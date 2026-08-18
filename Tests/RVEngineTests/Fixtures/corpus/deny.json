@@ -1,0 +1,440 @@
+{
+  "schema_version": 1,
+  "source": "pinned_0_11_0",
+  "cases": [
+    {
+      "id": "deny.quoted-argv0-reset",
+      "command": "\"git\" reset --hard",
+      "expected": "deny",
+      "rule_id": "core.git:reset-hard",
+      "reason_contains": "destroys uncommitted changes"
+    },
+    {
+      "id": "deny.quoted-subcommand-reset",
+      "command": "git \"reset\" --hard",
+      "expected": "deny",
+      "rule_id": "core.git:reset-hard",
+      "reason_contains": "destroys uncommitted changes"
+    },
+    {
+      "id": "deny.sudo-quoted-git-reset",
+      "command": "sudo \"git\" reset --hard",
+      "expected": "deny",
+      "rule_id": "core.git:reset-hard",
+      "reason_contains": "destroys uncommitted changes"
+    },
+    {
+      "id": "deny.chained-quoted-git-reset",
+      "command": "echo hello && \"git\" reset --hard",
+      "expected": "deny",
+      "rule_id": "core.git:reset-hard",
+      "reason_contains": "destroys uncommitted changes"
+    },
+    {
+      "id": "deny.quoted-dollar-subst-reset",
+      "command": "echo \"$(git reset --hard)\"",
+      "expected": "deny",
+      "rule_id": "core.git:reset-hard",
+      "reason_contains": "destroys uncommitted changes"
+    },
+    {
+      "id": "deny.quoted-backtick-reset",
+      "command": "echo \"`git reset --hard`\"",
+      "expected": "deny",
+      "rule_id": "core.git:reset-hard",
+      "reason_contains": "destroys uncommitted changes"
+    },
+    {
+      "id": "deny.quoted-subcommand-push",
+      "command": "git \"push\" --force",
+      "expected": "deny",
+      "rule_id": "core.git:push-force-long",
+      "reason_contains": "Force push"
+    },
+    {
+      "id": "deny.quoted-home-rm",
+      "command": "rm -rf \"$HOME\"",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.quoted-flag-hard",
+      "command": "git reset '--hard'",
+      "expected": "deny",
+      "rule_id": "core.git:reset-hard",
+      "reason_contains": "destroys uncommitted changes"
+    },
+    {
+      "id": "deny.sudo-reset",
+      "command": "sudo git reset --hard",
+      "expected": "deny",
+      "rule_id": "core.git:reset-hard",
+      "reason_contains": "destroys uncommitted changes"
+    },
+    {
+      "id": "deny.env-reset",
+      "command": "env GIT_DIR=.git git reset --hard",
+      "expected": "deny",
+      "rule_id": "core.git:reset-hard",
+      "reason_contains": "destroys uncommitted changes"
+    },
+    {
+      "id": "deny.command-reset",
+      "command": "command git reset --hard",
+      "expected": "deny",
+      "rule_id": "core.git:reset-hard",
+      "reason_contains": "destroys uncommitted changes"
+    },
+    {
+      "id": "deny.backslash-reset",
+      "command": "\\git reset --hard",
+      "expected": "deny",
+      "rule_id": "core.git:reset-hard",
+      "reason_contains": "destroys uncommitted changes"
+    },
+    {
+      "id": "deny.and-reset",
+      "command": "git status && git reset --hard",
+      "expected": "deny",
+      "rule_id": "core.git:reset-hard",
+      "reason_contains": "destroys uncommitted changes"
+    },
+    {
+      "id": "deny.or-reset",
+      "command": "test -f marker || git reset --hard",
+      "expected": "deny",
+      "rule_id": "core.git:reset-hard",
+      "reason_contains": "destroys uncommitted changes"
+    },
+    {
+      "id": "deny.semicolon-reset",
+      "command": "echo ok; git reset --hard",
+      "expected": "deny",
+      "rule_id": "core.git:reset-hard",
+      "reason_contains": "destroys uncommitted changes"
+    },
+    {
+      "id": "deny.pipe-reset",
+      "command": "echo ok | git reset --hard",
+      "expected": "deny",
+      "rule_id": "core.git:reset-hard",
+      "reason_contains": "destroys uncommitted changes"
+    },
+    {
+      "id": "deny.dollar-subst-reset",
+      "command": "echo $(git reset --hard)",
+      "expected": "deny",
+      "rule_id": "core.git:reset-hard",
+      "reason_contains": "destroys uncommitted changes"
+    },
+    {
+      "id": "deny.backtick-reset",
+      "command": "echo `git reset --hard`",
+      "expected": "deny",
+      "rule_id": "core.git:reset-hard",
+      "reason_contains": "destroys uncommitted changes"
+    },
+    {
+      "id": "deny.mixed-tmp-passwd",
+      "command": "rm -rf /tmp/safe /etc/passwd",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.per-pack-safe-does-not-suppress-git",
+      "command": "git reset --hard && rm -rf /tmp/x",
+      "expected": "deny",
+      "rule_id": "core.git:reset-hard",
+      "reason_contains": "destroys uncommitted changes"
+    },
+    {
+      "id": "deny.find-delete-src",
+      "command": "find ./src -delete",
+      "expected": "deny",
+      "rule_id": "core.filesystem:find-delete-general",
+      "reason_contains": "find ... -delete"
+    },
+    {
+      "id": "deny.unlink-ssh",
+      "command": "unlink ~/.ssh/id_ed25519",
+      "expected": "deny",
+      "rule_id": "core.filesystem:unlink-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.redirect-passwd",
+      "command": "> /etc/passwd",
+      "expected": "deny",
+      "rule_id": "core.filesystem:redirect-truncate-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.redirect-passwd-glued",
+      "command": ">/etc/passwd",
+      "expected": "deny",
+      "rule_id": "core.filesystem:redirect-truncate-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.adjacent-quoted-hard",
+      "command": "git reset --'hard'",
+      "expected": "deny",
+      "rule_id": "core.git:reset-hard",
+      "reason_contains": "destroys uncommitted changes"
+    },
+    {
+      "id": "deny.rm-rf-tilde",
+      "command": "rm -rf ~",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.git-push-f",
+      "command": "git push -f",
+      "expected": "deny",
+      "rule_id": "core.git:push-force-short",
+      "reason_contains": "Force push"
+    },
+    {
+      "id": "deny.git-push-uf",
+      "command": "git push -uf",
+      "expected": "deny",
+      "rule_id": "core.git:push-force-short",
+      "reason_contains": "Force push"
+    },
+    {
+      "id": "deny.fork-bomb",
+      "command": ":(){ :|:& };:",
+      "expected": "deny",
+      "rule_id": "core.filesystem:fork-bomb",
+      "reason_contains": "fork bomb"
+    },
+    {
+      "id": "deny.tmpdir-brace",
+      "command": "rm -rf ${TMPDIR}/build",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-general",
+      "reason_contains": "requires human approval"
+    },
+    {
+      "id": "deny.checkout-discard",
+      "command": "git checkout -- file.txt",
+      "expected": "deny",
+      "rule_id": "core.git:checkout-discard",
+      "reason_contains": "discards uncommitted changes"
+    },
+    {
+      "id": "deny.checkout-ref-discard",
+      "command": "git checkout main -- file.txt",
+      "expected": "deny",
+      "rule_id": "core.git:checkout-ref-discard",
+      "reason_contains": "overwrites working tree"
+    },
+    {
+      "id": "deny.restore-worktree",
+      "command": "git restore file.txt",
+      "expected": "deny",
+      "rule_id": "core.git:restore-worktree",
+      "reason_contains": "discards uncommitted changes"
+    },
+    {
+      "id": "deny.restore-worktree-explicit",
+      "command": "git restore -S -W file.txt",
+      "expected": "deny",
+      "rule_id": "core.git:restore-worktree-explicit",
+      "reason_contains": "discards uncommitted changes"
+    },
+    {
+      "id": "deny.reset-merge",
+      "command": "git reset --merge",
+      "expected": "deny",
+      "rule_id": "core.git:reset-merge",
+      "reason_contains": "can lose uncommitted changes"
+    },
+    {
+      "id": "deny.clean-force",
+      "command": "git clean -f",
+      "expected": "deny",
+      "rule_id": "core.git:clean-force",
+      "reason_contains": "removes untracked files"
+    },
+    {
+      "id": "deny.push-force-long",
+      "command": "git push --force origin main",
+      "expected": "deny",
+      "rule_id": "core.git:push-force-long",
+      "reason_contains": "Force push"
+    },
+    {
+      "id": "deny.branch-force-delete",
+      "command": "git branch -D feature",
+      "expected": "deny",
+      "rule_id": "core.git:branch-force-delete",
+      "reason_contains": "deletion or forced ref"
+    },
+    {
+      "id": "deny.stash-clear",
+      "command": "git stash clear",
+      "expected": "deny",
+      "rule_id": "core.git:stash-clear",
+      "reason_contains": "permanently deletes ALL"
+    },
+    {
+      "id": "deny.cp-sensitive-then-delete",
+      "command": "cp -al /etc /tmp/x && rm -rf /tmp/x",
+      "expected": "deny",
+      "rule_id": "core.filesystem:cp-sensitive-then-delete",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.ln-symlink-sensitive-then-delete",
+      "command": "ln -s /etc /tmp/x && rm -rf /tmp/x/.",
+      "expected": "deny",
+      "rule_id": "core.filesystem:ln-symlink-sensitive-then-delete",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.rsync-sensitive-then-delete",
+      "command": "rsync -a /etc/ /tmp/dest/ && rm -rf /tmp/dest",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rsync-sensitive-then-delete",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.rm-r-f-separate-root",
+      "command": "rm -r -f /",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-r-f-separate-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.rm-recursive-force-root",
+      "command": "rm --recursive --force /",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-recursive-force-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.rm-rf-general-dot",
+      "command": "rm -rf ./build",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-general",
+      "reason_contains": "rm -rf is destructive"
+    },
+    {
+      "id": "deny.rm-glob-home",
+      "command": "rm -f ~/Downloads/*.md",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-glob-home",
+      "reason_contains": "unexpanded glob"
+    },
+    {
+      "id": "deny.rm-r-f-separate",
+      "command": "rm -r -f ./build",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-r-f-separate",
+      "reason_contains": "separate -r -f"
+    },
+    {
+      "id": "deny.rm-recursive-force-long",
+      "command": "rm --recursive --force ./build",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-recursive-force-long",
+      "reason_contains": "--recursive --force"
+    },
+    {
+      "id": "deny.find-delete-root",
+      "command": "find /etc -delete",
+      "expected": "deny",
+      "rule_id": "core.filesystem:find-delete-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.unlink-general",
+      "command": "unlink ./scratch.txt",
+      "expected": "deny",
+      "rule_id": "core.filesystem:unlink-general",
+      "reason_contains": "unlink is destructive"
+    },
+    {
+      "id": "deny.truncate-zero-root",
+      "command": "truncate -s 0 /etc/passwd",
+      "expected": "deny",
+      "rule_id": "core.filesystem:truncate-zero-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.truncate-zero-general",
+      "command": "truncate -s 0 ./notes.txt",
+      "expected": "deny",
+      "rule_id": "core.filesystem:truncate-zero-general",
+      "reason_contains": "truncate"
+    },
+    {
+      "id": "deny.shred-root",
+      "command": "shred /etc/passwd",
+      "expected": "deny",
+      "rule_id": "core.filesystem:shred-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.shred-general",
+      "command": "shred ./secrets.txt",
+      "expected": "deny",
+      "rule_id": "core.filesystem:shred-general",
+      "reason_contains": "shred destroys"
+    },
+    {
+      "id": "deny.tar-remove-root",
+      "command": "tar --remove-files -cf out.tar /etc",
+      "expected": "deny",
+      "rule_id": "core.filesystem:tar-remove-files-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.tar-remove-general",
+      "command": "tar --remove-files -cf out.tar ./build",
+      "expected": "deny",
+      "rule_id": "core.filesystem:tar-remove-files-general",
+      "reason_contains": "tar --remove-files"
+    },
+    {
+      "id": "deny.dd-root",
+      "command": "dd if=/dev/zero of=/etc/passwd",
+      "expected": "deny",
+      "rule_id": "core.filesystem:dd-overwrite-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.dd-general",
+      "command": "dd if=/dev/zero of=./important.db",
+      "expected": "deny",
+      "rule_id": "core.filesystem:dd-overwrite-general",
+      "reason_contains": "overwrites file contents"
+    },
+    {
+      "id": "deny.mv-sensitive",
+      "command": "mv /etc /tmp/x",
+      "expected": "deny",
+      "rule_id": "core.filesystem:mv-sensitive-source-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.mv-dynamic",
+      "command": "mv $SRC ./dest",
+      "expected": "deny",
+      "rule_id": "core.filesystem:mv-dynamic-path",
+      "reason_contains": "shell-expanded"
+    },
+    {
+      "id": "deny.redirect-dynamic",
+      "command": "echo data > $TMPDIR/passwd",
+      "expected": "deny",
+      "rule_id": "core.filesystem:redirect-truncate-dynamic-path",
+      "reason_contains": "dynamic"
+    }
+  ]
+}

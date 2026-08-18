@@ -60,6 +60,10 @@ let package = Package(
         .testTarget(name: "RVTUITests", dependencies: ["RVTUI"]),
         .testTarget(name: "RVCLITests", dependencies: ["RVCLI"]),
         .testTarget(name: "RVHistoryTests", dependencies: ["RVHistory"]),
+        .testTarget(
+            name: "RVCorpusTests",
+            dependencies: ["RVDomain", "RVEngine", "RVPacks"]
+        ),
     ],
     swiftLanguageModes: [.v6]
 )

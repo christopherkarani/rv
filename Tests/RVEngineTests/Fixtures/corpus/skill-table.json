@@ -1,0 +1,354 @@
+{
+  "schema_version": 1,
+  "source": "pinned_0_11_0",
+  "cases": [
+    {
+      "id": "skill.deny.reset-hard",
+      "command": "git reset --hard",
+      "expected": "deny",
+      "rule_id": "core.git:reset-hard",
+      "reason_contains": "destroys uncommitted changes"
+    },
+    {
+      "id": "skill.deny.reset-hard-head",
+      "command": "git reset --hard HEAD~1",
+      "expected": "deny",
+      "rule_id": "core.git:reset-hard",
+      "reason_contains": "destroys uncommitted changes"
+    },
+    {
+      "id": "skill.deny.reset-merge",
+      "command": "git reset --merge",
+      "expected": "deny",
+      "rule_id": "core.git:reset-merge",
+      "reason_contains": "can lose uncommitted changes"
+    },
+    {
+      "id": "skill.deny.checkout-discard-dot",
+      "command": "git checkout -- .",
+      "expected": "deny",
+      "rule_id": "core.git:checkout-discard",
+      "reason_contains": "discards uncommitted changes"
+    },
+    {
+      "id": "skill.deny.checkout-discard-file",
+      "command": "git checkout -- file.txt",
+      "expected": "deny",
+      "rule_id": "core.git:checkout-discard",
+      "reason_contains": "discards uncommitted changes"
+    },
+    {
+      "id": "skill.deny.checkout-ref-discard",
+      "command": "git checkout main -- file.txt",
+      "expected": "deny",
+      "rule_id": "core.git:checkout-ref-discard",
+      "reason_contains": "overwrites working tree"
+    },
+    {
+      "id": "skill.deny.restore-worktree",
+      "command": "git restore file.txt",
+      "expected": "deny",
+      "rule_id": "core.git:restore-worktree",
+      "reason_contains": "discards uncommitted changes"
+    },
+    {
+      "id": "skill.deny.restore-worktree-long",
+      "command": "git restore --worktree file.txt",
+      "expected": "deny",
+      "rule_id": "core.git:restore-worktree",
+      "reason_contains": "discards uncommitted changes",
+      "notes": "Source order first-matches restore-worktree; --worktree without --staged/-S never reaches restore-worktree-explicit."
+    },
+    {
+      "id": "skill.deny.restore-worktree-short",
+      "command": "git restore -W file.txt",
+      "expected": "deny",
+      "rule_id": "core.git:restore-worktree",
+      "reason_contains": "discards uncommitted changes",
+      "notes": "Same first-match as --worktree. restore-worktree-explicit is the -S -W / --staged --worktree row."
+    },
+    {
+      "id": "skill.deny.restore-staged-and-worktree",
+      "command": "git restore -S -W file.txt",
+      "expected": "deny",
+      "rule_id": "core.git:restore-worktree-explicit",
+      "reason_contains": "discards uncommitted changes"
+    },
+    {
+      "id": "skill.deny.clean-force",
+      "command": "git clean -f",
+      "expected": "deny",
+      "rule_id": "core.git:clean-force",
+      "reason_contains": "removes untracked files"
+    },
+    {
+      "id": "skill.deny.clean-force-d",
+      "command": "git clean -fd",
+      "expected": "deny",
+      "rule_id": "core.git:clean-force",
+      "reason_contains": "removes untracked files"
+    },
+    {
+      "id": "skill.deny.push-force-long",
+      "command": "git push --force",
+      "expected": "deny",
+      "rule_id": "core.git:push-force-long",
+      "reason_contains": "Force push"
+    },
+    {
+      "id": "skill.deny.push-force-long-remote",
+      "command": "git push --force origin main",
+      "expected": "deny",
+      "rule_id": "core.git:push-force-long",
+      "reason_contains": "Force push"
+    },
+    {
+      "id": "skill.deny.push-force-short",
+      "command": "git push -f origin main",
+      "expected": "deny",
+      "rule_id": "core.git:push-force-short",
+      "reason_contains": "Force push"
+    },
+    {
+      "id": "skill.deny.branch-d",
+      "command": "git branch -d feature",
+      "expected": "deny",
+      "rule_id": "core.git:branch-force-delete",
+      "reason_contains": "deletion or forced ref"
+    },
+    {
+      "id": "skill.deny.branch-D",
+      "command": "git branch -D feature",
+      "expected": "deny",
+      "rule_id": "core.git:branch-force-delete",
+      "reason_contains": "deletion or forced ref"
+    },
+    {
+      "id": "skill.deny.branch-delete",
+      "command": "git branch --delete feature",
+      "expected": "deny",
+      "rule_id": "core.git:branch-force-delete",
+      "reason_contains": "deletion or forced ref"
+    },
+    {
+      "id": "skill.deny.branch-f",
+      "command": "git branch -f feature",
+      "expected": "deny",
+      "rule_id": "core.git:branch-force-delete",
+      "reason_contains": "deletion or forced ref"
+    },
+    {
+      "id": "skill.deny.branch-M",
+      "command": "git branch -M old new",
+      "expected": "deny",
+      "rule_id": "core.git:branch-force-delete",
+      "reason_contains": "deletion or forced ref"
+    },
+    {
+      "id": "skill.deny.branch-C",
+      "command": "git branch -C old new",
+      "expected": "deny",
+      "rule_id": "core.git:branch-force-delete",
+      "reason_contains": "deletion or forced ref"
+    },
+    {
+      "id": "skill.allow.stash-drop",
+      "command": "git stash drop",
+      "expected": "allow",
+      "rule_id": "core.git:stash-drop"
+    },
+    {
+      "id": "skill.deny.stash-clear",
+      "command": "git stash clear",
+      "expected": "deny",
+      "rule_id": "core.git:stash-clear",
+      "reason_contains": "permanently deletes ALL"
+    },
+    {
+      "id": "skill.deny.rm-rf-root",
+      "command": "rm -rf /",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "skill.deny.rm-rf-home-user",
+      "command": "rm -rf /home/user",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "skill.deny.rm-rf-var-log",
+      "command": "rm -rf /var/log",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS",
+      "notes": "Extracted root-home regex matches any / prefix; source wins over marketing general attribution."
+    },
+    {
+      "id": "skill.deny.rm-rf-src",
+      "command": "rm -rf ./src",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-general",
+      "reason_contains": "rm -rf is destructive"
+    },
+    {
+      "id": "skill.deny.path-git-reset",
+      "command": "/usr/bin/git reset --hard",
+      "expected": "deny",
+      "rule_id": "core.git:reset-hard",
+      "reason_contains": "destroys uncommitted changes"
+    },
+    {
+      "id": "skill.deny.path-git-checkout",
+      "command": "/usr/local/bin/git checkout -- .",
+      "expected": "deny",
+      "rule_id": "core.git:checkout-discard",
+      "reason_contains": "discards uncommitted changes"
+    },
+    {
+      "id": "skill.deny.path-rm-home",
+      "command": "/bin/rm -rf /home/user",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "skill.deny.rm-fr-var-log",
+      "command": "rm -fr /var/log",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "skill.deny.rm-r-f-var-log",
+      "command": "rm -r -f /var/log",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-r-f-separate-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "skill.deny.rm-recursive-force-var-log",
+      "command": "rm --recursive --force /var/log",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-recursive-force-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "skill.allow.git-status",
+      "command": "git status",
+      "expected": "allow"
+    },
+    {
+      "id": "skill.allow.git-log",
+      "command": "git log",
+      "expected": "allow"
+    },
+    {
+      "id": "skill.allow.git-diff",
+      "command": "git diff",
+      "expected": "allow"
+    },
+    {
+      "id": "skill.allow.git-add",
+      "command": "git add",
+      "expected": "allow"
+    },
+    {
+      "id": "skill.allow.git-commit",
+      "command": "git commit",
+      "expected": "allow"
+    },
+    {
+      "id": "skill.allow.git-push",
+      "command": "git push",
+      "expected": "allow"
+    },
+    {
+      "id": "skill.allow.git-pull",
+      "command": "git pull",
+      "expected": "allow"
+    },
+    {
+      "id": "skill.allow.git-fetch",
+      "command": "git fetch",
+      "expected": "allow"
+    },
+    {
+      "id": "skill.allow.git-stash",
+      "command": "git stash",
+      "expected": "allow"
+    },
+    {
+      "id": "skill.allow.git-stash-pop",
+      "command": "git stash pop",
+      "expected": "allow"
+    },
+    {
+      "id": "skill.allow.git-stash-list",
+      "command": "git stash list",
+      "expected": "allow"
+    },
+    {
+      "id": "skill.allow.checkout-new-branch",
+      "command": "git checkout -b feature",
+      "expected": "allow"
+    },
+    {
+      "id": "skill.allow.checkout-new-branch-slash",
+      "command": "git checkout -b feature/one",
+      "expected": "allow"
+    },
+    {
+      "id": "skill.allow.checkout-orphan",
+      "command": "git checkout --orphan topic",
+      "expected": "allow"
+    },
+    {
+      "id": "skill.allow.restore-staged-long",
+      "command": "git restore --staged file.txt",
+      "expected": "allow"
+    },
+    {
+      "id": "skill.allow.restore-staged-short",
+      "command": "git restore -S file.txt",
+      "expected": "allow"
+    },
+    {
+      "id": "skill.allow.clean-n",
+      "command": "git clean -n",
+      "expected": "allow"
+    },
+    {
+      "id": "skill.allow.clean-dry-run",
+      "command": "git clean --dry-run",
+      "expected": "allow"
+    },
+    {
+      "id": "skill.allow.force-with-lease",
+      "command": "git push --force-with-lease",
+      "expected": "allow"
+    },
+    {
+      "id": "skill.allow.rm-rf-tmp",
+      "command": "rm -rf /tmp/build",
+      "expected": "allow"
+    },
+    {
+      "id": "skill.allow.rm-rf-var-tmp",
+      "command": "rm -rf /var/tmp/build",
+      "expected": "allow"
+    },
+    {
+      "id": "skill.allow.command-v",
+      "command": "command -v git",
+      "expected": "allow"
+    },
+    {
+      "id": "skill.allow.command-V",
+      "command": "command -V git",
+      "expected": "allow"
+    }
+  ]
+}

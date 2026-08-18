@@ -1,0 +1,126 @@
+{
+  "schema_version": 1,
+  "source": "pinned_0_11_0",
+  "cases": [
+    {
+      "id": "near.echo-quoted-reset",
+      "command": "echo \"git reset --hard\"",
+      "expected": "allow"
+    },
+    {
+      "id": "near.rg-quoted-rm",
+      "command": "rg -n \"rm -rf\" README.md",
+      "expected": "allow"
+    },
+    {
+      "id": "near.git-commit-rm-message",
+      "command": "git commit -m \"fix rm -rf detection\"",
+      "expected": "allow"
+    },
+    {
+      "id": "near.git-commit-force-message",
+      "command": "git commit -m \"git push --force\"",
+      "expected": "allow"
+    },
+    {
+      "id": "near.git-commit-message-equals",
+      "command": "git commit --message=\"git reset --hard\"",
+      "expected": "allow"
+    },
+    {
+      "id": "near.sudo-echo-quoted-reset",
+      "command": "sudo echo \"git reset --hard\"",
+      "expected": "allow"
+    },
+    {
+      "id": "near.env-echo-quoted-reset",
+      "command": "env echo \"git reset --hard\"",
+      "expected": "allow"
+    },
+    {
+      "id": "near.command-echo-quoted-reset",
+      "command": "command echo \"git reset --hard\"",
+      "expected": "allow"
+    },
+    {
+      "id": "near.quoted-argv0-status",
+      "command": "\"git\" status",
+      "expected": "allow"
+    },
+    {
+      "id": "near.ls",
+      "command": "ls -la",
+      "expected": "allow"
+    },
+    {
+      "id": "near.force-with-lease",
+      "command": "git push --force-with-lease",
+      "expected": "allow"
+    },
+    {
+      "id": "near.force-with-lease-if-includes",
+      "command": "git push --force-with-lease --force-if-includes",
+      "expected": "allow"
+    },
+    {
+      "id": "near.branch-name-force",
+      "command": "git push origin feature--force",
+      "expected": "allow"
+    },
+    {
+      "id": "near.branch-name-f",
+      "command": "git push origin feature-f",
+      "expected": "allow"
+    },
+    {
+      "id": "near.later-segment-force",
+      "command": "git push origin main && echo done --force",
+      "expected": "allow"
+    },
+    {
+      "id": "near.restore-dot-staged",
+      "command": "git restore . --staged",
+      "expected": "allow"
+    },
+    {
+      "id": "near.restore-file-staged",
+      "command": "git restore file.txt --staged",
+      "expected": "allow"
+    },
+    {
+      "id": "near.echo-hello",
+      "command": "echo hello",
+      "expected": "allow"
+    },
+    {
+      "id": "near.gitignore-token",
+      "command": "cat .gitignore",
+      "expected": "allow"
+    },
+    {
+      "id": "near.digit",
+      "command": "echo digit",
+      "expected": "allow"
+    },
+    {
+      "id": "near.redirect-append-passwd",
+      "command": "echo line >> /etc/passwd",
+      "expected": "allow"
+    },
+    {
+      "id": "near.non-bomb-function",
+      "command": "foo(){ bar | baz; }; foo",
+      "expected": "allow"
+    },
+    {
+      "id": "near.checkout-new-branch",
+      "command": "git checkout -b feature",
+      "expected": "allow"
+    },
+    {
+      "id": "near.clean-n",
+      "command": "git clean -n",
+      "expected": "allow"
+    }
+  ]
+}

@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "source": "pinned_0_11_0",
+  "cases": [
+    {
+      "id": "skill.stale.tmpdir-allow",
+      "command": "rm -rf ${TMPDIR}/build",
+      "skill_claimed": "allow",
+      "pinned_0_11_0": "deny",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-general",
+      "reason_contains": "requires human approval",
+      "kind": "skill_drift"
+    },
+    {
+      "id": "skill.stale.stash-drop-block",
+      "command": "git stash drop",
+      "skill_claimed": "deny",
+      "pinned_0_11_0": "allow",
+      "expected": "allow",
+      "rule_id": "core.git:stash-drop",
+      "kind": "skill_drift"
+    },
+    {
+      "id": "skill.counts.34-16",
+      "kind": "meta",
+      "skill_claimed": "34 safe / 16 destructive",
+      "pinned_0_11_0": "extract full packs",
+      "notes": "Ignore marketing counts; committed JSON is the name-set scoreboard."
+    },
+    {
+      "id": "semantic.git-alias",
+      "command": "git myalias",
+      "expected": "allow",
+      "kind": "semantic_only",
+      "pattern_name": "git-alias-semantic-unverified",
+      "notes": "Pattern is (?!); ICU text match must not deny."
+    },
+    {
+      "id": "semantic.branch-dynamic",
+      "command": "git branch backup-$(date +%s)",
+      "expected": "allow",
+      "kind": "semantic_only",
+      "pattern_name": "branch-dynamic-token",
+      "notes": "Pattern is (?!); no Rust parser in T1."
+    },
+    {
+      "id": "semantic.sed-exec",
+      "command": "sed 's/a/b/e' file",
+      "expected": "allow",
+      "kind": "semantic_only",
+      "pattern_name": "sed-exec-unverified",
+      "notes": "Pattern is (?!); no Rust parser in T1."
+    }
+  ]
+}
