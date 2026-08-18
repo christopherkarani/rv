@@ -1,0 +1,10 @@
+{
+  "hookEventName": "pre_tool_use",
+  "sessionId": "abc-123",
+  "cwd": "/tmp/rv-hook-fixture",
+  "workspaceRoot": "/tmp/rv-hook-fixture",
+  "permissionMode": "default",
+  "toolName": "run_terminal_cmd",
+  "toolInput": { "command": "git status" },
+  "timestamp": "2026-04-14T12:00:00Z"
+}
