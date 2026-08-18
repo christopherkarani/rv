@@ -1,4 +1,4 @@
-public struct PackID: RawRepresentable, Hashable, Sendable, Equatable {
+public struct PackID: RawRepresentable, Hashable, Sendable, Equatable, Codable {
     public var rawValue: String
 
     public init(rawValue: String) {

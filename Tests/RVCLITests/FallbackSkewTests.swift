@@ -1,0 +1,39 @@
+import Testing
+@testable import RVCLI
+
+struct FallbackSkewTests {
+    @Test func skewedHelloDoesNotSendEvaluateAndStillDenies() async {
+        let transport = ScriptedTransport(
+            ack: HelloAckView(
+                protocolName: "rv.ipc.v0",
+                serviceSemver: "1.0.0",
+                ok: false,
+                skewReason: "protocol"
+            )
+        )
+        let client = ServiceClient(transport: transport)
+        let reply = await client.evaluate(command: "git reset --hard")
+        #expect(reply.decision == "deny")
+        #expect(reply.ruleID == "core.git:reset-hard")
+        #expect(reply.via == "inProcess")
+        #expect(transport.sendCount == 0)
+
+        let status = await client.status()
+        #expect(status.state == "skew")
+        #expect(status.fallback == "skew")
+        #expect(status.keepAlive == false)
+    }
+
+    @Test func majorSemverMismatchIsSkew() async {
+        let transport = ScriptedTransport(
+            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "2.0.0", ok: true)
+        )
+        let client = ServiceClient(transport: transport)
+        let reply = await client.evaluate(command: "git reset --hard")
+        #expect(reply.via == "inProcess")
+        #expect(reply.decision == "deny")
+        #expect(transport.sendCount == 0)
+        let status = await client.status()
+        #expect(status.state == "skew")
+    }
+}

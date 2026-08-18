@@ -19,6 +19,7 @@ let package = Package(
         .library(name: "RVTUI", targets: ["RVTUI"]),
         .library(name: "RVCLI", targets: ["RVCLI"]),
         .library(name: "RVHistory", targets: ["RVHistory"]),
+        .executable(name: "rvd", targets: ["rvd"]),
     ],
     targets: [
         .target(name: "RVDomain"),
@@ -47,6 +48,10 @@ let package = Package(
                 "RVDomain", "RVEngine", "RVPacks", "RVPolicy", "RVHooks", "RVIPC",
                 "RVPresentation", "RVTheme", "RVTUI", "RVService", "RVHistory",
             ]
+        ),
+        .executableTarget(
+            name: "rvd",
+            dependencies: ["RVService"]
         ),
         .testTarget(name: "RVDomainTests", dependencies: ["RVDomain"]),
         .testTarget(name: "RVEngineTests", dependencies: ["RVEngine"]),

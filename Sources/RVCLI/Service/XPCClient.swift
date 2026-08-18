@@ -1,0 +1,96 @@
+import Foundation
+import RVIPC
+import RVService
+
+public struct HelloAckView: Sendable, Equatable {
+    public var protocolName: String
+    public var serviceSemver: String
+    public var ok: Bool
+    public var skewReason: String?
+
+    public init(protocolName: String, serviceSemver: String, ok: Bool, skewReason: String? = nil) {
+        self.protocolName = protocolName
+        self.serviceSemver = serviceSemver
+        self.ok = ok
+        self.skewReason = skewReason
+    }
+
+    public init(_ ack: HelloAck) {
+        self.init(
+            protocolName: ack.protocolName,
+            serviceSemver: ack.serviceSemver,
+            ok: ack.ok,
+            skewReason: ack.skewReason
+        )
+    }
+}
+
+public enum ServiceTransportError: Error, Sendable, Equatable {
+    case connectFailed
+    case timeout
+    case interrupted
+    case decodeFailed
+}
+
+public protocol ServiceTransport: Sendable {
+    func hello(clientSemver: String) async throws -> HelloAckView
+    func send(_ body: Data) async throws -> Data
+}
+
+public struct XPCServiceTransport: ServiceTransport, @unchecked Sendable {
+    public static let serviceName = RVService.machServiceName
+    public var connectTimeoutMs: Int
+    public var requestTimeoutMs: Int
+    private let session: XPCEvaluateClient
+
+    public init(connectTimeoutMs: Int = 200, requestTimeoutMs: Int = 500) {
+        self.connectTimeoutMs = connectTimeoutMs
+        self.requestTimeoutMs = requestTimeoutMs
+        self.session = XPCEvaluateClient(serviceName: Self.serviceName)
+    }
+
+    public func hello(clientSemver: String) async throws -> HelloAckView {
+        let hello = Hello(protocolName: ProtocolVersion.name, clientSemver: clientSemver)
+        let body = try IPCJSON.encode(hello)
+        let reply = try await perform(body, timeoutMs: connectTimeoutMs)
+        do {
+            let ack = HelloAckView(try IPCJSON.decode(HelloAck.self, from: reply))
+            if ack.ok == false {
+                session.invalidate()
+            }
+            return ack
+        } catch {
+            session.invalidate()
+            throw ServiceTransportError.decodeFailed
+        }
+    }
+
+    public func send(_ body: Data) async throws -> Data {
+        try await perform(body, timeoutMs: requestTimeoutMs)
+    }
+
+    var openedConnectionCount: Int { session.openedConnectionCount }
+
+    private func perform(_ body: Data, timeoutMs: Int) async throws -> Data {
+        try await withThrowingTaskGroup(of: Data.self) { group in
+            group.addTask {
+                try await self.session.perform(body)
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(timeoutMs) * 1_000_000)
+                throw ServiceTransportError.timeout
+            }
+            do {
+                guard let first = try await group.next() else {
+                    throw ServiceTransportError.connectFailed
+                }
+                group.cancelAll()
+                return first
+            } catch {
+                session.invalidate()
+                group.cancelAll()
+                throw error
+            }
+        }
+    }
+}

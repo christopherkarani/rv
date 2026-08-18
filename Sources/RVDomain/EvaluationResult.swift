@@ -1,4 +1,4 @@
-public struct RuleMatch: Sendable, Equatable {
+public struct RuleMatch: Sendable, Equatable, Codable {
     public var ruleID: RuleID
     public var packID: PackID
     public var patternName: String
@@ -23,7 +23,7 @@ public struct RuleMatch: Sendable, Equatable {
     }
 }
 
-public struct SafeMatch: Sendable, Equatable {
+public struct SafeMatch: Sendable, Equatable, Codable {
     public var pack: PackID
     public var name: String
 
@@ -33,7 +33,7 @@ public struct SafeMatch: Sendable, Equatable {
     }
 }
 
-public struct EvaluationResult: Sendable, Equatable {
+public struct EvaluationResult: Sendable, Equatable, Codable {
     public var decision: Decision
     public var matched: RuleMatch?
     public var matchedSafe: SafeMatch?

@@ -1,4 +1,4 @@
-public struct EvaluationBudget: Sendable, Equatable {
+public struct EvaluationBudget: Sendable, Equatable, Codable {
     public var maxPatternAttempts: Int
 
     public init(maxPatternAttempts: Int) {
@@ -6,7 +6,7 @@ public struct EvaluationBudget: Sendable, Equatable {
     }
 }
 
-public struct EvaluationRequest: Sendable, Equatable {
+public struct EvaluationRequest: Sendable, Equatable, Codable {
     public var command: ShellCommand
     public var enabledPacks: [PackID]
     public var budget: EvaluationBudget?
