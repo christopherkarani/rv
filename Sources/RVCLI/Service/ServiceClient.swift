@@ -44,8 +44,17 @@ public struct ServiceClient: Sendable {
     }
 
     public func evaluate(command: String) async -> ClientEvaluateReply {
+        let evaluation = await evaluateRouted(command: ShellCommand(rawValue: command))
+        return Self.view(evaluation.result, via: evaluation.via)
+    }
+
+    public func evaluateResult(command: ShellCommand) async -> EvaluationResult {
+        await evaluateRouted(command: command).result
+    }
+
+    private func evaluateRouted(command: ShellCommand) async -> (result: EvaluationResult, via: String) {
         let request = EvaluationRequest(
-            command: ShellCommand(rawValue: command),
+            command: command,
             enabledPacks: dayOnePackIDs
         )
         switch await route() {
@@ -57,14 +66,14 @@ public struct ServiceClient: Sendable {
                 let data = try await transport.send(body)
                 let response = try IPCJSON.decode(IPCResponse.self, from: data)
                 if case .evaluate(let reply) = response.result {
-                    return Self.view(reply.result, via: "xpc")
+                    return (reply.result, "xpc")
                 }
-                return Self.view(fallback.evaluate(request), via: "inProcess")
+                return (fallback.evaluate(request), "inProcess")
             } catch {
-                return Self.view(fallback.evaluate(request), via: "inProcess")
+                return (fallback.evaluate(request), "inProcess")
             }
         case .down, .skew:
-            return Self.view(fallback.evaluate(request), via: "inProcess")
+            return (fallback.evaluate(request), "inProcess")
         }
     }
 

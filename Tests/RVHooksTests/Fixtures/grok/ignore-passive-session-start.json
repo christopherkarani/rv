@@ -1,0 +1,7 @@
+{
+  "hookEventName": "session_start",
+  "sessionId": "abc-123",
+  "cwd": "/tmp/rv-hook-fixture",
+  "workspaceRoot": "/tmp/rv-hook-fixture",
+  "timestamp": "2026-04-14T12:00:00Z"
+}
