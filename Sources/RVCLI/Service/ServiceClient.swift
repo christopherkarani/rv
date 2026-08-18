@@ -44,17 +44,17 @@ public struct ServiceClient: Sendable {
     }
 
     public func evaluate(command: String) async -> ClientEvaluateReply {
-        let evaluation = await evaluateRouted(command: command)
+        let evaluation = await evaluateRouted(command: ShellCommand(rawValue: command))
         return Self.view(evaluation.result, via: evaluation.via)
     }
 
-    public func evaluateResult(command: String) async -> EvaluationResult {
+    public func evaluateResult(command: ShellCommand) async -> EvaluationResult {
         await evaluateRouted(command: command).result
     }
 
-    private func evaluateRouted(command: String) async -> (result: EvaluationResult, via: String) {
+    private func evaluateRouted(command: ShellCommand) async -> (result: EvaluationResult, via: String) {
         let request = EvaluationRequest(
-            command: ShellCommand(rawValue: command),
+            command: command,
             enabledPacks: dayOnePackIDs
         )
         switch await route() {

@@ -12,6 +12,23 @@ private func grokFixture(_ name: String) throws -> String {
     return try String(contentsOf: url, encoding: .utf8)
 }
 
+private func grokOversizeHookStdin(paddingCount: Int = 65_537) -> String {
+    let command = String(repeating: "A", count: paddingCount) + " git reset --hard"
+    return """
+    {"hookEventName":"pre_tool_use","toolName":"run_terminal_command","toolInput":{"command":\(jsonFragment(command))}}
+    """
+}
+
+private func jsonFragment(_ value: String) -> String {
+    guard
+        let data = try? JSONSerialization.data(withJSONObject: value, options: .fragmentsAllowed),
+        let text = String(data: data, encoding: .utf8)
+    else {
+        return "\"\""
+    }
+    return text
+}
+
 private func grokExpected(_ stem: String) throws -> (stdout: String, exit: Int32) {
     let stdout = try grokFixture("\(stem).out")
     let exitText = try grokFixture("\(stem).exit")
@@ -26,12 +43,20 @@ private func grokExpected(_ stem: String) throws -> (stdout: String, exit: Int32
     ("deny-reason-is-one-line.json", "git reset --hard"),
     ("allow-legacy-run-terminal-cmd.json", "git status"),
     ("allow-medium-stash-drop.json", "git stash drop"),
-    ("deny-indeterminate-oversize.json", "git reset --hard"),
 ])
 func grokDecode_extractsShellCommand(_ file: String, expected: String) throws {
     let request = codec.decode(try grokFixture(file))
     #expect(request.host == .grok)
     #expect(request.command?.rawValue == expected)
+}
+
+@Test func grokDecode_oversizeExtractsFullCommand() throws {
+    let stdin = grokOversizeHookStdin()
+    let request = codec.decode(stdin)
+    let command = try #require(request.command?.rawValue)
+    #expect(request.host == .grok)
+    #expect(command.utf8.count > 65_536)
+    #expect(command.hasSuffix(" git reset --hard"))
 }
 
 @Test(arguments: [

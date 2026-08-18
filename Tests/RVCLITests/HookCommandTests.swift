@@ -13,6 +13,23 @@ private func grokFixture(_ name: String) throws -> String {
     return try String(contentsOf: url, encoding: .utf8)
 }
 
+private func grokOversizeHookStdin(paddingCount: Int = 65_537) -> String {
+    let command = String(repeating: "A", count: paddingCount) + " git reset --hard"
+    return """
+    {"hookEventName":"pre_tool_use","toolName":"run_terminal_command","toolInput":{"command":\(jsonFragment(command))}}
+    """
+}
+
+private func jsonFragment(_ value: String) -> String {
+    guard
+        let data = try? JSONSerialization.data(withJSONObject: value, options: .fragmentsAllowed),
+        let text = String(data: data, encoding: .utf8)
+    else {
+        return "\"\""
+    }
+    return text
+}
+
 private func grokExpected(_ stem: String) throws -> (stdout: String, exit: Int32) {
     let stdout = try grokFixture("\(stem).out")
     let exitText = try grokFixture("\(stem).exit")
@@ -32,15 +49,32 @@ private func withTempHome<T>(_ body: (URL) async throws -> T) async throws -> T 
 private final class EvaluateProbe: @unchecked Sendable {
     private(set) var commands: [String] = []
 
-    func record(_ command: String, result: EvaluationResult) -> EvaluationResult {
-        commands.append(command)
+    func record(_ command: ShellCommand, result: EvaluationResult) -> EvaluationResult {
+        commands.append(command.rawValue)
         return result
+    }
+}
+
+private func inProcessEvaluate(_ command: ShellCommand) async -> EvaluationResult {
+    await ServiceClient(transport: nil).evaluateResult(command: command)
+}
+
+private func runHook(
+    stdin: String,
+    evaluate: (@Sendable (ShellCommand) async -> EvaluationResult)? = nil
+) async throws -> HookWire {
+    try await withTempHome { _ in
+        await HookRun.run(
+            stdin: stdin,
+            codec: GrokHostCodec(),
+            evaluate: evaluate ?? inProcessEvaluate
+        )
     }
 }
 
 @Test func hookAllowGitStatus_emptyStdoutExitZero() async throws {
     let expected = try grokExpected("allow-git-status")
-    let wire = await HookRun.run(stdin: try grokFixture("allow-git-status.json"))
+    let wire = try await runHook(stdin: try grokFixture("allow-git-status.json"))
     #expect(wire.stdout == expected.stdout)
     #expect(wire.exitCode == expected.exit)
 }
@@ -50,7 +84,7 @@ private final class EvaluateProbe: @unchecked Sendable {
     let command = ShellCommand(rawValue: "git reset --hard")
     let result = CommandRun.evaluateCommand(command.rawValue)
     let text = try #require(hostDenyText(from: result, command: command))
-    let wire = await HookRun.run(stdin: try grokFixture("deny-git-reset-hard.json"))
+    let wire = try await runHook(stdin: try grokFixture("deny-git-reset-hard.json"))
     #expect(wire.stdout == expected.stdout)
     #expect(wire.exitCode == expected.exit)
     #expect(wire.stdout.contains(text))
@@ -60,20 +94,15 @@ private final class EvaluateProbe: @unchecked Sendable {
 
 @Test func hookStashDrop_isEmptyAllow() async throws {
     let expected = try grokExpected("allow-medium-stash-drop")
-    let wire = await HookRun.run(stdin: try grokFixture("allow-medium-stash-drop.json"))
+    let wire = try await runHook(stdin: try grokFixture("allow-medium-stash-drop.json"))
     #expect(wire.stdout == expected.stdout)
     #expect(wire.exitCode == expected.exit)
     #expect(wire.stdout.contains("deny") == false)
 }
 
 @Test func hookOversize_isIndeterminateDenyJSON() async throws {
-    let pad = String(repeating: "A", count: 65_537)
-    let command = "\(pad) git reset --hard"
-    let stdin = """
-    {"hookEventName":"pre_tool_use","toolName":"run_terminal_command","toolInput":{"command":\(jsonString(command))}}
-    """
     let expected = try grokExpected("deny-indeterminate-oversize")
-    let wire = await HookRun.run(stdin: stdin)
+    let wire = try await runHook(stdin: grokOversizeHookStdin())
     #expect(wire.stdout == expected.stdout)
     #expect(wire.exitCode == expected.exit)
     #expect(wire.stdout.contains("core.git") == false)
@@ -82,7 +111,7 @@ private final class EvaluateProbe: @unchecked Sendable {
 
 @Test func hookIndeterminate_stillDeniesWhenHostDenyTextNilFallback() async throws {
     let expected = try grokExpected("deny-indeterminate-oversize")
-    let wire = await HookRun.run(stdin: try grokFixture("deny-git-reset-hard.json")) { _ in
+    let wire = try await runHook(stdin: try grokFixture("deny-git-reset-hard.json")) { _ in
         EvaluationResult(decision: .indeterminate(.corePacksUnavailable))
     }
     #expect(wire.stdout == expected.stdout)
@@ -92,7 +121,7 @@ private final class EvaluateProbe: @unchecked Sendable {
 @Test func hookNonShellRead_doesNotEvaluate() async throws {
     let probe = EvaluateProbe()
     let expected = try grokExpected("allow-non-shell-read")
-    let wire = await HookRun.run(stdin: try grokFixture("allow-non-shell-read.json")) { command in
+    let wire = try await runHook(stdin: try grokFixture("allow-non-shell-read.json")) { command in
         probe.record(command, result: EvaluationResult(decision: .deny(
             Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "should not run")
         )))
@@ -104,7 +133,7 @@ private final class EvaluateProbe: @unchecked Sendable {
 
 @Test func hookMalformed_isEmptyAllow() async throws {
     let expected = try grokExpected("malformed")
-    let wire = await HookRun.run(stdin: try grokFixture("malformed.txt"))
+    let wire = try await runHook(stdin: try grokFixture("malformed.txt"))
     #expect(wire.stdout == expected.stdout)
     #expect(wire.exitCode == expected.exit)
 }
@@ -112,7 +141,7 @@ private final class EvaluateProbe: @unchecked Sendable {
 @Test func hookXPCDown_stillDeniesResetHard() async throws {
     let client = ServiceClient(transport: nil)
     let expected = try grokExpected("deny-git-reset-hard")
-    let wire = await HookRun.run(stdin: try grokFixture("deny-git-reset-hard.json")) { command in
+    let wire = try await runHook(stdin: try grokFixture("deny-git-reset-hard.json")) { command in
         await client.evaluateResult(command: command)
     }
     #expect(wire.stdout == expected.stdout)
@@ -130,7 +159,7 @@ private final class EvaluateProbe: @unchecked Sendable {
     )
     let client = ServiceClient(transport: transport)
     let expected = try grokExpected("deny-git-reset-hard")
-    let wire = await HookRun.run(stdin: try grokFixture("deny-git-reset-hard.json")) { command in
+    let wire = try await runHook(stdin: try grokFixture("deny-git-reset-hard.json")) { command in
         await client.evaluateResult(command: command)
     }
     #expect(transport.sendCount == 0)
@@ -143,79 +172,83 @@ private final class EvaluateProbe: @unchecked Sendable {
     {"hookEventName":"pre_tool_use","permissionMode":"bypassPermissions","toolName":"run_terminal_command","toolInput":{"command":"git reset --hard"}}
     """
     let expected = try grokExpected("deny-git-reset-hard")
-    let wire = await HookRun.run(stdin: stdin)
+    let wire = try await runHook(stdin: stdin)
     #expect(wire.stdout == expected.stdout)
     #expect(wire.exitCode == expected.exit)
 }
 
-@Test func hookProcess_deniesResetHardWithTempHomeAndBypassEnv() async throws {
+@Test func hookAllowEmptyCommand_emptyStdoutExitZero() async throws {
+    let expected = try grokExpected("allow-empty-command")
+    let wire = try await runHook(stdin: try grokFixture("allow-empty-command.json"))
+    #expect(wire.stdout == expected.stdout)
+    #expect(wire.exitCode == expected.exit)
+}
+
+@Test func hookAllowLegacyRunTerminalCmd_emptyStdoutExitZero() async throws {
+    let expected = try grokExpected("allow-legacy-run-terminal-cmd")
+    let wire = try await runHook(stdin: try grokFixture("allow-legacy-run-terminal-cmd.json"))
+    #expect(wire.stdout == expected.stdout)
+    #expect(wire.exitCode == expected.exit)
+}
+
+@Test func hookIgnorePassiveSessionStart_emptyStdoutExitZero() async throws {
+    let expected = try grokExpected("ignore-passive-session-start")
+    let wire = try await runHook(stdin: try grokFixture("ignore-passive-session-start.json"))
+    #expect(wire.stdout == expected.stdout)
+    #expect(wire.exitCode == expected.exit)
+}
+
+@Test func hookDenyReasonIsOneLine_noBannerOrCSI() async throws {
+    let expected = try grokExpected("deny-reason-is-one-line")
+    let wire = try await runHook(stdin: try grokFixture("deny-reason-is-one-line.json"))
+    #expect(wire.stdout == expected.stdout)
+    #expect(wire.exitCode == expected.exit)
+    let parsed = try grokDenyObject(wire.stdout)
+    #expect(parsed.reason.contains("\n") == false)
+    #expect(parsed.reason.contains("═") == false)
+    #expect(parsed.reason.contains("\u{001B}") == false)
+}
+
+@Test func hookRun_deniesResetHardWithTempHomeAndBypassEnv() async throws {
     try await withTempHome { home in
-        let binary = try #require(rvBinaryURL())
-        let stdin = try grokFixture("deny-git-reset-hard.json")
+        var hook = Hook()
+        hook.host = .grok
         let expected = try grokExpected("deny-git-reset-hard")
-        let result = try runRV(
-            binary: binary,
-            arguments: ["hook", "--host", "grok"],
-            stdin: stdin,
-            home: home,
-            extraEnv: ["RV_BYPASS": "1"]
+        let outcome = await hook.run(
+            stdin: try grokFixture("deny-git-reset-hard.json"),
+            environment: [
+                "HOME": home.path,
+                "RV_BYPASS": "1",
+            ],
+            evaluate: inProcessEvaluate
         )
-        #expect(result.exit == expected.exit)
-        #expect(result.stdout == expected.stdout)
-        #expect(result.stderr.isEmpty)
+        #expect(outcome.exitCode == expected.exit)
+        #expect(outcome.stdout == expected.stdout)
+        #expect(outcome.stderr.isEmpty)
         #expect(FileManager.default.fileExists(atPath: home.appendingPathComponent(".grok").path) == false)
     }
 }
 
-private func jsonString(_ value: String) -> String {
-    guard
-        let data = try? JSONSerialization.data(withJSONObject: value, options: .fragmentsAllowed),
-        let text = String(data: data, encoding: .utf8)
-    else {
-        return "\"\""
+@Test func hookUnknownHost_isArgumentParserUsageError() {
+    #expect(throws: (any Error).self) {
+        try Hook.parse(["--host", "unknown"])
     }
-    return text
 }
 
-private func rvBinaryURL() -> URL? {
-    let root = URL(fileURLWithPath: #filePath)
-        .deletingLastPathComponent()
-        .deletingLastPathComponent()
-        .deletingLastPathComponent()
-    let candidates = [
-        root.appendingPathComponent(".build/debug/rv"),
-        root.appendingPathComponent(".build/arm64-apple-macosx/debug/rv"),
-    ]
-    return candidates.first { FileManager.default.isExecutableFile(atPath: $0.path) }
+@Test func hookHostOption_defaultsToGrok() throws {
+    let hook = try Hook.parse([])
+    #expect(hook.host == .grok)
 }
 
-private func runRV(
-    binary: URL,
-    arguments: [String],
-    stdin: String,
-    home: URL,
-    extraEnv: [String: String]
-) throws -> (stdout: String, stderr: String, exit: Int32) {
-    let process = Process()
-    process.executableURL = binary
-    process.arguments = arguments
-    var env = ProcessInfo.processInfo.environment
-    env["HOME"] = home.path
-    for (key, value) in extraEnv {
-        env[key] = value
-    }
-    process.environment = env
-    let inPipe = Pipe()
-    let outPipe = Pipe()
-    let errPipe = Pipe()
-    process.standardInput = inPipe
-    process.standardOutput = outPipe
-    process.standardError = errPipe
-    try process.run()
-    inPipe.fileHandleForWriting.write(Data(stdin.utf8))
-    try inPipe.fileHandleForWriting.close()
-    process.waitUntilExit()
-    let stdout = String(data: outPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-    let stderr = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-    return (stdout, stderr, process.terminationStatus)
+private struct GrokDenyObject {
+    var reason: String
+}
+
+private func grokDenyObject(_ stdout: String) throws -> GrokDenyObject {
+    let data = try #require(stdout.data(using: .utf8))
+    let object = try #require(
+        JSONSerialization.jsonObject(with: data) as? [String: Any]
+    )
+    let reason = try #require(object["reason"] as? String)
+    return GrokDenyObject(reason: reason)
 }

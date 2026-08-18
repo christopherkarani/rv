@@ -4,26 +4,19 @@ import RVDomain
 import RVHooks
 import RVPresentation
 
+extension HookHost: ExpressibleByArgument {}
+
 enum HookRun {
-    static func run(
+    static func run<C: HostCodec>(
         stdin: String,
-        host: HookHost = .grok,
-        evaluate: (@Sendable (String) async -> EvaluationResult)? = nil
+        codec: C,
+        evaluate: @Sendable (ShellCommand) async -> EvaluationResult
     ) async -> HookWire {
-        let codec = GrokHostCodec()
-        guard host == .grok else {
-            return codec.encodeAllow()
-        }
         let request = codec.decode(stdin)
         guard let command = request.command else {
             return codec.encodeAllow()
         }
-        let result: EvaluationResult
-        if let evaluate {
-            result = await evaluate(command.rawValue)
-        } else {
-            result = await ServiceClient().evaluateResult(command: command.rawValue)
-        }
+        let result = await evaluate(command)
         switch result.decision {
         case .allow:
             return codec.encodeAllow()
@@ -42,14 +35,40 @@ struct Hook: AsyncParsableCommand {
     )
 
     @Option(name: .customLong("host"), help: "Host codec.")
-    var hostName: String = "grok"
+    var host: HookHost = .grok
 
     func run() async throws {
         let data = FileHandle.standardInput.readDataToEndOfFile()
         let stdin = String(data: data, encoding: .utf8) ?? ""
-        let host = HookHost(rawValue: hostName) ?? .grok
-        let wire = await HookRun.run(stdin: stdin, host: host)
-        FileHandle.standardOutput.write(Data(wire.stdout.utf8))
-        throw ExitCode(wire.exitCode)
+        let client = ServiceClient()
+        let outcome = await run(
+            stdin: stdin,
+            environment: ProcessInfo.processInfo.environment,
+            evaluate: { command in
+                await client.evaluateResult(command: command)
+            }
+        )
+        FileHandle.standardOutput.write(Data(outcome.stdout.utf8))
+        if !outcome.stderr.isEmpty {
+            FileHandle.standardError.write(Data(outcome.stderr.utf8))
+        }
+        throw ExitCode(outcome.exitCode)
+    }
+
+    func run(
+        stdin: String,
+        environment _: [String: String],
+        evaluate: @Sendable (ShellCommand) async -> EvaluationResult
+    ) async -> (stdout: String, stderr: String, exitCode: Int32) {
+        let wire: HookWire
+        switch host {
+        case .grok:
+            wire = await HookRun.run(
+                stdin: stdin,
+                codec: GrokHostCodec(),
+                evaluate: evaluate
+            )
+        }
+        return (wire.stdout, "", wire.exitCode)
     }
 }
