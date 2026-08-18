@@ -1,0 +1,407 @@
+{
+  "schema_version": 1,
+  "id": "core.filesystem",
+  "name": "Core Filesystem",
+  "version": "0.11.0",
+  "description": "Protects against recursive rm commands and equivalent filesystem destruction outside literal temp subdirectories",
+  "enabled_by_default": true,
+  "keywords": [
+    "rm",
+    "find",
+    "unlink",
+    "truncate",
+    "shred",
+    "tar",
+    "dd",
+    "mv",
+    "cp",
+    "ln",
+    "rsync",
+    ">/",
+    "> /",
+    ">~",
+    "> ~",
+    ">$",
+    "> $",
+    ">\"",
+    "> \"",
+    ">'",
+    "> '",
+    "&>",
+    ">&",
+    ">|",
+    "1>",
+    "2>",
+    ">%",
+    "> %",
+    ">!",
+    "> !",
+    ">^",
+    "> ^"
+  ],
+  "safe_patterns": [
+    {
+      "name": "rm-rf-tmp",
+      "pattern": "^rm\\s+-[a-zA-Z]*[rR][a-zA-Z]*f[a-zA-Z]*\\s+(?:(?:/private)?/tmp/(?!\\.\\.(?:/|\\s|$)|[^\\s]*/\\.\\.(?:/|\\s|$))\\S*(?:\\s+|$))+$",
+      "description": ""
+    },
+    {
+      "name": "rm-fr-tmp",
+      "pattern": "^rm\\s+-[a-zA-Z]*f[a-zA-Z]*[rR][a-zA-Z]*\\s+(?:(?:/private)?/tmp/(?!\\.\\.(?:/|\\s|$)|[^\\s]*/\\.\\.(?:/|\\s|$))\\S*(?:\\s+|$))+$",
+      "description": ""
+    },
+    {
+      "name": "rm-rf-var-tmp",
+      "pattern": "^rm\\s+-[a-zA-Z]*[rR][a-zA-Z]*f[a-zA-Z]*\\s+(?:(?:/private)?/var/tmp/(?!\\.\\.(?:/|\\s|$)|[^\\s]*/\\.\\.(?:/|\\s|$))\\S*(?:\\s+|$))+$",
+      "description": ""
+    },
+    {
+      "name": "rm-fr-var-tmp",
+      "pattern": "^rm\\s+-[a-zA-Z]*f[a-zA-Z]*[rR][a-zA-Z]*\\s+(?:(?:/private)?/var/tmp/(?!\\.\\.(?:/|\\s|$)|[^\\s]*/\\.\\.(?:/|\\s|$))\\S*(?:\\s+|$))+$",
+      "description": ""
+    },
+    {
+      "name": "rm-r-f-tmp",
+      "pattern": "^rm\\s+(-[a-zA-Z]+\\s+)*-[rR]\\s+(-[a-zA-Z]+\\s+)*-f\\s+(?:(?:/private)?/tmp/(?!\\.\\.(?:/|\\s|$)|[^\\s]*/\\.\\.(?:/|\\s|$))\\S*(?:\\s+|$))+$",
+      "description": ""
+    },
+    {
+      "name": "rm-f-r-tmp",
+      "pattern": "^rm\\s+(-[a-zA-Z]+\\s+)*-f\\s+(-[a-zA-Z]+\\s+)*-[rR]\\s+(?:(?:/private)?/tmp/(?!\\.\\.(?:/|\\s|$)|[^\\s]*/\\.\\.(?:/|\\s|$))\\S*(?:\\s+|$))+$",
+      "description": ""
+    },
+    {
+      "name": "rm-r-f-var-tmp",
+      "pattern": "^rm\\s+(-[a-zA-Z]+\\s+)*-[rR]\\s+(-[a-zA-Z]+\\s+)*-f\\s+(?:(?:/private)?/var/tmp/(?!\\.\\.(?:/|\\s|$)|[^\\s]*/\\.\\.(?:/|\\s|$))\\S*(?:\\s+|$))+$",
+      "description": ""
+    },
+    {
+      "name": "rm-f-r-var-tmp",
+      "pattern": "^rm\\s+(-[a-zA-Z]+\\s+)*-f\\s+(-[a-zA-Z]+\\s+)*-[rR]\\s+(?:(?:/private)?/var/tmp/(?!\\.\\.(?:/|\\s|$)|[^\\s]*/\\.\\.(?:/|\\s|$))\\S*(?:\\s+|$))+$",
+      "description": ""
+    },
+    {
+      "name": "rm-recursive-force-tmp",
+      "pattern": "^rm\\s+.*--recursive.*--force\\s+(?:(?:/private)?/tmp/(?!\\.\\.(?:/|\\s|$)|[^\\s]*/\\.\\.(?:/|\\s|$))\\S*(?:\\s+|$))+$",
+      "description": ""
+    },
+    {
+      "name": "rm-force-recursive-tmp",
+      "pattern": "^rm\\s+.*--force.*--recursive\\s+(?:(?:/private)?/tmp/(?!\\.\\.(?:/|\\s|$)|[^\\s]*/\\.\\.(?:/|\\s|$))\\S*(?:\\s+|$))+$",
+      "description": ""
+    },
+    {
+      "name": "rm-recursive-force-var-tmp",
+      "pattern": "^rm\\s+.*--recursive.*--force\\s+(?:(?:/private)?/var/tmp/(?!\\.\\.(?:/|\\s|$)|[^\\s]*/\\.\\.(?:/|\\s|$))\\S*(?:\\s+|$))+$",
+      "description": ""
+    },
+    {
+      "name": "rm-force-recursive-var-tmp",
+      "pattern": "^rm\\s+.*--force.*--recursive\\s+(?:(?:/private)?/var/tmp/(?!\\.\\.(?:/|\\s|$)|[^\\s]*/\\.\\.(?:/|\\s|$))\\S*(?:\\s+|$))+$",
+      "description": ""
+    },
+    {
+      "name": "find-delete-tmp",
+      "pattern": "^(?![^|;&]*[\\\\$`])find\\s+/tmp(?:/(?!\\.\\.(?:/|\\s|$)|[^\\s]*/\\.\\.(?:/|\\s|$))\\S*)?(?:\\s+(?:/tmp(?:/(?!\\.\\.(?:/|\\s|$)|[^\\s]*/\\.\\.(?:/|\\s|$))\\S*)?|-[a-zA-Z][\\S]*(?:\\s+[^/~$\\-\\s][^|;&\\s]*)?))*\\s+-delete(?:\\s+-[a-zA-Z][\\S]*(?:\\s+[^/~$\\-\\s][^|;&\\s]*)?)*\\s*$",
+      "description": ""
+    },
+    {
+      "name": "find-delete-var-tmp",
+      "pattern": "^(?![^|;&]*[\\\\$`])find\\s+/var/tmp(?:/(?!\\.\\.(?:/|\\s|$)|[^\\s]*/\\.\\.(?:/|\\s|$))\\S*)?(?:\\s+(?:/var/tmp(?:/(?!\\.\\.(?:/|\\s|$)|[^\\s]*/\\.\\.(?:/|\\s|$))\\S*)?|-[a-zA-Z][\\S]*(?:\\s+[^/~$\\-\\s][^|;&\\s]*)?))*\\s+-delete(?:\\s+-[a-zA-Z][\\S]*(?:\\s+[^/~$\\-\\s][^|;&\\s]*)?)*\\s*$",
+      "description": ""
+    },
+    {
+      "name": "unlink-tmp",
+      "pattern": "^(?![^|;&]*[\\\\$`])unlink\\s+(?:/private)?/tmp/(?!\\.\\.(?:/|\\s|$)|[^\\s]*/\\.\\.(?:/|\\s|$))\\S+\\s*$",
+      "description": ""
+    },
+    {
+      "name": "unlink-var-tmp",
+      "pattern": "^(?![^|;&]*[\\\\$`])unlink\\s+(?:/private)?/var/tmp/(?!\\.\\.(?:/|\\s|$)|[^\\s]*/\\.\\.(?:/|\\s|$))\\S+\\s*$",
+      "description": ""
+    },
+    {
+      "name": "unlink-help",
+      "pattern": "^unlink\\s+(?:--help|--version)\\s*$",
+      "description": ""
+    },
+    {
+      "name": "truncate-help",
+      "pattern": "^truncate\\s+(?:--help|--version)\\s*$",
+      "description": ""
+    },
+    {
+      "name": "truncate-grow",
+      "pattern": "^truncate\\s+(?:-s\\s+\\+\\S+|--size=\\+\\S+)\\s+\\S+\\s*$",
+      "description": ""
+    },
+    {
+      "name": "truncate-tmp",
+      "pattern": "^(?![^|;&]*[\\\\$`])truncate\\s+(?:-s\\s+\\S+|--size=\\S+)\\s+(?:/private)?/tmp/(?!\\.\\.(?:/|\\s|$)|[^\\s]*/\\.\\.(?:/|\\s|$))\\S+\\s*$",
+      "description": ""
+    },
+    {
+      "name": "truncate-var-tmp",
+      "pattern": "^(?![^|;&]*[\\\\$`])truncate\\s+(?:-s\\s+\\S+|--size=\\S+)\\s+(?:/private)?/var/tmp/(?!\\.\\.(?:/|\\s|$)|[^\\s]*/\\.\\.(?:/|\\s|$))\\S+\\s*$",
+      "description": ""
+    },
+    {
+      "name": "shred-help",
+      "pattern": "^shred\\s+(?:--help|--version)\\s*$",
+      "description": ""
+    },
+    {
+      "name": "shred-tmp",
+      "pattern": "^(?![^|;&]*[\\\\$`])shred(?:\\s+(?:-[a-zA-Z][a-zA-Z0-9_-]*(?:\\s+[^/~$\\-\\s][^\\s|;&]*)?|--[a-z\\-]+(?:=\\S+|\\s+[^/~$\\-\\s][^\\s|;&]*)?))*\\s+(?:/private)?/tmp/(?!\\.\\.(?:/|\\s|$)|[^\\s]*/\\.\\.(?:/|\\s|$))\\S+(?:\\s+(?:-[a-zA-Z][a-zA-Z0-9_-]*(?:\\s+[^/~$\\-\\s][^\\s|;&]*)?|--[a-z\\-]+(?:=\\S+|\\s+[^/~$\\-\\s][^\\s|;&]*)?))*\\s*$",
+      "description": ""
+    },
+    {
+      "name": "shred-var-tmp",
+      "pattern": "^(?![^|;&]*[\\\\$`])shred(?:\\s+(?:-[a-zA-Z][a-zA-Z0-9_-]*(?:\\s+[^/~$\\-\\s][^\\s|;&]*)?|--[a-z\\-]+(?:=\\S+|\\s+[^/~$\\-\\s][^\\s|;&]*)?))*\\s+(?:/private)?/var/tmp/(?!\\.\\.(?:/|\\s|$)|[^\\s]*/\\.\\.(?:/|\\s|$))\\S+(?:\\s+(?:-[a-zA-Z][a-zA-Z0-9_-]*(?:\\s+[^/~$\\-\\s][^\\s|;&]*)?|--[a-z\\-]+(?:=\\S+|\\s+[^/~$\\-\\s][^\\s|;&]*)?))*\\s*$",
+      "description": ""
+    },
+    {
+      "name": "tar-remove-files-tmp",
+      "pattern": "^(?![^|;&]*[\\\\$`])tar(?=\\s+[^|;&]*--remove-files\\b)(?:\\s+(?:-[a-zA-Z][a-zA-Z0-9_-]*(?:\\s+[^/~$\\-\\s][^\\s|;&]*)?|--[a-z\\-]+(?:=\\S+|\\s+[^/~$\\-\\s][^\\s|;&]*)?))*\\s+(?:/private)?/tmp/(?!\\.\\.(?:/|\\s|$)|[^\\s]*/\\.\\.(?:/|\\s|$))\\S+(?:\\s+(?:-[a-zA-Z][a-zA-Z0-9_-]*(?:\\s+[^/~$\\-\\s][^\\s|;&]*)?|--[a-z\\-]+(?:=\\S+|\\s+[^/~$\\-\\s][^\\s|;&]*)?))*\\s*$",
+      "description": ""
+    },
+    {
+      "name": "tar-remove-files-var-tmp",
+      "pattern": "^(?![^|;&]*[\\\\$`])tar(?=\\s+[^|;&]*--remove-files\\b)(?:\\s+(?:-[a-zA-Z][a-zA-Z0-9_-]*(?:\\s+[^/~$\\-\\s][^\\s|;&]*)?|--[a-z\\-]+(?:=\\S+|\\s+[^/~$\\-\\s][^\\s|;&]*)?))*\\s+(?:/private)?/var/tmp/(?!\\.\\.(?:/|\\s|$)|[^\\s]*/\\.\\.(?:/|\\s|$))\\S+(?:\\s+(?:-[a-zA-Z][a-zA-Z0-9_-]*(?:\\s+[^/~$\\-\\s][^\\s|;&]*)?|--[a-z\\-]+(?:=\\S+|\\s+[^/~$\\-\\s][^\\s|;&]*)?))*\\s*$",
+      "description": ""
+    },
+    {
+      "name": "dd-tmp",
+      "pattern": "^(?![^|;&]*[\\\\$`])dd(?=\\s+[^|;&]*\\bof=)(?:\\s+(?:[a-zA-Z]+=\\S+|--?[a-zA-Z][a-zA-Z0-9\\-]*(?:=\\S+)?))*\\s+of=['\"]?(?:/private)?/tmp/(?!\\.\\.(?:/|\\s|$)|[^\\s]*/\\.\\.(?:/|\\s|$))\\S+(?:\\s+(?:(?!of=)[a-zA-Z]+=\\S+|--?[a-zA-Z][a-zA-Z0-9\\-]*(?:=\\S+)?))*\\s*$",
+      "description": ""
+    },
+    {
+      "name": "dd-var-tmp",
+      "pattern": "^(?![^|;&]*[\\\\$`])dd(?=\\s+[^|;&]*\\bof=)(?:\\s+(?:[a-zA-Z]+=\\S+|--?[a-zA-Z][a-zA-Z0-9\\-]*(?:=\\S+)?))*\\s+of=['\"]?(?:/private)?/var/tmp/(?!\\.\\.(?:/|\\s|$)|[^\\s]*/\\.\\.(?:/|\\s|$))\\S+(?:\\s+(?:(?!of=)[a-zA-Z]+=\\S+|--?[a-zA-Z][a-zA-Z0-9\\-]*(?:=\\S+)?))*\\s*$",
+      "description": ""
+    },
+    {
+      "name": "dd-help",
+      "pattern": "^dd\\s+(?:--help|--version)\\s*$",
+      "description": ""
+    },
+    {
+      "name": "mv-tmp",
+      "pattern": "^(?![^|;&]*[\\\\$`])mv(?:\\s+(?:-[a-zA-Z][a-zA-Z0-9_-]*(?:\\s+[^/~$\\-\\s][^\\s|;&]*)?|--[a-z\\-]+(?:=\\S+|\\s+[^/~$\\-\\s][^\\s|;&]*)?))*\\s+(?:(?:/private)?/tmp/(?!\\.\\.(?:/|\\s|$)|[^\\s]*/\\.\\.(?:/|\\s|$))\\S+\\s+)+(?:/private)?/tmp/(?!\\.\\.(?:/|\\s|$)|[^\\s]*/\\.\\.(?:/|\\s|$))\\S+\\s*$",
+      "description": ""
+    },
+    {
+      "name": "mv-var-tmp",
+      "pattern": "^(?![^|;&]*[\\\\$`])mv(?:\\s+(?:-[a-zA-Z][a-zA-Z0-9_-]*(?:\\s+[^/~$\\-\\s][^\\s|;&]*)?|--[a-z\\-]+(?:=\\S+|\\s+[^/~$\\-\\s][^\\s|;&]*)?))*\\s+(?:(?:/private)?/var/tmp/(?!\\.\\.(?:/|\\s|$)|[^\\s]*/\\.\\.(?:/|\\s|$))\\S+\\s+)+(?:/private)?/var/tmp/(?!\\.\\.(?:/|\\s|$)|[^\\s]*/\\.\\.(?:/|\\s|$))\\S+\\s*$",
+      "description": ""
+    },
+    {
+      "name": "mv-help",
+      "pattern": "^mv\\s+(?:--help|--version)\\s*$",
+      "description": ""
+    },
+    {
+      "name": "mv-to-trash",
+      "pattern": "^(?![^|;&]*[\\\\$`])mv(?:[ \\t]+--?[a-zA-Z][a-zA-Z0-9-]*)*(?:[ \\t]+(?:~/|/home/[^/\\s]+/|/Users/[^/\\s]+/|(?:/private)?(?:/var)?/tmp/|\\./)?(?!\\.\\.(?:/|\\s|$)|[^\\s]*/\\.\\.(?:/|\\s|$))[A-Za-z0-9._][^\\s;|&]*)+[ \\t]+(?:~/\\.local/share/Trash|~/\\.Trash)(?:/(?!\\.\\.(?:/|\\s|$)|[^\\s]*/\\.\\.(?:/|\\s|$))[^\\s;|&]*)?\\s*$",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "sed-exec-unverified",
+      "pattern": "(?!)",
+      "severity": "high",
+      "description": "GNU sed executes shell input that the engine cannot statically verify.",
+      "explanation": "Use a literal sed replacement or inspect the fully rendered shell command before allowing execution. Backreferences, '&', and an empty `e` command depend on runtime input."
+    },
+    {
+      "name": "cp-sensitive-then-delete",
+      "pattern": "\\bcp\\b[^|;&]*(?:\\s(?:-[A-Za-z]*a[A-Za-z]*|--archive)\\b)[^|;&]*?(?:\\s|=)(?:['\"\\\\]|\\$['\"])?(?:/(?:etc|usr|bin|sbin|root|boot|lib|lib64|var|home|sys|proc|dev|opt)(?:/|(?=[\\s\\)'\"]|$))|/(?=[\\s\\)'\"]|$)|~(?=\\s|$|/|\\))|\\$\\{?HOME\\b)[^|;&]*?(?:\\s|=)(?:['\"\\\\]|\\$['\"])?(?:/tmp/|/var/tmp/|\\$TMPDIR/|\\$\\{TMPDIR\\}/)[^|;&\\s'\"]*[^|;&]*(?:&&|;|\\|\\|)[^|;&]*\\brm\\b[^|;&]*\\s(?:-[A-Za-z]*[rR][A-Za-z]*f[A-Za-z]*|-[A-Za-z]*f[A-Za-z]*[rR][A-Za-z]*|-[rR]\\s+-f|-f\\s+-[rR]|--recursive\\s+--force|--force\\s+--recursive)[^|;&]*?(?:\\s|=)(?:['\"\\\\]|\\$['\"])?(?:/tmp/|/var/tmp/|\\$TMPDIR/|\\$\\{TMPDIR\\}/)",
+      "severity": "critical",
+      "description": "archive copy of a sensitive path into temp followed by forced recursive deletion is a cross-segment data-loss bypass. EXTREMELY DANGEROUS.",
+      "explanation": "`cp -al /etc /tmp/x && rm -rf /tmp/x` is a propagation variant of the \\ relocate-then-delete bypass: the copy segment is allowed, and the temp \\ delete segment is normally safe, but the compound command can destroy \\ sensitive content or hide irreversible deletion behind a temp path.\n\n\\ Safer alternatives: \\ - Copy beside the original or into a named backup path and verify with `diff -r`. \\ - Do not combine sensitive-source propagation and forced deletion in one command. \\ - Use `rm -ri` if a derived temp tree genuinely needs manual cleanup."
+    },
+    {
+      "name": "ln-symlink-sensitive-then-delete",
+      "pattern": "\\bln\\b[^|;&]*\\s-[A-Za-z]*s[A-Za-z]*[^|;&]*?(?:\\s|=)(?:['\"\\\\]|\\$['\"])?(?:/(?:etc|usr|bin|sbin|root|boot|lib|lib64|var|home|sys|proc|dev|opt)(?:/|(?=[\\s\\)'\"]|$))|/(?=[\\s\\)'\"]|$)|~(?=\\s|$|/|\\))|\\$\\{?HOME\\b)[^|;&]*?(?:\\s|=)(?:['\"\\\\]|\\$['\"])?(?:/tmp/|/var/tmp/|\\$TMPDIR/|\\$\\{TMPDIR\\}/)[^|;&\\s'\"]*[^|;&]*(?:&&|;|\\|\\|)[^|;&]*\\brm\\b[^|;&]*\\s(?:-[A-Za-z]*[rR][A-Za-z]*f[A-Za-z]*|-[A-Za-z]*f[A-Za-z]*[rR][A-Za-z]*|-[rR]\\s+-f|-f\\s+-[rR]|--recursive\\s+--force|--force\\s+--recursive)[^|;&]*?(?:\\s|=)(?:['\"\\\\]|\\$['\"])?(?:/tmp/|/var/tmp/|\\$TMPDIR/|\\$\\{TMPDIR\\}/)",
+      "severity": "critical",
+      "description": "symlink from a sensitive path into temp followed by forced recursive deletion can traverse and destroy the target. EXTREMELY DANGEROUS.",
+      "explanation": "`ln -s /etc /tmp/x && rm -rf /tmp/x/.` can turn an apparently safe temp \\ cleanup into deletion through a symlink. The temp path does not make the \\ operation safe once it points back at a sensitive tree.\n\n\\ Safer alternatives: \\ - Inspect symlinks with `readlink` and `ls -la` before removing anything. \\ - Remove only the link itself with `unlink /tmp/<link>` when that is the intent. \\ - Avoid combining symlink creation and recursive deletion in one command."
+    },
+    {
+      "name": "rsync-sensitive-then-delete",
+      "pattern": "\\brsync\\b[^|;&]*(?:\\s(?:-[A-Za-z]*a[A-Za-z]*|--archive)\\b)[^|;&]*?(?:\\s|=)(?:['\"\\\\]|\\$['\"])?(?:/(?:etc|usr|bin|sbin|root|boot|lib|lib64|var|home|sys|proc|dev|opt)(?:/|(?=[\\s\\)'\"]|$))|/(?=[\\s\\)'\"]|$)|~(?=\\s|$|/|\\))|\\$\\{?HOME\\b)[^|;&]*?(?:\\s|=)(?:['\"\\\\]|\\$['\"])?(?:/tmp/|/var/tmp/|\\$TMPDIR/|\\$\\{TMPDIR\\}/)[^|;&\\s'\"]*[^|;&]*(?:&&|;|\\|\\|)[^|;&]*\\brm\\b[^|;&]*\\s(?:-[A-Za-z]*[rR][A-Za-z]*f[A-Za-z]*|-[A-Za-z]*f[A-Za-z]*[rR][A-Za-z]*|-[rR]\\s+-f|-f\\s+-[rR]|--recursive\\s+--force|--force\\s+--recursive)[^|;&]*?(?:\\s|=)(?:['\"\\\\]|\\$['\"])?(?:/tmp/|/var/tmp/|\\$TMPDIR/|\\$\\{TMPDIR\\}/)",
+      "severity": "critical",
+      "description": "rsync archive of a sensitive path into temp followed by forced recursive deletion is a cross-segment data-loss bypass. EXTREMELY DANGEROUS.",
+      "explanation": "`rsync -a /etc/ /tmp/dest/ && rm -rf /tmp/dest` is the rsync form of the \\ sensitive-source propagation bypass. Archive mode preserves enough structure \\ that the later temp cleanup should require human review.\n\n\\ Safer alternatives: \\ - Run rsync and inspect the destination in a separate step. \\ - Use `--dry-run` for rsync previews. \\ - Use `rm -ri` for manual cleanup of derived temp trees."
+    },
+    {
+      "name": "rm-rf-root-home",
+      "pattern": "rm\\s+-[a-zA-Z]*[rR][a-zA-Z]*f[a-zA-Z]*\\s+['\"\\\\]?(?:[/~]|\\$\\{?HOME\\b)|rm\\s+-[a-zA-Z]*f[a-zA-Z]*[rR][a-zA-Z]*\\s+['\"\\\\]?(?:[/~]|\\$\\{?HOME\\b)",
+      "severity": "critical",
+      "description": "rm -rf on root or home paths is EXTREMELY DANGEROUS. This command will NOT be executed. Ask the user to run it manually if truly needed.",
+      "explanation": "This command would recursively delete files starting from the root filesystem (/) \\ or home directory (~). This is catastrophic and will destroy:\n\n\\ - Your entire operating system \\ - All installed applications and libraries \\ - All user data, documents, and configurations \\ - Boot files, making the system unbootable\n\n\\ There is NO recovery without backups. Even with backups, full restoration \\ takes hours to days.\n\n\\ If you need to delete specific files, use explicit paths: \\ rm -rf /path/to/specific/directory\n\n\\ Always preview what would be deleted first: \\ find /path/to/directory -type f | head -20"
+    },
+    {
+      "name": "rm-r-f-separate-root-home",
+      "pattern": "rm\\s+(-[a-zA-Z]+\\s+)*-[rR]\\s+(-[a-zA-Z]+\\s+)*-f\\s+['\"\\\\]?(?:[/~]|\\$\\{?HOME\\b)|rm\\s+(-[a-zA-Z]+\\s+)*-f\\s+(-[a-zA-Z]+\\s+)*-[rR]\\s+['\"\\\\]?(?:[/~]|\\$\\{?HOME\\b)",
+      "severity": "critical",
+      "description": "rm with separate -r -f flags targeting root or home is EXTREMELY DANGEROUS.",
+      "explanation": "Separate `-r -f` flags on `/` or `~` have identical effect to `rm -rf /`: \\ recursive, forced, silent deletion of the entire filesystem or home directory.\n\n\\ There is NO recovery without backups. Run only if truly intended."
+    },
+    {
+      "name": "rm-recursive-force-root-home",
+      "pattern": "rm\\s+.*--recursive.*--force\\s+['\"\\\\]?(?:[/~]|\\$\\{?HOME\\b)|rm\\s+.*--force.*--recursive\\s+['\"\\\\]?(?:[/~]|\\$\\{?HOME\\b)",
+      "severity": "critical",
+      "description": "rm --recursive --force targeting root or home is EXTREMELY DANGEROUS.",
+      "explanation": "The long-flag form has identical effect to `rm -rf /`: recursive, forced, \\ silent deletion. Run only if truly intended."
+    },
+    {
+      "name": "rm-rf-general",
+      "pattern": "rm\\s+-[a-zA-Z]*[rR][a-zA-Z]*f|rm\\s+-[a-zA-Z]*f[a-zA-Z]*[rR]",
+      "severity": "high",
+      "description": "rm -rf is destructive and requires human approval. Explain what you want to delete and why, then ask the user to run the command manually.",
+      "explanation": "rm -rf recursively removes files and directories without confirmation prompts. \\ The -f (force) flag suppresses all warnings, making accidental deletions \\ silent and immediate.\n\n\\ Why this is dangerous: \\ - Deleted files bypass the trash - they're gone immediately \\ - Typos in paths can delete unintended directories \\ - Wildcards can expand to match more than expected \\ - No undo mechanism exists\n\n\\ Safe alternatives: \\ - rm -ri: Interactive mode, confirms each file \\ - trash-cli: Moves files to trash instead of deleting \\ - rm -rf in literal /tmp or /var/tmp subdirectories: Allowed \\ - Variable-rooted paths such as $TMPDIR: Reviewed because the environment may point anywhere\n\n\\ Preview what would be deleted: \\ find /path/to/delete -type f | wc -l # Count files \\ ls -la /path/to/delete # List contents"
+    },
+    {
+      "name": "rm-glob-home",
+      "pattern": "(?:^|[^\\w-])rm\\b[^|;&\\n]*?[ \\t](?:~|/Users|/home|\\$\\{?HOME\\}?)/[^|;&\\s]*[*?\\[]",
+      "severity": "high",
+      "description": "rm with an unexpanded glob under a home directory deletes an unbounded, shell-chosen file set and requires human approval.",
+      "explanation": "The glob is expanded by the shell at execution time, so the author cannot \\ review the exact file set being deleted: `rm -f ~/Downloads/*.md` removes \\ every matching file, exactly like the already-blocked recursive forms.\n\n\\ Safer alternatives: \\ - Preview the expansion first: `ls ~/Downloads/*.md` \\ - Delete explicitly named files: `rm ~/Downloads/one-file.md` \\ - Move to trash instead: `mv ~/Downloads/*.md ~/.local/share/Trash/`"
+    },
+    {
+      "name": "rm-r-f-separate",
+      "pattern": "rm\\s+(-[a-zA-Z]+\\s+)*-[rR]\\s+(-[a-zA-Z]+\\s+)*-f|rm\\s+(-[a-zA-Z]+\\s+)*-f\\s+(-[a-zA-Z]+\\s+)*-[rR]",
+      "severity": "high",
+      "description": "rm with separate -r -f flags is destructive and requires human approval.",
+      "explanation": "rm with separate -r and -f flags has the same effect as rm -rf: recursive \\ forced deletion without confirmation.\n\n\\ Common variations that are all equivalent: \\ - rm -r -f path \\ - rm -f -r path \\ - rm -r -f -v path (verbose but still forced)\n\n\\ All carry the same risks as rm -rf: immediate, silent, irreversible deletion.\n\n\\ This rule matches the -r/-f flag PAIR, not a filesystem path, so it also \\ fires when `rm` is another tool's subcommand (`git rm -r -f`, \\ `bq rm -r -f`). The recursive-force semantics still apply, but to that \\ tool's objects — tracked files and index entries for git, a dataset and \\ everything in it for bq — not to a directory tree. Enable that tool's pack \\ for guidance written for it; this rule is the backstop when it is not.\n\n\\ Safer approach for temporary directories: \\ - rm -r -f /tmp/mydir # Allowed - temp directories are safe \\ - Resolve and inspect $TMPDIR before using it as a deletion root\n\n\\ For other paths, prefer: \\ rm -ri /path # Interactive confirmation"
+    },
+    {
+      "name": "rm-recursive-force-long",
+      "pattern": "rm\\s+.*--recursive.*--force|rm\\s+.*--force.*--recursive",
+      "severity": "high",
+      "description": "rm --recursive --force is destructive and requires human approval.",
+      "explanation": "rm --recursive --force is the long-form equivalent of rm -rf. While more \\ readable, it carries identical risks: silent, recursive, irreversible deletion.\n\n\\ The long flags may appear in: \\ - Scripts aiming for clarity \\ - Generated code from build tools \\ - Cross-platform compatibility scenarios\n\n\\ All standard rm -rf precautions apply: \\ - Verify the path before running \\ - Use absolute paths to avoid ambiguity \\ - Consider using trash-cli for recoverable deletion\n\n\\ Preview command: \\ find /path --maxdepth 2 -ls | head -30"
+    },
+    {
+      "name": "find-delete-root-home",
+      "pattern": "\\bfind\\b[^|;&]*?(?:\\s|=)['\"\\\\]?(?:/(?:etc|usr|bin|sbin|root|boot|lib|lib64|var|home|sys|proc|dev|opt)(?:/|(?=\\s|$|['\"]))|/(?=\\s|$|['\"])|~(?=\\s|$|/)|\\$\\{?HOME\\b)[^|;&]*?\\s-delete(?:\\s|$|[;&|)\\n])",
+      "severity": "critical",
+      "description": "find <sensitive-path> -delete is bytewise-equivalent to rm -rf on root/home and is EXTREMELY DANGEROUS. This command will NOT be executed.",
+      "explanation": "`find <path> -delete` is the bytewise-equivalent of `rm -rf <path>`: \\ it recursively removes every file and (when -depth is implied) every \\ directory matched by the predicate. Targeting `/`, `~`, `$HOME`, or any \\ top-level system directory (`/etc`, `/usr`, `/var`, `/home`, `/boot`, \\ `/dev`, `/proc`, `/sys`, `/lib`, `/lib64`, `/opt`, `/root`) destroys \\ the operating system or user data the same way `rm -rf` would.\n\n\\ There is NO recovery without backups.\n\n\\ If you only need to delete files matching a pattern, use a much more \\ specific path: \\ find /path/to/specific/subdir -name '*.tmp' -delete\n\n\\ Always preview first: \\ find /path -type f | head -20"
+    },
+    {
+      "name": "find-delete-general",
+      "pattern": "\\bfind\\b[^|;&]*\\s-delete(?:\\s|$|[;&|)\\n])",
+      "severity": "high",
+      "description": "find ... -delete is destructive (bytewise-equivalent to rm -rf on the matched tree) and requires human approval.",
+      "explanation": "`find ... -delete` recursively deletes every path matched by the find \\ expression. The action flag `-delete` implies `-depth` (so directories \\ are deleted after their contents). With no path predicate it deletes \\ the entire starting tree. Common pitfalls:\n\n\\ - `find . -delete` deletes the current working directory's contents. \\ - `find <path> -delete` with a wide -name glob matches more than expected. \\ - `-delete` errors are silent by default — failures don't stop the walk.\n\n\\ Safer alternatives: \\ - Drop -delete to preview: `find <path> ...` (just lists matches) \\ - Add -print -delete to log each deletion as it happens \\ - Use `find /tmp/<subdir> ... -delete` (allowed under temp dirs) \\ - For a few files: `find ... | xargs -t -p rm -i` for confirmation"
+    },
+    {
+      "name": "unlink-root-home",
+      "pattern": "\\bunlink\\s+['\"\\\\]?(?:/(?:etc|usr|bin|sbin|root|boot|lib|lib64|var|home|sys|proc|dev|opt)(?:/|(?=\\s|$|['\"]))|/(?=\\s|$|['\"])|~(?=\\s|$|/)|\\$\\{?HOME\\b)",
+      "severity": "critical",
+      "description": "unlink on a sensitive system or home path is one-shot data destruction with no recovery. EXTREMELY DANGEROUS.",
+      "explanation": "`unlink <file>` is the raw POSIX unlink(2) primitive: it removes a single \\ directory entry without prompting, without trash, without backup. On a \\ sensitive system file (`/etc/passwd`, `/etc/shadow`, `/etc/sudoers`) or \\ a home-directory key (`~/.ssh/id_ed25519`, `$HOME/.gnupg/...`) the result \\ is irrecoverable.\n\n\\ There is NO recovery without backups.\n\n\\ Safer alternatives: \\ - `mv <file> <file>.deleted-YYYYMMDD` then verify nothing breaks, then \\ `unlink <file>.deleted-...` after a few days. \\ - `cp <file> <file>.bak && unlink <file>` to keep an explicit backup. \\ - `unlink /tmp/<subdir>/scratch` is allowed (temp dirs)."
+    },
+    {
+      "name": "unlink-general",
+      "pattern": "\\bunlink\\s+\\S",
+      "severity": "high",
+      "description": "unlink is destructive (POSIX equivalent of rm on a single file) and requires human approval.",
+      "explanation": "`unlink <file>` removes a single directory entry without confirmation, \\ without trash, without backup. While not as broad as `rm -rf`, a typo in \\ the target path destroys an unintended file.\n\n\\ Safer alternatives: \\ - Verify the path with `ls -la <file>` first. \\ - Make a backup: `cp <file> <file>.bak`. \\ - For temp scratch: `unlink /tmp/<subdir>/scratch` is allowed. \\ - Use `mv <file> /tmp/quarantine-<file>` if you want a delayed delete."
+    },
+    {
+      "name": "truncate-zero-root-home",
+      "pattern": "\\btruncate\\b[^|;&]*?(?:\\s-s\\s+(?!\\+)\\S+|\\s--size=(?!\\+)\\S+)[^|;&]*?\\s+['\"\\\\]?(?:/(?:etc|usr|bin|sbin|root|boot|lib|lib64|var|home|sys|proc|dev|opt)(?:/|(?=\\s|$|['\"]))|/(?=\\s|$|['\"])|~(?=\\s|$|/)|\\$\\{?HOME\\b)",
+      "severity": "critical",
+      "description": "truncate with a potentially shrinking size on a sensitive system or home path destroys data. EXTREMELY DANGEROUS.",
+      "explanation": "`truncate -s 0 <file>` zeros a file in place. `truncate -s -<N> <file>` \\ shrinks a file by N bytes (destroying the trailing data). On a sensitive \\ system file (`/etc/passwd`, `/etc/shadow`, `/etc/sudoers`) or a home-\\ directory key/credential the result is irrecoverable.\n\n\\ There is NO recovery without backups.\n\n\\ Safer alternatives: \\ - Make a backup first: `cp <file> <file>.bak && truncate -s 0 <file>`. \\ - For growth (NOT shrink): `truncate -s +<N>` is allowed (no data loss). \\ - For temp scratch: `truncate -s 0 /tmp/<subdir>/scratch` is allowed."
+    },
+    {
+      "name": "truncate-zero-general",
+      "pattern": "\\btruncate\\b[^|;&]*?(?:\\s-s\\s+(?!\\+)\\S+|\\s--size=(?!\\+)\\S+)",
+      "severity": "high",
+      "description": "truncate with an absolute or shrinking size can destroy file content and requires human approval.",
+      "explanation": "`truncate -s 0 <file>` zeros a file in place; `truncate -s -<N> <file>` \\ shrinks it by N bytes. Both destroy data without confirmation, without \\ trash, without backup. While not as broad as `rm`, a typo in the target \\ path destroys an unintended file.\n\n\\ Safer alternatives: \\ - Verify the size first: `wc -c <file>`. \\ - Make a backup: `cp <file> <file>.bak && truncate -s 0 <file>`. \\ - For growth: `truncate -s +<N>` (allowed; non-destructive). \\ - For temp scratch: `truncate -s 0 /tmp/<subdir>/scratch` is allowed."
+    },
+    {
+      "name": "shred-root-home",
+      "pattern": "\\bshred\\b[^|;&]*?\\s+['\"\\\\]?(?:/(?:etc|usr|bin|sbin|root|boot|lib|lib64|var|home|sys|proc|dev|opt)(?:/|(?=\\s|$|['\"]))|/(?=\\s|$|['\"])|~(?=\\s|$|/)|\\$\\{?HOME\\b)",
+      "severity": "critical",
+      "description": "shred on a sensitive system or home path destroys data beyond forensic recovery. EXTREMELY DANGEROUS.",
+      "explanation": "`shred` overwrites file content with random data (DoD-style multi-pass by \\ default). With `-u`/`--remove`/`-fzu` the file is also unlinked. On a \\ sensitive system file (`/etc/passwd`, `/etc/shadow`, `/etc/sudoers`) or a \\ home-directory key/credential the result is unrecoverable even with \\ specialised forensics — that is shred's entire design intent.\n\n\\ There is NO recovery without backups.\n\n\\ Safer alternatives: \\ - Verify the path with `ls -la <file>` first. \\ - Make a backup: `cp <file> <file>.bak && shred -u <file>`. \\ - For temp scratch: `shred -u /tmp/<subdir>/scratch` is allowed. \\ - For modern SSDs, single-pass is sufficient: `shred -n 1 -u <file>`."
+    },
+    {
+      "name": "shred-general",
+      "pattern": "\\bshred\\s+(?:-[a-zA-Z]+\\s+|--[a-z\\-]+\\s+|--[a-z\\-]+=\\S+\\s+)*\\S",
+      "severity": "high",
+      "description": "shred destroys file content beyond recovery and requires human approval.",
+      "explanation": "`shred` overwrites file content with random data; `-u`/`--remove` adds an \\ unlink step. The whole point is that the data cannot be recovered. While \\ not as broad as `rm -rf`, a typo in the target path destroys an unintended \\ file with no possibility of undo.\n\n\\ Safer alternatives: \\ - Verify the path with `ls -la <file>` first. \\ - Make a backup: `cp <file> <file>.bak`. \\ - For temp scratch: `shred -u /tmp/<subdir>/scratch` is allowed. \\ - On modern SSDs `shred` may not actually overwrite the underlying flash \\ cells; use `cryptsetup erase` or vendor secure-erase utilities instead."
+    },
+    {
+      "name": "tar-remove-files-root-home",
+      "pattern": "\\btar\\b[^|;&]*?\\s--remove-files\\b[^|;&]*?(?:\\s|=)['\"\\\\]?(?:/(?:etc|usr|bin|sbin|root|boot|lib|lib64|var|home|sys|proc|dev|opt)(?:/|(?=[\\s\\)'\"]|$))|/(?=[\\s\\)'\"]|$)|~(?=\\s|$|/|\\))|\\$\\{?HOME\\b)|\\btar\\b[^|;&]*?(?:\\s|=)['\"\\\\]?(?:/(?:etc|usr|bin|sbin|root|boot|lib|lib64|var|home|sys|proc|dev|opt)(?:/|(?=[\\s\\)'\"]|$))|/(?=[\\s\\)'\"]|$)|~(?=\\s|$|/|\\))|\\$\\{?HOME\\b)[^|;&]*?\\s--remove-files\\b",
+      "severity": "critical",
+      "description": "tar --remove-files on a sensitive system or home path is recursive deletion masquerading as an archive operation. EXTREMELY DANGEROUS.",
+      "explanation": "`tar --remove-files -cf <archive> <source>` first archives the source paths \\ into <archive>, then deletes the originals. With a sensitive source \\ (`/etc`, `/usr`, `/var`, `/home/<user>`, `~`, `$HOME`, ...) the result is \\ bytewise-equivalent to `rm -rf <source>`. With `-cf /dev/null` the archive \\ is discarded entirely, making this a pure recursive delete with no audit \\ trail.\n\n\\ There is NO recovery without backups.\n\n\\ Safer alternatives: \\ - Drop `--remove-files`: `tar -cf out.tar <source>` (sources preserved). \\ - Two-step with confirmation: `tar -cf out.tar <source> && rm -ri <source>`. \\ - Verify the source first: `ls -la <source>`. \\ - Allowed for temp dirs: `tar --remove-files -cf out.tar /tmp/<subdir>`."
+    },
+    {
+      "name": "tar-remove-files-general",
+      "pattern": "\\btar\\b[^|;&]*?\\s--remove-files\\b",
+      "severity": "high",
+      "description": "tar --remove-files deletes source paths after archiving and requires human approval.",
+      "explanation": "`tar --remove-files <source>` deletes the source paths once they have been \\ archived. While not as broad as `rm -rf`, a typo or wide glob in the source \\ list destroys files the agent did not intend to remove. With `-cf /dev/null` \\ the archive itself is discarded — the operation becomes a pure delete.\n\n\\ Safer alternatives: \\ - Drop `--remove-files` to preserve sources after archiving. \\ - Verify the source list with `ls -la` before running. \\ - For temp scratch: `tar --remove-files -cf out.tar /tmp/<subdir>` is allowed."
+    },
+    {
+      "name": "dd-overwrite-root-home",
+      "pattern": "\\bdd\\b[^|;&]*?\\bof=['\"\\\\]?(?!/dev/)(?:/(?:etc|usr|bin|sbin|root|boot|lib|lib64|var|home|sys|proc|opt)(?:/|(?=[\\s\\)'\"]|$))|/(?=[\\s\\)'\"]|$)|~(?=\\s|$|/|\\))|\\$\\{?HOME\\b)",
+      "severity": "critical",
+      "description": "dd of=<sensitive-path> overwrites file contents in place. EXTREMELY DANGEROUS on a system or home file.",
+      "explanation": "`dd if=/dev/zero of=<file>` and `dd if=/dev/urandom of=<file>` overwrite the \\ file's contents in place — the `truncate -s 0` equivalent at the dd layer. \\ On a sensitive system file (`/etc/passwd`, `/etc/shadow`, `/etc/sudoers`) or \\ a home-directory key/credential the result is irrecoverable. Even without an \\ explicit input source (`dd of=<file>` reads from stdin), the file's content \\ is destroyed.\n\n\\ There is NO recovery without backups.\n\n\\ Safer alternatives: \\ - Make a backup first: `cp <file> <file>.bak && dd if=/dev/zero of=<file>`. \\ - For read-only verification: `dd if=<file> of=/dev/null` (output discarded). \\ - For temp scratch: `dd if=/dev/zero of=/tmp/<subdir>/scratch` is allowed.\n\n\\ Device-level dd (`dd of=/dev/sda`) is governed by the `system.disk` pack \\ — enable it for partition-table protection."
+    },
+    {
+      "name": "dd-overwrite-general",
+      "pattern": "\\bdd\\b[^|;&]*?\\bof=['\"\\\\]?(?!/dev/)\\S",
+      "severity": "high",
+      "description": "dd with of=<file> overwrites file contents and requires human approval.",
+      "explanation": "`dd of=<file>` overwrites the file's contents (with the input from `if=` \\ or stdin if no input source is given). While not as broad as `rm -rf`, a \\ typo in the target path destroys an unintended file with no possibility of \\ undo.\n\n\\ Safer alternatives: \\ - Verify the path first: `ls -la <file>`. \\ - Make a backup: `cp <file> <file>.bak && dd if=/dev/zero of=<file>`. \\ - Read-only verification: `dd if=<file> of=/dev/null`. \\ - For temp scratch: `dd if=/dev/zero of=/tmp/<subdir>/scratch` is allowed. \\ - For device writes: enable the `system.disk` pack."
+    },
+    {
+      "name": "mv-sensitive-source-root-home",
+      "pattern": "\\bmv\\b[^|;&]*?(?:\\s|=)(?:['\"\\\\]|\\$['\"])?(?:/(?:etc|usr|bin|sbin|root|boot|lib|lib64|var|home|sys|proc|dev|opt)(?:/|(?=[\\s\\)'\"]|$))|/(?=[\\s\\)'\"]|$)|~(?=\\s|$|/|\\))|\\$\\{?HOME\\b)",
+      "severity": "critical",
+      "description": "mv touching a sensitive system or home path is the cross-segment recursive-force-delete bypass. EXTREMELY DANGEROUS.",
+      "explanation": "`mv /etc /tmp/x && rm -rf /tmp/x` is the canonical cross-segment bypass: \\ each segment is individually allowed (mv-to-tmp is benign; rm-rf-in-tmp \\ is safe) but the pair destroys `/etc`. The same shape closes via \\ `mv /etc /dev/null`, `mv $HOME /tmp/x`, or any \"relocate then delete\" chain.\n\n\\ Any mv that mentions a sensitive path (source OR destination — `/etc`, \\ `/usr`, `/var`, `/home`, `~`, `$HOME`, ...) blocks here, including \\ in-place renames within /etc.\n\n\\ Safer alternatives: \\ - Backup with copy + verify + delete: \\ `cp -a <source> <source>.bak && diff -r <source> <source>.bak && rm -rf <source>` \\ - Soft-delete via in-place rename: `mv <file> <file>.deleted-YYYYMMDD` \\ (use `the engine allow-once` for the rename, then a follow-up `rm` after a soak period). \\ - Pure tmp-to-tmp moves: `mv /tmp/<a> /tmp/<b>` is allowed."
+    },
+    {
+      "name": "mv-dynamic-path",
+      "pattern": "\\bmv\\b[^|;&]*[\\\\$`]",
+      "severity": "high",
+      "description": "mv with a shell-expanded or escaped path cannot be verified before execution.",
+      "explanation": "Shell variables and command substitutions are controlled by the calling environment and may resolve to `/`, `/etc`, a home directory, or another persistent tree. Backslash escapes can also hide traversal from lexical path checks, so the engine cannot safely classify this move.\n\n\\ Safer alternatives: \\ - Resolve and inspect every path before moving it. \\ - Use an explicit literal `/tmp/<subdir>` or `/var/tmp/<subdir>` path. \\ - Use `the engine allow-once` only after verifying the resolved source and destination."
+    },
+    {
+      "name": "redirect-truncate-root-home",
+      "pattern": "(?<![<>])(?:&>|>&|\\*>|(?:[0-9]+|\\{[A-Za-z_][A-Za-z0-9_]*\\})?>\\|?)\\s*(?:['\"\\\\]|\\$['\"])?(?!/dev/(?:null|zero|full)\\b)(?:/(?:etc|usr|bin|sbin|root|boot|lib|lib64|var|home|sys|proc|dev|opt)(?:/|(?=[\\s\\)'\"]|$))|/(?=[\\s\\)'\"]|$)|~(?=\\s|$|/|\\))|\\$\\{?HOME\\b)",
+      "severity": "critical",
+      "description": "shell truncating redirect (including arbitrary numeric, named, and PowerShell all-stream forms) to a sensitive system or home path destroys the previous file contents. EXTREMELY DANGEROUS.",
+      "explanation": "`> /etc/passwd` (or `: > /etc/passwd`, `echo > /etc/passwd`, etc.) opens \\ the target file with O_WRONLY|O_CREAT|O_TRUNC — the contents are destroyed \\ before any write happens. This applies equally to `>|` (force-overwrite), \\ `&>` / `>&` (stdout+stderr to file), and numbered FD forms (`1>`, `2>`, `1>|`, \\ `2>|`). All of these are silent, immediate, irrecoverable.\n\n\\ There is NO recovery without backups.\n\n\\ Safer alternatives: \\ - Use append (`>>`) to preserve existing content: `echo line >> <file>`. \\ - Make a backup: `cp <file> <file>.bak && echo data > <file>`. \\ - For temp scratch: `> /tmp/<subdir>/scratch` is allowed. \\ - Read redirects (`< <file>`) are not affected — they don't truncate."
+    },
+    {
+      "name": "redirect-truncate-dynamic-path",
+      "pattern": "(?<![<>])(?:&>|>&|\\*>|(?:[0-9]+|\\{[A-Za-z_][A-Za-z0-9_]*\\})?>\\|?)\\s*(?:[^|;&\\s]*[\\\\$`]|~[A-Za-z_][^|;&\\s]*|(?!(?:/tmp|/var/tmp)(?:/|(?=[\\s|;&]|$)))/[^|;&\\s]*['\"?*\\[][^|;&\\s]*|[%!][^|;&\\s]*|\\^(?!(?:/tmp|/var/tmp)(?:/|(?=[\\s|;&]|$)))[^|;&\\s]+)",
+      "severity": "high",
+      "description": "shell redirect to a dynamic or escaped path may truncate a sensitive file and requires human approval.",
+      "explanation": "The redirect target is expanded by the shell at runtime, so the engine cannot prove where it points before the file is opened with O_TRUNC.\n\n\\ Safer alternatives: \\ - Resolve and inspect the target path first. \\ - Use a literal `/tmp/<subdir>/scratch` path for disposable output. \\ - Use append (`>>`) when preserving existing content is acceptable."
+    },
+    {
+      "name": "fork-bomb",
+      "pattern": "([A-Za-z0-9_:]+)\\s*\\(\\s*\\)\\s*\\{\\s*\\1\\s*\\|\\s*\\1\\s*&\\s*;?\\s*\\}\\s*;\\s*\\1",
+      "severity": "critical",
+      "description": "This is a fork bomb: it recursively spawns processes until the system is unusable.",
+      "explanation": "A fork bomb defines a function that pipes itself into itself in the \\ background and then calls it. Process count grows exponentially until \\ the kernel can no longer schedule anything; the machine typically \\ needs a hard reboot, losing all unsaved work in every application.\n\n\\ There is no legitimate reason to run this shape. If you are testing \\ process limits, use `ulimit -u` in a disposable VM or container."
+    }
+  ]
+}

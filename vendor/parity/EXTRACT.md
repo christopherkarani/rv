@@ -1,7 +1,6 @@
 # Extract map
 
-No extractor in T0; T1 fills core JSON; T9 fills catalog.
-Do not vendor the Rust tree.
+T1 filled day-one JSON from a local `--source-root` already at tag `v0.11.0` / commit `2ed7eeef1ae63d204495f02312c657dd6d9bf73d`. No extractor in T0; T9 fills catalog. Do not vendor the Rust tree.
 
 | Field | Value |
 |---|---|
@@ -13,22 +12,31 @@ Do not vendor the Rust tree.
 
 ## Upstream → dest
 
-Do not clone or copy the upstream tree into this repo in T0.
-
-| Path at tag `v0.11.0` | Dest / later owner |
+| Path at tag `v0.11.0` | Dest / owner |
 |---|---|
-| `SKILL.md` | `Tests/RVEngineTests/Fixtures/corpus/` (T1) |
-| `src/packs/core/git.rs` | `Sources/RVPacks/Resources/packs/` as `core.git` JSON (T1) |
-| `src/packs/core/filesystem.rs` | `Sources/RVPacks/Resources/packs/` as `core.filesystem` JSON (T1) |
-| `src/packs/core/mod.rs` | Core pack module (T1) |
-| `src/packs/mod.rs` | Pack registry (T1 / T9) |
-| `src/packs/*/` | Remaining catalog JSON, default-off (T9). Includes `windows/` as data only — do not claim Windows support. |
-| `docs/packs/README.md` | Pack ID index (T9) |
+| `src/packs/core/git.rs` | `Sources/RVPacks/Resources/packs/core.git.json` |
+| `src/packs/core/filesystem.rs` | `Sources/RVPacks/Resources/packs/core.filesystem.json` |
+| `SKILL.md` | L2 corpus decisions in `Tests/RVEngineTests/Fixtures/corpus/` (not a vendored copy) |
+| `src/packs/*/` | Remaining catalog JSON, default-off (T9) |
 
-| rv path | Later owner |
-|---|---|
-| `vendor/parity/PIN` | T0 (this ticket) |
-| `vendor/parity/EXTRACT.md` | This map |
-| `Sources/RVPacks/Resources/packs/` | T1: `core.git` + `core.filesystem` JSON. T9: remaining JSON, default-off. |
-| `Tests/RVEngineTests/Fixtures/corpus/` | T1 SKILL.md + core fixtures. |
-| `tools/extract-packs/` | Future extractor entrypoint. |
+## Name sets (source wins)
+
+`core.git`: 6 safe, 14 destructive. Matches the T1 checklist, including semantic-only `(?!)` rows `git-alias-semantic-unverified` and `branch-dynamic-token`.
+
+`core.filesystem`: 33 safe, 28 destructive. Matches the T1 checklist, including semantic-only `(?!)` row `sed-exec-unverified`.
+
+Regenerate:
+
+```sh
+python3 tools/extract-packs/extract_core_packs.py --source-root /path/to/checkout-at-v0.11.0
+```
+
+Reason / explanation strings are name-hygiene sanitized on extract. Pattern strings are the 0.11.0 regexes unchanged.
+
+## Source-wins notes
+
+- `git push -uf` matches extracted `push-force-short` (`-[a-zA-Z]*f[a-zA-Z]*\b`). Do not rewrite the regex.
+- `git restore --worktree file.txt` and `git restore -W file.txt` first-match `restore-worktree` (that pattern only excludes `--staged`/`-S` and is listed first). `restore-worktree-explicit` fires when a staged flag is also present, e.g. `git restore -S -W file.txt`. Do not reorder the extracted rules.
+- `rm -rf /var/log` matches extracted `rm-rf-root-home` because that regex treats a `/` prefix as root/home. `rm -rf ./src` remains `rm-rf-general`. Do not rewrite the regex.
+- `$TMPDIR` / `${TMPDIR}` are not safe `rm -rf` prefixes.
+- Medium `stash-drop` is allow + match.

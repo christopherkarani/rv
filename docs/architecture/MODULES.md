@@ -28,7 +28,7 @@ Each module keeps a small public API, `package` internals later, and its own tes
 | `RVDomain` | none | Types in T1. |
 | `RVTheme` | none | Palettes in T2. No business rules. |
 | `RVEngine` | `RVDomain` | Must not depend on Packs, Hooks, CLI, TUI, Service. |
-| `RVPacks` | `RVDomain` | Resource dir reserved; no JSON yet. |
+| `RVPacks` | `RVDomain` | Day-one JSON: `core.git` + `core.filesystem`. |
 | `RVPolicy` | `RVDomain` | Config/allowlist later. |
 | `RVHooks` | `RVDomain` | Pi/Grok/OpenCode codecs later. |
 | `RVIPC` | `RVDomain` | `rv.ipc.v1` Codable later. |
