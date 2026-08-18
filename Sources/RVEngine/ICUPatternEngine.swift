@@ -20,7 +20,15 @@ public struct ICUPatternEngine: PatternEngine, Sendable {
     }
 
     public func matches(_ compiled: ICUCompiledPattern, in text: String) -> Bool {
-        let range = NSRange(text.startIndex..., in: text)
-        return compiled.regex.firstMatch(in: text, options: [], range: range) != nil
+        let full = NSRange(text.startIndex..., in: text)
+        return compiled.regex.firstMatch(in: text, options: [], range: full) != nil
+    }
+
+    public func firstMatch(_ compiled: ICUCompiledPattern, in text: String) -> Range<String.Index>? {
+        let full = NSRange(text.startIndex..., in: text)
+        guard let match = compiled.regex.firstMatch(in: text, options: [], range: full) else {
+            return nil
+        }
+        return Range(match.range, in: text)
     }
 }

@@ -1,3 +1,13 @@
+public struct MatchSpan: Sendable, Equatable {
+    public var start: Int
+    public var end: Int
+
+    public init(start: Int, end: Int) {
+        self.start = start
+        self.end = end
+    }
+}
+
 public struct RuleMatch: Sendable, Equatable {
     public var ruleID: RuleID
     public var packID: PackID
@@ -5,6 +15,10 @@ public struct RuleMatch: Sendable, Equatable {
     public var severity: Severity
     public var reason: String
     public var explanation: String?
+    public var regex: String?
+    public var span: MatchSpan?
+    public var matchedText: String?
+    public var searchText: String?
 
     public init(
         ruleID: RuleID,
@@ -12,7 +26,11 @@ public struct RuleMatch: Sendable, Equatable {
         patternName: String,
         severity: Severity,
         reason: String,
-        explanation: String? = nil
+        explanation: String? = nil,
+        regex: String? = nil,
+        span: MatchSpan? = nil,
+        matchedText: String? = nil,
+        searchText: String? = nil
     ) {
         self.ruleID = ruleID
         self.packID = packID
@@ -20,6 +38,10 @@ public struct RuleMatch: Sendable, Equatable {
         self.severity = severity
         self.reason = reason
         self.explanation = explanation
+        self.regex = regex
+        self.span = span
+        self.matchedText = matchedText
+        self.searchText = searchText
     }
 }
 
