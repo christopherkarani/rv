@@ -1,0 +1,3 @@
+Command: git status
+
+Result: ALLOWED

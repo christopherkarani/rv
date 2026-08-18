@@ -149,7 +149,7 @@ public actor ServiceRuntime {
             result: result,
             normalized: normalized,
             ruleID: result.matched?.ruleID,
-            packID: result.matched?.packID ?? result.matchedSafe?.pack,
+            packID: result.matched?.packID ?? result.matchedSafe?.packID,
             suggestion: suggestion,
             stages: stages
         )

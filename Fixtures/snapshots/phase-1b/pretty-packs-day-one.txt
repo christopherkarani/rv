@@ -1,0 +1,2 @@
+core.filesystem  on
+core.git         on

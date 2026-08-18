@@ -1,0 +1,1 @@
+{"schema":"rv.test.v1","decision":"deny","pack_id":"core.git","rule_id":"core.git:reset-hard","reason":"git reset --hard destroys uncommitted changes"}

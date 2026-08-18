@@ -10,7 +10,7 @@ Ship pretty, snapshot-stable CLI UX for **TTY human** `rv test` and `rv explain`
 
 - **Allow is silent** on the host/hook path. No banner, no panel, no “allowed by rv.”
 - **Pretty deny / explain / packs** render only on TTY human CLI (`rv test`, `rv explain`). Packs pretty is a view-model + renderer in this ticket; the `rv packs` command stays T9.
-- **Voice:** Vercel-quiet. One fact, one next action. No DCG `═══` box, no second command echo, no tip essay.
+- **Voice:** Hooks stay one fact, one next action (`hostDenyText`). `rv test` pretty is a labeled briefing: `Command` plus caret match, then Pack / Pattern / Reason / Explanation / Source, ending in `Result: BLOCKED|ALLOWED|INCOMPLETE`. Wrap at the live TTY width (tests pin 80). Labels dim; pack cyan, pattern yellow, essay titles silver, `Result` red/green. `rv explain` is a nested tree: `RV EXPLAIN` title, uppercase `Decision: DENY|ALLOW|INCOMPLETE`, pack `explanation` with blank section breaks, matched regex, and a day-one Suggestions catalog. No `═══` box, no second command echo, no latency dump, no interactive prompt.
 - **Stack:** `RVTheme` + `RVPresentation` + `RVTUI`, driven by a thin `RVCLI` pretty shell. TUI is `reduce` + `render` → `[String]`. No I/O in `reduce`/`render`.
 - **Modes:** robot / pretty / browse. Browse is eligible only when both stdin and stdout are TTYs and the process is not `--json` / `--robot` / `--plain` / `CI` / `NO_COLOR`.
 - **Gate:** L2 — pretty + deny snapshots green on the T1 SKILL.md / core-pack corpus. Decisions stay T1’s; T2 only renders them.
@@ -71,9 +71,29 @@ public struct DenyViewModel: Equatable, Sendable {
     public var nextAction: String          // one imperative
 }
 
-public struct ExplainStep: Equatable, Sendable {
-    public var name: String                // normalize | quick-reject | safe | destructive | default
-    public var outcome: String             // no microseconds
+public struct TestViewModel: Equatable, Sendable {
+    public var command: ShellCommand
+    public var span: MatchSpan?            // remapped onto command
+    public var matchedLabel: String?       // colon rule_id
+    public var packDisplay: String?
+    public var patternName: String?
+    public var reason: String?             // full pack reason on deny
+    public var explanation: String?        // pack essay on deny
+    public var source: String?             // "pack" on deny
+    public var resultWord: String          // ALLOWED | BLOCKED | INCOMPLETE
+    public var resultTone: DecisionTone
+}
+
+public enum ExplainStep: Equatable, Sendable {
+    enum Scan { case skipped, scanned }
+    enum Hit { case none, rule(RuleID) }
+    enum Fallthrough { case allow, incomplete }
+    case normalize                          // display outcome: prepared
+    case quickReject(Scan)
+    case safe(Hit)
+    case destructive(Hit)
+    case `default`(Fallthrough)
+    // display: label = stage name; outcome text has no microseconds
 }
 
 public struct ExplainViewModel: Equatable, Sendable {
@@ -82,9 +102,17 @@ public struct ExplainViewModel: Equatable, Sendable {
     public var decision: Decision
     public var packID: PackID?
     public var ruleID: RuleID?
+    public var patternName: String?
+    public var severity: Severity?
     public var fact: String                // allow: "allow"; deny: reason sentence
+    public var explanation: String?        // pack essay; pretty explain prints it
+    public var regex: String?              // matched pattern text; explain only
     public var nextAction: String?         // nil on allow
     public var steps: [ExplainStep]
+    public var suggestions: [ExplainSuggestion]  // day-one catalog; omit group if empty
+    // Display seams for TUI (no Decision switch in RVTUI):
+    // heading, decisionWord, explainDecisionWord, decisionTone,
+    // ruleDisplay, packDisplay, severityDisplay
 }
 
 public struct PackRow: Equatable, Sendable {
@@ -107,7 +135,9 @@ Builders (pure; take T1 results + copy tables, not clocks):
 | Function | Contract |
 |---|---|
 | `denyViewModel(from: EvaluationResult, command: ShellCommand) -> DenyViewModel?` | `nil` on allow. Never used by hook codecs. |
+| `testViewModel(from: EvaluationResult, command: ShellCommand) -> TestViewModel` | Always. Pretty `rv test` frame. |
 | `explainViewModel(from: EvaluationResult, command: ShellCommand) -> ExplainViewModel` | Always. Timing omitted or fixed `0` — snapshots must not flake. |
+| `explainSteps(from: EvaluationResult) -> [ExplainStep]` | Projects `Decision` + `matched` / `matchedSafe` / `quickRejected` only. Does not re-run the pipeline. |
 | `packsViewModel(enabled: [PackID], catalog: [(PackID, String)]) -> PacksViewModel` | Day-one rows: `core.git`, `core.filesystem`. Others off if present. |
 | `hostDenyText(from: EvaluationResult, command: ShellCommand) -> String?` | `nil` on `Decision.allow` (medium/low match included). On `Decision.indeterminate`: PLAN incomplete-eval sentence, no pack `rule_id` (“rv could not finish evaluating this command. Run it in Terminal.”). On `Decision.deny`: **one sentence** + `rule_id` + next step. No panel, no ANSI, no second command echo, no redeemable code. T4/T5 consume this string for deny **and** indeterminate. They must still switch on `Decision` — `nil` is not a synonym for allow if the decision was never inspected. |
 
@@ -116,9 +146,9 @@ Voice lock (do not paraphrase in implementation):
 | Surface | Allow | Deny |
 |---|---|---|
 | Hook / host | empty (T4/T5; T2 must not add a pretty hook helper) | `hostDenyText` only |
-| `rv test` pretty | one line: `allow` | `DenyViewModel` → pretty lines |
+| `rv test` pretty | `Command:` + `Result: ALLOWED` | `TestViewModel` → Command + caret + Pack/Pattern/Reason/Explanation/Source + `Result: BLOCKED` |
 | `rv test` robot | one JSON object, `decision: allow` | one JSON object, `decision: deny` |
-| `rv explain` pretty | fact `allow` + steps, no next action | fact + next action + steps |
+| `rv explain` pretty | `RV EXPLAIN` + `Decision: ALLOW` + Command + Pipeline, no next action | `RV EXPLAIN` + `Decision: DENY` + Command + Match (incl. regex) + Explanation + Pipeline + Suggestions + Next |
 
 Canonical deny fact (SKILL.md / DCG reason, not a new essay):
 
@@ -157,16 +187,31 @@ public enum RequestedMode: Equatable, Sendable {
     case browse
 }
 
-public struct ThemeProbe: Equatable, Sendable {
+public struct TTYPair: Equatable, Sendable {
     public var stdinIsTTY: Bool
     public var stdoutIsTTY: Bool
-    public var jsonFlag: Bool
-    public var robotFlag: Bool
-    public var plainFlag: Bool
-    public var noColorFlag: Bool
-    public var ci: Bool              // `CI` env present
-    public var noColorEnv: Bool      // `NO_COLOR` present (any value)
-    public var termDumb: Bool        // `TERM=dumb`
+    public var isBrowseEligible: Bool   // both TTY
+    public var canCarryColor: Bool      // stdout is TTY
+}
+
+public struct OutputForbid: Equatable, Sendable {
+    public var json: Bool
+    public var robot: Bool
+    public var plain: Bool
+    public var ci: Bool
+    public var noColor: NoColor         // flag / env / termDumb
+    public var isBrowseEligible: Bool   // not json/robot/plain/CI/NO_COLOR
+    public var canCarryColor: Bool      // not plain/CI/color-off
+}
+
+public struct ThemeProbe: Equatable, Sendable {
+    public var terminal: TTYPair
+    public var forbid: OutputForbid
+    public var columns: Int
+    // Spec field names stay as computed accessors from the 10-bool initializer:
+    // stdinIsTTY, stdoutIsTTY, jsonFlag, robotFlag, plainFlag, noColorFlag,
+    // ci, noColorEnv, termDumb
+    public var isBrowseEligible: Bool
 }
 
 public struct ColorCapability: Equatable, Sendable {
@@ -181,14 +226,20 @@ public struct Palette: Equatable, Sendable {
     public var muted: String
     public var deny: String
     public var allow: String
+    public var heading: String     // Command / Pack: bold cyan
+    public var mark: String        // Match / Suggestions: bold yellow
+    public var trace: String       // Pipeline: bold blue
+    public var silver: String      // essay titles (Why / Safe / Preview)
+    public var regex: RegexInk     // meta / escape / posix name; empty when color off
 }
 ```
 
 Pure functions (no `ProcessInfo`, no `isatty` inside Theme — CLI builds `ThemeProbe`):
 
-- `resolveOutputMode(probe:requested:) -> OutputMode` — see next section.
-- `colorCapability(probe:mode:) -> ColorCapability`
-- `palette(for: ColorCapability) -> Palette` — when colors are off, every slot is `""` (or identity) so renderers never emit `0x1B`.
+- `OutputMode(probe:requested:)` — see next section.
+- `ColorCapability(probe:mode:)`
+- `Palette(for: ColorCapability)` — when colors are off, every slot is `""` (or identity) so renderers never emit `0x1B`.
+- Spec names until T9 (thin wrappers): `resolveOutputMode(probe:requested:)`, `colorCapability(probe:mode:)`, `palette(for:)`, `browseEligible(_:)`.
 
 Robot mode **never** has color. `CI`, `NO_COLOR`, `--plain`, `--no-color`, `TERM=dumb` never have color.
 
@@ -218,28 +269,38 @@ Renderers T2 must ship (all `render → [String]`, no trailing ANSI when `colors
 
 | Renderer | Model | Used by |
 |---|---|---|
-| `DenyRenderer` | `DenyViewModel` | `rv test` pretty deny |
+| `TestRenderer` | `TestViewModel` | `rv test` pretty |
 | `ExplainRenderer` | `ExplainViewModel` | `rv explain`, `rv test --explain` |
 | `PacksRenderer` | `PacksViewModel` | snapshots + T9 later |
 | `BrowseRenderer` | `BrowseState` | TUI tests only in T2 |
 
-Pretty deny frame (color off, width-stable, command **once**):
+Pretty deny frame (color off, width-stable, command **once**). Labeled briefing on TTY only; hooks still get `hostDenyText` only. No tree, no `Next` row, no interactive prompt:
 
 ```
-blocked  git reset --hard
-core.git/reset-hard  git reset --hard destroys uncommitted changes
-run it in Terminal, or rv allow-once
+Command: git reset --hard
+         ^^^^^^^^^^^^^^^^
+         └── Matched: core.git:reset-hard
+
+Pack: core.git
+Pattern: reset-hard
+Reason: git reset --hard destroys uncommitted changes. Use 'git stash' first.
+Explanation: <flattened pack essay>
+
+Source: pack
+Result: BLOCKED
 ```
 
 Pretty allow frame:
 
 ```
-allow
+Command: git status
+
+Result: ALLOWED
 ```
 
-No banner, no pack list, no next action, no checkmark.
+No banner, no pack list, no next action, no checkmark. Medium/low matches stay `Result: ALLOWED` (optional caret if a span exists). `Matched` uses the colon `rule_id` (`core.git:reset-hard`). Carets sit under the matched span; on a color TTY they are red and `Matched:` is yellow.
 
-Pretty explain adds the step list under the fact/next-action block. Step names are stable tokens (`normalize`, `quick-reject`, `safe`, `destructive`, `default`). No `μs`.
+Pretty explain is a nested labeled tree. Flush-left root is `RV EXPLAIN` (unstyled). First child is `Decision: DENY|ALLOW|INCOMPLETE` (uppercase; deny red / allow green). Section titles are not one color: Command cyan, Match and Suggestions yellow, Pipeline blue, Explanation unstyled. Children use `├──` / `└──` / `│   ` guides: Command (`Input`), Match on a rule hit (Rule / Pack / Pattern / Regex / Severity / Reason), a top-level Explanation group when the pack essay is present, Pipeline, Suggestions when the day-one catalog has rows for that `rule_id`, and `Next` on deny. Incomplete eval has a top-level Reason leaf and **no** Match group. Pack `explanation` is flattened (wrap markers, `\ - ` bullets), keeps one blank spacer between sections, and is stripped of inline markdown (`**`, backticks, `[text](url)` → `text (url)`). Leave `_` in identifiers (`id_ed25519`, `O_TRUNC`). Match `Regex` is the raw pattern when color is off; on a color TTY it paints metas, escapes, and POSIX class names. Step names stay `normalize`, `quick-reject`, `safe`, `destructive`, `default`. No `μs`. Suggestions are Presentation copy keyed by `rule_id` (preview / safer / workflow / docs). Do not invent a one-time permit code. Do not copy a foreign product name. `rv test` pretty is the briefing above, not the explain tree. Hooks stay `hostDenyText` only — no panel, no regex, no suggestions.
 
 ### RVCLI — imperative shell
 
@@ -313,18 +374,18 @@ Checked-in goldens under `Fixtures/snapshots/phase-1b/`. Render with a **fixed**
 
 | File | Input | Assert |
 |---|---|---|
-| `pretty-deny-git-reset-hard.txt` | `git reset --hard` | `blocked`, command once, `core.git/reset-hard`, reason, next action |
-| `pretty-deny-rm-rf.txt` | T1 filesystem deny (e.g. `rm -rf /Users/me/src`, not a temp path) | `core.filesystem` + T1 `rule_id` + reason + next action |
-| `pretty-allow-git-status.txt` | `git status` | exactly `allow` |
-| `pretty-explain-git-reset-hard.txt` | explain same deny | fact + next action + stable step tokens; no `μs` |
-| `pretty-explain-git-status.txt` | explain allow | `allow`, steps, **no** next action |
+| `pretty-deny-git-reset-hard.txt` | `git reset --hard` | `Command`, caret, `Matched: core.git:reset-hard`, Pack/Pattern/Reason/Explanation/Source, `Result: BLOCKED` |
+| `pretty-deny-rm-rf.txt` | T1 filesystem deny (e.g. `rm -rf ./src`, not a temp path) | `Matched: core.filesystem:rm-rf-general` + pack essay + `Result: BLOCKED` |
+| `pretty-allow-git-status.txt` | `git status` | `Command: git status` + `Result: ALLOWED` |
+| `pretty-explain-git-reset-hard.txt` | explain same deny | `RV EXPLAIN`, `Decision: DENY`, Match includes regex, top-level Explanation + Suggestions; no `μs` |
+| `pretty-explain-git-status.txt` | explain allow | `RV EXPLAIN`, `Decision: ALLOW`, Command, steps, **no** next action |
 | `pretty-packs-day-one.txt` | day-one catalog | `core.git` + `core.filesystem` enabled; no extra default-on packs |
 | `robot-allow-git-status.json` | `rv test --robot` | `rv.test.v1` + `allow` |
 | `robot-deny-git-reset-hard.json` | `rv test --robot` | `deny` + `pack_id` + `rule_id` + reason; parse as JSON |
 | `host-deny-text-git-reset-hard.txt` | `hostDenyText` | one line; contains `core.git/reset-hard` and `rv allow-once`; no box chars |
 | `nocolor-deny-no-esc.txt` | pretty deny with `NO_COLOR` / `colorsEnabled == false` | **zero** `0x1B` bytes |
 
-Also assert (tests, not extra files): `hostDenyText` never contains `═`, `┌`, or CSI sequences; pretty allow never contains `blocked` / `deny`; robot allow has no `reason` banner.
+Also assert (tests, not extra files): `hostDenyText` never contains `═`, `┌`, or CSI sequences; pretty allow never contains `BLOCKED` / `deny`; robot allow has no `reason` banner.
 
 Corpus overlap: every SKILL.md deny T1 already pins must have a pretty deny snapshot **or** share the deny renderer via a table-driven test that checks `rule_id` + fact + next action. Do not invent new verdicts.
 
@@ -347,7 +408,8 @@ Sources/RVTUI/BrowseState.swift
 Sources/RVTUI/Reduce.swift
 Sources/RVTUI/Render.swift
 Sources/RVTUI/KeyMap.swift
-Sources/RVTUI/DenyRenderer.swift
+Sources/RVTUI/TestRenderer.swift
+Sources/RVPresentation/TestViewModel.swift
 Sources/RVTUI/ExplainRenderer.swift
 Sources/RVTUI/PacksRenderer.swift
 Sources/RVCLI/OutputModeResolver.swift
@@ -372,7 +434,7 @@ If T0 used a single stub file per module, replace the stub; do not leave a secon
 ## Acceptance
 
 1. `rv test "git reset --hard"` on a TTY-simulated pretty probe prints the deny snapshot and exits `1`.
-2. `rv test "git status"` pretty prints exactly `allow` and exits `0`. No banner.
+2. `rv test "git status"` pretty prints `Command: git status` and `Result: ALLOWED`, exits `0`. No banner.
 3. `rv explain "git reset --hard"` pretty matches the explain snapshot and exits `0`.
 4. `--json` / `--robot` emit `rv.test.v1` JSON only. No ANSI. No pretty panel.
 5. `--plain`, `NO_COLOR`, `CI`: no `0x1B` bytes. Browse resolver returns non-browse.
@@ -436,9 +498,9 @@ T2 is done when a fresh agent can say: **the block is visible in Terminal, invis
 
 - `feat/t2-ux` contains Presentation / Theme / TUI / CLI pretty only.
 - `rv test` / `rv explain` pretty + robot + host-deny-text snapshots are green (L2).
-- Allow pretty is one word; hook pretty does not exist.
+- Allow pretty is `Command` + `Result: ALLOWED`; hook pretty does not exist.
 - Browse cannot turn on unless both stdin+stdout are TTYs and none of `--json` / `--robot` / `--plain` / `CI` / `NO_COLOR` apply.
 - `reduce` / `render` are pure and TTY-free.
 - T1 corpus still green. Verdicts unchanged.
 - No IPC / XPC / launchd ownership. No ryk edits. No `RV_BYPASS`.
-- Voice on every deny: one fact, one next action — the sentence that later becomes the agent-visible block.
+- Voice on hook deny: one fact, one next action (`hostDenyText`). Pretty `rv test` is the labeled briefing, not that sentence.

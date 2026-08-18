@@ -72,7 +72,8 @@ private func run(
 @Test func evaluate_safeThenDestructiveThenAllow() throws {
     let checkout = try run("git checkout -b x")
     #expect(checkout.decision == .allow)
-    #expect(checkout.matchedSafe?.name == "checkout-new-branch")
+    #expect(checkout.matchedSafe?.packID == .coreGit)
+    #expect(checkout.matchedSafe?.patternName == "checkout-new-branch")
 
     let discard = try run("git checkout -- .")
     guard case .deny(let deny) = discard.decision else {
@@ -102,6 +103,18 @@ private func run(
     let result = try run("git stash drop")
     #expect(result.decision == .allow)
     #expect(result.matched?.ruleID.rawValue == "core.git:stash-drop")
+}
+
+@Test func evaluate_matchCopiesRegex() throws {
+    let result = try run("git reset --hard")
+    #expect(result.matched?.regex == #"git\s+reset\s+--hard"#)
+}
+
+@Test func evaluate_matchCopiesSpanAndText() throws {
+    let result = try run("git reset --hard")
+    #expect(result.matched?.matchedText == "git reset --hard")
+    #expect(result.matched?.span == MatchSpan(start: 0, end: 16))
+    #expect(result.matched?.searchText == "git reset --hard")
 }
 
 @Test func evaluate_oversizeIsIndeterminate() throws {
@@ -141,4 +154,63 @@ private func run(
     )
     let result = try run("git reset --hard", packs: [empty] + samplePacks().filter { $0.id == .coreFilesystem })
     #expect(result.decision == .indeterminate(.corePacksUnavailable))
+}
+
+/// `matches` would fire; `firstMatch` is the sole destructive hit test.
+private struct HitlessPatternEngine: PatternEngine {
+    func compile(_ pattern: String) throws -> String { pattern }
+    func matches(_ compiled: String, in text: String) -> Bool { true }
+    func firstMatch(_ compiled: String, in text: String) -> Range<String.Index>? { nil }
+}
+
+@Test func evaluate_destructiveHitRequiresFirstMatch() throws {
+    let packs = [
+        PackSnapshot(
+            id: .coreFilesystem,
+            name: "fs",
+            description: "fs",
+            keywords: ["rm"],
+            safe: [],
+            destructive: [
+                DestructiveRule(
+                    name: "rm-rf-general",
+                    pattern: #"rm\s+-rf"#,
+                    severity: .high,
+                    reason: "rm -rf is destructive"
+                )
+            ]
+        ),
+        PackSnapshot(
+            id: .coreGit,
+            name: "git",
+            description: "git",
+            keywords: ["git"],
+            safe: [],
+            destructive: [
+                DestructiveRule(
+                    name: "reset-hard",
+                    pattern: #"git\s+reset\s+--hard"#,
+                    severity: .critical,
+                    reason: "git reset --hard destroys uncommitted changes"
+                )
+            ]
+        )
+    ]
+    let engine = HitlessPatternEngine()
+    let compiled = try CompiledPacks<String>.compile(packs: packs, using: engine)
+    let result = evaluate(
+        EvaluationRequest(
+            command: ShellCommand(rawValue: "git reset --hard"),
+            enabledPacks: dayOnePackIDs
+        ),
+        packs: packs,
+        patterns: engine,
+        compiled: compiled
+    )
+    #expect(result.decision == .allow)
+    #expect(result.matched == nil)
+    if case .deny = result.decision {
+        Issue.record("matches-without-firstMatch must not deny")
+        #expect(result.matched?.span != nil)
+    }
 }
