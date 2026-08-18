@@ -2,7 +2,7 @@ import RVDomain
 import RVPresentation
 
 enum RobotWriter {
-    static func line(result: EvaluationResult, command _: ShellCommand) -> String {
+    static func line(result: EvaluationResult) -> String {
         switch result.decision {
         case .allow:
             return compact(["schema": "rv.test.v1", "decision": "allow"])

@@ -135,13 +135,24 @@ private func evaluateSingle<E: PatternEngine>(
                 return EvaluationResult(decision: .indeterminate(.budgetExhausted))
             }
             guard patterns.matches(rule.compiled, in: view) else { continue }
+            let range = patterns.firstMatch(rule.compiled, in: view)
+            let span = range.map { hit in
+                MatchSpan(
+                    start: view.distance(from: view.startIndex, to: hit.lowerBound),
+                    end: view.distance(from: view.startIndex, to: hit.upperBound)
+                )
+            }
             let match = RuleMatch(
                 ruleID: RuleID(pack: pack.snapshot.id, pattern: rule.rule.name),
                 packID: pack.snapshot.id,
                 patternName: rule.rule.name,
                 severity: rule.rule.severity,
                 reason: rule.rule.reason,
-                explanation: rule.rule.explanation
+                explanation: rule.rule.explanation,
+                regex: rule.rule.pattern,
+                span: span,
+                matchedText: range.map { String(view[$0]) },
+                searchText: view
             )
             if rule.rule.severity.blocksByDefault {
                 return EvaluationResult(

@@ -104,6 +104,18 @@ private func run(
     #expect(result.matched?.ruleID.rawValue == "core.git:stash-drop")
 }
 
+@Test func evaluate_matchCopiesRegex() throws {
+    let result = try run("git reset --hard")
+    #expect(result.matched?.regex == #"git\s+reset\s+--hard"#)
+}
+
+@Test func evaluate_matchCopiesSpanAndText() throws {
+    let result = try run("git reset --hard")
+    #expect(result.matched?.matchedText == "git reset --hard")
+    #expect(result.matched?.span == MatchSpan(start: 0, end: 16))
+    #expect(result.matched?.searchText == "git reset --hard")
+}
+
 @Test func evaluate_oversizeIsIndeterminate() throws {
     let command = String(repeating: "a", count: 65_537)
     let result = try run(command)

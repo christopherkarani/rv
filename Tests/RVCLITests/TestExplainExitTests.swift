@@ -62,16 +62,16 @@ private func robotProbe() -> ThemeProbe {
     #expect(trimOneNewline(result.stdout) == (try loadSnapshot("pretty-deny-git-reset-hard.txt")))
 }
 
-@Test func test_prettyAllow_gitStatus_exit0() {
+@Test func test_prettyAllow_gitStatus_exit0() throws {
     let result = CommandRun.run(
         kind: .test,
         command: "git status",
-        probe: prettyProbe(),
+        probe: prettyProbe(plain: true),
         requested: .automatic
     )
     #expect(result.exitCode == 0)
-    #expect(trimOneNewline(result.stdout) == "allow")
-    #expect(!result.stdout.contains("blocked"))
+    #expect(trimOneNewline(result.stdout) == (try loadSnapshot("pretty-allow-git-status.txt")))
+    #expect(!result.stdout.localizedCaseInsensitiveContains("blocked"))
     #expect(!result.stdout.contains("denied"))
 }
 
@@ -137,10 +137,12 @@ private func robotProbe() -> ThemeProbe {
         kind: .test,
         result: result,
         command: ShellCommand(rawValue: "git stash drop"),
-        probe: prettyProbe(),
+        probe: prettyProbe(plain: true),
         requested: .pretty
     )
-    #expect(trimOneNewline(pretty.stdout) == "allow")
+    #expect(pretty.stdout.contains("Command: git stash drop"))
+    #expect(pretty.stdout.contains("Result: ALLOWED"))
+    #expect(!pretty.stdout.contains("Result: BLOCKED"))
 }
 
 @Test func hostDenyText_indeterminateNoRuleID() {
@@ -151,6 +153,55 @@ private func robotProbe() -> ThemeProbe {
 
 @Test func prettyWriter_joinsWithNewline() {
     #expect(PrettyWriter.join(["a", "b"]) == "a\nb\n")
+}
+
+@Test func test_prettyDeny_doesNotFallBackToAllow() {
+    let result = EvaluationResult(
+        decision: .deny(
+            Deny(
+                ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+                reason: "git reset --hard destroys uncommitted changes"
+            )
+        )
+    )
+    let rendered = CommandRun.render(
+        kind: .test,
+        result: result,
+        command: ShellCommand(rawValue: "git reset --hard"),
+        probe: prettyProbe(plain: true),
+        requested: .pretty
+    )
+    #expect(rendered.exitCode == 1)
+    #expect(rendered.stdout.contains("Result: BLOCKED"))
+    #expect(!rendered.stdout.contains("Result: ALLOWED"))
+}
+
+@Test func test_prettyIndeterminate_isPlanSentence() {
+    let rendered = CommandRun.render(
+        kind: .test,
+        result: EvaluationResult(decision: .indeterminate(.corePacksUnavailable)),
+        command: ShellCommand(rawValue: "git status"),
+        probe: prettyProbe(plain: true),
+        requested: .pretty
+    )
+    #expect(rendered.exitCode == 1)
+    #expect(rendered.stdout.contains("Command: git status"))
+    #expect(rendered.stdout.contains(incompleteEvalSentence))
+    #expect(rendered.stdout.contains("Result: INCOMPLETE"))
+}
+
+@Test func test_prettyDeny_pipelineHighlightsDenyingSegment() {
+    let rendered = CommandRun.run(
+        kind: .test,
+        command: "rm -rf /tmp/foo && rm -rf ./src",
+        probe: prettyProbe(plain: true),
+        requested: .pretty
+    )
+    #expect(rendered.exitCode == 1)
+    #expect(rendered.stdout.contains("Command: rm -rf /tmp/foo && rm -rf ./src"))
+    #expect(rendered.stdout.contains("\n" + String(repeating: " ", count: 28) + "^^^^^^\n"))
+    #expect(rendered.stdout.contains("Matched: core.filesystem:rm-rf-general"))
+    #expect(!rendered.stdout.contains("\n" + String(repeating: " ", count: 9) + "^^^^^^"))
 }
 
 @Test func testExplain_sameExitAsTest() {

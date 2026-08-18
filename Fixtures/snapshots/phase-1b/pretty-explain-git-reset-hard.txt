@@ -1,6 +1,45 @@
-git reset --hard destroys uncommitted changes
-run it in Terminal, or rv allow-once
-normalize     prepared
-quick-reject  scanned
-safe          none
-destructive   core.git/reset-hard
+RV EXPLAIN
+├── Decision: DENY
+├── Command
+│   └── Input        git reset --hard
+├── Match
+│   ├── Rule         core.git/reset-hard
+│   ├── Pack         core.git
+│   ├── Pattern      reset-hard
+│   ├── Regex        (?:^|[^[:alnum:]_-])git\s+(?:\S+\s+)*reset\s+--hard
+│   ├── Severity     critical
+│   └── Reason       git reset --hard destroys uncommitted changes
+├── Explanation
+│   ├── git reset --hard discards ALL uncommitted changes in your working
+│   │   directory AND staging area. This is one of the most dangerous git
+│   │   commands because changes that were never committed cannot be recovered
+│   │   by any means.
+│   │   
+│   ├── What gets destroyed:
+│   ├── • All modified files revert to the target commit
+│   ├── • All staged changes are lost
+│   ├── • Untracked files remain (use git clean to remove those)
+│   │   
+│   ├── Safer alternatives:
+│   ├── • git reset --soft <ref>: Move HEAD but keep all changes staged
+│   ├── • git reset --mixed <ref>: Move HEAD, unstage changes, keep working dir
+│   │   (default)
+│   ├── • git stash: Save changes before resetting
+│   │   
+│   └── Preview what would be lost: git status && git diff
+├── Pipeline
+│   ├── normalize    prepared
+│   ├── quick-reject scanned
+│   ├── safe         none
+│   └── destructive  core.git/reset-hard
+├── Suggestions
+│   ├── Preview first: Run `git diff` and `git status` to see what would be lost
+│   │   └── $ git diff && git status
+│   ├── Safer alternative: Use `git reset --soft` or `--mixed` to preserve
+│   │   changes
+│   │   └── $ git reset --soft
+│   ├── Workflow fix: Consider using `git stash` to save changes temporarily
+│   │   └── $ git stash
+│   └── Documentation: See Git documentation for reset options
+│       └── See: https://git-scm.com/docs/git-reset
+└── Next         run it in Terminal, or rv allow-once

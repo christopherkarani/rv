@@ -180,6 +180,11 @@ private struct ModeCase {
     #expect(off.muted.isEmpty)
     #expect(off.deny.isEmpty)
     #expect(off.allow.isEmpty)
+    #expect(off.heading.isEmpty)
+    #expect(off.mark.isEmpty)
+    #expect(off.trace.isEmpty)
+    #expect(off.silver.isEmpty)
+    #expect(off.regex == .off)
     #expect(!off.reset.contains("\u{001B}"))
 }
 
@@ -188,4 +193,14 @@ private struct ModeCase {
     #expect(on.colorsEnabled)
     #expect(on.reset.contains("\u{001B}"))
     #expect(on.deny.contains("\u{001B}"))
+    #expect(on.heading.contains("\u{001B}"))
+    #expect(on.mark.contains("\u{001B}"))
+    #expect(on.trace.contains("\u{001B}"))
+    #expect(on.silver.contains("\u{001B}"))
+    #expect(on.silver != on.heading)
+    #expect(on.heading != on.mark)
+    #expect(on.mark != on.trace)
+    #expect(on.regex.meta.contains("\u{001B}"))
+    #expect(on.regex.escape.contains("\u{001B}"))
+    #expect(on.regex.name.contains("\u{001B}"))
 }

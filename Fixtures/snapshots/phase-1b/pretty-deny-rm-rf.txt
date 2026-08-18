@@ -1,3 +1,32 @@
-blocked  rm -rf ./src
-core.filesystem/rm-rf-general  rm -rf is destructive and requires human approval
-run it in Terminal, or rv allow-once
+Command: rm -rf ./src
+         ^^^^^^
+         └── Matched: core.filesystem:rm-rf-general
+
+Pack: core.filesystem
+Pattern: rm-rf-general
+Reason: rm -rf is destructive and requires human approval. Explain what you
+  want to delete and why, then ask the user to run the command manually.
+Explanation: rm -rf recursively removes files and directories without
+  confirmation prompts. The -f (force) flag suppresses all warnings,
+  making accidental deletions silent and immediate.
+
+
+  Why this is dangerous:
+    • Deleted files bypass the trash - they're gone immediately
+    • Typos in paths can delete unintended directories
+    • Wildcards can expand to match more than expected
+    • No undo mechanism exists
+
+
+  Safe alternatives:
+    • rm -ri: Interactive mode, confirms each file
+    • trash-cli: Moves files to trash instead of deleting
+    • rm -rf in literal /tmp or /var/tmp subdirectories: Allowed
+    • Variable-rooted paths such as $TMPDIR: Reviewed because the environment
+    may point anywhere
+
+
+  Preview what would be deleted: find /path/to/delete -type f | wc -l # Count
+  files ls -la /path/to/delete # List contents
+Source: pack
+Result: BLOCKED

@@ -1,6 +1,10 @@
-allow
-normalize     prepared
-quick-reject  scanned
-safe          none
-destructive   none
-default       allow
+RV EXPLAIN
+├── Decision: ALLOW
+├── Command
+│   └── Input        git status
+└── Pipeline
+    ├── normalize    prepared
+    ├── quick-reject scanned
+    ├── safe         none
+    ├── destructive  none
+    └── default      allow

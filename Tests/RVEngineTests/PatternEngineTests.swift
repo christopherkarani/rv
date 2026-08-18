@@ -8,6 +8,21 @@ import Testing
     #expect(!engine.matches(compiled, in: "git reset --soft"))
 }
 
+@Test func icu_firstMatchReportsCharacterRange() throws {
+    let engine = ICUPatternEngine()
+    let reset = try engine.compile(#"(?:^|[^[:alnum:]_-])git\s+(?:\S+\s+)*reset\s+--hard"#)
+    let resetRange = try #require(engine.firstMatch(reset, in: "git reset --hard"))
+    let resetText = "git reset --hard"
+    #expect(resetText[resetRange] == "git reset --hard")
+    #expect(resetText.distance(from: resetText.startIndex, to: resetRange.lowerBound) == 0)
+    #expect(resetText.distance(from: resetText.startIndex, to: resetRange.upperBound) == 16)
+
+    let rm = try engine.compile(#"rm\s+-[a-zA-Z]*[rR][a-zA-Z]*f"#)
+    let rmText = "rm -rf ./src"
+    let rmRange = try #require(engine.firstMatch(rm, in: rmText))
+    #expect(String(rmText[rmRange]) == "rm -rf")
+}
+
 @Test func icu_unsatisfiableLookaheadNeverMatches() throws {
     let engine = ICUPatternEngine()
     let compiled = try engine.compile("(?!)")

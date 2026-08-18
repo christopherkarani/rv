@@ -57,9 +57,14 @@ private struct CorpusFile: Decodable {
         if let ruleID = row.ruleID, let parsed = RuleID(rawValue: ruleID) {
             #expect(text?.contains(displayRuleID(parsed)) == true, Comment(rawValue: row.id))
         }
-        let lines = DenyRenderer().render(vm!, palette: colorOffPalette)
-        #expect(lines.contains { $0.contains(displayRuleID(deny.ruleID)) }, Comment(rawValue: row.id))
-        #expect(lines.contains(denyNextAction), Comment(rawValue: row.id))
+        let lines = TestRenderer().render(
+            testViewModel(from: result, command: ShellCommand(rawValue: command)),
+            palette: colorOffPalette
+        )
+        #expect(lines.contains { $0.contains("Matched: \(deny.ruleID.rawValue)") }, Comment(rawValue: row.id))
+        #expect(lines.contains { $0 == "Result: BLOCKED" }, Comment(rawValue: row.id))
+        #expect(lines.contains { $0.hasPrefix("Pack: \(deny.ruleID.pack.rawValue)") }, Comment(rawValue: row.id))
+        #expect(text?.contains("rv allow-once") == true, Comment(rawValue: row.id))
         #expect(lines.allSatisfy { $0.count <= 80 || $0.contains(command) }, Comment(rawValue: row.id))
     }
 }

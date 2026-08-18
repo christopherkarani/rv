@@ -8,6 +8,7 @@ public struct ThemeProbe: Equatable, Sendable {
     public var ci: Bool
     public var noColorEnv: Bool
     public var termDumb: Bool
+    public var columns: Int
 
     public init(
         stdinIsTTY: Bool,
@@ -18,7 +19,8 @@ public struct ThemeProbe: Equatable, Sendable {
         noColorFlag: Bool,
         ci: Bool,
         noColorEnv: Bool,
-        termDumb: Bool
+        termDumb: Bool,
+        columns: Int = 80
     ) {
         self.stdinIsTTY = stdinIsTTY
         self.stdoutIsTTY = stdoutIsTTY
@@ -29,5 +31,6 @@ public struct ThemeProbe: Equatable, Sendable {
         self.ci = ci
         self.noColorEnv = noColorEnv
         self.termDumb = termDumb
+        self.columns = max(16, columns)
     }
 }

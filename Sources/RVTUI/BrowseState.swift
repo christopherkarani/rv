@@ -16,8 +16,7 @@ public struct BrowseState: Equatable, Sendable {
     public var count: Int { rows.count }
 
     public var page: Int {
-        guard pageSize > 0 else { return 0 }
-        return selected / pageSize
+        selected / pageSize
     }
 }
 
@@ -33,6 +32,6 @@ public struct BrowseRenderer: FrameRenderer {
     public init() {}
 
     public func render(_ model: BrowseState, palette: Palette) -> [String] {
-        RVTUIRender.browse(model, palette: palette)
+        browseFrame(model, palette: palette)
     }
 }

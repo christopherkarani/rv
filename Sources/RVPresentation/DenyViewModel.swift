@@ -1,3 +1,4 @@
+import Foundation
 import RVDomain
 
 public struct DenyViewModel: Equatable, Sendable {
@@ -7,6 +8,8 @@ public struct DenyViewModel: Equatable, Sendable {
     public var ruleID: RuleID
     public var fact: String
     public var nextAction: String
+
+    public var ruleDisplay: String { displayRuleID(ruleID) }
 
     public init(
         decision: Decision,
@@ -31,45 +34,31 @@ public func displayRuleID(_ ruleID: RuleID) -> String {
     "\(ruleID.pack.rawValue)/\(ruleID.pattern)"
 }
 
-func trimWhitespace(_ text: String) -> String {
-    String(text.drop(while: \.isWhitespace).reversed().drop(while: \.isWhitespace).reversed())
-}
-
 public func factSentence(from reason: String) -> String {
-    let trimmed = trimWhitespace(reason)
-    if let end = sentenceEnd(in: trimmed) {
-        return trimWhitespace(String(trimmed[..<end]))
+    let trimmed = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+    if let end = trimmed.firstRange(of: ". ") {
+        return trimmed[..<end.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
     }
     if trimmed.hasSuffix(".") {
-        return trimWhitespace(String(trimmed.dropLast()))
+        return String(trimmed.dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
     }
     return trimmed
 }
 
-private func sentenceEnd(in text: String) -> String.Index? {
-    var index = text.startIndex
-    while index < text.endIndex {
-        if text[index] == "." {
-            let next = text.index(after: index)
-            if next < text.endIndex, text[next] == " " {
-                return index
-            }
-        }
-        index = text.index(after: index)
-    }
-    return nil
-}
-
-public func denyViewModel(from result: EvaluationResult, command: ShellCommand) -> DenyViewModel? {
-    guard case .deny(let deny) = result.decision else {
-        return nil
-    }
-    return DenyViewModel(
-        decision: result.decision,
+public func denyViewModel(_ deny: Deny, command: ShellCommand) -> DenyViewModel {
+    DenyViewModel(
+        decision: .deny(deny),
         command: command,
         packID: deny.ruleID.pack,
         ruleID: deny.ruleID,
         fact: factSentence(from: deny.reason),
         nextAction: denyNextAction
     )
+}
+
+public func denyViewModel(from result: EvaluationResult, command: ShellCommand) -> DenyViewModel? {
+    guard case .deny(let deny) = result.decision else {
+        return nil
+    }
+    return denyViewModel(deny, command: command)
 }

@@ -9,6 +9,9 @@ public enum CLIKind: Equatable, Sendable {
     case test
     case testExplain
     case explain
+
+    var exitsZeroOnDeny: Bool { self == .explain }
+    var usesExplainFrame: Bool { self != .test }
 }
 
 public struct CLIResult: Equatable, Sendable {
@@ -45,9 +48,13 @@ public enum CommandRun {
         probe: ThemeProbe,
         requested: RequestedMode
     ) -> CLIResult {
-        let command = ShellCommand(rawValue: raw)
-        let result = evaluateCommand(raw)
-        return render(kind: kind, result: result, command: command, probe: probe, requested: requested)
+        render(
+            kind: kind,
+            result: evaluateCommand(raw),
+            command: ShellCommand(rawValue: raw),
+            probe: probe,
+            requested: requested
+        )
     }
 
     public static func render(
@@ -57,43 +64,41 @@ public enum CommandRun {
         probe: ThemeProbe,
         requested: RequestedMode
     ) -> CLIResult {
-        let mode = OutputModeResolver.resolve(probe: probe, requested: requested)
+        let mode = resolveOutputMode(probe: probe, requested: requested)
         let palette = palette(for: colorCapability(probe: probe, mode: mode))
-        let exitCode: Int32
-        switch kind {
-        case .explain:
-            exitCode = 0
-        case .test, .testExplain:
-            exitCode = result.decision == .allow ? 0 : 1
-        }
+        let exitCode: Int32 = kind.exitsZeroOnDeny || result.decision == .allow ? 0 : 1
 
         if mode == .robot {
-            return CLIResult(stdout: RobotWriter.line(result: result, command: command), exitCode: exitCode)
+            return CLIResult(stdout: RobotWriter.line(result: result), exitCode: exitCode)
         }
 
-        let lines: [String]
-        switch kind {
-        case .test:
-            switch result.decision {
-            case .allow:
-                lines = prettyAllowLines()
-            case .deny:
-                if let vm = denyViewModel(from: result, command: command) {
-                    lines = DenyRenderer().render(vm, palette: palette)
-                } else {
-                    lines = prettyAllowLines()
-                }
-            case .indeterminate:
-                lines = [hostDenyText(from: result, command: command) ?? incompleteEvalSentence]
-            }
-        case .testExplain, .explain:
-            let vm = explainViewModel(
-                from: result,
-                command: command,
-                normalized: Normalize.matchingView(of: command.rawValue)
+        let lines = kind.usesExplainFrame
+            ? ExplainRenderer().render(
+                explainViewModel(
+                    from: result,
+                    command: command,
+                    normalized: Normalize.matchingView(of: command.rawValue)
+                ),
+                palette: palette
             )
-            lines = ExplainRenderer().render(vm, palette: palette)
-        }
+            : prettyTestLines(
+                result: result,
+                command: command,
+                columns: probe.columns,
+                palette: palette
+            )
         return CLIResult(stdout: PrettyWriter.join(lines), exitCode: exitCode)
+    }
+
+    private static func prettyTestLines(
+        result: EvaluationResult,
+        command: ShellCommand,
+        columns: Int,
+        palette: Palette
+    ) -> [String] {
+        TestRenderer().render(
+            testViewModel(from: result, command: command, columns: columns),
+            palette: palette
+        )
     }
 }

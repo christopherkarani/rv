@@ -12,7 +12,7 @@ public enum RequestedMode: Equatable, Sendable {
 }
 
 public func resolveOutputMode(probe: ThemeProbe, requested: RequestedMode) -> OutputMode {
-    if probe.jsonFlag || probe.robotFlag || requested == .robot {
+    if probe.jsonFlag || probe.robotFlag {
         return .robot
     }
     switch requested {

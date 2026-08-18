@@ -21,7 +21,8 @@ enum ThemeProbeFactory {
             noColorFlag: noColorFlag,
             ci: environment["CI"] != nil,
             noColorEnv: environment["NO_COLOR"] != nil,
-            termDumb: environment["TERM"] == "dumb"
+            termDumb: environment["TERM"] == "dumb",
+            columns: stdoutColumns(stdoutIsTTY: stdoutIsTTY)
         )
     }
 
@@ -41,4 +42,13 @@ enum ThemeProbeFactory {
             environment: ProcessInfo.processInfo.environment
         )
     }
+}
+
+private func stdoutColumns(stdoutIsTTY: Bool) -> Int {
+    guard stdoutIsTTY else { return 80 }
+    var size = winsize()
+    guard ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) == 0, size.ws_col > 0 else {
+        return 80
+    }
+    return Int(size.ws_col)
 }
