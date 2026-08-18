@@ -1,0 +1,6 @@
+git reset --hard destroys uncommitted changes
+run it in Terminal, or rv allow-once
+normalize     prepared
+quick-reject  scanned
+safe          none
+destructive   core.git/reset-hard

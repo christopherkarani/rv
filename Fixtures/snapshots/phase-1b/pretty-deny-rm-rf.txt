@@ -1,0 +1,3 @@
+blocked  rm -rf ./src
+core.filesystem/rm-rf-general  rm -rf is destructive and requires human approval
+run it in Terminal, or rv allow-once

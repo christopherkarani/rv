@@ -1,0 +1,3 @@
+blocked  git reset --hard
+core.git/reset-hard  git reset --hard destroys uncommitted changes
+run it in Terminal, or rv allow-once

@@ -19,6 +19,10 @@ let package = Package(
         .library(name: "RVTUI", targets: ["RVTUI"]),
         .library(name: "RVCLI", targets: ["RVCLI"]),
         .library(name: "RVHistory", targets: ["RVHistory"]),
+        .executable(name: "rv", targets: ["rv"]),
+    ],
+    dependencies: [
+        .package(url: "https://github.com/apple/swift-argument-parser", from: "1.7.0"),
     ],
     targets: [
         .target(name: "RVDomain"),
@@ -46,6 +50,14 @@ let package = Package(
             dependencies: [
                 "RVDomain", "RVEngine", "RVPacks", "RVPolicy", "RVHooks", "RVIPC",
                 "RVPresentation", "RVTheme", "RVTUI", "RVService", "RVHistory",
+                .product(name: "ArgumentParser", package: "swift-argument-parser"),
+            ]
+        ),
+        .executableTarget(
+            name: "rv",
+            dependencies: [
+                "RVCLI",
+                .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]
         ),
         .testTarget(name: "RVDomainTests", dependencies: ["RVDomain"]),

@@ -2,4 +2,4 @@
 #error("rv v1 is Apple Silicon only")
 #endif
 
-public enum RVPresentation {}
+import RVDomain

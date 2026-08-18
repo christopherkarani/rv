@@ -1,0 +1,6 @@
+allow
+normalize     prepared
+quick-reject  scanned
+safe          none
+destructive   none
+default       allow
