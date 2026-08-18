@@ -1,15 +1,5 @@
 import RVDomain
 
-public struct ExplainStep: Equatable, Sendable {
-    public var name: String
-    public var outcome: String
-
-    public init(name: String, outcome: String) {
-        self.name = name
-        self.outcome = outcome
-    }
-}
-
 public struct ExplainViewModel: Equatable, Sendable {
     public var command: ShellCommand
     public var normalized: String
@@ -106,66 +96,4 @@ public func explainViewModel(
         steps: explainSteps(from: result),
         suggestions: ruleID.map { suggestions(for: $0) } ?? []
     )
-}
-
-private enum ExplainHalt {
-    case incomplete
-    case quickRejected
-    case safe(SafeMatch)
-    case destructive(RuleID, allowed: Bool)
-    case none
-}
-
-private func explainHalt(from result: EvaluationResult) -> ExplainHalt {
-    switch result.decision {
-    case .indeterminate:
-        return .incomplete
-    case .deny(let deny):
-        return .destructive(deny.ruleID, allowed: false)
-    case .allow:
-        if result.quickRejected { return .quickRejected }
-        if let safe = result.matchedSafe, result.matched == nil { return .safe(safe) }
-        if let match = result.matched { return .destructive(match.ruleID, allowed: true) }
-        return .none
-    }
-}
-
-public func explainSteps(from result: EvaluationResult) -> [ExplainStep] {
-    let prepared = ExplainStep(name: "normalize", outcome: "prepared")
-    switch explainHalt(from: result) {
-    case .incomplete:
-        return [prepared, ExplainStep(name: "default", outcome: "incomplete")]
-    case .quickRejected:
-        return [
-            prepared,
-            ExplainStep(name: "quick-reject", outcome: "skipped"),
-            ExplainStep(name: "default", outcome: "allow"),
-        ]
-    case .safe(let safe):
-        return [
-            prepared,
-            ExplainStep(name: "quick-reject", outcome: "scanned"),
-            ExplainStep(name: "safe", outcome: displayRuleID(RuleID(pack: safe.pack, pattern: safe.name))),
-            ExplainStep(name: "default", outcome: "allow"),
-        ]
-    case .destructive(let ruleID, let allowed):
-        var steps = [
-            prepared,
-            ExplainStep(name: "quick-reject", outcome: "scanned"),
-            ExplainStep(name: "safe", outcome: "none"),
-            ExplainStep(name: "destructive", outcome: displayRuleID(ruleID)),
-        ]
-        if allowed {
-            steps.append(ExplainStep(name: "default", outcome: "allow"))
-        }
-        return steps
-    case .none:
-        return [
-            prepared,
-            ExplainStep(name: "quick-reject", outcome: "scanned"),
-            ExplainStep(name: "safe", outcome: "none"),
-            ExplainStep(name: "destructive", outcome: "none"),
-            ExplainStep(name: "default", outcome: "allow"),
-        ]
-    }
 }

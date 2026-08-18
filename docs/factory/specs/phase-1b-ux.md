@@ -84,9 +84,16 @@ public struct TestViewModel: Equatable, Sendable {
     public var resultTone: DecisionTone
 }
 
-public struct ExplainStep: Equatable, Sendable {
-    public var name: String                // normalize | quick-reject | safe | destructive | default
-    public var outcome: String             // no microseconds
+public enum ExplainStep: Equatable, Sendable {
+    enum Scan { case skipped, scanned }
+    enum Hit { case none, rule(RuleID) }
+    enum Fallthrough { case allow, incomplete }
+    case normalize                          // display outcome: prepared
+    case quickReject(Scan)
+    case safe(Hit)
+    case destructive(Hit)
+    case `default`(Fallthrough)
+    // display: label = stage name; outcome text has no microseconds
 }
 
 public struct ExplainViewModel: Equatable, Sendable {
@@ -130,6 +137,7 @@ Builders (pure; take T1 results + copy tables, not clocks):
 | `denyViewModel(from: EvaluationResult, command: ShellCommand) -> DenyViewModel?` | `nil` on allow. Never used by hook codecs. |
 | `testViewModel(from: EvaluationResult, command: ShellCommand) -> TestViewModel` | Always. Pretty `rv test` frame. |
 | `explainViewModel(from: EvaluationResult, command: ShellCommand) -> ExplainViewModel` | Always. Timing omitted or fixed `0` — snapshots must not flake. |
+| `explainSteps(from: EvaluationResult) -> [ExplainStep]` | Projects `Decision` + `matched` / `matchedSafe` / `quickRejected` only. Does not re-run the pipeline. |
 | `packsViewModel(enabled: [PackID], catalog: [(PackID, String)]) -> PacksViewModel` | Day-one rows: `core.git`, `core.filesystem`. Others off if present. |
 | `hostDenyText(from: EvaluationResult, command: ShellCommand) -> String?` | `nil` on `Decision.allow` (medium/low match included). On `Decision.indeterminate`: PLAN incomplete-eval sentence, no pack `rule_id` (“rv could not finish evaluating this command. Run it in Terminal.”). On `Decision.deny`: **one sentence** + `rule_id` + next step. No panel, no ANSI, no second command echo, no redeemable code. T4/T5 consume this string for deny **and** indeterminate. They must still switch on `Decision` — `nil` is not a synonym for allow if the decision was never inspected. |
 
@@ -179,16 +187,31 @@ public enum RequestedMode: Equatable, Sendable {
     case browse
 }
 
-public struct ThemeProbe: Equatable, Sendable {
+public struct TTYPair: Equatable, Sendable {
     public var stdinIsTTY: Bool
     public var stdoutIsTTY: Bool
-    public var jsonFlag: Bool
-    public var robotFlag: Bool
-    public var plainFlag: Bool
-    public var noColorFlag: Bool
-    public var ci: Bool              // `CI` env present
-    public var noColorEnv: Bool      // `NO_COLOR` present (any value)
-    public var termDumb: Bool        // `TERM=dumb`
+    public var isBrowseEligible: Bool   // both TTY
+    public var canCarryColor: Bool      // stdout is TTY
+}
+
+public struct OutputForbid: Equatable, Sendable {
+    public var json: Bool
+    public var robot: Bool
+    public var plain: Bool
+    public var ci: Bool
+    public var noColor: NoColor         // flag / env / termDumb
+    public var isBrowseEligible: Bool   // not json/robot/plain/CI/NO_COLOR
+    public var canCarryColor: Bool      // not plain/CI/color-off
+}
+
+public struct ThemeProbe: Equatable, Sendable {
+    public var terminal: TTYPair
+    public var forbid: OutputForbid
+    public var columns: Int
+    // Spec field names stay as computed accessors from the 10-bool initializer:
+    // stdinIsTTY, stdoutIsTTY, jsonFlag, robotFlag, plainFlag, noColorFlag,
+    // ci, noColorEnv, termDumb
+    public var isBrowseEligible: Bool
 }
 
 public struct ColorCapability: Equatable, Sendable {
@@ -213,9 +236,10 @@ public struct Palette: Equatable, Sendable {
 
 Pure functions (no `ProcessInfo`, no `isatty` inside Theme — CLI builds `ThemeProbe`):
 
-- `resolveOutputMode(probe:requested:) -> OutputMode` — see next section.
-- `colorCapability(probe:mode:) -> ColorCapability`
-- `palette(for: ColorCapability) -> Palette` — when colors are off, every slot is `""` (or identity) so renderers never emit `0x1B`.
+- `OutputMode(probe:requested:)` — see next section.
+- `ColorCapability(probe:mode:)`
+- `Palette(for: ColorCapability)` — when colors are off, every slot is `""` (or identity) so renderers never emit `0x1B`.
+- Spec names until T9 (thin wrappers): `resolveOutputMode(probe:requested:)`, `colorCapability(probe:mode:)`, `palette(for:)`, `browseEligible(_:)`.
 
 Robot mode **never** has color. `CI`, `NO_COLOR`, `--plain`, `--no-color`, `TERM=dumb` never have color.
 

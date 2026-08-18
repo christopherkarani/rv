@@ -72,7 +72,8 @@ private func run(
 @Test func evaluate_safeThenDestructiveThenAllow() throws {
     let checkout = try run("git checkout -b x")
     #expect(checkout.decision == .allow)
-    #expect(checkout.matchedSafe?.name == "checkout-new-branch")
+    #expect(checkout.matchedSafe?.packID == .coreGit)
+    #expect(checkout.matchedSafe?.patternName == "checkout-new-branch")
 
     let discard = try run("git checkout -- .")
     guard case .deny(let deny) = discard.decision else {
