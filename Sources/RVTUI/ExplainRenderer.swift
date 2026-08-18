@@ -37,7 +37,7 @@ public struct ExplainRenderer: FrameRenderer {
                     label: "Pipeline",
                     emphasis: .trace,
                     children: model.steps.map { step in
-                        .leaf(label: step.name, value: step.outcome, emphasis: .muted)
+                        .leaf(label: step.label, value: step.displayOutcome, emphasis: .muted)
                     }
                 )
             )

@@ -46,12 +46,17 @@ public struct RuleMatch: Sendable, Equatable {
 }
 
 public struct SafeMatch: Sendable, Equatable {
-    public var pack: PackID
-    public var name: String
+    public var packID: PackID
+    public var patternName: String
 
-    public init(pack: PackID, name: String) {
-        self.pack = pack
-        self.name = name
+    public init(packID: PackID, patternName: String) {
+        self.packID = packID
+        self.patternName = patternName
+    }
+
+    /// pack:pattern, same construction as `RuleMatch.ruleID`.
+    public var ruleID: RuleID {
+        RuleID(pack: packID, pattern: patternName)
     }
 }
 

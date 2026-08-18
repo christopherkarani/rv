@@ -120,7 +120,7 @@ private func evaluateSingle<E: PatternEngine>(
                 return EvaluationResult(decision: .indeterminate(.budgetExhausted))
             }
             if patterns.matches(named.compiled, in: view) {
-                lastSafe = SafeMatch(pack: pack.snapshot.id, name: named.name)
+                lastSafe = SafeMatch(packID: pack.snapshot.id, patternName: named.name)
                 skippedBySafe = true
                 break
             }

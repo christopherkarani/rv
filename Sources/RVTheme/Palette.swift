@@ -52,39 +52,48 @@ public struct Palette: Equatable, Sendable {
     }
 }
 
-public func palette(for capability: ColorCapability) -> Palette {
-    if !capability.colorsEnabled {
-        return Palette(
-            colorsEnabled: false,
-            reset: "",
-            fact: "",
-            muted: "",
-            deny: "",
-            allow: "",
-            heading: "",
-            mark: "",
-            trace: "",
-            silver: "",
-            regex: .off
+extension Palette {
+    /// Color-off palette is identity strings so renderers never emit CSI.
+    public init(for capability: ColorCapability) {
+        if !capability.colorsEnabled {
+            self.init(
+                colorsEnabled: false,
+                reset: "",
+                fact: "",
+                muted: "",
+                deny: "",
+                allow: "",
+                heading: "",
+                mark: "",
+                trace: "",
+                silver: "",
+                regex: .off
+            )
+            return
+        }
+        self.init(
+            colorsEnabled: true,
+            reset: "\u{001B}[0m",
+            fact: "\u{001B}[1m",
+            muted: "\u{001B}[2m",
+            deny: "\u{001B}[1;31m",
+            allow: "\u{001B}[1;32m",
+            heading: "\u{001B}[1;36m",
+            mark: "\u{001B}[1;33m",
+            trace: "\u{001B}[1;34m",
+            silver: "\u{001B}[38;5;244m",
+            regex: RegexInk(
+                meta: "\u{001B}[1;33m",
+                escape: "\u{001B}[96m",
+                name: "\u{001B}[35m"
+            )
         )
     }
-    return Palette(
-        colorsEnabled: true,
-        reset: "\u{001B}[0m",
-        fact: "\u{001B}[1m",
-        muted: "\u{001B}[2m",
-        deny: "\u{001B}[1;31m",
-        allow: "\u{001B}[1;32m",
-        heading: "\u{001B}[1;36m",
-        mark: "\u{001B}[1;33m",
-        trace: "\u{001B}[1;34m",
-        silver: "\u{001B}[38;5;244m",
-        regex: RegexInk(
-            meta: "\u{001B}[1;33m",
-            escape: "\u{001B}[96m",
-            name: "\u{001B}[35m"
-        )
-    )
+}
+
+/// Spec name until T9. Prefer `Palette(for:)`.
+public func palette(for capability: ColorCapability) -> Palette {
+    Palette(for: capability)
 }
 
 public let colorOffPalette = palette(for: ColorCapability(colorsEnabled: false))

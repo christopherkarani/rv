@@ -73,9 +73,9 @@ private func mediumAllow() -> EvaluationResult {
     let vm = explainViewModel(from: EvaluationResult(decision: .allow), command: status)
     #expect(vm.fact == "allow")
     #expect(vm.nextAction == nil)
-    #expect(!vm.steps.contains { $0.outcome.contains("μs") || $0.outcome.contains("us") })
-    #expect(vm.steps.map(\.name).contains("normalize"))
-    #expect(vm.steps.map(\.name).contains("default"))
+    #expect(vm.steps.contains { $0.displayOutcome.contains("μs") || $0.displayOutcome.contains("us") } == false)
+    #expect(vm.steps.map(\.name).contains(.normalize))
+    #expect(vm.steps.map(\.name).contains(.default))
 }
 
 @Test func explainViewModel_denyHasFactNextAndDestructiveStep() {
@@ -94,8 +94,8 @@ private func mediumAllow() -> EvaluationResult {
         !suggestions(for: RuleID(pack: .coreFilesystem, pattern: "dd-overwrite-general"))
             .contains { $0.command?.contains("rm -ri") == true }
     )
-    #expect(vm.steps.contains { $0.name == "destructive" && $0.outcome == "core.git/reset-hard" })
-    #expect(!vm.steps.contains { $0.outcome.contains("μs") })
+    #expect(vm.steps.contains(.destructive(.rule(RuleID(pack: .coreGit, pattern: "reset-hard")))))
+    #expect(vm.steps.contains { $0.displayOutcome.contains("μs") } == false)
 }
 
 @Test func testViewModel_denyShowsPackReasonAndColonMatch() {
@@ -294,8 +294,7 @@ private func mediumAllow() -> EvaluationResult {
         from: EvaluationResult(decision: .indeterminate(.commandTooLarge)),
         command: resetHard
     )
-    #expect(vm.steps.map(\.name) == ["normalize", "default"])
-    #expect(vm.steps.last?.outcome == "incomplete")
+    #expect(vm.steps == [.normalize, .default(.incomplete)])
     #expect(vm.fact == incompleteEvalSentence)
 }
 
@@ -307,8 +306,8 @@ private func mediumAllow() -> EvaluationResult {
         ),
         command: resetHard
     )
-    #expect(vm.steps.contains { $0.name == "destructive" && $0.outcome == "core.git/reset-hard" })
-    #expect(!vm.steps.contains { $0.name == "default" && $0.outcome == "allow" })
+    #expect(vm.steps.contains(.destructive(.rule(rule))))
+    #expect(!vm.steps.contains(.default(.allow)))
 }
 
 @Test func explainViewModel_quickRejectSkipsScan() {
@@ -316,8 +315,26 @@ private func mediumAllow() -> EvaluationResult {
         from: EvaluationResult(decision: .allow, quickRejected: true),
         command: status
     )
-    #expect(vm.steps.map(\.name) == ["normalize", "quick-reject", "default"])
-    #expect(vm.steps.contains { $0.name == "quick-reject" && $0.outcome == "skipped" })
+    #expect(vm.steps == [.normalize, .quickReject(.skipped), .default(.allow)])
+}
+
+@Test func explainViewModel_safeHitProjectsRuleID() {
+    let rule = RuleID(pack: .coreGit, pattern: "checkout-new-branch")
+    let vm = explainViewModel(
+        from: EvaluationResult(
+            decision: .allow,
+            matchedSafe: SafeMatch(packID: .coreGit, patternName: "checkout-new-branch")
+        ),
+        command: status
+    )
+    #expect(
+        vm.steps == [
+            .normalize,
+            .quickReject(.scanned),
+            .safe(.rule(rule)),
+            .default(.allow),
+        ]
+    )
 }
 
 @Test func explainViewModel_mediumAllowKeepsMatchAndNoNext() {

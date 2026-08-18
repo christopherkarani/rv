@@ -13,15 +13,18 @@ enum ThemeProbeFactory {
         environment: [String: String]
     ) -> ThemeProbe {
         ThemeProbe(
-            stdinIsTTY: stdinIsTTY,
-            stdoutIsTTY: stdoutIsTTY,
-            jsonFlag: jsonFlag,
-            robotFlag: robotFlag,
-            plainFlag: plainFlag,
-            noColorFlag: noColorFlag,
-            ci: environment["CI"] != nil,
-            noColorEnv: environment["NO_COLOR"] != nil,
-            termDumb: environment["TERM"] == "dumb",
+            terminal: TTYPair(stdinIsTTY: stdinIsTTY, stdoutIsTTY: stdoutIsTTY),
+            forbid: OutputForbid(
+                json: jsonFlag,
+                robot: robotFlag,
+                plain: plainFlag,
+                ci: environment["CI"] != nil,
+                noColor: OutputForbid.NoColor(
+                    flag: noColorFlag,
+                    env: environment["NO_COLOR"] != nil,
+                    termDumb: environment["TERM"] == "dumb"
+                )
+            ),
             columns: stdoutColumns(stdoutIsTTY: stdoutIsTTY)
         )
     }

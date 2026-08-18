@@ -169,11 +169,46 @@ private struct ModeCase {
             colorCapability(probe: item.probe, mode: resolved).colorsEnabled == item.colors,
             Comment(rawValue: item.name)
         )
+        #expect(
+            OutputMode(probe: item.probe, requested: item.requested) == item.mode,
+            Comment(rawValue: item.name)
+        )
+        #expect(
+            ColorCapability(probe: item.probe, mode: resolved).colorsEnabled == item.colors,
+            Comment(rawValue: item.name)
+        )
+        #expect(item.probe.isBrowseEligible == item.browse, Comment(rawValue: item.name))
     }
 }
 
+@Test func themeProbe_composesTTYAndForbid() {
+    let probe = probe(json: true, ci: true, noColorEnv: true)
+    #expect(probe.terminal.stdinIsTTY)
+    #expect(probe.terminal.stdoutIsTTY)
+    #expect(probe.terminal.isBrowseEligible)
+    #expect(probe.forbid.json)
+    #expect(probe.forbid.ci)
+    #expect(probe.forbid.noColor.env)
+    #expect(probe.forbid.isBrowseEligible == false)
+    #expect(probe.isBrowseEligible == false)
+}
+
+@Test func outputForbid_noColorFlagKeepsBrowseKillsColor() {
+    let forbid = OutputForbid(
+        json: false,
+        robot: false,
+        plain: false,
+        ci: false,
+        noColor: OutputForbid.NoColor(flag: true, env: false, termDumb: false)
+    )
+    #expect(forbid.isBrowseEligible)
+    #expect(forbid.canCarryColor == false)
+    #expect(forbid.noColor.env == false)
+    #expect(forbid.noColor.canCarryColor == false)
+}
+
 @Test func palette_colorOff_hasNoEscape() {
-    let off = palette(for: ColorCapability(colorsEnabled: false))
+    let off = Palette(for: ColorCapability(colorsEnabled: false))
     #expect(off.colorsEnabled == false)
     #expect(off.reset.isEmpty)
     #expect(off.fact.isEmpty)
@@ -185,11 +220,11 @@ private struct ModeCase {
     #expect(off.trace.isEmpty)
     #expect(off.silver.isEmpty)
     #expect(off.regex == .off)
-    #expect(!off.reset.contains("\u{001B}"))
+    #expect(off.reset.contains("\u{001B}") == false)
 }
 
 @Test func palette_colorOn_usesNamedSlotsOnly() {
-    let on = palette(for: ColorCapability(colorsEnabled: true))
+    let on = Palette(for: ColorCapability(colorsEnabled: true))
     #expect(on.colorsEnabled)
     #expect(on.reset.contains("\u{001B}"))
     #expect(on.deny.contains("\u{001B}"))

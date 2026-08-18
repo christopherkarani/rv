@@ -197,8 +197,9 @@ public struct RuleMatch: Sendable, Equatable {
 }
 
 public struct SafeMatch: Sendable, Equatable {
-    public var pack: PackID
-    public var name: String
+    public var packID: PackID
+    public var patternName: String
+    // ruleID is pack:pattern, same construction as RuleMatch.ruleID
 }
 
 public struct EvaluationResult: Sendable, Equatable {

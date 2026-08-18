@@ -82,8 +82,8 @@ public enum CommandRun {
         probe: ThemeProbe,
         requested: RequestedMode
     ) -> CLIResult {
-        let mode = resolveOutputMode(probe: probe, requested: requested)
-        let palette = palette(for: colorCapability(probe: probe, mode: mode))
+        let mode = OutputMode(probe: probe, requested: requested)
+        let palette = Palette(for: ColorCapability(probe: probe, mode: mode))
         let exitCode: Int32 = kind.exitsZeroOnDeny || result.decision == .allow ? 0 : 1
 
         if mode == .robot {
