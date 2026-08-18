@@ -4,30 +4,32 @@ import RVDomain
 @testable import RVIPC
 
 struct EnvelopeRoundTripTests {
-    @Test(arguments: IPCMethod.allSamples)
-    func methodRoundTrips(_ sample: NamedMethod) throws {
-        let request = IPCRequest(id: sample.id, method: sample.method)
-        let data = try IPCJSON.encode(request)
-        let decoded = try IPCJSON.decode(IPCRequest.self, from: data)
-        #expect(decoded == request)
+    @Test func methodRoundTrips() throws {
+        for sample in IPCMethod.allSamples {
+            let request = IPCRequest(id: sample.id, method: sample.method)
+            let data = try IPCJSON.encode(request)
+            let decoded = try IPCJSON.decode(IPCRequest.self, from: data)
+            #expect(decoded == request)
 
-        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
-        #expect(object["protocol"] as? String == ProtocolVersion.name)
-        let method = try #require(object["method"] as? [String: Any])
-        #expect(method[sample.key] != nil)
-        #expect(String(data: data, encoding: .utf8)?.contains("isDenied") == false)
+            let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            #expect(object["protocol"] as? String == ProtocolVersion.name)
+            let method = try #require(object["method"] as? [String: Any])
+            #expect(method[sample.key] != nil)
+            #expect(String(data: data, encoding: .utf8)?.contains("isDenied") == false)
+        }
     }
 
-    @Test(arguments: IPCResult.allSamples)
-    func resultRoundTrips(_ sample: NamedResult) throws {
-        let response = IPCResponse(id: sample.id, result: sample.result)
-        let data = try IPCJSON.encode(response)
-        let decoded = try IPCJSON.decode(IPCResponse.self, from: data)
-        #expect(decoded == response)
+    @Test func resultRoundTrips() throws {
+        for sample in IPCResult.allSamples {
+            let response = IPCResponse(id: sample.id, result: sample.result)
+            let data = try IPCJSON.encode(response)
+            let decoded = try IPCJSON.decode(IPCResponse.self, from: data)
+            #expect(decoded == response)
 
-        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
-        let result = try #require(object["result"] as? [String: Any])
-        #expect(result[sample.key] != nil)
+            let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            let result = try #require(object["result"] as? [String: Any])
+            #expect(result[sample.key] != nil)
+        }
     }
 
     @Test func helloRoundTrips() throws {
