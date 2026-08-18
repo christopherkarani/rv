@@ -1,4 +1,4 @@
-public struct Deny: Sendable, Equatable {
+public struct Deny: Sendable, Equatable, Codable {
     public var ruleID: RuleID
     public var reason: String
 
@@ -8,7 +8,7 @@ public struct Deny: Sendable, Equatable {
     }
 }
 
-public enum IndeterminateReason: Sendable, Equatable {
+public enum IndeterminateReason: String, Sendable, Equatable, Codable {
     case budgetExhausted
     case commandTooLarge
     case corePacksUnavailable

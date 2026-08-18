@@ -1,4 +1,4 @@
-public struct MatchSpan: Sendable, Equatable {
+public struct MatchSpan: Sendable, Equatable, Codable {
     public var start: Int
     public var end: Int
 
@@ -8,7 +8,7 @@ public struct MatchSpan: Sendable, Equatable {
     }
 }
 
-public struct RuleMatch: Sendable, Equatable {
+public struct RuleMatch: Sendable, Equatable, Codable {
     public var ruleID: RuleID
     public var packID: PackID
     public var patternName: String
@@ -45,7 +45,7 @@ public struct RuleMatch: Sendable, Equatable {
     }
 }
 
-public struct SafeMatch: Sendable, Equatable {
+public struct SafeMatch: Sendable, Equatable, Codable {
     public var packID: PackID
     public var patternName: String
 
@@ -60,7 +60,7 @@ public struct SafeMatch: Sendable, Equatable {
     }
 }
 
-public struct EvaluationResult: Sendable, Equatable {
+public struct EvaluationResult: Sendable, Equatable, Codable {
     public var decision: Decision
     public var matched: RuleMatch?
     public var matchedSafe: SafeMatch?

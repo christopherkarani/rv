@@ -1,4 +1,4 @@
-public enum Severity: String, Sendable, Equatable {
+public enum Severity: String, Sendable, Equatable, Codable {
     case low
     case medium
     case high

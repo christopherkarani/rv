@@ -6,7 +6,7 @@ import RVCLI
 
 @main
 enum RVEntry {
-    static func main() {
-        RV.main()
+    static func main() async {
+        await RV.main()
     }
 }
