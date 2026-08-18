@@ -13,7 +13,7 @@ public struct TTYPair: Equatable, Sendable {
         stdinIsTTY && stdoutIsTTY
     }
 
-    /// stdout can carry color when mode and the forbid set allow it.
+    /// stdout is a TTY.
     public var canCarryColor: Bool {
         stdoutIsTTY
     }
@@ -32,9 +32,6 @@ public struct OutputForbid: Equatable, Sendable {
             self.env = env
             self.termDumb = termDumb
         }
-
-        /// `NO_COLOR` forbids browse. `--no-color` and `TERM=dumb` only kill color.
-        public var isBrowseEligible: Bool { !env }
 
         /// Any color-off request disables ANSI.
         public var canCarryColor: Bool { !(flag || env || termDumb) }
@@ -56,7 +53,7 @@ public struct OutputForbid: Equatable, Sendable {
 
     /// None of json / robot / plain / CI / `NO_COLOR` are set.
     public var isBrowseEligible: Bool {
-        !json && !robot && !plain && !ci && noColor.isBrowseEligible
+        !json && !robot && !plain && !ci && !noColor.env
     }
 
     /// Pretty/browse color is off for plain, CI, or any color-off request.
@@ -83,11 +80,6 @@ public struct ThemeProbe: Equatable, Sendable {
     /// Both TTY and none of the browse forbids.
     public var isBrowseEligible: Bool {
         terminal.isBrowseEligible && forbid.isBrowseEligible
-    }
-
-    /// Color for a resolved output mode.
-    public func colorCapability(mode: OutputMode) -> ColorCapability {
-        ColorCapability(probe: self, mode: mode)
     }
 
     public init(terminal: TTYPair, forbid: OutputForbid, columns: Int = 80) {

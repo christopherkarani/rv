@@ -37,6 +37,7 @@ public enum ExplainStep: Equatable, Sendable {
     case destructive(Hit)
     case `default`(Fallthrough)
 
+    /// Stage identity without the associated outcome.
     public var name: ExplainStage {
         switch self {
         case .normalize:

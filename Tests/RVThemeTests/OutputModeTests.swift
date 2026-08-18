@@ -203,7 +203,7 @@ private struct ModeCase {
     )
     #expect(forbid.isBrowseEligible)
     #expect(forbid.canCarryColor == false)
-    #expect(forbid.noColor.isBrowseEligible)
+    #expect(forbid.noColor.env == false)
     #expect(forbid.noColor.canCarryColor == false)
 }
 

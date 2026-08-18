@@ -54,6 +54,7 @@ public struct SafeMatch: Sendable, Equatable {
         self.patternName = patternName
     }
 
+    /// pack:pattern, same construction as `RuleMatch.ruleID`.
     public var ruleID: RuleID {
         RuleID(pack: packID, pattern: patternName)
     }
