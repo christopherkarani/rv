@@ -26,8 +26,8 @@ public struct CLIResult: Equatable, Sendable {
 
 public enum CommandRun {
     public static func evaluateCommand(_ raw: String) -> EvaluationResult {
-        let command = ShellCommand(rawValue: raw)
-        do {
+        evaluationResult(catching: {
+            let command = ShellCommand(rawValue: raw)
             let packs = try PackRegistry.loadDayOne()
             let engine = ICUPatternEngine()
             let compiled = try CompiledPacks<ICUCompiledPattern>.compile(packs: packs, using: engine)
@@ -37,8 +37,26 @@ public enum CommandRun {
                 patterns: engine,
                 compiled: compiled
             )
-        } catch {
+        })
+    }
+
+    // Domain has no compile-fail reason; pack/decode and compile stay fail-closed.
+    static func evaluationResult(from error: Error) -> EvaluationResult {
+        switch error {
+        case is PackLoadError, is DecodingError:
             return EvaluationResult(decision: .indeterminate(.corePacksUnavailable))
+        case is PatternCompileError:
+            return EvaluationResult(decision: .indeterminate(.corePacksUnavailable))
+        default:
+            return EvaluationResult(decision: .indeterminate(.corePacksUnavailable))
+        }
+    }
+
+    static func evaluationResult(catching operation: () throws -> EvaluationResult) -> EvaluationResult {
+        do {
+            return try operation()
+        } catch {
+            return evaluationResult(from: error)
         }
     }
 

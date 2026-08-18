@@ -29,3 +29,17 @@ import Testing
     #expect(!engine.matches(compiled, in: "git myalias"))
     #expect(!engine.matches(compiled, in: "git reset --hard"))
 }
+
+private struct FirstMatchOnlyEngine: PatternEngine {
+    func compile(_ pattern: String) throws -> String { pattern }
+
+    func firstMatch(_ compiled: String, in text: String) -> Range<String.Index>? {
+        text.range(of: compiled)
+    }
+}
+
+@Test func patternEngine_defaultMatchesFollowsFirstMatch() {
+    let engine = FirstMatchOnlyEngine()
+    #expect(engine.matches("reset", in: "git reset --hard"))
+    #expect(!engine.matches("soft", in: "git reset --hard"))
+}

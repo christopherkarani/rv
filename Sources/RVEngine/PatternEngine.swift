@@ -7,6 +7,12 @@ public protocol PatternEngine: Sendable {
     func firstMatch(_ compiled: Compiled, in text: String) -> Range<String.Index>?
 }
 
+extension PatternEngine {
+    public func matches(_ compiled: Compiled, in text: String) -> Bool {
+        firstMatch(compiled, in: text) != nil
+    }
+}
+
 public enum PatternCompileError: Error, Sendable, Equatable {
     case invalidPattern(name: String, message: String)
 }

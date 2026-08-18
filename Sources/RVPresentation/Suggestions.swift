@@ -1,12 +1,32 @@
 import RVDomain
 
+public enum SuggestionKind: Equatable, Sendable {
+    case previewFirst
+    case saferAlternative
+    case workflowFix
+    case documentation
+
+    public var title: String {
+        switch self {
+        case .previewFirst:
+            return "Preview first"
+        case .saferAlternative:
+            return "Safer alternative"
+        case .workflowFix:
+            return "Workflow fix"
+        case .documentation:
+            return "Documentation"
+        }
+    }
+}
+
 public struct ExplainSuggestion: Equatable, Sendable {
-    public var kind: String
+    public var kind: SuggestionKind
     public var text: String
     public var command: String?
     public var url: String?
 
-    public init(kind: String, text: String, command: String? = nil, url: String? = nil) {
+    public init(kind: SuggestionKind, text: String, command: String? = nil, url: String? = nil) {
         self.kind = kind
         self.text = text
         self.command = command
@@ -15,28 +35,23 @@ public struct ExplainSuggestion: Equatable, Sendable {
 }
 
 public func suggestions(for ruleID: RuleID) -> [ExplainSuggestion] {
-    dayOneSuggestions[ruleID.rawValue] ?? []
+    dayOneSuggestions[ruleID] ?? []
 }
 
-private let previewFirst = "Preview first"
-private let saferAlternative = "Safer alternative"
-private let workflowFix = "Workflow fix"
-private let documentation = "Documentation"
-
 private func preview(_ text: String, command: String? = nil, url: String? = nil) -> ExplainSuggestion {
-    ExplainSuggestion(kind: previewFirst, text: text, command: command, url: url)
+    ExplainSuggestion(kind: .previewFirst, text: text, command: command, url: url)
 }
 
 private func safer(_ text: String, command: String? = nil, url: String? = nil) -> ExplainSuggestion {
-    ExplainSuggestion(kind: saferAlternative, text: text, command: command, url: url)
+    ExplainSuggestion(kind: .saferAlternative, text: text, command: command, url: url)
 }
 
 private func workflow(_ text: String, command: String? = nil, url: String? = nil) -> ExplainSuggestion {
-    ExplainSuggestion(kind: workflowFix, text: text, command: command, url: url)
+    ExplainSuggestion(kind: .workflowFix, text: text, command: command, url: url)
 }
 
 private func docs(_ text: String, url: String? = nil) -> ExplainSuggestion {
-    ExplainSuggestion(kind: documentation, text: text, url: url)
+    ExplainSuggestion(kind: .documentation, text: text, url: url)
 }
 
 private let rmRfSuggestions: [ExplainSuggestion] = [
@@ -120,9 +135,9 @@ private let forcePushSuggestions: [ExplainSuggestion] = [
     workflow("Coordinate with team before force pushing to shared branches"),
 ]
 
-private let dayOneSuggestions: [String: [ExplainSuggestion]] = {
-    var catalog: [String: [ExplainSuggestion]] = [
-        "core.git:reset-hard": [
+private let dayOneSuggestions: [RuleID: [ExplainSuggestion]] = {
+    var catalog: [RuleID: [ExplainSuggestion]] = [
+        RuleID(pack: .coreGit, pattern: "reset-hard"): [
             preview(
                 "Run `git diff` and `git status` to see what would be lost",
                 command: "git diff && git status"
@@ -137,25 +152,25 @@ private let dayOneSuggestions: [String: [ExplainSuggestion]] = {
             ),
             docs("See Git documentation for reset options", url: "https://git-scm.com/docs/git-reset"),
         ],
-        "core.git:clean-force": [
+        RuleID(pack: .coreGit, pattern: "clean-force"): [
             preview("Run `git clean -n` to preview what would be deleted", command: "git clean -n -fd"),
             safer("Use `git clean -i` for interactive mode to select files", command: "git clean -i"),
             workflow("Add patterns to .gitignore instead of cleaning"),
         ],
-        "core.git:push-force-long": forcePushSuggestions,
-        "core.git:push-force-short": forcePushSuggestions,
-        "core.git:checkout-discard": checkoutDiscardSuggestions,
-        "core.git:checkout-ref-discard": checkoutDiscardSuggestions,
-        "core.git:branch-force-delete": [
+        RuleID(pack: .coreGit, pattern: "push-force-long"): forcePushSuggestions,
+        RuleID(pack: .coreGit, pattern: "push-force-short"): forcePushSuggestions,
+        RuleID(pack: .coreGit, pattern: "checkout-discard"): checkoutDiscardSuggestions,
+        RuleID(pack: .coreGit, pattern: "checkout-ref-discard"): checkoutDiscardSuggestions,
+        RuleID(pack: .coreGit, pattern: "branch-force-delete"): [
             preview("Check if branch has unmerged commits with `git log branch --not main`"),
             safer(
                 "Use `git branch -d` (lowercase) to only delete if merged",
                 command: "git branch -d branch-name"
             ),
         ],
-        "core.git:restore-worktree": restoreWorktreeSuggestions,
-        "core.git:restore-worktree-explicit": restoreWorktreeSuggestions,
-        "core.git:reset-merge": [
+        RuleID(pack: .coreGit, pattern: "restore-worktree"): restoreWorktreeSuggestions,
+        RuleID(pack: .coreGit, pattern: "restore-worktree-explicit"): restoreWorktreeSuggestions,
+        RuleID(pack: .coreGit, pattern: "reset-merge"): [
             preview(
                 "Run `git status` to see uncommitted changes that could be lost",
                 command: "git status"
@@ -165,7 +180,7 @@ private let dayOneSuggestions: [String: [ExplainSuggestion]] = {
                 command: "git merge --abort"
             ),
         ],
-        "core.git:stash-drop": [
+        RuleID(pack: .coreGit, pattern: "stash-drop"): [
             preview(
                 "List stashes with `git stash list` and view contents with `git stash show -p`",
                 command: "git stash list"
@@ -175,7 +190,7 @@ private let dayOneSuggestions: [String: [ExplainSuggestion]] = {
                 command: "git stash apply"
             ),
         ],
-        "core.git:stash-clear": [
+        RuleID(pack: .coreGit, pattern: "stash-clear"): [
             preview(
                 "List all stashes with `git stash list` to review what would be deleted",
                 command: "git stash list"
@@ -187,60 +202,60 @@ private let dayOneSuggestions: [String: [ExplainSuggestion]] = {
         ],
     ]
 
-    for key in [
-        "core.filesystem:rm-rf-root-home",
-        "core.filesystem:rm-r-f-separate-root-home",
-        "core.filesystem:rm-recursive-force-root-home",
-        "core.filesystem:rm-rf-general",
-        "core.filesystem:rm-r-f-separate",
-        "core.filesystem:rm-recursive-force-long",
+    for ruleID in [
+        RuleID(pack: .coreFilesystem, pattern: "rm-rf-root-home"),
+        RuleID(pack: .coreFilesystem, pattern: "rm-r-f-separate-root-home"),
+        RuleID(pack: .coreFilesystem, pattern: "rm-recursive-force-root-home"),
+        RuleID(pack: .coreFilesystem, pattern: "rm-rf-general"),
+        RuleID(pack: .coreFilesystem, pattern: "rm-r-f-separate"),
+        RuleID(pack: .coreFilesystem, pattern: "rm-recursive-force-long"),
     ] {
-        catalog[key] = rmRfSuggestions
+        catalog[ruleID] = rmRfSuggestions
     }
-    for key in [
-        "core.filesystem:find-delete-root-home",
-        "core.filesystem:find-delete-general",
+    for ruleID in [
+        RuleID(pack: .coreFilesystem, pattern: "find-delete-root-home"),
+        RuleID(pack: .coreFilesystem, pattern: "find-delete-general"),
     ] {
-        catalog[key] = findDeleteSuggestions
+        catalog[ruleID] = findDeleteSuggestions
     }
-    for key in [
-        "core.filesystem:unlink-root-home",
-        "core.filesystem:unlink-general",
+    for ruleID in [
+        RuleID(pack: .coreFilesystem, pattern: "unlink-root-home"),
+        RuleID(pack: .coreFilesystem, pattern: "unlink-general"),
     ] {
-        catalog[key] = unlinkSuggestions
+        catalog[ruleID] = unlinkSuggestions
     }
-    for key in [
-        "core.filesystem:truncate-zero-root-home",
-        "core.filesystem:truncate-zero-general",
+    for ruleID in [
+        RuleID(pack: .coreFilesystem, pattern: "truncate-zero-root-home"),
+        RuleID(pack: .coreFilesystem, pattern: "truncate-zero-general"),
     ] {
-        catalog[key] = truncateSuggestions
+        catalog[ruleID] = truncateSuggestions
     }
-    for key in [
-        "core.filesystem:shred-root-home",
-        "core.filesystem:shred-general",
+    for ruleID in [
+        RuleID(pack: .coreFilesystem, pattern: "shred-root-home"),
+        RuleID(pack: .coreFilesystem, pattern: "shred-general"),
     ] {
-        catalog[key] = shredSuggestions
+        catalog[ruleID] = shredSuggestions
     }
-    for key in [
-        "core.filesystem:tar-remove-files-root-home",
-        "core.filesystem:tar-remove-files-general",
+    for ruleID in [
+        RuleID(pack: .coreFilesystem, pattern: "tar-remove-files-root-home"),
+        RuleID(pack: .coreFilesystem, pattern: "tar-remove-files-general"),
     ] {
-        catalog[key] = tarRemoveSuggestions
+        catalog[ruleID] = tarRemoveSuggestions
     }
-    for key in [
-        "core.filesystem:dd-overwrite-root-home",
-        "core.filesystem:dd-overwrite-general",
+    for ruleID in [
+        RuleID(pack: .coreFilesystem, pattern: "dd-overwrite-root-home"),
+        RuleID(pack: .coreFilesystem, pattern: "dd-overwrite-general"),
     ] {
-        catalog[key] = ddOverwriteSuggestions
+        catalog[ruleID] = ddOverwriteSuggestions
     }
-    catalog["core.filesystem:mv-sensitive-source-root-home"] = mvSensitiveSuggestions
-    for key in [
-        "core.filesystem:cp-sensitive-then-delete",
-        "core.filesystem:ln-symlink-sensitive-then-delete",
-        "core.filesystem:rsync-sensitive-then-delete",
+    catalog[RuleID(pack: .coreFilesystem, pattern: "mv-sensitive-source-root-home")] = mvSensitiveSuggestions
+    for ruleID in [
+        RuleID(pack: .coreFilesystem, pattern: "cp-sensitive-then-delete"),
+        RuleID(pack: .coreFilesystem, pattern: "ln-symlink-sensitive-then-delete"),
+        RuleID(pack: .coreFilesystem, pattern: "rsync-sensitive-then-delete"),
     ] {
-        catalog[key] = copyThenDeleteSuggestions
+        catalog[ruleID] = copyThenDeleteSuggestions
     }
-    catalog["core.filesystem:redirect-truncate-root-home"] = redirectTruncateSuggestions
+    catalog[RuleID(pack: .coreFilesystem, pattern: "redirect-truncate-root-home")] = redirectTruncateSuggestions
     return catalog
 }()

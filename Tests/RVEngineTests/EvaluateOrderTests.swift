@@ -154,3 +154,62 @@ private func run(
     let result = try run("git reset --hard", packs: [empty] + samplePacks().filter { $0.id == .coreFilesystem })
     #expect(result.decision == .indeterminate(.corePacksUnavailable))
 }
+
+/// `matches` would fire; `firstMatch` is the sole destructive hit test.
+private struct HitlessPatternEngine: PatternEngine {
+    func compile(_ pattern: String) throws -> String { pattern }
+    func matches(_ compiled: String, in text: String) -> Bool { true }
+    func firstMatch(_ compiled: String, in text: String) -> Range<String.Index>? { nil }
+}
+
+@Test func evaluate_destructiveHitRequiresFirstMatch() throws {
+    let packs = [
+        PackSnapshot(
+            id: .coreFilesystem,
+            name: "fs",
+            description: "fs",
+            keywords: ["rm"],
+            safe: [],
+            destructive: [
+                DestructiveRule(
+                    name: "rm-rf-general",
+                    pattern: #"rm\s+-rf"#,
+                    severity: .high,
+                    reason: "rm -rf is destructive"
+                )
+            ]
+        ),
+        PackSnapshot(
+            id: .coreGit,
+            name: "git",
+            description: "git",
+            keywords: ["git"],
+            safe: [],
+            destructive: [
+                DestructiveRule(
+                    name: "reset-hard",
+                    pattern: #"git\s+reset\s+--hard"#,
+                    severity: .critical,
+                    reason: "git reset --hard destroys uncommitted changes"
+                )
+            ]
+        )
+    ]
+    let engine = HitlessPatternEngine()
+    let compiled = try CompiledPacks<String>.compile(packs: packs, using: engine)
+    let result = evaluate(
+        EvaluationRequest(
+            command: ShellCommand(rawValue: "git reset --hard"),
+            enabledPacks: dayOnePackIDs
+        ),
+        packs: packs,
+        patterns: engine,
+        compiled: compiled
+    )
+    #expect(result.decision == .allow)
+    #expect(result.matched == nil)
+    if case .deny = result.decision {
+        Issue.record("matches-without-firstMatch must not deny")
+        #expect(result.matched?.span != nil)
+    }
+}

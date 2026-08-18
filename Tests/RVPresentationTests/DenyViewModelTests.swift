@@ -87,7 +87,7 @@ private func mediumAllow() -> EvaluationResult {
     #expect(vm.explanation == nil)
     #expect(vm.heading == "RV EXPLAIN")
     #expect(vm.explainDecisionWord == "DENY")
-    #expect(vm.suggestions.contains { $0.kind == "Preview first" })
+    #expect(vm.suggestions.contains { $0.kind == .previewFirst })
     #expect(vm.suggestions.contains { $0.command == "git reset --soft" })
     #expect(!vm.suggestions.contains { $0.command?.contains("HEAD~1") == true })
     #expect(

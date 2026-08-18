@@ -106,7 +106,7 @@ private func suggestionItems(_ model: ExplainViewModel) -> [OutlineItem] {
         if let url = suggestion.url {
             children.append(.text("See: \(url)", emphasis: .muted))
         }
-        let label = "\(suggestion.kind): \(suggestion.text)"
+        let label = "\(suggestion.kind.title): \(suggestion.text)"
         if children.isEmpty {
             return .text(label, emphasis: .plain)
         }
