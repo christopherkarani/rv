@@ -79,6 +79,43 @@ import RVTheme
     }
 }
 
+@Test func setup_pretty_occupiedGrokOnly_neverClaimsComplete() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(
+            atPath: layout.grokDirectory + "/hooks",
+            withIntermediateDirectories: true
+        )
+        let foreign = "{\"hooks\":[]}\n"
+        try foreign.write(toFile: layout.grokHook, atomically: true, encoding: .utf8)
+        let outcome = SetupRun.setup(
+            env(home: home, launchctl: launchctl),
+            appearance: .pretty(colorOffPalette)
+        )
+        #expect(outcome.exitCode == 0)
+        #expect(outcome.stdout.contains("Setup complete") == false)
+        #expect(outcome.stdout.contains("rv test") == false)
+        #expect(outcome.stdout == """
+        ○ Grok  skipped occupied
+        ○ Pi
+        ○ OpenCode
+        looking for hosts
+        No hosts yet
+        Next  rv setup
+
+        """)
+        let grokAfter = try String(contentsOfFile: layout.grokHook, encoding: .utf8)
+        #expect(grokAfter == foreign)
+        #expect(FileManager.default.fileExists(atPath: layout.piDirectory) == false)
+        #expect(FileManager.default.fileExists(atPath: layout.openCodeDirectory) == false)
+    }
+}
+
+@Test func setupAppearance_ciForcesRobot_prettyWithoutCIStaysPretty() {
+    #expect(SetupAppearance.resolved(mode: .pretty, ci: true, palette: colorOffPalette) == .robot)
+    #expect(SetupAppearance.resolved(mode: .browse, ci: true, palette: colorOffPalette) == .robot)
+    #expect(SetupAppearance.resolved(mode: .pretty, ci: false, palette: colorOffPalette) == .pretty(colorOffPalette))
+}
+
 @Test func setup_pretty_secondRunIsQuiet() throws {
     try withTempHome { home, layout, launchctl in
         try FileManager.default.createDirectory(
@@ -107,4 +144,10 @@ import RVTheme
         #expect(outcome.stdout.contains("○") == false)
         #expect(outcome.stdout.contains("●") == false)
     }
+}
+
+@Test func setupHelp_jsonAndRobotAreOneLineNotJSON() {
+    let help = Setup.helpText()
+    #expect(help.contains("Robot JSON") == false)
+    #expect(help.contains("One line, no circles"))
 }

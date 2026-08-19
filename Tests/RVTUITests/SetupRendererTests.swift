@@ -3,27 +3,23 @@ import RVPresentation
 import RVTheme
 @testable import RVTUI
 
-private func hostlessModel(isQuiet: Bool = false) -> SetupViewModel {
+private func hostlessModel() -> SetupViewModel {
     SetupViewModel(
         slots: SetupHostKind.allCases.map { SetupSlotView(host: $0, kind: .pending) },
-        activity: "looking for hosts",
-        closerTitle: "No hosts yet",
-        closerNext: "Next  rv setup",
-        isQuiet: isQuiet
+        activity: setupLookingActivity,
+        closer: .hostless
     )
 }
 
 private func grokWiredModel() -> SetupViewModel {
     SetupViewModel(
         slots: [
-            SetupSlotView(host: .grok, kind: .wired, clause: "reload /hooks"),
+            SetupSlotView(host: .grok, kind: .wired, clause: setupGrokReloadClause),
             SetupSlotView(host: .pi, kind: .pending),
             SetupSlotView(host: .openCode, kind: .pending),
         ],
         activity: "wiring Grok",
-        closerTitle: "Setup complete",
-        closerNext: "Next  rv test 'git reset --hard'",
-        isQuiet: false
+        closer: .complete
     )
 }
 
@@ -38,11 +34,6 @@ private func grokWiredModel() -> SetupViewModel {
         "Next  rv setup",
     ])
     #expect(lines.allSatisfy { $0.contains("\u{001B}") == false })
-}
-
-@Test func setupRenderer_quiet_isEmpty() {
-    let lines = SetupRenderer().render(hostlessModel(isQuiet: true), palette: colorOffPalette)
-    #expect(lines.isEmpty)
 }
 
 @Test func setupRenderer_wiredGrok_colorOff_reloadIsClause() {

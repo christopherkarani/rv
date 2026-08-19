@@ -16,7 +16,7 @@ Not ryk. Not line-for-line Rust. Repo: `~/CodingProjects/rv` (`christopherkarani
 - **Deny UX:** Native host deny **text** is the block path (one sentence + `rule_id` + next step). Pi also posts a display-only transcript card (`registerMessageRenderer` + `sendMessage`, customType `rv-decision`). OpenCode also shows a display-only TUI toast (`client.tui.showToast`, title `RV · Blocked`). Card and toast are chrome, not the deny. Pi renderer must return `{ render(width) => string[] }`, never a string. OpenCode `throw new Error(reason)` remains the abort. Toast failure must still throw. No host Allow, no confirm, no leftover-ask.
 - **Unlock:** Run command in Terminal, or `rv allow-once <code>` in a **TTY**. No host Allow button. **No `RV_BYPASS`.**
 - **Day-one packs:** `core.git` + `core.filesystem` only. Rest catalog, off until enabled.
-- **Setup mutations:** only rv-owned files. Foreign hooks untouched. Occupied single slot → skip + one line. Uninstall removes only rv files. **No ryk special-case.**
+- **Setup mutations:** only rv-owned files. Foreign hooks untouched. Occupied owned name → skip that host (TTY hollow + skip clause; non-TTY one line). Uninstall removes only rv files. **No ryk special-case.**
 - **Hostless install:** success. TTY closer: `No hosts yet` then `Next  rv setup`. Non-TTY: one line to run `rv setup` after a host exists.
 - **Privacy:** no command text in `os_log`. History **off** by default; when on, no raw secrets. Full command only in TTY `explain`/`test`.
 - **License:** deferred.

@@ -282,11 +282,7 @@ private func realGrokHookURL() -> URL? {
     try withTempHome { home, _, _ in
         let decoyDir = home.appendingPathComponent("cellar/bin", isDirectory: true)
         try makeExecutable(decoyDir.appendingPathComponent("rv"), contents: "decoy-rv")
-        let resolved = SetupEnvironment.resolveRv(
-            executable: URL(fileURLWithPath: "/usr/bin/swift"),
-            home: home.path,
-            pathEntries: [decoyDir.path]
-        )
+        let resolved = SetupEnvironment.resolveRv(home: home.path)
         #expect(resolved == home.path + "/.local/bin/rv")
     }
 }
@@ -302,8 +298,7 @@ private func realGrokHookURL() -> URL? {
         try makeExecutable(decoy, contents: "decoy-rvd")
         let resolved = SetupEnvironment.resolveRvd(
             nextTo: siblingRv.path,
-            home: home.path,
-            pathEntries: [home.appendingPathComponent(".local/bin").path]
+            home: home.path
         )
         #expect(resolved == siblingRvd.path)
     }

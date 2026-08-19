@@ -15,11 +15,7 @@ struct SetupOutcome: Equatable, Sendable {
     static let ok = SetupOutcome(stdout: "", exitCode: 0)
 }
 
-enum SetupHost: CaseIterable, Hashable, Sendable {
-    case grok
-    case pi
-    case openCode
-
+extension SetupHostKind {
     var toolName: String {
         switch self {
         case .grok: "grok"
@@ -105,26 +101,16 @@ struct SetupEnvironment {
     }
 
     /// Curl install bakes `$HOME/.local/bin/rv`. Do not walk PATH.
-    static func resolveRv(
-        executable: URL? = nil,
-        home: String,
-        pathEntries: [String] = [],
-        fileManager: FileManager = .default
-    ) -> String {
-        _ = executable
-        _ = pathEntries
-        _ = fileManager
-        return home + "/.local/bin/rv"
+    static func resolveRv(home: String) -> String {
+        home + "/.local/bin/rv"
     }
 
     /// Prefer `rvd` next to the running `rv`, then `$HOME/.local/bin/rvd`.
     static func resolveRvd(
         nextTo rvExecutable: String?,
         home: String,
-        pathEntries: [String] = [],
         fileManager: FileManager = .default
     ) -> String? {
-        _ = pathEntries
         if let rvExecutable {
             let sibling = (rvExecutable as NSString).deletingLastPathComponent + "/rvd"
             if fileManager.isExecutableFile(atPath: sibling) {
@@ -162,21 +148,18 @@ enum SetupRun {
     private static func perform(_ env: SetupEnvironment) throws -> SetupReport {
         let files = FileOps(fileManager: env.fileManager)
         let layout = HostLayout(home: env.home)
-        var kinds: [SetupHost: SetupSlotKind] = [
+        var kinds: [SetupHostKind: SetupSlotKind] = [
             .grok: .pending,
             .pi: .pending,
             .openCode: .pending,
         ]
-        var wrote: Set<SetupHost> = []
-        var occupied: Set<SetupHost> = []
-        var detected: Set<SetupHost> = []
+        var wrote: Set<SetupHostKind> = []
 
         try files.createDirectory(atPath: layout.configDirectory)
         try writeLaunchAgent(env: env, layout: layout, files: files)
 
-        for host in SetupHost.allCases {
+        for host in SetupHostKind.allCases {
             guard host.isDetected(layout: layout, env: env, files: files) else { continue }
-            detected.insert(host)
             let raw = try host.rawTemplate()
             switch try writeOwned(
                 path: host.ownedPath(in: layout),
@@ -190,7 +173,6 @@ enum SetupRun {
             case .unchanged:
                 kinds[host] = .wired
             case .occupied:
-                occupied.insert(host)
                 kinds[host] = .occupied
             }
         }
@@ -199,9 +181,7 @@ enum SetupRun {
             grok: kinds[.grok] ?? .pending,
             pi: kinds[.pi] ?? .pending,
             openCode: kinds[.openCode] ?? .pending,
-            wrote: wrote,
-            occupied: occupied,
-            detected: detected
+            wrote: wrote
         )
     }
 

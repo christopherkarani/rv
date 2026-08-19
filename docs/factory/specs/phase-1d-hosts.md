@@ -414,7 +414,7 @@ All setup / uninstall / doctor host probes honor **`$HOME` only** (process envir
 
 Do not `mkdir` a host tree to “detect” it. Only mkdir the owned parent (`hooks/`, `extensions/`, `plugins/`) after that host is detected.
 
-**Occupied single slot:** v1 hosts are multi-file, so the exclusive slot is the **owned filename**. If that path exists and is **not** the current rv template (command/path/`--host`/matcher/`tool_call`/`tool.execute.before` as shipped), **skip** that host and print **one line**. Do not merge. Do not backup-and-overwrite. Do not special-case `dcg.json` or ryk. A foreign `dcg.json` beside `rv.json` is fine (Grok runs both; first `deny` wins).
+**Occupied single slot:** v1 hosts are multi-file, so the exclusive slot is the **owned filename**. If that path exists and is **not** the current rv template (command/path/`--host`/matcher/`tool_call`/`tool.execute.before` as shipped), **skip** that host (TTY hollow + skip clause; non-TTY one line). Do not merge. Do not backup-and-overwrite. Do not special-case `dcg.json` or ryk. A foreign `dcg.json` beside `rv.json` is fine (Grok runs both; first `deny` wins).
 
 If no host is detected: setup still succeeds. No wizard. TTY closer: `No hosts yet` / `Next  rv setup`. Non-TTY: one line to run `rv setup` after a host exists.
 
@@ -580,7 +580,7 @@ Do not add Claude/Codex codecs. Do not add files under a ryk tree.
 1. `printf '%s' '<grok deny stdin>' | rv hook --host grok` → deny JSON, `reason` is `hostDenyText`, exit 0. `git status` → empty stdout, exit 0.
 2. Same command through `--host pi` and `--host opencode` → same `reason`; exit 1 on deny; adapters would block / throw.
 3. Non-shell tool names never evaluate.
-4. `HOME=/tmp/rv-l4-… rv setup` wires only detected hosts’ **owned** files; foreign files unchanged; occupied owned name skipped with one line; hostless prints one `rv setup` line and exits 0.
+4. `HOME=/tmp/rv-l4-… rv setup` wires only detected hosts’ **owned** files; foreign files unchanged; occupied owned name skipped (TTY skip clause; non-TTY one line); hostless TTY closer is `No hosts yet` / `Next  rv setup` (non-TTY one `rv setup` line) and exits 0.
 5. `HOME=/tmp/… rv uninstall` removes only owned files.
 6. `HOME=/tmp/… rv doctor` reports service (if T3), day-one packs, and host wired/missing/occupied without writing.
 7. `curl | sh` on a real HOME is the only v1 install path (human-run). No Homebrew.

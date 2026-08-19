@@ -6,14 +6,13 @@ public struct SetupRenderer: FrameRenderer {
     public init() {}
 
     public func render(_ model: SetupViewModel, palette: Palette) -> [String] {
-        if model.isQuiet { return [] }
         var lines: [String] = []
         for slot in model.slots {
             lines.append(row(slot, palette: palette))
         }
         lines.append(model.activity)
-        lines.append(model.closerTitle)
-        lines.append(model.closerNext)
+        lines.append(model.closer.title)
+        lines.append(model.closer.next)
         return lines
     }
 
