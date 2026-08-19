@@ -156,6 +156,97 @@ private func run(
     #expect(result.decision == .indeterminate(.corePacksUnavailable))
 }
 
+@Test func evaluate_compiledMissingRequiredRuleIsIndeterminate() {
+    let packs = samplePacks()
+    let engine = ICUPatternEngine()
+    let compiled = CompiledPacks<ICUCompiledPattern>(packs: [])
+    let result = evaluate(
+        EvaluationRequest(
+            command: ShellCommand(rawValue: "git reset --hard"),
+            enabledPacks: dayOnePackIDs
+        ),
+        packs: packs,
+        patterns: engine,
+        compiled: compiled
+    )
+    #expect(result.decision == .indeterminate(.corePacksUnavailable))
+    if case .allow = result.decision {
+        Issue.record("snapshots present with compiled missing reset-hard must not allow")
+    }
+}
+
+@Test func evaluate_emptyEnabledPacksDoesNotDenyResetHard() throws {
+    let packs = samplePacks()
+    let engine = ICUPatternEngine()
+    let compiled = try CompiledPacks<ICUCompiledPattern>.compile(packs: packs, using: engine)
+    let result = evaluate(
+        EvaluationRequest(
+            command: ShellCommand(rawValue: "git reset --hard"),
+            enabledPacks: []
+        ),
+        packs: packs,
+        patterns: engine,
+        compiled: compiled
+    )
+    #expect(result.decision == .allow)
+    if case .deny = result.decision {
+        Issue.record("empty enabledPacks means none enabled, not a deny")
+    }
+}
+
+@Test func evaluate_emptyEnabledPacksStillRequireReady() {
+    let engine = ICUPatternEngine()
+    let compiled = CompiledPacks<ICUCompiledPattern>(packs: [])
+    let result = evaluate(
+        EvaluationRequest(
+            command: ShellCommand(rawValue: "git reset --hard"),
+            enabledPacks: []
+        ),
+        packs: [],
+        patterns: engine,
+        compiled: compiled
+    )
+    #expect(result.decision == .indeterminate(.corePacksUnavailable))
+}
+
+@Test func evaluate_compiledMissingForkBombIsIndeterminate() throws {
+    var packs = samplePacks()
+    packs = packs.map { pack in
+        guard pack.id == .coreFilesystem else { return pack }
+        var copy = pack
+        copy.destructive.append(
+            DestructiveRule(
+                name: "fork-bomb",
+                pattern: ":",
+                severity: .critical,
+                reason: "fork bomb"
+            )
+        )
+        return copy
+    }
+    let engine = ICUPatternEngine()
+    var compiled = try CompiledPacks<ICUCompiledPattern>.compile(packs: packs, using: engine)
+    compiled.packs = compiled.packs.map { pack in
+        guard pack.snapshot.id == .coreFilesystem else { return pack }
+        var copy = pack
+        copy.destructive.removeAll { $0.rule.name == "fork-bomb" }
+        return copy
+    }
+    let result = evaluate(
+        EvaluationRequest(
+            command: ShellCommand(rawValue: "git reset --hard"),
+            enabledPacks: dayOnePackIDs
+        ),
+        packs: packs,
+        patterns: engine,
+        compiled: compiled
+    )
+    #expect(result.decision == .indeterminate(.corePacksUnavailable))
+    if case .allow = result.decision {
+        Issue.record("compiled missing fork-bomb must not allow")
+    }
+}
+
 /// `matches` would fire; `firstMatch` is the sole destructive hit test.
 private struct HitlessPatternEngine: PatternEngine {
     func compile(_ pattern: String) throws -> String { pattern }

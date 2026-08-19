@@ -19,7 +19,7 @@ public func evaluate<E: PatternEngine>(
             quickRejected: false
         )
     }
-    if !corePacksArePresent(packs) {
+    if !corePacksAreReady(snapshots: packs, compiled: compiled) {
         return EvaluationResult(decision: .indeterminate(.corePacksUnavailable))
     }
 
@@ -61,12 +61,44 @@ public func evaluate<E: PatternEngine>(
     return EvaluationResult(decision: .allow)
 }
 
+public func corePacksAreReady<Compiled: Sendable>(
+    snapshots: [PackSnapshot],
+    compiled: CompiledPacks<Compiled>
+) -> Bool {
+    guard corePacksArePresent(snapshots) else { return false }
+    return requiredRulesAreCompiled(snapshots: snapshots, compiled: compiled)
+}
+
 private func corePacksArePresent(_ packs: [PackSnapshot]) -> Bool {
     func usable(_ id: PackID) -> Bool {
         guard let pack = packs.first(where: { $0.id == id }) else { return false }
         return !pack.safe.isEmpty || !pack.destructive.isEmpty
     }
     return usable(.coreGit) && usable(.coreFilesystem)
+}
+
+let requiredCompiledRules: [(PackID, String)] = [
+    (.coreGit, "reset-hard"),
+    (.coreFilesystem, "fork-bomb"),
+]
+
+private func requiredRulesAreCompiled<Compiled: Sendable>(
+    snapshots: [PackSnapshot],
+    compiled: CompiledPacks<Compiled>
+) -> Bool {
+    for (id, name) in requiredCompiledRules {
+        let snapshotHasRule = snapshots.contains { pack in
+            pack.id == id && pack.destructive.contains { $0.name == name }
+        }
+        guard snapshotHasRule else { continue }
+        let compiledHasRule = compiled.packs.contains { pack in
+            pack.snapshot.id == id && pack.destructive.contains { $0.rule.name == name }
+        }
+        if !compiledHasRule {
+            return false
+        }
+    }
+    return true
 }
 
 private func enabledPacks(from packs: [PackSnapshot], enabledIDs: [PackID]) -> [PackSnapshot] {
