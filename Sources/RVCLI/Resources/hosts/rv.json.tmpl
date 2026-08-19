@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__RV_BINARY__ hook --host grok",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
