@@ -61,6 +61,7 @@ public func evaluate<E: PatternEngine>(
     return EvaluationResult(decision: .allow)
 }
 
+/// Returns whether `core.git` and `core.filesystem` snapshots are present and whether each required compiled rule is present in `compiled` when that rule exists on a snapshot.
 public func corePacksAreReady<Compiled: Sendable>(
     snapshots: [PackSnapshot],
     compiled: CompiledPacks<Compiled>
@@ -77,22 +78,22 @@ private func corePacksArePresent(_ packs: [PackSnapshot]) -> Bool {
     return usable(.coreGit) && usable(.coreFilesystem)
 }
 
-let requiredCompiledRules: [(PackID, String)] = [
-    (.coreGit, "reset-hard"),
-    (.coreFilesystem, "fork-bomb"),
+let requiredCompiledRules: Set<RuleID> = [
+    RuleID(pack: .coreGit, pattern: "reset-hard"),
+    RuleID(pack: .coreFilesystem, pattern: "fork-bomb"),
 ]
 
 private func requiredRulesAreCompiled<Compiled: Sendable>(
     snapshots: [PackSnapshot],
     compiled: CompiledPacks<Compiled>
 ) -> Bool {
-    for (id, name) in requiredCompiledRules {
+    for ruleID in requiredCompiledRules {
         let snapshotHasRule = snapshots.contains { pack in
-            pack.id == id && pack.destructive.contains { $0.name == name }
+            pack.id == ruleID.pack && pack.destructive.contains { $0.name == ruleID.pattern }
         }
         guard snapshotHasRule else { continue }
         let compiledHasRule = compiled.packs.contains { pack in
-            pack.snapshot.id == id && pack.destructive.contains { $0.rule.name == name }
+            pack.snapshot.id == ruleID.pack && pack.destructive.contains { $0.rule.name == ruleID.pattern }
         }
         if !compiledHasRule {
             return false
