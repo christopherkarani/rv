@@ -21,10 +21,12 @@ public enum HookHost: String, Equatable, Sendable {
 public struct HookRequest: Equatable, Sendable {
     public var host: HookHost
     public var command: ShellCommand?
+    public var cwd: String?
 
-    public init(host: HookHost, command: ShellCommand?) {
+    public init(host: HookHost, command: ShellCommand?, cwd: String? = nil) {
         self.host = host
         self.command = command
+        self.cwd = cwd
     }
 }
 

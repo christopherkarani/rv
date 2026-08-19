@@ -30,6 +30,27 @@ private func jsonFragment(_ value: String) -> String {
     return text
 }
 
+private func denyJSON(_ stdout: String) throws -> [String: Any] {
+    let object = try JSONSerialization.jsonObject(with: Data(stdout.utf8))
+    return try #require(object as? [String: Any])
+}
+
+private func expectResetHardMapperDeny(_ wire: HookWire, exit: Int32) throws {
+    let json = try denyJSON(wire.stdout)
+    #expect(json["decision"] as? String == "deny")
+    #expect(json["reason"] as? String == hostDenyText(
+        from: EvaluationResult(
+            decision: .deny(
+                Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "x")
+            )
+        ),
+        command: ShellCommand(rawValue: "git reset --hard")
+    ))
+    #expect(json["rule"] as? String == "core.git/reset-hard")
+    #expect(json["next"] as? String == hookUnlockNext)
+    #expect(wire.exitCode == exit)
+}
+
 private func grokExpected(_ stem: String) throws -> (stdout: String, exit: Int32) {
     let stdout = try grokFixture("\(stem).out")
     let exitText = try grokFixture("\(stem).exit")
@@ -55,14 +76,19 @@ private final class EvaluateProbe: @unchecked Sendable {
     }
 }
 
-private func inProcessEvaluate(_ command: ShellCommand) async -> EvaluationResult {
-    await ServiceClient(transport: nil).evaluateResult(command: command)
+private func inProcessEvaluate(_ command: ShellCommand, cwd: String) async -> EvaluationResult {
+    do {
+        let client = try isolatedClient(transport: nil)
+        return await client.evaluateResult(command: command, cwd: cwd)
+    } catch {
+        return EvaluationResult(decision: .indeterminate(.corePacksUnavailable))
+    }
 }
 
 private func runHook<C: HostCodec>(
     stdin: String,
     codec: C = GrokHostCodec(),
-    evaluate: (@Sendable (ShellCommand) async -> EvaluationResult)? = nil
+    evaluate: (@Sendable (ShellCommand, String) async -> EvaluationResult)? = nil
 ) async throws -> HookWire {
     try await withTempHome { _ in
         await HookRun.run(
@@ -83,10 +109,13 @@ private func runHook<C: HostCodec>(
 @Test func hookDenyResetHard_reasonEqualsHostDenyText() async throws {
     let expected = try grokExpected("deny-git-reset-hard")
     let command = ShellCommand(rawValue: "git reset --hard")
-    let result = CommandRun.evaluateCommand(command.rawValue)
+    let result = try await cliEvaluate(command.rawValue)
     let text = try #require(hostDenyText(from: result, command: command))
     let wire = try await runHook(stdin: try grokFixture("deny-git-reset-hard.json"))
-    #expect(wire.stdout == expected.stdout)
+    let json = try denyJSON(wire.stdout)
+    #expect(json["reason"] as? String == text)
+    #expect(json["rule"] as? String == "core.git/reset-hard")
+    #expect(json["next"] as? String == hookUnlockNext)
     #expect(wire.exitCode == expected.exit)
     #expect(wire.stdout.contains(text))
     #expect(text.contains("core.git/reset-hard"))
@@ -112,7 +141,7 @@ private func runHook<C: HostCodec>(
 
 @Test func hookIndeterminate_stillDeniesWhenHostDenyTextNilFallback() async throws {
     let expected = try grokExpected("deny-indeterminate-oversize")
-    let wire = try await runHook(stdin: try grokFixture("deny-git-reset-hard.json")) { _ in
+    let wire = try await runHook(stdin: try grokFixture("deny-git-reset-hard.json")) { _, _ in
         EvaluationResult(decision: .indeterminate(.corePacksUnavailable))
     }
     #expect(wire.stdout == expected.stdout)
@@ -122,7 +151,7 @@ private func runHook<C: HostCodec>(
 @Test func hookNonShellRead_doesNotEvaluate() async throws {
     let probe = EvaluateProbe()
     let expected = try grokExpected("allow-non-shell-read")
-    let wire = try await runHook(stdin: try grokFixture("allow-non-shell-read.json")) { command in
+    let wire = try await runHook(stdin: try grokFixture("allow-non-shell-read.json")) { command, _ in
         probe.record(command, result: EvaluationResult(decision: .deny(
             Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "should not run")
         )))
@@ -140,13 +169,12 @@ private func runHook<C: HostCodec>(
 }
 
 @Test func hookXPCDown_stillDeniesResetHard() async throws {
-    let client = ServiceClient(transport: nil)
+    let client = try isolatedClient(transport: nil)
     let expected = try grokExpected("deny-git-reset-hard")
-    let wire = try await runHook(stdin: try grokFixture("deny-git-reset-hard.json")) { command in
+    let wire = try await runHook(stdin: try grokFixture("deny-git-reset-hard.json")) { command, _ in
         await client.evaluateResult(command: command)
     }
-    #expect(wire.stdout == expected.stdout)
-    #expect(wire.exitCode == expected.exit)
+    try expectResetHardMapperDeny(wire, exit: expected.exit)
 }
 
 @Test func hookXPCSkew_stillDeniesResetHard() async throws {
@@ -158,14 +186,13 @@ private func runHook<C: HostCodec>(
             skewReason: "protocol"
         )
     )
-    let client = ServiceClient(transport: transport)
+    let client = try isolatedClient(transport: transport)
     let expected = try grokExpected("deny-git-reset-hard")
-    let wire = try await runHook(stdin: try grokFixture("deny-git-reset-hard.json")) { command in
+    let wire = try await runHook(stdin: try grokFixture("deny-git-reset-hard.json")) { command, _ in
         await client.evaluateResult(command: command)
     }
     #expect(transport.sendCount == 0)
-    #expect(wire.stdout == expected.stdout)
-    #expect(wire.exitCode == expected.exit)
+    try expectResetHardMapperDeny(wire, exit: expected.exit)
 }
 
 @Test func hookBypassPermissionMode_stillEvaluates() async throws {
@@ -174,8 +201,7 @@ private func runHook<C: HostCodec>(
     """
     let expected = try grokExpected("deny-git-reset-hard")
     let wire = try await runHook(stdin: stdin)
-    #expect(wire.stdout == expected.stdout)
-    #expect(wire.exitCode == expected.exit)
+    try expectResetHardMapperDeny(wire, exit: expected.exit)
 }
 
 @Test func hookAllowEmptyCommand_emptyStdoutExitZero() async throws {
@@ -202,8 +228,7 @@ private func runHook<C: HostCodec>(
 @Test func hookDenyReasonIsOneLine_noBannerOrCSI() async throws {
     let expected = try grokExpected("deny-reason-is-one-line")
     let wire = try await runHook(stdin: try grokFixture("deny-reason-is-one-line.json"))
-    #expect(wire.stdout == expected.stdout)
-    #expect(wire.exitCode == expected.exit)
+    try expectResetHardMapperDeny(wire, exit: expected.exit)
     let parsed = try grokDenyObject(wire.stdout)
     #expect(parsed.reason.contains("\n") == false)
     #expect(parsed.reason.contains("═") == false)
@@ -223,8 +248,10 @@ private func runHook<C: HostCodec>(
             ],
             evaluate: inProcessEvaluate
         )
-        #expect(outcome.exitCode == expected.exit)
-        #expect(outcome.stdout == expected.stdout)
+        try expectResetHardMapperDeny(
+            HookWire(stdout: outcome.stdout, exitCode: outcome.exitCode),
+            exit: expected.exit
+        )
         #expect(outcome.stderr.isEmpty)
         #expect(FileManager.default.fileExists(atPath: home.appendingPathComponent(".grok").path) == false)
     }
@@ -249,13 +276,15 @@ private func runHook<C: HostCodec>(
 @Test func hookPiDenyResetHard_reasonEqualsHostDenyText() async throws {
     let expected = try hostExpected("pi", "deny-git-reset-hard")
     let command = ShellCommand(rawValue: "git reset --hard")
-    let result = CommandRun.evaluateCommand(command.rawValue)
+    let result = try await cliEvaluate(command.rawValue)
     let text = try #require(hostDenyText(from: result, command: command))
     let wire = try await runHook(
         stdin: try hostFixture("pi", "deny-git-reset-hard.json"),
         codec: PiHostCodec()
     )
-    #expect(wire.stdout == expected.stdout)
+    let json = try denyJSON(wire.stdout)
+    #expect(json["reason"] as? String == text)
+    #expect(json["rule"] as? String == "core.git/reset-hard")
     #expect(wire.exitCode == expected.exit)
     #expect(wire.exitCode == 1)
     #expect(wire.stdout.contains(text))
@@ -264,13 +293,15 @@ private func runHook<C: HostCodec>(
 @Test func hookOpenCodeDenyResetHard_reasonEqualsHostDenyText() async throws {
     let expected = try hostExpected("opencode", "deny-git-reset-hard")
     let command = ShellCommand(rawValue: "git reset --hard")
-    let result = CommandRun.evaluateCommand(command.rawValue)
+    let result = try await cliEvaluate(command.rawValue)
     let text = try #require(hostDenyText(from: result, command: command))
     let wire = try await runHook(
         stdin: try hostFixture("opencode", "deny-git-reset-hard.json"),
         codec: OpenCodeHostCodec()
     )
-    #expect(wire.stdout == expected.stdout)
+    let json = try denyJSON(wire.stdout)
+    #expect(json["reason"] as? String == text)
+    #expect(json["rule"] as? String == "core.git/reset-hard")
     #expect(wire.exitCode == expected.exit)
     #expect(wire.exitCode == 1)
     #expect(wire.stdout.contains(text))
@@ -282,7 +313,7 @@ private func runHook<C: HostCodec>(
     let wire = try await runHook(
         stdin: try hostFixture("pi", "allow-non-shell-read.json"),
         codec: PiHostCodec()
-    ) { command in
+    ) { command, _ in
         probe.record(command, result: EvaluationResult(decision: .deny(
             Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "should not run")
         )))
@@ -298,7 +329,7 @@ private func runHook<C: HostCodec>(
     let wire = try await runHook(
         stdin: try hostFixture("opencode", "allow-non-shell-read.json"),
         codec: OpenCodeHostCodec()
-    ) { command in
+    ) { command, _ in
         probe.record(command, result: EvaluationResult(decision: .deny(
             Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "should not run")
         )))
@@ -309,16 +340,15 @@ private func runHook<C: HostCodec>(
 }
 
 @Test func hookPiXPCDown_stillDeniesResetHard() async throws {
-    let client = ServiceClient(transport: nil)
+    let client = try isolatedClient(transport: nil)
     let expected = try hostExpected("pi", "deny-git-reset-hard")
     let wire = try await runHook(
         stdin: try hostFixture("pi", "deny-git-reset-hard.json"),
         codec: PiHostCodec()
-    ) { command in
+    ) { command, _ in
         await client.evaluateResult(command: command)
     }
-    #expect(wire.stdout == expected.stdout)
-    #expect(wire.exitCode == expected.exit)
+    try expectResetHardMapperDeny(wire, exit: expected.exit)
 }
 
 @Test func hookRun_piAndOpenCodeDenyWithTempHome() async throws {
@@ -331,8 +361,10 @@ private func runHook<C: HostCodec>(
             environment: ["HOME": home.path],
             evaluate: inProcessEvaluate
         )
-        #expect(outcome.exitCode == expected.exit)
-        #expect(outcome.stdout == expected.stdout)
+        try expectResetHardMapperDeny(
+            HookWire(stdout: outcome.stdout, exitCode: outcome.exitCode),
+            exit: expected.exit
+        )
         #expect(outcome.stderr.isEmpty)
         #expect(FileManager.default.fileExists(atPath: home.appendingPathComponent(".pi").path) == false)
 
@@ -344,8 +376,10 @@ private func runHook<C: HostCodec>(
             environment: ["HOME": home.path],
             evaluate: inProcessEvaluate
         )
-        #expect(openOutcome.exitCode == openExpected.exit)
-        #expect(openOutcome.stdout == openExpected.stdout)
+        try expectResetHardMapperDeny(
+            HookWire(stdout: openOutcome.stdout, exitCode: openOutcome.exitCode),
+            exit: openExpected.exit
+        )
         #expect(openOutcome.stderr.isEmpty)
         #expect(
             FileManager.default.fileExists(

@@ -1,5 +1,12 @@
-func hookDenyJSON(reason: String) -> String {
-    "{\"decision\":\"deny\",\"reason\":\(jsonQuoted(reason))}\n"
+func hookDenyJSON(reason: String, rule: String? = nil, next: String? = nil) -> String {
+    var body = "\"decision\":\"deny\",\"reason\":\(jsonQuoted(reason))"
+    if let rule, rule.isEmpty == false {
+        body += ",\"rule\":\(jsonQuoted(rule))"
+    }
+    if let next, next.isEmpty == false {
+        body += ",\"next\":\(jsonQuoted(next))"
+    }
+    return "{\(body)}\n"
 }
 
 private func jsonQuoted(_ value: String) -> String {

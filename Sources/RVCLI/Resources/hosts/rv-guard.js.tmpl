@@ -18,7 +18,7 @@ export const RvGuard = async (ctx) => {
       }
       const mapped = await consultRv(command);
       if (mapped.action === "block") {
-        await showBlockToast(ctx, mapped.reason, command);
+        await showBlockToast(ctx, mapped, command);
         throw new Error(mapped.reason);
       }
     },
@@ -99,6 +99,8 @@ function mapRvHookResult(value) {
         return {
           action: "block",
           reason: typeof parsed.reason === "string" ? parsed.reason : "",
+          rule: typeof parsed.rule === "string" ? parsed.rule : undefined,
+          next: typeof parsed.next === "string" ? parsed.next : undefined,
         };
       }
     } catch {
@@ -112,8 +114,8 @@ function mapRvHookResult(value) {
   return { action: "block", reason: "rv failed" };
 }
 
-function formatToastMessage(reason, command) {
-  const card = cardFromBlock(reason, command);
+function formatToastMessage(mapped, command) {
+  const card = cardFromBlock(mapped, command);
   const lines = [];
   const push = (label, value) => {
     if (!value) {
@@ -128,9 +130,27 @@ function formatToastMessage(reason, command) {
   return lines.join("\n").slice(0, 280);
 }
 
-function cardFromBlock(reason, command) {
-  const cleaned = sanitizeVisibleText(typeof reason === "string" ? reason : "");
+function cardFromBlock(mapped, command) {
   const preview = previewCommand(command);
+  const reason = typeof mapped === "string" ? mapped : mapped && mapped.reason;
+  const rule = mapped && typeof mapped === "object" ? mapped.rule : undefined;
+  const next = mapped && typeof mapped === "object" ? mapped.next : undefined;
+  if (typeof rule === "string" || typeof next === "string") {
+    let summary = typeof reason === "string" ? reason : "";
+    if (typeof rule === "string") {
+      summary = summary.split(` (${rule})`).join("");
+    }
+    if (typeof next === "string") {
+      summary = summary.split(`. ${next}`).join("");
+    }
+    return {
+      summary: sanitizeVisibleText(summary) || "Blocked.",
+      rule: typeof rule === "string" ? rule : undefined,
+      nextStep: typeof next === "string" ? next : undefined,
+      preview,
+    };
+  }
+  const cleaned = sanitizeVisibleText(typeof reason === "string" ? reason : "");
   const withRule = cleaned.match(/^(.+?) \(([^)]+)\)\.\s*(.+)$/);
   if (withRule) {
     return {
@@ -168,10 +188,10 @@ function previewCommand(command) {
   return `${text.slice(0, RV_CMD_PREVIEW - 3)}...`;
 }
 
-async function showBlockToast(ctx, reason, command) {
+async function showBlockToast(ctx, mapped, command) {
   const payload = {
     title: RV_TOAST_TITLE,
-    message: formatToastMessage(reason, command),
+    message: formatToastMessage(mapped, command),
     variant: "error",
     duration: 8000,
   };

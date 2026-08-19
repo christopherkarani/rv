@@ -30,7 +30,7 @@ export default function (pi) {
     }
     const mapped = await consultRv(command);
     if (mapped.action === "block") {
-      showDecision(pi, ctx, cardFromBlock(mapped.reason, command));
+      showDecision(pi, ctx, cardFromBlock(mapped, command));
       return { block: true, reason: mapped.reason };
     }
     clearWidget(ctx);
@@ -143,9 +143,33 @@ function decisionCardRows(card) {
   return rows;
 }
 
-function cardFromBlock(reason, command) {
-  const cleaned = sanitizeVisibleText(typeof reason === "string" ? reason : "");
+function cardFromBlock(mapped, command) {
   const preview = previewCommand(command);
+  const reason = typeof mapped === "string" ? mapped : mapped && mapped.reason;
+  const rule = mapped && typeof mapped === "object" ? mapped.rule : undefined;
+  const next = mapped && typeof mapped === "object" ? mapped.next : undefined;
+  if (typeof rule === "string" || typeof next === "string") {
+    let summary = typeof reason === "string" ? reason : "";
+    if (typeof rule === "string") {
+      summary = summary.split(` (${rule})`).join("");
+    }
+    if (typeof next === "string") {
+      summary = summary.split(`. ${next}`).join("");
+    }
+    return {
+      variant: "block",
+      title: RV_DISPLAY_BRAND,
+      summary: sanitizeVisibleText(summary) || "Blocked.",
+      rule: typeof rule === "string" ? rule : undefined,
+      nextStep: typeof next === "string" ? next : undefined,
+      preview,
+    };
+  }
+  return cardFromReason(reason, command, preview);
+}
+
+function cardFromReason(reason, command, preview) {
+  const cleaned = sanitizeVisibleText(typeof reason === "string" ? reason : "");
   const withRule = cleaned.match(/^(.+?) \(([^)]+)\)\.\s*(.+)$/);
   if (withRule) {
     return {
@@ -154,7 +178,7 @@ function cardFromBlock(reason, command) {
       summary: withRule[1],
       rule: withRule[2],
       nextStep: withRule[3],
-      preview,
+      preview: preview ?? previewCommand(command),
     };
   }
   const withNext = cleaned.match(/^(.+?)\.\s+(.+)$/);
@@ -164,14 +188,14 @@ function cardFromBlock(reason, command) {
       title: RV_DISPLAY_BRAND,
       summary: withNext[1],
       nextStep: withNext[2],
-      preview,
+      preview: preview ?? previewCommand(command),
     };
   }
   return {
     variant: "block",
     title: RV_DISPLAY_BRAND,
     summary: cleaned || "Blocked.",
-    preview,
+    preview: preview ?? previewCommand(command),
   };
 }
 
@@ -318,6 +342,8 @@ function mapRvHookResult(value) {
         return {
           action: "block",
           reason: typeof parsed.reason === "string" ? parsed.reason : "",
+          rule: typeof parsed.rule === "string" ? parsed.rule : undefined,
+          next: typeof parsed.next === "string" ? parsed.next : undefined,
         };
       }
     } catch {

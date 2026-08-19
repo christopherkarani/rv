@@ -29,7 +29,10 @@ public struct EvaluateSession: Sendable {
 
     public func evaluate(_ request: EvaluationRequest) -> EvaluationResult {
         if !corePacksReady {
-            return EvaluationResult(decision: .indeterminate(.corePacksUnavailable))
+            return EvaluationResult(
+                decision: .indeterminate(.corePacksUnavailable),
+                matchingView: Normalize.matchingView(of: request.command.rawValue)
+            )
         }
         return callEngineEvaluate(
             request,

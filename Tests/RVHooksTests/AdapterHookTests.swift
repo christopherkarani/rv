@@ -318,12 +318,12 @@ func adapters_mapRvHookResultMatrix(host: String, kind: String) async throws {
 }
 
 private let resetHardJSON =
-    "{\"decision\":\"deny\",\"reason\":\"Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once.\"}\n"
+    "{\"decision\":\"deny\",\"reason\":\"Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once.\",\"rule\":\"core.git/reset-hard\",\"next\":\"Run it in Terminal, or rv allow-once.\"}\n"
 private let wrapperResetHardCommand = "echo \"$(git reset --hard)\""
 private let wrapperResetHardReason =
     "Blocked echo \"$(git reset --hard)\" (core.git/reset-hard). Run it in Terminal, or rv allow-once."
 private let wrapperResetHardJSON =
-    "{\"decision\":\"deny\",\"reason\":\"Blocked echo \\\"$(git reset --hard)\\\" (core.git/reset-hard). Run it in Terminal, or rv allow-once.\"}\n"
+    "{\"decision\":\"deny\",\"reason\":\"Blocked echo \\\"$(git reset --hard)\\\" (core.git/reset-hard). Run it in Terminal, or rv allow-once.\",\"rule\":\"core.git/reset-hard\",\"next\":\"Run it in Terminal, or rv allow-once.\"}\n"
 private let incompleteJSON =
     "{\"decision\":\"deny\",\"reason\":\"rv could not finish evaluating this command. Run it in Terminal.\"}\n"
 

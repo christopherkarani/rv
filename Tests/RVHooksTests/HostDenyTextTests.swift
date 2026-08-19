@@ -1,6 +1,6 @@
 import Testing
 import RVDomain
-@testable import RVPresentation
+@testable import RVHooks
 
 private let resetHard = ShellCommand(rawValue: "git reset --hard")
 
@@ -33,7 +33,7 @@ private let resetHard = ShellCommand(rawValue: "git reset --hard")
             from: EvaluationResult(decision: .indeterminate(reason)),
             command: resetHard
         )
-        #expect(text == "rv could not finish evaluating this command. Run it in Terminal.")
+        #expect(text == incompleteEvalSentence)
         #expect(text?.contains("core.git") == false)
         #expect(text?.contains("reset-hard") == false)
         #expect(text?.contains(":") == false)

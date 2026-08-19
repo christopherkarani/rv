@@ -11,13 +11,13 @@ public actor ServiceRuntime {
 
     private let session: EvaluateSession
     private var catalog: PackCatalog
-    private let allowOnce: any AllowOnceConsuming
+    private let allowOnce: AllowOnceStore
     private let log: (any ServiceLog)?
 
     public init(
         snapshots: [PackSnapshot]? = nil,
         catalog: PackCatalog = PackCatalog(),
-        allowOnce: (any AllowOnceConsuming)? = nil,
+        allowOnce: AllowOnceStore? = nil,
         idleExitSeconds: Int = IdleWatchdog.defaultSeconds,
         log: (any ServiceLog)? = nil
     ) {
@@ -25,7 +25,7 @@ public actor ServiceRuntime {
         self.session = session
         self.corePacksReady = session.corePacksReady
         self.catalog = catalog
-        self.allowOnce = allowOnce ?? MemoryAllowOnceStore()
+        self.allowOnce = allowOnce ?? AllowOnceStore.live()
         self.idleExitSeconds = idleExitSeconds
         self.log = log
     }
@@ -72,7 +72,7 @@ public actor ServiceRuntime {
         let result: IPCResult
         switch request.method {
         case .evaluate(let params):
-            result = .evaluate(makeEvaluateReply(params.request))
+            result = .evaluate(await makeEvaluateReply(params.request, cwd: params.cwd))
         case .explain(let params):
             result = .explain(explain(params.request))
         case .classify(let params):
@@ -90,21 +90,28 @@ public actor ServiceRuntime {
         return IPCResponse(id: request.id, result: result)
     }
 
-    public func insertAllowOnce(command: String, cwd: String) async throws -> String {
-        try await allowOnce.insert(command: command, cwd: cwd, expiresAt: nil)
+    public func insertGranted(matchingView: String, cwd: String, now: Date = Date()) async throws {
+        try await allowOnce.insertGranted(matchingView: matchingView, cwd: cwd, now: now)
     }
 
-    public func makeEvaluateReply(_ request: EvaluationRequest) -> EvaluateReply {
-        EvaluateReply(result: runEvaluate(request), via: "xpc")
+    public func makeEvaluateReply(_ request: EvaluationRequest, cwd: String = "") async -> EvaluateReply {
+        EvaluateReply(result: await runEvaluate(request, cwd: cwd), via: "xpc")
     }
 
-    private func runEvaluate(_ request: EvaluationRequest) -> EvaluationResult {
-        session.evaluate(request)
+    private func runEvaluate(_ request: EvaluationRequest, cwd: String) async -> EvaluationResult {
+        await PolicyGate.apply(
+            session.evaluate(request),
+            cwd: cwd,
+            store: allowOnce,
+            now: Date()
+        ).result
     }
 
     private func explain(_ request: EvaluationRequest) -> ExplainReply {
-        let normalized = Normalize.matchingView(of: request.command.rawValue)
-        let result = runEvaluate(request)
+        let result = session.evaluate(request)
+        let normalized = result.matchingView.isEmpty
+            ? Normalize.matchingView(of: request.command.rawValue)
+            : result.matchingView
         let stages = explainSteps(from: result).map {
             ExplainStage(name: $0.id.rawValue, elapsedMs: 0)
         }
@@ -128,7 +135,7 @@ public actor ServiceRuntime {
     }
 
     private func classify(_ request: EvaluationRequest) -> ClassifyReply {
-        let result = runEvaluate(request)
+        let result = session.evaluate(request)
         let risk: ClassifyRisk
         switch result.decision {
         case .allow:
@@ -192,7 +199,11 @@ public actor ServiceRuntime {
     }
 
     private func consumeAllowOnce(_ params: AllowOnceConsumeParams) async -> IPCResult {
-        switch await allowOnce.consume(command: params.command, cwd: params.cwd) {
+        switch await allowOnce.consume(
+            matchingView: Normalize.matchingView(of: params.command),
+            cwd: params.cwd,
+            now: Date()
+        ) {
         case .consumed(let tokenID):
             return .allowOnceConsume(AllowOnceConsumeReply(consumed: true, tokenID: tokenID))
         case .notFound:

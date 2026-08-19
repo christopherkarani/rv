@@ -112,7 +112,7 @@ struct FakeXPCUnixSocketTests {
 
     @Test func allowOnceConsumeTwiceThenEvaluateStillRuns() async throws {
         let runtime = ServiceRuntime()
-        _ = try await runtime.insertAllowOnce(command: "git reset --hard", cwd: "/tmp/ws")
+        try await runtime.insertGranted(matchingView: "git reset --hard", cwd: "/tmp/ws")
         let path = "/tmp/rv-t3-\(UUID().uuidString).sock"
         let server = FakeXPCServer(runtime: runtime, path: path)
         try server.start()
@@ -227,8 +227,8 @@ final class RecordingLog: ServiceLog, @unchecked Sendable {
     var snapshot: [ServiceLogEvent] { events }
 }
 
-private func evaluateJSON(_ command: String) -> [String: Any] {
-    methodJSON("evaluate", ["request": requestObject(command)])
+private func evaluateJSON(_ command: String, cwd: String = "") -> [String: Any] {
+    methodJSON("evaluate", ["request": requestObject(command), "cwd": cwd])
 }
 
 private func requestObject(_ command: String) -> [String: Any] {

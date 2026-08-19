@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import RVDomain
+import RVHooks
 import RVPresentation
 import RVTheme
 import RVTUI
@@ -24,7 +25,7 @@ private struct CorpusFile: Decodable {
     var cases: [CorpusCase]
 }
 
-@Test func skillTableDenies_shareDenyRendererContract() throws {
+@Test func skillTableDenies_shareDenyRendererContract() async throws {
     let url = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()
         .deletingLastPathComponent()
@@ -35,7 +36,7 @@ private struct CorpusFile: Decodable {
 
     for row in denies {
         guard let command = row.command else { continue }
-        let result = CommandRun.evaluateCommand(command)
+        let result = try await cliEvaluate(command)
         guard case .deny(let deny) = result.decision else {
             Issue.record("\(row.id): expected deny")
             continue

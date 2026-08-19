@@ -70,16 +70,24 @@ let package = Package(
             dependencies: ["RVService"]
         ),
         .testTarget(name: "RVDomainTests", dependencies: ["RVDomain"]),
-        .testTarget(name: "RVEngineTests", dependencies: ["RVEngine"]),
+        .testTarget(
+            name: "RVEngineTests",
+            dependencies: ["RVEngine"],
+            exclude: ["Fixtures"]
+        ),
         .testTarget(name: "RVPacksTests", dependencies: ["RVPacks"]),
         .testTarget(name: "RVPolicyTests", dependencies: ["RVPolicy"]),
-        .testTarget(name: "RVHooksTests", dependencies: ["RVHooks"]),
+        .testTarget(
+            name: "RVHooksTests",
+            dependencies: ["RVHooks"],
+            exclude: ["Fixtures"]
+        ),
         .testTarget(name: "RVIPCTests", dependencies: ["RVIPC"]),
-        .testTarget(name: "RVServiceTests", dependencies: ["RVService"]),
+        .testTarget(name: "RVServiceTests", dependencies: ["RVService", "RVPolicy"]),
         .testTarget(name: "RVPresentationTests", dependencies: ["RVPresentation"]),
         .testTarget(name: "RVThemeTests", dependencies: ["RVTheme"]),
         .testTarget(name: "RVTUITests", dependencies: ["RVTUI"]),
-        .testTarget(name: "RVCLITests", dependencies: ["RVCLI"]),
+        .testTarget(name: "RVCLITests", dependencies: ["RVCLI", "RVPolicy"]),
         .testTarget(name: "RVHistoryTests", dependencies: ["RVHistory"]),
         .testTarget(
             name: "RVCorpusTests",

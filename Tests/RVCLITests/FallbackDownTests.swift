@@ -2,8 +2,8 @@ import Testing
 @testable import RVCLI
 
 struct FallbackDownTests {
-    @Test func missingListenerEvaluatesInProcessAndDeniesResetHard() async {
-        let client = ServiceClient(transport: nil)
+    @Test func missingListenerEvaluatesInProcessAndDeniesResetHard() async throws {
+        let client = try isolatedClient(transport: nil)
         let reply = await client.evaluate(command: "git reset --hard")
         #expect(reply.decision == "deny")
         #expect(reply.ruleID == "core.git:reset-hard")
@@ -27,12 +27,12 @@ struct FallbackDownTests {
         #expect(reply.decision != "allow")
     }
 
-    @Test func midCallInterruptFallsBackAndStillDenies() async {
+    @Test func midCallInterruptFallsBackAndStillDenies() async throws {
         let transport = ScriptedTransport(
             ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", ok: true),
             sendError: .interrupted
         )
-        let client = ServiceClient(transport: transport)
+        let client = try isolatedClient(transport: transport)
         let reply = await client.evaluate(command: "git reset --hard")
         #expect(reply.decision == "deny")
         #expect(reply.ruleID == "core.git:reset-hard")

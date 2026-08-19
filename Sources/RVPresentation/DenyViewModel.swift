@@ -30,10 +30,6 @@ public struct DenyViewModel: Equatable, Sendable {
 
 public let denyNextAction = "run it in Terminal, or rv allow-once"
 
-public func displayRuleID(_ ruleID: RuleID) -> String {
-    "\(ruleID.pack.rawValue)/\(ruleID.pattern)"
-}
-
 public func factSentence(from reason: String) -> String {
     let trimmed = reason.trimmingCharacters(in: .whitespacesAndNewlines)
     if let end = trimmed.firstRange(of: ". ") {

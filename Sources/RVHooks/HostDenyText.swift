@@ -1,8 +1,5 @@
 import RVDomain
 
-public let incompleteEvalSentence =
-    "rv could not finish evaluating this command. Run it in Terminal."
-
 public func hostDenyText(from result: EvaluationResult, command: ShellCommand) -> String? {
     switch result.decision {
     case .allow:
@@ -14,6 +11,6 @@ public func hostDenyText(from result: EvaluationResult, command: ShellCommand) -
             (ch == "\n" || ch == "\r") ? " " : ch
         })
         return
-            "Blocked \(commandText) (\(displayRuleID(deny.ruleID))). Run it in Terminal, or rv allow-once."
+            "Blocked \(commandText) (\(displayRuleID(deny.ruleID))). \(hookUnlockNext)"
     }
 }

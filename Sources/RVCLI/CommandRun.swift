@@ -1,5 +1,7 @@
+import Foundation
 import RVDomain
 import RVEngine
+import RVPolicy
 import RVPresentation
 import RVService
 import RVTheme
@@ -25,24 +27,39 @@ public struct CLIResult: Equatable, Sendable {
 }
 
 public enum CommandRun {
-    public static func evaluateCommand(_ raw: String) -> EvaluationResult {
-        EvaluateSession().evaluate(
+    public static func evaluateCommand(
+        _ raw: String,
+        cwd: String,
+        store: AllowOnceStore,
+        now: Date = Date()
+    ) async -> EvaluationResult {
+        let engine = EvaluateSession().evaluate(
             EvaluationRequest(
                 command: ShellCommand(rawValue: raw),
                 enabledPacks: dayOnePackIDs
             )
         )
+        return await PolicyGate.apply(
+            engine,
+            cwd: cwd,
+            store: store,
+            now: now,
+            consume: false
+        ).result
     }
 
     public static func run(
         kind: CLIKind,
         command raw: String,
         probe: ThemeProbe,
-        requested: RequestedMode
-    ) -> CLIResult {
+        requested: RequestedMode,
+        cwd: String,
+        store: AllowOnceStore,
+        now: Date = Date()
+    ) async -> CLIResult {
         render(
             kind: kind,
-            result: evaluateCommand(raw),
+            result: await evaluateCommand(raw, cwd: cwd, store: store, now: now),
             command: ShellCommand(rawValue: raw),
             probe: probe,
             requested: requested
@@ -69,7 +86,9 @@ public enum CommandRun {
                 explainViewModel(
                     from: result,
                     command: command,
-                    normalized: Normalize.matchingView(of: command.rawValue)
+                    normalized: result.matchingView.isEmpty
+                        ? Normalize.matchingView(of: command.rawValue)
+                        : result.matchingView
                 ),
                 palette: palette
             )

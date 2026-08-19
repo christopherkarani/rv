@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import RVDomain
+import RVHooks
 import RVPresentation
 import RVTheme
 @testable import RVCLI
@@ -51,8 +52,8 @@ private func robotProbe() -> ThemeProbe {
     )
 }
 
-@Test func test_prettyDeny_resetHard_exit1() throws {
-    let result = CommandRun.run(
+@Test func test_prettyDeny_resetHard_exit1() async throws {
+    let result = try await cliRun(
         kind: .test,
         command: "git reset --hard",
         probe: prettyProbe(plain: true),
@@ -62,8 +63,8 @@ private func robotProbe() -> ThemeProbe {
     #expect(trimOneNewline(result.stdout) == (try loadSnapshot("pretty-deny-git-reset-hard.txt")))
 }
 
-@Test func test_prettyAllow_gitStatus_exit0() throws {
-    let result = CommandRun.run(
+@Test func test_prettyAllow_gitStatus_exit0() async throws {
+    let result = try await cliRun(
         kind: .test,
         command: "git status",
         probe: prettyProbe(plain: true),
@@ -75,8 +76,8 @@ private func robotProbe() -> ThemeProbe {
     #expect(!result.stdout.contains("denied"))
 }
 
-@Test func explain_prettyDeny_exit0() throws {
-    let result = CommandRun.run(
+@Test func explain_prettyDeny_exit0() async throws {
+    let result = try await cliRun(
         kind: .explain,
         command: "git reset --hard",
         probe: prettyProbe(plain: true),
@@ -86,8 +87,8 @@ private func robotProbe() -> ThemeProbe {
     #expect(trimOneNewline(result.stdout) == (try loadSnapshot("pretty-explain-git-reset-hard.txt")))
 }
 
-@Test func test_robotAllow_andDeny() throws {
-    let allow = CommandRun.run(
+@Test func test_robotAllow_andDeny() async throws {
+    let allow = try await cliRun(
         kind: .test,
         command: "git status",
         probe: robotProbe(),
@@ -98,7 +99,7 @@ private func robotProbe() -> ThemeProbe {
     #expect(!allow.stdout.contains("\u{001B}"))
     #expect(!allow.stdout.contains("reason"))
 
-    let deny = CommandRun.run(
+    let deny = try await cliRun(
         kind: .test,
         command: "git reset --hard",
         probe: robotProbe(),
@@ -115,9 +116,9 @@ private func robotProbe() -> ThemeProbe {
     #expect(json["rule_id"] as? String == "core.git:reset-hard")
 }
 
-@Test func test_plainAndNoColor_haveNoEscape() {
+@Test func test_plainAndNoColor_haveNoEscape() async throws {
     for probe in [prettyProbe(plain: true), prettyProbe(noColor: true), prettyProbe(ci: true), prettyProbe(noColorEnv: true)] {
-        let result = CommandRun.run(
+        let result = try await cliRun(
             kind: .test,
             command: "git reset --hard",
             probe: probe,
@@ -128,8 +129,8 @@ private func robotProbe() -> ThemeProbe {
     }
 }
 
-@Test func hostDenyText_stashDropIsNil() {
-    let result = CommandRun.evaluateCommand("git stash drop")
+@Test func hostDenyText_stashDropIsNil() async throws {
+    let result = try await cliEvaluate("git stash drop")
     #expect(result.decision == .allow)
     #expect(result.matched?.ruleID.rawValue == "core.git:stash-drop")
     #expect(hostDenyText(from: result, command: ShellCommand(rawValue: "git stash drop")) == nil)
@@ -190,8 +191,8 @@ private func robotProbe() -> ThemeProbe {
     #expect(rendered.stdout.contains("Result: INCOMPLETE"))
 }
 
-@Test func test_prettyDeny_pipelineHighlightsDenyingSegment() {
-    let rendered = CommandRun.run(
+@Test func test_prettyDeny_pipelineHighlightsDenyingSegment() async throws {
+    let rendered = try await cliRun(
         kind: .test,
         command: "rm -rf /tmp/foo && rm -rf ./src",
         probe: prettyProbe(plain: true),
@@ -204,15 +205,15 @@ private func robotProbe() -> ThemeProbe {
     #expect(!rendered.stdout.contains("\n" + String(repeating: " ", count: 9) + "^^^^^^"))
 }
 
-@Test func testExplain_sameExitAsTest() {
-    let deny = CommandRun.run(
+@Test func testExplain_sameExitAsTest() async throws {
+    let deny = try await cliRun(
         kind: .testExplain,
         command: "git reset --hard",
         probe: prettyProbe(),
         requested: .automatic
     )
     #expect(deny.exitCode == 1)
-    let allow = CommandRun.run(
+    let allow = try await cliRun(
         kind: .testExplain,
         command: "git status",
         probe: prettyProbe(),

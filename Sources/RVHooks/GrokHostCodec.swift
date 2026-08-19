@@ -21,7 +21,8 @@ public struct GrokHostCodec: HostCodec {
         guard let command = envelope.toolInput?.command, command.isEmpty == false else {
             return HookRequest(host: .grok, command: nil)
         }
-        return HookRequest(host: .grok, command: ShellCommand(rawValue: command))
+        let cwd = envelope.cwd.flatMap { $0.isEmpty ? nil : $0 }
+        return HookRequest(host: .grok, command: ShellCommand(rawValue: command), cwd: cwd)
     }
 
     private static let shellTools: Set<String> = [
@@ -35,6 +36,7 @@ private struct GrokEnvelope: Decodable {
     var hookEventName: String?
     var toolName: String?
     var toolInput: GrokToolInput?
+    var cwd: String?
 }
 
 private struct GrokToolInput: Decodable {

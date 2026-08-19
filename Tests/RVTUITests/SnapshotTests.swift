@@ -184,18 +184,4 @@ git reset --hard discards ALL uncommitted changes in your working directory \\ A
     #expect(!text.utf8.contains(0x1B))
 }
 
-@Test func snapshot_hostDenyText() throws {
-    let result = EvaluationResult(
-        decision: .deny(
-            Deny(
-                ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
-                reason: "git reset --hard destroys uncommitted changes. Use 'git stash' first."
-            )
-        )
-    )
-    let text = hostDenyText(from: result, command: ShellCommand(rawValue: "git reset --hard"))
-    #expect(text == (try loadSnapshot("host-deny-text-git-reset-hard.txt")))
-    #expect(text?.contains("core.git/reset-hard") == true)
-    #expect(text?.contains("rv allow-once") == true)
-    #expect(text?.contains("═") == false)
-}
+

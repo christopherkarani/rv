@@ -69,6 +69,15 @@ private func run(
     )
 }
 
+@Test func evaluate_setsMatchingViewOnDeny() throws {
+    let result = try run("git reset --hard")
+    #expect(result.matchingView == Normalize.matchingView(of: "git reset --hard"))
+    guard case .deny = result.decision else {
+        Issue.record("expected deny")
+        return
+    }
+}
+
 @Test func evaluate_safeThenDestructiveThenAllow() throws {
     let checkout = try run("git checkout -b x")
     #expect(checkout.decision == .allow)

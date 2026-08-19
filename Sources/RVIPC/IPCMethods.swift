@@ -3,9 +3,28 @@ import RVDomain
 
 public struct EvaluateParams: Sendable, Equatable, Codable {
     public var request: EvaluationRequest
+    public var cwd: String
 
-    public init(request: EvaluationRequest) {
+    public init(request: EvaluationRequest, cwd: String = "") {
         self.request = request
+        self.cwd = cwd
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case request
+        case cwd
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        request = try container.decode(EvaluationRequest.self, forKey: .request)
+        cwd = try container.decodeIfPresent(String.self, forKey: .cwd) ?? ""
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(request, forKey: .request)
+        try container.encode(cwd, forKey: .cwd)
     }
 }
 

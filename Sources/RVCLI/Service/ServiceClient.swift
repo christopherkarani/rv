@@ -1,6 +1,7 @@
 import Foundation
 import RVDomain
 import RVIPC
+import RVPolicy
 import RVService
 
 public struct ClientEvaluateReply: Sendable, Equatable {
@@ -31,15 +32,18 @@ public struct ServiceClient: Sendable {
 
     private let transport: (any ServiceTransport)?
     private let session: EvaluateSession?
+    private let store: AllowOnceStore
 
     public init(
         transport: (any ServiceTransport)? = XPCServiceTransport(),
         session: EvaluateSession? = nil,
+        store: AllowOnceStore = .live(),
         connectTimeoutMs: Int = 200,
         requestTimeoutMs: Int = 500
     ) {
         self.transport = transport
         self.session = session
+        self.store = store
         self.connectTimeoutMs = connectTimeoutMs
         self.requestTimeoutMs = requestTimeoutMs
     }
@@ -52,16 +56,19 @@ public struct ServiceClient: Sendable {
         ServiceClient(transport: transport, session: .uncompilableCore)
     }
 
-    public func evaluate(command: String) async -> ClientEvaluateReply {
-        let evaluation = await evaluateRouted(command: ShellCommand(rawValue: command))
+    public func evaluate(command: String, cwd: String = "") async -> ClientEvaluateReply {
+        let evaluation = await evaluateRouted(command: ShellCommand(rawValue: command), cwd: cwd)
         return Self.view(evaluation.result, via: evaluation.via)
     }
 
-    public func evaluateResult(command: ShellCommand) async -> EvaluationResult {
-        await evaluateRouted(command: command).result
+    public func evaluateResult(command: ShellCommand, cwd: String = "") async -> EvaluationResult {
+        await evaluateRouted(command: command, cwd: cwd).result
     }
 
-    private func evaluateRouted(command: ShellCommand) async -> (result: EvaluationResult, via: String) {
+    private func evaluateRouted(
+        command: ShellCommand,
+        cwd: String
+    ) async -> (result: EvaluationResult, via: String) {
         let request = EvaluationRequest(
             command: command,
             enabledPacks: dayOnePackIDs
@@ -70,24 +77,29 @@ public struct ServiceClient: Sendable {
         case .xpc(let transport):
             do {
                 let body = try IPCJSON.encode(
-                    IPCRequest(method: .evaluate(EvaluateParams(request: request)))
+                    IPCRequest(method: .evaluate(EvaluateParams(request: request, cwd: cwd)))
                 )
                 let data = try await transport.send(body)
                 let response = try IPCJSON.decode(IPCResponse.self, from: data)
                 if case .evaluate(let reply) = response.result {
                     return (reply.result, "xpc")
                 }
-                return (inProcessEvaluate(request), "inProcess")
+                return (await inProcessEvaluate(request, cwd: cwd), "inProcess")
             } catch {
-                return (inProcessEvaluate(request), "inProcess")
+                return (await inProcessEvaluate(request, cwd: cwd), "inProcess")
             }
         case .down, .skew:
-            return (inProcessEvaluate(request), "inProcess")
+            return (await inProcessEvaluate(request, cwd: cwd), "inProcess")
         }
     }
 
-    private func inProcessEvaluate(_ request: EvaluationRequest) -> EvaluationResult {
-        (session ?? EvaluateSession()).evaluate(request)
+    private func inProcessEvaluate(_ request: EvaluationRequest, cwd: String) async -> EvaluationResult {
+        await PolicyGate.apply(
+            (session ?? EvaluateSession()).evaluate(request),
+            cwd: cwd,
+            store: store,
+            now: Date()
+        ).result
     }
 
     public func status() async -> ServiceStatusReport {

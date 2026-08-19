@@ -17,6 +17,7 @@ struct EvaluateSessionTests {
             return
         }
         #expect(deny.ruleID.rawValue == "core.git:reset-hard")
+        #expect(result.matchingView == "git reset --hard")
     }
 
     @Test func emptyEnabledPacksDoesNotRefillDayOne() {

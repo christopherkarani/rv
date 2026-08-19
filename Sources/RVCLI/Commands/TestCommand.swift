@@ -14,7 +14,7 @@ struct FormatFlags: ParsableArguments {
     var noColor = false
 }
 
-struct Test: ParsableCommand {
+struct Test: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "test",
         abstract: "Evaluate a command."
@@ -29,8 +29,8 @@ struct Test: ParsableCommand {
     @Argument(parsing: .captureForPassthrough, help: "Command to evaluate.")
     var commandParts: [String] = []
 
-    func run() throws {
-        try CommandInvocation.emit(
+    func run() async throws {
+        try await CommandInvocation.emit(
             kind: explain ? .testExplain : .test,
             commandParts: commandParts,
             format: format

@@ -2,7 +2,6 @@ import ArgumentParser
 import Foundation
 import RVDomain
 import RVHooks
-import RVPresentation
 
 extension HookHost: ExpressibleByArgument {}
 
@@ -10,21 +9,15 @@ enum HookRun {
     static func run<C: HostCodec>(
         stdin: String,
         codec: C,
-        evaluate: @Sendable (ShellCommand) async -> EvaluationResult
+        evaluate: @Sendable (ShellCommand, String) async -> EvaluationResult
     ) async -> HookWire {
         let request = codec.decode(stdin)
         guard let command = request.command else {
             return codec.encodeAllow()
         }
-        let result = await evaluate(command)
-        switch result.decision {
-        case .allow:
-            return codec.encodeAllow()
-        case .deny, .indeterminate:
-            return codec.encodeDeny(
-                reason: hostDenyText(from: result, command: command) ?? incompleteEvalSentence
-            )
-        }
+        let cwd = request.cwd ?? FileManager.default.currentDirectoryPath
+        let result = await evaluate(command, cwd)
+        return hookWire(from: result, command: command, using: codec)
     }
 }
 
@@ -44,8 +37,8 @@ struct Hook: AsyncParsableCommand {
         let outcome = await run(
             stdin: stdin,
             environment: ProcessInfo.processInfo.environment,
-            evaluate: { command in
-                await client.evaluateResult(command: command)
+            evaluate: { command, cwd in
+                await client.evaluateResult(command: command, cwd: cwd)
             }
         )
         FileHandle.standardOutput.write(Data(outcome.stdout.utf8))
@@ -58,7 +51,7 @@ struct Hook: AsyncParsableCommand {
     func run(
         stdin: String,
         environment _: [String: String],
-        evaluate: @Sendable (ShellCommand) async -> EvaluationResult
+        evaluate: @Sendable (ShellCommand, String) async -> EvaluationResult
     ) async -> (stdout: String, stderr: String, exitCode: Int32) {
         let wire: HookWire
         switch host {

@@ -11,22 +11,26 @@ public func evaluate<E: PatternEngine>(
 ) -> EvaluationResult {
     let raw = request.command.rawValue
     if raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-        return EvaluationResult(decision: .allow)
+        return EvaluationResult(decision: .allow, matchingView: "")
     }
     if raw.utf8.count > commandByteCap {
         return EvaluationResult(
             decision: .indeterminate(.commandTooLarge),
-            quickRejected: false
+            quickRejected: false,
+            matchingView: raw
         )
     }
     if !corePacksAreReady(snapshots: packs, compiled: compiled) {
-        return EvaluationResult(decision: .indeterminate(.corePacksUnavailable))
+        return EvaluationResult(
+            decision: .indeterminate(.corePacksUnavailable),
+            matchingView: raw
+        )
     }
 
     let matchingView = Normalize.matchingView(of: raw)
     let enabledSnapshots = enabledPacks(from: packs, enabledIDs: request.enabledPacks)
     if QuickReject.shouldSkip(matchingView: matchingView, enabled: enabledSnapshots) {
-        return EvaluationResult(decision: .allow, quickRejected: true)
+        return EvaluationResult(decision: .allow, quickRejected: true, matchingView: matchingView)
     }
 
     var attempts = 0
@@ -44,7 +48,7 @@ public func evaluate<E: PatternEngine>(
                 budget: budget
             )
             if let result, isTerminal(result.decision) {
-                return result
+                return withMatchingView(result, matchingView)
             }
         }
     }
@@ -56,9 +60,15 @@ public func evaluate<E: PatternEngine>(
         attempts: &attempts,
         budget: budget
     ) {
-        return result
+        return withMatchingView(result, matchingView)
     }
-    return EvaluationResult(decision: .allow)
+    return EvaluationResult(decision: .allow, matchingView: matchingView)
+}
+
+private func withMatchingView(_ result: EvaluationResult, _ matchingView: String) -> EvaluationResult {
+    var copy = result
+    copy.matchingView = matchingView
+    return copy
 }
 
 /// Returns whether `core.git` and `core.filesystem` snapshots are present and whether each required compiled rule is present in `compiled` when that rule exists on a snapshot.
