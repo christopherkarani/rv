@@ -59,14 +59,15 @@ private func inProcessEvaluate(_ command: ShellCommand) async -> EvaluationResul
     await ServiceClient(transport: nil).evaluateResult(command: command)
 }
 
-private func runHook(
+private func runHook<C: HostCodec>(
     stdin: String,
+    codec: C = GrokHostCodec(),
     evaluate: (@Sendable (ShellCommand) async -> EvaluationResult)? = nil
 ) async throws -> HookWire {
     try await withTempHome { _ in
         await HookRun.run(
             stdin: stdin,
-            codec: GrokHostCodec(),
+            codec: codec,
             evaluate: evaluate ?? inProcessEvaluate
         )
     }
@@ -250,10 +251,9 @@ private func runHook(
     let command = ShellCommand(rawValue: "git reset --hard")
     let result = CommandRun.evaluateCommand(command.rawValue)
     let text = try #require(hostDenyText(from: result, command: command))
-    let wire = await HookRun.run(
+    let wire = try await runHook(
         stdin: try hostFixture("pi", "deny-git-reset-hard.json"),
-        codec: PiHostCodec(),
-        evaluate: inProcessEvaluate
+        codec: PiHostCodec()
     )
     #expect(wire.stdout == expected.stdout)
     #expect(wire.exitCode == expected.exit)
@@ -266,10 +266,9 @@ private func runHook(
     let command = ShellCommand(rawValue: "git reset --hard")
     let result = CommandRun.evaluateCommand(command.rawValue)
     let text = try #require(hostDenyText(from: result, command: command))
-    let wire = await HookRun.run(
+    let wire = try await runHook(
         stdin: try hostFixture("opencode", "deny-git-reset-hard.json"),
-        codec: OpenCodeHostCodec(),
-        evaluate: inProcessEvaluate
+        codec: OpenCodeHostCodec()
     )
     #expect(wire.stdout == expected.stdout)
     #expect(wire.exitCode == expected.exit)
@@ -280,7 +279,7 @@ private func runHook(
 @Test func hookPiNonShellRead_doesNotEvaluate() async throws {
     let probe = EvaluateProbe()
     let expected = try hostExpected("pi", "allow-non-shell-read")
-    let wire = await HookRun.run(
+    let wire = try await runHook(
         stdin: try hostFixture("pi", "allow-non-shell-read.json"),
         codec: PiHostCodec()
     ) { command in
@@ -296,7 +295,7 @@ private func runHook(
 @Test func hookOpenCodeNonShellRead_doesNotEvaluate() async throws {
     let probe = EvaluateProbe()
     let expected = try hostExpected("opencode", "allow-non-shell-read")
-    let wire = await HookRun.run(
+    let wire = try await runHook(
         stdin: try hostFixture("opencode", "allow-non-shell-read.json"),
         codec: OpenCodeHostCodec()
     ) { command in
@@ -312,7 +311,7 @@ private func runHook(
 @Test func hookPiXPCDown_stillDeniesResetHard() async throws {
     let client = ServiceClient(transport: nil)
     let expected = try hostExpected("pi", "deny-git-reset-hard")
-    let wire = await HookRun.run(
+    let wire = try await runHook(
         stdin: try hostFixture("pi", "deny-git-reset-hard.json"),
         codec: PiHostCodec()
     ) { command in
@@ -347,6 +346,12 @@ private func runHook(
         )
         #expect(openOutcome.exitCode == openExpected.exit)
         #expect(openOutcome.stdout == openExpected.stdout)
+        #expect(openOutcome.stderr.isEmpty)
+        #expect(
+            FileManager.default.fileExists(
+                atPath: home.appendingPathComponent(".config").appendingPathComponent("opencode").path
+            ) == false
+        )
     }
 }
 

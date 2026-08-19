@@ -24,14 +24,6 @@ public struct GrokHostCodec: HostCodec {
         return HookRequest(host: .grok, command: ShellCommand(rawValue: command))
     }
 
-    public func encodeAllow() -> HookWire {
-        HookWire(stdout: "", exitCode: 0)
-    }
-
-    public func encodeDeny(reason: String) -> HookWire {
-        HookWire(stdout: hookDenyJSON(reason: reason), exitCode: 0)
-    }
-
     private static let shellTools: Set<String> = [
         "run_terminal_command",
         "run_terminal_cmd",

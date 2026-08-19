@@ -130,6 +130,66 @@ private func harnessURL() -> URL {
     #expect(timedOut.threw == "rv failed")
 }
 
+@Test(arguments: [
+    ("pi", "allow"),
+    ("opencode", "allow"),
+    ("pi", "crash"),
+    ("opencode", "crash"),
+    ("pi", "timeout"),
+    ("opencode", "timeout"),
+])
+func adapters_mapRvHookResultMatrix(host: String, kind: String) async throws {
+    let stub: StubRV
+    let timeoutMs: Int?
+    switch kind {
+    case "allow":
+        stub = .stdout("", exit: 0)
+        timeoutMs = nil
+    case "crash":
+        stub = .stdout("not-json", exit: 99)
+        timeoutMs = nil
+    case "timeout":
+        stub = .sleep(seconds: 1)
+        timeoutMs = 50
+    default:
+        Issue.record("unknown matrix kind \(kind)")
+        return
+    }
+
+    if host == "pi" {
+        let result = try await runPiAdapter(
+            event: ["toolName": "bash", "input": ["command": "git status"]],
+            stub: stub,
+            timeoutMs: timeoutMs
+        )
+        if kind != "timeout" {
+            #expect(result.spawned == true, Comment(rawValue: "\(host) \(kind)"))
+        }
+        if kind == "allow" {
+            #expect(result.block == nil, Comment(rawValue: "\(host) \(kind)"))
+            #expect(result.reason == nil, Comment(rawValue: "\(host) \(kind)"))
+        } else {
+            #expect(result.block == true, Comment(rawValue: "\(host) \(kind)"))
+            #expect(result.reason == "rv failed", Comment(rawValue: "\(host) \(kind)"))
+        }
+        return
+    }
+
+    let result = try await runOpenCodeAdapter(
+        event: ["tool": "bash", "args": ["command": "git status"]],
+        stub: stub,
+        timeoutMs: timeoutMs
+    )
+    if kind != "timeout" {
+        #expect(result.spawned == true, Comment(rawValue: "\(host) \(kind)"))
+    }
+    if kind == "allow" {
+        #expect(result.threw == nil, Comment(rawValue: "\(host) \(kind)"))
+    } else {
+        #expect(result.threw == "rv failed", Comment(rawValue: "\(host) \(kind)"))
+    }
+}
+
 private let resetHardJSON =
     "{\"decision\":\"deny\",\"reason\":\"Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once.\"}\n"
 private let incompleteJSON =

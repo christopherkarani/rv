@@ -1,11 +1,15 @@
 import Foundation
 import RVDomain
 
+/// Adapter wire for OpenCode, not a host protocol.
 public struct OpenCodeHostCodec: HostCodec {
+    /// The OpenCode adapter host.
     public var host: HookHost { .opencode }
 
+    /// Creates an OpenCode adapter codec.
     public init() {}
 
+    /// Decodes adapter stdin; `command` is nil for non-bash or unreadable stdin.
     public func decode(_ stdin: String) -> HookRequest {
         guard let data = stdin.data(using: .utf8),
               let envelope = try? JSONDecoder().decode(OpenCodeEnvelope.self, from: data)
@@ -19,14 +23,6 @@ public struct OpenCodeHostCodec: HostCodec {
             return HookRequest(host: .opencode, command: nil)
         }
         return HookRequest(host: .opencode, command: ShellCommand(rawValue: command))
-    }
-
-    public func encodeAllow() -> HookWire {
-        HookWire(stdout: "", exitCode: 0)
-    }
-
-    public func encodeDeny(reason: String) -> HookWire {
-        HookWire(stdout: hookDenyJSON(reason: reason), exitCode: 1)
     }
 }
 
