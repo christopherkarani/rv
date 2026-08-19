@@ -9,9 +9,7 @@ public actor ServiceRuntime {
     public let corePacksReady: Bool
     public let idleExitSeconds: Int
 
-    private let snapshots: [PackSnapshot]
-    private let compiled: CompiledPacks<ICUCompiledPattern>
-    private let engine: ICUPatternEngine
+    private let session: EvaluateSession
     private var catalog: PackCatalog
     private let allowOnce: any AllowOnceConsuming
     private let log: (any ServiceLog)?
@@ -23,13 +21,9 @@ public actor ServiceRuntime {
         idleExitSeconds: Int = IdleWatchdog.defaultSeconds,
         log: (any ServiceLog)? = nil
     ) {
-        let loaded = snapshots ?? (try? PackRegistry.loadDayOne()) ?? []
-        let engine = ICUPatternEngine()
-        let warmed = CoreWarmup.prepare(snapshots: loaded, engine: engine)
-        self.snapshots = loaded
-        self.engine = engine
-        self.compiled = warmed.compiled
-        self.corePacksReady = warmed.ready
+        let session = EvaluateSession(snapshots: snapshots)
+        self.session = session
+        self.corePacksReady = session.corePacksReady
         self.catalog = catalog
         self.allowOnce = allowOnce ?? MemoryAllowOnceStore()
         self.idleExitSeconds = idleExitSeconds
@@ -105,18 +99,11 @@ public actor ServiceRuntime {
     }
 
     private func runEvaluate(_ request: EvaluationRequest) -> EvaluationResult {
-        if !corePacksReady {
-            return EvaluationResult(decision: .indeterminate(.corePacksUnavailable))
-        }
         var resolved = request
         if resolved.enabledPacks.isEmpty {
             resolved.enabledPacks = catalog.enabledIDs
         }
-        return engineEvaluate(resolved)
-    }
-
-    private func engineEvaluate(_ request: EvaluationRequest) -> EvaluationResult {
-        evaluate(request, packs: snapshots, patterns: engine, compiled: compiled)
+        return session.evaluate(resolved)
     }
 
     private func explain(_ request: EvaluationRequest) -> ExplainReply {

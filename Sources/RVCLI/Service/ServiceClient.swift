@@ -1,6 +1,7 @@
 import Foundation
 import RVDomain
 import RVIPC
+import RVService
 
 public struct ClientEvaluateReply: Sendable, Equatable {
     public var decision: String
@@ -29,18 +30,26 @@ public struct ServiceClient: Sendable {
     public var requestTimeoutMs: Int
 
     private let transport: (any ServiceTransport)?
-    private let fallback: InProcessFallback
+    private let session: EvaluateSession?
 
     public init(
         transport: (any ServiceTransport)? = XPCServiceTransport(),
-        fallback: InProcessFallback = InProcessFallback(),
+        session: EvaluateSession? = nil,
         connectTimeoutMs: Int = 200,
         requestTimeoutMs: Int = 500
     ) {
         self.transport = transport
-        self.fallback = fallback
+        self.session = session
         self.connectTimeoutMs = connectTimeoutMs
         self.requestTimeoutMs = requestTimeoutMs
+    }
+
+    public static func missingCore(transport: (any ServiceTransport)? = nil) -> ServiceClient {
+        ServiceClient(transport: transport, session: .missingCore)
+    }
+
+    public static func uncompilableCore(transport: (any ServiceTransport)? = nil) -> ServiceClient {
+        ServiceClient(transport: transport, session: .uncompilableCore)
     }
 
     public func evaluate(command: String) async -> ClientEvaluateReply {
@@ -68,13 +77,17 @@ public struct ServiceClient: Sendable {
                 if case .evaluate(let reply) = response.result {
                     return (reply.result, "xpc")
                 }
-                return (fallback.evaluate(request), "inProcess")
+                return (inProcessEvaluate(request), "inProcess")
             } catch {
-                return (fallback.evaluate(request), "inProcess")
+                return (inProcessEvaluate(request), "inProcess")
             }
         case .down, .skew:
-            return (fallback.evaluate(request), "inProcess")
+            return (inProcessEvaluate(request), "inProcess")
         }
+    }
+
+    private func inProcessEvaluate(_ request: EvaluationRequest) -> EvaluationResult {
+        (session ?? EvaluateSession()).evaluate(request)
     }
 
     public func status() async -> ServiceStatusReport {

@@ -12,7 +12,7 @@ struct FallbackDownTests {
     }
 
     @Test func uncompilableResetHardIsIndeterminateNotAllow() async {
-        let client = ServiceClient(transport: nil, fallback: .uncompilableCore)
+        let client = ServiceClient.uncompilableCore()
         let reply = await client.evaluate(command: "git reset --hard")
         #expect(reply.decision == "indeterminate")
         #expect(reply.indeterminateReason == "corePacksUnavailable")
@@ -20,7 +20,7 @@ struct FallbackDownTests {
     }
 
     @Test func missingCoreIsIndeterminateNotAllow() async {
-        let client = ServiceClient(transport: nil, fallback: .missingCore)
+        let client = ServiceClient.missingCore()
         let reply = await client.evaluate(command: "git reset --hard")
         #expect(reply.decision == "indeterminate")
         #expect(reply.indeterminateReason == "corePacksUnavailable")
