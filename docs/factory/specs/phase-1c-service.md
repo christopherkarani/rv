@@ -418,7 +418,7 @@ Sources/RVService/DoctorSnapshotBuilder.swift
 Sources/rvd/main.swift                      // start runtime; no ArgumentParser app
 
 Sources/RVCLI/Service/XPCClient.swift       // thin client; handshake
-Sources/RVCLI/Service/InProcessFallback.swift
+Sources/RVService/EvaluateSession.swift     // compiled day-one packs + evaluate; CLI constructs on miss
 Sources/RVCLI/Service/ServiceStatusCommand.swift
 
 Resources/launchd/dev.rv.evaluate.plist     // template; KeepAlive false; MachServices
