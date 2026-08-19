@@ -210,13 +210,19 @@ ExplainReply {
   ruleID: RuleID?
   packID: PackID?
   suggestion: String?           // one next action; Vercel-quiet
-  stages: [ExplainStage]        // name + elapsed ms; no command text required
+  stages: [ExplainStage]        // one row per Domain ExplainStep; no command text
 }
 
 ExplainStage { name: String, elapsedMs: Double }
 ```
 
-Stage names stay stable: `normalize`, `quickReject`, `safe`, `destructive`, `default`. Omit unused stages rather than inventing extra ones.
+`name` is `ExplainStep.ID.rawValue` — Domain/TTY kebab-case, not Swift case names: `normalize`, `quick-reject`, `safe`, `destructive`, `default`. Clients must not switch on camelCase `quickReject`.
+
+One row per `explainSteps(from:)` step as actually projected (`normalize`, `quick-reject`, `safe`, `destructive`, `default` — only the steps that path took). Do not invent extra stages. Do not pad a fixed five-row list. Examples: deny omits `default`; quick-reject allow omits the walkers; indeterminate is `normalize` then `default`.
+
+`elapsedMs` is currently always `0`. The service does not fabricate normalize-vs-rest timings.
+
+This stays **`rv.ipc.v1`** / `1.0.0`. The kebab-case names and zero elapsed are a spec correction of the shipped v1 wire, not a protocol bump.
 
 #### `classify`
 

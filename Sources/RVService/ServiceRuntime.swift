@@ -103,21 +103,10 @@ public actor ServiceRuntime {
     }
 
     private func explain(_ request: EvaluationRequest) -> ExplainReply {
-        let t0 = DispatchTime.now()
         let normalized = Normalize.matchingView(of: request.command.rawValue)
-        let normalizeMs = elapsedMs(since: t0)
-        let t1 = DispatchTime.now()
         let result = runEvaluate(request)
-        let restMs = elapsedMs(since: t1)
-        var stages = [ExplainStage(name: "normalize", elapsedMs: normalizeMs)]
-        if result.quickRejected {
-            stages.append(ExplainStage(name: "quickReject", elapsedMs: restMs))
-        } else if result.matched != nil {
-            stages.append(ExplainStage(name: "destructive", elapsedMs: restMs))
-        } else if result.matchedSafe != nil {
-            stages.append(ExplainStage(name: "safe", elapsedMs: restMs))
-        } else {
-            stages.append(ExplainStage(name: "default", elapsedMs: restMs))
+        let stages = explainSteps(from: result).map {
+            ExplainStage(name: $0.id.rawValue, elapsedMs: 0)
         }
         let suggestion: String?
         switch result.decision {

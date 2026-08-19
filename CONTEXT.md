@@ -15,3 +15,11 @@ _Avoid_: refill, default packs
 **Day-one packs**:
 core.git and core.filesystem. v1 evaluate always uses these two; the catalog does not change a Decision.
 _Avoid_: live catalog, enabled catalog
+
+**Explain pipeline**:
+The stages an EvaluationResult already took, in evaluation order: normalize, quick-reject, safe, destructive, default. TTY explain and XPC explain show the same stages. XPC `ExplainStage.name` is that kebab-case id (`quick-reject`, not camelCase `quickReject`); `elapsedMs` is currently always 0.
+_Avoid_: explain projection, briefing, ExplainStage (the IPC timing row)
+
+**Explain step**:
+One stage in the Explain pipeline, including that stage's outcome (scanned or skipped, rule hit or none, allow or incomplete).
+_Avoid_: ExplainStage
