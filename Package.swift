@@ -52,6 +52,10 @@ let package = Package(
                 "RVDomain", "RVEngine", "RVPacks", "RVPolicy", "RVHooks", "RVIPC",
                 "RVPresentation", "RVTheme", "RVTUI", "RVService", "RVHistory",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
+            ],
+            resources: [
+                .copy("Resources/hosts"),
+                .copy("Resources/launchd"),
             ]
         ),
         .executableTarget(
