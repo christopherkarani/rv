@@ -16,6 +16,9 @@ struct Setup: ParsableCommand {
         if outcome.stdout.isEmpty == false {
             FileHandle.standardOutput.write(Data(outcome.stdout.utf8))
         }
+        if outcome.stderr.isEmpty == false {
+            FileHandle.standardError.write(Data(outcome.stderr.utf8))
+        }
         throw ExitCode(outcome.exitCode)
     }
 }

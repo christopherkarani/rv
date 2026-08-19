@@ -7,6 +7,9 @@ private func withTempHome(_ body: (URL, HostLayout, RecordingLaunchctl) throws -
         .appendingPathComponent("rv-setup-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
+    let dummyRvd = root.appendingPathComponent("rvd")
+    try "#!/bin/sh\n".write(to: dummyRvd, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dummyRvd.path)
     let launchctl = RecordingLaunchctl()
     try body(root, HostLayout(home: root.path), launchctl)
 }
@@ -16,18 +19,27 @@ private func env(
     launchctl: RecordingLaunchctl,
     pathEntries: [String] = [],
     rvPath: String = "/tmp/rv-bin/rv",
-    rvdPath: String = "/tmp/rv-bin/rvd",
+    rvdPath: String? = nil,
     touchLaunchd: Bool = true
 ) -> SetupEnvironment {
     SetupEnvironment(
         home: home.path,
         pathEntries: pathEntries,
         rvPath: rvPath,
-        rvdPath: rvdPath,
+        rvdPath: rvdPath ?? home.appendingPathComponent("rvd").path,
         fileManager: .default,
         launchctl: launchctl,
         touchLaunchd: touchLaunchd
     )
+}
+
+private func makeExecutable(_ url: URL, contents: String = "#!/bin/sh\n") throws {
+    try FileManager.default.createDirectory(
+        at: url.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+    )
+    try contents.write(to: url, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
 }
 
 private func realGrokHookURL() -> URL? {
@@ -47,7 +59,7 @@ private func realGrokHookURL() -> URL? {
         #expect(FileManager.default.fileExists(atPath: layout.configDirectory))
         #expect(FileManager.default.fileExists(atPath: layout.launchAgent))
         let plist = try String(contentsOfFile: layout.launchAgent, encoding: .utf8)
-        #expect(plist.contains("/tmp/rv-bin/rvd"))
+        #expect(plist.contains(home.appendingPathComponent("rvd").path))
         #expect(plist.contains("<key>KeepAlive</key>"))
         #expect(plist.contains("<false/>"))
         #expect(launchctl.bootstraps.count == 1)
@@ -220,5 +232,178 @@ private func realGrokHookURL() -> URL? {
         let outcome = SetupRun.setup(env(home: home, launchctl: launchctl, pathEntries: [bin.path]))
         #expect(outcome.exitCode == 0)
         #expect(FileManager.default.fileExists(atPath: layout.grokHook))
+    }
+}
+
+@Test func setup_hostTemplates_renderWithoutResourceBundle() throws {
+    let grok = try HostTemplates.grokHook(rvPath: "/opt/rv")
+    #expect(grok.contains("/opt/rv hook --host grok"))
+    #expect(grok.contains("__RV_BINARY__") == false)
+    let pi = try HostTemplates.piExtension(rvPath: "/opt/rv")
+    #expect(pi.contains("const RV_BINARY = \"/opt/rv\""))
+    let plugin = try HostTemplates.openCodePlugin(rvPath: "/opt/rv")
+    #expect(plugin.contains("const RV_BINARY = \"/opt/rv\""))
+    let plist = try HostTemplates.launchAgentPlist(rvdPath: "/opt/rvd")
+    #expect(plist.contains("/opt/rvd"))
+    #expect(plist.contains("@RVD_PATH@") == false)
+    #expect(plist.contains("<false/>"))
+}
+
+@Test func setup_hostTemplates_matchOnDiskFiles() throws {
+    let root = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let hosts = root.appendingPathComponent("Sources/RVCLI/Resources/hosts")
+    let grokDisk = try String(contentsOf: hosts.appendingPathComponent("rv.json.tmpl"), encoding: .utf8)
+    let piDisk = try String(contentsOf: hosts.appendingPathComponent("rv-guard.ts.tmpl"), encoding: .utf8)
+    let jsDisk = try String(contentsOf: hosts.appendingPathComponent("rv-guard.js.tmpl"), encoding: .utf8)
+    let plistDisk = try String(
+        contentsOf: root.appendingPathComponent("Sources/RVCLI/Resources/launchd/dev.rv.evaluate.plist"),
+        encoding: .utf8
+    )
+    #expect(try HostTemplates.rawGrok() == grokDisk)
+    #expect(try HostTemplates.rawPi() == piDisk)
+    #expect(try HostTemplates.rawOpenCode() == jsDisk)
+    #expect(try HostTemplates.rawLaunchAgent() == plistDisk)
+}
+
+@Test func setup_hostTemplatesSourceDoesNotUseBundleModule() throws {
+    let url = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .appendingPathComponent("Sources/RVCLI/Setup/HostTemplates.swift")
+    let text = try String(contentsOf: url, encoding: .utf8)
+    #expect(text.contains("Bundle.module") == false)
+}
+
+@Test func setup_resolveRvd_prefersSiblingOverHomeLocalBin() throws {
+    try withTempHome { home, _, _ in
+        let running = home.appendingPathComponent("running", isDirectory: true)
+        let siblingRv = running.appendingPathComponent("rv")
+        let siblingRvd = running.appendingPathComponent("rvd")
+        try makeExecutable(siblingRv, contents: "sibling-rv")
+        try makeExecutable(siblingRvd, contents: "sibling-rvd")
+        let decoy = home.appendingPathComponent(".local/bin/rvd")
+        try makeExecutable(decoy, contents: "decoy-rvd")
+        let resolved = SetupEnvironment.resolveRvd(
+            nextTo: siblingRv.path,
+            home: home.path,
+            pathEntries: [home.appendingPathComponent(".local/bin").path]
+        )
+        #expect(resolved == siblingRvd.path)
+    }
+}
+
+@Test func setup_launchAgentProgramArguments_isSiblingRvdNotDecoy() throws {
+    try withTempHome { home, layout, launchctl in
+        let running = home.appendingPathComponent("running", isDirectory: true)
+        let siblingRvd = running.appendingPathComponent("rvd")
+        try makeExecutable(siblingRvd, contents: "sibling-rvd")
+        let decoy = home.appendingPathComponent(".local/bin/rvd")
+        try makeExecutable(decoy, contents: "decoy-rvd")
+        let outcome = SetupRun.setup(env(home: home, launchctl: launchctl, rvdPath: siblingRvd.path))
+        #expect(outcome.exitCode == 0)
+        let plist = try String(contentsOfFile: layout.launchAgent, encoding: .utf8)
+        #expect(plist.contains(siblingRvd.path))
+        #expect(plist.contains(decoy.path) == false)
+        #expect(launchctl.bootstraps.isEmpty == false)
+    }
+}
+
+@Test func setup_skipsLaunchAgentWhenRvdIsNotExecutable_stillWritesHosts() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(atPath: layout.grokDirectory, withIntermediateDirectories: true)
+        let missing = home.appendingPathComponent("missing-rvd").path
+        let outcome = SetupRun.setup(env(home: home, launchctl: launchctl, rvdPath: missing))
+        #expect(outcome.exitCode == 0)
+        #expect(launchctl.bootstraps.isEmpty)
+        #expect(FileManager.default.fileExists(atPath: layout.launchAgent) == false)
+        #expect(FileManager.default.fileExists(atPath: layout.grokHook))
+        #expect(outcome.stdout.contains(SetupRun.grokRestartLine))
+    }
+}
+
+@Test func setup_occupiedGrokHookWithExtraHook_leavesBytesUnchanged() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(
+            atPath: layout.grokDirectory + "/hooks",
+            withIntermediateDirectories: true
+        )
+        let rendered = try HostTemplates.grokHook(rvPath: "/tmp/rv-bin/rv")
+        let extra = rendered.replacingOccurrences(
+            of: "\"PreToolUse\": [",
+            with: """
+            "SessionStart": [{ "hooks": [{ "type": "command", "command": "echo extra" }] }],
+                "PreToolUse": [
+            """
+        )
+        #expect(extra.contains("PreToolUse"))
+        #expect(extra.contains("\"matcher\": \"Bash\""))
+        #expect(extra.contains("hook --host grok"))
+        #expect(extra.contains("\"type\": \"command\""))
+        try extra.write(toFile: layout.grokHook, atomically: true, encoding: .utf8)
+        let before = try Data(contentsOf: URL(fileURLWithPath: layout.grokHook))
+        let outcome = SetupRun.setup(env(home: home, launchctl: launchctl))
+        #expect(outcome.exitCode == 0)
+        #expect(outcome.stdout.contains("Skipped occupied grok hook."))
+        let after = try Data(contentsOf: URL(fileURLWithPath: layout.grokHook))
+        #expect(after == before)
+    }
+}
+
+@Test func setup_occupiedNonUTF8GrokHook_leavesBytesUnchanged() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(
+            atPath: layout.grokDirectory + "/hooks",
+            withIntermediateDirectories: true
+        )
+        let bytes = Data([0xFF, 0xFE, 0x00, 0x80, 0x81])
+        try bytes.write(to: URL(fileURLWithPath: layout.grokHook))
+        let outcome = SetupRun.setup(env(home: home, launchctl: launchctl))
+        #expect(outcome.exitCode == 0)
+        #expect(outcome.stdout.contains("Skipped occupied grok hook."))
+        let after = try Data(contentsOf: URL(fileURLWithPath: layout.grokHook))
+        #expect(after == bytes)
+    }
+}
+
+@Test func setup_live_usesHOME() {
+    let home = "/tmp/rv-setup-live-\(UUID().uuidString)"
+    let env = SetupEnvironment.live(environment: ["HOME": home, "PATH": "/usr/bin:/bin"])
+    #expect(env?.home == home)
+    #expect(env?.pathEntries == ["/usr/bin", "/bin"])
+}
+
+@Test func setup_live_emptyHOME_isNil() {
+    #expect(SetupEnvironment.live(environment: ["HOME": ""]) == nil)
+    #expect(SetupEnvironment.live(environment: [:]) == nil)
+}
+
+@Test func setup_live_touchLaunchdFalseWhenHomeIsNotLogin() {
+    let home = "/tmp/rv-setup-not-login-\(UUID().uuidString)"
+    let env = SetupEnvironment.live(environment: ["HOME": home, "PATH": ""])
+    #expect(env?.touchLaunchd == false)
+}
+
+@Test func setup_occupiedGrok_writesPi_andDoesNotPrintGrokRestart() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(
+            atPath: layout.grokDirectory + "/hooks",
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(atPath: layout.piDirectory, withIntermediateDirectories: true)
+        let foreign = "{\"hooks\":[]}\n"
+        try foreign.write(toFile: layout.grokHook, atomically: true, encoding: .utf8)
+        let outcome = SetupRun.setup(env(home: home, launchctl: launchctl))
+        #expect(outcome.exitCode == 0)
+        #expect(outcome.stdout.contains("Skipped occupied grok hook."))
+        #expect(outcome.stdout.contains(SetupRun.grokRestartLine) == false)
+        let grokAfter = try String(contentsOfFile: layout.grokHook, encoding: .utf8)
+        #expect(grokAfter == foreign)
+        #expect(FileManager.default.fileExists(atPath: layout.piExtension))
+        let pi = try String(contentsOfFile: layout.piExtension, encoding: .utf8)
+        #expect(pi.contains("spawnRvHook(\"pi\""))
     }
 }

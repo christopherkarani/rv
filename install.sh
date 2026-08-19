@@ -35,6 +35,8 @@ src="$RV_INSTALL_BIN"
   exit 1
 }
 
+# Unlink dest first: BSD cp writes through an existing dest symlink.
+rm -f "$bin/rv" "$bin/rvd"
 cp "$src/rv" "$bin/rv"
 cp "$src/rvd" "$bin/rvd"
 chmod 755 "$bin/rv" "$bin/rvd"

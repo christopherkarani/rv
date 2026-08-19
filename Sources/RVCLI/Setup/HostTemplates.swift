@@ -1,61 +1,98 @@
 import Foundation
 
 enum HostTemplates {
+    static let rvPlaceholder = "__RV_BINARY__"
+    static let rvdPlaceholder = "@RVD_PATH@"
+
     static func grokHook(rvPath: String) throws -> String {
-        try render(resource: "rv", ext: "json.tmpl", replacing: rvPath)
+        try render(try rawGrok(), name: "hosts/rv.json.tmpl", placeholder: rvPlaceholder, with: rvPath)
     }
 
     static func piExtension(rvPath: String) throws -> String {
-        try render(resource: "rv-guard", ext: "ts.tmpl", replacing: rvPath)
+        try render(try rawPi(), name: "hosts/rv-guard.ts.tmpl", placeholder: rvPlaceholder, with: rvPath)
     }
 
     static func openCodePlugin(rvPath: String) throws -> String {
-        try render(resource: "rv-guard", ext: "js.tmpl", replacing: rvPath)
+        try render(try rawOpenCode(), name: "hosts/rv-guard.js.tmpl", placeholder: rvPlaceholder, with: rvPath)
     }
 
     static func launchAgentPlist(rvdPath: String) throws -> String {
-        let url = try requireURL(resource: "dev.rv.evaluate", ext: "plist", subdirectory: "launchd")
-        let raw = try String(contentsOf: url, encoding: .utf8)
-        return raw.replacingOccurrences(of: "@RVD_PATH@", with: rvdPath)
+        try render(
+            try rawLaunchAgent(),
+            name: "launchd/dev.rv.evaluate.plist",
+            placeholder: rvdPlaceholder,
+            with: rvdPath
+        )
     }
 
-    static func isCurrentGrokHook(_ text: String) -> Bool {
-        text.contains("PreToolUse")
-            && text.contains("\"matcher\": \"Bash\"")
-            && text.contains("hook --host grok")
-            && text.contains("\"type\": \"command\"")
+    static func rawGrok() throws -> String {
+        try decode(PackageResources.rv_json_tmpl, name: "hosts/rv.json.tmpl")
     }
 
-    static func isCurrentPiExtension(_ text: String) -> Bool {
-        text.contains("tool_call")
-            && text.contains("[\"hook\", \"--host\", host]")
-            && text.contains("spawnRvHook(\"pi\"")
+    static func rawPi() throws -> String {
+        try decode(PackageResources.rv_guard_ts_tmpl, name: "hosts/rv-guard.ts.tmpl")
     }
 
-    static func isCurrentOpenCodePlugin(_ text: String) -> Bool {
-        text.contains("tool.execute.before")
-            && text.contains("[\"hook\", \"--host\", host]")
-            && text.contains("spawnRvHook(\"opencode\"")
+    static func rawOpenCode() throws -> String {
+        try decode(PackageResources.rv_guard_js_tmpl, name: "hosts/rv-guard.js.tmpl")
     }
 
-    private static func render(resource: String, ext: String, replacing rvPath: String) throws -> String {
-        let url = try requireURL(resource: resource, ext: ext, subdirectory: "hosts")
-        let raw = try String(contentsOf: url, encoding: .utf8)
-        return raw.replacingOccurrences(of: "__RV_BINARY__", with: rvPath)
+    static func rawLaunchAgent() throws -> String {
+        try decode(PackageResources.dev_rv_evaluate_plist, name: "launchd/dev.rv.evaluate.plist")
     }
 
-    private static func requireURL(resource: String, ext: String, subdirectory: String) throws -> URL {
-        if let url = Bundle.module.url(forResource: resource, withExtension: ext, subdirectory: subdirectory) {
-            return url
+    /// True when `existing` is the raw template with a single substitution for `placeholder`
+    /// (any baked path). Extra keys or hooks make this false.
+    static func matchesCurrentTemplate(
+        _ existing: String,
+        raw: String,
+        placeholder: String = rvPlaceholder
+    ) -> Bool {
+        let parts = raw.components(separatedBy: placeholder)
+        guard parts.count > 1 else { return existing == raw }
+        let prefix = parts[0]
+        guard existing.hasPrefix(prefix) else { return false }
+        let afterPrefix = existing.dropFirst(prefix.count)
+        let second = parts[1]
+        let substitution: String
+        if second.isEmpty {
+            substitution = String(afterPrefix)
+        } else {
+            guard let range = afterPrefix.range(of: second) else { return false }
+            substitution = String(afterPrefix[..<range.lowerBound])
         }
-        if let url = Bundle.module.url(forResource: resource, withExtension: ext) {
-            return url
+        return parts.joined(separator: substitution) == existing
+    }
+
+    private static func decode(_ bytes: [UInt8], name: String) throws -> String {
+        guard let text = String(bytes: bytes, encoding: .utf8), text.isEmpty == false else {
+            throw SetupError.missingTemplate(name)
         }
-        throw SetupError.missingTemplate("\(subdirectory)/\(resource).\(ext)")
+        return text
+    }
+
+    private static func render(
+        _ raw: String,
+        name: String,
+        placeholder: String,
+        with value: String
+    ) throws -> String {
+        guard raw.contains(placeholder) else {
+            throw SetupError.missingTemplate(name)
+        }
+        return raw.replacingOccurrences(of: placeholder, with: value)
     }
 }
 
-enum SetupError: Error, Equatable {
+enum SetupError: Error, Equatable, CustomStringConvertible, LocalizedError {
     case missingTemplate(String)
-    case missingHome
+
+    var description: String {
+        switch self {
+        case .missingTemplate(let name):
+            return "missing template \(name)"
+        }
+    }
+
+    var errorDescription: String? { description }
 }

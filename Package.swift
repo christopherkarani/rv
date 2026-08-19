@@ -54,8 +54,8 @@ let package = Package(
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],
             resources: [
-                .copy("Resources/hosts"),
-                .copy("Resources/launchd"),
+                .embedInCode("Resources/hosts"),
+                .embedInCode("Resources/launchd"),
             ]
         ),
         .executableTarget(

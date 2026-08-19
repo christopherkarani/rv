@@ -1,21 +1,8 @@
 import Foundation
 
-protocol LaunchctlApplying: Sendable {
+protocol LaunchctlApplying {
     func bootstrap(domain: String, plist: URL) throws
     func bootout(domain: String, label: String) throws
-}
-
-final class RecordingLaunchctl: LaunchctlApplying, @unchecked Sendable {
-    private(set) var bootstraps: [URL] = []
-    private(set) var bootouts: [String] = []
-
-    func bootstrap(domain _: String, plist: URL) throws {
-        bootstraps.append(plist)
-    }
-
-    func bootout(domain _: String, label: String) throws {
-        bootouts.append(label)
-    }
 }
 
 struct ProcessLaunchctl: LaunchctlApplying {
