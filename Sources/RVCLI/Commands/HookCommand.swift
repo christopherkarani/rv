@@ -68,6 +68,18 @@ struct Hook: AsyncParsableCommand {
                 codec: GrokHostCodec(),
                 evaluate: evaluate
             )
+        case .pi:
+            wire = await HookRun.run(
+                stdin: stdin,
+                codec: PiHostCodec(),
+                evaluate: evaluate
+            )
+        case .opencode:
+            wire = await HookRun.run(
+                stdin: stdin,
+                codec: OpenCodeHostCodec(),
+                evaluate: evaluate
+            )
         }
         return (wire.stdout, "", wire.exitCode)
     }

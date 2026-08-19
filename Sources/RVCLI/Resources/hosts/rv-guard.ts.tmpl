@@ -1,0 +1,107 @@
+import { spawn } from "node:child_process";
+
+const RV_BINARY = "__RV_BINARY__";
+const RV_HOOK_TIMEOUT_MS = 5000;
+
+export default function (pi) {
+  pi.on("tool_call", async (event) => {
+    if (event.toolName !== "bash") {
+      return;
+    }
+    const command = event.input && event.input.command;
+    if (typeof command !== "string" || command.length === 0) {
+      return;
+    }
+    const mapped = await consultRv(command);
+    if (mapped.action === "block") {
+      return { block: true, reason: mapped.reason };
+    }
+  });
+}
+
+function consultRv(command) {
+  const stdin = JSON.stringify({
+    toolName: "bash",
+    input: { command },
+  });
+  return spawnRvHook("pi", stdin);
+}
+
+function spawnRvHook(host, stdin) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (value) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      resolve(mapRvHookResult(value));
+    };
+
+    let child;
+    try {
+      child = spawn(RV_BINARY, ["hook", "--host", host], {
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+    } catch (error) {
+      done({ error });
+      return;
+    }
+
+    const chunks = [];
+    child.stdout.on("data", (chunk) => {
+      chunks.push(chunk);
+    });
+    child.on("error", (error) => {
+      done({ error });
+    });
+
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      done({ timedOut: true });
+    }, RV_HOOK_TIMEOUT_MS);
+
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      done({
+        stdout: Buffer.concat(chunks).toString("utf8"),
+        exitCode: code,
+      });
+    });
+
+    try {
+      child.stdin.end(stdin, "utf8");
+    } catch (error) {
+      done({ error });
+    }
+  });
+}
+
+function mapRvHookResult(value) {
+  if (value.error && value.error.code === "ENOENT") {
+    return { action: "block", reason: "rv missing" };
+  }
+  if (value.error || value.timedOut) {
+    return { action: "block", reason: "rv failed" };
+  }
+  const stdout = value.stdout ?? "";
+  const trimmed = stdout.trim();
+  if (trimmed.length > 0) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (parsed && parsed.decision === "deny") {
+        return {
+          action: "block",
+          reason: typeof parsed.reason === "string" ? parsed.reason : "",
+        };
+      }
+    } catch {
+      // non-JSON from a started rv is a failure, not allow
+    }
+    return { action: "block", reason: "rv failed" };
+  }
+  if (value.exitCode === 0) {
+    return { action: "allow" };
+  }
+  return { action: "block", reason: "rv failed" };
+}

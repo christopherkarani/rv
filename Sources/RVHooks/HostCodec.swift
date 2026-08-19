@@ -2,6 +2,8 @@ import RVDomain
 
 public enum HookHost: String, Equatable, Sendable {
     case grok
+    case pi
+    case opencode
 }
 
 public struct HookRequest: Equatable, Sendable {

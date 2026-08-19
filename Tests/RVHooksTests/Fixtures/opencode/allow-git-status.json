@@ -1,0 +1,4 @@
+{
+  "tool": "bash",
+  "args": { "command": "git status" }
+}

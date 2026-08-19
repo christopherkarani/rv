@@ -1,0 +1,4 @@
+{
+  "tool": "read",
+  "args": { "filePath": "/tmp/rv-hook-fixture/README.md" }
+}
