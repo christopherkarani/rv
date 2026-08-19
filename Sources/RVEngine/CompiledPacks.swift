@@ -52,7 +52,7 @@ public struct CompiledPacks<Compiled: Sendable>: Sendable {
                         CompiledDestructive(rule: rule, compiled: try patterns.compile(rule.pattern))
                     )
                 } catch {
-                    if rule.name == "reset-hard" || rule.name == "fork-bomb" {
+                    if requiredCompiledRules.contains(ruleID) {
                         throw PatternCompileError.invalidPattern(
                             name: ruleID.rawValue,
                             message: "required pattern failed to compile"

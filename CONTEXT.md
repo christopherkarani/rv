@@ -5,8 +5,16 @@ Mac-native destructive-command guard for coding-agent shell hooks. Day-one hosts
 ## Language
 
 **Evaluate session**:
-The compiled day-one packs from which a Decision is produced. Hook fallback and TTY test/explain share one.
+The compiled day-one packs from which a Decision is produced. TTY test/explain and a hook miss share one; TTY never asks rvd.
 _Avoid_: in-process fallback, composer, warm evaluate
+
+**Enabled packs**:
+The pack IDs on an evaluate request. Empty means none — not the catalog, not an implied day-one refill.
+_Avoid_: refill, default packs
+
+**Day-one packs**:
+core.git and core.filesystem. v1 evaluate always uses these two; the catalog does not change a Decision.
+_Avoid_: live catalog, enabled catalog
 
 **Explain pipeline**:
 The stages an EvaluationResult already took, in evaluation order: normalize, quick-reject, safe, destructive, default. TTY explain and XPC explain show the same stages. XPC `ExplainStage.name` is that kebab-case id (`quick-reject`, not camelCase `quickReject`); `elapsedMs` is currently always 0.

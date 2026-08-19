@@ -99,11 +99,7 @@ public actor ServiceRuntime {
     }
 
     private func runEvaluate(_ request: EvaluationRequest) -> EvaluationResult {
-        var resolved = request
-        if resolved.enabledPacks.isEmpty {
-            resolved.enabledPacks = catalog.enabledIDs
-        }
-        return session.evaluate(resolved)
+        session.evaluate(request)
     }
 
     private func explain(_ request: EvaluationRequest) -> ExplainReply {
