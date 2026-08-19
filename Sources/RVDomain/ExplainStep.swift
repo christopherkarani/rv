@@ -1,5 +1,6 @@
 /// One stage in the Explain pipeline, including that stage's outcome.
 public enum ExplainStep: Equatable, Sendable {
+    /// Pipeline stage. `rawValue` is the stable TTY/XPC stage name.
     public enum ID: String, Equatable, Sendable {
         case normalize
         case quickReject = "quick-reject"
@@ -8,16 +9,19 @@ public enum ExplainStep: Equatable, Sendable {
         case `default`
     }
 
+    /// Quick-reject outcome: `skipped` if it fired; `scanned` if walkers ran.
     public enum Scan: Equatable, Sendable {
         case skipped
         case scanned
     }
 
+    /// Safe or destructive walker result: no match, or the hitting rule.
     public enum Hit: Equatable, Sendable {
         case none
         case rule(RuleID)
     }
 
+    /// Outcome of the default pipeline stage.
     public enum Fallthrough: Equatable, Sendable {
         case allow
         case incomplete
@@ -29,6 +33,7 @@ public enum ExplainStep: Equatable, Sendable {
     case destructive(Hit)
     case `default`(Fallthrough)
 
+    /// Pipeline stage this step occupies.
     public var id: ID {
         switch self {
         case .normalize:

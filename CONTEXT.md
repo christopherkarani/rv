@@ -9,7 +9,7 @@ The compiled day-one packs from which a Decision is produced. Hook fallback and 
 _Avoid_: in-process fallback, composer, warm evaluate
 
 **Explain pipeline**:
-The stages an EvaluationResult already took, in evaluation order: normalize, quick-reject, safe, destructive, default. TTY explain and XPC explain show the same stages.
+The stages an EvaluationResult already took, in evaluation order: normalize, quick-reject, safe, destructive, default. TTY explain and XPC explain show the same stages. XPC `ExplainStage.name` is that kebab-case id (`quick-reject`, not camelCase `quickReject`); `elapsedMs` is currently always 0.
 _Avoid_: explain projection, briefing, ExplainStage (the IPC timing row)
 
 **Explain step**:

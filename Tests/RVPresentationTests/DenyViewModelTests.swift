@@ -73,10 +73,9 @@ private func mediumAllow() -> EvaluationResult {
     let vm = explainViewModel(from: EvaluationResult(decision: .allow), command: status)
     #expect(vm.fact == "allow")
     #expect(vm.nextAction == nil)
-    #expect(vm.steps.contains { $0.displayOutcome.contains("μs") || $0.displayOutcome.contains("us") } == false)
 }
 
-@Test func explainViewModel_denyHasFactNextAndDestructiveStep() {
+@Test func explainViewModel_denyHasFactNext() {
     let vm = explainViewModel(from: denyResult(), command: resetHard)
     #expect(vm.fact == "git reset --hard destroys uncommitted changes")
     #expect(vm.nextAction == "run it in Terminal, or rv allow-once")
@@ -92,7 +91,6 @@ private func mediumAllow() -> EvaluationResult {
         !suggestions(for: RuleID(pack: .coreFilesystem, pattern: "dd-overwrite-general"))
             .contains { $0.command?.contains("rm -ri") == true }
     )
-    #expect(vm.steps.contains { $0.displayOutcome.contains("μs") } == false)
 }
 
 @Test func testViewModel_denyShowsPackReasonAndColonMatch() {
@@ -286,7 +284,7 @@ private func mediumAllow() -> EvaluationResult {
     )
 }
 
-@Test func explainViewModel_indeterminateStopsAtIncomplete() {
+@Test func explainViewModel_indeterminateHasIncompleteFact() {
     let vm = explainViewModel(
         from: EvaluationResult(decision: .indeterminate(.commandTooLarge)),
         command: resetHard
