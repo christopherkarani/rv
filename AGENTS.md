@@ -24,6 +24,7 @@ Pointers: `docs/architecture/MODULES.md`, `docs/dev/SWIFT.md`, `docs/dev/PARITY.
 - No `RV_BYPASS` or any env a hook child honors to skip evaluate.
 - No allow-because-XPC-missed (down or skew must in-process evaluate).
 - No Read/Edit/MCP hooks in v1.
+- No host Allow / leftover-ask UI. Pi deny card is display-only (`{ render(width) => string[] }`, never a string). OpenCode toast is display-only chrome; `throw` remains the deny path.
 - No foreign hook writes.
 - No live-HOME tests.
 - No command text in `os_log`. History stays off by default.

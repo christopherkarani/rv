@@ -474,7 +474,7 @@ All of PLAN **Forbidden (product law)**, plus T2-specific:
 - ANSI inside `RVPresentation`.
 - Opening a TTY from `RVTUI`.
 - Owning or editing IPC / XPC / launchd / `RVService` / `RVIPC`.
-- Host Allow button, leftover-ask-as-permit, custom Pi renderer, OpenCode toast.
+- Host Allow button, leftover-ask-as-permit, Pi confirm as deny UX, OpenCode toast.
 - Writing foreign hook files or the human’s real `HOME` from tests.
 - Persisting raw command text to `os_log` or default history.
 - Claiming OS-enforced / Seatbelt. Grade is **hook**.

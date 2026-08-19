@@ -28,7 +28,7 @@ After this phase a real-HOME hero install (`curl | sh`) plus `rv setup` is what 
 - Remaining catalog packs or `rv packs` (T9). Day-one packs stay `core.git` + `core.filesystem`.
 - Claude, Codex, Gemini, Copilot, Cursor, Hermes, Antigravity, or any other host.
 - Read / Edit / Write / MCP / `apply_patch` / `user_bash` hooks.
-- Pi `registerMessageRenderer`, Pi `ctx.ui.confirm` / `notify` as the deny path, OpenCode `tui.toast.show` / toast client calls.
+- Pi `ctx.ui.confirm` / `notify` as the deny path. OpenCode toast as the deny path. Display-only Pi `registerMessageRenderer` and OpenCode `client.tui.showToast` are allowed (not the deny path).
 - Host Allow button, leftover-ask-as-permit, `permission.ask` as a permit channel.
 - Project-local hooks (`.grok/hooks/`, `.pi/extensions/`, `.opencode/plugins/`) in v1.
 - Writing `~/.grok/config.toml`, `~/.claude/settings.json`, `~/.cursor/hooks.json`, Pi `settings.json`, or `opencode.json`.
@@ -254,18 +254,19 @@ Pi loads TypeScript from:
 
 Factory: `export default function (pi) { … }`. Node built-ins (`node:child_process`, `node:fs`, …) are available.
 
-**Gate:** `pi.on("tool_call", …)` only.
+**Gate:** evaluate only on `pi.on("tool_call", …)`. Display-only `registerMessageRenderer` is chrome.
 
 | Host field | v1 use |
 |---|---|
 | `event.toolName` | Evaluate only `"bash"`. All other tools (including `read`, `write`, `edit`): return nothing. |
 | `event.input.command` | Shell string when `toolName === "bash"`. |
 | `event.input.timeout` | Ignore. |
-| return `{ block: true, reason }` | Deny. `reason` is `hostDenyText`. |
+| return `{ block: true, reason }` | Deny. `reason` is `hostDenyText`. This is the block path. |
 | return `{ block: true, reason, terminate: true }` | **Do not use.** Stops the agent, not just the tool. |
 | mutate `event.input` | **Do not.** No rewrite. |
 | `ctx.ui.confirm` / `notify` / `custom` | **Do not.** That is a host Allow / extra UI. |
-| `pi.registerMessageRenderer` | **Forbidden.** |
+| `pi.registerMessageRenderer` | Display-only deny card for `rv-decision`. Must return `{ render(width) => string[] }`, never a string. Not the deny path. |
+| `pi.sendMessage` | Deny only. `customType` `rv-decision`, `display: true`, `triggerTurn: false`. Allow stays silent. A throw here must not fail-open. |
 | `user_bash` | **Do not hook.** User `!` is Terminal-like, not the agent shell tool. |
 
 Pi documents: `tool_call` **errors block the tool (fail-safe)**. PLAN miss policy: cannot spawn `rv` (ENOENT) → return `{ block: true, reason: "rv missing" }`. A started `rv` that times out or crashes → `{ block: true, reason: "rv failed" }`. Honor deny JSON regardless of exit code. `rvd` down/skew is not this case — `rv hook` still in-process-evaluates and must deny. Do not catch-and-allow a missing binary.
@@ -300,11 +301,11 @@ Documented callback:
 | `input.tool` | Evaluate only `"bash"`. Skip `read`, `write`, `edit`, `apply_patch`, MCP, custom tools. |
 | `output.args.command` | Shell string for `bash`. |
 | `throw new Error(reason)` | Deny. Message is `hostDenyText`. This is the documented abort. |
+| `client.tui.showToast` | Display-only chrome on deny. Title `RV · Blocked`, message Why/Cmd/Meta/Next (parsed from `hostDenyText` + command). Variant `error`. Bind the method. v1 `{ body }` vs v2 flat. Best-effort; never skip throw if toast fails. Throw text stays `hostDenyText`. Do not `console.log` / `console.error` (OpenCode dumps those into the TUI). |
 | mutate `output.args` | **Do not.** |
 | `"tool.execute.after"` | Do not register. |
 | `permission.ask` | Do not register (Allow-button territory). |
-| `tui.toast.show` / toast APIs | **Forbidden.** |
-| `client` UI helpers for a banner | **Forbidden.** |
+| toast as the deny path | **Forbidden.** |
 
 Allow = return without throwing. Official examples use `input.tool === "bash"` and `output.args.command`. Do not invent a `shell` alias unless a later Open question is closed.
 
@@ -366,8 +367,8 @@ Absolute `rv` path: T6 bakes it into the adapter at setup (same as Grok `command
 
 Adapter unit tests (string/source fixtures, not a live Pi/OpenCode):
 
-- Pi template: registers only `tool_call`; no `registerMessageRenderer`; no `confirm`; no `terminate: true`; no `user_bash`.
-- OpenCode template: top-level `"tool.execute.before"` only; no `tui.toast.show`; no nested `tool.execute`.
+- Pi template: registers `tool_call` plus display-only `registerMessageRenderer`; no `confirm`; no `terminate: true`; no `user_bash`. Renderer returns a component, never a string. Deny posts one `rv-decision` message; allow posts none.
+- OpenCode template: top-level `"tool.execute.before"` only; display-only `showToast` on deny; no nested `tool.execute`; no `permission.ask`. Toast failure still throws.
 - Both: non-`bash` returns without spawning `rv` (or spawns and codec allows — prefer skip-spawn).
 - deny JSON + exit 0 → still block / throw (honor deny regardless of exit).
 - ENOENT spawn → block / throw `rv missing`.
@@ -538,8 +539,8 @@ Rules:
 - Unlock **may** say: run it in Terminal, or `rv allow-once <code>` in a TTY. Until T8, do **not** fabricate `<code>` — T2’s `or rv allow-once` is enough.
 - No host Allow button. No leftover-ask-as-permit. No `RV_BYPASS`.
 - **Grok:** that string is JSON `reason` only.
-- **Pi:** that string is `{ block: true, reason }`. No renderer.
-- **OpenCode:** that string is `throw new Error(reason)`. No toast.
+- **Pi:** that string is `{ block: true, reason }`. A display-only `rv-decision` card may also appear; it is not the block path.
+- **OpenCode:** that string is `throw new Error(reason)`. A display-only TUI toast may also appear; it is not the block path.
 - Allow: empty. No “allowed by rv.”
 
 ## Files to create
@@ -598,7 +599,7 @@ Do not add Claude/Codex codecs. Do not add files under a ryk tree.
 - Allowing because `rvd` is down or skewed (in-process evaluate).
 - Treating Grok `permissionMode: bypassPermissions` as skip-evaluate.
 - Hooking Read / Edit / MCP / `user_bash` / `apply_patch`.
-- Pi `registerMessageRenderer`, Pi confirm/notify as deny UX, OpenCode toast.
+- Pi confirm/notify as deny UX, Pi renderer as the deny path, OpenCode toast as the deny path.
 - Host Allow button / `permission.ask` permit UI / leftover-ask rewrite.
 - Claude `hookSpecificOutput` as the Grok/Pi/OpenCode deny document.
 - Hermes `"decision":"block"` as the Grok deny keyword.
@@ -631,7 +632,7 @@ Do not add Claude/Codex codecs. Do not add files under a ryk tree.
 ## Definition of done
 
 - T4 L3 green: Grok fixtures + `rv hook --host grok` match T4.3. T1 corpus decision for `git reset --hard` is unchanged.
-- T5 L3 green: Pi + OpenCode codecs + adapter templates; same `hostDenyText`; no renderer, no toast, no Allow UI.
+- T5 L3 green: Pi + OpenCode codecs + adapter templates; same `hostDenyText`; Pi display-only card; OpenCode display-only toast; no Allow UI.
 - T6 L4 green: temp-HOME setup/uninstall idempotent; foreign files untouched; occupied skip; hostless one line; `install.sh` refuses non-macOS-26-arm64.
 - T7 L1 green: doctor reports service (or “not installed”), day-one packs, and host wired/missing/occupied/broken/absent-file without writing HOME.
 - Worktree rules held: T4 before T5; T4 after T1; T6/T7 parallel only with the ownership split.

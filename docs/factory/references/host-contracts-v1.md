@@ -16,8 +16,8 @@ rv owns codecs. Do not copy ryk leftover-ask-as-permit. Do not copy DCG fail-ope
 
 - Discover: `~/.pi/agent/extensions/*.ts` or project `.pi/extensions/*.ts`.
 - Event: `pi.on("tool_call", …)`. Shell tool name is typically `bash`. Input: `event.input.command`.
-- Deny: return `{ block: true, reason }`. Reason is `hostDenyText` (one sentence + rule_id + next step).
-- No `registerMessageRenderer`.
+- Deny: return `{ block: true, reason }`. Reason is `hostDenyText` (one sentence + rule_id + next step). That return is the block path.
+- Display-only: `registerMessageRenderer` for `rv-decision` must return `{ render(width) => string[] }`, never a string. `sendMessage` on deny only (`triggerTurn: false`). Allow stays silent. Not the deny path. No confirm / Allow UI.
 - DCG’s published recipe fails open if `dcg` is missing. **rv adapter (PLAN #6):** missing `rv` binary → Pi `{ block: true, reason: "rv missing" }`. A started `rv` that times out or crashes → `{ block: true, reason: "rv failed" }`. **`rvd` down/skew** still evaluates in-process and must deny. Doctor reports a missing/non-exec baked path as `broken`.
 - Occupied slot: skip + one line. No ryk special-case.
 
@@ -25,7 +25,7 @@ rv owns codecs. Do not copy ryk leftover-ask-as-permit. Do not copy DCG fail-ope
 
 - Discover: `~/.config/opencode/plugins/` or project `.opencode/plugins/`.
 - Event: `tool.execute.before` (and `command.execute.before` if the same shell payload exists). Shell only.
-- Deny: throw/block with native text. No toast. No TUI plugin required in v1. Missing `rv` → throw `rv missing`. A started `rv` that times out or crashes → throw `rv failed`.
+- Deny: throw/block with native text. Display-only TUI toast (`client.tui.showToast`, title `RV · Blocked`) is chrome, not the deny. Toast failure must still throw. Missing `rv` → throw `rv missing`. A started `rv` that times out or crashes → throw `rv failed`.
 - DCG does not auto-install OpenCode; community plugins have shipped wrong JSON field names. rv must pin fixtures from a current OpenCode plugin API, not from a broken gist.
 - Occupied slot: skip + one line.
 

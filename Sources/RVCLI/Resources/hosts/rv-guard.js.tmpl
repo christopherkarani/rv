@@ -2,8 +2,11 @@ import { spawn } from "node:child_process";
 
 const RV_BINARY = "__RV_BINARY__";
 const RV_HOOK_TIMEOUT_MS = 5000;
+const RV_TOAST_TIMEOUT_MS = 1500;
+const RV_TOAST_TITLE = "RV · Blocked";
+const RV_CMD_PREVIEW = 96;
 
-export const RvGuard = async () => {
+export const RvGuard = async (ctx) => {
   return {
     "tool.execute.before": async (input, output) => {
       if (input.tool !== "bash") {
@@ -15,6 +18,7 @@ export const RvGuard = async () => {
       }
       const mapped = await consultRv(command);
       if (mapped.action === "block") {
+        await showBlockToast(ctx, mapped.reason, command);
         throw new Error(mapped.reason);
       }
     },
@@ -106,4 +110,136 @@ function mapRvHookResult(value) {
     return { action: "allow" };
   }
   return { action: "block", reason: "rv failed" };
+}
+
+function formatToastMessage(reason, command) {
+  const card = cardFromBlock(reason, command);
+  const lines = [];
+  const push = (label, value) => {
+    if (!value) {
+      return;
+    }
+    lines.push(`${label.padEnd(4)}  ${value}`);
+  };
+  push("Why", card.summary);
+  push("Cmd", card.preview);
+  push("Meta", card.rule);
+  push("Next", card.nextStep);
+  return lines.join("\n").slice(0, 280);
+}
+
+function cardFromBlock(reason, command) {
+  const cleaned = sanitizeVisibleText(typeof reason === "string" ? reason : "");
+  const preview = previewCommand(command);
+  const withRule = cleaned.match(/^(.+?) \(([^)]+)\)\.\s*(.+)$/);
+  if (withRule) {
+    return {
+      summary: withRule[1],
+      rule: withRule[2],
+      nextStep: withRule[3],
+      preview,
+    };
+  }
+  const withNext = cleaned.match(/^(.+?)\.\s+(.+)$/);
+  if (withNext) {
+    return {
+      summary: withNext[1],
+      nextStep: withNext[2],
+      preview,
+    };
+  }
+  return {
+    summary: cleaned || "Blocked.",
+    preview,
+  };
+}
+
+function sanitizeVisibleText(value) {
+  return String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function previewCommand(command) {
+  const text = sanitizeVisibleText(command);
+  if (text.length <= RV_CMD_PREVIEW) {
+    return text;
+  }
+  return `${text.slice(0, RV_CMD_PREVIEW - 3)}...`;
+}
+
+async function showBlockToast(ctx, reason, command) {
+  const payload = {
+    title: RV_TOAST_TITLE,
+    message: formatToastMessage(reason, command),
+    variant: "error",
+    duration: 8000,
+  };
+  const toastPromise = invokeShowToast(ctx, payload);
+  void toastPromise.catch(() => undefined);
+  let timer;
+  try {
+    await Promise.race([
+      toastPromise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error("toast timeout")), RV_TOAST_TIMEOUT_MS);
+      }),
+    ]);
+  } catch {
+    // Chrome failed; tool.execute.before still throws.
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+async function invokeShowToast(ctx, payload) {
+  const tui = ctx && ctx.client && ctx.client.tui;
+  if (!tui) {
+    return;
+  }
+  const showToast =
+    typeof tui.showToast === "function" ? tui.showToast.bind(tui) : undefined;
+  const publish =
+    typeof tui.publish === "function" ? tui.publish.bind(tui) : undefined;
+
+  if (typeof showToast === "function") {
+    const arity = showToast.length;
+    if (arity >= 2) {
+      try {
+        await showToast(payload, { throwOnError: true });
+        return;
+      } catch {
+        // try v1 body
+      }
+    }
+    try {
+      await showToast({ body: payload, throwOnError: true });
+      return;
+    } catch {
+      // try body-only
+    }
+    try {
+      await showToast({ body: payload });
+      return;
+    } catch {
+      // try flat on arity-1
+    }
+    if (arity < 2) {
+      try {
+        await showToast(payload);
+        return;
+      } catch {
+        // try publish
+      }
+    }
+  }
+
+  if (typeof publish === "function") {
+    await publish({
+      type: "tui.toast.show",
+      properties: payload,
+    });
+  }
 }
