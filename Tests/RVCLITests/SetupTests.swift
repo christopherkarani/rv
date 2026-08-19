@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import RVCLI
 
-private func withTempHome(_ body: (URL, HostLayout, RecordingLaunchctl) throws -> Void) throws {
+func withTempHome(_ body: (URL, HostLayout, RecordingLaunchctl) throws -> Void) throws {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-setup-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -14,7 +14,7 @@ private func withTempHome(_ body: (URL, HostLayout, RecordingLaunchctl) throws -
     try body(root, HostLayout(home: root.path), launchctl)
 }
 
-private func env(
+func env(
     home: URL,
     launchctl: RecordingLaunchctl,
     pathEntries: [String] = [],
@@ -33,7 +33,7 @@ private func env(
     )
 }
 
-private func makeExecutable(_ url: URL, contents: String = "#!/bin/sh\n") throws {
+func makeExecutable(_ url: URL, contents: String = "#!/bin/sh\n") throws {
     try FileManager.default.createDirectory(
         at: url.deletingLastPathComponent(),
         withIntermediateDirectories: true
@@ -73,7 +73,7 @@ private func realGrokHookURL() -> URL? {
         try FileManager.default.createDirectory(atPath: layout.grokDirectory, withIntermediateDirectories: true)
         let outcome = SetupRun.setup(env(home: home, launchctl: launchctl))
         #expect(outcome.exitCode == 0)
-        #expect(outcome.stdout == SetupRun.grokRestartLine + "\n")
+        #expect(outcome.stdout == SetupRun.robotCompleteLine + "\n")
         let body = try String(contentsOfFile: layout.grokHook, encoding: .utf8)
         #expect(body.contains("PreToolUse"))
         #expect(body.contains("\"matcher\": \"Bash\""))
@@ -278,6 +278,15 @@ private func realGrokHookURL() -> URL? {
     #expect(text.contains("Bundle.module") == false)
 }
 
+@Test func setup_resolveRv_ignoresPATH_bakesHomeLocalBin() throws {
+    try withTempHome { home, _, _ in
+        let decoyDir = home.appendingPathComponent("cellar/bin", isDirectory: true)
+        try makeExecutable(decoyDir.appendingPathComponent("rv"), contents: "decoy-rv")
+        let resolved = SetupEnvironment.resolveRv(home: home.path)
+        #expect(resolved == home.path + "/.local/bin/rv")
+    }
+}
+
 @Test func setup_resolveRvd_prefersSiblingOverHomeLocalBin() throws {
     try withTempHome { home, _, _ in
         let running = home.appendingPathComponent("running", isDirectory: true)
@@ -289,8 +298,7 @@ private func realGrokHookURL() -> URL? {
         try makeExecutable(decoy, contents: "decoy-rvd")
         let resolved = SetupEnvironment.resolveRvd(
             nextTo: siblingRv.path,
-            home: home.path,
-            pathEntries: [home.appendingPathComponent(".local/bin").path]
+            home: home.path
         )
         #expect(resolved == siblingRvd.path)
     }
@@ -321,7 +329,7 @@ private func realGrokHookURL() -> URL? {
         #expect(launchctl.bootstraps.isEmpty)
         #expect(FileManager.default.fileExists(atPath: layout.launchAgent) == false)
         #expect(FileManager.default.fileExists(atPath: layout.grokHook))
-        #expect(outcome.stdout.contains(SetupRun.grokRestartLine))
+        #expect(outcome.stdout.contains(SetupRun.robotCompleteLine))
     }
 }
 
@@ -399,7 +407,7 @@ private func realGrokHookURL() -> URL? {
         let outcome = SetupRun.setup(env(home: home, launchctl: launchctl))
         #expect(outcome.exitCode == 0)
         #expect(outcome.stdout.contains("Skipped occupied grok hook."))
-        #expect(outcome.stdout.contains(SetupRun.grokRestartLine) == false)
+        #expect(outcome.stdout.contains(SetupRun.robotCompleteLine) == false)
         let grokAfter = try String(contentsOfFile: layout.grokHook, encoding: .utf8)
         #expect(grokAfter == foreign)
         #expect(FileManager.default.fileExists(atPath: layout.piExtension))

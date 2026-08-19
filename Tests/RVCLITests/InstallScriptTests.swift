@@ -1,12 +1,28 @@
 import Foundation
 import Testing
 
-private func installScriptURL() -> URL {
+private func repoRootURL() -> URL {
     URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()
         .deletingLastPathComponent()
         .deletingLastPathComponent()
-        .appendingPathComponent("install.sh")
+}
+
+private func installScriptURL() -> URL {
+    repoRootURL().appendingPathComponent("install.sh")
+}
+
+@Test func installSh_doesNotMentionBrew() throws {
+    let text = try String(contentsOf: installScriptURL(), encoding: .utf8)
+    #expect(text.localizedCaseInsensitiveContains("brew") == false)
+}
+
+@Test func readme_hasNoBrewInstallPath() throws {
+    let text = try String(
+        contentsOf: repoRootURL().appendingPathComponent("README.md"),
+        encoding: .utf8
+    )
+    #expect(text.localizedCaseInsensitiveContains("brew") == false)
 }
 
 @Test func installSh_refusesNonDarwin() throws {

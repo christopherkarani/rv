@@ -11,13 +11,13 @@ Not ryk. Not line-for-line Rust. Repo: `~/CodingProjects/rv` (`christopherkarani
 - **Parity source:** DCG **0.11.0** decisions/packs/contracts.
 - **Platform v1:** **macOS 26, Apple Silicon only.** No Linux/Windows. No claimed 14/15 matrix. Windows/Linux pack *patterns* may live in the catalog as data; do not claim those OSes.
 - **XPC is in v1.** App is not. `rvd` is **on-demand** LaunchAgent (`dev.rv.evaluate`), idle-exit ~5m. Not KeepAlive by default. Down/skew → **in-process evaluate**. Never allow because XPC missed.
-- **Install:** Hero is `curl -fsSL …/install | sh` (real HOME, binary + quiet setup). Brew is second: `brew install rv && rv setup`. Brew alone does not wire hooks. Homebrew `post_install` cannot wire hooks (temp HOME).
+- **Install:** v1 is **curl only.** Hero is `curl -fsSL …/install | sh` (real HOME → `$HOME/.local/bin/{rv,rvd}`, then `rv setup`). No Homebrew formula, tap, bottle, or `post_install` in v1. T6 must not add a formula stub or brew README path. Homebrew is Phase 4+. `install.sh` places binaries and execs `rv setup`. Setup owns the TTY show.
 - **Hosts v1:** **Pi, Grok, OpenCode only.** Shell/command tools only. No Read/Edit/MCP.
 - **Deny UX:** Native host deny **text** is the block path (one sentence + `rule_id` + next step). Pi also posts a display-only transcript card (`registerMessageRenderer` + `sendMessage`, customType `rv-decision`). OpenCode also shows a display-only TUI toast (`client.tui.showToast`, title `RV · Blocked`). Card and toast are chrome, not the deny. Pi renderer must return `{ render(width) => string[] }`, never a string. OpenCode `throw new Error(reason)` remains the abort. Toast failure must still throw. No host Allow, no confirm, no leftover-ask.
 - **Unlock:** Run command in Terminal, or `rv allow-once <code>` in a **TTY**. No host Allow button. **No `RV_BYPASS`.**
 - **Day-one packs:** `core.git` + `core.filesystem` only. Rest catalog, off until enabled.
-- **Setup mutations:** only rv-owned files. Foreign hooks untouched. Occupied single slot → skip + one line. Uninstall removes only rv files. **No ryk special-case.**
-- **Hostless install:** success. One line: run `rv setup` after a host exists.
+- **Setup mutations:** only rv-owned files. Foreign hooks untouched. Occupied owned name → skip that host (TTY hollow + skip clause; non-TTY one line). Uninstall removes only rv files. **No ryk special-case.**
+- **Hostless install:** success. TTY closer: `No hosts yet` then `Next  rv setup`. Non-TTY: one line to run `rv setup` after a host exists.
 - **Privacy:** no command text in `os_log`. History **off** by default; when on, no raw secrets. Full command only in TTY `explain`/`test`.
 - **License:** deferred.
 - **Repo:** work only in `~/CodingProjects/rv`. Never implement inside ryk.
@@ -26,7 +26,7 @@ Not ryk. Not line-for-line Rust. Repo: `~/CodingProjects/rv` (`christopherkarani
 
 **v1 scoreboard:** same decision + `rule_id` as DCG **0.11.0 engine source** (critical/high → deny; medium/low → allow + match). SKILL.md marketing rows that disagree are quarantine fixtures, not the scoreboard. Hook JSON/exit codes for **Grok / Pi / OpenCode shell events**. Quiet allow, native deny text.
 
-**Later (not v1 gate):** all 99 packs enabled-by-default (they stay in catalog, off), Claude/Codex/etc., scan, MCP, heredoc/AST, SARIF, Mac app, Intel, older macOS.
+**Later (not v1 gate):** all 99 packs enabled-by-default (they stay in catalog, off), Claude/Codex/etc., scan, MCP, heredoc/AST, SARIF, Mac app, Intel, older macOS, Homebrew.
 
 `dcg test` vs `rv test` agree-rate is the long-term scoreboard when `dcg` is on PATH. Do not block v1 on it.
 
@@ -73,7 +73,7 @@ Copy into `AGENTS.md` and `docs/dev/SWIFT.md` at T0.
 - Allow: **silent**. No banner on hook allow.
 - Deny: host-native reason string is the block path. Pi may show a display-only transcript card. Pretty denial panel only on TTY `rv test` / `explain` / human CLI.
 - Three modes: robot / pretty / browse. Browse only if both stdin+stdout TTY and not `--json`/`--robot`/`--plain`/`CI`/`NO_COLOR`.
-- `rv setup`: no wizard. Quiet. One line if a host must restart or none found.
+- `rv setup`: no wizard, no pack list, no LaunchAgent row, no questions. TTY pretty paints three host slots (Grok, Pi, OpenCode). **Text is default terminal color. Only the circle changes** (`○` muted pending, `●` heading cyan when wired). Closer is `Setup complete` then `Next  rv test 'git reset --hard'`. Occupied stays hollow with a skip clause. Restart (Grok `/hooks`) is a clause on that row, not a second screen. Non-TTY / `--robot` / `CI`: one line, no circles. Do not reopen `rv test` / `rv explain` for this show.
 - Voice: one fact, one next action. Vercel-quiet.
 
 ## Slice ladder
@@ -166,6 +166,7 @@ These close implementer forks. Specs that disagree are wrong. Adversarial FN + k
 18. **Doctor `wired`** requires the baked `rv` path to be executable. Missing path is `broken`.
 19. **On-disk allow-once** uses atomic compare-and-swap so two in-process hook children cannot both consume one grant.
 20. **Product-tree name hygiene.** Files created or edited **outside** `docs/factory/` must not contain the tokens `dcg` or `ryk` (any case, as a substring). That includes `Sources/`, `Tests/`, `Package.swift`, `README.md`, `AGENTS.md`, `docs/dev/`, `docs/architecture/`, `vendor/`, `tools/`, `install.sh`, and host templates. Factory docs under `docs/factory/` may name the parity source and the sibling project. Product copy, comments, identifiers, paths, env names, and fixture keys use `rv`, `upstream`, `pinned 0.11.0`, `vendor/parity/`, and `tools/extract-packs/` only. Pin file is `vendor/parity/PIN`. Extract flag is `--source-root`. Quarantine field is `pinned_0_11_0`. Do not honor or mention a `.dcg/` config dir in product code. T0 acceptance includes a product-tree grep that those tokens are absent.
+21. **Install show.** v1 install is curl only. TTY `rv setup` may paint the three host circles; that is not a wizard. Ink: default text, circle-only color (`Palette.muted` / `Palette.heading`). Next action after a wired setup is `rv test 'git reset --hard'` — do not invent a first-run explain panel. `rv test` / `rv explain` stay as T2 shipped them.
 
 ## First implementation slice
 
