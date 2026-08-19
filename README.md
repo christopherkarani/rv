@@ -11,21 +11,19 @@ Mac-native destructive-command guard for coding-agent **shell** hooks.
 
 ## Install
 
-Hero path (real HOME, when you mean it):
+v1 is curl only. Hero (real HOME, when you mean it):
+
+```sh
+curl -fsSL …/install | sh
+```
+
+Until a release URL is locked, the same script is:
 
 ```sh
 RV_INSTALL_BIN=/path/to/dir-with-rv-and-rvd ./install.sh
 ```
 
-`install.sh` copies `rv` and `rvd` to `~/.local/bin` and runs `rv setup`. It refuses anything that is not macOS 26 on Apple Silicon.
-
-Brew is second, when a formula exists:
-
-```sh
-brew install rv && rv setup
-```
-
-Brew alone does not wire hooks. Homebrew `post_install` must not call setup.
+`install.sh` copies `rv` and `rvd` to `$HOME/.local/bin` and execs `rv setup`. It refuses anything that is not macOS 26 on Apple Silicon.
 
 ```sh
 rv setup      # idempotent; honors process HOME only
@@ -40,6 +38,6 @@ rv uninstall  # rv-owned files only
 - `~/.config/rv/`
 - `~/Library/LaunchAgents/dev.rv.evaluate.plist` (`KeepAlive` false)
 
-Foreign hook files are left untouched. Occupied owned names are skipped. Hostless setup succeeds and prints one line to run `rv setup` later.
+Foreign hook files are left untouched. Occupied owned names are skipped. Hostless TTY setup prints `No hosts yet` then `Next  rv setup`. Non-TTY prints one line to run `rv setup` later.
 
 Do not run `install.sh` or `rv setup` from tests without overriding `HOME`.

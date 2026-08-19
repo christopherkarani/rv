@@ -32,6 +32,7 @@ These are later. They are not v1 gates, not T0–T9 acceptance, and not implied 
 | Intel | `x86_64-apple-macos` as a claimed target | Apple Silicon only |
 | Older macOS | Claimed 14 / 15 (or other) matrix | **macOS 26** only. Do not claim 14 / 15 |
 | History on-by-choice | Optional `RVHistory` persist of evaluations after an explicit enable | History **off**. No default store. Full command only in TTY `explain` / `test` |
+| Homebrew | Formula / tap / bottle; `brew install rv && rv setup` | v1 install is **curl only** (`install.sh` → `$HOME/.local/bin`). T6 must not add a formula |
 
 Also later, not v1:
 
@@ -40,6 +41,7 @@ Also later, not v1:
 - KeepAlive / always-on daemon (v1 `rvd` is on-demand, idle-exit ~5m).
 - Pi confirm / Allow UI / leftover-ask-as-permit. Display-only Pi deny card and OpenCode toast are v1.
 - License choice (still deferred).
+- Homebrew formula / tap / bottle (v1 is curl only).
 
 Windows / Linux pack JSON in the catalog is data, not a platform claim.
 

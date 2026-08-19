@@ -104,7 +104,7 @@ Follow `docs/factory/specs/phase-0-repo.md` acceptance literally. Gate is `swift
 
 - Semantic-only upstream rules (git alias, branch-dynamic) cannot be ICU text matches. T1 must quarantine them.
 - Host stdin/stdout contracts for Pi / Grok / OpenCode must be taken from those hosts, not from a leftover-ask rewrite wire.
-- Homebrew `post_install` cannot wire hooks (temp HOME). Hero path is `curl | sh` then `rv setup`.
+- v1 install is curl only (`install.sh` → `$HOME/.local/bin`, then `rv setup`). Homebrew is Phase 4+; T6 must not add a formula. TTY setup: default-color text, circle-only cyan; next command is `rv test 'git reset --hard'`.
 - Tests that write the operator’s live `~/.grok` / `~/.pi` / `~/.config/opencode` are a ship-stopper.
 
 ## Suggested skills

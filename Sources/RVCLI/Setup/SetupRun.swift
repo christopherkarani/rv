@@ -1,4 +1,5 @@
 import Foundation
+import RVPresentation
 
 struct SetupOutcome: Equatable, Sendable {
     var stdout: String
@@ -94,8 +95,8 @@ struct SetupEnvironment {
         return SetupEnvironment(
             home: home,
             pathEntries: pathEntries,
-            rvPath: resolveRv(executable: executable, home: home, pathEntries: pathEntries),
-            rvdPath: resolveRvd(nextTo: executable?.path, home: home, pathEntries: pathEntries)
+            rvPath: resolveRv(home: home),
+            rvdPath: resolveRvd(nextTo: executable?.path, home: home)
                 ?? (home + "/.local/bin/rvd"),
             fileManager: .default,
             launchctl: ProcessLaunchctl(),
@@ -103,35 +104,27 @@ struct SetupEnvironment {
         )
     }
 
+    /// Curl install bakes `$HOME/.local/bin/rv`. Do not walk PATH.
     static func resolveRv(
-        executable: URL?,
+        executable: URL? = nil,
         home: String,
-        pathEntries: [String],
+        pathEntries: [String] = [],
         fileManager: FileManager = .default
     ) -> String {
-        if let executable, executable.lastPathComponent == "rv" {
-            return executable.path
-        }
-        let local = home + "/.local/bin/rv"
-        if fileManager.isExecutableFile(atPath: local) {
-            return local
-        }
-        for entry in pathEntries {
-            let candidate = entry + "/rv"
-            if fileManager.isExecutableFile(atPath: candidate) {
-                return candidate
-            }
-        }
-        return local
+        _ = executable
+        _ = pathEntries
+        _ = fileManager
+        return home + "/.local/bin/rv"
     }
 
-    /// Prefer `rvd` next to the running `rv`, then `$HOME/.local/bin/rvd`, then PATH.
+    /// Prefer `rvd` next to the running `rv`, then `$HOME/.local/bin/rvd`.
     static func resolveRvd(
         nextTo rvExecutable: String?,
         home: String,
-        pathEntries: [String],
+        pathEntries: [String] = [],
         fileManager: FileManager = .default
     ) -> String? {
+        _ = pathEntries
         if let rvExecutable {
             let sibling = (rvExecutable as NSString).deletingLastPathComponent + "/rvd"
             if fileManager.isExecutableFile(atPath: sibling) {
@@ -142,61 +135,74 @@ struct SetupEnvironment {
         if fileManager.isExecutableFile(atPath: local) {
             return local
         }
-        for entry in pathEntries {
-            let candidate = entry + "/rvd"
-            if fileManager.isExecutableFile(atPath: candidate) {
-                return candidate
-            }
-        }
         return nil
     }
 }
 
 enum SetupRun {
     static let hostlessLine = "Run rv setup after Pi, Grok, or OpenCode exists."
-    static let grokRestartLine = "Reload /hooks or restart Grok."
+    static let robotCompleteLine = "Setup complete. Next  rv test 'git reset --hard'."
     static let launchAgentLabel = "dev.rv.evaluate"
 
-    static func setup(_ env: SetupEnvironment) -> SetupOutcome {
-        let files = FileOps(fileManager: env.fileManager)
-        let layout = HostLayout(home: env.home)
-        var lines: [String] = []
-        var wrote: Set<SetupHost> = []
-        var detected: Set<SetupHost> = []
-
+    static func setup(
+        _ env: SetupEnvironment,
+        appearance: SetupAppearance = .robot
+    ) -> SetupOutcome {
         do {
-            try files.createDirectory(atPath: layout.configDirectory)
-            try writeLaunchAgent(env: env, layout: layout, files: files)
-
-            for host in SetupHost.allCases {
-                guard host.isDetected(layout: layout, env: env, files: files) else { continue }
-                detected.insert(host)
-                let raw = try host.rawTemplate()
-                switch try writeOwned(
-                    path: host.ownedPath(in: layout),
-                    contents: try host.template(rvPath: env.rvPath),
-                    isCurrent: { host.isCurrent($0, raw: raw) },
-                    files: files
-                ) {
-                case .wrote:
-                    wrote.insert(host)
-                case .unchanged:
-                    break
-                case .occupied:
-                    lines.append(host.occupiedLine)
-                }
-            }
-
-            if detected.isEmpty {
-                lines.append(hostlessLine)
-            } else if wrote.contains(.grok) {
-                lines.append(grokRestartLine)
-            }
-
-            return SetupOutcome(stdout: join(lines), exitCode: 0)
+            let report = try perform(env)
+            return SetupOutcome(
+                stdout: SetupFormat.stdout(report: report, appearance: appearance),
+                exitCode: 0
+            )
         } catch {
             return SetupOutcome(stdout: "", stderr: "rv setup failed: \(error)\n", exitCode: 1)
         }
+    }
+
+    private static func perform(_ env: SetupEnvironment) throws -> SetupReport {
+        let files = FileOps(fileManager: env.fileManager)
+        let layout = HostLayout(home: env.home)
+        var kinds: [SetupHost: SetupSlotKind] = [
+            .grok: .pending,
+            .pi: .pending,
+            .openCode: .pending,
+        ]
+        var wrote: Set<SetupHost> = []
+        var occupied: Set<SetupHost> = []
+        var detected: Set<SetupHost> = []
+
+        try files.createDirectory(atPath: layout.configDirectory)
+        try writeLaunchAgent(env: env, layout: layout, files: files)
+
+        for host in SetupHost.allCases {
+            guard host.isDetected(layout: layout, env: env, files: files) else { continue }
+            detected.insert(host)
+            let raw = try host.rawTemplate()
+            switch try writeOwned(
+                path: host.ownedPath(in: layout),
+                contents: try host.template(rvPath: env.rvPath),
+                isCurrent: { host.isCurrent($0, raw: raw) },
+                files: files
+            ) {
+            case .wrote:
+                wrote.insert(host)
+                kinds[host] = .wired
+            case .unchanged:
+                kinds[host] = .wired
+            case .occupied:
+                occupied.insert(host)
+                kinds[host] = .occupied
+            }
+        }
+
+        return SetupReport(
+            grok: kinds[.grok] ?? .pending,
+            pi: kinds[.pi] ?? .pending,
+            openCode: kinds[.openCode] ?? .pending,
+            wrote: wrote,
+            occupied: occupied,
+            detected: detected
+        )
     }
 
     static func uninstall(_ env: SetupEnvironment) -> SetupOutcome {
@@ -267,11 +273,6 @@ enum SetupRun {
             return .wrote
         }
         return .occupied
-    }
-
-    private static func join(_ lines: [String]) -> String {
-        if lines.isEmpty { return "" }
-        return lines.joined(separator: "\n") + "\n"
     }
 }
 
