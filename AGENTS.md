@@ -9,6 +9,9 @@ Hexagonal modules; dependency arrows down; a test that needs a TTY to prove a **
 Ticket order T0→T1 then PLAN’s parallel rules. T0 serial.
 
 Pointers: `docs/architecture/MODULES.md`, `docs/dev/SWIFT.md`, `docs/dev/PARITY.md`, `docs/factory/PLAN.md`.
+Skills: `.grok/skills/swift-hexagonal-spm`, `.grok/skills/swift-evaluate-parity`, `.grok/skills/swift-hook-xpc`, `.grok/skills/swift-thermo-nuclear-review`, `~/.grok/skills/swift-pr-review`, `~/.grok/skills/swift-concurrency`, `~/.grok/skills/swift-testing-pro`, `~/.grok/skills/swift-api-design-guidelines`. Project skills win on conflict. Fixtures/fakes stay in `Tests/`. Do not load `thermo-nuclear-code-quality-review` on this repo.
+
+Gate: `swift test --filter <Target>Tests` on a warm `.build`. Do not wipe `.build` or `swift package clean` to prove a compile — clean ~12s is Foundation ModuleCache (6.3.3 has no prebuilt SDK overlays), not type-check. Details: `docs/dev/SWIFT.md`.
 
 ## Swift style contract
 

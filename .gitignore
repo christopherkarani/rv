@@ -3,3 +3,8 @@
 xcuserdata/
 .DS_Store
 .worktrees/
+.agents/
+.claude-plugin/
+.grok/
+.ryk/
+.skynex/

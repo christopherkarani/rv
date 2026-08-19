@@ -4,6 +4,27 @@ Package tools: Swift 6.3. Language mode 6. macOS 26, Apple Silicon only.
 
 Pin: `.swift-version` (`6.3.3`). This machine’s `/usr/bin/swift` may still be Xcode 6.2. Put `~/Library/Developer/Toolchains/swift-6.3.3-RELEASE.xctoolchain/usr/bin` on `PATH` first, or run `swiftly run 6.3.3 -- swift test`.
 
+## Compile times
+
+Standalone 6.3.3 has no `prebuilt-modules`. SPM builds Darwin/Foundation overlays into `.build/arm64-apple-macosx/debug/ModuleCache` (~80 MB). `rm -rf .build` and `swift package clean` wipe that cache.
+
+Measured on this M3 Max / macOS 26 / SDK 26.2 (2026-08-18):
+
+| Action | Typical |
+|---|---|
+| Clean `swift build` (debug) | ~12s |
+| Clean `swift test` | ~16s |
+| Incremental no-op | ~0.2s compile |
+| Engine file edit + `--filter RVEngineTests` | <1s |
+| `import Foundation` typecheck, cold cache | ~8s |
+| Same, warm cache | ~0.1s |
+
+Slowest Engine body (`tokenizeCommand`) is ~22 ms. Do not merge modules or rewrite Normalize to “fix” clean builds.
+
+Gate: keep `.build` warm. `swift test --filter <Target>Tests`. A 10s+ clean is ModuleCache unless `-debug-time-function-bodies` shows a hot function.
+
+T2 ArgumentParser is the next real compile bill. Domain public-API edits today rebuild only Engine + Packs (the libraries that `import RVDomain`); filled stubs will fan out.
+
 ## Style contract
 
 - Value types only in Domain/Engine/Packs/Presentation. `class` only at XPC/`NSObject` `RVService` edge.

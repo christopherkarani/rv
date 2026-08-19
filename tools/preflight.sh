@@ -15,6 +15,7 @@
 #
 # Does NOT run swift test. Pair with: swift test --filter <Target>Tests
 # Does NOT require 6.3.3 on PATH — that's the caller's job (see docs/dev/SWIFT.md).
+# Requires: bash, grep, find, sed, python3 (for corpus + Package.swift structural checks).
 
 set -euo pipefail
 
@@ -22,6 +23,17 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SOURCES="$ROOT/Sources"
 TESTS="$ROOT/Tests"
 CORPUS="$TESTS/RVEngineTests/Fixtures/corpus"
+
+# Declare hidden dependencies up front so the checks fail loudly, not silently.
+# corpus-quarantine, corpus-landmines, and test-target-isolation delegate to
+# python3; if it is missing the empty result must NOT read as "no violations".
+command -v python3 >/dev/null 2>&1 || {
+  printf "preflight: python3 required (corpus + Package.swift checks)\n" >&2
+  exit 127
+}
+for _d in "$SOURCES" "$TESTS"; do
+  [ -d "$_d" ] || { printf "preflight: missing expected directory %s\n" "$_d" >&2; exit 1; }
+done
 
 # Colors
 RED='\033[0;31m'
@@ -31,18 +43,17 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 QUIET=0
-ONLY=""
 FAILURES=0
 WARNINGS=0
 
 print_list() {
   cat <<'EOF'
 Available checks:
-  value-types           No class declarations outside RVService/XPC NSObject edge
+  value-types           No class/actor outside RVService/RVPolicy (store modules)
   no-isdenied           No boolean isDenied anywhere in Sources
-  no-force-unwrap       No try! or force-unwrap on production paths
+  no-force-unwrap       No try! or force-unwrap (!) on production paths
   no-exported-import    No new @_exported import (existing T1 debt is known)
-  evaluate-pure         evaluate has no Date(), FileManager, or ProcessInfo
+  evaluate-pure         RVEngine evaluate has no Date(), FileManager, or ProcessInfo
   no-bypass             No RV_BYPASS or env that skips evaluate
   no-ns-home             No NSHomeDirectory() in Sources or Tests
   no-os-log-cmdtext     No command text written to os_log (structural check)
@@ -59,6 +70,10 @@ EOF
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
+# Indent stdin by four spaces. Used for diagnostic detail under ✗/⚠ lines.
+# (shellcheck SC2001 prefers ${var//...} but that does not prefix multi-line.)
+indent() { sed 's/^/    /'; }
+
 # Count matches; return 0 (pass) if count is 0, 1 (fail) otherwise.
 # Prints the count and any matching lines (unless --quiet).
 check_empty() {
@@ -70,55 +85,40 @@ check_empty() {
   local count
   count=$(echo "$matches" | grep -c . || true)
   if [ "$count" -eq 0 ]; then
-    if [ "$QUIET" -eq 0 ]; then printf "  ${GREEN}✓${NC} %s\n" "$label"; fi
+    if [ "$QUIET" -eq 0 ]; then printf "  %b✓%b %s\n" "$GREEN" "$NC" "$label"; fi
     return 0
   else
-    printf "  ${RED}✗ %s${NC} (%d match%s)\n" "$label" "$count" "$([ "$count" -ne 1 ] && echo es || true)"
+    printf "  %b✗ %s%b (%d match%s)\n" "$RED" "$label" "$NC" "$count" "$([ "$count" -ne 1 ] && echo es || true)"
     if [ "$QUIET" -eq 0 ]; then
-      echo "$matches" | head -15 | sed 's/^/    /'
+      echo "$matches" | head -15 | indent
       [ "$count" -gt 15 ] && echo "    … ($(( count - 15 )) more)"
     fi
     return 1
   fi
 }
 
-# Same as check_empty but warns instead of failing.
-warn_empty() {
-  local label="$1"
-  local pattern="$2"
-  shift 2
-  local matches
-  matches=$(grep -rn -- "$pattern" "$@" 2>/dev/null || true)
-  local count
-  count=$(echo "$matches" | grep -c . || true)
-  if [ "$count" -eq 0 ]; then
-    if [ "$QUIET" -eq 0 ]; then printf "  ${GREEN}✓${NC} %s\n" "$label"; fi
-    return 0
-  else
-    printf "  ${YELLOW}⚠ %s${NC} (%d match%s, known debt)\n" "$label" "$count" "$([ "$count" -ne 1 ] && echo es || true)"
-    if [ "$QUIET" -eq 0 ]; then
-      echo "$matches" | head -5 | sed 's/^/    /'
-    fi
-    WARNINGS=$((WARNINGS + 1))
-    return 0
-  fi
-}
-
 # ─── Checks ──────────────────────────────────────────────────────────────────
 
 check_value_types() {
-  # class declarations anywhere except RVService (the XPC/NSObject edge)
+  # Reference types (class, actor) outside the allowed edges.
+  #   class  — only RVService (the XPC/NSObject edge).
+  #   actor  — only RVService and RVPolicy (store modules; AGENTS allows
+  #            "actors for stores"). Domain/Engine/Packs/Presentation are value-only.
+  # A leading attribute (@MainActor, @objc, @unchecked Sendable, …) or access
+  # modifier (public/internal/…/final) must not hide a declaration, so we match
+  # the keyword on a line that may start with any run of those tokens.
+  local pat='^\s*(@[A-Za-z][A-Za-z0-9_ ]*\s)?(public |internal |private |fileprivate |open |final )*(class|actor) '
   local matches
-  matches=$(grep -rn '^\s*\(public \|internal \|private \|fileprivate \|open \)*class ' "$SOURCES" --include='*.swift' \
-    | grep -v 'Sources/RVService/' || true)
+  matches=$(grep -rnE "$pat" "$SOURCES" --include='*.swift' \
+    | grep -v 'Sources/RVService/' | grep -v 'Sources/RVPolicy/' || true)
   local count
   count=$(echo "$matches" | grep -c . || true)
   if [ "$count" -eq 0 ]; then
-    if [ "$QUIET" -eq 0 ]; then printf "  ${GREEN}✓${NC} %s\n" "No class declarations outside RVService"; fi
+    if [ "$QUIET" -eq 0 ]; then printf "  %b✓%b %s\n" "$GREEN" "$NC" "No class/actor outside RVService/RVPolicy"; fi
     return 0
   else
-    printf "  ${RED}✗ class declarations outside RVService${NC} (%d)\n" "$count"
-    echo "$matches" | head -15 | sed 's/^/    /'
+    printf "  %b✗ class/actor outside RVService/RVPolicy%b (%d)\n" "$RED" "$NC" "$count"
+    echo "$matches" | head -15 | indent
     return 1
   fi
 }
@@ -128,9 +128,22 @@ check_no_isdenied() {
 }
 
 check_no_force_unwrap() {
-  # try! in production Sources
+  # try! and force-unwrap (!) on production paths (AGENTS: "No try! / !").
+  # The `!` form excludes != and !== so we catch optional! but not inequality.
+  # Uses grep -E (ERE) because the pattern needs alternation + char class.
   local fail=0
   check_empty "No try! in Sources" 'try!' "$SOURCES" --include='*.swift' || fail=1
+  local matches
+  matches=$(grep -rnE '[]A-Za-z0-9_)}]!([^=]|$)' "$SOURCES" --include='*.swift' 2>/dev/null || true)
+  local count
+  count=$(echo "$matches" | grep -c . || true)
+  if [ "$count" -eq 0 ]; then
+    if [ "$QUIET" -eq 0 ]; then printf "  %b✓%b %s\n" "$GREEN" "$NC" "No force-unwrap (!) in Sources"; fi
+  else
+    printf "  %b✗ force-unwrap (!) in Sources%b (%d)\n" "$RED" "$NC" "$count"
+    echo "$matches" | head -15 | indent
+    fail=1
+  fi
   return $fail
 }
 
@@ -142,7 +155,7 @@ check_no_exported_import() {
   local count
   count=$(echo "$matches" | grep -c . || true)
   if [ "$count" -eq 0 ]; then
-    if [ "$QUIET" -eq 0 ]; then printf "  ${GREEN}✓${NC} %s\n" "No @_exported import"; fi
+    if [ "$QUIET" -eq 0 ]; then printf "  %b✓%b %s\n" "$GREEN" "$NC" "No @_exported import"; fi
     return 0
   fi
   # Check if all matches are in RVEngine.swift or RVPacks.swift (known T1 debt)
@@ -151,17 +164,19 @@ check_no_exported_import() {
   local non_debt_count
   non_debt_count=$(echo "$non_debt" | grep -c . || true)
   if [ "$non_debt_count" -gt 0 ]; then
-    printf "  ${RED}✗ New @_exported import outside known T1 debt${NC} (%d)\n" "$non_debt_count"
-    echo "$non_debt" | head -10 | sed 's/^/    /'
+    printf "  %b✗ New @_exported import outside known T1 debt%b (%d)\n" "$RED" "$NC" "$non_debt_count"
+    echo "$non_debt" | head -10 | indent
     return 1
   else
-    printf "  ${YELLOW}⚠ @_exported import${NC} (%d, known T1 debt in RVEngine/RVPacks)\n" "$count"
+    printf "  %b⚠ @_exported import%b (%d, known T1 debt in RVEngine/RVPacks)\n" "$YELLOW" "$NC" "$count"
     WARNINGS=$((WARNINGS + 1))
     return 0
   fi
 }
 
 check_evaluate_pure() {
+  # Functional core: only RVEngine's evaluate must be pure. RVCLI/RVService are
+  # the imperative shell and may touch Date/FileManager/ProcessInfo.
   local fail=0
   local engine="$SOURCES/RVEngine"
   check_empty "evaluate pure: no Date()" 'Date()' "$engine" --include='*.swift' || fail=1
@@ -190,12 +205,12 @@ check_no_os_log_cmdtext() {
   local count
   count=$(echo "$matches" | grep -c . || true)
   if [ "$count" -eq 0 ]; then
-    if [ "$QUIET" -eq 0 ]; then printf "  ${GREEN}✓${NC} %s\n" "No os_log usage (no command-text risk)"; fi
+    if [ "$QUIET" -eq 0 ]; then printf "  %b✓%b %s\n" "$GREEN" "$NC" "No os_log usage (no command-text risk)"; fi
     return 0
   else
-    printf "  ${YELLOW}⚠ os_log/Logger usage${NC} (%d site%s — verify no command text)\n" "$count" "$([ "$count" -ne 1 ] && echo s || true)"
+    printf "  %b⚠ os_log/Logger usage%b (%d site%s — verify no command text)\n" "$YELLOW" "$NC" "$count" "$([ "$count" -ne 1 ] && echo s || true)"
     if [ "$QUIET" -eq 0 ]; then
-      echo "$matches" | head -10 | sed 's/^/    /'
+      echo "$matches" | head -10 | indent
     fi
     WARNINGS=$((WARNINGS + 1))
     return 0
@@ -206,58 +221,62 @@ check_name_hygiene() {
   # PLAN #20: no dcg or ryk tokens outside docs/factory/ in product files.
   #
   # Two tiers:
-  #   FAIL  — token in product code (Sources, Tests, Package.swift, root configs)
+  #   FAIL  — token in product code (any tracked file under ROOT except the
+  #           excluded paths below). Scanning the whole tree (not a hardcoded
+  #           file allowlist) means a NEW root file (CHANGELOG.md, install
+  #           script, …) is covered automatically.
   #   WARN  — token in agent-config dotfiles (.ryk, .claude-plugin, .agents)
   #           These are pre-existing multi-tool configs, not product code, but
   #           worth surfacing so an agent doesn't "clean up" what looks stray.
   #
   # Excludes: .build, .git, .worktrees (worktree copies are not product files),
   # docs/factory (allowed), tools/preflight.sh (self — must contain the tokens),
-  # .gitignore (path reference, not a product name).
+  # tools/README.md (documents the tokens), .gitignore (path reference).
+  #
+  # Uses POSIX grep (not rg) so there is no hidden ripgrep dependency.
 
-  # Product files: Sources, Tests, and root-level non-dotfile configs.
+  # Product files: whole tree, narrowed by extension, minus known-OK paths.
   local product_matches
-  product_matches=$(rg -i --no-ignore-vcs \
-    --glob '!docs/factory/**' \
-    --glob '!.build/**' \
-    --glob '!.git/**' \
-    --glob '!.worktrees/**' \
-    --glob '!tools/preflight.sh' \
-    --glob '!.gitignore' \
-    --glob '!**/.ryk/**' \
-    --glob '!**/.claude-plugin/**' \
-    --glob '!**/.agents/**' \
-    'dcg|ryk' \
-    "$ROOT/Sources" "$ROOT/Tests" "$ROOT/Package.swift" "$ROOT/README.md" "$ROOT/AGENTS.md" "$ROOT/CONTEXT.md" \
-    --files-with-matches 2>/dev/null || true)
+  product_matches=$(grep -rni 'dcg\|ryk' \
+    "$ROOT" \
+    --include='*.swift' --include='*.md' --include='*.json' --include='*.sh' --include='Package.swift' \
+    2>/dev/null \
+    | grep -v '/.build/' | grep -v '/.git/' | grep -v '/.worktrees/' \
+    | grep -v '/docs/factory/' \
+    | grep -v 'tools/preflight.sh' | grep -v 'tools/README.md' \
+    | grep -v '/.ryk/' | grep -v '/.claude-plugin/' | grep -v '/.agents/' \
+    | grep -v '/.skynex/' \
+    | grep -v '\.gitignore' \
+    | cut -d: -f1 \
+    | sort -u || true)
   local pcount
   pcount=$(echo "$product_matches" | grep -c . || true)
 
   # Agent config dotfiles: warn only.
   local config_matches
-  config_matches=$(rg -i --no-ignore-vcs \
-    --glob '!.build/**' \
-    'dcg|ryk' \
+  config_matches=$(grep -rli 'dcg\|ryk' \
     "$ROOT/.claude-plugin" "$ROOT/.agents" "$ROOT/.ryk" \
-    --files-with-matches 2>/dev/null || true)
+    2>/dev/null \
+    | grep -v '/.build/' || true)
   local ccount
   ccount=$(echo "$config_matches" | grep -c . || true)
 
   if [ "$pcount" -gt 0 ]; then
-    printf "  ${RED}✗ Name hygiene: dcg/ryk in product files${NC} (%d)\n" "$pcount"
-    echo "$product_matches" | head -15 | sed 's/^/    /'
+    printf "  %b✗ Name hygiene: dcg/ryk in product files%b (%d)\n" "$RED" "$NC" "$pcount"
+    echo "$product_matches" | head -15 | indent
     return 1
   fi
   if [ "$ccount" -gt 0 ]; then
-    printf "  ${YELLOW}⚠ dcg/ryk in agent-config dotfiles${NC} (%d, pre-existing — not product code)\n" "$ccount"
+    printf "  %b⚠ dcg/ryk in agent-config dotfiles%b (%d, pre-existing — not product code)\n" "$YELLOW" "$NC" "$ccount"
     WARNINGS=$((WARNINGS + 1))
   fi
-  if [ "$QUIET" -eq 0 ]; then printf "  ${GREEN}✓${NC} %s\n" "Name hygiene: no dcg/ryk in product files"; fi
+  if [ "$QUIET" -eq 0 ]; then printf "  %b✓%b %s\n" "$GREEN" "$NC" "Name hygiene: no dcg/ryk in product files"; fi
   return 0
 }
 
 check_no_xctest() {
-  check_empty "Tests use Swift Testing, not XCTest" 'import XCTest' "$TESTS" --include='*.swift'
+  # Word-boundary: avoid matching import XCTestHelper / import XCTestMocks.
+  check_empty "Tests use Swift Testing, not XCTest" 'import XCTest$' "$TESTS" --include='*.swift'
 }
 
 check_no_main_in_library() {
@@ -269,11 +288,11 @@ check_no_main_in_library() {
   local count
   count=$(echo "$matches" | grep -c . || true)
   if [ "$count" -gt 0 ]; then
-    printf "  ${RED}✗ main.swift in library target${NC} (%d)\n" "$count"
-    echo "$matches" | head -10 | sed 's/^/    /'
+    printf "  %b✗ main.swift in library target%b (%d)\n" "$RED" "$NC" "$count"
+    echo "$matches" | head -10 | indent
     fail=1
   else
-    if [ "$QUIET" -eq 0 ]; then printf "  ${GREEN}✓${NC} %s\n" "No main.swift in library targets"; fi
+    if [ "$QUIET" -eq 0 ]; then printf "  %b✓%b %s\n" "$GREEN" "$NC" "No main.swift in library targets"; fi
   fi
   # @main in library target source files
   local amatches
@@ -282,8 +301,8 @@ check_no_main_in_library() {
   local acount
   acount=$(echo "$amatches" | grep -c . || true)
   if [ "$acount" -gt 0 ]; then
-    printf "  ${RED}✗ @main in library target${NC} (%d)\n" "$acount"
-    echo "$amatches" | head -10 | sed 's/^/    /'
+    printf "  %b✗ @main in library target%b (%d)\n" "$RED" "$NC" "$acount"
+    echo "$amatches" | head -10 | indent
     fail=1
   fi
   return $fail
@@ -294,30 +313,40 @@ check_graph_no_engine_packs() {
 }
 
 check_corpus_quarantine() {
-  # Never quarantine reset-hard or fork-bomb
+  # Never quarantine reset-hard or fork-bomb. Match the COMMAND field only, with
+  # word boundaries, so a note like "reset-hardening" does not false-positive
+  # (the previous version substring-matched the whole serialized case object).
   local fail=0
   local qfile="$CORPUS/quarantine.json"
   if [ ! -f "$qfile" ]; then
-    printf "  ${RED}✗ quarantine.json missing${NC}\n"
+    printf "  %b✗ quarantine.json missing%b\n" "$RED" "$NC"
     return 1
   fi
-  local found
+  local found err
   found=$(python3 -c "
-import json, sys
+import json, re
 d = json.load(open('$qfile'))
 for c in d.get('cases', []):
-    blob = json.dumps(c)
-    if 'reset-hard' in blob or 'fork-bomb' in blob:
-        print(c.get('id', '?'))
-" 2>/dev/null || true)
+    cmd = c.get('command', '').lower()
+    for token in ('reset-hard', 'fork-bomb'):
+        # token-boundary match: not a substring of a larger word
+        if re.search(r'(^|[^a-z-])' + re.escape(token) + r'([^a-z-]|\$)', cmd):
+            print(c.get('id', '?'))
+            break
+" 2>&1) || err=1
+  if [ "${err:-0}" = 1 ]; then
+    printf "  %b✗ quarantine.json: python parse failed%b\n" "$RED" "$NC"
+    echo "$found" | indent
+    return 1
+  fi
   local count
   count=$(echo "$found" | grep -c . || true)
   if [ "$count" -gt 0 ]; then
-    printf "  ${RED}✗ reset-hard/fork-bomb in quarantine.json${NC} (%d)\n" "$count"
-    echo "$found" | sed 's/^/    /'
+    printf "  %b✗ reset-hard/fork-bomb in quarantine.json%b (%d)\n" "$RED" "$NC" "$count"
+    echo "$found" | indent
     return 1
   else
-    if [ "$QUIET" -eq 0 ]; then printf "  ${GREEN}✓${NC} %s\n" "reset-hard/fork-bomb not in quarantine"; fi
+    if [ "$QUIET" -eq 0 ]; then printf "  %b✓%b %s\n" "$GREEN" "$NC" "reset-hard/fork-bomb not in quarantine"; fi
     return 0
   fi
 }
@@ -327,14 +356,16 @@ check_corpus_landmines() {
   # These are the rows agents keep deleting to go green (SKILL landmines.md).
   local nfile="$CORPUS/near-miss.json"
   if [ ! -f "$nfile" ]; then
-    printf "  ${RED}✗ near-miss.json missing${NC}\n"
+    printf "  %b✗ near-miss.json missing%b\n" "$RED" "$NC"
     return 1
   fi
-  local missing
+  local missing err
   missing=$(python3 -c "
-import json
+import json, re
 d = json.load(open('$nfile'))
 cmds = [c.get('command','').lower() for c in d.get('cases', [])]
+# Each required landmine must appear as a distinct token in the command,
+# not as a substring of another word (e.g. 'rg' must not match 'cargo').
 required = [
     'force-with-lease',
     'checkout -b',
@@ -342,17 +373,25 @@ required = [
     'rg',
 ]
 for r in required:
-    if not any(r in c for c in cmds):
+    # Word-boundary regex: the token must be preceded/followed by a non-word
+    # char (space, quote, start/end). This prevents 'rg' matching 'cargo'.
+    pattern = r'(^|[^a-z])' + re.escape(r) + r'([^a-z]|\$)'
+    if not any(re.search(pattern, cmd) for cmd in cmds):
         print(r)
-" 2>/dev/null || true)
+" 2>&1) || err=1
+  if [ "${err:-0}" = 1 ]; then
+    printf "  %b✗ near-miss.json: python parse failed%b\n" "$RED" "$NC"
+    echo "$missing" | indent
+    return 1
+  fi
   local count
   count=$(echo "$missing" | grep -c . || true)
   if [ "$count" -gt 0 ]; then
-    printf "  ${RED}✗ near-miss.json missing required landmine commands${NC} (%d)\n" "$count"
-    echo "$missing" | sed 's/^/    /'
+    printf "  %b✗ near-miss.json missing required landmine commands%b (%d)\n" "$RED" "$NC" "$count"
+    echo "$missing" | indent
     return 1
   else
-    if [ "$QUIET" -eq 0 ]; then printf "  ${GREEN}✓${NC} %s\n" "near-miss.json retains required landmines"; fi
+    if [ "$QUIET" -eq 0 ]; then printf "  %b✓%b %s\n" "$GREEN" "$NC" "near-miss.json retains required landmines"; fi
     return 0
   fi
 }
@@ -363,7 +402,7 @@ check_corpus_structure() {
   for f in deny.json near-miss.json quarantine.json skill-table.json; do
     local path="$CORPUS/$f"
     if [ ! -f "$path" ]; then
-      printf "  ${RED}✗ %s missing${NC}\n" "$f"
+      printf "  %b✗ %s missing%b\n" "$RED" "$f" "$NC"
       fail=1
       continue
     fi
@@ -375,10 +414,10 @@ if not isinstance(d, dict) or 'cases' not in d or not isinstance(d['cases'], lis
     print('missing cases array')
 " 2>&1 || true)
     if [ -n "$err" ]; then
-      printf "  ${RED}✗ %s: %s${NC}\n" "$f" "$err"
+      printf "  %b✗ %s: %s%b\n" "$RED" "$f" "$err" "$NC"
       fail=1
     else
-      if [ "$QUIET" -eq 0 ]; then printf "  ${GREEN}✓${NC} %s: valid (cases array)\n" "$f"; fi
+      if [ "$QUIET" -eq 0 ]; then printf "  %b✓%b %s: valid (cases array)\n" "$GREEN" "$NC" "$f"; fi
     fi
   done
   return $fail
@@ -389,11 +428,11 @@ check_test_target_isolation() {
   # RVServiceTests and RVCLITests list 2 (RVPolicy as test fake) — warn, not fail.
   local pkg="$ROOT/Package.swift"
   if [ ! -f "$pkg" ]; then
-    printf "  ${RED}✗ Package.swift missing${NC}\n"
+    printf "  %b✗ Package.swift missing%b\n" "$RED" "$NC"
     return 1
   fi
   local fail=0
-  local output
+  local output err
   output=$(python3 -c "
 import re, sys
 content = open('$pkg').read()
@@ -406,22 +445,27 @@ for m in re.finditer(pattern, content):
         print(f'FAIL\t{name}\t{len(module_deps)} modules: {module_deps}')
     elif len(module_deps) == 2 and name not in ('RVCorpusTests', 'RVServiceTests', 'RVCLITests'):
         print(f'WARN\t{name}\t{len(module_deps)} modules: {module_deps}')
-" 2>/dev/null || true)
+" 2>&1) || err=1
+  if [ "${err:-0}" = 1 ]; then
+    printf "  %b✗ Package.swift: python parse failed%b\n" "$RED" "$NC"
+    echo "$output" | indent
+    return 1
+  fi
   local fails warns
   fails=$(echo "$output" | grep '^FAIL' || true)
   warns=$(echo "$output" | grep '^WARN' || true)
   if [ -n "$fails" ]; then
-    printf "  ${RED}✗ Test target with 3+ deps (only RVCorpusTests allowed)${NC}\n"
-    echo "$fails" | sed 's/^/    /'
+    printf "  %b✗ Test target with 3+ deps (only RVCorpusTests allowed)%b\n" "$RED" "$NC"
+    echo "$fails" | indent
     fail=1
   fi
   if [ -n "$warns" ]; then
-    printf "  ${YELLOW}⚠ Test target with 2 module deps${NC} (test fakes — review)\n"
-    echo "$warns" | sed 's/^/    /'
+    printf "  %b⚠ Test target with 2 module deps%b (test fakes — review)\n" "$YELLOW" "$NC"
+    echo "$warns" | indent
     WARNINGS=$((WARNINGS + 1))
   fi
   if [ -z "$fails" ] && [ -z "$warns" ]; then
-    if [ "$QUIET" -eq 0 ]; then printf "  ${GREEN}✓${NC} %s\n" "Test target isolation OK"; fi
+    if [ "$QUIET" -eq 0 ]; then printf "  %b✓%b %s\n" "$GREEN" "$NC" "Test target isolation OK"; fi
   fi
   return $fail
 }
@@ -488,9 +532,13 @@ fi
 
 if [ "${1:-}" = "--quiet" ]; then
   QUIET=1
+elif [ -n "${1:-}" ]; then
+  echo "Unknown flag: $1" >&2
+  echo "Usage: tools/preflight.sh [--quiet | --check NAME | --list]" >&2
+  exit 1
 fi
 
-printf "${CYAN}rv preflight${NC} — %d checks\n" "${#ALL_CHECKS[@]}"
+printf "%brv preflight%b — %d checks\n" "$CYAN" "$NC" "${#ALL_CHECKS[@]}"
 printf "%s\n" "────────────────────────────────────────────────────────"
 
 for check in "${ALL_CHECKS[@]}"; do
@@ -501,12 +549,12 @@ done
 
 printf "%s\n" "────────────────────────────────────────────────────────"
 if [ "$FAILURES" -gt 0 ]; then
-  printf "${RED}%d failed${NC}" "$FAILURES"
+  printf "%b%d failed%b" "$RED" "$FAILURES" "$NC"
 else
-  printf "${GREEN}0 failed${NC}"
+  printf "%b0 failed%b" "$GREEN" "$NC"
 fi
 if [ "$WARNINGS" -gt 0 ]; then
-  printf ", ${YELLOW}%d warning%s${NC}" "$WARNINGS" "$([ "$WARNINGS" -ne 1 ] && echo s || true)"
+  printf ", %b%d warning%s%b" "$YELLOW" "$WARNINGS" "$([ "$WARNINGS" -ne 1 ] && echo s || true)" "$NC"
 fi
 printf "\n"
 
