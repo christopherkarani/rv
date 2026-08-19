@@ -474,7 +474,7 @@ All of PLAN **Forbidden (product law)**, plus T2-specific:
 - ANSI inside `RVPresentation`.
 - Opening a TTY from `RVTUI`.
 - Owning or editing IPC / XPC / launchd / `RVService` / `RVIPC`.
-- Host Allow button, leftover-ask-as-permit, Pi confirm as deny UX, OpenCode toast.
+- Host Allow / leftover-ask-as-permit UI. Pi renderer as the deny path, Pi confirm/Allow UI, leftover-ask-as-permit, or OpenCode toast as the deny path in v1. Display-only TUI toast (`client.tui.showToast`, title `RV · Blocked`) is chrome, not the deny.
 - Writing foreign hook files or the human’s real `HOME` from tests.
 - Persisting raw command text to `os_log` or default history.
 - Claiming OS-enforced / Seatbelt. Grade is **hook**.

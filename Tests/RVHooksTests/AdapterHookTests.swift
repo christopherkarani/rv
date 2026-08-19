@@ -37,6 +37,12 @@ private func harnessURL() -> URL {
     #expect(source.contains("terminate: true") == false)
     #expect(source.contains("user_bash") == false)
     #expect(source.contains("permission.ask") == false)
+    #expect(source.contains("terminalContentWidth") == false)
+    #expect(source.contains("function capitalize") == false)
+    #expect(source.contains("function buildWidget") == false)
+    #expect(source.contains("card.severity") == false)
+    #expect(source.contains("card.pack") == false)
+    #expect(source.contains("render(width)"))
 }
 
 @Test func openCodeTemplate_registersOnlyExecuteBefore() throws {
@@ -44,10 +50,6 @@ private func harnessURL() -> URL {
     #expect(source.contains("\"tool.execute.before\""))
     #expect(source.contains("showToast"))
     #expect(source.contains("RV · Blocked"))
-    #expect(source.contains("Why"))
-    #expect(source.contains("Cmd"))
-    #expect(source.contains("Meta"))
-    #expect(source.contains("Next"))
     #expect(source.contains("permission.ask") == false)
     #expect(source.contains("tool: {") == false)
     #expect(source.contains("console.log") == false)
@@ -64,9 +66,11 @@ private func harnessURL() -> URL {
     #expect(result.rendererType == "rv-decision")
     #expect(result.messageCount == 1)
     #expect(result.triggerTurn == false)
-    #expect(result.rendererIsComponent == true)
-    #expect(result.rendererReturnedString == false)
-    let joined = (result.lines ?? []).joined(separator: "\n")
+    guard case .component(let lines) = result.rendererProbe else {
+        Issue.record("expected component renderer, got \(result.rendererProbe)")
+        return
+    }
+    let joined = lines.joined(separator: "\n")
     #expect(joined.contains("RV · Blocked"))
     #expect(joined.contains("Why"))
     #expect(joined.contains("Blocked git reset --hard"))
@@ -82,6 +86,7 @@ private func harnessURL() -> URL {
     #expect(result.cardRule == "core.git/reset-hard")
     #expect(result.cardPreview == "git reset --hard")
     #expect(result.cardNext == "Run it in Terminal, or rv allow-once.")
+    #expect((result.narrowLines ?? []).count > lines.count)
 }
 
 @Test func piAdapter_sendMessageThrowStillBlocks() async throws {
@@ -102,8 +107,7 @@ private func harnessURL() -> URL {
     #expect(result.block == nil)
     #expect(result.messageCount == 0)
     #expect(result.rendererType == "rv-decision")
-    #expect(result.rendererIsComponent == true)
-    #expect(result.rendererReturnedString == false)
+    #expect(result.rendererProbe == .missing)
 }
 
 @Test func piAdapter_nonBashDoesNotSpawn() async throws {
@@ -160,6 +164,16 @@ private func harnessURL() -> URL {
     )
     #expect(result.threw == resetHardReason)
     #expect(result.toastCount == 0)
+}
+
+@Test func openCodeAdapter_toastTimeoutStillBlocks() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: ["tool": "bash", "args": ["command": "git reset --hard"]],
+        stub: .stdout(resetHardJSON, exit: 1),
+        toastHangs: true,
+        toastTimeoutMs: 50
+    )
+    #expect(result.threw == resetHardReason)
 }
 
 @Test func openCodeAdapter_allowDoesNotToast() async throws {
@@ -319,6 +333,12 @@ private enum StubRV {
     case sleep(seconds: Int)
 }
 
+private enum RendererProbe: Equatable, Sendable {
+    case component(lines: [String])
+    case string
+    case missing
+}
+
 private struct PiAdapterRun {
     var block: Bool?
     var reason: String?
@@ -326,9 +346,8 @@ private struct PiAdapterRun {
     var rendererType: String?
     var messageCount: Int
     var triggerTurn: Bool?
-    var rendererIsComponent: Bool?
-    var rendererReturnedString: Bool?
-    var lines: [String]?
+    var rendererProbe: RendererProbe
+    var narrowLines: [String]?
     var cardVariant: String?
     var cardRule: String?
     var cardPreview: String?
@@ -371,9 +390,8 @@ private func runPiAdapter(
         rendererType: object["rendererType"] as? String,
         messageCount: messages.count,
         triggerTurn: options?["triggerTurn"] as? Bool,
-        rendererIsComponent: object["rendererIsComponent"] as? Bool,
-        rendererReturnedString: object["rendererReturnedString"] as? Bool,
-        lines: object["lines"] as? [String],
+        rendererProbe: rendererProbe(from: object),
+        narrowLines: object["narrowLines"] as? [String],
         cardVariant: details?["variant"] as? String,
         cardRule: details?["rule"] as? String,
         cardPreview: details?["preview"] as? String,
@@ -381,18 +399,33 @@ private func runPiAdapter(
     )
 }
 
+private func rendererProbe(from object: [String: Any]) -> RendererProbe {
+    switch object["rendererProbe"] as? String {
+    case "component":
+        return .component(lines: object["lines"] as? [String] ?? [])
+    case "string":
+        return .string
+    default:
+        return .missing
+    }
+}
+
 private func runOpenCodeAdapter(
     event: [String: Any],
     stub: StubRV,
     timeoutMs: Int? = nil,
-    toastThrows: Bool = false
+    toastThrows: Bool = false,
+    toastHangs: Bool = false,
+    toastTimeoutMs: Int? = nil
 ) async throws -> OpenCodeAdapterRun {
     let payload = try await runAdapter(
         host: "opencode",
         event: event,
         stub: stub,
         timeoutMs: timeoutMs,
-        toastThrows: toastThrows
+        toastThrows: toastThrows,
+        toastHangs: toastHangs,
+        toastTimeoutMs: toastTimeoutMs
     )
     let object = try harnessObject(payload.text)
     let toast = firstToast(object)
@@ -429,7 +462,9 @@ private func runAdapter(
     stub: StubRV,
     timeoutMs: Int?,
     sendMessageThrows: Bool = false,
-    toastThrows: Bool = false
+    toastThrows: Bool = false,
+    toastHangs: Bool = false,
+    toastTimeoutMs: Int? = nil
 ) async throws -> AdapterPayload {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-t5-\(UUID().uuidString)", isDirectory: true)
@@ -476,6 +511,12 @@ private func runAdapter(
             with: "const RV_HOOK_TIMEOUT_MS = \(timeoutMs);"
         )
     }
+    if let toastTimeoutMs {
+        source = source.replacingOccurrences(
+            of: "const RV_TOAST_TIMEOUT_MS = 1500;",
+            with: "const RV_TOAST_TIMEOUT_MS = \(toastTimeoutMs);"
+        )
+    }
     let adapter = root.appendingPathComponent("adapter.mjs")
     try source.write(to: adapter, atomically: true, encoding: .utf8)
 
@@ -490,6 +531,9 @@ private func runAdapter(
     }
     if toastThrows {
         environment["RV_TOAST_THROWS"] = "1"
+    }
+    if toastHangs {
+        environment["RV_TOAST_HANGS"] = "1"
     }
     switch stub {
     case .missing:

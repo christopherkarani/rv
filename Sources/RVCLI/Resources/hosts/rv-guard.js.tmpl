@@ -201,45 +201,12 @@ async function invokeShowToast(ctx, payload) {
   }
   const showToast =
     typeof tui.showToast === "function" ? tui.showToast.bind(tui) : undefined;
-  const publish =
-    typeof tui.publish === "function" ? tui.publish.bind(tui) : undefined;
-
-  if (typeof showToast === "function") {
-    const arity = showToast.length;
-    if (arity >= 2) {
-      try {
-        await showToast(payload, { throwOnError: true });
-        return;
-      } catch {
-        // try v1 body
-      }
-    }
-    try {
-      await showToast({ body: payload, throwOnError: true });
-      return;
-    } catch {
-      // try body-only
-    }
-    try {
-      await showToast({ body: payload });
-      return;
-    } catch {
-      // try flat on arity-1
-    }
-    if (arity < 2) {
-      try {
-        await showToast(payload);
-        return;
-      } catch {
-        // try publish
-      }
-    }
+  if (typeof showToast !== "function") {
+    return;
   }
-
-  if (typeof publish === "function") {
-    await publish({
-      type: "tui.toast.show",
-      properties: payload,
-    });
+  try {
+    await showToast(payload);
+  } catch {
+    await showToast({ body: payload });
   }
 }

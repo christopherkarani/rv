@@ -39,10 +39,10 @@ if (host === "pi") {
   }
   const ctx = { ui: {} };
   const result = await registered[0].fn(event, ctx);
-  let rendererIsComponent = false;
-  let rendererReturnedString = false;
+  let rendererProbe = "missing";
   let lines = null;
-  if (typeof renderer === "function") {
+  let narrowLines = null;
+  if (typeof renderer === "function" && messages.length > 0) {
     const theme = {
       fg(_name, text) {
         return text;
@@ -51,24 +51,17 @@ if (host === "pi") {
         return text;
       },
     };
-    const payload = messages[0]?.message ?? {
-      customType: rendererType,
-      content: "Blocked.",
-      details: {
-        variant: "block",
-        title: "RV",
-        summary: "Blocked.",
-        preview: "git status",
-      },
-    };
-    const rendered = renderer(payload, {}, theme);
-    rendererReturnedString = typeof rendered === "string";
-    rendererIsComponent =
+    const rendered = renderer(messages[0].message, {}, theme);
+    if (typeof rendered === "string") {
+      rendererProbe = "string";
+    } else if (
       rendered != null &&
       typeof rendered === "object" &&
-      typeof rendered.render === "function";
-    if (rendererIsComponent) {
+      typeof rendered.render === "function"
+    ) {
+      rendererProbe = "component";
       lines = rendered.render(80);
+      narrowLines = rendered.render(24);
     }
   }
   process.stdout.write(
@@ -76,9 +69,9 @@ if (host === "pi") {
       result: result ?? null,
       rendererType,
       messages,
-      rendererIsComponent,
-      rendererReturnedString,
+      rendererProbe,
       lines,
+      narrowLines,
     })
   );
   process.exit(0);
@@ -92,6 +85,9 @@ if (host === "opencode") {
         async showToast(input) {
           if (process.env.RV_TOAST_THROWS === "1") {
             throw new Error("toast");
+          }
+          if (process.env.RV_TOAST_HANGS === "1") {
+            return new Promise(() => {});
           }
           toasts.push(input);
         },

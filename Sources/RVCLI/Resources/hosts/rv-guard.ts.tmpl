@@ -44,7 +44,7 @@ function showDecision(pi, ctx, card) {
       pi.sendMessage(
         {
           customType: RV_DECISION_TYPE,
-          content: buildWidget(card).join("\n"),
+          content: buildThemedDecisionLines(card, PLAIN_THEME, 72).join("\n"),
           display: true,
           details: card,
         },
@@ -70,7 +70,7 @@ function showWidget(ctx, card) {
   if (!ctx?.ui?.setWidget) {
     return;
   }
-  ctx.ui.setWidget(RV_BLOCK_WIDGET, buildWidget(card), {
+  ctx.ui.setWidget(RV_BLOCK_WIDGET, buildThemedDecisionLines(card, PLAIN_THEME, 72), {
     placement: "aboveEditor",
   });
 }
@@ -87,29 +87,19 @@ function renderDecisionMessage(message, _options, theme) {
             ? message.content
             : "Blocked.",
       };
-  return tuiTextComponent(buildThemedDecisionLines(card, theme).join("\n"));
+  return {
+    render(width) {
+      const lines = buildThemedDecisionLines(card, theme, width);
+      return lines.length === 0 ? [""] : lines;
+    },
+  };
 }
 
 function isDecisionCard(value) {
   return Boolean(value && typeof value === "object" && typeof value.summary === "string");
 }
 
-function tuiTextComponent(text) {
-  return {
-    render(_width) {
-      if (text.length === 0) {
-        return [""];
-      }
-      return text.split("\n");
-    },
-  };
-}
-
-function buildWidget(card) {
-  return buildThemedDecisionLines(card, PLAIN_THEME);
-}
-
-function buildThemedDecisionLines(card, theme) {
+function buildThemedDecisionLines(card, theme, width) {
   const fg =
     theme && typeof theme.fg === "function" ? theme.fg.bind(theme) : (_n, t) => t;
   const bold =
@@ -117,10 +107,8 @@ function buildThemedDecisionLines(card, theme) {
   const brand = bold(card.title || RV_DISPLAY_BRAND);
   const header = `${fg("error", brand)} ${fg("dim", "· Blocked")}`;
   const lines = [header, ""];
-  const contentWidth = Math.min(
-    72,
-    Math.max(48, Math.min(terminalContentWidth(), 72)),
-  );
+  const n = Number(width);
+  const contentWidth = Number.isFinite(n) && n > 0 ? n : 72;
   for (const row of decisionCardRows(card)) {
     lines.push(
       ...formatMinimalRow(row.label, row.value, contentWidth, (lab, val, first) => {
@@ -146,18 +134,8 @@ function decisionCardRows(card) {
   if (card.preview) {
     rows.push({ label: "Cmd", value: card.preview });
   }
-  const metaBits = [];
   if (card.rule) {
-    metaBits.push(card.rule);
-  }
-  if (card.severity) {
-    metaBits.push(capitalize(card.severity));
-  }
-  if (card.pack && card.pack !== String(card.rule || "").split(":")[0] && card.pack !== String(card.rule || "").split("/")[0]) {
-    metaBits.push(card.pack);
-  }
-  if (metaBits.length > 0) {
-    rows.push({ label: "Meta", value: metaBits.join(" · ") });
+    rows.push({ label: "Meta", value: card.rule });
   }
   if (card.nextStep) {
     rows.push({ label: "Next", value: card.nextStep });
@@ -249,14 +227,6 @@ function wrapText(value, width) {
   });
 }
 
-function terminalContentWidth() {
-  const cols = Number(process.stdout?.columns ?? 0);
-  if (!Number.isFinite(cols) || cols < 40) {
-    return 54;
-  }
-  return Math.max(40, cols - 8);
-}
-
 function sanitizeVisibleText(value) {
   return String(value ?? "")
     .replace(/\s+/g, " ")
@@ -272,10 +242,6 @@ function truncate(value, max) {
     return value;
   }
   return `${value.slice(0, max - 3)}...`;
-}
-
-function capitalize(value) {
-  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 function consultRv(command) {
