@@ -1,0 +1,1 @@
+{"decision":"deny","reason":"Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once."}

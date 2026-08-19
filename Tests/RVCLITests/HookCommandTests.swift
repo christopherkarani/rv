@@ -59,14 +59,15 @@ private func inProcessEvaluate(_ command: ShellCommand) async -> EvaluationResul
     await ServiceClient(transport: nil).evaluateResult(command: command)
 }
 
-private func runHook(
+private func runHook<C: HostCodec>(
     stdin: String,
+    codec: C = GrokHostCodec(),
     evaluate: (@Sendable (ShellCommand) async -> EvaluationResult)? = nil
 ) async throws -> HookWire {
     try await withTempHome { _ in
         await HookRun.run(
             stdin: stdin,
-            codec: GrokHostCodec(),
+            codec: codec,
             evaluate: evaluate ?? inProcessEvaluate
         )
     }
@@ -238,6 +239,136 @@ private func runHook(
 @Test func hookHostOption_defaultsToGrok() throws {
     let hook = try Hook.parse([])
     #expect(hook.host == .grok)
+}
+
+@Test func hookHostOption_parsesPiAndOpenCode() throws {
+    #expect(try Hook.parse(["--host", "pi"]).host == .pi)
+    #expect(try Hook.parse(["--host", "opencode"]).host == .opencode)
+}
+
+@Test func hookPiDenyResetHard_reasonEqualsHostDenyText() async throws {
+    let expected = try hostExpected("pi", "deny-git-reset-hard")
+    let command = ShellCommand(rawValue: "git reset --hard")
+    let result = CommandRun.evaluateCommand(command.rawValue)
+    let text = try #require(hostDenyText(from: result, command: command))
+    let wire = try await runHook(
+        stdin: try hostFixture("pi", "deny-git-reset-hard.json"),
+        codec: PiHostCodec()
+    )
+    #expect(wire.stdout == expected.stdout)
+    #expect(wire.exitCode == expected.exit)
+    #expect(wire.exitCode == 1)
+    #expect(wire.stdout.contains(text))
+}
+
+@Test func hookOpenCodeDenyResetHard_reasonEqualsHostDenyText() async throws {
+    let expected = try hostExpected("opencode", "deny-git-reset-hard")
+    let command = ShellCommand(rawValue: "git reset --hard")
+    let result = CommandRun.evaluateCommand(command.rawValue)
+    let text = try #require(hostDenyText(from: result, command: command))
+    let wire = try await runHook(
+        stdin: try hostFixture("opencode", "deny-git-reset-hard.json"),
+        codec: OpenCodeHostCodec()
+    )
+    #expect(wire.stdout == expected.stdout)
+    #expect(wire.exitCode == expected.exit)
+    #expect(wire.exitCode == 1)
+    #expect(wire.stdout.contains(text))
+}
+
+@Test func hookPiNonShellRead_doesNotEvaluate() async throws {
+    let probe = EvaluateProbe()
+    let expected = try hostExpected("pi", "allow-non-shell-read")
+    let wire = try await runHook(
+        stdin: try hostFixture("pi", "allow-non-shell-read.json"),
+        codec: PiHostCodec()
+    ) { command in
+        probe.record(command, result: EvaluationResult(decision: .deny(
+            Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "should not run")
+        )))
+    }
+    #expect(probe.commands.isEmpty)
+    #expect(wire.stdout == expected.stdout)
+    #expect(wire.exitCode == expected.exit)
+}
+
+@Test func hookOpenCodeNonShellRead_doesNotEvaluate() async throws {
+    let probe = EvaluateProbe()
+    let expected = try hostExpected("opencode", "allow-non-shell-read")
+    let wire = try await runHook(
+        stdin: try hostFixture("opencode", "allow-non-shell-read.json"),
+        codec: OpenCodeHostCodec()
+    ) { command in
+        probe.record(command, result: EvaluationResult(decision: .deny(
+            Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "should not run")
+        )))
+    }
+    #expect(probe.commands.isEmpty)
+    #expect(wire.stdout == expected.stdout)
+    #expect(wire.exitCode == expected.exit)
+}
+
+@Test func hookPiXPCDown_stillDeniesResetHard() async throws {
+    let client = ServiceClient(transport: nil)
+    let expected = try hostExpected("pi", "deny-git-reset-hard")
+    let wire = try await runHook(
+        stdin: try hostFixture("pi", "deny-git-reset-hard.json"),
+        codec: PiHostCodec()
+    ) { command in
+        await client.evaluateResult(command: command)
+    }
+    #expect(wire.stdout == expected.stdout)
+    #expect(wire.exitCode == expected.exit)
+}
+
+@Test func hookRun_piAndOpenCodeDenyWithTempHome() async throws {
+    try await withTempHome { home in
+        var pi = Hook()
+        pi.host = .pi
+        let expected = try hostExpected("pi", "deny-git-reset-hard")
+        let outcome = await pi.run(
+            stdin: try hostFixture("pi", "deny-git-reset-hard.json"),
+            environment: ["HOME": home.path],
+            evaluate: inProcessEvaluate
+        )
+        #expect(outcome.exitCode == expected.exit)
+        #expect(outcome.stdout == expected.stdout)
+        #expect(outcome.stderr.isEmpty)
+        #expect(FileManager.default.fileExists(atPath: home.appendingPathComponent(".pi").path) == false)
+
+        var openCode = Hook()
+        openCode.host = .opencode
+        let openExpected = try hostExpected("opencode", "deny-git-reset-hard")
+        let openOutcome = await openCode.run(
+            stdin: try hostFixture("opencode", "deny-git-reset-hard.json"),
+            environment: ["HOME": home.path],
+            evaluate: inProcessEvaluate
+        )
+        #expect(openOutcome.exitCode == openExpected.exit)
+        #expect(openOutcome.stdout == openExpected.stdout)
+        #expect(openOutcome.stderr.isEmpty)
+        #expect(
+            FileManager.default.fileExists(
+                atPath: home.appendingPathComponent(".config").appendingPathComponent("opencode").path
+            ) == false
+        )
+    }
+}
+
+private func hostFixture(_ host: String, _ name: String) throws -> String {
+    let url = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .appendingPathComponent("RVHooksTests/Fixtures/\(host)/\(name)")
+    return try String(contentsOf: url, encoding: .utf8)
+}
+
+private func hostExpected(_ host: String, _ stem: String) throws -> (stdout: String, exit: Int32) {
+    let stdout = try hostFixture(host, "\(stem).out")
+    let exitText = try hostFixture(host, "\(stem).exit")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    let code = try #require(Int32(exitText))
+    return (stdout, code)
 }
 
 private struct GrokDenyObject {

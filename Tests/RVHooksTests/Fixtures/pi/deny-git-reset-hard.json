@@ -1,0 +1,4 @@
+{
+  "toolName": "bash",
+  "input": { "command": "git reset --hard" }
+}
