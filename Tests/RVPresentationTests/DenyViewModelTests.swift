@@ -73,12 +73,9 @@ private func mediumAllow() -> EvaluationResult {
     let vm = explainViewModel(from: EvaluationResult(decision: .allow), command: status)
     #expect(vm.fact == "allow")
     #expect(vm.nextAction == nil)
-    #expect(vm.steps.contains { $0.displayOutcome.contains("μs") || $0.displayOutcome.contains("us") } == false)
-    #expect(vm.steps.map(\.name).contains(.normalize))
-    #expect(vm.steps.map(\.name).contains(.default))
 }
 
-@Test func explainViewModel_denyHasFactNextAndDestructiveStep() {
+@Test func explainViewModel_denyHasFactNext() {
     let vm = explainViewModel(from: denyResult(), command: resetHard)
     #expect(vm.fact == "git reset --hard destroys uncommitted changes")
     #expect(vm.nextAction == "run it in Terminal, or rv allow-once")
@@ -94,8 +91,6 @@ private func mediumAllow() -> EvaluationResult {
         !suggestions(for: RuleID(pack: .coreFilesystem, pattern: "dd-overwrite-general"))
             .contains { $0.command?.contains("rm -ri") == true }
     )
-    #expect(vm.steps.contains(.destructive(.rule(RuleID(pack: .coreGit, pattern: "reset-hard")))))
-    #expect(vm.steps.contains { $0.displayOutcome.contains("μs") } == false)
 }
 
 @Test func testViewModel_denyShowsPackReasonAndColonMatch() {
@@ -289,52 +284,24 @@ private func mediumAllow() -> EvaluationResult {
     )
 }
 
-@Test func explainViewModel_indeterminateStopsAtIncomplete() {
+@Test func explainViewModel_indeterminateHasIncompleteFact() {
     let vm = explainViewModel(
         from: EvaluationResult(decision: .indeterminate(.commandTooLarge)),
         command: resetHard
     )
-    #expect(vm.steps == [.normalize, .default(.incomplete)])
     #expect(vm.fact == incompleteEvalSentence)
 }
 
-@Test func explainViewModel_denyWithoutMatchedStillDestructive() {
-    let rule = RuleID(pack: .coreGit, pattern: "reset-hard")
-    let vm = explainViewModel(
-        from: EvaluationResult(
-            decision: .deny(Deny(ruleID: rule, reason: "git reset --hard destroys uncommitted changes"))
-        ),
-        command: resetHard
-    )
-    #expect(vm.steps.contains(.destructive(.rule(rule))))
-    #expect(!vm.steps.contains(.default(.allow)))
-}
-
-@Test func explainViewModel_quickRejectSkipsScan() {
-    let vm = explainViewModel(
-        from: EvaluationResult(decision: .allow, quickRejected: true),
-        command: status
-    )
-    #expect(vm.steps == [.normalize, .quickReject(.skipped), .default(.allow)])
-}
-
-@Test func explainViewModel_safeHitProjectsRuleID() {
+@Test func explainStep_displayWordsAreTTYVoice() {
     let rule = RuleID(pack: .coreGit, pattern: "checkout-new-branch")
-    let vm = explainViewModel(
-        from: EvaluationResult(
-            decision: .allow,
-            matchedSafe: SafeMatch(packID: .coreGit, patternName: "checkout-new-branch")
-        ),
-        command: status
-    )
-    #expect(
-        vm.steps == [
-            .normalize,
-            .quickReject(.scanned),
-            .safe(.rule(rule)),
-            .default(.allow),
-        ]
-    )
+    #expect(ExplainStep.normalize.label == "normalize")
+    #expect(ExplainStep.normalize.displayOutcome == "prepared")
+    #expect(ExplainStep.quickReject(.skipped).displayOutcome == "skipped")
+    #expect(ExplainStep.quickReject(.scanned).displayOutcome == "scanned")
+    #expect(ExplainStep.safe(.none).displayOutcome == "none")
+    #expect(ExplainStep.safe(.rule(rule)).displayOutcome == "core.git/checkout-new-branch")
+    #expect(ExplainStep.default(.allow).displayOutcome == "allow")
+    #expect(ExplainStep.default(.incomplete).displayOutcome == "incomplete")
 }
 
 @Test func explainViewModel_mediumAllowKeepsMatchAndNoNext() {

@@ -36,7 +36,7 @@ Hexagonal. Engine never imports CLI, TUI, or XPC. Each module: small public API,
 
 | Module | Owns | Must not |
 |---|---|---|
-| **RVDomain** | `Decision`, `Severity`, `PackID`, `RuleID`, `EvaluationRequest/Result` | I/O, TTY, XPC |
+| **RVDomain** | `Decision`, `Severity`, `PackID`, `RuleID`, `EvaluationRequest/Result`, Explain pipeline | I/O, TTY, XPC |
 | **RVEngine** | normalize, quick-reject, safe then destructive, deadline, `PatternEngine` | pack files, hooks |
 | **RVPacks** | registry, bundled JSON, enable/disable | decisions, rendering |
 | **RVPolicy** | config merge, allowlist, allow-once | rendering |
