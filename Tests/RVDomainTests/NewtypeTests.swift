@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import RVDomain
 
@@ -50,4 +51,11 @@ import Testing
 
 @Test func dayOnePackIDs_areNonFailableConstants() {
     #expect(dayOnePackIDs.map(\.rawValue) == ["core.filesystem", "core.git"])
+}
+
+@Test func matchingView_encodesAsJSONStringNotObject() throws {
+    let view = MatchingView("git reset --hard")
+    let data = try JSONEncoder().encode(view)
+    #expect(String(data: data, encoding: .utf8) == "\"git reset --hard\"")
+    #expect(try JSONDecoder().decode(MatchingView.self, from: data) == view)
 }

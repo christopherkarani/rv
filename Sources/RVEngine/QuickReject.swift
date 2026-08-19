@@ -3,14 +3,15 @@ import RVDomain
 
 public enum QuickReject {
     public static func shouldSkip(
-        matchingView: String,
+        matchingView: MatchingView,
         enabled: [PackSnapshot]
     ) -> Bool {
-        if containsEmptyParenPair(matchingView) {
+        let text = matchingView.rawValue
+        if containsEmptyParenPair(text) {
             return false
         }
         return !enabled.contains { pack in
-            pack.keywords.contains { keywordHits($0, in: matchingView) }
+            pack.keywords.contains { keywordHits($0, in: text) }
         }
     }
 

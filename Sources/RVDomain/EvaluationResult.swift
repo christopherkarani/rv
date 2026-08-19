@@ -66,14 +66,14 @@ public struct EvaluationResult: Sendable, Equatable {
     public var matchedSafe: SafeMatch?
     public var quickRejected: Bool
     /// T1-normalized command text this result was decided on.
-    public var matchingView: String
+    public var matchingView: MatchingView
 
     public init(
         decision: Decision,
         matched: RuleMatch? = nil,
         matchedSafe: SafeMatch? = nil,
         quickRejected: Bool = false,
-        matchingView: String = ""
+        matchingView: MatchingView = MatchingView("")
     ) {
         self.decision = decision
         self.matched = matched
@@ -98,7 +98,8 @@ extension EvaluationResult: Codable {
         matched = try container.decodeIfPresent(RuleMatch.self, forKey: .matched)
         matchedSafe = try container.decodeIfPresent(SafeMatch.self, forKey: .matchedSafe)
         quickRejected = try container.decodeIfPresent(Bool.self, forKey: .quickRejected) ?? false
-        matchingView = try container.decodeIfPresent(String.self, forKey: .matchingView) ?? ""
+        matchingView = try container.decodeIfPresent(MatchingView.self, forKey: .matchingView)
+            ?? MatchingView("")
     }
 
     public func encode(to encoder: Encoder) throws {

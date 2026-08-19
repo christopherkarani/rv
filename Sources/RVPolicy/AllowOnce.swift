@@ -1,26 +1,28 @@
 import CryptoKit
 import Darwin
 import Foundation
+import RVDomain
 
 public enum AllowOnceConsumeStatus: Sendable, Equatable {
     case consumed(tokenID: String)
     case notFound
     case alreadyConsumed
     case expired
+    case unavailable
 }
 
 public actor AllowOnceStore {
-    public let baseDirectory: URL
+    nonisolated public let baseDirectory: URL
 
     public init(baseDirectory: URL) {
         self.baseDirectory = baseDirectory
     }
 
     nonisolated public static func live() -> AllowOnceStore {
-        AllowOnceStore(baseDirectory: processHomeRoot() ?? fallbackRoot)
+        AllowOnceStore(baseDirectory: processHomeConfigDirectory() ?? fallbackRoot)
     }
 
-    nonisolated public static func processHomeRoot() -> URL? {
+    nonisolated private static func processHomeConfigDirectory() -> URL? {
         guard let home = ProcessInfo.processInfo.environment["HOME"], home.isEmpty == false else {
             return nil
         }
@@ -30,7 +32,7 @@ public actor AllowOnceStore {
     }
 
     public func insertGranted(
-        matchingView: String,
+        matchingView: MatchingView,
         cwd: String,
         now: Date,
         ttl: TimeInterval = 24 * 60 * 60
@@ -55,7 +57,7 @@ public actor AllowOnceStore {
         }
     }
 
-    public func hasGrant(matchingView: String, cwd: String, now: Date) async -> Bool {
+    public func hasGrant(matchingView: MatchingView, cwd: String, now: Date) async -> Bool {
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
             return false
         }
@@ -70,7 +72,7 @@ public actor AllowOnceStore {
     }
 
     public func consume(
-        matchingView: String,
+        matchingView: MatchingView,
         cwd: String,
         now: Date
     ) async -> AllowOnceConsumeStatus {
@@ -113,7 +115,7 @@ public actor AllowOnceStore {
                 return .notFound
             }
         } catch {
-            return .notFound
+            return .unavailable
         }
     }
 
@@ -143,7 +145,7 @@ public actor AllowOnceStore {
     }
 
     private func writeRecords(_ records: [AllowOnceRecord]) throws {
-        try FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
+        try prepareStoreDirectory()
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.sortedKeys]
@@ -157,6 +159,7 @@ public actor AllowOnceStore {
         let body = lines.joined(separator: "\n") + (lines.isEmpty ? "" : "\n")
         let temp = fileURL.appendingPathExtension("tmp")
         try body.write(to: temp, atomically: true, encoding: .utf8)
+        try setOwnerOnlyFile(temp)
         let renamed: Int32 = fileURL.withUnsafeFileSystemRepresentation { dest in
             temp.withUnsafeFileSystemRepresentation { src in
                 guard let dest, let src else { return Int32(-1) }
@@ -166,14 +169,26 @@ public actor AllowOnceStore {
         if renamed != 0 {
             throw AllowOnceStoreError.encodeFailed
         }
+        try setOwnerOnlyFile(fileURL)
     }
 
     private func withFileLock<T>(_ body: () throws -> T) throws -> T {
-        try FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
+        try prepareStoreDirectory()
         let lockURL = baseDirectory.appendingPathComponent(".allow-once.lock", isDirectory: false)
         if FileManager.default.fileExists(atPath: lockURL.path) == false {
-            FileManager.default.createFile(atPath: lockURL.path, contents: Data())
+            FileManager.default.createFile(
+                atPath: lockURL.path,
+                contents: Data(),
+                attributes: [.posixPermissions: 0o600]
+            )
         }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: lockURL.path, isDirectory: &isDirectory),
+              isDirectory.boolValue == false
+        else {
+            throw AllowOnceStoreError.lockFailed
+        }
+        try setOwnerOnlyFile(lockURL)
         let fd = lockURL.path.withCString { path in
             open(path, O_RDWR)
         }
@@ -182,6 +197,24 @@ public actor AllowOnceStore {
         guard flock(fd, LOCK_EX) == 0 else { throw AllowOnceStoreError.lockFailed }
         defer { _ = flock(fd, LOCK_UN) }
         return try body()
+    }
+
+    private func prepareStoreDirectory() throws {
+        try FileManager.default.createDirectory(
+            at: baseDirectory,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: baseDirectory.path
+        )
+    }
+
+    private func setOwnerOnlyFile(_ url: URL) throws {
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: url.path
+        )
     }
 }
 
@@ -222,8 +255,8 @@ struct AllowOnceRecord: Sendable, Equatable, Codable {
     }
 }
 
-func commandFingerprint(_ matchingView: String) -> String {
-    sha256Hex(matchingView)
+func commandFingerprint(_ matchingView: MatchingView) -> String {
+    sha256Hex(matchingView.rawValue)
 }
 
 private func sha256Hex(_ text: String) -> String {

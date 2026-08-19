@@ -132,24 +132,25 @@ function formatToastMessage(mapped, command) {
 
 function cardFromBlock(mapped, command) {
   const preview = previewCommand(command);
-  const reason = typeof mapped === "string" ? mapped : mapped && mapped.reason;
-  const rule = mapped && typeof mapped === "object" ? mapped.rule : undefined;
-  const next = mapped && typeof mapped === "object" ? mapped.next : undefined;
-  if (typeof rule === "string" || typeof next === "string") {
-    let summary = typeof reason === "string" ? reason : "";
-    if (typeof rule === "string") {
-      summary = summary.split(` (${rule})`).join("");
+  if (typeof mapped.rule === "string" || typeof mapped.next === "string") {
+    let summary = typeof mapped.reason === "string" ? mapped.reason : "";
+    if (typeof mapped.rule === "string") {
+      summary = summary.split(` (${mapped.rule})`).join("");
     }
-    if (typeof next === "string") {
-      summary = summary.split(`. ${next}`).join("");
+    if (typeof mapped.next === "string") {
+      summary = summary.split(`. ${mapped.next}`).join("");
     }
     return {
       summary: sanitizeVisibleText(summary) || "Blocked.",
-      rule: typeof rule === "string" ? rule : undefined,
-      nextStep: typeof next === "string" ? next : undefined,
+      rule: typeof mapped.rule === "string" ? mapped.rule : undefined,
+      nextStep: typeof mapped.next === "string" ? mapped.next : undefined,
       preview,
     };
   }
+  return cardFromReason(mapped.reason, preview);
+}
+
+function cardFromReason(reason, preview) {
   const cleaned = sanitizeVisibleText(typeof reason === "string" ? reason : "");
   const withRule = cleaned.match(/^(.+?) \(([^)]+)\)\.\s*(.+)$/);
   if (withRule) {

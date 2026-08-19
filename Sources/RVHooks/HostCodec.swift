@@ -44,7 +44,7 @@ public protocol HostCodec: Sendable {
     var host: HookHost { get }
     func decode(_ stdin: String) -> HookRequest
     func encodeAllow() -> HookWire
-    func encodeDeny(reason: String) -> HookWire
+    func encodeDeny(reason: String, rule: String?, next: String?) -> HookWire
 }
 
 extension HostCodec {
@@ -54,7 +54,11 @@ extension HostCodec {
     }
 
     /// Returns deny JSON plus a trailing newline, with this host's deny exit code.
-    public func encodeDeny(reason: String) -> HookWire {
-        HookWire(stdout: hookDenyJSON(reason: reason), exitCode: host.denyExitCode)
+    /// `rule` and `next` are omitted from JSON when nil or empty.
+    public func encodeDeny(reason: String, rule: String? = nil, next: String? = nil) -> HookWire {
+        HookWire(
+            stdout: hookDenyJSON(reason: reason, rule: rule, next: next),
+            exitCode: host.denyExitCode
+        )
     }
 }

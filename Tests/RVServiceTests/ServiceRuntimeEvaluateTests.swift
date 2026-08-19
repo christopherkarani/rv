@@ -2,12 +2,11 @@ import Foundation
 import Testing
 import RVDomain
 import RVIPC
-import RVPolicy
 @testable import RVService
 
 struct ServiceRuntimeEvaluateTests {
-    @Test func dispatchEvaluate_emptyEnabledPacksDoesNotRefillDayOne() async {
-        let runtime = ServiceRuntime()
+    @Test func dispatchEvaluate_emptyEnabledPacksDoesNotRefillDayOne() async throws {
+        let runtime = try isolatedRuntime()
         let response = await runtime.dispatch(
             IPCRequest(
                 method: .evaluate(
@@ -30,8 +29,8 @@ struct ServiceRuntimeEvaluateTests {
         #expect(reply.result.decision == .allow)
     }
 
-    @Test func dispatchEvaluate_disabledCatalogPackStillDeniesResetHard() async {
-        let runtime = ServiceRuntime()
+    @Test func dispatchEvaluate_disabledCatalogPackStillDeniesResetHard() async throws {
+        let runtime = try isolatedRuntime()
         let disable = await runtime.dispatch(
             IPCRequest(
                 method: .setPackEnabled(SetPackEnabledParams(id: .coreGit, enabled: false))
@@ -65,11 +64,7 @@ struct ServiceRuntimeEvaluateTests {
     }
 
     @Test func dispatchEvaluate_grantHonorsOnceForCwd() async throws {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("rv-runtime-allow-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let store = AllowOnceStore(baseDirectory: root)
-        let runtime = ServiceRuntime(allowOnce: store)
+        let runtime = ServiceRuntime(allowOnceDirectory: try isolatedAllowOnceDirectory())
         try await runtime.insertGranted(matchingView: "git reset --hard", cwd: "/tmp/ws")
         let request = EvaluationRequest(
             command: ShellCommand(rawValue: "git reset --hard"),

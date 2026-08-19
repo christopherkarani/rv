@@ -18,6 +18,7 @@ public actor ServiceRuntime {
         snapshots: [PackSnapshot]? = nil,
         catalog: PackCatalog = PackCatalog(),
         allowOnce: AllowOnceStore? = nil,
+        allowOnceDirectory: URL? = nil,
         idleExitSeconds: Int = IdleWatchdog.defaultSeconds,
         log: (any ServiceLog)? = nil
     ) {
@@ -25,7 +26,13 @@ public actor ServiceRuntime {
         self.session = session
         self.corePacksReady = session.corePacksReady
         self.catalog = catalog
-        self.allowOnce = allowOnce ?? AllowOnceStore.live()
+        if let allowOnce {
+            self.allowOnce = allowOnce
+        } else if let allowOnceDirectory {
+            self.allowOnce = AllowOnceStore(baseDirectory: allowOnceDirectory)
+        } else {
+            self.allowOnce = AllowOnceStore.live()
+        }
         self.idleExitSeconds = idleExitSeconds
         self.log = log
     }
@@ -90,15 +97,15 @@ public actor ServiceRuntime {
         return IPCResponse(id: request.id, result: result)
     }
 
-    public func insertGranted(matchingView: String, cwd: String, now: Date = Date()) async throws {
+    public func insertGranted(matchingView: MatchingView, cwd: String, now: Date = Date()) async throws {
         try await allowOnce.insertGranted(matchingView: matchingView, cwd: cwd, now: now)
     }
 
-    public func makeEvaluateReply(_ request: EvaluationRequest, cwd: String = "") async -> EvaluateReply {
+    public func makeEvaluateReply(_ request: EvaluationRequest, cwd: String? = nil) async -> EvaluateReply {
         EvaluateReply(result: await runEvaluate(request, cwd: cwd), via: "xpc")
     }
 
-    private func runEvaluate(_ request: EvaluationRequest, cwd: String) async -> EvaluationResult {
+    private func runEvaluate(_ request: EvaluationRequest, cwd: String?) async -> EvaluationResult {
         await PolicyGate.apply(
             session.evaluate(request),
             cwd: cwd,
@@ -110,8 +117,8 @@ public actor ServiceRuntime {
     private func explain(_ request: EvaluationRequest) -> ExplainReply {
         let result = session.evaluate(request)
         let normalized = result.matchingView.isEmpty
-            ? Normalize.matchingView(of: request.command.rawValue)
-            : result.matchingView
+            ? Normalize.matchingView(of: request.command.rawValue).rawValue
+            : result.matchingView.rawValue
         let stages = explainSteps(from: result).map {
             ExplainStage(name: $0.id.rawValue, elapsedMs: 0)
         }
@@ -212,6 +219,8 @@ public actor ServiceRuntime {
             return .error(.allowOnceAlreadyConsumed)
         case .expired:
             return .error(.allowOnceExpired)
+        case .unavailable:
+            return .error(.engine("allow-once store unavailable"))
         }
     }
 
