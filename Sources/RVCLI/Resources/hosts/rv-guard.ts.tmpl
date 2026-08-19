@@ -2,9 +2,25 @@ import { spawn } from "node:child_process";
 
 const RV_BINARY = "__RV_BINARY__";
 const RV_HOOK_TIMEOUT_MS = 5000;
+const RV_DECISION_TYPE = "rv-decision";
+const RV_BLOCK_WIDGET = "rv-block";
+const RV_DISPLAY_BRAND = "RV";
+const RV_CMD_PREVIEW = 96;
+const MINIMAL_LABEL_WIDTH = 4;
+const PLAIN_THEME = {
+  fg(_name, text) {
+    return text;
+  },
+};
 
 export default function (pi) {
-  pi.on("tool_call", async (event) => {
+  try {
+    pi.registerMessageRenderer?.(RV_DECISION_TYPE, renderDecisionMessage);
+  } catch {
+    // Older hosts still deny via { block: true }.
+  }
+
+  pi.on("tool_call", async (event, ctx) => {
     if (event.toolName !== "bash") {
       return;
     }
@@ -14,9 +30,218 @@ export default function (pi) {
     }
     const mapped = await consultRv(command);
     if (mapped.action === "block") {
+      showDecision(pi, ctx, cardFromBlock(mapped.reason, command));
       return { block: true, reason: mapped.reason };
     }
+    clearWidget(ctx);
   });
+}
+
+function showDecision(pi, ctx, card) {
+  clearWidget(ctx);
+  try {
+    if (pi.sendMessage) {
+      pi.sendMessage(
+        {
+          customType: RV_DECISION_TYPE,
+          content: buildThemedDecisionLines(card, PLAIN_THEME, 72).join("\n"),
+          display: true,
+          details: card,
+        },
+        { triggerTurn: false },
+      );
+      return;
+    }
+    showWidget(ctx, card);
+  } catch {
+    // Chrome failed; tool_call still returns { block: true }.
+  }
+}
+
+function clearWidget(ctx) {
+  try {
+    ctx?.ui?.setWidget?.(RV_BLOCK_WIDGET, undefined);
+  } catch {
+    // ignore
+  }
+}
+
+function showWidget(ctx, card) {
+  if (!ctx?.ui?.setWidget) {
+    return;
+  }
+  ctx.ui.setWidget(RV_BLOCK_WIDGET, buildThemedDecisionLines(card, PLAIN_THEME, 72), {
+    placement: "aboveEditor",
+  });
+}
+
+function renderDecisionMessage(message, _options, theme) {
+  const details = message && message.details;
+  const card = isDecisionCard(details)
+    ? details
+    : {
+        variant: "block",
+        title: RV_DISPLAY_BRAND,
+        summary:
+          typeof message.content === "string" && message.content.length > 0
+            ? message.content
+            : "Blocked.",
+      };
+  return {
+    render(width) {
+      const lines = buildThemedDecisionLines(card, theme, width);
+      return lines.length === 0 ? [""] : lines;
+    },
+  };
+}
+
+function isDecisionCard(value) {
+  return Boolean(value && typeof value === "object" && typeof value.summary === "string");
+}
+
+function buildThemedDecisionLines(card, theme, width) {
+  const fg =
+    theme && typeof theme.fg === "function" ? theme.fg.bind(theme) : (_n, t) => t;
+  const bold =
+    theme && typeof theme.bold === "function" ? theme.bold.bind(theme) : (t) => t;
+  const brand = bold(card.title || RV_DISPLAY_BRAND);
+  const header = `${fg("error", brand)} ${fg("dim", "· Blocked")}`;
+  const lines = [header, ""];
+  const n = Number(width);
+  const contentWidth = Number.isFinite(n) && n > 0 ? n : 72;
+  for (const row of decisionCardRows(card)) {
+    lines.push(
+      ...formatMinimalRow(row.label, row.value, contentWidth, (lab, val, first) => {
+        const labelPart = fg("dim", lab);
+        if (!first) {
+          return `${lab}${val}`;
+        }
+        if (row.label === "Cmd") {
+          return `${labelPart}${fg("dim", val)}`;
+        }
+        return `${labelPart}${val}`;
+      }),
+    );
+  }
+  return lines;
+}
+
+function decisionCardRows(card) {
+  const rows = [];
+  if (card.summary) {
+    rows.push({ label: "Why", value: card.summary });
+  }
+  if (card.preview) {
+    rows.push({ label: "Cmd", value: card.preview });
+  }
+  if (card.rule) {
+    rows.push({ label: "Meta", value: card.rule });
+  }
+  if (card.nextStep) {
+    rows.push({ label: "Next", value: card.nextStep });
+  }
+  return rows;
+}
+
+function cardFromBlock(reason, command) {
+  const cleaned = sanitizeVisibleText(typeof reason === "string" ? reason : "");
+  const preview = previewCommand(command);
+  const withRule = cleaned.match(/^(.+?) \(([^)]+)\)\.\s*(.+)$/);
+  if (withRule) {
+    return {
+      variant: "block",
+      title: RV_DISPLAY_BRAND,
+      summary: withRule[1],
+      rule: withRule[2],
+      nextStep: withRule[3],
+      preview,
+    };
+  }
+  const withNext = cleaned.match(/^(.+?)\.\s+(.+)$/);
+  if (withNext) {
+    return {
+      variant: "block",
+      title: RV_DISPLAY_BRAND,
+      summary: withNext[1],
+      nextStep: withNext[2],
+      preview,
+    };
+  }
+  return {
+    variant: "block",
+    title: RV_DISPLAY_BRAND,
+    summary: cleaned || "Blocked.",
+    preview,
+  };
+}
+
+function formatMinimalRow(label, value, width, paint) {
+  if (!value) {
+    return [];
+  }
+  const labelCol = label.padEnd(MINIMAL_LABEL_WIDTH);
+  const available = Math.max(1, width - MINIMAL_LABEL_WIDTH - 2);
+  const wrapped = wrapText(value, available);
+  return wrapped.map((line, index) => {
+    const prefix = index === 0 ? labelCol : "".padEnd(MINIMAL_LABEL_WIDTH, " ");
+    const raw = `${prefix}  ${line}`;
+    if (!paint) {
+      return raw;
+    }
+    return paint(prefix, `  ${line}`, index === 0);
+  });
+}
+
+function wrapText(value, width) {
+  const text = sanitizeVisibleText(value);
+  if (!text) {
+    return [""];
+  }
+  const words = text.split(/\s+/);
+  const lines = [];
+  let current = "";
+  for (const word of words) {
+    if (!current) {
+      current = word;
+      continue;
+    }
+    if (`${current} ${word}`.length <= width) {
+      current = `${current} ${word}`;
+      continue;
+    }
+    lines.push(current);
+    current = word;
+  }
+  if (current) {
+    lines.push(current);
+  }
+  return lines.flatMap((line) => {
+    if (line.length <= width) {
+      return [line];
+    }
+    const chunks = [];
+    for (let i = 0; i < line.length; i += width) {
+      chunks.push(line.slice(i, i + width));
+    }
+    return chunks;
+  });
+}
+
+function sanitizeVisibleText(value) {
+  return String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function previewCommand(command) {
+  return truncate(sanitizeVisibleText(command), RV_CMD_PREVIEW);
+}
+
+function truncate(value, max) {
+  if (value.length <= max) {
+    return value;
+  }
+  return `${value.slice(0, max - 3)}...`;
 }
 
 function consultRv(command) {

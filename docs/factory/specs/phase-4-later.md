@@ -38,7 +38,7 @@ Also later, not v1:
 - `dcg test` vs `rv test` agree-rate as a ship gate (long-term scoreboard only; do not block v1 on `dcg` being on PATH).
 - Linux / Windows runtimes (catalog may hold those pack *patterns* as data; do not claim those OSes).
 - KeepAlive / always-on daemon (v1 `rvd` is on-demand, idle-exit ~5m).
-- Custom Pi `registerMessageRenderer`, OpenCode toast, host Allow button, leftover-ask-as-permit.
+- Pi confirm / Allow UI / leftover-ask-as-permit. Display-only Pi deny card and OpenCode toast are v1.
 - License choice (still deferred).
 
 Windows / Linux pack JSON in the catalog is data, not a platform claim.
@@ -70,7 +70,7 @@ Later features plug in. They do not fork the product.
 5. **Packs are data.** Catalog JSON, enable/disable in `RVPacks` / `RVPolicy`. Do not explode the remaining packs into 99 Swift files. T9’s disabled import is the later enable switch.
 6. **Identity and files.** Name `rv` / `rvd`, prefix `RV_`, config `~/.config/rv/`. Setup mutates only rv-owned files. Uninstall removes only rv files. No ryk special-case. No `RV_BYPASS` ever.
 7. **Host codecs live in `RVHooks`.** New hosts are new codecs + fixtures, not a second hook runtime. v1 codecs stay Pi / Grok / OpenCode shell events.
-8. **Deny UX law.** Allow is silent. Hook deny is native host text (one sentence + `rule_id` + next step). Pretty panels stay TTY `rv test` / `explain` / human CLI. Later hosts must not require a Pi renderer or OpenCode toast to be correct.
+8. **Deny UX law.** Allow is silent. Hook deny is native host text (one sentence + `rule_id` + next step). Pi may show a display-only transcript card; the block path is still `{ block: true, reason }`. OpenCode may show a display-only TUI toast; the block path is still `throw new Error(reason)`. Pretty panels stay TTY `rv test` / `explain` / human CLI. Later hosts must not require a renderer or toast to be correct.
 9. **Unlock law.** Terminal, or `rv allow-once <code>` in a TTY. No host Allow button. The app, if built, is another client of `allowOnce.consume` — not a new permit channel.
 10. **Fallback law.** `rvd` down or version-skewed → in-process evaluate. Never allow because XPC missed. The app must not treat “service down” as permit.
 11. **Platform claims stay honest.** v1 claims macOS 26 Apple Silicon only. Later Intel / older macOS / Linux / Windows are new claimed targets with tests — not a README edit.

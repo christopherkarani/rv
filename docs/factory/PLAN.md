@@ -13,7 +13,7 @@ Not ryk. Not line-for-line Rust. Repo: `~/CodingProjects/rv` (`christopherkarani
 - **XPC is in v1.** App is not. `rvd` is **on-demand** LaunchAgent (`dev.rv.evaluate`), idle-exit ~5m. Not KeepAlive by default. Down/skew → **in-process evaluate**. Never allow because XPC missed.
 - **Install:** Hero is `curl -fsSL …/install | sh` (real HOME, binary + quiet setup). Brew is second: `brew install rv && rv setup`. Brew alone does not wire hooks. Homebrew `post_install` cannot wire hooks (temp HOME).
 - **Hosts v1:** **Pi, Grok, OpenCode only.** Shell/command tools only. No Read/Edit/MCP.
-- **Deny UX:** Native host deny **text** only. No Pi `registerMessageRenderer`, no OpenCode toast. One sentence + `rule_id` + next step.
+- **Deny UX:** Native host deny **text** is the block path (one sentence + `rule_id` + next step). Pi also posts a display-only transcript card (`registerMessageRenderer` + `sendMessage`, customType `rv-decision`). OpenCode also shows a display-only TUI toast (`client.tui.showToast`, title `RV · Blocked`). Card and toast are chrome, not the deny. Pi renderer must return `{ render(width) => string[] }`, never a string. OpenCode `throw new Error(reason)` remains the abort. Toast failure must still throw. No host Allow, no confirm, no leftover-ask.
 - **Unlock:** Run command in Terminal, or `rv allow-once <code>` in a **TTY**. No host Allow button. **No `RV_BYPASS`.**
 - **Day-one packs:** `core.git` + `core.filesystem` only. Rest catalog, off until enabled.
 - **Setup mutations:** only rv-owned files. Foreign hooks untouched. Occupied single slot → skip + one line. Uninstall removes only rv files. **No ryk special-case.**
@@ -71,7 +71,7 @@ Copy into `AGENTS.md` and `docs/dev/SWIFT.md` at T0.
 ## UX laws
 
 - Allow: **silent**. No banner on hook allow.
-- Deny: host-native reason string. Pretty denial panel only on TTY `rv test` / `explain` / human CLI.
+- Deny: host-native reason string is the block path. Pi may show a display-only transcript card. Pretty denial panel only on TTY `rv test` / `explain` / human CLI.
 - Three modes: robot / pretty / browse. Browse only if both stdin+stdout TTY and not `--json`/`--robot`/`--plain`/`CI`/`NO_COLOR`.
 - `rv setup`: no wizard. Quiet. One line if a host must restart or none found.
 - Voice: one fact, one next action. Vercel-quiet.
@@ -119,7 +119,7 @@ When two agents run in parallel they **must** use git worktrees from the same ba
 - Allowing because `rvd` is down (must in-process evaluate).
 - Evaluating against a version-skewed `rvd` (in-process + doctor warn).
 - Hooking Read/Edit/MCP in v1.
-- Custom Pi renderer or OpenCode toast in v1.
+- Pi renderer as the deny path, Pi confirm/Allow UI, leftover-ask-as-permit, or OpenCode toast as the deny path in v1.
 - Host Allow / leftover-ask-as-permit UI.
 - Writing foreign hook files. Writing the human’s real HOME from tests.
 - Persisting raw command text to os_log or default history.

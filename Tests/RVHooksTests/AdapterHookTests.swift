@@ -24,22 +24,36 @@ private func harnessURL() -> URL {
         .appendingPathComponent("Fixtures/adapters/harness.mjs")
 }
 
-@Test func piTemplate_registersOnlyToolCall() throws {
+@Test func piTemplate_registersToolCallAndDisplayOnlyRenderer() throws {
     let source = try adapterTemplate("rv-guard.ts.tmpl")
     #expect(source.contains("pi.on(\"tool_call\""))
-    #expect(source.contains("registerMessageRenderer") == false)
+    #expect(source.contains("registerMessageRenderer"))
+    #expect(source.contains("rv-decision"))
+    #expect(source.contains("Why"))
+    #expect(source.contains("Cmd"))
+    #expect(source.contains("Meta"))
+    #expect(source.contains("Next"))
     #expect(source.contains("confirm") == false)
     #expect(source.contains("terminate: true") == false)
     #expect(source.contains("user_bash") == false)
+    #expect(source.contains("permission.ask") == false)
+    #expect(source.contains("terminalContentWidth") == false)
+    #expect(source.contains("function capitalize") == false)
+    #expect(source.contains("function buildWidget") == false)
+    #expect(source.contains("card.severity") == false)
+    #expect(source.contains("card.pack") == false)
+    #expect(source.contains("render(width)"))
 }
 
 @Test func openCodeTemplate_registersOnlyExecuteBefore() throws {
     let source = try adapterTemplate("rv-guard.js.tmpl")
     #expect(source.contains("\"tool.execute.before\""))
-    #expect(source.contains("tui.toast.show") == false)
+    #expect(source.contains("showToast"))
+    #expect(source.contains("RV · Blocked"))
     #expect(source.contains("permission.ask") == false)
     #expect(source.contains("tool: {") == false)
-    #expect(source.contains("toast") == false)
+    #expect(source.contains("console.log") == false)
+    #expect(source.contains("console.error") == false)
 }
 
 @Test func piAdapter_resetHardBlocksWithHostDenyText() async throws {
@@ -49,6 +63,51 @@ private func harnessURL() -> URL {
     )
     #expect(result.block == true)
     #expect(result.reason == resetHardReason)
+    #expect(result.rendererType == "rv-decision")
+    #expect(result.messageCount == 1)
+    #expect(result.triggerTurn == false)
+    guard case .component(let lines) = result.rendererProbe else {
+        Issue.record("expected component renderer, got \(result.rendererProbe)")
+        return
+    }
+    let joined = lines.joined(separator: "\n")
+    #expect(joined.contains("RV · Blocked"))
+    #expect(joined.contains("Why"))
+    #expect(joined.contains("Blocked git reset --hard"))
+    #expect(joined.contains("Cmd"))
+    #expect(joined.contains("git reset --hard"))
+    #expect(joined.contains("Meta"))
+    #expect(joined.contains("core.git/reset-hard"))
+    #expect(joined.contains("Next"))
+    #expect(joined.contains("Run it in Terminal, or rv allow-once."))
+    #expect(joined.contains("┏") == false)
+    #expect(joined.contains("│") == false)
+    #expect(result.cardVariant == "block")
+    #expect(result.cardRule == "core.git/reset-hard")
+    #expect(result.cardPreview == "git reset --hard")
+    #expect(result.cardNext == "Run it in Terminal, or rv allow-once.")
+    #expect((result.narrowLines ?? []).count > lines.count)
+}
+
+@Test func piAdapter_sendMessageThrowStillBlocks() async throws {
+    let result = try await runPiAdapter(
+        event: ["toolName": "bash", "input": ["command": "git reset --hard"]],
+        stub: .stdout(resetHardJSON, exit: 1),
+        sendMessageThrows: true
+    )
+    #expect(result.block == true)
+    #expect(result.reason == resetHardReason)
+}
+
+@Test func piAdapter_allowDoesNotPostDecisionCard() async throws {
+    let result = try await runPiAdapter(
+        event: ["toolName": "bash", "input": ["command": "git status"]],
+        stub: .stdout("", exit: 0)
+    )
+    #expect(result.block == nil)
+    #expect(result.messageCount == 0)
+    #expect(result.rendererType == "rv-decision")
+    #expect(result.rendererProbe == .missing)
 }
 
 @Test func piAdapter_nonBashDoesNotSpawn() async throws {
@@ -66,6 +125,64 @@ private func harnessURL() -> URL {
         stub: .stdout(resetHardJSON, exit: 1)
     )
     #expect(result.threw == resetHardReason)
+    #expect(result.toastCount == 1)
+    #expect(result.toastTitle == "RV · Blocked")
+    #expect(result.toastVariant == "error")
+    let message = result.toastMessage ?? ""
+    #expect(message.contains("Why"))
+    #expect(message.contains("Blocked git reset --hard"))
+    #expect(message.contains("Cmd"))
+    #expect(message.contains("git reset --hard"))
+    #expect(message.contains("Meta"))
+    #expect(message.contains("core.git/reset-hard"))
+    #expect(message.contains("Next"))
+    #expect(message.contains("Run it in Terminal, or rv allow-once."))
+    #expect(message != resetHardReason)
+}
+
+@Test func openCodeAdapter_toastSplitsWrapperCommand() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: ["tool": "bash", "args": ["command": wrapperResetHardCommand]],
+        stub: .stdout(wrapperResetHardJSON, exit: 1)
+    )
+    #expect(result.threw == wrapperResetHardReason)
+    let message = result.toastMessage ?? ""
+    #expect(message.contains("Why"))
+    #expect(message.contains("Cmd"))
+    #expect(message.contains(wrapperResetHardCommand))
+    #expect(message.contains("Meta"))
+    #expect(message.contains("core.git/reset-hard"))
+    #expect(message.contains("Next"))
+    #expect(message.contains("Run it in Terminal, or rv allow-once."))
+}
+
+@Test func openCodeAdapter_toastThrowStillBlocks() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: ["tool": "bash", "args": ["command": "git reset --hard"]],
+        stub: .stdout(resetHardJSON, exit: 1),
+        toastThrows: true
+    )
+    #expect(result.threw == resetHardReason)
+    #expect(result.toastCount == 0)
+}
+
+@Test func openCodeAdapter_toastTimeoutStillBlocks() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: ["tool": "bash", "args": ["command": "git reset --hard"]],
+        stub: .stdout(resetHardJSON, exit: 1),
+        toastHangs: true,
+        toastTimeoutMs: 50
+    )
+    #expect(result.threw == resetHardReason)
+}
+
+@Test func openCodeAdapter_allowDoesNotToast() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: ["tool": "bash", "args": ["command": "git status"]],
+        stub: .stdout("", exit: 0)
+    )
+    #expect(result.threw == nil)
+    #expect(result.toastCount == 0)
 }
 
 @Test func openCodeAdapter_nonBashDoesNotSpawn() async throws {
@@ -90,6 +207,11 @@ private func harnessURL() -> URL {
         stub: .missing
     )
     #expect(openCode.threw == "rv missing")
+    #expect(openCode.toastTitle == "RV · Blocked")
+    let missingMessage = openCode.toastMessage ?? ""
+    #expect(missingMessage.contains("Why"))
+    #expect(missingMessage.contains("rv missing"))
+    #expect(missingMessage.contains("Cmd"))
 }
 
 @Test func adapters_honorDenyJSONRegardlessOfExitIncludingIndeterminate() async throws {
@@ -185,13 +307,23 @@ func adapters_mapRvHookResultMatrix(host: String, kind: String) async throws {
     }
     if kind == "allow" {
         #expect(result.threw == nil, Comment(rawValue: "\(host) \(kind)"))
+        #expect(result.toastCount == 0, Comment(rawValue: "\(host) \(kind)"))
     } else {
         #expect(result.threw == "rv failed", Comment(rawValue: "\(host) \(kind)"))
+        #expect(result.toastTitle == "RV · Blocked", Comment(rawValue: "\(host) \(kind)"))
+        let failedMessage = result.toastMessage ?? ""
+        #expect(failedMessage.contains("Why"), Comment(rawValue: "\(host) \(kind)"))
+        #expect(failedMessage.contains("rv failed"), Comment(rawValue: "\(host) \(kind)"))
     }
 }
 
 private let resetHardJSON =
     "{\"decision\":\"deny\",\"reason\":\"Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once.\"}\n"
+private let wrapperResetHardCommand = "echo \"$(git reset --hard)\""
+private let wrapperResetHardReason =
+    "Blocked echo \"$(git reset --hard)\" (core.git/reset-hard). Run it in Terminal, or rv allow-once."
+private let wrapperResetHardJSON =
+    "{\"decision\":\"deny\",\"reason\":\"Blocked echo \\\"$(git reset --hard)\\\" (core.git/reset-hard). Run it in Terminal, or rv allow-once.\"}\n"
 private let incompleteJSON =
     "{\"decision\":\"deny\",\"reason\":\"rv could not finish evaluating this command. Run it in Terminal.\"}\n"
 
@@ -201,43 +333,122 @@ private enum StubRV {
     case sleep(seconds: Int)
 }
 
+private enum RendererProbe: Equatable, Sendable {
+    case component(lines: [String])
+    case string
+    case missing
+}
+
 private struct PiAdapterRun {
     var block: Bool?
     var reason: String?
     var spawned: Bool
+    var rendererType: String?
+    var messageCount: Int
+    var triggerTurn: Bool?
+    var rendererProbe: RendererProbe
+    var narrowLines: [String]?
+    var cardVariant: String?
+    var cardRule: String?
+    var cardPreview: String?
+    var cardNext: String?
 }
 
 private struct OpenCodeAdapterRun {
     var threw: String?
     var spawned: Bool
+    var toastCount: Int
+    var toastTitle: String?
+    var toastMessage: String?
+    var toastVariant: String?
 }
 
 private func runPiAdapter(
     event: [String: Any],
     stub: StubRV,
-    timeoutMs: Int? = nil
+    timeoutMs: Int? = nil,
+    sendMessageThrows: Bool = false
 ) async throws -> PiAdapterRun {
-    let payload = try await runAdapter(host: "pi", event: event, stub: stub, timeoutMs: timeoutMs)
+    let payload = try await runAdapter(
+        host: "pi",
+        event: event,
+        stub: stub,
+        timeoutMs: timeoutMs,
+        sendMessageThrows: sendMessageThrows
+    )
     let object = try harnessObject(payload.text)
     let result = object["result"] as? [String: Any]
+    let messages = object["messages"] as? [[String: Any]] ?? []
+    let firstMessage = messages.first
+    let options = firstMessage?["options"] as? [String: Any]
+    let message = firstMessage?["message"] as? [String: Any]
+    let details = message?["details"] as? [String: Any]
     return PiAdapterRun(
         block: result?["block"] as? Bool,
         reason: result?["reason"] as? String,
-        spawned: payload.spawned
+        spawned: payload.spawned,
+        rendererType: object["rendererType"] as? String,
+        messageCount: messages.count,
+        triggerTurn: options?["triggerTurn"] as? Bool,
+        rendererProbe: rendererProbe(from: object),
+        narrowLines: object["narrowLines"] as? [String],
+        cardVariant: details?["variant"] as? String,
+        cardRule: details?["rule"] as? String,
+        cardPreview: details?["preview"] as? String,
+        cardNext: details?["nextStep"] as? String
     )
+}
+
+private func rendererProbe(from object: [String: Any]) -> RendererProbe {
+    switch object["rendererProbe"] as? String {
+    case "component":
+        return .component(lines: object["lines"] as? [String] ?? [])
+    case "string":
+        return .string
+    default:
+        return .missing
+    }
 }
 
 private func runOpenCodeAdapter(
     event: [String: Any],
     stub: StubRV,
-    timeoutMs: Int? = nil
+    timeoutMs: Int? = nil,
+    toastThrows: Bool = false,
+    toastHangs: Bool = false,
+    toastTimeoutMs: Int? = nil
 ) async throws -> OpenCodeAdapterRun {
-    let payload = try await runAdapter(host: "opencode", event: event, stub: stub, timeoutMs: timeoutMs)
+    let payload = try await runAdapter(
+        host: "opencode",
+        event: event,
+        stub: stub,
+        timeoutMs: timeoutMs,
+        toastThrows: toastThrows,
+        toastHangs: toastHangs,
+        toastTimeoutMs: toastTimeoutMs
+    )
     let object = try harnessObject(payload.text)
+    let toast = firstToast(object)
     return OpenCodeAdapterRun(
         threw: object["threw"] as? String,
-        spawned: payload.spawned
+        spawned: payload.spawned,
+        toastCount: (object["toasts"] as? [Any])?.count ?? 0,
+        toastTitle: toast?["title"] as? String,
+        toastMessage: toast?["message"] as? String,
+        toastVariant: toast?["variant"] as? String
     )
+}
+
+private func firstToast(_ object: [String: Any]) -> [String: Any]? {
+    let toasts = object["toasts"] as? [[String: Any]] ?? []
+    guard let first = toasts.first else { return nil }
+    if let body = first["body"] as? [String: Any] {
+        return body
+    }
+    if let properties = first["properties"] as? [String: Any] {
+        return properties
+    }
+    return first
 }
 
 private struct AdapterPayload {
@@ -249,7 +460,11 @@ private func runAdapter(
     host: String,
     event: [String: Any],
     stub: StubRV,
-    timeoutMs: Int?
+    timeoutMs: Int?,
+    sendMessageThrows: Bool = false,
+    toastThrows: Bool = false,
+    toastHangs: Bool = false,
+    toastTimeoutMs: Int? = nil
 ) async throws -> AdapterPayload {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-t5-\(UUID().uuidString)", isDirectory: true)
@@ -296,6 +511,12 @@ private func runAdapter(
             with: "const RV_HOOK_TIMEOUT_MS = \(timeoutMs);"
         )
     }
+    if let toastTimeoutMs {
+        source = source.replacingOccurrences(
+            of: "const RV_TOAST_TIMEOUT_MS = 1500;",
+            with: "const RV_TOAST_TIMEOUT_MS = \(toastTimeoutMs);"
+        )
+    }
     let adapter = root.appendingPathComponent("adapter.mjs")
     try source.write(to: adapter, atomically: true, encoding: .utf8)
 
@@ -305,6 +526,15 @@ private func runAdapter(
     var environment = ProcessInfo.processInfo.environment
     environment["HOME"] = root.path
     environment["RV_STUB_DIR"] = stubDir.path
+    if sendMessageThrows {
+        environment["RV_SEND_MESSAGE_THROWS"] = "1"
+    }
+    if toastThrows {
+        environment["RV_TOAST_THROWS"] = "1"
+    }
+    if toastHangs {
+        environment["RV_TOAST_HANGS"] = "1"
+    }
     switch stub {
     case .missing:
         break
