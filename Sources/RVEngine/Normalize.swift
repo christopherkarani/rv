@@ -3,9 +3,9 @@ import Foundation
 public enum Normalize {
     public static let maxWrapperIterations = 32
 
-    public static func matchingView(of command: String) -> String {
+    public static func matchingView(of command: String) -> MatchingView {
         let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return "" }
+        if trimmed.isEmpty { return MatchingView("") }
         var current = applyRoleAwareQuotes(trimmed)
         var iteration = 0
         while iteration < maxWrapperIterations {
@@ -28,7 +28,7 @@ public enum Normalize {
             }
             break
         }
-        return stripAbsolutePathOnArgv0(current)
+        return MatchingView(stripAbsolutePathOnArgv0(current))
     }
 }
 

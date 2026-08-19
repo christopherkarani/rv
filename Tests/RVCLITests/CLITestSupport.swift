@@ -1,25 +1,31 @@
 import Foundation
 import RVDomain
-import RVPolicy
 import RVTheme
 @testable import RVCLI
 
-func isolatedAllowOnceStore() throws -> AllowOnceStore {
+func isolatedAllowOnceDirectory() throws -> URL {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-cli-allow-once-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-    return AllowOnceStore(baseDirectory: root)
+    return root
 }
 
-func isolatedClient(transport: (any ServiceTransport)? = nil) throws -> ServiceClient {
-    ServiceClient(transport: transport, store: try isolatedAllowOnceStore())
+func isolatedClient(
+    transport: (any ServiceTransport)? = nil,
+    allowOnceDirectory: URL? = nil
+) throws -> ServiceClient {
+    ServiceClient(
+        transport: transport,
+        allowOnceDirectory: try allowOnceDirectory ?? isolatedAllowOnceDirectory()
+    )
 }
 
 func cliRun(
     kind: CLIKind,
     command: String,
     probe: ThemeProbe,
-    requested: RequestedMode
+    requested: RequestedMode,
+    allowOnceDirectory: URL? = nil
 ) async throws -> CLIResult {
     await CommandRun.run(
         kind: kind,
@@ -27,14 +33,17 @@ func cliRun(
         probe: probe,
         requested: requested,
         cwd: "/tmp/ws",
-        store: try isolatedAllowOnceStore()
+        allowOnceDirectory: try allowOnceDirectory ?? isolatedAllowOnceDirectory()
     )
 }
 
-func cliEvaluate(_ command: String) async throws -> EvaluationResult {
+func cliEvaluate(
+    _ command: String,
+    allowOnceDirectory: URL? = nil
+) async throws -> EvaluationResult {
     await CommandRun.evaluateCommand(
         command,
         cwd: "/tmp/ws",
-        store: try isolatedAllowOnceStore()
+        allowOnceDirectory: try allowOnceDirectory ?? isolatedAllowOnceDirectory()
     )
 }

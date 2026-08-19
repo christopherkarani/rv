@@ -39,13 +39,26 @@ public enum CommandRun {
                 enabledPacks: dayOnePackIDs
             )
         )
-        return await PolicyGate.apply(
+        return await PolicyGate.peek(
             engine,
             cwd: cwd,
             store: store,
-            now: now,
-            consume: false
+            now: now
         ).result
+    }
+
+    public static func evaluateCommand(
+        _ raw: String,
+        cwd: String,
+        allowOnceDirectory: URL,
+        now: Date = Date()
+    ) async -> EvaluationResult {
+        await evaluateCommand(
+            raw,
+            cwd: cwd,
+            store: AllowOnceStore(baseDirectory: allowOnceDirectory),
+            now: now
+        )
     }
 
     public static func run(
@@ -63,6 +76,26 @@ public enum CommandRun {
             command: ShellCommand(rawValue: raw),
             probe: probe,
             requested: requested
+        )
+    }
+
+    public static func run(
+        kind: CLIKind,
+        command raw: String,
+        probe: ThemeProbe,
+        requested: RequestedMode,
+        cwd: String,
+        allowOnceDirectory: URL,
+        now: Date = Date()
+    ) async -> CLIResult {
+        await run(
+            kind: kind,
+            command: raw,
+            probe: probe,
+            requested: requested,
+            cwd: cwd,
+            store: AllowOnceStore(baseDirectory: allowOnceDirectory),
+            now: now
         )
     }
 
@@ -87,8 +120,8 @@ public enum CommandRun {
                     from: result,
                     command: command,
                     normalized: result.matchingView.isEmpty
-                        ? Normalize.matchingView(of: command.rawValue)
-                        : result.matchingView
+                        ? Normalize.matchingView(of: command.rawValue).rawValue
+                        : result.matchingView.rawValue
                 ),
                 palette: palette
             )

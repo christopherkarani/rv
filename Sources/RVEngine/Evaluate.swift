@@ -11,19 +11,19 @@ public func evaluate<E: PatternEngine>(
 ) -> EvaluationResult {
     let raw = request.command.rawValue
     if raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-        return EvaluationResult(decision: .allow, matchingView: "")
+        return EvaluationResult(decision: .allow, matchingView: MatchingView(""))
     }
     if raw.utf8.count > commandByteCap {
         return EvaluationResult(
             decision: .indeterminate(.commandTooLarge),
             quickRejected: false,
-            matchingView: raw
+            matchingView: MatchingView(raw)
         )
     }
     if !corePacksAreReady(snapshots: packs, compiled: compiled) {
         return EvaluationResult(
             decision: .indeterminate(.corePacksUnavailable),
-            matchingView: raw
+            matchingView: MatchingView(raw)
         )
     }
 
@@ -37,7 +37,7 @@ public func evaluate<E: PatternEngine>(
     let budget = request.budget?.maxPatternAttempts
     let compiledEnabled = enabledCompiled(from: compiled, enabledIDs: request.enabledPacks)
 
-    let segments = splitSegments(matchingView)
+    let segments = splitSegments(matchingView.rawValue)
     if segments.count > 1 {
         for segment in segments {
             let result = evaluateSingle(
@@ -54,7 +54,7 @@ public func evaluate<E: PatternEngine>(
     }
 
     if let result = evaluateSingle(
-        matchingView,
+        matchingView.rawValue,
         compiled: compiledEnabled,
         patterns: patterns,
         attempts: &attempts,
@@ -65,7 +65,7 @@ public func evaluate<E: PatternEngine>(
     return EvaluationResult(decision: .allow, matchingView: matchingView)
 }
 
-private func withMatchingView(_ result: EvaluationResult, _ matchingView: String) -> EvaluationResult {
+private func withMatchingView(_ result: EvaluationResult, _ matchingView: MatchingView) -> EvaluationResult {
     var copy = result
     copy.matchingView = matchingView
     return copy

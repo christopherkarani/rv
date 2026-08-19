@@ -3,11 +3,11 @@ import RVDomain
 
 public struct EvaluateParams: Sendable, Equatable, Codable {
     public var request: EvaluationRequest
-    public var cwd: String
+    public var cwd: String?
 
-    public init(request: EvaluationRequest, cwd: String = "") {
+    public init(request: EvaluationRequest, cwd: String? = nil) {
         self.request = request
-        self.cwd = cwd
+        self.cwd = cwd.flatMap { $0.isEmpty ? nil : $0 }
     }
 
     enum CodingKeys: String, CodingKey {
@@ -18,13 +18,14 @@ public struct EvaluateParams: Sendable, Equatable, Codable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         request = try container.decode(EvaluationRequest.self, forKey: .request)
-        cwd = try container.decodeIfPresent(String.self, forKey: .cwd) ?? ""
+        let decoded = try container.decodeIfPresent(String.self, forKey: .cwd)
+        cwd = decoded.flatMap { $0.isEmpty ? nil : $0 }
     }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(request, forKey: .request)
-        try container.encode(cwd, forKey: .cwd)
+        try container.encodeIfPresent(cwd, forKey: .cwd)
     }
 }
 

@@ -37,37 +37,56 @@ public struct ServiceClient: Sendable {
     public init(
         transport: (any ServiceTransport)? = XPCServiceTransport(),
         session: EvaluateSession? = nil,
-        store: AllowOnceStore = .live(),
+        store: AllowOnceStore? = nil,
+        allowOnceDirectory: URL? = nil,
         connectTimeoutMs: Int = 200,
         requestTimeoutMs: Int = 500
     ) {
         self.transport = transport
         self.session = session
-        self.store = store
+        self.store = Self.resolveStore(store: store, allowOnceDirectory: allowOnceDirectory)
         self.connectTimeoutMs = connectTimeoutMs
         self.requestTimeoutMs = requestTimeoutMs
     }
 
-    public static func missingCore(transport: (any ServiceTransport)? = nil) -> ServiceClient {
-        ServiceClient(transport: transport, session: .missingCore)
+    public static func missingCore(
+        transport: (any ServiceTransport)? = nil,
+        allowOnceDirectory: URL? = nil
+    ) -> ServiceClient {
+        ServiceClient(
+            transport: transport,
+            session: .missingCore,
+            allowOnceDirectory: allowOnceDirectory ?? isolatedFactoryDirectory()
+        )
     }
 
-    public static func uncompilableCore(transport: (any ServiceTransport)? = nil) -> ServiceClient {
-        ServiceClient(transport: transport, session: .uncompilableCore)
+    public static func uncompilableCore(
+        transport: (any ServiceTransport)? = nil,
+        allowOnceDirectory: URL? = nil
+    ) -> ServiceClient {
+        ServiceClient(
+            transport: transport,
+            session: .uncompilableCore,
+            allowOnceDirectory: allowOnceDirectory ?? isolatedFactoryDirectory()
+        )
     }
 
-    public func evaluate(command: String, cwd: String = "") async -> ClientEvaluateReply {
+    public func insertGranted(matchingView: MatchingView, cwd: String, now: Date = Date()) async throws {
+        try await store.insertGranted(matchingView: matchingView, cwd: cwd, now: now)
+    }
+
+    public func evaluate(command: String, cwd: String? = nil) async -> ClientEvaluateReply {
         let evaluation = await evaluateRouted(command: ShellCommand(rawValue: command), cwd: cwd)
         return Self.view(evaluation.result, via: evaluation.via)
     }
 
-    public func evaluateResult(command: ShellCommand, cwd: String = "") async -> EvaluationResult {
+    public func evaluateResult(command: ShellCommand, cwd: String? = nil) async -> EvaluationResult {
         await evaluateRouted(command: command, cwd: cwd).result
     }
 
     private func evaluateRouted(
         command: ShellCommand,
-        cwd: String
+        cwd: String?
     ) async -> (result: EvaluationResult, via: String) {
         let request = EvaluationRequest(
             command: command,
@@ -93,7 +112,7 @@ public struct ServiceClient: Sendable {
         }
     }
 
-    private func inProcessEvaluate(_ request: EvaluationRequest, cwd: String) async -> EvaluationResult {
+    private func inProcessEvaluate(_ request: EvaluationRequest, cwd: String?) async -> EvaluationResult {
         await PolicyGate.apply(
             (session ?? EvaluateSession()).evaluate(request),
             cwd: cwd,
@@ -166,5 +185,25 @@ public struct ServiceClient: Sendable {
                 indeterminateReason: reason.rawValue
             )
         }
+    }
+
+    private static func resolveStore(
+        store: AllowOnceStore?,
+        allowOnceDirectory: URL?
+    ) -> AllowOnceStore {
+        if let store {
+            return store
+        }
+        if let allowOnceDirectory {
+            return AllowOnceStore(baseDirectory: allowOnceDirectory)
+        }
+        return .live()
+    }
+
+    private static func isolatedFactoryDirectory() -> URL {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-client-allow-once-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        return root
     }
 }

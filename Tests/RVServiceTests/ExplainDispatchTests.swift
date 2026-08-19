@@ -4,8 +4,8 @@ import RVIPC
 @testable import RVService
 
 struct ExplainDispatchTests {
-    @Test func denyEmitsTTYStageNamesWithZeroElapsed() async {
-        let runtime = ServiceRuntime()
+    @Test func denyEmitsTTYStageNamesWithZeroElapsed() async throws {
+        let runtime = try isolatedRuntime()
         let response = await runtime.dispatch(
             IPCRequest(
                 method: .explain(
@@ -33,8 +33,8 @@ struct ExplainDispatchTests {
         #expect(deny.ruleID.rawValue == "core.git:reset-hard")
     }
 
-    @Test func quickRejectAllowEmitsSkipWalkWithZeroElapsed() async {
-        let runtime = ServiceRuntime()
+    @Test func quickRejectAllowEmitsSkipWalkWithZeroElapsed() async throws {
+        let runtime = try isolatedRuntime()
         let response = await runtime.dispatch(
             IPCRequest(
                 method: .explain(

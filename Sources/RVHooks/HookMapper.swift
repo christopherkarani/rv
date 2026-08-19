@@ -1,5 +1,6 @@
 import RVDomain
 
+/// Returns the host wire for `result`: allow uses `encodeAllow`; deny and indeterminate use `encodeDeny`.
 public func hookWire<C: HostCodec>(
     from result: EvaluationResult,
     command: ShellCommand,
@@ -9,19 +10,12 @@ public func hookWire<C: HostCodec>(
     case .allow:
         return codec.encodeAllow()
     case .deny(let deny):
-        let reason = hostDenyText(from: result, command: command) ?? incompleteEvalSentence
-        return HookWire(
-            stdout: hookDenyJSON(
-                reason: reason,
-                rule: displayRuleID(deny.ruleID),
-                next: hookUnlockNext
-            ),
-            exitCode: codec.host.denyExitCode
+        return codec.encodeDeny(
+            reason: hostDenyLine(command: command, ruleID: deny.ruleID),
+            rule: displayRuleID(deny.ruleID),
+            next: hookUnlockNext
         )
     case .indeterminate:
-        return HookWire(
-            stdout: hookDenyJSON(reason: incompleteEvalSentence),
-            exitCode: codec.host.denyExitCode
-        )
+        return codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: nil)
     }
 }

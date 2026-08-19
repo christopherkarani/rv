@@ -20,17 +20,17 @@ import Testing
     #expect(Normalize.matchingView(of: "git \"reset\" --hard") == "git reset --hard")
     #expect(Normalize.matchingView(of: "sudo \"git\" reset --hard") == "git reset --hard")
     let chained = Normalize.matchingView(of: "echo hello && \"git\" reset --hard")
-    #expect(chained.contains("git reset --hard"))
+    #expect(chained.rawValue.contains("git reset --hard"))
     let echoed = Normalize.matchingView(of: "echo \"git reset --hard\"")
-    #expect(!echoed.contains("reset"))
+    #expect(!echoed.rawValue.contains("reset"))
     let commit = Normalize.matchingView(of: "git commit -m \"git push --force\"")
-    #expect(!commit.contains("--force"))
+    #expect(!commit.rawValue.contains("--force"))
     let attached = Normalize.matchingView(of: "git commit --message=\"git reset --hard\"")
-    #expect(!attached.contains("reset"))
+    #expect(!attached.rawValue.contains("reset"))
     let sudoEcho = Normalize.matchingView(of: "sudo echo \"git reset --hard\"")
-    #expect(!sudoEcho.contains("reset"))
+    #expect(!sudoEcho.rawValue.contains("reset"))
     let envEcho = Normalize.matchingView(of: "env echo \"git reset --hard\"")
-    #expect(!envEcho.contains("reset"))
+    #expect(!envEcho.rawValue.contains("reset"))
 }
 
 @Test func normalize_concatenatesAdjacentQuotes() {
@@ -45,10 +45,10 @@ import Testing
 }
 
 @Test func normalize_doesNotMaskSubstitutions() {
-    #expect(Normalize.matchingView(of: "echo $(git reset --hard)").contains("git reset --hard"))
-    #expect(Normalize.matchingView(of: "echo `git reset --hard`").contains("git reset --hard"))
-    #expect(Normalize.matchingView(of: "echo \"$(git reset --hard)\"").contains("git reset --hard"))
-    #expect(Normalize.matchingView(of: "echo \"`git reset --hard`\"").contains("git reset --hard"))
+    #expect(Normalize.matchingView(of: "echo $(git reset --hard)").rawValue.contains("git reset --hard"))
+    #expect(Normalize.matchingView(of: "echo `git reset --hard`").rawValue.contains("git reset --hard"))
+    #expect(Normalize.matchingView(of: "echo \"$(git reset --hard)\"").rawValue.contains("git reset --hard"))
+    #expect(Normalize.matchingView(of: "echo \"`git reset --hard`\"").rawValue.contains("git reset --hard"))
 }
 
 @Test func normalize_doesNotExpandTmpdir() {

@@ -5,7 +5,7 @@ import Testing
 @Suite(.serialized)
 struct FakeXPCUnixSocketTests {
     @Test func handshakeAndEvaluateDenyResetHard() async throws {
-        let runtime = ServiceRuntime()
+        let runtime = try isolatedRuntime()
         let path = "/tmp/rv-t3-\(UUID().uuidString).sock"
         let server = FakeXPCServer(runtime: runtime, path: path)
         try server.start()
@@ -29,7 +29,7 @@ struct FakeXPCUnixSocketTests {
     }
 
     @Test func handshakeAndEvaluateAllowsGitStatus() async throws {
-        let runtime = ServiceRuntime()
+        let runtime = try isolatedRuntime()
         let path = "/tmp/rv-t3-\(UUID().uuidString).sock"
         let server = FakeXPCServer(runtime: runtime, path: path)
         try server.start()
@@ -43,7 +43,7 @@ struct FakeXPCUnixSocketTests {
     }
 
     @Test func allSevenMethodsRoundTripOnSocket() async throws {
-        let runtime = ServiceRuntime()
+        let runtime = try isolatedRuntime()
         let path = "/tmp/rv-t3-\(UUID().uuidString).sock"
         let server = FakeXPCServer(runtime: runtime, path: path)
         try server.start()
@@ -77,7 +77,7 @@ struct FakeXPCUnixSocketTests {
     }
 
     @Test func listPacksIncludesDayOneEnabled() async throws {
-        let runtime = ServiceRuntime()
+        let runtime = try isolatedRuntime()
         let path = "/tmp/rv-t3-\(UUID().uuidString).sock"
         let server = FakeXPCServer(runtime: runtime, path: path)
         try server.start()
@@ -95,7 +95,7 @@ struct FakeXPCUnixSocketTests {
     }
 
     @Test func unknownPackIsPackNotFound() async throws {
-        let runtime = ServiceRuntime()
+        let runtime = try isolatedRuntime()
         let path = "/tmp/rv-t3-\(UUID().uuidString).sock"
         let server = FakeXPCServer(runtime: runtime, path: path)
         try server.start()
@@ -111,7 +111,7 @@ struct FakeXPCUnixSocketTests {
     }
 
     @Test func allowOnceConsumeTwiceThenEvaluateStillRuns() async throws {
-        let runtime = ServiceRuntime()
+        let runtime = try isolatedRuntime()
         try await runtime.insertGranted(matchingView: "git reset --hard", cwd: "/tmp/ws")
         let path = "/tmp/rv-t3-\(UUID().uuidString).sock"
         let server = FakeXPCServer(runtime: runtime, path: path)
@@ -131,14 +131,14 @@ struct FakeXPCUnixSocketTests {
         )
         #expect(nested(second, ["result", "error"])?["allowOnceAlreadyConsumed"] as? Bool == true)
 
-        let evaluated = try client.sendJSON(evaluateJSON("git reset --hard"))
+        let evaluated = try client.sendJSON(evaluateJSON("git reset --hard", cwd: "/tmp/ws"))
         let decision = nested(evaluated, ["result", "evaluate", "result", "decision"])
         #expect(decision?["decision"] as? String == "deny")
         #expect(decision?["ruleID"] as? String == "core.git:reset-hard")
     }
 
     @Test func doctorSnapshotSkipsHostChecks() async throws {
-        let runtime = ServiceRuntime()
+        let runtime = try isolatedRuntime()
         let path = "/tmp/rv-t3-\(UUID().uuidString).sock"
         let server = FakeXPCServer(runtime: runtime, path: path)
         try server.start()
@@ -164,7 +164,7 @@ struct FakeXPCUnixSocketTests {
     }
 
     @Test func uncompilableResetHardIsNotOkAndDoesNotAllow() async throws {
-        let runtime = ServiceRuntime(snapshots: BrokenCoreSnapshots.uncompilableResetHard())
+        let runtime = try isolatedRuntime(snapshots: BrokenCoreSnapshots.uncompilableResetHard())
         #expect(await runtime.corePacksReady == false)
         let path = "/tmp/rv-t3-\(UUID().uuidString).sock"
         let server = FakeXPCServer(runtime: runtime, path: path)
@@ -189,7 +189,7 @@ struct FakeXPCUnixSocketTests {
     }
 
     @Test func emptyCoreHandshakeIsNotOk() async throws {
-        let runtime = ServiceRuntime(snapshots: [])
+        let runtime = try isolatedRuntime(snapshots: [])
         let path = "/tmp/rv-t3-\(UUID().uuidString).sock"
         let server = FakeXPCServer(runtime: runtime, path: path)
         try server.start()
@@ -203,7 +203,7 @@ struct FakeXPCUnixSocketTests {
 
     @Test func evaluateDoesNotLogCommandText() async throws {
         let log = RecordingLog()
-        let runtime = ServiceRuntime(log: log)
+        let runtime = try isolatedRuntime(log: log)
         let request = Data(
             """
             {"id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","protocol":"rv.ipc.v1","method":{"evaluate":{"request":{"command":"rm -rf /Users/me","enabledPacks":["core.filesystem","core.git"]}}}}

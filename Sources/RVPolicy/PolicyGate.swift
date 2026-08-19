@@ -17,45 +17,67 @@ public struct PolicyDecision: Equatable, Sendable {
 }
 
 public enum PolicyGate {
+    /// Spends a matching grant. Hook / `rvd` / in-process fallback.
     public static func apply(
         _ result: EvaluationResult,
-        cwd: String,
+        cwd: String?,
         store: AllowOnceStore,
-        now: Date,
-        consume: Bool = true
+        now: Date
     ) async -> PolicyDecision {
+        guard let granted = grantCandidate(result, cwd: cwd) else {
+            return PolicyDecision(result: result, override: .none)
+        }
+        switch await store.consume(
+            matchingView: granted.result.matchingView,
+            cwd: granted.cwd,
+            now: now
+        ) {
+        case .consumed:
+            return allowOnceDecision(granted.result)
+        case .notFound, .alreadyConsumed, .expired, .unavailable:
+            return PolicyDecision(result: result, override: .none)
+        }
+    }
+
+    /// Shows a matching grant without spending it. TTY `test` / `explain`.
+    public static func peek(
+        _ result: EvaluationResult,
+        cwd: String?,
+        store: AllowOnceStore,
+        now: Date
+    ) async -> PolicyDecision {
+        guard let granted = grantCandidate(result, cwd: cwd) else {
+            return PolicyDecision(result: result, override: .none)
+        }
+        let hit = await store.hasGrant(
+            matchingView: granted.result.matchingView,
+            cwd: granted.cwd,
+            now: now
+        )
+        guard hit else {
+            return PolicyDecision(result: result, override: .none)
+        }
+        return allowOnceDecision(granted.result)
+    }
+
+    private static func grantCandidate(
+        _ result: EvaluationResult,
+        cwd: String?
+    ) -> (result: EvaluationResult, cwd: String)? {
         switch result.decision {
         case .allow, .indeterminate:
-            return PolicyDecision(result: result, override: .none)
+            return nil
         case .deny:
-            guard cwd.isEmpty == false, result.matchingView.isEmpty == false else {
-                return PolicyDecision(result: result, override: .none)
+            guard let cwd, cwd.isEmpty == false, result.matchingView.isEmpty == false else {
+                return nil
             }
-            if consume == false {
-                let hit = await store.hasGrant(
-                    matchingView: result.matchingView,
-                    cwd: cwd,
-                    now: now
-                )
-                guard hit else {
-                    return PolicyDecision(result: result, override: .none)
-                }
-                var allowed = result
-                allowed.decision = .allow
-                return PolicyDecision(result: allowed, override: .allowOnce)
-            }
-            switch await store.consume(
-                matchingView: result.matchingView,
-                cwd: cwd,
-                now: now
-            ) {
-            case .consumed:
-                var allowed = result
-                allowed.decision = .allow
-                return PolicyDecision(result: allowed, override: .allowOnce)
-            case .notFound, .alreadyConsumed, .expired:
-                return PolicyDecision(result: result, override: .none)
-            }
+            return (result, cwd)
         }
+    }
+
+    private static func allowOnceDecision(_ result: EvaluationResult) -> PolicyDecision {
+        var allowed = result
+        allowed.decision = .allow
+        return PolicyDecision(result: allowed, override: .allowOnce)
     }
 }
