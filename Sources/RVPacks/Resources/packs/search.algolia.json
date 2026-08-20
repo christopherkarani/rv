@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "search.algolia",
+  "name": "Algolia",
+  "version": "0.11.0",
+  "description": "Protects against destructive Algolia operations like deleting indices, clearing objects, \\ removing rules/synonyms, and deleting API keys.",
+  "category": "search",
+  "enabled_by_default": false,
+  "keywords": [
+    "algolia",
+    "algoliasearch"
+  ],
+  "safe_patterns": [
+    {
+      "name": "algolia-indices-browse",
+      "pattern": "algolia(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+indices\\s+browse\\b",
+      "description": ""
+    },
+    {
+      "name": "algolia-indices-list",
+      "pattern": "algolia(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+indices\\s+list\\b",
+      "description": ""
+    },
+    {
+      "name": "algolia-search",
+      "pattern": "algolia(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+search\\b",
+      "description": ""
+    },
+    {
+      "name": "algolia-settings-get",
+      "pattern": "algolia(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+settings\\s+get\\b",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "algolia-indices-delete",
+      "pattern": "algolia(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+indices\\s+delete\\b",
+      "severity": "critical",
+      "description": "algolia indices delete permanently removes an Algolia index.",
+      "explanation": "Deleting an Algolia index permanently removes all searchable records, settings, \\ rules, and synonyms. Search functionality for applications using this index will \\ fail immediately. Re-indexing may require significant time and resources.\n\n\\ Safer alternatives: \\ - algolia indices list: Review indices before deletion \\ - Export index data using algolia indices browse \\ - Create a replica or copy before deleting"
+    },
+    {
+      "name": "algolia-indices-clear",
+      "pattern": "algolia(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+indices\\s+clear\\b",
+      "severity": "high",
+      "description": "algolia indices clear removes all objects from an Algolia index.",
+      "explanation": "Clearing an Algolia index removes all searchable records while preserving settings, \\ rules, and synonyms. Search will return no results until data is re-indexed. \\ This is irreversible without re-indexing from source data.\n\n\\ Safer alternatives: \\ - Export objects using algolia indices browse first \\ - Use a staging index for testing \\ - Delete specific objects instead of clearing all"
+    },
+    {
+      "name": "algolia-rules-delete",
+      "pattern": "algolia(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+rules\\s+delete\\b",
+      "severity": "medium",
+      "description": "algolia rules delete removes index rules.",
+      "explanation": "Deleting Algolia rules removes search customizations like query rewrites, \\ promotions, and filters. Search behavior may change unexpectedly for users \\ relying on these rules for relevant results.\n\n\\ Safer alternatives: \\ - algolia rules browse: Export rules before deletion \\ - Disable rules temporarily instead of deleting \\ - Test rule changes on a replica index first"
+    },
+    {
+      "name": "algolia-synonyms-delete",
+      "pattern": "algolia(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+synonyms\\s+delete\\b",
+      "severity": "medium",
+      "description": "algolia synonyms delete removes synonym entries.",
+      "explanation": "Deleting Algolia synonyms removes word associations that improve search matching. \\ Users searching with alternative terms may no longer find expected results. \\ Synonym configurations can take time to rebuild.\n\n\\ Safer alternatives: \\ - algolia synonyms browse: Export synonyms before deletion \\ - Test synonym changes on a replica index \\ - Document synonym configurations for recovery"
+    },
+    {
+      "name": "algolia-apikeys-delete",
+      "pattern": "algolia(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apikeys\\s+delete\\b",
+      "severity": "high",
+      "description": "algolia apikeys delete removes API keys and can break integrations.",
+      "explanation": "Deleting an Algolia API key immediately revokes access for all applications using \\ it. Search and indexing operations will fail with authentication errors. The key \\ cannot be recovered after deletion.\n\n\\ Safer alternatives: \\ - algolia apikeys list: Review keys and their usage \\ - Create new API keys before deleting old ones \\ - Rotate keys by updating applications first"
+    },
+    {
+      "name": "algolia-sdk-delete-index",
+      "pattern": "\\b(?:algolia|algoliasearch)\\b.*\\bdeleteIndex\\b",
+      "severity": "critical",
+      "description": "Algolia SDK deleteIndex removes an index.",
+      "explanation": "The deleteIndex SDK method permanently removes an Algolia index and all its \\ contents. This includes all records, settings, rules, and synonyms. Production \\ search functionality will fail immediately.\n\n\\ Safer alternatives: \\ - Use browseObjects to export data first \\ - Copy to a backup index before deleting \\ - Add confirmation prompts in application code"
+    },
+    {
+      "name": "algolia-sdk-clear-objects",
+      "pattern": "\\b(?:algolia|algoliasearch)\\b.*\\bclearObjects\\b",
+      "severity": "high",
+      "description": "Algolia SDK clearObjects removes all records from an index.",
+      "explanation": "The clearObjects SDK method removes all searchable records from an index while \\ keeping configuration intact. Search results will be empty until re-indexing \\ completes. This cannot be undone.\n\n\\ Safer alternatives: \\ - Export objects using browseObjects first \\ - Use deleteObjects for targeted removal \\ - Test on a replica index before production"
+    }
+  ]
+}

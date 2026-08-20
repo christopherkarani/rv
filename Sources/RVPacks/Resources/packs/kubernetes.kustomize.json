@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "kubernetes.kustomize",
+  "name": "Kustomize",
+  "version": "0.11.0",
+  "description": "Protects against destructive Kustomize operations when combined \\ with kubectl delete or applied without review",
+  "category": "kubernetes",
+  "enabled_by_default": false,
+  "keywords": [
+    "kustomize",
+    "kubectl"
+  ],
+  "safe_patterns": [
+    {
+      "name": "kustomize-build",
+      "pattern": "kustomize\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+build\\b(?!.*\\|)",
+      "description": ""
+    },
+    {
+      "name": "kubectl-kustomize",
+      "pattern": "kubectl\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+kustomize\\b(?!.*\\|)",
+      "description": ""
+    },
+    {
+      "name": "kustomize-diff",
+      "pattern": "kustomize\\b.*?\\bbuild\\s+.*\\|\\s*kubectl\\b.*?\\s+diff\\b",
+      "description": ""
+    },
+    {
+      "name": "kustomize-dry-run",
+      "pattern": "kustomize\\b.*?\\bbuild\\s+.*\\|\\s*kubectl\\b.*--dry-run(?:=(?:client|server))?(?:\\s|$)",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "kustomize-delete",
+      "pattern": "kustomize\\b.*?\\bbuild\\s+.*\\|\\s*kubectl\\b(?!.*--dry-run(?:=(?:client|server))?(?:\\s|$)).*?\\bdelete",
+      "severity": "critical",
+      "description": "kustomize build | kubectl delete removes all resources in the kustomization.",
+      "explanation": "Piping kustomize build to kubectl delete removes ALL resources defined in the \\ kustomization directory. This can delete entire applications:\n\n\\ - Every resource in kustomization.yaml and its bases is deleted \\ - Deployments, services, configmaps, secrets all removed \\ - Overlays may include resources you didn't expect \\ - No confirmation or preview by default\n\n\\ Safer alternatives: \\ - kustomize build <dir>: Review manifests first \\ - kustomize build <dir> | kubectl delete --dry-run=client -f -: Preview \\ - kustomize build <dir> | kubectl diff -f -: Compare with cluster state"
+    },
+    {
+      "name": "kubectl-kustomize-delete",
+      "pattern": "kubectl\\b.*?\\bkustomize\\s+.*\\|\\s*kubectl\\b(?!.*--dry-run(?:=(?:client|server))?(?:\\s|$)).*?\\bdelete",
+      "severity": "critical",
+      "description": "kubectl kustomize | kubectl delete removes all resources in the kustomization.",
+      "explanation": "Piping kubectl kustomize to kubectl delete removes ALL resources defined in the \\ kustomization directory. This is equivalent to kustomize build | kubectl delete:\n\n\\ - Entire application stack can be deleted \\ - Base and overlay resources are all affected \\ - Includes resources from remote URLs if referenced \\ - Order of deletion may cause cascading failures\n\n\\ Safer alternatives: \\ - kubectl kustomize <dir>: Review manifests first \\ - kubectl delete --dry-run=client -k <dir>: Preview deletion \\ - kubectl diff -k <dir>: Compare with cluster state"
+    },
+    {
+      "name": "kubectl-delete-k",
+      "pattern": "kubectl\\b.*?\\bdelete\\s+-k\\b(?!.*--dry-run(?:=(?:client|server))?(?:\\s|$))",
+      "severity": "critical",
+      "description": "kubectl delete -k removes all resources defined in the kustomization. Use --dry-run first.",
+      "explanation": "kubectl delete -k removes all resources defined in a kustomization directory. \\ This is a convenient but dangerous shorthand:\n\n\\ - All resources in kustomization.yaml are deleted \\ - Includes base resources and all overlays \\ - May include namespaces, PVCs, and other critical resources \\ - No confirmation prompt by default\n\n\\ Safer alternatives: \\ - kubectl delete -k <dir> --dry-run=client: Preview what will be deleted \\ - kubectl kustomize <dir>: Review manifests before deleting \\ - kubectl get -k <dir>: List resources that would be affected"
+    }
+  ]
+}

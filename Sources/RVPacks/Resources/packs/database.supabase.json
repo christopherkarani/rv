@@ -1,0 +1,334 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "database.supabase",
+  "name": "Supabase",
+  "version": "0.11.0",
+  "description": "Protects against destructive Supabase CLI operations including database \\ resets, migration rollbacks, function/secret/storage deletion, project \\ removal, and infrastructure changes",
+  "category": "database",
+  "enabled_by_default": false,
+  "keywords": [
+    "supabase",
+    "db reset",
+    "db push",
+    "migration repair",
+    "migration down",
+    "migration squash",
+    "functions delete",
+    "secrets unset",
+    "storage rm",
+    "projects delete",
+    "orgs delete",
+    "branches delete",
+    "domains delete",
+    "vanity-subdomains delete",
+    "sso remove",
+    "network-restrictions",
+    "config push"
+  ],
+  "safe_patterns": [
+    {
+      "name": "supabase-db-diff",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+db\\s+diff",
+      "description": ""
+    },
+    {
+      "name": "supabase-db-lint",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+db\\s+lint",
+      "description": ""
+    },
+    {
+      "name": "supabase-db-dump",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+db\\s+dump",
+      "description": ""
+    },
+    {
+      "name": "supabase-db-shell-safe",
+      "pattern": "(?i)supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+db\\s+shell\\s*$",
+      "description": ""
+    },
+    {
+      "name": "supabase-inspect-db",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+inspect\\s+db",
+      "description": ""
+    },
+    {
+      "name": "supabase-status",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+status",
+      "description": ""
+    },
+    {
+      "name": "supabase-start",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+start",
+      "description": ""
+    },
+    {
+      "name": "supabase-services",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+services",
+      "description": ""
+    },
+    {
+      "name": "supabase-gen-types",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+gen\\s+types",
+      "description": ""
+    },
+    {
+      "name": "supabase-test-db",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+test\\s+db",
+      "description": ""
+    },
+    {
+      "name": "supabase-migration-list",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+migration\\s+list",
+      "description": ""
+    },
+    {
+      "name": "supabase-migration-new",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+migration\\s+new",
+      "description": ""
+    },
+    {
+      "name": "supabase-migration-fetch",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+migration\\s+fetch",
+      "description": ""
+    },
+    {
+      "name": "supabase-db-push-dry-run",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+db\\s+push\\b.*--dry-run(?:=true)?(?:\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "supabase-functions-list",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+functions\\s+list",
+      "description": ""
+    },
+    {
+      "name": "supabase-functions-serve",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+functions\\s+serve",
+      "description": ""
+    },
+    {
+      "name": "supabase-functions-download",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+functions\\s+download",
+      "description": ""
+    },
+    {
+      "name": "supabase-functions-new",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+functions\\s+new",
+      "description": ""
+    },
+    {
+      "name": "supabase-secrets-list",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+secrets\\s+list",
+      "description": ""
+    },
+    {
+      "name": "supabase-storage-ls",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+storage\\s+ls",
+      "description": ""
+    },
+    {
+      "name": "supabase-projects-list",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+projects\\s+list",
+      "description": ""
+    },
+    {
+      "name": "supabase-orgs-list",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+orgs\\s+list",
+      "description": ""
+    },
+    {
+      "name": "supabase-branches-list",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+branches\\s+list",
+      "description": ""
+    },
+    {
+      "name": "supabase-branches-get",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+branches\\s+get",
+      "description": ""
+    },
+    {
+      "name": "supabase-domains-get",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+domains\\s+get",
+      "description": ""
+    },
+    {
+      "name": "supabase-domains-reverify",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+domains\\s+reverify",
+      "description": ""
+    },
+    {
+      "name": "supabase-vanity-subdomains-get",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+vanity-subdomains\\s+get",
+      "description": ""
+    },
+    {
+      "name": "supabase-vanity-subdomains-check",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+vanity-subdomains\\s+check-availability",
+      "description": ""
+    },
+    {
+      "name": "supabase-sso-list",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+sso\\s+list",
+      "description": ""
+    },
+    {
+      "name": "supabase-sso-show",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+sso\\s+show",
+      "description": ""
+    },
+    {
+      "name": "supabase-sso-info",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+sso\\s+info",
+      "description": ""
+    },
+    {
+      "name": "supabase-network-restrictions-get",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+network-restrictions\\s+get",
+      "description": ""
+    },
+    {
+      "name": "supabase-network-bans-get",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+network-bans\\s+get",
+      "description": ""
+    },
+    {
+      "name": "supabase-ssl-enforcement-get",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+ssl-enforcement\\s+get",
+      "description": ""
+    },
+    {
+      "name": "supabase-postgres-config-get",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+postgres-config\\s+get",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "supabase-db-reset",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+db\\s+reset",
+      "severity": "critical",
+      "description": "supabase db reset drops and recreates the entire database. All data will be lost.",
+      "explanation": "supabase db reset completely destroys and recreates your database:\n\n\\ - All tables, views, and functions are dropped \\ - All data is permanently deleted \\ - Migrations are re-applied from scratch \\ - Seed data (if configured) is re-inserted\n\n\\ This is irreversible for any data not captured in migrations or seeds. \\ With --linked, this targets the remote production database.\n\n\\ Before resetting: \\ supabase db dump -f backup.sql\n\n\\ Review differences first: \\ supabase db diff"
+    },
+    {
+      "name": "supabase-db-push",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+db\\s+push",
+      "severity": "critical",
+      "description": "supabase db push applies migrations to the remote database. Use --dry-run to preview first.",
+      "explanation": "supabase db push applies pending migrations to the remote (linked) database:\n\n\\ - Migrations may include DROP/ALTER statements \\ - Changes to the production database are irreversible \\ - With --linked, this targets the live project database\n\n\\ Always preview changes first: \\ supabase db push --dry-run\n\n\\ Dump remote database before pushing: \\ supabase db dump -f backup.sql --linked"
+    },
+    {
+      "name": "supabase-db-shell-destructive",
+      "pattern": "(?i)supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+db\\s+shell\\s+.*\\b(DROP|TRUNCATE|DELETE|ALTER)\\b",
+      "severity": "high",
+      "description": "supabase db shell with destructive SQL (DROP/TRUNCATE/DELETE/ALTER). Verify the command carefully.",
+      "explanation": "supabase db shell is being invoked with destructive SQL:\n\n\\ - DROP permanently removes database objects \\ - TRUNCATE removes all rows from tables \\ - DELETE without WHERE removes all rows \\ - ALTER can drop columns, change types, or remove constraints\n\n\\ Dump the database before running destructive commands: \\ supabase db dump -f backup.sql\n\n\\ Check row count first: \\ supabase db shell -- -c 'SELECT COUNT(*) FROM tablename'"
+    },
+    {
+      "name": "supabase-migration-repair",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+migration\\s+repair",
+      "severity": "critical",
+      "description": "supabase migration repair modifies the migration history. This can cause drift between schema and migrations.",
+      "explanation": "supabase migration repair alters the migration history table:\n\n\\ - Can mark migrations as applied or reverted \\ - May cause schema drift if used incorrectly \\ - Can break future migration runs\n\n\\ Review migration status first: \\ supabase migration list\n\n\\ Dump the database before repairing: \\ supabase db dump -f backup.sql"
+    },
+    {
+      "name": "supabase-migration-down",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+migration\\s+down",
+      "severity": "critical",
+      "description": "supabase migration down reverts applied migrations. Schema changes and associated data may be lost.",
+      "explanation": "supabase migration down reverts previously applied migrations:\n\n\\ - Reversed migrations may DROP tables, columns, or constraints \\ - Data in dropped objects is permanently lost \\ - With --linked, this targets the remote production database \\ - The --version flag can revert multiple migrations at once\n\n\\ Review applied migrations first: \\ supabase migration list\n\n\\ Dump the database before reverting: \\ supabase db dump -f backup.sql --linked"
+    },
+    {
+      "name": "supabase-migration-squash",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+migration\\s+squash",
+      "severity": "high",
+      "description": "supabase migration squash consolidates migrations and omits data manipulation statements (INSERT/UPDATE/DELETE).",
+      "explanation": "supabase migration squash consolidates multiple migration files into one:\n\n\\ - DML statements (INSERT, UPDATE, DELETE) are omitted \\ - Cron jobs, storage buckets, and vault secrets are lost \\ - These must be manually recreated in the squashed migration \\ - With --linked, modifies the remote migration history\n\n\\ Review migrations before squashing: \\ supabase migration list\n\n\\ Dump the database before squashing: \\ supabase db dump -f backup.sql"
+    },
+    {
+      "name": "supabase-functions-delete",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+functions\\s+delete",
+      "severity": "high",
+      "description": "supabase functions delete removes a deployed Edge Function. This causes immediate downtime for that function.",
+      "explanation": "supabase functions delete permanently removes a deployed Edge Function:\n\n\\ - The function is immediately unavailable \\ - Clients calling the function will receive errors \\ - The function can be re-deployed from local source code\n\n\\ Verify the function first: \\ supabase functions list\n\n\\ Download source before deleting: \\ supabase functions download {function_name}"
+    },
+    {
+      "name": "supabase-storage-rm",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+storage\\s+rm",
+      "severity": "high",
+      "description": "supabase storage rm deletes objects from storage. With --recursive, entire directories are removed.",
+      "explanation": "supabase storage rm permanently deletes objects from Supabase Storage:\n\n\\ - Deleted files cannot be recovered \\ - With --recursive, entire directory trees are removed \\ - User-uploaded content may be permanently lost\n\n\\ List contents before deleting: \\ supabase storage ls {path}\n\n\\ Copy files locally before deleting: \\ supabase storage cp {path} ./backup/"
+    },
+    {
+      "name": "supabase-secrets-unset",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+secrets\\s+unset",
+      "severity": "high",
+      "description": "supabase secrets unset removes secrets from the project. Edge Functions depending on them will break immediately.",
+      "explanation": "supabase secrets unset removes environment variables from the project:\n\n\\ - Edge Functions depending on these secrets will fail \\ - Third-party integrations may break \\ - The secret values cannot be retrieved after removal\n\n\\ List secrets before removing: \\ supabase secrets list"
+    },
+    {
+      "name": "supabase-projects-delete",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+projects\\s+delete",
+      "severity": "critical",
+      "description": "supabase projects delete permanently removes the entire Supabase project and all its data.",
+      "explanation": "supabase projects delete permanently removes a Supabase project:\n\n\\ - The database and all data are deleted \\ - Auth users and sessions are removed \\ - Storage buckets and files are deleted \\ - Edge functions are removed \\ - API keys are invalidated\n\n\\ This action cannot be undone.\n\n\\ Dump the database before deleting: \\ supabase db dump -f backup.sql --linked\n\n\\ Verify the project: \\ supabase projects list"
+    },
+    {
+      "name": "supabase-orgs-delete",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+orgs\\s+delete",
+      "severity": "high",
+      "description": "supabase orgs delete permanently removes the organization and may affect all projects within it.",
+      "explanation": "supabase orgs delete permanently removes a Supabase organization:\n\n\\ - All projects in the organization may be affected \\ - Billing and subscription are cancelled \\ - Team members lose access\n\n\\ This action cannot be undone.\n\n\\ List organization projects first: \\ supabase projects list\n\n\\ Verify the organization: \\ supabase orgs list"
+    },
+    {
+      "name": "supabase-branches-delete",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+branches\\s+delete",
+      "severity": "high",
+      "description": "supabase branches delete permanently removes a preview branch and its database.",
+      "explanation": "supabase branches delete permanently removes a preview database branch:\n\n\\ - The branch database and all its data are deleted \\ - Any pending migrations on the branch are lost \\ - This action cannot be undone\n\n\\ Verify the branch first: \\ supabase branches list\n\n\\ Inspect branch details: \\ supabase branches get --id {branch_id}"
+    },
+    {
+      "name": "supabase-domains-delete",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+domains\\s+delete",
+      "severity": "high",
+      "description": "supabase domains delete removes the custom domain configuration. Clients using the custom domain will lose access.",
+      "explanation": "supabase domains delete removes the custom hostname configuration:\n\n\\ - Clients accessing the service via the custom domain will fail \\ - DNS records may need to be reconfigured \\ - Re-setup requires DNS verification\n\n\\ Check current domain configuration: \\ supabase domains get"
+    },
+    {
+      "name": "supabase-vanity-subdomains-delete",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+vanity-subdomains\\s+delete",
+      "severity": "high",
+      "description": "supabase vanity-subdomains delete removes the vanity subdomain. Clients using it will lose access.",
+      "explanation": "supabase vanity-subdomains delete removes the vanity subdomain:\n\n\\ - Clients using the vanity URL will lose access \\ - Auth flows configured with the vanity URL will break \\ - The subdomain name may not be reclaimable\n\n\\ Check current configuration: \\ supabase vanity-subdomains get"
+    },
+    {
+      "name": "supabase-network-restrictions-update",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+network-restrictions\\s+update",
+      "severity": "high",
+      "description": "supabase network-restrictions update modifies allowed CIDR ranges. Misconfiguration can lock out all database connections.",
+      "explanation": "supabase network-restrictions update modifies the database firewall rules:\n\n\\ - Overly restrictive CIDR ranges can lock out all connections \\ - Including your own application servers and admin access \\ - Recovery may require Supabase support intervention\n\n\\ Check current restrictions first: \\ supabase network-restrictions get"
+    },
+    {
+      "name": "supabase-sso-remove",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+sso\\s+remove",
+      "severity": "critical",
+      "description": "supabase sso remove disconnects an SSO identity provider. All users authenticating via that provider will be locked out.",
+      "explanation": "supabase sso remove disconnects an SSO identity provider:\n\n\\ - All users authenticating via that provider are immediately locked out \\ - Existing sessions may be invalidated \\ - Re-adding the provider requires full reconfiguration\n\n\\ List providers before removing: \\ supabase sso list\n\n\\ Inspect provider details: \\ supabase sso show --id {provider_id}"
+    },
+    {
+      "name": "supabase-config-push",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+config\\s+push",
+      "severity": "high",
+      "description": "supabase config push overwrites the remote project configuration with local config.toml settings.",
+      "explanation": "supabase config push replaces the remote project configuration:\n\n\\ - Auth, database, API, and other settings may be overwritten \\ - Misconfiguration can break authentication flows \\ - Changes take effect immediately on the live project\n\n\\ Review your local config.toml before pushing."
+    },
+    {
+      "name": "supabase-stop-no-backup",
+      "pattern": "supabase(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+stop\\b.*--no-backup",
+      "severity": "high",
+      "description": "supabase stop --no-backup stops the local stack and permanently deletes all data volumes.",
+      "explanation": "supabase stop --no-backup stops the local development stack and deletes data:\n\n\\ - All local database data is permanently deleted \\ - Storage objects in the local stack are removed \\ - Auth users created locally are lost \\ - Combined with --all, deletes ALL local Supabase projects' data\n\n\\ Use 'supabase stop' without --no-backup to preserve data."
+    }
+  ]
+}

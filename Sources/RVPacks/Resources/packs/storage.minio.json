@@ -1,0 +1,129 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "storage.minio",
+  "name": "MinIO",
+  "version": "0.11.0",
+  "description": "Protects against destructive MinIO Client (mc) operations like bucket \\ removal, object deletion, and admin operations.",
+  "category": "storage",
+  "enabled_by_default": false,
+  "keywords": [
+    "mc"
+  ],
+  "safe_patterns": [
+    {
+      "name": "mc-ls",
+      "pattern": "\\bmc\\s+(?:--?\\S+\\s+)*ls(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "mc-cat",
+      "pattern": "\\bmc\\s+(?:--?\\S+\\s+)*cat(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "mc-head",
+      "pattern": "\\bmc\\s+(?:--?\\S+\\s+)*head(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "mc-stat",
+      "pattern": "\\bmc\\s+(?:--?\\S+\\s+)*stat(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "mc-cp",
+      "pattern": "\\bmc\\s+(?:--?\\S+\\s+)*cp(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "mc-diff",
+      "pattern": "\\bmc\\s+(?:--?\\S+\\s+)*diff(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "mc-find",
+      "pattern": "\\bmc\\s+(?:--?\\S+\\s+)*find(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "mc-du",
+      "pattern": "\\bmc\\s+(?:--?\\S+\\s+)*du(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "mc-version",
+      "pattern": "\\bmc\\s+(?:--?\\S+\\s+)*version(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "mc-help",
+      "pattern": "\\bmc\\s+(?:--?\\S+\\s+)*(?:--help|-h)\\b",
+      "description": ""
+    },
+    {
+      "name": "mc-admin-info",
+      "pattern": "\\bmc\\s+(?:--?\\S+\\s+)*admin\\s+info(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "mc-admin-user-list",
+      "pattern": "\\bmc\\s+(?:--?\\S+\\s+)*admin\\s+user\\s+list(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "mc-admin-policy-list",
+      "pattern": "\\bmc\\s+(?:--?\\S+\\s+)*admin\\s+policy\\s+list(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "mc-alias-list",
+      "pattern": "\\bmc\\s+(?:--?\\S+\\s+)*alias\\s+list(?=\\s|$)",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "mc-rb",
+      "pattern": "\\bmc\\s+(?:--?\\S+\\s+)*rb\\b",
+      "severity": "critical",
+      "description": "mc rb removes a MinIO bucket.",
+      "explanation": "Removing a MinIO bucket deletes the bucket and all objects within it. With \\ --force, objects are deleted without confirmation. Applications referencing \\ this bucket will fail immediately.\n\n\\ Safer alternatives: \\ - mc ls: List bucket contents first \\ - mc cp --recursive: Backup to another location \\ - Enable versioning or object locking before testing"
+    },
+    {
+      "name": "mc-rm",
+      "pattern": "\\bmc\\s+(?:--?\\S+\\s+)*rm\\b",
+      "severity": "high",
+      "description": "mc rm deletes objects from MinIO.",
+      "explanation": "Deleting MinIO objects permanently removes data unless versioning is enabled. \\ With --recursive, entire directory trees are deleted. With --force, no \\ confirmation is requested.\n\n\\ Safer alternatives: \\ - mc ls: Preview files to be deleted \\ - mc cp: Backup objects before deletion \\ - Enable bucket versioning for recovery"
+    },
+    {
+      "name": "mc-admin-bucket-delete",
+      "pattern": "\\bmc\\s+(?:--?\\S+\\s+)*admin\\s+bucket\\s+(?:delete|remove)\\b",
+      "severity": "critical",
+      "description": "mc admin bucket delete removes a bucket via admin API.",
+      "explanation": "The admin bucket delete command bypasses normal bucket deletion restrictions. \\ This can remove buckets that are protected or non-empty. The operation is \\ immediate and cannot be undone.\n\n\\ Safer alternatives: \\ - mc admin info: Review cluster configuration \\ - mc ls: Verify bucket contents first \\ - Use standard mc rb for safer deletion"
+    },
+    {
+      "name": "mc-mirror-remove",
+      "pattern": "\\bmc\\s+(?:--?\\S+\\s+)*mirror\\b.*--remove\\b",
+      "severity": "high",
+      "description": "mc mirror --remove deletes destination objects not in source.",
+      "explanation": "The --remove flag deletes objects from the destination that don't exist in \\ the source. If source and destination are swapped, or source is empty, this \\ can result in complete data loss at the destination.\n\n\\ Safer alternatives: \\ - mc diff: Preview differences before mirroring \\ - mc mirror without --remove: Only adds/updates \\ - Backup destination before mirroring"
+    },
+    {
+      "name": "mc-admin-user-remove",
+      "pattern": "\\bmc\\s+(?:--?\\S+\\s+)*admin\\s+user\\s+(?:remove|disable)\\b",
+      "severity": "high",
+      "description": "mc admin user remove/disable affects user access.",
+      "explanation": "Removing or disabling a MinIO user revokes their access to all buckets and \\ policies. Applications using this user's credentials will fail to authenticate. \\ Service accounts created by this user may also be affected.\n\n\\ Safer alternatives: \\ - mc admin user info: Review user permissions first \\ - mc admin user disable: Disable instead of remove \\ - Rotate credentials before removing user"
+    },
+    {
+      "name": "mc-admin-policy-remove",
+      "pattern": "\\bmc\\s+(?:--?\\S+\\s+)*admin\\s+policy\\s+(?:remove|unset)\\b",
+      "severity": "medium",
+      "description": "mc admin policy remove/unset modifies access policies.",
+      "explanation": "Removing or unsetting a policy affects all users and groups assigned to it. \\ Users may unexpectedly lose access to buckets they need. Policy changes take \\ effect immediately.\n\n\\ Safer alternatives: \\ - mc admin policy info: Review policy details \\ - mc admin user list: Check who uses this policy \\ - Create replacement policy before removing old one"
+    }
+  ]
+}

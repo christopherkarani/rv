@@ -1,0 +1,375 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "cloud.aws",
+  "name": "AWS CLI",
+  "version": "0.11.0",
+  "description": "Protects against destructive AWS CLI operations like terminate-instances, \\ delete-db-instance, s3 rm --recursive, Athena/Glue catalog deletions, and \\ destructive Athena queries (DROP, TRUNCATE, DELETE without WHERE)",
+  "category": "cloud",
+  "enabled_by_default": false,
+  "keywords": [
+    "aws",
+    "terminate",
+    "delete",
+    "s3",
+    "ec2",
+    "rds",
+    "ecr",
+    "logs",
+    "athena",
+    "glue",
+    "kms",
+    "secretsmanager",
+    "route53",
+    "cloudtrail",
+    "redshift",
+    "kinesis",
+    "efs"
+  ],
+  "safe_patterns": [
+    {
+      "name": "aws-describe",
+      "pattern": "aws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+\\S+\\s+describe-",
+      "description": ""
+    },
+    {
+      "name": "aws-list",
+      "pattern": "aws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+\\S+\\s+list-",
+      "description": ""
+    },
+    {
+      "name": "aws-get",
+      "pattern": "aws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+\\S+\\s+get-",
+      "description": ""
+    },
+    {
+      "name": "s3-ls",
+      "pattern": "aws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+s3\\s+ls(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "s3-cp",
+      "pattern": "aws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+s3\\s+cp(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "ec2-terminate-dry-run",
+      "pattern": "aws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+ec2\\s+terminate-instances\\b(?![^\\n;&|]*(?:\\s--no-dry-run(?:\\s|$)|\\s--dry-run=false(?:\\s|$)))[^\\n;&|]*\\s--dry-run(?:\\s|$)[^\\n;&|]*$",
+      "description": ""
+    },
+    {
+      "name": "ec2-delete-dry-run",
+      "pattern": "aws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+ec2\\s+delete-[^\\s;&|]+\\b(?![^\\n;&|]*(?:\\s--no-dry-run(?:\\s|$)|\\s--dry-run=false(?:\\s|$)))[^\\n;&|]*\\s--dry-run(?:\\s|$)[^\\n;&|]*$",
+      "description": ""
+    },
+    {
+      "name": "sts-identity",
+      "pattern": "aws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+sts\\s+get-caller-identity(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "cfn-describe",
+      "pattern": "aws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+cloudformation\\s+(?:describe|list)-",
+      "description": ""
+    },
+    {
+      "name": "ecr-login",
+      "pattern": "aws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+ecr\\s+get-login",
+      "description": ""
+    },
+    {
+      "name": "athena-delete-with-where",
+      "pattern": "(?i)aws\\b.*?\\bathena\\s+start-query-execution\\b.*?--query-string[=\\s]+['\"]?\\s*DELETE\\s+FROM\\s+[^\\s;]+\\s+.*?\\bWHERE\\b(?!.*;\\s*[A-Za-z])",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "ec2-terminate",
+      "pattern": "aws\\b.*?\\bec2\\s+terminate-instances",
+      "severity": "critical",
+      "description": "aws ec2 terminate-instances permanently destroys EC2 instances.",
+      "explanation": "terminate-instances permanently destroys EC2 instances:\n\n\\ - Instance is stopped and deleted \\ - Instance store volumes are lost \\ - EBS root volumes deleted (unless DeleteOnTermination=false) \\ - Elastic IPs are disassociated\n\n\\ This cannot be undone. The instance ID will never be reusable.\n\n\\ Preview first: \\ aws ec2 describe-instances --instance-ids i-xxx\n\n\\ Consider stop instead: \\ aws ec2 stop-instances --instance-ids i-xxx"
+    },
+    {
+      "name": "removes AWS resources",
+      "pattern": "aws\\b.*?\\bec2\\s+delete-",
+      "severity": "high",
+      "description": "aws ec2 delete-* permanently removes AWS resources.",
+      "explanation": "EC2 delete commands permanently remove resources:\n\n\\ - delete-snapshot: Removes EBS snapshot (backup data lost) \\ - delete-volume: Destroys EBS volume and all data \\ - delete-vpc: Removes VPC (must be empty) \\ - delete-image: Deregisters AMI \\ - delete-security-group: Removes firewall rules \\ - delete-key-pair: Removes SSH key (can't SSH to instances using it)\n\n\\ Always verify resource IDs: \\ aws ec2 describe-<resource> --<resource>-ids xxx"
+    },
+    {
+      "name": "s3-rm-recursive",
+      "pattern": "aws\\b.*?\\bs3\\s+rm\\s+.*--recursive",
+      "severity": "critical",
+      "description": "aws s3 rm --recursive permanently deletes all objects in the path.",
+      "explanation": "s3 rm --recursive deletes ALL objects under the specified path:\n\n\\ - All files and 'folders' are deleted \\ - Versioned objects: only current version deleted \\ - No trash/recycle bin \\ - Cannot be undone (unless versioning enabled)\n\n\\ Preview what would be deleted: \\ aws s3 ls s3://bucket/path/ --recursive \\ aws s3 rm s3://bucket/path/ --recursive --dryrun\n\n\\ Consider versioning for recovery: \\ aws s3api list-object-versions --bucket bucket"
+    },
+    {
+      "name": "s3-rb",
+      "pattern": "aws\\b.*?\\bs3\\s+rb\\b",
+      "severity": "critical",
+      "description": "aws s3 rb removes the entire S3 bucket.",
+      "explanation": "s3 rb removes an S3 bucket:\n\n\\ - Bucket must be empty (use --force to delete contents first) \\ - With --force: deletes all objects then bucket \\ - Bucket name becomes available for others \\ - Cannot be undone\n\n\\ Check bucket contents: \\ aws s3 ls s3://bucket --recursive --summarize\n\n\\ Verify bucket name: \\ aws s3api head-bucket --bucket bucket-name"
+    },
+    {
+      "name": "s3api-delete-bucket",
+      "pattern": "aws\\b.*?\\bs3api\\s+delete-bucket",
+      "severity": "critical",
+      "description": "aws s3api delete-bucket removes the entire S3 bucket.",
+      "explanation": "s3api delete-bucket removes a bucket (must be empty):\n\n\\ - Returns error if bucket not empty \\ - Bucket name released for reuse by anyone \\ - Associated policies and configurations lost\n\n\\ Empty bucket first if needed: \\ aws s3 rm s3://bucket --recursive\n\n\\ Or use s3 rb --force for both operations."
+    },
+    {
+      "name": "rds-delete",
+      "pattern": "aws\\b.*?\\brds\\s+delete-",
+      "severity": "critical",
+      "description": "aws rds delete-* permanently destroys the database resource (instance, cluster, snapshot, parameter group, subnet group, etc.).",
+      "explanation": "RDS delete commands permanently remove database resources:\n\n\\ - delete-db-instance: Destroys the database instance \\ - delete-db-cluster: Destroys Aurora cluster \\ - delete-db-snapshot: Removes backup \\ - delete-db-cluster-snapshot: Removes cluster backup\n\n\\ Consider: \\ - Create final snapshot before deletion \\ - Skip final snapshot only for test instances\n\n\\ Create backup: \\ aws rds create-db-snapshot --db-instance-id xxx --db-snapshot-id backup"
+    },
+    {
+      "name": "cfn-delete-stack",
+      "pattern": "aws\\b.*?\\bcloudformation\\s+delete-stack",
+      "severity": "critical",
+      "description": "aws cloudformation delete-stack removes the entire stack and its resources.",
+      "explanation": "CloudFormation delete-stack removes the stack AND all resources it created:\n\n\\ - EC2 instances terminated \\ - RDS databases deleted (unless DeletionPolicy: Retain) \\ - S3 buckets removed (if empty) \\ - All IAM resources deleted\n\n\\ Resources with DeletionPolicy: Retain are kept but orphaned.\n\n\\ Preview resources: \\ aws cloudformation describe-stack-resources --stack-name xxx\n\n\\ Consider: \\ aws cloudformation delete-stack --retain-resources res1 res2"
+    },
+    {
+      "name": "lambda-delete",
+      "pattern": "aws\\b.*?\\blambda\\s+delete-",
+      "severity": "high",
+      "description": "aws lambda delete-* permanently removes a Lambda resource (function, alias, layer version, event source mapping, etc.).",
+      "explanation": "delete-function removes a Lambda function completely:\n\n\\ - Function code is deleted \\ - All versions and aliases removed \\ - Event source mappings deleted \\ - Cannot be undone\n\n\\ Backup function code first: \\ aws lambda get-function --function-name xxx --query Code.Location\n\n\\ List versions: \\ aws lambda list-versions-by-function --function-name xxx"
+    },
+    {
+      "name": "iam-delete",
+      "pattern": "aws\\b.*?\\biam\\s+delete-",
+      "severity": "high",
+      "description": "aws iam delete-* removes IAM resources. Verify dependencies first.",
+      "explanation": "IAM delete commands remove identity resources:\n\n\\ - delete-user: Removes IAM user (must detach policies first) \\ - delete-role: Removes role (must detach policies first) \\ - delete-policy: Removes managed policy \\ - delete-group: Removes IAM group\n\n\\ Check dependencies: \\ aws iam list-attached-user-policies --user-name xxx \\ aws iam list-entities-for-policy --policy-arn xxx\n\n\\ Roles used by services (Lambda, EC2) will break!"
+    },
+    {
+      "name": "dynamodb-delete",
+      "pattern": "aws\\b.*?\\bdynamodb\\s+delete-table",
+      "severity": "critical",
+      "description": "aws dynamodb delete-table permanently deletes the table and all data.",
+      "explanation": "delete-table removes a DynamoDB table and ALL its data:\n\n\\ - All items are deleted \\ - Table configuration is lost \\ - Global secondary indexes deleted \\ - Cannot be undone\n\n\\ Backup first: \\ aws dynamodb create-backup --table-name xxx --backup-name backup\n\n\\ Or export to S3: \\ aws dynamodb export-table-to-point-in-time ..."
+    },
+    {
+      "name": "eks-delete",
+      "pattern": "aws\\b.*?\\beks\\s+delete-cluster",
+      "severity": "critical",
+      "description": "aws eks delete-cluster removes the entire EKS cluster.",
+      "explanation": "delete-cluster removes an EKS cluster:\n\n\\ - Control plane is deleted \\ - Node groups must be deleted separately first \\ - Kubernetes resources (deployments, services) are lost \\ - Persistent volumes may remain as orphaned EBS\n\n\\ Delete node groups first: \\ aws eks list-nodegroups --cluster-name xxx \\ aws eks delete-nodegroup --cluster-name xxx --nodegroup-name yyy\n\n\\ Then delete cluster."
+    },
+    {
+      "name": "ecr-delete-repository",
+      "pattern": "aws\\b.*?\\becr\\s+delete-repository",
+      "severity": "high",
+      "description": "aws ecr delete-repository permanently deletes the repository and its images.",
+      "explanation": "delete-repository removes an ECR repository:\n\n\\ - All images in the repository are deleted \\ - Repository configuration lost \\ - Requires --force if repository not empty\n\n\\ List images first: \\ aws ecr list-images --repository-name xxx\n\n\\ Consider keeping critical images: \\ docker pull <account>.dkr.ecr.<region>.amazonaws.com/repo:tag"
+    },
+    {
+      "name": "ecr-batch-delete-image",
+      "pattern": "aws\\b.*?\\becr\\s+batch-delete-image",
+      "severity": "high",
+      "description": "aws ecr batch-delete-image permanently deletes one or more images.",
+      "explanation": "batch-delete-image removes specific images from ECR:\n\n\\ - Images are permanently deleted \\ - Can delete by tag or digest \\ - Running containers using these images may fail on restart\n\n\\ List images: \\ aws ecr describe-images --repository-name xxx\n\n\\ Verify image usage before deletion."
+    },
+    {
+      "name": "ecr-delete-lifecycle-policy",
+      "pattern": "aws\\b.*?\\becr\\s+delete-lifecycle-policy",
+      "severity": "medium",
+      "description": "aws ecr delete-lifecycle-policy removes the repository lifecycle policy.",
+      "explanation": "delete-lifecycle-policy removes automatic image cleanup rules:\n\n\\ - Old images will no longer be automatically deleted \\ - May lead to storage cost increases \\ - Repository will retain all images indefinitely\n\n\\ View current policy: \\ aws ecr get-lifecycle-policy --repository-name xxx"
+    },
+    {
+      "name": "logs-delete-log-group",
+      "pattern": "aws\\b.*?\\blogs\\s+delete-log-group",
+      "severity": "high",
+      "description": "aws logs delete-log-group permanently deletes a log group and all events.",
+      "explanation": "delete-log-group removes a CloudWatch log group:\n\n\\ - All log streams are deleted \\ - All log events are lost \\ - Metric filters and subscriptions removed \\ - Cannot be undone\n\n\\ Export logs before deletion: \\ aws logs create-export-task --log-group-name xxx \\ \\ --destination bucket --from 0 --to $(date +%s)000"
+    },
+    {
+      "name": "logs-delete-log-stream",
+      "pattern": "aws\\b.*?\\blogs\\s+delete-log-stream",
+      "severity": "high",
+      "description": "aws logs delete-log-stream permanently deletes a log stream and all events.",
+      "explanation": "delete-log-stream removes a specific log stream:\n\n\\ - All events in the stream are deleted \\ - Log group remains intact \\ - Cannot be undone\n\n\\ View log stream events before deletion: \\ aws logs get-log-events --log-group-name xxx \\ \\ --log-stream-name yyy --limit 100"
+    },
+    {
+      "name": "kms-schedule-key-deletion",
+      "pattern": "aws\\b.*?\\bkms\\s+schedule-key-deletion",
+      "severity": "critical",
+      "description": "aws kms schedule-key-deletion schedules a KMS key for irreversible deletion — all data encrypted with it becomes unreadable.",
+      "explanation": "schedule-key-deletion starts an irreversible KMS key destruction:\n\n\\ - After the waiting period (min 7 days), the key is deleted \\ - Every piece of data encrypted under this key becomes \\ permanently undecryptable \\ - CancelKeyDeletion can abort within the waiting window \\ - After deletion: data loss is unrecoverable\n\n\\ Prefer `disable-key` if you want to stop usage reversibly: \\ aws kms disable-key --key-id xxx"
+    },
+    {
+      "name": "secretsmanager-delete-secret",
+      "pattern": "aws\\b.*?\\bsecretsmanager\\s+delete-secret",
+      "severity": "critical",
+      "description": "aws secretsmanager delete-secret destroys a stored secret — typically irrecoverable credentials.",
+      "explanation": "delete-secret removes a Secrets Manager secret:\n\n\\ - Default 30-day recovery window unless --force-delete-without-recovery \\ - With --force-delete-without-recovery: immediate & unrecoverable \\ - All rotation history, versions, and values are lost \\ - Credentials for production services can become \\ unrecoverable if not backed up\n\n\\ Restore during the recovery window: \\ aws secretsmanager restore-secret --secret-id xxx"
+    },
+    {
+      "name": "route53-delete-hosted-zone",
+      "pattern": "aws\\b.*?\\broute53\\s+delete-hosted-zone",
+      "severity": "critical",
+      "description": "aws route53 delete-hosted-zone removes a DNS zone — domains stop resolving.",
+      "explanation": "delete-hosted-zone removes a Route53 hosted zone:\n\n\\ - All DNS records in the zone are deleted \\ - Domains configured with this zone's nameservers stop resolving \\ - Production traffic can become unroutable immediately \\ - Cannot be undone\n\n\\ Export records first: \\ aws route53 list-resource-record-sets --hosted-zone-id xxx > zone-backup.json"
+    },
+    {
+      "name": "cloudtrail-delete-trail",
+      "pattern": "aws\\b.*?\\bcloudtrail\\s+delete-trail",
+      "severity": "critical",
+      "description": "aws cloudtrail delete-trail removes an audit trail — compliance/forensics impact.",
+      "explanation": "delete-trail removes a CloudTrail trail:\n\n\\ - Trail configuration is deleted \\ - Historical log files in S3 are NOT deleted (still queryable) \\ - Future events stop being recorded via this trail \\ - Compliance regimes (SOC2, PCI, HIPAA) may require this trail\n\n\\ Consider stop-logging if pausing is sufficient: \\ aws cloudtrail stop-logging --name xxx"
+    },
+    {
+      "name": "redshift-delete-cluster",
+      "pattern": "aws\\b.*?\\bredshift\\s+delete-cluster",
+      "severity": "critical",
+      "description": "aws redshift delete-cluster destroys a Redshift cluster and all loaded data.",
+      "explanation": "delete-cluster removes a Redshift cluster:\n\n\\ - With --skip-final-cluster-snapshot: ALL data is destroyed immediately \\ - Without --skip-final-cluster-snapshot: cluster deleted after final snapshot \\ - Connected BI tools, ETL pipelines, and downstream jobs break \\ - Very expensive to restore (hours of snapshot restore)\n\n\\ Preview: \\ aws redshift describe-clusters --cluster-identifier xxx"
+    },
+    {
+      "name": "kinesis-delete-stream",
+      "pattern": "aws\\b.*?\\bkinesis\\s+delete-stream",
+      "severity": "critical",
+      "description": "aws kinesis delete-stream destroys a data stream — in-flight records are lost.",
+      "explanation": "delete-stream removes a Kinesis data stream:\n\n\\ - All shards, consumers, and in-flight records are lost \\ - Producers and consumers disconnect immediately \\ - Data retained only as long as EnhancedMonitoring/FanOut sinks preserved it \\ - Stream name is reserved briefly; re-creation may fail until it clears"
+    },
+    {
+      "name": "efs-delete-file-system",
+      "pattern": "aws\\b.*?\\befs\\s+delete-file-system",
+      "severity": "critical",
+      "description": "aws efs delete-file-system destroys an EFS filesystem — all files and mount targets are lost.",
+      "explanation": "delete-file-system removes an EFS filesystem:\n\n\\ - All files in the filesystem are permanently deleted \\ - Mount targets and access points are removed \\ - Cannot be undone (no built-in recovery) \\ - Take a backup first via AWS Backup or rsync out: \\ aws backup start-backup-job --backup-vault-name xxx \\ \\ --resource-arn arn:aws:elasticfilesystem:...:file-system/fs-xxx \\ \\ --iam-role-arn arn:aws:iam::...:role/backup-role"
+    },
+    {
+      "name": "s3api-delete-object",
+      "pattern": "aws\\b.*?\\bs3api\\s+delete-object",
+      "severity": "high",
+      "description": "aws s3api delete-object[s]/delete-object-tagging — object(s) or tags are gone unless bucket versioning is enabled.",
+      "explanation": "delete-object / delete-objects / delete-object-tagging:\n\n\\ - Without bucket versioning: objects or tags are permanently gone \\ - With versioning (objects only): a delete marker is added; past versions recoverable \\ - delete-objects is BATCH (up to 1000 keys per call) — a misfire can wipe thousands \\ - No trash/recycle bin\n\n\\ Check versioning first: \\ aws s3api get-bucket-versioning --bucket xxx\n\n\\ Preview the keys about to be deleted: \\ aws s3api list-objects-v2 --bucket xxx --prefix yyy/"
+    },
+    {
+      "name": "athena-delete-data-catalog",
+      "pattern": "aws\\b.*?\\bathena\\s+delete-data-catalog\\b",
+      "severity": "critical",
+      "description": "aws athena delete-data-catalog removes the data catalog and all \\\n             database/table definitions tied to it.",
+      "explanation": "delete-data-catalog detaches and removes an Athena DataCatalog:\n\n\\ - All databases and table definitions linked to the catalog are lost \\ - Queries referencing this catalog will fail \\ - Underlying S3 data is NOT deleted, but becomes unreadable via Athena \\ - Cannot be undone (catalog metadata is gone)\n\n\\ List catalogs first: \\ aws athena list-data-catalogs \\ aws athena get-data-catalog --name xxx"
+    },
+    {
+      "name": "athena-delete-work-group",
+      "pattern": "aws\\b.*?\\bathena\\s+delete-work-group\\b",
+      "severity": "high",
+      "description": "aws athena delete-work-group removes the Athena workgroup and its configuration.",
+      "explanation": "delete-work-group removes an Athena workgroup:\n\n\\ - Query history, IAM-scoped configuration, and cost controls are lost \\ - In-flight queries are cancelled \\ - With --recursive-delete-option, named queries in the workgroup are also dropped\n\n\\ Preview first: \\ aws athena get-work-group --work-group xxx"
+    },
+    {
+      "name": "athena-delete-named-query",
+      "pattern": "aws\\b.*?\\bathena\\s+delete-named-query\\b",
+      "severity": "medium",
+      "description": "aws athena delete-named-query permanently removes a saved query.",
+      "explanation": "delete-named-query deletes a saved Athena query:\n\n\\ - The stored query text and metadata are removed \\ - No data is lost, but the query must be rewritten from scratch if \\ it wasn't stored elsewhere\n\n\\ Retrieve the query before deleting: \\ aws athena get-named-query --named-query-id xxx"
+    },
+    {
+      "name": "athena-query-drop-database",
+      "pattern": "(?is)aws\\b.*?\\bathena\\s+start-query-execution\\b.*\\bDROP\\s+(?:DATABASE|SCHEMA)\\b",
+      "severity": "critical",
+      "description": "Athena DROP DATABASE/SCHEMA removes the database from the Glue catalog.",
+      "explanation": "DROP DATABASE/SCHEMA removes a database from the Glue catalog:\n\n\\ - All table definitions inside the database are lost \\ - Queries referencing this database will fail \\ - Underlying S3 data is NOT deleted, just unreadable via Athena \\ - Cannot be undone (catalog metadata lost)\n\n\\ List tables first: \\ aws athena start-query-execution \\ \\ --query-string 'SHOW TABLES IN database_name'\n\n\\ For more control, use `aws glue delete-database` \\ (which this pack also blocks)."
+    },
+    {
+      "name": "athena-query-drop-table",
+      "pattern": "(?is)aws\\b.*?\\bathena\\s+start-query-execution\\b.*\\bDROP\\s+(?:TABLE|VIEW|EXTERNAL\\s+TABLE)\\b",
+      "severity": "high",
+      "description": "Athena DROP TABLE/VIEW removes the table definition from the Glue catalog.",
+      "explanation": "DROP TABLE/VIEW removes a table or view from the catalog:\n\n\\ - Table definition is lost \\ - Queries referencing this table will fail \\ - Underlying S3 data is NOT deleted\n\n\\ Preview schema first: \\ aws athena start-query-execution \\ \\ --query-string 'SHOW CREATE TABLE db.table'"
+    },
+    {
+      "name": "athena-query-truncate",
+      "pattern": "(?is)aws\\b.*?\\bathena\\s+start-query-execution\\b.*\\bTRUNCATE\\s+TABLE\\b",
+      "severity": "critical",
+      "description": "Athena TRUNCATE TABLE deletes all rows from an Iceberg table.",
+      "explanation": "TRUNCATE TABLE in Athena (Iceberg tables):\n\n\\ - All rows are deleted from the table \\ - The table definition is preserved \\ - Underlying S3 objects are removed for Iceberg tables \\ - Cannot be undone (no implicit snapshot retention)\n\n\\ Consider a targeted DELETE with WHERE clause instead."
+    },
+    {
+      "name": "athena-query-string-from-file",
+      "pattern": "(?i)aws\\b.*?\\bathena\\s+start-query-execution\\b.*--query-string[=\\s]+['\"]?\\s*(?:file|fileb)://",
+      "severity": "high",
+      "description": "Athena --query-string loaded from file:// or fileb:// — SQL content is opaque to the guard.",
+      "explanation": "Athena `start-query-execution --query-string file://…` loads the \\ SQL from disk, so the engine can't inspect the statement. The file may \\ contain DROP DATABASE, TRUNCATE TABLE, or an unscoped DELETE.\n\n\\ Prefer the inline form so the guard can see what you're running: \\ aws athena start-query-execution \\ \\ --query-string 'SELECT … FROM …'\n\n\\ If a file-loaded query is genuinely required, cat it first so \\ the content is inspectable, and allowlist this rule in your \\ project the engine config with a justification."
+    },
+    {
+      "name": "athena-cli-input-file",
+      "pattern": "(?i)aws\\b.*?\\bathena\\s+start-query-execution\\b.*--cli-input-(?:json|yaml)[=\\s]+['\"]?\\s*(?:file|fileb)://",
+      "severity": "high",
+      "description": "Athena --cli-input-json/yaml loaded from file:// or fileb:// — content is opaque to the guard.",
+      "explanation": "`--cli-input-json file://…` (or `-yaml`) supplies the whole \\ invocation — including QueryString — from a file on disk. the engine \\ only greps the command line, so a DROP or TRUNCATE buried in \\ the JSON/YAML body on disk slips past every other Athena rule.\n\n\\ Inline JSON/YAML (e.g. `--cli-input-json '{…}'`) is still \\ allowed because the engine can read the literal in the command line \\ and catch a DROP there.\n\n\\ Prefer explicit `--query-string '…'`, or inline the JSON blob. \\ If the file-backed form is genuinely required, allowlist this \\ rule with a justification."
+    },
+    {
+      "name": "athena-query-delete-without-where",
+      "pattern": "(?is)aws\\b.*?\\bathena\\s+start-query-execution\\b.*\\bDELETE\\s+FROM\\s+\\S+",
+      "severity": "critical",
+      "description": "Athena DELETE without a WHERE clause removes all rows from the target table.",
+      "explanation": "DELETE FROM <table> without a WHERE clause:\n\n\\ - Every row in the table is deleted \\ - Iceberg tables: underlying S3 data is dropped \\ - Hive tables: operation fails (Athena rejects unscoped DELETE on Hive) \\ - Cannot be undone (no automatic snapshots)\n\n\\ Rewrite with a WHERE clause that scopes the deletion: \\ DELETE FROM db.table WHERE <predicate>"
+    },
+    {
+      "name": "glue-delete-database",
+      "pattern": "aws\\b.*?\\bglue\\s+delete-database\\b",
+      "severity": "critical",
+      "description": "aws glue delete-database removes the database and every table definition inside it.",
+      "explanation": "delete-database drops a Glue database and every table/partition in it:\n\n\\ - All table definitions in the database are lost \\ - Athena / EMR / Redshift Spectrum queries referencing these tables will fail \\ - Underlying S3 data is preserved, but becomes unreadable via the catalog \\ - Cannot be undone (metadata is gone)\n\n\\ List tables first: \\ aws glue get-tables --database-name xxx"
+    },
+    {
+      "name": "glue-delete-table",
+      "pattern": "aws\\b.*?\\bglue\\s+delete-table\\b",
+      "severity": "high",
+      "description": "aws glue delete-table removes the table definition from the catalog.",
+      "explanation": "delete-table removes a Glue table definition:\n\n\\ - Table schema and partition metadata are lost \\ - Underlying S3 data is NOT deleted \\ - Queries referencing this table will fail\n\n\\ Preview the table first: \\ aws glue get-table --database-name xxx --name yyy"
+    },
+    {
+      "name": "glue-batch-delete-table",
+      "pattern": "aws\\b.*?\\bglue\\s+batch-delete-table\\b",
+      "severity": "critical",
+      "description": "aws glue batch-delete-table removes multiple table definitions in one call.",
+      "explanation": "batch-delete-table drops several Glue tables in one API call:\n\n\\ - All listed table definitions are lost \\ - Underlying S3 data is preserved \\ - Queries referencing these tables will fail \\ - Cannot be undone\n\n\\ Review the exact names first: \\ aws glue get-tables --database-name xxx"
+    },
+    {
+      "name": "glue-delete-partition",
+      "pattern": "aws\\b.*?\\bglue\\s+delete-partition\\b",
+      "severity": "high",
+      "description": "aws glue delete-partition removes partition metadata; the partition is no longer \\\n             queryable until recreated.",
+      "explanation": "delete-partition removes a Glue partition's metadata:\n\n\\ - Partition metadata is lost (column stats, location pointer) \\ - Underlying S3 data is preserved \\ - Queries scoped to that partition will return no rows until re-registered"
+    },
+    {
+      "name": "glue-batch-delete-partition",
+      "pattern": "aws\\b.*?\\bglue\\s+batch-delete-partition\\b",
+      "severity": "high",
+      "description": "aws glue batch-delete-partition removes multiple partition definitions in one call.",
+      "explanation": "batch-delete-partition drops several Glue partitions at once:\n\n\\ - Every listed partition's metadata is lost \\ - Underlying S3 data is preserved \\ - Recreate via `aws glue batch-create-partition` if you still have the list"
+    },
+    {
+      "name": "glue-delete-crawler",
+      "pattern": "aws\\b.*?\\bglue\\s+delete-crawler\\b",
+      "severity": "medium",
+      "description": "aws glue delete-crawler removes the crawler configuration.",
+      "explanation": "delete-crawler removes a Glue crawler:\n\n\\ - Crawler configuration (targets, schedule, schema detection rules) is lost \\ - Schedules and classifiers tied to the crawler are orphaned \\ - Can be re-created from Infrastructure-as-Code if present"
+    },
+    {
+      "name": "glue-delete-job",
+      "pattern": "aws\\b.*?\\bglue\\s+delete-job\\b",
+      "severity": "high",
+      "description": "aws glue delete-job removes the ETL job definition and all of its run history.",
+      "explanation": "delete-job removes a Glue ETL job:\n\n\\ - Job script reference, connections, arguments, and schedule are lost \\ - All run history and metrics for the job are removed \\ - Scheduled triggers referencing the job will fail\n\n\\ Export the job definition first: \\ aws glue get-job --job-name xxx > job-backup.json"
+    },
+    {
+      "name": "glue-delete-dev-endpoint",
+      "pattern": "aws\\b.*?\\bglue\\s+delete-dev-endpoint\\b",
+      "severity": "medium",
+      "description": "aws glue delete-dev-endpoint tears down the development endpoint and any attached \\\n             SageMaker notebook configuration.",
+      "explanation": "delete-dev-endpoint shuts down a Glue DevEndpoint:\n\n\\ - Endpoint is stopped and deleted \\ - Attached SageMaker notebook (if any) must be cleaned up separately \\ - Ongoing sessions / jobs on the endpoint are terminated"
+    }
+  ]
+}

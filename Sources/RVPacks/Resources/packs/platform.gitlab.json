@@ -1,0 +1,140 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "platform.gitlab",
+  "name": "GitLab Platform",
+  "version": "0.11.0",
+  "description": "Protects against destructive GitLab platform operations like deleting projects, \\ releases, protected branches, and webhooks.",
+  "category": "platform",
+  "enabled_by_default": false,
+  "keywords": [
+    "glab",
+    "gitlab-rails",
+    "gitlab-rake"
+  ],
+  "safe_patterns": [
+    {
+      "name": "glab-repo-list",
+      "pattern": "glab(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+repo\\s+list\\b",
+      "description": ""
+    },
+    {
+      "name": "glab-repo-view",
+      "pattern": "glab(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+repo\\s+view\\b",
+      "description": ""
+    },
+    {
+      "name": "glab-repo-clone",
+      "pattern": "glab(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+repo\\s+clone\\b",
+      "description": ""
+    },
+    {
+      "name": "glab-mr-list",
+      "pattern": "glab(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+mr\\s+list\\b",
+      "description": ""
+    },
+    {
+      "name": "glab-mr-view",
+      "pattern": "glab(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+mr\\s+view\\b",
+      "description": ""
+    },
+    {
+      "name": "glab-issue-list",
+      "pattern": "glab(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+issue\\s+list\\b",
+      "description": ""
+    },
+    {
+      "name": "glab-issue-view",
+      "pattern": "glab(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+issue\\s+view\\b",
+      "description": ""
+    },
+    {
+      "name": "glab-variable-list",
+      "pattern": "glab(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+variable\\s+list\\b",
+      "description": ""
+    },
+    {
+      "name": "glab-release-list",
+      "pattern": "glab(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+release\\s+list\\b",
+      "description": ""
+    },
+    {
+      "name": "glab-release-view",
+      "pattern": "glab(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+release\\s+view\\b",
+      "description": ""
+    },
+    {
+      "name": "glab-api-explicit-get",
+      "pattern": "glab(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+api\\b.*(?:-X\\s*|--method(?:=|\\s+))GET\\b",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "glab-repo-delete",
+      "pattern": "glab(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+repo\\s+delete\\b",
+      "severity": "high",
+      "description": "glab repo delete permanently deletes a GitLab project."
+    },
+    {
+      "name": "glab-repo-archive",
+      "pattern": "glab(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+repo\\s+archive\\b",
+      "severity": "high",
+      "description": "glab repo archive makes a GitLab project read-only."
+    },
+    {
+      "name": "glab-release-delete",
+      "pattern": "glab(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+release\\s+delete\\b",
+      "severity": "high",
+      "description": "glab release delete removes GitLab releases."
+    },
+    {
+      "name": "glab-variable-delete",
+      "pattern": "glab(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+variable\\s+(?:delete|remove)\\b",
+      "severity": "high",
+      "description": "glab variable delete removes GitLab CI/CD variables."
+    },
+    {
+      "name": "glab-api-delete-project",
+      "pattern": "glab(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+api\\b.*(?:-X\\s*|--method(?:=|\\s+))DELETE\\b.*(?:/)?projects/[^/\\s]+(?:\\s|$)",
+      "severity": "high",
+      "description": "glab api DELETE /projects/* deletes a GitLab project."
+    },
+    {
+      "name": "glab-api-delete-release",
+      "pattern": "glab(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+api\\b.*(?:-X\\s*|--method(?:=|\\s+))DELETE\\b.*(?:/)?projects/[^/\\s]+/releases/",
+      "severity": "high",
+      "description": "glab api DELETE releases removes GitLab releases."
+    },
+    {
+      "name": "glab-api-delete-variable",
+      "pattern": "glab(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+api\\b.*(?:-X\\s*|--method(?:=|\\s+))DELETE\\b.*(?:/)?projects/[^/\\s]+/variables/",
+      "severity": "high",
+      "description": "glab api DELETE variables removes CI/CD variables."
+    },
+    {
+      "name": "glab-api-delete-protected-branch",
+      "pattern": "glab(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+api\\b.*(?:-X\\s*|--method(?:=|\\s+))DELETE\\b.*(?:/)?protected_branches/",
+      "severity": "high",
+      "description": "glab api DELETE protected_branches removes branch protections."
+    },
+    {
+      "name": "glab-api-delete-hook",
+      "pattern": "glab(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+api\\b.*(?:-X\\s*|--method(?:=|\\s+))DELETE\\b.*(?:/)?hooks/",
+      "severity": "high",
+      "description": "glab api DELETE hooks removes GitLab webhooks."
+    },
+    {
+      "name": "gitlab-rails-runner-destructive",
+      "pattern": "gitlab-rails\\s+runner\\b.*\\b(?:destroy_all|delete_all|\\.destroy\\b|\\.delete\\b|truncate|drop)\\b",
+      "severity": "high",
+      "description": "gitlab-rails runner destructive operations can remove data."
+    },
+    {
+      "name": "gitlab-rake-destructive",
+      "pattern": "gitlab-rake\\b.*\\b(?:gitlab:)?backup:restore\\b|gitlab-rake\\b.*\\b(?:gitlab:)?db:(?:drop|reset)\\b",
+      "severity": "high",
+      "description": "gitlab-rake destructive maintenance tasks can delete or replace data."
+    }
+  ]
+}

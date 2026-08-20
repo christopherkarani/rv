@@ -1,0 +1,133 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "cdn.cloudflare_workers",
+  "name": "Cloudflare Workers",
+  "version": "0.11.0",
+  "description": "Protects against destructive Cloudflare Workers, KV, R2, and D1 operations \\ via the Wrangler CLI.",
+  "category": "cdn",
+  "enabled_by_default": false,
+  "keywords": [
+    "wrangler"
+  ],
+  "safe_patterns": [
+    {
+      "name": "wrangler-whoami",
+      "pattern": "wrangler(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+whoami(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "wrangler-kv-get",
+      "pattern": "wrangler(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+kv(?::|\\s+)key\\s+get(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "wrangler-kv-list",
+      "pattern": "wrangler(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+kv(?::|\\s+)key\\s+list(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "wrangler-kv-namespace-list",
+      "pattern": "wrangler(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+kv(?::|\\s+)namespace\\s+list(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "wrangler-r2-object-get",
+      "pattern": "wrangler(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+r2\\s+object\\s+get(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "wrangler-r2-bucket-list",
+      "pattern": "wrangler(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+r2\\s+bucket\\s+list(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "wrangler-d1-list",
+      "pattern": "wrangler(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+d1\\s+list(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "wrangler-d1-info",
+      "pattern": "wrangler(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+d1\\s+info(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "wrangler-dev",
+      "pattern": "wrangler(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+dev(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "wrangler-tail",
+      "pattern": "wrangler(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+tail(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "wrangler-version",
+      "pattern": "wrangler(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+(?:-v|--version|version)(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "wrangler-help",
+      "pattern": "wrangler(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+(?:-h|--help|help)(?=\\s|$)",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "wrangler-delete",
+      "pattern": "wrangler(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+delete\\b",
+      "severity": "critical",
+      "description": "wrangler delete removes a Worker from Cloudflare.",
+      "explanation": "Deleting a Cloudflare Worker immediately stops all edge processing for that \\ Worker. Any routes pointing to it will return errors. Custom domains and \\ bindings (KV, R2, D1) associated with the Worker remain but become orphaned.\n\n\\ Safer alternatives: \\ - wrangler deployments list: Review deployment history first \\ - Disable routes instead of deleting the Worker \\ - Use wrangler tail to verify traffic before deletion"
+    },
+    {
+      "name": "wrangler-deployments-rollback",
+      "pattern": "wrangler(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+deployments\\s+rollback\\b",
+      "severity": "high",
+      "description": "wrangler deployments rollback reverts to a previous Worker version.",
+      "explanation": "Rolling back a deployment replaces your current Worker code with a previous \\ version. This can reintroduce bugs, break API compatibility, or cause issues \\ if the previous version relies on removed bindings or environment variables.\n\n\\ Safer alternatives: \\ - wrangler deployments list: Review available versions first \\ - Test the target version in a staging environment \\ - Deploy a fix forward instead of rolling back"
+    },
+    {
+      "name": "wrangler-kv-key-delete",
+      "pattern": "wrangler(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+kv(?::|\\s+)key\\s+delete\\b",
+      "severity": "medium",
+      "description": "wrangler kv key delete removes a key from KV storage.",
+      "explanation": "Deleting a KV key immediately removes the data at all edge locations. \\ Applications reading this key will receive null or errors. KV deletions \\ propagate globally within seconds.\n\n\\ Safer alternatives: \\ - wrangler kv:key get: Retrieve and backup the value first \\ - Set an expiration instead of deleting for temporary data \\ - Use KV namespaces for environment separation"
+    },
+    {
+      "name": "wrangler-kv-namespace-delete",
+      "pattern": "wrangler(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+kv(?::|\\s+)namespace\\s+delete\\b",
+      "severity": "critical",
+      "description": "wrangler kv namespace delete removes an entire KV namespace.",
+      "explanation": "Deleting a KV namespace permanently removes ALL keys and values within it. \\ Any Workers bound to this namespace will fail when accessing KV. This cannot \\ be undone and all data is lost.\n\n\\ Safer alternatives: \\ - wrangler kv:key list: Inventory all keys first \\ - Export data before deletion \\ - Remove Worker bindings before deleting the namespace"
+    },
+    {
+      "name": "wrangler-kv-bulk-delete",
+      "pattern": "wrangler(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+kv(?::|\\s+)bulk\\s+delete\\b",
+      "severity": "high",
+      "description": "wrangler kv bulk delete removes multiple keys from KV storage.",
+      "explanation": "Bulk delete removes many KV keys at once based on a JSON file. This is \\ efficient but dangerous - a malformed keys file can delete unintended data. \\ All deletions are immediate and irreversible.\n\n\\ Safer alternatives: \\ - Review the keys JSON file carefully before execution \\ - Test with a single wrangler kv:key delete first \\ - Back up affected keys before bulk deletion"
+    },
+    {
+      "name": "wrangler-r2-object-delete",
+      "pattern": "wrangler(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+r2\\s+object\\s+delete\\b",
+      "severity": "medium",
+      "description": "wrangler r2 object delete removes an object from R2 storage.",
+      "explanation": "Deleting an R2 object permanently removes the file from storage. Any URLs \\ or Workers accessing this object will receive 404 errors. Unlike S3, R2 does \\ not charge for delete operations but data is unrecoverable.\n\n\\ Safer alternatives: \\ - wrangler r2 object get: Download the object first \\ - Use object lifecycle rules for automatic expiration \\ - Move to a separate 'archive' bucket instead of deleting"
+    },
+    {
+      "name": "wrangler-r2-bucket-delete",
+      "pattern": "wrangler(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+r2\\s+bucket\\s+delete\\b",
+      "severity": "critical",
+      "description": "wrangler r2 bucket delete removes an entire R2 bucket.",
+      "explanation": "Deleting an R2 bucket removes the bucket and ALL objects within it. Workers \\ bound to this bucket will fail. The bucket name becomes available for reuse \\ by any Cloudflare account.\n\n\\ Safer alternatives: \\ - wrangler r2 bucket list: Verify the bucket contents \\ - Empty the bucket and verify it's truly unused \\ - Remove Worker bindings before bucket deletion"
+    },
+    {
+      "name": "wrangler-d1-delete",
+      "pattern": "wrangler(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+d1\\s+delete\\b",
+      "severity": "critical",
+      "description": "wrangler d1 delete removes a D1 database.",
+      "explanation": "Deleting a D1 database permanently removes all tables, data, and schema. \\ Workers bound to this database will fail with binding errors. D1 databases \\ cannot be recovered after deletion.\n\n\\ Safer alternatives: \\ - wrangler d1 export: Export the database first \\ - wrangler d1 info: Review database details \\ - Remove Worker bindings before deletion"
+    }
+  ]
+}

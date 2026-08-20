@@ -1,0 +1,228 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "cloud.gcp",
+  "name": "Google Cloud SDK",
+  "version": "0.11.0",
+  "description": "Protects against destructive gcloud operations like instances delete, \\ sql instances delete, and gsutil rm -r",
+  "category": "cloud",
+  "enabled_by_default": false,
+  "keywords": [
+    "gcloud",
+    "gsutil",
+    "delete",
+    "instances",
+    "artifacts",
+    "images",
+    "repositories",
+    "gcloud",
+    "bq",
+    "secrets",
+    "kms",
+    "iam",
+    "dns",
+    "spanner",
+    "bigtable",
+    "dataproc"
+  ],
+  "safe_patterns": [
+    {
+      "name": "gcloud-describe",
+      "pattern": "gcloud\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+\\S+\\s+\\S+\\s+describe(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "gcloud-list",
+      "pattern": "gcloud\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+\\S+\\s+\\S+\\s+list(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "gsutil-ls",
+      "pattern": "gsutil\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+ls(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "gsutil-cp",
+      "pattern": "gsutil\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+cp(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "gcloud-config",
+      "pattern": "gcloud\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+config(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "gcloud-auth",
+      "pattern": "gcloud\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+auth(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "gcloud-info",
+      "pattern": "gcloud\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+info(?=\\s|$)",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "compute-delete",
+      "pattern": "gcloud\\b.*?\\bcompute\\s+instances\\s+delete",
+      "severity": "critical",
+      "description": "gcloud compute instances delete permanently destroys VM instances.",
+      "explanation": "compute instances delete permanently destroys VMs:\n\n\\ - Instance is stopped and deleted \\ - Boot disk deleted (unless --keep-disks specified) \\ - External IPs released back to pool \\ - Instance metadata and logs lost\n\n\\ Use --keep-disks=boot,data to preserve disks for recovery."
+    },
+    {
+      "name": "disk-delete",
+      "pattern": "gcloud\\b.*?\\bcompute\\s+disks\\s+delete",
+      "severity": "critical",
+      "description": "gcloud compute disks delete permanently destroys disk data.",
+      "explanation": "compute disks delete permanently destroys persistent disks:\n\n\\ - All data on the disk is lost forever \\ - Cannot be recovered without snapshots \\ - Any instances using the disk will fail\n\n\\ Create a snapshot before deletion: gcloud compute disks snapshot DISK"
+    },
+    {
+      "name": "sql-delete",
+      "pattern": "gcloud\\b.*?\\bsql\\s+instances\\s+delete",
+      "severity": "critical",
+      "description": "gcloud sql instances delete permanently destroys the Cloud SQL instance.",
+      "explanation": "sql instances delete permanently destroys Cloud SQL:\n\n\\ - Database and all data deleted \\ - All backups deleted (unless retained) \\ - Read replicas also deleted \\ - IP addresses released\n\n\\ Export data first: gcloud sql export sql INSTANCE gs://bucket/file.sql"
+    },
+    {
+      "name": "gsutil-rm-recursive",
+      "pattern": "gsutil\\b.*?\\brm\\s+.*-r|gsutil\\b.*?\\brm\\s+-[a-z]*r",
+      "severity": "critical",
+      "description": "gsutil rm -r permanently deletes all objects in the path.",
+      "explanation": "gsutil rm -r recursively deletes all objects:\n\n\\ - All objects under the path are deleted \\ - Cannot be recovered without versioning enabled \\ - -m flag parallelizes (faster but same risk)\n\n\\ List first: gsutil ls -r gs://bucket/path/ \\ Enable versioning: gsutil versioning set on gs://bucket"
+    },
+    {
+      "name": "gsutil-rb",
+      "pattern": "gsutil\\b.*?\\brb(?=\\s|$)",
+      "severity": "critical",
+      "description": "gsutil rb removes the entire GCS bucket.",
+      "explanation": "gsutil rb removes the entire Cloud Storage bucket:\n\n\\ - Bucket must be empty (or use -f to force) \\ - Bucket name becomes available to others \\ - All bucket-level permissions lost\n\n\\ List contents first: gsutil ls gs://bucket/"
+    },
+    {
+      "name": "gke-delete",
+      "pattern": "gcloud\\b.*?\\bcontainer\\s+clusters\\s+delete",
+      "severity": "critical",
+      "description": "gcloud container clusters delete removes the entire GKE cluster.",
+      "explanation": "container clusters delete removes the entire GKE cluster:\n\n\\ - All nodes and workloads terminated \\ - Persistent volumes may be deleted \\ - Load balancers and IPs released \\ - Cluster-level secrets lost\n\n\\ Backup workloads: kubectl get all -A -o yaml > backup.yaml"
+    },
+    {
+      "name": "project-delete",
+      "pattern": "gcloud\\b.*?\\bprojects\\s+delete",
+      "severity": "critical",
+      "description": "gcloud projects delete removes the entire GCP project and ALL its resources!",
+      "explanation": "projects delete removes the ENTIRE GCP project:\n\n\\ - ALL resources in the project deleted \\ - All VMs, databases, storage, functions \\ - All IAM policies and service accounts \\ - 30-day recovery window, then permanent\n\n\\ This is the most destructive GCP command possible!"
+    },
+    {
+      "name": "functions-delete",
+      "pattern": "gcloud\\b.*?\\bfunctions\\s+delete",
+      "severity": "high",
+      "description": "gcloud functions delete removes the Cloud Function.",
+      "explanation": "functions delete removes Cloud Functions:\n\n\\ - Function code and configuration deleted \\ - Triggers and event subscriptions removed \\ - Function URL becomes unavailable\n\n\\ Export source first if not in version control."
+    },
+    {
+      "name": "pubsub-delete",
+      "pattern": "gcloud\\b.*?\\bpubsub\\s+(?:topics|subscriptions)\\s+delete",
+      "severity": "high",
+      "description": "gcloud pubsub delete removes Pub/Sub topics or subscriptions.",
+      "explanation": "pubsub delete removes messaging infrastructure:\n\n\\ - Topic deletion removes all subscriptions \\ - Unacknowledged messages are lost \\ - Publishers will fail until recreated\n\n\\ Check subscribers: gcloud pubsub topics list-subscriptions TOPIC"
+    },
+    {
+      "name": "firestore-delete",
+      "pattern": "gcloud\\b.*?\\bfirestore\\s+.*delete",
+      "severity": "critical",
+      "description": "gcloud firestore delete removes Firestore data.",
+      "explanation": "firestore delete removes Firestore documents:\n\n\\ - Documents and collections deleted \\ - Subcollections may remain (delete recursively) \\ - No automatic backups by default\n\n\\ Export first: gcloud firestore export gs://bucket/backup"
+    },
+    {
+      "name": "container-images-delete",
+      "pattern": "gcloud\\b.*?\\bcontainer\\s+images\\s+delete",
+      "severity": "high",
+      "description": "gcloud container images delete permanently deletes container images.",
+      "explanation": "container images delete removes images from GCR:\n\n\\ - Image tags and digests deleted \\ - Running containers unaffected (cached) \\ - New pulls will fail\n\n\\ List tags first: gcloud container images list-tags IMAGE"
+    },
+    {
+      "name": "artifacts-docker-images-delete",
+      "pattern": "gcloud\\b.*?\\bartifacts\\s+docker\\s+images\\s+delete",
+      "severity": "high",
+      "description": "gcloud artifacts docker images delete permanently deletes container images.",
+      "explanation": "artifacts docker images delete removes images from Artifact Registry:\n\n\\ - Specified image version deleted \\ - Other tags pointing to same digest unaffected \\ - Consider cleanup policies instead\n\n\\ List versions: gcloud artifacts docker images list REPO"
+    },
+    {
+      "name": "artifacts-repositories-delete",
+      "pattern": "gcloud\\b.*?\\bartifacts\\s+repositories\\s+delete",
+      "severity": "critical",
+      "description": "gcloud artifacts repositories delete permanently deletes the repository.",
+      "explanation": "artifacts repositories delete removes entire repository:\n\n\\ - All packages/images in repository deleted \\ - Repository configuration lost \\ - IAM policies on repository removed\n\n\\ List contents: gcloud artifacts packages list --repository=REPO"
+    },
+    {
+      "name": "secrets-delete",
+      "pattern": "gcloud\\b.*?\\bsecrets\\s+delete",
+      "severity": "critical",
+      "description": "gcloud secrets delete destroys a Secret Manager secret — credentials gone.",
+      "explanation": "secrets delete removes a Secret Manager secret:\n\n\\ - Secret and ALL its versions are permanently deleted \\ - No recovery window (unlike AWS Secrets Manager) \\ - Applications using the secret will fail to authenticate\n\n\\ List versions first: gcloud secrets versions list SECRET \\ Disable rather than delete: gcloud secrets versions disable VERSION --secret=SECRET"
+    },
+    {
+      "name": "kms-keys-destroy",
+      "pattern": "gcloud\\b.*?\\bkms\\s+keys\\s+versions\\s+destroy",
+      "severity": "critical",
+      "description": "gcloud kms keys versions destroy schedules a CryptoKeyVersion for destruction — data encrypted with it becomes unrecoverable.",
+      "explanation": "kms keys versions destroy scheduled destruction of a key version:\n\n\\ - 24-hour waiting period by default (per-keyring policy) \\ - After destruction: ALL data encrypted under this version is unrecoverable \\ - `gcloud kms keys versions restore` can undo within the waiting window\n\n\\ Consider `disable` instead if reversibility matters: \\ gcloud kms keys versions disable VERSION --key=KEY --keyring=RING --location=LOC"
+    },
+    {
+      "name": "iam-service-accounts-delete",
+      "pattern": "gcloud\\b.*?\\biam\\s+service-accounts\\s+delete",
+      "severity": "critical",
+      "description": "gcloud iam service-accounts delete removes a service account — workloads authenticating with it break.",
+      "explanation": "iam service-accounts delete removes a service account:\n\n\\ - Every workload using this SA loses access \\ - Keys associated with the SA are deleted \\ - CI/CD pipelines, GKE workloads, Cloud Functions dependent on this SA fail \\ - Can undelete within 30 days via `gcloud iam service-accounts undelete`\n\n\\ List usages first: gcloud iam service-accounts get-iam-policy SA-EMAIL"
+    },
+    {
+      "name": "iam-roles-delete",
+      "pattern": "gcloud\\b.*?\\biam\\s+roles\\s+delete",
+      "severity": "high",
+      "description": "gcloud iam roles delete removes a custom IAM role — all users/SAs bound to it lose the permissions.",
+      "explanation": "iam roles delete removes a custom IAM role:\n\n\\ - Every user/group/SA bound to this role loses its permissions \\ - Predefined roles cannot be deleted; this always targets custom roles \\ - Role is soft-deleted for 7 days, then permanently removed\n\n\\ Audit bindings first via gcloud projects get-iam-policy PROJECT"
+    },
+    {
+      "name": "dns-managed-zones-delete",
+      "pattern": "gcloud\\b.*?\\bdns\\s+managed-zones\\s+delete",
+      "severity": "critical",
+      "description": "gcloud dns managed-zones delete removes a DNS zone — domains stop resolving.",
+      "explanation": "dns managed-zones delete removes a Cloud DNS zone:\n\n\\ - All record sets in the zone are deleted \\ - Domains configured with this zone's nameservers stop resolving immediately \\ - Production traffic can go dark \\ - No undelete\n\n\\ Export records first: \\ gcloud dns record-sets export zone-backup.yaml --zone=ZONE"
+    },
+    {
+      "name": "logging-sinks-delete",
+      "pattern": "gcloud\\b.*?\\blogging\\s+sinks\\s+delete",
+      "severity": "high",
+      "description": "gcloud logging sinks delete removes an audit-log export — compliance/forensics impact.",
+      "explanation": "logging sinks delete stops log export to BigQuery/PubSub/Storage:\n\n\\ - Historical exports remain at the destination \\ - Future events stop flowing to the configured sink \\ - Compliance regimes (SOC2, ISO 27001) may require this sink\n\n\\ Consider disabling by updating filter: \\ gcloud logging sinks update SINK --log-filter='false'"
+    },
+    {
+      "name": "spanner-instances-delete",
+      "pattern": "gcloud\\b.*?\\bspanner\\s+instances\\s+delete",
+      "severity": "critical",
+      "description": "gcloud spanner instances delete destroys a Spanner instance — all databases and data lost.",
+      "explanation": "spanner instances delete removes a Spanner instance:\n\n\\ - All databases inside the instance are deleted \\ - Data is unrecoverable unless previously exported \\ - Applications writing to these DBs fail immediately\n\n\\ Export data first: \\ gcloud dataflow jobs run export-spanner --region=REGION \\ \\ --parameters=sourceInstance=INST,destinationPath=gs://bkt/backup/"
+    },
+    {
+      "name": "bigtable-instances-delete",
+      "pattern": "gcloud\\b.*?\\bbigtable\\s+instances\\s+delete",
+      "severity": "critical",
+      "description": "gcloud bigtable instances delete destroys a Bigtable instance — all tables and data lost.",
+      "explanation": "bigtable instances delete removes a Bigtable instance:\n\n\\ - All tables, clusters, and data are permanently deleted \\ - No backup unless one was explicitly taken \\ - Downstream pipelines consuming from Bigtable fail\n\n\\ Take a backup first: \\ cbt -instance=INST createsnapshot CLUSTER TABLE SNAPSHOT 30"
+    },
+    {
+      "name": "dataproc-clusters-delete",
+      "pattern": "gcloud\\b.*?\\bdataproc\\s+clusters\\s+delete",
+      "severity": "high",
+      "description": "gcloud dataproc clusters delete destroys a Dataproc (Hadoop/Spark) cluster.",
+      "explanation": "dataproc clusters delete removes a Dataproc cluster:\n\n\\ - Running jobs are killed \\ - Any data stored on local HDFS or cluster-local disks is lost \\ - Data in GCS (external) is preserved \\ - Cluster name is reserved for ~5 min; re-creation may fail until it clears"
+    },
+    {
+      "name": "bq-rm-recursive",
+      "pattern": "\\bbq\\b.*?\\brm\\s+.*-r\\b|\\bbq\\b.*?\\brm\\s+.*-f\\b",
+      "severity": "critical",
+      "description": "bq rm -r/-f removes BigQuery datasets, tables, or models — data lost.",
+      "explanation": "bq rm recursively deletes BigQuery resources:\n\n\\ - `bq rm -r DATASET`: removes dataset + ALL tables/views/models inside \\ - `bq rm -f TABLE`: removes a table without confirmation \\ - Data is not recoverable (unless a prior `EXPORT` or snapshot exists) \\ - No trash/recycle bin\n\n\\ Export first: \\ bq extract --destination_format=NEWLINE_DELIMITED_JSON \\ \\ DATASET.TABLE gs://bkt/backup/*.json"
+    }
+  ]
+}

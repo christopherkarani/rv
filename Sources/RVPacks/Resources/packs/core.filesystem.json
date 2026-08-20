@@ -1,9 +1,11 @@
 {
   "schema_version": 1,
+  "pin_version": "0.11.0",
   "id": "core.filesystem",
   "name": "Core Filesystem",
   "version": "0.11.0",
   "description": "Protects against recursive rm commands and equivalent filesystem destruction outside literal temp subdirectories",
+  "category": "core",
   "enabled_by_default": true,
   "keywords": [
     "rm",
@@ -23,8 +25,8 @@
     "> ~",
     ">$",
     "> $",
-    ">\"",
-    "> \"",
+    ">\\\"",
+    "> \\\"",
     ">'",
     "> '",
     "&>",

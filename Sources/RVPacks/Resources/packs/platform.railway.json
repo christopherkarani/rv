@@ -1,0 +1,249 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "platform.railway",
+  "name": "Railway Platform",
+  "version": "0.11.0",
+  "description": "Protects against destructive Railway CLI and Public API operations that can delete projects, environments, services, functions, volumes, variables, or deployments.",
+  "category": "platform",
+  "enabled_by_default": false,
+  "keywords": [
+    "railway",
+    "backboard.railway.app",
+    "backboard.railway.com",
+    "railway.app/graphql",
+    "railway.com/graphql",
+    "Project-Access-Token",
+    "PROJECT_ACCESS_TOKEN",
+    "projectDelete",
+    "projectScheduleDelete",
+    "environmentDelete",
+    "serviceDelete",
+    "volumeDelete",
+    "volumeInstanceDelete",
+    "volumeInstanceBackupDelete",
+    "volumeInstanceBackupRestore",
+    "volumeInstanceBackupScheduleUpdate",
+    "volumeInstanceUpdate",
+    "variableDelete",
+    "variableUpsert",
+    "variableCollectionUpsert",
+    "deploymentRemove",
+    "deploymentStop"
+  ],
+  "safe_patterns": [
+    {
+      "name": "railway-status",
+      "pattern": "(?<![\\w-])railway\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+status(?:\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "railway-project-list",
+      "pattern": "(?<![\\w-])railway\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+(?:list|ls)(?:\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "railway-project-subcommand-list",
+      "pattern": "(?<![\\w-])railway\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+project\\s+(?:list|ls)(?:\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "railway-whoami",
+      "pattern": "(?<![\\w-])railway\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+whoami(?:\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "railway-logs",
+      "pattern": "(?<![\\w-])railway\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+logs(?:\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "railway-service-list",
+      "pattern": "(?<![\\w-])railway\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+service\\s+(?:list|ls)(?:\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "railway-function-list",
+      "pattern": "(?<![\\w-])railway\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+(?:function|functions|func|funcs|fn|fns)\\s+(?:list|ls)(?:\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "railway-environment-list",
+      "pattern": "(?<![\\w-])railway\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+(?:environment|env)\\s+(?:list|ls)(?:\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "railway-volume-list",
+      "pattern": "(?<![\\w-])railway\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+volume\\s+(?:list|ls)(?:\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "railway-variable-list",
+      "pattern": "(?<![\\w-])railway\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+(?:variable|variables|vars|var)\\s+(?:list|ls)(?:\\s|$)",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "railway-project-delete",
+      "pattern": "(?<![\\w-])railway\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+delete(?:\\s|$)",
+      "severity": "critical",
+      "description": "railway delete schedules deletion of the entire Railway project.",
+      "explanation": "Deleting a Railway project can remove every service, database, volume, variable, and deployment attached to it."
+    },
+    {
+      "name": "railway-project-subcommand-delete",
+      "pattern": "(?<![\\w-])railway\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+project\\s+(?:delete|remove|rm)(?:\\s|$)",
+      "severity": "critical",
+      "description": "railway project delete schedules deletion of the entire Railway project.",
+      "explanation": "Deleting a Railway project can remove every service, database, volume, variable, and deployment attached to it."
+    },
+    {
+      "name": "railway-environment-delete",
+      "pattern": "(?<![\\w-])railway\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+(?:environment|env)\\s+(?:delete|remove|rm)(?:\\s|$)",
+      "severity": "critical",
+      "description": "railway environment delete removes a Railway environment and its resources.",
+      "explanation": "Deleting an environment can remove production services, database instances, volumes, and variables in that environment."
+    },
+    {
+      "name": "railway-service-delete",
+      "pattern": "(?<![\\w-])railway\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+service\\s+(?:delete|remove|rm)(?:\\s|$)",
+      "severity": "critical",
+      "description": "railway service delete permanently deletes a Railway service.",
+      "explanation": "Deleting a service can remove the production app or managed database service and its deployment history."
+    },
+    {
+      "name": "railway-function-delete",
+      "pattern": "(?<![\\w-])railway\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+(?:function|functions|func|funcs|fn|fns)\\s+(?:delete|remove|rm)(?:\\s|$)",
+      "severity": "critical",
+      "description": "railway functions delete removes a Railway serverless function.",
+      "explanation": "Deleting a Railway function can remove production serverless code, HTTP endpoints, or scheduled jobs."
+    },
+    {
+      "name": "railway-volume-delete",
+      "pattern": "(?<![\\w-])railway\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+volume\\s+(?:delete|remove|rm)(?:\\s|$)",
+      "severity": "critical",
+      "description": "railway volume delete removes persistent Railway storage.",
+      "explanation": "Deleting a Railway volume can destroy persistent database storage and is catastrophic when the volume backs production data."
+    },
+    {
+      "name": "railway-volume-detach",
+      "pattern": "(?<![\\w-])railway\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+volume\\s+detach(?:\\s|$)",
+      "severity": "high",
+      "description": "railway volume detach disconnects persistent storage from a service.",
+      "explanation": "Detaching a volume can take a production database or stateful service offline even when the bytes are not immediately deleted."
+    },
+    {
+      "name": "railway-variable-delete",
+      "pattern": "(?<![\\w-])railway\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+(?:variable|variables|vars|var)\\s+(?:delete|remove|rm)(?:\\s|$)",
+      "severity": "high",
+      "description": "railway variable delete removes Railway environment variables.",
+      "explanation": "Deleting environment variables can break production deploys, database connections, credentials, and service-to-service links."
+    },
+    {
+      "name": "railway-database-variable-set",
+      "pattern": "(?<![\\w-])railway\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+(?:variable|variables|vars|var)\\s+(?:set|upsert)(?:[^;&|\\r\\n]|\\\\\\r?\\n)*(?:\\s|[^=\\\\]\\\\?[\"'])(?:DATABASE_URL|DATABASE_PRIVATE_URL|DATABASE_PUBLIC_URL|RAILWAY_DATABASE_URL|PGHOST|PGPORT|PGUSER|PGPASSWORD|PGDATABASE|POSTGRES_HOST|POSTGRES_PORT|POSTGRES_USER|POSTGRES_PASSWORD|POSTGRES_DB|POSTGRES_DATABASE|POSTGRES_URL|POSTGRES_PRIVATE_URL|POSTGRES_PUBLIC_URL|POSTGRESQL_URL|POSTGRESQL_PRIVATE_URL|POSTGRESQL_PUBLIC_URL|MYSQL_URL|MYSQL_PRIVATE_URL|MYSQL_PUBLIC_URL|MYSQLHOST|MYSQLPORT|MYSQLUSER|MYSQLPASSWORD|MYSQLDATABASE|REDIS_URL|REDIS_PRIVATE_URL|REDIS_PUBLIC_URL|REDISHOST|REDISUSER|REDISPORT|REDISPASSWORD|MONGO_URL|MONGO_PRIVATE_URL|MONGO_PUBLIC_URL|MONGODB_URI|MONGODB_URL|MONGODB_PRIVATE_URL|MONGODB_PUBLIC_URL|MONGOHOST|MONGOPORT|MONGOUSER|MONGOPASSWORD)(?:\\s|=|\\\\?[\"']\\s*:|$)",
+      "severity": "high",
+      "description": "railway variable set is changing a database connection variable.",
+      "explanation": "Overwriting database connection variables can redirect production traffic or disconnect an app from its production database."
+    },
+    {
+      "name": "railway-database-variable-legacy-set",
+      "pattern": "(?<![\\w-])railway\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+(?:variable|variables|vars|var)(?:\\s+--?\\S+(?:\\s+\\S+)?)*(?:\\s+--set(?:=|\\s+)|\\s+--set-from-stdin(?:=|\\s+))(?:DATABASE_URL|DATABASE_PRIVATE_URL|DATABASE_PUBLIC_URL|RAILWAY_DATABASE_URL|PGHOST|PGPORT|PGUSER|PGPASSWORD|PGDATABASE|POSTGRES_HOST|POSTGRES_PORT|POSTGRES_USER|POSTGRES_PASSWORD|POSTGRES_DB|POSTGRES_DATABASE|POSTGRES_URL|POSTGRES_PRIVATE_URL|POSTGRES_PUBLIC_URL|POSTGRESQL_URL|POSTGRESQL_PRIVATE_URL|POSTGRESQL_PUBLIC_URL|MYSQL_URL|MYSQL_PRIVATE_URL|MYSQL_PUBLIC_URL|MYSQLHOST|MYSQLPORT|MYSQLUSER|MYSQLPASSWORD|MYSQLDATABASE|REDIS_URL|REDIS_PRIVATE_URL|REDIS_PUBLIC_URL|REDISHOST|REDISUSER|REDISPORT|REDISPASSWORD|MONGO_URL|MONGO_PRIVATE_URL|MONGO_PUBLIC_URL|MONGODB_URI|MONGODB_URL|MONGODB_PRIVATE_URL|MONGODB_PUBLIC_URL|MONGOHOST|MONGOPORT|MONGOUSER|MONGOPASSWORD)(?:\\s|=|$)",
+      "severity": "high",
+      "description": "railway variable legacy flags are changing a database connection variable.",
+      "explanation": "Legacy Railway variable flags can still overwrite database connection variables and break production database access."
+    },
+    {
+      "name": "railway-deployment-remove",
+      "pattern": "(?<![\\w-])railway\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+down(?:\\s|$)",
+      "severity": "high",
+      "description": "railway down removes the latest successful deployment.",
+      "explanation": "Removing a deployment can interrupt production service availability."
+    },
+    {
+      "name": "railway-api-project-delete",
+      "pattern": "(?i)(?:backboard\\.railway\\.(?:app|com)|railway\\.(?:app|com)/graphql|RAILWAY_API_(?:URL|TOKEN)|RAILWAY_TOKEN|PROJECT_ACCESS_TOKEN|Project-Access-Token)(?:[^;&|\\r\\n]|\\\\\\r?\\n)*(?:projectDelete|projectScheduleDelete)|(?:projectDelete|projectScheduleDelete)(?:[^;&|\\r\\n]|\\\\\\r?\\n)*(?:backboard\\.railway\\.(?:app|com)|railway\\.(?:app|com)/graphql|RAILWAY_API_(?:URL|TOKEN)|RAILWAY_TOKEN|PROJECT_ACCESS_TOKEN|Project-Access-Token)",
+      "severity": "critical",
+      "description": "Railway Public API project deletion mutation detected.",
+      "explanation": "Railway GraphQL project deletion mutations can remove an entire project and all attached production resources."
+    },
+    {
+      "name": "railway-api-environment-delete",
+      "pattern": "(?i)(?:backboard\\.railway\\.(?:app|com)|railway\\.(?:app|com)/graphql|RAILWAY_API_(?:URL|TOKEN)|RAILWAY_TOKEN|PROJECT_ACCESS_TOKEN|Project-Access-Token)(?:[^;&|\\r\\n]|\\\\\\r?\\n)*environmentDelete|environmentDelete(?:[^;&|\\r\\n]|\\\\\\r?\\n)*(?:backboard\\.railway\\.(?:app|com)|railway\\.(?:app|com)/graphql|RAILWAY_API_(?:URL|TOKEN)|RAILWAY_TOKEN|PROJECT_ACCESS_TOKEN|Project-Access-Token)",
+      "severity": "critical",
+      "description": "Railway Public API environment deletion mutation detected.",
+      "explanation": "Railway GraphQL environment deletion mutations can remove production services, databases, volumes, and variables."
+    },
+    {
+      "name": "railway-api-service-delete",
+      "pattern": "(?i)(?:backboard\\.railway\\.(?:app|com)|railway\\.(?:app|com)/graphql|RAILWAY_API_(?:URL|TOKEN)|RAILWAY_TOKEN|PROJECT_ACCESS_TOKEN|Project-Access-Token)(?:[^;&|\\r\\n]|\\\\\\r?\\n)*serviceDelete|serviceDelete(?:[^;&|\\r\\n]|\\\\\\r?\\n)*(?:backboard\\.railway\\.(?:app|com)|railway\\.(?:app|com)/graphql|RAILWAY_API_(?:URL|TOKEN)|RAILWAY_TOKEN|PROJECT_ACCESS_TOKEN|Project-Access-Token)",
+      "severity": "critical",
+      "description": "Railway Public API service deletion mutation detected.",
+      "explanation": "Railway GraphQL service deletion mutations can remove a production app or managed database service."
+    },
+    {
+      "name": "railway-api-volume-delete",
+      "pattern": "(?i)(?:backboard\\.railway\\.(?:app|com)|railway\\.(?:app|com)/graphql|RAILWAY_API_(?:URL|TOKEN)|RAILWAY_TOKEN|PROJECT_ACCESS_TOKEN|Project-Access-Token)(?:[^;&|\\r\\n]|\\\\\\r?\\n)*(?:volumeDelete|volumeInstanceDelete)|(?:volumeDelete|volumeInstanceDelete)(?:[^;&|\\r\\n]|\\\\\\r?\\n)*(?:backboard\\.railway\\.(?:app|com)|railway\\.(?:app|com)/graphql|RAILWAY_API_(?:URL|TOKEN)|RAILWAY_TOKEN|PROJECT_ACCESS_TOKEN|Project-Access-Token)",
+      "severity": "critical",
+      "description": "Railway Public API volume deletion mutation detected.",
+      "explanation": "Railway GraphQL volume deletion mutations can destroy persistent database storage."
+    },
+    {
+      "name": "railway-api-volume-backup-restore",
+      "pattern": "(?i)(?:backboard\\.railway\\.(?:app|com)|railway\\.(?:app|com)/graphql|RAILWAY_API_(?:URL|TOKEN)|RAILWAY_TOKEN|PROJECT_ACCESS_TOKEN|Project-Access-Token)(?:[^;&|\\r\\n]|\\\\\\r?\\n)*volumeInstanceBackupRestore|volumeInstanceBackupRestore(?:[^;&|\\r\\n]|\\\\\\r?\\n)*(?:backboard\\.railway\\.(?:app|com)|railway\\.(?:app|com)/graphql|RAILWAY_API_(?:URL|TOKEN)|RAILWAY_TOKEN|PROJECT_ACCESS_TOKEN|Project-Access-Token)",
+      "severity": "critical",
+      "description": "Railway Public API volume backup restore mutation detected.",
+      "explanation": "Restoring a Railway volume backup can replace current persistent data and roll back a production database."
+    },
+    {
+      "name": "railway-api-volume-backup-delete",
+      "pattern": "(?i)(?:backboard\\.railway\\.(?:app|com)|railway\\.(?:app|com)/graphql|RAILWAY_API_(?:URL|TOKEN)|RAILWAY_TOKEN|PROJECT_ACCESS_TOKEN|Project-Access-Token)(?:[^;&|\\r\\n]|\\\\\\r?\\n)*volumeInstanceBackupDelete|volumeInstanceBackupDelete(?:[^;&|\\r\\n]|\\\\\\r?\\n)*(?:backboard\\.railway\\.(?:app|com)|railway\\.(?:app|com)/graphql|RAILWAY_API_(?:URL|TOKEN)|RAILWAY_TOKEN|PROJECT_ACCESS_TOKEN|Project-Access-Token)",
+      "severity": "high",
+      "description": "Railway Public API volume backup deletion mutation detected.",
+      "explanation": "Deleting Railway volume backups removes recovery points for persistent database storage."
+    },
+    {
+      "name": "railway-api-volume-backup-schedule-update",
+      "pattern": "(?i)(?:backboard\\.railway\\.(?:app|com)|railway\\.(?:app|com)/graphql|RAILWAY_API_(?:URL|TOKEN)|RAILWAY_TOKEN|PROJECT_ACCESS_TOKEN|Project-Access-Token)(?:[^;&|\\r\\n]|\\\\\\r?\\n)*volumeInstanceBackupScheduleUpdate|volumeInstanceBackupScheduleUpdate(?:[^;&|\\r\\n]|\\\\\\r?\\n)*(?:backboard\\.railway\\.(?:app|com)|railway\\.(?:app|com)/graphql|RAILWAY_API_(?:URL|TOKEN)|RAILWAY_TOKEN|PROJECT_ACCESS_TOKEN|Project-Access-Token)",
+      "severity": "high",
+      "description": "Railway Public API volume backup schedule update mutation detected.",
+      "explanation": "Changing Railway volume backup schedules can disable or weaken database recovery coverage."
+    },
+    {
+      "name": "railway-api-volume-detach",
+      "pattern": "(?i)(?:backboard\\.railway\\.(?:app|com)|railway\\.(?:app|com)/graphql|RAILWAY_API_(?:URL|TOKEN)|RAILWAY_TOKEN|PROJECT_ACCESS_TOKEN|Project-Access-Token)(?:[^;&|\\r\\n]|\\\\\\r?\\n)*volumeInstanceUpdate(?:[^;&|\\r\\n]|\\\\\\r?\\n)*[\"']?serviceId[\"']?\\s*:\\s*null|volumeInstanceUpdate(?:[^;&|\\r\\n]|\\\\\\r?\\n)*[\"']?serviceId[\"']?\\s*:\\s*null(?:[^;&|\\r\\n]|\\\\\\r?\\n)*(?:backboard\\.railway\\.(?:app|com)|railway\\.(?:app|com)/graphql|RAILWAY_API_(?:URL|TOKEN)|RAILWAY_TOKEN|PROJECT_ACCESS_TOKEN|Project-Access-Token)",
+      "severity": "high",
+      "description": "Railway Public API volume detach mutation detected.",
+      "explanation": "Railway GraphQL volumeInstanceUpdate with serviceId null detaches persistent storage from its service."
+    },
+    {
+      "name": "railway-api-variable-delete",
+      "pattern": "(?i)(?:backboard\\.railway\\.(?:app|com)|railway\\.(?:app|com)/graphql|RAILWAY_API_(?:URL|TOKEN)|RAILWAY_TOKEN|PROJECT_ACCESS_TOKEN|Project-Access-Token)(?:[^;&|\\r\\n]|\\\\\\r?\\n)*variableDelete|variableDelete(?:[^;&|\\r\\n]|\\\\\\r?\\n)*(?:backboard\\.railway\\.(?:app|com)|railway\\.(?:app|com)/graphql|RAILWAY_API_(?:URL|TOKEN)|RAILWAY_TOKEN|PROJECT_ACCESS_TOKEN|Project-Access-Token)",
+      "severity": "high",
+      "description": "Railway Public API variable deletion mutation detected.",
+      "explanation": "Railway GraphQL variable deletion mutations can remove credentials or database connection variables from production environments."
+    },
+    {
+      "name": "railway-api-variable-collection-replace",
+      "pattern": "(?i)(?:(?:backboard\\.railway\\.(?:app|com)|railway\\.(?:app|com)/graphql|RAILWAY_API_(?:URL|TOKEN)|RAILWAY_TOKEN|PROJECT_ACCESS_TOKEN|Project-Access-Token)(?:[^;&|\\r\\n]|\\\\\\r?\\n)*variableCollectionUpsert(?:[^;&|\\r\\n]|\\\\\\r?\\n)*[\"']?replace[\"']?[ \\t]*:[ \\t]*true|(?:backboard\\.railway\\.(?:app|com)|railway\\.(?:app|com)/graphql|RAILWAY_API_(?:URL|TOKEN)|RAILWAY_TOKEN|PROJECT_ACCESS_TOKEN|Project-Access-Token)(?:[^;&|\\r\\n]|\\\\\\r?\\n)*[\"']?replace[\"']?[ \\t]*:[ \\t]*true(?:[^;&|\\r\\n]|\\\\\\r?\\n)*variableCollectionUpsert|variableCollectionUpsert(?:[^;&|\\r\\n]|\\\\\\r?\\n)*(?:backboard\\.railway\\.(?:app|com)|railway\\.(?:app|com)/graphql|RAILWAY_API_(?:URL|TOKEN)|RAILWAY_TOKEN|PROJECT_ACCESS_TOKEN|Project-Access-Token)(?:[^;&|\\r\\n]|\\\\\\r?\\n)*[\"']?replace[\"']?[ \\t]*:[ \\t]*true|variableCollectionUpsert(?:[^;&|\\r\\n]|\\\\\\r?\\n)*[\"']?replace[\"']?[ \\t]*:[ \\t]*true(?:[^;&|\\r\\n]|\\\\\\r?\\n)*(?:backboard\\.railway\\.(?:app|com)|railway\\.(?:app|com)/graphql|RAILWAY_API_(?:URL|TOKEN)|RAILWAY_TOKEN|PROJECT_ACCESS_TOKEN|Project-Access-Token)|[\"']?replace[\"']?[ \\t]*:[ \\t]*true(?:[^;&|\\r\\n]|\\\\\\r?\\n)*(?:backboard\\.railway\\.(?:app|com)|railway\\.(?:app|com)/graphql|RAILWAY_API_(?:URL|TOKEN)|RAILWAY_TOKEN|PROJECT_ACCESS_TOKEN|Project-Access-Token)(?:[^;&|\\r\\n]|\\\\\\r?\\n)*variableCollectionUpsert|[\"']?replace[\"']?[ \\t]*:[ \\t]*true(?:[^;&|\\r\\n]|\\\\\\r?\\n)*variableCollectionUpsert(?:[^;&|\\r\\n]|\\\\\\r?\\n)*(?:backboard\\.railway\\.(?:app|com)|railway\\.(?:app|com)/graphql|RAILWAY_API_(?:URL|TOKEN)|RAILWAY_TOKEN|PROJECT_ACCESS_TOKEN|Project-Access-Token))",
+      "severity": "high",
+      "description": "Railway Public API variableCollectionUpsert with replace=true detected.",
+      "explanation": "Railway variableCollectionUpsert with replace=true deletes variables omitted from the payload, which can remove production database credentials even when their names are not present."
+    },
+    {
+      "name": "railway-api-database-variable-upsert",
+      "pattern": "(?i)(?:backboard\\.railway\\.(?:app|com)|railway\\.(?:app|com)/graphql|RAILWAY_API_(?:URL|TOKEN)|RAILWAY_TOKEN|PROJECT_ACCESS_TOKEN|Project-Access-Token)(?:[^;&|\\r\\n]|\\\\\\r?\\n)*(?:variableCollectionUpsert|variableUpsert)(?:[^;&|\\r\\n]|\\\\\\r?\\n)*(?:DATABASE_URL|DATABASE_PRIVATE_URL|DATABASE_PUBLIC_URL|RAILWAY_DATABASE_URL|PGHOST|PGPORT|PGUSER|PGPASSWORD|PGDATABASE|POSTGRES_HOST|POSTGRES_PORT|POSTGRES_USER|POSTGRES_PASSWORD|POSTGRES_DB|POSTGRES_DATABASE|POSTGRES_URL|POSTGRES_PRIVATE_URL|POSTGRES_PUBLIC_URL|POSTGRESQL_URL|POSTGRESQL_PRIVATE_URL|POSTGRESQL_PUBLIC_URL|MYSQL_URL|MYSQL_PRIVATE_URL|MYSQL_PUBLIC_URL|MYSQLHOST|MYSQLPORT|MYSQLUSER|MYSQLPASSWORD|MYSQLDATABASE|REDIS_URL|REDIS_PRIVATE_URL|REDIS_PUBLIC_URL|REDISHOST|REDISUSER|REDISPORT|REDISPASSWORD|MONGO_URL|MONGO_PRIVATE_URL|MONGO_PUBLIC_URL|MONGODB_URI|MONGODB_URL|MONGODB_PRIVATE_URL|MONGODB_PUBLIC_URL|MONGOHOST|MONGOPORT|MONGOUSER|MONGOPASSWORD)|(?:variableCollectionUpsert|variableUpsert)(?:[^;&|\\r\\n]|\\\\\\r?\\n)*(?:DATABASE_URL|DATABASE_PRIVATE_URL|DATABASE_PUBLIC_URL|RAILWAY_DATABASE_URL|PGHOST|PGPORT|PGUSER|PGPASSWORD|PGDATABASE|POSTGRES_HOST|POSTGRES_PORT|POSTGRES_USER|POSTGRES_PASSWORD|POSTGRES_DB|POSTGRES_DATABASE|POSTGRES_URL|POSTGRES_PRIVATE_URL|POSTGRES_PUBLIC_URL|POSTGRESQL_URL|POSTGRESQL_PRIVATE_URL|POSTGRESQL_PUBLIC_URL|MYSQL_URL|MYSQL_PRIVATE_URL|MYSQL_PUBLIC_URL|MYSQLHOST|MYSQLPORT|MYSQLUSER|MYSQLPASSWORD|MYSQLDATABASE|REDIS_URL|REDIS_PRIVATE_URL|REDIS_PUBLIC_URL|REDISHOST|REDISUSER|REDISPORT|REDISPASSWORD|MONGO_URL|MONGO_PRIVATE_URL|MONGO_PUBLIC_URL|MONGODB_URI|MONGODB_URL|MONGODB_PRIVATE_URL|MONGODB_PUBLIC_URL|MONGOHOST|MONGOPORT|MONGOUSER|MONGOPASSWORD)(?:[^;&|\\r\\n]|\\\\\\r?\\n)*(?:backboard\\.railway\\.(?:app|com)|railway\\.(?:app|com)/graphql|RAILWAY_API_(?:URL|TOKEN)|RAILWAY_TOKEN|PROJECT_ACCESS_TOKEN|Project-Access-Token)",
+      "severity": "high",
+      "description": "Railway Public API upsert is changing a database connection variable.",
+      "explanation": "Bulk-upserting Railway variables that include database connection keys can redirect or sever production database access."
+    },
+    {
+      "name": "railway-api-deployment-remove",
+      "pattern": "(?i)(?:backboard\\.railway\\.(?:app|com)|railway\\.(?:app|com)/graphql|RAILWAY_API_(?:URL|TOKEN)|RAILWAY_TOKEN|PROJECT_ACCESS_TOKEN|Project-Access-Token)(?:[^;&|\\r\\n]|\\\\\\r?\\n)*(?:deploymentRemove|deploymentStop)|(?:deploymentRemove|deploymentStop)(?:[^;&|\\r\\n]|\\\\\\r?\\n)*(?:backboard\\.railway\\.(?:app|com)|railway\\.(?:app|com)/graphql|RAILWAY_API_(?:URL|TOKEN)|RAILWAY_TOKEN|PROJECT_ACCESS_TOKEN|Project-Access-Token)",
+      "severity": "high",
+      "description": "Railway Public API deployment removal or stop mutation detected.",
+      "explanation": "Railway GraphQL deployment removal and stop mutations can interrupt production availability."
+    }
+  ]
+}

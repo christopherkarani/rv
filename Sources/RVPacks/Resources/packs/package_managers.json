@@ -1,0 +1,230 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "package_managers",
+  "name": "Package Managers",
+  "version": "0.11.0",
+  "description": "Protects against dangerous package manager operations like publishing \\ packages and removing critical system packages",
+  "category": "package_managers",
+  "enabled_by_default": false,
+  "keywords": [
+    "npm",
+    "yarn",
+    "pnpm",
+    "pip",
+    "apt",
+    "yum",
+    "dnf",
+    "cargo",
+    "gem",
+    "brew",
+    "poetry",
+    "mvn",
+    "mvnw",
+    "gradle",
+    "gradlew",
+    "publish"
+  ],
+  "safe_patterns": [
+    {
+      "name": "npm-install",
+      "pattern": "\\bnpm\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+(?:install|i|ci)(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "yarn-add",
+      "pattern": "\\byarn\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+(?:add|install)(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "pnpm-install",
+      "pattern": "\\bpnpm\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+(?:add|install|i)(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "npm-list",
+      "pattern": "\\bnpm\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+(?:list|ls|info|view)(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "yarn-list",
+      "pattern": "\\byarn\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+(?:list|info|why)(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "npm-audit",
+      "pattern": "\\bnpm\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+audit(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "yarn-audit",
+      "pattern": "\\byarn\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+audit(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "pip-list",
+      "pattern": "\\bpip\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+(?:list|show|freeze)(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "poetry-show",
+      "pattern": "\\bpoetry\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+show(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "poetry-env-list",
+      "pattern": "\\bpoetry\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+env\\s+list(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "cargo-safe",
+      "pattern": "\\bcargo\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+(?:build|test|check|clippy|fmt|doc|bench)\\b",
+      "description": ""
+    },
+    {
+      "name": "apt-list",
+      "pattern": "\\bapt\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+(?:list|show|search)(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "apt-get-list",
+      "pattern": "\\bapt-get\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+(?:update|upgrade)(?!\\s+.*-y)",
+      "description": ""
+    },
+    {
+      "name": "npm-dry-run",
+      "pattern": "\\bnpm\\b[^;|&\\n]*--dry-run(?:=true)?(?:\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "yarn-dry-run",
+      "pattern": "\\byarn\\b[^;|&\\n]*--dry-run(?:=true)?(?:\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "pnpm-dry-run",
+      "pattern": "\\bpnpm\\b[^;|&\\n]*--dry-run(?:=true)?(?:\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "cargo-dry-run",
+      "pattern": "\\bcargo\\b[^;|&\\n]*--dry-run(?:=true)?(?:\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "poetry-dry-run",
+      "pattern": "\\bpoetry\\b[^;|&\\n]*--dry-run(?:=true)?(?:\\s|$)",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "npm-publish",
+      "pattern": "\\bnpm(?:\\.(?:cmd|exe|com))?\\b(?:\\s+--?[^\\s;|&]+(?:\\s+(?!publish(?:[\\s;|&]|$))[^-\\s;|&][^\\s;|&]*)?)*\\s+publish(?=[\\s;|&]|$)(?![^;|&\\n]*--dry-run(?:=true)?(?:\\s|$))",
+      "severity": "high",
+      "description": "npm publish releases a package publicly. Use --dry-run first."
+    },
+    {
+      "name": "yarn-publish",
+      "pattern": "\\byarn(?:\\.(?:cmd|exe|com))?\\b(?:\\s+(?:--?[^\\s;|&]+(?:\\s+(?!publish(?:[\\s;|&]|$))[^-\\s;|&][^\\s;|&]*)?|workspace\\s+[^\\s;|&]+|npm\\b))*\\s+publish(?=[\\s;|&]|$)(?![^;|&\\n]*--dry-run(?:=true)?(?:\\s|$))",
+      "severity": "high",
+      "description": "yarn publish releases a package publicly. Verify package.json first."
+    },
+    {
+      "name": "pnpm-publish",
+      "pattern": "\\bpnpm(?:\\.(?:cmd|exe|com))?\\b(?:\\s+(?:--?[^\\s;|&]+(?:\\s+(?!publish(?:[\\s;|&]|$))[^-\\s;|&][^\\s;|&]*)?|recursive\\b))*\\s+publish(?=[\\s;|&]|$)(?![^;|&\\n]*--dry-run(?:=true)?(?:\\s|$))",
+      "severity": "high",
+      "description": "pnpm publish releases a package publicly."
+    },
+    {
+      "name": "npm-unpublish",
+      "pattern": "\\bnpm\\b.*?\\bunpublish(?=\\s|$)",
+      "severity": "high",
+      "description": "npm unpublish removes a published package. This can break dependent projects."
+    },
+    {
+      "name": "pip-uninstall",
+      "pattern": "\\bpip(?:3)?\\b.*?\\buninstall(?=\\s|$)",
+      "severity": "high",
+      "description": "pip uninstall removes installed packages. Verify dependencies before removing."
+    },
+    {
+      "name": "pip-url",
+      "pattern": "\\bpip\\b.*?\\binstall\\s+.*(?:https?://|git\\+)",
+      "severity": "high",
+      "description": "pip install from URL can install unvetted code. Verify the source first."
+    },
+    {
+      "name": "pip-system",
+      "pattern": "\\bpip\\b.*?\\binstall\\s+.*--(?:system|target\\s*/usr)",
+      "severity": "high",
+      "description": "pip install to system directories requires careful review."
+    },
+    {
+      "name": "apt-remove",
+      "pattern": "\\bapt(?:-get)?\\b.*?\\b(?:remove|purge|autoremove)(?=\\s|$)",
+      "severity": "high",
+      "description": "apt remove/purge removes packages. Verify no critical packages are affected."
+    },
+    {
+      "name": "yum-remove",
+      "pattern": "\\b(?:yum|dnf)\\b.*?\\b(?:remove|erase|autoremove)(?=\\s|$)",
+      "severity": "high",
+      "description": "yum/dnf remove removes packages. Verify no critical packages are affected."
+    },
+    {
+      "name": "cargo-publish",
+      "pattern": "\\bcargo\\b.*?\\bpublish\\b(?!.*--dry-run(?:=true)?(?:\\s|$))",
+      "severity": "high",
+      "description": "cargo publish releases a crate to crates.io. Use --dry-run first."
+    },
+    {
+      "name": "cargo-yank",
+      "pattern": "\\bcargo\\b.*?\\byank(?=\\s|$)",
+      "severity": "high",
+      "description": "cargo yank marks a version as unavailable. This can break dependent projects."
+    },
+    {
+      "name": "gem-push",
+      "pattern": "\\bgem\\b.*?\\bpush\\b",
+      "severity": "high",
+      "description": "gem push releases a gem to rubygems.org. Verify before publishing."
+    },
+    {
+      "name": "brew-uninstall",
+      "pattern": "\\bbrew\\b.*?\\b(?:uninstall|remove)(?=\\s|$)",
+      "severity": "high",
+      "description": "brew uninstall removes packages. Verify no dependent packages are affected."
+    },
+    {
+      "name": "poetry-publish",
+      "pattern": "\\bpoetry\\b.*?\\bpublish\\b(?!.*--dry-run(?:=true)?(?:\\s|$))",
+      "severity": "high",
+      "description": "poetry publish releases a package. Use --dry-run first."
+    },
+    {
+      "name": "poetry-remove",
+      "pattern": "\\bpoetry\\b.*?\\bremove(?=\\s|$)",
+      "severity": "high",
+      "description": "poetry remove uninstalls a dependency. Verify no critical packages are affected."
+    },
+    {
+      "name": "maven-deploy",
+      "pattern": "\\b(?:mvn|mvnw)\\b.*?\\bdeploy\\b",
+      "severity": "high",
+      "description": "mvn deploy publishes artifacts to a remote repository. Verify target repository."
+    },
+    {
+      "name": "maven-release-perform",
+      "pattern": "\\b(?:mvn|mvnw)\\s+.*release:perform\\b",
+      "severity": "high",
+      "description": "mvn release:perform publishes a release. Verify version and repository."
+    },
+    {
+      "name": "gradle-publish",
+      "pattern": "\\b(?:gradle|gradlew)\\s+.*\\bpublish\\b",
+      "severity": "high",
+      "description": "gradle publish uploads artifacts. Use --dry-run first when possible."
+    }
+  ]
+}

@@ -49,23 +49,11 @@ let expectedFilesystemDestructive = [
     #expect(git.destructive.contains { $0.name == "stash-drop" && $0.severity == .medium })
 }
 
-@Test func packLoad_enabledByDefaultAndOnlyTwoFiles() throws {
-    let packsDir = URL(fileURLWithPath: #filePath)
-        .deletingLastPathComponent()
-        .deletingLastPathComponent()
-        .deletingLastPathComponent()
-        .appendingPathComponent("Sources/RVPacks/Resources/packs")
-    let jsonFiles = try FileManager.default.contentsOfDirectory(
-        at: packsDir,
-        includingPropertiesForKeys: nil
-    ).filter { $0.pathExtension == "json" }
-    let names = Set(jsonFiles.map(\.lastPathComponent))
-    #expect(names == ["core.filesystem.json", "core.git.json"])
-    for url in jsonFiles {
-        let object = try JSONSerialization.jsonObject(with: Data(contentsOf: url))
-        let json = try #require(object as? [String: Any])
-        #expect(json["enabled_by_default"] as? Bool == true)
-        #expect(json["version"] as? String == "0.11.0")
-        #expect(url.lastPathComponent == "core.git.json" || url.lastPathComponent == "core.filesystem.json")
-    }
+@Test func packLoad_coreStillDefaultOn() throws {
+    let git = try PackRegistry.loadDocument(id: "core.git")
+    let filesystem = try PackRegistry.loadDocument(id: "core.filesystem")
+    #expect(git.enabledByDefault)
+    #expect(filesystem.enabledByDefault)
+    let disk = try PackRegistry.loadDocument(id: "system.disk")
+    #expect(!disk.enabledByDefault)
 }

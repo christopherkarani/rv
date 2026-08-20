@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "backup.rclone",
+  "name": "Rclone",
+  "version": "0.11.0",
+  "description": "Protects against destructive rclone operations like sync, delete, purge, dedupe, and move.",
+  "category": "backup",
+  "enabled_by_default": false,
+  "keywords": [
+    "rclone"
+  ],
+  "safe_patterns": [
+    {
+      "name": "rclone-copy",
+      "pattern": "rclone(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+copy(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "rclone-ls",
+      "pattern": "rclone(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+ls(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "rclone-lsd",
+      "pattern": "rclone(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+lsd(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "rclone-lsl",
+      "pattern": "rclone(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+lsl(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "rclone-size",
+      "pattern": "rclone(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+size(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "rclone-check",
+      "pattern": "rclone(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+check(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "rclone-config",
+      "pattern": "rclone(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+config(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "rclone-dry-run",
+      "pattern": "\\brclone\\b(?:\\s+\\S+)*\\s+(?:--dry-run(?:=true)?|-n)(?:\\s|$)",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "rclone-sync",
+      "pattern": "rclone(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+sync\\b",
+      "severity": "critical",
+      "description": "rclone sync deletes destination files not present in the source.",
+      "explanation": "rclone sync makes destination match source exactly:\n\n\\ - Files in destination not in source are DELETED \\ - This is a one-way sync (source -> destination) \\ - Use --dry-run to preview changes first \\ - Consider 'rclone copy' for non-destructive transfer\n\n\\ Preview: rclone sync source: dest: --dry-run"
+    },
+    {
+      "name": "rclone-delete",
+      "pattern": "rclone(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+delete\\b",
+      "severity": "critical",
+      "description": "rclone delete removes files and directories from the target.",
+      "explanation": "rclone delete removes files from remote:\n\n\\ - Deletes files matching the path/filter \\ - Does not delete directories (use purge for that) \\ - Use --dry-run to preview deletions \\ - Filters (--include/--exclude) affect what's deleted\n\n\\ Preview: rclone delete remote:path --dry-run"
+    },
+    {
+      "name": "rclone-deletefile",
+      "pattern": "rclone(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+deletefile\\b",
+      "severity": "high",
+      "description": "rclone deletefile removes a single file from the target.",
+      "explanation": "rclone deletefile removes a single file:\n\n\\ - Deletes exactly one specified file \\ - More targeted than 'rclone delete' \\ - Cannot be undone without backup\n\n\\ Lower risk than bulk delete but still permanent"
+    },
+    {
+      "name": "rclone-purge",
+      "pattern": "rclone(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+purge\\b",
+      "severity": "critical",
+      "description": "rclone purge deletes a path and all its contents.",
+      "explanation": "rclone purge removes directory and ALL contents:\n\n\\ - Deletes the specified path completely \\ - Removes all files AND subdirectories \\ - More destructive than 'rclone delete' \\ - Cannot be undone without backup\n\n\\ List contents first: rclone ls remote:path"
+    },
+    {
+      "name": "rclone-cleanup",
+      "pattern": "rclone(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+cleanup\\b",
+      "severity": "medium",
+      "description": "rclone cleanup removes old/malformed uploads.",
+      "explanation": "rclone cleanup removes incomplete uploads:\n\n\\ - Removes old/incomplete multipart uploads \\ - Cleans up failed transfer artifacts \\ - May interrupt in-progress uploads\n\n\\ Generally safe but check for active uploads first"
+    },
+    {
+      "name": "rclone-dedupe",
+      "pattern": "rclone(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+dedupe\\b",
+      "severity": "high",
+      "description": "rclone dedupe can delete or rename duplicate files.",
+      "explanation": "rclone dedupe handles duplicate files:\n\n\\ - Can delete duplicates (--dedupe-mode oldest/newest) \\ - Can rename duplicates to unique names \\ - Interactive mode lets you choose per-file \\ - Use --dry-run to preview actions\n\n\\ Preview: rclone dedupe remote:path --dry-run"
+    },
+    {
+      "name": "rclone-move",
+      "pattern": "rclone(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+move\\b",
+      "severity": "high",
+      "description": "rclone move deletes source files after copying.",
+      "explanation": "rclone move transfers and deletes source:\n\n\\ - Copies files to destination \\ - Deletes source files after successful copy \\ - Use --dry-run to preview the operation \\ - Consider 'rclone copy' to preserve source\n\n\\ Preview: rclone move source: dest: --dry-run"
+    }
+  ]
+}

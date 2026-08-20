@@ -1,0 +1,135 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "storage.gcs",
+  "name": "Google Cloud Storage",
+  "version": "0.11.0",
+  "description": "Protects against destructive GCS operations like bucket removal, \\ object deletion, and recursive deletes.",
+  "category": "storage",
+  "enabled_by_default": false,
+  "keywords": [
+    "gsutil",
+    "gcloud"
+  ],
+  "safe_patterns": [
+    {
+      "name": "gsutil-ls",
+      "pattern": "gsutil\\s+(?:-[a-zA-Z]+\\s+)*ls(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "gsutil-cat",
+      "pattern": "gsutil\\s+(?:-[a-zA-Z]+\\s+)*cat(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "gsutil-stat",
+      "pattern": "gsutil\\s+(?:-[a-zA-Z]+\\s+)*stat(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "gsutil-du",
+      "pattern": "gsutil\\s+(?:-[a-zA-Z]+\\s+)*du(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "gsutil-hash",
+      "pattern": "gsutil\\s+(?:-[a-zA-Z]+\\s+)*hash(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "gsutil-version",
+      "pattern": "gsutil\\s+(?:-[a-zA-Z]+\\s+)*version(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "gsutil-help",
+      "pattern": "gsutil\\s+(?:-[a-zA-Z]+\\s+)*help(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "gsutil-cp",
+      "pattern": "gsutil\\s+(?:-[a-zA-Z]+\\s+)*cp(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "gcloud-storage-buckets-list",
+      "pattern": "gcloud\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*(?:\\s+(?:alpha|beta)(?:\\s+--?\\S+(?:\\s+\\S+)?)*)?\\s+storage\\s+buckets\\s+list(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "gcloud-storage-buckets-describe",
+      "pattern": "gcloud\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*(?:\\s+(?:alpha|beta)(?:\\s+--?\\S+(?:\\s+\\S+)?)*)?\\s+storage\\s+buckets\\s+describe(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "gcloud-storage-objects-list",
+      "pattern": "gcloud\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*(?:\\s+(?:alpha|beta)(?:\\s+--?\\S+(?:\\s+\\S+)?)*)?\\s+storage\\s+objects\\s+list(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "gcloud-storage-objects-describe",
+      "pattern": "gcloud\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*(?:\\s+(?:alpha|beta)(?:\\s+--?\\S+(?:\\s+\\S+)?)*)?\\s+storage\\s+objects\\s+describe(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "gcloud-storage-ls",
+      "pattern": "gcloud\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*(?:\\s+(?:alpha|beta)(?:\\s+--?\\S+(?:\\s+\\S+)?)*)?\\s+storage\\s+ls(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "gcloud-storage-cat",
+      "pattern": "gcloud\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*(?:\\s+(?:alpha|beta)(?:\\s+--?\\S+(?:\\s+\\S+)?)*)?\\s+storage\\s+cat(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "gcloud-storage-cp",
+      "pattern": "gcloud\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*(?:\\s+(?:alpha|beta)(?:\\s+--?\\S+(?:\\s+\\S+)?)*)?\\s+storage\\s+cp(?=\\s|$)",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "gsutil-rb",
+      "pattern": "gsutil\\b.*?\\brb(?=\\s|$)",
+      "severity": "critical",
+      "description": "gsutil rb removes a GCS bucket.",
+      "explanation": "Removing a GCS bucket deletes the bucket and potentially all objects within it. \\ Bucket names are globally unique and may not be immediately available for reuse. \\ Applications and services referencing this bucket will fail.\n\n\\ Safer alternatives: \\ - gsutil ls gs://bucket: List bucket contents first \\ - gsutil -m cp -r gs://bucket ./backup: Backup contents locally \\ - Enable object versioning before testing deletions"
+    },
+    {
+      "name": "gsutil-rm",
+      "pattern": "gsutil\\b.*?\\brm(?=\\s|$)",
+      "severity": "high",
+      "description": "gsutil rm deletes objects from GCS.",
+      "explanation": "Deleting GCS objects permanently removes data unless versioning is enabled. \\ With -r flag, entire directory trees are deleted recursively. Without \\ versioning, deleted objects cannot be recovered.\n\n\\ Safer alternatives: \\ - gsutil ls: Preview what will be deleted \\ - Enable bucket versioning for recovery options \\ - gsutil mv: Move to archive bucket instead of deleting"
+    },
+    {
+      "name": "gsutil-rsync-delete",
+      "pattern": "gsutil\\b.*?\\brsync\\b.*\\s+-d\\b",
+      "severity": "high",
+      "description": "gsutil rsync -d deletes destination objects not in source.",
+      "explanation": "The -d flag with gsutil rsync deletes destination objects that don't exist \\ in the source. If source and destination are swapped, or source is empty, \\ this can result in total data loss at the destination.\n\n\\ Safer alternatives: \\ - gsutil rsync -n -d: Dry run to preview deletions \\ - gsutil rsync without -d: Only adds/updates, never deletes \\ - Backup destination before syncing"
+    },
+    {
+      "name": "gcloud-storage-buckets-delete",
+      "pattern": "gcloud\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*(?:\\s+(?:alpha|beta)(?:\\s+--?\\S+(?:\\s+\\S+)?)*)?\\s+storage\\s+buckets\\s+delete\\b",
+      "severity": "critical",
+      "description": "gcloud storage buckets delete removes a GCS bucket.",
+      "explanation": "Deleting a GCS bucket removes the bucket configuration and all objects within it \\ (if --recursive is used). The globally unique bucket name may not be immediately \\ reclaimable. All dependent applications will fail.\n\n\\ Safer alternatives: \\ - gcloud storage buckets describe: Review bucket configuration \\ - gcloud storage cp -r: Backup contents before deletion \\ - Remove objects first to understand data being deleted"
+    },
+    {
+      "name": "gcloud-storage-objects-delete",
+      "pattern": "gcloud\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*(?:\\s+(?:alpha|beta)(?:\\s+--?\\S+(?:\\s+\\S+)?)*)?\\s+storage\\s+objects\\s+delete\\b",
+      "severity": "high",
+      "description": "gcloud storage objects delete removes objects from GCS.",
+      "explanation": "Deleting GCS objects permanently removes data. Without object versioning, \\ deleted files cannot be recovered. Production data should be backed up \\ before deletion.\n\n\\ Safer alternatives: \\ - gcloud storage objects describe: Verify object before deletion \\ - Enable bucket versioning for soft deletes \\ - Move to archive storage class instead of deleting"
+    },
+    {
+      "name": "gcloud-storage-rm",
+      "pattern": "gcloud\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*(?:\\s+(?:alpha|beta)(?:\\s+--?\\S+(?:\\s+\\S+)?)*)?\\s+storage\\s+rm\\b",
+      "severity": "high",
+      "description": "gcloud storage rm removes objects from GCS.",
+      "explanation": "The rm command deletes objects and can recursively remove entire bucket \\ contents. Deleted objects are permanently lost unless versioning is enabled. \\ Wildcards can unexpectedly match more files than intended.\n\n\\ Safer alternatives: \\ - gcloud storage ls: Preview files matching pattern \\ - Enable bucket versioning before testing \\ - gcloud storage mv: Move to archive bucket instead"
+    }
+  ]
+}

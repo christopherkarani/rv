@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "infrastructure.pulumi",
+  "name": "Pulumi",
+  "version": "0.11.0",
+  "description": "Protects against destructive Pulumi operations like destroy \\ and up with -y (auto-approve)",
+  "category": "infrastructure",
+  "enabled_by_default": false,
+  "keywords": [
+    "pulumi",
+    "destroy",
+    "state"
+  ],
+  "safe_patterns": [
+    {
+      "name": "pulumi-preview",
+      "pattern": "pulumi\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+preview(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "pulumi-stack-ls",
+      "pattern": "pulumi\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+stack\\s+ls(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "pulumi-stack-select",
+      "pattern": "pulumi\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+stack\\s+select(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "pulumi-stack-init",
+      "pattern": "pulumi\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+stack\\s+init(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "pulumi-config",
+      "pattern": "pulumi\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+config(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "pulumi-whoami",
+      "pattern": "pulumi\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+whoami(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "pulumi-version",
+      "pattern": "pulumi\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+version(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "pulumi-about",
+      "pattern": "pulumi\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+about(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "pulumi-logs",
+      "pattern": "pulumi\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+logs(?=\\s|$)",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "destroy",
+      "pattern": "pulumi\\b.*?\\bdestroy(?=\\s|$)",
+      "severity": "critical",
+      "description": "pulumi destroy removes ALL managed infrastructure. Use 'pulumi preview --diff' first.",
+      "explanation": "pulumi destroy removes ALL managed infrastructure:\n\n\\ - Every resource in your stack is destroyed \\ - Cloud resources (VMs, databases, networks) deleted \\ - Cannot be undone without backups/recreation \\ - Use --target to destroy specific resources only\n\n\\ Preview first: pulumi preview --diff"
+    },
+    {
+      "name": "up-yes",
+      "pattern": "pulumi\\b.*?\\bup\\s+.*(?:-y\\b|--yes\\b)",
+      "severity": "high",
+      "description": "pulumi up -y skips confirmation. Remove -y flag for safety.",
+      "explanation": "pulumi up -y skips confirmation:\n\n\\ - No opportunity to review changes before applying \\ - Intended for CI/CD, not interactive use \\ - Changes may destroy or recreate resources \\ - Replacements can cause downtime\n\n\\ For safety: remove -y and review the preview"
+    },
+    {
+      "name": "state-delete",
+      "pattern": "pulumi\\b.*?\\bstate\\s+delete",
+      "severity": "high",
+      "description": "pulumi state delete removes resource from state without destroying it.",
+      "explanation": "pulumi state delete orphans resources:\n\n\\ - Resource removed from Pulumi state \\ - Actual cloud resource still exists \\ - Resource becomes 'unmanaged' (Pulumi ignores it) \\ - May cause drift between state and reality\n\n\\ Consider: pulumi refresh to sync state with reality"
+    },
+    {
+      "name": "stack-rm",
+      "pattern": "pulumi\\b.*?\\bstack\\s+rm",
+      "severity": "high",
+      "description": "pulumi stack rm removes the stack. Use --force only if stack is empty.",
+      "explanation": "pulumi stack rm removes the entire stack:\n\n\\ - Stack and its state deleted \\ - Does NOT destroy actual infrastructure (unless empty) \\ - --force required if resources still exist \\ - Resources become unmanaged (orphaned)\n\n\\ Destroy resources first: pulumi destroy, then rm stack"
+    },
+    {
+      "name": "refresh-yes",
+      "pattern": "pulumi\\b.*?\\brefresh\\s+.*(?:-y\\b|--yes\\b)",
+      "severity": "medium",
+      "description": "pulumi refresh -y auto-approves state changes. Review changes first.",
+      "explanation": "pulumi refresh -y auto-approves state sync:\n\n\\ - Syncs Pulumi state with actual cloud resources \\ - May delete resources from state if not found \\ - May update state with drift from cloud\n\n\\ Run without -y first to review detected changes"
+    },
+    {
+      "name": "cancel",
+      "pattern": "pulumi\\b.*?\\bcancel\\b",
+      "severity": "high",
+      "description": "pulumi cancel terminates an in-progress update, which may leave resources in inconsistent state.",
+      "explanation": "pulumi cancel stops in-progress operations:\n\n\\ - Terminates currently running update/destroy \\ - Resources may be left in inconsistent state \\ - Some resources created, others not \\ - May require manual cleanup\n\n\\ Use only when operation is stuck/hung"
+    }
+  ]
+}

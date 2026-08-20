@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "dns.generic",
+  "name": "Generic DNS Tools",
+  "version": "0.11.0",
+  "description": "Protects against destructive or risky DNS tooling usage (nsupdate deletes, zone transfers).",
+  "category": "dns",
+  "enabled_by_default": false,
+  "keywords": [
+    "nsupdate",
+    "dig",
+    "host",
+    "nslookup"
+  ],
+  "safe_patterns": [
+    {
+      "name": "dns-dig-safe",
+      "pattern": "\\bdig\\b(?!.*(?i:\\b(?:axfr|ixfr)\\b))",
+      "description": ""
+    },
+    {
+      "name": "dns-host-safe",
+      "pattern": "\\bhost\\b",
+      "description": ""
+    },
+    {
+      "name": "dns-nslookup-safe",
+      "pattern": "\\bnslookup\\b",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "stdin-unverified",
+      "pattern": "(?!)",
+      "severity": "high",
+      "description": "nsupdate receives indirect input that the engine cannot statically verify.",
+      "explanation": "Materialize and review the exact nsupdate commands before piping, redirecting, or loading them into the client."
+    },
+    {
+      "name": "dns-nsupdate-delete",
+      "pattern": "(?:\\bnsupdate\\b.*\\bdelete\\b|\\bdelete\\b.*\\|\\s*\\bnsupdate\\b)",
+      "severity": "high",
+      "description": "nsupdate delete commands remove DNS records.",
+      "explanation": "nsupdate delete removes DNS records from the authoritative server using \\ dynamic DNS updates (RFC 2136). Changes take effect immediately and can \\ break services relying on those records.\n\n\\ Safer alternatives: \\ - Test in a non-production zone first \\ - Use 'prereq' commands to verify record state before delete \\ - Keep backup of zone file or export current records"
+    },
+    {
+      "name": "dns-nsupdate-local",
+      "pattern": "\\bnsupdate\\b.*\\s-l\\b",
+      "severity": "medium",
+      "description": "nsupdate -l applies local updates which can modify DNS records.",
+      "explanation": "nsupdate -l uses local (loopback) TSIG authentication, allowing DNS \\ modifications without network credentials. This is convenient for local \\ testing but can accidentally modify production DNS if run on the wrong \\ server.\n\n\\ Safer alternatives: \\ - Verify you are on the intended server before running \\ - Use explicit server and key options for clarity \\ - Test changes with 'show' before 'send'"
+    },
+    {
+      "name": "dns-dig-zone-transfer",
+      "pattern": "(?i:\\bdig\\b.*\\b(?:axfr|ixfr)\\b)",
+      "severity": "medium",
+      "description": "dig AXFR/IXFR zone transfers can exfiltrate full zone data.",
+      "explanation": "Zone transfers (AXFR/IXFR) download complete DNS zone data, revealing all \\ hostnames, internal IPs, and infrastructure topology. This information aids \\ reconnaissance for attacks. Most zones should restrict transfers to known \\ secondary servers.\n\n\\ Safer alternatives: \\ - Use standard dig queries for specific records \\ - Request zone transfer permissions through proper channels \\ - Check if zone transfer is authorized for your IP"
+    }
+  ]
+}

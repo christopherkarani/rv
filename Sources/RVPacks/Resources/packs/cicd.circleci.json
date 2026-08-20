@@ -1,0 +1,109 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "cicd.circleci",
+  "name": "CircleCI",
+  "version": "0.11.0",
+  "description": "Protects against destructive CircleCI operations like deleting contexts, \\ removing secrets, deleting orbs/namespaces, or removing pipelines.",
+  "category": "cicd",
+  "enabled_by_default": false,
+  "keywords": [
+    "circleci"
+  ],
+  "safe_patterns": [
+    {
+      "name": "circleci-context-list",
+      "pattern": "circleci(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+context\\s+list\\b",
+      "description": ""
+    },
+    {
+      "name": "circleci-orb-list",
+      "pattern": "circleci(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+orb\\s+list\\b",
+      "description": ""
+    },
+    {
+      "name": "circleci-orb-info",
+      "pattern": "circleci(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+orb\\s+info\\b",
+      "description": ""
+    },
+    {
+      "name": "circleci-pipeline-list",
+      "pattern": "circleci(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+pipeline\\s+list\\b",
+      "description": ""
+    },
+    {
+      "name": "circleci-project-list",
+      "pattern": "circleci(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+project\\s+list\\b",
+      "description": ""
+    },
+    {
+      "name": "circleci-namespace-list",
+      "pattern": "circleci(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+namespace\\s+list\\b",
+      "description": ""
+    },
+    {
+      "name": "circleci-config-validate",
+      "pattern": "circleci(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+config\\s+validate\\b",
+      "description": ""
+    },
+    {
+      "name": "circleci-local-execute",
+      "pattern": "circleci(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+local\\s+execute\\b",
+      "description": ""
+    },
+    {
+      "name": "circleci-policy-status",
+      "pattern": "circleci(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+policy\\s+status\\b",
+      "description": ""
+    },
+    {
+      "name": "circleci-diagnostic",
+      "pattern": "circleci(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+diagnostic\\b",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "circleci-context-delete",
+      "pattern": "circleci(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+context\\s+delete\\b",
+      "severity": "critical",
+      "description": "circleci context delete removes contexts and their secrets.",
+      "explanation": "Deleting a CircleCI context removes all secrets stored within it. Any pipeline \\ jobs that reference this context will fail immediately. Secret values cannot be \\ recovered after deletion and must be manually re-entered.\n\n\\ Safer alternatives: \\ - circleci context list: Review contexts before deletion \\ - circleci context show: Inspect context secrets (names only) \\ - Document secret names before removing context"
+    },
+    {
+      "name": "circleci-context-remove-secret",
+      "pattern": "circleci(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+context\\s+remove-secret\\b",
+      "severity": "high",
+      "description": "circleci context remove-secret deletes secrets from a context.",
+      "explanation": "Removing a secret from a context makes it unavailable to all jobs using that \\ context. Pipelines depending on this secret will fail. The secret value cannot \\ be retrieved after removal.\n\n\\ Safer alternatives: \\ - circleci context show: Review secrets in context first \\ - Update the secret value instead of removing \\ - Document secret value externally before removal"
+    },
+    {
+      "name": "circleci-orb-delete",
+      "pattern": "circleci(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+orb\\s+delete\\b",
+      "severity": "high",
+      "description": "circleci orb delete removes an orb from the registry.",
+      "explanation": "Deleting an orb removes it from the CircleCI orb registry. Any pipeline using \\ this orb will fail on the next run. If other teams or projects depend on this \\ orb, their CI/CD will break without warning.\n\n\\ Safer alternatives: \\ - circleci orb info: Review orb details and usage \\ - Deprecate the orb instead of deleting \\ - Check for dependent projects before deletion"
+    },
+    {
+      "name": "circleci-namespace-delete",
+      "pattern": "circleci(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+namespace\\s+delete\\b",
+      "severity": "critical",
+      "description": "circleci namespace delete removes an orb namespace.",
+      "explanation": "Deleting a namespace removes all orbs within that namespace from the registry. \\ This is a cascading deletion that affects every orb published under this namespace. \\ All pipelines using any orb from this namespace will fail.\n\n\\ Safer alternatives: \\ - circleci namespace list: Review namespaces first \\ - circleci orb list: Inventory orbs in namespace \\ - Delete individual orbs instead if needed"
+    },
+    {
+      "name": "circleci-pipeline-delete",
+      "pattern": "circleci(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+pipeline\\s+delete\\b",
+      "severity": "medium",
+      "description": "circleci pipeline delete removes pipeline history.",
+      "explanation": "Deleting pipeline history removes records of past builds, including logs, artifacts, \\ and test results. This affects audit trails and debugging capabilities. The history \\ cannot be recovered once deleted.\n\n\\ Safer alternatives: \\ - circleci pipeline list: Review pipelines before deletion \\ - Export logs and artifacts before deletion \\ - Consider archiving rather than deleting"
+    },
+    {
+      "name": "circleci-api-delete-envvar",
+      "pattern": "curl(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+(?:-X\\s*|--request(?:=|\\s+))DELETE\\b.*circleci\\.com/api/[^\\s]*\\b(?:envvar|environment-variable)\\b",
+      "severity": "high",
+      "description": "curl DELETE against CircleCI envvar endpoints removes environment variables.",
+      "explanation": "Making DELETE requests to CircleCI environment variable endpoints removes variables \\ from projects. Pipelines depending on these variables will fail on next run. \\ Variable values cannot be recovered after deletion.\n\n\\ Safer alternatives: \\ - GET request first: Review variable exists \\ - Update variable value instead of deleting \\ - Use circleci CLI for safer operations"
+    }
+  ]
+}

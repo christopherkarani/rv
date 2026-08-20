@@ -1,0 +1,129 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "database.mysql",
+  "name": "MySQL/MariaDB",
+  "version": "0.11.0",
+  "description": "Protects against destructive MySQL/MariaDB operations like DROP DATABASE, \\ TRUNCATE, and mysqladmin drop",
+  "category": "database",
+  "enabled_by_default": false,
+  "keywords": [
+    "mysql",
+    "mysqladmin",
+    "mysqldump",
+    "mariadb",
+    "DROP",
+    "TRUNCATE",
+    "DELETE",
+    "delete",
+    "drop",
+    "truncate",
+    "GRANT"
+  ],
+  "safe_patterns": [
+    {
+      "name": "select-query",
+      "pattern": "(?i)^\\s*SELECT\\s+",
+      "description": ""
+    },
+    {
+      "name": "show-command",
+      "pattern": "(?i)^\\s*SHOW\\s+",
+      "description": ""
+    },
+    {
+      "name": "describe-query",
+      "pattern": "(?i)^\\s*(?:DESCRIBE|DESC|EXPLAIN)\\s+",
+      "description": ""
+    },
+    {
+      "name": "mysqldump-no-drop",
+      "pattern": "mysqldump\\s+(?!.*--add-drop-database)(?!.*--add-drop-table)",
+      "description": ""
+    },
+    {
+      "name": "mysql-select",
+      "pattern": "mysql\\s+.*(?:-e|--execute)\\s*['\"]?\\s*SELECT",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "stdin-unverified",
+      "pattern": "(?!)",
+      "severity": "high",
+      "description": "mysql/mariadb receives indirect input that the engine cannot statically verify.",
+      "explanation": "Materialize and review the exact SQL before piping or redirecting it into the client."
+    },
+    {
+      "name": "drop-database",
+      "pattern": "(?i)\\bDROP\\s+DATABASE\\b",
+      "severity": "critical",
+      "description": "DROP DATABASE permanently deletes the entire database. Verify and back up first.",
+      "explanation": "DROP DATABASE completely removes a database and ALL its contents:\n\n\\ - All tables, views, and indexes \\ - All stored procedures and functions \\ - All triggers and events \\ - All data - gone permanently \\ - User privileges on the database remain but are orphaned\n\n\\ IF EXISTS only prevents errors if the database doesn't exist - it still deletes!\n\n\\ Before dropping: \\ mysqldump -h host -u user -p dbname > backup.sql\n\n\\ Verify database name: \\ SHOW DATABASES LIKE 'dbname';"
+    },
+    {
+      "name": "drop-table",
+      "pattern": "(?i)\\bDROP\\s+TABLE\\b",
+      "severity": "high",
+      "description": "DROP TABLE permanently deletes the table. Verify and back up first.",
+      "explanation": "DROP TABLE removes the table structure and ALL data:\n\n\\ - All rows are permanently deleted \\ - Indexes and constraints are removed \\ - Foreign key relationships may break \\ - Triggers on the table are dropped \\ - AUTO_INCREMENT values are lost\n\n\\ IF EXISTS only prevents errors - it still drops the table!\n\n\\ Backup table first: \\ mysqldump -h host -u user -p dbname tablename > table_backup.sql\n\n\\ Preview table contents: \\ SELECT COUNT(*) FROM tablename; \\ SELECT * FROM tablename LIMIT 10;"
+    },
+    {
+      "name": "truncate-table",
+      "pattern": "(?i)TRUNCATE\\s+(?:TABLE\\s+)?[a-zA-Z_]",
+      "severity": "high",
+      "description": "TRUNCATE permanently deletes all rows. Cannot be rolled back in MySQL.",
+      "explanation": "TRUNCATE is faster than DELETE but more dangerous in MySQL:\n\n\\ - Removes ALL rows instantly \\ - CANNOT be rolled back (implicit commit) \\ - Does not fire DELETE triggers \\ - Resets AUTO_INCREMENT counter to 1 \\ - Requires DROP privilege \\ - Acquires table lock\n\n\\ Unlike PostgreSQL, MySQL's TRUNCATE is NOT transactional!\n\n\\ Check row count first: \\ SELECT COUNT(*) FROM tablename;\n\n\\ If you need rollback capability, use: \\ DELETE FROM tablename; -- Slower but transactional"
+    },
+    {
+      "name": "delete-without-where",
+      "pattern": "(?i)DELETE\\s+FROM\\s+(?:(?:[a-zA-Z_][a-zA-Z0-9_]*|`[^`]+`)(?:\\.(?:[a-zA-Z_][a-zA-Z0-9_]*|`[^`]+`))?)\\s*(?:;|$)",
+      "severity": "high",
+      "description": "DELETE without WHERE clause deletes ALL rows. Add a WHERE clause.",
+      "explanation": "DELETE without WHERE removes ALL rows from the table:\n\n\\ - Each row deletion is logged in binary log \\ - CAN be rolled back if within a transaction \\ - Fires DELETE triggers for each row \\ - Does NOT reset AUTO_INCREMENT counter \\ - Much slower than TRUNCATE for large tables\n\n\\ If you meant to delete all rows: \\ - TRUNCATE is faster (but non-transactional) \\ - DELETE in transaction allows rollback\n\n\\ Otherwise, add a WHERE clause: \\ DELETE FROM tablename WHERE condition;\n\n\\ Preview what would be deleted: \\ SELECT COUNT(*) FROM tablename; -- all rows! \\ SELECT * FROM tablename LIMIT 10;"
+    },
+    {
+      "name": "mysqladmin-drop",
+      "pattern": "mysqladmin\\s+.*drop\\b",
+      "severity": "critical",
+      "description": "mysqladmin drop permanently deletes the database. Verify carefully.",
+      "explanation": "mysqladmin drop is the CLI equivalent of DROP DATABASE:\n\n\\ - Completely removes the database \\ - All data is lost permanently \\ - Has an 'are you sure?' prompt by default \\ - Adding --force skips confirmation!\n\n\\ Triple-check the database name. Common mistake: \\ mysqladmin drop myapp_production # Oops, meant myapp_staging\n\n\\ Backup first: \\ mysqldump -h host -u user -p dbname > backup.sql\n\n\\ List databases to verify: \\ mysql -e 'SHOW DATABASES;'"
+    },
+    {
+      "name": "mysqldump-add-drop-database",
+      "pattern": "mysqldump\\s+.*--add-drop-database",
+      "severity": "high",
+      "description": "mysqldump --add-drop-database drops the database before restore.",
+      "explanation": "mysqldump --add-drop-database adds DROP DATABASE to the backup file.\n\n\\ On restore, this will: \\ - DROP the database before CREATE DATABASE \\ - Destroy ALL existing data in that database \\ - If restore fails partway, data may be lost\n\n\\ This is dangerous when restoring to a database with data you want to keep.\n\n\\ Safer approach: \\ - Restore to a new/different database first \\ - Verify the restore completed successfully \\ - Then rename or swap databases\n\n\\ Without --add-drop-database: \\ mysqldump dbname > backup.sql # Creates only, no drops"
+    },
+    {
+      "name": "mysqldump-add-drop-table",
+      "pattern": "mysqldump\\s+.*--add-drop-table",
+      "severity": "medium",
+      "description": "mysqldump --add-drop-table drops tables before creating them on restore.",
+      "explanation": "mysqldump --add-drop-table adds DROP TABLE before each CREATE TABLE.\n\n\\ This is actually the DEFAULT behavior of mysqldump! \\ On restore, each table is dropped before being recreated.\n\n\\ Risks: \\ - If restore fails partway, some tables may be dropped without recreation \\ - Existing data in those tables is permanently lost\n\n\\ Safer alternatives: \\ - Use --skip-add-drop-table to disable drops \\ - Restore to a new database first, then verify \\ - Keep the original database until restore is confirmed\n\n\\ To preserve existing data: \\ mysqldump --skip-add-drop-table dbname > backup.sql"
+    },
+    {
+      "name": "grant-all",
+      "pattern": "(?i)GRANT\\s+ALL\\s+(?:PRIVILEGES\\s+)?ON\\s+\\*\\.\\*",
+      "severity": "high",
+      "description": "GRANT ALL ON *.* gives unrestricted access to all databases.",
+      "explanation": "GRANT ALL PRIVILEGES ON *.* gives the user complete control:\n\n\\ - Can create, modify, and drop ANY database \\ - Can create, modify, and drop ANY user \\ - Can grant privileges to others \\ - Essentially creates a superuser\n\n\\ This is rarely necessary and violates principle of least privilege.\n\n\\ Better alternatives: \\ - GRANT ALL ON specific_db.* - Limit to one database \\ - GRANT SELECT, INSERT, UPDATE ON db.* - Limit operations \\ - GRANT ... ON db.table - Limit to specific tables\n\n\\ Review current grants: \\ SHOW GRANTS FOR 'user'@'host';"
+    },
+    {
+      "name": "drop-user",
+      "pattern": "(?i)\\bDROP\\s+USER\\b",
+      "severity": "medium",
+      "description": "DROP USER permanently removes the user account and all their privileges.",
+      "explanation": "DROP USER removes the MySQL user account:\n\n\\ - All privileges granted to the user are revoked \\ - User can no longer authenticate \\ - Applications using this user will fail \\ - Cannot be undone (user must be recreated)\n\n\\ IF EXISTS only prevents errors if user doesn't exist.\n\n\\ Before dropping: \\ SHOW GRANTS FOR 'user'@'host'; -- Document privileges \\ SELECT * FROM mysql.user WHERE user='username'; -- Verify user\n\n\\ Consider disabling instead: \\ ALTER USER 'user'@'host' ACCOUNT LOCK;"
+    },
+    {
+      "name": "reset-master",
+      "pattern": "(?i)\\bRESET\\s+MASTER\\b",
+      "severity": "critical",
+      "description": "RESET MASTER deletes all binary logs and resets the binlog position.",
+      "explanation": "RESET MASTER is destructive to replication and point-in-time recovery:\n\n\\ - Deletes ALL binary log files \\ - Resets binary log index \\ - Clears GTID executed set \\ - Breaks replication to all replicas \\ - Loses point-in-time recovery capability\n\n\\ Replicas must be reconfigured after RESET MASTER on the source.\n\n\\ Before running: \\ - Ensure no replicas are replicating \\ - Backup binary logs if needed for recovery \\ - Consider PURGE BINARY LOGS for selective cleanup\n\n\\ Safer alternative: \\ PURGE BINARY LOGS BEFORE 'date'; -- Keeps recent logs"
+    }
+  ]
+}

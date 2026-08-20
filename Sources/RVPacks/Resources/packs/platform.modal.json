@@ -1,0 +1,171 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "platform.modal",
+  "name": "Modal Platform",
+  "version": "0.11.0",
+  "description": "Protects against destructive Modal CLI operations that can delete or wipe Modal Volumes, Secrets, Apps, Containers, Environments, Dicts, or Queues. Catches commands even when `-y`/`--yes` is passed to bypass interactive confirmation.",
+  "category": "platform",
+  "enabled_by_default": false,
+  "keywords": [
+    "modal"
+  ],
+  "safe_patterns": [
+    {
+      "name": "modal-volume-list",
+      "pattern": "(?<![\\w-])modal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+volume\\s+(?:list|ls)\\b",
+      "description": ""
+    },
+    {
+      "name": "modal-volume-get",
+      "pattern": "(?<![\\w-])modal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+volume\\s+(?:get|cp|cat)\\b",
+      "description": ""
+    },
+    {
+      "name": "modal-volume-create",
+      "pattern": "(?<![\\w-])modal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+volume\\s+(?:create|rename)\\b",
+      "description": ""
+    },
+    {
+      "name": "modal-app-readonly",
+      "pattern": "(?<![\\w-])modal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+app\\s+(?:list|ls|logs|history|dashboard|rollback|rollover)\\b",
+      "description": ""
+    },
+    {
+      "name": "modal-container-readonly",
+      "pattern": "(?<![\\w-])modal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+container\\s+(?:list|ls|logs|exec)\\b",
+      "description": ""
+    },
+    {
+      "name": "modal-secret-list",
+      "pattern": "(?<![\\w-])modal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+secret\\s+(?:list|ls)\\b",
+      "description": ""
+    },
+    {
+      "name": "modal-secret-create-no-force",
+      "pattern": "(?<![\\w-])modal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+secret\\s+create\\b(?!(?:[^;&|\\r\\n]|\\\\\\r?\\n)*(?:--force|--overwrite)\\b)",
+      "description": ""
+    },
+    {
+      "name": "modal-environment-list",
+      "pattern": "(?<![\\w-])modal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+environment\\s+(?:list|ls)\\b",
+      "description": ""
+    },
+    {
+      "name": "modal-environment-mutate",
+      "pattern": "(?<![\\w-])modal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+environment\\s+(?:create|update)\\b",
+      "description": ""
+    },
+    {
+      "name": "modal-dict-readonly",
+      "pattern": "(?<![\\w-])modal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+dict\\s+(?:list|ls|get|items|create)\\b",
+      "description": ""
+    },
+    {
+      "name": "modal-queue-readonly",
+      "pattern": "(?<![\\w-])modal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+queue\\s+(?:list|ls|peek|len|create)\\b",
+      "description": ""
+    },
+    {
+      "name": "modal-shell",
+      "pattern": "(?<![\\w-])modal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+shell\\b",
+      "description": ""
+    },
+    {
+      "name": "modal-deploy",
+      "pattern": "(?<![\\w-])modal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+(?:deploy|serve|run|profile|launch)\\b",
+      "description": ""
+    },
+    {
+      "name": "modal-token",
+      "pattern": "(?<![\\w-])modal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+token\\s+(?:info|new|set)\\b",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "modal-environment-delete",
+      "pattern": "(?<![\\w-])modal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+environment\\s+(?:delete|remove|rm)\\b",
+      "severity": "critical",
+      "description": "modal environment delete schedules removal of an entire Modal environment.",
+      "explanation": "Deleting a Modal environment removes the environment and every Modal app inside it — irrecoverable. Agents passing --yes bypass Modal's confirmation prompt entirely."
+    },
+    {
+      "name": "modal-volume-delete",
+      "pattern": "(?<![\\w-])modal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+volume\\s+(?:delete|remove)\\b",
+      "severity": "critical",
+      "description": "modal volume delete removes a Modal Volume and all data inside it.",
+      "explanation": "Deleting a Modal Volume destroys persistent ML artifacts: model weights, datasets, checkpoints. There is no undo. Agents passing --yes bypass Modal's confirmation prompt entirely."
+    },
+    {
+      "name": "modal-secret-delete",
+      "pattern": "(?<![\\w-])modal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+secret\\s+(?:delete|remove|rm)\\b",
+      "severity": "critical",
+      "description": "modal secret delete permanently removes a published Modal Secret.",
+      "explanation": "Deleting a Modal Secret can immediately break every running app that references it (API keys, DB credentials, OAuth tokens). Agents passing --yes bypass Modal's confirmation prompt entirely."
+    },
+    {
+      "name": "modal-dict-delete",
+      "pattern": "(?<![\\w-])modal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+dict\\s+(?:delete|remove|rm)\\b",
+      "severity": "critical",
+      "description": "modal dict delete removes a named Modal Dict and all its data.",
+      "explanation": "Deleting a Modal Dict can destroy authoritative state that an app treats as a transient cache when it actually is not. Agents passing --yes bypass Modal's confirmation prompt entirely."
+    },
+    {
+      "name": "modal-queue-delete",
+      "pattern": "(?<![\\w-])modal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+queue\\s+(?:delete|remove|rm)\\b",
+      "severity": "critical",
+      "description": "modal queue delete removes a named Modal Queue and all its data.",
+      "explanation": "Deleting a Modal Queue discards every message currently in flight or buffered. Agents passing --yes bypass Modal's confirmation prompt entirely."
+    },
+    {
+      "name": "modal-app-stop",
+      "pattern": "(?<![\\w-])modal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+app\\s+stop\\b",
+      "severity": "high",
+      "description": "modal app stop terminates a Modal app and its running containers.",
+      "explanation": "Stopping a Modal app permanently stops it and terminates running containers; in-progress inputs are lost or reassigned. Use `modal app rollback` to roll back without stopping."
+    },
+    {
+      "name": "modal-container-stop",
+      "pattern": "(?<![\\w-])modal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+container\\s+stop\\b",
+      "severity": "high",
+      "description": "modal container stop terminates a running Modal container and reassigns inputs.",
+      "explanation": "Stopping a Modal container interrupts in-flight work. The platform may reassign inputs, but exactly-once semantics are not guaranteed."
+    },
+    {
+      "name": "modal-volume-rm-recursive",
+      "pattern": "(?<![\\w-])modal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+volume\\s+rm\\b(?:[^;&|\\r\\n]|\\\\\\r?\\n)*(?:\\s|=)(?:-r\\b|-R\\b|--recursive\\b)",
+      "severity": "high",
+      "description": "modal volume rm -r recursively deletes files inside a Modal Volume.",
+      "explanation": "Recursive `modal volume rm` can wipe entire subdirectories of persistent storage (datasets, checkpoints). Catastrophic when the target is wrong."
+    },
+    {
+      "name": "modal-dict-clear",
+      "pattern": "(?<![\\w-])modal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+dict\\s+clear\\b",
+      "severity": "high",
+      "description": "modal dict clear empties a Modal Dict.",
+      "explanation": "Clearing a Modal Dict deletes every entry but leaves the Dict object. If the Dict holds authoritative state, this is data loss."
+    },
+    {
+      "name": "modal-queue-clear",
+      "pattern": "(?<![\\w-])modal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+queue\\s+clear\\b",
+      "severity": "high",
+      "description": "modal queue clear drains every message from a Modal Queue.",
+      "explanation": "Clearing a Modal Queue drops every buffered message. If consumers have not yet processed them, the work is lost."
+    },
+    {
+      "name": "modal-volume-rm",
+      "pattern": "(?<![\\w-])modal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+volume\\s+rm\\b(?!(?:[^;&|\\r\\n]|\\\\\\r?\\n)*(?:\\s|=)(?:-r\\b|-R\\b|--recursive\\b))",
+      "severity": "medium",
+      "description": "modal volume rm deletes a file inside a Modal Volume.",
+      "explanation": "Single-file deletion inside a Volume is recoverable only if you have an external copy. Verify the target path before running."
+    },
+    {
+      "name": "modal-secret-create-force",
+      "pattern": "(?<![\\w-])modal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+secret\\s+create\\b(?:[^;&|\\r\\n]|\\\\\\r?\\n)*(?:--force|--overwrite)\\b",
+      "severity": "medium",
+      "description": "modal secret create --force overwrites an existing Modal Secret in place.",
+      "explanation": "Overwriting a Secret with --force changes the value used by every app that references it on next cold start — common cause of unintended prod credential rotation."
+    }
+  ]
+}

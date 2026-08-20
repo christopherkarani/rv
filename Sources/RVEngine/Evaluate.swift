@@ -113,20 +113,16 @@ private func requiredRulesAreCompiled<Compiled: Sendable>(
 }
 
 private func enabledPacks(from packs: [PackSnapshot], enabledIDs: [PackID]) -> [PackSnapshot] {
-    let wanted = Set(enabledIDs)
-    return packs
-        .filter { wanted.contains($0.id) }
-        .sorted { $0.id.rawValue < $1.id.rawValue }
+    let byID = Dictionary(uniqueKeysWithValues: packs.map { ($0.id, $0) })
+    return enabledIDs.compactMap { byID[$0] }
 }
 
 private func enabledCompiled<Compiled: Sendable>(
     from compiled: CompiledPacks<Compiled>,
     enabledIDs: [PackID]
 ) -> [CompiledPack<Compiled>] {
-    let wanted = Set(enabledIDs)
-    return compiled.packs
-        .filter { wanted.contains($0.snapshot.id) }
-        .sorted { $0.snapshot.id.rawValue < $1.snapshot.id.rawValue }
+    let byID = Dictionary(uniqueKeysWithValues: compiled.packs.map { ($0.snapshot.id, $0) })
+    return enabledIDs.compactMap { byID[$0] }
 }
 
 private func isTerminal(_ decision: Decision) -> Bool {

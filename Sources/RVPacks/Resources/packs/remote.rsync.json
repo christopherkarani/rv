@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "remote.rsync",
+  "name": "rsync",
+  "version": "0.11.0",
+  "description": "Protects against destructive rsync operations like --delete and its variants.",
+  "category": "remote",
+  "enabled_by_default": false,
+  "keywords": [
+    "rsync"
+  ],
+  "safe_patterns": [
+    {
+      "name": "rsync-dry-run",
+      "pattern": "rsync\\b.*\\s--dry-run\\b",
+      "description": ""
+    },
+    {
+      "name": "rsync-short-dry-run",
+      "pattern": "rsync\\b.*\\s+-[A-Za-z]*n[A-Za-z]*\\b",
+      "description": ""
+    },
+    {
+      "name": "rsync-list-only",
+      "pattern": "rsync\\b.*\\s--list-only\\b",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "rsync-delete",
+      "pattern": "rsync\\b.*\\s--delete(?:-[a-z-]+)?\\b",
+      "severity": "high",
+      "description": "rsync --delete removes destination files not present in source.",
+      "explanation": "The --delete flag removes files from the destination that don't exist in the \\ source. If source and destination are swapped, or if the source is unexpectedly \\ empty, important data on the destination can be permanently deleted.\n\n\\ Safer alternatives: \\ - rsync --dry-run --delete: Preview what would be deleted \\ - rsync without --delete: Only adds/updates, never deletes \\ - rsync --backup --delete: Keep backup copies of deleted files"
+    },
+    {
+      "name": "rsync-del-short",
+      "pattern": "rsync\\b.*\\s--del\\b",
+      "severity": "high",
+      "description": "rsync --del is a short alias for --delete and is destructive.",
+      "explanation": "The --del flag is shorthand for --delete-during, which deletes destination files \\ not present in source during the transfer. This is slightly more dangerous than \\ --delete-after because deletions happen incrementally.\n\n\\ Safer alternatives: \\ - rsync --dry-run --del: Preview deletions first \\ - rsync without deletion flags: Additive sync only \\ - Use --delete-after for predictable batch deletion"
+    }
+  ]
+}

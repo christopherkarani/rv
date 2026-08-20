@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "remote.scp",
+  "name": "scp",
+  "version": "0.11.0",
+  "description": "Protects against destructive SCP operations like overwrites to system paths.",
+  "category": "remote",
+  "enabled_by_default": false,
+  "keywords": [
+    "scp",
+    "pscp"
+  ],
+  "safe_patterns": [
+    {
+      "name": "scp-help",
+      "pattern": "scp\\b.*\\s--?h(elp)?\\b",
+      "description": ""
+    },
+    {
+      "name": "scp-download",
+      "pattern": "scp\\b.*\\s(?:\\S+@)?\\S+:\\S+\\s+\\.\\S*\\s*$",
+      "description": ""
+    },
+    {
+      "name": "scp-to-home",
+      "pattern": "scp\\b.*\\s(?:(?:\\S+@)?\\S+:)?~/(?!\\S*\\.\\./)\\S+\\s*$",
+      "description": ""
+    },
+    {
+      "name": "scp-to-tmp",
+      "pattern": "scp\\b.*\\s(?:(?:\\S+@)?\\S+:)?/tmp/(?!\\S*\\.\\./)\\S*\\s*$",
+      "description": ""
+    },
+    {
+      "name": "scp-to-var-tmp",
+      "pattern": "scp\\b.*\\s(?:(?:\\S+@)?\\S+:)?/var/tmp(?:/(?!\\S*\\.\\./)\\S*)?\\s*$",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "scp-destination-unverified",
+      "pattern": "(?!)",
+      "severity": "high",
+      "description": "scp/pscp has a runtime-dependent or malformed destination that cannot be verified before execution.",
+      "explanation": "A shell variable, expression, malformed URI, or otherwise unverified final operand can \\ resolve to a protected local path or an arbitrary remote host. Use a literal destination \\ so the engine can determine direction and target before the transfer runs."
+    },
+    {
+      "name": "scp-relative-traversal",
+      "pattern": "(?!)",
+      "severity": "high",
+      "description": "scp/pscp uses parent-directory traversal in a remote relative destination.",
+      "explanation": "Remote relative paths and tilde paths are resolved by the remote account. A `..` component \\ can escape the account's apparent home/staging directory and overwrite a protected system \\ location. Resolve the remote absolute path first and use a traversal-free destination."
+    },
+    {
+      "name": "scp-to-windows-system",
+      "pattern": "(?!)",
+      "severity": "critical",
+      "description": "scp/pscp targets a protected Windows system directory on the remote host.",
+      "explanation": "Copying into a remote drive root, Windows, Program Files, ProgramData, Boot, or EFI tree can \\ overwrite operating-system files and make the destination host unusable. Stage the payload \\ in a non-system directory and install it through a reviewed deployment mechanism."
+    },
+    {
+      "name": "scp-recursive-root",
+      "pattern": "scp\\b.*\\s-[A-Za-z0-9]*r[A-Za-z0-9]*\\b.*\\s(?:(?:\\S+@)?\\S+:)?/\\s*$",
+      "severity": "critical",
+      "description": "scp -r to root (/) is extremely dangerous.",
+      "explanation": "Recursive copy to the root filesystem can overwrite critical system files, \\ potentially rendering the system unbootable. This affects all system directories \\ including /etc, /bin, /lib, and /boot.\n\n\\ Safer alternatives: \\ - Specify a target subdirectory instead of / \\ - Use rsync with --dry-run to preview changes \\ - Copy to /tmp first and move files individually"
+    },
+    {
+      "name": "scp-to-etc",
+      "pattern": "scp\\b.*\\s(?:(?:\\S+@)?\\S+:)?/etc(?:/\\S*)?\\s*$",
+      "severity": "high",
+      "description": "scp to /etc/ can overwrite system configuration.",
+      "explanation": "The /etc directory contains critical system configuration files including passwd, \\ shadow, fstab, and network settings. Overwriting these can lock you out of the \\ system or cause services to fail.\n\n\\ Safer alternatives: \\ - Copy to a staging directory first \\ - Back up existing files before overwriting \\ - Use configuration management tools (Ansible, etc.)"
+    },
+    {
+      "name": "scp-to-var",
+      "pattern": "scp\\b.*\\s(?:(?:\\S+@)?\\S+:)?/var(?:/\\S*)?\\s*$",
+      "severity": "high",
+      "description": "scp to /var/ can overwrite system data.",
+      "explanation": "The /var directory contains variable data including logs, databases, mail spools, \\ and application state. Overwriting this data can cause data loss and service \\ disruptions.\n\n\\ Safer alternatives: \\ - Use /var/tmp for temporary staging \\ - Stop affected services before modifying their data \\ - Back up existing data first"
+    },
+    {
+      "name": "scp-to-boot",
+      "pattern": "scp\\b.*\\s(?:(?:\\S+@)?\\S+:)?/boot(?:/\\S*)?\\s*$",
+      "severity": "critical",
+      "description": "scp to /boot/ can corrupt boot configuration.",
+      "explanation": "The /boot directory contains the kernel, initramfs, and bootloader configuration. \\ Corrupting these files will prevent the system from booting, requiring rescue \\ media to recover.\n\n\\ Safer alternatives: \\ - Use package manager for kernel updates \\ - Keep backup kernels available \\ - Test changes in a VM first"
+    },
+    {
+      "name": "scp-to-usr",
+      "pattern": "scp\\b.*\\s(?:(?:\\S+@)?\\S+:)?/usr(?:/\\S*)?\\s*$",
+      "severity": "high",
+      "description": "scp to /usr/ can overwrite system binaries.",
+      "explanation": "The /usr directory contains system binaries, libraries, and shared resources. \\ Overwriting files here can break system utilities and installed applications.\n\n\\ Safer alternatives: \\ - Use /usr/local for custom installations \\ - Use package managers for system updates \\ - Install to user directories when possible"
+    },
+    {
+      "name": "scp-to-bin",
+      "pattern": "scp\\b.*\\s(?:(?:\\S+@)?\\S+:)?/(?:bin|sbin)(?:/\\S*)?\\s*$",
+      "severity": "critical",
+      "description": "scp to /bin/ or /sbin/ can overwrite system binaries.",
+      "explanation": "The /bin and /sbin directories contain essential system binaries required for \\ basic operation. Overwriting these can make the system unusable and require \\ rescue mode recovery.\n\n\\ Safer alternatives: \\ - Install custom scripts to /usr/local/bin \\ - Use package managers for system updates \\ - Test binaries in user directories first"
+    },
+    {
+      "name": "scp-to-lib",
+      "pattern": "scp\\b.*\\s(?:(?:\\S+@)?\\S+:)?/lib(?:64)?(?:/\\S*)?\\s*$",
+      "severity": "critical",
+      "description": "scp to /lib/ can overwrite system libraries.",
+      "explanation": "The /lib and /lib64 directories contain shared libraries required by system \\ binaries. Overwriting these can cause immediate system instability and prevent \\ commands from running.\n\n\\ Safer alternatives: \\ - Use package managers for library updates \\ - Install custom libraries to /usr/local/lib \\ - Use LD_LIBRARY_PATH for testing"
+    }
+  ]
+}

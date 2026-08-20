@@ -16,13 +16,26 @@ public enum PackEnableError: Error, Sendable, Equatable {
     case packNotFound(PackID)
 }
 
+/// Mutable enable flags over the bundled catalog (IPC / doctor rows).
 public struct PackCatalog: Sendable, Equatable {
     public private(set) var records: [PackEnablement]
 
-    public init(bundled: [PackID] = [.coreFilesystem, .coreGit]) {
+    public init(records: [PackEnablement]) {
+        self.records = records.sorted { $0.id.rawValue < $1.id.rawValue }
+    }
+
+    public init(bundled: [PackID] = PackSet.defaultIDs) {
         records = bundled
             .sorted { $0.rawValue < $1.rawValue }
             .map { PackEnablement(id: $0, enabled: true, bundled: true) }
+    }
+
+    public static func bundlingAll(enabled: Set<PackID>, index: PackIndex) -> PackCatalog {
+        let records = index.packIDs.map { raw in
+            let id = PackID(rawValue: raw)
+            return PackEnablement(id: id, enabled: enabled.contains(id), bundled: true)
+        }
+        return PackCatalog(records: records)
     }
 
     public var enabledIDs: [PackID] {

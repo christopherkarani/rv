@@ -1,0 +1,110 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "windows.powershell",
+  "name": "Windows PowerShell Cmdlets",
+  "version": "0.11.0",
+  "description": "Protects against destructive PowerShell cmdlets: registry/provider deletes \\ (`Remove-Item HKLM:\\`, `Remove-ItemProperty`, `Remove-PSDrive`), account/task \\ removal (`Remove-LocalUser`, `Unregister-ScheduledTask`), `Disable-ComputerRestore`, \\ forced `Stop-Computer`/`Restart-Computer`, and `Remove-VM`/`Remove-AppxPackage`.",
+  "category": "windows",
+  "enabled_by_default": false,
+  "keywords": [
+    "Remove-Item",
+    "remove-item",
+    "ri",
+    "RI",
+    "Remove-ItemProperty",
+    "remove-itemproperty",
+    "Clear-Item",
+    "clear-item",
+    "Remove-PSDrive",
+    "remove-psdrive",
+    "Remove-LocalUser",
+    "remove-localuser",
+    "Remove-LocalGroup",
+    "remove-localgroup",
+    "Unregister-ScheduledTask",
+    "unregister-scheduledtask",
+    "Disable-ComputerRestore",
+    "disable-computerrestore",
+    "Stop-Computer",
+    "stop-computer",
+    "Restart-Computer",
+    "restart-computer",
+    "Remove-VM",
+    "remove-vm",
+    "Remove-AppxPackage",
+    "remove-appxpackage"
+  ],
+  "safe_patterns": [
+    {
+      "name": "ps-whatif",
+      "pattern": "(?i)^\\s*[^|&;\\r\\n]*\\s-whatif\\b[^|&;\\r\\n]*$",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "remove-item-provider",
+      "pattern": "(?i)\\b(?:remove-item|ri)\\b[^|&\\r\\n]*\\b(?:hklm|hkcu|hkcr|hku|cert|wsman):",
+      "severity": "high",
+      "description": "Remove-Item against a registry/cert/WSMan provider path deletes that store entry.",
+      "explanation": "`Remove-Item HKLM:\\...` (or `HKCU:`/`Cert:`/`WSMan:`) deletes a registry key, \\ certificate, or WSMan config item — not a file. The registry/cert stores have no \\ Recycle Bin, and a wrong key can break apps, services, or trust.\n\n\\ Safer alternatives: \\ - Get-ItemProperty / Get-ChildItem on the path to confirm contents first \\ - Export the key (reg export) before removing it"
+    },
+    {
+      "name": "remove-itemproperty-or-clear",
+      "pattern": "(?i)\\b(?:remove-itemproperty|clear-item|clear-itemproperty)\\b",
+      "severity": "high",
+      "description": "Remove-ItemProperty / Clear-Item* deletes registry values or item contents.",
+      "explanation": "`Remove-ItemProperty` deletes a registry value; `Clear-Item`/`Clear-ItemProperty` wipe an \\ item's contents/value. Against the registry these silently remove configuration with no \\ undo.\n\n\\ Safer alternatives: \\ - Get-ItemProperty: read the value first \\ - Export the parent key before changing values"
+    },
+    {
+      "name": "remove-psdrive",
+      "pattern": "(?i)\\bremove-psdrive\\b",
+      "severity": "medium",
+      "description": "Remove-PSDrive removes a PowerShell drive mapping.",
+      "explanation": "`Remove-PSDrive` removes a PowerShell drive. For a persistent or system drive this can \\ break scripts and access that depend on it.\n\n\\ Safer alternatives: \\ - Get-PSDrive: confirm which drive and whether anything relies on it"
+    },
+    {
+      "name": "remove-localuser-or-group",
+      "pattern": "(?i)\\b(?:remove-localuser|remove-localgroup)\\b",
+      "severity": "high",
+      "description": "Remove-LocalUser / Remove-LocalGroup deletes a local account or group.",
+      "explanation": "`Remove-LocalUser`/`Remove-LocalGroup` permanently deletes a local account or group and \\ its access. The user's profile/data can be orphaned and there is no undo.\n\n\\ Safer alternatives: \\ - Get-LocalUser: confirm the account first \\ - Disable-LocalUser: disable reversibly instead of deleting"
+    },
+    {
+      "name": "unregister-scheduledtask",
+      "pattern": "(?i)\\bunregister-scheduledtask\\b",
+      "severity": "medium",
+      "description": "Unregister-ScheduledTask deletes a scheduled task.",
+      "explanation": "`Unregister-ScheduledTask` deletes a scheduled task. If maintenance, backups, or apps \\ rely on it, that work silently stops running.\n\n\\ Safer alternatives: \\ - Get-ScheduledTask: confirm the task first \\ - Disable-ScheduledTask: disable reversibly instead"
+    },
+    {
+      "name": "disable-computerrestore",
+      "pattern": "(?i)\\bdisable-computerrestore\\b",
+      "severity": "high",
+      "description": "Disable-ComputerRestore turns off System Restore and discards restore points.",
+      "explanation": "`Disable-ComputerRestore` turns off System Restore for a drive and deletes its existing \\ restore points — removing a key local recovery path, much like deleting shadow copies.\n\n\\ Safer alternatives: \\ - Get-ComputerRestorePoint: review existing restore points first \\ - Checkpoint-Computer: create a restore point rather than disabling protection"
+    },
+    {
+      "name": "force-stop-or-restart-computer",
+      "pattern": "(?i)\\b(?:stop-computer|restart-computer)\\b(?=[^|&\\r\\n]*\\s-force\\b)",
+      "severity": "medium",
+      "description": "Stop-Computer/Restart-Computer -Force shuts down/reboots without saving work.",
+      "explanation": "`Stop-Computer -Force` / `Restart-Computer -Force` powers off or reboots immediately, \\ bypassing apps' save/close prompts — unsaved work in any running program is lost, and on \\ a server it drops every session.\n\n\\ Safer alternatives: \\ - Drop -Force so applications can save and close cleanly \\ - Confirm no critical work/sessions are active before forcing"
+    },
+    {
+      "name": "remove-vm-or-snapshot",
+      "pattern": "(?i)\\b(?:remove-vm|remove-vmsnapshot|remove-vmcheckpoint)\\b",
+      "severity": "high",
+      "description": "Remove-VM / Remove-VMSnapshot deletes a virtual machine or its checkpoints.",
+      "explanation": "`Remove-VM` deletes a Hyper-V virtual machine's configuration; `Remove-VMSnapshot`/\\ `Remove-VMCheckpoint` deletes its checkpoints (a recovery path). Targeting the wrong VM \\ destroys it or its ability to roll back.\n\n\\ Safer alternatives: \\ - Get-VM: confirm the VM name first \\ - Export-VM / Checkpoint-VM before removing anything"
+    },
+    {
+      "name": "remove-appxpackage",
+      "pattern": "(?i)\\bremove-appxpackage\\b",
+      "severity": "medium",
+      "description": "Remove-AppxPackage uninstalls an app package (potentially for all users).",
+      "explanation": "`Remove-AppxPackage` uninstalls a Windows app package; with `-AllUsers` it removes it for \\ everyone. Removing a provisioned/system app can break Windows features.\n\n\\ Safer alternatives: \\ - Get-AppxPackage: confirm the exact package first \\ - Avoid -AllUsers unless you intend a machine-wide removal"
+    }
+  ]
+}

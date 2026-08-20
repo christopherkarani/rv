@@ -1,0 +1,131 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "search.meilisearch",
+  "name": "Meilisearch",
+  "version": "0.11.0",
+  "description": "Protects against destructive Meilisearch REST API operations like index deletion, \\ document deletion, delete-batch, and API key removal.",
+  "category": "search",
+  "enabled_by_default": false,
+  "keywords": [
+    "meili",
+    "meilisearch",
+    "7700",
+    "/indexes",
+    "/keys"
+  ],
+  "safe_patterns": [
+    {
+      "name": "meili-curl-get-stats",
+      "pattern": "(?i)^(?!(?=.*(?:-X\\s*|--request(?:=|\\s+))DELETE\\b)(?=.*(?:meili|:7700)))(?!(?=.*(?:-X\\s*|--request(?:=|\\s+))POST\\b)(?=.*documents/delete-batch\\b))curl\\b.*(?:-X\\s*|--request(?:=|\\s+))GET\\b.*\\b(?:https?://)?[^\\s'\\\"]*(?:meili|:7700)[^\\s'\\\"]*/stats\\b",
+      "description": ""
+    },
+    {
+      "name": "meili-curl-get-health",
+      "pattern": "(?i)^(?!(?=.*(?:-X\\s*|--request(?:=|\\s+))DELETE\\b)(?=.*(?:meili|:7700)))(?!(?=.*(?:-X\\s*|--request(?:=|\\s+))POST\\b)(?=.*documents/delete-batch\\b))curl\\b.*(?:-X\\s*|--request(?:=|\\s+))GET\\b.*\\b(?:https?://)?[^\\s'\\\"]*(?:meili|:7700)[^\\s'\\\"]*/health\\b",
+      "description": ""
+    },
+    {
+      "name": "meili-curl-get-version",
+      "pattern": "(?i)^(?!(?=.*(?:-X\\s*|--request(?:=|\\s+))DELETE\\b)(?=.*(?:meili|:7700)))(?!(?=.*(?:-X\\s*|--request(?:=|\\s+))POST\\b)(?=.*documents/delete-batch\\b))curl\\b.*(?:-X\\s*|--request(?:=|\\s+))GET\\b.*\\b(?:https?://)?[^\\s'\\\"]*(?:meili|:7700)[^\\s'\\\"]*/version\\b",
+      "description": ""
+    },
+    {
+      "name": "meili-curl-search",
+      "pattern": "(?i)^(?!(?=.*(?:-X\\s*|--request(?:=|\\s+))DELETE\\b)(?=.*(?:meili|:7700)))(?!(?=.*(?:-X\\s*|--request(?:=|\\s+))POST\\b)(?=.*documents/delete-batch\\b))curl\\b.*(?:-X\\s*|--request(?:=|\\s+))POST\\b.*\\b(?:https?://)?[^\\s'\\\"]*(?:meili|:7700)[^\\s'\\\"]*/indexes/[^\\s/]+/search\\b",
+      "description": ""
+    },
+    {
+      "name": "meili-http-get-stats",
+      "pattern": "http\\s+GET\\s+(?:https?://)?\\S*(?:meili|:7700)\\S*/stats\\b",
+      "description": ""
+    },
+    {
+      "name": "meili-http-get-health",
+      "pattern": "http\\s+GET\\s+(?:https?://)?\\S*(?:meili|:7700)\\S*/health\\b",
+      "description": ""
+    },
+    {
+      "name": "meili-http-get-version",
+      "pattern": "http\\s+GET\\s+(?:https?://)?\\S*(?:meili|:7700)\\S*/version\\b",
+      "description": ""
+    },
+    {
+      "name": "meili-http-search",
+      "pattern": "http\\s+POST\\s+(?:https?://)?\\S*(?:meili|:7700)\\S*/indexes/\\S+/search\\b",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "meili-curl-delete-document",
+      "pattern": "(?i)\\bcurl\\b(?=.*(?:-X\\s*|--request(?:=|\\s+))DELETE\\b)(?=.*\\b(?:https?://)?[^\\s'\\\"]*(?:meili|:7700)[^\\s'\\\"]*/indexes/[^\\s/?]+/documents/[^\\s/?]+).*",
+      "severity": "medium",
+      "description": "curl -X DELETE against /documents/{id} removes a document from Meilisearch.",
+      "explanation": "Deleting a single document removes it from search results immediately. While \\ less destructive than bulk operations, applications expecting this document \\ will receive errors or empty results.\n\n\\ Safer alternatives: \\ - GET /indexes/{uid}/documents/{id}: Verify document first \\ - Export document content before deletion \\ - Use soft delete field in documents instead"
+    },
+    {
+      "name": "meili-curl-delete-documents",
+      "pattern": "(?i)\\bcurl\\b(?=.*(?:-X\\s*|--request(?:=|\\s+))DELETE\\b)(?=.*\\b(?:https?://)?[^\\s'\\\"]*(?:meili|:7700)[^\\s'\\\"]*/indexes/[^\\s/?]+/documents(?:[\\s?'\"]|$)).*",
+      "severity": "high",
+      "description": "curl -X DELETE against /documents removes documents from Meilisearch.",
+      "explanation": "Deleting all documents removes every record from the index while preserving \\ settings and configuration. Search will return no results until re-indexing. \\ This cannot be undone.\n\n\\ Safer alternatives: \\ - GET /indexes/{uid}/documents: Export documents first \\ - Create a snapshot or dump before deletion \\ - Use delete-batch for targeted removal instead"
+    },
+    {
+      "name": "meili-curl-delete-batch",
+      "pattern": "(?i)\\bcurl\\b(?=.*(?:-X\\s*|--request(?:=|\\s+))POST\\b)(?=.*\\b(?:https?://)?[^\\s'\\\"]*(?:meili|:7700)[^\\s'\\\"]*/indexes/[^\\s/?]+/documents/delete-batch\\b).*",
+      "severity": "high",
+      "description": "curl -X POST to /documents/delete-batch deletes documents in bulk.",
+      "explanation": "Batch delete removes multiple documents by their IDs in a single operation. \\ This is irreversible and affects all documents matching the provided IDs. \\ Verify the ID list carefully before executing.\n\n\\ Safer alternatives: \\ - GET documents by ID to verify content first \\ - Export matching documents before deletion \\ - Test with a small batch before processing all"
+    },
+    {
+      "name": "meili-curl-delete-key",
+      "pattern": "(?i)\\bcurl\\b(?=.*(?:-X\\s*|--request(?:=|\\s+))DELETE\\b)(?=.*\\b(?:https?://)?[^\\s'\\\"]*(?:meili|:7700)[^\\s'\\\"]*/keys/[^\\s/?]+).*",
+      "severity": "high",
+      "description": "curl -X DELETE against /keys removes a Meilisearch API key.",
+      "explanation": "Deleting an API key immediately revokes access for all applications using it. \\ Search and indexing operations will fail with authentication errors. The key \\ cannot be recovered after deletion.\n\n\\ Safer alternatives: \\ - GET /keys: List and document keys before deletion \\ - Create replacement key before deleting old one \\ - Update applications with new key first"
+    },
+    {
+      "name": "meili-curl-delete-index",
+      "pattern": "(?i)\\bcurl\\b(?=.*(?:-X\\s*|--request(?:=|\\s+))DELETE\\b)(?=.*\\b(?:https?://)?[^\\s'\\\"]*(?:meili|:7700)[^\\s'\\\"]*/indexes/[^\\s/?]+(?:[\\s?'\"]|$)).*",
+      "severity": "critical",
+      "description": "curl -X DELETE against /indexes/{uid} deletes a Meilisearch index.",
+      "explanation": "Deleting a Meilisearch index permanently removes all documents, settings, \\ filterable attributes, and ranking rules. Search functionality for applications \\ using this index will fail immediately.\n\n\\ Safer alternatives: \\ - GET /indexes/{uid}: Export index settings first \\ - Create a dump with POST /dumps for backup \\ - Re-index from source data after verification"
+    },
+    {
+      "name": "meili-http-delete-document",
+      "pattern": "http\\s+DELETE\\s+(?:https?://)?\\S*(?:meili|:7700)\\S*/indexes/\\S+/documents/\\S+",
+      "severity": "medium",
+      "description": "http DELETE against /documents/{id} removes a document from Meilisearch.",
+      "explanation": "Deleting a single document removes it from search results immediately. While \\ less destructive than bulk operations, applications expecting this document \\ will receive errors or empty results.\n\n\\ Safer alternatives: \\ - GET /indexes/{uid}/documents/{id}: Verify document first \\ - Export document content before deletion \\ - Use soft delete field in documents instead"
+    },
+    {
+      "name": "meili-http-delete-documents",
+      "pattern": "http\\s+DELETE\\s+(?:https?://)?\\S*(?:meili|:7700)\\S*/indexes/\\S+/documents(?:[\\s?]|$)",
+      "severity": "high",
+      "description": "http DELETE against /documents removes documents from Meilisearch.",
+      "explanation": "Deleting all documents removes every record from the index while preserving \\ settings and configuration. Search will return no results until re-indexing. \\ This cannot be undone.\n\n\\ Safer alternatives: \\ - GET /indexes/{uid}/documents: Export documents first \\ - Create a snapshot or dump before deletion \\ - Use delete-batch for targeted removal instead"
+    },
+    {
+      "name": "meili-http-delete-batch",
+      "pattern": "http\\s+POST\\s+(?:https?://)?\\S*(?:meili|:7700)\\S*/indexes/\\S+/documents/delete-batch\\b",
+      "severity": "high",
+      "description": "http POST to /documents/delete-batch deletes documents in bulk.",
+      "explanation": "Batch delete removes multiple documents by their IDs in a single operation. \\ This is irreversible and affects all documents matching the provided IDs. \\ Verify the ID list carefully before executing.\n\n\\ Safer alternatives: \\ - GET documents by ID to verify content first \\ - Export matching documents before deletion \\ - Test with a small batch before processing all"
+    },
+    {
+      "name": "meili-http-delete-key",
+      "pattern": "http\\s+DELETE\\s+(?:https?://)?\\S*(?:meili|:7700)\\S*/keys/\\S+",
+      "severity": "high",
+      "description": "http DELETE against /keys removes a Meilisearch API key.",
+      "explanation": "Deleting an API key immediately revokes access for all applications using it. \\ Search and indexing operations will fail with authentication errors. The key \\ cannot be recovered after deletion.\n\n\\ Safer alternatives: \\ - GET /keys: List and document keys before deletion \\ - Create replacement key before deleting old one \\ - Update applications with new key first"
+    },
+    {
+      "name": "meili-http-delete-index",
+      "pattern": "http\\s+DELETE\\s+(?:https?://)?\\S*(?:meili|:7700)\\S*/indexes/\\S+(?:[\\s?]|$)",
+      "severity": "critical",
+      "description": "http DELETE against /indexes/{uid} deletes a Meilisearch index.",
+      "explanation": "Deleting a Meilisearch index permanently removes all documents, settings, \\ filterable attributes, and ranking rules. Search functionality for applications \\ using this index will fail immediately.\n\n\\ Safer alternatives: \\ - GET /indexes/{uid}: Export index settings first \\ - Create a dump with POST /dumps for backup \\ - Re-index from source data after verification"
+    }
+  ]
+}

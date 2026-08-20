@@ -1,0 +1,97 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "messaging.rabbitmq",
+  "name": "RabbitMQ",
+  "version": "0.11.0",
+  "description": "Protects against destructive RabbitMQ operations like deleting queues/exchanges, \\ purging queues, deleting vhosts, and resetting cluster state.",
+  "category": "messaging",
+  "enabled_by_default": false,
+  "keywords": [
+    "rabbitmqadmin",
+    "rabbitmqctl"
+  ],
+  "safe_patterns": [
+    {
+      "name": "rabbitmqadmin-list",
+      "pattern": "rabbitmqadmin(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+list\\b",
+      "description": ""
+    },
+    {
+      "name": "rabbitmqadmin-show",
+      "pattern": "rabbitmqadmin(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+show\\b",
+      "description": ""
+    },
+    {
+      "name": "rabbitmqctl-status",
+      "pattern": "rabbitmqctl(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+status\\b",
+      "description": ""
+    },
+    {
+      "name": "rabbitmqctl-list-queues",
+      "pattern": "rabbitmqctl(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+list_queues\\b",
+      "description": ""
+    },
+    {
+      "name": "rabbitmqctl-cluster-status",
+      "pattern": "rabbitmqctl(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+cluster_status\\b",
+      "description": ""
+    },
+    {
+      "name": "rabbitmqctl-report",
+      "pattern": "rabbitmqctl(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+report\\b",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "rabbitmqadmin-delete-queue",
+      "pattern": "rabbitmqadmin(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+delete\\s+queue\\b",
+      "severity": "critical",
+      "description": "rabbitmqadmin delete queue permanently deletes a queue.",
+      "explanation": "Deleting a queue permanently removes all messages and bindings. \\ Consumers will disconnect, and producers will fail unless they handle \\ the missing queue. Undelivered messages are lost.\n\n\\ Safer alternatives: \\ - rabbitmqadmin list queues: Review queues first \\ - rabbitmqadmin purge queue: Remove messages but keep the queue \\ - Set TTL or max-length policies for automatic cleanup"
+    },
+    {
+      "name": "rabbitmqadmin-delete-exchange",
+      "pattern": "rabbitmqadmin(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+delete\\s+exchange\\b",
+      "severity": "high",
+      "description": "rabbitmqadmin delete exchange removes an exchange and its bindings.",
+      "explanation": "Deleting an exchange removes all bindings to queues. Messages published \\ to this exchange will be lost unless an alternate exchange is configured. \\ Publishers may not receive errors if they don't use confirms.\n\n\\ Safer alternatives: \\ - rabbitmqadmin list exchanges: Review exchanges first \\ - rabbitmqadmin list bindings: Check dependent bindings \\ - Rebind queues to a new exchange before deletion"
+    },
+    {
+      "name": "rabbitmqadmin-purge-queue",
+      "pattern": "rabbitmqadmin(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+purge\\s+queue\\b",
+      "severity": "high",
+      "description": "rabbitmqadmin purge queue deletes ALL messages in the queue.",
+      "explanation": "Purging a queue deletes all messages immediately. Messages that were \\ waiting to be consumed are permanently lost. This cannot be undone.\n\n\\ Safer alternatives: \\ - rabbitmqadmin show queue: Check message count first \\ - Consume and process messages instead of purging \\ - Set message TTL for automatic expiration"
+    },
+    {
+      "name": "rabbitmqctl-delete-vhost",
+      "pattern": "rabbitmqctl(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+delete_vhost\\b",
+      "severity": "critical",
+      "description": "rabbitmqctl delete_vhost removes a vhost and all its resources.",
+      "explanation": "Deleting a vhost removes ALL queues, exchanges, bindings, policies, \\ and user permissions within that vhost. This is a complete wipe of \\ that namespace.\n\n\\ Safer alternatives: \\ - rabbitmqctl list_vhosts: Review vhosts first \\ - rabbitmqctl list_queues -p <vhost>: Check resources in vhost \\ - Export definitions before deletion"
+    },
+    {
+      "name": "rabbitmqctl-forget-cluster-node",
+      "pattern": "rabbitmqctl(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+forget_cluster_node\\b",
+      "severity": "high",
+      "description": "rabbitmqctl forget_cluster_node permanently removes a node from the cluster.",
+      "explanation": "Forgetting a cluster node removes it from the cluster metadata. Use this \\ only for permanently failed nodes. Mirrored queues may lose replicas, \\ and quorum queues may lose availability if quorum is affected.\n\n\\ Safer alternatives: \\ - rabbitmqctl cluster_status: Review cluster state first \\ - Try to recover the node instead of forgetting \\ - Ensure quorum is maintained after removal"
+    },
+    {
+      "name": "rabbitmqctl-reset",
+      "pattern": "rabbitmqctl(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+reset\\b",
+      "severity": "critical",
+      "description": "rabbitmqctl reset wipes all configuration, queues, and bindings on the node.",
+      "explanation": "Reset returns the node to a blank state, removing all exchanges, queues, \\ bindings, users, vhosts, and permissions. The node is removed from any \\ cluster it was part of.\n\n\\ Safer alternatives: \\ - Export definitions before reset \\ - Use stop_app/start_app for service restart without data loss \\ - Consider forget_cluster_node for cluster membership changes only"
+    },
+    {
+      "name": "rabbitmqctl-force-reset",
+      "pattern": "rabbitmqctl(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+force_reset\\b",
+      "severity": "critical",
+      "description": "rabbitmqctl force_reset wipes node data and can break cluster state.",
+      "explanation": "Force reset ignores cluster state and wipes the node unconditionally. \\ This can leave the cluster in an inconsistent state where other nodes \\ still expect this node to exist.\n\n\\ Safer alternatives: \\ - Try rabbitmqctl reset first (safer) \\ - Coordinate with cluster members before force reset \\ - Document the cluster state for recovery"
+    }
+  ]
+}

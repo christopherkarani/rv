@@ -1,0 +1,221 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "cloud.azure",
+  "name": "Azure CLI",
+  "version": "0.11.0",
+  "description": "Protects against destructive Azure CLI operations like vm delete, \\ storage account delete, and resource group delete",
+  "category": "cloud",
+  "enabled_by_default": false,
+  "keywords": [
+    "az",
+    "delete",
+    "vm",
+    "storage",
+    "acr",
+    "registry",
+    "keyvault",
+    "role",
+    "ad",
+    "dns",
+    "cosmosdb",
+    "monitor",
+    "purge"
+  ],
+  "safe_patterns": [
+    {
+      "name": "az-show",
+      "pattern": "az\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+\\S+\\s+show(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "az-list",
+      "pattern": "az\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+\\S+\\s+list(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "az-account",
+      "pattern": "az\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+account(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "az-configure",
+      "pattern": "az\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+configure(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "az-login",
+      "pattern": "az\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+login(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "az-version",
+      "pattern": "az\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+version(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "az-help",
+      "pattern": "az\\b.*--help",
+      "description": ""
+    },
+    {
+      "name": "az-deployment-what-if",
+      "pattern": "az\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+deployment\\s+(?:group|sub|mg|tenant)\\s+what-if(?:\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "az-deployment-create-what-if",
+      "pattern": "az\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+deployment\\s+(?:group|sub|mg|tenant)\\s+create(?:\\s|$)[^\\n;&|]*\\s--what-if(?:\\s|$)",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "vm-delete",
+      "pattern": "az\\b.*?\\bvm\\s+delete",
+      "severity": "critical",
+      "description": "az vm delete permanently destroys virtual machines.",
+      "explanation": "vm delete permanently destroys Azure VMs:\n\n\\ - VM is deallocated and deleted \\ - OS disk deleted (unless --os-disk=detach) \\ - Data disks detached but not deleted \\ - Public IP released\n\n\\ Preserve disks: az vm delete --os-disk detach --data-disks detach"
+    },
+    {
+      "name": "storage-delete",
+      "pattern": "az\\b.*?\\bstorage\\s+account\\s+delete",
+      "severity": "critical",
+      "description": "az storage account delete permanently destroys the storage account and all data.",
+      "explanation": "storage account delete destroys entire storage account:\n\n\\ - ALL blobs, files, queues, tables deleted \\ - All containers and their contents gone \\ - Cannot be recovered without backups\n\n\\ List contents first: az storage container list --account-name NAME"
+    },
+    {
+      "name": "blob-delete",
+      "pattern": "az\\b.*?\\bstorage\\s+(?:blob|container)\\s+delete",
+      "severity": "high",
+      "description": "az storage blob/container delete permanently removes data.",
+      "explanation": "storage blob/container delete removes data:\n\n\\ - Blob delete removes individual blobs \\ - Container delete removes container and ALL blobs \\ - Soft delete may allow recovery if enabled\n\n\\ Check soft delete: az storage account show --name NAME --query blobServiceProperties"
+    },
+    {
+      "name": "sql-delete",
+      "pattern": "az\\b.*?\\bsql\\s+(?:server|db)\\s+delete",
+      "severity": "critical",
+      "description": "az sql server/db delete permanently destroys the database.",
+      "explanation": "sql server/db delete destroys databases:\n\n\\ - Server delete removes ALL databases on server \\ - Database delete removes specific database \\ - Point-in-time restore possible within retention period\n\n\\ Create backup: az sql db export --name DB --server SRV --storage-uri URI"
+    },
+    {
+      "name": "group-delete",
+      "pattern": "az\\b.*?\\bgroup\\s+delete",
+      "severity": "critical",
+      "description": "az group delete removes the entire resource group and ALL resources within it!",
+      "explanation": "group delete removes ENTIRE resource group:\n\n\\ - ALL resources in the group deleted \\ - VMs, storage, databases, networks - everything \\ - Cannot be undone \\ - --no-wait returns immediately (deletion continues)\n\n\\ This is one of the most destructive Azure commands!"
+    },
+    {
+      "name": "aks-delete",
+      "pattern": "az\\b.*?\\baks\\s+delete",
+      "severity": "critical",
+      "description": "az aks delete removes the entire AKS cluster.",
+      "explanation": "aks delete removes the entire Kubernetes cluster:\n\n\\ - All nodes and workloads terminated \\ - Persistent volumes may be deleted \\ - Load balancers and IPs released \\ - Node resource group also deleted\n\n\\ Backup workloads: kubectl get all -A -o yaml > backup.yaml"
+    },
+    {
+      "name": "webapp-delete",
+      "pattern": "az\\b.*?\\bwebapp\\s+delete",
+      "severity": "high",
+      "description": "az webapp delete removes the App Service.",
+      "explanation": "webapp delete removes App Service:\n\n\\ - Application code and configuration deleted \\ - Custom domain mappings removed \\ - SSL certificates may be deleted \\ - Deployment slots also deleted\n\n\\ Backup config: az webapp config show --name NAME -g RG"
+    },
+    {
+      "name": "functionapp-delete",
+      "pattern": "az\\b.*?\\bfunctionapp\\s+delete",
+      "severity": "high",
+      "description": "az functionapp delete removes the Azure Function App.",
+      "explanation": "functionapp delete removes Azure Functions:\n\n\\ - All functions and configuration deleted \\ - Triggers and bindings removed \\ - Function keys lost \\ - Associated storage may be affected\n\n\\ Export functions if not in version control."
+    },
+    {
+      "name": "cosmosdb-delete",
+      "pattern": "az\\b.*?\\bcosmosdb\\s+(?:delete|database\\s+delete|collection\\s+delete)",
+      "severity": "critical",
+      "description": "az cosmosdb delete permanently destroys the Cosmos DB resource.",
+      "explanation": "cosmosdb delete destroys Cosmos DB resources:\n\n\\ - Account delete removes entire Cosmos DB account \\ - Database delete removes database and all containers \\ - Collection delete removes container and data\n\n\\ Enable point-in-time restore for recovery options."
+    },
+    {
+      "name": "keyvault-delete",
+      "pattern": "az\\b.*?\\bkeyvault\\s+delete",
+      "severity": "critical",
+      "description": "az keyvault delete removes the Key Vault. Secrets may be unrecoverable.",
+      "explanation": "keyvault delete removes Key Vault:\n\n\\ - All secrets, keys, certificates deleted \\ - Soft delete allows recovery (if enabled) \\ - Purge protection prevents permanent deletion \\ - Vault name reserved for recovery period\n\n\\ Check protection: az keyvault show --name NAME --query properties.enablePurgeProtection"
+    },
+    {
+      "name": "vnet-delete",
+      "pattern": "az\\b.*?\\bnetwork\\s+vnet\\s+delete",
+      "severity": "high",
+      "description": "az network vnet delete removes the virtual network.",
+      "explanation": "network vnet delete removes virtual network:\n\n\\ - Network must be empty (no subnets in use) \\ - Connected resources lose connectivity \\ - Peerings to other VNets broken \\ - Network security groups may remain\n\n\\ Check usage: az network vnet subnet list --vnet-name VNET -g RG"
+    },
+    {
+      "name": "acr-delete",
+      "pattern": "az\\b.*?\\bacr\\s+delete",
+      "severity": "critical",
+      "description": "az acr delete removes the container registry and all images.",
+      "explanation": "acr delete removes entire container registry:\n\n\\ - ALL repositories and images deleted \\ - All tags and manifests gone \\ - Webhooks and replications removed \\ - Registry name becomes available to others\n\n\\ List repos: az acr repository list --name REGISTRY"
+    },
+    {
+      "name": "acr-repository-delete",
+      "pattern": "az\\b.*?\\bacr\\s+repository\\s+delete",
+      "severity": "high",
+      "description": "az acr repository delete permanently deletes the repository and its images.",
+      "explanation": "acr repository delete removes repository:\n\n\\ - All tags and images in repository deleted \\ - Running containers unaffected (cached) \\ - New pulls will fail\n\n\\ List tags: az acr repository show-tags --name REG --repository REPO"
+    },
+    {
+      "name": "acr-repository-untag",
+      "pattern": "az\\b.*?\\bacr\\s+repository\\s+untag",
+      "severity": "medium",
+      "description": "az acr repository untag removes tags from images.",
+      "explanation": "acr repository untag removes image tags:\n\n\\ - Tag removed from manifest \\ - Image still exists if other tags reference it \\ - Untagged images may be garbage collected\n\n\\ Lower risk: manifests can be re-tagged if digest known."
+    },
+    {
+      "name": "keyvault-item-delete-or-purge",
+      "pattern": "az\\b.*?\\bkeyvault\\s+(?:key|secret|certificate|storage)\\s+(?:delete|purge)",
+      "severity": "critical",
+      "description": "Key Vault item delete/purge (az keyvault <key|secret|certificate|storage> …) — purge bypasses soft-delete and is irreversible.",
+      "explanation": "keyvault delete/purge on a Key Vault sub-resource:\n\n\\ - delete: soft-delete (recoverable within retention window) \\ - purge: PERMANENT; cannot be recovered; bypasses retention \\ - Purging a KEK (Key-Encryption-Key) makes all data encrypted under it unrecoverable \\ - Applications/services bound to the item fail immediately\n\n\\ Restore soft-deleted items within retention: \\ az keyvault <sub> recover --name NAME --vault-name VAULT\n\n\\ Check purge protection: \\ az keyvault show --name VAULT --query properties.enablePurgeProtection"
+    },
+    {
+      "name": "role-assignment-delete",
+      "pattern": "az\\b.*?\\brole\\s+assignment\\s+delete",
+      "severity": "high",
+      "description": "az role assignment delete removes an RBAC binding — users/SPs lose permissions.",
+      "explanation": "role assignment delete revokes an RBAC assignment:\n\n\\ - The target user / service principal / group loses the role's permissions \\ - Can cascade — CI/CD pipelines, workloads, operators lose access \\ - Re-adding via `az role assignment create` is possible if IDs are known\n\n\\ List bindings first: \\ az role assignment list --assignee PRINCIPAL-ID"
+    },
+    {
+      "name": "ad-sp-delete",
+      "pattern": "az\\b.*?\\bad\\s+sp\\s+delete",
+      "severity": "critical",
+      "description": "az ad sp delete removes a service principal — workloads using it lose auth.",
+      "explanation": "ad sp delete removes an Azure AD service principal:\n\n\\ - All workloads authenticating via this SP lose access \\ - SP credentials (client secrets, certs) are invalidated \\ - Can soft-delete and restore within 30 days via Graph API \\ - Associated app registration is NOT deleted (requires `az ad app delete`)\n\n\\ Preview usages: \\ az role assignment list --assignee SP-APP-ID"
+    },
+    {
+      "name": "ad-app-delete",
+      "pattern": "az\\b.*?\\bad\\s+app\\s+delete",
+      "severity": "critical",
+      "description": "az ad app delete removes an Azure AD app registration — every service principal for it stops working.",
+      "explanation": "ad app delete removes the Azure AD application registration:\n\n\\ - All service principals derived from this app break \\ - OAuth grants to this app are invalidated \\ - Associated federated credentials are deleted \\ - Can restore within 30 days via Graph API soft-delete\n\n\\ Consider disabling instead: \\ az ad app update --id APP-ID --set disabledByMicrosoftStatus=None"
+    },
+    {
+      "name": "network-dns-zone-delete",
+      "pattern": "az\\b.*?\\bnetwork\\s+dns\\s+zone\\s+delete",
+      "severity": "critical",
+      "description": "az network dns zone delete removes an Azure DNS zone — domains stop resolving.",
+      "explanation": "network dns zone delete removes an Azure DNS zone:\n\n\\ - All record sets in the zone are deleted \\ - Domains delegated to this zone's nameservers stop resolving \\ - Production traffic goes dark \\ - No undelete\n\n\\ Export records first: \\ az network dns record-set list -g RG -z ZONE -o json > zone-backup.json"
+    },
+    {
+      "name": "monitor-log-profiles-delete",
+      "pattern": "az\\b.*?\\bmonitor\\s+log-profiles\\s+delete",
+      "severity": "high",
+      "description": "az monitor log-profiles delete removes a subscription activity-log export — compliance/forensics.",
+      "explanation": "monitor log-profiles delete stops exporting the Azure activity log:\n\n\\ - Historical entries at the destination (Storage/Event Hub) are preserved \\ - Future activity events stop flowing to the configured export \\ - Compliance audit (SOC2, ISO 27001, FedRAMP) may require this profile\n\n\\ Each subscription only supports one log profile at a time."
+    },
+    {
+      "name": "cosmosdb-sql-container-delete",
+      "pattern": "az\\b.*?\\bcosmosdb\\s+(?:sql|mongodb|cassandra|gremlin|table)\\s+(?:database|container|keyspace|graph)\\s+delete",
+      "severity": "critical",
+      "description": "az cosmosdb <api> <db|container|keyspace> delete permanently destroys Cosmos DB data.",
+      "explanation": "cosmosdb <api> delete destroys Cosmos DB SQL/Mongo/Cassandra/Gremlin/Table API resources:\n\n\\ - Container/keyspace deletion removes ALL documents/rows inside \\ - Point-in-time restore is only available if continuous backup is enabled \\ - Periodic backups can restore within retention, with a new account name\n\n\\ Enable continuous backup for safer recovery: \\ az cosmosdb update --name ACCOUNT --resource-group RG \\ \\ --backup-policy-type Continuous"
+    }
+  ]
+}

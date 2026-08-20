@@ -1,0 +1,229 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "pin_tag": "v0.11.0",
+  "pin_commit": "2ed7eeef1ae63d204495f02312c657dd6d9bf73d",
+  "pack_count": 99,
+  "default_enabled": [
+    "core.filesystem",
+    "core.git"
+  ],
+  "categories": {
+    "apigateway": [
+      "apigateway.apigee",
+      "apigateway.aws",
+      "apigateway.kong"
+    ],
+    "backup": [
+      "backup.borg",
+      "backup.rclone",
+      "backup.restic",
+      "backup.velero"
+    ],
+    "careful_company_running_windows": [
+      "careful_company_running_windows.chat",
+      "careful_company_running_windows.email",
+      "careful_company_running_windows.guardrails",
+      "careful_company_running_windows.transfer",
+      "careful_company_running_windows.tunnel",
+      "careful_company_running_windows.upload"
+    ],
+    "cdn": [
+      "cdn.cloudflare_workers",
+      "cdn.cloudfront",
+      "cdn.fastly"
+    ],
+    "cicd": [
+      "cicd.circleci",
+      "cicd.github_actions",
+      "cicd.gitlab_ci",
+      "cicd.jenkins"
+    ],
+    "cloud": [
+      "cloud.aws",
+      "cloud.azure",
+      "cloud.gcp"
+    ],
+    "containers": [
+      "containers.compose",
+      "containers.docker",
+      "containers.podman"
+    ],
+    "core": [
+      "core.filesystem",
+      "core.git"
+    ],
+    "database": [
+      "database.bigquery",
+      "database.mongodb",
+      "database.mysql",
+      "database.postgresql",
+      "database.redis",
+      "database.snowflake",
+      "database.sqlite",
+      "database.supabase"
+    ],
+    "dns": [
+      "dns.cloudflare",
+      "dns.generic",
+      "dns.route53"
+    ],
+    "email": [
+      "email.mailgun",
+      "email.postmark",
+      "email.sendgrid",
+      "email.ses"
+    ],
+    "featureflags": [
+      "featureflags.flipt",
+      "featureflags.launchdarkly",
+      "featureflags.split",
+      "featureflags.unleash"
+    ],
+    "infrastructure": [
+      "infrastructure.ansible",
+      "infrastructure.atmos",
+      "infrastructure.pulumi",
+      "infrastructure.terraform"
+    ],
+    "kubernetes": [
+      "kubernetes.helm",
+      "kubernetes.kubectl",
+      "kubernetes.kustomize"
+    ],
+    "loadbalancer": [
+      "loadbalancer.elb",
+      "loadbalancer.haproxy",
+      "loadbalancer.nginx",
+      "loadbalancer.traefik"
+    ],
+    "messaging": [
+      "messaging.kafka",
+      "messaging.nats",
+      "messaging.rabbitmq",
+      "messaging.sqs_sns"
+    ],
+    "monitoring": [
+      "monitoring.datadog",
+      "monitoring.newrelic",
+      "monitoring.pagerduty",
+      "monitoring.prometheus",
+      "monitoring.splunk"
+    ],
+    "package_managers": [
+      "package_managers"
+    ],
+    "payment": [
+      "payment.braintree",
+      "payment.square",
+      "payment.stripe"
+    ],
+    "platform": [
+      "platform.github",
+      "platform.gitlab",
+      "platform.kamal",
+      "platform.modal",
+      "platform.railway"
+    ],
+    "remote": [
+      "remote.rsync",
+      "remote.scp",
+      "remote.ssh"
+    ],
+    "search": [
+      "search.algolia",
+      "search.elasticsearch",
+      "search.meilisearch",
+      "search.opensearch"
+    ],
+    "secrets": [
+      "secrets.aws_secrets",
+      "secrets.doppler",
+      "secrets.onepassword",
+      "secrets.vault"
+    ],
+    "storage": [
+      "storage.azure_blob",
+      "storage.gcs",
+      "storage.minio",
+      "storage.s3"
+    ],
+    "strict_git": [
+      "strict_git"
+    ],
+    "system": [
+      "system.disk",
+      "system.permissions",
+      "system.services"
+    ],
+    "windows": [
+      "windows.filesystem",
+      "windows.misc",
+      "windows.powershell",
+      "windows.system"
+    ]
+  },
+  "presets": {
+    "careful_company_running_windows": [
+      "backup.borg",
+      "backup.rclone",
+      "backup.restic",
+      "backup.velero",
+      "cloud.aws",
+      "cloud.azure",
+      "cloud.gcp",
+      "database.bigquery",
+      "database.mongodb",
+      "database.mysql",
+      "database.postgresql",
+      "database.redis",
+      "database.snowflake",
+      "database.sqlite",
+      "database.supabase",
+      "remote.rsync",
+      "remote.scp",
+      "remote.ssh",
+      "secrets.aws_secrets",
+      "secrets.doppler",
+      "secrets.onepassword",
+      "secrets.vault",
+      "storage.azure_blob",
+      "storage.gcs",
+      "storage.minio",
+      "storage.s3",
+      "windows.filesystem",
+      "windows.misc",
+      "windows.powershell",
+      "windows.system"
+    ]
+  },
+  "tiers": {
+    "apigateway": 4,
+    "backup": 7,
+    "careful_company_running_windows": 12,
+    "cdn": 4,
+    "cicd": 10,
+    "cloud": 4,
+    "containers": 6,
+    "core": 1,
+    "database": 7,
+    "dns": 4,
+    "email": 10,
+    "featureflags": 10,
+    "infrastructure": 3,
+    "kubernetes": 5,
+    "loadbalancer": 4,
+    "messaging": 7,
+    "monitoring": 10,
+    "package_managers": 8,
+    "payment": 10,
+    "platform": 4,
+    "remote": 1,
+    "search": 7,
+    "secrets": 10,
+    "storage": 1,
+    "strict_git": 9,
+    "system": 2,
+    "windows": 11
+  }
+}

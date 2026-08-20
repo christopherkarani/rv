@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "messaging.sqs_sns",
+  "name": "AWS SQS/SNS",
+  "version": "0.11.0",
+  "description": "Protects against destructive AWS SQS and SNS operations like deleting queues, \\ purging messages, deleting topics, and removing subscriptions.",
+  "category": "messaging",
+  "enabled_by_default": false,
+  "keywords": [
+    "aws",
+    "sqs",
+    "sns"
+  ],
+  "safe_patterns": [
+    {
+      "name": "aws-sqs-list-queues",
+      "pattern": "aws(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+sqs\\s+list-queues\\b",
+      "description": ""
+    },
+    {
+      "name": "aws-sqs-get-queue-attributes",
+      "pattern": "aws(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+sqs\\s+get-queue-attributes\\b",
+      "description": ""
+    },
+    {
+      "name": "aws-sqs-receive-message",
+      "pattern": "aws(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+sqs\\s+receive-message\\b",
+      "description": ""
+    },
+    {
+      "name": "aws-sns-list-topics",
+      "pattern": "aws(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+sns\\s+list-topics\\b",
+      "description": ""
+    },
+    {
+      "name": "aws-sns-list-subscriptions",
+      "pattern": "aws(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+sns\\s+list-subscriptions\\b",
+      "description": ""
+    },
+    {
+      "name": "aws-sns-get-topic-attributes",
+      "pattern": "aws(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+sns\\s+get-topic-attributes\\b",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "aws-sqs-delete-queue",
+      "pattern": "aws(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+sqs\\s+delete-queue\\b",
+      "severity": "critical",
+      "description": "aws sqs delete-queue permanently deletes an SQS queue.",
+      "explanation": "Deleting an SQS queue removes the queue and all messages in it. Messages \\ in flight are lost, and any applications sending to this queue will \\ receive errors. You must wait 60 seconds before recreating a queue \\ with the same name.\n\n\\ Safer alternatives: \\ - aws sqs get-queue-attributes: Review queue metrics first \\ - aws sqs purge-queue: Remove messages but keep the queue \\ - Use message retention period for automatic cleanup"
+    },
+    {
+      "name": "aws-sqs-purge-queue",
+      "pattern": "aws(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+sqs\\s+purge-queue\\b",
+      "severity": "high",
+      "description": "aws sqs purge-queue deletes ALL messages in the queue.",
+      "explanation": "Purging an SQS queue deletes all messages immediately. This includes \\ messages in flight and delayed messages. The operation cannot be undone. \\ You can only purge a queue once every 60 seconds.\n\n\\ Safer alternatives: \\ - aws sqs get-queue-attributes: Check message count first \\ - Process messages normally instead of purging \\ - Use dead-letter queues for failed messages"
+    },
+    {
+      "name": "aws-sqs-delete-message-batch",
+      "pattern": "aws(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+sqs\\s+delete-message-batch\\b",
+      "severity": "medium",
+      "description": "aws sqs delete-message-batch removes multiple messages from the queue.",
+      "explanation": "Batch deletion removes up to 10 messages at once. Messages must be \\ successfully processed before deletion, or they will be lost. Ensure \\ your processing logic is complete before calling delete.\n\n\\ Safer alternatives: \\ - Verify receipt handles are still valid \\ - Use visibility timeout to prevent duplicate processing \\ - Delete messages only after confirmed processing"
+    },
+    {
+      "name": "aws-sqs-delete-message",
+      "pattern": "aws(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+sqs\\s+delete-message(?:[\\s]|$)",
+      "severity": "medium",
+      "description": "aws sqs delete-message removes a message from the queue.",
+      "explanation": "Deleting a message removes it permanently from the queue. Only delete \\ after successful processing. If processing fails after deletion, the \\ message is lost.\n\n\\ Safer alternatives: \\ - Extend visibility timeout if processing takes longer \\ - Use dead-letter queues for failed processing \\ - Implement idempotent processing for safety"
+    },
+    {
+      "name": "aws-sns-delete-topic",
+      "pattern": "aws(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+sns\\s+delete-topic\\b",
+      "severity": "critical",
+      "description": "aws sns delete-topic removes an SNS topic and its subscriptions.",
+      "explanation": "Deleting an SNS topic removes all subscriptions and stops all message \\ delivery. Publishers will receive errors. Lambda functions, SQS queues, \\ and other subscribers will no longer receive notifications.\n\n\\ Safer alternatives: \\ - aws sns list-subscriptions-by-topic: Review subscribers first \\ - Unsubscribe endpoints individually if needed \\ - Use topic policies to restrict publishing instead"
+    },
+    {
+      "name": "aws-sns-unsubscribe",
+      "pattern": "aws(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+sns\\s+unsubscribe\\b",
+      "severity": "high",
+      "description": "aws sns unsubscribe removes a subscription and stops message delivery.",
+      "explanation": "Unsubscribing stops message delivery to that endpoint. If this is a \\ critical integration (Lambda, SQS, HTTP endpoint), that system will \\ stop receiving notifications immediately.\n\n\\ Safer alternatives: \\ - aws sns get-subscription-attributes: Review subscription first \\ - Use subscription filter policies to reduce traffic \\ - Disable the endpoint instead of unsubscribing"
+    },
+    {
+      "name": "aws-sns-remove-permission",
+      "pattern": "aws(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+sns\\s+remove-permission\\b",
+      "severity": "high",
+      "description": "aws sns remove-permission revokes permissions on a topic.",
+      "explanation": "Removing permissions can break cross-account access or service \\ integrations. AWS services and other accounts may lose the ability \\ to publish or subscribe to the topic.\n\n\\ Safer alternatives: \\ - aws sns get-topic-attributes: Review current policy first \\ - Add new permissions before removing old ones \\ - Use IAM policies for fine-grained access control"
+    },
+    {
+      "name": "aws-sns-delete-platform-application",
+      "pattern": "aws(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+sns\\s+delete-platform-application\\b",
+      "severity": "high",
+      "description": "aws sns delete-platform-application removes a platform application.",
+      "explanation": "Deleting a platform application removes all endpoints and stops push \\ notifications to mobile devices. All registered device tokens are \\ removed, and users will stop receiving push notifications.\n\n\\ Safer alternatives: \\ - aws sns list-endpoints-by-platform-application: Review endpoints \\ - Disable individual endpoints instead of deleting the app \\ - Back up endpoint ARNs before deletion"
+    }
+  ]
+}

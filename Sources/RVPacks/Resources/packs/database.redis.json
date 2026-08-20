@@ -1,0 +1,150 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "database.redis",
+  "name": "Redis",
+  "version": "0.11.0",
+  "description": "Protects against destructive Redis operations like FLUSHALL, \\ FLUSHDB, and mass key deletion",
+  "category": "database",
+  "enabled_by_default": false,
+  "keywords": [
+    "redis",
+    "valkey",
+    "keydb",
+    "FLUSHALL",
+    "FLUSHDB",
+    "DEBUG"
+  ],
+  "safe_patterns": [
+    {
+      "name": "redis-get",
+      "pattern": "(?i)^(?!.*\\b(?:FLUSHALL|FLUSHDB|DEBUG|SHUTDOWN|CONFIG\\s+(?:SET|REWRITE|RESETSTAT)|xargs\\s+(?:-\\S+(?:\\s+\\S+)?\\s+)*redis-cli(?:\\s+\\S+)*\\s+(?:DEL|UNLINK))\\b).*\\b(?:GET|MGET)\\b",
+      "description": ""
+    },
+    {
+      "name": "redis-scan",
+      "pattern": "(?i)^(?!.*\\b(?:FLUSHALL|FLUSHDB|DEBUG|SHUTDOWN|CONFIG\\s+(?:SET|REWRITE|RESETSTAT)|xargs\\s+(?:-\\S+(?:\\s+\\S+)?\\s+)*redis-cli(?:\\s+\\S+)*\\s+(?:DEL|UNLINK))\\b).*\\bSCAN\\b",
+      "description": ""
+    },
+    {
+      "name": "redis-info",
+      "pattern": "(?i)^(?!.*\\b(?:FLUSHALL|FLUSHDB|DEBUG|SHUTDOWN|CONFIG\\s+(?:SET|REWRITE|RESETSTAT)|xargs\\s+(?:-\\S+(?:\\s+\\S+)?\\s+)*redis-cli(?:\\s+\\S+)*\\s+(?:DEL|UNLINK))\\b).*\\bINFO\\b",
+      "description": ""
+    },
+    {
+      "name": "redis-keys",
+      "pattern": "(?i)^(?!.*\\b(?:FLUSHALL|FLUSHDB|DEBUG|SHUTDOWN|CONFIG\\s+(?:SET|REWRITE|RESETSTAT)|xargs\\s+(?:-\\S+(?:\\s+\\S+)?\\s+)*redis-cli(?:\\s+\\S+)*\\s+(?:DEL|UNLINK))\\b).*\\bKEYS\\b",
+      "description": ""
+    },
+    {
+      "name": "redis-dbsize",
+      "pattern": "(?i)^(?!.*\\b(?:FLUSHALL|FLUSHDB|DEBUG|SHUTDOWN|CONFIG\\s+(?:SET|REWRITE|RESETSTAT)|xargs\\s+(?:-\\S+(?:\\s+\\S+)?\\s+)*redis-cli(?:\\s+\\S+)*\\s+(?:DEL|UNLINK))\\b).*\\bDBSIZE\\b",
+      "description": ""
+    },
+    {
+      "name": "redis-config-get",
+      "pattern": "(?i)^(?!.*\\b(?:FLUSHALL|FLUSHDB|DEBUG|SHUTDOWN|CONFIG\\s+(?:SET|REWRITE|RESETSTAT)|xargs\\s+(?:-\\S+(?:\\s+\\S+)?\\s+)*redis-cli(?:\\s+\\S+)*\\s+(?:DEL|UNLINK))\\b).*\\bCONFIG\\s+GET\\b",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "stdin-unverified",
+      "pattern": "(?!)",
+      "severity": "high",
+      "description": "redis-cli receives indirect input that the engine cannot statically verify.",
+      "explanation": "Materialize and review the exact Redis commands before piping or redirecting them into the client."
+    },
+    {
+      "name": "flushall",
+      "pattern": "(?i)\\bFLUSHALL\\b",
+      "severity": "critical",
+      "description": "FLUSHALL permanently deletes ALL keys in ALL databases.",
+      "explanation": "FLUSHALL removes every key from every database (0-15 by default):\n\n\\ - All cached data is lost \\ - All session data is gone \\ - All queues are emptied \\ - Affects ALL databases, not just current\n\n\\ This is instant and cannot be undone. RDB/AOF backups are not affected \\ until the next save.\n\n\\ Check database sizes first: \\ INFO keyspace \\ DBSIZE\n\n\\ Consider: \\ FLUSHDB # Only current database \\ DEL key1 key2 # Specific keys"
+    },
+    {
+      "name": "flushdb",
+      "pattern": "(?i)\\bFLUSHDB\\b",
+      "severity": "high",
+      "description": "FLUSHDB permanently deletes ALL keys in the current database.",
+      "explanation": "FLUSHDB removes all keys from the currently selected database:\n\n\\ - All keys in this database are deleted \\ - Other databases (0-15) are unaffected \\ - Instant execution, no confirmation \\ - Cannot be undone\n\n\\ Check current database and key count: \\ CLIENT INFO # Shows current DB \\ DBSIZE # Keys in current DB \\ KEYS '*' | head -20 # Sample keys (slow on large DBs)\n\n\\ Prefer audited per-key cleanup with a dry run and backup."
+    },
+    {
+      "name": "config-resetstat",
+      "pattern": "(?i)\\bCONFIG\\s+RESETSTAT\\b",
+      "severity": "medium",
+      "description": "CONFIG RESETSTAT clears Redis runtime counters and can hide recent incidents.",
+      "explanation": "CONFIG RESETSTAT resets Redis statistics reported by INFO:\n\n\\ - Command counters and error counters are cleared \\ - Recent operational evidence can be lost \\ - Capacity and incident analysis becomes harder\n\n\\ Capture INFO and monitoring data first, then run this manually only when \\ resetting observability counters is intentional."
+    },
+    {
+      "name": "mass-delete-pipeline",
+      "pattern": "(?i)\\bredis-cli\\b.*\\b(?:KEYS\\b|--scan\\b|SCAN\\b).*\\|\\s*xargs\\s+(?:-\\S+(?:\\s+\\S+)?\\s+)*redis-cli(?:\\s+\\S+)*\\s+(?:DEL|UNLINK)\\b",
+      "severity": "high",
+      "description": "Redis KEYS/SCAN piped to DEL/UNLINK can delete many keys at once.",
+      "explanation": "Piping Redis key enumeration into DEL or UNLINK can delete every matching key:\n\n\\ - redis-cli KEYS '*' | xargs redis-cli DEL removes all returned keys \\ - redis-cli --scan --pattern 'prefix:*' | xargs redis-cli UNLINK removes a whole key namespace \\ - This bypasses Redis's lack of wildcard DEL by expanding keys client-side\n\n\\ Safer alternatives: \\ redis-cli --scan --pattern 'prefix:*' | head -50 # inspect first \\ Count and back up affected keys before selective deletion \\ Prefer application-owned cleanup tooling with dry-run support"
+    },
+    {
+      "name": "debug-crash",
+      "pattern": "(?i)\\bDEBUG\\s+(?:SEGFAULT|CRASH)\\b",
+      "severity": "critical",
+      "description": "DEBUG SEGFAULT/CRASH will crash the Redis server.",
+      "explanation": "DEBUG SEGFAULT/CRASH intentionally crashes the Redis server:\n\n\\ - Server process terminates immediately \\ - All connections are dropped \\ - Unsaved data may be lost \\ - Services depending on Redis fail\n\n\\ This is meant for testing crash recovery, not production use.\n\n\\ These commands should be disabled in production: \\ CONFIG SET debug-command no \\ rename-command DEBUG \"\" # In redis.conf"
+    },
+    {
+      "name": "debug-sleep",
+      "pattern": "(?i)\\bDEBUG\\s+SLEEP\\b",
+      "severity": "high",
+      "description": "DEBUG SLEEP blocks the Redis server and can cause availability issues.",
+      "explanation": "DEBUG SLEEP blocks the Redis server for the specified duration:\n\n\\ - All client connections freeze \\ - No commands are processed \\ - Cluster may mark node as failed \\ - Can trigger failover in Sentinel setups\n\n\\ This is meant for testing timeouts, not production use.\n\n\\ Disable in production: \\ CONFIG SET debug-command no"
+    },
+    {
+      "name": "shutdown",
+      "pattern": "(?i)\\bSHUTDOWN\\b",
+      "severity": "high",
+      "description": "SHUTDOWN stops the Redis server. SHUTDOWN NOSAVE risks data loss.",
+      "explanation": "SHUTDOWN stops the Redis server:\n\n\\ - SHUTDOWN SAVE: Saves RDB before exit (default) \\ - SHUTDOWN NOSAVE: Exits immediately, no save \\ - All client connections are closed \\ - Services depending on Redis fail\n\n\\ Check for unsaved changes: \\ INFO persistence # Look at rdb_changes_since_last_save\n\n\\ Ensure proper restart mechanism exists (systemd, Docker, etc.)."
+    },
+    {
+      "name": "config-dangerous",
+      "pattern": "(?i)\\bCONFIG\\s+SET\\s+(?:dir|dbfilename|slaveof|replicaof)\\b",
+      "severity": "critical",
+      "description": "CONFIG SET for dir/dbfilename/slaveof can be used for security attacks.",
+      "explanation": "These CONFIG SET options are commonly exploited in Redis attacks:\n\n\\ - dir + dbfilename: Can write arbitrary files (RCE vector) \\ - slaveof/replicaof: Can exfiltrate data to attacker's server\n\n\\ Attack example: \\ 1. CONFIG SET dir /var/spool/cron \\ 2. CONFIG SET dbfilename root \\ 3. SET payload '* * * * * malicious-command' \\ 4. BGSAVE\n\n\\ Disable in production: \\ rename-command CONFIG \"\" # In redis.conf\n\n\\ Use ACLs to restrict these commands."
+    },
+    {
+      "name": "config-set-maxmemory",
+      "pattern": "(?i)\\bCONFIG\\s+SET\\s+maxmemory\\b(?:\\s|$)",
+      "severity": "critical",
+      "description": "CONFIG SET maxmemory can trigger immediate mass key eviction if new limit is below current usage.",
+      "explanation": "Lowering maxmemory below current usage causes Redis to evict keys immediately \\ according to the active eviction policy:\n\n\\ - volatile-lru/allkeys-lru: Silently deletes keys to fit budget \\ - noeviction: Returns OOM errors on writes\n\n\\ Check current usage first: \\ INFO memory # Look at used_memory vs maxmemory\n\n\\ Prefer gradual reduction or off-peak changes."
+    },
+    {
+      "name": "config-set-maxmemory-policy",
+      "pattern": "(?i)\\bCONFIG\\s+SET\\s+maxmemory-policy\\b",
+      "severity": "critical",
+      "description": "CONFIG SET maxmemory-policy changes how Redis evicts keys, risking silent data loss.",
+      "explanation": "Switching eviction policy can silently delete keys:\n\n\\ - noeviction -> allkeys-lru: Enables silent key deletion \\ - volatile-* -> allkeys-*: Extends eviction to non-expiring keys\n\n\\ Check current policy: \\ CONFIG GET maxmemory-policy\n\n\\ Ensure application logic handles the new eviction behavior."
+    },
+    {
+      "name": "config-set-save",
+      "pattern": "(?i)\\bCONFIG\\s+SET\\s+save\\b",
+      "severity": "high",
+      "description": "CONFIG SET save can disable RDB persistence entirely, risking data loss on restart.",
+      "explanation": "CONFIG SET save \"\" disables all RDB snapshots:\n\n\\ - No automatic persistence to disk \\ - All data lost on restart unless AOF is enabled \\ - Existing RDB file may become stale\n\n\\ Check current persistence: \\ CONFIG GET save \\ CONFIG GET appendonly\n\n\\ Ensure at least one persistence mechanism remains active."
+    },
+    {
+      "name": "config-set-appendonly",
+      "pattern": "(?i)\\bCONFIG\\s+SET\\s+appendonly\\b",
+      "severity": "high",
+      "description": "CONFIG SET appendonly can disable AOF persistence, risking data loss on restart.",
+      "explanation": "Disabling AOF without RDB means zero persistence:\n\n\\ - CONFIG SET appendonly no: Stops AOF logging \\ - Combined with disabled RDB: complete data loss on crash/restart\n\n\\ Check other persistence mechanisms: \\ CONFIG GET save \\ CONFIG GET appendonly\n\n\\ Ensure at least one persistence mechanism remains active."
+    },
+    {
+      "name": "config-rewrite",
+      "pattern": "(?i)\\bCONFIG\\s+REWRITE\\b",
+      "severity": "high",
+      "description": "CONFIG REWRITE persists all runtime CONFIG SET changes to redis.conf permanently.",
+      "explanation": "CONFIG REWRITE writes current runtime config back to redis.conf:\n\n\\ - Makes all CONFIG SET changes survive restarts \\ - Can persist dangerous temporary changes permanently \\ - No undo: must manually edit redis.conf to revert\n\n\\ Review current runtime changes first: \\ CONFIG GET * # Compare with original redis.conf\n\n\\ Ensure no dangerous CONFIG SET changes are pending before rewriting."
+    }
+  ]
+}

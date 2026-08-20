@@ -1,0 +1,122 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "windows.system",
+  "name": "Windows Disk & System",
+  "version": "0.11.0",
+  "description": "Protects against catastrophic Windows disk/system operations: \\ `vssadmin delete shadows` / `wmic shadowcopy delete` (Volume Shadow Copy \\ destruction), `diskpart`, `Format-Volume`, `Clear-Disk`, `Remove-Partition`, \\ `Initialize-Disk`, `Reset-PhysicalDisk`, `cipher /w`, and `bcdedit /delete`.",
+  "category": "windows",
+  "enabled_by_default": false,
+  "keywords": [
+    "vssadmin",
+    "VSSADMIN",
+    "wmic",
+    "WMIC",
+    "shadowcopy",
+    "ShadowCopy",
+    "SHADOWCOPY",
+    "diskpart",
+    "DISKPART",
+    "Format-Volume",
+    "format-volume",
+    "FORMAT-VOLUME",
+    "Clear-Disk",
+    "clear-disk",
+    "CLEAR-DISK",
+    "Remove-Partition",
+    "remove-partition",
+    "REMOVE-PARTITION",
+    "Initialize-Disk",
+    "initialize-disk",
+    "INITIALIZE-DISK",
+    "Reset-PhysicalDisk",
+    "reset-physicaldisk",
+    "RESET-PHYSICALDISK",
+    "cipher",
+    "CIPHER",
+    "bcdedit",
+    "BCDEDIT"
+  ],
+  "safe_patterns": [
+    {
+      "name": "vssadmin-list",
+      "pattern": "(?i)^\\s*vssadmin(?:\\.exe)?\\s+list\\b[^|&;\\r\\n]*$",
+      "description": ""
+    },
+    {
+      "name": "diskpart-list",
+      "pattern": "(?i)^\\s*diskpart(?:\\.exe)?\\s+(?:/s\\s+\\S+\\s+)?list\\b[^|&;\\r\\n]*$",
+      "description": ""
+    },
+    {
+      "name": "storage-whatif",
+      "pattern": "(?i)^\\s*(?:format-volume|clear-disk|remove-partition|initialize-disk|reset-physicaldisk)\\b[^|&;\\r\\n]*\\s-whatif\\b[^|&;\\r\\n]*$",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "vssadmin-delete-shadows",
+      "pattern": "(?i)\\bvssadmin(?:\\.exe)?\\s+(?:[^|&\\r\\n]*\\s+)?delete\\s+shadows\\b",
+      "severity": "critical",
+      "description": "vssadmin delete shadows destroys Volume Shadow Copies (System Restore + backups).",
+      "explanation": "`vssadmin delete shadows` deletes the Volume Shadow Copies on a volume — the snapshots \\ that back System Restore, Previous Versions, and many backup tools. With `/all /quiet` \\ it removes every shadow copy with no prompt. This is one of the first things ransomware \\ does, and run by accident it silently removes the main local recovery path.\n\n\\ Safer alternatives: \\ - vssadmin list shadows: review what exists before deleting anything \\ - Take a fresh backup (wbadmin / your backup tool) instead of deleting recovery points"
+    },
+    {
+      "name": "wmic-shadowcopy-delete",
+      "pattern": "(?i)\\bwmic(?:\\.exe)?\\s+shadowcopy\\s+delete\\b",
+      "severity": "critical",
+      "description": "wmic shadowcopy delete destroys Volume Shadow Copies.",
+      "explanation": "`wmic shadowcopy delete` is an alternate way to destroy Volume Shadow Copies (the same \\ snapshots that back System Restore and backups). Like `vssadmin delete shadows` it is a \\ common ransomware step and an irreversible loss of local recovery.\n\n\\ Safer alternatives: \\ - wmic shadowcopy list / vssadmin list shadows: inspect first \\ - Back up before removing any recovery points"
+    },
+    {
+      "name": "diskpart",
+      "pattern": "(?i)\\bdiskpart(?:\\.exe)?\\b(?=[^|&\\r\\n]*(?:/s\\b|\\bclean\\b|\\bdelete\\b|\\bformat\\b))",
+      "severity": "high",
+      "description": "diskpart with clean/delete/format/script reconfigures or wipes disks and partitions.",
+      "explanation": "`diskpart` is the low-level disk-partitioning tool. Driven by a script (`/s file.txt`) or \\ with `clean`/`delete partition`/`delete volume`/`format`, it wipes partition tables and \\ volumes — a wrong disk number destroys the wrong drive irreversibly. A non-interactive \\ agent has no confirmation prompt.\n\n\\ Safer alternatives: \\ - diskpart -> `list disk` / `list volume`: confirm the exact target first \\ - Use Get-Disk/Get-Partition to inspect before any clean/delete"
+    },
+    {
+      "name": "format-volume",
+      "pattern": "(?i)\\bformat-volume\\b",
+      "severity": "critical",
+      "description": "Format-Volume erases a volume's filesystem and data.",
+      "explanation": "`Format-Volume` re-creates the filesystem on a volume, destroying all data on it. A wrong \\ drive letter or disk number formats the wrong volume. There is no Recycle Bin for a \\ format.\n\n\\ Safer alternatives: \\ - Get-Volume / Get-Partition: confirm the exact target first \\ - Back up the volume before any format"
+    },
+    {
+      "name": "clear-disk",
+      "pattern": "(?i)\\bclear-disk\\b",
+      "severity": "critical",
+      "description": "Clear-Disk removes all partitions and data from a disk.",
+      "explanation": "`Clear-Disk` wipes a whole physical disk — with `-RemoveData -RemoveOEM` it deletes every \\ partition (including recovery/OEM) and all data. A wrong disk number destroys the wrong \\ drive irreversibly.\n\n\\ Safer alternatives: \\ - Get-Disk: confirm the disk number and that it is the intended target \\ - Back up before clearing; consider removing a single partition instead"
+    },
+    {
+      "name": "remove-partition",
+      "pattern": "(?i)\\bremove-partition\\b",
+      "severity": "critical",
+      "description": "Remove-Partition deletes a partition and its data.",
+      "explanation": "`Remove-Partition` deletes a partition and everything on it. Targeting the wrong disk or \\ partition number destroys live data with no undo.\n\n\\ Safer alternatives: \\ - Get-Partition: confirm the disk/partition numbers first \\ - Back up the partition's data before removing it"
+    },
+    {
+      "name": "initialize-or-reset-disk",
+      "pattern": "(?i)\\b(?:initialize-disk|reset-physicaldisk)\\b",
+      "severity": "high",
+      "description": "Initialize-Disk / Reset-PhysicalDisk wipe disk metadata and data.",
+      "explanation": "`Initialize-Disk` re-initializes a disk's partition style and `Reset-PhysicalDisk` resets \\ a physical disk — both discard existing partitioning/data on the target. On a disk that \\ already holds data this is destructive and easy to point at the wrong disk.\n\n\\ Safer alternatives: \\ - Get-Disk: confirm the disk is empty / the intended target first \\ - Back up before initializing or resetting"
+    },
+    {
+      "name": "cipher-wipe",
+      "pattern": "(?i)\\bcipher(?:\\.exe)?\\s+(?:[^|&\\r\\n]*\\s+)?/w",
+      "severity": "high",
+      "description": "cipher /w overwrites free space, making deleted files unrecoverable.",
+      "explanation": "`cipher /w:<path>` overwrites all free space on the volume, permanently destroying the \\ recoverability of any previously deleted files. It is slow, irreversible, and usually run \\ by mistake when a simple delete was intended.\n\n\\ Safer alternatives: \\ - If you only need to remove a file, delete it normally \\ - Reserve free-space wiping for decommissioning, after backups are confirmed"
+    },
+    {
+      "name": "bcdedit-delete",
+      "pattern": "(?i)\\bbcdedit(?:\\.exe)?\\s+(?:[^|&\\r\\n]*\\s+)?/delete",
+      "severity": "high",
+      "description": "bcdedit /delete removes a boot configuration entry.",
+      "explanation": "`bcdedit /delete` (and `/deletevalue`) removes Boot Configuration Data entries. A wrong \\ entry can leave the machine unbootable. Boot config should be changed deliberately, not \\ as part of a cleanup.\n\n\\ Safer alternatives: \\ - bcdedit /enum: review the current boot entries first \\ - Export with `bcdedit /export` before modifying anything"
+    }
+  ]
+}

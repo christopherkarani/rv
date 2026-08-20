@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "monitoring.datadog",
+  "name": "Datadog",
+  "version": "0.11.0",
+  "description": "Protects against destructive Datadog CLI/API operations like deleting monitors and dashboards.",
+  "category": "monitoring",
+  "enabled_by_default": false,
+  "keywords": [
+    "datadog-ci",
+    "datadoghq",
+    "datadog"
+  ],
+  "safe_patterns": [
+    {
+      "name": "datadog-ci-monitors-list",
+      "pattern": "datadog-ci\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+monitors\\s+(?:get|list)(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "datadog-ci-dashboards-list",
+      "pattern": "datadog-ci\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+dashboards\\s+(?:get|list)(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "datadog-api-get",
+      "pattern": "(?i)^(?!(?=.*(?:-X\\s*|--request(?:=|\\s+))DELETE\\b)(?=.*api\\.datadoghq\\.com.*\\/(?:monitor|dashboard|synthetics)\\/))curl\\s+.*(?:-X\\s*|--request(?:=|\\s+))GET\\b.*api\\.datadoghq\\.com",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "datadog-ci-monitors-delete",
+      "pattern": "datadog-ci\\b.*?\\bmonitors\\s+delete\\b",
+      "severity": "high",
+      "description": "datadog-ci monitors delete removes a Datadog monitor.",
+      "explanation": "Deleting a Datadog monitor stops all alerting for that check. You will no \\ longer be notified if the monitored condition occurs, potentially missing \\ critical production issues.\n\n\\ Safer alternatives: \\ - datadog-ci monitors get <id>: Review the monitor configuration first \\ - Mute the monitor temporarily instead of deleting \\ - Export monitor JSON configuration as backup before deletion"
+    },
+    {
+      "name": "datadog-ci-dashboards-delete",
+      "pattern": "datadog-ci\\b.*?\\bdashboards\\s+delete\\b",
+      "severity": "high",
+      "description": "datadog-ci dashboards delete removes a Datadog dashboard.",
+      "explanation": "Deleting a dashboard removes all widgets, queries, and layout configuration. \\ Team members relying on this dashboard for visibility will lose access \\ immediately.\n\n\\ Safer alternatives: \\ - datadog-ci dashboards get <id>: Export dashboard JSON first \\ - Clone the dashboard before making changes \\ - Use Terraform or Pulumi for version-controlled dashboard definitions"
+    },
+    {
+      "name": "datadog-api-delete",
+      "pattern": "(?i)\\bcurl\\b(?=.*(?:-X\\s*|--request(?:=|\\s+))DELETE\\b)(?=.*api\\.datadoghq\\.com.*\\/(?:monitor|dashboard|synthetics)\\/).*",
+      "severity": "high",
+      "description": "Datadog API DELETE calls remove monitors/dashboards/synthetics.",
+      "explanation": "Direct API DELETE calls permanently remove Datadog resources without \\ confirmation prompts. Monitors, dashboards, and synthetic tests are deleted \\ immediately.\n\n\\ Safer alternatives: \\ - GET the resource first to verify the ID and export configuration \\ - Use datadog-ci CLI which provides better feedback \\ - Use Terraform/Pulumi for auditable, reversible infrastructure changes"
+    },
+    {
+      "name": "terraform-datadog-destroy",
+      "pattern": "terraform\\b.*?\\bdestroy\\b.*\\bdatadog_[a-zA-Z0-9_]+\\b",
+      "severity": "high",
+      "description": "terraform destroy targeting Datadog resources removes monitoring infrastructure.",
+      "explanation": "Terraform destroy removes Datadog monitors, dashboards, and other resources \\ defined in your configuration. While Terraform tracks state, the actual \\ monitoring resources are deleted immediately from Datadog.\n\n\\ Safer alternatives: \\ - terraform plan -destroy -target=... to preview deletions \\ - terraform state rm to stop managing without deleting \\ - Remove from Terraform config and apply instead of destroy"
+    }
+  ]
+}

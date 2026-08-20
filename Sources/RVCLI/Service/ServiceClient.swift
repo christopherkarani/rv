@@ -62,7 +62,9 @@ public struct ServiceClient: Sendable {
     }
 
     public func evaluate(command: ShellCommand, cwd: String? = nil) async -> RoutedEvaluation {
-        let request = EvaluationRequest.makeDayOne(command: command)
+        let home = (ProcessInfo.processInfo.environment["HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? "")
+        let enabled = (try? PacksFacade.effectiveIDs(home: home)) ?? dayOnePackIDs
+        let request = EvaluationRequest(command: command, enabledPacks: enabled)
         func inProcessRoute() async -> RoutedEvaluation {
             RoutedEvaluation(
                 result: await inProcessEvaluate(request, cwd: cwd),

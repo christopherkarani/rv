@@ -1,0 +1,173 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "featureflags.split",
+  "name": "Split.io",
+  "version": "0.11.0",
+  "description": "Protects against destructive Split.io CLI and API operations.",
+  "category": "featureflags",
+  "enabled_by_default": false,
+  "keywords": [
+    "split",
+    "api.split.io"
+  ],
+  "safe_patterns": [
+    {
+      "name": "split-splits-list",
+      "pattern": "split(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+splits\\s+list(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "split-splits-get",
+      "pattern": "split(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+splits\\s+get(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "split-splits-create",
+      "pattern": "split(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+splits\\s+create(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "split-splits-update",
+      "pattern": "split(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+splits\\s+update(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "split-environments-list",
+      "pattern": "split(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+environments\\s+list(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "split-environments-get",
+      "pattern": "split(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+environments\\s+get(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "split-environments-create",
+      "pattern": "split(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+environments\\s+create(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "split-segments-list",
+      "pattern": "split(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+segments\\s+list(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "split-segments-get",
+      "pattern": "split(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+segments\\s+get(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "split-segments-create",
+      "pattern": "split(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+segments\\s+create(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "split-traffic-types-list",
+      "pattern": "split(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+traffic-types\\s+list(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "split-traffic-types-get",
+      "pattern": "split(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+traffic-types\\s+get(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "split-workspaces-list",
+      "pattern": "split(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+workspaces\\s+list(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "split-workspaces-get",
+      "pattern": "split(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+workspaces\\s+get(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "split-help",
+      "pattern": "split(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+(?:--help|-h|help)(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "split-version",
+      "pattern": "split(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+(?:--version|version)(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "split-api-get",
+      "pattern": "(?i)^(?!(?=.*(?:-X\\s*|--request(?:=|\\s+))DELETE\\b)(?=.*api\\.split\\.io))curl\\s+.*(?:-X\\s*|--request(?:=|\\s+))GET\\b.*api\\.split\\.io",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "split-splits-delete",
+      "pattern": "split(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+splits\\s+delete\\b",
+      "severity": "critical",
+      "description": "split splits delete permanently removes a split definition. This cannot be undone.",
+      "explanation": "Deleting a split permanently removes the feature flag definition and all its \\ targeting rules. SDKs will return control treatment for this split. Historical \\ data and metrics are preserved but the split cannot be recovered.\n\n\\ Safer alternatives: \\ - split splits kill: Stop traffic without deleting \\ - Archive the split in the UI \\ - Export split configuration first"
+    },
+    {
+      "name": "split-splits-kill",
+      "pattern": "split(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+splits\\s+kill\\b",
+      "severity": "high",
+      "description": "split splits kill terminates a split, stopping all traffic to treatments.",
+      "explanation": "Killing a split immediately stops all treatment assignment and returns the \\ default treatment to all users. Unlike delete, the split can be reactivated, \\ but all users will see behavior change immediately.\n\n\\ Safer alternatives: \\ - Gradually ramp down traffic percentages first \\ - Verify the default treatment behavior \\ - Communicate the change to stakeholders"
+    },
+    {
+      "name": "split-environments-delete",
+      "pattern": "split(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+environments\\s+delete\\b",
+      "severity": "critical",
+      "description": "split environments delete removes an environment and all its configurations.",
+      "explanation": "Deleting an environment removes all split configurations, targeting rules, \\ and API keys for that environment. Applications using this environment will \\ receive default treatments for all splits.\n\n\\ Safer alternatives: \\ - Export environment configuration \\ - Rotate API keys before deletion \\ - Kill all splits in the environment first"
+    },
+    {
+      "name": "split-segments-delete",
+      "pattern": "split(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+segments\\s+delete\\b",
+      "severity": "high",
+      "description": "split segments delete removes a segment and its targeting rules.",
+      "explanation": "Deleting a segment removes user grouping definitions. Splits targeting this \\ segment will lose that targeting rule, changing which users receive which \\ treatments.\n\n\\ Safer alternatives: \\ - Check which splits use this segment \\ - Update split targeting before deletion \\ - Export segment membership"
+    },
+    {
+      "name": "split-traffic-types-delete",
+      "pattern": "split(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+traffic-types\\s+delete\\b",
+      "severity": "critical",
+      "description": "split traffic-types delete removes a traffic type. This affects all splits using it.",
+      "explanation": "Deleting a traffic type affects ALL splits configured for that traffic type. \\ SDKs sending this traffic type will no longer match any splits, returning \\ control treatment for all evaluations.\n\n\\ Safer alternatives: \\ - Review all splits using this traffic type \\ - Migrate splits to a different traffic type \\ - Ensure no SDKs are sending this traffic type"
+    },
+    {
+      "name": "split-workspaces-delete",
+      "pattern": "split(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+workspaces\\s+delete\\b",
+      "severity": "critical",
+      "description": "split workspaces delete removes a workspace and all its resources.",
+      "explanation": "Deleting a workspace removes ALL splits, segments, environments, and API keys \\ within it. This is the most destructive operation and affects all applications \\ using any resource in this workspace.\n\n\\ Safer alternatives: \\ - Export complete workspace configuration \\ - Migrate critical splits to another workspace \\ - Contact Split.io support for assistance"
+    },
+    {
+      "name": "split-api-delete-splits",
+      "pattern": "(?i)\\bcurl\\b(?=.*(?:-X\\s*|--request(?:=|\\s+))DELETE\\b)(?=.*api\\.split\\.io/.*/splits/).*",
+      "severity": "critical",
+      "description": "DELETE request to Split.io API removes split definitions.",
+      "explanation": "API DELETE calls to splits permanently remove feature flags without CLI \\ confirmation. All targeting rules and treatments are lost immediately.\n\n\\ Safer alternatives: \\ - Use the Split CLI for confirmation prompts \\ - GET the split configuration first \\ - Use the Split UI for visibility into impact"
+    },
+    {
+      "name": "split-api-delete-environments",
+      "pattern": "(?i)\\bcurl\\b(?=.*(?:-X\\s*|--request(?:=|\\s+))DELETE\\b)(?=.*api\\.split\\.io/.*/environments/).*",
+      "severity": "critical",
+      "description": "DELETE request to Split.io API removes environments.",
+      "explanation": "API DELETE calls to environments invalidate all API keys and remove all \\ split configurations for that environment. Applications will lose all \\ feature flag evaluations.\n\n\\ Safer alternatives: \\ - Use the Split CLI for better confirmation \\ - Export environment configuration first \\ - Rotate API keys before deletion"
+    },
+    {
+      "name": "split-api-delete-segments",
+      "pattern": "(?i)\\bcurl\\b(?=.*(?:-X\\s*|--request(?:=|\\s+))DELETE\\b)(?=.*api\\.split\\.io/.*/segments/).*",
+      "severity": "high",
+      "description": "DELETE request to Split.io API removes segments.",
+      "explanation": "API DELETE calls to segments remove user groupings. Splits using this \\ segment will lose targeting rules, changing treatment assignment for \\ affected users.\n\n\\ Safer alternatives: \\ - Check segment dependencies first \\ - Update split targeting before deletion \\ - Export segment membership data"
+    },
+    {
+      "name": "split-api-delete-generic",
+      "pattern": "(?i)\\bcurl\\b(?=.*(?:-X\\s*|--request(?:=|\\s+))DELETE\\b)(?=.*api\\.split\\.io).*",
+      "severity": "high",
+      "description": "DELETE request to Split.io API can remove resources.",
+      "explanation": "Generic DELETE requests to the Split.io API can remove various resources. \\ Review the specific endpoint to understand what will be deleted.\n\n\\ Safer alternatives: \\ - Verify the exact resource being deleted \\ - Use the Split CLI or UI for better visibility \\ - GET the resource first to confirm"
+    }
+  ]
+}

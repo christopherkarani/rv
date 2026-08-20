@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "backup.restic",
+  "name": "Restic",
+  "version": "0.11.0",
+  "description": "Protects against destructive restic operations like forgetting snapshots, pruning data, removing keys, and cache cleanup.",
+  "category": "backup",
+  "enabled_by_default": false,
+  "keywords": [
+    "restic"
+  ],
+  "safe_patterns": [
+    {
+      "name": "restic-snapshots",
+      "pattern": "restic(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+snapshots(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "restic-ls",
+      "pattern": "restic(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+ls(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "restic-stats",
+      "pattern": "restic(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+stats(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "restic-check",
+      "pattern": "restic(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+check(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "restic-diff",
+      "pattern": "restic(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+diff(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "restic-find",
+      "pattern": "restic(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+find(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "restic-backup",
+      "pattern": "restic(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+backup(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "restic-restore",
+      "pattern": "restic(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+restore(?=\\s|$)",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "restic-forget",
+      "pattern": "restic\\b.*\\sforget\\b",
+      "severity": "critical",
+      "description": "restic forget removes snapshots and can permanently delete backup data.",
+      "explanation": "restic forget removes snapshots from repository:\n\n\\ - Snapshot metadata removed from repository \\ - Data not deleted until prune is run \\ - Use --keep-* flags to retain recent snapshots \\ - --dry-run shows what would be forgotten\n\n\\ Preview first: restic forget --dry-run [options]"
+    },
+    {
+      "name": "restic-prune",
+      "pattern": "restic\\b.*\\sprune\\b",
+      "severity": "critical",
+      "description": "restic prune removes unreferenced data and is irreversible.",
+      "explanation": "restic prune permanently deletes unreferenced data:\n\n\\ - Removes data no longer referenced by snapshots \\ - Usually run after 'restic forget' \\ - Cannot be undone - data is permanently deleted \\ - May take a long time for large repositories\n\n\\ Consider: restic forget --prune to combine operations"
+    },
+    {
+      "name": "restic-key-remove",
+      "pattern": "restic\\b.*\\skey\\b.*\\sremove\\b",
+      "severity": "critical",
+      "description": "restic key remove deletes encryption keys and can make backups unrecoverable.",
+      "explanation": "restic key remove deletes repository encryption keys:\n\n\\ - Key is permanently deleted from repository \\ - If all keys removed, repository becomes inaccessible \\ - Cannot recover data without a valid key \\ - Always keep at least one key available\n\n\\ List keys first: restic key list"
+    },
+    {
+      "name": "restic-unlock-remove-all",
+      "pattern": "restic\\b.*\\sunlock\\b.*\\s--remove-all\\b",
+      "severity": "high",
+      "description": "restic unlock --remove-all force-removes repository locks.",
+      "explanation": "restic unlock --remove-all force-removes all locks:\n\n\\ - Removes locks from potentially active operations \\ - May cause corruption if operations are in progress \\ - Use only when locks are stale/orphaned\n\n\\ Check first: ensure no other restic processes are running"
+    },
+    {
+      "name": "restic-cache-cleanup",
+      "pattern": "restic\\b.*\\scache\\b.*\\s--cleanup\\b",
+      "severity": "low",
+      "description": "restic cache --cleanup removes cached data from disk.",
+      "explanation": "restic cache --cleanup removes local cache:\n\n\\ - Deletes cached data from local disk \\ - Does not affect repository data \\ - Cache will be rebuilt on next operation \\ - May slow down subsequent operations\n\n\\ Lower risk: only affects local cache, not backups"
+    }
+  ]
+}

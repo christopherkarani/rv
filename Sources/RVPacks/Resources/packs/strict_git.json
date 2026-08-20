@@ -1,0 +1,112 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "strict_git",
+  "name": "Strict Git",
+  "version": "0.11.0",
+  "description": "Stricter git protections: blocks force pushes, rebases, history \\ rewriting, blind staging, and direct pushes to default branches",
+  "category": "strict_git",
+  "enabled_by_default": false,
+  "keywords": [
+    "git"
+  ],
+  "safe_patterns": [],
+  "destructive_patterns": [
+    {
+      "name": "push-force-any",
+      "pattern": "git\\b.*?\\bpush(?:[^\\n;]*\\s(?:--force(?:=\\S*)?|--force-with-lease(?:=\\S*)?|-f)(?=\\s|$)|(?:\\s+\\S+)*\\s+(?:\\$?[\"']|\\\\)*\\+\\S+)",
+      "severity": "high",
+      "description": "Force push (even with --force-with-lease) can rewrite remote history. Disabled in strict mode."
+    },
+    {
+      "name": "push-mirror",
+      "pattern": "git\\b.*?\\bpush\\b[^\\n;]*(?:^|\\s)--mirror(?:=\\S*)?(?=\\s|$)",
+      "severity": "high",
+      "description": "git push --mirror force-updates and deletes remote refs. Disabled in strict mode."
+    },
+    {
+      "name": "push-dynamic-argument",
+      "pattern": "git\\b.*?\\bpush\\b[^\\n;]*(?:\\\\|\\$|`|\\*|\\?|\\{|\\}|\\[)",
+      "severity": "high",
+      "description": "Force push risk: a shell-expanded or escaped git push argument cannot be verified as non-forcing. Use literal remote and refspec arguments in strict mode."
+    },
+    {
+      "name": "rebase",
+      "pattern": "git\\b.*?\\brebase\\b",
+      "severity": "high",
+      "description": "git rebase rewrites commit history. Disabled in strict mode."
+    },
+    {
+      "name": "commit-amend",
+      "pattern": "git\\b.*?\\bcommit\\s+.*--amend",
+      "severity": "high",
+      "description": "git commit --amend rewrites the last commit. Disabled in strict mode."
+    },
+    {
+      "name": "cherry-pick",
+      "pattern": "git\\b.*?\\bcherry-pick\\b",
+      "severity": "high",
+      "description": "git cherry-pick can introduce duplicate commits. Review carefully."
+    },
+    {
+      "name": "filter-branch",
+      "pattern": "git\\b.*?\\bfilter-branch\\b",
+      "severity": "high",
+      "description": "git filter-branch rewrites entire repository history. Extremely dangerous!"
+    },
+    {
+      "name": "filter-repo",
+      "pattern": "git\\b.*?\\bfilter-repo\\b",
+      "severity": "high",
+      "description": "git filter-repo rewrites repository history. Review carefully."
+    },
+    {
+      "name": "reflog-expire",
+      "pattern": "git\\b.*?\\breflog\\s+expire",
+      "severity": "high",
+      "description": "git reflog expire removes reflog entries needed for recovery."
+    },
+    {
+      "name": "gc-aggressive",
+      "pattern": "git\\b.*?\\bgc\\s+.*--(?:aggressive|prune)",
+      "severity": "high",
+      "description": "git gc with aggressive/prune options can remove recoverable objects."
+    },
+    {
+      "name": "worktree-remove",
+      "pattern": "git\\b.*?\\bworktree\\s+remove",
+      "severity": "high",
+      "description": "git worktree remove deletes a linked working tree."
+    },
+    {
+      "name": "submodule-deinit",
+      "pattern": "git\\b.*?\\bsubmodule\\s+deinit",
+      "severity": "high",
+      "description": "git submodule deinit removes submodule configuration."
+    },
+    {
+      "name": "add-all-dot",
+      "pattern": "git\\b.*?\\badd\\s+['\"]?\\.['\"]?(?:\\s|$)",
+      "severity": "high",
+      "description": "git add . stages everything including secrets, .env files, and build artifacts. Use 'git add <specific-files>' instead."
+    },
+    {
+      "name": "add-all-flag",
+      "pattern": "git\\b.*?\\badd\\s+(?:-A|--all)\\b",
+      "severity": "high",
+      "description": "git add -A/--all stages all changes including secrets, .env files, and build artifacts. Use 'git add <specific-files>' instead."
+    },
+    {
+      "name": "push-master",
+      "pattern": "git\\s+(?:\\S+\\s+)*push\\s+(?:.*[\\s:/])?\\+?master(?:\\s|$)",
+      "severity": "high",
+      "description": "Direct push to master is blocked. Use a feature branch and open a Pull Request."
+    },
+    {
+      "name": "push-main",
+      "pattern": "git\\s+(?:\\S+\\s+)*push\\s+(?:.*[\\s:/])?\\+?main(?:\\s|$)",
+      "severity": "high",
+      "description": "Direct push to main is blocked. Use a feature branch and open a Pull Request."
+    }
+  ]
+}

@@ -1,0 +1,151 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "search.opensearch",
+  "name": "OpenSearch",
+  "version": "0.11.0",
+  "description": "Protects against destructive OpenSearch REST API operations and AWS CLI domain deletions.",
+  "category": "search",
+  "enabled_by_default": false,
+  "keywords": [
+    "opensearch",
+    "aws",
+    "curl",
+    "http",
+    "9200",
+    "_search",
+    "_cluster",
+    "_cat",
+    "_doc",
+    "_all",
+    "_delete_by_query"
+  ],
+  "safe_patterns": [
+    {
+      "name": "os-curl-get-search",
+      "pattern": "(?i)^(?!(?=.*(?:-X\\s*|--request(?:=|\\s+))(?:DELETE|POST)\\b)(?=.*(?:opensearch|:9200)))curl\\b.*(?:-X\\s*|--request(?:=|\\s+))GET\\b.*\\b(?:https?://)?[^\\s'\\\"]*(?:opensearch|:9200)[^\\s'\\\"]*/(?:[^\\s/]+/)?(?:_search|_count|_mapping|_settings)\\b",
+      "description": ""
+    },
+    {
+      "name": "os-curl-get-cat",
+      "pattern": "(?i)^(?!(?=.*(?:-X\\s*|--request(?:=|\\s+))(?:DELETE|POST)\\b)(?=.*(?:opensearch|:9200)))curl\\b.*(?:-X\\s*|--request(?:=|\\s+))GET\\b.*\\b(?:https?://)?[^\\s'\\\"]*(?:opensearch|:9200)[^\\s'\\\"]*/_cat/\\S+",
+      "description": ""
+    },
+    {
+      "name": "os-curl-get-cluster-health",
+      "pattern": "(?i)^(?!(?=.*(?:-X\\s*|--request(?:=|\\s+))(?:DELETE|POST)\\b)(?=.*(?:opensearch|:9200)))curl\\b.*(?:-X\\s*|--request(?:=|\\s+))GET\\b.*\\b(?:https?://)?[^\\s'\\\"]*(?:opensearch|:9200)[^\\s'\\\"]*/_cluster/health\\b",
+      "description": ""
+    },
+    {
+      "name": "os-http-get-search",
+      "pattern": "http\\s+GET\\s+(?:https?://)?\\S*(?:opensearch|:9200)\\S*/(?:\\S+/)?(?:_search|_count|_mapping|_settings)\\b",
+      "description": ""
+    },
+    {
+      "name": "os-http-get-cat",
+      "pattern": "http\\s+GET\\s+(?:https?://)?\\S*(?:opensearch|:9200)\\S*/_cat/\\S+",
+      "description": ""
+    },
+    {
+      "name": "os-http-get-cluster-health",
+      "pattern": "http\\s+GET\\s+(?:https?://)?\\S*(?:opensearch|:9200)\\S*/_cluster/health\\b",
+      "description": ""
+    },
+    {
+      "name": "aws-opensearch-describe-domain",
+      "pattern": "aws(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+opensearch\\s+describe-domain\\b",
+      "description": ""
+    },
+    {
+      "name": "aws-opensearch-list-domain-names",
+      "pattern": "aws(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+opensearch\\s+list-domain-names\\b",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "os-curl-delete-doc",
+      "pattern": "(?i)\\bcurl\\b(?=.*(?:-X\\s*|--request(?:=|\\s+))DELETE\\b)(?=.*\\b(?:https?://)?[^\\s'\\\"]*?(?:opensearch|:9200)[^\\s'\\\"]*?/[a-z0-9][a-z0-9._-]*/_doc/[^\\s/?]+).*",
+      "severity": "medium",
+      "description": "curl -X DELETE against /_doc deletes a document from OpenSearch.",
+      "explanation": "Deleting individual documents removes them from search results immediately. \\ While less destructive than bulk operations, this can affect applications \\ expecting the document to exist.\n\n\\ Safer alternatives: \\ - GET the document first to verify content \\ - Use _update API to mark as deleted instead \\ - Ensure document ID is correct before deletion"
+    },
+    {
+      "name": "os-curl-delete-by-query",
+      "pattern": "(?i)\\bcurl\\b(?=.*(?:-X\\s*|--request(?:=|\\s+))POST\\b)(?=.*\\b(?:https?://)?[^\\s'\\\"]*(?:opensearch|:9200)[^\\s'\\\"]*/[a-z0-9][a-z0-9._-]*/_delete_by_query\\b).*",
+      "severity": "high",
+      "description": "curl -X POST to _delete_by_query deletes documents matching the query.",
+      "explanation": "The _delete_by_query endpoint can delete large numbers of documents at once. \\ A poorly constructed query can remove more data than intended. This operation \\ cannot be easily undone.\n\n\\ Safer alternatives: \\ - Use _search with same query first to preview matches \\ - Add conflicts=abort to stop on version conflicts \\ - Use scroll_size to process in smaller batches"
+    },
+    {
+      "name": "os-curl-close-index",
+      "pattern": "(?i)\\bcurl\\b(?=.*(?:-X\\s*|--request(?:=|\\s+))POST\\b)(?=.*\\b(?:https?://)?[^\\s'\\\"]*(?:opensearch|:9200)[^\\s'\\\"]*/(?:_all|\\*|[a-z0-9][a-z0-9._-]*)/_close\\b).*",
+      "severity": "high",
+      "description": "curl -X POST to _close closes an index, making it unavailable for reads/writes.",
+      "explanation": "Closing an index makes it completely unavailable for search and indexing. \\ Applications will receive errors until the index is reopened. Using _all or * \\ can close all indices at once.\n\n\\ Safer alternatives: \\ - Check index status with _cat/indices first \\ - Use specific index names instead of wildcards \\ - Verify no active applications depend on the index"
+    },
+    {
+      "name": "os-curl-delete-index",
+      "pattern": "(?i)\\bcurl\\b(?=.*(?:-X\\s*|--request(?:=|\\s+))DELETE\\b)(?=.*\\b(?:https?://)?[^\\s'\\\"]*(?:opensearch|:9200)[^\\s'\\\"]*/(?:_all|\\*|[a-z0-9][a-z0-9._-]*)(?:\\b|[/?])).*",
+      "severity": "critical",
+      "description": "curl -X DELETE against an OpenSearch index (or _all/*) deletes data permanently.",
+      "explanation": "Deleting an OpenSearch index permanently removes all documents, mappings, and \\ settings. Using _all or * patterns can delete multiple indices at once. This \\ action cannot be undone without restoring from a snapshot.\n\n\\ Safer alternatives: \\ - _cat/indices: List indices before deletion \\ - Create a snapshot before deleting \\ - Close the index first if just archiving"
+    },
+    {
+      "name": "os-http-delete-doc",
+      "pattern": "http\\s+DELETE\\s+(?:https?://)?\\S*(?:opensearch|:9200)\\S*/[a-z0-9][a-z0-9._-]*/_doc/[^\\s/?]+",
+      "severity": "medium",
+      "description": "http DELETE against /_doc deletes a document from OpenSearch.",
+      "explanation": "Deleting individual documents removes them from search results immediately. \\ While less destructive than bulk operations, this can affect applications \\ expecting the document to exist.\n\n\\ Safer alternatives: \\ - GET the document first to verify content \\ - Use _update API to mark as deleted instead \\ - Ensure document ID is correct before deletion"
+    },
+    {
+      "name": "os-http-delete-by-query",
+      "pattern": "http\\s+POST\\s+(?:https?://)?\\S*(?:opensearch|:9200)\\S*/[a-z0-9][a-z0-9._-]*/_delete_by_query\\b",
+      "severity": "high",
+      "description": "http POST to _delete_by_query deletes documents matching the query.",
+      "explanation": "The _delete_by_query endpoint can delete large numbers of documents at once. \\ A poorly constructed query can remove more data than intended. This operation \\ cannot be easily undone.\n\n\\ Safer alternatives: \\ - Use _search with same query first to preview matches \\ - Add conflicts=abort to stop on version conflicts \\ - Use scroll_size to process in smaller batches"
+    },
+    {
+      "name": "os-http-close-index",
+      "pattern": "http\\s+POST\\s+(?:https?://)?\\S*(?:opensearch|:9200)\\S*/(?:_all|\\*|[a-z0-9][a-z0-9._-]*)/_close\\b",
+      "severity": "high",
+      "description": "http POST to _close closes an index, making it unavailable for reads/writes.",
+      "explanation": "Closing an index makes it completely unavailable for search and indexing. \\ Applications will receive errors until the index is reopened. Using _all or * \\ can close all indices at once.\n\n\\ Safer alternatives: \\ - Check index status with _cat/indices first \\ - Use specific index names instead of wildcards \\ - Verify no active applications depend on the index"
+    },
+    {
+      "name": "os-http-delete-index",
+      "pattern": "http\\s+DELETE\\s+(?:https?://)?\\S*(?:opensearch|:9200)\\S*/(?:_all|\\*|[a-z0-9][a-z0-9._-]*)(?:[\\s?]|$)",
+      "severity": "critical",
+      "description": "http DELETE against an OpenSearch index (or _all/*) deletes data permanently.",
+      "explanation": "Deleting an OpenSearch index permanently removes all documents, mappings, and \\ settings. Using _all or * patterns can delete multiple indices at once. This \\ action cannot be undone without restoring from a snapshot.\n\n\\ Safer alternatives: \\ - _cat/indices: List indices before deletion \\ - Create a snapshot before deleting \\ - Close the index first if just archiving"
+    },
+    {
+      "name": "aws-opensearch-delete-domain",
+      "pattern": "aws(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+opensearch\\s+delete-domain\\b",
+      "severity": "critical",
+      "description": "aws opensearch delete-domain permanently deletes an OpenSearch domain.",
+      "explanation": "Deleting an OpenSearch domain removes the entire cluster including all indices, \\ data, and configuration. This is irreversible and affects all applications using \\ the domain. Automated snapshots may also be deleted.\n\n\\ Safer alternatives: \\ - aws opensearch describe-domain: Review domain configuration \\ - Create a manual snapshot before deletion \\ - Export data to S3 for long-term retention"
+    },
+    {
+      "name": "aws-opensearch-delete-inbound-connection",
+      "pattern": "aws(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+opensearch\\s+delete-inbound-connection\\b",
+      "severity": "high",
+      "description": "aws opensearch delete-inbound-connection removes an OpenSearch connection.",
+      "explanation": "Deleting an inbound connection removes cross-cluster connectivity. Applications \\ performing cross-cluster searches or replication will fail. The connection must \\ be re-established from the source domain.\n\n\\ Safer alternatives: \\ - List connections to understand dependencies \\ - Verify no active cross-cluster operations \\ - Update applications to use alternative data sources"
+    },
+    {
+      "name": "aws-opensearch-delete-outbound-connection",
+      "pattern": "aws(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+opensearch\\s+delete-outbound-connection\\b",
+      "severity": "high",
+      "description": "aws opensearch delete-outbound-connection removes an OpenSearch connection.",
+      "explanation": "Deleting an outbound connection removes cross-cluster connectivity from this \\ domain. Any cross-cluster searches or replication to other domains will fail. \\ Re-establishing requires a new connection request.\n\n\\ Safer alternatives: \\ - List connections to understand what will be affected \\ - Coordinate with teams using connected domains \\ - Test connection removal in a non-production environment"
+    },
+    {
+      "name": "aws-opensearch-delete-package",
+      "pattern": "aws(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+opensearch\\s+delete-package\\b",
+      "severity": "medium",
+      "description": "aws opensearch delete-package removes an OpenSearch package.",
+      "explanation": "Deleting a package removes custom plugins, dictionaries, or scripts. Domains \\ using this package may experience errors or degraded functionality. The package \\ must be re-uploaded if needed again.\n\n\\ Safer alternatives: \\ - List domains using this package first \\ - Dissociate package from domains before deletion \\ - Keep a copy of package contents for recovery"
+    }
+  ]
+}

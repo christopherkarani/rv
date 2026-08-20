@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "cicd.github_actions",
+  "name": "GitHub Actions",
+  "version": "0.11.0",
+  "description": "Protects against destructive GitHub Actions operations like deleting secrets/variables \\ or using gh api DELETE against /actions endpoints.",
+  "category": "cicd",
+  "enabled_by_default": false,
+  "keywords": [
+    "gh"
+  ],
+  "safe_patterns": [
+    {
+      "name": "gh-actions-secret-list",
+      "pattern": "gh(?:\\s+--?[A-Za-z][A-Za-z0-9-]*\\b(?:\\s+(?!(?:secret|variable|workflow|run|api)\\b)\\S+)?)*\\s+secret\\s+list\\b",
+      "description": ""
+    },
+    {
+      "name": "gh-actions-variable-list",
+      "pattern": "gh(?:\\s+--?[A-Za-z][A-Za-z0-9-]*\\b(?:\\s+(?!(?:secret|variable|workflow|run|api)\\b)\\S+)?)*\\s+variable\\s+list\\b",
+      "description": ""
+    },
+    {
+      "name": "gh-actions-workflow-list",
+      "pattern": "gh(?:\\s+--?[A-Za-z][A-Za-z0-9-]*\\b(?:\\s+(?!(?:secret|variable|workflow|run|api)\\b)\\S+)?)*\\s+workflow\\s+list\\b",
+      "description": ""
+    },
+    {
+      "name": "gh-actions-workflow-view",
+      "pattern": "gh(?:\\s+--?[A-Za-z][A-Za-z0-9-]*\\b(?:\\s+(?!(?:secret|variable|workflow|run|api)\\b)\\S+)?)*\\s+workflow\\s+view\\b",
+      "description": ""
+    },
+    {
+      "name": "gh-actions-run-list",
+      "pattern": "gh(?:\\s+--?[A-Za-z][A-Za-z0-9-]*\\b(?:\\s+(?!(?:secret|variable|workflow|run|api)\\b)\\S+)?)*\\s+run\\s+list\\b",
+      "description": ""
+    },
+    {
+      "name": "gh-actions-run-view",
+      "pattern": "gh(?:\\s+--?[A-Za-z][A-Za-z0-9-]*\\b(?:\\s+(?!(?:secret|variable|workflow|run|api)\\b)\\S+)?)*\\s+run\\s+view\\b",
+      "description": ""
+    },
+    {
+      "name": "gh-actions-api-explicit-get",
+      "pattern": "^(?!(?=.*(?:-X\\s*|--method(?:=|\\s+))DELETE\\b))gh(?:\\s+--?[A-Za-z][A-Za-z0-9-]*\\b(?:\\s+(?!(?:secret|variable|workflow|run|api)\\b)\\S+)?)*\\s+api\\b.*(?:-X\\s*|--method(?:=|\\s+))GET\\b",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "gh-actions-secret-remove",
+      "pattern": "gh(?:\\s+--?[A-Za-z][A-Za-z0-9-]*\\b(?:\\s+(?!(?:secret|variable|workflow|run|api)\\b)\\S+)?)*\\s+secret\\s+(?:delete|remove)\\b",
+      "severity": "high",
+      "description": "gh secret delete/remove deletes GitHub Actions secrets. This can break CI and may be hard to recover.",
+      "explanation": "Deleting a GitHub Actions secret removes it from the repository, organization, \\ or environment. Workflows using this secret will fail with authentication or \\ configuration errors. Secret values are not recoverable after deletion.\n\n\\ Safer alternatives: \\ - gh secret list: Review existing secrets first \\ - Update the secret value instead of deleting \\ - Check workflow files for secret usage before removing"
+    },
+    {
+      "name": "gh-actions-variable-remove",
+      "pattern": "gh(?:\\s+--?[A-Za-z][A-Za-z0-9-]*\\b(?:\\s+(?!(?:secret|variable|workflow|run|api)\\b)\\S+)?)*\\s+variable\\s+(?:delete|remove)\\b",
+      "severity": "medium",
+      "description": "gh variable delete/remove deletes GitHub Actions variables. This can break workflows.",
+      "explanation": "Removing a GitHub Actions variable makes it unavailable to all workflows that \\ reference it. Unlike secrets, variable values are visible, but workflows may \\ fail with undefined variable errors after deletion.\n\n\\ Safer alternatives: \\ - gh variable list: Review existing variables first \\ - gh variable set: Update value instead of removing \\ - Search workflows for variable usage before removing"
+    },
+    {
+      "name": "gh-actions-workflow-disable",
+      "pattern": "gh(?:\\s+--?[A-Za-z][A-Za-z0-9-]*\\b(?:\\s+(?!(?:secret|variable|workflow|run|api)\\b)\\S+)?)*\\s+workflow\\s+disable\\b",
+      "severity": "low",
+      "description": "gh workflow disable disables workflows. This is reversible, but can disrupt CI.",
+      "explanation": "Disabling a workflow prevents it from running on any triggers. This is reversible \\ with 'gh workflow enable', but can disrupt CI/CD pipelines, scheduled jobs, and \\ automated deployments while disabled.\n\n\\ Safer alternatives: \\ - gh workflow list: Review workflow status first \\ - gh workflow view: Check workflow details \\ - Use workflow_dispatch for manual control instead"
+    },
+    {
+      "name": "gh-actions-run-cancel",
+      "pattern": "gh(?:\\s+--?[A-Za-z][A-Za-z0-9-]*\\b(?:\\s+(?!(?:secret|variable|workflow|run|api)\\b)\\S+)?)*\\s+run\\s+cancel\\b",
+      "severity": "low",
+      "description": "gh run cancel cancels a running workflow. This is reversible, but may disrupt deployments.",
+      "explanation": "Canceling a workflow run stops it mid-execution. Any in-progress deployments, \\ tests, or builds will be interrupted. The run can be re-triggered, but partial \\ work may leave systems in an inconsistent state.\n\n\\ Safer alternatives: \\ - gh run view: Check run status and progress first \\ - gh run list: Review running workflows \\ - Wait for natural completion if possible"
+    },
+    {
+      "name": "gh-actions-api-delete-secrets",
+      "pattern": "gh(?:\\s+--?[A-Za-z][A-Za-z0-9-]*\\b(?:\\s+(?!(?:secret|variable|workflow|run|api)\\b)\\S+)?)*\\s+api\\b.*(?:-X\\s*|--method(?:=|\\s+))DELETE\\b.*\\b/?repos/[^\\s/]+/[^\\s/]+/actions/secrets\\b",
+      "severity": "high",
+      "description": "gh api DELETE against /actions/secrets deletes GitHub Actions secrets.",
+      "explanation": "Making DELETE requests to the GitHub Actions secrets API removes secrets from \\ the repository. This bypasses CLI confirmations and directly modifies repository \\ settings. Workflows will fail when referencing deleted secrets.\n\n\\ Safer alternatives: \\ - Use gh secret delete for safer deletion with prompts \\ - gh api GET first: Verify secret exists \\ - Prefer CLI commands over direct API calls"
+    },
+    {
+      "name": "gh-actions-api-delete-variables",
+      "pattern": "gh(?:\\s+--?[A-Za-z][A-Za-z0-9-]*\\b(?:\\s+(?!(?:secret|variable|workflow|run|api)\\b)\\S+)?)*\\s+api\\b.*(?:-X\\s*|--method(?:=|\\s+))DELETE\\b.*\\b/?repos/[^\\s/]+/[^\\s/]+/actions/variables\\b",
+      "severity": "medium",
+      "description": "gh api DELETE against /actions/variables deletes GitHub Actions variables.",
+      "explanation": "Making DELETE requests to the GitHub Actions variables API removes variables \\ from the repository. This bypasses CLI confirmations and directly modifies \\ repository settings. Workflows referencing these variables will fail.\n\n\\ Safer alternatives: \\ - Use gh variable delete for safer deletion with prompts \\ - gh api GET first: Verify variable exists \\ - Prefer CLI commands over direct API calls"
+    }
+  ]
+}

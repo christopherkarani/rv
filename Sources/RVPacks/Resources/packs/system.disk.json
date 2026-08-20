@@ -1,0 +1,456 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "system.disk",
+  "name": "Disk Operations",
+  "version": "0.11.0",
+  "description": "Protects against destructive disk operations like dd to devices, \\ mkfs, partition table modifications, RAID management, \\ btrfs/LVM/device-mapper operations, network block devices, \\ and macOS diskutil erase/partition/APFS deletion",
+  "category": "system",
+  "enabled_by_default": false,
+  "keywords": [
+    "dd",
+    "diskutil",
+    "fdisk",
+    "mkfs",
+    "mkswap",
+    "parted",
+    "mount",
+    "wipefs",
+    "/dev/",
+    "mdadm",
+    "btrfs",
+    "dmsetup",
+    "nbd-client",
+    "pvremove",
+    "vgremove",
+    "lvremove",
+    "vgreduce",
+    "lvreduce",
+    "lvresize",
+    "pvmove"
+  ],
+  "safe_patterns": [
+    {
+      "name": "dd-file-out",
+      "pattern": "dd\\s+.*of=['\"]?[^/\\s'\"]+\\.",
+      "description": ""
+    },
+    {
+      "name": "dd-discard",
+      "pattern": "dd\\s+.*of=['\"]?/dev/(?:null|zero|full)['\"]?(?:\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "lsblk",
+      "pattern": "\\blsblk\\b",
+      "description": ""
+    },
+    {
+      "name": "fdisk-list",
+      "pattern": "fdisk\\s+-l",
+      "description": ""
+    },
+    {
+      "name": "parted-print",
+      "pattern": "parted\\b(?:\\s+--?\\S+)*\\s+(?:['\"]?/dev/\\S+['\"]?\\s+)?print(?:\\s+(?:devices|free|list|all|\\d+))?\\s*$",
+      "description": ""
+    },
+    {
+      "name": "blkid",
+      "pattern": "\\bblkid\\b",
+      "description": ""
+    },
+    {
+      "name": "df",
+      "pattern": "\\bdf\\b",
+      "description": ""
+    },
+    {
+      "name": "mount-list",
+      "pattern": "\\bmount\\s*$",
+      "description": ""
+    },
+    {
+      "name": "mkswap-check",
+      "pattern": "mkswap\\s+(?:.*\\s+)?--check\\b",
+      "description": ""
+    },
+    {
+      "name": "mdadm-detail",
+      "pattern": "mdadm\\s+--detail\\b",
+      "description": ""
+    },
+    {
+      "name": "mdadm-examine",
+      "pattern": "mdadm\\s+--examine\\b",
+      "description": ""
+    },
+    {
+      "name": "mdadm-query",
+      "pattern": "mdadm\\s+--query\\b",
+      "description": ""
+    },
+    {
+      "name": "mdadm-query-short",
+      "pattern": "mdadm\\s+-Q\\b",
+      "description": ""
+    },
+    {
+      "name": "mdadm-scan",
+      "pattern": "mdadm\\s+--scan\\b",
+      "description": ""
+    },
+    {
+      "name": "btrfs-subvolume-list",
+      "pattern": "btrfs\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+subvolume\\s+list(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "btrfs-subvolume-show",
+      "pattern": "btrfs\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+subvolume\\s+show(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "btrfs-filesystem-show",
+      "pattern": "btrfs\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+filesystem\\s+show(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "btrfs-filesystem-df",
+      "pattern": "btrfs\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+filesystem\\s+df(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "btrfs-filesystem-usage",
+      "pattern": "btrfs\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+filesystem\\s+usage(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "btrfs-device-stats",
+      "pattern": "btrfs\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+device\\s+stats(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "btrfs-property-get",
+      "pattern": "btrfs\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+property\\s+(?:get|list)(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "btrfs-scrub-status",
+      "pattern": "btrfs\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+scrub\\s+status(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "dmsetup-ls",
+      "pattern": "dmsetup\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+ls(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "dmsetup-status",
+      "pattern": "dmsetup\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+status(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "dmsetup-info",
+      "pattern": "dmsetup\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+info(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "dmsetup-table",
+      "pattern": "dmsetup\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+table(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "dmsetup-deps",
+      "pattern": "dmsetup\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+deps(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "nbd-client-list",
+      "pattern": "nbd-client\\s+-l\\b",
+      "description": ""
+    },
+    {
+      "name": "nbd-client-check",
+      "pattern": "nbd-client\\s+.*-check\\b",
+      "description": ""
+    },
+    {
+      "name": "diskutil-readonly",
+      "pattern": "(?i)diskutil\\s+(?:list|info|information|activity|listFilesystems|apfs\\s+list(?:Snapshots|Users)?)\\b[^;&|\\r\\n]*$",
+      "description": ""
+    },
+    {
+      "name": "lvm-list",
+      "pattern": "\\b(?:lvs|vgs|pvs)\\b",
+      "description": ""
+    },
+    {
+      "name": "lvm-display",
+      "pattern": "\\b(?:lvdisplay|vgdisplay|pvdisplay)\\b",
+      "description": ""
+    },
+    {
+      "name": "lvm-scan",
+      "pattern": "\\b(?:lvscan|vgscan|pvscan)\\b",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "dd-device",
+      "pattern": "dd\\s+.*of=['\"]?/dev/",
+      "severity": "high",
+      "description": "dd to a block device will OVERWRITE all data on that device. Extremely dangerous!"
+    },
+    {
+      "name": "dd-wipe",
+      "pattern": "dd\\s+.*if=['\"]?/dev/(?:zero|urandom|random).*of=['\"]?/dev/",
+      "severity": "high",
+      "description": "dd from /dev/zero or /dev/urandom to a device will WIPE all data!"
+    },
+    {
+      "name": "fdisk-edit",
+      "pattern": "fdisk\\s+['\"]?/dev/(?!.*-l)",
+      "severity": "high",
+      "description": "fdisk can modify partition tables and cause data loss."
+    },
+    {
+      "name": "parted-modify",
+      "pattern": "parted\\b[^\\n;&|]*?['\"]?/dev/\\S+['\"]?(?:\\s+--)?\\s+(?:(?!\\s*(?:align-check|help|h|print|p|quit|q|select|unit|u)\\b)|[^\\n;&|]*\\b(?:print|p)\\b\\s+(?:(?:devices|free|list|all|\\d+)\\s+\\S+|(?!devices\\b|free\\b|list\\b|all\\b|\\d+\\b)\\S+)|[^\\n;&|]*\\b(?:disk_set|disk_toggle|mklabel|mktable|mkpart|name|rescue|resizepart|rm|set|toggle|type)\\b)",
+      "severity": "high",
+      "description": "parted can modify partition tables and cause data loss."
+    },
+    {
+      "name": "mkfs",
+      "pattern": "mkfs(?:\\.[a-z0-9]+)?\\s+",
+      "severity": "high",
+      "description": "mkfs formats a partition/device and ERASES all existing data."
+    },
+    {
+      "name": "mkswap",
+      "pattern": "mkswap\\s+",
+      "severity": "high",
+      "description": "mkswap formats a partition as a swap area, ERASING any existing data."
+    },
+    {
+      "name": "wipefs",
+      "pattern": "wipefs\\s+",
+      "severity": "high",
+      "description": "wipefs removes filesystem signatures. Use with extreme caution."
+    },
+    {
+      "name": "mount-bind-root",
+      "pattern": "mount\\s+.*--bind\\s+.*\\s+['\"]?/(?:$|[^a-z])",
+      "severity": "high",
+      "description": "mount --bind to root directory can have system-wide effects."
+    },
+    {
+      "name": "umount-force",
+      "pattern": "umount\\s+.*-[a-z]*f",
+      "severity": "high",
+      "description": "umount -f force unmounts which may cause data loss if device is in use."
+    },
+    {
+      "name": "losetup-device",
+      "pattern": "losetup\\s+['\"]?/dev/loop",
+      "severity": "high",
+      "description": "losetup modifies loop device associations. Verify before proceeding."
+    },
+    {
+      "name": "mdadm-stop",
+      "pattern": "mdadm\\s+(?:.*\\s+)?(?:--stop|-S)\\b",
+      "severity": "high",
+      "description": "mdadm --stop shuts down a RAID array. Data may become inaccessible."
+    },
+    {
+      "name": "mdadm-remove",
+      "pattern": "mdadm\\s+(?:.*\\s+)?--remove\\b",
+      "severity": "high",
+      "description": "mdadm --remove removes a drive from a RAID array. May cause data loss if redundancy is lost."
+    },
+    {
+      "name": "mdadm-fail",
+      "pattern": "mdadm\\s+(?:.*\\s+)?(?:--fail|-f)\\b",
+      "severity": "high",
+      "description": "mdadm --fail marks a device as failed. Use only for intentional drive replacement."
+    },
+    {
+      "name": "mdadm-zero-superblock",
+      "pattern": "mdadm\\s+(?:.*\\s+)?--zero-superblock\\b",
+      "severity": "high",
+      "description": "mdadm --zero-superblock PERMANENTLY erases RAID metadata. Array cannot be reassembled."
+    },
+    {
+      "name": "mdadm-create",
+      "pattern": "mdadm\\s+(?:.*\\s+)?(?:--create|-C)\\b",
+      "severity": "high",
+      "description": "mdadm --create initializes a new RAID array, ERASING existing data on member devices."
+    },
+    {
+      "name": "mdadm-grow",
+      "pattern": "mdadm\\s+(?:.*\\s+)?--grow\\b",
+      "severity": "high",
+      "description": "mdadm --grow reshapes a RAID array. Interruption can cause data loss. Backup first."
+    },
+    {
+      "name": "btrfs-subvolume-delete",
+      "pattern": "btrfs\\b.*?\\s+subvolume\\s+delete\\b",
+      "severity": "high",
+      "description": "btrfs subvolume delete PERMANENTLY removes a subvolume and all its data."
+    },
+    {
+      "name": "btrfs-device-remove",
+      "pattern": "btrfs\\b.*?\\s+device\\s+(?:remove|delete)\\b",
+      "severity": "high",
+      "description": "btrfs device remove redistributes data off a device. Interruption causes data loss."
+    },
+    {
+      "name": "btrfs-device-add",
+      "pattern": "btrfs\\b.*?\\s+device\\s+add\\b",
+      "severity": "high",
+      "description": "btrfs device add incorporates a device into the filesystem. Verify the device is correct."
+    },
+    {
+      "name": "btrfs-balance",
+      "pattern": "btrfs\\b.*?\\s+balance\\s+start\\b",
+      "severity": "high",
+      "description": "btrfs balance redistributes data across devices. Can be slow and disruptive."
+    },
+    {
+      "name": "btrfs-check-repair",
+      "pattern": "btrfs\\b.*?\\s+check\\s+(?:.*\\s+)?--repair\\b",
+      "severity": "high",
+      "description": "btrfs check --repair is DANGEROUS and can cause data loss. Backup first!"
+    },
+    {
+      "name": "btrfs-rescue",
+      "pattern": "btrfs\\b.*?\\s+rescue\\b",
+      "severity": "high",
+      "description": "btrfs rescue operations modify filesystem metadata. Use only as last resort."
+    },
+    {
+      "name": "btrfs-filesystem-resize",
+      "pattern": "btrfs\\b.*?\\s+filesystem\\s+resize\\b",
+      "severity": "high",
+      "description": "btrfs filesystem resize can shrink a filesystem. Data loss if size is too small."
+    },
+    {
+      "name": "dmsetup-remove",
+      "pattern": "dmsetup\\b.*?\\s+remove\\b",
+      "severity": "high",
+      "description": "dmsetup remove detaches a device-mapper device. May cause data loss if in use."
+    },
+    {
+      "name": "dmsetup-remove-all",
+      "pattern": "dmsetup\\b.*?\\s+remove_all\\b",
+      "severity": "high",
+      "description": "dmsetup remove_all removes ALL device-mapper devices. Extremely dangerous!"
+    },
+    {
+      "name": "dmsetup-wipe-table",
+      "pattern": "dmsetup\\b.*?\\s+wipe_table\\b",
+      "severity": "high",
+      "description": "dmsetup wipe_table replaces the device table, causing all I/O to fail."
+    },
+    {
+      "name": "dmsetup-clear",
+      "pattern": "dmsetup\\b.*?\\s+clear\\b",
+      "severity": "high",
+      "description": "dmsetup clear removes the mapping table from a device."
+    },
+    {
+      "name": "dmsetup-load",
+      "pattern": "dmsetup\\b.*?\\s+load\\b",
+      "severity": "high",
+      "description": "dmsetup load changes device mapping. Verify the new table is correct."
+    },
+    {
+      "name": "dmsetup-create",
+      "pattern": "dmsetup\\b.*?\\s+create\\b",
+      "severity": "high",
+      "description": "dmsetup create sets up a new device-mapper device. Verify parameters carefully."
+    },
+    {
+      "name": "nbd-client-disconnect",
+      "pattern": "nbd-client\\s+(?:.*\\s+)?-d\\b",
+      "severity": "high",
+      "description": "nbd-client -d disconnects a network block device. Data loss if not properly unmounted."
+    },
+    {
+      "name": "nbd-client-connect",
+      "pattern": "nbd-client\\s+\\S+\\s+\\d+\\s+['\"]?/dev/nbd",
+      "severity": "high",
+      "description": "nbd-client connecting a device can expose or overwrite data. Verify server and device."
+    },
+    {
+      "name": "pvremove",
+      "pattern": "\\bpvremove\\b",
+      "severity": "high",
+      "description": "pvremove ERASES LVM metadata from a physical volume. Data becomes inaccessible."
+    },
+    {
+      "name": "vgremove",
+      "pattern": "\\bvgremove\\b",
+      "severity": "high",
+      "description": "vgremove DELETES a volume group and all logical volumes within it."
+    },
+    {
+      "name": "lvremove",
+      "pattern": "\\blvremove\\b",
+      "severity": "high",
+      "description": "lvremove PERMANENTLY deletes a logical volume and ALL its data."
+    },
+    {
+      "name": "vgreduce",
+      "pattern": "\\bvgreduce\\b",
+      "severity": "high",
+      "description": "vgreduce removes a physical volume from a volume group. Data may be lost."
+    },
+    {
+      "name": "lvreduce",
+      "pattern": "\\blvreduce\\b",
+      "severity": "high",
+      "description": "lvreduce SHRINKS a logical volume. Data loss if filesystem isn't resized first!"
+    },
+    {
+      "name": "lvresize-shrink",
+      "pattern": "lvresize\\s+(?:.*\\s+)?(?:-L\\s*-|-l\\s*-|--size\\s+\\S*-)",
+      "severity": "high",
+      "description": "lvresize with negative size SHRINKS the volume. Resize filesystem first or lose data!"
+    },
+    {
+      "name": "pvmove",
+      "pattern": "\\bpvmove\\b",
+      "severity": "high",
+      "description": "pvmove migrates data between physical volumes. Do NOT interrupt or data may be lost."
+    },
+    {
+      "name": "lvconvert-merge",
+      "pattern": "lvconvert\\s+(?:.*\\s+)?--merge\\b",
+      "severity": "high",
+      "description": "lvconvert --merge reverts LV to snapshot state, discarding changes since snapshot."
+    },
+    {
+      "name": "diskutil-erase",
+      "pattern": "(?i)diskutil\\s+(?:eraseDisk|eraseVolume|reformat|zeroDisk|randomDisk|secureErase)\\b",
+      "severity": "critical",
+      "description": "diskutil erase operations DESTROY all data on the target disk or volume.",
+      "explanation": "diskutil eraseDisk/eraseVolume/reformat/zeroDisk/randomDisk/secureErase \\ overwrite the target's contents. On APFS this removes every volume in \\ the container. There is no recovery without backups.\n\n\\ Inspect the target first: \\ diskutil list \\ diskutil info <disk>"
+    },
+    {
+      "name": "diskutil-partition",
+      "pattern": "(?i)diskutil\\s+(?:partitionDisk|splitPartition|mergePartitions|resetFusion)\\b",
+      "severity": "critical",
+      "description": "diskutil partitioning operations rewrite the partition map and erase data.",
+      "explanation": "diskutil partitionDisk erases the entire disk before writing the new \\ partition map; splitPartition and mergePartitions destroy the contents \\ of the partitions they reshape (merge preserves only the first when \\ asked); resetFusion wipes both constituent devices.\n\n\\ Preview the current layout first: \\ diskutil list <disk>"
+    },
+    {
+      "name": "diskutil-apfs-delete",
+      "pattern": "(?i)diskutil\\s+(?:apfs|ap)\\s+(?:deleteContainer|deleteVolume|eraseVolume|deleteSnapshot)\\b",
+      "severity": "critical",
+      "description": "diskutil apfs delete/erase operations permanently remove APFS containers, volumes, or snapshots.",
+      "explanation": "Deleting an APFS container destroys every volume inside it; deleting or \\ erasing a volume destroys that volume's data; deleting a snapshot \\ removes a restore point. None of these are recoverable without \\ backups.\n\n\\ List APFS structure first: \\ diskutil apfs list"
+    }
+  ]
+}

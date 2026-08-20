@@ -1,0 +1,133 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "containers.docker",
+  "name": "Docker",
+  "version": "0.11.0",
+  "description": "Protects against destructive Docker operations like system prune, \\ volume prune, and force removal",
+  "category": "containers",
+  "enabled_by_default": false,
+  "keywords": [
+    "docker",
+    "prune",
+    "rmi",
+    "volume"
+  ],
+  "safe_patterns": [
+    {
+      "name": "docker-ps",
+      "pattern": "^\\s*docker\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+ps(?=\\s|$)(?:\\s+[^;&|`$()]*)*$",
+      "description": ""
+    },
+    {
+      "name": "docker-images",
+      "pattern": "^\\s*docker\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+images(?=\\s|$)(?:\\s+[^;&|`$()]*)*$",
+      "description": ""
+    },
+    {
+      "name": "docker-logs",
+      "pattern": "^\\s*docker\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+logs(?=\\s|$)(?:\\s+[^;&|`$()]*)*$",
+      "description": ""
+    },
+    {
+      "name": "docker-inspect",
+      "pattern": "^\\s*docker\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+inspect(?=\\s|$)(?:\\s+[^;&|`$()]*)*$",
+      "description": ""
+    },
+    {
+      "name": "docker-build",
+      "pattern": "^\\s*docker\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+build(?=\\s|$)(?:\\s+[^;&|`$()]*)*$",
+      "description": ""
+    },
+    {
+      "name": "docker-pull",
+      "pattern": "^\\s*docker\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+pull(?=\\s|$)(?:\\s+[^;&|`$()]*)*$",
+      "description": ""
+    },
+    {
+      "name": "docker-run",
+      "pattern": "^\\s*docker\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+run(?=\\s|$)(?:\\s+[^;&|`$()]*)*$",
+      "description": ""
+    },
+    {
+      "name": "docker-exec",
+      "pattern": "^\\s*docker\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+exec(?=\\s|$)(?:\\s+[^;&|`$()]*)*$",
+      "description": ""
+    },
+    {
+      "name": "docker-stats",
+      "pattern": "^\\s*docker\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+stats(?=\\s|$)(?:\\s+[^;&|`$()]*)*$",
+      "description": ""
+    },
+    {
+      "name": "docker-dry-run",
+      "pattern": "^\\s*docker\\b(?:\\s+[^;&|`$()]*)*--dry-run(?:\\s+[^;&|`$()]*)*$",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "system-prune",
+      "pattern": "docker\\b.*?\\bsystem\\s+prune",
+      "severity": "high",
+      "description": "docker system prune removes ALL unused containers, networks, images. Use 'docker system df' to preview.",
+      "explanation": "docker system prune is Docker's most aggressive cleanup command. It removes:\n\n\\ - All stopped containers \\ - All networks not used by at least one container \\ - All dangling images (untagged) \\ - All dangling build cache\n\n\\ With -a flag, it also removes all unused images, not just dangling ones. \\ With --volumes flag, it removes all unused volumes (data loss!).\n\n\\ Preview what would be removed: \\ docker system df # Show disk usage \\ docker system df -v # Verbose with details\n\n\\ Safer alternative: \\ docker container prune # Only stopped containers \\ docker image prune # Only dangling images"
+    },
+    {
+      "name": "volume-prune",
+      "pattern": "docker\\b.*?\\bvolume\\s+prune",
+      "severity": "high",
+      "description": "docker volume prune removes ALL unused volumes and their data permanently.",
+      "explanation": "docker volume prune permanently deletes ALL volumes not currently attached \\ to a running container. This is extremely dangerous because:\n\n\\ - Database data stored in volumes is lost forever \\ - Application state and uploads are destroyed \\ - There is NO recovery mechanism\n\n\\ Even stopped containers' volumes are considered 'unused' and will be deleted.\n\n\\ Preview before pruning: \\ docker volume ls # List all volumes \\ docker volume ls -f dangling=true # Show only unused\n\n\\ Safer approach: \\ docker volume rm <specific-volume> # Remove by name"
+    },
+    {
+      "name": "network-prune",
+      "pattern": "docker\\b.*?\\bnetwork\\s+prune",
+      "severity": "high",
+      "description": "docker network prune removes ALL unused networks.",
+      "explanation": "docker network prune removes all user-defined networks not used by any container. \\ While less destructive than volume prune, it can still cause issues:\n\n\\ - Custom network configurations are lost \\ - Containers may fail to communicate after restart \\ - Service discovery between containers breaks\n\n\\ Preview unused networks: \\ docker network ls \\ docker network ls -f dangling=true\n\n\\ Safer alternative: \\ docker network rm <specific-network>"
+    },
+    {
+      "name": "image-prune",
+      "pattern": "docker\\b.*?\\bimage\\s+prune",
+      "severity": "medium",
+      "description": "docker image prune removes unused images. Use 'docker images' to review first.",
+      "explanation": "docker image prune removes 'dangling' images (untagged layers). \\ With -a flag, it removes ALL images not used by existing containers.\n\n\\ Consequences: \\ - Build cache layers are deleted (slower rebuilds) \\ - With -a: base images must be re-pulled\n\n\\ Preview what would be removed: \\ docker images -f dangling=true \\ docker images # With -a flag\n\n\\ Usually safe, but may slow down builds."
+    },
+    {
+      "name": "container-prune",
+      "pattern": "docker\\b.*?\\bcontainer\\s+prune",
+      "severity": "medium",
+      "description": "docker container prune removes ALL stopped containers.",
+      "explanation": "docker container prune removes all stopped containers. This is relatively \\ safe but can cause issues:\n\n\\ - Container logs are lost \\ - Container filesystem layers are deleted \\ - Cannot restart or inspect removed containers\n\n\\ Preview stopped containers: \\ docker ps -a -f status=exited \\ docker ps -a -f status=created\n\n\\ Consider keeping recent containers for debugging."
+    },
+    {
+      "name": "rm-force",
+      "pattern": "docker\\b.*?\\brm\\s+.*(?:-[a-zA-Z0-9]*f|--force)",
+      "severity": "high",
+      "description": "docker rm -f forcibly removes containers, potentially losing data.",
+      "explanation": "docker rm -f forcibly stops and removes containers. This is dangerous because:\n\n\\ - Running processes are killed immediately (SIGKILL) \\ - No graceful shutdown - data may be corrupted \\ - In-flight requests are dropped \\ - Uncommitted data in the container is lost\n\n\\ Safer approach: \\ docker stop <container> # Graceful shutdown (SIGTERM) \\ docker rm <container> # Then remove\n\n\\ Check container status first: \\ docker ps -a | grep <container>"
+    },
+    {
+      "name": "rmi-force",
+      "pattern": "docker\\b.*?\\brmi\\s+.*(?:-[a-zA-Z0-9]*f|--force)",
+      "severity": "high",
+      "description": "docker rmi -f forcibly removes images even if in use.",
+      "explanation": "docker rmi -f forcibly removes images, even if containers are using them. \\ This can cause:\n\n\\ - Running containers to fail on restart \\ - Broken references to deleted layers \\ - Loss of build cache\n\n\\ Check what's using the image: \\ docker ps -a --filter ancestor=<image>\n\n\\ Safer approach: \\ docker rmi <image> # Fails safely if in use"
+    },
+    {
+      "name": "volume-rm",
+      "pattern": "docker\\b.*?\\bvolume\\s+rm",
+      "severity": "high",
+      "description": "docker volume rm permanently deletes volumes and their data.",
+      "explanation": "docker volume rm permanently deletes named volumes and all data stored in them. \\ This is irreversible:\n\n\\ - Database files are gone \\ - User uploads are lost \\ - Configuration data is destroyed \\ - No trash or undo mechanism exists\n\n\\ Check volume contents first: \\ docker run --rm -v <volume>:/data alpine ls -la /data\n\n\\ Consider backing up: \\ docker run --rm -v <volume>:/data -v $(pwd):/backup alpine \\ \\ tar czf /backup/volume-backup.tar.gz /data"
+    },
+    {
+      "name": "stop-all",
+      "pattern": "docker\\b.*?\\b(?:stop|kill)\\s+\\$\\(",
+      "severity": "high",
+      "description": "Stopping/killing all containers can disrupt services. Be specific about which containers.",
+      "explanation": "This pattern stops or kills ALL running containers on the system. \\ This is dangerous in shared environments:\n\n\\ - Production services go down \\ - Database connections are severed \\ - In-flight requests fail \\ - Other users' containers are affected\n\n\\ Be specific instead: \\ docker stop <container-name> # Stop by name \\ docker stop $(docker ps -q -f name=myapp) # Filter by name\n\n\\ Preview what would be stopped: \\ docker ps --format '{{.Names}}: {{.Status}}'"
+    }
+  ]
+}
