@@ -19,6 +19,7 @@ let package = Package(
         .library(name: "RVTUI", targets: ["RVTUI"]),
         .library(name: "RVCLI", targets: ["RVCLI"]),
         .library(name: "RVHistory", targets: ["RVHistory"]),
+        .library(name: "RVAnalytics", targets: ["RVAnalytics"]),
         .executable(name: "rv", targets: ["rv"]),
         .executable(name: "rvd", targets: ["rvd"]),
     ],
@@ -42,12 +43,14 @@ let package = Package(
         ),
         .target(name: "RVIPC", dependencies: ["RVDomain"]),
         .target(name: "RVHistory", dependencies: ["RVDomain"]),
+        .target(name: "RVAnalytics"),
         .target(name: "RVPresentation", dependencies: ["RVDomain", "RVTheme"]),
         .target(name: "RVTUI", dependencies: ["RVTheme", "RVPresentation"]),
         .target(
             name: "RVService",
             dependencies: [
                 "RVDomain", "RVEngine", "RVPacks", "RVPolicy", "RVIPC", "RVHistory",
+                "RVAnalytics",
             ]
         ),
         .target(
@@ -55,6 +58,7 @@ let package = Package(
             dependencies: [
                 "RVDomain", "RVEngine", "RVPolicy", "RVHooks", "RVIPC",
                 "RVPresentation", "RVTheme", "RVTUI", "RVService", "RVHistory",
+                "RVAnalytics",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],
             resources: [
@@ -92,6 +96,7 @@ let package = Package(
         .testTarget(name: "RVTUITests", dependencies: ["RVTUI"]),
         .testTarget(name: "RVCLITests", dependencies: ["RVCLI"]),
         .testTarget(name: "RVHistoryTests", dependencies: ["RVHistory"]),
+        .testTarget(name: "RVAnalyticsTests", dependencies: ["RVAnalytics"]),
         .testTarget(
             name: "RVCorpusTests",
             dependencies: ["RVDomain", "RVEngine", "RVPacks"]
