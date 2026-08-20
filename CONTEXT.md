@@ -13,7 +13,7 @@ The T1-normalized command text an EvaluationResult was decided on. The Policy ga
 _Avoid_: raw argv as the grant key
 
 **Policy gate**:
-The step after the Evaluate session. On engine deny, hook miss and rvd may spend one allow-once grant for this matching view and cwd and return allow. Missing cwd skips honor — it is not filled in from the process directory. TTY test/explain and XPC explain/classify use the same gate without spending. Not a pack rule.
+The step after the Evaluate session. On engine deny, hook miss and rvd may spend one allow-once grant for this matching view and cwd and return allow. Missing cwd skips honor — it is not filled in from the process directory. Pi and OpenCode codecs do not populate cwd, so those hosts cannot honor grants until the codecs send it. Grok already can. TTY test/explain and XPC explain/classify use the same gate without spending. Not a pack rule.
 _Avoid_: honor wrapper, consume-on-evaluate
 
 **Allow-once grant**:

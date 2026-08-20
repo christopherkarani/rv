@@ -4,9 +4,10 @@ import RVPolicy
 
 /// Runs the Evaluate session, then the Policy gate.
 public struct GatedEvaluate: Sendable {
-    public let session: EvaluateSession
+    public var corePacksReady: Bool { session.corePacksReady }
 
-    /// Creates a door around an Evaluate session.
+    private let session: EvaluateSession
+
     public init(_ session: EvaluateSession = EvaluateSession()) {
         self.session = session
     }
@@ -18,12 +19,7 @@ public struct GatedEvaluate: Sendable {
         store: AllowOnceStore,
         now: Date
     ) async -> EvaluationResult {
-        await PolicyGate.peek(
-            session.evaluate(request),
-            cwd: cwd,
-            store: store,
-            now: now
-        ).result
+        await evaluateThenGate(request, cwd: cwd, store: store, now: now, PolicyGate.peek)
     }
 
     /// Spends a matching grant after an engine deny.
@@ -33,11 +29,16 @@ public struct GatedEvaluate: Sendable {
         store: AllowOnceStore,
         now: Date
     ) async -> EvaluationResult {
-        await PolicyGate.apply(
-            session.evaluate(request),
-            cwd: cwd,
-            store: store,
-            now: now
-        ).result
+        await evaluateThenGate(request, cwd: cwd, store: store, now: now, PolicyGate.apply)
+    }
+
+    private func evaluateThenGate(
+        _ request: EvaluationRequest,
+        cwd: String?,
+        store: AllowOnceStore,
+        now: Date,
+        _ gate: (EvaluationResult, String?, AllowOnceStore, Date) async -> PolicyDecision
+    ) async -> EvaluationResult {
+        await gate(session.evaluate(request), cwd, store, now).result
     }
 }

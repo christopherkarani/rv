@@ -57,6 +57,35 @@ struct AllowOnceGrantHonorTests {
         #expect(honored.decision == .allow)
     }
 
+    @Test func hookPresentCwdHonorsGrantOnce() async throws {
+        let directory = try isolatedAllowOnceDirectory()
+        let client = try isolatedClient(transport: nil, allowOnceDirectory: directory)
+        try await client.insertGranted(matchingView: "git reset --hard", cwd: "/tmp/ws")
+
+        let stdin = """
+        {"hookEventName":"pre_tool_use","cwd":"/tmp/ws","toolName":"run_terminal_command","toolInput":{"command":"git reset --hard"}}
+        """
+        let wire = await HookRun.run(
+            stdin: stdin,
+            codec: GrokHostCodec()
+        ) { command, cwd in
+            await client.evaluateResult(command: command, cwd: cwd)
+        }
+        #expect(wire.stdout.isEmpty)
+        #expect(wire.exitCode == 0)
+        #expect(wire.stdout.contains("\"decision\":\"deny\"") == false)
+
+        let second = await client.evaluateResult(
+            command: ShellCommand(rawValue: "git reset --hard"),
+            cwd: "/tmp/ws"
+        )
+        guard case .deny(let deny) = second.decision else {
+            Issue.record("second evaluate must deny after the grant is spent")
+            return
+        }
+        #expect(deny.ruleID.rawValue == "core.git:reset-hard")
+    }
+
     @Test func xpcEvaluateSuccessDoesNotApplyLocalGrant() async throws {
         let directory = try isolatedAllowOnceDirectory()
         let storeClient = try isolatedClient(transport: nil, allowOnceDirectory: directory)
