@@ -2,7 +2,7 @@
 
 Package tools: Swift 6.3. Language mode 6. macOS 26, Apple Silicon only.
 
-Pin: `.swift-version` (`6.3.3`). This machine’s `/usr/bin/swift` may still be Xcode 6.2. Put `~/Library/Developer/Toolchains/swift-6.3.3-RELEASE.xctoolchain/usr/bin` on `PATH` first, or run `swiftly run 6.3.3 -- swift test`.
+Pin: `.swift-version` (`6.3.3`). This machine’s `/usr/bin/swift` may still be Xcode 6.2. Prefer `tools/swift-6.3.3` (or put `~/Library/Developer/Toolchains/swift-6.3.3-RELEASE.xctoolchain/usr/bin` on `PATH` first). `swiftly run 6.3.3 -- swift test` also works if proven.
 
 ## Compile times
 
@@ -21,7 +21,7 @@ Measured on this M3 Max / macOS 26 / SDK 26.2 (2026-08-18):
 
 Slowest Engine body (`tokenizeCommand`) is ~22 ms. Do not merge modules or rewrite Normalize to “fix” clean builds.
 
-Gate: keep `.build` warm. `swift test --filter <Target>Tests`. A 10s+ clean is ModuleCache unless `-debug-time-function-bodies` shows a hot function.
+Gate: keep `.build` warm. Prefer `tools/gate.sh <Target>Tests` (or `tools/swift-6.3.3 test --filter <Target>Tests`). A 10s+ clean is ModuleCache unless `-debug-time-function-bodies` shows a hot function.
 
 T2 ArgumentParser is the next real compile bill. Domain public-API edits today rebuild only Engine + Packs (the libraries that `import RVDomain`); filled stubs will fan out.
 

@@ -1,38 +1,38 @@
 # Factory status
 
-Goal: Go Ready kickoff for rv T0–T9 in `~/CodingProjects/rv`.
+Living board for implement sessions. Do **not** re-grill. Do **not** load `docs/factory/reviews/*` to implement.
 
-| Step | State |
-|---|---|
-| Locked plan | Done |
-| Phase specs (8) | Landed |
-| Adversarial FP / FN / known-unknowns | Landed; PLAN patched |
-| Handoff | Complete (factory → implement T0) |
-| Stress test ×2 | Landed (`reviews/stress-1.md`, `stress-2.md`) |
-| Implement prompts | Landed (`docs/factory/prompts/T0.md`–`T9.md`) |
-| Cohesiveness Go Ready | **Go Ready** |
-| Kickoff canvas | [rv-factory](/Users/chriskarani/.cursor/projects/Users-chriskarani-CodingProjects-rv/canvases/rv-factory.canvas.tsx) |
+**Agent entry:** `AGENTS.md` → this file → relevant skill → `tools/gate.sh`
 
-## Specs
+## Board
+
+| | Ticket | Notes |
+|---|---|---|
+| Done | T0–T6 | Scaffold through curl install + TTY setup show. Host adapters live. |
+| **Current** | **T7** | `rv doctor` (service + hosts + packs). Prompt: [`prompts/T7.md`](prompts/T7.md). Specs: `specs/phase-1c-service.md`, `specs/phase-1d-hosts.md`. Skill: `.grok/skills/swift-hook-xpc`. |
+| Next | T8 ∥ T9 | After T1 (already green): allow-once and pack catalog in parallel worktrees per PLAN. |
+
+`docs/factory/PLAN.md` wins product-law conflicts. It is a conflict arbiter, not mandatory full session-start reading.
+
+## Specs (landed)
 
 | File | State |
 |---|---|
 | `specs/phase-0-repo.md` | Landed |
-| `specs/phase-1-engine.md` | Landed (patched after FN/KU) |
-| `specs/phase-1b-ux.md` | Landed (`hostDenyText` nil on allow; robot `rule_id` colon form) |
-| `specs/phase-1c-service.md` | Landed (consume = grant; T3 adds `rvd`) |
-| `specs/phase-1d-hosts.md` | Landed (indeterminate deny; T6 LaunchAgent; missing `rv` blocks Pi/OpenCode) |
+| `specs/phase-1-engine.md` | Landed |
+| `specs/phase-1b-ux.md` | Landed |
+| `specs/phase-1c-service.md` | Landed |
+| `specs/phase-1d-hosts.md` | Landed |
 | `specs/phase-2-packs.md` | Landed |
-| `specs/phase-3-allow.md` | Landed (`$HOME/.config/rv` only) |
+| `specs/phase-3-allow.md` | Landed |
 | `specs/phase-4-later.md` | Landed (fence only) |
 
-## Parallel kickoff (after Go Ready)
+## Parallel rules (reminder)
 
 | Wave | Tickets | Worktree? |
 |---|---|---|
-| 1 | T0 | No — serial on main |
-| 2 | T1 | No — serial after T0 |
-| 3 | T2 ∥ T3 | Yes — separate worktrees |
-| 4 | T4 then T5 | One worktree, serial |
-| 5 | T6 ∥ T7 | Yes if ownership split |
-| 3 or later | T8 ∥ T9 | Yes — after T1 |
+| Done | T0 → T1 serial; T2 ∥ T3; T4 then T5; T6 | — |
+| Now | T7 | `feat/t7-doctor` (may have paralleled T6) |
+| Later | T8 ∥ T9 | Yes — separate worktrees |
+
+Historical factory→T0 handoff: [`HANDOFF.md`](HANDOFF.md) (do not use as session start).

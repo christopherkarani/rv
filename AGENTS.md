@@ -6,12 +6,21 @@ v1 platform: macOS 26, Apple Silicon only. Package tools Swift 6.3. Language mod
 
 Hexagonal modules; dependency arrows down; a test that needs a TTY to prove a **decision** is in the wrong module.
 
-Ticket order T0→T1 then PLAN’s parallel rules. T0 serial.
+Ticket order T0→T1 then PLAN’s parallel rules. T0 serial. **Current ticket:** `docs/factory/STATUS.md`.
 
-Pointers: `docs/architecture/MODULES.md`, `docs/dev/SWIFT.md`, `docs/dev/PARITY.md`, `docs/factory/PLAN.md`.
-Skills: `.grok/skills/swift-hexagonal-spm`, `.grok/skills/swift-evaluate-parity`, `.grok/skills/swift-hook-xpc`, `.grok/skills/swift-thermo-nuclear-review`, `~/.grok/skills/swift-pr-review`, `~/.grok/skills/swift-concurrency`, `~/.grok/skills/swift-testing-pro`, `~/.grok/skills/swift-api-design-guidelines`. Project skills win on conflict. Fixtures/fakes stay in `Tests/`. Do not load `thermo-nuclear-code-quality-review` on this repo.
+Pointers: `CONTEXT.md` (vocabulary), `docs/factory/STATUS.md` (living board), `docs/architecture/MODULES.md`, `docs/dev/SWIFT.md`, `docs/dev/PARITY.md`, `docs/factory/PLAN.md` (conflict arbiter).
 
-Gate: `swift test --filter <Target>Tests` on a warm `.build`. Do not wipe `.build` or `swift package clean` to prove a compile — clean ~12s is Foundation ModuleCache (6.3.3 has no prebuilt SDK overlays), not type-check. Details: `docs/dev/SWIFT.md`.
+Skills (project wins on conflict; fixtures/fakes stay in `Tests/`; do not load `thermo-nuclear-code-quality-review`):
+
+| Topic | Skill |
+|---|---|
+| `Package.swift` / module graph | `.grok/skills/swift-hexagonal-spm` |
+| Evaluate / packs / corpus | `.grok/skills/swift-evaluate-parity` |
+| Hooks / XPC / hostDenyText / doctor | `.grok/skills/swift-hook-xpc` |
+| Pre-merge review | `.grok/skills/swift-thermo-nuclear-review` |
+| Also | `~/.grok/skills/swift-pr-review`, `swift-concurrency`, `swift-testing-pro`, `swift-api-design-guidelines` |
+
+Gate: `tools/gate.sh` (runs `preflight` + filtered tests via `tools/swift-6.3.3`). Warm `.build`. Do not wipe `.build` or `swift package clean` to prove a compile — clean ~12s is Foundation ModuleCache (6.3.3 has no prebuilt SDK overlays), not type-check. Details: `docs/dev/SWIFT.md`.
 
 ## Swift style contract
 
