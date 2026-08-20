@@ -1,4 +1,5 @@
 import Testing
+import RVDomain
 @testable import RVCLI
 
 struct FallbackSkewTests {
@@ -13,9 +14,12 @@ struct FallbackSkewTests {
         )
         let client = try isolatedClient(transport: transport)
         let reply = await client.evaluate(command: "git reset --hard")
-        #expect(reply.decision == "deny")
-        #expect(reply.ruleID == "core.git:reset-hard")
-        #expect(reply.via == "inProcess")
+        guard case .deny(let deny) = reply.result.decision else {
+            Issue.record("expected deny")
+            return
+        }
+        #expect(deny.ruleID.rawValue == "core.git:reset-hard")
+        #expect(reply.path == .inProcess)
         #expect(transport.sendCount == 0)
 
         let status = await client.status()
@@ -30,8 +34,11 @@ struct FallbackSkewTests {
         )
         let client = try isolatedClient(transport: transport)
         let reply = await client.evaluate(command: "git reset --hard")
-        #expect(reply.via == "inProcess")
-        #expect(reply.decision == "deny")
+        #expect(reply.path == .inProcess)
+        guard case .deny = reply.result.decision else {
+            Issue.record("expected deny")
+            return
+        }
         #expect(transport.sendCount == 0)
         let status = await client.status()
         #expect(status.state == "skew")

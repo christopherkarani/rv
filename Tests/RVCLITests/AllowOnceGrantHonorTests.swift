@@ -112,8 +112,11 @@ struct AllowOnceGrantHonorTests {
         )
         let client = try isolatedClient(transport: transport, allowOnceDirectory: directory)
         let reply = await client.evaluate(command: "git reset --hard", cwd: "/tmp/ws")
-        #expect(reply.via == "xpc")
-        #expect(reply.decision == "deny")
+        #expect(reply.path == .xpc)
+        guard case .deny = reply.result.decision else {
+            Issue.record("xpc success must surface the service deny")
+            return
+        }
         #expect(transport.sendCount == 1)
 
         let honored = await storeClient.evaluateResult(
