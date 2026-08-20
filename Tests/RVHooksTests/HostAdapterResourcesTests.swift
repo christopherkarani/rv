@@ -1,6 +1,24 @@
 import RVHooks
 import Testing
 
+@Test(arguments: [HookHost.grok, .pi, .opencode])
+func hostAdapter_bakedRvPath_roundTripsAllResources(host: HookHost) throws {
+    let adapter = try HostAdapterResources.load(for: host)
+    let rvPath = "/Applications/rv/bin/rv"
+    let rendered = adapter.rendered(rvPath: rvPath)
+
+    #expect(adapter.bakedRvPath(in: rendered) == rvPath)
+}
+
+@Test(arguments: [HookHost.grok, .pi, .opencode])
+func hostAdapter_bakedRvPath_rejectsModifiedAndForeignBytes(host: HookHost) throws {
+    let adapter = try HostAdapterResources.load(for: host)
+    let rendered = adapter.rendered(rvPath: "/opt/rv/bin/rv")
+
+    #expect(adapter.bakedRvPath(in: rendered + "\nforeign edit") == nil)
+    #expect(adapter.bakedRvPath(in: "foreign adapter") == nil)
+}
+
 @Test func hostAdapter_matchesCurrent_acceptsAnyBakedPath() throws {
     let adapter = try HostAdapterResources.load(for: .grok)
     let oldPath = adapter.rendered(rvPath: "/old/rv")

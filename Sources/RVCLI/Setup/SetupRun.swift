@@ -17,35 +17,11 @@ struct SetupOutcome: Equatable, Sendable {
 }
 
 extension SetupHostKind {
-    var toolName: String {
-        switch self {
-        case .grok: "grok"
-        case .pi: "pi"
-        case .openCode: "opencode"
-        }
-    }
-
     var occupiedLine: String {
         switch self {
         case .grok: "Skipped occupied grok hook."
         case .pi: "Skipped occupied pi hook."
         case .openCode: "Skipped occupied opencode hook."
-        }
-    }
-
-    func directory(in layout: HostLayout) -> String {
-        switch self {
-        case .grok: layout.grokDirectory
-        case .pi: layout.piDirectory
-        case .openCode: layout.openCodeDirectory
-        }
-    }
-
-    func ownedPath(in layout: HostLayout) -> String {
-        switch self {
-        case .grok: layout.grokHook
-        case .pi: layout.piExtension
-        case .openCode: layout.openCodePlugin
         }
     }
 
@@ -61,11 +37,6 @@ extension SetupHostKind {
         }
     }
 
-    func isDetected(layout: HostLayout, env: SetupEnvironment, files: FileOps) -> Bool {
-        files.isDirectory(directory(in: layout)) || env.pathEntries.contains { entry in
-            env.fileManager.isExecutableFile(atPath: entry + "/" + toolName)
-        }
-    }
 }
 
 struct SetupEnvironment {
@@ -140,7 +111,12 @@ enum SetupRun {
 
     private static func perform(_ env: SetupEnvironment) throws -> SetupReport {
         let files = FileOps(fileManager: env.fileManager)
-        let layout = HostLayout(home: env.home)
+        let layout = OwnedPaths(home: env.home)
+        let installations = try HostAdapterInstallation.inspect(
+            paths: layout,
+            pathEntries: env.pathEntries,
+            fileManager: env.fileManager
+        )
         var kinds: [SetupHostKind: SetupSlotKind] = [
             .grok: .pending,
             .pi: .pending,
@@ -151,13 +127,26 @@ enum SetupRun {
         try files.createDirectory(atPath: layout.configDirectory)
         try writeLaunchAgent(env: env, layout: layout, files: files)
 
-        for host in SetupHostKind.allCases {
-            guard host.isDetected(layout: layout, env: env, files: files) else { continue }
-            let adapter = try host.adapterResource()
+        for owned in layout.hostAdapters {
+            let host = owned.host
+            let installation = installations.installation(for: host)
+            let existingData: Data?
+            switch installation {
+            case .missing:
+                continue
+            case .occupied:
+                kinds[host] = .occupied
+                continue
+            case .absentFile:
+                existingData = nil
+            case .broken(_, let data, _), .wired(_, let data, _):
+                existingData = data
+            }
+            let adapter = try HostAdapterResources.load(for: owned.hookHost)
             switch try writeOwned(
-                path: host.ownedPath(in: layout),
+                path: owned.destination,
                 contents: adapter.rendered(rvPath: env.rvPath),
-                isCurrent: { adapter.matchesCurrent($0) },
+                existingData: existingData,
                 files: files
             ) {
             case .wrote:
@@ -180,23 +169,38 @@ enum SetupRun {
 
     static func uninstall(_ env: SetupEnvironment) -> SetupOutcome {
         let files = FileOps(fileManager: env.fileManager)
-        let layout = HostLayout(home: env.home)
-        let owned = [
-            layout.grokHook,
-            layout.piExtension,
-            layout.openCodePlugin,
-            layout.launchAgent,
-            layout.localRv,
-            layout.localRvd,
-        ]
-        for path in owned {
+        let layout = OwnedPaths(home: env.home)
+        let installations: HostAdapterInstallationSnapshot
+        do {
+            installations = try HostAdapterInstallation.inspect(
+                paths: layout,
+                pathEntries: env.pathEntries,
+                fileManager: env.fileManager
+            )
+        } catch {
+            return SetupOutcome(
+                stdout: "",
+                stderr: "rv uninstall failed: unable to inspect Host adapters\n",
+                exitCode: 1
+            )
+        }
+        var removedPaths = [layout.launchAgent, layout.localRv, layout.localRvd]
+        for owned in layout.hostAdapters {
+            switch installations.installation(for: owned.host) {
+            case .broken, .wired:
+                removedPaths.append(owned.destination)
+            case .missing, .absentFile, .occupied:
+                break
+            }
+        }
+        for path in removedPaths {
             files.removeFile(atPath: path)
         }
-        files.removeDirectoryIfExists(atPath: layout.configDirectory)
+        files.removeDirectoryIfEmpty(atPath: layout.configDirectory)
         if env.touchLaunchd {
             try? env.launchctl.bootout(domain: "gui/\(getuid())", label: launchAgentLabel)
         }
-        if owned.contains(where: { files.fileExists($0) }) {
+        if removedPaths.contains(where: { files.fileExists($0) }) {
             return SetupOutcome(
                 stdout: "",
                 stderr: "rv uninstall failed: owned path still exists\n",
@@ -206,7 +210,7 @@ enum SetupRun {
         return .ok
     }
 
-    private static func writeLaunchAgent(env: SetupEnvironment, layout: HostLayout, files: FileOps) throws {
+    private static func writeLaunchAgent(env: SetupEnvironment, layout: OwnedPaths, files: FileOps) throws {
         guard env.fileManager.isExecutableFile(atPath: env.rvdPath) else {
             return
         }
@@ -228,24 +232,18 @@ enum SetupRun {
     private static func writeOwned(
         path: String,
         contents: String,
-        isCurrent: (String) -> Bool,
+        existingData: Data?,
         files: FileOps
     ) throws -> WriteKind {
-        guard files.fileExists(path) else {
+        guard let existingData else {
             try files.write(contents, to: path)
             return .wrote
-        }
-        guard let existingData = files.readData(path) else {
-            return .occupied
         }
         if existingData == Data(contents.utf8) {
             return .unchanged
         }
-        if let existing = String(data: existingData, encoding: .utf8), isCurrent(existing) {
-            try files.write(contents, to: path)
-            return .wrote
-        }
-        return .occupied
+        try files.write(contents, to: path)
+        return .wrote
     }
 }
 
@@ -279,8 +277,11 @@ struct FileOps {
         try? fileManager.removeItem(atPath: path)
     }
 
-    func removeDirectoryIfExists(atPath path: String) {
+    func removeDirectoryIfEmpty(atPath path: String) {
         guard isDirectory(path) else { return }
+        guard let contents = try? fileManager.contentsOfDirectory(atPath: path), contents.isEmpty else {
+            return
+        }
         try? fileManager.removeItem(atPath: path)
     }
 }

@@ -28,6 +28,7 @@ RV_INSTALL_BIN=/path/to/dir-with-rv-and-rvd ./install.sh
 ```sh
 rv setup      # idempotent; honors process HOME only
 rv uninstall  # rv-owned files only
+rv doctor     # read-only service, pack, and Host adapter health
 ```
 
 `rv setup` writes only:
@@ -41,3 +42,9 @@ rv uninstall  # rv-owned files only
 Foreign hook files are left untouched. Occupied owned names are skipped. Hostless TTY setup prints `No hosts yet` then `Next  rv setup`. Non-TTY prints one line to run `rv setup` later.
 
 Do not run `install.sh` or `rv setup` from tests without overriding `HOME`.
+
+`rv doctor` reports service reachability/version, local fallback readiness,
+LaunchAgent state, day-one packs, and each Host adapter installation state.
+TTY output is one fact per line; `--robot` and non-TTY output are one JSON
+object. Host wiring warnings do not make doctor fail, but unreadable config,
+broken packs, or unavailable local fallback do.

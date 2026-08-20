@@ -8,9 +8,8 @@ Living board for implement sessions. Do **not** re-grill. Do **not** load `docs/
 
 | | Ticket | Notes |
 |---|---|---|
-| Done | T0–T6 | Scaffold through curl install + TTY setup show. Host adapters live. |
-| **Current** | **T7** | `rv doctor` (service + hosts + packs). Prompt: [`prompts/T7.md`](prompts/T7.md). Specs: `specs/phase-1c-service.md`, `specs/phase-1d-hosts.md`. Skill: `.grok/skills/swift-hook-xpc`. |
-| Next | T8 ∥ T9 | After T1 (already green): allow-once and pack catalog in parallel worktrees per PLAN. |
+| Done | T0–T7 | Scaffold through read-only `rv doctor`. Host adapters and service/pack/Host health reporting live. |
+| **Current** | **T8 ∥ T9** | After T1 (already green): allow-once and pack catalog in parallel worktrees per PLAN. |
 
 `docs/factory/PLAN.md` wins product-law conflicts. It is a conflict arbiter, not mandatory full session-start reading.
 
