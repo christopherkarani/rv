@@ -12,6 +12,8 @@ public struct RV: AsyncParsableCommand {
             Setup.self,
             Uninstall.self,
             Doctor.self,
+            AllowOnceCommand.self,
+            AllowlistCommand.self,
         ]
     )
 

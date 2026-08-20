@@ -1,0 +1,13 @@
+complete -c rv -f
+complete -c rv -n "__fish_use_subcommand" -a "test" -d "Evaluate a command"
+complete -c rv -n "__fish_use_subcommand" -a "explain" -d "Explain a decision"
+complete -c rv -n "__fish_use_subcommand" -a "allow-once" -d "Mint and redeem single-use unlock codes"
+complete -c rv -n "__fish_use_subcommand" -a "allowlist" -d "Manage permanent user-layer exceptions"
+complete -c rv -n "__fish_seen_subcommand_from allow-once" -a "mint" -d "Mint a code"
+complete -c rv -n "__fish_seen_subcommand_from allow-once" -a "list" -d "List rows"
+complete -c rv -n "__fish_seen_subcommand_from allow-once" -a "clear" -d "Clear rows"
+complete -c rv -n "__fish_seen_subcommand_from allowlist" -a "add" -d "Add rule"
+complete -c rv -n "__fish_seen_subcommand_from allowlist" -a "add-command" -d "Add exact command"
+complete -c rv -n "__fish_seen_subcommand_from allowlist" -a "list" -d "List"
+complete -c rv -n "__fish_seen_subcommand_from allowlist" -a "remove" -d "Remove"
+complete -c rv -n "__fish_seen_subcommand_from allowlist" -a "validate" -d "Validate"

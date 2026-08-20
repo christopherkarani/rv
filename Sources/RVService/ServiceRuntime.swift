@@ -101,7 +101,7 @@ public actor ServiceRuntime {
         return IPCResponse(id: request.id, result: result)
     }
 
-    public func insertGranted(matchingView: MatchingView, cwd: String, now: Date = Date()) async throws {
+    package func insertGranted(matchingView: MatchingView, cwd: String, now: Date = Date()) async throws {
         try await allowOnce.insertGranted(matchingView: matchingView, cwd: cwd, now: now)
     }
 

@@ -57,7 +57,7 @@ public struct ServiceClient: Sendable {
         )
     }
 
-    public func insertGranted(matchingView: MatchingView, cwd: String, now: Date = Date()) async throws {
+    package func insertGranted(matchingView: MatchingView, cwd: String, now: Date = Date()) async throws {
         try await store.insertGranted(matchingView: matchingView, cwd: cwd, now: now)
     }
 

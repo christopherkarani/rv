@@ -2,6 +2,7 @@ import Foundation
 import RVAnalytics
 import RVHooks
 import RVIPC
+import RVPolicy
 import RVPresentation
 
 struct SetupOutcome: Equatable, Sendable {
@@ -229,6 +230,10 @@ enum SetupRun {
             case .missing, .absentFile, .occupied:
                 break
             }
+        }
+        let configDir = URL(fileURLWithPath: layout.configDirectory, isDirectory: true)
+        for artifact in RVPolicyPaths.uninstallArtifacts(inConfigDir: configDir) {
+            removedPaths.append(artifact.path)
         }
         for path in removedPaths {
             files.removeFile(atPath: path)

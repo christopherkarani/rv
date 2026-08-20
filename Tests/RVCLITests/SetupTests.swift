@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import RVPolicy
 import RVPresentation
 @testable import RVCLI
 
@@ -213,6 +214,25 @@ private func realGrokHookURL() -> URL? {
         #expect(FileManager.default.fileExists(atPath: layout.grokDirectory + "/hooks/other.json"))
         #expect(FileManager.default.fileExists(atPath: layout.grokDirectory))
         #expect(launchctl.bootouts.contains(SetupRun.launchAgentLabel))
+    }
+}
+
+@Test func uninstall_removesPolicyArtifactsAndLocks() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(
+            atPath: layout.configDirectory,
+            withIntermediateDirectories: true
+        )
+        let configDir = URL(fileURLWithPath: layout.configDirectory, isDirectory: true)
+        for artifact in RVPolicyPaths.uninstallArtifacts(inConfigDir: configDir) {
+            try "x".write(to: artifact, atomically: true, encoding: .utf8)
+        }
+        let outcome = SetupRun.uninstall(env(home: home, launchctl: launchctl))
+        #expect(outcome.exitCode == 0)
+        for artifact in RVPolicyPaths.uninstallArtifacts(inConfigDir: configDir) {
+            #expect(FileManager.default.fileExists(atPath: artifact.path) == false)
+        }
+        #expect(FileManager.default.fileExists(atPath: layout.configDirectory) == false)
     }
 }
 
