@@ -190,7 +190,7 @@ private func isolatedStore() throws -> AllowOnceStore {
 }
 
 private func sabotageLock(in directory: URL) throws {
-    let lock = directory.appendingPathComponent(".allow-once.lock", isDirectory: false)
+    let lock = RVPolicyPaths.allowOnceLockFile(inConfigDir: directory)
     if FileManager.default.fileExists(atPath: lock.path) {
         try FileManager.default.removeItem(at: lock)
     }

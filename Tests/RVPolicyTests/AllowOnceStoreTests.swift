@@ -197,7 +197,7 @@ struct AllowOnceStoreTests {
         let store = try isolatedStore()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         try await store.insertGranted(matchingView: "git reset --hard", cwd: "/tmp/ws", now: now)
-        let lock = store.baseDirectory.appendingPathComponent(".allow-once.lock", isDirectory: false)
+        let lock = RVPolicyPaths.allowOnceLockFile(inConfigDir: store.baseDirectory)
         #expect(try posixMode(store.baseDirectory) == 0o700)
         #expect(try posixMode(jsonl(store)) == 0o600)
         #expect(try posixMode(lock) == 0o600)
@@ -370,7 +370,7 @@ private func jsonl(_ store: AllowOnceStore) -> URL {
 }
 
 private func sabotageLock(in directory: URL) throws {
-    let lock = directory.appendingPathComponent(".allow-once.lock", isDirectory: false)
+    let lock = RVPolicyPaths.allowOnceLockFile(inConfigDir: directory)
     if FileManager.default.fileExists(atPath: lock.path) {
         try FileManager.default.removeItem(at: lock)
     }
