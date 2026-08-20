@@ -1,4 +1,5 @@
 import Foundation
+import RVAnalytics
 import RVDomain
 import RVEngine
 import RVIPC
@@ -13,6 +14,7 @@ public actor ServiceRuntime {
     private var catalog: PackCatalog
     private let allowOnce: AllowOnceStore
     private let log: (any ServiceLog)?
+    private let analytics: AnalyticsCoordinator?
 
     public init(
         snapshots: [PackSnapshot]? = nil,
@@ -20,7 +22,8 @@ public actor ServiceRuntime {
         allowOnce: AllowOnceStore? = nil,
         allowOnceDirectory: URL? = nil,
         idleExitSeconds: Int = IdleWatchdog.defaultSeconds,
-        log: (any ServiceLog)? = nil
+        log: (any ServiceLog)? = nil,
+        analytics: AnalyticsCoordinator? = nil
     ) {
         let gated = GatedEvaluate(EvaluateSession(snapshots: snapshots))
         self.gated = gated
@@ -35,6 +38,7 @@ public actor ServiceRuntime {
         }
         self.idleExitSeconds = idleExitSeconds
         self.log = log
+        self.analytics = analytics
     }
 
     public func acknowledge(_ hello: Hello) -> HelloAck {
@@ -106,7 +110,28 @@ public actor ServiceRuntime {
     }
 
     private func runEvaluate(_ request: EvaluationRequest, cwd: String?) async -> EvaluationResult {
-        await gated.apply(request, cwd: cwd, store: allowOnce, now: Date())
+        let result = await gated.apply(request, cwd: cwd, store: allowOnce, now: Date())
+        recordAnalytics(for: result)
+        return result
+    }
+
+    private func recordAnalytics(for result: EvaluationResult) {
+        guard let analytics else { return }
+        let kind: AnalyticsDecisionKind
+        switch result.decision {
+        case .allow:
+            kind = .allow
+        case .deny:
+            kind = .deny
+        case .indeterminate:
+            kind = .indeterminate
+        }
+        let packs = catalog.records.filter(\.enabled).map(\.id.rawValue)
+        Task {
+            await analytics.recordDecision(kind)
+            await analytics.noteEnabledPacks(packs)
+            await analytics.flushDailyIfNeeded()
+        }
     }
 
     private func explain(_ params: ExplainParams) async -> ExplainReply {
@@ -198,6 +223,12 @@ public actor ServiceRuntime {
     private func setPackEnabled(_ params: SetPackEnabledParams) -> IPCResult {
         do {
             let updated = try catalog.setEnabled(id: params.id, enabled: params.enabled)
+            let packs = catalog.records.filter(\.enabled).map(\.id.rawValue)
+            if let analytics {
+                Task {
+                    await analytics.noteEnabledPacks(packs)
+                }
+            }
             return .setPackEnabled(
                 SetPackEnabledReply(
                     pack: PackRecord(id: updated.id, enabled: updated.enabled, bundled: updated.bundled)

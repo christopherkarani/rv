@@ -59,7 +59,7 @@ Each item below is real DCG-shaped work. Pulling any of it into v1 breaks the da
 - **Intel / older macOS.** A claimed matrix is test hardware, install artifacts, and support. v1 is macOS 26 Apple Silicon so “it runs here” is one sentence.
 - **History on-by-choice.** Persist is a privacy program (redaction, retention, path, enable UX). Shipping a default-on store in v1 violates the privacy law below. The module can exist later; the default cannot flip casually.
 
-v1 also refuses work that is easy to disguise as “later polish”: `RV_BYPASS`, allow-because-XPC-missed, foreign hook writes, live-HOME tests, telemetry, Seatbelt claims, or implementing inside ryk. Those stay forbidden after v1 too.
+v1 also refuses work that is easy to disguise as “later polish”: `RV_BYPASS`, allow-because-XPC-missed, foreign hook writes, live-HOME tests, Seatbelt claims, or implementing inside ryk. Those stay forbidden after v1 too. Anonymous product analytics is allowed only as `RVAnalytics` (opt-out, no command text / paths / secrets, never from host hooks).
 
 ## Contracts that must stay stable so later work is cheap
 
@@ -86,9 +86,10 @@ These are product law. Phase 4+ does not relax them.
 - **No command text in `os_log`.** Not argv, not the raw line, not a “debug” copy. Service and CLI logs may carry `rule_id`, `pack_id`, decision, host, and timing — not the command.
 - **No raw secrets.** When history is on, persist redacted records only. Tokens, keys, passwords, and secret-shaped flags do not hit disk. Full command text remains a TTY `explain` / `test` privilege, not a log or history default.
 - **`RVHistory` must not log full argv** as a side effect of evaluate. Evaluate stays pure relative to persistence; history is an explicit, disabled-by-default adapter.
-- **No telemetry, SaaS, or network install of packs** — later or not.
+- **Anonymous product analytics may be opt-out** via `RVAnalytics` / PostHog: installs, DAU, host wired state, allow/deny counts, pack enablement, version, macOS build. Never command text, paths, or secrets. Never from host hook processes. Network install of packs stays forbidden.
+- **No network install of packs** — later or not.
 
-Default-off is the privacy feature. The later work is the opt-in path, not a new default.
+Default-off remains the history privacy feature. Analytics is a separate, opt-out product counter surface; disclosure UX can land later via `AnalyticsNotice` without changing transport.
 
 ## Open questions
 
