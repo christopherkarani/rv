@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Testing
 @testable import RVPolicy
@@ -94,6 +95,40 @@ struct AllowOnceStoreTests {
         }
         #expect(consumed.count == 1)
         #expect(results.contains(.alreadyConsumed))
+        #expect(results.allSatisfy { status in
+            switch status {
+            case .consumed, .alreadyConsumed:
+                return true
+            case .notFound, .expired, .unavailable:
+                return false
+            }
+        })
+    }
+
+    /// Two processes, one grant. `rv test` peeks; `rv hook` prefers XPC and will not
+    /// spend an isolated-HOME grant while rvd is up. No consume CLI (T8: no new module).
+    /// Children re-exec this test host and call `AllowOnceStore.consume` on the same dir.
+    @Test func concurrentConsumeAcrossProcessesWinsOnce() async throws {
+        if try await AllowOnceConsumeProbe.runIfRequested() {
+            exit(0)
+        }
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-allow-once-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let writer = AllowOnceStore(baseDirectory: root)
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        try await writer.insertGranted(matchingView: "git reset --hard", cwd: "/tmp/ws", now: now)
+        let runner = try #require(testHostExecutableURL())
+        let processA = try startConsumeProbe(executable: runner, directory: root, outputName: "a.status")
+        let processB = try startConsumeProbe(executable: runner, directory: root, outputName: "b.status")
+        processA.waitUntilExit()
+        processB.waitUntilExit()
+        let statusA = try readProbeStatus(directory: root, outputName: "a.status", process: processA)
+        let statusB = try readProbeStatus(directory: root, outputName: "b.status", process: processB)
+        let lines = [statusA, statusB]
+        #expect(lines.filter { $0 == "consumed" }.count == 1)
+        #expect(lines.filter { $0 == "alreadyConsumed" }.count == 1)
+        #expect(lines.allSatisfy { $0 == "consumed" || $0 == "alreadyConsumed" })
     }
 
     @Test func wrongCwdDoesNotConsume() async throws {
@@ -107,6 +142,26 @@ struct AllowOnceStoreTests {
             Issue.record("matching cwd should consume")
             return
         }
+    }
+
+    @Test func missingFileIsNotFoundNotUnavailable() async throws {
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        #expect(
+            await store.consume(matchingView: "git reset --hard", cwd: "/tmp/ws", now: now)
+                == .notFound
+        )
+    }
+
+    @Test func lockFailureIsUnavailable() async throws {
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        try await store.insertGranted(matchingView: "git reset --hard", cwd: "/tmp/ws", now: now)
+        try sabotageLock(in: store.baseDirectory)
+        #expect(
+            await store.consume(matchingView: "git reset --hard", cwd: "/tmp/ws", now: now)
+                == .unavailable
+        )
     }
 
     @Test func expiredGrantIsExpired() async throws {
@@ -142,8 +197,10 @@ struct AllowOnceStoreTests {
         let store = try isolatedStore()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         try await store.insertGranted(matchingView: "git reset --hard", cwd: "/tmp/ws", now: now)
+        let lock = RVPolicyPaths.allowOnceLockFile(inConfigDir: store.baseDirectory)
         #expect(try posixMode(store.baseDirectory) == 0o700)
         #expect(try posixMode(jsonl(store)) == 0o600)
+        #expect(try posixMode(lock) == 0o600)
     }
 
     @Test func configDirIgnoresXDG() async throws {
@@ -179,6 +236,128 @@ struct AllowOnceStoreTests {
     }
 }
 
+private enum AllowOnceConsumeProbe {
+    static let storeDirEnv = "RV_ALLOW_ONCE_CONSUME_PROBE"
+    static let outputEnv = "RV_ALLOW_ONCE_CONSUME_OUT"
+
+    static func runIfRequested() async throws -> Bool {
+        let env = ProcessInfo.processInfo.environment
+        guard let storeDir = env[storeDirEnv], storeDir.isEmpty == false,
+              let outputName = env[outputEnv], outputName.isEmpty == false
+        else {
+            return false
+        }
+        let root = URL(fileURLWithPath: storeDir, isDirectory: true)
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let store = AllowOnceStore(baseDirectory: root)
+        let status = await store.consume(
+            matchingView: "git reset --hard",
+            cwd: "/tmp/ws",
+            now: now
+        )
+        let line: String
+        switch status {
+        case .consumed:
+            line = "consumed"
+        case .alreadyConsumed:
+            line = "alreadyConsumed"
+        case .notFound:
+            line = "notFound"
+        case .expired:
+            line = "expired"
+        case .unavailable:
+            line = "unavailable"
+        }
+        try line.write(
+            to: root.appendingPathComponent(outputName),
+            atomically: true,
+            encoding: .utf8
+        )
+        return true
+    }
+}
+
+private func testHostExecutableURL() -> URL? {
+    let argv0 = URL(fileURLWithPath: CommandLine.arguments[0])
+    if FileManager.default.isExecutableFile(atPath: argv0.path) {
+        return argv0
+    }
+    if let url = Bundle.main.executableURL,
+       FileManager.default.isExecutableFile(atPath: url.path)
+    {
+        return url
+    }
+    return nil
+}
+
+private func consumeProbeChildArguments() -> [String] {
+    let original = Array(CommandLine.arguments.dropFirst())
+    let usesSwiftTestingCLI = original.contains { arg in
+        arg == "--filter"
+            || arg.hasPrefix("--filter=")
+            || arg == "--testing-library"
+            || arg.hasPrefix("--testing-library=")
+    }
+    guard usesSwiftTestingCLI else {
+        return original
+    }
+    var args: [String] = []
+    var index = original.startIndex
+    while index < original.endIndex {
+        let arg = original[index]
+        if arg == "--filter" || arg == "--skip" {
+            index = original.index(after: index)
+            if index < original.endIndex {
+                index = original.index(after: index)
+            }
+            continue
+        }
+        if arg.hasPrefix("--filter=") || arg.hasPrefix("--skip=") {
+            index = original.index(after: index)
+            continue
+        }
+        args.append(arg)
+        index = original.index(after: index)
+    }
+    args.append(contentsOf: ["--filter", "concurrentConsumeAcrossProcessesWinsOnce"])
+    return args
+}
+
+private func startConsumeProbe(
+    executable: URL,
+    directory: URL,
+    outputName: String
+) throws -> Process {
+    let errURL = directory.appendingPathComponent("\(outputName).err")
+    FileManager.default.createFile(atPath: errURL.path, contents: Data())
+    let process = Process()
+    process.executableURL = executable
+    process.arguments = consumeProbeChildArguments()
+    var environment = ProcessInfo.processInfo.environment
+    environment[AllowOnceConsumeProbe.storeDirEnv] = directory.path
+    environment[AllowOnceConsumeProbe.outputEnv] = outputName
+    process.environment = environment
+    process.standardInput = FileHandle.nullDevice
+    process.standardOutput = FileHandle.nullDevice
+    process.standardError = try FileHandle(forWritingTo: errURL)
+    try process.run()
+    return process
+}
+
+private func readProbeStatus(directory: URL, outputName: String, process: Process) throws -> String {
+    let url = directory.appendingPathComponent(outputName)
+    if FileManager.default.fileExists(atPath: url.path) == false {
+        let errURL = directory.appendingPathComponent("\(outputName).err")
+        let err = (try? String(contentsOf: errURL, encoding: .utf8)) ?? ""
+        Issue.record(
+            "consume probe \(outputName) missing after exit \(process.terminationStatus). stderr: \(err)"
+        )
+    }
+    try #require(FileManager.default.fileExists(atPath: url.path))
+    return try String(contentsOf: url, encoding: .utf8)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
 private func isolatedStore() throws -> AllowOnceStore {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-allow-once-\(UUID().uuidString)", isDirectory: true)
@@ -188,6 +367,14 @@ private func isolatedStore() throws -> AllowOnceStore {
 
 private func jsonl(_ store: AllowOnceStore) -> URL {
     RVPolicyPaths.allowOnceFile(inConfigDir: store.baseDirectory)
+}
+
+private func sabotageLock(in directory: URL) throws {
+    let lock = RVPolicyPaths.allowOnceLockFile(inConfigDir: directory)
+    if FileManager.default.fileExists(atPath: lock.path) {
+        try FileManager.default.removeItem(at: lock)
+    }
+    try FileManager.default.createDirectory(at: lock, withIntermediateDirectories: false)
 }
 
 private func posixMode(_ url: URL) throws -> Int {
