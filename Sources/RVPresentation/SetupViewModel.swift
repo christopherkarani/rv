@@ -107,21 +107,10 @@ public func setupViewModel(
     return .painted(
         SetupViewModel(
             slots: SetupHostKind.allCases.map { host in
-                SetupSlotView(host: host, kind: kind(host), clause: clause(host: host, kind: kind(host)))
+                SetupSlotView(host: host, kind: kind(host), clause: setupSlotClause(host: host, kind: kind(host)))
             },
             activity: lastWired.map { "wiring \($0.displayName)" } ?? setupLookingActivity,
             closer: closer
         )
     )
-}
-
-private func clause(host: SetupHostKind, kind: SetupSlotKind) -> String? {
-    switch kind {
-    case .wired where host == .grok:
-        return setupGrokReloadClause
-    case .occupied:
-        return setupOccupiedClause
-    case .pending, .wired:
-        return nil
-    }
 }

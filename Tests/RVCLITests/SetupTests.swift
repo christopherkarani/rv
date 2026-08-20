@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import RVAnalytics
 import RVPolicy
 import RVPresentation
 @testable import RVCLI
@@ -123,6 +124,66 @@ private func realGrokHookURL() -> URL? {
     }
 }
 
+@Test func setup_force_replacesOccupiedOwnedNameAndKeepsBackup() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(
+            atPath: layout.grokDirectory + "/hooks",
+            withIntermediateDirectories: true
+        )
+        let foreign = "{\"hooks\":[]}\n"
+        try foreign.write(toFile: layout.grokHook, atomically: true, encoding: .utf8)
+
+        let outcome = SetupRun.setup(env(home: home, launchctl: launchctl), force: true)
+
+        #expect(outcome.exitCode == 0)
+        #expect(outcome.stdout.contains("Skipped occupied grok hook.") == false)
+        let wired = try String(contentsOfFile: layout.grokHook, encoding: .utf8)
+        #expect(wired == (try SetupHostKind.grok.adapterResource().rendered(rvPath: "/tmp/rv-bin/rv")))
+        let backup = try String(contentsOfFile: layout.grokHook + ".bak", encoding: .utf8)
+        #expect(backup == foreign)
+    }
+}
+
+@Test func setup_force_replacesOccupiedSymlinkWithoutLeavingLink() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(
+            atPath: layout.grokDirectory + "/hooks",
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createSymbolicLink(
+            atPath: layout.grokHook,
+            withDestinationPath: "/nonexistent/foreign-adapter"
+        )
+
+        let outcome = SetupRun.setup(env(home: home, launchctl: launchctl), force: true)
+
+        #expect(outcome.exitCode == 0)
+        #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: layout.grokHook)) == nil)
+        let wired = try String(contentsOfFile: layout.grokHook, encoding: .utf8)
+        #expect(wired == (try SetupHostKind.grok.adapterResource().rendered(rvPath: "/tmp/rv-bin/rv")))
+        #expect(FileManager.default.fileExists(atPath: layout.grokHook + ".bak") == false)
+    }
+}
+
+@Test func setup_force_leavesForeignSiblingUntouched() throws {
+    try withTempHome { home, layout, launchctl in
+        let hooks = layout.grokDirectory + "/hooks"
+        try FileManager.default.createDirectory(atPath: hooks, withIntermediateDirectories: true)
+        let sibling = hooks + "/other.json"
+        try "{\"foreign\":true}\n".write(toFile: sibling, atomically: true, encoding: .utf8)
+        try "{\"hooks\":[]}\n".write(toFile: layout.grokHook, atomically: true, encoding: .utf8)
+
+        let outcome = SetupRun.setup(env(home: home, launchctl: launchctl), force: true)
+
+        #expect(outcome.exitCode == 0)
+        #expect(try String(contentsOfFile: sibling, encoding: .utf8) == "{\"foreign\":true}\n")
+        #expect(
+            try String(contentsOfFile: layout.grokHook, encoding: .utf8)
+                == (try SetupHostKind.grok.adapterResource().rendered(rvPath: "/tmp/rv-bin/rv"))
+        )
+    }
+}
+
 @Test func setup_danglingSymlinkAtOwnedNameIsOccupiedAndPreserved() throws {
     try withTempHome { home, layout, launchctl in
         try FileManager.default.createDirectory(
@@ -236,6 +297,26 @@ private func realGrokHookURL() -> URL? {
     }
 }
 
+@Test func uninstall_removesAnalyticsConfigJson() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(
+            atPath: layout.configDirectory,
+            withIntermediateDirectories: true
+        )
+        let configDir = URL(fileURLWithPath: layout.configDirectory, isDirectory: true)
+        let analytics = AnalyticsPaths(configDirectory: configDir)
+        for artifact in analytics.uninstallArtifacts {
+            try "x".write(to: artifact, atomically: true, encoding: .utf8)
+        }
+        let outcome = SetupRun.uninstall(env(home: home, launchctl: launchctl))
+        #expect(outcome.exitCode == 0)
+        for artifact in analytics.uninstallArtifacts {
+            #expect(FileManager.default.fileExists(atPath: artifact.path) == false)
+        }
+        #expect(FileManager.default.fileExists(atPath: layout.configDirectory) == false)
+    }
+}
+
 @Test func uninstall_preservesForeignContentInPreexistingConfigDirectory() throws {
     try withTempHome { home, layout, launchctl in
         try FileManager.default.createDirectory(
@@ -296,6 +377,8 @@ private func realGrokHookURL() -> URL? {
         let second = SetupRun.uninstall(env(home: home, launchctl: launchctl))
         #expect(first.exitCode == 0)
         #expect(second.exitCode == 0)
+        #expect(first.stdout == SetupRun.uninstallAlreadyCleanLine + "\n")
+        #expect(second.stdout == SetupRun.uninstallAlreadyCleanLine + "\n")
     }
 }
 

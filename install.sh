@@ -41,4 +41,4 @@ cp "$src/rv" "$bin/rv"
 cp "$src/rvd" "$bin/rvd"
 chmod 755 "$bin/rv" "$bin/rvd"
 
-exec "$bin/rv" setup
+RV_FROM_INSTALL=1 exec "$bin/rv" setup
