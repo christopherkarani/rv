@@ -22,7 +22,10 @@ package struct HostAdapterResource: Sendable {
 
     /// Returns the adapter source with the rv-binary placeholder replaced by `rvPath`.
     package func rendered(rvPath: String) -> String {
-        template.replacingOccurrences(of: HostAdapterResources.rvPlaceholder, with: rvPath)
+        template.replacingOccurrences(
+            of: HostAdapterResources.rvPlaceholder,
+            with: HostAdapterString.escape(rvPath)
+        )
     }
 
     /// Returns the rv path baked into `existing`, or `nil` when it is not this adapter.
@@ -41,12 +44,49 @@ package struct HostAdapterResource: Sendable {
             substitution = String(afterPrefix[..<range.lowerBound])
         }
         guard parts.joined(separator: substitution) == existing else { return nil }
-        return substitution
+        return HostAdapterString.unescape(substitution)
     }
 
     /// True when `existing` is this adapter with any single baked rv path.
     package func matchesCurrent(_ existing: String) -> Bool {
         bakedRvPath(in: existing) != nil
+    }
+}
+
+/// Escapes filesystem paths as JSON / JS double-quoted string *contents*
+/// (no surrounding quotes). Shared by Grok JSON and Pi/OpenCode literals.
+enum HostAdapterString {
+    static func escape(_ value: String) -> String {
+        guard let data = try? JSONSerialization.data(
+            withJSONObject: value,
+            options: [.fragmentsAllowed]
+        ),
+            let encoded = String(data: data, encoding: .utf8),
+            encoded.count >= 2,
+            encoded.first == "\"",
+            encoded.last == "\""
+        else {
+            preconditionFailure("JSONSerialization must encode String")
+        }
+        // Foundation may emit `\/`; JSON and JS both treat `/` as unescaped.
+        // Keep ordinary paths byte-identical to pre-escape installs.
+        return String(encoded.dropFirst().dropLast())
+            .replacingOccurrences(of: "\\/", with: "/")
+    }
+
+    static func unescape(_ value: String) -> String? {
+        var quoted = "\""
+        quoted.append(value)
+        quoted.append("\"")
+        guard let data = quoted.data(using: .utf8),
+              let decoded = try? JSONSerialization.jsonObject(
+                  with: data,
+                  options: [.fragmentsAllowed]
+              ) as? String
+        else {
+            return nil
+        }
+        return decoded
     }
 }
 

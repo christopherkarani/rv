@@ -1,3 +1,4 @@
+import Foundation
 import RVHooks
 import Testing
 
@@ -36,4 +37,77 @@ func hostAdapter_bakedRvPath_rejectsModifiedAndForeignBytes(host: HookHost) thro
     #expect(pi.matchesCurrent(piBody))
     #expect(openCode.matchesCurrent(piBody) == false)
     #expect(pi.matchesCurrent(openCode.rendered(rvPath: "/opt/rv")) == false)
+}
+
+@Test func hostAdapter_quotedPath_grokJSONIsValidAndBakesOriginalPath() throws {
+    let path = #"/tmp/rv-"bin"/rv"#
+    let adapter = try HostAdapterResources.load(for: .grok)
+    let body = adapter.rendered(rvPath: path)
+    let json = try JSONSerialization.jsonObject(with: Data(body.utf8))
+    let command = try grokHookCommand(json)
+    #expect(command == path + " hook --host grok")
+    #expect(adapter.matchesCurrent(body))
+    #expect(adapter.bakedRvPath(in: body) == path)
+}
+
+@Test func hostAdapter_quotedPath_piAndOpenCodeBakeOriginalPath() throws {
+    let path = #"/tmp/rv-"bin"/rv"#
+    for host in [HookHost.pi, .opencode] {
+        let adapter = try HostAdapterResources.load(for: host)
+        let body = adapter.rendered(rvPath: path)
+        #expect(adapter.matchesCurrent(body))
+        #expect(adapter.bakedRvPath(in: body) == path)
+        #expect(jsBinaryLiteral(in: body) == path)
+    }
+}
+
+@Test(arguments: [HookHost.grok, .pi, .opencode])
+func hostAdapter_controlAndBackslashPath_roundTrips(host: HookHost) throws {
+    let path = "/tmp/rv-\t\"bin\"\\\r/rv"
+    let adapter = try HostAdapterResources.load(for: host)
+    let body = adapter.rendered(rvPath: path)
+    #expect(adapter.bakedRvPath(in: body) == path)
+    #expect(adapter.matchesCurrent(body))
+    if host == .grok {
+        let json = try JSONSerialization.jsonObject(with: Data(body.utf8))
+        #expect(try grokHookCommand(json) == path + " hook --host grok")
+    } else {
+        #expect(jsBinaryLiteral(in: body) == path)
+    }
+}
+
+private func grokHookCommand(_ json: Any) throws -> String {
+    let root = try #require(json as? [String: Any])
+    let hooks = try #require(root["hooks"] as? [String: Any])
+    let pre = try #require(hooks["PreToolUse"] as? [[String: Any]])
+    let first = try #require(pre.first)
+    let inner = try #require(first["hooks"] as? [[String: Any]])
+    let command = try #require(inner.first?["command"] as? String)
+    return command
+}
+
+private func jsBinaryLiteral(in body: String) -> String? {
+    let marker = "const RV_BINARY = "
+    guard let start = body.range(of: marker) else { return nil }
+    let rest = body[start.upperBound...]
+    guard rest.first == "\"" else { return nil }
+    var decoded = ""
+    var chars = rest.dropFirst().makeIterator()
+    while let ch = chars.next() {
+        if ch == "\"" { return decoded }
+        if ch == "\\" {
+            guard let next = chars.next() else { return nil }
+            switch next {
+            case "\"": decoded.append("\"")
+            case "\\": decoded.append("\\")
+            case "n": decoded.append("\n")
+            case "r": decoded.append("\r")
+            case "t": decoded.append("\t")
+            default: return nil
+            }
+        } else {
+            decoded.append(ch)
+        }
+    }
+    return nil
 }
