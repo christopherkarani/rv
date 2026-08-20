@@ -180,9 +180,14 @@ enum SetupRun {
             "pi": analyticsStatus(report.pi),
             "opencode": analyticsStatus(report.openCode),
         ]
+        // Setup is a short-lived CLI process; await delivery before exit.
+        let group = DispatchGroup()
+        group.enter()
         Task {
             await coordinator.captureInstall(hosts: hosts)
+            group.leave()
         }
+        _ = group.wait(timeout: .now() + .seconds(10))
     }
 
     private static func analyticsStatus(_ kind: SetupSlotKind) -> String {

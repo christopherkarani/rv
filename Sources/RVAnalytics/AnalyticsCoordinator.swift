@@ -80,20 +80,24 @@ public actor AnalyticsCoordinator {
         persistState()
     }
 
-    public func captureInstall(hosts: [String: String], now: Date = Date()) async {
+    public func captureInstall(hosts: [String: String]) async {
         guard preferences.isEnabled else { return }
         guard installSent == false else {
             noteHosts(hosts)
             return
         }
-        _ = now
         noteHosts(hosts)
-        await sink.capture(makePayload(event: AnalyticsPayload.installEvent, extra: [:]))
+        let delivered = await sink.capture(
+            makePayload(event: AnalyticsPayload.installEvent, extra: [:])
+        )
+        guard delivered else { return }
         installSent = true
         try? Data("1".utf8).write(to: paths.installSentFile, options: .atomic)
     }
 
     /// Emits `daily_active` at most once per calendar day (local), then resets counters.
+    /// On transport failure, counters are kept and the day is still stamped so rvd does
+    /// not retry on every evaluate; residual counts ride the next successful flush day.
     public func flushDailyIfNeeded(now: Date = Date()) async {
         guard preferences.isEnabled else { return }
         let day = Self.dayString(now)
@@ -107,11 +111,15 @@ public actor AnalyticsCoordinator {
         for (host, status) in state.hosts {
             extra["host_\(host)"] = .string(status)
         }
-        await sink.capture(makePayload(event: AnalyticsPayload.dailyActiveEvent, extra: extra))
-        state.allowCount = 0
-        state.denyCount = 0
-        state.indeterminateCount = 0
+        let delivered = await sink.capture(
+            makePayload(event: AnalyticsPayload.dailyActiveEvent, extra: extra)
+        )
         state.lastFlushDay = day
+        if delivered {
+            state.allowCount = 0
+            state.denyCount = 0
+            state.indeterminateCount = 0
+        }
         persistState()
     }
 
@@ -177,7 +185,7 @@ public actor AnalyticsCoordinator {
 }
 
 public enum AnalyticsBootstrap {
-    /// Live coordinator for setup / rvd. Returns nil when HOME is missing.
+    /// Live coordinator for setup / rvd. Returns nil when HOME is missing or analytics is opted out.
     public static func live(
         productVersion: String,
         sink: (any AnalyticsSink)? = nil,
@@ -187,6 +195,9 @@ public enum AnalyticsBootstrap {
             return nil
         }
         let preferences = AnalyticsPreferences.load(from: paths)
+        guard preferences.isEnabled else {
+            return nil
+        }
         let identity: AnalyticsIdentity
         do {
             identity = try AnalyticsIdentity.loadOrCreate(in: paths)
@@ -196,8 +207,6 @@ public enum AnalyticsBootstrap {
         let resolvedSink: any AnalyticsSink
         if let sink {
             resolvedSink = sink
-        } else if preferences.isEnabled == false {
-            resolvedSink = NoOpAnalyticsSink()
         } else {
             let key = AnalyticsCredentials.apiKey(environment: environment)
             if key.isEmpty {

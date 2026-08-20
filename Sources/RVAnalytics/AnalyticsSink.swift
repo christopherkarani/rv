@@ -1,14 +1,16 @@
 import Foundation
 
 public protocol AnalyticsSink: Sendable {
-    func capture(_ payload: AnalyticsPayload) async
+    /// Returns `true` only when the event was accepted by the transport.
+    func capture(_ payload: AnalyticsPayload) async -> Bool
 }
 
 public struct NoOpAnalyticsSink: AnalyticsSink {
     public init() {}
 
-    public func capture(_ payload: AnalyticsPayload) async {
+    public func capture(_ payload: AnalyticsPayload) async -> Bool {
         _ = payload
+        return false
     }
 }
 
@@ -48,11 +50,16 @@ public struct PostHogSink: AnalyticsSink {
         self.poster = poster
     }
 
-    public func capture(_ payload: AnalyticsPayload) async {
-        guard apiKey.isEmpty == false else { return }
-        guard let body = try? Self.encodeBatch(apiKey: apiKey, payload: payload) else { return }
+    public func capture(_ payload: AnalyticsPayload) async -> Bool {
+        guard apiKey.isEmpty == false else { return false }
+        guard let body = try? Self.encodeBatch(apiKey: apiKey, payload: payload) else { return false }
         let url = host.appendingPathComponent("batch/")
-        try? await poster.post(url: url, body: body, contentType: "application/json")
+        do {
+            try await poster.post(url: url, body: body, contentType: "application/json")
+            return true
+        } catch {
+            return false
+        }
     }
 
     package static func encodeBatch(apiKey: String, payload: AnalyticsPayload) throws -> Data {

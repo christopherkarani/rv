@@ -33,6 +33,30 @@ struct AnalyticsIdentityTests {
     }
 }
 
+@Suite("AnalyticsBootstrap")
+struct AnalyticsBootstrapTests {
+    @Test func optedOutDoesNotCreateIdentity() throws {
+        let fakeHome = try temporaryConfigRoot()
+        let configDir = fakeHome
+            .appendingPathComponent(".config", isDirectory: true)
+            .appendingPathComponent("rv", isDirectory: true)
+        try FileManager.default.createDirectory(at: configDir, withIntermediateDirectories: true)
+        try Data(#"{"analytics":{"enabled":false}}"#.utf8).write(
+            to: configDir.appendingPathComponent("config.json", isDirectory: false)
+        )
+        let result = AnalyticsBootstrap.live(
+            productVersion: "1.0.0",
+            environment: ["HOME": fakeHome.path]
+        )
+        #expect(result == nil)
+        #expect(
+            FileManager.default.fileExists(
+                atPath: configDir.appendingPathComponent("analytics-id").path
+            ) == false
+        )
+    }
+}
+
 @Suite("PostHogSink")
 struct PostHogSinkTests {
     @Test func encodesBatchWithoutCommandFields() throws {
@@ -60,10 +84,11 @@ struct PostHogSinkTests {
     @Test func emptyAPIKeyIsNoOp() async {
         let poster = RecordingHTTPPoster()
         let sink = PostHogSink(apiKey: "", poster: poster)
-        await sink.capture(
+        let delivered = await sink.capture(
             AnalyticsPayload(event: "install", distinctID: "x")
         )
         let count = await poster.count
+        #expect(delivered == false)
         #expect(count == 0)
     }
 }
@@ -82,14 +107,14 @@ struct AnalyticsCoordinatorTests {
             productVersion: "1.0.0",
             platform: PlatformSnapshot(macosVersion: "26.0.0", macosBuild: "25A354")
         )
-        await coordinator.captureInstall(hosts: ["grok": "wired", "pi": "pending"], now: day(2026, 8, 20))
+        await coordinator.captureInstall(hosts: ["grok": "wired", "pi": "pending"])
         await coordinator.recordDecision(.allow)
         await coordinator.recordDecision(.deny)
         await coordinator.noteEnabledPacks(["core.git", "core.filesystem"])
         await coordinator.flushDailyIfNeeded(now: day(2026, 8, 20))
         await coordinator.flushDailyIfNeeded(now: day(2026, 8, 20))
         await coordinator.recordDecision(.allow)
-        await coordinator.captureInstall(hosts: ["grok": "wired"], now: day(2026, 8, 21))
+        await coordinator.captureInstall(hosts: ["grok": "wired"])
         await coordinator.flushDailyIfNeeded(now: day(2026, 8, 21))
 
         let events = await sink.events
@@ -104,6 +129,68 @@ struct AnalyticsCoordinatorTests {
         #expect(daily.properties["host_grok"] == .string("wired"))
         #expect(daily.properties["enabled_packs"] == .strings(["core.filesystem", "core.git"]))
         #expect(events[2].properties["allow_count"] == .int(1))
+    }
+
+    @Test func failedInstallDoesNotMarkSent() async throws {
+        let root = try temporaryConfigRoot()
+        let paths = AnalyticsPaths(configDirectory: root)
+        let sink = FailingAnalyticsSink()
+        let coordinator = AnalyticsCoordinator(
+            paths: paths,
+            preferences: .optOutDefault,
+            identity: AnalyticsIdentity(distinctID: "user-1"),
+            sink: sink,
+            productVersion: "1.0.0",
+            platform: PlatformSnapshot(macosVersion: "26.0.0", macosBuild: "25A354")
+        )
+        await coordinator.captureInstall(hosts: ["grok": "wired"])
+        #expect(FileManager.default.fileExists(atPath: paths.installSentFile.path) == false)
+
+        let okSink = RecordingAnalyticsSink()
+        let retry = AnalyticsCoordinator(
+            paths: paths,
+            preferences: .optOutDefault,
+            identity: AnalyticsIdentity(distinctID: "user-1"),
+            sink: okSink,
+            productVersion: "1.0.0",
+            platform: PlatformSnapshot(macosVersion: "26.0.0", macosBuild: "25A354")
+        )
+        await retry.captureInstall(hosts: ["grok": "wired"])
+        let events = await okSink.events
+        #expect(events.map(\.event) == [AnalyticsPayload.installEvent])
+        #expect(FileManager.default.fileExists(atPath: paths.installSentFile.path))
+    }
+
+    @Test func failedFlushKeepsCounters() async throws {
+        let root = try temporaryConfigRoot()
+        let paths = AnalyticsPaths(configDirectory: root)
+        let sink = FailingAnalyticsSink()
+        let coordinator = AnalyticsCoordinator(
+            paths: paths,
+            preferences: .optOutDefault,
+            identity: AnalyticsIdentity(distinctID: "user-1"),
+            sink: sink,
+            productVersion: "1.0.0",
+            platform: PlatformSnapshot(macosVersion: "26.0.0", macosBuild: "25A354")
+        )
+        await coordinator.recordDecision(.allow)
+        await coordinator.recordDecision(.deny)
+        await coordinator.flushDailyIfNeeded(now: day(2026, 8, 20))
+
+        let okSink = RecordingAnalyticsSink()
+        let next = AnalyticsCoordinator(
+            paths: paths,
+            preferences: .optOutDefault,
+            identity: AnalyticsIdentity(distinctID: "user-1"),
+            sink: okSink,
+            productVersion: "1.0.0",
+            platform: PlatformSnapshot(macosVersion: "26.0.0", macosBuild: "25A354")
+        )
+        await next.flushDailyIfNeeded(now: day(2026, 8, 21))
+        let events = await okSink.events
+        #expect(events.count == 1)
+        #expect(events[0].properties["allow_count"] == .int(1))
+        #expect(events[0].properties["deny_count"] == .int(1))
     }
 
     @Test func disabledSkipsCapture() async throws {
@@ -137,8 +224,16 @@ struct AnalyticsNoticeTests {
 actor RecordingAnalyticsSink: AnalyticsSink {
     private(set) var events: [AnalyticsPayload] = []
 
-    func capture(_ payload: AnalyticsPayload) async {
+    func capture(_ payload: AnalyticsPayload) async -> Bool {
         events.append(payload)
+        return true
+    }
+}
+
+actor FailingAnalyticsSink: AnalyticsSink {
+    func capture(_ payload: AnalyticsPayload) async -> Bool {
+        _ = payload
+        return false
     }
 }
 
