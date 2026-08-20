@@ -40,13 +40,13 @@ Hexagonal. Engine never imports CLI, TUI, or XPC. Each module: small public API,
 | **RVEngine** | normalize, quick-reject, safe then destructive, deadline, `PatternEngine` | pack files, hooks |
 | **RVPacks** | registry, bundled JSON, enable/disable | decisions, rendering |
 | **RVPolicy** | config merge, allowlist, allow-once | rendering |
-| **RVHooks** | **Pi / Grok / OpenCode** shell codecs only in v1 | evaluation |
+| **RVHooks** | **Pi / Grok / OpenCode** Host adapters: shell codecs, Hook mapper/voice, embedded adapter resources | evaluation, setup mutations |
 | **RVIPC** | `rv.ipc.v1` Codable | transport details |
 | **RVService** | XPC listener, warm registry, launchd | ArgumentParser, SwiftUI |
 | **RVPresentation** | deny/explain/packs/doctor view models | ANSI |
 | **RVTheme** | palettes, pure capability detect | business rules |
 | **RVTUI** | browse kit, `render` → `[String]`, key map | opening a TTY |
-| **RVCLI** | ArgumentParser, output mode, thin XPC client, fallback | regex, pack parse |
+| **RVCLI** | ArgumentParser, output mode, thin XPC client, fallback, Host adapter setup mutations | regex, pack parse |
 | **RVHistory** | later; off by default | logging full argv |
 
 **Dependency law:** arrows down. A test that needs a TTY to prove a **decision** is in the wrong module.

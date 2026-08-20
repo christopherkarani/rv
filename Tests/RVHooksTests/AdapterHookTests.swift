@@ -1,4 +1,5 @@
 import Foundation
+import RVHooks
 import Testing
 
 private let resetHardReason =
@@ -6,16 +7,8 @@ private let resetHardReason =
 private let incompleteReason =
     "rv could not finish evaluating this command. Run it in Terminal."
 
-private func repoRoot() -> URL {
-    URL(fileURLWithPath: #filePath)
-        .deletingLastPathComponent()
-        .deletingLastPathComponent()
-        .deletingLastPathComponent()
-}
-
-private func adapterTemplate(_ name: String) throws -> String {
-    let url = repoRoot().appendingPathComponent("Sources/RVCLI/Resources/hosts/\(name)")
-    return try String(contentsOf: url, encoding: .utf8)
+private func adapterSource(for host: HookHost, rvPath: String) throws -> String {
+    try HostAdapterResources.load(for: host).rendered(rvPath: rvPath)
 }
 
 private func harnessURL() -> URL {
@@ -24,8 +17,20 @@ private func harnessURL() -> URL {
         .appendingPathComponent("Fixtures/adapters/harness.mjs")
 }
 
+@Test func grokTemplate_bakesRvPathIntoBashMatcher() throws {
+    let source = try adapterSource(for: .grok, rvPath: "/opt/rv")
+    let object = try JSONSerialization.jsonObject(with: Data(source.utf8))
+    let root = try #require(object as? [String: Any])
+    let hooks = try #require(root["hooks"] as? [String: Any])
+    let preToolUse = try #require(hooks["PreToolUse"] as? [[String: Any]])
+    let entry = try #require(preToolUse.first)
+    #expect(entry["matcher"] as? String == "Bash")
+    let commands = try #require(entry["hooks"] as? [[String: Any]])
+    #expect(commands.first?["command"] as? String == "/opt/rv hook --host grok")
+}
+
 @Test func piTemplate_registersToolCallAndDisplayOnlyRenderer() throws {
-    let source = try adapterTemplate("rv-guard.ts.tmpl")
+    let source = try adapterSource(for: .pi, rvPath: "/opt/rv")
     #expect(source.contains("pi.on(\"tool_call\""))
     #expect(source.contains("registerMessageRenderer"))
     #expect(source.contains("rv-decision"))
@@ -46,7 +51,7 @@ private func harnessURL() -> URL {
 }
 
 @Test func openCodeTemplate_registersOnlyExecuteBefore() throws {
-    let source = try adapterTemplate("rv-guard.js.tmpl")
+    let source = try adapterSource(for: .opencode, rvPath: "/opt/rv")
     #expect(source.contains("\"tool.execute.before\""))
     #expect(source.contains("showToast"))
     #expect(source.contains("RV · Blocked"))
@@ -370,7 +375,7 @@ private func runPiAdapter(
     sendMessageThrows: Bool = false
 ) async throws -> PiAdapterRun {
     let payload = try await runAdapter(
-        host: "pi",
+        host: .pi,
         event: event,
         stub: stub,
         timeoutMs: timeoutMs,
@@ -419,7 +424,7 @@ private func runOpenCodeAdapter(
     toastTimeoutMs: Int? = nil
 ) async throws -> OpenCodeAdapterRun {
     let payload = try await runAdapter(
-        host: "opencode",
+        host: .opencode,
         event: event,
         stub: stub,
         timeoutMs: timeoutMs,
@@ -457,7 +462,7 @@ private struct AdapterPayload {
 }
 
 private func runAdapter(
-    host: String,
+    host: HookHost,
     event: [String: Any],
     stub: StubRV,
     timeoutMs: Int?,
@@ -471,8 +476,6 @@ private func runAdapter(
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
 
-    let templateName = host == "pi" ? "rv-guard.ts.tmpl" : "rv-guard.js.tmpl"
-    var source = try adapterTemplate(templateName)
     let rvPath: String
     let stubDir = root.appendingPathComponent("stub", isDirectory: true)
     try FileManager.default.createDirectory(at: stubDir, withIntermediateDirectories: true)
@@ -504,7 +507,7 @@ private func runAdapter(
         )
     }
 
-    source = source.replacingOccurrences(of: "__RV_BINARY__", with: rvPath)
+    var source = try adapterSource(for: host, rvPath: rvPath)
     if let timeoutMs {
         source = source.replacingOccurrences(
             of: "const RV_HOOK_TIMEOUT_MS = 5000;",
@@ -551,7 +554,7 @@ private func runAdapter(
     process.arguments = [
         "node",
         harnessURL().path,
-        host,
+        host.rawValue,
         adapter.path,
         eventText,
     ]

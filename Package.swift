@@ -35,7 +35,11 @@ let package = Package(
             resources: [.copy("Resources/packs")]
         ),
         .target(name: "RVPolicy", dependencies: ["RVDomain"]),
-        .target(name: "RVHooks", dependencies: ["RVDomain"]),
+        .target(
+            name: "RVHooks",
+            dependencies: ["RVDomain"],
+            resources: [.embedInCode("Resources/hosts")]
+        ),
         .target(name: "RVIPC", dependencies: ["RVDomain"]),
         .target(name: "RVHistory", dependencies: ["RVDomain"]),
         .target(name: "RVPresentation", dependencies: ["RVDomain", "RVTheme"]),
@@ -54,7 +58,6 @@ let package = Package(
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],
             resources: [
-                .embedInCode("Resources/hosts"),
                 .embedInCode("Resources/launchd"),
             ]
         ),

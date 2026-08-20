@@ -12,13 +12,13 @@ Each module keeps a small public API, `package` internals later, and its own tes
 | **RVEngine** | normalize, quick-reject, safe then destructive, deadline, `PatternEngine` | pack files, hooks |
 | **RVPacks** | registry, bundled JSON, enable/disable | decisions, rendering |
 | **RVPolicy** | config merge, allowlist, allow-once | rendering |
-| **RVHooks** | **Pi / Grok / OpenCode** shell codecs only in v1 | evaluation |
+| **RVHooks** | **Pi / Grok / OpenCode** Host adapters: shell codecs, Hook mapper/voice, embedded adapter resources | evaluation, setup mutations |
 | **RVIPC** | `rv.ipc.v1` Codable | transport details |
 | **RVService** | XPC listener, EvaluateSession (compiled day-one packs + evaluate), launchd | ArgumentParser, SwiftUI |
 | **RVPresentation** | deny/explain/packs/doctor view models | ANSI |
 | **RVTheme** | palettes, pure capability detect | business rules |
 | **RVTUI** | browse kit, `render` → `[String]`, key map | opening a TTY |
-| **RVCLI** | ArgumentParser, output mode, thin XPC client, EvaluateSession for TTY test/explain and hook XPC miss | regex, pack parse |
+| **RVCLI** | ArgumentParser, output mode, thin XPC client, EvaluateSession for TTY test/explain and hook XPC miss, Host adapter setup mutations | regex, pack parse |
 | **RVHistory** | stub; later; off by default | logging full argv |
 
 ## Dependency graph
@@ -30,7 +30,7 @@ Each module keeps a small public API, `package` internals later, and its own tes
 | `RVEngine` | `RVDomain` | Must not depend on Packs, Hooks, CLI, TUI, Service. |
 | `RVPacks` | `RVDomain` | Day-one JSON: `core.git` + `core.filesystem`. |
 | `RVPolicy` | `RVDomain` | Config/allowlist later. |
-| `RVHooks` | `RVDomain` | Pi/Grok/OpenCode codecs later. |
+| `RVHooks` | `RVDomain` | Complete Pi/Grok/OpenCode Host adapter behavior; no setup mutations. |
 | `RVIPC` | `RVDomain` | `rv.ipc.v1` Codable later. |
 | `RVHistory` | `RVDomain` | **Stub.** Off by default forever until a later ticket enables it. Must not log argv. |
 | `RVPresentation` | `RVDomain`, `RVTheme` | View models later. No ANSI. |

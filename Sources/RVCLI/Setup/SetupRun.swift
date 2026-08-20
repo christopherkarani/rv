@@ -1,4 +1,5 @@
 import Foundation
+import RVHooks
 import RVPresentation
 
 struct SetupOutcome: Equatable, Sendable {
@@ -48,24 +49,16 @@ extension SetupHostKind {
         }
     }
 
-    func template(rvPath: String) throws -> String {
-        switch self {
-        case .grok: try HostTemplates.grokHook(rvPath: rvPath)
-        case .pi: try HostTemplates.piExtension(rvPath: rvPath)
-        case .openCode: try HostTemplates.openCodePlugin(rvPath: rvPath)
-        }
+    func adapterResource() throws -> HostAdapterResource {
+        try HostAdapterResources.load(for: hookHost)
     }
 
-    func rawTemplate() throws -> String {
+    private var hookHost: HookHost {
         switch self {
-        case .grok: try HostTemplates.rawGrok()
-        case .pi: try HostTemplates.rawPi()
-        case .openCode: try HostTemplates.rawOpenCode()
+        case .grok: .grok
+        case .pi: .pi
+        case .openCode: .opencode
         }
-    }
-
-    func isCurrent(_ existing: String, raw: String) -> Bool {
-        HostTemplates.matchesCurrentTemplate(existing, raw: raw)
     }
 
     func isDetected(layout: HostLayout, env: SetupEnvironment, files: FileOps) -> Bool {
@@ -160,11 +153,11 @@ enum SetupRun {
 
         for host in SetupHostKind.allCases {
             guard host.isDetected(layout: layout, env: env, files: files) else { continue }
-            let raw = try host.rawTemplate()
+            let adapter = try host.adapterResource()
             switch try writeOwned(
                 path: host.ownedPath(in: layout),
-                contents: try host.template(rvPath: env.rvPath),
-                isCurrent: { host.isCurrent($0, raw: raw) },
+                contents: adapter.rendered(rvPath: env.rvPath),
+                isCurrent: { adapter.matchesCurrent($0) },
                 files: files
             ) {
             case .wrote:
@@ -217,7 +210,7 @@ enum SetupRun {
         guard env.fileManager.isExecutableFile(atPath: env.rvdPath) else {
             return
         }
-        let body = try HostTemplates.launchAgentPlist(rvdPath: env.rvdPath)
+        let body = try LaunchAgentTemplate.rendered(rvdPath: env.rvdPath)
         try files.write(body, to: layout.launchAgent)
         if env.touchLaunchd {
             let url = URL(fileURLWithPath: layout.launchAgent)
