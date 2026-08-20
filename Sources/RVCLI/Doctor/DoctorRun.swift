@@ -195,7 +195,7 @@ extension ServiceHealth {
         switch self {
         case .reachable(let facts):
             DoctorServiceView(
-                state: serviceState(facts.snapshot.state),
+                state: .running,
                 protocolName: facts.snapshot.protocolName,
                 serviceSemver: facts.snapshot.serviceSemver,
                 label: facts.snapshot.label,
@@ -208,7 +208,7 @@ extension ServiceHealth {
         case .notInstalled(let local):
             localService(state: .notInstalled, local: local, warning: nil)
         case .skew(let reason, let local):
-            localService(state: .skew, local: local, warning: reason.statusMessage)
+            localService(state: .skew, local: local, warning: reason?.statusMessage)
         case .requestFailed(let failure, let local):
             localService(state: .down, local: local, warning: failure.statusMessage)
         }
@@ -219,17 +219,6 @@ extension ServiceHealth {
             enabled: enabledPacks,
             registry: packCheckReady ? .ready : .broken
         )
-    }
-
-    private func serviceState(_ state: ServiceState) -> DoctorServiceState {
-        switch state {
-        case .running, .idleExitArmed:
-            .running
-        case .down:
-            .down
-        case .skew:
-            .skew
-        }
     }
 
     private func localService(

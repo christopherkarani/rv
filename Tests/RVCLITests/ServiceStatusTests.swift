@@ -82,4 +82,69 @@ struct ServiceStatusTests {
         #expect(report.fallback == "down")
         #expect(report.lastError == "request failed")
     }
+
+    @Test func xpcDownSnapshotReportsDownNotRunning() async throws {
+        let snapshot = DoctorSnapshotReply(
+            state: .down,
+            idleExitSeconds: 300,
+            packsEnabled: [.coreGit, .coreFilesystem],
+            checks: []
+        )
+        let transport = ScriptedTransport(
+            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", ok: true),
+            responseResult: .doctorSnapshot(snapshot)
+        )
+        let client = try isolatedClient(transport: transport)
+        let health = ServiceHealth.inspect(await client.diagnostics())
+        #expect(
+            health == .down(
+                .init(corePacksReady: true, serviceSemver: "1.0.0", launchAgent: .missing)
+            )
+        )
+
+        let report = await client.status()
+        #expect(report.state == "down")
+        #expect(report.fallback == "down")
+        #expect(report.lastError == nil)
+        let robot = ServiceStatusCommand.robotText(report)
+        #expect(robot.contains("state=down"))
+        #expect(robot.contains("launch") == false)
+        #expect(robot.contains("pack") == false)
+    }
+
+    @Test func xpcSkewSnapshotReportsSkewNotRunning() async throws {
+        let snapshot = DoctorSnapshotReply(
+            state: .skew,
+            idleExitSeconds: 300,
+            packsEnabled: [.coreGit, .coreFilesystem],
+            lastError: "peer supplied detail",
+            checks: []
+        )
+        let transport = ScriptedTransport(
+            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", ok: true),
+            responseResult: .doctorSnapshot(snapshot)
+        )
+        let client = try isolatedClient(transport: transport)
+        let health = ServiceHealth.inspect(await client.diagnostics())
+        #expect(
+            health == .skew(
+                reason: nil,
+                local: .init(
+                    corePacksReady: true,
+                    serviceSemver: "1.0.0",
+                    launchAgent: .missing
+                )
+            )
+        )
+
+        let report = await client.status()
+        #expect(report.state == "skew")
+        #expect(report.fallback == "skew")
+        #expect(report.lastError == nil)
+        let robot = ServiceStatusCommand.robotText(report)
+        #expect(robot.contains("state=skew"))
+        #expect(robot.contains("peer supplied detail") == false)
+        #expect(robot.contains("launch") == false)
+        #expect(robot.contains("pack") == false)
+    }
 }

@@ -7,7 +7,7 @@ enum ServiceHealth: Equatable, Sendable {
     case reachable(Reachable)
     case down(Local)
     case notInstalled(Local)
-    case skew(reason: ServiceSkewReason, local: Local)
+    case skew(reason: ServiceSkewReason?, local: Local)
     case requestFailed(failure: ServiceDiagnosticFailure, local: Local)
 
     struct Reachable: Equatable, Sendable {
@@ -119,12 +119,10 @@ extension ServiceHealth {
 
         switch diagnostics {
         case .xpc(let snapshot, let localCorePacksReady):
-            return .reachable(
-                Reachable(
-                    snapshot: snapshot,
-                    localCorePacksReady: localCorePacksReady,
-                    launchAgent: agent
-                )
+            return inspect(
+                snapshot: snapshot,
+                localCorePacksReady: localCorePacksReady,
+                launchAgent: agent
             )
         case .local(let diagnostic):
             let local = Local(
@@ -143,6 +141,32 @@ extension ServiceHealth {
             case .requestFailed(let failure):
                 return .requestFailed(failure: failure, local: local)
             }
+        }
+    }
+
+    private static func inspect(
+        snapshot: DoctorSnapshotReply,
+        localCorePacksReady: Bool,
+        launchAgent: DoctorLaunchAgentState
+    ) -> ServiceHealth {
+        let local = Local(
+            corePacksReady: localCorePacksReady,
+            serviceSemver: snapshot.serviceSemver,
+            launchAgent: launchAgent
+        )
+        switch snapshot.state {
+        case .running, .idleExitArmed:
+            .reachable(
+                Reachable(
+                    snapshot: snapshot,
+                    localCorePacksReady: localCorePacksReady,
+                    launchAgent: launchAgent
+                )
+            )
+        case .down:
+            .down(local)
+        case .skew:
+            .skew(reason: nil, local: local)
         }
     }
 }

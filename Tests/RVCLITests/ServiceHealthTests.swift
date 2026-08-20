@@ -130,6 +130,57 @@ struct ServiceHealthTests {
         #expect(health.enabledPacks == dayOnePackIDs)
         #expect(health.fallbackReady)
     }
+
+    @Test func idleExitArmedSnapshotIsReachable() {
+        let snapshot = snapshot(state: .idleExitArmed)
+        let health = ServiceHealth.inspect(.xpc(snapshot: snapshot, localCorePacksReady: true))
+
+        #expect(
+            health == .reachable(
+                .init(snapshot: snapshot, localCorePacksReady: true, launchAgent: .missing)
+            )
+        )
+        #expect(health.statusReport.state == "running")
+        #expect(health.statusReport.fallback == "inactive")
+    }
+
+    @Test func xpcDownSnapshotIsDownEvenWhenLaunchAgentIsObservedMissing() {
+        let snapshot = snapshot(state: .down)
+        let diagnostics = ServiceDiagnosticResult.xpc(
+            snapshot: snapshot,
+            localCorePacksReady: true
+        )
+
+        #expect(
+            ServiceHealth.inspect(diagnostics)
+                == .down(readyLocal(serviceSemver: snapshot.serviceSemver))
+        )
+        #expect(
+            ServiceHealth.inspect(
+                diagnostics,
+                launchAgentInstalled: false,
+                launchAgentLoaded: false
+            ) == .down(readyLocal(serviceSemver: snapshot.serviceSemver))
+        )
+        #expect(ServiceHealth.inspect(diagnostics).statusReport.state == "down")
+        #expect(ServiceHealth.inspect(diagnostics).statusReport.fallback == "down")
+        #expect(ServiceHealth.inspect(diagnostics).statusReport.lastError == nil)
+    }
+
+    @Test func xpcSkewSnapshotIsSkewWithoutInventingATypedReason() {
+        let snapshot = snapshot(state: .skew, lastError: "peer supplied detail")
+        let health = ServiceHealth.inspect(.xpc(snapshot: snapshot, localCorePacksReady: true))
+
+        #expect(
+            health == .skew(
+                reason: nil,
+                local: readyLocal(serviceSemver: snapshot.serviceSemver)
+            )
+        )
+        #expect(health.statusReport.state == "skew")
+        #expect(health.statusReport.fallback == "skew")
+        #expect(health.statusReport.lastError == nil)
+    }
 }
 
 private func local(
@@ -158,11 +209,19 @@ private func readyLocal(
 }
 
 private func runningSnapshot() -> DoctorSnapshotReply {
+    snapshot(state: .running)
+}
+
+private func snapshot(
+    state: ServiceState,
+    lastError: String? = nil
+) -> DoctorSnapshotReply {
     DoctorSnapshotReply(
         serviceSemver: "1.0.0",
-        state: .running,
+        state: state,
         idleExitSeconds: 300,
         packsEnabled: dayOnePackIDs,
+        lastError: lastError,
         checks: [DoctorCheck(id: "packs", status: .ok, message: "ready")]
     )
 }

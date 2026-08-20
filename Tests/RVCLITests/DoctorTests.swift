@@ -477,6 +477,84 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
     }
 }
 
+@Test func doctor_xpcDownSnapshotFormatsAsDownNotNotInstalled() throws {
+    try withDoctorHome { _, _, environment in
+        let snapshot = DoctorSnapshotReply(
+            serviceSemver: "1.0.0",
+            state: .down,
+            idleExitSeconds: 300,
+            packsEnabled: dayOnePackIDs,
+            checks: [DoctorCheck(id: "packs", status: .ok, message: "ready")]
+        )
+        let diagnostics = ServiceDiagnosticResult.xpc(
+            snapshot: snapshot,
+            localCorePacksReady: true
+        )
+        let health = ServiceHealth.inspect(
+            diagnostics,
+            launchAgentInstalled: false,
+            launchAgentLoaded: false
+        )
+        #expect(
+            health == .down(
+                .init(corePacksReady: true, serviceSemver: "1.0.0", launchAgent: .missing)
+            )
+        )
+
+        let outcome = DoctorRun.run(
+            environment: environment,
+            diagnostics: diagnostics,
+            appearance: .pretty(colorOffPalette)
+        )
+
+        #expect(outcome.stdout.contains("service: down"))
+        #expect(outcome.stdout.contains("service: not installed") == false)
+        #expect(outcome.stdout.contains("service: running") == false)
+    }
+}
+
+@Test func doctor_xpcSkewSnapshotFormatsAsSkew() throws {
+    try withDoctorHome { _, _, environment in
+        let snapshot = DoctorSnapshotReply(
+            serviceSemver: "1.0.0",
+            state: .skew,
+            idleExitSeconds: 300,
+            packsEnabled: dayOnePackIDs,
+            lastError: "peer supplied detail",
+            checks: [DoctorCheck(id: "packs", status: .ok, message: "ready")]
+        )
+        let diagnostics = ServiceDiagnosticResult.xpc(
+            snapshot: snapshot,
+            localCorePacksReady: true
+        )
+        let health = ServiceHealth.inspect(
+            diagnostics,
+            launchAgentInstalled: false,
+            launchAgentLoaded: false
+        )
+        #expect(
+            health == .skew(
+                reason: nil,
+                local: .init(
+                    corePacksReady: true,
+                    serviceSemver: "1.0.0",
+                    launchAgent: .missing
+                )
+            )
+        )
+
+        let outcome = DoctorRun.run(
+            environment: environment,
+            diagnostics: diagnostics,
+            appearance: .pretty(colorOffPalette)
+        )
+
+        #expect(outcome.stdout.contains("service: skew"))
+        #expect(outcome.stdout.contains("service: running") == false)
+        #expect(outcome.stdout.contains("peer supplied detail") == false)
+    }
+}
+
 @Test func doctor_isRegisteredOnRootCommand() {
     #expect(RV.configuration.subcommands.contains { $0.configuration.commandName == "doctor" })
 }

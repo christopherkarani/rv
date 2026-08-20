@@ -90,7 +90,7 @@ extension ServiceHealth {
             ServiceStatusReport(
                 state: "skew",
                 fallback: "skew",
-                lastError: reason.statusMessage
+                lastError: reason?.statusMessage
             )
         case .requestFailed(let failure, _):
             ServiceStatusReport(
