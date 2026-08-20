@@ -10,7 +10,8 @@ struct PolicyGateTests {
         let denied = resetHardDeny()
         let gated = await PolicyGate.apply(denied, cwd: "/tmp/ws", store: store, now: now)
         #expect(gated.override == .none)
-        guard case .deny = gated.result.decision else {
+        #expect(gated.engine == denied)
+        guard case .deny = gated.effective.decision else {
             Issue.record("engine deny without grant must stay deny")
             return
         }
@@ -23,10 +24,14 @@ struct PolicyGateTests {
         try await store.insertGranted(matchingView: denied.matchingView, cwd: "/tmp/ws", now: now)
         let first = await PolicyGate.apply(denied, cwd: "/tmp/ws", store: store, now: now)
         #expect(first.override == .allowOnce)
-        #expect(first.result.decision == .allow)
+        guard case .deny = first.engine.decision else {
+            Issue.record("honor must keep the engine deny")
+            return
+        }
+        #expect(first.effective.decision == .allow)
         let second = await PolicyGate.apply(denied, cwd: "/tmp/ws", store: store, now: now)
         #expect(second.override == .none)
-        guard case .deny = second.result.decision else {
+        guard case .deny = second.effective.decision else {
             Issue.record("second evaluate must deny after the grant is spent")
             return
         }
@@ -39,7 +44,7 @@ struct PolicyGateTests {
         let allow = EvaluationResult(decision: .allow, matchingView: "git reset --hard")
         let gated = await PolicyGate.apply(allow, cwd: "/tmp/ws", store: store, now: now)
         #expect(gated.override == .none)
-        #expect(gated.result.decision == .allow)
+        #expect(gated.effective.decision == .allow)
         let still = await store.consume(matchingView: "git reset --hard", cwd: "/tmp/ws", now: now)
         guard case .consumed = still else {
             Issue.record("allow must not spend the grant")
@@ -57,7 +62,7 @@ struct PolicyGateTests {
         )
         let gated = await PolicyGate.apply(incomplete, cwd: "/tmp/ws", store: store, now: now)
         #expect(gated.override == .none)
-        guard case .indeterminate = gated.result.decision else {
+        guard case .indeterminate = gated.effective.decision else {
             Issue.record("indeterminate must not become allow")
             return
         }
@@ -80,7 +85,11 @@ struct PolicyGateTests {
             now: now
         )
         #expect(preview.override == .allowOnce)
-        #expect(preview.result.decision == .allow)
+        guard case .deny = preview.engine.decision else {
+            Issue.record("peek honor must keep the engine deny")
+            return
+        }
+        #expect(preview.effective.decision == .allow)
         let still = await store.consume(matchingView: denied.matchingView, cwd: "/tmp/ws", now: now)
         guard case .consumed = still else {
             Issue.record("preview must not spend the grant")
@@ -96,7 +105,7 @@ struct PolicyGateTests {
         try sabotageLock(in: store.baseDirectory)
         let gated = await PolicyGate.apply(denied, cwd: "/tmp/ws", store: store, now: now)
         #expect(gated.override == .none)
-        guard case .deny = gated.result.decision else {
+        guard case .deny = gated.effective.decision else {
             Issue.record("store unavailable must stay deny")
             return
         }
@@ -109,7 +118,7 @@ struct PolicyGateTests {
         try await store.insertGranted(matchingView: denied.matchingView, cwd: "/tmp/ws", now: now)
         let gated = await PolicyGate.apply(denied, cwd: "", store: store, now: now)
         #expect(gated.override == .none)
-        guard case .deny = gated.result.decision else {
+        guard case .deny = gated.effective.decision else {
             Issue.record("empty cwd must not honor")
             return
         }

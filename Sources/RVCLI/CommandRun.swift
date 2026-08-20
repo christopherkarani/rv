@@ -38,7 +38,7 @@ public enum CommandRun {
             cwd: cwd,
             store: store,
             now: now
-        )
+        ).effective
     }
 
     public static func evaluateCommand(
