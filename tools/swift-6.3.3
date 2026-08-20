@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# tools/swift-6.3.3 — put the pinned toolchain first on PATH, then exec swift.
+# Eliminates the /usr/bin/swift 6.2.x trap. See docs/dev/SWIFT.md.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+PIN_FILE="$ROOT/.swift-version"
+if [[ ! -f "$PIN_FILE" ]]; then
+  printf "swift-6.3.3: missing .swift-version\n" >&2
+  exit 1
+fi
+PIN="$(tr -d '[:space:]' <"$PIN_FILE")"
+if [[ -z "$PIN" ]]; then
+  printf "swift-6.3.3: empty .swift-version\n" >&2
+  exit 1
+fi
+
+TOOLCHAIN_BIN="$HOME/Library/Developer/Toolchains/swift-${PIN}-RELEASE.xctoolchain/usr/bin"
+SWIFT="$TOOLCHAIN_BIN/swift"
+if [[ ! -x "$SWIFT" ]]; then
+  printf "swift-6.3.3: toolchain not found at %s\n" "$SWIFT" >&2
+  printf "swift-6.3.3: install Swift %s or fix .swift-version\n" "$PIN" >&2
+  exit 1
+fi
+
+export PATH="$TOOLCHAIN_BIN:$PATH"
+exec "$SWIFT" "$@"
