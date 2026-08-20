@@ -7,25 +7,15 @@ public struct EvaluateParams: Sendable, Equatable, Codable {
 
     public init(request: EvaluationRequest, cwd: String? = nil) {
         self.request = request
-        self.cwd = cwd.flatMap { $0.isEmpty ? nil : $0 }
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case request
-        case cwd
+        self.cwd = RequestCwdCoding.nonempty(cwd)
     }
 
     public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        request = try container.decode(EvaluationRequest.self, forKey: .request)
-        let decoded = try container.decodeIfPresent(String.self, forKey: .cwd)
-        cwd = decoded.flatMap { $0.isEmpty ? nil : $0 }
+        (request, cwd) = try RequestCwdCoding.decode(from: decoder)
     }
 
     public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(request, forKey: .request)
-        try container.encodeIfPresent(cwd, forKey: .cwd)
+        try RequestCwdCoding.encode(request: request, cwd: cwd, to: encoder)
     }
 }
 
@@ -45,25 +35,15 @@ public struct ExplainParams: Sendable, Equatable, Codable {
 
     public init(request: EvaluationRequest, cwd: String? = nil) {
         self.request = request
-        self.cwd = cwd.flatMap { $0.isEmpty ? nil : $0 }
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case request
-        case cwd
+        self.cwd = RequestCwdCoding.nonempty(cwd)
     }
 
     public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        request = try container.decode(EvaluationRequest.self, forKey: .request)
-        let decoded = try container.decodeIfPresent(String.self, forKey: .cwd)
-        cwd = decoded.flatMap { $0.isEmpty ? nil : $0 }
+        (request, cwd) = try RequestCwdCoding.decode(from: decoder)
     }
 
     public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(request, forKey: .request)
-        try container.encodeIfPresent(cwd, forKey: .cwd)
+        try RequestCwdCoding.encode(request: request, cwd: cwd, to: encoder)
     }
 }
 
@@ -116,25 +96,15 @@ public struct ClassifyParams: Sendable, Equatable, Codable {
 
     public init(request: EvaluationRequest, cwd: String? = nil) {
         self.request = request
-        self.cwd = cwd.flatMap { $0.isEmpty ? nil : $0 }
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case request
-        case cwd
+        self.cwd = RequestCwdCoding.nonempty(cwd)
     }
 
     public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        request = try container.decode(EvaluationRequest.self, forKey: .request)
-        let decoded = try container.decodeIfPresent(String.self, forKey: .cwd)
-        cwd = decoded.flatMap { $0.isEmpty ? nil : $0 }
+        (request, cwd) = try RequestCwdCoding.decode(from: decoder)
     }
 
     public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(request, forKey: .request)
-        try container.encodeIfPresent(cwd, forKey: .cwd)
+        try RequestCwdCoding.encode(request: request, cwd: cwd, to: encoder)
     }
 }
 
@@ -444,3 +414,27 @@ extension IPCResult: Codable {
 }
 
 struct EmptyPayload: Sendable, Equatable, Codable {}
+
+enum RequestCwdCoding {
+    enum CodingKeys: String, CodingKey {
+        case request
+        case cwd
+    }
+
+    static func nonempty(_ cwd: String?) -> String? {
+        cwd.flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    static func decode(from decoder: Decoder) throws -> (EvaluationRequest, String?) {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let request = try container.decode(EvaluationRequest.self, forKey: .request)
+        let cwd = nonempty(try container.decodeIfPresent(String.self, forKey: .cwd))
+        return (request, cwd)
+    }
+
+    static func encode(request: EvaluationRequest, cwd: String?, to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(request, forKey: .request)
+        try container.encodeIfPresent(cwd, forKey: .cwd)
+    }
+}

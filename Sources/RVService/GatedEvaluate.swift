@@ -8,6 +8,7 @@ public struct GatedEvaluate: Sendable {
 
     private let session: EvaluateSession
 
+    /// Creates a door around an Evaluate session.
     public init(_ session: EvaluateSession = EvaluateSession()) {
         self.session = session
     }
@@ -19,7 +20,12 @@ public struct GatedEvaluate: Sendable {
         store: AllowOnceStore,
         now: Date
     ) async -> EvaluationResult {
-        await evaluateThenGate(request, cwd: cwd, store: store, now: now, PolicyGate.peek)
+        await PolicyGate.peek(
+            session.evaluate(request),
+            cwd: cwd,
+            store: store,
+            now: now
+        ).result
     }
 
     /// Spends a matching grant after an engine deny.
@@ -29,16 +35,11 @@ public struct GatedEvaluate: Sendable {
         store: AllowOnceStore,
         now: Date
     ) async -> EvaluationResult {
-        await evaluateThenGate(request, cwd: cwd, store: store, now: now, PolicyGate.apply)
-    }
-
-    private func evaluateThenGate(
-        _ request: EvaluationRequest,
-        cwd: String?,
-        store: AllowOnceStore,
-        now: Date,
-        _ gate: (EvaluationResult, String?, AllowOnceStore, Date) async -> PolicyDecision
-    ) async -> EvaluationResult {
-        await gate(session.evaluate(request), cwd, store, now).result
+        await PolicyGate.apply(
+            session.evaluate(request),
+            cwd: cwd,
+            store: store,
+            now: now
+        ).result
     }
 }

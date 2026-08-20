@@ -33,7 +33,7 @@ public enum CommandRun {
         store: AllowOnceStore,
         now: Date = Date()
     ) async -> EvaluationResult {
-        return await GatedEvaluate().peek(
+        await GatedEvaluate().peek(
             EvaluationRequest(
                 command: ShellCommand(rawValue: raw),
                 enabledPacks: dayOnePackIDs
