@@ -13,31 +13,39 @@ public struct GatedEvaluate: Sendable {
         self.session = session
     }
 
-    /// Shows a matching grant without spending it.
+    /// Shows a matching grant / allowlist without spending it.
     public func peek(
         _ request: EvaluationRequest,
         cwd: String?,
         store: AllowOnceStore,
         now: Date
     ) async -> EvaluationResult {
-        await PolicyGate.peek(
-            session.evaluate(request),
+        let result = session.evaluate(request)
+        let allowlist = AllowlistStore(baseDirectory: store.baseDirectory)
+            .loadUserSnapshot(workspacePath: cwd, now: now)
+        return await PolicyGate.peek(
+            result,
             cwd: cwd,
+            allowlist: allowlist,
             store: store,
             now: now
         ).result
     }
 
-    /// Spends a matching grant after an engine deny.
+    /// Spends a matching grant after an engine deny; honor user allowlist first.
     public func apply(
         _ request: EvaluationRequest,
         cwd: String?,
         store: AllowOnceStore,
         now: Date
     ) async -> EvaluationResult {
-        await PolicyGate.apply(
-            session.evaluate(request),
+        let result = session.evaluate(request)
+        let allowlist = AllowlistStore(baseDirectory: store.baseDirectory)
+            .loadUserSnapshot(workspacePath: cwd, now: now)
+        return await PolicyGate.apply(
+            result,
             cwd: cwd,
+            allowlist: allowlist,
             store: store,
             now: now
         ).result

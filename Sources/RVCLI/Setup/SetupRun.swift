@@ -1,5 +1,6 @@
 import Foundation
 import RVHooks
+import RVPolicy
 import RVPresentation
 
 struct SetupOutcome: Equatable, Sendable {
@@ -188,6 +189,9 @@ enum SetupRun {
                 break
             }
         }
+        let configDir = URL(fileURLWithPath: layout.configDirectory, isDirectory: true)
+        removedPaths.append(RVPolicyPaths.allowlistFile(inConfigDir: configDir).path)
+        removedPaths.append(RVPolicyPaths.allowOnceFile(inConfigDir: configDir).path)
         for path in removedPaths {
             files.removeFile(atPath: path)
         }

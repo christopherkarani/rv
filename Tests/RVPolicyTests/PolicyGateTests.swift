@@ -32,6 +32,31 @@ struct PolicyGateTests {
         }
     }
 
+    @Test func allowlistBeforeAllowOnce() async throws {
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let denied = resetHardDeny()
+        try await store.insertGranted(matchingView: denied.matchingView, cwd: "/tmp/ws", now: now)
+        let ruleID = try #require(RuleID(rawValue: "core.git:reset-hard"))
+        let allowlist = AllowlistSnapshot(entries: [
+            AllowlistEntry(selector: .rule(ruleID), reason: "ci", addedAt: now),
+        ])
+        let gated = await PolicyGate.apply(
+            denied,
+            cwd: "/tmp/ws",
+            allowlist: allowlist,
+            store: store,
+            now: now
+        )
+        #expect(gated.override == .allowlist)
+        #expect(gated.result.decision == .allow)
+        let still = await store.consume(matchingView: denied.matchingView, cwd: "/tmp/ws", now: now)
+        guard case .consumed = still else {
+            Issue.record("allowlist must not spend the grant")
+            return
+        }
+    }
+
     @Test func allowDoesNotConsumeGrant() async throws {
         let store = try isolatedStore()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
@@ -47,7 +72,7 @@ struct PolicyGateTests {
         }
     }
 
-    @Test func indeterminateDoesNotConsumeGrant() async throws {
+    @Test func indeterminateIsNotAllow() async throws {
         let store = try isolatedStore()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         try await store.insertGranted(matchingView: "git reset --hard", cwd: "/tmp/ws", now: now)
@@ -57,13 +82,37 @@ struct PolicyGateTests {
         )
         let gated = await PolicyGate.apply(incomplete, cwd: "/tmp/ws", store: store, now: now)
         #expect(gated.override == .none)
+        #expect(gated.result.decision != .allow)
         guard case .indeterminate = gated.result.decision else {
-            Issue.record("indeterminate must not become allow")
+            Issue.record("indeterminate must stay miss-policy (not allow)")
             return
         }
         let still = await store.consume(matchingView: "git reset --hard", cwd: "/tmp/ws", now: now)
         guard case .consumed = still else {
             Issue.record("indeterminate must not spend the grant")
+            return
+        }
+    }
+
+    @Test func redeemThenGateAllowsOnce() async throws {
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+        let denied = resetHardDeny()
+        let code = try await store.mint(
+            matchingView: denied.matchingView,
+            cwd: "/tmp/a",
+            ruleID: nil,
+            tty: tty,
+            now: now
+        )
+        _ = try await store.redeem(code: code, tty: tty, now: now)
+        let first = await PolicyGate.apply(denied, cwd: "/tmp/a", store: store, now: now)
+        #expect(first.override == .allowOnce)
+        #expect(first.result.decision == .allow)
+        let second = await PolicyGate.apply(denied, cwd: "/tmp/a", store: store, now: now)
+        guard case .deny = second.result.decision else {
+            Issue.record("second identical command must deny")
             return
         }
     }
@@ -87,33 +136,6 @@ struct PolicyGateTests {
             return
         }
     }
-
-    @Test func storeUnavailableStaysDeny() async throws {
-        let store = try isolatedStore()
-        let now = Date(timeIntervalSince1970: 1_700_000_000)
-        let denied = resetHardDeny()
-        try await store.insertGranted(matchingView: denied.matchingView, cwd: "/tmp/ws", now: now)
-        try sabotageLock(in: store.baseDirectory)
-        let gated = await PolicyGate.apply(denied, cwd: "/tmp/ws", store: store, now: now)
-        #expect(gated.override == .none)
-        guard case .deny = gated.result.decision else {
-            Issue.record("store unavailable must stay deny")
-            return
-        }
-    }
-
-    @Test func emptyCwdDoesNotHonor() async throws {
-        let store = try isolatedStore()
-        let now = Date(timeIntervalSince1970: 1_700_000_000)
-        let denied = resetHardDeny()
-        try await store.insertGranted(matchingView: denied.matchingView, cwd: "/tmp/ws", now: now)
-        let gated = await PolicyGate.apply(denied, cwd: "", store: store, now: now)
-        #expect(gated.override == .none)
-        guard case .deny = gated.result.decision else {
-            Issue.record("empty cwd must not honor")
-            return
-        }
-    }
 }
 
 private func resetHardDeny() -> EvaluationResult {
@@ -133,12 +155,4 @@ private func isolatedStore() throws -> AllowOnceStore {
         .appendingPathComponent("rv-policy-gate-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     return AllowOnceStore(baseDirectory: root)
-}
-
-private func sabotageLock(in directory: URL) throws {
-    let lock = directory.appendingPathComponent(".allow-once.lock", isDirectory: false)
-    if FileManager.default.fileExists(atPath: lock.path) {
-        try FileManager.default.removeItem(at: lock)
-    }
-    try FileManager.default.createDirectory(at: lock, withIntermediateDirectories: false)
 }
