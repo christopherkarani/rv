@@ -110,7 +110,7 @@ struct FakeXPCUnixSocketTests {
         #expect(error["packNotFound"] as? String == "core.unknown")
     }
 
-    @Test func allowOnceConsumeTwiceThenEvaluateStillRuns() async throws {
+    @Test func allowOnceConsumeIsUnknownMethodAndDoesNotSpend() async throws {
         let runtime = try isolatedRuntime()
         try await runtime.insertGranted(matchingView: "git reset --hard", cwd: "/tmp/ws")
         let path = "/tmp/rv-t3-\(UUID().uuidString).sock"
