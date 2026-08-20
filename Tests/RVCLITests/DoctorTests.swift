@@ -43,6 +43,17 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
     try withDoctorHome { home, _, environment in
         let before = try FileManager.default.contentsOfDirectory(atPath: home.path)
 
+        let health = ServiceHealth.inspect(
+            localReady,
+            launchAgentInstalled: false,
+            launchAgentLoaded: environment.launchAgentLoaded
+        )
+        #expect(
+            health == .notInstalled(
+                .init(corePacksReady: true, serviceSemver: nil, launchAgent: .missing)
+            )
+        )
+
         let outcome = DoctorRun.run(
             environment: environment,
             diagnostics: localReady,
@@ -89,12 +100,28 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
     try withDoctorHome { _, _, initialEnvironment in
         var environment = initialEnvironment
         environment.launchAgentLoaded = true
+        let diagnostics = ServiceDiagnosticResult.xpc(
+            snapshot: runningDoctorSnapshot(),
+            localCorePacksReady: true
+        )
+        let health = ServiceHealth.inspect(
+            diagnostics,
+            launchAgentInstalled: false,
+            launchAgentLoaded: environment.launchAgentLoaded
+        )
+        #expect(
+            health == .reachable(
+                .init(
+                    snapshot: runningDoctorSnapshot(),
+                    localCorePacksReady: true,
+                    launchAgent: .loaded
+                )
+            )
+        )
+
         let outcome = DoctorRun.run(
             environment: environment,
-            diagnostics: .xpc(
-                snapshot: runningDoctorSnapshot(),
-                localCorePacksReady: true
-            ),
+            diagnostics: diagnostics,
             appearance: .pretty(colorOffPalette)
         )
 
@@ -310,6 +337,232 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
         #expect(object["argv"] == nil)
         #expect(outcome.stdout.contains("\u{001B}") == false)
         #expect(outcome.stdout.contains("═") == false)
+    }
+}
+
+@Test func doctor_skewFormatsTheSharedWarning() throws {
+    try withDoctorHome { _, _, environment in
+        let diagnostics = ServiceDiagnosticResult.local(
+            ServiceFallbackDiagnostic(
+                cause: .skew(.protocolMismatch),
+                corePacksReady: true,
+                serviceSemver: "1.0.0"
+            )
+        )
+        let health = ServiceHealth.inspect(
+            diagnostics,
+            launchAgentInstalled: false,
+            launchAgentLoaded: false
+        )
+        #expect(
+            health == .skew(
+                reason: .protocolMismatch,
+                source: .local(
+                    .init(
+                        corePacksReady: true,
+                        serviceSemver: "1.0.0",
+                        launchAgent: .missing
+                    )
+                )
+            )
+        )
+
+        let outcome = DoctorRun.run(
+            environment: environment,
+            diagnostics: diagnostics,
+            appearance: .pretty(colorOffPalette)
+        )
+
+        #expect(outcome.stdout.contains("service: skew"))
+        #expect(outcome.stdout.contains("service-warning: protocol mismatch"))
+    }
+}
+
+@Test func doctor_requestFailureFormatsAsDownWithSharedWarning() throws {
+    try withDoctorHome { _, _, environment in
+        let diagnostics = ServiceDiagnosticResult.local(
+            ServiceFallbackDiagnostic(
+                cause: .requestFailed(.invalidResponse),
+                corePacksReady: true,
+                serviceSemver: "1.0.0"
+            )
+        )
+        let health = ServiceHealth.inspect(
+            diagnostics,
+            launchAgentInstalled: false,
+            launchAgentLoaded: false
+        )
+        #expect(
+            health == .requestFailed(
+                failure: .invalidResponse,
+                local: .init(
+                    corePacksReady: true,
+                    serviceSemver: "1.0.0",
+                    launchAgent: .missing
+                )
+            )
+        )
+
+        let outcome = DoctorRun.run(
+            environment: environment,
+            diagnostics: diagnostics,
+            appearance: .pretty(colorOffPalette)
+        )
+
+        #expect(outcome.stdout.contains("service: down"))
+        #expect(outcome.stdout.contains("service: not installed") == false)
+        #expect(outcome.stdout.contains("service-warning: invalid response"))
+    }
+}
+
+@Test func doctor_downWithInstalledAgentIsDownNotNotInstalled() throws {
+    try withDoctorHome { home, paths, environment in
+        try FileManager.default.createDirectory(
+            atPath: (paths.launchAgent as NSString).deletingLastPathComponent,
+            withIntermediateDirectories: true
+        )
+        try "plist".write(toFile: paths.launchAgent, atomically: true, encoding: .utf8)
+        let before = try FileManager.default.contentsOfDirectory(atPath: home.path)
+
+        let health = ServiceHealth.inspect(
+            localReady,
+            launchAgentInstalled: true,
+            launchAgentLoaded: false
+        )
+        #expect(
+            health == .down(
+                .local(.init(corePacksReady: true, serviceSemver: nil, launchAgent: .installed))
+            )
+        )
+
+        let outcome = DoctorRun.run(
+            environment: environment,
+            diagnostics: localReady,
+            appearance: .pretty(colorOffPalette)
+        )
+
+        #expect(outcome.stdout.contains("service: down"))
+        #expect(outcome.stdout.contains("service: not installed") == false)
+        #expect(outcome.stdout.contains("launch-agent: installed"))
+        #expect(try String(contentsOfFile: paths.launchAgent, encoding: .utf8) == "plist")
+        #expect(try FileManager.default.contentsOfDirectory(atPath: home.path) == before)
+    }
+}
+
+@Test func doctor_unavailableLocalCoreReportsNoEnabledPacks() throws {
+    try withDoctorHome { _, _, environment in
+        let diagnostics = ServiceDiagnosticResult.local(
+            ServiceFallbackDiagnostic(cause: .down, corePacksReady: false)
+        )
+        let health = ServiceHealth.inspect(
+            diagnostics,
+            launchAgentInstalled: false,
+            launchAgentLoaded: false
+        )
+        #expect(health.enabledPacks.isEmpty)
+        #expect(health.packCheckReady == false)
+        #expect(health.fallbackReady == false)
+
+        let outcome = DoctorRun.run(
+            environment: environment,
+            diagnostics: diagnostics,
+            appearance: .robot
+        )
+        let object = try #require(
+            JSONSerialization.jsonObject(with: Data(outcome.stdout.utf8)) as? [String: Any]
+        )
+        let packs = try #require(object["packs"] as? [String: Any])
+
+        #expect(outcome.exitCode == 1)
+        #expect(packs["enabled"] as? [String] == [])
+        #expect(packs["registry"] as? String == "broken")
+    }
+}
+
+@Test func doctor_xpcDownSnapshotFormatsAsDownNotNotInstalled() throws {
+    try withDoctorHome { _, _, environment in
+        let snapshot = DoctorSnapshotReply(
+            serviceSemver: "1.0.0",
+            state: .down,
+            idleExitSeconds: 300,
+            packsEnabled: dayOnePackIDs,
+            checks: [DoctorCheck(id: "packs", status: .ok, message: "ready")]
+        )
+        let diagnostics = ServiceDiagnosticResult.xpc(
+            snapshot: snapshot,
+            localCorePacksReady: true
+        )
+        let health = ServiceHealth.inspect(
+            diagnostics,
+            launchAgentInstalled: false,
+            launchAgentLoaded: false
+        )
+        #expect(
+            health == .down(
+                .xpc(
+                    .init(
+                        snapshot: snapshot,
+                        localCorePacksReady: true,
+                        launchAgent: .missing
+                    )
+                )
+            )
+        )
+
+        let outcome = DoctorRun.run(
+            environment: environment,
+            diagnostics: diagnostics,
+            appearance: .pretty(colorOffPalette)
+        )
+
+        #expect(outcome.stdout.contains("service: down"))
+        #expect(outcome.stdout.contains("service: not installed") == false)
+        #expect(outcome.stdout.contains("service: running") == false)
+    }
+}
+
+@Test func doctor_xpcSkewSnapshotFormatsAsSkew() throws {
+    try withDoctorHome { _, _, environment in
+        let snapshot = DoctorSnapshotReply(
+            serviceSemver: "1.0.0",
+            state: .skew,
+            idleExitSeconds: 300,
+            packsEnabled: dayOnePackIDs,
+            lastError: "peer supplied detail",
+            checks: [DoctorCheck(id: "packs", status: .ok, message: "ready")]
+        )
+        let diagnostics = ServiceDiagnosticResult.xpc(
+            snapshot: snapshot,
+            localCorePacksReady: true
+        )
+        let health = ServiceHealth.inspect(
+            diagnostics,
+            launchAgentInstalled: false,
+            launchAgentLoaded: false
+        )
+        #expect(
+            health == .skew(
+                reason: nil,
+                source: .xpc(
+                    .init(
+                        snapshot: snapshot,
+                        localCorePacksReady: true,
+                        launchAgent: .missing
+                    )
+                )
+            )
+        )
+
+        let outcome = DoctorRun.run(
+            environment: environment,
+            diagnostics: diagnostics,
+            appearance: .pretty(colorOffPalette)
+        )
+
+        #expect(outcome.stdout.contains("service: skew"))
+        #expect(outcome.stdout.contains("service: running") == false)
+        #expect(outcome.stdout.contains("service-warning: service reported an error"))
+        #expect(outcome.stdout.contains("peer supplied detail") == false)
     }
 }
 

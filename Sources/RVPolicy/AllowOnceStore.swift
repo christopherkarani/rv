@@ -1,15 +1,7 @@
-import CryptoKit
 import Darwin
 import Foundation
 import RVDomain
-
-public enum AllowOnceConsumeStatus: Sendable, Equatable {
-    case consumed(tokenID: String)
-    case notFound
-    case alreadyConsumed
-    case expired
-    case unavailable
-}
+import Security
 
 public actor AllowOnceStore {
     nonisolated public let baseDirectory: URL
@@ -22,7 +14,8 @@ public actor AllowOnceStore {
         AllowOnceStore(baseDirectory: processHomeConfigDirectory() ?? fallbackRoot)
     }
 
-    nonisolated private static func processHomeConfigDirectory() -> URL? {
+    /// Production config dir: `$HOME/.config/rv` only. Does not read `XDG_CONFIG_HOME`.
+    nonisolated public static func processHomeConfigDirectory() -> URL? {
         guard let home = ProcessInfo.processInfo.environment["HOME"], home.isEmpty == false else {
             return nil
         }
@@ -31,19 +24,118 @@ public actor AllowOnceStore {
             .appendingPathComponent("rv", isDirectory: true)
     }
 
-    public func insertGranted(
+    public func mint(
+        matchingView: MatchingView,
+        cwd: String,
+        ruleID: RuleID?,
+        tty: TTYCapability,
+        now: Date,
+        robot: Bool = false,
+        ttl: TimeInterval = 24 * 60 * 60
+    ) async throws -> String {
+        guard allowsInteractiveAllowOnce(tty) else { throw AllowOnceError.ttyRequired }
+        guard robot == false else { throw AllowOnceError.robotRefused }
+        let trimmed = matchingView.rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else { throw AllowOnceError.emptyCommand }
+        let view = MatchingView(trimmed)
+        var lastError: AllowOnceError = .collision
+        for _ in 0..<8 {
+            let code = try generateAllowOnceCode()
+            let hash = sha256Hex(code)
+            do {
+                try withFileLock {
+                    var records = loadRecords().filter { $0.expiresAt >= now || $0.kind == .consumed }
+                    if records.contains(where: {
+                        $0.kind == .pending && $0.codeHash == hash && $0.expiresAt >= now
+                    }) {
+                        throw AllowOnceError.collision
+                    }
+                    let record = AllowOnceRecord(
+                        schemaVersion: 1,
+                        kind: .pending,
+                        codeHash: hash,
+                        commandFingerprint: commandFingerprint(view),
+                        commandRedacted: redactCommand(view),
+                        cwd: cwd,
+                        ruleID: ruleID?.rawValue,
+                        createdAt: now,
+                        expiresAt: now.addingTimeInterval(ttl),
+                        consumedAt: nil
+                    )
+                    records.append(record)
+                    try writeRecords(records)
+                }
+                return code
+            } catch let error as AllowOnceError where error == .collision {
+                lastError = error
+                continue
+            }
+        }
+        throw lastError
+    }
+
+    public func redeem(
+        code: String,
+        tty: TTYCapability,
+        now: Date,
+        robot: Bool = false
+    ) async throws -> AllowOnceListRow {
+        guard allowsInteractiveAllowOnce(tty) else { throw AllowOnceError.ttyRequired }
+        guard robot == false else { throw AllowOnceError.robotRefused }
+        let normalized = code.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard normalized.count == 6, normalized.allSatisfy(\.isHexDigit) else {
+            throw AllowOnceError.unknownCode
+        }
+        let hash = sha256Hex(normalized)
+        return try withFileLock {
+            var records = loadRecords()
+            guard let index = records.firstIndex(where: {
+                $0.kind == .pending && $0.codeHash == hash
+            }) else {
+                if records.contains(where: {
+                    ($0.kind == .granted || $0.kind == .consumed) && $0.codeHash == hash
+                }) {
+                    throw AllowOnceError.alreadySpent
+                }
+                throw AllowOnceError.unknownCode
+            }
+            var pending = records[index]
+            guard pending.expiresAt >= now else {
+                records.remove(at: index)
+                try writeRecords(records)
+                throw AllowOnceError.expired
+            }
+            pending.kind = .granted
+            records[index] = pending
+            records.removeAll {
+                ($0.kind == .pending || $0.kind == .granted) && $0.expiresAt < now
+            }
+            try writeRecords(records)
+            return AllowOnceListRow(
+                kind: .granted,
+                codeHash: pending.codeHash,
+                commandRedacted: pending.commandRedacted,
+                cwd: pending.cwd,
+                createdAt: pending.createdAt,
+                expiresAt: pending.expiresAt
+            )
+        }
+    }
+
+    /// Test / service preload of a grant without minting a code.
+    /// Not a human unlock path — does not require a TTY. Keep `package` so CLI cannot plant grants.
+    package func insertGranted(
         matchingView: MatchingView,
         cwd: String,
         now: Date,
         ttl: TimeInterval = 24 * 60 * 60
     ) async throws {
-        let fingerprint = commandFingerprint(matchingView)
         let record = AllowOnceRecord(
             schemaVersion: 1,
             kind: .granted,
             codeHash: sha256Hex(UUID().uuidString),
-            commandFingerprint: fingerprint,
-            commandRedacted: "[redacted]",
+            commandFingerprint: commandFingerprint(matchingView),
+            commandRedacted: redactCommand(matchingView),
             cwd: cwd,
             ruleID: nil,
             createdAt: now,
@@ -119,8 +211,42 @@ public actor AllowOnceStore {
         }
     }
 
+    public func list(now: Date) async -> [AllowOnceListRow] {
+        loadRecords().compactMap { record in
+            guard record.expiresAt >= now || record.kind == .consumed else { return nil }
+            guard record.kind != .consumed else {
+                return AllowOnceListRow(
+                    kind: record.kind,
+                    codeHash: record.codeHash,
+                    commandRedacted: record.commandRedacted,
+                    cwd: record.cwd,
+                    createdAt: record.createdAt,
+                    expiresAt: record.expiresAt
+                )
+            }
+            return AllowOnceListRow(
+                kind: record.kind,
+                codeHash: record.codeHash,
+                commandRedacted: record.commandRedacted,
+                cwd: record.cwd,
+                createdAt: record.createdAt,
+                expiresAt: record.expiresAt
+            )
+        }
+    }
+
+    public func clear(tty: TTYCapability, now: Date) async throws {
+        guard allowsInteractiveAllowOnce(tty) else { throw AllowOnceError.ttyRequired }
+        try withFileLock {
+            let kept = loadRecords().filter { record in
+                record.kind == .consumed && record.expiresAt >= now
+            }
+            try writeRecords(kept)
+        }
+    }
+
     private var fileURL: URL {
-        baseDirectory.appendingPathComponent("allow-once.jsonl", isDirectory: false)
+        RVPolicyPaths.allowOnceFile(inConfigDir: baseDirectory)
     }
 
     private func loadRecords() -> [AllowOnceRecord] {
@@ -152,7 +278,7 @@ public actor AllowOnceStore {
         let lines = try records.map { record -> String in
             let data = try encoder.encode(record)
             guard let line = String(data: data, encoding: .utf8) else {
-                throw AllowOnceStoreError.encodeFailed
+                throw AllowOnceError.encodeFailed
             }
             return line
         }
@@ -167,14 +293,14 @@ public actor AllowOnceStore {
             }
         }
         if renamed != 0 {
-            throw AllowOnceStoreError.encodeFailed
+            throw AllowOnceError.encodeFailed
         }
         try setOwnerOnlyFile(fileURL)
     }
 
     private func withFileLock<T>(_ body: () throws -> T) throws -> T {
         try prepareStoreDirectory()
-        let lockURL = baseDirectory.appendingPathComponent(".allow-once.lock", isDirectory: false)
+        let lockURL = RVPolicyPaths.allowOnceLockFile(inConfigDir: baseDirectory)
         if FileManager.default.fileExists(atPath: lockURL.path) == false {
             FileManager.default.createFile(
                 atPath: lockURL.path,
@@ -186,15 +312,15 @@ public actor AllowOnceStore {
         guard FileManager.default.fileExists(atPath: lockURL.path, isDirectory: &isDirectory),
               isDirectory.boolValue == false
         else {
-            throw AllowOnceStoreError.lockFailed
+            throw AllowOnceError.lockFailed
         }
         try setOwnerOnlyFile(lockURL)
         let fd = lockURL.path.withCString { path in
             open(path, O_RDWR)
         }
-        guard fd >= 0 else { throw AllowOnceStoreError.lockFailed }
+        guard fd >= 0 else { throw AllowOnceError.lockFailed }
         defer { close(fd) }
-        guard flock(fd, LOCK_EX) == 0 else { throw AllowOnceStoreError.lockFailed }
+        guard flock(fd, LOCK_EX) == 0 else { throw AllowOnceError.lockFailed }
         defer { _ = flock(fd, LOCK_UN) }
         return try body()
     }
@@ -218,50 +344,11 @@ public actor AllowOnceStore {
     }
 }
 
-public enum AllowOnceStoreError: Error, Sendable, Equatable {
-    case encodeFailed
-    case lockFailed
-}
-
-struct AllowOnceRecord: Sendable, Equatable, Codable {
-    enum Kind: String, Sendable, Codable {
-        case pending
-        case granted
-        case consumed
-    }
-
-    var schemaVersion: Int
-    var kind: Kind
-    var codeHash: String
-    var commandFingerprint: String
-    var commandRedacted: String
-    var cwd: String
-    var ruleID: String?
-    var createdAt: Date
-    var expiresAt: Date
-    var consumedAt: Date?
-
-    enum CodingKeys: String, CodingKey {
-        case schemaVersion = "schema_version"
-        case kind
-        case codeHash = "code_hash"
-        case commandFingerprint = "command_fingerprint"
-        case commandRedacted = "command_redacted"
-        case cwd
-        case ruleID = "rule_id"
-        case createdAt = "created_at"
-        case expiresAt = "expires_at"
-        case consumedAt = "consumed_at"
-    }
-}
-
-func commandFingerprint(_ matchingView: MatchingView) -> String {
-    sha256Hex(matchingView.rawValue)
-}
-
-private func sha256Hex(_ text: String) -> String {
-    let digest = SHA256.hash(data: Data(text.utf8))
-    return digest.map { String(format: "%02x", $0) }.joined()
+private func generateAllowOnceCode() throws -> String {
+    var bytes = [UInt8](repeating: 0, count: 3)
+    let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+    guard status == errSecSuccess else { throw AllowOnceError.encodeFailed }
+    return bytes.map { String(format: "%02x", $0) }.joined()
 }
 
 private let fallbackRoot: URL = FileManager.default.temporaryDirectory
