@@ -124,17 +124,22 @@ struct FakeXPCUnixSocketTests {
         let first = try client.sendJSON(
             methodJSON("allowOnceConsume", ["command": "git reset --hard", "cwd": "/tmp/ws"])
         )
-        #expect(nested(first, ["result", "allowOnceConsume"])?["consumed"] as? Bool == true)
+        #expect(nested(first, ["result", "error"])?["unknownMethod"] as? Bool == true)
+        #expect(nested(first, ["result", "allowOnceConsume"]) == nil)
 
         let second = try client.sendJSON(
             methodJSON("allowOnceConsume", ["command": "git reset --hard", "cwd": "/tmp/ws"])
         )
-        #expect(nested(second, ["result", "error"])?["allowOnceAlreadyConsumed"] as? Bool == true)
+        #expect(nested(second, ["result", "error"])?["unknownMethod"] as? Bool == true)
 
-        let evaluated = try client.sendJSON(evaluateJSON("git reset --hard", cwd: "/tmp/ws"))
-        let decision = nested(evaluated, ["result", "evaluate", "result", "decision"])
-        #expect(decision?["decision"] as? String == "deny")
-        #expect(decision?["ruleID"] as? String == "core.git:reset-hard")
+        let honored = try client.sendJSON(evaluateJSON("git reset --hard", cwd: "/tmp/ws"))
+        let firstDecision = nested(honored, ["result", "evaluate", "result", "decision"])
+        #expect(firstDecision?["decision"] as? String == "allow")
+
+        let spent = try client.sendJSON(evaluateJSON("git reset --hard", cwd: "/tmp/ws"))
+        let secondDecision = nested(spent, ["result", "evaluate", "result", "decision"])
+        #expect(secondDecision?["decision"] as? String == "deny")
+        #expect(secondDecision?["ruleID"] as? String == "core.git:reset-hard")
     }
 
     @Test func doctorSnapshotSkipsHostChecks() async throws {

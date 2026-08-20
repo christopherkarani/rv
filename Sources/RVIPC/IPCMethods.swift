@@ -41,9 +41,29 @@ public struct EvaluateReply: Sendable, Equatable, Codable {
 
 public struct ExplainParams: Sendable, Equatable, Codable {
     public var request: EvaluationRequest
+    public var cwd: String?
 
-    public init(request: EvaluationRequest) {
+    public init(request: EvaluationRequest, cwd: String? = nil) {
         self.request = request
+        self.cwd = cwd.flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case request
+        case cwd
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        request = try container.decode(EvaluationRequest.self, forKey: .request)
+        let decoded = try container.decodeIfPresent(String.self, forKey: .cwd)
+        cwd = decoded.flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(request, forKey: .request)
+        try container.encodeIfPresent(cwd, forKey: .cwd)
     }
 }
 
@@ -92,9 +112,29 @@ public enum ClassifyRisk: String, Sendable, Equatable, Codable {
 
 public struct ClassifyParams: Sendable, Equatable, Codable {
     public var request: EvaluationRequest
+    public var cwd: String?
 
-    public init(request: EvaluationRequest) {
+    public init(request: EvaluationRequest, cwd: String? = nil) {
         self.request = request
+        self.cwd = cwd.flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case request
+        case cwd
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        request = try container.decode(EvaluationRequest.self, forKey: .request)
+        let decoded = try container.decodeIfPresent(String.self, forKey: .cwd)
+        cwd = decoded.flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(request, forKey: .request)
+        try container.encodeIfPresent(cwd, forKey: .cwd)
     }
 }
 

@@ -75,7 +75,7 @@ private final class EvaluateProbe: @unchecked Sendable {
     }
 }
 
-private func inProcessEvaluate(_ command: ShellCommand, cwd: String) async -> EvaluationResult {
+private func inProcessEvaluate(_ command: ShellCommand, cwd: String?) async -> EvaluationResult {
     do {
         let client = try isolatedClient(transport: nil)
         return await client.evaluateResult(command: command, cwd: cwd)
@@ -87,7 +87,7 @@ private func inProcessEvaluate(_ command: ShellCommand, cwd: String) async -> Ev
 private func runHook<C: HostCodec>(
     stdin: String,
     codec: C = GrokHostCodec(),
-    evaluate: (@Sendable (ShellCommand, String) async -> EvaluationResult)? = nil
+    evaluate: (@Sendable (ShellCommand, String?) async -> EvaluationResult)? = nil
 ) async throws -> HookWire {
     try await withTempHome { _ in
         await HookRun.run(
