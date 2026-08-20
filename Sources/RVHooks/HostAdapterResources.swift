@@ -25,22 +25,28 @@ package struct HostAdapterResource: Sendable {
         template.replacingOccurrences(of: HostAdapterResources.rvPlaceholder, with: rvPath)
     }
 
-    /// True when `existing` is this adapter with any single baked rv path.
-    package func matchesCurrent(_ existing: String) -> Bool {
+    /// Returns the rv path baked into `existing`, or `nil` when it is not this adapter.
+    package func bakedRvPath(in existing: String) -> String? {
         let parts = template.components(separatedBy: HostAdapterResources.rvPlaceholder)
-        guard parts.count > 1 else { return existing == template }
+        guard parts.count > 1 else { return existing == template ? "" : nil }
         let prefix = parts[0]
-        guard existing.hasPrefix(prefix) else { return false }
+        guard existing.hasPrefix(prefix) else { return nil }
         let afterPrefix = existing.dropFirst(prefix.count)
         let second = parts[1]
         let substitution: String
         if second.isEmpty {
             substitution = String(afterPrefix)
         } else {
-            guard let range = afterPrefix.range(of: second) else { return false }
+            guard let range = afterPrefix.range(of: second) else { return nil }
             substitution = String(afterPrefix[..<range.lowerBound])
         }
-        return parts.joined(separator: substitution) == existing
+        guard parts.joined(separator: substitution) == existing else { return nil }
+        return substitution
+    }
+
+    /// True when `existing` is this adapter with any single baked rv path.
+    package func matchesCurrent(_ existing: String) -> Bool {
+        bakedRvPath(in: existing) != nil
     }
 }
 

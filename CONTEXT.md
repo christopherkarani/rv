@@ -24,6 +24,10 @@ _Avoid_: bypass, pending code, exception, consume-then-evaluate
 The rv-owned integration for one supported host that turns a host shell event into a Hook request and carries the Hook mapper's result back as the host-native block plus optional display-only chrome. Setup installs a Host adapter; it does not define its behavior.
 _Avoid_: host hook, HostCodec (only one part)
 
+**Host adapter installation state**:
+The read-only classification of one owned Host adapter path: missing, absent-file, occupied, broken, or wired. RVCLI derives it from host detection, resource identity, and the baked executable path; setup and doctor consume the same snapshot.
+_Avoid_: parsing Host adapter behavior in setup or doctor
+
 **Hook mapper**:
 EvaluationResult to HookWire after the Policy gate. One Decision switch, three HostCodecs. Owns hook voice.
 _Avoid_: per-codec Decision switch

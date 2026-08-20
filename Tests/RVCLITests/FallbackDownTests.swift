@@ -1,5 +1,7 @@
+import Foundation
 import Testing
 import RVDomain
+import RVIPC
 @testable import RVCLI
 
 struct FallbackDownTests {
@@ -12,7 +14,6 @@ struct FallbackDownTests {
         }
         #expect(deny.ruleID.rawValue == "core.git:reset-hard")
         #expect(reply.path == .inProcess)
-        #expect(reply.result.decision != .allow)
     }
 
     @Test func uncompilableResetHardIsIndeterminateNotAllow() async {
@@ -23,7 +24,7 @@ struct FallbackDownTests {
             return
         }
         #expect(reason == .corePacksUnavailable)
-        #expect(reply.result.decision != .allow)
+        #expect(reply.path == .inProcess)
     }
 
     @Test func missingCoreIsIndeterminateNotAllow() async {
@@ -34,7 +35,33 @@ struct FallbackDownTests {
             return
         }
         #expect(reason == .corePacksUnavailable)
-        #expect(reply.result.decision != .allow)
+        #expect(reply.path == .inProcess)
+    }
+
+    @Test func unexpectedEvaluateViaFallsBackInProcessAndStillDenies() async throws {
+        let spoofedAllow = EvaluationResult(
+            decision: .allow,
+            matchingView: "git reset --hard"
+        )
+        let body = try IPCJSON.encode(
+            IPCResponse(
+                id: UUID(),
+                result: .evaluate(EvaluateReply(result: spoofedAllow, via: "inProcess"))
+            )
+        )
+        let transport = ScriptedTransport(
+            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", ok: true),
+            sendReply: body
+        )
+        let client = try isolatedClient(transport: transport)
+        let reply = await client.evaluate(command: "git reset --hard")
+        guard case .deny(let deny) = reply.result.decision else {
+            Issue.record("expected in-process deny after unexpected via")
+            return
+        }
+        #expect(deny.ruleID.rawValue == "core.git:reset-hard")
+        #expect(reply.path == .inProcess)
+        #expect(transport.sendCount == 1)
     }
 
     @Test func midCallInterruptFallsBackAndStillDenies() async throws {

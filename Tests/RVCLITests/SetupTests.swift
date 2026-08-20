@@ -3,7 +3,7 @@ import Testing
 import RVPresentation
 @testable import RVCLI
 
-func withTempHome(_ body: (URL, HostLayout, RecordingLaunchctl) throws -> Void) throws {
+func withTempHome(_ body: (URL, OwnedPaths, RecordingLaunchctl) throws -> Void) throws {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-setup-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -12,7 +12,7 @@ func withTempHome(_ body: (URL, HostLayout, RecordingLaunchctl) throws -> Void) 
     try "#!/bin/sh\n".write(to: dummyRvd, atomically: true, encoding: .utf8)
     try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dummyRvd.path)
     let launchctl = RecordingLaunchctl()
-    try body(root, HostLayout(home: root.path), launchctl)
+    try body(root, OwnedPaths(home: root.path), launchctl)
 }
 
 func env(
@@ -122,6 +122,26 @@ private func realGrokHookURL() -> URL? {
     }
 }
 
+@Test func setup_danglingSymlinkAtOwnedNameIsOccupiedAndPreserved() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(
+            atPath: layout.grokDirectory + "/hooks",
+            withIntermediateDirectories: true
+        )
+        let target = "/nonexistent/foreign-adapter"
+        try FileManager.default.createSymbolicLink(
+            atPath: layout.grokHook,
+            withDestinationPath: target
+        )
+
+        let outcome = SetupRun.setup(env(home: home, launchctl: launchctl))
+
+        #expect(outcome.exitCode == 0)
+        #expect(outcome.stdout.contains("Skipped occupied grok hook."))
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: layout.grokHook) == target)
+    }
+}
+
 @Test func setup_foreignSibling_untouched_andWritesOwnedHook() throws {
     try withTempHome { home, layout, launchctl in
         let hooks = layout.grokDirectory + "/hooks"
@@ -193,6 +213,60 @@ private func realGrokHookURL() -> URL? {
         #expect(FileManager.default.fileExists(atPath: layout.grokDirectory + "/hooks/other.json"))
         #expect(FileManager.default.fileExists(atPath: layout.grokDirectory))
         #expect(launchctl.bootouts.contains(SetupRun.launchAgentLabel))
+    }
+}
+
+@Test func uninstall_preservesForeignContentInPreexistingConfigDirectory() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(
+            atPath: layout.configDirectory,
+            withIntermediateDirectories: true
+        )
+        let foreignPath = layout.configDirectory + "/user-settings"
+        let sentinel = "keep me\n"
+        try sentinel.write(toFile: foreignPath, atomically: true, encoding: .utf8)
+
+        _ = SetupRun.setup(env(home: home, launchctl: launchctl))
+        let outcome = SetupRun.uninstall(env(home: home, launchctl: launchctl))
+
+        #expect(outcome.exitCode == 0)
+        #expect(try String(contentsOfFile: foreignPath, encoding: .utf8) == sentinel)
+        #expect(FileManager.default.fileExists(atPath: layout.configDirectory))
+    }
+}
+
+@Test func uninstall_preservesOccupiedAdapterAtOwnedName() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(
+            atPath: layout.grokDirectory + "/hooks",
+            withIntermediateDirectories: true
+        )
+        let foreign = "{\"hooks\":[]}\n"
+        try foreign.write(toFile: layout.grokHook, atomically: true, encoding: .utf8)
+
+        let outcome = SetupRun.uninstall(env(home: home, launchctl: launchctl))
+
+        #expect(outcome.exitCode == 0)
+        #expect(try String(contentsOfFile: layout.grokHook, encoding: .utf8) == foreign)
+    }
+}
+
+@Test func uninstall_preservesOccupiedDanglingSymlinkAtOwnedName() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(
+            atPath: layout.grokDirectory + "/hooks",
+            withIntermediateDirectories: true
+        )
+        let target = "/nonexistent/foreign-adapter"
+        try FileManager.default.createSymbolicLink(
+            atPath: layout.grokHook,
+            withDestinationPath: target
+        )
+
+        let outcome = SetupRun.uninstall(env(home: home, launchctl: launchctl))
+
+        #expect(outcome.exitCode == 0)
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: layout.grokHook) == target)
     }
 }
 
