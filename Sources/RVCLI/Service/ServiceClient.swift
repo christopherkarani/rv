@@ -61,19 +61,8 @@ public struct ServiceClient: Sendable {
         try await store.insertGranted(matchingView: matchingView, cwd: cwd, now: now)
     }
 
-    public func evaluate(command: String, cwd: String? = nil) async -> RoutedEvaluation {
-        await evaluateRouted(command: ShellCommand(rawValue: command), cwd: cwd)
-    }
-
-    public func evaluateResult(command: ShellCommand, cwd: String? = nil) async -> EvaluationResult {
-        await evaluateRouted(command: command, cwd: cwd).result
-    }
-
-    private func evaluateRouted(
-        command: ShellCommand,
-        cwd: String?
-    ) async -> RoutedEvaluation {
-        let request = dayOneEvaluationRequest(command: command)
+    public func evaluate(command: ShellCommand, cwd: String? = nil) async -> RoutedEvaluation {
+        let request = EvaluationRequest.makeDayOne(command: command)
         func inProcessRoute() async -> RoutedEvaluation {
             RoutedEvaluation(
                 result: await inProcessEvaluate(request, cwd: cwd),
@@ -100,6 +89,10 @@ public struct ServiceClient: Sendable {
         case .down, .skew, .failed:
             return await inProcessRoute()
         }
+    }
+
+    public func evaluateResult(command: ShellCommand, cwd: String? = nil) async -> EvaluationResult {
+        await evaluate(command: command, cwd: cwd).result
     }
 
     private func inProcessEvaluate(_ request: EvaluationRequest, cwd: String?) async -> EvaluationResult {

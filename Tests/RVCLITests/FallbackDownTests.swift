@@ -5,35 +5,28 @@ import RVIPC
 @testable import RVCLI
 
 struct FallbackDownTests {
+    private let resetHard = ShellCommand(rawValue: "git reset --hard")
+
     @Test func missingListenerEvaluatesInProcessAndDeniesResetHard() async throws {
         let client = try isolatedClient(transport: nil)
-        let reply = await client.evaluate(command: "git reset --hard")
-        guard case .deny(let deny) = reply.result.decision else {
-            Issue.record("expected deny")
-            return
-        }
+        let reply = await client.evaluate(command: resetHard)
+        let deny = try #require(denyPayload(from: reply.result.decision))
         #expect(deny.ruleID.rawValue == "core.git:reset-hard")
         #expect(reply.path == .inProcess)
     }
 
-    @Test func uncompilableResetHardIsIndeterminateNotAllow() async {
+    @Test func uncompilableResetHardIsIndeterminateNotAllow() async throws {
         let client = ServiceClient.uncompilableCore()
-        let reply = await client.evaluate(command: "git reset --hard")
-        guard case .indeterminate(let reason) = reply.result.decision else {
-            Issue.record("expected indeterminate")
-            return
-        }
+        let reply = await client.evaluate(command: resetHard)
+        let reason = try #require(indeterminateReason(from: reply.result.decision))
         #expect(reason == .corePacksUnavailable)
         #expect(reply.path == .inProcess)
     }
 
-    @Test func missingCoreIsIndeterminateNotAllow() async {
+    @Test func missingCoreIsIndeterminateNotAllow() async throws {
         let client = ServiceClient.missingCore()
-        let reply = await client.evaluate(command: "git reset --hard")
-        guard case .indeterminate(let reason) = reply.result.decision else {
-            Issue.record("expected indeterminate")
-            return
-        }
+        let reply = await client.evaluate(command: resetHard)
+        let reason = try #require(indeterminateReason(from: reply.result.decision))
         #expect(reason == .corePacksUnavailable)
         #expect(reply.path == .inProcess)
     }
@@ -41,7 +34,7 @@ struct FallbackDownTests {
     @Test func unexpectedEvaluateViaFallsBackInProcessAndStillDenies() async throws {
         let spoofedAllow = EvaluationResult(
             decision: .allow,
-            matchingView: "git reset --hard"
+            matchingView: MatchingView(resetHard.rawValue)
         )
         let body = try IPCJSON.encode(
             IPCResponse(
@@ -54,11 +47,8 @@ struct FallbackDownTests {
             sendReply: body
         )
         let client = try isolatedClient(transport: transport)
-        let reply = await client.evaluate(command: "git reset --hard")
-        guard case .deny(let deny) = reply.result.decision else {
-            Issue.record("expected in-process deny after unexpected via")
-            return
-        }
+        let reply = await client.evaluate(command: resetHard)
+        let deny = try #require(denyPayload(from: reply.result.decision))
         #expect(deny.ruleID.rawValue == "core.git:reset-hard")
         #expect(reply.path == .inProcess)
         #expect(transport.sendCount == 1)
@@ -70,11 +60,8 @@ struct FallbackDownTests {
             sendError: .interrupted
         )
         let client = try isolatedClient(transport: transport)
-        let reply = await client.evaluate(command: "git reset --hard")
-        guard case .deny(let deny) = reply.result.decision else {
-            Issue.record("expected deny")
-            return
-        }
+        let reply = await client.evaluate(command: resetHard)
+        let deny = try #require(denyPayload(from: reply.result.decision))
         #expect(deny.ruleID.rawValue == "core.git:reset-hard")
         #expect(reply.path == .inProcess)
         #expect(transport.sendCount == 1)

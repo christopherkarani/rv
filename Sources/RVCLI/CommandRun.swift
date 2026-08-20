@@ -34,7 +34,7 @@ public enum CommandRun {
         now: Date = Date()
     ) async -> EvaluationResult {
         await GatedEvaluate().peek(
-            dayOneEvaluationRequest(command: ShellCommand(rawValue: raw)),
+            .makeDayOne(command: ShellCommand(rawValue: raw)),
             cwd: cwd,
             store: store,
             now: now

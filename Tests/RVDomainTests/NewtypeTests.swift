@@ -53,6 +53,14 @@ import Testing
     #expect(dayOnePackIDs.map(\.rawValue) == ["core.filesystem", "core.git"])
 }
 
+@Test func evaluationRequest_makeDayOne_usesDayOnePacksAndNoBudget() {
+    let command = ShellCommand(rawValue: "git status")
+    let request = EvaluationRequest.makeDayOne(command: command)
+    #expect(request.command == command)
+    #expect(request.enabledPacks == dayOnePackIDs)
+    #expect(request.budget == nil)
+}
+
 @Test func matchingView_encodesAsJSONStringNotObject() throws {
     let view = MatchingView("git reset --hard")
     let data = try JSONEncoder().encode(view)

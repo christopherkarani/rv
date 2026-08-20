@@ -20,4 +20,9 @@ public struct EvaluationRequest: Sendable, Equatable, Codable {
         self.enabledPacks = enabledPacks
         self.budget = budget
     }
+
+    /// Day-one packs only (`core.filesystem`, `core.git`) and the default budget.
+    public static func makeDayOne(command: ShellCommand) -> EvaluationRequest {
+        EvaluationRequest(command: command, enabledPacks: dayOnePackIDs)
+    }
 }

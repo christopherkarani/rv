@@ -13,11 +13,8 @@ struct FallbackSkewTests {
             )
         )
         let client = try isolatedClient(transport: transport)
-        let reply = await client.evaluate(command: "git reset --hard")
-        guard case .deny(let deny) = reply.result.decision else {
-            Issue.record("expected deny")
-            return
-        }
+        let reply = await client.evaluate(command: ShellCommand(rawValue: "git reset --hard"))
+        let deny = try #require(denyPayload(from: reply.result.decision))
         #expect(deny.ruleID.rawValue == "core.git:reset-hard")
         #expect(reply.path == .inProcess)
         #expect(transport.sendCount == 0)
@@ -33,12 +30,9 @@ struct FallbackSkewTests {
             ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "2.0.0", ok: true)
         )
         let client = try isolatedClient(transport: transport)
-        let reply = await client.evaluate(command: "git reset --hard")
+        let reply = await client.evaluate(command: ShellCommand(rawValue: "git reset --hard"))
         #expect(reply.path == .inProcess)
-        guard case .deny = reply.result.decision else {
-            Issue.record("expected deny")
-            return
-        }
+        try #require(denyPayload(from: reply.result.decision) != nil)
         #expect(transport.sendCount == 0)
         let status = await client.status()
         #expect(status.state == "skew")

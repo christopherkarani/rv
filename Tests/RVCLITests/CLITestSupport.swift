@@ -1,7 +1,18 @@
 import Foundation
+import Testing
 import RVDomain
 import RVTheme
 @testable import RVCLI
+
+func denyPayload(from decision: Decision) -> Deny? {
+    if case .deny(let deny) = decision { return deny }
+    return nil
+}
+
+func indeterminateReason(from decision: Decision) -> IndeterminateReason? {
+    if case .indeterminate(let reason) = decision { return reason }
+    return nil
+}
 
 func isolatedAllowOnceDirectory() throws -> URL {
     let root = FileManager.default.temporaryDirectory
