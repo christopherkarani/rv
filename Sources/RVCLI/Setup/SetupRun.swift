@@ -190,8 +190,9 @@ enum SetupRun {
             }
         }
         let configDir = URL(fileURLWithPath: layout.configDirectory, isDirectory: true)
-        removedPaths.append(RVPolicyPaths.allowlistFile(inConfigDir: configDir).path)
-        removedPaths.append(RVPolicyPaths.allowOnceFile(inConfigDir: configDir).path)
+        for artifact in RVPolicyPaths.uninstallArtifacts(inConfigDir: configDir) {
+            removedPaths.append(artifact.path)
+        }
         for path in removedPaths {
             files.removeFile(atPath: path)
         }

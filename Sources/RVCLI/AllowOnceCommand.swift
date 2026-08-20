@@ -120,6 +120,9 @@ struct AllowOnceCommand: AsyncParsableCommand {
         } catch AllowOnceError.unknownCode, AllowOnceError.expired, AllowOnceError.alreadySpent {
             FileHandle.standardError.write(Data("rv allow-once: code not redeemable\n".utf8))
             throw ExitCode(2)
+        } catch AllowOnceError.lockFailed, AllowOnceError.encodeFailed {
+            FileHandle.standardError.write(Data("rv allow-once: store unavailable\n".utf8))
+            throw ExitCode(2)
         }
     }
 }
@@ -169,6 +172,12 @@ struct AllowOnceMint: AsyncParsableCommand {
             FileHandle.standardError.write(
                 Data("rv allow-once mint: --json/--robot refused\n".utf8)
             )
+            throw ExitCode(2)
+        } catch AllowOnceError.emptyCommand {
+            FileHandle.standardError.write(Data("rv allow-once mint: missing command\n".utf8))
+            throw ExitCode(2)
+        } catch AllowOnceError.lockFailed, AllowOnceError.encodeFailed, AllowOnceError.collision {
+            FileHandle.standardError.write(Data("rv allow-once mint: store unavailable\n".utf8))
             throw ExitCode(2)
         }
     }
@@ -234,6 +243,9 @@ struct AllowOnceClear: AsyncParsableCommand {
             FileHandle.standardError.write(
                 Data("rv allow-once clear: requires an interactive TTY\n".utf8)
             )
+            throw ExitCode(2)
+        } catch AllowOnceError.lockFailed, AllowOnceError.encodeFailed {
+            FileHandle.standardError.write(Data("rv allow-once clear: store unavailable\n".utf8))
             throw ExitCode(2)
         }
     }

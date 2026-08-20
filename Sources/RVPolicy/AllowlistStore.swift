@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import RVDomain
 
@@ -86,7 +87,30 @@ public struct AllowlistStore: Sendable {
         return removed
     }
 
-    public func writeAll(_ entries: [AllowlistEntry]) throws {
+    /// Rewrite the user allowlist file. Callers that mutate must already enforce TTY.
+    package func writeAll(_ entries: [AllowlistEntry]) throws {
+        try withFileLock {
+            try writeAllUnlocked(entries)
+        }
+    }
+
+    private func mutate(_ body: (inout [AllowlistEntry]) throws -> Void) throws {
+        try withFileLock {
+            var entries: [AllowlistEntry] = []
+            switch loadForValidate(workspacePath: nil) {
+            case .missing, .symlinkIntoWorkspace:
+                entries = []
+            case .invalid(let error):
+                throw error
+            case .ok(let existing):
+                entries = existing
+            }
+            try body(&entries)
+            try writeAllUnlocked(entries)
+        }
+    }
+
+    private func writeAllUnlocked(_ entries: [AllowlistEntry]) throws {
         try prepareDirectory()
         let body = AllowlistTOML.render(entries)
         try body.write(to: fileURL, atomically: true, encoding: .utf8)
@@ -96,18 +120,34 @@ public struct AllowlistStore: Sendable {
         )
     }
 
-    private func mutate(_ body: (inout [AllowlistEntry]) throws -> Void) throws {
-        var entries: [AllowlistEntry] = []
-        switch loadForValidate(workspacePath: nil) {
-        case .missing, .symlinkIntoWorkspace:
-            entries = []
-        case .invalid(let error):
-            throw error
-        case .ok(let existing):
-            entries = existing
+    private func withFileLock<T>(_ body: () throws -> T) throws -> T {
+        try prepareDirectory()
+        let lockURL = RVPolicyPaths.allowlistLockFile(inConfigDir: baseDirectory)
+        if FileManager.default.fileExists(atPath: lockURL.path) == false {
+            FileManager.default.createFile(
+                atPath: lockURL.path,
+                contents: Data(),
+                attributes: [.posixPermissions: 0o600]
+            )
         }
-        try body(&entries)
-        try writeAll(entries)
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: lockURL.path, isDirectory: &isDirectory),
+              isDirectory.boolValue == false
+        else {
+            throw AllowOnceError.lockFailed
+        }
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: lockURL.path
+        )
+        let fd = lockURL.path.withCString { path in
+            open(path, O_RDWR)
+        }
+        guard fd >= 0 else { throw AllowOnceError.lockFailed }
+        defer { close(fd) }
+        guard flock(fd, LOCK_EX) == 0 else { throw AllowOnceError.lockFailed }
+        defer { _ = flock(fd, LOCK_UN) }
+        return try body()
     }
 
     private func prepareDirectory() throws {

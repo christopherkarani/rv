@@ -168,6 +168,15 @@ struct AllowOnceStoreTests {
                 == home.appendingPathComponent(".config/rv").path
         )
     }
+
+    @Test func uninstallArtifactsIncludeLocks() {
+        let root = URL(fileURLWithPath: "/tmp/rv-config", isDirectory: true)
+        let names = RVPolicyPaths.uninstallArtifacts(inConfigDir: root).map(\.lastPathComponent)
+        #expect(names.contains("allowlist.toml"))
+        #expect(names.contains("allow-once.jsonl"))
+        #expect(names.contains(".allow-once.lock"))
+        #expect(names.contains(".allowlist.lock"))
+    }
 }
 
 private func isolatedStore() throws -> AllowOnceStore {

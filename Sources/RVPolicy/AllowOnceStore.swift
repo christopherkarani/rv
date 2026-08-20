@@ -123,7 +123,8 @@ public actor AllowOnceStore {
     }
 
     /// Test / service preload of a grant without minting a code.
-    public func insertGranted(
+    /// Not a human unlock path — does not require a TTY. Keep `package` so CLI cannot plant grants.
+    package func insertGranted(
         matchingView: MatchingView,
         cwd: String,
         now: Date,
@@ -299,7 +300,7 @@ public actor AllowOnceStore {
 
     private func withFileLock<T>(_ body: () throws -> T) throws -> T {
         try prepareStoreDirectory()
-        let lockURL = baseDirectory.appendingPathComponent(".allow-once.lock", isDirectory: false)
+        let lockURL = RVPolicyPaths.allowOnceLockFile(inConfigDir: baseDirectory)
         if FileManager.default.fileExists(atPath: lockURL.path) == false {
             FileManager.default.createFile(
                 atPath: lockURL.path,
