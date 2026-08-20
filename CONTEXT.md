@@ -20,6 +20,10 @@ _Avoid_: honor wrapper, consume-on-evaluate
 A single-use unlock for one matching view plus cwd. Spent by the Policy gate. The hook wire never carries a code.
 _Avoid_: bypass, pending code, exception
 
+**Host adapter**:
+The rv-owned integration for one supported host that turns a host shell event into a Hook request and carries the Hook mapper's result back as the host-native block plus optional display-only chrome. Setup installs a Host adapter; it does not define its behavior.
+_Avoid_: host hook, HostCodec (only one part)
+
 **Hook mapper**:
 EvaluationResult to HookWire after the Policy gate. One Decision switch, three HostCodecs. Owns hook voice.
 _Avoid_: per-codec Decision switch

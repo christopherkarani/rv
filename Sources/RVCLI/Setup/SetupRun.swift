@@ -1,4 +1,5 @@
 import Foundation
+import RVHooks
 import RVPresentation
 
 struct SetupOutcome: Equatable, Sendable {
@@ -16,6 +17,8 @@ struct SetupOutcome: Equatable, Sendable {
 }
 
 extension SetupHostKind {
+    fileprivate static let rvPathMarker = "__RV_SETUP_BINARY_PATH__"
+
     var toolName: String {
         switch self {
         case .grok: "grok"
@@ -48,24 +51,16 @@ extension SetupHostKind {
         }
     }
 
-    func template(rvPath: String) throws -> String {
-        switch self {
-        case .grok: try HostTemplates.grokHook(rvPath: rvPath)
-        case .pi: try HostTemplates.piExtension(rvPath: rvPath)
-        case .openCode: try HostTemplates.openCodePlugin(rvPath: rvPath)
-        }
+    func adapterResource() throws -> HostAdapterResource {
+        try HostAdapterResources.load(for: hookHost)
     }
 
-    func rawTemplate() throws -> String {
+    private var hookHost: HookHost {
         switch self {
-        case .grok: try HostTemplates.rawGrok()
-        case .pi: try HostTemplates.rawPi()
-        case .openCode: try HostTemplates.rawOpenCode()
+        case .grok: .grok
+        case .pi: .pi
+        case .openCode: .opencode
         }
-    }
-
-    func isCurrent(_ existing: String, raw: String) -> Bool {
-        HostTemplates.matchesCurrentTemplate(existing, raw: raw)
     }
 
     func isDetected(layout: HostLayout, env: SetupEnvironment, files: FileOps) -> Bool {
@@ -73,6 +68,27 @@ extension SetupHostKind {
             env.fileManager.isExecutableFile(atPath: entry + "/" + toolName)
         }
     }
+}
+
+private func matchesCurrentTemplate(
+    _ existing: String,
+    marked: String,
+    marker: String
+) -> Bool {
+    let parts = marked.components(separatedBy: marker)
+    guard parts.count > 1 else { return existing == marked }
+    let prefix = parts[0]
+    guard existing.hasPrefix(prefix) else { return false }
+    let afterPrefix = existing.dropFirst(prefix.count)
+    let second = parts[1]
+    let substitution: String
+    if second.isEmpty {
+        substitution = String(afterPrefix)
+    } else {
+        guard let range = afterPrefix.range(of: second) else { return false }
+        substitution = String(afterPrefix[..<range.lowerBound])
+    }
+    return parts.joined(separator: substitution) == existing
 }
 
 struct SetupEnvironment {
@@ -160,11 +176,18 @@ enum SetupRun {
 
         for host in SetupHostKind.allCases {
             guard host.isDetected(layout: layout, env: env, files: files) else { continue }
-            let raw = try host.rawTemplate()
+            let adapter = try host.adapterResource()
+            let marked = adapter.rendered(rvPath: SetupHostKind.rvPathMarker)
             switch try writeOwned(
                 path: host.ownedPath(in: layout),
-                contents: try host.template(rvPath: env.rvPath),
-                isCurrent: { host.isCurrent($0, raw: raw) },
+                contents: adapter.rendered(rvPath: env.rvPath),
+                isCurrent: {
+                    matchesCurrentTemplate(
+                        $0,
+                        marked: marked,
+                        marker: SetupHostKind.rvPathMarker
+                    )
+                },
                 files: files
             ) {
             case .wrote:
@@ -217,7 +240,7 @@ enum SetupRun {
         guard env.fileManager.isExecutableFile(atPath: env.rvdPath) else {
             return
         }
-        let body = try HostTemplates.launchAgentPlist(rvdPath: env.rvdPath)
+        let body = try LaunchAgentTemplate.rendered(rvdPath: env.rvdPath)
         try files.write(body, to: layout.launchAgent)
         if env.touchLaunchd {
             let url = URL(fileURLWithPath: layout.launchAgent)

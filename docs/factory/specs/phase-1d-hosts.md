@@ -55,12 +55,12 @@ T8 is not a dependency. Unlock text may mention `rv allow-once` without implemen
 - **T5 does not start** until T4’s L3 Grok fixtures are green (codec + `rv hook` exist).
 - **T6 and T7 may run in parallel worktrees** (`feat/t6-install`, `feat/t7-doctor`) **only if file ownership is split** as below. Both branch from a SHA that already has T4 fixtures (PLAN: “after T4 fixtures exist”). If T7 needs a setup path that this spec does not name, T7 waits for T6.
 - Two agents **must not** share a working tree. Use git worktrees from the same base SHA.
-- **`Package.swift`:** do not add/remove modules. T4–T7 only add sources and test fixtures under existing targets. T6 may add `resources` on `RVCLI` for host templates; if that graph edit collides with T3/T7, stop and write a merge plan.
+- **`Package.swift`:** do not add/remove modules. T4–T7 only add sources and test fixtures under existing targets. RVHooks embeds Host adapter resources; RVCLI embeds the LaunchAgent resource. If that ownership edit collides with T3/T7, stop and write a merge plan.
 
 | Worktree | Owns | Must not edit |
 |---|---|---|
-| `feat/t4-t5-hooks` | `Sources/RVHooks/**`, `Tests/RVHooksTests/**`, `rv hook` in `RVCLI` | `install.sh`, setup/uninstall writers, `rv doctor` |
-| `feat/t6-install` | `install.sh`, `rv setup` / `uninstall`, host **templates** under `Sources/RVCLI/Resources/hosts/` | `RVHooks` codecs, `rv doctor` |
+| `feat/t4-t5-hooks` | `Sources/RVHooks/**` including embedded Host adapter resources, `Tests/RVHooksTests/**`, `rv hook` in `RVCLI` | `install.sh`, setup/uninstall writers, `rv doctor` |
+| `feat/t6-install` | `install.sh`, `rv setup` / `uninstall`, Host adapter detection and filesystem mutations | `RVHooks` behavior, `rv doctor` |
 | `feat/t7-doctor` | `rv doctor`, `DoctorViewModel` fields, doctor tests | `install.sh`, setup/uninstall, hook codecs |
 
 T7 reads the **T6 path contract** in this spec (owned filenames, detect rules, occupied-skip). It does not discover new paths.
@@ -463,7 +463,7 @@ rv uninstall
 - Idempotent if files are already gone.
 - Leaves empty parent dirs alone (do not `rm -rf ~/.grok`).
 
-Templates live in `Sources/RVCLI/Resources/hosts/` (`rv.json.tmpl`, `rv-guard.ts.tmpl`, `rv-guard.js.tmpl`) so T6 does not edit `RVHooks`.
+Host adapter resources live in `Sources/RVHooks/Resources/hosts/` (`rv.json.tmpl`, `rv-guard.ts.tmpl`, `rv-guard.js.tmpl`). T6 consumes them through the RVHooks interface and owns only setup mutations.
 
 ### T6.4 L4 tests (temp HOME)
 
@@ -558,9 +558,9 @@ Sources/RVCLI/HookCommand.swift
 Sources/RVCLI/SetupCommand.swift           # T6
 Sources/RVCLI/UninstallCommand.swift       # T6
 Sources/RVCLI/DoctorCommand.swift          # T7
-Sources/RVCLI/Resources/hosts/rv.json.tmpl
-Sources/RVCLI/Resources/hosts/rv-guard.ts.tmpl
-Sources/RVCLI/Resources/hosts/rv-guard.js.tmpl
+Sources/RVHooks/Resources/hosts/rv.json.tmpl
+Sources/RVHooks/Resources/hosts/rv-guard.ts.tmpl
+Sources/RVHooks/Resources/hosts/rv-guard.js.tmpl
 Sources/RVPresentation/DoctorViewModel.swift   # T7 fills T2 stub
 install.sh
 Tests/RVHooksTests/GrokHookTests.swift
