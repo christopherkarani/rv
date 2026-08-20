@@ -139,24 +139,19 @@ enum SetupRun {
                 continue
             case .absentFile:
                 existingData = nil
-            case .broken(_, let data, _), .wired(_, let data, _):
+            case .broken(_, let data), .wired(_, let data):
                 existingData = data
             }
             let adapter = try HostAdapterResources.load(for: owned.hookHost)
-            switch try writeOwned(
+            if try writeOwned(
                 path: owned.destination,
                 contents: adapter.rendered(rvPath: env.rvPath),
                 existingData: existingData,
                 files: files
             ) {
-            case .wrote:
                 wrote.insert(host)
-                kinds[host] = .wired
-            case .unchanged:
-                kinds[host] = .wired
-            case .occupied:
-                kinds[host] = .occupied
             }
+            kinds[host] = .wired
         }
 
         return SetupReport(
@@ -223,27 +218,19 @@ enum SetupRun {
         }
     }
 
-    private enum WriteKind {
-        case wrote
-        case unchanged
-        case occupied
-    }
-
+    /// Writes `contents` when missing or different. Returns whether a write occurred.
     private static func writeOwned(
         path: String,
         contents: String,
         existingData: Data?,
         files: FileOps
-    ) throws -> WriteKind {
-        guard let existingData else {
-            try files.write(contents, to: path)
-            return .wrote
-        }
-        if existingData == Data(contents.utf8) {
-            return .unchanged
+    ) throws -> Bool {
+        let payload = Data(contents.utf8)
+        if existingData == payload {
+            return false
         }
         try files.write(contents, to: path)
-        return .wrote
+        return true
     }
 }
 

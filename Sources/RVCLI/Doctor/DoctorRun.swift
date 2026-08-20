@@ -35,8 +35,17 @@ enum DoctorRun {
         diagnostics: ServiceDiagnosticResult,
         appearance: CLIAppearance
     ) -> DoctorOutcome {
+        let model: DoctorViewModel
         do {
-            let model = try inspect(environment: environment, diagnostics: diagnostics)
+            model = try inspect(environment: environment, diagnostics: diagnostics)
+        } catch {
+            return DoctorOutcome(
+                stdout: "",
+                stderr: "rv doctor failed: unable to inspect Host adapters\n",
+                exitCode: 1
+            )
+        }
+        do {
             let stdout: String
             switch appearance {
             case .robot:
@@ -83,10 +92,7 @@ enum DoctorRun {
             service: projection.service,
             packs: packs,
             hosts: SetupHostKind.allCases.map { host in
-                DoctorHostView(
-                    host: host,
-                    state: doctorHostState(installations.state(for: host))
-                )
+                DoctorHostView(host: host, state: installations.state(for: host))
             },
             config: config
         )
@@ -155,7 +161,7 @@ enum DoctorRun {
                     state: state,
                     protocolName: ProtocolVersion.name,
                     serviceSemver: diagnostic.serviceSemver,
-                    label: "dev.rv.evaluate",
+                    label: SetupRun.launchAgentLabel,
                     fallback: diagnostic.corePacksReady ? .ready : .unavailable,
                     launchAgent: launchAgent,
                     warning: warning
@@ -178,23 +184,6 @@ enum DoctorRun {
             return .unreadable
         }
         return .readable
-    }
-
-    private static func doctorHostState(
-        _ state: HostAdapterInstallationState
-    ) -> DoctorHostState {
-        switch state {
-        case .missing:
-            .missing
-        case .wired:
-            .wired
-        case .occupied:
-            .occupied
-        case .absentFile:
-            .absentFile
-        case .broken:
-            .broken
-        }
     }
 
     private static func robotText(_ model: DoctorViewModel) throws -> String {

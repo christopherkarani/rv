@@ -160,27 +160,9 @@ public struct ServiceClient: Sendable {
                         serviceSemver: serviceSemver
                     )
                 }
-            } catch is DecodingError {
-                return localDiagnostic(
-                    cause: .requestFailed(.invalidResponse),
-                    corePacksReady: localCorePacksReady,
-                    serviceSemver: serviceSemver
-                )
-            } catch is EncodingError {
-                return localDiagnostic(
-                    cause: .requestFailed(.invalidResponse),
-                    corePacksReady: localCorePacksReady,
-                    serviceSemver: serviceSemver
-                )
-            } catch let error as ServiceTransportError {
-                return localDiagnostic(
-                    cause: .requestFailed(.transport(error)),
-                    corePacksReady: localCorePacksReady,
-                    serviceSemver: serviceSemver
-                )
             } catch {
                 return localDiagnostic(
-                    cause: .requestFailed(.transport(.unexpected)),
+                    cause: .requestFailed(Self.diagnosticFailure(from: error)),
                     corePacksReady: localCorePacksReady,
                     serviceSemver: serviceSemver
                 )
@@ -213,6 +195,17 @@ public struct ServiceClient: Sendable {
                 serviceSemver: serviceSemver
             )
         )
+    }
+
+    private static func diagnosticFailure(from error: Error) -> ServiceDiagnosticFailure {
+        switch error {
+        case is DecodingError, is EncodingError:
+            .invalidResponse
+        case let error as ServiceTransportError:
+            .transport(error)
+        default:
+            .transport(.unexpected)
+        }
     }
 
     private func fallback() -> GatedEvaluate {

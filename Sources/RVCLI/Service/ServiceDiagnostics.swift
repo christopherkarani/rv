@@ -1,11 +1,13 @@
 import RVIPC
 
+/// Typed failure while talking to a reachable evaluation service.
 enum ServiceDiagnosticFailure: Sendable, Equatable {
     case transport(ServiceTransportError)
     case invalidResponse
     case unexpectedResponse
     case service(IPCError)
 
+    /// Operator-facing status string with no peer-supplied detail.
     var statusMessage: String {
         switch self {
         case .transport:
@@ -20,12 +22,14 @@ enum ServiceDiagnosticFailure: Sendable, Equatable {
     }
 }
 
+/// Why a successful hello still cannot use the peer.
 enum ServiceSkewReason: Sendable, Equatable {
     case protocolMismatch
     case majorVersionMismatch
     case corePacksUnavailable
     case rejected
 
+    /// Operator-facing status string with no peer-supplied detail.
     var statusMessage: String {
         switch self {
         case .protocolMismatch:
@@ -40,12 +44,14 @@ enum ServiceSkewReason: Sendable, Equatable {
     }
 }
 
+/// Why diagnostics fell back to local readiness instead of an XPC snapshot.
 enum ServiceFallbackCause: Sendable, Equatable {
     case down
     case skew(ServiceSkewReason)
     case requestFailed(ServiceDiagnosticFailure)
 }
 
+/// Local readiness facts when the XPC doctor snapshot is unavailable.
 struct ServiceFallbackDiagnostic: Sendable, Equatable {
     var cause: ServiceFallbackCause
     var corePacksReady: Bool
@@ -62,12 +68,14 @@ struct ServiceFallbackDiagnostic: Sendable, Equatable {
     }
 }
 
+/// Result of one typed hello + doctorSnapshot diagnostic attempt.
 enum ServiceDiagnosticResult: Sendable, Equatable {
     case xpc(snapshot: DoctorSnapshotReply, localCorePacksReady: Bool)
     case local(ServiceFallbackDiagnostic)
 }
 
 extension ServiceDiagnosticResult {
+    /// Projects diagnostics into the existing `rv service status` report shape.
     var statusReport: ServiceStatusReport {
         switch self {
         case .xpc(let snapshot, _):

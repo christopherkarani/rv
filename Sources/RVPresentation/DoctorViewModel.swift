@@ -8,7 +8,10 @@ public enum DoctorServiceState: String, Equatable, Sendable {
     case notInstalled = "not-installed"
 }
 
-/// Installation state of an rv-owned Host adapter path.
+/// Installation state at an rv-owned Host adapter path.
+///
+/// Shared by setup inspection, uninstall, and doctor rendering so those
+/// surfaces cannot drift apart.
 public enum DoctorHostState: String, Equatable, Sendable {
     case missing
     case wired

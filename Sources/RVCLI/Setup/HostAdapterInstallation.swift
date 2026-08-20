@@ -2,22 +2,16 @@ import Foundation
 import RVHooks
 import RVPresentation
 
-enum HostAdapterInstallationState: String, Equatable, Sendable {
-    case missing
-    case absentFile = "absent-file"
-    case occupied
-    case broken
-    case wired
-}
-
+/// Inspected Host adapter path, including bytes needed to rewrite owned files.
 enum HostAdapterInstallation: Equatable, Sendable {
     case missing(OwnedHostAdapterPath)
     case absentFile(OwnedHostAdapterPath)
     case occupied(OwnedHostAdapterPath)
-    case broken(path: OwnedHostAdapterPath, existingData: Data, bakedRvPath: String)
-    case wired(path: OwnedHostAdapterPath, existingData: Data, bakedRvPath: String)
+    case broken(path: OwnedHostAdapterPath, existingData: Data)
+    case wired(path: OwnedHostAdapterPath, existingData: Data)
 
-    var state: HostAdapterInstallationState {
+    /// Doctor / setup-facing installation state for this path.
+    var state: DoctorHostState {
         switch self {
         case .missing:
             .missing
@@ -33,6 +27,7 @@ enum HostAdapterInstallation: Equatable, Sendable {
     }
 }
 
+/// Closed snapshot of installation state for every v1 Host.
 struct HostAdapterInstallationSnapshot: Equatable, Sendable {
     private var grok: HostAdapterInstallation
     private var pi: HostAdapterInstallation
@@ -48,10 +43,12 @@ struct HostAdapterInstallationSnapshot: Equatable, Sendable {
         self.openCode = openCode
     }
 
-    func state(for host: SetupHostKind) -> HostAdapterInstallationState {
+    /// Returns the doctor-facing state for `host`.
+    func state(for host: SetupHostKind) -> DoctorHostState {
         installation(for: host).state
     }
 
+    /// Returns the full installation record for `host`.
     func installation(for host: SetupHostKind) -> HostAdapterInstallation {
         switch host {
         case .grok:
@@ -65,6 +62,7 @@ struct HostAdapterInstallationSnapshot: Equatable, Sendable {
 }
 
 extension HostAdapterInstallation {
+    /// Inspects every owned Host adapter path under `paths` without mutating the filesystem.
     static func inspect(
         paths: OwnedPaths,
         pathEntries: [String],
@@ -117,9 +115,9 @@ extension HostAdapterInstallation {
             && bakedRvPath.hasPrefix("/")
             && fileManager.isExecutableFile(atPath: bakedRvPath)
         if wired {
-            return .wired(path: path, existingData: data, bakedRvPath: bakedRvPath)
+            return .wired(path: path, existingData: data)
         }
-        return .broken(path: path, existingData: data, bakedRvPath: bakedRvPath)
+        return .broken(path: path, existingData: data)
     }
 
     private static func isDetected(
