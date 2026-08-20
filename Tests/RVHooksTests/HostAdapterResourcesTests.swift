@@ -61,6 +61,21 @@ func hostAdapter_bakedRvPath_rejectsModifiedAndForeignBytes(host: HookHost) thro
     }
 }
 
+@Test(arguments: [HookHost.grok, .pi, .opencode])
+func hostAdapter_controlAndBackslashPath_roundTrips(host: HookHost) throws {
+    let path = "/tmp/rv-\t\"bin\"\\\r/rv"
+    let adapter = try HostAdapterResources.load(for: host)
+    let body = adapter.rendered(rvPath: path)
+    #expect(adapter.bakedRvPath(in: body) == path)
+    #expect(adapter.matchesCurrent(body))
+    if host == .grok {
+        let json = try JSONSerialization.jsonObject(with: Data(body.utf8))
+        #expect(try grokHookCommand(json) == path + " hook --host grok")
+    } else {
+        #expect(jsBinaryLiteral(in: body) == path)
+    }
+}
+
 private func grokHookCommand(_ json: Any) throws -> String {
     let root = try #require(json as? [String: Any])
     let hooks = try #require(root["hooks"] as? [String: Any])

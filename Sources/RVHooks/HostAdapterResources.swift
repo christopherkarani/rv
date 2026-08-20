@@ -53,88 +53,40 @@ package struct HostAdapterResource: Sendable {
     }
 }
 
+/// Escapes filesystem paths as JSON / JS double-quoted string *contents*
+/// (no surrounding quotes). Shared by Grok JSON and Pi/OpenCode literals.
 enum HostAdapterString {
     static func escape(_ value: String) -> String {
-        var out = ""
-        for scalar in value.unicodeScalars {
-            switch scalar {
-            case "\"":
-                out += "\\\""
-            case "\\":
-                out += "\\\\"
-            case "\n":
-                out += "\\n"
-            case "\r":
-                out += "\\r"
-            case "\t":
-                out += "\\t"
-            default:
-                if scalar.value < 0x20 {
-                    out += "\\u"
-                    out += hex4(scalar.value)
-                } else {
-                    out.unicodeScalars.append(scalar)
-                }
-            }
+        guard let data = try? JSONSerialization.data(
+            withJSONObject: value,
+            options: [.fragmentsAllowed]
+        ),
+            let encoded = String(data: data, encoding: .utf8),
+            encoded.count >= 2,
+            encoded.first == "\"",
+            encoded.last == "\""
+        else {
+            preconditionFailure("JSONSerialization must encode String")
         }
-        return out
+        // Foundation may emit `\/`; JSON and JS both treat `/` as unescaped.
+        // Keep ordinary paths byte-identical to pre-escape installs.
+        return String(encoded.dropFirst().dropLast())
+            .replacingOccurrences(of: "\\/", with: "/")
     }
 
-    static func unescape(_ value: String) -> String {
-        var out = ""
-        var scalars = value.unicodeScalars.makeIterator()
-        while let scalar = scalars.next() {
-            guard scalar == "\\" else {
-                out.unicodeScalars.append(scalar)
-                continue
-            }
-            guard let next = scalars.next() else {
-                out.unicodeScalars.append(scalar)
-                break
-            }
-            switch next {
-            case "\"":
-                out += "\""
-            case "\\":
-                out += "\\"
-            case "n":
-                out += "\n"
-            case "r":
-                out += "\\r"
-            case "t":
-                out += "\\t"
-            case "u":
-                var hex = ""
-                var taken: [Unicode.Scalar] = []
-                for _ in 0..<4 {
-                    guard let digit = scalars.next() else { break }
-                    taken.append(digit)
-                    hex.unicodeScalars.append(digit)
-                }
-                if taken.count == 4, let code = UInt32(hex, radix: 16), let decoded = Unicode.Scalar(code) {
-                    out.unicodeScalars.append(decoded)
-                } else {
-                    out += "\\u"
-                    for digit in taken {
-                        out.unicodeScalars.append(digit)
-                    }
-                }
-            default:
-                out.unicodeScalars.append("\\")
-                out.unicodeScalars.append(next)
-            }
+    static func unescape(_ value: String) -> String? {
+        var quoted = "\""
+        quoted.append(value)
+        quoted.append("\"")
+        guard let data = quoted.data(using: .utf8),
+              let decoded = try? JSONSerialization.jsonObject(
+                  with: data,
+                  options: [.fragmentsAllowed]
+              ) as? String
+        else {
+            return nil
         }
-        return out
-    }
-
-    private static func hex4(_ value: UInt32) -> String {
-        let digits = Array("0123456789abcdef")
-        return String([
-            digits[Int((value >> 12) & 0xF)],
-            digits[Int((value >> 8) & 0xF)],
-            digits[Int((value >> 4) & 0xF)],
-            digits[Int(value & 0xF)],
-        ])
+        return decoded
     }
 }
 
