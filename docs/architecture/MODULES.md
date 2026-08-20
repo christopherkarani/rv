@@ -14,11 +14,11 @@ Each module keeps a small public API, `package` internals later, and its own tes
 | **RVPolicy** | config merge, allowlist, allow-once | rendering |
 | **RVHooks** | **Pi / Grok / OpenCode** Host adapters: shell codecs, Hook mapper/voice, embedded adapter resources | evaluation, setup mutations |
 | **RVIPC** | `rv.ipc.v1` Codable | transport details |
-| **RVService** | XPC listener, EvaluateSession (compiled day-one packs + evaluate), launchd | ArgumentParser, SwiftUI |
+| **RVService** | XPC listener, EvaluateSession (compiled day-one packs + evaluate), GatedEvaluate (session then Policy gate), launchd | ArgumentParser, SwiftUI |
 | **RVPresentation** | deny/explain/packs/doctor view models | ANSI |
 | **RVTheme** | palettes, pure capability detect | business rules |
 | **RVTUI** | browse kit, `render` → `[String]`, key map | opening a TTY |
-| **RVCLI** | ArgumentParser, output mode, thin XPC client, EvaluateSession for TTY test/explain and hook XPC miss, Host adapter setup mutations | regex, pack parse |
+| **RVCLI** | ArgumentParser, output mode, thin XPC client, GatedEvaluate for TTY test/explain and hook XPC miss, Host adapter setup mutations | regex, pack parse |
 | **RVHistory** | stub; later; off by default | logging full argv |
 
 ## Dependency graph
@@ -36,6 +36,6 @@ Each module keeps a small public API, `package` internals later, and its own tes
 | `RVPresentation` | `RVDomain`, `RVTheme` | View models later. No ANSI. |
 | `RVTUI` | `RVTheme`, `RVPresentation` | `reduce` + `render` later. Must not open a TTY. |
 | `RVService` | `RVDomain`, `RVEngine`, `RVPacks`, `RVPolicy`, `RVIPC`, `RVHistory` | XPC/`NSObject` edge later. No ArgumentParser, no SwiftUI, no TUI/CLI/Presentation. |
-| `RVCLI` | `RVDomain`, `RVEngine`, `RVPolicy`, `RVHooks`, `RVIPC`, `RVPresentation`, `RVTheme`, `RVTUI`, `RVService`, `RVHistory` | Thin client; EvaluateSession for TTY test/explain and hook XPC miss. No regex, no pack parse. |
+| `RVCLI` | `RVDomain`, `RVEngine`, `RVPolicy`, `RVHooks`, `RVIPC`, `RVPresentation`, `RVTheme`, `RVTUI`, `RVService`, `RVHistory` | Thin client; GatedEvaluate for TTY test/explain and hook XPC miss. No regex, no pack parse. |
 
 Each module has a matching `*Tests` target that depends only on that module.

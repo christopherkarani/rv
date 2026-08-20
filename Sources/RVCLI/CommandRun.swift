@@ -33,18 +33,15 @@ public enum CommandRun {
         store: AllowOnceStore,
         now: Date = Date()
     ) async -> EvaluationResult {
-        let engine = EvaluateSession().evaluate(
+        return await GatedEvaluate().peek(
             EvaluationRequest(
                 command: ShellCommand(rawValue: raw),
                 enabledPacks: dayOnePackIDs
-            )
-        )
-        return await PolicyGate.peek(
-            engine,
+            ),
             cwd: cwd,
             store: store,
             now: now
-        ).result
+        )
     }
 
     public static func evaluateCommand(

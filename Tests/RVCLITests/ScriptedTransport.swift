@@ -4,11 +4,17 @@ import Foundation
 final class ScriptedTransport: ServiceTransport, @unchecked Sendable {
     let ack: HelloAckView
     let sendError: ServiceTransportError?
+    let sendReply: Data?
     nonisolated(unsafe) private var sends = 0
 
-    init(ack: HelloAckView, sendError: ServiceTransportError? = nil) {
+    init(
+        ack: HelloAckView,
+        sendError: ServiceTransportError? = nil,
+        sendReply: Data? = nil
+    ) {
         self.ack = ack
         self.sendError = sendError
+        self.sendReply = sendReply
     }
 
     var sendCount: Int { sends }
@@ -22,6 +28,6 @@ final class ScriptedTransport: ServiceTransport, @unchecked Sendable {
         if let sendError {
             throw sendError
         }
-        return Data()
+        return sendReply ?? Data()
     }
 }

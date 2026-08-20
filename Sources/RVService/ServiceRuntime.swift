@@ -9,7 +9,7 @@ public actor ServiceRuntime {
     public let corePacksReady: Bool
     public let idleExitSeconds: Int
 
-    private let session: EvaluateSession
+    private let gated: GatedEvaluate
     private var catalog: PackCatalog
     private let allowOnce: AllowOnceStore
     private let log: (any ServiceLog)?
@@ -22,9 +22,9 @@ public actor ServiceRuntime {
         idleExitSeconds: Int = IdleWatchdog.defaultSeconds,
         log: (any ServiceLog)? = nil
     ) {
-        let session = EvaluateSession(snapshots: snapshots)
-        self.session = session
-        self.corePacksReady = session.corePacksReady
+        let gated = GatedEvaluate(EvaluateSession(snapshots: snapshots))
+        self.gated = gated
+        self.corePacksReady = gated.session.corePacksReady
         self.catalog = catalog
         if let allowOnce {
             self.allowOnce = allowOnce
@@ -81,15 +81,15 @@ public actor ServiceRuntime {
         case .evaluate(let params):
             result = .evaluate(await makeEvaluateReply(params.request, cwd: params.cwd))
         case .explain(let params):
-            result = .explain(explain(params.request))
+            result = .explain(await explain(params))
         case .classify(let params):
-            result = .classify(classify(params.request))
+            result = .classify(await classify(params))
         case .listPacks:
             result = .listPacks(listPacks())
         case .setPackEnabled(let params):
             result = setPackEnabled(params)
-        case .allowOnceConsume(let params):
-            result = await consumeAllowOnce(params)
+        case .allowOnceConsume:
+            result = .error(.unknownMethod)
         case .doctorSnapshot:
             result = .doctorSnapshot(doctorSnapshot())
         }
@@ -106,18 +106,18 @@ public actor ServiceRuntime {
     }
 
     private func runEvaluate(_ request: EvaluationRequest, cwd: String?) async -> EvaluationResult {
-        await PolicyGate.apply(
-            session.evaluate(request),
-            cwd: cwd,
-            store: allowOnce,
-            now: Date()
-        ).result
+        await gated.apply(request, cwd: cwd, store: allowOnce, now: Date())
     }
 
-    private func explain(_ request: EvaluationRequest) -> ExplainReply {
-        let result = session.evaluate(request)
+    private func explain(_ params: ExplainParams) async -> ExplainReply {
+        let result = await gated.peek(
+            params.request,
+            cwd: params.cwd,
+            store: allowOnce,
+            now: Date()
+        )
         let normalized = result.matchingView.isEmpty
-            ? Normalize.matchingView(of: request.command.rawValue).rawValue
+            ? Normalize.matchingView(of: params.request.command.rawValue).rawValue
             : result.matchingView.rawValue
         let stages = explainSteps(from: result).map {
             ExplainStage(name: $0.id.rawValue, elapsedMs: 0)
@@ -141,8 +141,13 @@ public actor ServiceRuntime {
         )
     }
 
-    private func classify(_ request: EvaluationRequest) -> ClassifyReply {
-        let result = session.evaluate(request)
+    private func classify(_ params: ClassifyParams) async -> ClassifyReply {
+        let result = await gated.peek(
+            params.request,
+            cwd: params.cwd,
+            store: allowOnce,
+            now: Date()
+        )
         let risk: ClassifyRisk
         switch result.decision {
         case .allow:
@@ -202,25 +207,6 @@ public actor ServiceRuntime {
             return .error(.packNotFound(id))
         } catch {
             return .error(.engine("pack enable failed"))
-        }
-    }
-
-    private func consumeAllowOnce(_ params: AllowOnceConsumeParams) async -> IPCResult {
-        switch await allowOnce.consume(
-            matchingView: Normalize.matchingView(of: params.command),
-            cwd: params.cwd,
-            now: Date()
-        ) {
-        case .consumed(let tokenID):
-            return .allowOnceConsume(AllowOnceConsumeReply(consumed: true, tokenID: tokenID))
-        case .notFound:
-            return .error(.allowOnceNotFound)
-        case .alreadyConsumed:
-            return .error(.allowOnceAlreadyConsumed)
-        case .expired:
-            return .error(.allowOnceExpired)
-        case .unavailable:
-            return .error(.engine("allow-once store unavailable"))
         }
     }
 

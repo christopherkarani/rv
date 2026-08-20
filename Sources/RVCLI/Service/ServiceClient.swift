@@ -113,12 +113,12 @@ public struct ServiceClient: Sendable {
     }
 
     private func inProcessEvaluate(_ request: EvaluationRequest, cwd: String?) async -> EvaluationResult {
-        await PolicyGate.apply(
-            (session ?? EvaluateSession()).evaluate(request),
+        await GatedEvaluate(session ?? EvaluateSession()).apply(
+            request,
             cwd: cwd,
             store: store,
             now: Date()
-        ).result
+        )
     }
 
     public func status() async -> ServiceStatusReport {

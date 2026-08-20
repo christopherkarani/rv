@@ -9,14 +9,13 @@ enum HookRun {
     static func run<C: HostCodec>(
         stdin: String,
         codec: C,
-        evaluate: @Sendable (ShellCommand, String) async -> EvaluationResult
+        evaluate: @Sendable (ShellCommand, String?) async -> EvaluationResult
     ) async -> HookWire {
         let request = codec.decode(stdin)
         guard let command = request.command else {
             return codec.encodeAllow()
         }
-        let cwd = request.cwd ?? FileManager.default.currentDirectoryPath
-        let result = await evaluate(command, cwd)
+        let result = await evaluate(command, request.cwd)
         return hookWire(from: result, command: command, using: codec)
     }
 }
@@ -51,7 +50,7 @@ struct Hook: AsyncParsableCommand {
     func run(
         stdin: String,
         environment _: [String: String],
-        evaluate: @Sendable (ShellCommand, String) async -> EvaluationResult
+        evaluate: @Sendable (ShellCommand, String?) async -> EvaluationResult
     ) async -> (stdout: String, stderr: String, exitCode: Int32) {
         let wire: HookWire
         switch host {

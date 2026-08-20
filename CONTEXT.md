@@ -13,12 +13,12 @@ The T1-normalized command text an EvaluationResult was decided on. The Policy ga
 _Avoid_: raw argv as the grant key
 
 **Policy gate**:
-The step after the Evaluate session. On engine deny, hook miss and rvd may spend one allow-once grant for this matching view and cwd and return allow. TTY test/explain uses the same gate without spending. Not a pack rule.
+The step after the Evaluate session. On engine deny, hook miss and rvd may spend one allow-once grant for this matching view and cwd and return allow. Missing cwd skips honor — it is not filled in from the process directory. TTY test/explain and XPC explain/classify use the same gate without spending. Not a pack rule.
 _Avoid_: honor wrapper, consume-on-evaluate
 
 **Allow-once grant**:
-A single-use unlock for one matching view plus cwd. Spent by the Policy gate. The hook wire never carries a code.
-_Avoid_: bypass, pending code, exception
+A single-use unlock for one matching view plus cwd. Spent by the Policy gate after an engine deny. The hook wire never carries a code.
+_Avoid_: bypass, pending code, exception, consume-then-evaluate
 
 **Host adapter**:
 The rv-owned integration for one supported host that turns a host shell event into a Hook request and carries the Hook mapper's result back as the host-native block plus optional display-only chrome. Setup installs a Host adapter; it does not define its behavior.
