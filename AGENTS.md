@@ -42,3 +42,12 @@ Gate: `tools/gate.sh` (runs `preflight` + filtered tests via `tools/swift-6.3.3`
 - No command text in `os_log`. History stays off by default.
 - No OS-enforced / Seatbelt claim. Grade is hook.
 - No Linux / Windows / macOS 14 / 15 claim.
+
+## Cursor Cloud specific instructions
+
+The Cursor Cloud Agent VM is **Linux x86_64**, but this project is **macOS 26 / Apple Silicon only** — an intentional, source-level lock, not a missing dependency.
+
+- Every module begins with `#if !arch(arm64) #error("rv v1 is Apple Silicon only") #endif`, and the code pulls in `Darwin`, `CryptoKit`, XPC (`NSXPCConnection`/`NSXPCListener`), launchd plists, and `.macOS(.v26)`. So on this VM **no `swift build`/`swift test` target compiles** and the `rv`/`rvd` binaries **cannot run**. Do that work on a macOS 26 Apple Silicon host with Swift 6.3.3 (see `docs/dev/SWIFT.md`), using `tools/swift-6.3.3` / `tools/gate.sh`.
+- What *does* run on the Linux VM: the lint/structural gate **`tools/preflight.sh`** (pure `bash`+`grep`+`python3`, all present on the base image). It is the platform-independent half of `tools/gate.sh` and covers the module-law, purity, name-hygiene, and corpus-JSON checks. Run it directly; expect `0 failed` (one known `@_exported` warning).
+- Do **not** run `tools/gate.sh` on this VM expecting success — after `preflight` it calls `tools/swift-6.3.3 test`, which needs the macOS `.xctoolchain` and will fail here. Installing a Linux Swift toolchain does not help: the `arch(arm64)` guard rejects x86_64 outright.
+- Practical scope for a Linux Cloud Agent here: docs, config, corpus JSON, and any change validated by `tools/preflight.sh`. Anything requiring a Swift compile or the XPC/launchd runtime must be verified on macOS.
