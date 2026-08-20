@@ -136,6 +136,38 @@ struct PolicyGateTests {
             return
         }
     }
+
+    @Test func storeUnavailableStaysDeny() async throws {
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let denied = resetHardDeny()
+        try await store.insertGranted(matchingView: denied.matchingView, cwd: "/tmp/ws", now: now)
+        try sabotageLock(in: store.baseDirectory)
+        let gated = await PolicyGate.apply(denied, cwd: "/tmp/ws", store: store, now: now)
+        #expect(gated.override == .none)
+        guard case .deny = gated.result.decision else {
+            Issue.record("store unavailable must stay deny")
+            return
+        }
+    }
+
+    @Test func emptyCwdDoesNotHonor() async throws {
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let denied = resetHardDeny()
+        try await store.insertGranted(matchingView: denied.matchingView, cwd: "/tmp/ws", now: now)
+        let gated = await PolicyGate.apply(denied, cwd: "", store: store, now: now)
+        #expect(gated.override == .none)
+        guard case .deny = gated.result.decision else {
+            Issue.record("empty cwd must not honor")
+            return
+        }
+        let still = await store.consume(matchingView: denied.matchingView, cwd: "/tmp/ws", now: now)
+        guard case .consumed = still else {
+            Issue.record("empty cwd must not spend the grant")
+            return
+        }
+    }
 }
 
 private func resetHardDeny() -> EvaluationResult {
@@ -155,4 +187,12 @@ private func isolatedStore() throws -> AllowOnceStore {
         .appendingPathComponent("rv-policy-gate-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     return AllowOnceStore(baseDirectory: root)
+}
+
+private func sabotageLock(in directory: URL) throws {
+    let lock = directory.appendingPathComponent(".allow-once.lock", isDirectory: false)
+    if FileManager.default.fileExists(atPath: lock.path) {
+        try FileManager.default.removeItem(at: lock)
+    }
+    try FileManager.default.createDirectory(at: lock, withIntermediateDirectories: false)
 }
