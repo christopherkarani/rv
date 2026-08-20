@@ -1,5 +1,4 @@
 import Foundation
-import RVDomain
 import RVIPC
 import RVPresentation
 import RVTUI
@@ -77,99 +76,19 @@ enum DoctorRun {
             pathEntries: environment.pathEntries,
             fileManager: environment.fileManager
         )
-        let launchAgentInstalled = environment.fileManager.fileExists(atPath: paths.launchAgent)
-        let config = configState(path: paths.configDirectory, fileManager: environment.fileManager)
-        let projection = project(
+        let health = ServiceHealth.inspect(
             diagnostics,
-            launchAgentInstalled: launchAgentInstalled,
+            launchAgentInstalled: environment.fileManager.fileExists(atPath: paths.launchAgent),
             launchAgentLoaded: environment.launchAgentLoaded
         )
-        let packs = DoctorPacksView(
-            enabled: projection.enabledPacks,
-            registry: projection.packCheckReady ? .ready : .broken
-        )
         return DoctorViewModel(
-            service: projection.service,
-            packs: packs,
+            service: health.service,
+            packs: health.packs,
             hosts: SetupHostKind.allCases.map { host in
                 DoctorHostView(host: host, state: installations.state(for: host))
             },
-            config: config
+            config: configState(path: paths.configDirectory, fileManager: environment.fileManager)
         )
-    }
-
-    private struct DiagnosticProjection {
-        var service: DoctorServiceView
-        var enabledPacks: [PackID]
-        var packCheckReady: Bool
-    }
-
-    private static func project(
-        _ diagnostics: ServiceDiagnosticResult,
-        launchAgentInstalled: Bool,
-        launchAgentLoaded: Bool
-    ) -> DiagnosticProjection {
-        let launchAgent: DoctorLaunchAgentState
-        if launchAgentLoaded {
-            launchAgent = .loaded
-        } else if launchAgentInstalled {
-            launchAgent = .installed
-        } else {
-            launchAgent = .missing
-        }
-        switch diagnostics {
-        case .xpc(let snapshot, let localCorePacksReady):
-            let state: DoctorServiceState
-            switch snapshot.state {
-            case .running, .idleExitArmed:
-                state = .running
-            case .down:
-                state = .down
-            case .skew:
-                state = .skew
-            }
-            let packCheckReady = snapshot.checks.first { $0.id == "packs" }?.status == .ok
-            return DiagnosticProjection(
-                service: DoctorServiceView(
-                    state: state,
-                    protocolName: snapshot.protocolName,
-                    serviceSemver: snapshot.serviceSemver,
-                    label: snapshot.label,
-                    fallback: localCorePacksReady ? .ready : .unavailable,
-                    launchAgent: launchAgent,
-                    warning: snapshot.lastError == nil ? nil : "service reported an error"
-                ),
-                enabledPacks: snapshot.packsEnabled,
-                packCheckReady: packCheckReady
-            )
-        case .local(let diagnostic):
-            let state: DoctorServiceState
-            let warning: String?
-            switch diagnostic.cause {
-            case .down:
-                state = launchAgentInstalled || launchAgentLoaded ? .down : .notInstalled
-                warning = nil
-            case .skew(let reason):
-                state = .skew
-                warning = reason.statusMessage
-            case .requestFailed(let failure):
-                state = .down
-                warning = failure.statusMessage
-            }
-            return DiagnosticProjection(
-                service: DoctorServiceView(
-                    state: state,
-                    protocolName: ProtocolVersion.name,
-                    serviceSemver: diagnostic.serviceSemver,
-                    label: SetupRun.launchAgentLabel,
-                    fallback: diagnostic.corePacksReady ? .ready : .unavailable,
-                    launchAgent: launchAgent,
-                    warning: warning
-                ),
-                enabledPacks: diagnostic.corePacksReady ? dayOnePackIDs : [],
-                packCheckReady: diagnostic.corePacksReady
-            )
-        }
     }
 
     private static func configState(
@@ -268,5 +187,64 @@ private extension SetupHostKind {
         case .openCode:
             "opencode"
         }
+    }
+}
+
+extension ServiceHealth {
+    var service: DoctorServiceView {
+        switch self {
+        case .reachable(let facts):
+            DoctorServiceView(
+                state: serviceState(facts.snapshot.state),
+                protocolName: facts.snapshot.protocolName,
+                serviceSemver: facts.snapshot.serviceSemver,
+                label: facts.snapshot.label,
+                fallback: facts.localCorePacksReady ? .ready : .unavailable,
+                launchAgent: facts.launchAgent,
+                warning: facts.snapshot.lastError == nil ? nil : "service reported an error"
+            )
+        case .down(let local):
+            localService(state: .down, local: local, warning: nil)
+        case .notInstalled(let local):
+            localService(state: .notInstalled, local: local, warning: nil)
+        case .skew(let reason, let local):
+            localService(state: .skew, local: local, warning: reason.statusMessage)
+        case .requestFailed(let failure, let local):
+            localService(state: .down, local: local, warning: failure.statusMessage)
+        }
+    }
+
+    var packs: DoctorPacksView {
+        DoctorPacksView(
+            enabled: enabledPacks,
+            registry: packCheckReady ? .ready : .broken
+        )
+    }
+
+    private func serviceState(_ state: ServiceState) -> DoctorServiceState {
+        switch state {
+        case .running, .idleExitArmed:
+            .running
+        case .down:
+            .down
+        case .skew:
+            .skew
+        }
+    }
+
+    private func localService(
+        state: DoctorServiceState,
+        local: Local,
+        warning: String?
+    ) -> DoctorServiceView {
+        DoctorServiceView(
+            state: state,
+            protocolName: ProtocolVersion.name,
+            serviceSemver: local.serviceSemver,
+            label: SetupRun.launchAgentLabel,
+            fallback: local.corePacksReady ? .ready : .unavailable,
+            launchAgent: local.launchAgent,
+            warning: warning
+        )
     }
 }

@@ -1,5 +1,6 @@
 import Testing
 import RVDomain
+import RVPresentation
 @testable import RVCLI
 
 struct FallbackSkewTests {
@@ -18,6 +19,18 @@ struct FallbackSkewTests {
         #expect(deny.ruleID.rawValue == "core.git:reset-hard")
         #expect(reply.path == .inProcess)
         #expect(transport.sendCount == 0)
+
+        let health = ServiceHealth.inspect(await client.diagnostics())
+        #expect(
+            health == .skew(
+                reason: .protocolMismatch,
+                local: .init(
+                    corePacksReady: true,
+                    serviceSemver: "1.0.0",
+                    launchAgent: .missing
+                )
+            )
+        )
 
         let status = await client.status()
         #expect(status.state == "skew")

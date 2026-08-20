@@ -73,37 +73,3 @@ enum ServiceDiagnosticResult: Sendable, Equatable {
     case xpc(snapshot: DoctorSnapshotReply, localCorePacksReady: Bool)
     case local(ServiceFallbackDiagnostic)
 }
-
-extension ServiceDiagnosticResult {
-    /// Projects diagnostics into the existing `rv service status` report shape.
-    var statusReport: ServiceStatusReport {
-        switch self {
-        case .xpc(let snapshot, _):
-            ServiceStatusReport(
-                state: "running",
-                protocolName: snapshot.protocolName,
-                label: snapshot.label,
-                fallback: "inactive",
-                keepAlive: snapshot.keepAlive,
-                lastError: snapshot.lastError
-            )
-        case .local(let diagnostic):
-            switch diagnostic.cause {
-            case .down:
-                ServiceStatusReport(state: "down", fallback: "down")
-            case .skew(let reason):
-                ServiceStatusReport(
-                    state: "skew",
-                    fallback: "skew",
-                    lastError: reason.statusMessage
-                )
-            case .requestFailed(let failure):
-                ServiceStatusReport(
-                    state: "down",
-                    fallback: "down",
-                    lastError: failure.statusMessage
-                )
-            }
-        }
-    }
-}

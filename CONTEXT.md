@@ -28,6 +28,10 @@ _Avoid_: host hook, HostCodec (only one part)
 The read-only classification of one owned Host adapter path: missing, absent-file, occupied, broken, or wired. RVCLI derives it from host detection, resource identity, and the baked executable path; setup and doctor consume the same snapshot.
 _Avoid_: parsing Host adapter behavior in setup or doctor
 
+**Service health**:
+The read-only classification of rvd reachability: reachable, down, not-installed, skew, or request-failed. RVCLI derives it from typed diagnostics plus optional LaunchAgent installed/loaded; doctor and status format the same facts.
+_Avoid_: mapping down/skew/request-failed separately in doctor or status
+
 **Hook mapper**:
 EvaluationResult to HookWire after the Policy gate. One Decision switch, three HostCodecs. Owns hook voice.
 _Avoid_: per-codec Decision switch

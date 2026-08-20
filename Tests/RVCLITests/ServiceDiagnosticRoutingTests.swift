@@ -1,5 +1,6 @@
 import RVDomain
 import RVIPC
+import RVPresentation
 import Testing
 @testable import RVCLI
 
@@ -14,6 +15,12 @@ struct ServiceDiagnosticRoutingTests {
         let result = try await isolatedClient(transport: transport).diagnostics()
 
         #expect(result == .xpc(snapshot: snapshot, localCorePacksReady: true))
+        #expect(
+            ServiceHealth.inspect(result)
+                == .reachable(
+                    .init(snapshot: snapshot, localCorePacksReady: true, launchAgent: .missing)
+                )
+        )
         #expect(transport.sendCount == 1)
     }
 
@@ -38,6 +45,10 @@ struct ServiceDiagnosticRoutingTests {
         let result = try await isolatedClient(transport: transport).diagnostics()
 
         #expect(result == .local(.init(cause: .down, corePacksReady: true)))
+        #expect(
+            ServiceHealth.inspect(result)
+                == .down(.init(corePacksReady: true, serviceSemver: nil, launchAgent: .missing))
+        )
         #expect(transport.sendCount == 0)
     }
 
@@ -83,6 +94,17 @@ struct ServiceDiagnosticRoutingTests {
         )
         #expect(transport.sendCount == 0)
         #expect(transport.invalidationCount == 1)
+        #expect(
+            ServiceHealth.inspect(result)
+                == .skew(
+                    reason: .protocolMismatch,
+                    local: .init(
+                        corePacksReady: true,
+                        serviceSemver: "1.0.0",
+                        launchAgent: .missing
+                    )
+                )
+        )
     }
 
     @Test func majorVersionSkewReturnsLocalReadinessWithoutSending() async throws {
@@ -180,6 +202,17 @@ struct ServiceDiagnosticRoutingTests {
             )
         )
         #expect(transport.sendCount == 1)
+        #expect(
+            ServiceHealth.inspect(result)
+                == .requestFailed(
+                    failure: .transport(.interrupted),
+                    local: .init(
+                        corePacksReady: true,
+                        serviceSemver: "1.0.0",
+                        launchAgent: .missing
+                    )
+                )
+        )
     }
 
     @Test func wrongResponseReturnsTypedLocalFallback() async throws {
