@@ -59,6 +59,25 @@ struct EnvelopeRoundTripTests {
             Issue.record("indeterminate must not decode as allow")
         }
     }
+
+    @Test func emptyCwdOnHonorParamsIsNil() throws {
+        let request = EvaluationRequest(
+            command: ShellCommand(rawValue: "git reset --hard"),
+            enabledPacks: dayOnePackIDs
+        )
+        #expect(EvaluateParams(request: request, cwd: "").cwd == nil)
+        #expect(ExplainParams(request: request, cwd: "").cwd == nil)
+        #expect(ClassifyParams(request: request, cwd: "").cwd == nil)
+
+        let payload = try IPCJSON.encode(EvaluateParams(request: request, cwd: "/tmp/ws"))
+        var object = try #require(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+        object["cwd"] = ""
+        let emptied = try JSONSerialization.data(withJSONObject: object)
+        let decoded = try IPCJSON.decode(EvaluateParams.self, from: emptied)
+        #expect(decoded.cwd == nil)
+        #expect(try IPCJSON.decode(ExplainParams.self, from: emptied).cwd == nil)
+        #expect(try IPCJSON.decode(ClassifyParams.self, from: emptied).cwd == nil)
+    }
 }
 
 struct NamedMethod: Sendable {
