@@ -11,8 +11,8 @@ public enum PolicyOverride: Equatable, Sendable {
 /// `engine` stays the Evaluate-session output. Honor does not rewrite it in place —
 /// callers that need the post-gate Decision read `effective`.
 public struct PolicyDecision: Equatable, Sendable {
-    public var engine: EvaluationResult
-    public var override: PolicyOverride
+    public let engine: EvaluationResult
+    public let override: PolicyOverride
 
     public init(engine: EvaluationResult, override: PolicyOverride) {
         self.engine = engine
