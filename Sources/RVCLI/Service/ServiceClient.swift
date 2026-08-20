@@ -108,7 +108,7 @@ public struct ServiceClient: Sendable {
             cwd: cwd,
             store: store,
             now: Date()
-        )
+        ).effective
     }
 
     public func status() async -> ServiceStatusReport {

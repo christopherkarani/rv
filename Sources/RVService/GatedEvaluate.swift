@@ -19,13 +19,13 @@ public struct GatedEvaluate: Sendable {
         cwd: String?,
         store: AllowOnceStore,
         now: Date
-    ) async -> EvaluationResult {
+    ) async -> PolicyDecision {
         await PolicyGate.peek(
             session.evaluate(request),
             cwd: cwd,
             store: store,
             now: now
-        ).result
+        )
     }
 
     /// Spends a matching grant after an engine deny.
@@ -34,12 +34,12 @@ public struct GatedEvaluate: Sendable {
         cwd: String?,
         store: AllowOnceStore,
         now: Date
-    ) async -> EvaluationResult {
+    ) async -> PolicyDecision {
         await PolicyGate.apply(
             session.evaluate(request),
             cwd: cwd,
             store: store,
             now: now
-        ).result
+        )
     }
 }

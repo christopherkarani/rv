@@ -6,13 +6,29 @@ public enum PolicyOverride: Equatable, Sendable {
     case allowOnce
 }
 
+/// Engine evaluation plus an optional policy overlay.
+///
+/// `engine` stays the Evaluate-session output. Honor does not rewrite it in place —
+/// callers that need the post-gate Decision read `effective`.
 public struct PolicyDecision: Equatable, Sendable {
-    public var result: EvaluationResult
+    public var engine: EvaluationResult
     public var override: PolicyOverride
 
-    public init(result: EvaluationResult, override: PolicyOverride) {
-        self.result = result
+    public init(engine: EvaluationResult, override: PolicyOverride) {
+        self.engine = engine
         self.override = override
+    }
+
+    /// Decision after the Policy gate (allow-once flips a deny to allow).
+    public var effective: EvaluationResult {
+        switch override {
+        case .none:
+            return engine
+        case .allowOnce:
+            var allowed = engine
+            allowed.decision = .allow
+            return allowed
+        }
     }
 }
 
@@ -25,7 +41,7 @@ public enum PolicyGate {
         now: Date
     ) async -> PolicyDecision {
         guard let granted = grantCandidate(result, cwd: cwd) else {
-            return PolicyDecision(result: result, override: .none)
+            return PolicyDecision(engine: result, override: .none)
         }
         switch await store.consume(
             matchingView: granted.result.matchingView,
@@ -33,9 +49,9 @@ public enum PolicyGate {
             now: now
         ) {
         case .consumed:
-            return allowOnceDecision(granted.result)
+            return PolicyDecision(engine: granted.result, override: .allowOnce)
         case .notFound, .alreadyConsumed, .expired, .unavailable:
-            return PolicyDecision(result: result, override: .none)
+            return PolicyDecision(engine: result, override: .none)
         }
     }
 
@@ -47,7 +63,7 @@ public enum PolicyGate {
         now: Date
     ) async -> PolicyDecision {
         guard let granted = grantCandidate(result, cwd: cwd) else {
-            return PolicyDecision(result: result, override: .none)
+            return PolicyDecision(engine: result, override: .none)
         }
         let hit = await store.hasGrant(
             matchingView: granted.result.matchingView,
@@ -55,9 +71,9 @@ public enum PolicyGate {
             now: now
         )
         guard hit else {
-            return PolicyDecision(result: result, override: .none)
+            return PolicyDecision(engine: result, override: .none)
         }
-        return allowOnceDecision(granted.result)
+        return PolicyDecision(engine: granted.result, override: .allowOnce)
     }
 
     private static func grantCandidate(
@@ -73,11 +89,5 @@ public enum PolicyGate {
             }
             return (result, cwd)
         }
-    }
-
-    private static func allowOnceDecision(_ result: EvaluationResult) -> PolicyDecision {
-        var allowed = result
-        allowed.decision = .allow
-        return PolicyDecision(result: allowed, override: .allowOnce)
     }
 }

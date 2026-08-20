@@ -106,16 +106,17 @@ public actor ServiceRuntime {
     }
 
     private func runEvaluate(_ request: EvaluationRequest, cwd: String?) async -> EvaluationResult {
-        await gated.apply(request, cwd: cwd, store: allowOnce, now: Date())
+        await gated.apply(request, cwd: cwd, store: allowOnce, now: Date()).effective
     }
 
     private func explain(_ params: ExplainParams) async -> ExplainReply {
-        let result = await gated.peek(
+        let decision = await gated.peek(
             params.request,
             cwd: params.cwd,
             store: allowOnce,
             now: Date()
         )
+        let result = decision.effective
         let normalized = result.matchingView.isEmpty
             ? Normalize.matchingView(of: params.request.command.rawValue).rawValue
             : result.matchingView.rawValue
@@ -147,7 +148,7 @@ public actor ServiceRuntime {
             cwd: params.cwd,
             store: allowOnce,
             now: Date()
-        )
+        ).effective
         let risk: ClassifyRisk
         switch result.decision {
         case .allow:
