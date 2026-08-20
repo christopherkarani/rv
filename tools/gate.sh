@@ -25,7 +25,8 @@ Usage: tools/gate.sh [--quiet] [--filter NAME] [FilterName ...]
 
 With no filters: infer from git changes under Sources/ and Tests/.
 If Package.swift changed or multiple modules are touched, run the union of
-affected *Tests targets. If nothing maps, exit 2 and ask for an explicit filter.
+affected *Tests targets. If nothing maps (or an empty --filter was given),
+exit 2 — never exit 0 after preflight alone with zero tests.
 EOF
 }
 
@@ -137,13 +138,19 @@ infer_filters() {
 
 if [[ "$EXPLICIT" -eq 0 ]]; then
   infer_filters
-  if [[ -z "$FILTERS" ]]; then
-    printf "gate: no test filters inferred; pass e.g. tools/gate.sh RVDomainTests\n" >&2
-    exit 2
-  fi
-  if [[ "$QUIET" -eq 0 ]]; then
+  if [[ "$QUIET" -eq 0 && -n "$FILTERS" ]]; then
     printf "gate: inferred filters: %s\n" "$FILTERS"
   fi
+fi
+
+# Explicit empty --filter / blank names must not green-exit after preflight alone.
+if [[ -z "$FILTERS" ]]; then
+  if [[ "$EXPLICIT" -eq 1 ]]; then
+    printf "gate: empty filter list; pass e.g. tools/gate.sh RVDomainTests\n" >&2
+  else
+    printf "gate: no test filters inferred; pass e.g. tools/gate.sh RVDomainTests\n" >&2
+  fi
+  exit 2
 fi
 
 fail=0

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # tools/worktree-cleanup.sh — list (default) or prune safe stale worktrees.
 # Default is dry-run. --apply removes only:
-#   - detached worktrees under /var/folders (agent temps)
-#   - feat/* worktrees whose branch is fully merged into origin/main
-#     and have no unique unpushed commits vs origin/main
-# Never removes the primary checkout.
+#   - detached worktrees under /var/folders (agent temps) with a clean tree
+#   - feat/* worktrees whose branch is fully merged into origin/main,
+#     have no unique commits vs origin/main, and a clean working tree
+# Never removes the primary checkout. Never --force-deletes a dirty tree.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -87,6 +87,13 @@ flush() {
         ;;
     esac
   fi
+  # Dirty / untracked work is never a safe prune candidate.
+  if [[ "$ok" -eq 1 ]]; then
+    if [[ -n "$(git -C "$abs" status --porcelain 2>/dev/null)" ]]; then
+      ok=0
+      reason=""
+    fi
+  fi
   if [[ "$ok" -eq 1 ]]; then
     candidates+=("$abs")
     reasons+=("$reason")
@@ -134,8 +141,18 @@ fi
 
 i=0
 for c in "${candidates[@]}"; do
+  # Re-check porcelain immediately before remove (race with local edits).
+  if [[ -n "$(git -C "$c" status --porcelain 2>/dev/null)" ]]; then
+    printf "worktree-cleanup: skip dirty %s\n" "$c" >&2
+    i=$((i + 1))
+    continue
+  fi
   printf "worktree-cleanup: removing %s (%s)\n" "$c" "${reasons[$i]}"
-  git worktree remove --force "$c"
+  # No --force: refuse locked/dirty trees rather than discard work.
+  if ! git worktree remove "$c"; then
+    printf "worktree-cleanup: failed to remove %s\n" "$c" >&2
+    exit 1
+  fi
   i=$((i + 1))
 done
 

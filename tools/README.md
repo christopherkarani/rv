@@ -15,7 +15,7 @@ by the Swift package.
 | `preflight.sh` | Encodes the four grok-skill checklists as 16 exit-code assertions. Run before claiming a ticket is done. | `.grok/skills/*/SKILL.md` preflight sections |
 | `swift-6.3.3` | Puts the `.swift-version` toolchain first on `PATH`, then `exec`s `swift`. Eliminates the `/usr/bin/swift` 6.2.x trap. | `.swift-version`, `docs/dev/SWIFT.md` |
 | `gate.sh` | `preflight.sh` + filtered `swift test` via `swift-6.3.3`. Explicit filter or infer from git-changed modules (union when multi-module / `Package.swift`). | `AGENTS.md` gate |
-| `worktree-cleanup.sh` | Dry-run (default) lists safe stale worktrees; `--apply` prunes only detached `/var/folders` temps and fully-merged `feat/*`. | Parallel ticket hygiene |
+| `worktree-cleanup.sh` | Dry-run (default) lists safe stale worktrees; `--apply` prunes only clean detached `/var/folders` temps and clean fully-merged `feat/*`. | Parallel ticket hygiene |
 | `extract-packs/extract_core_packs.py` | One-shot extract of day-one pack JSON from a local v0.11.0 checkout. Does not clone or vendor Rust. | `vendor/parity/PIN`, `docs/dev/PARITY.md` |
 
 ## swift-6.3.3
@@ -37,7 +37,8 @@ tools/gate.sh --filter RVCorpusTests
 ```
 
 Does not run an unfiltered full `swift test` by default. If nothing maps from
-git changes, exit 2 and pass an explicit filter.
+git changes, or an empty `--filter` is given, exit 2 — never green after
+preflight alone with zero tests.
 
 ## worktree-cleanup.sh
 
@@ -46,7 +47,8 @@ tools/worktree-cleanup.sh             # dry-run: list safe candidates
 tools/worktree-cleanup.sh --apply     # prune only the narrow safe set
 ```
 
-Never removes the primary (main) checkout.
+Never removes the primary (main) checkout. Dirty or untracked worktrees are
+not candidates; `--apply` refuses `--force` removal.
 
 ## preflight.sh
 
