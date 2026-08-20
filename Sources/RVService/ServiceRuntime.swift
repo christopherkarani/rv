@@ -24,7 +24,7 @@ public actor ServiceRuntime {
     ) {
         let gated = GatedEvaluate(EvaluateSession(snapshots: snapshots))
         self.gated = gated
-        self.corePacksReady = gated.session.corePacksReady
+        self.corePacksReady = gated.corePacksReady
         self.catalog = catalog
         if let allowOnce {
             self.allowOnce = allowOnce

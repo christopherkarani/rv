@@ -4,7 +4,9 @@ import RVPolicy
 
 /// Runs the Evaluate session, then the Policy gate.
 public struct GatedEvaluate: Sendable {
-    public let session: EvaluateSession
+    public var corePacksReady: Bool { session.corePacksReady }
+
+    private let session: EvaluateSession
 
     /// Creates a door around an Evaluate session.
     public init(_ session: EvaluateSession = EvaluateSession()) {
