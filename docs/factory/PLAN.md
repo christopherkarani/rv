@@ -18,7 +18,7 @@ Not ryk. Not line-for-line Rust. Repo: `~/CodingProjects/rv` (`christopherkarani
 - **Day-one packs:** `core.git` + `core.filesystem` only. Rest catalog, off until enabled.
 - **Setup mutations:** only rv-owned files. Foreign hooks untouched. Occupied owned name → skip that host (TTY hollow + skip clause; non-TTY one line). Uninstall removes only rv files. **No ryk special-case.**
 - **Hostless install:** success. TTY closer: `No hosts yet` then `Next  rv setup`. Non-TTY: one line to run `rv setup` after a host exists.
-- **Privacy:** no command text in `os_log`. History **off** by default; when on, no raw secrets. Full command only in TTY `explain`/`test`.
+- **Privacy:** no command text in `os_log`. History **off** by default; when on, no raw secrets. Full command only in TTY `explain`/`test`. Anonymous product analytics (installs / DAU / host+pack counters) may run **opt-out** via `RVAnalytics` / PostHog; never command text, paths, or secrets; never from host hook processes.
 - **License:** deferred.
 - **Repo:** work only in `~/CodingProjects/rv`. Never implement inside ryk.
 
@@ -48,6 +48,7 @@ Hexagonal. Engine never imports CLI, TUI, or XPC. Each module: small public API,
 | **RVTUI** | browse kit, `render` → `[String]`, key map | opening a TTY |
 | **RVCLI** | ArgumentParser, output mode, thin XPC client, fallback, Host adapter setup mutations | regex, pack parse |
 | **RVHistory** | later; off by default | logging full argv |
+| **RVAnalytics** | anonymous install / DAU / product counters (PostHog); opt-out config | command text, paths, secrets; hook-process network |
 
 **Dependency law:** arrows down. A test that needs a TTY to prove a **decision** is in the wrong module.
 
@@ -125,7 +126,7 @@ When two agents run in parallel they **must** use git worktrees from the same ba
 - Persisting raw command text to os_log or default history.
 - Claiming OS-enforced / Seatbelt. Grade is **hook**.
 - Claiming Linux/Windows/macOS 14/15 support.
-- Telemetry, SaaS, network install of packs.
+- Command text, paths, or secrets in analytics payloads. Analytics calls from host hook processes. Network install of packs.
 - Implementing this product inside ryk.
 - Installing or rebinding ryk on this machine.
 - Writing the tokens `dcg` or `ryk` into any product file outside `docs/factory/`.

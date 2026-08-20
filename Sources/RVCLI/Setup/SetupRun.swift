@@ -1,5 +1,7 @@
 import Foundation
+import RVAnalytics
 import RVHooks
+import RVIPC
 import RVPresentation
 
 struct SetupOutcome: Equatable, Sendable {
@@ -154,12 +156,46 @@ enum SetupRun {
             kinds[host] = .wired
         }
 
-        return SetupReport(
+        let report = SetupReport(
             grok: kinds[.grok] ?? .pending,
             pi: kinds[.pi] ?? .pending,
             openCode: kinds[.openCode] ?? .pending,
             wrote: wrote
         )
+        emitInstallAnalytics(report: report, home: env.home)
+        return report
+    }
+
+    private static func emitInstallAnalytics(report: SetupReport, home: String) {
+        var environment = ProcessInfo.processInfo.environment
+        environment["HOME"] = home
+        guard let coordinator = AnalyticsBootstrap.live(
+            productVersion: ProtocolVersion.serviceSemver,
+            environment: environment
+        ) else {
+            return
+        }
+        let hosts: [String: String] = [
+            "grok": analyticsStatus(report.grok),
+            "pi": analyticsStatus(report.pi),
+            "opencode": analyticsStatus(report.openCode),
+        ]
+        // Setup is a short-lived CLI process; await delivery before exit.
+        let group = DispatchGroup()
+        group.enter()
+        Task {
+            await coordinator.captureInstall(hosts: hosts)
+            group.leave()
+        }
+        _ = group.wait(timeout: .now() + .seconds(10))
+    }
+
+    private static func analyticsStatus(_ kind: SetupSlotKind) -> String {
+        switch kind {
+        case .pending: "pending"
+        case .wired: "wired"
+        case .occupied: "occupied"
+        }
     }
 
     static func uninstall(_ env: SetupEnvironment) -> SetupOutcome {
@@ -180,6 +216,12 @@ enum SetupRun {
             )
         }
         var removedPaths = [layout.launchAgent, layout.localRv, layout.localRvd]
+        removedPaths.append(contentsOf: [
+            layout.configDirectory + "/analytics-id",
+            layout.configDirectory + "/analytics-counters.json",
+            layout.configDirectory + "/analytics-install-sent",
+            layout.configDirectory + "/analytics-hosts.json",
+        ])
         for owned in layout.hostAdapters {
             switch installations.installation(for: owned.host) {
             case .broken, .wired:
