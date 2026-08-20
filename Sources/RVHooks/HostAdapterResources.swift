@@ -22,7 +22,10 @@ package struct HostAdapterResource: Sendable {
 
     /// Returns the adapter source with the rv-binary placeholder replaced by `rvPath`.
     package func rendered(rvPath: String) -> String {
-        template.replacingOccurrences(of: HostAdapterResources.rvPlaceholder, with: rvPath)
+        template.replacingOccurrences(
+            of: HostAdapterResources.rvPlaceholder,
+            with: HostAdapterString.escape(rvPath)
+        )
     }
 
     /// Returns the rv path baked into `existing`, or `nil` when it is not this adapter.
@@ -41,12 +44,97 @@ package struct HostAdapterResource: Sendable {
             substitution = String(afterPrefix[..<range.lowerBound])
         }
         guard parts.joined(separator: substitution) == existing else { return nil }
-        return substitution
+        return HostAdapterString.unescape(substitution)
     }
 
     /// True when `existing` is this adapter with any single baked rv path.
     package func matchesCurrent(_ existing: String) -> Bool {
         bakedRvPath(in: existing) != nil
+    }
+}
+
+enum HostAdapterString {
+    static func escape(_ value: String) -> String {
+        var out = ""
+        for scalar in value.unicodeScalars {
+            switch scalar {
+            case "\"":
+                out += "\\\""
+            case "\\":
+                out += "\\\\"
+            case "\n":
+                out += "\\n"
+            case "\r":
+                out += "\\r"
+            case "\t":
+                out += "\\t"
+            default:
+                if scalar.value < 0x20 {
+                    out += "\\u"
+                    out += hex4(scalar.value)
+                } else {
+                    out.unicodeScalars.append(scalar)
+                }
+            }
+        }
+        return out
+    }
+
+    static func unescape(_ value: String) -> String {
+        var out = ""
+        var scalars = value.unicodeScalars.makeIterator()
+        while let scalar = scalars.next() {
+            guard scalar == "\\" else {
+                out.unicodeScalars.append(scalar)
+                continue
+            }
+            guard let next = scalars.next() else {
+                out.unicodeScalars.append(scalar)
+                break
+            }
+            switch next {
+            case "\"":
+                out += "\""
+            case "\\":
+                out += "\\"
+            case "n":
+                out += "\n"
+            case "r":
+                out += "\\r"
+            case "t":
+                out += "\\t"
+            case "u":
+                var hex = ""
+                var taken: [Unicode.Scalar] = []
+                for _ in 0..<4 {
+                    guard let digit = scalars.next() else { break }
+                    taken.append(digit)
+                    hex.unicodeScalars.append(digit)
+                }
+                if taken.count == 4, let code = UInt32(hex, radix: 16), let decoded = Unicode.Scalar(code) {
+                    out.unicodeScalars.append(decoded)
+                } else {
+                    out += "\\u"
+                    for digit in taken {
+                        out.unicodeScalars.append(digit)
+                    }
+                }
+            default:
+                out.unicodeScalars.append("\\")
+                out.unicodeScalars.append(next)
+            }
+        }
+        return out
+    }
+
+    private static func hex4(_ value: UInt32) -> String {
+        let digits = Array("0123456789abcdef")
+        return String([
+            digits[Int((value >> 12) & 0xF)],
+            digits[Int((value >> 8) & 0xF)],
+            digits[Int((value >> 4) & 0xF)],
+            digits[Int(value & 0xF)],
+        ])
     }
 }
 
