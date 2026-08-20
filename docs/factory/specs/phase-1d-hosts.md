@@ -472,12 +472,12 @@ Host adapter resources live in `Sources/RVHooks/Resources/hosts/` (`rv.json.tmpl
 | Case | Assert |
 |---|---|
 | Hostless | no `~/.grok`, `~/.pi`, `~/.config/opencode` created; exit 0; stdout has one line mentioning `rv setup` |
-| Grok only | `$HOME/.grok` pre-created; writes `hooks/rv.json` with `PreToolUse` + `matcher: Bash` + `rv hook --host grok`; no other files under `.grok` |
-| Pi only | writes `rv-guard.ts`; no `settings.json` edit |
-| OpenCode only | writes `rv-guard.js` with top-level `"tool.execute.before"` |
+| Grok only | `$HOME/.grok` pre-created; writes `hooks/rv.json` equal to the RVHooks Grok adapter rendered with the baked `rvPath`; leftover `__RV_BINARY__` absent; no other files under `.grok`. Adapter-contract (`PreToolUse` / `matcher: Bash` / `rv hook --host grok`) is `Tests/RVHooksTests/AdapterHookTests` |
+| Pi only | writes `rv-guard.ts` equal to the RVHooks Pi adapter rendered with the baked `rvPath`; no `settings.json` edit |
+| OpenCode only | writes `rv-guard.js` equal to the RVHooks OpenCode adapter rendered with the baked `rvPath` |
 | Occupied `rv.json` | pre-write foreign JSON at owned path; setup skips; file bytes unchanged; one skip line |
 | Foreign `dcg.json` | left untouched; `rv.json` still written |
-| Idempotent setup | two runs; second does not duplicate matchers |
+| Idempotent setup | two runs; second is quiet and bytes unchanged |
 | Uninstall | owned files gone; `dcg.json` / foreign extension still there |
 | `$HOME` isolation | after tests, the operator’s real `~/.grok/hooks/rv.json` (if any) is unchanged — assert by not using the real HOME |
 | LaunchAgent | writes `$HOME/Library/LaunchAgents/dev.rv.evaluate.plist` from the T3 template; `KeepAlive` false; uninstall removes only that plist |

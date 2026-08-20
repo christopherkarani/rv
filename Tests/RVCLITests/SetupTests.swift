@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import RVPresentation
 @testable import RVCLI
 
 func withTempHome(_ body: (URL, HostLayout, RecordingLaunchctl) throws -> Void) throws {
@@ -75,8 +76,7 @@ private func realGrokHookURL() -> URL? {
         #expect(outcome.exitCode == 0)
         #expect(outcome.stdout == SetupRun.robotCompleteLine + "\n")
         let body = try String(contentsOfFile: layout.grokHook, encoding: .utf8)
-        #expect(body.contains("/tmp/rv-bin/rv"))
-        #expect(body.contains("__RV_BINARY__") == false)
+        #expect(body == (try SetupHostKind.grok.adapterResource().rendered(rvPath: "/tmp/rv-bin/rv")))
         #expect(FileManager.default.fileExists(atPath: layout.piExtension) == false)
         let extras = try FileManager.default.contentsOfDirectory(atPath: layout.grokDirectory)
         #expect(extras == ["hooks"])
@@ -92,8 +92,7 @@ private func realGrokHookURL() -> URL? {
         let outcome = SetupRun.setup(env(home: home, launchctl: launchctl))
         #expect(outcome.exitCode == 0)
         let body = try String(contentsOfFile: layout.piExtension, encoding: .utf8)
-        #expect(body.contains("/tmp/rv-bin/rv"))
-        #expect(body.contains("__RV_BINARY__") == false)
+        #expect(body == (try SetupHostKind.pi.adapterResource().rendered(rvPath: "/tmp/rv-bin/rv")))
         #expect(FileManager.default.fileExists(atPath: layout.piDirectory + "/settings.json") == false)
         #expect(FileManager.default.fileExists(atPath: layout.grokHook) == false)
     }
@@ -105,8 +104,7 @@ private func realGrokHookURL() -> URL? {
         let outcome = SetupRun.setup(env(home: home, launchctl: launchctl))
         #expect(outcome.exitCode == 0)
         let body = try String(contentsOfFile: layout.openCodePlugin, encoding: .utf8)
-        #expect(body.contains("/tmp/rv-bin/rv"))
-        #expect(body.contains("__RV_BINARY__") == false)
+        #expect(body == (try SetupHostKind.openCode.adapterResource().rendered(rvPath: "/tmp/rv-bin/rv")))
         #expect(FileManager.default.fileExists(atPath: layout.grokHook) == false)
     }
 }
@@ -358,7 +356,6 @@ private func realGrokHookURL() -> URL? {
         #expect(grokAfter == foreign)
         #expect(FileManager.default.fileExists(atPath: layout.piExtension))
         let pi = try String(contentsOfFile: layout.piExtension, encoding: .utf8)
-        #expect(pi.contains("/tmp/rv-bin/rv"))
-        #expect(pi.contains("__RV_BINARY__") == false)
+        #expect(pi == (try SetupHostKind.pi.adapterResource().rendered(rvPath: "/tmp/rv-bin/rv")))
     }
 }
