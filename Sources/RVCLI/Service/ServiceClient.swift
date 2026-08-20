@@ -105,7 +105,7 @@ public struct ServiceClient: Sendable {
     }
 
     public func status() async -> ServiceStatusReport {
-        await diagnostics().statusReport
+        ServiceHealth.inspect(await diagnostics()).statusReport
     }
 
     func diagnostics() async -> ServiceDiagnosticResult {

@@ -71,3 +71,33 @@ public enum ServiceStatusCommand {
         }
     }
 }
+
+extension ServiceHealth {
+    var statusReport: ServiceStatusReport {
+        switch self {
+        case .reachable(let facts):
+            ServiceStatusReport(
+                state: "running",
+                protocolName: facts.snapshot.protocolName,
+                label: facts.snapshot.label,
+                fallback: "inactive",
+                keepAlive: facts.snapshot.keepAlive,
+                lastError: facts.snapshot.lastError
+            )
+        case .down, .notInstalled:
+            ServiceStatusReport(state: "down", fallback: "down")
+        case .skew(let reason, _):
+            ServiceStatusReport(
+                state: "skew",
+                fallback: "skew",
+                lastError: reason?.statusMessage
+            )
+        case .requestFailed(let failure, _):
+            ServiceStatusReport(
+                state: "down",
+                fallback: "down",
+                lastError: failure.statusMessage
+            )
+        }
+    }
+}

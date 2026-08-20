@@ -20,7 +20,7 @@ Each module keeps a small public API, `package` internals later, and its own tes
 | **RVPresentation** | deny/explain/packs/doctor view models | ANSI |
 | **RVTheme** | palettes, pure capability detect | business rules |
 | **RVTUI** | browse kit, `render` → `[String]`, key map | opening a TTY |
-| **RVCLI** | ArgumentParser, output mode, thin XPC client, typed service diagnostics, GatedEvaluate for TTY test/explain and hook XPC miss, Host adapter installation state + setup mutations | regex, pack parse |
+| **RVCLI** | ArgumentParser, output mode, thin XPC client, typed service diagnostics, service health facts, GatedEvaluate for TTY test/explain and hook XPC miss, Host adapter installation state + setup mutations | regex, pack parse |
 | **RVHistory** | stub; later; off by default | logging full argv |
 | **RVAnalytics** | anonymous install / DAU / product counters; PostHog sink; opt-out preferences; `AnalyticsNotice` seam | command text, paths, secrets; hook-process I/O |
 
@@ -40,6 +40,6 @@ Each module keeps a small public API, `package` internals later, and its own tes
 | `RVPresentation` | `RVDomain`, `RVTheme` | View models later. No ANSI. |
 | `RVTUI` | `RVTheme`, `RVPresentation` | `reduce` + `render` later. Must not open a TTY. |
 | `RVService` | `RVDomain`, `RVEngine`, `RVPacks`, `RVPolicy`, `RVIPC`, `RVHistory`, `RVAnalytics` | XPC/`NSObject` edge later. No ArgumentParser, no SwiftUI, no TUI/CLI/Presentation. |
-| `RVCLI` | `RVDomain`, `RVEngine`, `RVPolicy`, `RVHooks`, `RVIPC`, `RVPresentation`, `RVTheme`, `RVTUI`, `RVService`, `RVHistory`, `RVAnalytics` | Thin client; typed service diagnostics; GatedEvaluate for TTY test/explain and hook XPC miss; read-only Host adapter installation state shared by setup and doctor. No regex, no pack parse. |
+| `RVCLI` | `RVDomain`, `RVEngine`, `RVPolicy`, `RVHooks`, `RVIPC`, `RVPresentation`, `RVTheme`, `RVTUI`, `RVService`, `RVHistory`, `RVAnalytics` | Thin client; typed service diagnostics; service health facts shared by doctor and status; GatedEvaluate for TTY test/explain and hook XPC miss; read-only Host adapter installation state shared by setup and doctor. No regex, no pack parse. |
 
 Each module has a matching `*Tests` target that depends only on that module.
