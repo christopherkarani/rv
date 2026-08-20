@@ -42,3 +42,4 @@ Gate: `tools/gate.sh` (runs `preflight` + filtered tests via `tools/swift-6.3.3`
 - No command text in `os_log`. History stays off by default.
 - No OS-enforced / Seatbelt claim. Grade is hook.
 - No Linux / Windows / macOS 14 / 15 claim.
+- Analytics never carries command text, paths, or secrets; host hooks never phone home.
