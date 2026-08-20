@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Extract all 99 pack JSON documents from a local v0.11.0 DCG tree.
+"""Extract all 99 pack JSON documents from a local pinned 0.11.0 upstream tree.
 
 Usage:
   python3 tools/extract-packs/extract_packs.py --source-root /path/to/checkout

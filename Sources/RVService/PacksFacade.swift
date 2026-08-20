@@ -114,10 +114,6 @@ public enum PacksFacade {
             throw PacksCommandError.unknownID(token)
         }
 
-        // Critical/high ICU misses are quarantined at compile time in EvaluateSession;
-        // enable still records the pack so the operator can turn it on.
-        _ = expansion
-
         var config = (try? PacksConfigStore.load(home: home)) ?? .empty
         let before = Set(
             try PackSet.effectiveOrdered(
@@ -128,6 +124,9 @@ public enum PacksFacade {
         )
 
         if enabling {
+            // PLAN #16 / phase-2: critical/high ICU miss → typed error, no config write.
+            try PackEnableCompileGate.assertBlockingPatternsCompile(packIDs: expansion)
+
             // Persist operator tokens (pack / category / preset); expand at read time.
             config.enabled = mergeUnique(config.enabled, ids)
             config.disabled = config.disabled.filter { token in

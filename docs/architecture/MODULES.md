@@ -29,7 +29,7 @@ Each module keeps a small public API, `package` internals later, and its own tes
 | `RVTheme` | none | Palettes in T2. No business rules. |
 | `RVEngine` | `RVDomain` | Must not depend on Packs, Hooks, CLI, TUI, Service. |
 | `RVPacks` | `RVDomain` | Bundled catalog JSON (99 packs); default-on remains core only. |
-| `RVPolicy` | `RVDomain` | Config/allowlist later. |
+| `RVPolicy` | `RVDomain` | Packs config merge; allowlist / allow-once. |
 | `RVHooks` | `RVDomain` | Complete Pi/Grok/OpenCode Host adapter behavior; no setup mutations. |
 | `RVIPC` | `RVDomain` | `rv.ipc.v1` Codable later. |
 | `RVHistory` | `RVDomain` | **Stub.** Off by default forever until a later ticket enables it. Must not log argv. |

@@ -61,6 +61,27 @@ import RVService
         #expect(second.changed.isEmpty)
         #expect(second.enabledCount == 3)
     }
+
+    @Test func enablePreservesNonPacksTomlSections() throws {
+        let home = try temporaryHome()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let url = PacksConfigStore.configURL(home: home)
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try """
+        [theme]
+        mode = "dark"
+        """.write(to: url, atomically: true, encoding: .utf8)
+
+        _ = try PacksFacade.enable(home: home, ids: ["database.sqlite"])
+        let text = try String(contentsOf: url, encoding: .utf8)
+        #expect(text.contains("[theme]"))
+        #expect(text.contains("mode = \"dark\""))
+        #expect(text.contains("[packs]"))
+        #expect(text.contains("database.sqlite"))
+    }
 }
 
 private func temporaryHome() throws -> String {

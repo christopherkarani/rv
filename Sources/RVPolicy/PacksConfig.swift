@@ -46,7 +46,8 @@ public enum PacksConfigStore {
         let url = configURL(home: home)
         let directory = url.deletingLastPathComponent()
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        let body = render(config)
+        let existing = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        let body = mergePacksSection(existing: existing, config: config)
         guard let data = body.data(using: .utf8) else {
             throw PacksConfigError.unwritable
         }
@@ -55,6 +56,39 @@ public enum PacksConfigStore {
         } catch {
             throw PacksConfigError.unwritable
         }
+    }
+
+    /// Replace or append `[packs]` while leaving other TOML sections intact.
+    public static func mergePacksSection(existing: String, config: PacksConfig) -> String {
+        let packsBlock = render(config)
+        if existing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return packsBlock
+        }
+
+        var kept: [String] = []
+        var inPacks = false
+        for rawLine in existing.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = String(rawLine)
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("[") {
+                if trimmed == "[packs]" {
+                    inPacks = true
+                    continue
+                }
+                inPacks = false
+            }
+            if inPacks { continue }
+            kept.append(line)
+        }
+
+        while kept.last?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true {
+            kept.removeLast()
+        }
+
+        if kept.isEmpty {
+            return packsBlock
+        }
+        return kept.joined(separator: "\n") + "\n\n" + packsBlock
     }
 
     public static func parse(_ text: String) -> PacksConfig {
