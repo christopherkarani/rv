@@ -36,7 +36,7 @@ struct SetupReport: Equatable, Sendable {
 }
 
 enum SetupFormat {
-    static func stdout(report: SetupReport, appearance: SetupAppearance) -> String {
+    static func stdout(report: SetupReport, appearance: CLIAppearance) -> String {
         switch appearance {
         case .robot:
             return robot(report)

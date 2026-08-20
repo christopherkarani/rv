@@ -24,14 +24,12 @@ struct Setup: ParsableCommand {
             FileHandle.standardError.write(Data("rv setup: HOME is not set\n".utf8))
             throw ExitCode(1)
         }
-        let probe = ThemeProbeFactory.live(
-            jsonFlag: json,
-            robotFlag: robot,
-            plainFlag: plain,
-            noColorFlag: noColor
+        let appearance = CLIAppearance.resolve(
+            json: json,
+            robot: robot,
+            plain: plain,
+            noColor: noColor
         )
-        let requested = OutputModeResolver.requested(json: json, robot: robot)
-        let appearance = CLIAppearance.resolve(probe: probe, requested: requested)
         let outcome = SetupRun.setup(env, appearance: appearance)
         if outcome.stdout.isEmpty == false {
             FileHandle.standardOutput.write(Data(outcome.stdout.utf8))
