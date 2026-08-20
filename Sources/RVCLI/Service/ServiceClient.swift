@@ -27,26 +27,19 @@ public struct ClientEvaluateReply: Sendable, Equatable {
 }
 
 public struct ServiceClient: Sendable {
-    public var connectTimeoutMs: Int
-    public var requestTimeoutMs: Int
-
     private let transport: (any ServiceTransport)?
-    private let session: EvaluateSession?
+    private let injectedFallback: GatedEvaluate?
     private let store: AllowOnceStore
 
     public init(
         transport: (any ServiceTransport)? = XPCServiceTransport(),
         session: EvaluateSession? = nil,
         store: AllowOnceStore? = nil,
-        allowOnceDirectory: URL? = nil,
-        connectTimeoutMs: Int = 200,
-        requestTimeoutMs: Int = 500
+        allowOnceDirectory: URL? = nil
     ) {
         self.transport = transport
-        self.session = session
+        self.injectedFallback = session.map(GatedEvaluate.init)
         self.store = Self.resolveStore(store: store, allowOnceDirectory: allowOnceDirectory)
-        self.connectTimeoutMs = connectTimeoutMs
-        self.requestTimeoutMs = requestTimeoutMs
     }
 
     public static func missingCore(
@@ -93,7 +86,7 @@ public struct ServiceClient: Sendable {
             enabledPacks: dayOnePackIDs
         )
         switch await route() {
-        case .xpc(let transport):
+        case .xpc(let transport, _):
             do {
                 let body = try IPCJSON.encode(
                     IPCRequest(method: .evaluate(EvaluateParams(request: request, cwd: cwd)))
@@ -107,13 +100,13 @@ public struct ServiceClient: Sendable {
             } catch {
                 return (await inProcessEvaluate(request, cwd: cwd), "inProcess")
             }
-        case .down, .skew:
+        case .down, .skew, .failed:
             return (await inProcessEvaluate(request, cwd: cwd), "inProcess")
         }
     }
 
     private func inProcessEvaluate(_ request: EvaluationRequest, cwd: String?) async -> EvaluationResult {
-        await GatedEvaluate(session ?? EvaluateSession()).apply(
+        await fallback().apply(
             request,
             cwd: cwd,
             store: store,
@@ -122,45 +115,148 @@ public struct ServiceClient: Sendable {
     }
 
     public func status() async -> ServiceStatusReport {
+        await diagnostics().statusReport
+    }
+
+    func diagnostics() async -> ServiceDiagnosticResult {
+        let localCorePacksReady = fallback().corePacksReady
         switch await route() {
-        case .xpc:
-            return ServiceStatusReport(state: "running", fallback: "inactive")
+        case .xpc(let transport, let serviceSemver):
+            let request = IPCRequest(method: .doctorSnapshot)
+            do {
+                let data = try await transport.send(IPCJSON.encode(request))
+                let response = try IPCJSON.decode(IPCResponse.self, from: data)
+                guard response.id == request.id,
+                      response.protocolName == ProtocolVersion.name
+                else {
+                    return localDiagnostic(
+                        cause: .requestFailed(.invalidResponse),
+                        corePacksReady: localCorePacksReady,
+                        serviceSemver: serviceSemver
+                    )
+                }
+                switch response.result {
+                case .doctorSnapshot(let snapshot):
+                    return .xpc(
+                        snapshot: snapshot,
+                        localCorePacksReady: localCorePacksReady
+                    )
+                case .error(.protocolSkew):
+                    return localDiagnostic(
+                        cause: .skew(.protocolMismatch),
+                        corePacksReady: localCorePacksReady,
+                        serviceSemver: serviceSemver
+                    )
+                case .error(let error):
+                    return localDiagnostic(
+                        cause: .requestFailed(.service(error)),
+                        corePacksReady: localCorePacksReady,
+                        serviceSemver: serviceSemver
+                    )
+                default:
+                    return localDiagnostic(
+                        cause: .requestFailed(.unexpectedResponse),
+                        corePacksReady: localCorePacksReady,
+                        serviceSemver: serviceSemver
+                    )
+                }
+            } catch {
+                return localDiagnostic(
+                    cause: .requestFailed(Self.diagnosticFailure(from: error)),
+                    corePacksReady: localCorePacksReady,
+                    serviceSemver: serviceSemver
+                )
+            }
         case .down:
-            return ServiceStatusReport(state: "down", fallback: "down")
-        case .skew(let reason):
-            return ServiceStatusReport(state: "skew", fallback: "skew", lastError: reason)
+            return localDiagnostic(cause: .down, corePacksReady: localCorePacksReady)
+        case .skew(let reason, let serviceSemver):
+            return localDiagnostic(
+                cause: .skew(reason),
+                corePacksReady: localCorePacksReady,
+                serviceSemver: serviceSemver
+            )
+        case .failed(let failure):
+            return localDiagnostic(
+                cause: .requestFailed(failure),
+                corePacksReady: localCorePacksReady
+            )
         }
     }
 
+    private func localDiagnostic(
+        cause: ServiceFallbackCause,
+        corePacksReady: Bool,
+        serviceSemver: String? = nil
+    ) -> ServiceDiagnosticResult {
+        .local(
+            ServiceFallbackDiagnostic(
+                cause: cause,
+                corePacksReady: corePacksReady,
+                serviceSemver: serviceSemver
+            )
+        )
+    }
+
+    private static func diagnosticFailure(from error: Error) -> ServiceDiagnosticFailure {
+        switch error {
+        case is DecodingError, is EncodingError:
+            .invalidResponse
+        case let error as ServiceTransportError:
+            .transport(error)
+        default:
+            .transport(.unexpected)
+        }
+    }
+
+    private func fallback() -> GatedEvaluate {
+        injectedFallback ?? GatedEvaluate()
+    }
+
     private enum Route {
-        case xpc(any ServiceTransport)
+        case xpc(any ServiceTransport, serviceSemver: String)
         case down
-        case skew(String)
+        case skew(ServiceSkewReason, serviceSemver: String)
+        case failed(ServiceDiagnosticFailure)
     }
 
     private func route() async -> Route {
         guard let transport else { return .down }
         do {
             let ack = try await transport.hello(clientSemver: ProtocolVersion.serviceSemver)
-            if isSkew(ack) {
-                return .skew(ack.skewReason ?? "protocol")
+            if let reason = skewReason(ack) {
+                transport.invalidate()
+                return .skew(reason, serviceSemver: ack.serviceSemver)
             }
-            return .xpc(transport)
+            return .xpc(transport, serviceSemver: ack.serviceSemver)
+        } catch let error as ServiceTransportError {
+            switch error {
+            case .connectFailed, .timeout, .interrupted:
+                return .down
+            case .decodeFailed, .unexpected:
+                return .failed(.transport(error))
+            }
         } catch {
-            return .down
+            return .failed(.transport(.unexpected))
         }
     }
 
-    private func isSkew(_ ack: HelloAckView) -> Bool {
-        if ack.ok == false { return true }
-        if ack.protocolName != ProtocolVersion.name { return true }
+    private func skewReason(_ ack: HelloAckView) -> ServiceSkewReason? {
+        if ack.protocolName != ProtocolVersion.name {
+            return .protocolMismatch
+        }
         if ProtocolVersion.isMajorSkew(
             clientSemver: ProtocolVersion.serviceSemver,
             serviceSemver: ack.serviceSemver
         ) {
-            return true
+            return .majorVersionMismatch
         }
-        return false
+        if ack.ok == false {
+            if ack.skewReason == "core packs unavailable" {
+                return .corePacksUnavailable
+            }
+            return .rejected
+        }
+        return nil
     }
 
     private static func view(_ result: EvaluationResult, via: String) -> ClientEvaluateReply {

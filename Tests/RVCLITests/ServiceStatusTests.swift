@@ -1,3 +1,5 @@
+import RVDomain
+import RVIPC
 import Testing
 @testable import RVCLI
 
@@ -22,13 +24,33 @@ struct ServiceStatusTests {
     }
 
     @Test func runningReportsInactiveFallback() async throws {
+        let snapshot = DoctorSnapshotReply(
+            state: .running,
+            idleExitSeconds: 300,
+            packsEnabled: [.coreGit, .coreFilesystem],
+            checks: []
+        )
         let transport = ScriptedTransport(
-            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", ok: true)
+            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", ok: true),
+            responseResult: .doctorSnapshot(snapshot)
         )
         let report = try await isolatedClient(transport: transport).status()
         #expect(report.state == "running")
         #expect(report.fallback == "inactive")
         #expect(report.keepAlive == false)
         #expect(XPCServiceTransport.serviceName == "dev.rv.evaluate")
+    }
+
+    @Test func requestFailureIsDownNotFalseRunning() async throws {
+        let transport = ScriptedTransport(
+            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", ok: true),
+            sendError: .interrupted
+        )
+
+        let report = try await isolatedClient(transport: transport).status()
+
+        #expect(report.state == "down")
+        #expect(report.fallback == "down")
+        #expect(report.lastError == "request failed")
     }
 }

@@ -30,11 +30,14 @@ public enum ServiceTransportError: Error, Sendable, Equatable {
     case timeout
     case interrupted
     case decodeFailed
+    case unexpected
 }
 
 public protocol ServiceTransport: Sendable {
     func hello(clientSemver: String) async throws -> HelloAckView
     func send(_ body: Data) async throws -> Data
+    /// Drops the current transport connection after a failed or skewed handshake.
+    func invalidate()
 }
 
 public struct XPCServiceTransport: ServiceTransport, @unchecked Sendable {
@@ -54,11 +57,7 @@ public struct XPCServiceTransport: ServiceTransport, @unchecked Sendable {
         let body = try IPCJSON.encode(hello)
         let reply = try await perform(body, timeoutMs: connectTimeoutMs)
         do {
-            let ack = HelloAckView(try IPCJSON.decode(HelloAck.self, from: reply))
-            if ack.ok == false {
-                session.invalidate()
-            }
-            return ack
+            return HelloAckView(try IPCJSON.decode(HelloAck.self, from: reply))
         } catch {
             session.invalidate()
             throw ServiceTransportError.decodeFailed
@@ -67,6 +66,11 @@ public struct XPCServiceTransport: ServiceTransport, @unchecked Sendable {
 
     public func send(_ body: Data) async throws -> Data {
         try await perform(body, timeoutMs: requestTimeoutMs)
+    }
+
+    /// Drops the current XPC connection.
+    public func invalidate() {
+        session.invalidate()
     }
 
     var openedConnectionCount: Int { session.openedConnectionCount }

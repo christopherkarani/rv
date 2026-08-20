@@ -323,7 +323,3 @@ private func mediumAllow() -> EvaluationResult {
     #expect(vm.rows.allSatisfy { $0.enabled })
     #expect(vm.rows.map(\.id.rawValue) == ["core.filesystem", "core.git"])
 }
-
-@Test func doctorViewModel_isStub() {
-    let _: DoctorViewModel = DoctorViewModel()
-}
