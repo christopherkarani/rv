@@ -2,22 +2,6 @@ import RVPresentation
 import RVTUI
 import RVTheme
 
-enum SetupAppearance: Equatable, Sendable {
-    case robot
-    case pretty(Palette)
-
-    /// CI is one line, no circles. T2 `OutputMode` still maps CI+TTY browse to pretty.
-    static func resolved(mode: OutputMode, ci: Bool, palette: Palette) -> SetupAppearance {
-        if ci { return .robot }
-        switch mode {
-        case .robot:
-            return .robot
-        case .pretty, .browse:
-            return .pretty(palette)
-        }
-    }
-}
-
 struct SetupReport: Equatable, Sendable {
     var grok: SetupSlotKind
     var pi: SetupSlotKind

@@ -21,12 +21,17 @@ struct Status: AsyncParsableCommand {
 
     func run() async {
         let report = await ServiceClient().status()
-        let text: String
-        if format.json || format.robot {
-            text = ServiceStatusCommand.robotText(report)
-        } else {
-            text = ServiceStatusCommand.plainText(report)
-        }
+        let probe = ThemeProbeFactory.live(
+            jsonFlag: format.json,
+            robotFlag: format.robot,
+            plainFlag: format.plain,
+            noColorFlag: format.noColor
+        )
+        let requested = OutputModeResolver.requested(json: format.json, robot: format.robot)
+        let text = ServiceStatusCommand.text(
+            report,
+            appearance: CLIAppearance.resolve(probe: probe, requested: requested)
+        )
         FileHandle.standardOutput.write(Data((text + "\n").utf8))
     }
 }

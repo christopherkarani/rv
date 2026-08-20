@@ -61,4 +61,13 @@ public enum ServiceStatusCommand {
     public static func plainText(_ report: ServiceStatusReport) -> String {
         report.plainLines.joined(separator: "\n")
     }
+
+    static func text(_ report: ServiceStatusReport, appearance: CLIAppearance) -> String {
+        switch appearance {
+        case .robot:
+            return robotText(report)
+        case .pretty:
+            return plainText(report)
+        }
+    }
 }

@@ -111,9 +111,9 @@ import RVTheme
 }
 
 @Test func setupAppearance_ciForcesRobot_prettyWithoutCIStaysPretty() {
-    #expect(SetupAppearance.resolved(mode: .pretty, ci: true, palette: colorOffPalette) == .robot)
-    #expect(SetupAppearance.resolved(mode: .browse, ci: true, palette: colorOffPalette) == .robot)
-    #expect(SetupAppearance.resolved(mode: .pretty, ci: false, palette: colorOffPalette) == .pretty(colorOffPalette))
+    #expect(CLIAppearance.resolved(mode: .pretty, ci: true, palette: colorOffPalette) == .robot)
+    #expect(CLIAppearance.resolved(mode: .browse, ci: true, palette: colorOffPalette) == .robot)
+    #expect(CLIAppearance.resolved(mode: .pretty, ci: false, palette: colorOffPalette) == .pretty(colorOffPalette))
 }
 
 @Test func setup_pretty_secondRunIsQuiet() throws {

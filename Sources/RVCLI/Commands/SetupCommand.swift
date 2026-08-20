@@ -1,6 +1,5 @@
 import ArgumentParser
 import Foundation
-import RVTheme
 
 struct Setup: ParsableCommand {
     static let configuration = CommandConfiguration(
@@ -32,12 +31,7 @@ struct Setup: ParsableCommand {
             noColorFlag: noColor
         )
         let requested = OutputModeResolver.requested(json: json, robot: robot)
-        let mode = OutputMode(probe: probe, requested: requested)
-        let appearance = SetupAppearance.resolved(
-            mode: mode,
-            ci: probe.ci,
-            palette: Palette(for: ColorCapability(probe: probe, mode: mode))
-        )
+        let appearance = CLIAppearance.resolve(probe: probe, requested: requested)
         let outcome = SetupRun.setup(env, appearance: appearance)
         if outcome.stdout.isEmpty == false {
             FileHandle.standardOutput.write(Data(outcome.stdout.utf8))
