@@ -1,8 +1,11 @@
 # Handoff — rv factory → implement T0
 
-Kind: **complete** (factory Go Ready; next focus: implement T0)
+> **Historical.** Factory→T0 kickoff only. Implementers: use [`STATUS.md`](STATUS.md) for the current ticket. Do not treat this file as session start.
+
+Kind: **complete** (factory Go Ready; originally next focus: implement T0)
 Workspace: `/Users/chriskarani/CodingProjects/rv`
 Date: 2026-08-17
+
 
 ## Goal status
 

@@ -5,6 +5,8 @@ xcuserdata/
 .worktrees/
 .agents/
 .claude-plugin/
-.grok/
+.grok/*
+!.grok/skills/
+!.grok/skills/**
 .ryk/
 .skynex/
