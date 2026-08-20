@@ -125,7 +125,7 @@ enum SetupRun {
 
     static func setup(
         _ env: SetupEnvironment,
-        appearance: SetupAppearance = .robot
+        appearance: CLIAppearance = .robot
     ) -> SetupOutcome {
         do {
             let report = try perform(env)

@@ -1,6 +1,5 @@
 import ArgumentParser
 import Foundation
-import RVTheme
 
 struct Setup: ParsableCommand {
     static let configuration = CommandConfiguration(
@@ -25,18 +24,11 @@ struct Setup: ParsableCommand {
             FileHandle.standardError.write(Data("rv setup: HOME is not set\n".utf8))
             throw ExitCode(1)
         }
-        let probe = ThemeProbeFactory.live(
-            jsonFlag: json,
-            robotFlag: robot,
-            plainFlag: plain,
-            noColorFlag: noColor
-        )
-        let requested = OutputModeResolver.requested(json: json, robot: robot)
-        let mode = OutputMode(probe: probe, requested: requested)
-        let appearance = SetupAppearance.resolved(
-            mode: mode,
-            ci: probe.ci,
-            palette: Palette(for: ColorCapability(probe: probe, mode: mode))
+        let appearance = CLIAppearance.resolve(
+            json: json,
+            robot: robot,
+            plain: plain,
+            noColor: noColor
         )
         let outcome = SetupRun.setup(env, appearance: appearance)
         if outcome.stdout.isEmpty == false {
