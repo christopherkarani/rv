@@ -1,0 +1,109 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "messaging.nats",
+  "name": "NATS",
+  "version": "0.11.0",
+  "description": "Protects against destructive NATS/JetStream operations like deleting streams, consumers, \\ key-value entries, objects, and accounts.",
+  "category": "messaging",
+  "enabled_by_default": false,
+  "keywords": [
+    "nats"
+  ],
+  "safe_patterns": [
+    {
+      "name": "nats-stream-info",
+      "pattern": "nats(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+stream\\s+info(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "nats-stream-ls",
+      "pattern": "nats(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+stream\\s+ls(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "nats-consumer-info",
+      "pattern": "nats(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+consumer\\s+info(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "nats-consumer-ls",
+      "pattern": "nats(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+consumer\\s+ls(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "nats-kv-get",
+      "pattern": "nats(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+kv\\s+get(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "nats-kv-ls",
+      "pattern": "nats(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+kv\\s+ls(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "nats-pub",
+      "pattern": "nats(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+pub(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "nats-sub",
+      "pattern": "nats(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+sub(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "nats-server-info",
+      "pattern": "nats(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+server\\s+info(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "nats-bench",
+      "pattern": "nats(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+bench(?=\\s|$)",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "nats-stream-delete",
+      "pattern": "nats(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+stream\\s+(?:delete|rm)\\b",
+      "severity": "critical",
+      "description": "nats stream delete/rm removes a JetStream stream and all its messages.",
+      "explanation": "Deleting a JetStream stream permanently removes all stored messages, \\ consumers, and configuration. Applications relying on this stream will \\ lose access to historical data.\n\n\\ Safer alternatives: \\ - nats stream info: Review stream details first \\ - nats stream purge: Remove messages but keep the stream \\ - Back up stream configuration before deletion"
+    },
+    {
+      "name": "nats-stream-purge",
+      "pattern": "nats(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+stream\\s+purge\\b",
+      "severity": "high",
+      "description": "nats stream purge deletes ALL messages from the stream.",
+      "explanation": "Purging a stream removes all messages while keeping the stream and \\ consumer configurations intact. Consumers will have no messages to \\ process until new ones arrive.\n\n\\ Safer alternatives: \\ - nats stream info: Check message count first \\ - Use --seq to purge only messages up to a specific sequence \\ - Use --keep to retain the last N messages"
+    },
+    {
+      "name": "nats-consumer-delete",
+      "pattern": "nats(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+consumer\\s+(?:delete|rm)\\b",
+      "severity": "high",
+      "description": "nats consumer delete/rm removes a JetStream consumer.",
+      "explanation": "Deleting a consumer removes its acknowledgment state and delivery \\ tracking. Messages may be redelivered to other consumers or lost \\ if this was the only consumer.\n\n\\ Safer alternatives: \\ - nats consumer info: Review consumer state first \\ - Pause the consumer instead of deleting \\ - Ensure other consumers exist for critical streams"
+    },
+    {
+      "name": "nats-kv-delete",
+      "pattern": "nats(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+kv\\s+(?:del|rm)\\b",
+      "severity": "high",
+      "description": "nats kv del/rm deletes key-value entries.",
+      "explanation": "Deleting KV entries removes data that applications may depend on. \\ If history is disabled, the deletion is permanent and cannot be \\ recovered.\n\n\\ Safer alternatives: \\ - nats kv get: Retrieve and back up the value first \\ - nats kv history: Check if history is enabled \\ - Use TTL for automatic expiration instead of manual deletion"
+    },
+    {
+      "name": "nats-object-delete",
+      "pattern": "nats(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+object\\s+delete\\b",
+      "severity": "high",
+      "description": "nats object delete removes an object from the store.",
+      "explanation": "Deleting an object from the object store removes the file and its \\ metadata. Applications expecting this object will receive errors.\n\n\\ Safer alternatives: \\ - nats object info: Review object details first \\ - Download the object before deletion \\ - Use object versioning if available"
+    },
+    {
+      "name": "nats-account-delete",
+      "pattern": "nats(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+account\\s+delete\\b",
+      "severity": "critical",
+      "description": "nats account delete removes an account and its resources.",
+      "explanation": "Deleting a NATS account removes all streams, consumers, and permissions \\ associated with that account. All applications using this account will \\ lose connectivity.\n\n\\ Safer alternatives: \\ - Review account resources before deletion \\ - Migrate resources to another account first \\ - Disable the account instead of deleting"
+    }
+  ]
+}

@@ -1,0 +1,114 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "containers.podman",
+  "name": "Podman",
+  "version": "0.11.0",
+  "description": "Protects against destructive Podman operations like system prune, \\ volume prune, and force removal",
+  "category": "containers",
+  "enabled_by_default": false,
+  "keywords": [
+    "podman",
+    "prune"
+  ],
+  "safe_patterns": [
+    {
+      "name": "podman-ps",
+      "pattern": "podman\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+ps(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "podman-images",
+      "pattern": "podman\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+images(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "podman-logs",
+      "pattern": "podman\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+logs(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "podman-inspect",
+      "pattern": "podman\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+inspect(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "podman-build",
+      "pattern": "podman\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+build(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "podman-pull",
+      "pattern": "podman\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+pull(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "podman-run",
+      "pattern": "podman\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+run(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "podman-exec",
+      "pattern": "podman\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+exec(?=\\s|$)",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "system-prune",
+      "pattern": "podman\\b.*?\\bsystem\\s+prune",
+      "severity": "high",
+      "description": "podman system prune removes ALL unused containers, pods, images. Use 'podman system df' to preview.",
+      "explanation": "podman system prune is an aggressive cleanup command that removes:\n\n\\ - All stopped containers \\ - All pods without running containers \\ - All dangling images (untagged) \\ - All dangling build cache\n\n\\ With -a flag, removes ALL unused images. With --volumes, removes unused volumes.\n\n\\ Safer alternatives: \\ - podman system df: Preview disk usage first \\ - podman container prune: Only remove stopped containers \\ - podman image prune: Only remove dangling images"
+    },
+    {
+      "name": "volume-prune",
+      "pattern": "podman\\b.*?\\bvolume\\s+prune",
+      "severity": "critical",
+      "description": "podman volume prune removes ALL unused volumes and their data permanently.",
+      "explanation": "podman volume prune permanently deletes ALL volumes not currently in use by \\ any container. This is extremely dangerous:\n\n\\ - Database data in volumes is lost forever \\ - Application state and uploads are destroyed \\ - Volumes from stopped containers are considered 'unused' \\ - No recovery mechanism exists\n\n\\ Safer alternatives: \\ - podman volume ls: List all volumes first \\ - podman volume inspect: Check volume contents \\ - podman volume rm <name>: Remove specific volumes"
+    },
+    {
+      "name": "pod-prune",
+      "pattern": "podman\\b.*?\\bpod\\s+prune",
+      "severity": "medium",
+      "description": "podman pod prune removes ALL stopped pods.",
+      "explanation": "podman pod prune removes all pods that are not currently running. Pods group \\ containers together and pruning them:\n\n\\ - Removes all containers within the stopped pods \\ - Pod configuration and networking setup is lost \\ - Cannot restart or inspect removed pods\n\n\\ Safer alternatives: \\ - podman pod ps -a: List all pods first \\ - podman pod rm <pod>: Remove specific pods \\ - podman pod start <pod>: Restart instead of removing"
+    },
+    {
+      "name": "image-prune",
+      "pattern": "podman\\b.*?\\bimage\\s+prune",
+      "severity": "medium",
+      "description": "podman image prune removes unused images. Use 'podman images' to review first.",
+      "explanation": "podman image prune removes dangling images (untagged layers). With -a flag, \\ removes ALL images not used by existing containers.\n\n\\ Consequences: \\ - Build cache layers are deleted (slower rebuilds) \\ - With -a: Base images must be re-pulled\n\n\\ Safer alternatives: \\ - podman images -f dangling=true: Preview what would be removed \\ - podman images: Review all images \\ - podman rmi <image>: Remove specific images"
+    },
+    {
+      "name": "container-prune",
+      "pattern": "podman\\b.*?\\bcontainer\\s+prune",
+      "severity": "medium",
+      "description": "podman container prune removes ALL stopped containers.",
+      "explanation": "podman container prune removes all stopped containers. Relatively safe but:\n\n\\ - Container logs are lost \\ - Container filesystem layers are deleted \\ - Cannot restart or inspect removed containers\n\n\\ Safer alternatives: \\ - podman ps -a: List all containers first \\ - podman rm <container>: Remove specific containers \\ - podman start <container>: Restart instead of removing"
+    },
+    {
+      "name": "rm-force",
+      "pattern": "podman\\b.*?\\brm\\s+.*(?:-[a-zA-Z0-9]*f|--force)",
+      "severity": "high",
+      "description": "podman rm -f forcibly removes containers, potentially losing data.",
+      "explanation": "podman rm -f forcibly stops and removes containers. This is dangerous because:\n\n\\ - Running processes are killed immediately (SIGKILL) \\ - No graceful shutdown - data may be corrupted \\ - In-flight requests are dropped \\ - Uncommitted data in the container is lost\n\n\\ Safer alternatives: \\ - podman stop <container>: Graceful shutdown first \\ - podman rm <container>: Then remove \\ - podman ps: Check container status first"
+    },
+    {
+      "name": "rmi-force",
+      "pattern": "podman\\b.*?\\brmi\\s+.*(?:-[a-zA-Z0-9]*f|--force)",
+      "severity": "high",
+      "description": "podman rmi -f forcibly removes images even if in use.",
+      "explanation": "podman rmi -f forcibly removes images, even if containers reference them. \\ This can cause:\n\n\\ - Containers to fail on restart (missing image) \\ - Broken references to deleted layers \\ - Loss of build cache\n\n\\ Safer alternatives: \\ - podman ps -a --filter ancestor=<image>: Check what uses the image \\ - podman rmi <image>: Fails safely if in use \\ - podman images: Review images before removal"
+    },
+    {
+      "name": "volume-rm",
+      "pattern": "podman\\b.*?\\bvolume\\s+rm",
+      "severity": "high",
+      "description": "podman volume rm permanently deletes volumes and their data.",
+      "explanation": "podman volume rm permanently deletes named volumes and all data stored in them. \\ This is irreversible:\n\n\\ - Database files are gone forever \\ - User uploads are lost \\ - Configuration data is destroyed \\ - No trash or undo mechanism\n\n\\ Safer alternatives: \\ - podman volume inspect <volume>: Check volume details \\ - podman run --rm -v vol:/data alpine ls -la /data: View contents \\ - Back up before removal"
+    }
+  ]
+}

@@ -1,0 +1,126 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "cdn.cloudfront",
+  "name": "AWS CloudFront",
+  "version": "0.11.0",
+  "description": "Protects against destructive AWS CloudFront operations like deleting \\ distributions, cache policies, and functions.",
+  "category": "cdn",
+  "enabled_by_default": false,
+  "keywords": [
+    "cloudfront"
+  ],
+  "safe_patterns": [
+    {
+      "name": "cloudfront-list-distributions",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+cloudfront\\s+list-distributions\\b",
+      "description": ""
+    },
+    {
+      "name": "cloudfront-list-cache-policies",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+cloudfront\\s+list-cache-policies\\b",
+      "description": ""
+    },
+    {
+      "name": "cloudfront-list-origin-request-policies",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+cloudfront\\s+list-origin-request-policies\\b",
+      "description": ""
+    },
+    {
+      "name": "cloudfront-list-functions",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+cloudfront\\s+list-functions\\b",
+      "description": ""
+    },
+    {
+      "name": "cloudfront-list-invalidations",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+cloudfront\\s+list-invalidations\\b",
+      "description": ""
+    },
+    {
+      "name": "cloudfront-get-distribution",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+cloudfront\\s+get-distribution\\b",
+      "description": ""
+    },
+    {
+      "name": "cloudfront-get-distribution-config",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+cloudfront\\s+get-distribution-config\\b",
+      "description": ""
+    },
+    {
+      "name": "cloudfront-get-cache-policy",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+cloudfront\\s+get-cache-policy\\b",
+      "description": ""
+    },
+    {
+      "name": "cloudfront-get-origin-request-policy",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+cloudfront\\s+get-origin-request-policy\\b",
+      "description": ""
+    },
+    {
+      "name": "cloudfront-get-function",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+cloudfront\\s+get-function\\b",
+      "description": ""
+    },
+    {
+      "name": "cloudfront-get-invalidation",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+cloudfront\\s+get-invalidation\\b",
+      "description": ""
+    },
+    {
+      "name": "cloudfront-describe-function",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+cloudfront\\s+describe-function\\b",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "cloudfront-delete-distribution",
+      "pattern": "\\baws\\b.*?\\bcloudfront\\s+delete-distribution\\b",
+      "severity": "critical",
+      "description": "aws cloudfront delete-distribution removes a CloudFront distribution.",
+      "explanation": "Deleting a CloudFront distribution removes your CDN endpoint. All traffic \\ to the distribution URL will fail. You must first disable the distribution \\ and wait for propagation. Associated origins, behaviors, and cache settings \\ are lost.\n\n\\ Safer alternatives: \\ - aws cloudfront get-distribution: Review configuration first \\ - Disable the distribution before deleting \\ - Export the distribution config for backup"
+    },
+    {
+      "name": "cloudfront-delete-cache-policy",
+      "pattern": "\\baws\\b.*?\\bcloudfront\\s+delete-cache-policy\\b",
+      "severity": "high",
+      "description": "aws cloudfront delete-cache-policy removes a cache policy.",
+      "explanation": "Deleting a cache policy fails if any distribution behaviors reference it. \\ If deletion succeeds, any caching optimizations you configured are lost. \\ Custom TTLs, cache keys, and compression settings must be recreated.\n\n\\ Safer alternatives: \\ - aws cloudfront get-cache-policy: Review policy settings first \\ - Check which distributions use this policy \\ - Create a replacement policy before deleting"
+    },
+    {
+      "name": "cloudfront-delete-origin-request-policy",
+      "pattern": "\\baws\\b.*?\\bcloudfront\\s+delete-origin-request-policy\\b",
+      "severity": "high",
+      "description": "aws cloudfront delete-origin-request-policy removes an origin request policy.",
+      "explanation": "Deleting an origin request policy removes header, query string, and cookie \\ forwarding configuration. Origins may receive different requests than \\ expected, potentially breaking authentication or content negotiation.\n\n\\ Safer alternatives: \\ - aws cloudfront get-origin-request-policy: Review settings first \\ - Verify no distributions reference this policy \\ - Create replacement before deletion"
+    },
+    {
+      "name": "cloudfront-delete-function",
+      "pattern": "\\baws\\b.*?\\bcloudfront\\s+delete-function\\b",
+      "severity": "high",
+      "description": "aws cloudfront delete-function removes a CloudFront function.",
+      "explanation": "Deleting a CloudFront Function removes edge compute logic. Any distributions \\ using this function will lose URL rewriting, header manipulation, or other \\ transformations. Function code is not recoverable after deletion.\n\n\\ Safer alternatives: \\ - aws cloudfront get-function: Download function code first \\ - Remove function associations from distributions first \\ - Test replacements before deleting the original"
+    },
+    {
+      "name": "cloudfront-delete-response-headers-policy",
+      "pattern": "\\baws\\b.*?\\bcloudfront\\s+delete-response-headers-policy\\b",
+      "severity": "high",
+      "description": "aws cloudfront delete-response-headers-policy removes a response headers policy.",
+      "explanation": "Deleting a response headers policy removes security headers like CORS, \\ Content-Security-Policy, and HSTS settings. Browsers may block cross-origin \\ requests or report security warnings after deletion.\n\n\\ Safer alternatives: \\ - Review which distributions use this policy \\ - Test your site without these headers in staging \\ - Create a replacement policy before deleting"
+    },
+    {
+      "name": "cloudfront-delete-key-group",
+      "pattern": "\\baws\\b.*?\\bcloudfront\\s+delete-key-group\\b",
+      "severity": "critical",
+      "description": "aws cloudfront delete-key-group removes a key group used for signed URLs.",
+      "explanation": "Deleting a key group breaks signed URL and signed cookie validation. \\ Users with existing signed URLs will lose access to protected content. \\ Any distributions using this key group for restricted content will deny \\ all requests.\n\n\\ Safer alternatives: \\ - Rotate keys by adding new keys before removing old ones \\ - Verify no distributions reference this key group \\ - Update applications to use new signing keys first"
+    },
+    {
+      "name": "cloudfront-create-invalidation",
+      "pattern": "\\baws\\b.*?\\bcloudfront\\s+create-invalidation\\b",
+      "severity": "medium",
+      "description": "aws cloudfront create-invalidation creates a cache invalidation (has cost implications).",
+      "explanation": "Cache invalidations have cost implications after the first 1,000 paths per \\ month. Wildcard invalidations (/*) count as one path but clear the entire \\ cache, causing origin load spikes. Frequent invalidations defeat CDN benefits.\n\n\\ Safer alternatives: \\ - Use versioned URLs (file.v2.js) instead of invalidation \\ - Invalidate specific paths rather than wildcards \\ - Set appropriate Cache-Control headers at the origin"
+    }
+  ]
+}

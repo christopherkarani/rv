@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "email.postmark",
+  "name": "Postmark",
+  "version": "0.11.0",
+  "description": "Protects against destructive Postmark API operations like server deletion, \\ template deletion, and sender signature removal.",
+  "category": "email",
+  "enabled_by_default": false,
+  "keywords": [
+    "postmark",
+    "api.postmarkapp.com"
+  ],
+  "safe_patterns": [],
+  "destructive_patterns": [
+    {
+      "name": "postmark-delete-server",
+      "pattern": "(?:-X\\s*DELETE|--request(?:=|\\s+)DELETE).*api\\.postmarkapp\\.com/servers/|api\\.postmarkapp\\.com/servers/\\d+.*(?:-X\\s*DELETE|--request(?:=|\\s+)DELETE)",
+      "severity": "critical",
+      "description": "DELETE to Postmark /servers removes a server configuration.",
+      "explanation": "Deleting a Postmark server removes all associated templates, message streams, \\ webhooks, and statistics. All applications using this server's API tokens will \\ fail to send emails. Server tokens cannot be recovered.\n\n\\ Safer alternatives: \\ - GET /servers/{id}: Export server configuration \\ - GET /templates: Export all templates first \\ - Create new server and migrate before deleting"
+    },
+    {
+      "name": "postmark-delete-template",
+      "pattern": "(?:-X\\s*DELETE|--request(?:=|\\s+)DELETE).*api\\.postmarkapp\\.com/templates/|api\\.postmarkapp\\.com/templates/[^\\s/]+.*(?:-X\\s*DELETE|--request(?:=|\\s+)DELETE)",
+      "severity": "medium",
+      "description": "DELETE to Postmark /templates removes an email template.",
+      "explanation": "Deleting a Postmark template breaks any email sends referencing that template \\ ID or alias. Applications will receive errors when attempting to send with the \\ deleted template. Template content cannot be recovered.\n\n\\ Safer alternatives: \\ - GET /templates/{id}: Export template content first \\ - Create a new template version instead of deleting \\ - Search codebase for template ID/alias references"
+    },
+    {
+      "name": "postmark-delete-domain",
+      "pattern": "(?:-X\\s*DELETE|--request(?:=|\\s+)DELETE).*api\\.postmarkapp\\.com/domains/|api\\.postmarkapp\\.com/domains/\\d+.*(?:-X\\s*DELETE|--request(?:=|\\s+)DELETE)",
+      "severity": "critical",
+      "description": "DELETE to Postmark /domains removes a domain configuration.",
+      "explanation": "Deleting a Postmark domain removes DKIM keys and domain verification. Emails \\ sent from this domain will fail authentication checks, affecting deliverability. \\ Re-verification requires DNS changes and propagation time.\n\n\\ Safer alternatives: \\ - GET /domains/{id}: Export domain configuration \\ - Document DNS records before deletion \\ - Verify new domain is working before removing old"
+    },
+    {
+      "name": "postmark-delete-sender-signature",
+      "pattern": "(?:-X\\s*DELETE|--request(?:=|\\s+)DELETE).*api\\.postmarkapp\\.com/senders/|api\\.postmarkapp\\.com/senders/\\d+.*(?:-X\\s*DELETE|--request(?:=|\\s+)DELETE)",
+      "severity": "high",
+      "description": "DELETE to Postmark /senders removes a sender signature.",
+      "explanation": "Deleting a sender signature prevents sending from that email address. \\ Applications using this sender will fail until a new signature is verified. \\ Re-verification requires confirming the email address.\n\n\\ Safer alternatives: \\ - GET /senders/{id}: Document sender configuration \\ - Create and verify new sender before deleting old \\ - Update application configurations first"
+    },
+    {
+      "name": "postmark-delete-webhook",
+      "pattern": "(?:-X\\s*DELETE|--request(?:=|\\s+)DELETE).*api\\.postmarkapp\\.com/webhooks/|api\\.postmarkapp\\.com/webhooks/\\d+.*(?:-X\\s*DELETE|--request(?:=|\\s+)DELETE)",
+      "severity": "medium",
+      "description": "DELETE to Postmark /webhooks removes a webhook configuration.",
+      "explanation": "Deleting a webhook stops event notifications to your application. Bounce, \\ delivery, open, click, and spam complaint notifications will not be received. \\ This affects email analytics and automation workflows.\n\n\\ Safer alternatives: \\ - GET /webhooks/{id}: Document webhook URL and events \\ - Set up new webhook before removing old one \\ - Test webhook endpoints before configuration changes"
+    },
+    {
+      "name": "postmark-delete-suppression",
+      "pattern": "(?:-X\\s*DELETE|--request(?:=|\\s+)DELETE).*api\\.postmarkapp\\.com/message-streams/[^/]+/suppressions/|api\\.postmarkapp\\.com/message-streams/[^/]+/suppressions/.*(?:-X\\s*DELETE|--request(?:=|\\s+)DELETE)",
+      "severity": "high",
+      "description": "DELETE to Postmark suppressions endpoint removes suppression entries.",
+      "explanation": "Removing suppression entries allows emails to addresses that previously bounced, \\ complained, or unsubscribed. This damages sender reputation and may violate \\ anti-spam regulations like CAN-SPAM and GDPR.\n\n\\ Safer alternatives: \\ - GET suppressions: Review reason for suppression \\ - Never remove unsubscribe or complaint suppressions \\ - Use email verification services before removing bounces"
+    },
+    {
+      "name": "postmark-delete-message-stream",
+      "pattern": "(?:-X\\s*DELETE|--request(?:=|\\s+)DELETE).*api\\.postmarkapp\\.com/message-streams/[\\w-]+(?:\\s|$)|api\\.postmarkapp\\.com/message-streams/[\\w-]+(?:\\s|$).*(?:-X\\s*DELETE|--request(?:=|\\s+)DELETE)",
+      "severity": "high",
+      "description": "DELETE to Postmark /message-streams removes a message stream.",
+      "explanation": "Deleting a message stream removes all associated statistics, suppressions, and \\ configurations. Applications sending to this stream will fail. Transactional and \\ broadcast streams have different behaviors when deleted.\n\n\\ Safer alternatives: \\ - GET /message-streams/{id}: Export stream configuration \\ - Review stream statistics before deletion \\ - Migrate to new stream before deleting old one"
+    }
+  ]
+}

@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "storage.s3",
+  "name": "AWS S3",
+  "version": "0.11.0",
+  "description": "Protects against destructive S3 operations like bucket removal, recursive deletes, and sync --delete.",
+  "category": "storage",
+  "enabled_by_default": false,
+  "keywords": [
+    "s3",
+    "s3api",
+    "rb",
+    "delete-bucket",
+    "delete-object",
+    "delete-objects",
+    "--delete"
+  ],
+  "safe_patterns": [
+    {
+      "name": "s3-list",
+      "pattern": "aws(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+s3\\s+ls(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "s3-copy",
+      "pattern": "aws(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+s3\\s+cp(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "s3-presign",
+      "pattern": "aws(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+s3\\s+presign(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "s3-mb",
+      "pattern": "aws(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+s3\\s+mb(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "s3-rm-dryrun",
+      "pattern": "aws(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+s3\\s+rm(?=\\s|$)[^\\n;&|]*\\s--dryrun(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "s3-sync-delete-dryrun",
+      "pattern": "aws(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+s3\\s+sync(?=\\s|$)[^\\n;&|]*\\s--delete(?=\\s|$)[^\\n;&|]*\\s--dryrun(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "s3-sync-dryrun-delete",
+      "pattern": "aws(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+s3\\s+sync(?=\\s|$)[^\\n;&|]*\\s--dryrun(?=\\s|$)[^\\n;&|]*\\s--delete(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "s3api-list-objects",
+      "pattern": "aws(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+s3api\\s+list-objects(?:-v2)?(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "s3api-get-object",
+      "pattern": "aws(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+s3api\\s+get-object(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "s3api-head-object",
+      "pattern": "aws(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+s3api\\s+head-object(?=\\s|$)",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "s3-rb",
+      "pattern": "aws(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+s3\\s+rb\\b",
+      "severity": "critical",
+      "description": "aws s3 rb removes an S3 bucket and is destructive.",
+      "explanation": "Removing an S3 bucket deletes the bucket and optionally all objects within \\ it (with --force). Bucket names are globally unique and may be claimed by \\ others after deletion. Versioned objects require additional cleanup.\n\n\\ Safer alternatives: \\ - aws s3 ls: Review bucket contents first \\ - Empty the bucket before removal \\ - Enable bucket versioning for recovery options"
+    },
+    {
+      "name": "s3-rm",
+      "pattern": "aws(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+s3\\s+rm\\b",
+      "severity": "high",
+      "description": "aws s3 rm deletes S3 objects and is destructive.",
+      "explanation": "The rm command deletes objects from S3. With --recursive, it deletes all \\ objects under a prefix. For versioned buckets, this creates delete markers; \\ for unversioned buckets, data is permanently lost.\n\n\\ Safer alternatives: \\ - aws s3 ls: Review objects before deletion \\ - Use --dryrun to preview what will be deleted \\ - Enable versioning for recovery options"
+    },
+    {
+      "name": "s3-sync-delete",
+      "pattern": "aws(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+s3\\s+sync\\b(?:\\s+[^\\n]*)?\\s+--delete\\b",
+      "severity": "high",
+      "description": "aws s3 sync --delete removes destination objects not in source.",
+      "explanation": "The --delete flag removes files from the destination that don't exist in \\ the source. This can accidentally delete important data if source and \\ destination are swapped or if source is empty.\n\n\\ Safer alternatives: \\ - aws s3 sync --dryrun: Preview changes first \\ - Omit --delete for additive-only sync \\ - Back up destination before syncing"
+    },
+    {
+      "name": "s3api-delete-bucket",
+      "pattern": "aws(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+s3api\\s+delete-bucket\\b",
+      "severity": "critical",
+      "description": "aws s3api delete-bucket permanently deletes a bucket.",
+      "explanation": "The delete-bucket API removes an S3 bucket. The bucket must be empty \\ (including all versions and delete markers). Once deleted, the bucket \\ name becomes available globally and may be claimed by others.\n\n\\ Safer alternatives: \\ - aws s3api list-objects-v2: Verify bucket is empty \\ - aws s3api list-object-versions: Check for versions \\ - Use lifecycle policies for managed cleanup"
+    },
+    {
+      "name": "s3api-delete-object",
+      "pattern": "aws(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+s3api\\s+delete-object(?=\\s|$)",
+      "severity": "medium",
+      "description": "aws s3api delete-object permanently deletes an object.",
+      "explanation": "Deleting an object removes it from S3. For versioned buckets, this creates \\ a delete marker. Specifying a version-id permanently deletes that specific \\ version. Unversioned objects are immediately and permanently deleted.\n\n\\ Safer alternatives: \\ - aws s3api head-object: Verify object exists \\ - Use bucket versioning for recovery \\ - Copy to backup location before deletion"
+    },
+    {
+      "name": "s3api-delete-objects",
+      "pattern": "aws(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+s3api\\s+delete-objects\\b",
+      "severity": "high",
+      "description": "aws s3api delete-objects permanently deletes multiple objects.",
+      "explanation": "Batch deletion removes up to 1,000 objects per request. A malformed delete \\ JSON file can remove unintended objects. Deletions are processed in \\ parallel and cannot be easily stopped once started.\n\n\\ Safer alternatives: \\ - Review the delete JSON file carefully \\ - Test with a single object first \\ - Enable versioning before bulk deletions"
+    }
+  ]
+}

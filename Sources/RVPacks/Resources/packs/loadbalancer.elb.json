@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "loadbalancer.elb",
+  "name": "AWS ELB",
+  "version": "0.11.0",
+  "description": "Protects against destructive AWS Elastic Load Balancing (ELB/ALB/NLB) \\ operations like deleting load balancers, target groups, or deregistering \\ targets from live traffic.",
+  "category": "loadbalancer",
+  "enabled_by_default": false,
+  "keywords": [
+    "elbv2",
+    "delete-load-balancer",
+    "delete-target-group",
+    "deregister-targets",
+    "delete-listener",
+    "delete-rule",
+    "deregister-instances-from-load-balancer"
+  ],
+  "safe_patterns": [
+    {
+      "name": "elbv2-describe-load-balancers",
+      "pattern": "\\baws\\b(?:\\s+(?:--profile|--region|--output|--endpoint-url)\\s+\\S+|\\s+--\\S+)*\\s+elbv2\\s+describe-load-balancers\\b",
+      "description": ""
+    },
+    {
+      "name": "elbv2-describe-target-groups",
+      "pattern": "\\baws\\b(?:\\s+(?:--profile|--region|--output|--endpoint-url)\\s+\\S+|\\s+--\\S+)*\\s+elbv2\\s+describe-target-groups\\b",
+      "description": ""
+    },
+    {
+      "name": "elbv2-describe-target-health",
+      "pattern": "\\baws\\b(?:\\s+(?:--profile|--region|--output|--endpoint-url)\\s+\\S+|\\s+--\\S+)*\\s+elbv2\\s+describe-target-health\\b",
+      "description": ""
+    },
+    {
+      "name": "elb-describe-load-balancers",
+      "pattern": "\\baws\\b(?:\\s+(?:--profile|--region|--output|--endpoint-url)\\s+\\S+|\\s+--\\S+)*\\s+elb\\s+describe-load-balancers\\b",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "elbv2-delete-load-balancer",
+      "pattern": "\\baws\\b(?:\\s+(?:--profile|--region|--output|--endpoint-url)\\s+\\S+|\\s+--\\S+)*\\s+elbv2\\s+delete-load-balancer\\b",
+      "severity": "high",
+      "description": "aws elbv2 delete-load-balancer permanently deletes the load balancer."
+    },
+    {
+      "name": "elbv2-delete-target-group",
+      "pattern": "\\baws\\b(?:\\s+(?:--profile|--region|--output|--endpoint-url)\\s+\\S+|\\s+--\\S+)*\\s+elbv2\\s+delete-target-group\\b",
+      "severity": "high",
+      "description": "aws elbv2 delete-target-group permanently deletes the target group."
+    },
+    {
+      "name": "elbv2-deregister-targets",
+      "pattern": "\\baws\\b(?:\\s+(?:--profile|--region|--output|--endpoint-url)\\s+\\S+|\\s+--\\S+)*\\s+elbv2\\s+deregister-targets\\b",
+      "severity": "high",
+      "description": "aws elbv2 deregister-targets removes targets from the load balancer, impacting live traffic."
+    },
+    {
+      "name": "elbv2-delete-listener",
+      "pattern": "\\baws\\b(?:\\s+(?:--profile|--region|--output|--endpoint-url)\\s+\\S+|\\s+--\\S+)*\\s+elbv2\\s+delete-listener\\b",
+      "severity": "high",
+      "description": "aws elbv2 delete-listener deletes a listener, potentially breaking traffic routing."
+    },
+    {
+      "name": "elbv2-delete-rule",
+      "pattern": "\\baws\\b(?:\\s+(?:--profile|--region|--output|--endpoint-url)\\s+\\S+|\\s+--\\S+)*\\s+elbv2\\s+delete-rule\\b",
+      "severity": "high",
+      "description": "aws elbv2 delete-rule deletes a listener rule, potentially breaking routing."
+    },
+    {
+      "name": "elb-delete-load-balancer",
+      "pattern": "\\baws\\b(?:\\s+(?:--profile|--region|--output|--endpoint-url)\\s+\\S+|\\s+--\\S+)*\\s+elb\\s+delete-load-balancer\\b",
+      "severity": "high",
+      "description": "aws elb delete-load-balancer permanently deletes the classic load balancer."
+    },
+    {
+      "name": "elb-deregister-instances",
+      "pattern": "\\baws\\b(?:\\s+(?:--profile|--region|--output|--endpoint-url)\\s+\\S+|\\s+--\\S+)*\\s+elb\\s+deregister-instances-from-load-balancer\\b",
+      "severity": "high",
+      "description": "aws elb deregister-instances-from-load-balancer removes instances from the load balancer, impacting live traffic."
+    }
+  ]
+}

@@ -1,0 +1,160 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "featureflags.unleash",
+  "name": "Unleash",
+  "version": "0.11.0",
+  "description": "Protects against destructive Unleash CLI and API operations.",
+  "category": "featureflags",
+  "enabled_by_default": false,
+  "keywords": [
+    "unleash"
+  ],
+  "safe_patterns": [
+    {
+      "name": "unleash-features-list",
+      "pattern": "unleash(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+features?\\s+list(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "unleash-features-get",
+      "pattern": "unleash(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+features?\\s+get(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "unleash-features-create",
+      "pattern": "unleash(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+features?\\s+create(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "unleash-features-update",
+      "pattern": "unleash(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+features?\\s+update(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "unleash-features-enable",
+      "pattern": "unleash(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+features?\\s+enable(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "unleash-features-disable",
+      "pattern": "unleash(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+features?\\s+disable\\b",
+      "description": ""
+    },
+    {
+      "name": "unleash-projects-list",
+      "pattern": "unleash(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+projects?\\s+list(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "unleash-projects-get",
+      "pattern": "unleash(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+projects?\\s+get(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "unleash-projects-create",
+      "pattern": "unleash(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+projects?\\s+create(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "unleash-environments-list",
+      "pattern": "unleash(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+environments?\\s+list(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "unleash-environments-get",
+      "pattern": "unleash(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+environments?\\s+get(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "unleash-strategies-list",
+      "pattern": "unleash(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+strategies?\\s+list(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "unleash-strategies-get",
+      "pattern": "unleash(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+strategies?\\s+get(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "unleash-help",
+      "pattern": "unleash(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+(?:--help|-h|help)(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "unleash-version",
+      "pattern": "unleash(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+(?:--version|version)(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "unleash-api-get",
+      "pattern": "(?i)^(?!(?=.*(?:-X\\s*|--request(?:=|\\s+))DELETE\\b)(?=.*/api/admin/))curl\\s+.*(?:-X\\s*|--request(?:=|\\s+))GET\\b.*/api/admin/",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "unleash-features-delete",
+      "pattern": "unleash(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+features?\\s+delete\\b",
+      "severity": "critical",
+      "description": "unleash features delete permanently removes a feature toggle. This cannot be undone.",
+      "explanation": "Deleting an Unleash feature toggle permanently removes it and all its \\ strategies. SDKs will return the default value (typically false). Event \\ history is preserved but the toggle cannot be recovered.\n\n\\ Safer alternatives: \\ - unleash features archive: Soft-delete with recovery \\ - Disable the toggle in all environments first \\ - Export toggle configuration before deletion"
+    },
+    {
+      "name": "unleash-features-archive",
+      "pattern": "unleash(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+features?\\s+archive\\b",
+      "severity": "high",
+      "description": "unleash features archive soft-deletes a feature toggle.",
+      "explanation": "Archiving a toggle removes it from evaluation but allows recovery. SDKs \\ will stop receiving the toggle and return default values. Archived toggles \\ can be restored from the Unleash UI.\n\n\\ Safer alternatives: \\ - Disable the toggle before archiving \\ - Verify no code paths depend on the toggle \\ - Document the toggle's purpose before archiving"
+    },
+    {
+      "name": "unleash-projects-delete",
+      "pattern": "unleash(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+projects?\\s+delete\\b",
+      "severity": "critical",
+      "description": "unleash projects delete removes a project and all its feature toggles.",
+      "explanation": "Deleting a project removes ALL feature toggles, strategies, and environments \\ within it. This is irreversible. All applications using toggles from this \\ project will receive default values.\n\n\\ Safer alternatives: \\ - Export project configuration first \\ - Archive toggles individually for recovery options \\ - Migrate critical toggles to another project"
+    },
+    {
+      "name": "unleash-environments-delete",
+      "pattern": "unleash(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+environments?\\s+delete\\b",
+      "severity": "critical",
+      "description": "unleash environments delete removes an environment.",
+      "explanation": "Deleting an environment removes all toggle configurations for that \\ environment. API keys for this environment stop working. Applications \\ will fail to fetch toggle states.\n\n\\ Safer alternatives: \\ - Export environment configuration \\ - Disable toggles in the environment first \\ - Rotate API keys before deletion"
+    },
+    {
+      "name": "unleash-strategies-delete",
+      "pattern": "unleash(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+strategies?\\s+delete\\b",
+      "severity": "high",
+      "description": "unleash strategies delete removes a custom strategy.",
+      "explanation": "Deleting a custom strategy breaks all toggles using it. Those toggles \\ will fail to evaluate properly, potentially returning unexpected values \\ or errors.\n\n\\ Safer alternatives: \\ - Check which toggles use this strategy \\ - Migrate toggles to built-in strategies first \\ - Create a replacement strategy before deleting"
+    },
+    {
+      "name": "unleash-api-keys-delete",
+      "pattern": "unleash(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+api-keys?\\s+delete\\b",
+      "severity": "high",
+      "description": "unleash api-keys delete removes an API key.",
+      "explanation": "Deleting an API key immediately revokes access for all SDKs using that \\ key. Applications will fail to connect and receive toggle updates, \\ falling back to cached or default values.\n\n\\ Safer alternatives: \\ - Create new API keys before deleting old ones \\ - Update SDK configurations first \\ - Use key rotation instead of deletion"
+    },
+    {
+      "name": "unleash-api-delete-features",
+      "pattern": "(?i)\\bcurl\\b(?=.*(?:-X\\s*|--request(?:=|\\s+))DELETE\\b)(?=.*?/api/admin/projects/.*/features/).*",
+      "severity": "critical",
+      "description": "DELETE request to Unleash API removes feature toggles.",
+      "explanation": "API DELETE calls to features permanently remove toggles without archive \\ recovery options. All strategies and configurations are lost immediately.\n\n\\ Safer alternatives: \\ - Use the Unleash CLI for confirmation prompts \\ - Archive toggles instead of deleting \\ - GET the toggle configuration first"
+    },
+    {
+      "name": "unleash-api-delete-projects",
+      "pattern": "(?i)\\bcurl\\b(?=.*(?:-X\\s*|--request(?:=|\\s+))DELETE\\b)(?=.*?/api/admin/projects/[^/\\s]+(?:\\s|$)).*",
+      "severity": "critical",
+      "description": "DELETE request to Unleash API removes projects.",
+      "explanation": "API DELETE calls to projects remove ALL toggles, strategies, and \\ configurations within the project. This is the most destructive \\ operation and cannot be undone.\n\n\\ Safer alternatives: \\ - Export project configuration completely \\ - Use the Unleash UI for visibility \\ - Archive toggles individually first"
+    },
+    {
+      "name": "unleash-api-delete-generic",
+      "pattern": "(?i)\\bcurl\\b(?=.*(?:-X\\s*|--request(?:=|\\s+))DELETE\\b)(?=.*?/api/admin/).*",
+      "severity": "high",
+      "description": "DELETE request to Unleash API can remove resources.",
+      "explanation": "Generic DELETE requests to the Unleash admin API can remove various \\ resources including strategies, environments, users, and API keys. \\ Review the specific endpoint before executing.\n\n\\ Safer alternatives: \\ - Verify the exact resource being deleted \\ - Use the Unleash CLI or UI for better visibility \\ - GET the resource first to confirm"
+    }
+  ]
+}

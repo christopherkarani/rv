@@ -1,0 +1,97 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "payment.stripe",
+  "name": "Stripe",
+  "version": "0.11.0",
+  "description": "Protects against destructive Stripe CLI/API operations like deleting webhook endpoints \\ and customers, or rotating API keys without coordination.",
+  "category": "payment",
+  "enabled_by_default": false,
+  "keywords": [
+    "stripe",
+    "api.stripe.com"
+  ],
+  "safe_patterns": [
+    {
+      "name": "stripe-listen",
+      "pattern": "\\bstripe\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+listen\\b",
+      "description": ""
+    },
+    {
+      "name": "stripe-customers-list",
+      "pattern": "\\bstripe\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+customers\\s+list\\b",
+      "description": ""
+    },
+    {
+      "name": "stripe-products-list",
+      "pattern": "\\bstripe\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+products\\s+list\\b",
+      "description": ""
+    },
+    {
+      "name": "stripe-payments-list",
+      "pattern": "\\bstripe\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+payments\\s+list\\b",
+      "description": ""
+    },
+    {
+      "name": "stripe-logs-tail",
+      "pattern": "\\bstripe\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+logs\\s+tail\\b",
+      "description": ""
+    },
+    {
+      "name": "stripe-api-get",
+      "pattern": "(?i)^(?!(?=.*(?:-X\\s*|--request(?:=|\\s+))DELETE\\b)(?=.*api\\.stripe\\.com.*\\/v1\\/))curl\\s+.*(?:-X\\s*|--request(?:=|\\s+))GET\\b.*api\\.stripe\\.com.*\\/v1\\/",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "stripe-webhook-endpoints-delete",
+      "pattern": "\\bstripe\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+webhook[_-]endpoints\\s+delete\\b",
+      "severity": "high",
+      "description": "stripe webhook_endpoints delete removes a Stripe webhook endpoint, breaking notifications.",
+      "explanation": "Deleting a webhook endpoint stops Stripe event notifications for that URL. Your \\ application will miss payment confirmations, subscription updates, dispute alerts, \\ and other critical events until the webhook is recreated.\n\n\\ Safer alternatives: \\ - stripe webhook_endpoints list to verify before deletion \\ - Disable the endpoint instead of deleting if temporary \\ - Ensure backup webhook is configured before deletion"
+    },
+    {
+      "name": "stripe-customers-delete",
+      "pattern": "\\bstripe\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+customers\\s+delete\\b",
+      "severity": "critical",
+      "description": "stripe customers delete permanently deletes a customer.",
+      "explanation": "Deleting a customer removes their payment methods, subscriptions, and billing \\ history from Stripe. This can affect compliance records, break recurring billing, \\ and lose valuable customer data that cannot be recovered.\n\n\\ Safer alternatives: \\ - Cancel subscriptions and mark customer inactive instead \\ - stripe customers retrieve to verify customer data first \\ - Export customer data before deletion for compliance"
+    },
+    {
+      "name": "stripe-products-delete",
+      "pattern": "\\bstripe\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+products\\s+delete\\b",
+      "severity": "high",
+      "description": "stripe products delete permanently deletes a product.",
+      "explanation": "Deleting a product removes it from your catalog. Associated prices remain but \\ become orphaned. Existing subscriptions using this product may behave unexpectedly \\ and invoice line items will lose product metadata.\n\n\\ Safer alternatives: \\ - Archive the product by setting active=false instead \\ - stripe products retrieve to verify before deletion \\ - Ensure no active subscriptions reference this product"
+    },
+    {
+      "name": "stripe-prices-delete",
+      "pattern": "\\bstripe\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+prices\\s+delete\\b",
+      "severity": "high",
+      "description": "stripe prices delete permanently deletes a price.",
+      "explanation": "Deleting a price removes the pricing configuration. Active subscriptions using \\ this price will fail to renew or behave unexpectedly. New purchases cannot use \\ this price ID, breaking checkout integrations that reference it.\n\n\\ Safer alternatives: \\ - Archive the price by setting active=false instead \\ - Create a new price rather than modifying existing one \\ - Check for active subscriptions using this price first"
+    },
+    {
+      "name": "stripe-coupons-delete",
+      "pattern": "\\bstripe\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+coupons\\s+delete\\b",
+      "severity": "high",
+      "description": "stripe coupons delete permanently deletes a coupon.",
+      "explanation": "Deleting a coupon prevents new redemptions and removes the discount from future \\ invoices. Customers with the coupon applied to their subscription will lose the \\ discount on their next renewal.\n\n\\ Safer alternatives: \\ - Set coupon max_redemptions or redeem_by to expire naturally \\ - stripe coupons retrieve to verify before deletion \\ - Communicate discount changes to affected customers first"
+    },
+    {
+      "name": "stripe-api-keys-roll",
+      "pattern": "\\bstripe\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+api[_-]keys\\s+roll\\b",
+      "severity": "medium",
+      "description": "stripe api_keys roll rotates API keys; coordinate to avoid outages.",
+      "explanation": "Rolling API keys invalidates the old key immediately. Any service using the old \\ key will fail authentication until updated. In production, this can cause payment \\ processing outages if not coordinated across all systems.\n\n\\ Safer alternatives: \\ - Deploy new key to all services before rolling \\ - Use key restriction to limit blast radius \\ - Test key rotation in test mode first"
+    },
+    {
+      "name": "stripe-api-delete",
+      "pattern": "(?i)\\bcurl\\b(?=.*(?:-X\\s*|--request(?:=|\\s+))DELETE\\b)(?=.*api\\.stripe\\.com.*\\/v1\\/).*",
+      "severity": "high",
+      "description": "Stripe API DELETE calls remove Stripe resources.",
+      "explanation": "Direct API DELETE calls permanently remove Stripe resources without CLI \\ confirmation prompts. This bypasses safety checks and can delete customers, \\ products, subscriptions, or other critical payment data.\n\n\\ Safer alternatives: \\ - Use stripe CLI which provides confirmation prompts \\ - GET the resource first to verify ID is correct \\ - Test in Stripe test mode before production"
+    }
+  ]
+}

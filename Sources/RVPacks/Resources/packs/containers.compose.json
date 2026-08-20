@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "containers.compose",
+  "name": "Docker Compose",
+  "version": "0.11.0",
+  "description": "Protects against destructive Docker Compose operations like \\ 'down -v' which removes volumes",
+  "category": "containers",
+  "enabled_by_default": false,
+  "keywords": [
+    "docker-compose",
+    "docker compose",
+    "compose"
+  ],
+  "safe_patterns": [
+    {
+      "name": "compose-config",
+      "pattern": "(?:docker-compose|docker\\s+compose)\\s+config",
+      "description": ""
+    },
+    {
+      "name": "compose-ps",
+      "pattern": "(?:docker-compose|docker\\s+compose)\\s+ps",
+      "description": ""
+    },
+    {
+      "name": "compose-logs",
+      "pattern": "(?:docker-compose|docker\\s+compose)\\s+logs",
+      "description": ""
+    },
+    {
+      "name": "compose-up",
+      "pattern": "(?:docker-compose|docker\\s+compose)\\s+up",
+      "description": ""
+    },
+    {
+      "name": "compose-build",
+      "pattern": "(?:docker-compose|docker\\s+compose)\\s+build",
+      "description": ""
+    },
+    {
+      "name": "compose-pull",
+      "pattern": "(?:docker-compose|docker\\s+compose)\\s+pull",
+      "description": ""
+    },
+    {
+      "name": "compose-down-no-volumes",
+      "pattern": "(?:docker-compose|docker\\s+compose)\\s+(?:-[^\\s;|&`()<>]*\\s+(?:[^\\s;|&`()<>-][^\\s;|&`()<>]*\\s+)?)*down(?!\\s+.*(?:-[vt]*v[vt]*\\b|--volumes|--rmi))(?:\\s|$)",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "down-volumes",
+      "pattern": "(?:docker-compose|docker\\s+compose)\\s+(?:-[^\\s;|&`()<>]*\\s+(?:[^\\s;|&`()<>-][^\\s;|&`()<>]*\\s+)?)*down\\s+.*(?:-[vt]*v[vt]*\\b|--volumes)",
+      "severity": "critical",
+      "description": "docker-compose down -v removes volumes and their data permanently.",
+      "explanation": "The -v/--volumes flag causes docker-compose down to remove named volumes declared \\ in the volumes section of the Compose file, as well as anonymous volumes attached \\ to containers. This permanently destroys:\n\n\\ - Database data (PostgreSQL, MySQL, MongoDB volumes) \\ - User uploads and application state \\ - Any persistent configuration stored in volumes\n\n\\ Safer alternatives: \\ - docker-compose down: Stops and removes containers without touching volumes \\ - docker-compose stop: Stops containers, preserving everything \\ - docker volume ls: List volumes before removal"
+    },
+    {
+      "name": "down-rmi-all",
+      "pattern": "(?:docker-compose|docker\\s+compose)\\s+(?:-[^\\s;|&`()<>]*\\s+(?:[^\\s;|&`()<>-][^\\s;|&`()<>]*\\s+)?)*down\\s+.*--rmi\\s+all",
+      "severity": "high",
+      "description": "docker-compose down --rmi all removes all images used by services.",
+      "explanation": "The --rmi all flag removes all images used by services in the Compose file. \\ This forces re-downloading or rebuilding images on next 'up':\n\n\\ - Base images must be pulled again (bandwidth, time) \\ - Custom built images need rebuilding \\ - Layers not in registry are lost\n\n\\ Safer alternatives: \\ - docker-compose down: Preserves images for faster restarts \\ - docker-compose down --rmi local: Only removes images without custom tag \\ - docker image ls: Review images before removal"
+    },
+    {
+      "name": "rm-volumes",
+      "pattern": "(?:docker-compose|docker\\s+compose)\\s+(?:-[^\\s;|&`()<>]*\\s+(?:[^\\s;|&`()<>-][^\\s;|&`()<>]*\\s+)?)*rm\\s+.*(?:-[fsv]*v[fsv]*\\b|--volumes)",
+      "severity": "high",
+      "description": "docker-compose rm -v removes volumes attached to containers.",
+      "explanation": "The -v flag with docker-compose rm removes anonymous volumes attached to the \\ containers being removed. This can cause data loss if volumes contain:\n\n\\ - Application state or session data \\ - Cached data that takes time to rebuild \\ - Temporary but important processing results\n\n\\ Safer alternatives: \\ - docker-compose rm: Removes containers without volumes \\ - docker-compose stop: Stops without removing anything \\ - docker volume ls: Check what volumes exist"
+    },
+    {
+      "name": "rm-force",
+      "pattern": "(?:docker-compose|docker\\s+compose)\\s+(?:-[^\\s;|&`()<>]*\\s+(?:[^\\s;|&`()<>-][^\\s;|&`()<>]*\\s+)?)*rm\\s+.*(?:-[fsv]*f[fsv]*\\b|--force)",
+      "severity": "medium",
+      "description": "docker-compose rm -f forcibly removes containers without confirmation.",
+      "explanation": "The -f/--force flag removes containers without asking for confirmation. While \\ this doesn't directly cause data loss, it can be risky:\n\n\\ - Running containers are stopped abruptly (SIGKILL) \\ - No graceful shutdown for applications \\ - In-flight requests or transactions may be lost\n\n\\ Safer alternatives: \\ - docker-compose stop: Graceful shutdown first \\ - docker-compose rm: Asks for confirmation \\ - docker-compose ps: Check container status first"
+    }
+  ]
+}

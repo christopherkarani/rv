@@ -1,9 +1,11 @@
 {
   "schema_version": 1,
+  "pin_version": "0.11.0",
   "id": "core.git",
   "name": "Core Git",
   "version": "0.11.0",
-  "description": "Protects against destructive git commands that can lose uncommitted work, rewrite history, or destroy stashes",
+  "description": "Protects against destructive git commands that can lose uncommitted work, \\ rewrite history, or destroy stashes",
+  "category": "core",
   "enabled_by_default": true,
   "keywords": [
     "git"

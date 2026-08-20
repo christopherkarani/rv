@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "payment.braintree",
+  "name": "Braintree",
+  "version": "0.11.0",
+  "description": "Protects against destructive Braintree/PayPal payment operations like deleting customers \\ or cancelling subscriptions via API/SDK calls.",
+  "category": "payment",
+  "enabled_by_default": false,
+  "keywords": [
+    "braintree",
+    "braintreegateway.com",
+    "braintree.",
+    "gateway.customer.",
+    "gateway.merchant_account.",
+    "gateway.payment_method.",
+    "gateway.subscription."
+  ],
+  "safe_patterns": [
+    {
+      "name": "braintree-customer-find",
+      "pattern": "\\bbraintree\\.Customer\\.find\\b",
+      "description": ""
+    },
+    {
+      "name": "braintree-customer-search",
+      "pattern": "\\bgateway\\.customer\\.search\\b",
+      "description": ""
+    },
+    {
+      "name": "braintree-api-get",
+      "pattern": "(?i)^(?!(?=.*(?:-X\\s*|--request(?:=|\\s+))DELETE\\b)(?=.*braintreegateway\\.com))curl\\s+.*(?:-X\\s*|--request(?:=|\\s+))GET\\b.*braintreegateway\\.com",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "braintree-api-delete",
+      "pattern": "(?i)\\bcurl\\b(?=.*(?:-X\\s*|--request(?:=|\\s+))DELETE\\b)(?=.*braintreegateway\\.com).*",
+      "severity": "high",
+      "description": "Braintree API DELETE calls remove payment resources (customers, webhooks, etc.).",
+      "explanation": "Direct API DELETE calls to Braintree permanently remove payment resources \\ without SDK safety checks. This can delete customers, payment methods, or \\ webhook configurations with no confirmation.\n\n\\ Safer alternatives: \\ - Use Braintree SDK which may provide additional validation \\ - GET the resource first to verify ID is correct \\ - Test in sandbox environment before production"
+    },
+    {
+      "name": "braintree-customer-delete",
+      "pattern": "\\bbraintree\\.Customer\\.delete\\b",
+      "severity": "critical",
+      "description": "braintree.Customer.delete permanently deletes a Braintree customer.",
+      "explanation": "Deleting a Braintree customer removes their payment methods, transaction \\ history references, and vault records. This can break billing reconciliation \\ and compliance audit trails. Subscriptions for this customer will also fail.\n\n\\ Safer alternatives: \\ - Archive customer in your application instead \\ - Cancel subscriptions and remove payment methods first \\ - braintree.Customer.find() to verify customer before deletion"
+    },
+    {
+      "name": "braintree-gateway-customer-delete",
+      "pattern": "\\bgateway\\.customer\\.delete\\b",
+      "severity": "critical",
+      "description": "gateway.customer.delete permanently deletes a Braintree customer.",
+      "explanation": "Deleting a customer via gateway removes all their payment methods and vault \\ data from Braintree. Associated subscriptions will fail to renew and \\ transaction history loses customer context.\n\n\\ Safer alternatives: \\ - Mark customer inactive in your system instead \\ - gateway.customer.find() to verify before deletion \\ - Export customer data for compliance before deletion"
+    },
+    {
+      "name": "braintree-merchant-account-delete",
+      "pattern": "\\bgateway\\.merchant_account\\.delete\\b",
+      "severity": "critical",
+      "description": "gateway.merchant_account.delete removes a Braintree merchant account.",
+      "explanation": "Deleting a merchant account stops payment processing for that account. Any \\ sub-merchants or payment flows using this account will fail. Pending \\ settlements may be affected, impacting cash flow.\n\n\\ Safer alternatives: \\ - Contact Braintree support for proper account closure \\ - Verify no active transactions are pending \\ - Transfer sub-merchants to another account first"
+    },
+    {
+      "name": "braintree-payment-method-delete",
+      "pattern": "\\bgateway\\.payment_method\\.delete\\b",
+      "severity": "high",
+      "description": "gateway.payment_method.delete removes a stored payment method.",
+      "explanation": "Deleting a payment method removes the card or bank account from the vault. \\ Subscriptions using this payment method will fail on next renewal. Customers \\ will need to re-enter payment details to continue service.\n\n\\ Safer alternatives: \\ - Update subscription to use a different payment method first \\ - gateway.payment_method.find() to verify before deletion \\ - Notify customer before removing their payment method"
+    },
+    {
+      "name": "braintree-subscription-cancel",
+      "pattern": "\\bgateway\\.subscription\\.cancel\\b",
+      "severity": "high",
+      "description": "gateway.subscription.cancel cancels a subscription, impacting billing.",
+      "explanation": "Cancelling a subscription immediately stops recurring billing. The customer \\ loses access at the end of their current period (or immediately, depending \\ on configuration). This may require manual intervention to restore.\n\n\\ Safer alternatives: \\ - gateway.subscription.find() to verify subscription details first \\ - Consider pausing or updating instead of cancelling \\ - Communicate cancellation to customer before processing"
+    }
+  ]
+}

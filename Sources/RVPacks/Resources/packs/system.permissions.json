@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "system.permissions",
+  "name": "Permissions",
+  "version": "0.11.0",
+  "description": "Protects against dangerous permission changes like chmod 777, \\ recursive chmod/chown on system directories",
+  "category": "system",
+  "enabled_by_default": false,
+  "keywords": [
+    "chmod",
+    "chown",
+    "chgrp",
+    "setfacl"
+  ],
+  "safe_patterns": [
+    {
+      "name": "chmod-non-recursive",
+      "pattern": "chmod\\s+(?!-[rR])(?:\\d{3,4}|[ugoa][+-][rwxXst]+)\\s+[^/]",
+      "description": ""
+    },
+    {
+      "name": "stat",
+      "pattern": "\\bstat\\b",
+      "description": ""
+    },
+    {
+      "name": "ls-perms",
+      "pattern": "ls\\s+.*-[a-zA-Z]*l",
+      "description": ""
+    },
+    {
+      "name": "getfacl",
+      "pattern": "\\bgetfacl\\b",
+      "description": ""
+    },
+    {
+      "name": "namei",
+      "pattern": "\\bnamei\\b",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "chmod-777",
+      "pattern": "chmod\\s+(?:.*\\s+)?[\"'=]?0*777(?:[\\s\"']|$)",
+      "severity": "high",
+      "description": "chmod 777 makes files world-writable. This is a security risk.",
+      "explanation": "chmod 777 grants read/write/execute to everyone. This can expose sensitive \\ files and allow unauthorized modification. Prefer least-privilege permissions \\ that only grant the specific access needed."
+    },
+    {
+      "name": "chmod-recursive-root",
+      "pattern": "chmod\\s+(?:.*(?:-[rR]|--recursive)).*\\s+['\"]?/(?:(?:bin|boot|dev|etc|lib64|lib|opt|proc|root|run|sbin|srv|sys|usr|var)\\b|home(?:/[^/\\s\"']+)?/?(?:[\\s\"']|$)|['\"]?(?:\\s|$))",
+      "severity": "critical",
+      "description": "chmod -R on system directories can break system permissions.",
+      "explanation": "Recursively changing permissions on system directories can render the system \\ unbootable, break package management, and disrupt every running service. Many \\ system files require specific permission bits to function correctly.\n\n\\ Check current permissions first: \\ ls -la /path/to/directory\n\n\\ Apply changes to a specific subdirectory instead of the whole tree."
+    },
+    {
+      "name": "chown-recursive-root",
+      "pattern": "chown\\s+(?:.*(?:-[rR]|--recursive)).*\\s+['\"]?/(?:(?:bin|boot|dev|etc|lib64|lib|opt|proc|root|run|sbin|srv|sys|usr|var)\\b|home(?:/[^/\\s\"']+)?/?(?:[\\s\"']|$)|['\"]?(?:\\s|$))",
+      "severity": "high",
+      "description": "chown -R on system directories can break system ownership.",
+      "explanation": "Recursive ownership changes on system directories can disrupt services, \\ break package-managed files, and be difficult to undo. Start with a single \\ path or a shallow find before applying broader changes."
+    },
+    {
+      "name": "chmod-setuid",
+      "pattern": "chmod\\s+.*u\\+s|chmod\\s+[4-7]\\d{3}",
+      "severity": "high",
+      "description": "Setting setuid bit (chmod u+s) is a security-sensitive operation.",
+      "explanation": "The setuid bit causes a program to run with the file owner's privileges \\ regardless of who executes it. If set on the wrong binary, any user can \\ gain elevated access. This is a common privilege escalation vector.\n\n\\ Verify the file and owner first: \\ ls -la <file>\n\n\\ Find existing setuid files: \\ find / -perm -4000 -type f 2>/dev/null"
+    },
+    {
+      "name": "chmod-setgid",
+      "pattern": "chmod\\s+.*g\\+s|chmod\\s+[2367]\\d{3}",
+      "severity": "high",
+      "description": "Setting setgid bit (chmod g+s) is a security-sensitive operation.",
+      "explanation": "The setgid bit on an executable causes it to run with the file group's \\ privileges. On a directory, new files inherit the directory's group. \\ Misapplication can grant unintended group access to sensitive resources.\n\n\\ Check current group ownership: \\ ls -la <file>\n\n\\ Find existing setgid files: \\ find / -perm -2000 -type f 2>/dev/null"
+    },
+    {
+      "name": "chown-to-root",
+      "pattern": "chown\\s+.*root[:\\s]",
+      "severity": "high",
+      "description": "Changing ownership to root should be done carefully.",
+      "explanation": "Transferring file ownership to root makes the files inaccessible to normal \\ users and may break applications that need to write to those files. Services \\ running as non-root users will lose access.\n\n\\ Check who currently owns the file: \\ ls -la <path>\n\n\\ Consider using group ownership instead: \\ chgrp <group> <path>"
+    },
+    {
+      "name": "setfacl-all",
+      "pattern": "setfacl\\s+.*-[rR].*\\s+['\"]?/(?:(?:bin|boot|dev|etc|lib64|lib|opt|proc|root|run|sbin|srv|sys|usr|var)\\b|home(?:/[^/\\s\"']+)?/?(?:[\\s\"']|$)|['\"]?(?:\\s|$))",
+      "severity": "critical",
+      "description": "setfacl -R on system directories can modify access control across the filesystem.",
+      "explanation": "Recursively modifying ACLs on system directories changes fine-grained access \\ control for every file in the tree. This can override traditional Unix \\ permissions and grant or revoke access in unexpected ways, breaking services \\ and security boundaries.\n\n\\ Review current ACLs first: \\ getfacl <path>\n\n\\ Apply to a specific file instead of recursively: \\ setfacl -m u:<user>:rwx <specific-file>"
+    }
+  ]
+}

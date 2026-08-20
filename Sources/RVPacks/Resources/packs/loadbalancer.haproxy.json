@@ -1,0 +1,97 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "loadbalancer.haproxy",
+  "name": "HAProxy",
+  "version": "0.11.0",
+  "description": "Protects against destructive HAProxy load balancer operations like stopping \\ the service or disabling backends via runtime API.",
+  "category": "loadbalancer",
+  "enabled_by_default": false,
+  "keywords": [
+    "haproxy",
+    "socat"
+  ],
+  "safe_patterns": [
+    {
+      "name": "haproxy-config-check",
+      "pattern": "\\bhaproxy\\s+-c\\b",
+      "description": ""
+    },
+    {
+      "name": "haproxy-version",
+      "pattern": "\\bhaproxy\\s+-v+\\b",
+      "description": ""
+    },
+    {
+      "name": "systemctl-status-haproxy",
+      "pattern": "systemctl\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+status\\s+haproxy(?:\\.service)?\\b",
+      "description": ""
+    },
+    {
+      "name": "service-status-haproxy",
+      "pattern": "service\\s+haproxy\\s+status\\b",
+      "description": ""
+    },
+    {
+      "name": "haproxy-socat-show",
+      "pattern": "(?:echo|printf)\\s+['\"]?show\\s+(?:stat|info|servers|backend|pools|sess|errors|table)['\"]?\\s*\\|\\s*socat\\b",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "haproxy-soft-stop",
+      "pattern": "\\bhaproxy\\s+.*-sf\\b",
+      "severity": "high",
+      "description": "haproxy -sf sends a soft stop signal, terminating the load balancer gracefully."
+    },
+    {
+      "name": "haproxy-hard-stop",
+      "pattern": "\\bhaproxy\\s+.*-st\\b",
+      "severity": "high",
+      "description": "haproxy -st sends a hard stop signal, immediately terminating the load balancer."
+    },
+    {
+      "name": "haproxy-systemctl-stop",
+      "pattern": "systemctl\\b.*?\\s+stop\\s+haproxy(?:\\.service)?\\b",
+      "severity": "high",
+      "description": "systemctl stop haproxy stops the HAProxy service."
+    },
+    {
+      "name": "haproxy-service-stop",
+      "pattern": "service\\s+haproxy\\s+stop\\b",
+      "severity": "high",
+      "description": "service haproxy stop stops the HAProxy service."
+    },
+    {
+      "name": "haproxy-socat-disable-server",
+      "pattern": "(?:echo|printf)\\s+['\"]?disable\\s+server\\b.*\\|\\s*socat\\b",
+      "severity": "high",
+      "description": "Disabling a server via HAProxy runtime API removes it from the load balancer pool."
+    },
+    {
+      "name": "haproxy-socat-shutdown-sessions",
+      "pattern": "(?:echo|printf)\\s+['\"]?shutdown\\s+sessions\\b.*\\|\\s*socat\\b",
+      "severity": "high",
+      "description": "Shutting down sessions via HAProxy runtime API terminates active connections."
+    },
+    {
+      "name": "haproxy-socat-disable-frontend",
+      "pattern": "(?:echo|printf)\\s+['\"]?disable\\s+frontend\\b.*\\|\\s*socat\\b",
+      "severity": "high",
+      "description": "Disabling a frontend via HAProxy runtime API stops accepting new connections."
+    },
+    {
+      "name": "haproxy-socat-shutdown-frontend",
+      "pattern": "(?:echo|printf)\\s+['\"]?shutdown\\s+frontend\\b.*\\|\\s*socat\\b",
+      "severity": "high",
+      "description": "Shutting down a frontend via HAProxy runtime API terminates it immediately."
+    },
+    {
+      "name": "haproxy-config-delete",
+      "pattern": "\\brm\\b.*\\s+['\"]?/etc/haproxy(?:/|\\b)",
+      "severity": "high",
+      "description": "Removing files from /etc/haproxy deletes HAProxy configuration."
+    }
+  ]
+}

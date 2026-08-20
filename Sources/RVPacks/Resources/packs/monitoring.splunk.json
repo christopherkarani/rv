@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "monitoring.splunk",
+  "name": "Splunk",
+  "version": "0.11.0",
+  "description": "Protects against destructive Splunk CLI/API operations like index removal \\ and REST API DELETE calls",
+  "category": "monitoring",
+  "enabled_by_default": false,
+  "keywords": [
+    "splunk"
+  ],
+  "safe_patterns": [
+    {
+      "name": "splunk-list",
+      "pattern": "splunk\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+list(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "splunk-show",
+      "pattern": "splunk\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+show(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "splunk-search",
+      "pattern": "splunk\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+search(?=\\s|$)",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "splunk-remove-index",
+      "pattern": "splunk\\b.*?\\bremove\\s+index\\b",
+      "severity": "critical",
+      "description": "splunk remove index deletes an index and its data permanently.",
+      "explanation": "Removing a Splunk index permanently deletes all indexed data within it. \\ Historical logs, events, and metrics are irretrievably lost. Any searches, \\ dashboards, or alerts referencing this index will fail.\n\n\\ Safer alternatives: \\ - splunk list index: Review index before removal \\ - Archive the data before deletion \\ - Use retention policies instead of manual deletion"
+    },
+    {
+      "name": "splunk-clean-eventdata",
+      "pattern": "splunk\\b.*?\\bclean\\s+eventdata\\b",
+      "severity": "critical",
+      "description": "splunk clean eventdata permanently deletes indexed data.",
+      "explanation": "Clean eventdata permanently removes all events from the specified index. \\ This cannot be undone. Use this only when you're certain the data is no \\ longer needed.\n\n\\ Safer alternatives: \\ - Set retention policies for automatic cleanup \\ - Export data before cleaning \\ - Use splunk search to verify what will be deleted"
+    },
+    {
+      "name": "splunk-delete-user-role",
+      "pattern": "splunk\\b.*?\\bdelete\\s+(?:user|role)\\b",
+      "severity": "high",
+      "description": "splunk delete user/role removes access configurations. Verify before deleting.",
+      "explanation": "Deleting a user removes their access and any saved searches or dashboards \\ owned by them. Deleting a role affects all users assigned to it, potentially \\ breaking access controls.\n\n\\ Safer alternatives: \\ - splunk list user/role: Review before deletion \\ - Disable the user instead of deleting \\ - Reassign role capabilities before deletion"
+    },
+    {
+      "name": "splunk-api-delete",
+      "pattern": "(?i)curl\\s+.*(?:-X\\s*|--request(?:=|\\s+))DELETE\\b.*splunk.*\\/services\\/",
+      "severity": "high",
+      "description": "Splunk REST DELETE calls can permanently remove objects. Verify the endpoint.",
+      "explanation": "Direct API DELETE calls to Splunk services can remove indexes, saved searches, \\ dashboards, alerts, and other objects without confirmation.\n\n\\ Safer alternatives: \\ - GET the resource first to verify the object \\ - Use Splunk CLI or web UI for better feedback \\ - Export configuration before deletion"
+    }
+  ]
+}

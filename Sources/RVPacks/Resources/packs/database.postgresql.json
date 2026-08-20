@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "database.postgresql",
+  "name": "PostgreSQL",
+  "version": "0.11.0",
+  "description": "Protects against destructive PostgreSQL operations like DROP DATABASE, \\ TRUNCATE, and dropdb",
+  "category": "database",
+  "enabled_by_default": false,
+  "keywords": [
+    "psql",
+    "dropdb",
+    "DROP",
+    "TRUNCATE",
+    "pg_dump",
+    "postgres",
+    "DELETE",
+    "delete",
+    "drop",
+    "truncate"
+  ],
+  "safe_patterns": [
+    {
+      "name": "pg-dump-no-clean",
+      "pattern": "pg_dump\\s+(?!.*--clean)(?!.*-c\\b)",
+      "description": ""
+    },
+    {
+      "name": "select-query",
+      "pattern": "(?i)^\\s*SELECT\\s+",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "stdin-unverified",
+      "pattern": "(?!)",
+      "severity": "high",
+      "description": "psql receives indirect input that the engine cannot statically verify.",
+      "explanation": "Materialize and review the exact SQL before piping or redirecting it into psql."
+    },
+    {
+      "name": "drop-database",
+      "pattern": "(?i)\\bDROP\\s+DATABASE\\b",
+      "severity": "critical",
+      "description": "DROP DATABASE permanently deletes the entire database (even with IF EXISTS). Verify and back up first.",
+      "explanation": "DROP DATABASE completely removes a database and ALL its contents:\n\n\\ - All tables, views, and indexes \\ - All functions, procedures, and triggers \\ - All data - gone permanently \\ - Users/roles remain but lose access\n\n\\ IF EXISTS only prevents errors if the database doesn't exist - it still deletes!\n\n\\ Before dropping: \\ pg_dump -h host -U user dbname > backup.sql\n\n\\ Verify database name: \\ psql -c '\\l' | grep dbname"
+    },
+    {
+      "name": "drop-table",
+      "pattern": "(?i)\\bDROP\\s+TABLE\\b",
+      "severity": "high",
+      "description": "DROP TABLE permanently deletes the table (even with IF EXISTS). Verify and back up first.",
+      "explanation": "DROP TABLE removes the table structure and ALL data:\n\n\\ - All rows are deleted \\ - Indexes, constraints, triggers are removed \\ - Foreign keys referencing this table may fail \\ - CASCADE drops dependent objects too\n\n\\ IF EXISTS only prevents errors - it still drops the table!\n\n\\ Backup table first: \\ pg_dump -t tablename dbname > table_backup.sql\n\n\\ Preview table contents: \\ SELECT COUNT(*) FROM tablename; \\ SELECT * FROM tablename LIMIT 10;"
+    },
+    {
+      "name": "drop-schema",
+      "pattern": "(?i)\\bDROP\\s+SCHEMA\\b",
+      "severity": "critical",
+      "description": "DROP SCHEMA permanently deletes the schema and all its objects (even with IF EXISTS).",
+      "explanation": "DROP SCHEMA removes a schema and potentially ALL objects within it:\n\n\\ - With CASCADE: Drops all tables, views, functions in the schema \\ - With RESTRICT (default): Fails if schema is not empty \\ - public schema deletion is catastrophic\n\n\\ List schema contents first: \\ SELECT table_name FROM information_schema.tables \\ WHERE table_schema = 'schema_name';\n\n\\ Backup schema: \\ pg_dump -n schema_name dbname > schema_backup.sql"
+    },
+    {
+      "name": "truncate-table",
+      "pattern": "(?i)\\bTRUNCATE\\s+(?:TABLE\\s+)?[a-zA-Z_]",
+      "severity": "high",
+      "description": "TRUNCATE permanently deletes all rows without logging individual deletions.",
+      "explanation": "TRUNCATE is faster than DELETE but more dangerous:\n\n\\ - Removes ALL rows instantly \\ - Cannot be rolled back outside a transaction \\ - Does not fire DELETE triggers \\ - Resets IDENTITY/SERIAL columns \\ - CASCADE truncates referencing tables too\n\n\\ TRUNCATE is transactional in PostgreSQL. Wrap in transaction: \\ BEGIN; \\ TRUNCATE tablename; \\ -- verify, then COMMIT or ROLLBACK\n\n\\ Check row count first: \\ SELECT COUNT(*) FROM tablename;"
+    },
+    {
+      "name": "delete-without-where",
+      "pattern": "(?i)DELETE\\s+FROM\\s+(?:(?:[a-zA-Z_][a-zA-Z0-9_]*|\"[^\"]+\")(?:\\.(?:[a-zA-Z_][a-zA-Z0-9_]*|\"[^\"]+\"))?)\\s*(?:;|$)",
+      "severity": "high",
+      "description": "DELETE without WHERE clause deletes ALL rows. Add a WHERE clause or use TRUNCATE intentionally.",
+      "explanation": "DELETE without WHERE removes ALL rows from the table:\n\n\\ - Each row deletion is logged (slower than TRUNCATE) \\ - Can be rolled back within a transaction \\ - Fires DELETE triggers for each row \\ - Does not reset IDENTITY/SERIAL counters\n\n\\ If you meant to delete all rows, use TRUNCATE for speed. \\ Otherwise, add a WHERE clause: \\ DELETE FROM tablename WHERE condition;\n\n\\ Preview what would be deleted: \\ SELECT COUNT(*) FROM tablename; -- all rows! \\ SELECT * FROM tablename LIMIT 10;"
+    },
+    {
+      "name": "dropdb-cli",
+      "pattern": "\\bdropdb\\s+",
+      "severity": "critical",
+      "description": "dropdb permanently deletes the entire database. Verify the database name carefully.",
+      "explanation": "dropdb is the CLI equivalent of DROP DATABASE:\n\n\\ - Completely removes the database \\ - All data is lost permanently \\ - No confirmation prompt by default \\ - Cannot be undone\n\n\\ Triple-check the database name. Common mistake: \\ dropdb myapp_production # Oops, meant myapp_staging\n\n\\ Backup first: \\ pg_dump -h host -U user dbname > backup.sql\n\n\\ List databases to verify: \\ psql -c '\\l'"
+    },
+    {
+      "name": "pg-dump-clean",
+      "pattern": "pg_dump\\s+.*(?:--clean|-c\\b)",
+      "severity": "high",
+      "description": "pg_dump --clean drops objects before creating them. This can be destructive on restore.",
+      "explanation": "pg_dump --clean adds DROP statements to the backup file. On restore:\n\n\\ - DROP TABLE is run before CREATE TABLE \\ - Existing data is deleted before restore \\ - If restore fails partway, data may be lost\n\n\\ This is safe for backup, but dangerous when restoring to a database \\ with existing data you want to keep.\n\n\\ Safer approach for restoring: \\ - Restore to a new database first \\ - Verify the restore \\ - Then swap databases\n\n\\ Without --clean: \\ pg_dump dbname > backup.sql # Creates only, no drops"
+    }
+  ]
+}

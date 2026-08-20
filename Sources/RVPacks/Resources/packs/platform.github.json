@@ -1,0 +1,186 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "platform.github",
+  "name": "GitHub Platform",
+  "version": "0.11.0",
+  "description": "Protects against destructive GitHub CLI operations like deleting repositories, gists, releases, or SSH keys.",
+  "category": "platform",
+  "enabled_by_default": false,
+  "keywords": [
+    "gh"
+  ],
+  "safe_patterns": [
+    {
+      "name": "gh-repo-list-view",
+      "pattern": "gh(?:\\s+--?[A-Za-z][A-Za-z0-9-]*\\b(?:\\s+(?!(?:repo|gist|release|issue|ssh-key|secret|variable|run|auth|status|api)\\b)(?:(?:\\x22[^\\x22]*\\x22)|(?:'[^']*')|(?!--?[A-Za-z])[^\\s;&|]+))?)*\\s+repo\\s+(?:list|view)\\b",
+      "description": ""
+    },
+    {
+      "name": "gh-gist-list-view",
+      "pattern": "gh(?:\\s+--?[A-Za-z][A-Za-z0-9-]*\\b(?:\\s+(?!(?:repo|gist|release|issue|ssh-key|secret|variable|run|auth|status|api)\\b)(?:(?:\\x22[^\\x22]*\\x22)|(?:'[^']*')|(?!--?[A-Za-z])[^\\s;&|]+))?)*\\s+gist\\s+(?:list|view)\\b",
+      "description": ""
+    },
+    {
+      "name": "gh-release-list-view",
+      "pattern": "gh(?:\\s+--?[A-Za-z][A-Za-z0-9-]*\\b(?:\\s+(?!(?:repo|gist|release|issue|ssh-key|secret|variable|run|auth|status|api)\\b)(?:(?:\\x22[^\\x22]*\\x22)|(?:'[^']*')|(?!--?[A-Za-z])[^\\s;&|]+))?)*\\s+release\\s+(?:list|view)\\b",
+      "description": ""
+    },
+    {
+      "name": "gh-issue-list-view",
+      "pattern": "gh(?:\\s+--?[A-Za-z][A-Za-z0-9-]*\\b(?:\\s+(?!(?:repo|gist|release|issue|ssh-key|secret|variable|run|auth|status|api)\\b)(?:(?:\\x22[^\\x22]*\\x22)|(?:'[^']*')|(?!--?[A-Za-z])[^\\s;&|]+))?)*\\s+issue\\s+(?:list|view)\\b",
+      "description": ""
+    },
+    {
+      "name": "gh-ssh-key-list",
+      "pattern": "gh(?:\\s+--?[A-Za-z][A-Za-z0-9-]*\\b(?:\\s+(?!(?:repo|gist|release|issue|ssh-key|secret|variable|run|auth|status|api)\\b)(?:(?:\\x22[^\\x22]*\\x22)|(?:'[^']*')|(?!--?[A-Za-z])[^\\s;&|]+))?)*\\s+ssh-key\\s+list\\b",
+      "description": ""
+    },
+    {
+      "name": "gh-secret-list",
+      "pattern": "gh(?:\\s+--?[A-Za-z][A-Za-z0-9-]*\\b(?:\\s+(?!(?:repo|gist|release|issue|ssh-key|secret|variable|run|auth|status|api)\\b)(?:(?:\\x22[^\\x22]*\\x22)|(?:'[^']*')|(?!--?[A-Za-z])[^\\s;&|]+))?)*\\s+secret\\s+list\\b",
+      "description": ""
+    },
+    {
+      "name": "gh-variable-list",
+      "pattern": "gh(?:\\s+--?[A-Za-z][A-Za-z0-9-]*\\b(?:\\s+(?!(?:repo|gist|release|issue|ssh-key|secret|variable|run|auth|status|api)\\b)(?:(?:\\x22[^\\x22]*\\x22)|(?:'[^']*')|(?!--?[A-Za-z])[^\\s;&|]+))?)*\\s+variable\\s+list\\b",
+      "description": ""
+    },
+    {
+      "name": "gh-auth-status",
+      "pattern": "gh(?:\\s+--?[A-Za-z][A-Za-z0-9-]*\\b(?:\\s+(?!(?:repo|gist|release|issue|ssh-key|secret|variable|run|auth|status|api)\\b)(?:(?:\\x22[^\\x22]*\\x22)|(?:'[^']*')|(?!--?[A-Za-z])[^\\s;&|]+))?)*\\s+auth\\s+status\\b",
+      "description": ""
+    },
+    {
+      "name": "gh-status",
+      "pattern": "gh(?:\\s+--?[A-Za-z][A-Za-z0-9-]*\\b(?:\\s+(?!(?:repo|gist|release|issue|ssh-key|secret|variable|run|auth|status|api)\\b)(?:(?:\\x22[^\\x22]*\\x22)|(?:'[^']*')|(?!--?[A-Za-z])[^\\s;&|]+))?)*\\s+status\\b",
+      "description": ""
+    },
+    {
+      "name": "gh-api-explicit-get",
+      "pattern": "^(?!(?=.*(?:-X\\s*|--method(?:=|\\s+))DELETE\\b))gh(?:\\s+--?[A-Za-z][A-Za-z0-9-]*\\b(?:\\s+(?!(?:repo|gist|release|issue|ssh-key|secret|variable|run|auth|status|api)\\b)(?:(?:\\x22[^\\x22]*\\x22)|(?:'[^']*')|(?!--?[A-Za-z])[^\\s;&|]+))?)*\\s+api\\b.*(?:-X\\s*|--method(?:=|\\s+))GET\\b",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "gh-repo-delete",
+      "pattern": "gh(?:\\s+--?[A-Za-z][A-Za-z0-9-]*\\b(?:\\s+(?!(?:repo|gist|release|issue|ssh-key|secret|variable|run|auth|status|api)\\b)(?:(?:\\x22[^\\x22]*\\x22)|(?:'[^']*')|(?!--?[A-Za-z])[^\\s;&|]+))?)*\\s+repo\\s+delete\\b",
+      "severity": "high",
+      "description": "gh repo delete permanently deletes a GitHub repository. This cannot be undone.",
+      "explanation": "Deleting a repository removes its code, issues, pull requests, releases, \\ wiki, and Actions history together. GitHub can restore a deleted repository \\ only within 90 days, only if the name has not been reused, and only via \\ support — it is not a self-service undo.\n\n\\ Safer alternatives: \\ - gh repo archive: makes it read-only while keeping everything visible \\ (the engine gates this one too, but it is reversible) \\ - gh repo edit --visibility private: hides it without destroying it"
+    },
+    {
+      "name": "gh-repo-archive",
+      "pattern": "gh(?:\\s+--?[A-Za-z][A-Za-z0-9-]*\\b(?:\\s+(?!(?:repo|gist|release|issue|ssh-key|secret|variable|run|auth|status|api)\\b)(?:(?:\\x22[^\\x22]*\\x22)|(?:'[^']*')|(?!--?[A-Za-z])[^\\s;&|]+))?)*\\s+repo\\s+archive\\b",
+      "severity": "high",
+      "description": "gh repo archive makes a repository read-only. While reversible, it stops all write access.",
+      "explanation": "Archiving is reversible, but until it is reversed nobody can push, open \\ issues, or comment, and automation that writes to the repository starts \\ failing. Unarchive from the web UI (Settings) or with the REST API.\n\n\\ Reverse it with: \\ gh api -X PATCH repos/<owner>/<repo> -F archived=false"
+    },
+    {
+      "name": "gh-gist-delete",
+      "pattern": "gh(?:\\s+--?[A-Za-z][A-Za-z0-9-]*\\b(?:\\s+(?!(?:repo|gist|release|issue|ssh-key|secret|variable|run|auth|status|api)\\b)(?:(?:\\x22[^\\x22]*\\x22)|(?:'[^']*')|(?!--?[A-Za-z])[^\\s;&|]+))?)*\\s+gist\\s+delete\\b",
+      "severity": "high",
+      "description": "gh gist delete permanently deletes a Gist.",
+      "explanation": "Gist deletion is immediate and permanent — there is no trash and no \\ support-side restore. Any URL you have shared, and anything embedding the \\ Gist, breaks at once.\n\n\\ Save the contents first: \\ gh gist view <id> > backup.txt"
+    },
+    {
+      "name": "gh-release-delete",
+      "pattern": "gh(?:\\s+--?[A-Za-z][A-Za-z0-9-]*\\b(?:\\s+(?!(?:repo|gist|release|issue|ssh-key|secret|variable|run|auth|status|api)\\b)(?:(?:\\x22[^\\x22]*\\x22)|(?:'[^']*')|(?!--?[A-Za-z])[^\\s;&|]+))?)*\\s+release\\s+delete\\b",
+      "severity": "high",
+      "description": "gh release delete permanently deletes a release.",
+      "explanation": "Deleting a release destroys its uploaded assets. Anyone installing by that \\ release URL — install scripts, CI pipelines, package managers pinned to it — \\ starts getting 404s immediately, and the binaries cannot be recovered unless \\ you still have them locally.\n\n\\ Safer alternative: \\ - gh release edit <tag> --draft: unpublish while keeping the assets"
+    },
+    {
+      "name": "gh-issue-delete",
+      "pattern": "gh(?:\\s+--?[A-Za-z][A-Za-z0-9-]*\\b(?:\\s+(?!(?:repo|gist|release|issue|ssh-key|secret|variable|run|auth|status|api)\\b)(?:(?:\\x22[^\\x22]*\\x22)|(?:'[^']*')|(?!--?[A-Za-z])[^\\s;&|]+))?)*\\s+issue\\s+delete\\b",
+      "severity": "high",
+      "description": "gh issue delete permanently deletes an issue.",
+      "explanation": "Issue deletion is permanent and takes the whole discussion thread with it. \\ Almost every reason to delete an issue is better served by closing it, which \\ preserves the history and the cross-references other issues rely on.\n\n\\ Safer alternative: \\ - gh issue close <number> --reason 'not planned'"
+    },
+    {
+      "name": "gh-ssh-key-delete",
+      "pattern": "gh(?:\\s+--?[A-Za-z][A-Za-z0-9-]*\\b(?:\\s+(?!(?:repo|gist|release|issue|ssh-key|secret|variable|run|auth|status|api)\\b)(?:(?:\\x22[^\\x22]*\\x22)|(?:'[^']*')|(?!--?[A-Za-z])[^\\s;&|]+))?)*\\s+ssh-key\\s+delete\\b",
+      "severity": "high",
+      "description": "gh ssh-key delete removes an SSH key, potentially breaking access.",
+      "explanation": "Removing an SSH key takes effect immediately for every machine using it. If \\ it is the key for the session you are in, or the only key on a remote host, \\ you lose git push/pull access and may lock yourself out of automation that \\ authenticates with it.\n\n\\ Confirm which key you are about to remove: \\ gh ssh-key list"
+    },
+    {
+      "name": "gh-secret-delete",
+      "pattern": "gh(?:\\s+--?[A-Za-z][A-Za-z0-9-]*\\b(?:\\s+(?!(?:repo|gist|release|issue|ssh-key|secret|variable|run|auth|status|api)\\b)(?:(?:\\x22[^\\x22]*\\x22)|(?:'[^']*')|(?!--?[A-Za-z])[^\\s;&|]+))?)*\\s+secret\\s+(?:delete|remove)\\b",
+      "severity": "high",
+      "description": "gh secret delete removes GitHub Actions secrets.",
+      "explanation": "Secret values are write-only — GitHub will not show you the value, so a \\ deleted secret cannot be restored unless you hold it somewhere else. Every \\ workflow referencing it starts failing on the next run, often mid-deploy.\n\n\\ Safer alternative: \\ - gh secret set <NAME>: rotate the value in place, no window with it missing"
+    },
+    {
+      "name": "gh-variable-delete",
+      "pattern": "gh(?:\\s+--?[A-Za-z][A-Za-z0-9-]*\\b(?:\\s+(?!(?:repo|gist|release|issue|ssh-key|secret|variable|run|auth|status|api)\\b)(?:(?:\\x22[^\\x22]*\\x22)|(?:'[^']*')|(?!--?[A-Za-z])[^\\s;&|]+))?)*\\s+variable\\s+(?:delete|remove)\\b",
+      "severity": "high",
+      "description": "gh variable delete removes GitHub Actions variables.",
+      "explanation": "Workflows referencing the variable resolve it to an empty string rather than \\ failing loudly, so the breakage can be silent — a deploy target or feature \\ flag quietly becomes blank.\n\n\\ Safer alternative: \\ - gh variable set <NAME>: change the value without a window where it is unset"
+    },
+    {
+      "name": "gh-repo-deploy-key-delete",
+      "pattern": "gh(?:\\s+--?[A-Za-z][A-Za-z0-9-]*\\b(?:\\s+(?!(?:repo|gist|release|issue|ssh-key|secret|variable|run|auth|status|api)\\b)(?:(?:\\x22[^\\x22]*\\x22)|(?:'[^']*')|(?!--?[A-Za-z])[^\\s;&|]+))?)*\\s+repo\\s+deploy-key\\s+delete\\b",
+      "severity": "high",
+      "description": "gh repo deploy-key delete removes a deploy key and can break access.",
+      "explanation": "Deploy keys are how servers and CI clone this repository without a user \\ account. Removing one breaks those consumers immediately, and the failure \\ usually surfaces on someone else's next deploy rather than here.\n\n\\ Confirm what depends on it: \\ gh repo deploy-key list"
+    },
+    {
+      "name": "gh-run-cancel",
+      "pattern": "gh(?:\\s+--?[A-Za-z][A-Za-z0-9-]*\\b(?:\\s+(?!(?:repo|gist|release|issue|ssh-key|secret|variable|run|auth|status|api)\\b)(?:(?:\\x22[^\\x22]*\\x22)|(?:'[^']*')|(?!--?[A-Za-z])[^\\s;&|]+))?)*\\s+run\\s+cancel\\b",
+      "severity": "high",
+      "description": "gh run cancel stops a workflow run and may interrupt deployments.",
+      "explanation": "Cancelling mid-run can leave a deployment half-applied: a job that has \\ already pushed some resources stops before its cleanup or rollback steps. \\ Check what the run is doing before stopping it.\n\n\\ Inspect first: \\ gh run view <run-id>"
+    },
+    {
+      "name": "gh-api-delete-actions-secret",
+      "pattern": "gh(?:\\s+--?[A-Za-z][A-Za-z0-9-]*\\b(?:\\s+(?!(?:repo|gist|release|issue|ssh-key|secret|variable|run|auth|status|api)\\b)(?:(?:\\x22[^\\x22]*\\x22)|(?:'[^']*')|(?!--?[A-Za-z])[^\\s;&|]+))?)*\\s+api\\b.*(?:-X\\s*|--method(?:=|\\s+))DELETE\\b.*(?:/)?repos/[^/\\s]+/[^/\\s]+/actions/secrets/",
+      "severity": "high",
+      "description": "gh api DELETE actions/secrets removes GitHub Actions secrets.",
+      "explanation": "Secret values are write-only, so a deleted secret cannot be read back or \\ restored. Every workflow referencing it fails on the next run.\n\n\\ Safer alternative: \\ - gh secret set <NAME>: rotate the value in place via the first-class verb"
+    },
+    {
+      "name": "gh-api-delete-actions-variable",
+      "pattern": "gh(?:\\s+--?[A-Za-z][A-Za-z0-9-]*\\b(?:\\s+(?!(?:repo|gist|release|issue|ssh-key|secret|variable|run|auth|status|api)\\b)(?:(?:\\x22[^\\x22]*\\x22)|(?:'[^']*')|(?!--?[A-Za-z])[^\\s;&|]+))?)*\\s+api\\b.*(?:-X\\s*|--method(?:=|\\s+))DELETE\\b.*(?:/)?repos/[^/\\s]+/[^/\\s]+/actions/variables/",
+      "severity": "high",
+      "description": "gh api DELETE actions/variables removes GitHub Actions variables.",
+      "explanation": "Workflows referencing a missing variable resolve it to an empty string rather \\ than failing loudly, so the breakage is easy to miss.\n\n\\ Safer alternative: \\ - gh variable set <NAME>: update the value via the first-class verb"
+    },
+    {
+      "name": "gh-api-delete-hook",
+      "pattern": "gh(?:\\s+--?[A-Za-z][A-Za-z0-9-]*\\b(?:\\s+(?!(?:repo|gist|release|issue|ssh-key|secret|variable|run|auth|status|api)\\b)(?:(?:\\x22[^\\x22]*\\x22)|(?:'[^']*')|(?!--?[A-Za-z])[^\\s;&|]+))?)*\\s+api\\b.*(?:-X\\s*|--method(?:=|\\s+))DELETE\\b.*(?:/)?repos/[^/\\s]+/[^/\\s]+/hooks/",
+      "severity": "high",
+      "description": "gh api DELETE hooks removes repository webhooks.",
+      "explanation": "Removing a webhook silently stops every downstream integration it feeds — CI \\ triggers, chat notifications, deployment hooks. Nothing errors; events simply \\ stop arriving, so the failure surfaces late and somewhere else.\n\n\\ Inspect first, and note the config so it can be recreated: \\ gh api repos/<owner>/<repo>/hooks"
+    },
+    {
+      "name": "gh-api-delete-deploy-key",
+      "pattern": "gh(?:\\s+--?[A-Za-z][A-Za-z0-9-]*\\b(?:\\s+(?!(?:repo|gist|release|issue|ssh-key|secret|variable|run|auth|status|api)\\b)(?:(?:\\x22[^\\x22]*\\x22)|(?:'[^']*')|(?!--?[A-Za-z])[^\\s;&|]+))?)*\\s+api\\b.*(?:-X\\s*|--method(?:=|\\s+))DELETE\\b.*(?:/)?repos/[^/\\s]+/[^/\\s]+/keys/",
+      "severity": "high",
+      "description": "gh api DELETE keys removes deploy keys.",
+      "explanation": "Deploy keys are how servers and CI clone this repository without a user \\ account. Removing one breaks those consumers immediately, usually surfacing \\ on someone else's next deploy.\n\n\\ Confirm what depends on it: \\ gh repo deploy-key list"
+    },
+    {
+      "name": "gh-api-delete-release",
+      "pattern": "gh(?:\\s+--?[A-Za-z][A-Za-z0-9-]*\\b(?:\\s+(?!(?:repo|gist|release|issue|ssh-key|secret|variable|run|auth|status|api)\\b)(?:(?:\\x22[^\\x22]*\\x22)|(?:'[^']*')|(?!--?[A-Za-z])[^\\s;&|]+))?)*\\s+api\\b.*(?:-X\\s*|--method(?:=|\\s+))DELETE\\b.*(?:/)?repos/[^/\\s]+/[^/\\s]+/releases/",
+      "severity": "high",
+      "description": "gh api DELETE releases removes GitHub releases.",
+      "explanation": "Deleting a release destroys its uploaded assets. Install scripts and pinned \\ CI jobs that fetch by that release URL start getting 404s immediately.\n\n\\ Safer alternative: \\ - gh release edit <tag> --draft: unpublish while keeping the assets"
+    },
+    {
+      "name": "gh-api-delete-repo",
+      "pattern": "gh(?:\\s+--?[A-Za-z][A-Za-z0-9-]*\\b(?:\\s+(?!(?:repo|gist|release|issue|ssh-key|secret|variable|run|auth|status|api)\\b)(?:(?:\\x22[^\\x22]*\\x22)|(?:'[^']*')|(?!--?[A-Za-z])[^\\s;&|]+))?)*\\s+api\\b.*(?:-X\\s*|--method(?:=|\\s+))DELETE\\b.*(?:/)?repos/[^/\\s]+/[^/\\s]+/?(?:[\\x22'\\s]|$)",
+      "severity": "high",
+      "description": "gh api DELETE /repos/{owner}/{repo} permanently deletes a GitHub repository. This cannot be undone.",
+      "explanation": "This is the raw-API spelling of `gh repo delete`. It removes the code, \\ issues, pull requests, releases, wiki, and Actions history together. GitHub \\ can restore a deleted repository only within 90 days, only if the name has \\ not been reused, and only via support.\n\n\\ Safer alternatives: \\ - gh api -X PATCH repos/<owner>/<repo> -F archived=true: read-only, via the API \\ - gh repo archive: the same thing via the first-class verb (the engine gates \\ that one too, but archiving is reversible)"
+    },
+    {
+      "name": "gh-api-delete-generic",
+      "pattern": "gh(?:\\s+--?[A-Za-z][A-Za-z0-9-]*\\b(?:\\s+(?!(?:repo|gist|release|issue|ssh-key|secret|variable|run|auth|status|api)\\b)(?:(?:\\x22[^\\x22]*\\x22)|(?:'[^']*')|(?!--?[A-Za-z])[^\\s;&|]+))?)*\\s+api\\b.*(?:-X\\s*|--method(?:=|\\s+))DELETE\\b",
+      "severity": "high",
+      "description": "gh api DELETE calls can be destructive. Please verify the endpoint.",
+      "explanation": "This is the catch-all for raw-API deletions whose endpoint this pack does not \\ recognize, so the blast radius is unknown rather than known-large — it covers \\ both `DELETE /repos/{owner}/{repo}` scale operations and routine ones like \\ removing a label or an assignee.\n\n\\ Before reaching for a raw API DELETE, check whether `gh` has a first-class \\ verb for it: those are more readable, and several are allowed outright. For \\ example, sub-issue hierarchy has dedicated verbs: \\ - gh issue edit <child> --remove-parent \\ - gh issue edit <parent> --remove-sub-issue <number>\n\n\\ Preview what the endpoint returns before deleting it: \\ gh api <endpoint>"
+    }
+  ]
+}

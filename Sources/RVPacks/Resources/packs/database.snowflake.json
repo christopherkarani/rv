@@ -1,0 +1,388 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "database.snowflake",
+  "name": "Snowflake CLI",
+  "version": "0.11.0",
+  "description": "Protects modern `snow sql` queries, files, stdin, nested sources, data, \\ ingestion, compute, and account privileges",
+  "category": "database",
+  "enabled_by_default": false,
+  "keywords": [
+    "snow",
+    "Snow",
+    "SNOW",
+    "DROP",
+    "drop",
+    "TRUNCATE",
+    "truncate",
+    "DELETE",
+    "delete",
+    "UPDATE",
+    "update",
+    "ALTER",
+    "alter",
+    "GRANT",
+    "grant",
+    "REVOKE",
+    "revoke",
+    "REMOVE",
+    "remove",
+    "OVERWRITE",
+    "overwrite",
+    "EXECUTE",
+    "execute"
+  ],
+  "safe_patterns": [],
+  "destructive_patterns": [
+    {
+      "name": "stdin-unverified",
+      "pattern": "(?!)",
+      "severity": "high",
+      "description": "snow sql receives SQL or a source that the engine cannot completely verify.",
+      "explanation": "Materialize the exact rendered SQL, keep all !source inputs local, and review every statement before execution."
+    },
+    {
+      "name": "drop-database",
+      "pattern": "(?!)",
+      "severity": "critical",
+      "description": "DROP DATABASE removes the database and every contained schema and object.",
+      "explanation": "Snowflake Time Travel and UNDROP are conditional on object support, retention, privileges, and subsequent operations; they are not a substitute for preventing the drop."
+    },
+    {
+      "name": "drop-schema",
+      "pattern": "(?!)",
+      "severity": "critical",
+      "description": "DROP SCHEMA removes the schema and can remove all contained objects.",
+      "explanation": "Review the schema contents, prefer RESTRICT where supported, and clone the schema before broad DDL."
+    },
+    {
+      "name": "drop-table",
+      "pattern": "(?!)",
+      "severity": "critical",
+      "description": "DROP TABLE removes the active table and its data.",
+      "explanation": "Verify the fully qualified target, inspect retention, and create a zero-copy clone before dropping the table."
+    },
+    {
+      "name": "replace-database",
+      "pattern": "(?!)",
+      "severity": "critical",
+      "description": "CREATE OR REPLACE DATABASE replaces a live database.",
+      "explanation": "Create and validate a separate database or clone instead of replacing the active database in place."
+    },
+    {
+      "name": "replace-schema",
+      "pattern": "(?!)",
+      "severity": "critical",
+      "description": "CREATE OR REPLACE SCHEMA replaces a live schema.",
+      "explanation": "Clone the schema and test the migration against the clone before changing production."
+    },
+    {
+      "name": "replace-table",
+      "pattern": "(?!)",
+      "severity": "critical",
+      "description": "CREATE OR REPLACE TABLE replaces the active table.",
+      "explanation": "Build and validate a separate table or clone, then use a reviewed cutover operation."
+    },
+    {
+      "name": "truncate-table",
+      "pattern": "(?!)",
+      "severity": "critical",
+      "description": "TRUNCATE TABLE removes every row from the target table.",
+      "explanation": "Preview the row count and clone the table before truncating it."
+    },
+    {
+      "name": "delete-all",
+      "pattern": "(?!)",
+      "severity": "critical",
+      "description": "DELETE without a top-level WHERE clause removes every row.",
+      "explanation": "Add a reviewed WHERE predicate and run the equivalent SELECT and COUNT first."
+    },
+    {
+      "name": "update-all",
+      "pattern": "(?!)",
+      "severity": "critical",
+      "description": "UPDATE without a top-level WHERE clause modifies every row.",
+      "explanation": "Add a reviewed WHERE predicate and preview the exact target rows first."
+    },
+    {
+      "name": "drop-data-product",
+      "pattern": "(?!)",
+      "severity": "high",
+      "description": "DROP removes a live view, materialized view, or dynamic table.",
+      "explanation": "Inspect dependencies and validate a replacement object before removing the live query surface."
+    },
+    {
+      "name": "drop-ingestion-object",
+      "pattern": "(?!)",
+      "severity": "high",
+      "description": "DROP removes a live stage, pipe, stream, or task.",
+      "explanation": "Inspect pipeline dependencies and state before removing an ingestion or scheduling object."
+    },
+    {
+      "name": "drop-warehouse",
+      "pattern": "(?!)",
+      "severity": "high",
+      "description": "DROP WAREHOUSE removes compute used by applications, tasks, or users.",
+      "explanation": "Inspect warehouse consumers and prefer a reversible suspend only after reviewing active workloads."
+    },
+    {
+      "name": "drop-principal",
+      "pattern": "(?!)",
+      "severity": "high",
+      "description": "DROP USER or DROP ROLE can break services and revoke access hierarchies.",
+      "explanation": "Review grants and dependencies, then disable access reversibly before deleting a principal."
+    },
+    {
+      "name": "drop-security-object",
+      "pattern": "(?!)",
+      "severity": "high",
+      "description": "DROP removes a live integration, network policy, or share.",
+      "explanation": "Review all consumers, grants, and recovery options before removing the security or sharing object."
+    },
+    {
+      "name": "drop-programmable-object",
+      "pattern": "(?!)",
+      "severity": "medium",
+      "description": "DROP removes a file format, sequence, function, or procedure used by workloads.",
+      "explanation": "Inspect object dependencies and preserve the current definition before removal."
+    },
+    {
+      "name": "remove-stage-files",
+      "pattern": "(?!)",
+      "severity": "high",
+      "description": "REMOVE deletes files from an internal Snowflake stage.",
+      "explanation": "LIST the exact stage path and verify retention or a backup before removing files."
+    },
+    {
+      "name": "pause-pipe",
+      "pattern": "(?!)",
+      "severity": "high",
+      "description": "ALTER PIPE pauses ingestion and can silently make downstream data stale.",
+      "explanation": "Inspect pipe status and downstream freshness requirements before pausing ingestion."
+    },
+    {
+      "name": "suspend-task",
+      "pattern": "(?!)",
+      "severity": "high",
+      "description": "ALTER TASK SUSPEND stops scheduled execution.",
+      "explanation": "Inspect task dependencies and active runs before suspending the task."
+    },
+    {
+      "name": "execute-task",
+      "pattern": "(?!)",
+      "severity": "high",
+      "description": "EXECUTE TASK immediately starts a task run and may cascade a task graph.",
+      "explanation": "Inspect the task definition, owner privileges, graph dependencies, and active runs before forcing execution."
+    },
+    {
+      "name": "suspend-warehouse",
+      "pattern": "(?!)",
+      "severity": "high",
+      "description": "ALTER WAREHOUSE SUSPEND can interrupt active or queued workloads.",
+      "explanation": "Inspect active queries and dependent tasks before suspending compute."
+    },
+    {
+      "name": "broad-revoke",
+      "pattern": "(?!)",
+      "severity": "high",
+      "description": "REVOKE removes broad privileges or role membership and can break applications immediately.",
+      "explanation": "Review current grants and identify every affected principal before revoking access."
+    },
+    {
+      "name": "broad-grant",
+      "pattern": "(?!)",
+      "severity": "high",
+      "description": "GRANT creates account-wide, all-privilege, or ACCOUNTADMIN access.",
+      "explanation": "Grant only the required privileges on specific objects to a least-privilege role."
+    },
+    {
+      "name": "transfer-ownership",
+      "pattern": "(?!)",
+      "severity": "high",
+      "description": "GRANT OWNERSHIP transfers control and can revoke or copy existing grants.",
+      "explanation": "Inventory outbound privileges and review COPY/REVOKE CURRENT GRANTS semantics before transferring ownership."
+    },
+    {
+      "name": "alter-table-drop-column",
+      "pattern": "(?!)",
+      "severity": "high",
+      "description": "ALTER TABLE DROP COLUMN removes a column and its active data.",
+      "explanation": "Clone the table and validate all downstream consumers before removing the column."
+    },
+    {
+      "name": "alter-table-swap",
+      "pattern": "(?!)",
+      "severity": "high",
+      "description": "ALTER TABLE SWAP WITH exchanges table identities atomically.",
+      "explanation": "Verify both fully qualified tables and compare row counts and schemas before swapping."
+    },
+    {
+      "name": "insert-overwrite",
+      "pattern": "(?!)",
+      "severity": "high",
+      "description": "INSERT OVERWRITE replaces the target table's current rows.",
+      "explanation": "Write to and validate a separate table before a reviewed cutover."
+    },
+    {
+      "name": "copy-overwrite",
+      "pattern": "(?!)",
+      "severity": "high",
+      "description": "COPY INTO a location with OVERWRITE = TRUE can replace exported files.",
+      "explanation": "Export to a versioned path and LIST the destination before copying."
+    },
+    {
+      "name": "put-overwrite",
+      "pattern": "(?!)",
+      "severity": "high",
+      "description": "PUT with OVERWRITE = TRUE can replace files in an internal stage.",
+      "explanation": "Upload to a versioned stage path and LIST existing files first."
+    },
+    {
+      "name": "replace-live-object",
+      "pattern": "(?!)",
+      "severity": "high",
+      "description": "CREATE OR REPLACE replaces a live Snowflake object and may lose grants, state, or configuration.",
+      "explanation": "Create and validate a separate object before changing the live definition."
+    },
+    {
+      "name": "bounded-delete",
+      "pattern": "(?!)",
+      "severity": "medium",
+      "description": "DELETE mutates every row selected by its WHERE predicate.",
+      "explanation": "Run the equivalent SELECT and COUNT against a clone before deleting rows."
+    },
+    {
+      "name": "bounded-update",
+      "pattern": "(?!)",
+      "severity": "medium",
+      "description": "UPDATE mutates every row selected by its WHERE predicate.",
+      "explanation": "Preview affected rows and validate the update against a clone first."
+    },
+    {
+      "name": "merge-data",
+      "pattern": "(?!)",
+      "severity": "medium",
+      "description": "MERGE can update, insert, or delete rows based on source matching.",
+      "explanation": "Validate source uniqueness and preview matched and unmatched rows against a clone."
+    },
+    {
+      "name": "copy-into-table",
+      "pattern": "(?!)",
+      "severity": "medium",
+      "description": "COPY INTO a table can load duplicate, corrupt, or unexpected data.",
+      "explanation": "Validate the staged files and load into a clone or scratch table first."
+    },
+    {
+      "name": "rename-object",
+      "pattern": "(?!)",
+      "severity": "medium",
+      "description": "Renaming a database, schema, or table can break fully qualified consumers.",
+      "explanation": "Inventory consumers and stage a coordinated cutover before renaming the object."
+    },
+    {
+      "name": "alter-column",
+      "pattern": "(?!)",
+      "severity": "medium",
+      "description": "ALTER TABLE ALTER COLUMN can break writes and downstream consumers.",
+      "explanation": "Validate type, nullability, default, and policy changes against a clone first."
+    },
+    {
+      "name": "warehouse-settings",
+      "pattern": "(?!)",
+      "severity": "medium",
+      "description": "ALTER WAREHOUSE SET can create availability or cost risk.",
+      "explanation": "Review active consumers, size, scaling, and auto-suspend settings before applying changes."
+    },
+    {
+      "name": "abort-query",
+      "pattern": "(?!)",
+      "severity": "medium",
+      "description": "!abort cancels an active Snowflake query.",
+      "explanation": "Inspect query history and confirm the exact query ID before aborting it."
+    },
+    {
+      "name": "interactive-edit",
+      "pattern": "(?!)",
+      "severity": "high",
+      "description": "!edit executes SQL modified in an external editor that the engine cannot inspect in advance.",
+      "explanation": "Materialize the final SQL in a reviewed local file and execute it with snow sql -f."
+    },
+    {
+      "name": "execute-immediate",
+      "pattern": "(?!)",
+      "severity": "medium",
+      "description": "EXECUTE IMMEDIATE runs generated SQL whose rendered semantics require explicit review.",
+      "explanation": "Materialize and review the exact rendered SQL, including templates and variables, before executing it."
+    },
+    {
+      "name": "cli-object-drop-database",
+      "pattern": "(?:^|[\\s;&|(])snow(?:\\s+--?[^\\s;&|]+(?:\\s+[^-\\s;&|][^\\s;&|]*)?)*\\s+object\\s+drop\\s+(?:database|schema)\\b",
+      "severity": "critical",
+      "description": "snow object drop database/schema removes the object and everything inside it.",
+      "explanation": "Dropping a database or schema removes ALL contained objects (tables, views, \\ stages, pipes, tasks, functions). Time Travel/UNDROP recovery is conditional \\ on retention, edition, and privileges - it is not a substitute for preventing \\ the drop. Verify with `snow object list database` / `snow object describe` \\ and consider `CREATE DATABASE <name>_backup CLONE <name>` first."
+    },
+    {
+      "name": "cli-object-drop",
+      "pattern": "(?:^|[\\s;&|(])snow(?:\\s+--?[^\\s;&|]+(?:\\s+[^-\\s;&|][^\\s;&|]*)?)*\\s+object\\s+drop\\b",
+      "severity": "high",
+      "description": "snow object drop permanently removes a Snowflake object.",
+      "explanation": "snow object drop removes tables, views, stages, streams, tasks, warehouses, \\ users, roles, integrations, and more; --force skips the confirmation prompt. \\ Dropping shared infrastructure can break applications and automation \\ immediately. Inspect first with `snow object describe <type> <name>`."
+    },
+    {
+      "name": "cli-stage-drop",
+      "pattern": "(?:^|[\\s;&|(])snow(?:\\s+--?[^\\s;&|]+(?:\\s+[^-\\s;&|][^\\s;&|]*)?)*\\s+stage\\s+drop\\b",
+      "severity": "high",
+      "description": "snow stage drop removes the stage; internal staged files are not recoverable.",
+      "explanation": "Dropped stages cannot be recovered - internal stage files are gone, and \\ workflows (COPY INTO, Snowpipe) referencing the stage break immediately. \\ List contents first with `snow stage list-files <stage>`."
+    },
+    {
+      "name": "cli-stage-remove",
+      "pattern": "(?:^|[\\s;&|(])snow(?:\\s+--?[^\\s;&|]+(?:\\s+[^-\\s;&|][^\\s;&|]*)?)*\\s+stage\\s+remove\\b",
+      "severity": "high",
+      "description": "snow stage remove deletes files from a stage.",
+      "explanation": "Files removed from an internal stage are not covered by Time Travel. \\ Ingestion pipelines expecting those files will silently see nothing to \\ load. Preview with `snow stage list-files <stage>` and consider copying \\ the files out first."
+    },
+    {
+      "name": "cli-app-teardown",
+      "pattern": "(?:^|[\\s;&|(])snow(?:\\s+--?[^\\s;&|]+(?:\\s+[^-\\s;&|][^\\s;&|]*)?)*\\s+app\\s+teardown\\b",
+      "severity": "high",
+      "description": "snow app teardown drops the Native App and (with --cascade) its owned objects.",
+      "explanation": "snow app teardown drops the application object and the application \\ package's development artifacts; with --cascade it also drops objects the \\ app owns, databases included. Anyone using the app loses access \\ immediately."
+    },
+    {
+      "name": "cli-app-version-drop",
+      "pattern": "(?:^|[\\s;&|(])snow(?:\\s+--?[^\\s;&|]+(?:\\s+[^-\\s;&|][^\\s;&|]*)?)*\\s+app\\s+version\\s+drop\\b",
+      "severity": "medium",
+      "description": "snow app version drop removes a Native App version definition.",
+      "explanation": "Dropping an application package version prevents new installs and upgrades \\ of that version; releases pinned to it break."
+    },
+    {
+      "name": "cli-snowpark-drop",
+      "pattern": "(?:^|[\\s;&|(])snow(?:\\s+--?[^\\s;&|]+(?:\\s+[^-\\s;&|][^\\s;&|]*)?)*\\s+snowpark\\s+drop\\b",
+      "severity": "medium",
+      "description": "snow snowpark drop removes a deployed procedure or function from Snowflake.",
+      "explanation": "snow snowpark drop function/procedure drops the named object from \\ Snowflake. Downstream callers (tasks, other procedures, applications) \\ fail until it is redeployed."
+    },
+    {
+      "name": "cli-spcs-drop",
+      "pattern": "(?:^|[\\s;&|(])snow(?:\\s+--?[^\\s;&|]+(?:\\s+[^-\\s;&|][^\\s;&|]*)?)*\\s+spcs\\s+(?:service|compute-pool|image-repository)\\s+drop\\b",
+      "severity": "high",
+      "description": "snow spcs ... drop removes container services infrastructure.",
+      "explanation": "Dropping an SPCS service stops and removes the running workload; dropping \\ a compute pool removes the compute for every service on it; dropping an \\ image repository deletes the stored images."
+    },
+    {
+      "name": "cli-dbt-drop",
+      "pattern": "(?:^|[\\s;&|(])snow(?:\\s+--?[^\\s;&|]+(?:\\s+[^-\\s;&|][^\\s;&|]*)?)*\\s+dbt\\s+drop\\b",
+      "severity": "medium",
+      "description": "snow dbt drop removes a dbt project object from Snowflake.",
+      "explanation": "snow dbt drop removes the named DBT PROJECT object; scheduled `snow dbt \\ execute` runs and tasks referencing it fail until it is redeployed."
+    },
+    {
+      "name": "cli-dcm-drop",
+      "pattern": "(?:^|[\\s;&|(])snow(?:\\s+--?[^\\s;&|]+(?:\\s+[^-\\s;&|][^\\s;&|]*)?)*\\s+dcm\\s+drop\\b",
+      "severity": "medium",
+      "description": "snow dcm drop removes a DCM project object from Snowflake.",
+      "explanation": "snow dcm drop removes the named DCM PROJECT object, including its \\ deployment history in Snowflake."
+    }
+  ]
+}

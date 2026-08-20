@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "email.mailgun",
+  "name": "Mailgun",
+  "version": "0.11.0",
+  "description": "Protects against destructive Mailgun API operations like domain deletion, \\ route deletion, and mailing list removal.",
+  "category": "email",
+  "enabled_by_default": false,
+  "keywords": [
+    "mailgun",
+    "api.mailgun.net"
+  ],
+  "safe_patterns": [],
+  "destructive_patterns": [
+    {
+      "name": "mailgun-delete-domain",
+      "pattern": "(?:-X\\s*DELETE|--request(?:=|\\s+)DELETE).*api\\.mailgun\\.net/v3/domains/[^\\s/]+(?:\\s|$)|api\\.mailgun\\.net/v3/domains/[^\\s/]+(?:\\s|$).*(?:-X\\s*DELETE|--request(?:=|\\s+)DELETE)",
+      "severity": "critical",
+      "description": "DELETE to Mailgun /v3/domains removes a domain configuration.",
+      "explanation": "Deleting a domain removes all DNS settings, DKIM keys, tracking configuration, \\ and sending capability. All applications using this domain will fail to send \\ emails. Re-adding requires DNS verification.\n\n\\ Safer alternatives: \\ - Export domain settings and DNS records \\ - Disable domain instead of deleting \\ - Verify no production systems use this domain"
+    },
+    {
+      "name": "mailgun-delete-route",
+      "pattern": "(?:-X\\s*DELETE|--request(?:=|\\s+)DELETE).*api\\.mailgun\\.net/v3/routes/|api\\.mailgun\\.net/v3/routes/\\w+.*(?:-X\\s*DELETE|--request(?:=|\\s+)DELETE)",
+      "severity": "high",
+      "description": "DELETE to Mailgun /v3/routes removes an email route.",
+      "explanation": "Deleting a route stops email forwarding, storage, or webhook delivery for \\ matching messages. Incoming emails matching this route will not be processed \\ as expected.\n\n\\ Safer alternatives: \\ - Document route expression and actions \\ - Disable route before deleting \\ - Test with lower priority route first"
+    },
+    {
+      "name": "mailgun-delete-list",
+      "pattern": "(?:-X\\s*DELETE|--request(?:=|\\s+)DELETE).*api\\.mailgun\\.net/v3/lists/|api\\.mailgun\\.net/v3/lists/[^\\s/]+.*(?:-X\\s*DELETE|--request(?:=|\\s+)DELETE)",
+      "severity": "high",
+      "description": "DELETE to Mailgun /v3/lists removes a mailing list.",
+      "explanation": "Deleting a mailing list removes all members and subscription data permanently. \\ Applications sending to this list will receive errors. Member preferences and \\ history are lost.\n\n\\ Safer alternatives: \\ - Export list members before deletion \\ - Archive list rather than deleting \\ - Check for scheduled campaigns to this list"
+    },
+    {
+      "name": "mailgun-delete-template",
+      "pattern": "(?:-X\\s*DELETE|--request(?:=|\\s+)DELETE).*api\\.mailgun\\.net/v3/[^/]+/templates/|api\\.mailgun\\.net/v3/[^/]+/templates/\\w+.*(?:-X\\s*DELETE|--request(?:=|\\s+)DELETE)",
+      "severity": "medium",
+      "description": "DELETE to Mailgun templates endpoint removes an email template.",
+      "explanation": "Deleting a template breaks email sends that reference it. Applications will \\ receive errors when attempting to use the deleted template. All versions are \\ removed.\n\n\\ Safer alternatives: \\ - GET template to export content first \\ - Create new version instead of deleting \\ - Search codebase for template name references"
+    },
+    {
+      "name": "mailgun-delete-webhook",
+      "pattern": "(?:-X\\s*DELETE|--request(?:=|\\s+)DELETE).*api\\.mailgun\\.net/v3/domains/[^/]+/webhooks/|api\\.mailgun\\.net/v3/domains/[^/]+/webhooks/\\w+.*(?:-X\\s*DELETE|--request(?:=|\\s+)DELETE)",
+      "severity": "medium",
+      "description": "DELETE to Mailgun webhooks endpoint removes a webhook.",
+      "explanation": "Deleting a webhook stops event delivery to your application. Bounce, complaint, \\ delivery, open, and click notifications will not be received. This affects \\ analytics and automation.\n\n\\ Safer alternatives: \\ - Document webhook URL and events \\ - Configure new webhook before removing old \\ - Verify no critical processes depend on events"
+    },
+    {
+      "name": "mailgun-delete-credential",
+      "pattern": "(?:-X\\s*DELETE|--request(?:=|\\s+)DELETE).*api\\.mailgun\\.net/v3/domains/[^/]+/credentials/|api\\.mailgun\\.net/v3/domains/[^/]+/credentials/[^\\s/]+.*(?:-X\\s*DELETE|--request(?:=|\\s+)DELETE)",
+      "severity": "high",
+      "description": "DELETE to Mailgun credentials endpoint removes SMTP credentials.",
+      "explanation": "Deleting SMTP credentials immediately revokes access. Applications using these \\ credentials for SMTP authentication will fail to send. The credential cannot \\ be recovered.\n\n\\ Safer alternatives: \\ - Create new credentials before deleting old ones \\ - Update application configurations first \\ - Use API keys where possible for better management"
+    },
+    {
+      "name": "mailgun-delete-tag",
+      "pattern": "(?:-X\\s*DELETE|--request(?:=|\\s+)DELETE).*api\\.mailgun\\.net/v3/[^/]+/tags/|api\\.mailgun\\.net/v3/[^/]+/tags/\\w+.*(?:-X\\s*DELETE|--request(?:=|\\s+)DELETE)",
+      "severity": "low",
+      "description": "DELETE to Mailgun tags endpoint removes a tag.",
+      "explanation": "Deleting a tag removes the grouping but does not affect sent emails. Statistics \\ associated with this tag will no longer be queryable. This is relatively safe \\ but can affect reporting.\n\n\\ Safer alternatives: \\ - Export tag statistics before deletion \\ - Rename tag instead of deleting \\ - Use new tags for new campaigns"
+    },
+    {
+      "name": "mailgun-delete-suppression",
+      "pattern": "(?:-X\\s*DELETE|--request(?:=|\\s+)DELETE).*api\\.mailgun\\.net/v3/[^/]+/(?:bounces|complaints|unsubscribes)/",
+      "severity": "high",
+      "description": "DELETE to Mailgun suppression endpoints removes suppression entries.",
+      "explanation": "Removing suppression entries allows emails to addresses that previously \\ bounced, complained, or unsubscribed. This damages sender reputation and may \\ violate anti-spam regulations.\n\n\\ Safer alternatives: \\ - Verify address validity before removing bounce \\ - Never remove complaint or unsubscribe entries \\ - Use email verification services for bounced addresses"
+    }
+  ]
+}

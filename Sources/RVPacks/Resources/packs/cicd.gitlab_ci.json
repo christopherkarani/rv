@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "cicd.gitlab_ci",
+  "name": "GitLab CI",
+  "version": "0.11.0",
+  "description": "Protects against destructive GitLab CI/CD operations like deleting variables, \\ removing artifacts, and unregistering runners.",
+  "category": "cicd",
+  "enabled_by_default": false,
+  "keywords": [
+    "glab",
+    "gitlab-runner"
+  ],
+  "safe_patterns": [
+    {
+      "name": "glab-variable-list",
+      "pattern": "glab(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+variable\\s+list\\b",
+      "description": ""
+    },
+    {
+      "name": "glab-ci-list",
+      "pattern": "glab(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+ci\\s+list\\b",
+      "description": ""
+    },
+    {
+      "name": "glab-ci-view",
+      "pattern": "glab(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+ci\\s+view\\b",
+      "description": ""
+    },
+    {
+      "name": "glab-ci-status",
+      "pattern": "glab(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+ci\\s+status\\b",
+      "description": ""
+    },
+    {
+      "name": "gitlab-runner-list",
+      "pattern": "gitlab-runner(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+list\\b",
+      "description": ""
+    },
+    {
+      "name": "gitlab-runner-status",
+      "pattern": "gitlab-runner(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+status\\b",
+      "description": ""
+    },
+    {
+      "name": "glab-api-explicit-get",
+      "pattern": "glab(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+api\\b.*(?:-X\\s*|--method(?:=|\\s+))GET\\b",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "glab-variable-delete",
+      "pattern": "glab(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+variable\\s+delete\\b",
+      "severity": "high",
+      "description": "glab variable delete removes CI variables and can break pipelines.",
+      "explanation": "Deleting a GitLab CI/CD variable removes it from the project, group, or instance. \\ Pipelines that depend on this variable will fail with undefined variable errors. \\ Protected or masked variable values cannot be recovered after deletion.\n\n\\ Safer alternatives: \\ - glab variable list: Review existing variables first \\ - Update variable value instead of deleting \\ - Check .gitlab-ci.yml for variable usage before removing"
+    },
+    {
+      "name": "glab-ci-delete",
+      "pattern": "glab(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+ci\\s+delete\\b",
+      "severity": "medium",
+      "description": "glab ci delete removes pipeline artifacts or pipelines.",
+      "explanation": "Deleting pipelines or artifacts removes build history, job logs, and generated \\ files. This affects debugging capabilities and audit trails. Artifacts needed \\ for deployments or releases will no longer be available.\n\n\\ Safer alternatives: \\ - glab ci list: Review pipelines before deletion \\ - glab ci view: Inspect pipeline details \\ - Download artifacts before deletion if needed"
+    },
+    {
+      "name": "glab-api-delete-variables",
+      "pattern": "glab(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+api\\b.*(?:-X\\s*|--method(?:=|\\s+))DELETE\\b.*\\bvariables\\b",
+      "severity": "high",
+      "description": "glab api DELETE against variables endpoints removes CI variables.",
+      "explanation": "Making DELETE requests to GitLab variables API removes CI/CD variables directly. \\ This bypasses CLI confirmations and immediately affects all pipelines using these \\ variables. Protected variable values cannot be recovered.\n\n\\ Safer alternatives: \\ - Use glab variable delete for safer deletion \\ - GET request first: Verify variable exists \\ - Prefer CLI commands over direct API calls"
+    },
+    {
+      "name": "gitlab-runner-unregister",
+      "pattern": "gitlab-runner(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+unregister\\b",
+      "severity": "critical",
+      "description": "gitlab-runner unregister removes runners and can halt CI.",
+      "explanation": "Unregistering a GitLab runner removes it from the GitLab instance. Jobs assigned \\ to this runner will be stuck pending or fail. With --all-runners, all runners \\ on the machine are removed, potentially halting all CI/CD for multiple projects.\n\n\\ Safer alternatives: \\ - gitlab-runner list: Review registered runners first \\ - Pause the runner in GitLab UI instead \\ - Verify replacement runners are available before removing"
+    }
+  ]
+}

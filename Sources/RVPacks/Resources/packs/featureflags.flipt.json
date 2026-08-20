@@ -1,0 +1,163 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "featureflags.flipt",
+  "name": "Flipt",
+  "version": "0.11.0",
+  "description": "Protects against destructive Flipt CLI and API operations.",
+  "category": "featureflags",
+  "enabled_by_default": false,
+  "keywords": [
+    "flipt"
+  ],
+  "safe_patterns": [
+    {
+      "name": "flipt-flag-list",
+      "pattern": "flipt(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+flag\\s+list(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "flipt-flag-get",
+      "pattern": "flipt(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+flag\\s+get(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "flipt-flag-create",
+      "pattern": "flipt(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+flag\\s+create(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "flipt-flag-update",
+      "pattern": "flipt(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+flag\\s+update(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "flipt-segment-list",
+      "pattern": "flipt(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+segment\\s+list(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "flipt-segment-get",
+      "pattern": "flipt(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+segment\\s+get(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "flipt-segment-create",
+      "pattern": "flipt(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+segment\\s+create(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "flipt-namespace-list",
+      "pattern": "flipt(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+namespace\\s+list(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "flipt-namespace-get",
+      "pattern": "flipt(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+namespace\\s+get(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "flipt-namespace-create",
+      "pattern": "flipt(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+namespace\\s+create(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "flipt-rule-list",
+      "pattern": "flipt(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+rule\\s+list(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "flipt-rule-get",
+      "pattern": "flipt(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+rule\\s+get(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "flipt-rule-create",
+      "pattern": "flipt(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+rule\\s+create(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "flipt-evaluate",
+      "pattern": "flipt(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+evaluate(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "flipt-help",
+      "pattern": "flipt(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+(?:--help|-h|help)(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "flipt-version",
+      "pattern": "flipt(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+(?:--version|version)(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "flipt-server",
+      "pattern": "flipt(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+(?:server|serve)(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "flipt-config",
+      "pattern": "flipt(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+config(?=\\s|$)",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "flipt-flag-delete",
+      "pattern": "flipt(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+flag\\s+delete\\b",
+      "severity": "critical",
+      "description": "flipt flag delete permanently removes a feature flag. This cannot be undone.",
+      "explanation": "Deleting a Flipt feature flag immediately removes it from evaluation. All \\ applications checking this flag will receive default values or errors. Rules, \\ variants, and distributions associated with the flag are also removed.\n\n\\ Safer alternatives: \\ - flipt flag get: Review flag configuration first \\ - Disable the flag instead of deleting \\ - Export flag configuration before deletion"
+    },
+    {
+      "name": "flipt-segment-delete",
+      "pattern": "flipt(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+segment\\s+delete\\b",
+      "severity": "high",
+      "description": "flipt segment delete removes a segment and its constraints.",
+      "explanation": "Deleting a segment removes user grouping rules. Any flags using this segment \\ for targeting will lose that targeting logic, potentially changing which users \\ receive which variants.\n\n\\ Safer alternatives: \\ - flipt segment get: Review segment configuration \\ - Check which flags reference this segment \\ - Update flags to use different segments first"
+    },
+    {
+      "name": "flipt-namespace-delete",
+      "pattern": "flipt(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+namespace\\s+delete\\b",
+      "severity": "critical",
+      "description": "flipt namespace delete removes a namespace and all its flags, segments, and rules.",
+      "explanation": "Deleting a namespace removes ALL flags, segments, rules, and constraints \\ within it. This is a complete wipe of that feature flag environment. All \\ applications using this namespace will lose flag evaluations.\n\n\\ Safer alternatives: \\ - flipt namespace get: Review namespace contents \\ - Export all flags and segments before deletion \\ - Migrate resources to another namespace first"
+    },
+    {
+      "name": "flipt-rule-delete",
+      "pattern": "flipt(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+rule\\s+delete\\b",
+      "severity": "high",
+      "description": "flipt rule delete removes a targeting rule from a flag.",
+      "explanation": "Deleting a rule changes how the flag evaluates for targeted users. Users \\ previously matching this rule will fall through to other rules or receive \\ the default variant.\n\n\\ Safer alternatives: \\ - flipt rule get: Review rule configuration \\ - Disable the rule instead of deleting \\ - Verify other rules handle affected users"
+    },
+    {
+      "name": "flipt-constraint-delete",
+      "pattern": "flipt(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+constraint\\s+delete\\b",
+      "severity": "medium",
+      "description": "flipt constraint delete removes a constraint from a segment.",
+      "explanation": "Removing a constraint changes segment membership. Users previously excluded \\ or included by this constraint will now match or not match the segment \\ differently.\n\n\\ Safer alternatives: \\ - Review segment membership before and after \\ - Test constraint changes in a staging namespace \\ - Document why the constraint is being removed"
+    },
+    {
+      "name": "flipt-variant-delete",
+      "pattern": "flipt(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+variant\\s+delete\\b",
+      "severity": "high",
+      "description": "flipt variant delete removes a variant from a flag.",
+      "explanation": "Deleting a variant removes a possible flag value. Rules distributing traffic \\ to this variant will fail or need adjustment. Applications expecting this \\ variant value may break.\n\n\\ Safer alternatives: \\ - Check which rules reference this variant \\ - Update distributions before deleting \\ - Zero out traffic to this variant first"
+    },
+    {
+      "name": "flipt-distribution-delete",
+      "pattern": "flipt(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+distribution\\s+delete\\b",
+      "severity": "medium",
+      "description": "flipt distribution delete removes a distribution from a rule.",
+      "explanation": "Removing a distribution changes traffic allocation within a rule. The \\ affected variant will no longer receive traffic from this rule, shifting \\ all traffic to remaining distributions.\n\n\\ Safer alternatives: \\ - Review current traffic allocation \\ - Adjust percentages instead of deleting \\ - Verify other distributions handle the traffic"
+    },
+    {
+      "name": "flipt-api-delete",
+      "pattern": "curl\\s+.*(?:-X\\s*DELETE|--request(?:=|\\s+)DELETE)\\s+.*?/api/v1/",
+      "severity": "high",
+      "description": "DELETE request to Flipt API can remove flags, segments, or rules.",
+      "explanation": "Direct API DELETE calls to Flipt can remove flags, segments, rules, or \\ namespaces without CLI confirmation prompts. API deletions take effect \\ immediately across all connected applications.\n\n\\ Safer alternatives: \\ - Use the Flipt CLI for better confirmation prompts \\ - GET the resource first to verify what will be deleted \\ - Use the Flipt UI for visibility into dependencies"
+    }
+  ]
+}

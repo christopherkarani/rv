@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "cicd.jenkins",
+  "name": "Jenkins",
+  "version": "0.11.0",
+  "description": "Protects against destructive Jenkins CLI/API operations like deleting jobs, \\ nodes, credentials, or build history.",
+  "category": "cicd",
+  "enabled_by_default": false,
+  "keywords": [
+    "jenkins-cli",
+    "jenkins",
+    "doDelete"
+  ],
+  "safe_patterns": [
+    {
+      "name": "jenkins-cli-list-jobs",
+      "pattern": "(?:jenkins-cli|java\\s+-jar\\s+\\S*jenkins-cli\\.jar)(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+list-jobs\\b",
+      "description": ""
+    },
+    {
+      "name": "jenkins-cli-get-job",
+      "pattern": "(?:jenkins-cli|java\\s+-jar\\s+\\S*jenkins-cli\\.jar)(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+get-job\\b",
+      "description": ""
+    },
+    {
+      "name": "jenkins-cli-build",
+      "pattern": "(?:jenkins-cli|java\\s+-jar\\s+\\S*jenkins-cli\\.jar)(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+build\\b",
+      "description": ""
+    },
+    {
+      "name": "jenkins-cli-who-am-i",
+      "pattern": "(?:jenkins-cli|java\\s+-jar\\s+\\S*jenkins-cli\\.jar)(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+who-am-i\\b",
+      "description": ""
+    },
+    {
+      "name": "jenkins-cli-list-views",
+      "pattern": "(?:jenkins-cli|java\\s+-jar\\s+\\S*jenkins-cli\\.jar)(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+list-views\\b",
+      "description": ""
+    },
+    {
+      "name": "jenkins-cli-list-plugins",
+      "pattern": "(?:jenkins-cli|java\\s+-jar\\s+\\S*jenkins-cli\\.jar)(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+list-plugins\\b",
+      "description": ""
+    },
+    {
+      "name": "jenkins-cli-get-node",
+      "pattern": "(?:jenkins-cli|java\\s+-jar\\s+\\S*jenkins-cli\\.jar)(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+get-node\\b",
+      "description": ""
+    },
+    {
+      "name": "jenkins-cli-get-credentials",
+      "pattern": "(?:jenkins-cli|java\\s+-jar\\s+\\S*jenkins-cli\\.jar)(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+get-credentials\\b",
+      "description": ""
+    },
+    {
+      "name": "jenkins-curl-explicit-get",
+      "pattern": "(?i)^(?!(?=.*(?:-X\\s*|--request(?:=|\\s+))POST\\b)(?=.*\\bdoDelete\\b))curl(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+(?:-X\\s*|--request(?:=|\\s+))GET\\b.*(?:jenkins|/job/|/api/)",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "jenkins-cli-delete-job",
+      "pattern": "(?:jenkins-cli|java\\s+-jar\\s+\\S*jenkins-cli\\.jar)(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+delete-job\\b",
+      "severity": "critical",
+      "description": "jenkins-cli delete-job deletes Jenkins jobs and can break pipelines.",
+      "explanation": "Deleting a Jenkins job removes the job configuration, build history, and all \\ associated artifacts. Downstream jobs that depend on this job will fail. The \\ job definition and history cannot be recovered without backups.\n\n\\ Safer alternatives: \\ - list-jobs: Review jobs before deletion \\ - get-job: Export job XML configuration first \\ - Disable the job instead of deleting"
+    },
+    {
+      "name": "jenkins-cli-delete-node",
+      "pattern": "(?:jenkins-cli|java\\s+-jar\\s+\\S*jenkins-cli\\.jar)(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+delete-node\\b",
+      "severity": "high",
+      "description": "jenkins-cli delete-node deletes Jenkins nodes and can halt CI.",
+      "explanation": "Removing a Jenkins node (agent) disconnects it from the controller. Jobs \\ configured to run on this node will fail or remain pending. Any running builds \\ on the node will be aborted immediately.\n\n\\ Safer alternatives: \\ - get-node: Review node configuration first \\ - Take node offline temporarily instead \\ - Verify jobs don't require this specific node"
+    },
+    {
+      "name": "jenkins-cli-delete-credentials",
+      "pattern": "(?:jenkins-cli|java\\s+-jar\\s+\\S*jenkins-cli\\.jar)(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+delete-credentials\\b",
+      "severity": "high",
+      "description": "jenkins-cli delete-credentials removes stored credentials.",
+      "explanation": "Deleting credentials from Jenkins removes them from the credential store. Jobs \\ and pipelines using these credentials will fail authentication. Credential \\ values (passwords, tokens, keys) cannot be recovered after deletion.\n\n\\ Safer alternatives: \\ - get-credentials: Review credential metadata first \\ - Update credentials instead of deleting \\ - Search Jenkinsfiles for credential usage"
+    },
+    {
+      "name": "jenkins-cli-delete-builds",
+      "pattern": "(?:jenkins-cli|java\\s+-jar\\s+\\S*jenkins-cli\\.jar)(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+delete-builds\\b",
+      "severity": "medium",
+      "description": "jenkins-cli delete-builds removes build history and artifacts.",
+      "explanation": "Deleting builds removes build records, console logs, and artifacts for the \\ specified build range. This affects audit trails, debugging capabilities, and \\ any artifacts needed for deployments. Build history cannot be recovered.\n\n\\ Safer alternatives: \\ - list-jobs: Review job builds first \\ - Download artifacts before deletion \\ - Use build retention policies instead"
+    },
+    {
+      "name": "jenkins-cli-delete-view",
+      "pattern": "(?:jenkins-cli|java\\s+-jar\\s+\\S*jenkins-cli\\.jar)(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+delete-view\\b",
+      "severity": "low",
+      "description": "jenkins-cli delete-view removes Jenkins views.",
+      "explanation": "Deleting a Jenkins view removes the view configuration. Jobs included in the \\ view are not deleted, but the organizational structure is lost. Users relying \\ on this view for job navigation will be affected.\n\n\\ Safer alternatives: \\ - list-views: Review views before deletion \\ - Export view configuration if custom filters are used \\ - Create a replacement view before removing"
+    },
+    {
+      "name": "jenkins-curl-do-delete",
+      "pattern": "(?i)\\bcurl\\b(?=.*(?:-X\\s*|--request(?:=|\\s+))POST\\b)(?=.*\\bdoDelete\\b).*",
+      "severity": "critical",
+      "description": "curl POST to Jenkins doDelete endpoints deletes jobs or resources.",
+      "explanation": "POSTing to Jenkins doDelete endpoints triggers immediate deletion of jobs, builds, \\ or other resources. This bypasses CLI safety checks and directly calls the \\ internal deletion API. Resources cannot be recovered without backups.\n\n\\ Safer alternatives: \\ - Use jenkins-cli for safer deletion with confirmation \\ - GET the resource configuration first for backup \\ - Avoid direct API calls for destructive operations"
+    }
+  ]
+}

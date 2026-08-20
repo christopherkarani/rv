@@ -1,0 +1,280 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "apigateway.aws",
+  "name": "AWS API Gateway",
+  "version": "0.11.0",
+  "description": "Protects against destructive AWS API Gateway CLI operations for both \\ REST APIs and HTTP APIs.",
+  "category": "apigateway",
+  "enabled_by_default": false,
+  "keywords": [
+    "aws",
+    "apigateway",
+    "apigatewayv2"
+  ],
+  "safe_patterns": [
+    {
+      "name": "apigateway-get-rest-api",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigateway\\s+get-rest-api(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "apigateway-get-rest-apis",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigateway\\s+get-rest-apis(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "apigateway-get-resources",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigateway\\s+get-resources(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "apigateway-get-resource",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigateway\\s+get-resource(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "apigateway-get-method",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigateway\\s+get-method(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "apigateway-get-stages",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigateway\\s+get-stages(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "apigateway-get-stage",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigateway\\s+get-stage(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "apigateway-get-deployments",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigateway\\s+get-deployments(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "apigateway-get-deployment",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigateway\\s+get-deployment(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "apigateway-get-api-keys",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigateway\\s+get-api-keys(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "apigateway-get-api-key",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigateway\\s+get-api-key(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "apigateway-get-authorizers",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigateway\\s+get-authorizers(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "apigateway-get-models",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigateway\\s+get-models(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "apigateway-get-usage-plans",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigateway\\s+get-usage-plans(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "apigateway-get-domain-names",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigateway\\s+get-domain-names(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "apigatewayv2-get-apis",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigatewayv2\\s+get-apis(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "apigatewayv2-get-api",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigatewayv2\\s+get-api(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "apigatewayv2-get-routes",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigatewayv2\\s+get-routes(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "apigatewayv2-get-route",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigatewayv2\\s+get-route(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "apigatewayv2-get-integrations",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigatewayv2\\s+get-integrations(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "apigatewayv2-get-integration",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigatewayv2\\s+get-integration(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "apigatewayv2-get-stages",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigatewayv2\\s+get-stages(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "apigatewayv2-get-stage",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigatewayv2\\s+get-stage(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "apigatewayv2-get-authorizers",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigatewayv2\\s+get-authorizers(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "apigatewayv2-get-domain-names",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigatewayv2\\s+get-domain-names(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "apigateway-help",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigateway\\s+(?:help|\\-\\-help)(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "apigatewayv2-help",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigatewayv2\\s+(?:help|\\-\\-help)(?=\\s|$)",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "apigateway-delete-rest-api",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigateway\\s+delete-rest-api\\b",
+      "severity": "critical",
+      "description": "aws apigateway delete-rest-api permanently removes a REST API and all its resources.",
+      "explanation": "Deleting a REST API removes all resources, methods, stages, deployments, and \\ configurations. All clients will immediately receive errors. API keys and usage \\ plans referencing this API become orphaned but are not automatically deleted.\n\n\\ Safer alternatives: \\ - aws apigateway get-rest-api: Review API details before deletion \\ - aws apigateway get-stages: Check active stages and traffic \\ - Export API definition with aws apigateway get-export first"
+    },
+    {
+      "name": "apigateway-delete-resource",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigateway\\s+delete-resource\\b",
+      "severity": "high",
+      "description": "aws apigateway delete-resource removes an API resource and its methods.",
+      "explanation": "Deleting a resource removes the URL path and all HTTP methods defined on it. \\ Clients calling that endpoint will receive 404 errors. Child resources are \\ also deleted recursively.\n\n\\ Safer alternatives: \\ - aws apigateway get-resources: Review resource tree first \\ - Deploy to a test stage to verify the change \\ - Delete individual methods instead if only removing specific operations"
+    },
+    {
+      "name": "apigateway-delete-method",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigateway\\s+delete-method\\b",
+      "severity": "medium",
+      "description": "aws apigateway delete-method removes an HTTP method from a resource.",
+      "explanation": "Deleting a method removes the HTTP operation (GET, POST, etc.) from a resource. \\ Clients calling that method will receive 404 or 405 errors after redeployment.\n\n\\ Safer alternatives: \\ - aws apigateway get-method: Review method configuration first \\ - Test changes in a non-production stage \\ - Consider disabling the method instead of deleting"
+    },
+    {
+      "name": "apigateway-delete-stage",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigateway\\s+delete-stage\\b",
+      "severity": "high",
+      "description": "aws apigateway delete-stage removes a deployment stage from an API.",
+      "explanation": "Deleting a stage stops all traffic to that deployment. Stage variables, \\ caching settings, and throttling configurations are lost. Clients using \\ the stage URL will receive errors immediately.\n\n\\ Safer alternatives: \\ - aws apigateway get-stage: Review stage settings first \\ - Redirect traffic to another stage before deletion \\ - Export stage configuration for backup"
+    },
+    {
+      "name": "apigateway-delete-deployment",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigateway\\s+delete-deployment\\b",
+      "severity": "medium",
+      "description": "aws apigateway delete-deployment removes a deployment from an API.",
+      "explanation": "Deleting a deployment removes a specific API snapshot. If the deployment is \\ currently active on a stage, that stage becomes unavailable. Rollback to this \\ version becomes impossible after deletion.\n\n\\ Safer alternatives: \\ - aws apigateway get-deployments: List deployments first \\ - Ensure no stages reference this deployment \\ - Keep recent deployments for rollback capability"
+    },
+    {
+      "name": "apigateway-delete-api-key",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigateway\\s+delete-api-key\\b",
+      "severity": "high",
+      "description": "aws apigateway delete-api-key removes an API key.",
+      "explanation": "Deleting an API key immediately revokes access for any client using that key. \\ Requests will be rejected with 403 Forbidden. Usage tracking history for the \\ key is preserved but the key cannot be recovered.\n\n\\ Safer alternatives: \\ - aws apigateway get-api-key: Review key details first \\ - Disable the key instead of deleting to preserve for audit \\ - Notify affected clients before deletion"
+    },
+    {
+      "name": "apigateway-delete-authorizer",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigateway\\s+delete-authorizer\\b",
+      "severity": "high",
+      "description": "aws apigateway delete-authorizer removes an authorizer from an API.",
+      "explanation": "Deleting an authorizer breaks authentication for all methods using it. Those \\ methods will fail authorization until reconfigured. Lambda authorizer functions \\ are not deleted but become orphaned.\n\n\\ Safer alternatives: \\ - aws apigateway get-authorizers: Review authorizers first \\ - Update methods to use a different authorizer before deletion \\ - Test in a non-production stage first"
+    },
+    {
+      "name": "apigateway-delete-model",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigateway\\s+delete-model\\b",
+      "severity": "medium",
+      "description": "aws apigateway delete-model removes a model from an API.",
+      "explanation": "Deleting a model removes the JSON schema definition. Methods referencing this \\ model for request/response validation will lose that validation. The API will \\ still function but without schema enforcement.\n\n\\ Safer alternatives: \\ - aws apigateway get-models: Review models first \\ - Check which methods reference this model \\ - Update method configurations to remove model references first"
+    },
+    {
+      "name": "apigateway-delete-domain-name",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigateway\\s+delete-domain-name\\b",
+      "severity": "high",
+      "description": "aws apigateway delete-domain-name removes a custom domain name.",
+      "explanation": "Deleting a custom domain name breaks all traffic using that domain. The ACM \\ certificate is not deleted but becomes unused. DNS records pointing to the \\ domain will fail to resolve API traffic.\n\n\\ Safer alternatives: \\ - aws apigateway get-domain-names: Review domains first \\ - Update DNS records before domain deletion \\ - Verify no production traffic uses this domain"
+    },
+    {
+      "name": "apigateway-delete-usage-plan",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigateway\\s+delete-usage-plan\\b",
+      "severity": "high",
+      "description": "aws apigateway delete-usage-plan removes a usage plan.",
+      "explanation": "Deleting a usage plan removes throttling and quota limits for associated API \\ keys. Keys lose their rate limiting, which may cause backend overload or \\ unexpected billing. Key associations are removed.\n\n\\ Safer alternatives: \\ - aws apigateway get-usage-plans: Review plans first \\ - aws apigateway get-usage-plan-keys: Check associated keys \\ - Migrate keys to another plan before deletion"
+    },
+    {
+      "name": "apigatewayv2-delete-api",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigatewayv2\\s+delete-api\\b",
+      "severity": "critical",
+      "description": "aws apigatewayv2 delete-api permanently removes an HTTP API.",
+      "explanation": "Deleting an HTTP API removes all routes, integrations, stages, and configurations. \\ All clients will immediately lose access. WebSocket connections are terminated. \\ The API ID cannot be reused.\n\n\\ Safer alternatives: \\ - aws apigatewayv2 get-api: Review API details first \\ - aws apigatewayv2 export-api: Export OpenAPI spec for backup \\ - Verify no production traffic before deletion"
+    },
+    {
+      "name": "apigatewayv2-delete-route",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigatewayv2\\s+delete-route\\b",
+      "severity": "high",
+      "description": "aws apigatewayv2 delete-route removes a route from an HTTP API.",
+      "explanation": "Deleting a route removes the path and method combination from the API. Clients \\ calling that endpoint will receive 404 errors. Route authorization settings \\ and request validation are also removed.\n\n\\ Safer alternatives: \\ - aws apigatewayv2 get-routes: List routes first \\ - Test in $default stage before production \\ - Consider updating the route instead of deleting"
+    },
+    {
+      "name": "apigatewayv2-delete-integration",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigatewayv2\\s+delete-integration\\b",
+      "severity": "high",
+      "description": "aws apigatewayv2 delete-integration removes an integration from an HTTP API.",
+      "explanation": "Deleting an integration breaks routes using it. Those routes will fail to \\ invoke backend services. Lambda function configurations, HTTP endpoints, \\ and VPC link settings are lost.\n\n\\ Safer alternatives: \\ - aws apigatewayv2 get-integrations: Review integrations first \\ - Check which routes use this integration \\ - Update routes to use a different integration first"
+    },
+    {
+      "name": "apigatewayv2-delete-stage",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigatewayv2\\s+delete-stage\\b",
+      "severity": "high",
+      "description": "aws apigatewayv2 delete-stage removes a stage from an HTTP API.",
+      "explanation": "Deleting a stage stops all traffic to that deployment. Stage variables, access \\ logs, throttling, and auto-deploy settings are lost. Clients using the stage \\ URL will receive errors.\n\n\\ Safer alternatives: \\ - aws apigatewayv2 get-stages: Review stages first \\ - Redirect traffic before deletion \\ - Keep $default stage for production traffic"
+    },
+    {
+      "name": "apigatewayv2-delete-authorizer",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigatewayv2\\s+delete-authorizer\\b",
+      "severity": "high",
+      "description": "aws apigatewayv2 delete-authorizer removes an authorizer from an HTTP API.",
+      "explanation": "Deleting an authorizer breaks authentication for routes using it. JWT validation \\ and Lambda authorization will fail. Routes must be updated to remove or replace \\ the authorizer reference.\n\n\\ Safer alternatives: \\ - aws apigatewayv2 get-authorizers: Review authorizers first \\ - Update routes to use a different authorizer \\ - Test authorization changes in a test stage"
+    },
+    {
+      "name": "apigatewayv2-delete-domain-name",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigatewayv2\\s+delete-domain-name\\b",
+      "severity": "high",
+      "description": "aws apigatewayv2 delete-domain-name removes a custom domain name from an HTTP API.",
+      "explanation": "Deleting a custom domain breaks traffic using that hostname. API mappings are \\ removed. DNS records will fail to route to the API. The ACM certificate \\ remains but becomes unused.\n\n\\ Safer alternatives: \\ - aws apigatewayv2 get-domain-names: Review domains first \\ - Update DNS before deletion \\ - Remove API mappings first to verify impact"
+    },
+    {
+      "name": "apigatewayv2-delete-route-response",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigatewayv2\\s+delete-route-response\\b",
+      "severity": "medium",
+      "description": "aws apigatewayv2 delete-route-response removes a route response from an HTTP API.",
+      "explanation": "Deleting a route response removes response configuration for WebSocket APIs. \\ Response selection expressions and model mappings are lost. Clients may \\ receive unexpected response formats.\n\n\\ Safer alternatives: \\ - aws apigatewayv2 get-route-responses: Review responses first \\ - Test in a non-production stage \\ - Update response instead of deleting"
+    },
+    {
+      "name": "apigatewayv2-delete-integration-response",
+      "pattern": "\\baws\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigatewayv2\\s+delete-integration-response\\b",
+      "severity": "medium",
+      "description": "aws apigatewayv2 delete-integration-response removes an integration response.",
+      "explanation": "Deleting an integration response removes response mapping for WebSocket APIs. \\ Template transformations and response codes are lost. Clients may receive \\ raw backend responses.\n\n\\ Safer alternatives: \\ - aws apigatewayv2 get-integration-responses: Review first \\ - Test response handling in a test stage \\ - Update the response instead of deleting"
+    }
+  ]
+}

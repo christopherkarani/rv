@@ -1,3 +1,4 @@
+import Foundation
 import RVDomain
 import RVEngine
 import RVPacks
@@ -10,7 +11,13 @@ public struct EvaluateSession: Sendable {
     private let engine: ICUPatternEngine
 
     public init(snapshots: [PackSnapshot]? = nil) {
-        let loaded = snapshots ?? (try? PackRegistry.loadDayOne()) ?? []
+        let loaded: [PackSnapshot]
+        if let snapshots {
+            loaded = snapshots
+        } else {
+            // Prefer full catalog; fall back to day-one if index is missing.
+            loaded = (try? PackRegistry.loadAll()) ?? ((try? PackRegistry.loadDayOne()) ?? [])
+        }
         let engine = ICUPatternEngine()
         let warmed = CoreWarmup.prepare(snapshots: loaded, engine: engine)
         self.snapshots = loaded

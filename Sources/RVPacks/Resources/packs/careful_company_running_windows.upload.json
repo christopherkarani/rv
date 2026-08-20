@@ -1,0 +1,146 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "careful_company_running_windows.upload",
+  "name": "Careful Company: HTTP Upload Egress",
+  "version": "0.11.0",
+  "description": "Blocks HTTP file-upload primitives (`-InFile`, `-Form`, `curl -T`, \\ `-F field=@file`, `--data-binary @file`, `--post-file`, \\ `WebClient.UploadFile`, `GetRequestStream`, `MultipartFormDataContent`, BITS \\ uploads), file-drop and paste services, `gh gist create`, `certreq -Post`, \\ and request bodies built from file or clipboard contents. Mutating requests \\ with an inline body warn instead of blocking; plain GETs and downloads are \\ untouched.",
+  "category": "careful_company_running_windows",
+  "enabled_by_default": false,
+  "keywords": [],
+  "safe_patterns": [
+    {
+      "name": "internal-http-target",
+      "pattern": "(?i)^\\s*(?:invoke-webrequest|invoke-restmethod|iwr|irm|curl(?:\\.exe)?|wget(?:\\.exe)?)\\b(?![^\\r\\n]*(?:169\\.254\\.169\\.254|metadata\\.google\\.internal|metadata\\.goog))(?![^|&;<>\\r\\n]*https?://(?!(?:localhost|127\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}|\\[::1\\]|0\\.0\\.0\\.0|host\\.docker\\.internal|10\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}|192\\.168\\.\\d{1,3}\\.\\d{1,3}|172\\.(?:1[6-9]|2\\d|3[01])\\.\\d{1,3}\\.\\d{1,3}|[a-z0-9_.-]+\\.(?:internal|corp|local|localdomain|lan|intranet|test))(?:[:/?#]|\\s|$)))[^|&;<>\\r\\n]*https?://[^|&;<>\\r\\n]*$",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "ps-http-upload-file",
+      "pattern": "(?i)\\b(?:invoke-webrequest|invoke-restmethod|iwr|irm)\\b[^|&;\\r\\n]*\\s-inf(?:i(?:le?)?)?\\b|\\b(?:invoke-webrequest|invoke-restmethod|iwr|irm)\\b[^|&;\\r\\n]*\\s-form\\b[^|&;\\r\\n]*(?:get-item|get-childitem|\\bgi\\b|\\bgci\\b|(?:^|[\\s\\x22'(=])[a-z]:[\\\\/]|\\[io\\.file\\]|filestream)",
+      "severity": "high",
+      "description": "Invoke-WebRequest/-RestMethod with -InFile, or -Form carrying a file, uploads it.",
+      "explanation": "`-InFile` streams a local file as the request body and has no read-only use, so it is an \\ upload regardless of URL or method. `-Form` builds a multipart request, which is an \\ upload only when a file goes into it — a form of literal fields is just a POST body, so \\ this rule requires visible file evidence (`Get-Item`, a drive-qualified path, a file \\ stream) and leaves the literal-only case to the warn-level rule.\n\n\\ Safer alternatives: \\ - Leave the file on disk and report its path to the operator \\ - Send to an internal endpoint (loopback/RFC1918/*.internal are allowed)"
+    },
+    {
+      "name": "ps-splatted-upload",
+      "pattern": "(?i)\\binfile\\s*=[^}\\r\\n]*\\}[^|&\\r\\n]*\\b(?:invoke-webrequest|invoke-restmethod|iwr|irm)\\b[^|&;\\r\\n]*@\\w+\\b",
+      "severity": "high",
+      "description": "A splatted parameter hashtable containing InFile, then splatted into a web request, uploads a file.",
+      "explanation": "PowerShell splatting (`$p = @{Uri='…'; InFile='C:\\data.zip'}; irm @p`) moves every \\ parameter off the command line, so flag-based rules see nothing. This requires **both** \\ a hashtable with an `InFile` key **and** a subsequent splat into a web request. A \\ hashtable that is merely assigned and never used does not match. The rule is \\ deliberately conservative about proving that the two variable names are identical: \\ keeping the file-bearing assignment and the executed request on separate lines avoids \\ this warning when they are unrelated.\n\n\\ Safer alternatives: \\ - Pass parameters explicitly so the operation is visible in the transcript \\ - Drop the InFile entry if the request does not need to carry a file"
+    },
+    {
+      "name": "ps-http-body-from-file",
+      "pattern": "(?i)\\b(?:invoke-webrequest|invoke-restmethod|iwr|irm)\\b[^|&;\\r\\n]*\\s-bo(?:d(?:y)?)?\\b[^|&;\\r\\n]*(?:get-content|\\bgc\\s|\\bget-clipboard\\b|\\bgcb\\b|\\[io\\.file\\]|\\[system\\.io\\.file\\]|readalltext|readallbytes|tobase64string)",
+      "severity": "high",
+      "description": "A request body built from file or clipboard contents sends that content over HTTP.",
+      "explanation": "`-Body (Get-Content C:\\data.csv -Raw)` and `[IO.File]::ReadAllBytes(...)` send a file's \\ contents without ever naming `-InFile`. `[Convert]::ToBase64String` in the same position \\ is the same thing with an encoding step, and `-Body (Get-Clipboard)` sends whatever the \\ user last copied — frequently a password or a token.\n\n\\ Safer alternatives: \\ - Send a summary or a record count rather than the content itself \\ - Target an internal endpoint if the data must be transmitted"
+    },
+    {
+      "name": "dotnet-webclient-upload",
+      "pattern": "(?i)\\.(?:upload(?:file|data|string|values)(?:async|taskasync)?|openwrite)\\s*\\(",
+      "severity": "high",
+      "description": "WebClient.Upload*/OpenWrite sends local data to a URL.",
+      "explanation": "`(New-Object Net.WebClient).UploadFile($url,'C:\\data.zip')` — and the `UploadData`, \\ `UploadString`, `UploadValues`, and `OpenWrite` variants — are the .NET upload \\ primitives. They bypass every `Invoke-*` parameter rule because no cmdlet is involved.\n\n\\ Safer alternatives: \\ - `DownloadFile`/`DownloadString` (the read direction) are not matched by this rule \\ - Hand the data to an approved internal service instead"
+    },
+    {
+      "name": "dotnet-request-stream-upload",
+      "pattern": "(?i)\\bgetrequeststream\\s*\\(|\\bmultipartformdatacontent\\b[^\\r\\n]*(?:\\.add\\s*\\(|streamcontent|bytearraycontent)",
+      "severity": "high",
+      "description": "GetRequestStream / a populated MultipartFormDataContent write a request body from a stream.",
+      "explanation": "`HttpWebRequest.GetRequestStream()` has no read-only use at all — obtaining the stream \\ is how bytes get written to a request. `MultipartFormDataContent` is matched only once \\ something is added to it (`.Add(`, a `StreamContent`, a `ByteArrayContent`), since an \\ empty one carries nothing. Together they are the standard way to upload from a \\ PowerShell one-liner without touching a cmdlet parameter.\n\n\\ Safer alternatives: \\ - Use `GetResponseStream`/`DownloadString` when the intent is to read \\ - Route the send through an approved internal service"
+    },
+    {
+      "name": "bits-upload",
+      "pattern": "(?i)\\bstart-bitstransfer\\b[^|&;\\r\\n]*\\bupload(?:reply)?\\b|\\bbitsadmin(?:\\.exe)?\\b[^|&;\\r\\n]*\\s/upload(?:reply)?\\b",
+      "severity": "high",
+      "description": "A BITS transfer in the Upload direction sends a local file to a server.",
+      "explanation": "`Start-BitsTransfer -TransferType Upload` and `bitsadmin /transfer job /upload` push a \\ local file to a URL using the background transfer service, which survives logoff and \\ retries on its own. The default direction is Download and is not matched here.\n\n\\ Safer alternatives: \\ - Omit `-TransferType Upload` when the intent is to fetch something \\ - Use an internal destination for transfers that must happen"
+    },
+    {
+      "name": "curl-upload-file",
+      "pattern": "(?i)\\bcurl(?:\\.exe)?\\b[^|&;\\r\\n]*\\s(?:(?-i:-[a-z]*T)(?:\\S+|\\s+\\S+)|(?-i:--upload-file)(?:=|\\s+)\\S)",
+      "severity": "high",
+      "description": "curl -T / --upload-file uploads a local file.",
+      "explanation": "`curl -T C:\\data.zip https://host/path` PUTs the file to the server; `-T -` sends \\ standard input instead, which is how a pipeline's output leaves the machine. It also \\ works over `ftp://`, `sftp://`, and `smb://`.\n\n\\ Safer alternatives: \\ - `curl -o file URL` (the download direction) is not matched \\ - Upload to an internal endpoint if the transfer is required"
+    },
+    {
+      "name": "curl-form-file-attach",
+      "pattern": "(?i)\\bcurl(?:\\.exe)?\\b[^|&;\\r\\n]*\\s(?:(?-i:-[A-Za-z]*F)\\s*|(?-i:--form)(?:=|\\s+))[\\x22']?[^\\s\\x22'|&;]*=[@<]",
+      "severity": "high",
+      "description": "curl -F field=@file attaches a local file to a multipart upload.",
+      "explanation": "In a curl form field, `@` reads the file as an attachment and `<` reads it as the \\ field's value — `-F \"note=<C:\\secrets.txt\"` is as much an upload as \\ `-F \"file=@C:\\secrets.txt\"`, and is much easier to overlook.\n\n\\ Safer alternatives: \\ - Pass literal values (`-F name=value`) when no file needs to be sent \\ - Send to an internal endpoint"
+    },
+    {
+      "name": "curl-data-from-file",
+      "pattern": "(?i)\\bcurl(?:\\.exe)?\\b[^|&;\\r\\n]*\\s(?:(?-i:-[A-Za-z]*d)\\s*|(?-i:--data(?:-binary|-ascii|-urlencode)?)(?:=|\\s+))[\\x22']?@",
+      "severity": "high",
+      "description": "curl -d @file sends the contents of a local file as the request body.",
+      "explanation": "The `@` prefix on curl's data flags means \"read this from a file\": \\ `--data-binary @C:\\dump.sql` sends the whole file. `-d @-` reads standard input. \\ (`--data-raw` deliberately does not interpret `@` and is not matched.)\n\n\\ Safer alternatives: \\ - Pass an inline literal body when the request only needs parameters \\ - Send to an internal endpoint"
+    },
+    {
+      "name": "wget-post-file",
+      "pattern": "(?i)\\bwget(?:\\.exe)?\\b[^|&;\\r\\n]*\\s--(?:post-file|body-file)(?:=|\\s+)\\S",
+      "severity": "high",
+      "description": "wget --post-file / --body-file uploads a local file.",
+      "explanation": "`wget --post-file=C:\\data.zip https://host` sends the named file as the request body, \\ as does `--body-file` with `--method=PUT`.\n\n\\ Safer alternatives: \\ - `wget -O out URL` (the download direction) is not matched \\ - Send to an internal endpoint"
+    },
+    {
+      "name": "certreq-post-upload",
+      "pattern": "(?i)\\bcertreq(?:\\.exe)?\\b[^|&;\\r\\n]*\\s-post\\b",
+      "severity": "high",
+      "description": "certreq -Post uploads a local file's contents to an arbitrary URL.",
+      "explanation": "`certreq -Post -config https://host/ C:\\data.txt out.txt` posts the file to any URL. It \\ is a signed, built-in Windows binary, so it draws no attention on its own — and it has \\ nothing to do with certificates when used this way.\n\n\\ Safer alternatives: \\ - Use certreq only against your own certificate authority \\ - Move files through an approved, logged channel"
+    },
+    {
+      "name": "file-drop-service",
+      "pattern": "(?i)https?://(?:[a-z0-9-]+\\.)?(?:transfer\\.sh|0x0\\.st|envs\\.sh|x0\\.at|file\\.io|bashupload\\.com|oshi\\.at|temp\\.sh|tmpfiles\\.org|uguu\\.se|catbox\\.moe|anonfiles\\.com|gofile\\.io|filebin\\.net|ix\\.io|sprunge\\.us|paste\\.rs|dpaste\\.(?:com|org)|pastebin\\.com|hastebin\\.com|rentry\\.co|controlc\\.com|privatebin\\.net|ghostbin\\.co|justpaste\\.it|sendspace\\.com|wetransfer\\.com|ppng\\.io|termbin\\.com)",
+      "severity": "medium",
+      "description": "File-drop and paste services publish whatever is sent to a link anyone can fetch.",
+      "explanation": "These hosts exist to accept an anonymous upload and hand back a URL that is readable by \\ anyone who obtains it, usually with no expiry and no audit trail. Touching one is \\ warned rather than blocked, because fetching *from* a paste link is an inbound read and \\ this preset is about what leaves. Actually sending to one — `curl -T`, `-F file=@…`, \\ `--data-binary @…` — is caught as an upload by the blocking rules above.\n\n\\ Safer alternatives: \\ - Use an internal file share or artifact store \\ - Attach the file to the ticket or PR that needs it"
+    },
+    {
+      "name": "gh-gist-create",
+      "pattern": "(?i)\\bgh(?:\\.exe)?\\s+gist\\s+create\\b",
+      "severity": "high",
+      "description": "gh gist create publishes file contents to GitHub.",
+      "explanation": "`gh gist create secrets.env` uploads the file to the authenticated GitHub account. \\ `--public` makes it world-readable and indexable, but even a secret gist is a URL that \\ anyone holding it can read, hosted outside company control.\n\n\\ Safer alternatives: \\ - Share the file through the repository or an internal store \\ - `gh gist list` / `gh gist view` (reading) are not matched"
+    },
+    {
+      "name": "dotnet-http-mutating-request",
+      "pattern": "(?i)\\.(?:postasync|putasync|patchasync)\\s*\\(",
+      "severity": "medium",
+      "description": "HttpClient.PostAsync/PutAsync/PatchAsync sends a request body.",
+      "explanation": "`HttpClient.PostAsync($url, $content)` carries a body outward, but the content is as \\ often a JSON query as it is a file — the same ambiguity as an inline `-Body`, so it \\ warns rather than blocks. When the content is built from `MultipartFormDataContent` or \\ a `StreamContent`, the blocking rule above applies instead.\n\n\\ Safer alternatives: \\ - Confirm the destination host before sending a body to it \\ - Use `GetAsync` when the intent is to read"
+    },
+    {
+      "name": "ps-http-mutating-request",
+      "pattern": "(?i)\\b(?:invoke-webrequest|invoke-restmethod|iwr|irm)\\b[^|&;\\r\\n]*\\s-me(?:t(?:h(?:o(?:d)?)?)?)?[\\s:]+[\\x22']?(?:post|put|patch)\\b",
+      "severity": "medium",
+      "description": "A PowerShell POST/PUT/PATCH sends a body to a server that is not internal.",
+      "explanation": "A mutating request carries data outward, but an inline body is a GraphQL query or an \\ Elasticsearch search about as often as it is an exfiltration — and the two look \\ identical. This warns and is recorded rather than blocking, so ordinary API work keeps \\ running.\n\n\\ Safer alternatives: \\ - Confirm the destination host before sending a body to it \\ - Set a `[policy.rules]` entry to \"deny\" to make this a hard block"
+    },
+    {
+      "name": "cli-http-mutating-request",
+      "pattern": "(?i)\\bcurl(?:\\.exe)?\\b[^|&;\\r\\n]*\\s(?:(?-i:-[A-Za-z]*X)\\s*(?:POST|PUT|PATCH)\\b|(?-i:--request)(?:=|\\s+)(?:POST|PUT|PATCH)\\b|(?-i:-[A-Za-z]*d)\\s*[^@\\s]|(?-i:--data(?:-binary|-ascii|-urlencode|-raw)?)(?:=|\\s+)[^@\\s])|(?i)\\bwget(?:\\.exe)?\\b[^|&;\\r\\n]*\\s--post-data(?:=|\\s+)",
+      "severity": "medium",
+      "description": "A curl/wget POST/PUT/PATCH sends a body to a server that is not internal.",
+      "explanation": "Same reasoning as the PowerShell rule: an inline `-d` body is usually an API call, so \\ this warns rather than blocks. Bodies read from a file (`-d @file`) are a separate, \\ blocking rule because those are unambiguous.\n\n\\ Safer alternatives: \\ - Confirm the destination host before sending a body to it \\ - Set a `[policy.rules]` entry to \"deny\" to make this a hard block"
+    },
+    {
+      "name": "curl-config-file",
+      "pattern": "(?i)\\bcurl(?:\\.exe)?\\b[^|&;\\r\\n]*\\s(?:(?-i:-[A-Za-z]*K)(?:\\S+|\\s+\\S+)|(?-i:--config)(?:=|\\s+)\\S)",
+      "severity": "medium",
+      "description": "curl -K reads its arguments from a file, hiding the request from inspection.",
+      "explanation": "`curl -K C:\\opts.txt https://host` takes every flag — including upload flags and the \\ real URL — from a file, so nothing about the request is visible on the command line. \\ That is not automatically malicious, but it means this command cannot be reviewed as \\ written.\n\n\\ Safer alternatives: \\ - Pass the flags explicitly so the request is auditable \\ - Print the config file first if it must be used"
+    },
+    {
+      "name": "gh-content-upload",
+      "pattern": "(?i)\\bgh(?:\\.exe)?\\s+(?:release\\s+upload|secret\\s+set|variable\\s+set|repo\\s+create\\b[^|&;\\r\\n]*--(?:source|push)\\b)",
+      "severity": "medium",
+      "description": "gh release upload / secret set / repo create --push publishes local content to GitHub.",
+      "explanation": "These are ordinary release and CI operations, and also the way a whole working tree or \\ a secret reaches a remote account in one command. Warned rather than blocked because \\ the legitimate uses are common.\n\n\\ Safer alternatives: \\ - Confirm the target repository belongs to the organization \\ - Set a `[policy.rules]` entry to \"deny\" if releases should never come from an agent"
+    }
+  ]
+}

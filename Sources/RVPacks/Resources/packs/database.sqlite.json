@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "database.sqlite",
+  "name": "SQLite",
+  "version": "0.11.0",
+  "description": "Protects against destructive SQLite operations like DROP TABLE, \\ DELETE without WHERE, and accidental data loss",
+  "category": "database",
+  "enabled_by_default": false,
+  "keywords": [
+    "sqlite",
+    "sqlite3",
+    "DROP",
+    "TRUNCATE",
+    "DELETE"
+  ],
+  "safe_patterns": [
+    {
+      "name": "select-query",
+      "pattern": "(?i)^\\s*SELECT\\s+",
+      "description": ""
+    },
+    {
+      "name": "sqlite3-dot-command",
+      "pattern": "sqlite3\\b[^|;&]*['\"]\\s*\\.(?:schema|tables|dump|backup|help)\\b[^'\"]*['\"]?\\s*$",
+      "description": ""
+    },
+    {
+      "name": "dot-command-standalone",
+      "pattern": "^\\s*\\.(?:schema|tables|dump|backup|help)\\b",
+      "description": ""
+    },
+    {
+      "name": "explain",
+      "pattern": "(?i)^\\s*EXPLAIN\\s+",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "stdin-unverified",
+      "pattern": "(?!)",
+      "severity": "high",
+      "description": "sqlite3 receives indirect input that the engine cannot statically verify.",
+      "explanation": "Materialize and review the exact SQL before piping or redirecting it into sqlite3."
+    },
+    {
+      "name": "drop-table",
+      "pattern": "(?i)\\bDROP\\s+TABLE\\b",
+      "severity": "critical",
+      "description": "DROP TABLE permanently deletes the table (even with IF EXISTS). Verify it is intended.",
+      "explanation": "DROP TABLE permanently removes a table and all its data from the SQLite database. \\ Unlike some other databases, SQLite has no recycle bin or undo mechanism. The IF \\ EXISTS clause only prevents errors, it doesn't make the operation less destructive.\n\n\\ Safer alternatives: \\ - .schema tablename: View table structure first \\ - .dump tablename: Export table data as SQL backup \\ - .backup: Create full database backup before dropping \\ - ALTER TABLE ... RENAME: Rename instead of drop if reorganizing"
+    },
+    {
+      "name": "delete-without-where",
+      "pattern": "(?i)DELETE\\s+FROM\\s+[a-zA-Z_][a-zA-Z0-9_]*\\s*(?:;|$)",
+      "severity": "critical",
+      "description": "DELETE without WHERE deletes ALL rows. Add a WHERE clause.",
+      "explanation": "DELETE FROM without a WHERE clause removes every row from the table. This is \\ almost always unintentional - if you truly want to remove all rows, TRUNCATE or \\ DROP TABLE + CREATE is more explicit about the intent. SQLite doesn't support \\ TRUNCATE, making this pattern especially dangerous.\n\n\\ Safer alternatives: \\ - SELECT COUNT(*) FROM table: Check row count first \\ - DELETE FROM table WHERE condition: Add explicit conditions \\ - .backup before DELETE: Create backup first \\ - Use transactions: BEGIN; DELETE ...; verify; COMMIT or ROLLBACK"
+    },
+    {
+      "name": "vacuum-into",
+      "pattern": "(?i)VACUUM\\s+INTO\\s+",
+      "severity": "medium",
+      "description": "VACUUM INTO overwrites the target file if it exists.",
+      "explanation": "VACUUM INTO creates a new compacted copy of the database at the specified path. \\ If a file already exists at that path, it will be overwritten without warning. \\ This can accidentally destroy other databases or important files.\n\n\\ Safer alternatives: \\ - Check if target file exists before running \\ - Use a unique filename with timestamp \\ - .backup filename: Alternative backup method \\ - Move existing file before VACUUM INTO"
+    },
+    {
+      "name": "sqlite3-stdin",
+      "pattern": "sqlite3\\s+[^\\s]+\\s+<\\s+",
+      "severity": "high",
+      "description": "Running SQL from file could contain destructive commands. Review the file first.",
+      "explanation": "Piping SQL from a file into sqlite3 executes all commands without review. The \\ file may contain DROP TABLE, DELETE, or other destructive statements. If the \\ file comes from an untrusted source or was auto-generated, it could cause \\ unintended data loss.\n\n\\ Safer alternatives: \\ - Review the SQL file contents first \\ - .backup before running: Create database backup \\ - .read filename inside sqlite3: Allows Ctrl+C interruption \\ - Run in a transaction: Wrap file contents in BEGIN/COMMIT"
+    }
+  ]
+}

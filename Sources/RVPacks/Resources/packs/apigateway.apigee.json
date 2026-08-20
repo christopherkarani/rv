@@ -1,0 +1,236 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "apigateway.apigee",
+  "name": "Google Apigee",
+  "version": "0.11.0",
+  "description": "Protects against destructive Google Apigee CLI and apigeecli operations.",
+  "category": "apigateway",
+  "enabled_by_default": false,
+  "keywords": [
+    "apigee",
+    "apigeecli"
+  ],
+  "safe_patterns": [
+    {
+      "name": "gcloud-apigee-apis-list",
+      "pattern": "gcloud\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigee\\s+apis\\s+list(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "gcloud-apigee-apis-describe",
+      "pattern": "gcloud\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigee\\s+apis\\s+describe(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "gcloud-apigee-environments-list",
+      "pattern": "gcloud\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigee\\s+environments\\s+list(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "gcloud-apigee-environments-describe",
+      "pattern": "gcloud\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigee\\s+environments\\s+describe(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "gcloud-apigee-developers-list",
+      "pattern": "gcloud\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigee\\s+developers\\s+list(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "gcloud-apigee-developers-describe",
+      "pattern": "gcloud\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigee\\s+developers\\s+describe(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "gcloud-apigee-products-list",
+      "pattern": "gcloud\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigee\\s+products\\s+list(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "gcloud-apigee-products-describe",
+      "pattern": "gcloud\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigee\\s+products\\s+describe(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "gcloud-apigee-organizations-list",
+      "pattern": "gcloud\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigee\\s+organizations\\s+list(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "gcloud-apigee-organizations-describe",
+      "pattern": "gcloud\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigee\\s+organizations\\s+describe(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "gcloud-apigee-deployments-list",
+      "pattern": "gcloud\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigee\\s+deployments\\s+list(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "gcloud-apigee-deployments-describe",
+      "pattern": "gcloud\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigee\\s+deployments\\s+describe(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "apigeecli-apis-list",
+      "pattern": "apigeecli(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apis\\s+list(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "apigeecli-apis-get",
+      "pattern": "apigeecli(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apis\\s+get(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "apigeecli-products-list",
+      "pattern": "apigeecli(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+products\\s+list(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "apigeecli-products-get",
+      "pattern": "apigeecli(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+products\\s+get(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "apigeecli-developers-list",
+      "pattern": "apigeecli(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+developers\\s+list(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "apigeecli-developers-get",
+      "pattern": "apigeecli(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+developers\\s+get(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "apigeecli-envs-list",
+      "pattern": "apigeecli(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+envs\\s+list(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "apigeecli-envs-get",
+      "pattern": "apigeecli(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+envs\\s+get(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "apigeecli-orgs-list",
+      "pattern": "apigeecli(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+orgs\\s+list(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "apigeecli-orgs-get",
+      "pattern": "apigeecli(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+orgs\\s+get(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "gcloud-apigee-help",
+      "pattern": "gcloud\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apigee\\s+(?:--help|-h|help)\\b",
+      "description": ""
+    },
+    {
+      "name": "apigeecli-help",
+      "pattern": "apigeecli(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+(?:--help|-h|help|version)\\b",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "gcloud-apigee-apis-delete",
+      "pattern": "gcloud\\b.*?\\bapigee\\s+apis\\s+delete\\b",
+      "severity": "high",
+      "description": "gcloud apigee apis delete removes an API proxy from Apigee.",
+      "explanation": "Deleting an API proxy removes all its revisions and deployment history. Any \\ applications relying on this API will immediately receive errors. API keys \\ and quotas associated with products referencing this API may be affected.\n\n\\ Safer alternatives: \\ - gcloud apigee apis list: Review APIs before deletion \\ - gcloud apigee deployments undeploy: Undeploy first to verify impact \\ - Export the API proxy bundle before deletion for backup"
+    },
+    {
+      "name": "gcloud-apigee-environments-delete",
+      "pattern": "gcloud\\b.*?\\bapigee\\s+environments\\s+delete\\b",
+      "severity": "critical",
+      "description": "gcloud apigee environments delete removes an Apigee environment.",
+      "explanation": "Deleting an environment removes all deployed API proxies, target servers, \\ key-value maps, and caches within it. This is irreversible and will break \\ all API traffic routed through this environment.\n\n\\ Safer alternatives: \\ - gcloud apigee environments describe: Review environment contents \\ - Undeploy all APIs from the environment first \\ - Export environment configuration and resources before deletion"
+    },
+    {
+      "name": "gcloud-apigee-developers-delete",
+      "pattern": "gcloud\\b.*?\\bapigee\\s+developers\\s+delete\\b",
+      "severity": "high",
+      "description": "gcloud apigee developers delete removes a developer from Apigee.",
+      "explanation": "Deleting a developer also deletes all their apps and associated API keys. \\ Any applications using those keys will immediately lose API access. Developer \\ analytics and usage history are also removed.\n\n\\ Safer alternatives: \\ - gcloud apigee developers describe: Review developer details \\ - Revoke individual app credentials instead of deleting the developer \\ - Set developer status to inactive rather than deleting"
+    },
+    {
+      "name": "gcloud-apigee-products-delete",
+      "pattern": "gcloud\\b.*?\\bapigee\\s+products\\s+delete\\b",
+      "severity": "high",
+      "description": "gcloud apigee products delete removes an API product from Apigee.",
+      "explanation": "Deleting an API product immediately revokes access for all apps subscribed \\ to it. Quota settings, rate limits, and access controls defined in the product \\ are lost. Apps will need to be re-subscribed to a different product.\n\n\\ Safer alternatives: \\ - gcloud apigee products describe: Review product configuration \\ - Remove individual apps from the product instead \\ - Set product access to private before deletion to verify impact"
+    },
+    {
+      "name": "gcloud-apigee-organizations-delete",
+      "pattern": "gcloud\\b.*?\\bapigee\\s+organizations\\s+delete\\b",
+      "severity": "critical",
+      "description": "gcloud apigee organizations delete removes an entire Apigee organization.",
+      "explanation": "Deleting an organization permanently removes ALL environments, API proxies, \\ products, developers, apps, and analytics data. This is irreversible and will \\ completely destroy your API management infrastructure.\n\n\\ Safer alternatives: \\ - Export all configurations and proxy bundles before deletion \\ - Delete individual resources to verify nothing is still in use \\ - Consider disabling billing instead if just reducing costs"
+    },
+    {
+      "name": "gcloud-apigee-deployments-undeploy",
+      "pattern": "gcloud\\b.*?\\bapigee\\s+deployments\\s+undeploy\\b",
+      "severity": "medium",
+      "description": "gcloud apigee deployments undeploy removes an API deployment.",
+      "explanation": "Undeploying an API proxy stops all traffic processing for that API in the \\ specified environment. Clients will receive errors until the API is redeployed. \\ This is reversible by redeploying the proxy.\n\n\\ Safer alternatives: \\ - gcloud apigee deployments list: Review current deployments \\ - Test in a non-production environment first \\ - Deploy a new revision instead of undeploying"
+    },
+    {
+      "name": "apigeecli-apis-delete",
+      "pattern": "apigeecli(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apis\\s+delete\\b",
+      "severity": "high",
+      "description": "apigeecli apis delete removes an API proxy from Apigee.",
+      "explanation": "Deleting an API proxy removes all its revisions and deployment history. Any \\ applications relying on this API will immediately receive errors.\n\n\\ Safer alternatives: \\ - apigeecli apis list: Review APIs before deletion \\ - apigeecli apis export: Export the proxy bundle for backup \\ - Undeploy from all environments first to verify impact"
+    },
+    {
+      "name": "apigeecli-products-delete",
+      "pattern": "apigeecli(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+products\\s+delete\\b",
+      "severity": "high",
+      "description": "apigeecli products delete removes an API product from Apigee.",
+      "explanation": "Deleting an API product immediately revokes access for all subscribed apps. \\ Quota settings and rate limits are permanently lost.\n\n\\ Safer alternatives: \\ - apigeecli products list: Review products before deletion \\ - apigeecli products get: Check which apps are using the product \\ - Remove apps from the product first to verify impact"
+    },
+    {
+      "name": "apigeecli-developers-delete",
+      "pattern": "apigeecli(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+developers\\s+delete\\b",
+      "severity": "high",
+      "description": "apigeecli developers delete removes a developer from Apigee.",
+      "explanation": "Deleting a developer also deletes all their apps and API keys. Applications \\ using those keys will immediately lose access.\n\n\\ Safer alternatives: \\ - apigeecli developers list: Review developers before deletion \\ - apigeecli apps list: Check developer's apps first \\ - Set developer status to inactive instead of deleting"
+    },
+    {
+      "name": "apigeecli-envs-delete",
+      "pattern": "apigeecli(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+envs\\s+delete\\b",
+      "severity": "critical",
+      "description": "apigeecli envs delete removes an Apigee environment.",
+      "explanation": "Deleting an environment removes all deployed proxies, target servers, and \\ configurations. This breaks all API traffic through that environment.\n\n\\ Safer alternatives: \\ - apigeecli envs list: Review environments before deletion \\ - Export all environment resources before deletion \\ - Undeploy all APIs first to verify nothing is in use"
+    },
+    {
+      "name": "apigeecli-orgs-delete",
+      "pattern": "apigeecli(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+orgs\\s+delete\\b",
+      "severity": "critical",
+      "description": "apigeecli orgs delete removes an entire Apigee organization.",
+      "explanation": "Deleting an organization permanently removes ALL resources: environments, \\ APIs, products, developers, apps, and analytics. This is completely irreversible.\n\n\\ Safer alternatives: \\ - Export all configurations before deletion \\ - Delete individual resources first to verify impact \\ - Contact support if you need to preserve any data"
+    },
+    {
+      "name": "apigeecli-apps-delete",
+      "pattern": "apigeecli(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+apps\\s+delete\\b",
+      "severity": "high",
+      "description": "apigeecli apps delete removes a developer app from Apigee.",
+      "explanation": "Deleting an app revokes all its API keys and credentials. Any systems using \\ those keys will immediately lose API access.\n\n\\ Safer alternatives: \\ - apigeecli apps list: Review apps before deletion \\ - Revoke individual credentials instead of deleting the app \\ - Set app status to revoked to disable without deleting"
+    },
+    {
+      "name": "apigeecli-keyvaluemaps-delete",
+      "pattern": "apigeecli(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+keyvaluemaps\\s+delete\\b",
+      "severity": "high",
+      "description": "apigeecli keyvaluemaps delete removes a key-value map from Apigee.",
+      "explanation": "Deleting a KVM removes all stored key-value pairs. API proxies reading from \\ this KVM will fail or return errors. Configuration data stored in the KVM is \\ permanently lost.\n\n\\ Safer alternatives: \\ - apigeecli keyvaluemaps list: Review KVMs before deletion \\ - Export KVM entries before deletion \\ - Check which proxies reference this KVM first"
+    },
+    {
+      "name": "apigeecli-targetservers-delete",
+      "pattern": "apigeecli(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+targetservers\\s+delete\\b",
+      "severity": "high",
+      "description": "apigeecli targetservers delete removes a target server from Apigee.",
+      "explanation": "Deleting a target server breaks all API proxies that route traffic to it. \\ Requests will fail until proxies are updated to use a different target.\n\n\\ Safer alternatives: \\ - apigeecli targetservers list: Review targets before deletion \\ - Update API proxies to use a different target first \\ - Set the target server to disabled to test impact"
+    }
+  ]
+}

@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "windows.misc",
+  "name": "Windows Misc (registry/accounts/wsl)",
+  "version": "0.11.0",
+  "description": "Protects against destructive Windows cmd operations: `reg delete`, \\ `net user|localgroup /delete`, `sc delete`, `schtasks /delete`, \\ `wsl --unregister` (destroys a WSL distro), and `robocopy /MIR` (mirror \\ delete).",
+  "category": "windows",
+  "enabled_by_default": false,
+  "keywords": [
+    "reg",
+    "REG",
+    "net",
+    "NET",
+    "sc",
+    "SC",
+    "schtasks",
+    "SCHTASKS",
+    "wsl",
+    "WSL",
+    "robocopy",
+    "ROBOCOPY"
+  ],
+  "safe_patterns": [
+    {
+      "name": "reg-query",
+      "pattern": "(?i)^\\s*reg(?:\\.exe)?\\s+(?:query|export|save)\\b[^|&;\\r\\n]*$",
+      "description": ""
+    },
+    {
+      "name": "sc-query",
+      "pattern": "(?i)^\\s*sc(?:\\.exe)?\\s+(?:query|qc|queryex|enumdepend)\\b[^|&;\\r\\n]*$",
+      "description": ""
+    },
+    {
+      "name": "wsl-list",
+      "pattern": "(?i)^\\s*wsl(?:\\.exe)?\\s+(?:--list|-l|--export|--status)\\b[^|&;\\r\\n]*$",
+      "description": ""
+    },
+    {
+      "name": "schtasks-query",
+      "pattern": "(?i)^\\s*schtasks(?:\\.exe)?\\s+/query\\b[^|&;\\r\\n]*$",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "reg-delete",
+      "pattern": "(?i)\\breg(?:\\.exe)?\\s+delete\\b",
+      "severity": "high",
+      "description": "reg delete removes registry keys/values, which can break apps or Windows.",
+      "explanation": "`reg delete <key>` removes a registry key and all of its values and subkeys; with `/f` \\ it does so without confirmation. The registry holds app and OS configuration, so a \\ wrong key can break software, services, or the boot path, and there is no Recycle Bin \\ for the registry.\n\n\\ Safer alternatives: \\ - reg export <key> backup.reg: back up the key first (undo with `reg import`) \\ - reg query <key>: confirm exactly what the key contains before deleting"
+    },
+    {
+      "name": "net-account-delete",
+      "pattern": "(?i)\\bnet(?:\\.exe)?\\s+(?:user|localgroup)\\s+(?:[^|&\\r\\n]*\\s+)?/delete\\b",
+      "severity": "high",
+      "description": "net user/localgroup /delete removes a user account or local group.",
+      "explanation": "`net user <name> /delete` deletes a local user account (and `net localgroup <name> \\ /delete` a group). The account, its group memberships, and access are removed with no \\ prompt; the user's profile/data can be orphaned.\n\n\\ Safer alternatives: \\ - net user <name>: review the account before deleting \\ - Disable instead of delete: net user <name> /active:no"
+    },
+    {
+      "name": "sc-delete",
+      "pattern": "(?i)\\bsc(?:\\.exe)?\\s+delete\\b",
+      "severity": "high",
+      "description": "sc delete removes a Windows service.",
+      "explanation": "`sc delete <service>` permanently removes a Windows service registration. If it is a \\ service something depends on, that software stops working until the service is \\ reinstalled.\n\n\\ Safer alternatives: \\ - sc query <service>: confirm the service and its state first \\ - sc stop <service> / sc config <service> start= disabled: disable reversibly instead"
+    },
+    {
+      "name": "schtasks-delete",
+      "pattern": "(?i)\\bschtasks(?:\\.exe)?\\s+(?:[^|&\\r\\n]*\\s+)?/delete\\b",
+      "severity": "medium",
+      "description": "schtasks /delete removes scheduled tasks.",
+      "explanation": "`schtasks /delete /tn <task> /f` removes a scheduled task with no prompt; `/tn *` can \\ remove many at once. Deleting a task that maintenance, backups, or apps rely on \\ silently stops that work from running.\n\n\\ Safer alternatives: \\ - schtasks /query /tn <task>: confirm the task first \\ - schtasks /change /tn <task> /disable: disable reversibly instead of deleting"
+    },
+    {
+      "name": "wsl-unregister",
+      "pattern": "(?i)\\bwsl(?:\\.exe)?\\s+(?:[^|&\\r\\n]*\\s+)?--unregister\\b",
+      "severity": "high",
+      "description": "wsl --unregister irreversibly destroys a WSL distribution and its filesystem.",
+      "explanation": "`wsl --unregister <distro>` deregisters a WSL distribution and DELETES its entire \\ filesystem — every file, package, and change inside that Linux environment is gone with \\ no undo. It is a frequent footgun when a reset/restart was intended.\n\n\\ Safer alternatives: \\ - wsl --export <distro> backup.tar: back up the whole distro first \\ - wsl --terminate <distro>: stop it without destroying it"
+    },
+    {
+      "name": "robocopy-mirror",
+      "pattern": "(?i)\\brobocopy(?:\\.exe)?\\b(?=[^|&\\r\\n]*\\s(?:/mir|/purge)\\b)",
+      "severity": "high",
+      "description": "robocopy /MIR deletes destination files that are not present in the source.",
+      "explanation": "`robocopy <src> <dst> /MIR` (mirror) and `/PURGE` delete files and directories in the \\ DESTINATION that do not exist in the source — the Windows equivalent of `rsync \\ --delete`. A wrong destination, or a source that is missing/empty, wipes the \\ destination's contents.\n\n\\ Safer alternatives: \\ - robocopy <src> <dst> /E: copy subdirectories WITHOUT deleting extras \\ - Add /L to /MIR first: list what WOULD change without touching anything"
+    }
+  ]
+}

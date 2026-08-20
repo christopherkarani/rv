@@ -1,0 +1,118 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "system.services",
+  "name": "Services",
+  "version": "0.11.0",
+  "description": "Protects against dangerous service operations like stopping critical \\ services and modifying init configuration",
+  "category": "system",
+  "enabled_by_default": false,
+  "keywords": [
+    "systemctl",
+    "service",
+    "init",
+    "upstart",
+    "shutdown",
+    "reboot"
+  ],
+  "safe_patterns": [
+    {
+      "name": "systemctl-status",
+      "pattern": "systemctl\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+status(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "service-status",
+      "pattern": "service\\s+\\S+\\s+status(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "systemctl-list",
+      "pattern": "systemctl\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+list-(?:units|unit-files|sockets|timers)(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "systemctl-show",
+      "pattern": "systemctl\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+show(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "systemctl-is",
+      "pattern": "systemctl\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+is-(?:active|enabled|failed)(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "systemctl-reload",
+      "pattern": "systemctl\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+daemon-reload(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "systemctl-cat",
+      "pattern": "systemctl\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+cat(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "journalctl",
+      "pattern": "\\bjournalctl\\b",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "systemctl-stop-critical",
+      "pattern": "systemctl\\b.*?\\s+(?:stop|disable|mask)\\s+(?:ssh|sshd|network|networking|firewalld|ufw|docker|containerd)\\b",
+      "severity": "high",
+      "description": "Stopping/disabling critical services can cause system access loss or outage.",
+      "explanation": "Stopping, disabling, or masking a critical system service can lock you out \\ of the machine or cause cascading failures. For example, stopping sshd severs \\ remote access, stopping networking drops all connections, and stopping docker \\ kills every running container.\n\n\\ Check current state first: \\ systemctl status <service>\n\n\\ If you need to restart rather than stop: \\ systemctl restart <service>"
+    },
+    {
+      "name": "systemctl-stop",
+      "pattern": "systemctl\\b.*?\\s+(?:stop|disable|mask)\\b",
+      "severity": "high",
+      "description": "systemctl stop/disable/mask affects service availability. Verify service name.",
+      "explanation": "Stopping a service immediately terminates it; disabling prevents it from \\ starting at boot; masking makes it impossible to start even manually. Each \\ has different severity and reversibility.\n\n\\ Check what depends on the service: \\ systemctl list-dependencies --reverse <service>\n\n\\ To temporarily stop without disabling: \\ systemctl stop <service> (restarts on reboot)"
+    },
+    {
+      "name": "service-stop-critical",
+      "pattern": "service\\s+(?:ssh|sshd|network|networking|docker)\\s+stop",
+      "severity": "high",
+      "description": "Stopping critical services can cause system access loss.",
+      "explanation": "The legacy 'service' command stops a critical service immediately. Stopping \\ sshd terminates remote access, stopping networking drops all connections. \\ If you are connected remotely, you may be unable to reconnect.\n\n\\ Check status first: \\ service <name> status\n\n\\ Prefer systemctl on systemd systems: \\ systemctl status <name>"
+    },
+    {
+      "name": "systemctl-isolate",
+      "pattern": "systemctl\\b.*?\\s+isolate\\b",
+      "severity": "high",
+      "description": "systemctl isolate changes the system state significantly.",
+      "explanation": "Isolating a target stops all services not required by that target. For \\ example, isolating rescue.target drops to single-user mode, stopping \\ networking, display managers, and most daemons. This is equivalent to \\ changing the runlevel and can be very disruptive.\n\n\\ Check current target: \\ systemctl get-default\n\n\\ List active targets: \\ systemctl list-units --type=target"
+    },
+    {
+      "name": "systemctl-power",
+      "pattern": "systemctl\\b.*?\\s+(?:poweroff|reboot|halt|suspend|hibernate)\\b",
+      "severity": "critical",
+      "description": "systemctl poweroff/reboot/halt will shut down or restart the system.",
+      "explanation": "This immediately initiates a system power state change. Poweroff and halt \\ shut down the machine, reboot restarts it, and suspend/hibernate save state \\ to RAM or disk. Any unsaved work, running processes, or active connections \\ will be interrupted.\n\n\\ Check who is logged in: \\ who\n\n\\ Schedule a graceful shutdown instead: \\ shutdown +5 \"Rebooting for maintenance\""
+    },
+    {
+      "name": "shutdown",
+      "pattern": "\\bshutdown\\b",
+      "severity": "critical",
+      "description": "shutdown will power off or restart the system.",
+      "explanation": "The shutdown command powers off or restarts the machine. All running \\ processes receive SIGTERM then SIGKILL, all filesystems are unmounted, \\ and the system goes down. Remote users lose access immediately.\n\n\\ To cancel a pending shutdown: \\ shutdown -c\n\n\\ To schedule with warning: \\ shutdown +10 \"System going down for maintenance\""
+    },
+    {
+      "name": "reboot",
+      "pattern": "\\breboot\\b",
+      "severity": "critical",
+      "description": "reboot will restart the system.",
+      "explanation": "Reboot restarts the machine immediately. All processes are terminated, \\ connections are dropped, and the system goes through a full restart cycle. \\ Any unsaved work is lost and services will be briefly unavailable.\n\n\\ Check uptime and load before deciding: \\ uptime\n\n\\ For a delayed reboot with notice: \\ shutdown -r +5 \"Rebooting in 5 minutes\""
+    },
+    {
+      "name": "init-level",
+      "pattern": "\\binit\\s+[06]\\b",
+      "severity": "critical",
+      "description": "init 0 shuts down, init 6 reboots the system.",
+      "explanation": "Changing the init level to 0 halts the system and to 6 reboots it. This \\ is the legacy SysV method for power management and takes effect immediately. \\ All processes are killed and the machine goes down.\n\n\\ On systemd systems, prefer: \\ systemctl poweroff (instead of init 0) \\ systemctl reboot (instead of init 6)\n\n\\ Check current runlevel: \\ runlevel"
+    }
+  ]
+}

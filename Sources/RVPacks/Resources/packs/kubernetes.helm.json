@@ -1,0 +1,108 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "kubernetes.helm",
+  "name": "Helm",
+  "version": "0.11.0",
+  "description": "Protects against destructive Helm operations like uninstall \\ and rollback without dry-run",
+  "category": "kubernetes",
+  "enabled_by_default": false,
+  "keywords": [
+    "helm",
+    "uninstall",
+    "delete",
+    "rollback"
+  ],
+  "safe_patterns": [
+    {
+      "name": "helm-list",
+      "pattern": "helm\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+list(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "helm-status",
+      "pattern": "helm\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+status(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "helm-history",
+      "pattern": "helm\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+history(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "helm-show",
+      "pattern": "helm\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+show(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "helm-inspect",
+      "pattern": "helm\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+inspect(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "helm-get",
+      "pattern": "helm\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+get(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "helm-search",
+      "pattern": "helm\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+search(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "helm-repo",
+      "pattern": "helm\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+repo(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "helm-dry-run",
+      "pattern": "helm\\b.*--dry-run(?:=(?:true|client|server))?(?:\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "helm-template",
+      "pattern": "helm\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+template(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "helm-lint",
+      "pattern": "helm\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+lint(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "helm-diff",
+      "pattern": "helm\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+diff(?=\\s|$)",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "uninstall",
+      "pattern": "helm\\b.*?\\b(?:uninstall|delete)\\b(?!.*--dry-run(?:=(?:true|client|server))?(?:\\s|$))",
+      "severity": "critical",
+      "description": "helm uninstall removes the release and all its resources. Use --dry-run first.",
+      "explanation": "helm uninstall deletes the release and ALL Kubernetes resources created by it:\n\n\\ - Deployments, services, and pods are terminated \\ - ConfigMaps and secrets are deleted \\ - Persistent volume claims may be deleted (depends on chart) \\ - Release history is purged (no rollback possible)\n\n\\ Safer alternatives: \\ - helm uninstall <release> --dry-run: Preview what will be deleted \\ - helm status <release>: Review current release state \\ - helm get all <release>: See all resources managed by release \\ - helm get manifest <release>: Get the actual Kubernetes manifests"
+    },
+    {
+      "name": "rollback",
+      "pattern": "helm\\b.*?\\brollback\\b(?!.*--dry-run(?:=(?:true|client|server))?(?:\\s|$))",
+      "severity": "high",
+      "description": "helm rollback reverts to a previous release. Use --dry-run to preview changes.",
+      "explanation": "helm rollback reverts the release to a previous revision. This can cause unexpected \\ behavior if the previous version differs significantly:\n\n\\ - Pod configurations are reverted (may break dependencies) \\ - ConfigMaps and secrets are rolled back \\ - Database migrations are NOT automatically undone \\ - Downtime may occur during the transition\n\n\\ Safer alternatives: \\ - helm rollback <release> <revision> --dry-run: Preview changes \\ - helm history <release>: Review available revisions \\ - helm diff rollback <release> <revision>: Compare changes (requires diff plugin)"
+    },
+    {
+      "name": "upgrade-force",
+      "pattern": "helm\\b.*?\\bupgrade\\s+.*--force",
+      "severity": "high",
+      "description": "helm upgrade --force deletes and recreates resources, causing downtime.",
+      "explanation": "The --force flag causes Helm to delete and recreate resources instead of updating \\ them in place. This can cause service disruption:\n\n\\ - Pods are terminated and recreated (downtime between) \\ - Persistent volume claims may be deleted and recreated \\ - In-flight requests are dropped during recreation \\ - Service IP addresses may change\n\n\\ Safer alternatives: \\ - Remove --force to use rolling updates \\ - helm upgrade --dry-run --debug: Preview changes \\ - helm diff upgrade: Compare before upgrading (requires diff plugin)"
+    },
+    {
+      "name": "upgrade-reset-values",
+      "pattern": "helm\\b.*?\\bupgrade\\s+.*--reset-values",
+      "severity": "high",
+      "description": "helm upgrade --reset-values discards all previously set values.",
+      "explanation": "The --reset-values flag discards all values from previous releases, using only \\ chart defaults and explicitly provided values. This can unexpectedly change:\n\n\\ - Resource limits and replica counts \\ - Database connection strings and credentials \\ - Feature flags and environment variables \\ - Any customization from previous 'helm upgrade' commands\n\n\\ Safer alternatives: \\ - helm get values <release>: Review current values first \\ - helm upgrade --reuse-values: Keep existing values (default) \\ - helm upgrade -f values.yaml: Explicitly set all needed values"
+    }
+  ]
+}

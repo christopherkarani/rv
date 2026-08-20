@@ -1,0 +1,187 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "platform.kamal",
+  "name": "Kamal",
+  "version": "0.11.0",
+  "description": "Protects against destructive Kamal 2.x operations that tear down the stack, \\ delete accessory data directories, drop proxy routing, take the app offline, \\ or prune the images that rollback depends on.",
+  "category": "platform",
+  "enabled_by_default": false,
+  "keywords": [
+    "kamal"
+  ],
+  "safe_patterns": [
+    {
+      "name": "kamal-audit",
+      "pattern": "(?<![\\w-])kamal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+audit(?:\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "kamal-details",
+      "pattern": "(?<![\\w-])kamal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+details(?:\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "kamal-config",
+      "pattern": "(?<![\\w-])kamal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+config(?:\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "kamal-secrets",
+      "pattern": "(?<![\\w-])kamal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+secrets(?:\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "kamal-deploy",
+      "pattern": "(?<![\\w-])kamal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+deploy(?:\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "kamal-redeploy",
+      "pattern": "(?<![\\w-])kamal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+redeploy(?:\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "kamal-setup",
+      "pattern": "(?<![\\w-])kamal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+setup(?:\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "kamal-build",
+      "pattern": "(?<![\\w-])kamal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+build(?:\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "kamal-rollback",
+      "pattern": "(?<![\\w-])kamal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+rollback(?:\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "kamal-upgrade",
+      "pattern": "(?<![\\w-])kamal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+upgrade(?:\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "kamal-registry",
+      "pattern": "(?<![\\w-])kamal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+registry\\s+(?:login|logout)(?:\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "kamal-lock",
+      "pattern": "(?<![\\w-])kamal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+lock(?:\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "kamal-server-bootstrap",
+      "pattern": "(?<![\\w-])kamal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+server\\s+bootstrap(?:\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "kamal-init",
+      "pattern": "(?<![\\w-])kamal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+init(?:\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "kamal-docs",
+      "pattern": "(?<![\\w-])kamal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+docs(?:\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "kamal-help",
+      "pattern": "(?<![\\w-])kamal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+help(?:\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "kamal-version",
+      "pattern": "(?<![\\w-])kamal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+version(?:\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "kamal-app-safe",
+      "pattern": "(?<![\\w-])kamal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+app(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+(?:boot|start|restart|details|containers|images|logs|version|stale_containers|maintenance|live)(?:\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "kamal-accessory-safe",
+      "pattern": "(?<![\\w-])kamal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+accessory(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+(?:boot|start|restart|details|logs|upgrade)(?:\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "kamal-proxy-safe",
+      "pattern": "(?<![\\w-])kamal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+proxy(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+(?:boot|boot_config|start|restart|details|logs)(?:\\s|$)",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "kamal-remove",
+      "pattern": "(?<![\\w-])kamal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+remove(?:\\s|$)",
+      "severity": "critical",
+      "description": "kamal remove tears down the entire deployment, including stateful accessories.",
+      "explanation": "`kamal remove` removes the app container, kamal-proxy, and all accessory containers \\ from the servers and logs out of the registry. Because it removes accessories, it can \\ destroy stateful services (Postgres/Redis/search) along with the rest of the stack. \\ It accepts `-y`/`--yes` to skip the confirmation prompt, so a non-interactive agent \\ run has no safety net. A wrong destination (e.g. a missing `-d staging` while the \\ shell points at production) tears down prod.\n\n\\ Safer alternatives: \\ - kamal details: review what is actually deployed first \\ - kamal app remove / kamal proxy remove: scope the teardown if that is the real intent \\ - Always pass the explicit destination (e.g. -d staging) and confirm it"
+    },
+    {
+      "name": "kamal-accessory-remove",
+      "pattern": "(?<![\\w-])kamal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+accessory(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+remove(?:\\s|$)",
+      "severity": "critical",
+      "description": "kamal accessory remove deletes the accessory container, image, AND its host data directory.",
+      "explanation": "`kamal accessory remove [NAME]` removes the accessory container and image and ALSO \\ deletes its data directory from the host. For a database/redis/search accessory this \\ permanently destroys the data. `kamal accessory remove all` does this across every \\ accessory at once (highest blast radius). The common mistake is meaning the YAML block \\ in deploy.yml, not the live Postgres/Redis data on disk.\n\n\\ Safer alternatives: \\ - Edit the accessory block out of deploy.yml instead of deleting live data \\ - kamal accessory stop: take it offline reversibly (data preserved) \\ - Back up the data directory / take a database dump before any removal"
+    },
+    {
+      "name": "kamal-app-remove",
+      "pattern": "(?<![\\w-])kamal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+app(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+remove(?:\\s|$)",
+      "severity": "high",
+      "description": "kamal app remove takes the app offline by removing its containers and images.",
+      "explanation": "`kamal app remove` removes the app containers and images from the servers. The app goes \\ offline and the images must be rebuilt or re-pulled before it can serve again. This is \\ a frequent footgun when asked to \"clean up old containers\".\n\n\\ Safer alternatives: \\ - kamal app stale_containers: list leftover containers without removing the live app \\ - kamal prune: remove genuinely old images/containers (still erodes rollback) \\ - kamal app maintenance: serve a 503 reversibly instead of removing"
+    },
+    {
+      "name": "kamal-app-stop",
+      "pattern": "(?<![\\w-])kamal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+app(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+stop(?:\\s|$)",
+      "severity": "high",
+      "description": "kamal app stop stops the app container, causing an outage until restarted.",
+      "explanation": "`kamal app stop` stops the app container on the servers, causing an outage until \\ `kamal app start`. There is no built-in confirmation prompt.\n\n\\ Safer alternatives: \\ - kamal app maintenance: serve a 503 maintenance page (reversible with kamal app live) \\ - kamal app details: confirm the target before stopping anything"
+    },
+    {
+      "name": "kamal-proxy-remove",
+      "pattern": "(?<![\\w-])kamal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+proxy(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+remove(?:\\s|$)",
+      "severity": "high",
+      "description": "kamal proxy remove drops routing for every app behind that proxy on the host.",
+      "explanation": "`kamal proxy remove` removes the kamal-proxy container and image. Every app behind that \\ proxy on the host loses routing until the proxy is re-booted. There is no confirmation \\ prompt for `remove`.\n\n\\ Safer alternatives: \\ - kamal proxy details / kamal proxy logs: diagnose the proxy without removing it \\ - kamal proxy reboot --rolling: if a cycle is required, stagger it to limit the outage"
+    },
+    {
+      "name": "kamal-proxy-reboot",
+      "pattern": "(?<![\\w-])kamal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+proxy(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+reboot(?:\\s|$)",
+      "severity": "high",
+      "description": "kamal proxy reboot stops, removes, and recreates the proxy, causing a short outage.",
+      "explanation": "`kamal proxy reboot` stops, removes, and starts a new proxy container. It is documented \\ to cause a small outage on each server. While it prompts interactively, a non-interactive \\ agent run with `-y` skips that prompt.\n\n\\ Safer alternatives: \\ - kamal proxy reboot --rolling: stagger the restart across servers to reduce the outage \\ - kamal proxy restart: a lighter restart of the existing proxy where applicable"
+    },
+    {
+      "name": "kamal-proxy-stop",
+      "pattern": "(?<![\\w-])kamal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+proxy(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+stop(?:\\s|$)",
+      "severity": "high",
+      "description": "kamal proxy stop drops routing for every app behind that proxy until it is started.",
+      "explanation": "`kamal proxy stop` stops the kamal-proxy container. Every app behind that proxy on the \\ host loses routing until `kamal proxy start`/`boot`.\n\n\\ Safer alternatives: \\ - kamal proxy details: confirm what the proxy is serving before stopping it \\ - kamal proxy restart: cycle the proxy without leaving it down"
+    },
+    {
+      "name": "kamal-accessory-reboot",
+      "pattern": "(?<![\\w-])kamal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+accessory(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+reboot(?:\\s|$)",
+      "severity": "high",
+      "description": "kamal accessory reboot stops, removes, and recreates the accessory container (downtime).",
+      "explanation": "`kamal accessory reboot [NAME]` stops, removes, and starts a new accessory container, \\ causing downtime for that accessory (e.g. the database). Data survives only if a volume \\ is mapped; an unmapped data directory is at risk. `NAME=all` reboots every accessory.\n\n\\ Safer alternatives: \\ - kamal accessory restart: restart the existing container without remove/recreate \\ - kamal accessory details: confirm the target accessory before cycling it"
+    },
+    {
+      "name": "kamal-accessory-stop",
+      "pattern": "(?<![\\w-])kamal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+accessory(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+stop(?:\\s|$)",
+      "severity": "high",
+      "description": "kamal accessory stop stops the accessory (e.g. the database), erroring the app.",
+      "explanation": "`kamal accessory stop [NAME]` stops the accessory container. Stopping the database (or \\ cache/search) errors the app until the accessory is restarted, knocking a dependency \\ offline mid-traffic.\n\n\\ Safer alternatives: \\ - kamal accessory restart: cycle it without leaving it stopped \\ - kamal accessory details / kamal accessory logs: diagnose without stopping"
+    },
+    {
+      "name": "kamal-prune",
+      "pattern": "(?<![\\w-])kamal\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+prune(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+(?:all|containers|images)(?:\\s|$)",
+      "severity": "medium",
+      "description": "kamal prune removes older images/containers that kamal rollback relies on.",
+      "explanation": "`kamal prune all` prunes unused images and stopped containers, `kamal prune containers` \\ prunes stopped containers except the last n (default 5), and `kamal prune images` prunes \\ unused images. Kamal's `rollback` relies on the older deployed images/containers, so \\ over-pruning can strand a deployment with no rollback target.\n\n\\ Safer alternatives: \\ - kamal app containers / kamal app images: see what would be removed first \\ - Confirm a known-good rollback target exists before pruning"
+    }
+  ]
+}

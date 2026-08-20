@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "loadbalancer.traefik",
+  "name": "Traefik",
+  "version": "0.11.0",
+  "description": "Protects against destructive Traefik load balancer operations like stopping \\ containers, deleting config, or API deletions.",
+  "category": "loadbalancer",
+  "enabled_by_default": false,
+  "keywords": [
+    "traefik",
+    "ingressroute"
+  ],
+  "safe_patterns": [
+    {
+      "name": "traefik-version",
+      "pattern": "\\btraefik\\s+version(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "traefik-healthcheck",
+      "pattern": "\\btraefik\\s+healthcheck(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "traefik-api-get",
+      "pattern": "(?i)^(?!(?=.*(?:-X\\s*|--request(?:=|\\s+))DELETE\\b)(?=.*\\btraefik\\b.*\\b/api/))curl\\b.*(?:-X\\s*|--request(?:=|\\s+))GET\\b.*\\btraefik\\b.*\\b/api/",
+      "description": ""
+    },
+    {
+      "name": "traefik-api-read",
+      "pattern": "curl\\b(?!.*\\s(?:-X\\s*|--request(?:=|\\s+))(?:DELETE|PUT|POST|PATCH)\\b).*\\btraefik\\b.*\\b/api/(?:overview|entrypoints|routers|services|middlewares|version|rawdata)",
+      "description": ""
+    },
+    {
+      "name": "docker-traefik-inspect",
+      "pattern": "docker\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+(?:inspect|logs)\\s+.*\\btraefik\\b",
+      "description": ""
+    },
+    {
+      "name": "kubectl-traefik-get",
+      "pattern": "kubectl\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+(?:get|describe)\\s+.*\\bingressroute",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "traefik-docker-stop",
+      "pattern": "docker\\b.*?\\s+(?:stop|kill)\\s+.*\\btraefik\\b",
+      "severity": "critical",
+      "description": "Stopping the Traefik container halts all traffic routing.",
+      "explanation": "Stopping or killing the Traefik container immediately halts all HTTP/HTTPS \\ traffic routing. Every service behind this load balancer becomes unreachable \\ until Traefik is restarted.\n\n\\ Check container status first: \\ docker inspect traefik\n\n\\ View logs for issues: \\ docker logs traefik"
+    },
+    {
+      "name": "traefik-docker-rm",
+      "pattern": "docker\\b.*?\\s+rm\\s+.*\\btraefik\\b",
+      "severity": "critical",
+      "description": "Removing the Traefik container destroys the load balancer.",
+      "explanation": "Removing the Traefik container deletes it entirely, including any runtime \\ state, Let's Encrypt certificates stored in the container, and dynamic \\ configuration. The container must be recreated from scratch.\n\n\\ Stop without removing: \\ docker stop traefik\n\n\\ Back up certificates first if stored in container volume."
+    },
+    {
+      "name": "traefik-compose-down",
+      "pattern": "docker[\\s-]compose\\s+.*\\bdown\\b.*\\btraefik\\b",
+      "severity": "critical",
+      "description": "docker-compose down on Traefik stops and removes the load balancer.",
+      "explanation": "Running docker-compose down stops and removes Traefik containers, networks, \\ and optionally volumes. All traffic routing stops and any non-persisted state \\ is lost.\n\n\\ To stop without removing: \\ docker-compose stop traefik\n\n\\ To restart cleanly: \\ docker-compose restart traefik"
+    },
+    {
+      "name": "traefik-kubectl-delete-pod",
+      "pattern": "kubectl\\b.*?\\s+delete\\s+(?:pod|deployment|daemonset)\\s+.*\\btraefik\\b",
+      "severity": "critical",
+      "description": "Deleting Traefik pods/deployments disrupts traffic routing.",
+      "explanation": "Deleting Traefik pods or deployments removes the load balancer from the \\ cluster. If managed by a Deployment, pods will be recreated but with \\ downtime. Deleting the Deployment itself stops all traffic routing until \\ it is redeployed.\n\n\\ Check pod status: \\ kubectl get pods -l app=traefik\n\n\\ Restart pods without deleting: \\ kubectl rollout restart deployment traefik"
+    },
+    {
+      "name": "traefik-kubectl-delete-ingressroute",
+      "pattern": "kubectl\\b.*?\\s+delete\\s+ingressroute\\b",
+      "severity": "high",
+      "description": "Deleting IngressRoute CRDs removes Traefik routing rules.",
+      "explanation": "IngressRoute custom resources define how Traefik routes traffic to backend \\ services. Deleting them removes those routing rules, making the associated \\ services unreachable through the load balancer.\n\n\\ List current routes first: \\ kubectl get ingressroute\n\n\\ Describe a route before deleting: \\ kubectl describe ingressroute <name>"
+    },
+    {
+      "name": "traefik-config-delete",
+      "pattern": "\\brm\\b.*\\btraefik\\b.*\\.(?:ya?ml|toml)\\b",
+      "severity": "critical",
+      "description": "Removing Traefik config files disrupts load balancer configuration.",
+      "explanation": "Deleting Traefik configuration files removes entrypoint definitions, \\ middleware chains, TLS settings, and provider configurations. Traefik \\ will fail to start or lose routing rules on the next reload.\n\n\\ Back up config first: \\ cp traefik.yml traefik.yml.backup\n\n\\ Validate config before changes: \\ traefik healthcheck"
+    },
+    {
+      "name": "traefik-api-delete",
+      "pattern": "(?i)\\bcurl\\b(?=.*(?:-X\\s*|--request(?:=|\\s+))DELETE\\b)(?=.*\\btraefik\\b.*\\b/api/).*",
+      "severity": "high",
+      "description": "DELETE operations against Traefik API can remove routing configuration.",
+      "explanation": "Sending DELETE requests to the Traefik API removes routers, services, or \\ middleware from the running configuration. Depending on the provider, these \\ changes may be permanent or reverted on restart.\n\n\\ Use GET to inspect before deleting: \\ curl -X GET http://traefik:8080/api/overview"
+    },
+    {
+      "name": "traefik-systemctl-stop",
+      "pattern": "systemctl\\b.*?\\s+stop\\s+traefik(?:\\.service)?\\b",
+      "severity": "high",
+      "description": "systemctl stop traefik stops the Traefik service.",
+      "explanation": "Stopping the Traefik systemd service shuts down the load balancer process. \\ All HTTP/HTTPS traffic routing ceases until the service is restarted.\n\n\\ Check status first: \\ systemctl status traefik\n\n\\ To restart instead: \\ systemctl restart traefik"
+    },
+    {
+      "name": "traefik-service-stop",
+      "pattern": "service\\s+traefik\\s+stop\\b",
+      "severity": "high",
+      "description": "service traefik stop stops the Traefik service.",
+      "explanation": "Stopping Traefik via the legacy service command terminates the load balancer. \\ All traffic routing stops until the service is manually restarted.\n\n\\ Check status first: \\ service traefik status\n\n\\ Prefer systemctl on systemd systems: \\ systemctl status traefik"
+    }
+  ]
+}

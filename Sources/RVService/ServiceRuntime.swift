@@ -18,7 +18,7 @@ public actor ServiceRuntime {
 
     public init(
         snapshots: [PackSnapshot]? = nil,
-        catalog: PackCatalog = PackCatalog(),
+        catalog: PackCatalog? = nil,
         allowOnce: AllowOnceStore? = nil,
         allowOnceDirectory: URL? = nil,
         idleExitSeconds: Int = IdleWatchdog.defaultSeconds,
@@ -28,7 +28,12 @@ public actor ServiceRuntime {
         let gated = GatedEvaluate(EvaluateSession(snapshots: snapshots))
         self.gated = gated
         self.corePacksReady = gated.corePacksReady
-        self.catalog = catalog
+        if let catalog {
+            self.catalog = catalog
+        } else {
+            let home = (ProcessInfo.processInfo.environment["HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? "")
+            self.catalog = (try? PacksFacade.makeCatalog(home: home)) ?? PackCatalog()
+        }
         if let allowOnce {
             self.allowOnce = allowOnce
         } else if let allowOnceDirectory {
@@ -211,18 +216,18 @@ public actor ServiceRuntime {
         )
     }
 
-    private func listPacks() -> ListPacksReply {
-        let packs = catalog.records.map { PackRecord(id: $0.id, enabled: $0.enabled, bundled: $0.bundled) }
-        return ListPacksReply(
-            packs: packs,
-            enabledCount: packs.filter(\.enabled).count,
-            totalCount: packs.count
-        )
-    }
-
     private func setPackEnabled(_ params: SetPackEnabledParams) -> IPCResult {
+        let home = (ProcessInfo.processInfo.environment["HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? "")
         do {
-            let updated = try catalog.setEnabled(id: params.id, enabled: params.enabled)
+            if params.enabled {
+                _ = try PacksFacade.enable(home: home, ids: [params.id.rawValue])
+            } else {
+                _ = try PacksFacade.disable(home: home, ids: [params.id.rawValue])
+            }
+            catalog = try PacksFacade.makeCatalog(home: home)
+            guard let updated = catalog.records.first(where: { $0.id == params.id }) else {
+                return .error(.packNotFound(params.id))
+            }
             let packs = catalog.records.filter(\.enabled).map(\.id.rawValue)
             if let analytics {
                 Task {
@@ -234,11 +239,24 @@ public actor ServiceRuntime {
                     pack: PackRecord(id: updated.id, enabled: updated.enabled, bundled: updated.bundled)
                 )
             )
-        } catch PackEnableError.packNotFound(let id) {
-            return .error(.packNotFound(id))
+        } catch PacksCommandError.unknownID {
+            return .error(.packNotFound(params.id))
         } catch {
             return .error(.engine("pack enable failed"))
         }
+    }
+
+    private func listPacks() -> ListPacksReply {
+        let home = (ProcessInfo.processInfo.environment["HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? "")
+        if let refreshed = try? PacksFacade.makeCatalog(home: home) {
+            catalog = refreshed
+        }
+        let packs = catalog.records.map { PackRecord(id: $0.id, enabled: $0.enabled, bundled: $0.bundled) }
+        return ListPacksReply(
+            packs: packs,
+            enabledCount: packs.filter(\.enabled).count,
+            totalCount: packs.count
+        )
     }
 
     private func doctorSnapshot() -> DoctorSnapshotReply {

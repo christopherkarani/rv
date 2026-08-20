@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "backup.borg",
+  "name": "BorgBackup",
+  "version": "0.11.0",
+  "description": "Protects against destructive borg operations like delete, prune, compact, and recreate.",
+  "category": "backup",
+  "enabled_by_default": false,
+  "keywords": [
+    "borg"
+  ],
+  "safe_patterns": [
+    {
+      "name": "borg-list",
+      "pattern": "borg(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+list(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "borg-info",
+      "pattern": "borg(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+info(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "borg-diff",
+      "pattern": "borg(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+diff(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "borg-check",
+      "pattern": "borg(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+check(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "borg-create",
+      "pattern": "borg(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+create(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "borg-extract",
+      "pattern": "borg(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+extract(?=\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "borg-mount",
+      "pattern": "borg(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+mount(?=\\s|$)",
+      "description": ""
+    }
+  ],
+  "destructive_patterns": [
+    {
+      "name": "borg-delete",
+      "pattern": "borg(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+delete\\b",
+      "severity": "critical",
+      "description": "borg delete removes archives or entire repositories.",
+      "explanation": "Deleting borg archives or repositories permanently removes backup data. Without \\ the archive, you cannot restore files to that point in time. If you delete the \\ entire repository, all backup history is lost and cannot be recovered.\n\n\\ Safer alternatives: \\ - borg list: Review archives before deletion \\ - borg info: Check archive details and size \\ - borg export-tar: Export archive contents before deletion \\ - Use --dry-run to preview what would be deleted"
+    },
+    {
+      "name": "borg-prune",
+      "pattern": "borg(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+prune\\b",
+      "severity": "high",
+      "description": "borg prune removes archives based on retention rules.",
+      "explanation": "Pruning removes archives that don't match retention rules. Misconfigured retention \\ policies can delete more archives than intended. Once pruned, those backup points \\ cannot be restored. Space is not reclaimed until borg compact is run.\n\n\\ Safer alternatives: \\ - borg prune --dry-run: Preview which archives would be removed \\ - borg list: Review current archives before pruning \\ - Double-check retention flags (--keep-daily, --keep-weekly, etc.)"
+    },
+    {
+      "name": "borg-compact",
+      "pattern": "borg(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+compact\\b",
+      "severity": "medium",
+      "description": "borg compact reclaims space after deletions.",
+      "explanation": "Compacting permanently removes data segments that are no longer referenced after \\ delete or prune operations. Before compacting, deleted data could theoretically \\ be recovered. After compacting, the data is permanently gone and disk space is \\ reclaimed.\n\n\\ Safer alternatives: \\ - borg list: Verify intended archives still exist \\ - borg check: Verify repository integrity before compacting \\ - Ensure all pruning was intentional before compacting"
+    },
+    {
+      "name": "borg-recreate",
+      "pattern": "borg(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+recreate\\b",
+      "severity": "high",
+      "description": "borg recreate can drop data from archives.",
+      "explanation": "Recreate modifies existing archives by recompressing or excluding files. Using \\ --exclude or --exclude-from can permanently remove files from the archive. The \\ original archive state cannot be recovered after recreation completes.\n\n\\ Safer alternatives: \\ - borg recreate --dry-run: Preview changes without applying \\ - borg create: Create a new archive instead of modifying existing \\ - borg export-tar: Export archive before recreation for backup"
+    },
+    {
+      "name": "borg-break-lock",
+      "pattern": "borg(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+break-lock\\b",
+      "severity": "medium",
+      "description": "borg break-lock forces removal of repository locks.",
+      "explanation": "Breaking locks removes lock files that protect against concurrent access. If \\ another borg process is actually running (not a stale lock), breaking the lock \\ can cause repository corruption. Only use when certain no other operation is \\ in progress.\n\n\\ Safer alternatives: \\ - Check for running borg processes (ps aux | grep borg) \\ - Wait for existing operations to complete \\ - Verify lock is stale (check lock file timestamp)"
+    }
+  ]
+}

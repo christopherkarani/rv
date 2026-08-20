@@ -1,0 +1,249 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "database.bigquery",
+  "name": "BigQuery",
+  "version": "0.11.0",
+  "description": "Protects the `bq` CLI and GoogleSQL against dataset drops, table \\ overwrites, unfiltered DML, and settings that shorten the time-travel \\ recovery window",
+  "category": "database",
+  "enabled_by_default": false,
+  "keywords": [
+    "bq",
+    "bigquery",
+    "DROP",
+    "TRUNCATE",
+    "DELETE",
+    "UPDATE",
+    "ALTER",
+    "OVERWRITE",
+    "OR REPLACE",
+    "NOT MATCHED"
+  ],
+  "safe_patterns": [],
+  "destructive_patterns": [
+    {
+      "name": "bq-rm-recursive",
+      "pattern": "(?:^|[\\s;&|(])(?:[^\\s;&|]*[/\\\\])?bq(?:\\.exe)?(?:\\s+--?[^\\s;&|]+(?:\\s+[^-\\s;&|][^\\s;&|]*)?)*\\s+rm\\b(?:\\s+[^\\s;&|]+)*\\s+(?:-r\\b|-{1,2}recursive\\b)",
+      "severity": "critical",
+      "description": "bq rm -r deletes a dataset and every table, view, and routine inside it.",
+      "explanation": "Recursive removal deletes the dataset together with all of its contents in one \\ call. Individual tables can sometimes be recovered from time travel within \\ 2-7 days, but the dataset itself cannot be restored once dropped.\n\n\\ Inspect the contents first: \\ bq ls <project>:<dataset>"
+    },
+    {
+      "name": "bq-rm-transfer-config",
+      "pattern": "(?:^|[\\s;&|(])(?:[^\\s;&|]*[/\\\\])?bq(?:\\.exe)?(?:\\s+--?[^\\s;&|]+(?:\\s+[^-\\s;&|][^\\s;&|]*)?)*\\s+rm\\b(?:\\s+[^\\s;&|]+)*\\s+-{1,2}transfer_config\\b",
+      "severity": "high",
+      "description": "bq rm --transfer_config deletes a scheduled query or data transfer.",
+      "explanation": "Removing a transfer config stops the scheduled load or query silently — the \\ next run simply never happens, and the schedule, destination, and parameters \\ are gone with it.\n\n\\ Record the config before removing it: \\ bq show --transfer_config <resource-name>"
+    },
+    {
+      "name": "bq-rm-reservation",
+      "pattern": "(?:^|[\\s;&|(])(?:[^\\s;&|]*[/\\\\])?bq(?:\\.exe)?(?:\\s+--?[^\\s;&|]+(?:\\s+[^-\\s;&|][^\\s;&|]*)?)*\\s+rm\\b(?:\\s+[^\\s;&|]+)*\\s+-{1,2}(?:reservation|capacity_commitment|reservation_assignment)\\b",
+      "severity": "high",
+      "description": "bq rm --reservation removes purchased capacity and can change query cost and performance.",
+      "explanation": "Reservations and capacity commitments are billing objects. Removing one moves \\ the affected workloads onto on-demand pricing, which changes both cost and \\ concurrency behaviour immediately.\n\n\\ Inspect the reservation first: \\ bq show --reservation --location=<location> <name>"
+    },
+    {
+      "name": "bq-rm",
+      "pattern": "(?:^|[\\s;&|(])(?:[^\\s;&|]*[/\\\\])?bq(?:\\.exe)?(?:\\s+--?[^\\s;&|]+(?:\\s+[^-\\s;&|][^\\s;&|]*)?)*\\s+rm\\b",
+      "severity": "high",
+      "description": "bq rm deletes a table, view, model, or dataset.",
+      "explanation": "Deletion is immediate. A table may be recoverable from time travel within the \\ dataset's window (2-7 days) using the `@<epoch_ms>` decorator, but only if \\ nothing recreates the name in the meantime; datasets and models have no such \\ recovery.\n\n\\ Confirm the target first: \\ bq show <project>:<dataset>.<table>"
+    },
+    {
+      "name": "bq-load-replace",
+      "pattern": "(?:^|[\\s;&|(])(?:[^\\s;&|]*[/\\\\])?bq(?:\\.exe)?(?:\\s+--?[^\\s;&|]+(?:\\s+[^-\\s;&|][^\\s;&|]*)?)*\\s+load\\b(?:\\s+[^\\s;&|]+)*\\s+-{1,2}replace\\b",
+      "severity": "high",
+      "description": "bq load --replace overwrites all existing data in the destination table.",
+      "explanation": "`--replace` truncates the destination table before loading. If the source file \\ is wrong, short, or malformed, the previous contents are already gone and only \\ time travel can recover them.\n\n\\ Safer alternative: \\ - bq load --noreplace: append instead of overwriting \\ - load into a staging table first, then swap"
+    },
+    {
+      "name": "bq-query-replace",
+      "pattern": "(?:^|[\\s;&|(])(?:[^\\s;&|]*[/\\\\])?bq(?:\\.exe)?(?:\\s+--?[^\\s;&|]+(?:\\s+[^-\\s;&|][^\\s;&|]*)?)*\\s+query\\b(?:\\s+[^\\s;&|]+)*\\s+-{1,2}replace\\b",
+      "severity": "high",
+      "description": "bq query --replace overwrites the destination table with the query result.",
+      "explanation": "`--replace` discards the destination table's current contents before writing \\ the result. A query that returns fewer rows than expected silently destroys \\ the difference.\n\n\\ Safer alternative: \\ - bq query --append_table: add rows instead of replacing them \\ - bq query --dry_run: check what the query would process first"
+    },
+    {
+      "name": "bq-cp-force",
+      "pattern": "(?:^|[\\s;&|(])(?:[^\\s;&|]*[/\\\\])?bq(?:\\.exe)?(?:\\s+--?[^\\s;&|]+(?:\\s+[^-\\s;&|][^\\s;&|]*)?)*\\s+cp\\b(?:\\s+[^\\s;&|]+)*\\s+(?:-f\\b|-{1,2}force\\b)",
+      "severity": "high",
+      "description": "bq cp -f overwrites the destination table without prompting.",
+      "explanation": "`-f` suppresses the overwrite confirmation, so an existing destination table is \\ replaced silently. Copying onto the wrong destination is not detectable after \\ the fact except through time travel.\n\n\\ Check whether the destination already exists: \\ bq show <project>:<dataset>.<table>"
+    },
+    {
+      "name": "bq-mk-force",
+      "pattern": "(?:^|[\\s;&|(])(?:[^\\s;&|]*[/\\\\])?bq(?:\\.exe)?(?:\\s+--?[^\\s;&|]+(?:\\s+[^-\\s;&|][^\\s;&|]*)?)*\\s+mk\\b(?:\\s+[^\\s;&|]+)*\\s+(?:-f\\b|-{1,2}force\\b)",
+      "severity": "medium",
+      "description": "bq mk -f overwrites an existing table definition.",
+      "explanation": "`bq mk -f` succeeds when the object already exists, replacing its definition \\ rather than failing. Recreating a table this way drops the existing rows.\n\n\\ Check first: \\ bq show <project>:<dataset>.<table>"
+    },
+    {
+      "name": "bq-update-time-travel",
+      "pattern": "(?:^|[\\s;&|(])(?:[^\\s;&|]*[/\\\\])?bq(?:\\.exe)?(?:\\s+--?[^\\s;&|]+(?:\\s+[^-\\s;&|][^\\s;&|]*)?)*\\s+update\\b(?:\\s+[^\\s;&|]+)*\\s+-{1,2}max_time_travel_hours\\b",
+      "severity": "high",
+      "description": "bq update --max_time_travel_hours shortens the only window in which deleted BigQuery data can be recovered.",
+      "explanation": "Time travel (48-168 hours) is BigQuery's only undo. Lowering it discards \\ history immediately and irreversibly: data older than the new window cannot be \\ recovered afterwards, including data you have not yet noticed is missing. This \\ destroys the recovery path itself rather than any single table.\n\n\\ Take a snapshot before shortening the window: \\ bq cp <dataset>.<table>@<epoch_ms> <dataset>.<table>_backup"
+    },
+    {
+      "name": "bq-update-expiration",
+      "pattern": "(?:^|[\\s;&|(])(?:[^\\s;&|]*[/\\\\])?bq(?:\\.exe)?(?:\\s+--?[^\\s;&|]+(?:\\s+[^-\\s;&|][^\\s;&|]*)?)*\\s+update\\b(?:\\s+[^\\s;&|]+)*\\s+-{1,2}(?:expiration|default_table_expiration|default_partition_expiration)\\b",
+      "severity": "high",
+      "description": "bq update --expiration schedules automatic deletion of tables or partitions.",
+      "explanation": "An expiration is a deferred delete. Setting one on a dataset applies to tables \\ created afterwards; setting one on a table schedules that table's removal. The \\ deletion happens later, without a prompt, and is easy to forget was configured.\n\n\\ Inspect the current setting: \\ bq show --format=prettyjson <project>:<dataset>"
+    },
+    {
+      "name": "bq-cancel",
+      "pattern": "(?:^|[\\s;&|(])(?:[^\\s;&|]*[/\\\\])?bq(?:\\.exe)?(?:\\s+--?[^\\s;&|]+(?:\\s+[^-\\s;&|][^\\s;&|]*)?)*\\s+cancel\\b",
+      "severity": "medium",
+      "description": "bq cancel stops a running job, which may leave a partial load or export.",
+      "explanation": "Cancelling a load or export mid-flight can leave the destination in a partial \\ state: some files written, some rows loaded. Check what the job is doing before \\ stopping it.\n\n\\ Inspect the job first: \\ bq show --job=true <job-id>"
+    },
+    {
+      "name": "drop-schema",
+      "pattern": "(?i)\\bDROP\\s+(?:SCHEMA|DATABASE)\\b",
+      "severity": "critical",
+      "description": "DROP SCHEMA removes a BigQuery dataset and everything inside it.",
+      "explanation": "In GoogleSQL a *dataset* is a SCHEMA, so this is the dataset-level catastrophe \\ rather than a namespace tidy-up. With CASCADE it removes every table, view, and \\ routine in the dataset. Individual tables may be recoverable from time travel \\ for 2-7 days; the dataset is not.\n\n\\ List the contents first: \\ bq ls <project>:<dataset>"
+    },
+    {
+      "name": "drop-snapshot-table",
+      "pattern": "(?i)\\bDROP\\s+SNAPSHOT\\s+TABLE\\b",
+      "severity": "critical",
+      "description": "DROP SNAPSHOT TABLE destroys a point-in-time backup.",
+      "explanation": "A table snapshot is often the backup taken precisely because time travel is too \\ short. Dropping it removes the recovery point itself, and unlike the source \\ table it has no time-travel window of its own."
+    },
+    {
+      "name": "drop-materialized-view-or-external-table",
+      "pattern": "(?i)\\bDROP\\s+(?:MATERIALIZED\\s+VIEW|EXTERNAL\\s+TABLE)\\b",
+      "severity": "medium",
+      "description": "DROP MATERIALIZED VIEW / EXTERNAL TABLE removes a derived or federated object.",
+      "explanation": "A materialized view holds precomputed data that must be rebuilt, which costs a \\ full refresh; an external table definition carries the schema and source URIs \\ needed to read the underlying files. Neither the data nor the definition is \\ recoverable from time travel."
+    },
+    {
+      "name": "drop-routine",
+      "pattern": "(?i)\\bDROP\\s+(?:TABLE\\s+FUNCTION|FUNCTION|PROCEDURE)\\b",
+      "severity": "high",
+      "description": "DROP FUNCTION/PROCEDURE/TABLE FUNCTION removes a routine other queries may depend on.",
+      "explanation": "Routine definitions are not covered by time travel. Anything calling the routine \\ — scheduled queries, views, downstream jobs — starts failing at its next run.\n\n\\ Capture the definition first: \\ SELECT ddl FROM `<project>.<dataset>.INFORMATION_SCHEMA.ROUTINES`"
+    },
+    {
+      "name": "drop-model",
+      "pattern": "(?i)\\bDROP\\s+MODEL\\b",
+      "severity": "high",
+      "description": "DROP MODEL deletes a trained BigQuery ML model.",
+      "explanation": "A model is not covered by time travel and cannot be restored — rebuilding it \\ means re-running training over the original data, which costs both money and \\ hours, and reproduces the result only if that training data still exists in \\ the same form.\n\n\\ Copy it first: \\ bq cp <dataset>.<model> <dataset>.<model>_backup"
+    },
+    {
+      "name": "drop-all-row-access-policies",
+      "pattern": "(?i)\\bDROP\\s+(?:ALL\\s+ROW\\s+ACCESS\\s+POLICIES|ROW\\s+ACCESS\\s+POLICY)\\b",
+      "severity": "high",
+      "description": "DROP ROW ACCESS POLICY removes row-level security from a table.",
+      "explanation": "This does not delete data — it exposes it. Every row previously filtered by a \\ policy becomes visible to anyone with table access, which is a disclosure event \\ rather than a data-loss one, and it is silent."
+    },
+    {
+      "name": "drop-search-index",
+      "pattern": "(?i)\\bDROP\\s+(?:SEARCH|VECTOR)\\s+INDEX\\b",
+      "severity": "medium",
+      "description": "DROP SEARCH INDEX removes an index that must be fully rebuilt.",
+      "explanation": "Rebuilding a search or vector index over a large table is expensive and not \\ instantaneous; queries relying on it degrade to full scans in the meantime."
+    },
+    {
+      "name": "drop-capacity-or-reservation",
+      "pattern": "(?i)\\bDROP\\s+(?:CAPACITY|RESERVATION|ASSIGNMENT)\\b",
+      "severity": "high",
+      "description": "DROP CAPACITY/RESERVATION/ASSIGNMENT changes billing and query capacity.",
+      "explanation": "These are billing objects. Dropping one moves affected workloads to on-demand \\ pricing immediately, changing both cost and concurrency."
+    },
+    {
+      "name": "drop-view",
+      "pattern": "(?i)\\bDROP\\s+VIEW\\b",
+      "severity": "medium",
+      "description": "DROP VIEW removes a view definition.",
+      "explanation": "View definitions are not covered by time travel. Downstream queries and \\ dashboards referencing the view break at their next run.\n\n\\ Capture the definition first: \\ SELECT view_definition FROM `<project>.<dataset>.INFORMATION_SCHEMA.VIEWS`"
+    },
+    {
+      "name": "drop-table",
+      "pattern": "(?i)\\bDROP\\s+TABLE\\b",
+      "severity": "high",
+      "description": "DROP TABLE removes a table and its data.",
+      "explanation": "The table may be recoverable from time travel within the dataset's window \\ (2-7 days) via `<table>@<epoch_ms>`, but only if nothing recreates the name in \\ the meantime — recreating it starts a fresh history and forecloses recovery.\n\n\\ Snapshot before dropping: \\ bq cp <dataset>.<table>@<epoch_ms> <dataset>.<table>_backup"
+    },
+    {
+      "name": "alter-table-drop-column",
+      "pattern": "(?i)\\bALTER\\s+TABLE\\b[^;]{0,200}?\\bDROP\\s+COLUMN\\b",
+      "severity": "high",
+      "description": "ALTER TABLE DROP COLUMN removes a column and its data.",
+      "explanation": "Dropping a column deletes its values. Time travel recovers the whole table to a \\ prior point rather than restoring one column, so recovery means reconstructing \\ the table."
+    },
+    {
+      "name": "alter-set-expiration",
+      "pattern": "(?i)\\bALTER\\s+(?:TABLE|SCHEMA|MATERIALIZED\\s+VIEW)\\b[^;]{0,200}?\\bSET\\s+OPTIONS\\b[^;]{0,200}?\\bexpiration_timestamp\\b",
+      "severity": "high",
+      "description": "SET OPTIONS(expiration_timestamp) schedules automatic deletion.",
+      "explanation": "An expiration timestamp is a deferred delete: the object disappears at that time \\ with no further prompt. Setting it in the past deletes immediately."
+    },
+    {
+      "name": "alter-table-rename",
+      "pattern": "(?i)\\bALTER\\s+TABLE\\b[^;]{0,200}?\\bRENAME\\s+TO\\b",
+      "severity": "medium",
+      "description": "ALTER TABLE RENAME TO breaks every reference to the old table name.",
+      "explanation": "Renaming is not itself data loss, but views, scheduled queries, and downstream \\ jobs referencing the old name fail at their next run, and a later `CREATE TABLE` \\ reusing the old name makes the break silent."
+    },
+    {
+      "name": "create-or-replace-routine",
+      "pattern": "(?i)\\bCREATE\\s+OR\\s+REPLACE\\s+(?:TABLE\\s+FUNCTION|FUNCTION|PROCEDURE|MODEL)\\b",
+      "severity": "medium",
+      "description": "CREATE OR REPLACE FUNCTION/PROCEDURE overwrites an existing routine definition.",
+      "explanation": "The previous definition is discarded with no version history. If the new body is \\ wrong, the old one must be reconstructed from source control or memory."
+    },
+    {
+      "name": "create-or-replace-table",
+      "pattern": "(?i)\\bCREATE\\s+OR\\s+REPLACE\\s+(?:MATERIALIZED\\s+VIEW|EXTERNAL\\s+TABLE|SNAPSHOT\\s+TABLE|TEMP(?:ORARY)?\\s+TABLE|TABLE|VIEW)\\b",
+      "severity": "high",
+      "description": "CREATE OR REPLACE TABLE discards the existing table and its data.",
+      "explanation": "This is a drop and recreate in one statement: the old rows are gone before the \\ new ones are written. A query that produces fewer rows than expected destroys \\ the difference silently.\n\n\\ Safer alternative: \\ - CREATE TABLE IF NOT EXISTS: fails instead of overwriting \\ - write to a staging table and swap after verifying"
+    },
+    {
+      "name": "load-data-overwrite",
+      "pattern": "(?i)\\bLOAD\\s+DATA\\s+OVERWRITE\\b",
+      "severity": "high",
+      "description": "LOAD DATA OVERWRITE replaces all existing data in the destination table.",
+      "explanation": "`OVERWRITE` truncates the destination before loading. If the source is wrong or \\ short, the previous contents are already gone.\n\n\\ Safer alternative: \\ - LOAD DATA INTO: append instead of replacing"
+    },
+    {
+      "name": "export-data-overwrite",
+      "pattern": "(?i)\\bEXPORT\\s+DATA\\b[^;]{0,200}?\\boverwrite\\s*=\\s*true",
+      "severity": "medium",
+      "description": "EXPORT DATA with overwrite=true replaces files at the destination URI.",
+      "explanation": "Existing objects under the destination prefix in Cloud Storage are replaced. If \\ the bucket is not versioned, the previous export is unrecoverable."
+    },
+    {
+      "name": "truncate-table",
+      "pattern": "(?i)\\bTRUNCATE\\s+TABLE\\b",
+      "severity": "high",
+      "description": "TRUNCATE TABLE removes every row in the table.",
+      "explanation": "All rows are deleted while the schema stays in place. Recovery is time travel \\ only, within the dataset's 2-7 day window."
+    },
+    {
+      "name": "delete-all-rows",
+      "pattern": "(?i)\\bDELETE\\s+(?:FROM\\s+)?[^\\s;]+(?:\\s+(?:AS\\s+)?[A-Za-z_][A-Za-z0-9_]*)?\\s+WHERE\\s+(?:TRUE|1\\s*=\\s*1)\\b",
+      "severity": "high",
+      "description": "DELETE ... WHERE TRUE removes every row in the table.",
+      "explanation": "In GoogleSQL a WHERE clause is mandatory on DELETE, so `WHERE TRUE` is the \\ idiomatic way to spell \"delete everything\" — it is a full-table delete, not a \\ filtered one. Recovery is time travel only.\n\n\\ Check the blast radius first: \\ SELECT COUNT(*) FROM `<table>` WHERE <your-predicate>"
+    },
+    {
+      "name": "update-all-rows",
+      "pattern": "(?i)\\bUPDATE\\s+[^\\s;]+(?:\\s+(?:AS\\s+)?[A-Za-z_][A-Za-z0-9_]*)?\\s+SET\\b[^;]{0,4000}?\\bWHERE\\s+(?:TRUE|1\\s*=\\s*1)\\b",
+      "severity": "high",
+      "description": "UPDATE ... WHERE TRUE rewrites every row in the table.",
+      "explanation": "`WHERE TRUE` is the idiomatic full-table spelling in GoogleSQL, where the WHERE \\ clause is mandatory. Every row is rewritten, and the prior values are recoverable \\ only through time travel.\n\n\\ Check the blast radius first: \\ SELECT COUNT(*) FROM `<table>` WHERE <your-predicate>"
+    },
+    {
+      "name": "merge-delete-not-matched-by-source",
+      "pattern": "(?i)\\bMERGE\\b[^;]{0,4000}?\\bWHEN\\s+NOT\\s+MATCHED\\s+BY\\s+SOURCE\\b[^;]{0,400}?\\bTHEN\\s+DELETE\\b",
+      "severity": "high",
+      "description": "MERGE ... WHEN NOT MATCHED BY SOURCE THEN DELETE removes every target row absent from the source.",
+      "explanation": "The delete is driven by what the source query returns. If the source is empty, \\ filtered, or partially loaded, this deletes most or all of the target table — \\ and the statement looks routine in review.\n\n\\ Check what the source actually returns first: \\ SELECT COUNT(*) FROM (<source-query>)"
+    }
+  ]
+}
