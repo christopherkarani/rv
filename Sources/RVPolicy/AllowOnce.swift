@@ -37,18 +37,12 @@ public actor AllowOnceStore {
         now: Date,
         ttl: TimeInterval = 24 * 60 * 60
     ) async throws {
-        let fingerprint = commandFingerprint(matchingView)
-        let record = AllowOnceRecord(
-            schemaVersion: 1,
-            kind: .granted,
-            codeHash: sha256Hex(UUID().uuidString),
-            commandFingerprint: fingerprint,
-            commandRedacted: "[redacted]",
+        let record = AllowOnceLedger.makeGranted(
+            matchingView: matchingView,
             cwd: cwd,
-            ruleID: nil,
-            createdAt: now,
-            expiresAt: now.addingTimeInterval(ttl),
-            consumedAt: nil
+            now: now,
+            ttl: ttl,
+            codeHash: sha256Hex(UUID().uuidString)
         )
         try withFileLock {
             var records = loadRecords()
@@ -61,14 +55,12 @@ public actor AllowOnceStore {
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
             return false
         }
-        let fingerprint = commandFingerprint(matchingView)
-        let records = loadRecords()
-        return records.contains {
-            $0.kind == .granted
-                && $0.commandFingerprint == fingerprint
-                && $0.cwd == cwd
-                && $0.expiresAt >= now
-        }
+        return AllowOnceLedger.hasGrant(
+            records: loadRecords(),
+            matchingView: matchingView,
+            cwd: cwd,
+            now: now
+        )
     }
 
     public func consume(
@@ -76,43 +68,24 @@ public actor AllowOnceStore {
         cwd: String,
         now: Date
     ) async -> AllowOnceConsumeStatus {
-        let fingerprint = commandFingerprint(matchingView)
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
             return .notFound
         }
         do {
             return try withFileLock {
-                var records = loadRecords()
-                let related = records.indices.filter {
-                    records[$0].commandFingerprint == fingerprint && records[$0].cwd == cwd
+                let outcome = AllowOnceLedger.consume(
+                    records: loadRecords(),
+                    matchingView: matchingView,
+                    cwd: cwd,
+                    now: now
+                )
+                switch outcome.status {
+                case .consumed, .expired:
+                    try writeRecords(outcome.records)
+                case .notFound, .alreadyConsumed, .unavailable:
+                    break
                 }
-                if let index = related.first(where: {
-                    records[$0].kind == .granted && records[$0].expiresAt >= now
-                }) {
-                    var granted = records[index]
-                    granted.kind = .consumed
-                    granted.consumedAt = now
-                    records[index] = granted
-                    records.removeAll {
-                        $0.kind == .granted && $0.expiresAt < now
-                    }
-                    try writeRecords(records)
-                    return .consumed(tokenID: granted.codeHash)
-                }
-                let hadExpiredGrant = related.contains {
-                    records[$0].kind == .granted && records[$0].expiresAt < now
-                }
-                if hadExpiredGrant {
-                    records.removeAll {
-                        $0.kind == .granted && $0.expiresAt < now
-                    }
-                    try writeRecords(records)
-                    return .expired
-                }
-                if related.contains(where: { records[$0].kind == .consumed }) {
-                    return .alreadyConsumed
-                }
-                return .notFound
+                return outcome.status
             }
         } catch {
             return .unavailable
@@ -259,7 +232,7 @@ func commandFingerprint(_ matchingView: MatchingView) -> String {
     sha256Hex(matchingView.rawValue)
 }
 
-private func sha256Hex(_ text: String) -> String {
+func sha256Hex(_ text: String) -> String {
     let digest = SHA256.hash(data: Data(text.utf8))
     return digest.map { String(format: "%02x", $0) }.joined()
 }
