@@ -144,6 +144,26 @@ struct AllowlistCommandTests {
         }
         #expect(entries.count == 1)
     }
+
+    @Test func removeMatchesNormalizedExactCommandAlias() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-allowlist-cli-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let store = AllowlistStore(baseDirectory: root)
+        let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+        let normalized = MatchingView("rm -rf ./build")
+        try store.add(
+            AllowlistEntry(selector: .exactCommand(normalized), reason: "build", addedAt: Date()),
+            tty: tty
+        )
+        let removed = try store.remove(
+            matching: "sudo rm -rf ./build",
+            tty: tty,
+            exactCommandAliases: [normalized.rawValue]
+        )
+        #expect(removed == 1)
+        #expect(store.loadForValidate(workspacePath: nil) == .ok([]))
+    }
 }
 
 private func isolatedStore() throws -> AllowOnceStore {

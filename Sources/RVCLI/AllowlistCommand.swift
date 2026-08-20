@@ -119,6 +119,9 @@ struct AllowlistAdd: AsyncParsableCommand {
         } catch AllowOnceError.lockFailed {
             FileHandle.standardError.write(Data("rv allowlist add: store unavailable\n".utf8))
             throw ExitCode(2)
+        } catch is AllowlistParseError {
+            FileHandle.standardError.write(Data("rv allowlist add: invalid allowlist.toml\n".utf8))
+            throw ExitCode(2)
         }
     }
 }
@@ -175,6 +178,11 @@ struct AllowlistAddCommand: AsyncParsableCommand {
                 Data("rv allowlist add-command: store unavailable\n".utf8)
             )
             throw ExitCode(2)
+        } catch is AllowlistParseError {
+            FileHandle.standardError.write(
+                Data("rv allowlist add-command: invalid allowlist.toml\n".utf8)
+            )
+            throw ExitCode(2)
         }
     }
 }
@@ -203,7 +211,13 @@ struct AllowlistRemove: AsyncParsableCommand {
             noColor: format.noColor
         )
         do {
-            let removed = try AllowlistCLI.store().remove(matching: target, tty: tty)
+            let trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
+            let normalized = Normalize.matchingView(of: trimmed).rawValue
+            let removed = try AllowlistCLI.store().remove(
+                matching: trimmed,
+                tty: tty,
+                exactCommandAliases: normalized == trimmed ? [] : [normalized]
+            )
             FileHandle.standardOutput.write(Data("removed \(removed)\n".utf8))
         } catch AllowOnceError.ttyRequired {
             FileHandle.standardError.write(
@@ -212,6 +226,11 @@ struct AllowlistRemove: AsyncParsableCommand {
             throw ExitCode(2)
         } catch AllowOnceError.lockFailed {
             FileHandle.standardError.write(Data("rv allowlist remove: store unavailable\n".utf8))
+            throw ExitCode(2)
+        } catch is AllowlistParseError {
+            FileHandle.standardError.write(
+                Data("rv allowlist remove: invalid allowlist.toml\n".utf8)
+            )
             throw ExitCode(2)
         }
     }

@@ -65,10 +65,16 @@ public struct AllowlistStore: Sendable {
 
     public func remove(
         matching ruleOrCommand: String,
-        tty: TTYCapability
+        tty: TTYCapability,
+        exactCommandAliases: [String] = []
     ) throws -> Int {
         guard allowsInteractiveAllowOnce(tty) else { throw AllowOnceError.ttyRequired }
         let needle = ruleOrCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+        let aliases = Set(
+            ([needle] + exactCommandAliases)
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { $0.isEmpty == false }
+        )
         var removed = 0
         try mutate { entries in
             let before = entries.count
@@ -79,7 +85,7 @@ public struct AllowlistStore: Sendable {
                         || displayRuleID(ruleID) == needle
                         || parseAllowlistRuleID(needle) == ruleID
                 case .exactCommand(let command):
-                    return command.rawValue == needle
+                    return aliases.contains(command.rawValue)
                 }
             }
             removed = before - entries.count
