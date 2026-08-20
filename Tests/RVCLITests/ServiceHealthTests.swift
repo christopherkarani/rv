@@ -9,7 +9,7 @@ struct ServiceHealthTests {
         let diagnostics = local(.down)
         let health = ServiceHealth.inspect(diagnostics)
 
-        #expect(health == .down(readyLocal()))
+        #expect(health == .down(.local(readyLocal())))
         #expect(health.fallbackReady)
         #expect(health.enabledPacks == dayOnePackIDs)
         #expect(health.packCheckReady)
@@ -37,7 +37,7 @@ struct ServiceHealthTests {
             launchAgentLoaded: false
         )
 
-        #expect(health == .down(readyLocal(launchAgent: .installed)))
+        #expect(health == .down(.local(readyLocal(launchAgent: .installed))))
         #expect(health.launchAgent == .installed)
     }
 
@@ -48,7 +48,7 @@ struct ServiceHealthTests {
             launchAgentLoaded: true
         )
 
-        #expect(health == .down(readyLocal(launchAgent: .loaded)))
+        #expect(health == .down(.local(readyLocal(launchAgent: .loaded))))
         #expect(health.launchAgent == .loaded)
     }
 
@@ -57,14 +57,20 @@ struct ServiceHealthTests {
 
         #expect(
             ServiceHealth.inspect(diagnostics)
-                == .skew(reason: .protocolMismatch, local: readyLocal(serviceSemver: "1.0.0"))
+                == .skew(
+                    reason: .protocolMismatch,
+                    source: .local(readyLocal(serviceSemver: "1.0.0"))
+                )
         )
         #expect(
             ServiceHealth.inspect(
                 diagnostics,
                 launchAgentInstalled: false,
                 launchAgentLoaded: false
-            ) == .skew(reason: .protocolMismatch, local: readyLocal(serviceSemver: "1.0.0"))
+            ) == .skew(
+                reason: .protocolMismatch,
+                source: .local(readyLocal(serviceSemver: "1.0.0"))
+            )
         )
     }
 
@@ -151,17 +157,25 @@ struct ServiceHealthTests {
             localCorePacksReady: true
         )
 
-        #expect(
-            ServiceHealth.inspect(diagnostics)
-                == .down(readyLocal(serviceSemver: snapshot.serviceSemver))
+        let xpcDown = ServiceHealth.down(
+            .xpc(
+                .init(
+                    snapshot: snapshot,
+                    localCorePacksReady: true,
+                    launchAgent: .missing
+                )
+            )
         )
+        #expect(ServiceHealth.inspect(diagnostics) == xpcDown)
         #expect(
             ServiceHealth.inspect(
                 diagnostics,
                 launchAgentInstalled: false,
                 launchAgentLoaded: false
-            ) == .down(readyLocal(serviceSemver: snapshot.serviceSemver))
+            ) == xpcDown
         )
+        #expect(xpcDown.enabledPacks == snapshot.packsEnabled)
+        #expect(xpcDown.packCheckReady)
         #expect(ServiceHealth.inspect(diagnostics).statusReport.state == "down")
         #expect(ServiceHealth.inspect(diagnostics).statusReport.fallback == "down")
         #expect(ServiceHealth.inspect(diagnostics).statusReport.lastError == nil)
@@ -174,12 +188,37 @@ struct ServiceHealthTests {
         #expect(
             health == .skew(
                 reason: nil,
-                local: readyLocal(serviceSemver: snapshot.serviceSemver)
+                source: .xpc(
+                    .init(
+                        snapshot: snapshot,
+                        localCorePacksReady: true,
+                        launchAgent: .missing
+                    )
+                )
             )
         )
+        #expect(health.enabledPacks == snapshot.packsEnabled)
+        #expect(health.packCheckReady)
         #expect(health.statusReport.state == "skew")
         #expect(health.statusReport.fallback == "skew")
         #expect(health.statusReport.lastError == nil)
+    }
+
+    @Test func xpcDownKeepsSnapshotPacksNotDayOneSubstitution() {
+        let snapshot = DoctorSnapshotReply(
+            serviceSemver: "1.0.0",
+            state: .down,
+            idleExitSeconds: 300,
+            packsEnabled: [.coreGit],
+            checks: [DoctorCheck(id: "packs", status: .ok, message: "ready")]
+        )
+        let health = ServiceHealth.inspect(
+            .xpc(snapshot: snapshot, localCorePacksReady: false)
+        )
+
+        #expect(health.enabledPacks == [.coreGit])
+        #expect(health.packCheckReady)
+        #expect(health.fallbackReady == false)
     }
 }
 

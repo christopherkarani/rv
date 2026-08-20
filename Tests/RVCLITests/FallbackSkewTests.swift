@@ -24,10 +24,12 @@ struct FallbackSkewTests {
         #expect(
             health == .skew(
                 reason: .protocolMismatch,
-                local: .init(
-                    corePacksReady: true,
-                    serviceSemver: "1.0.0",
-                    launchAgent: .missing
+                source: .local(
+                    .init(
+                        corePacksReady: true,
+                        serviceSemver: "1.0.0",
+                        launchAgent: .missing
+                    )
                 )
             )
         )

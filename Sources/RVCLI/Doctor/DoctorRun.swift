@@ -194,21 +194,13 @@ extension ServiceHealth {
     var service: DoctorServiceView {
         switch self {
         case .reachable(let facts):
-            DoctorServiceView(
-                state: .running,
-                protocolName: facts.snapshot.protocolName,
-                serviceSemver: facts.snapshot.serviceSemver,
-                label: facts.snapshot.label,
-                fallback: facts.localCorePacksReady ? .ready : .unavailable,
-                launchAgent: facts.launchAgent,
-                warning: facts.snapshot.lastError == nil ? nil : "service reported an error"
-            )
-        case .down(let local):
-            localService(state: .down, local: local, warning: nil)
+            xpcService(state: .running, facts: facts)
+        case .down(let source):
+            serviceView(state: .down, source: source, localWarning: nil)
         case .notInstalled(let local):
             localService(state: .notInstalled, local: local, warning: nil)
-        case .skew(let reason, let local):
-            localService(state: .skew, local: local, warning: reason?.statusMessage)
+        case .skew(let reason, let source):
+            serviceView(state: .skew, source: source, localWarning: reason?.statusMessage)
         case .requestFailed(let failure, let local):
             localService(state: .down, local: local, warning: failure.statusMessage)
         }
@@ -218,6 +210,35 @@ extension ServiceHealth {
         DoctorPacksView(
             enabled: enabledPacks,
             registry: packCheckReady ? .ready : .broken
+        )
+    }
+
+    private func serviceView(
+        state: DoctorServiceState,
+        source: Source,
+        localWarning: String?
+    ) -> DoctorServiceView {
+        switch source {
+        case .xpc(let facts):
+            // XPC snapshots have no typed skew reason; keep the generic lastError warning.
+            xpcService(state: state, facts: facts)
+        case .local(let local):
+            localService(state: state, local: local, warning: localWarning)
+        }
+    }
+
+    private func xpcService(
+        state: DoctorServiceState,
+        facts: Reachable
+    ) -> DoctorServiceView {
+        DoctorServiceView(
+            state: state,
+            protocolName: facts.snapshot.protocolName,
+            serviceSemver: facts.snapshot.serviceSemver,
+            label: facts.snapshot.label,
+            fallback: facts.localCorePacksReady ? .ready : .unavailable,
+            launchAgent: facts.launchAgent,
+            warning: facts.snapshot.lastError == nil ? nil : "service reported an error"
         )
     }
 

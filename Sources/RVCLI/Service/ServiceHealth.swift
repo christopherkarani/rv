@@ -5,21 +5,29 @@ import RVPresentation
 /// Inspected rvd health derived from diagnostics and optional LaunchAgent presence.
 enum ServiceHealth: Equatable, Sendable {
     case reachable(Reachable)
-    case down(Local)
+    case down(Source)
     case notInstalled(Local)
-    case skew(reason: ServiceSkewReason?, local: Local)
+    case skew(reason: ServiceSkewReason?, source: Source)
     case requestFailed(failure: ServiceDiagnosticFailure, local: Local)
 
+    /// Facts from a successful XPC doctor snapshot, plus local fallback readiness.
     struct Reachable: Equatable, Sendable {
         var snapshot: DoctorSnapshotReply
         var localCorePacksReady: Bool
         var launchAgent: DoctorLaunchAgentState
     }
 
+    /// Facts when diagnostics stayed local (no usable XPC snapshot).
     struct Local: Equatable, Sendable {
         var corePacksReady: Bool
         var serviceSemver: String?
         var launchAgent: DoctorLaunchAgentState
+    }
+
+    /// Down or skew may come from an XPC snapshot or a local diagnostic.
+    enum Source: Equatable, Sendable {
+        case xpc(Reachable)
+        case local(Local)
     }
 }
 
@@ -47,9 +55,9 @@ extension ServiceHealth {
         switch self {
         case .reachable(let facts):
             facts.launchAgent
-        case .down(let local), .notInstalled(let local):
-            local.launchAgent
-        case .skew(_, let local), .requestFailed(_, let local):
+        case .down(let source), .skew(_, let source):
+            source.launchAgent
+        case .notInstalled(let local), .requestFailed(_, let local):
             local.launchAgent
         }
     }
@@ -58,9 +66,9 @@ extension ServiceHealth {
         switch self {
         case .reachable(let facts):
             facts.localCorePacksReady
-        case .down(let local), .notInstalled(let local):
-            local.corePacksReady
-        case .skew(_, let local), .requestFailed(_, let local):
+        case .down(let source), .skew(_, let source):
+            source.fallbackReady
+        case .notInstalled(let local), .requestFailed(_, let local):
             local.corePacksReady
         }
     }
@@ -69,8 +77,9 @@ extension ServiceHealth {
         switch self {
         case .reachable(let facts):
             facts.snapshot.packsEnabled
-        case .down(let local), .notInstalled(let local),
-             .skew(_, let local), .requestFailed(_, let local):
+        case .down(let source), .skew(_, let source):
+            source.enabledPacks
+        case .notInstalled(let local), .requestFailed(_, let local):
             local.corePacksReady ? dayOnePackIDs : []
         }
     }
@@ -79,8 +88,47 @@ extension ServiceHealth {
         switch self {
         case .reachable(let facts):
             facts.snapshot.checks.first { $0.id == "packs" }?.status == .ok
-        case .down(let local), .notInstalled(let local),
-             .skew(_, let local), .requestFailed(_, let local):
+        case .down(let source), .skew(_, let source):
+            source.packCheckReady
+        case .notInstalled(let local), .requestFailed(_, let local):
+            local.corePacksReady
+        }
+    }
+}
+
+extension ServiceHealth.Source {
+    var launchAgent: DoctorLaunchAgentState {
+        switch self {
+        case .xpc(let facts):
+            facts.launchAgent
+        case .local(let local):
+            local.launchAgent
+        }
+    }
+
+    var fallbackReady: Bool {
+        switch self {
+        case .xpc(let facts):
+            facts.localCorePacksReady
+        case .local(let local):
+            local.corePacksReady
+        }
+    }
+
+    var enabledPacks: [PackID] {
+        switch self {
+        case .xpc(let facts):
+            facts.snapshot.packsEnabled
+        case .local(let local):
+            local.corePacksReady ? dayOnePackIDs : []
+        }
+    }
+
+    var packCheckReady: Bool {
+        switch self {
+        case .xpc(let facts):
+            facts.snapshot.checks.first { $0.id == "packs" }?.status == .ok
+        case .local(let local):
             local.corePacksReady
         }
     }
@@ -135,9 +183,9 @@ extension ServiceHealth {
                 if case .observed(.missing) = launchAgent {
                     return .notInstalled(local)
                 }
-                return .down(local)
+                return .down(.local(local))
             case .skew(let reason):
-                return .skew(reason: reason, local: local)
+                return .skew(reason: reason, source: .local(local))
             case .requestFailed(let failure):
                 return .requestFailed(failure: failure, local: local)
             }
@@ -149,24 +197,18 @@ extension ServiceHealth {
         localCorePacksReady: Bool,
         launchAgent: DoctorLaunchAgentState
     ) -> ServiceHealth {
-        let local = Local(
-            corePacksReady: localCorePacksReady,
-            serviceSemver: snapshot.serviceSemver,
+        let facts = Reachable(
+            snapshot: snapshot,
+            localCorePacksReady: localCorePacksReady,
             launchAgent: launchAgent
         )
         switch snapshot.state {
         case .running, .idleExitArmed:
-            .reachable(
-                Reachable(
-                    snapshot: snapshot,
-                    localCorePacksReady: localCorePacksReady,
-                    launchAgent: launchAgent
-                )
-            )
+            return .reachable(facts)
         case .down:
-            .down(local)
+            return .down(.xpc(facts))
         case .skew:
-            .skew(reason: nil, local: local)
+            return .skew(reason: nil, source: .xpc(facts))
         }
     }
 }

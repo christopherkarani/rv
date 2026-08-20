@@ -47,7 +47,7 @@ struct ServiceDiagnosticRoutingTests {
         #expect(result == .local(.init(cause: .down, corePacksReady: true)))
         #expect(
             ServiceHealth.inspect(result)
-                == .down(.init(corePacksReady: true, serviceSemver: nil, launchAgent: .missing))
+                == .down(.local(.init(corePacksReady: true, serviceSemver: nil, launchAgent: .missing)))
         )
         #expect(transport.sendCount == 0)
     }
@@ -98,10 +98,12 @@ struct ServiceDiagnosticRoutingTests {
             ServiceHealth.inspect(result)
                 == .skew(
                     reason: .protocolMismatch,
-                    local: .init(
-                        corePacksReady: true,
-                        serviceSemver: "1.0.0",
-                        launchAgent: .missing
+                    source: .local(
+                        .init(
+                            corePacksReady: true,
+                            serviceSemver: "1.0.0",
+                            launchAgent: .missing
+                        )
                     )
                 )
         )

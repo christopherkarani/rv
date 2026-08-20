@@ -10,7 +10,7 @@ struct ServiceStatusTests {
         let health = ServiceHealth.inspect(await client.diagnostics())
         #expect(
             health == .down(
-                .init(corePacksReady: true, serviceSemver: nil, launchAgent: .missing)
+                .local(.init(corePacksReady: true, serviceSemver: nil, launchAgent: .missing))
             )
         )
 
@@ -98,7 +98,13 @@ struct ServiceStatusTests {
         let health = ServiceHealth.inspect(await client.diagnostics())
         #expect(
             health == .down(
-                .init(corePacksReady: true, serviceSemver: "1.0.0", launchAgent: .missing)
+                .xpc(
+                    .init(
+                        snapshot: snapshot,
+                        localCorePacksReady: true,
+                        launchAgent: .missing
+                    )
+                )
             )
         )
 
@@ -129,10 +135,12 @@ struct ServiceStatusTests {
         #expect(
             health == .skew(
                 reason: nil,
-                local: .init(
-                    corePacksReady: true,
-                    serviceSemver: "1.0.0",
-                    launchAgent: .missing
+                source: .xpc(
+                    .init(
+                        snapshot: snapshot,
+                        localCorePacksReady: true,
+                        launchAgent: .missing
+                    )
                 )
             )
         )

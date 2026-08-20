@@ -357,10 +357,12 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
         #expect(
             health == .skew(
                 reason: .protocolMismatch,
-                local: .init(
-                    corePacksReady: true,
-                    serviceSemver: "1.0.0",
-                    launchAgent: .missing
+                source: .local(
+                    .init(
+                        corePacksReady: true,
+                        serviceSemver: "1.0.0",
+                        launchAgent: .missing
+                    )
                 )
             )
         )
@@ -429,7 +431,7 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
         )
         #expect(
             health == .down(
-                .init(corePacksReady: true, serviceSemver: nil, launchAgent: .installed)
+                .local(.init(corePacksReady: true, serviceSemver: nil, launchAgent: .installed))
             )
         )
 
@@ -497,7 +499,13 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
         )
         #expect(
             health == .down(
-                .init(corePacksReady: true, serviceSemver: "1.0.0", launchAgent: .missing)
+                .xpc(
+                    .init(
+                        snapshot: snapshot,
+                        localCorePacksReady: true,
+                        launchAgent: .missing
+                    )
+                )
             )
         )
 
@@ -535,10 +543,12 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
         #expect(
             health == .skew(
                 reason: nil,
-                local: .init(
-                    corePacksReady: true,
-                    serviceSemver: "1.0.0",
-                    launchAgent: .missing
+                source: .xpc(
+                    .init(
+                        snapshot: snapshot,
+                        localCorePacksReady: true,
+                        launchAgent: .missing
+                    )
                 )
             )
         )
@@ -551,6 +561,7 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
 
         #expect(outcome.stdout.contains("service: skew"))
         #expect(outcome.stdout.contains("service: running") == false)
+        #expect(outcome.stdout.contains("service-warning: service reported an error"))
         #expect(outcome.stdout.contains("peer supplied detail") == false)
     }
 }
