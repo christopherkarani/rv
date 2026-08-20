@@ -4,25 +4,18 @@ import RVIPC
 import RVPolicy
 import RVService
 
-public struct ClientEvaluateReply: Sendable, Equatable {
-    public var decision: String
-    public var ruleID: String?
-    public var reason: String?
-    public var via: String
-    public var indeterminateReason: String?
+public enum EvaluationPath: String, Sendable, Equatable {
+    case xpc
+    case inProcess
+}
 
-    public init(
-        decision: String,
-        ruleID: String? = nil,
-        reason: String? = nil,
-        via: String,
-        indeterminateReason: String? = nil
-    ) {
-        self.decision = decision
-        self.ruleID = ruleID
-        self.reason = reason
-        self.via = via
-        self.indeterminateReason = indeterminateReason
+public struct RoutedEvaluation: Sendable, Equatable {
+    public var result: EvaluationResult
+    public var path: EvaluationPath
+
+    public init(result: EvaluationResult, path: EvaluationPath) {
+        self.result = result
+        self.path = path
     }
 }
 
@@ -75,23 +68,19 @@ public struct ServiceClient: Sendable {
         try await store.insertGranted(matchingView: matchingView, cwd: cwd, now: now)
     }
 
-    public func evaluate(command: String, cwd: String? = nil) async -> ClientEvaluateReply {
-        let evaluation = await evaluateRouted(command: ShellCommand(rawValue: command), cwd: cwd)
-        return Self.view(evaluation.result, via: evaluation.via)
+    public func evaluate(command: String, cwd: String? = nil) async -> RoutedEvaluation {
+        await evaluateRouted(command: ShellCommand(rawValue: command), cwd: cwd)
     }
 
     public func evaluateResult(command: ShellCommand, cwd: String? = nil) async -> EvaluationResult {
-        await evaluateRouted(command: command, cwd: cwd).result
+        await evaluate(command: command.rawValue, cwd: cwd).result
     }
 
     private func evaluateRouted(
         command: ShellCommand,
         cwd: String?
-    ) async -> (result: EvaluationResult, via: String) {
-        let request = EvaluationRequest(
-            command: command,
-            enabledPacks: dayOnePackIDs
-        )
+    ) async -> RoutedEvaluation {
+        let request = dayOneEvaluationRequest(command: command)
         switch await route() {
         case .xpc(let transport):
             do {
@@ -100,15 +89,24 @@ public struct ServiceClient: Sendable {
                 )
                 let data = try await transport.send(body)
                 let response = try IPCJSON.decode(IPCResponse.self, from: data)
-                if case .evaluate(let reply) = response.result {
-                    return (reply.result, "xpc")
+                if case .evaluate(let reply) = response.result, reply.via == EvaluationPath.xpc.rawValue {
+                    return RoutedEvaluation(result: reply.result, path: .xpc)
                 }
-                return (await inProcessEvaluate(request, cwd: cwd), "inProcess")
+                return RoutedEvaluation(
+                    result: await inProcessEvaluate(request, cwd: cwd),
+                    path: .inProcess
+                )
             } catch {
-                return (await inProcessEvaluate(request, cwd: cwd), "inProcess")
+                return RoutedEvaluation(
+                    result: await inProcessEvaluate(request, cwd: cwd),
+                    path: .inProcess
+                )
             }
         case .down, .skew:
-            return (await inProcessEvaluate(request, cwd: cwd), "inProcess")
+            return RoutedEvaluation(
+                result: await inProcessEvaluate(request, cwd: cwd),
+                path: .inProcess
+            )
         }
     }
 
@@ -161,30 +159,6 @@ public struct ServiceClient: Sendable {
             return true
         }
         return false
-    }
-
-    private static func view(_ result: EvaluationResult, via: String) -> ClientEvaluateReply {
-        switch result.decision {
-        case .allow:
-            return ClientEvaluateReply(
-                decision: "allow",
-                ruleID: result.matched?.ruleID.rawValue,
-                via: via
-            )
-        case .deny(let deny):
-            return ClientEvaluateReply(
-                decision: "deny",
-                ruleID: deny.ruleID.rawValue,
-                reason: deny.reason,
-                via: via
-            )
-        case .indeterminate(let reason):
-            return ClientEvaluateReply(
-                decision: "indeterminate",
-                via: via,
-                indeterminateReason: reason.rawValue
-            )
-        }
     }
 
     private static func resolveStore(
