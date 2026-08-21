@@ -106,7 +106,7 @@ public enum CommandRun {
         let exitCode: Int32 = kind.exitsZeroOnDeny || result.decision == .allow ? 0 : 1
 
         if mode == .robot {
-            return CLIResult(stdout: RobotWriter.line(result: result), exitCode: exitCode)
+            return robotResult(kind: kind, result: result, command: command, exitCode: exitCode)
         }
 
         let lines = kind.usesExplainFrame
@@ -127,6 +127,34 @@ public enum CommandRun {
                 palette: palette
             )
         return CLIResult(stdout: PrettyWriter.join(lines), exitCode: exitCode)
+    }
+
+    private static func robotResult(
+        kind: CLIKind,
+        result: EvaluationResult,
+        command: ShellCommand,
+        exitCode: Int32
+    ) -> CLIResult {
+        // Schema follows the CLI verb, not pretty-frame choice: only `rv explain`
+        // emits `rv.explain.v1`. `rv test` / `rv test --explain` keep `rv.test.v1`.
+        let text: String
+        switch kind {
+        case .explain:
+            text = RobotJSON.encode(
+                explainRobotPayload(
+                    from: explainViewModel(
+                        from: result,
+                        command: command,
+                        normalized: result.matchingView.isEmpty
+                            ? Normalize.matchingView(of: command.rawValue).rawValue
+                            : result.matchingView.rawValue
+                    )
+                ).fields
+            )
+        case .test, .testExplain:
+            text = RobotJSON.encode(testRobotPayload(from: result).fields)
+        }
+        return CLIResult(stdout: text + "\n", exitCode: exitCode)
     }
 
     private static func prettyTestLines(
