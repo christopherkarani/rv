@@ -45,13 +45,14 @@ struct ExclusiveFileLockTests {
         #expect(try posixMode(lockURL) == 0o600)
     }
 
-    @Test func preExistingOwnerUnwritableModeRecoveredToOwnerOnly() throws {
-        let root = try makeDirectory("owner-unwritable")
+    @Test(arguments: [0o000, 0o444, 0o200])
+    func preExistingOwnerUnwritableModeRecoveredToOwnerOnly(unwritableMode: Int) throws {
+        let root = try makeDirectory("owner-unwritable-\(unwritableMode)")
         let lockURL = root.appendingPathComponent(".probe.lock")
         FileManager.default.createFile(
             atPath: lockURL.path,
             contents: Data(),
-            attributes: [.posixPermissions: 0o444]
+            attributes: [.posixPermissions: unwritableMode]
         )
         let acquired = try ExclusiveFileLock.withLock(at: lockURL) { true }
         #expect(acquired)
