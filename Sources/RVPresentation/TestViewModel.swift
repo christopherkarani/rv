@@ -91,7 +91,6 @@ public func testViewModel(
 ) -> TestViewModel {
     let resultWord = testResultWord(result.decision)
     let tone = decisionTone(result.decision)
-    let deny = denyViewModel(from: result, command: command)
     switch result.decision {
     case .allow:
         return TestViewModel(
@@ -105,10 +104,10 @@ public func testViewModel(
             matchedLabel: result.matched.map { $0.ruleID.rawValue },
             resultWord: resultWord,
             resultTone: tone,
-            columns: columns,
-            deny: deny
+            columns: columns
         )
     case .deny(let payload):
+        let deny = denyViewModel(payload, command: command)
         let matched = result.matched
         return TestViewModel(
             command: command,
@@ -118,10 +117,10 @@ public func testViewModel(
                 searchText: matched?.searchText,
                 onto: command.rawValue
             ),
-            matchedLabel: (matched?.ruleID ?? deny?.ruleID ?? payload.ruleID).rawValue,
-            packDisplay: deny?.packID.rawValue ?? payload.ruleID.pack.rawValue,
-            patternName: deny?.ruleID.pattern ?? payload.ruleID.pattern,
-            reason: deny?.packReason ?? payload.reason,
+            matchedLabel: (matched?.ruleID ?? deny.ruleID).rawValue,
+            packDisplay: deny.packID.rawValue,
+            patternName: deny.ruleID.pattern,
+            reason: deny.packReason,
             explanation: matched?.explanation,
             source: testMatchSource,
             resultWord: resultWord,
@@ -135,8 +134,7 @@ public func testViewModel(
             reason: incompleteEvalSentence,
             resultWord: resultWord,
             resultTone: tone,
-            columns: columns,
-            deny: deny
+            columns: columns
         )
     }
 }
