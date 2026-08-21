@@ -31,8 +31,7 @@ public actor ServiceRuntime {
         if let catalog {
             self.catalog = catalog
         } else {
-            let home = (ProcessInfo.processInfo.environment["HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? "")
-            self.catalog = (try? PacksFacade.makeCatalog(home: home)) ?? PackCatalog()
+            self.catalog = (try? PacksFacade.makeCatalog(home: EnabledPacks.processHome())) ?? PackCatalog()
         }
         if let allowOnce {
             self.allowOnce = allowOnce
@@ -217,7 +216,7 @@ public actor ServiceRuntime {
     }
 
     private func setPackEnabled(_ params: SetPackEnabledParams) -> IPCResult {
-        let home = (ProcessInfo.processInfo.environment["HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? "")
+        let home = EnabledPacks.processHome()
         do {
             if params.enabled {
                 _ = try PacksFacade.enable(home: home, ids: [params.id.rawValue])
@@ -247,7 +246,7 @@ public actor ServiceRuntime {
     }
 
     private func listPacks() -> ListPacksReply {
-        let home = (ProcessInfo.processInfo.environment["HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? "")
+        let home = EnabledPacks.processHome()
         if let refreshed = try? PacksFacade.makeCatalog(home: home) {
             catalog = refreshed
         }
