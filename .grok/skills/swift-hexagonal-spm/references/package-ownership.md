@@ -25,6 +25,9 @@ restore the pre-T2 snapshot.
 | T3 | Product + `executableTarget` `rvd` at `Sources/rvd` depending on `RVService`. Keep `RVService` a library. | ArgumentParser, product `rv`, `Sources/RVCLI/main.swift`, `Sources/RVService/main.swift` / `@main` |
 | T4–T5 | Nothing in the library graph unless a spec says so | A second hooks module |
 | T6–T9 | Only what that ticket’s spec names | A surprise executable |
+| T10 | Nothing in the library graph. `tools/release.sh` + `install.sh` bundle copy | `Package.swift`, `Sources/` |
+| T11–T14 | Nothing in the library graph. File ownership is `docs/factory/specs/phase-5-size-speed.md` | A new product, target, or SPM dependency |
+| T15+ (fence) | Thin hook executable — **merge plan required** | Do not add `rv-hook` in T10–T14 |
 
 T2 and T3 run in **separate worktrees**. They must not both edit
 `products` / `dependencies` / `targets` without a merge plan.
