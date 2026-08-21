@@ -5,8 +5,9 @@ import RVDomain
 
 @Test func hookWire_denyAddsRuleAndNextWithoutBreakingDecisionReason() throws {
     let result = EvaluationResult(
-        decision: .deny(
-            Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "x")
+        outcome: .deny(
+            Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "x"),
+            matched: nil
         )
     )
     let wire = hookWire(
@@ -28,7 +29,7 @@ import RVDomain
 
 @Test func hookWire_allowIsEmpty() {
     let wire = hookWire(
-        from: EvaluationResult(decision: .allow),
+        from: EvaluationResult(outcome: .plain),
         command: ShellCommand(rawValue: "git status"),
         using: GrokHostCodec()
     )
@@ -38,7 +39,7 @@ import RVDomain
 
 @Test func hookWire_indeterminateOmitsRule() throws {
     let wire = hookWire(
-        from: EvaluationResult(decision: .indeterminate(.commandTooLarge)),
+        from: EvaluationResult(outcome: .indeterminate(.commandTooLarge)),
         command: ShellCommand(rawValue: "x"),
         using: GrokHostCodec()
     )
@@ -54,8 +55,9 @@ import RVDomain
     let denyCodec = EncodeDenySpy()
     let denyWire = hookWire(
         from: EvaluationResult(
-            decision: .deny(
-                Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "x")
+            outcome: .deny(
+                Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "x"),
+                matched: nil
             )
         ),
         command: ShellCommand(rawValue: "git reset --hard"),
@@ -69,7 +71,7 @@ import RVDomain
 
     let incompleteCodec = EncodeDenySpy()
     let incompleteWire = hookWire(
-        from: EvaluationResult(decision: .indeterminate(.commandTooLarge)),
+        from: EvaluationResult(outcome: .indeterminate(.commandTooLarge)),
         command: ShellCommand(rawValue: "x"),
         using: incompleteCodec
     )
@@ -84,8 +86,8 @@ private final class EncodeDenySpy: HostCodec, @unchecked Sendable {
     var host: HookHost { .grok }
     private(set) var denyCalls: [(reason: String, rule: String?, next: String?)] = []
 
-    func decode(_ stdin: String) -> HookRequest {
-        HookRequest(host: .grok, command: nil)
+    func decode(_ stdin: String) -> HookDecodeOutcome {
+        .malformed(.missingCommand)
     }
 
     func encodeDeny(reason: String, rule: String?, next: String?) -> HookWire {
@@ -98,7 +100,10 @@ private final class EncodeDenySpy: HostCodec, @unchecked Sendable {
     let stdin = """
     {"hookEventName":"pre_tool_use","cwd":"/tmp/ws","toolName":"run_terminal_command","toolInput":{"command":"git status"}}
     """
-    let request = GrokHostCodec().decode(stdin)
-    #expect(request.command?.rawValue == "git status")
+    guard case .request(let request) = GrokHostCodec().decode(stdin) else {
+        Issue.record("expected .request for cwd stdin")
+        return
+    }
+    #expect(request.command.rawValue == "git status")
     #expect(request.cwd == "/tmp/ws")
 }

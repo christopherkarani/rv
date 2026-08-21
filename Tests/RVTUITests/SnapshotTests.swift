@@ -35,16 +35,18 @@ private func resetHardTest() -> TestViewModel {
     let reason = "git reset --hard destroys uncommitted changes. Use 'git stash' first."
     return testViewModel(
         from: EvaluationResult(
-            decision: .deny(Deny(ruleID: rule, reason: reason)),
-            matched: RuleMatch(
-                ruleID: rule,
-                packID: .coreGit,
-                patternName: "reset-hard",
-                severity: .critical,
-                reason: reason,
-                explanation: resetHardPackExplanation,
-                span: MatchSpan(start: 0, end: 16),
-                matchedText: "git reset --hard"
+            outcome: .deny(
+                Deny(ruleID: rule, reason: reason),
+                matched: RuleMatch(
+                    ruleID: rule,
+                    packID: .coreGit,
+                    patternName: "reset-hard",
+                    severity: .critical,
+                    reason: reason,
+                    explanation: resetHardPackExplanation,
+                    span: MatchSpan(start: 0, end: 16),
+                    matchedText: "git reset --hard"
+                )
             )
         ),
         command: ShellCommand(rawValue: "git reset --hard")
@@ -57,16 +59,18 @@ private func rmRfTest() -> TestViewModel {
         "rm -rf is destructive and requires human approval. Explain what you want to delete and why, then ask the user to run the command manually."
     return testViewModel(
         from: EvaluationResult(
-            decision: .deny(Deny(ruleID: rule, reason: reason)),
-            matched: RuleMatch(
-                ruleID: rule,
-                packID: .coreFilesystem,
-                patternName: "rm-rf-general",
-                severity: .high,
-                reason: reason,
-                explanation: rmRfPackExplanation,
-                span: MatchSpan(start: 0, end: 6),
-                matchedText: "rm -rf"
+            outcome: .deny(
+                Deny(ruleID: rule, reason: reason),
+                matched: RuleMatch(
+                    ruleID: rule,
+                    packID: .coreFilesystem,
+                    patternName: "rm-rf-general",
+                    severity: .high,
+                    reason: reason,
+                    explanation: rmRfPackExplanation,
+                    span: MatchSpan(start: 0, end: 6),
+                    matchedText: "rm -rf"
+                )
             )
         ),
         command: ShellCommand(rawValue: "rm -rf ./src")
@@ -115,7 +119,7 @@ git reset --hard discards ALL uncommitted changes in your working directory \\ A
 @Test func snapshot_prettyAllowGitStatus() throws {
     let lines = TestRenderer().render(
         testViewModel(
-            from: EvaluationResult(decision: .allow),
+            from: EvaluationResult(outcome: .plain),
             command: ShellCommand(rawValue: "git status")
         ),
         palette: colorOffPalette
@@ -128,20 +132,20 @@ git reset --hard discards ALL uncommitted changes in your working directory \\ A
 @Test func snapshot_prettyExplainGitResetHard() throws {
     let vm = explainViewModel(
         from: EvaluationResult(
-            decision: .deny(
+            outcome: .deny(
                 Deny(
                     ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
                     reason: "git reset --hard destroys uncommitted changes. Use 'git stash' first."
+                ),
+                matched: RuleMatch(
+                    ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+                    packID: .coreGit,
+                    patternName: "reset-hard",
+                    severity: .critical,
+                    reason: "git reset --hard destroys uncommitted changes. Use 'git stash' first.",
+                    explanation: resetHardPackExplanation,
+                    regex: #"(?:^|[^[:alnum:]_-])git\s+(?:\S+\s+)*reset\s+--hard"#
                 )
-            ),
-            matched: RuleMatch(
-                ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
-                packID: .coreGit,
-                patternName: "reset-hard",
-                severity: .critical,
-                reason: "git reset --hard destroys uncommitted changes. Use 'git stash' first.",
-                explanation: resetHardPackExplanation,
-                regex: #"(?:^|[^[:alnum:]_-])git\s+(?:\S+\s+)*reset\s+--hard"#
             )
         ),
         command: ShellCommand(rawValue: "git reset --hard")
@@ -154,7 +158,7 @@ git reset --hard discards ALL uncommitted changes in your working directory \\ A
 
 @Test func snapshot_prettyExplainGitStatus() throws {
     let vm = explainViewModel(
-        from: EvaluationResult(decision: .allow),
+        from: EvaluationResult(outcome: .plain),
         command: ShellCommand(rawValue: "git status")
     )
     let lines = ExplainRenderer().render(vm, palette: colorOffPalette)
