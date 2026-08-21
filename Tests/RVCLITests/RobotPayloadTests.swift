@@ -63,6 +63,26 @@ private func object(from stdout: String) throws -> [String: Any] {
     #expect(json["decision"] as? String == "deny")
 }
 
+@Test func testExplainRobot_keepsTestSchemaNotExplainSchema() throws {
+    let deny = renderRobot(
+        kind: .testExplain,
+        result: denyResult(),
+        command: "git reset --hard"
+    )
+    let json = try object(from: deny.stdout)
+
+    #expect(deny.exitCode == 1)
+    #expect(json["schema"] as? String == "rv.test.v1")
+    #expect(json["schema"] as? String != "rv.explain.v1")
+    #expect(json["decision"] as? String == "deny")
+    #expect(json["explanation"] == nil)
+    #expect(json["next_action"] == nil)
+    #expect(
+        trimOneNewline(deny.stdout)
+            == #"{"schema":"rv.test.v1","decision":"deny","pack_id":"core.git","rule_id":"core.git:reset-hard","reason":"git reset --hard destroys uncommitted changes"}"#
+    )
+}
+
 @Test func testRobot_stdoutKeepsStableTestSchemaAndBytes() throws {
     let allow = renderRobot(kind: .test, result: EvaluationResult(outcome: .plain), command: "git status")
     #expect(allow.exitCode == 0)

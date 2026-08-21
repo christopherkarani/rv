@@ -135,8 +135,11 @@ public enum CommandRun {
         command: ShellCommand,
         exitCode: Int32
     ) -> CLIResult {
+        // Schema follows the CLI verb, not pretty-frame choice: only `rv explain`
+        // emits `rv.explain.v1`. `rv test` / `rv test --explain` keep `rv.test.v1`.
         let text: String
-        if kind.usesExplainFrame {
+        switch kind {
+        case .explain:
             text = RobotJSON.encode(
                 explainRobotPayload(
                     from: explainViewModel(
@@ -148,7 +151,7 @@ public enum CommandRun {
                     )
                 ).fields
             )
-        } else {
+        case .test, .testExplain:
             text = RobotJSON.encode(testRobotPayload(from: result).fields)
         }
         return CLIResult(stdout: text + "\n", exitCode: exitCode)
