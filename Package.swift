@@ -93,7 +93,11 @@ let package = Package(
         .testTarget(name: "RVServiceTests", dependencies: ["RVService"]),
         .testTarget(name: "RVPresentationTests", dependencies: ["RVPresentation"]),
         .testTarget(name: "RVThemeTests", dependencies: ["RVTheme"]),
-        .testTarget(name: "RVTUITests", dependencies: ["RVTUI"]),
+        .testTarget(
+            name: "RVTUITests",
+            dependencies: ["RVTUI"],
+            exclude: ["Fixtures"]
+        ),
         .testTarget(name: "RVCLITests", dependencies: ["RVCLI"]),
         .testTarget(name: "RVHistoryTests", dependencies: ["RVHistory"]),
         .testTarget(name: "RVAnalyticsTests", dependencies: ["RVAnalytics"]),

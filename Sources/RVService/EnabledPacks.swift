@@ -12,11 +12,6 @@ public enum EnabledPacks {
         (try? PacksFacade.effectiveIDs(home: home)) ?? dayOnePackIDs
     }
 
-    /// Resolves for the live process's HOME.
-    public static func forProcess() -> [PackID] {
-        resolve(home: processHome())
-    }
-
     /// The operator's HOME as this process sees it; empty when unset.
     static func processHome() -> String {
         ProcessInfo.processInfo.environment["HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? ""

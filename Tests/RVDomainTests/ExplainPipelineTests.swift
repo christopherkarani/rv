@@ -6,7 +6,7 @@ struct ExplainPipelineTests {
         let rule = RuleID(pack: .coreGit, pattern: "reset-hard")
         let steps = explainSteps(
             from: EvaluationResult(
-                decision: .deny(Deny(ruleID: rule, reason: "blocked"))
+                outcome: .deny(Deny(ruleID: rule, reason: "blocked"), matched: nil)
             )
         )
         #expect(
@@ -26,7 +26,7 @@ struct ExplainPipelineTests {
     @Test func indeterminateStopsAtIncomplete() {
         #expect(
             explainSteps(
-                from: EvaluationResult(decision: .indeterminate(.commandTooLarge))
+                from: EvaluationResult(outcome: .indeterminate(.commandTooLarge))
             ) == [.normalize, .default(.incomplete)]
         )
     }
@@ -34,7 +34,7 @@ struct ExplainPipelineTests {
     @Test func quickRejectSkipsScan() {
         #expect(
             explainSteps(
-                from: EvaluationResult(decision: .allow, quickRejected: true)
+                from: EvaluationResult(outcome: .quickRejected)
             ) == [.normalize, .quickReject(.skipped), .default(.allow)]
         )
     }
@@ -44,8 +44,7 @@ struct ExplainPipelineTests {
         #expect(
             explainSteps(
                 from: EvaluationResult(
-                    decision: .allow,
-                    matchedSafe: SafeMatch(packID: .coreGit, patternName: "checkout-new-branch")
+                    outcome: .safeOnly(SafeMatch(packID: .coreGit, patternName: "checkout-new-branch"))
                 )
             ) == [
                 .normalize,
@@ -61,13 +60,15 @@ struct ExplainPipelineTests {
         #expect(
             explainSteps(
                 from: EvaluationResult(
-                    decision: .allow,
-                    matched: RuleMatch(
-                        ruleID: rule,
-                        packID: .coreGit,
-                        patternName: "stash-drop",
-                        severity: .medium,
-                        reason: "git stash drop deletes a single stash"
+                    outcome: .hit(
+                        RuleMatch(
+                            ruleID: rule,
+                            packID: .coreGit,
+                            patternName: "stash-drop",
+                            severity: .medium,
+                            reason: "git stash drop deletes a single stash"
+                        ),
+                        safe: nil
                     )
                 )
             ) == [
@@ -86,15 +87,16 @@ struct ExplainPipelineTests {
         #expect(
             explainSteps(
                 from: EvaluationResult(
-                    decision: .allow,
-                    matched: RuleMatch(
-                        ruleID: match,
-                        packID: .coreGit,
-                        patternName: "stash-drop",
-                        severity: .medium,
-                        reason: "git stash drop deletes a single stash"
-                    ),
-                    matchedSafe: SafeMatch(packID: .coreFilesystem, patternName: "tmp-scratch")
+                    outcome: .hit(
+                        RuleMatch(
+                            ruleID: match,
+                            packID: .coreGit,
+                            patternName: "stash-drop",
+                            severity: .medium,
+                            reason: "git stash drop deletes a single stash"
+                        ),
+                        safe: SafeMatch(packID: .coreFilesystem, patternName: "tmp-scratch")
+                    )
                 )
             ) == [
                 .normalize,
@@ -108,7 +110,7 @@ struct ExplainPipelineTests {
 
     @Test func unmatchedAllowWalksFullDefault() {
         #expect(
-            explainSteps(from: EvaluationResult(decision: .allow)) == [
+            explainSteps(from: EvaluationResult(outcome: .plain)) == [
                 .normalize,
                 .quickReject(.scanned),
                 .safe(.none),
@@ -116,5 +118,33 @@ struct ExplainPipelineTests {
                 .default(.allow),
             ]
         )
+    }
+
+    @Test func denyWithMatchedStillShowsNoSafeStage() {
+        let rule = RuleID(pack: .coreGit, pattern: "reset-hard")
+        let safeRule = RuleID(pack: .coreFilesystem, pattern: "tmp-scratch")
+        let steps = explainSteps(
+            from: EvaluationResult(
+                outcome: .deny(
+                    Deny(ruleID: rule, reason: "blocked"),
+                    matched: RuleMatch(
+                        ruleID: rule,
+                        packID: .coreGit,
+                        patternName: "reset-hard",
+                        severity: .critical,
+                        reason: "blocked"
+                    )
+                )
+            )
+        )
+        #expect(
+            steps == [
+                .normalize,
+                .quickReject(.scanned),
+                .safe(.none),
+                .destructive(.rule(rule)),
+            ]
+        )
+        #expect(steps.contains { $0 == .safe(.rule(safeRule)) } == false)
     }
 }

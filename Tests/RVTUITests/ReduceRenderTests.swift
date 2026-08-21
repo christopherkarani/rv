@@ -46,11 +46,12 @@ import RVTheme
 @Test func testRenderer_colorOff_hasNoEscape() {
     let vm = testViewModel(
         from: EvaluationResult(
-            decision: .deny(
+            outcome: .deny(
                 Deny(
                     ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
                     reason: "git reset --hard destroys uncommitted changes. Use 'git stash' first."
-                )
+                ),
+                matched: nil
             )
         ),
         command: ShellCommand(rawValue: "git reset --hard")
@@ -88,17 +89,17 @@ private func stripCSI(_ text: String) -> String {
     let rule = RuleID(pack: .coreGit, pattern: "reset-hard")
     let vm = testViewModel(
         from: EvaluationResult(
-            decision: .deny(
-                Deny(ruleID: rule, reason: "git reset --hard destroys uncommitted changes")
-            ),
-            matched: RuleMatch(
-                ruleID: rule,
-                packID: .coreGit,
-                patternName: "reset-hard",
-                severity: .critical,
-                reason: "git reset --hard destroys uncommitted changes",
-                span: MatchSpan(start: 0, end: 16),
-                matchedText: "git reset --hard"
+            outcome: .deny(
+                Deny(ruleID: rule, reason: "git reset --hard destroys uncommitted changes"),
+                matched: RuleMatch(
+                    ruleID: rule,
+                    packID: .coreGit,
+                    patternName: "reset-hard",
+                    severity: .critical,
+                    reason: "git reset --hard destroys uncommitted changes",
+                    span: MatchSpan(start: 0, end: 16),
+                    matchedText: "git reset --hard"
+                )
             )
         ),
         command: ShellCommand(rawValue: command)
@@ -128,15 +129,17 @@ git reset --hard discards ALL uncommitted changes in your working directory \\ A
     let regex = #"(?:^|[^[:alnum:]_-])git\s+(?:\S+\s+)*reset\s+--hard"#
     let vm = explainViewModel(
         from: EvaluationResult(
-            decision: .deny(Deny(ruleID: rule, reason: reason)),
-            matched: RuleMatch(
-                ruleID: rule,
-                packID: .coreGit,
-                patternName: "reset-hard",
-                severity: .critical,
-                reason: reason,
-                explanation: resetHardExplanation,
-                regex: regex
+            outcome: .deny(
+                Deny(ruleID: rule, reason: reason),
+                matched: RuleMatch(
+                    ruleID: rule,
+                    packID: .coreGit,
+                    patternName: "reset-hard",
+                    severity: .critical,
+                    reason: reason,
+                    explanation: resetHardExplanation,
+                    regex: regex
+                )
             )
         ),
         command: ShellCommand(rawValue: "git reset --hard")
@@ -173,7 +176,7 @@ private func isTreeSpacer(_ line: String) -> Bool {
 
 @Test func explainRenderer_indeterminateHasReasonWithoutMatch() {
     let vm = explainViewModel(
-        from: EvaluationResult(decision: .indeterminate(.commandTooLarge)),
+        from: EvaluationResult(outcome: .indeterminate(.commandTooLarge)),
         command: ShellCommand(rawValue: "git reset --hard")
     )
     let lines = ExplainRenderer().render(vm, palette: colorOffPalette)
@@ -190,16 +193,16 @@ private func isTreeSpacer(_ line: String) -> Bool {
     let rule = RuleID(pack: .coreGit, pattern: "reset-hard")
     let vm = explainViewModel(
         from: EvaluationResult(
-            decision: .deny(
-                Deny(ruleID: rule, reason: "git reset --hard destroys uncommitted changes")
-            ),
-            matched: RuleMatch(
-                ruleID: rule,
-                packID: .coreGit,
-                patternName: "reset-hard",
-                severity: .critical,
-                reason: "git reset --hard destroys uncommitted changes",
-                explanation: resetHardExplanation
+            outcome: .deny(
+                Deny(ruleID: rule, reason: "git reset --hard destroys uncommitted changes"),
+                matched: RuleMatch(
+                    ruleID: rule,
+                    packID: .coreGit,
+                    patternName: "reset-hard",
+                    severity: .critical,
+                    reason: "git reset --hard destroys uncommitted changes",
+                    explanation: resetHardExplanation
+                )
             )
         ),
         command: ShellCommand(rawValue: "git reset --hard")
@@ -231,16 +234,16 @@ private func isTreeSpacer(_ line: String) -> Bool {
     let regex = #"(?:^|[^[:alnum:]_-])git\s+(?:\S+\s+)*reset\s+--hard"#
     let vm = explainViewModel(
         from: EvaluationResult(
-            decision: .deny(
-                Deny(ruleID: rule, reason: "git reset --hard destroys uncommitted changes")
-            ),
-            matched: RuleMatch(
-                ruleID: rule,
-                packID: .coreGit,
-                patternName: "reset-hard",
-                severity: .critical,
-                reason: "git reset --hard destroys uncommitted changes",
-                regex: regex
+            outcome: .deny(
+                Deny(ruleID: rule, reason: "git reset --hard destroys uncommitted changes"),
+                matched: RuleMatch(
+                    ruleID: rule,
+                    packID: .coreGit,
+                    patternName: "reset-hard",
+                    severity: .critical,
+                    reason: "git reset --hard destroys uncommitted changes",
+                    regex: regex
+                )
             )
         ),
         command: ShellCommand(rawValue: "git reset --hard")
@@ -293,18 +296,18 @@ private func isTreeSpacer(_ line: String) -> Bool {
     let rule = RuleID(pack: .coreFilesystem, pattern: "rm-rf-general")
     let vm = testViewModel(
         from: EvaluationResult(
-            decision: .deny(
-                Deny(ruleID: rule, reason: "rm -rf is destructive and requires human approval.")
-            ),
-            matched: RuleMatch(
-                ruleID: rule,
-                packID: .coreFilesystem,
-                patternName: "rm-rf-general",
-                severity: .high,
-                reason: "rm -rf is destructive and requires human approval.",
-                span: MatchSpan(start: command.count - 12, end: command.count - 6),
-                matchedText: "rm -rf",
-                searchText: "rm -rf ./src"
+            outcome: .deny(
+                Deny(ruleID: rule, reason: "rm -rf is destructive and requires human approval."),
+                matched: RuleMatch(
+                    ruleID: rule,
+                    packID: .coreFilesystem,
+                    patternName: "rm-rf-general",
+                    severity: .high,
+                    reason: "rm -rf is destructive and requires human approval.",
+                    span: MatchSpan(start: command.count - 12, end: command.count - 6),
+                    matchedText: "rm -rf",
+                    searchText: "rm -rf ./src"
+                )
             )
         ),
         command: ShellCommand(rawValue: command)
@@ -321,18 +324,18 @@ private func isTreeSpacer(_ line: String) -> Bool {
     let rule = RuleID(pack: .coreGit, pattern: "reset-hard")
     let vm = testViewModel(
         from: EvaluationResult(
-            decision: .deny(
-                Deny(ruleID: rule, reason: "git reset --hard destroys uncommitted changes")
-            ),
-            matched: RuleMatch(
-                ruleID: rule,
-                packID: .coreGit,
-                patternName: "reset-hard",
-                severity: .critical,
-                reason: "git reset --hard destroys uncommitted changes",
-                span: MatchSpan(start: 0, end: command.count),
-                matchedText: command,
-                searchText: command
+            outcome: .deny(
+                Deny(ruleID: rule, reason: "git reset --hard destroys uncommitted changes"),
+                matched: RuleMatch(
+                    ruleID: rule,
+                    packID: .coreGit,
+                    patternName: "reset-hard",
+                    severity: .critical,
+                    reason: "git reset --hard destroys uncommitted changes",
+                    span: MatchSpan(start: 0, end: command.count),
+                    matchedText: command,
+                    searchText: command
+                )
             )
         ),
         command: ShellCommand(rawValue: command),
@@ -351,16 +354,18 @@ private func isTreeSpacer(_ line: String) -> Bool {
     let rule = RuleID(pack: .coreFilesystem, pattern: "rm-rf-general")
     let vm = testViewModel(
         from: EvaluationResult(
-            decision: .deny(Deny(ruleID: rule, reason: reason)),
-            matched: RuleMatch(
-                ruleID: rule,
-                packID: .coreFilesystem,
-                patternName: "rm-rf-general",
-                severity: .high,
-                reason: reason,
-                explanation: "Why this is dangerous: \\ - Gone",
-                span: MatchSpan(start: 0, end: 6),
-                matchedText: "rm -rf"
+            outcome: .deny(
+                Deny(ruleID: rule, reason: reason),
+                matched: RuleMatch(
+                    ruleID: rule,
+                    packID: .coreFilesystem,
+                    patternName: "rm-rf-general",
+                    severity: .high,
+                    reason: reason,
+                    explanation: "Why this is dangerous: \\ - Gone",
+                    span: MatchSpan(start: 0, end: 6),
+                    matchedText: "rm -rf"
+                )
             )
         ),
         command: ShellCommand(rawValue: "rm -rf"),
@@ -376,18 +381,18 @@ private func isTreeSpacer(_ line: String) -> Bool {
     let rule = RuleID(pack: .coreGit, pattern: "reset-hard")
     let vm = testViewModel(
         from: EvaluationResult(
-            decision: .deny(
-                Deny(ruleID: rule, reason: "git reset --hard destroys uncommitted changes")
-            ),
-            matched: RuleMatch(
-                ruleID: rule,
-                packID: .coreGit,
-                patternName: "reset-hard",
-                severity: .critical,
-                reason: "git reset --hard destroys uncommitted changes",
-                explanation: "intro\n\n\\ Why this is dangerous:",
-                span: MatchSpan(start: 0, end: 16),
-                matchedText: "git reset --hard"
+            outcome: .deny(
+                Deny(ruleID: rule, reason: "git reset --hard destroys uncommitted changes"),
+                matched: RuleMatch(
+                    ruleID: rule,
+                    packID: .coreGit,
+                    patternName: "reset-hard",
+                    severity: .critical,
+                    reason: "git reset --hard destroys uncommitted changes",
+                    explanation: "intro\n\n\\ Why this is dangerous:",
+                    span: MatchSpan(start: 0, end: 16),
+                    matchedText: "git reset --hard"
+                )
             )
         ),
         command: ShellCommand(rawValue: "git reset --hard")
@@ -412,17 +417,17 @@ private func isTreeSpacer(_ line: String) -> Bool {
     let rule = RuleID(pack: .coreFilesystem, pattern: "rm-rf-general")
     let vm = testViewModel(
         from: EvaluationResult(
-            decision: .deny(
-                Deny(ruleID: rule, reason: "rm -rf is destructive and requires human approval.")
-            ),
-            matched: RuleMatch(
-                ruleID: rule,
-                packID: .coreFilesystem,
-                patternName: "rm-rf-general",
-                severity: .high,
-                reason: "rm -rf is destructive and requires human approval.",
-                span: MatchSpan(start: 0, end: 6),
-                matchedText: "rm -rf"
+            outcome: .deny(
+                Deny(ruleID: rule, reason: "rm -rf is destructive and requires human approval."),
+                matched: RuleMatch(
+                    ruleID: rule,
+                    packID: .coreFilesystem,
+                    patternName: "rm-rf-general",
+                    severity: .high,
+                    reason: "rm -rf is destructive and requires human approval.",
+                    span: MatchSpan(start: 0, end: 6),
+                    matchedText: "rm -rf"
+                )
             )
         ),
         command: ShellCommand(rawValue: "rm -rf ./src")

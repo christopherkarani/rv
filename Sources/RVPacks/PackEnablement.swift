@@ -65,7 +65,7 @@ public enum PackSet {
                 if tierL != tierR { return tierL < tierR }
                 return lhs < rhs
             }
-            .map { PackID(rawValue: $0) }
+            .compactMap { PackID(validating: $0) }
     }
 
     public static func tier(for packID: String, index: PackIndex) -> Int {

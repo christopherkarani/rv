@@ -24,21 +24,25 @@ private func openCodeExpected(_ stem: String) throws -> (stdout: String, exit: I
     ("deny-git-reset-hard.json", "git reset --hard"),
 ])
 func openCodeDecode_extractsBashCommand(_ file: String, expected: String) throws {
-    let request = codec.decode(try openCodeFixture(file))
+    guard case .request(let request) = codec.decode(try openCodeFixture(file)) else {
+        Issue.record("expected .request for \(file)")
+        return
+    }
     #expect(request.host == .opencode)
-    #expect(request.command?.rawValue == expected)
+    #expect(request.command.rawValue == expected)
 }
 
-@Test func openCodeDecode_nonShellIsNoOp() throws {
-    let request = codec.decode(try openCodeFixture("allow-non-shell-read.json"))
-    #expect(request.host == .opencode)
-    #expect(request.command == nil)
+@Test func openCodeDecode_nonShellIsForeign() throws {
+    #expect(codec.decode(try openCodeFixture("allow-non-shell-read.json")) == .foreign)
 }
 
-@Test func openCodeDecode_emptyCommandIsNoOp() {
-    #expect(codec.decode(#"{"tool":"bash","args":{}}"#).command == nil)
-    #expect(codec.decode(#"{"tool":"bash","args":{"command":""}}"#).command == nil)
-    #expect(codec.decode("not-json").command == nil)
+@Test func openCodeDecode_emptyCommandIsMissingCommand() {
+    #expect(codec.decode(#"{"tool":"bash","args":{}}"#) == .malformed(.missingCommand))
+    #expect(codec.decode(#"{"tool":"bash","args":{"command":""}}"#) == .malformed(.missingCommand))
+}
+
+@Test func openCodeDecode_notJSONIsUnreadable() {
+    #expect(codec.decode("not-json") == .malformed(.unreadable))
 }
 
 @Test func openCodeEncodeAllow_isEmptyExitZero() throws {
