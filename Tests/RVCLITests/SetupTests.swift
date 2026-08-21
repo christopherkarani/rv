@@ -47,13 +47,23 @@ func makeExecutable(_ url: URL, contents: String = "#!/bin/sh\n") throws {
     try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
 }
 
-private func realGrokHookURL() -> URL? {
-    guard let login = LoginHome.path() else { return nil }
-    return URL(fileURLWithPath: login + "/.grok/hooks/rv.json")
+private func fixtureLoginHome() throws -> URL {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-setup-login-\(UUID().uuidString)", isDirectory: true)
+    let hook = root.appendingPathComponent(".grok/hooks/rv.json")
+    try FileManager.default.createDirectory(
+        at: hook.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+    )
+    try "{\"hooks\":[]}\n".write(to: hook, atomically: true, encoding: .utf8)
+    return root
 }
 
 @Test func setup_hostless_createsNoHostTrees_andPrintsSetupLine() throws {
-    let realBefore = realGrokHookURL().flatMap { try? Data(contentsOf: $0) }
+    let foreignHome = try fixtureLoginHome()
+    defer { try? FileManager.default.removeItem(at: foreignHome) }
+    let foreignHook = foreignHome.appendingPathComponent(".grok/hooks/rv.json")
+    let before = try Data(contentsOf: foreignHook)
     try withTempHome { home, layout, launchctl in
         let outcome = SetupRun.setup(env(home: home, launchctl: launchctl))
         #expect(outcome.exitCode == 0)
@@ -74,8 +84,8 @@ private func realGrokHookURL() -> URL? {
         #expect(FileManager.default.fileExists(atPath: analytics.identityFile.path) == false)
         #expect(FileManager.default.fileExists(atPath: analytics.hostsFile.path) == false)
     }
-    let realAfter = realGrokHookURL().flatMap { try? Data(contentsOf: $0) }
-    #expect(realBefore == realAfter)
+    let after = try Data(contentsOf: foreignHook)
+    #expect(before == after)
 }
 
 @Test func setup_grokOnly_writesOwnedPayloadWithBakedPath() throws {

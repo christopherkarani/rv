@@ -31,12 +31,14 @@ public enum CommandRun {
         _ raw: String,
         cwd: String,
         store: AllowOnceStore,
-        now: Date = Date()
+        now: Date = Date(),
+        home: String? = ProcessInfo.processInfo.environment["HOME"].flatMap { $0.isEmpty ? nil : $0 }
     ) async -> EvaluationResult {
         await GatedEvaluate().run(
             .peek,
             command: ShellCommand(rawValue: raw),
             cwd: cwd,
+            home: home,
             store: store,
             now: now
         )
@@ -46,13 +48,15 @@ public enum CommandRun {
         _ raw: String,
         cwd: String,
         allowOnceDirectory: URL,
-        now: Date = Date()
+        now: Date = Date(),
+        home: String? = ProcessInfo.processInfo.environment["HOME"].flatMap { $0.isEmpty ? nil : $0 }
     ) async -> EvaluationResult {
         await evaluateCommand(
             raw,
             cwd: cwd,
             store: AllowOnceStore(baseDirectory: allowOnceDirectory),
-            now: now
+            now: now,
+            home: home
         )
     }
 
@@ -63,11 +67,12 @@ public enum CommandRun {
         requested: RequestedMode,
         cwd: String,
         store: AllowOnceStore,
-        now: Date = Date()
+        now: Date = Date(),
+        home: String? = ProcessInfo.processInfo.environment["HOME"].flatMap { $0.isEmpty ? nil : $0 }
     ) async -> CLIResult {
         render(
             kind: kind,
-            result: await evaluateCommand(raw, cwd: cwd, store: store, now: now),
+            result: await evaluateCommand(raw, cwd: cwd, store: store, now: now, home: home),
             command: ShellCommand(rawValue: raw),
             probe: probe,
             requested: requested
@@ -81,7 +86,8 @@ public enum CommandRun {
         requested: RequestedMode,
         cwd: String,
         allowOnceDirectory: URL,
-        now: Date = Date()
+        now: Date = Date(),
+        home: String? = ProcessInfo.processInfo.environment["HOME"].flatMap { $0.isEmpty ? nil : $0 }
     ) async -> CLIResult {
         await run(
             kind: kind,
@@ -90,7 +96,8 @@ public enum CommandRun {
             requested: requested,
             cwd: cwd,
             store: AllowOnceStore(baseDirectory: allowOnceDirectory),
-            now: now
+            now: now,
+            home: home
         )
     }
 

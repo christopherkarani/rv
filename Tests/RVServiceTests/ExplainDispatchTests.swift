@@ -1,11 +1,15 @@
 import Testing
 import RVDomain
 import RVIPC
+import RVPacks
 @testable import RVService
 
 struct ExplainDispatchTests {
     @Test func denyEmitsTTYStageNamesWithZeroElapsed() async throws {
-        let runtime = try isolatedRuntime()
+        let runtime = ServiceRuntime(
+            catalog: PackCatalog(),
+            allowOnceDirectory: try isolatedAllowOnceDirectory()
+        )
         let response = await runtime.dispatch(
             IPCRequest(
                 method: .explain(
@@ -34,7 +38,10 @@ struct ExplainDispatchTests {
     }
 
     @Test func quickRejectAllowEmitsSkipWalkWithZeroElapsed() async throws {
-        let runtime = try isolatedRuntime()
+        let runtime = ServiceRuntime(
+            catalog: PackCatalog(),
+            allowOnceDirectory: try isolatedAllowOnceDirectory()
+        )
         let response = await runtime.dispatch(
             IPCRequest(
                 method: .explain(
@@ -60,7 +67,10 @@ struct ExplainDispatchTests {
     }
 
     @Test func explainPeeksGrantWithoutSpending() async throws {
-        let runtime = ServiceRuntime(allowOnceDirectory: try isolatedAllowOnceDirectory())
+        let runtime = ServiceRuntime(
+            catalog: PackCatalog(),
+            allowOnceDirectory: try isolatedAllowOnceDirectory()
+        )
         try await runtime.insertGranted(matchingView: "git reset --hard", cwd: "/tmp/ws")
         let request = EvaluationRequest(
             command: ShellCommand(rawValue: "git reset --hard"),
@@ -96,7 +106,10 @@ struct ExplainDispatchTests {
     }
 
     @Test func classifyPeeksGrantWithoutSpending() async throws {
-        let runtime = ServiceRuntime(allowOnceDirectory: try isolatedAllowOnceDirectory())
+        let runtime = ServiceRuntime(
+            catalog: PackCatalog(),
+            allowOnceDirectory: try isolatedAllowOnceDirectory()
+        )
         try await runtime.insertGranted(matchingView: "git reset --hard", cwd: "/tmp/ws")
         let request = EvaluationRequest(
             command: ShellCommand(rawValue: "git reset --hard"),
