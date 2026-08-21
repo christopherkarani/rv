@@ -17,6 +17,7 @@ by the Swift package.
 | `gate.sh` | `preflight.sh` + filtered `swift test` via `swift-6.3.3`. Explicit filter or infer from git-changed modules (union when multi-module / `Package.swift`). | `AGENTS.md` gate |
 | `worktree-cleanup.sh` | Dry-run (default) lists safe stale worktrees; `--apply` prunes only clean detached `/var/folders` temps and clean fully-merged `feat/*`. | Parallel ticket hygiene |
 | `extract-packs/extract_core_packs.py` | One-shot extract of day-one pack JSON from a local v0.11.0 checkout. Does not clone or vendor Rust. | `vendor/parity/PIN`, `docs/dev/PARITY.md` |
+| `release.sh` | Release-config `swift build` of `rv` + `rvd`, `strip -x`, stage binaries and `*_RVPacks.bundle`. | `docs/dev/SWIFT.md` (Release artifacts) |
 
 ## swift-6.3.3
 
