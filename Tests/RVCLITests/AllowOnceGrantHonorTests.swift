@@ -103,7 +103,7 @@ struct AllowOnceGrantHonorTests {
         let body = try IPCJSON.encode(
             IPCResponse(
                 id: UUID(),
-                result: .evaluate(EvaluateReply(result: denied, via: "xpc"))
+                result: .evaluate(EvaluateReply(result: denied, via: .xpc))
             )
         )
         let transport = ScriptedTransport(

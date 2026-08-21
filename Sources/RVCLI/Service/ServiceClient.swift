@@ -4,11 +4,6 @@ import RVIPC
 import RVPolicy
 import RVService
 
-public enum EvaluationPath: String, Sendable, Equatable {
-    case xpc
-    case inProcess
-}
-
 public struct RoutedEvaluation: Sendable, Equatable {
     public let result: EvaluationResult
     public let path: EvaluationPath
@@ -79,9 +74,7 @@ public struct ServiceClient: Sendable {
                 )
                 let data = try await transport.send(body)
                 let response = try IPCJSON.decode(IPCResponse.self, from: data)
-                if case .evaluate(let reply) = response.result,
-                   EvaluationPath(rawValue: reply.via) == .xpc
-                {
+                if case .evaluate(let reply) = response.result, reply.via == .xpc {
                     return RoutedEvaluation(result: reply.result, path: .xpc)
                 }
                 return await inProcessRoute()

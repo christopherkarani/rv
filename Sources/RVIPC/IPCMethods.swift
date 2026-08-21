@@ -19,11 +19,17 @@ public struct EvaluateParams: Sendable, Equatable, Codable {
     }
 }
 
+/// How an evaluate reply was produced. Wire values: `xpc`, `inProcess`.
+public enum EvaluationPath: String, Sendable, Equatable, Codable {
+    case xpc
+    case inProcess
+}
+
 public struct EvaluateReply: Sendable, Equatable, Codable {
     public var result: EvaluationResult
-    public var via: String
+    public var via: EvaluationPath
 
-    public init(result: EvaluationResult, via: String = "xpc") {
+    public init(result: EvaluationResult, via: EvaluationPath = .xpc) {
         self.result = result
         self.via = via
     }

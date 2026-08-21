@@ -111,7 +111,7 @@ public actor ServiceRuntime {
     }
 
     public func makeEvaluateReply(_ request: EvaluationRequest, cwd: String? = nil) async -> EvaluateReply {
-        EvaluateReply(result: await runEvaluate(request, cwd: cwd), via: "xpc")
+        EvaluateReply(result: await runEvaluate(request, cwd: cwd), via: .xpc)
     }
 
     private func runEvaluate(_ request: EvaluationRequest, cwd: String?) async -> EvaluationResult {

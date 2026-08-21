@@ -39,7 +39,7 @@ struct FallbackDownTests {
         let body = try IPCJSON.encode(
             IPCResponse(
                 id: UUID(),
-                result: .evaluate(EvaluateReply(result: spoofedAllow, via: "inProcess"))
+                result: .evaluate(EvaluateReply(result: spoofedAllow, via: .inProcess))
             )
         )
         let transport = ScriptedTransport(
