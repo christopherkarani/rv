@@ -99,7 +99,9 @@ public func explainSteps(from result: EvaluationResult) -> [ExplainStep] {
 }
 
 /// Derived projections of EvaluationResult for assertion-style readers;
-/// production consumers pattern-match `outcome` directly.
+/// production consumers pattern-match `outcome` directly. Remaining readers
+/// live in out-of-scope test suites: EvaluateOrderTests, CorpusTests,
+/// ExplainDispatchTests.
 extension EvaluationResult {
     public var matched: RuleMatch? { outcome.matched }
     public var matchedSafe: SafeMatch? { outcome.matchedSafe }

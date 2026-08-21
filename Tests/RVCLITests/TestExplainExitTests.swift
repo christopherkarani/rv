@@ -132,7 +132,11 @@ private func robotProbe() -> ThemeProbe {
 @Test func hostDenyText_stashDropIsNil() async throws {
     let result = try await cliEvaluate("git stash drop")
     #expect(result.decision == .allow)
-    #expect(result.matched?.ruleID.rawValue == "core.git:stash-drop")
+    guard case .hit(let match, _) = result.outcome else {
+        Issue.record("expected stash-drop hit, got \(result.outcome)")
+        return
+    }
+    #expect(match.ruleID.rawValue == "core.git:stash-drop")
     #expect(hostDenyText(from: result, command: ShellCommand(rawValue: "git stash drop")) == nil)
     let pretty = CommandRun.render(
         kind: .test,
