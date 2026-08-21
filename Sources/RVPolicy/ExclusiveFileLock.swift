@@ -12,8 +12,19 @@ enum ExclusiveFileLock {
         {
             throw LockError.lockFailed
         }
-        let fd = lockURL.path.withCString { path in
+        var fd = lockURL.path.withCString { path in
             open(path, O_RDWR | O_CREAT, 0o600)
+        }
+        if fd < 0, errno == EACCES {
+            // Pre-existing mode denied the owner write access. The owner can always
+            // chmod its own file, so re-assert 0600 and retry once.
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o600],
+                ofItemAtPath: lockURL.path
+            )
+            fd = lockURL.path.withCString { path in
+                open(path, O_RDWR | O_CREAT, 0o600)
+            }
         }
         guard fd >= 0 else { throw LockError.lockFailed }
         defer { close(fd) }
