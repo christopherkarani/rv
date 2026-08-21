@@ -49,8 +49,9 @@ public struct GatedEvaluate: Sendable {
         return EvaluationRequest(command: command, enabledPacks: enabled)
     }
 
-    /// Shows a matching grant / allowlist without spending it.
-    public func peek(
+    /// Wire-path peek for an already-built request (ServiceRuntime explain/classify).
+    /// CLI and in-process fallback must use `run(.peek, ...)` so pack resolution stays shared.
+    func peek(
         _ request: EvaluationRequest,
         cwd: String?,
         store: AllowOnceStore,
@@ -59,8 +60,9 @@ public struct GatedEvaluate: Sendable {
         await gated(.peek, request, cwd: cwd, store: store, now: now)
     }
 
-    /// Spends a matching grant after an engine deny; honor user allowlist first.
-    public func apply(
+    /// Wire-path apply for an already-built request (ServiceRuntime evaluate).
+    /// CLI and in-process fallback must use `run(.apply, ...)` so pack resolution stays shared.
+    func apply(
         _ request: EvaluationRequest,
         cwd: String?,
         store: AllowOnceStore,
