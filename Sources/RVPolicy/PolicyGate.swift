@@ -97,8 +97,24 @@ public enum PolicyGate {
         _ result: EvaluationResult,
         override: PolicyOverride
     ) -> PolicyDecision {
-        var allowed = result
-        allowed.decision = .allow
-        return PolicyDecision(result: allowed, override: override)
+        PolicyDecision(
+            result: EvaluationResult(
+                outcome: allowedOutcome(result.outcome),
+                matchingView: result.matchingView
+            ),
+            override: override
+        )
+    }
+
+    /// Typed override transition: a deny becomes its allow-equivalent with the
+    /// hit structure intact; every other outcome passes through unchanged.
+    private static func allowedOutcome(_ outcome: EvaluationOutcome) -> EvaluationOutcome {
+        switch outcome {
+        case .deny(_, let match):
+            guard let match else { return .plain }
+            return .hit(match, safe: nil)
+        case .quickRejected, .plain, .safeOnly, .hit, .indeterminate:
+            return outcome
+        }
     }
 }
