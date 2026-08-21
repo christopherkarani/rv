@@ -41,4 +41,12 @@ cp "$src/rv" "$bin/rv"
 cp "$src/rvd" "$bin/rvd"
 chmod 755 "$bin/rv" "$bin/rvd"
 
+# Pack JSON lives in SPM *_RVPacks.bundle next to the binaries (tools/release.sh).
+for bundle in "$src"/*_RVPacks.bundle; do
+  [ -d "$bundle" ] || continue
+  name="$(basename "$bundle")"
+  rm -rf "$bin/$name"
+  cp -R "$bundle" "$bin/$name"
+done
+
 RV_FROM_INSTALL=1 exec "$bin/rv" setup
