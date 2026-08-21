@@ -258,7 +258,7 @@ private func run(
 
 /// `matches` would fire; `firstMatch` is the sole destructive hit test.
 private struct HitlessPatternEngine: PatternEngine {
-    func compile(_ pattern: String) throws -> String { pattern }
+    func compile(_ pattern: String) throws(PatternCompileError) -> String { pattern }
     func matches(_ compiled: String, in text: String) -> Bool { true }
     func firstMatch(_ compiled: String, in text: String) -> Range<String.Index>? { nil }
 }
