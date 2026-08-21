@@ -8,8 +8,6 @@ import RVTheme
 private func snapshotDirectory() -> URL {
     URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()
-        .deletingLastPathComponent()
-        .deletingLastPathComponent()
         .appendingPathComponent("Fixtures/snapshots/phase-1b")
 }
 
