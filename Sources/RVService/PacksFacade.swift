@@ -86,10 +86,14 @@ public enum PacksFacade {
     }
 
     public static func effectiveIDs(home: String) throws -> [PackID] {
-        let index = try PackRegistry.loadIndex()
         if home.isEmpty {
-            return try PackSet.effectiveOrdered(enabled: [], disabled: [], index: index)
+            return dayOnePackIDs
         }
+        let configURL = PacksConfigStore.configURL(home: home)
+        if FileManager.default.fileExists(atPath: configURL.path) == false {
+            return dayOnePackIDs
+        }
+        let index = try PackRegistry.loadIndex()
         let config = (try? PacksConfigStore.load(home: home)) ?? .empty
         return try PackSet.effectiveOrdered(
             enabled: config.enabled,

@@ -21,15 +21,20 @@ public struct GatedEvaluate: Sendable {
         now: Date
     ) async -> EvaluationResult {
         let result = session.evaluate(request)
-        let allowlist = AllowlistStore(baseDirectory: store.baseDirectory)
-            .loadUserSnapshot(workspacePath: cwd, now: now)
-        return await PolicyGate.peek(
-            result,
-            cwd: cwd,
-            allowlist: allowlist,
-            store: store,
-            now: now
-        ).result
+        switch result.decision {
+        case .allow, .indeterminate:
+            return result
+        case .deny:
+            let allowlist = AllowlistStore(baseDirectory: store.baseDirectory)
+                .loadUserSnapshot(workspacePath: cwd, now: now)
+            return await PolicyGate.peek(
+                result,
+                cwd: cwd,
+                allowlist: allowlist,
+                store: store,
+                now: now
+            ).result
+        }
     }
 
     /// Spends a matching grant after an engine deny; honor user allowlist first.
@@ -40,14 +45,19 @@ public struct GatedEvaluate: Sendable {
         now: Date
     ) async -> EvaluationResult {
         let result = session.evaluate(request)
-        let allowlist = AllowlistStore(baseDirectory: store.baseDirectory)
-            .loadUserSnapshot(workspacePath: cwd, now: now)
-        return await PolicyGate.apply(
-            result,
-            cwd: cwd,
-            allowlist: allowlist,
-            store: store,
-            now: now
-        ).result
+        switch result.decision {
+        case .allow, .indeterminate:
+            return result
+        case .deny:
+            let allowlist = AllowlistStore(baseDirectory: store.baseDirectory)
+                .loadUserSnapshot(workspacePath: cwd, now: now)
+            return await PolicyGate.apply(
+                result,
+                cwd: cwd,
+                allowlist: allowlist,
+                store: store,
+                now: now
+            ).result
+        }
     }
 }
