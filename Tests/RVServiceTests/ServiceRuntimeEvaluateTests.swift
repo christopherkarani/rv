@@ -2,12 +2,17 @@ import Foundation
 import Testing
 import RVDomain
 import RVIPC
+import RVPolicy
 @testable import RVService
 
 struct ServiceRuntimeEvaluateTests {
     @Test func isolatedRuntime_setPackEnabledDoesNotWriteLiveHome() async throws {
         let live = try liveRVConfigSnapshot()
-        let runtime = try isolatedRuntime()
+        let home = try isolatedHomeDirectory()
+        let runtime = ServiceRuntime(
+            home: home.path,
+            allowOnceDirectory: try isolatedAllowOnceDirectory()
+        )
         let disable = await runtime.dispatch(
             IPCRequest(method: .setPackEnabled(SetPackEnabledParams(id: .coreGit, enabled: false)))
         )
@@ -24,6 +29,11 @@ struct ServiceRuntimeEvaluateTests {
         }
         let git = try #require(packs.packs.first { $0.id == .coreGit })
         #expect(git.enabled == false)
+
+        let tempConfig = PacksConfigStore.configURL(home: home.path)
+        #expect(FileManager.default.fileExists(atPath: tempConfig.path))
+        let persisted = try PacksConfigStore.load(home: home.path)
+        #expect(persisted.disabled.contains(PackID.coreGit.rawValue))
 
         #expect(try liveRVConfigSnapshot() == live)
     }
