@@ -69,3 +69,18 @@ import RVDomain
         _ = try PackSet.expand(["paranoid"], index: index, rejectUnknown: true)
     }
 }
+
+@Test func enablement_orderDropsInvalidIndexPackIDs() {
+    let index = PackIndex(
+        pinVersion: "0",
+        pinTag: "tag",
+        pinCommit: "commit",
+        packCount: 2,
+        defaultEnabled: [],
+        categories: ["core": ["core.git", "Core.Git"]],
+        presets: [:],
+        tiers: ["core": 1]
+    )
+    let ordered = PackSet.order(Set(["core.git", "Core.Git"]), index: index)
+    #expect(ordered.map(\.rawValue) == ["core.git"])
+}
