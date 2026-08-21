@@ -4,7 +4,7 @@ import RVDomain
 
 struct EvaluateSessionTests {
     @Test func dayOneDeniesResetHard() {
-        let session = EvaluateSession()
+        let session = EvaluateSession(enabledPacks: dayOnePackIDs)
         #expect(session.corePacksReady)
         let result = session.evaluate(
             EvaluationRequest(
@@ -20,8 +20,21 @@ struct EvaluateSessionTests {
         #expect(result.matchingView == "git reset --hard")
     }
 
+    @Test func dayOneAllowsStashDropAsAllowPlusMatch() {
+        let session = EvaluateSession(enabledPacks: dayOnePackIDs)
+        #expect(session.corePacksReady)
+        let result = session.evaluate(
+            EvaluationRequest(
+                command: ShellCommand(rawValue: "git stash drop"),
+                enabledPacks: dayOnePackIDs
+            )
+        )
+        #expect(result.decision == .allow)
+        #expect(result.matched?.ruleID.rawValue == "core.git:stash-drop")
+    }
+
     @Test func emptyEnabledPacksDoesNotRefillDayOne() {
-        let session = EvaluateSession()
+        let session = EvaluateSession(enabledPacks: dayOnePackIDs)
         #expect(session.corePacksReady)
         let result = session.evaluate(
             EvaluationRequest(

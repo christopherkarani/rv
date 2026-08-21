@@ -10,30 +10,44 @@ public actor ServiceRuntime {
     public let corePacksReady: Bool
     public let idleExitSeconds: Int
 
-    private let gated: GatedEvaluate
+    private var gated: GatedEvaluate
     private var catalog: PackCatalog
+    private let sessionSnapshots: [PackSnapshot]
+    private let configHome: String
     private let allowOnce: AllowOnceStore
     private let log: (any ServiceLog)?
     private let analytics: AnalyticsCoordinator?
 
+    package private(set) var compiledPackIDs: [PackID]
+
     public init(
         snapshots: [PackSnapshot]? = nil,
         catalog: PackCatalog? = nil,
+        home: String? = nil,
         allowOnce: AllowOnceStore? = nil,
         allowOnceDirectory: URL? = nil,
         idleExitSeconds: Int = IdleWatchdog.defaultSeconds,
         log: (any ServiceLog)? = nil,
         analytics: AnalyticsCoordinator? = nil
     ) {
-        let gated = GatedEvaluate(EvaluateSession(snapshots: snapshots))
-        self.gated = gated
-        self.corePacksReady = gated.corePacksReady
+        let resolvedHome = home ?? processHOME()
+        self.configHome = resolvedHome
         if let catalog {
             self.catalog = catalog
         } else {
-            let home = (ProcessInfo.processInfo.environment["HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? "")
-            self.catalog = (try? PacksFacade.makeCatalog(home: home)) ?? PackCatalog()
+            self.catalog = (try? PacksFacade.makeCatalog(home: resolvedHome)) ?? PackCatalog()
         }
+        let loaded = snapshots
+            ?? ((try? PackRegistry.loadAll()) ?? ((try? PackRegistry.loadDayOne()) ?? []))
+        self.sessionSnapshots = loaded
+        let session = EvaluateSession(
+            snapshots: loaded,
+            enabledPacks: Self.compileEnabledIDs(from: self.catalog)
+        )
+        self.compiledPackIDs = session.compiledPackIDs
+        let gated = GatedEvaluate(session)
+        self.gated = gated
+        self.corePacksReady = gated.corePacksReady
         if let allowOnce {
             self.allowOnce = allowOnce
         } else if let allowOnceDirectory {
@@ -217,17 +231,17 @@ public actor ServiceRuntime {
     }
 
     private func setPackEnabled(_ params: SetPackEnabledParams) -> IPCResult {
-        let home = (ProcessInfo.processInfo.environment["HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? "")
         do {
             if params.enabled {
-                _ = try PacksFacade.enable(home: home, ids: [params.id.rawValue])
+                _ = try PacksFacade.enable(home: configHome, ids: [params.id.rawValue])
             } else {
-                _ = try PacksFacade.disable(home: home, ids: [params.id.rawValue])
+                _ = try PacksFacade.disable(home: configHome, ids: [params.id.rawValue])
             }
-            catalog = try PacksFacade.makeCatalog(home: home)
+            catalog = try PacksFacade.makeCatalog(home: configHome)
             guard let updated = catalog.records.first(where: { $0.id == params.id }) else {
                 return .error(.packNotFound(params.id))
             }
+            rebuildGated()
             let packs = catalog.records.filter(\.enabled).map(\.id.rawValue)
             if let analytics {
                 Task {
@@ -313,4 +327,30 @@ public actor ServiceRuntime {
     private func elapsedMs(since start: DispatchTime) -> Double {
         Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000
     }
+
+    private func rebuildGated() {
+        let session = EvaluateSession(
+            snapshots: sessionSnapshots,
+            enabledPacks: Self.compileEnabledIDs(from: catalog)
+        )
+        compiledPackIDs = session.compiledPackIDs
+        gated = GatedEvaluate(session)
+    }
+
+    /// Catalog-enabled IDs, plus day-one so a catalog disable cannot uncompile
+    /// required core rules or change the request evaluate set.
+    private static func compileEnabledIDs(from catalog: PackCatalog) -> [PackID] {
+        if catalog.records.isEmpty {
+            return dayOnePackIDs
+        }
+        var ids = catalog.records.filter(\.enabled).map(\.id)
+        for id in dayOnePackIDs where !ids.contains(id) {
+            ids.append(id)
+        }
+        return ids
+    }
+}
+
+private func processHOME() -> String {
+    ProcessInfo.processInfo.environment["HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? ""
 }
