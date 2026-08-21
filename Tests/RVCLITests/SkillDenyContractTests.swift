@@ -42,15 +42,17 @@ private func cannedReason(containing needle: String?) -> String {
 
 private func cannedDenyResult(command: String, ruleID: RuleID, reason: String) -> EvaluationResult {
     EvaluationResult(
-        decision: .deny(Deny(ruleID: ruleID, reason: reason)),
-        matched: RuleMatch(
-            ruleID: ruleID,
-            packID: ruleID.pack,
-            patternName: ruleID.pattern,
-            severity: .critical,
-            reason: reason,
-            span: MatchSpan(start: 0, end: command.count),
-            matchedText: command
+        outcome: .deny(
+            Deny(ruleID: ruleID, reason: reason),
+            matched: RuleMatch(
+                ruleID: ruleID,
+                packID: ruleID.pack,
+                patternName: ruleID.pattern,
+                severity: .critical,
+                reason: reason,
+                span: MatchSpan(start: 0, end: command.count),
+                matchedText: command
+            )
         )
     )
 }
