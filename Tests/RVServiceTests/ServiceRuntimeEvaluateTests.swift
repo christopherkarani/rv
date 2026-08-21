@@ -5,6 +5,29 @@ import RVIPC
 @testable import RVService
 
 struct ServiceRuntimeEvaluateTests {
+    @Test func isolatedRuntime_setPackEnabledDoesNotWriteLiveHome() async throws {
+        let live = try liveRVConfigSnapshot()
+        let runtime = try isolatedRuntime()
+        let disable = await runtime.dispatch(
+            IPCRequest(method: .setPackEnabled(SetPackEnabledParams(id: .coreGit, enabled: false)))
+        )
+        guard case .setPackEnabled(let reply) = disable.result else {
+            Issue.record("expected setPackEnabled reply")
+            return
+        }
+        #expect(reply.pack.enabled == false)
+
+        let listed = await runtime.dispatch(IPCRequest(method: .listPacks))
+        guard case .listPacks(let packs) = listed.result else {
+            Issue.record("expected listPacks reply")
+            return
+        }
+        let git = try #require(packs.packs.first { $0.id == .coreGit })
+        #expect(git.enabled == false)
+
+        #expect(try liveRVConfigSnapshot() == live)
+    }
+
     @Test func dispatchEvaluate_emptyEnabledPacksDoesNotRefillDayOne() async throws {
         let runtime = try isolatedRuntime()
         let response = await runtime.dispatch(
@@ -64,7 +87,7 @@ struct ServiceRuntimeEvaluateTests {
     }
 
     @Test func dispatchEvaluate_grantHonorsOnceForCwd() async throws {
-        let runtime = ServiceRuntime(allowOnceDirectory: try isolatedAllowOnceDirectory())
+        let runtime = try isolatedRuntime()
         try await runtime.insertGranted(matchingView: "git reset --hard", cwd: "/tmp/ws")
         let request = EvaluationRequest(
             command: ShellCommand(rawValue: "git reset --hard"),
@@ -94,7 +117,7 @@ struct ServiceRuntimeEvaluateTests {
     }
 
     @Test func classify_honoredAllowIsNotHighBecauseLeftoverMatch() async throws {
-        let runtime = ServiceRuntime(allowOnceDirectory: try isolatedAllowOnceDirectory())
+        let runtime = try isolatedRuntime()
         try await runtime.insertGranted(matchingView: "git reset --hard", cwd: "/tmp/ws")
         let request = EvaluationRequest(
             command: ShellCommand(rawValue: "git reset --hard"),
@@ -133,4 +156,22 @@ struct ServiceRuntimeEvaluateTests {
         #expect(reply.decision == .allow)
         #expect(reply.risk == .medium)
     }
+}
+
+private struct LiveRVConfigSnapshot: Equatable {
+    var directoryExists: Bool
+    var configContents: Data?
+}
+
+private func liveRVConfigSnapshot() throws -> LiveRVConfigSnapshot {
+    let home = try #require(
+        ProcessInfo.processInfo.environment["HOME"].flatMap { $0.isEmpty ? nil : $0 }
+    )
+    let directory = URL(fileURLWithPath: home, isDirectory: true)
+        .appendingPathComponent(".config", isDirectory: true)
+        .appendingPathComponent("rv", isDirectory: true)
+    let config = directory.appendingPathComponent("config.toml")
+    let directoryExists = FileManager.default.fileExists(atPath: directory.path)
+    let configContents = directoryExists ? try? Data(contentsOf: config) : nil
+    return LiveRVConfigSnapshot(directoryExists: directoryExists, configContents: configContents)
 }

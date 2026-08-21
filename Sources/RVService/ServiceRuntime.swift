@@ -12,6 +12,7 @@ public actor ServiceRuntime {
 
     private let gated: GatedEvaluate
     private var catalog: PackCatalog
+    private let home: String
     private let allowOnce: AllowOnceStore
     private let log: (any ServiceLog)?
     private let analytics: AnalyticsCoordinator?
@@ -19,6 +20,7 @@ public actor ServiceRuntime {
     public init(
         snapshots: [PackSnapshot]? = nil,
         catalog: PackCatalog? = nil,
+        home: String? = nil,
         allowOnce: AllowOnceStore? = nil,
         allowOnceDirectory: URL? = nil,
         idleExitSeconds: Int = IdleWatchdog.defaultSeconds,
@@ -28,11 +30,12 @@ public actor ServiceRuntime {
         let gated = GatedEvaluate(EvaluateSession(snapshots: snapshots))
         self.gated = gated
         self.corePacksReady = gated.corePacksReady
+        let resolvedHome = Self.resolveHome(home)
+        self.home = resolvedHome
         if let catalog {
             self.catalog = catalog
         } else {
-            let home = (ProcessInfo.processInfo.environment["HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? "")
-            self.catalog = (try? PacksFacade.makeCatalog(home: home)) ?? PackCatalog()
+            self.catalog = (try? PacksFacade.makeCatalog(home: resolvedHome)) ?? PackCatalog()
         }
         if let allowOnce {
             self.allowOnce = allowOnce
@@ -219,7 +222,6 @@ public actor ServiceRuntime {
     }
 
     private func setPackEnabled(_ params: SetPackEnabledParams) -> IPCResult {
-        let home = (ProcessInfo.processInfo.environment["HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? "")
         do {
             if params.enabled {
                 _ = try PacksFacade.enable(home: home, ids: [params.id.rawValue])
@@ -249,7 +251,6 @@ public actor ServiceRuntime {
     }
 
     private func listPacks() -> ListPacksReply {
-        let home = (ProcessInfo.processInfo.environment["HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? "")
         if let refreshed = try? PacksFacade.makeCatalog(home: home) {
             catalog = refreshed
         }
@@ -314,5 +315,10 @@ public actor ServiceRuntime {
 
     private func elapsedMs(since start: DispatchTime) -> Double {
         Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000
+    }
+
+    private static func resolveHome(_ home: String?) -> String {
+        if let home { return home }
+        return ProcessInfo.processInfo.environment["HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? ""
     }
 }
