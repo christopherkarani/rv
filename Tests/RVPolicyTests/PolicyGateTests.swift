@@ -61,7 +61,7 @@ struct PolicyGateTests {
         let store = try isolatedStore()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         try await store.insertGranted(matchingView: "git reset --hard", cwd: "/tmp/ws", now: now)
-        let allow = EvaluationResult(decision: .allow, matchingView: "git reset --hard")
+        let allow = EvaluationResult(outcome: .plain, matchingView: "git reset --hard")
         let gated = await PolicyGate.apply(allow, cwd: "/tmp/ws", store: store, now: now)
         #expect(gated.override == .none)
         #expect(gated.result.decision == .allow)
@@ -77,7 +77,7 @@ struct PolicyGateTests {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         try await store.insertGranted(matchingView: "git reset --hard", cwd: "/tmp/ws", now: now)
         let incomplete = EvaluationResult(
-            decision: .indeterminate(.commandTooLarge),
+            outcome: .indeterminate(.commandTooLarge),
             matchingView: "git reset --hard"
         )
         let gated = await PolicyGate.apply(incomplete, cwd: "/tmp/ws", store: store, now: now)
@@ -188,11 +188,12 @@ struct PolicyGateTests {
 
 private func resetHardDeny() -> EvaluationResult {
     EvaluationResult(
-        decision: .deny(
+        outcome: .deny(
             Deny(
                 ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
                 reason: "git reset --hard destroys uncommitted changes"
-            )
+            ),
+            matched: nil
         ),
         matchingView: "git reset --hard"
     )

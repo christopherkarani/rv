@@ -5,8 +5,9 @@ import RVDomain
 
 @Test func hookWire_denyAddsRuleAndNextWithoutBreakingDecisionReason() throws {
     let result = EvaluationResult(
-        decision: .deny(
-            Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "x")
+        outcome: .deny(
+            Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "x"),
+            matched: nil
         )
     )
     let wire = hookWire(
@@ -28,7 +29,7 @@ import RVDomain
 
 @Test func hookWire_allowIsEmpty() {
     let wire = hookWire(
-        from: EvaluationResult(decision: .allow),
+        from: EvaluationResult(outcome: .plain),
         command: ShellCommand(rawValue: "git status"),
         using: GrokHostCodec()
     )
@@ -38,7 +39,7 @@ import RVDomain
 
 @Test func hookWire_indeterminateOmitsRule() throws {
     let wire = hookWire(
-        from: EvaluationResult(decision: .indeterminate(.commandTooLarge)),
+        from: EvaluationResult(outcome: .indeterminate(.commandTooLarge)),
         command: ShellCommand(rawValue: "x"),
         using: GrokHostCodec()
     )
@@ -54,8 +55,9 @@ import RVDomain
     let denyCodec = EncodeDenySpy()
     let denyWire = hookWire(
         from: EvaluationResult(
-            decision: .deny(
-                Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "x")
+            outcome: .deny(
+                Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "x"),
+                matched: nil
             )
         ),
         command: ShellCommand(rawValue: "git reset --hard"),
@@ -69,7 +71,7 @@ import RVDomain
 
     let incompleteCodec = EncodeDenySpy()
     let incompleteWire = hookWire(
-        from: EvaluationResult(decision: .indeterminate(.commandTooLarge)),
+        from: EvaluationResult(outcome: .indeterminate(.commandTooLarge)),
         command: ShellCommand(rawValue: "x"),
         using: incompleteCodec
     )

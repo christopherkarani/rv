@@ -52,42 +52,19 @@ public enum ExplainStep: Equatable, Sendable {
 
 /// Projects an EvaluationResult onto the Explain pipeline.
 ///
-/// Switches on Decision plus matched / matchedSafe / quickRejected only.
-/// Does not re-run normalize, quick-reject, or the walkers.
+/// Exhaustive switch over EvaluationOutcome. Deny outcomes carry no safe
+/// context: `EvaluationOutcome.deny` has no SafeMatch slot and decoding a
+/// deny-with-safe frame throws, so the safe stage reports `.none` — the drop
+/// is enforced by the type, not silently ignored here. Does not re-run
+/// normalize, quick-reject, or the walkers.
 public func explainSteps(from result: EvaluationResult) -> [ExplainStep] {
     let prepared = ExplainStep.normalize
-    switch result.decision {
+    switch result.outcome {
     case .indeterminate:
         return [prepared, .default(.incomplete)]
-    case .deny(let deny):
-        return [
-            prepared,
-            .quickReject(.scanned),
-            .safe(.none),
-            .destructive(.rule(deny.ruleID)),
-        ]
-    case .allow:
-        if result.quickRejected {
-            return [prepared, .quickReject(.skipped), .default(.allow)]
-        }
-        if let safe = result.matchedSafe, result.matched == nil {
-            return [
-                prepared,
-                .quickReject(.scanned),
-                .safe(.rule(safe.ruleID)),
-                .default(.allow),
-            ]
-        }
-        if let match = result.matched {
-            let safe: ExplainStep.Hit = result.matchedSafe.map { .rule($0.ruleID) } ?? .none
-            return [
-                prepared,
-                .quickReject(.scanned),
-                .safe(safe),
-                .destructive(.rule(match.ruleID)),
-                .default(.allow),
-            ]
-        }
+    case .quickRejected:
+        return [prepared, .quickReject(.skipped), .default(.allow)]
+    case .plain:
         return [
             prepared,
             .quickReject(.scanned),
@@ -95,5 +72,38 @@ public func explainSteps(from result: EvaluationResult) -> [ExplainStep] {
             .destructive(.none),
             .default(.allow),
         ]
+    case .safeOnly(let safe):
+        return [
+            prepared,
+            .quickReject(.scanned),
+            .safe(.rule(safe.ruleID)),
+            .default(.allow),
+        ]
+    case .hit(let match, let safe):
+        let safeHit: ExplainStep.Hit = safe.map { .rule($0.ruleID) } ?? .none
+        return [
+            prepared,
+            .quickReject(.scanned),
+            .safe(safeHit),
+            .destructive(.rule(match.ruleID)),
+            .default(.allow),
+        ]
+    case .deny(let deny, _):
+        return [
+            prepared,
+            .quickReject(.scanned),
+            .safe(.none),
+            .destructive(.rule(deny.ruleID)),
+        ]
     }
+}
+
+/// Derived projections of EvaluationResult for assertion-style readers;
+/// production consumers pattern-match `outcome` directly. Remaining readers
+/// live in out-of-scope test suites: EvaluateOrderTests, CorpusTests,
+/// ExplainDispatchTests.
+extension EvaluationResult {
+    public var matched: RuleMatch? { outcome.matched }
+    public var matchedSafe: SafeMatch? { outcome.matchedSafe }
+    public var quickRejected: Bool { outcome.quickRejected }
 }
