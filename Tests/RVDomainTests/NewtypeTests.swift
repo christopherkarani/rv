@@ -20,12 +20,31 @@ import Testing
 @Test func packID_rawValueInit_isNonFailable() {
     let pack = PackID(rawValue: "core.git")
     #expect(pack.rawValue == "core.git")
+    let invalid = PackID(rawValue: "Core.Git")
+    #expect(invalid.rawValue == "Core.Git")
+}
+
+@Test func packID_decodeRejectsInvalidGrammar() {
+    #expect(throws: DecodingError.self) {
+        _ = try JSONDecoder().decode(PackID.self, from: Data(#""Core.Git""#.utf8))
+    }
+}
+
+@Test func packID_codableIsJSONString() throws {
+    let pack = PackID(rawValue: "core.git")
+    let data = try JSONEncoder().encode(pack)
+    #expect(String(data: data, encoding: .utf8) == "\"core.git\"")
+    #expect(try JSONDecoder().decode(PackID.self, from: data) == pack)
 }
 
 @Test func ruleID_isPackColonPattern() {
     let rule = RuleID(pack: PackID(rawValue: "core.git"), pattern: "reset-hard")
     #expect(rule.rawValue == "core.git:reset-hard")
     #expect(RuleID(rawValue: "core.git:reset-hard")?.pattern == "reset-hard")
+}
+
+@Test func ruleID_rejectsInvalidPackGrammar() {
+    #expect(RuleID(rawValue: "Core.Git:reset-hard") == nil)
 }
 
 @Test func deny_alwaysCarriesRuleAndReason() {
