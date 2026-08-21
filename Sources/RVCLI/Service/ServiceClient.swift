@@ -74,7 +74,8 @@ public struct ServiceClient: Sendable {
                 )
                 let data = try await transport.send(body)
                 let response = try IPCJSON.decode(IPCResponse.self, from: data)
-                if case .evaluate(let reply) = response.result, reply.via == .xpc {
+                // Decode already requires EvaluateReply.via == .xpc; anything else falls back.
+                if case .evaluate(let reply) = response.result {
                     return RoutedEvaluation(result: reply.result, path: .xpc)
                 }
                 return await inProcessRoute()

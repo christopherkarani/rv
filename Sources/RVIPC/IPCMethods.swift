@@ -19,7 +19,10 @@ public struct EvaluateParams: Sendable, Equatable, Codable {
     }
 }
 
-/// How an evaluate reply was produced. Wire values: `xpc`, `inProcess`.
+/// Evaluation route: trusted service reply (`xpc`) or client in-process fallback (`inProcess`).
+///
+/// On `EvaluateReply`, only `.xpc` decodes. `.inProcess` is reserved for client-side
+/// routing and is rejected on the wire.
 public enum EvaluationPath: String, Sendable, Equatable, Codable {
     case xpc
     case inProcess
@@ -27,11 +30,36 @@ public enum EvaluationPath: String, Sendable, Equatable, Codable {
 
 public struct EvaluateReply: Sendable, Equatable, Codable {
     public var result: EvaluationResult
-    public var via: EvaluationPath
+    public let via: EvaluationPath
 
-    public init(result: EvaluationResult, via: EvaluationPath = .xpc) {
+    public init(result: EvaluationResult) {
         self.result = result
-        self.via = via
+        self.via = .xpc
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        result = try container.decode(EvaluationResult.self, forKey: .result)
+        let decodedVia = try container.decode(EvaluationPath.self, forKey: .via)
+        guard decodedVia == .xpc else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .via,
+                in: container,
+                debugDescription: "EvaluateReply.via must be \"xpc\""
+            )
+        }
+        via = decodedVia
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(result, forKey: .result)
+        try container.encode(via, forKey: .via)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case result
+        case via
     }
 }
 

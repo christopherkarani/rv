@@ -60,24 +60,20 @@ struct EnvelopeRoundTripTests {
         }
     }
 
-    @Test func evaluateViaRoundTripsAsEvaluationPath() throws {
-        let reply = EvaluateReply(
-            result: EvaluationResult(decision: .allow),
-            via: .xpc
-        )
+    @Test func evaluateViaRoundTripsAsXpcAndRejectsOtherPaths() throws {
+        let reply = EvaluateReply(result: EvaluationResult(decision: .allow))
         let data = try IPCJSON.encode(reply)
         let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
         #expect(object["via"] as? String == "xpc")
         #expect(try IPCJSON.decode(EvaluateReply.self, from: data).via == .xpc)
 
-        let inProcess = try IPCJSON.encode(EvaluateReply(result: reply.result, via: .inProcess))
-        #expect(try IPCJSON.decode(EvaluateReply.self, from: inProcess).via == .inProcess)
-
-        var spoofed = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
-        spoofed["via"] = "bogus"
-        let bad = try JSONSerialization.data(withJSONObject: spoofed)
-        #expect(throws: DecodingError.self) {
-            try IPCJSON.decode(EvaluateReply.self, from: bad)
+        for badVia in ["inProcess", "bogus"] {
+            var spoofed = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            spoofed["via"] = badVia
+            let bad = try JSONSerialization.data(withJSONObject: spoofed)
+            #expect(throws: DecodingError.self) {
+                try IPCJSON.decode(EvaluateReply.self, from: bad)
+            }
         }
     }
 
@@ -149,7 +145,7 @@ extension IPCResult {
             )
         )
         return [
-            NamedResult(key: "evaluate", id: id, result: .evaluate(EvaluateReply(result: deny, via: .xpc))),
+            NamedResult(key: "evaluate", id: id, result: .evaluate(EvaluateReply(result: deny))),
             NamedResult(
                 key: "explain",
                 id: id,
