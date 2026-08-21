@@ -10,8 +10,7 @@ private func snapshotDirectory() -> URL {
     URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()
         .deletingLastPathComponent()
-        .deletingLastPathComponent()
-        .appendingPathComponent("Fixtures/snapshots/phase-1b")
+        .appendingPathComponent("RVTUITests/Fixtures/snapshots/phase-1b")
 }
 
 private func loadSnapshot(_ name: String) throws -> String {
