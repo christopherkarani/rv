@@ -5,18 +5,20 @@ import RVDomain
 private let resetHard = ShellCommand(rawValue: "git reset --hard")
 
 @Test func hostDenyText_nilOnAllowIncludingMedium() {
-    let allow = EvaluationResult(decision: .allow)
+    let allow = EvaluationResult(outcome: .plain)
     #expect(hostDenyText(from: allow, command: ShellCommand(rawValue: "git status")) == nil)
 
     let rule = RuleID(pack: .coreGit, pattern: "stash-drop")
     let medium = EvaluationResult(
-        decision: .allow,
-        matched: RuleMatch(
-            ruleID: rule,
-            packID: .coreGit,
-            patternName: "stash-drop",
-            severity: .medium,
-            reason: "git stash drop deletes a single stash"
+        outcome: .hit(
+            RuleMatch(
+                ruleID: rule,
+                packID: .coreGit,
+                patternName: "stash-drop",
+                severity: .medium,
+                reason: "git stash drop deletes a single stash"
+            ),
+            safe: nil
         )
     )
     #expect(hostDenyText(from: medium, command: ShellCommand(rawValue: "git stash drop")) == nil)
@@ -30,7 +32,7 @@ private let resetHard = ShellCommand(rawValue: "git reset --hard")
     ]
     for reason in reasons {
         let text = hostDenyText(
-            from: EvaluationResult(decision: .indeterminate(reason)),
+            from: EvaluationResult(outcome: .indeterminate(reason)),
             command: resetHard
         )
         #expect(text == incompleteEvalSentence)
@@ -44,11 +46,12 @@ private let resetHard = ShellCommand(rawValue: "git reset --hard")
 @Test func hostDenyText_denyIsOneLineNoPanelNoCode() {
     let rule = RuleID(pack: .coreGit, pattern: "reset-hard")
     let result = EvaluationResult(
-        decision: .deny(
+        outcome: .deny(
             Deny(
                 ruleID: rule,
                 reason: "git reset --hard destroys uncommitted changes. Use 'git stash' first."
-            )
+            ),
+            matched: nil
         )
     )
     let text = hostDenyText(from: result, command: resetHard)
@@ -66,9 +69,12 @@ private let resetHard = ShellCommand(rawValue: "git reset --hard")
 
 @Test func hostDenyText_switchesOnDecisionNotNilHeuristic() {
     let deny = EvaluationResult(
-        decision: .deny(Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "x"))
+        outcome: .deny(
+            Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "x"),
+            matched: nil
+        )
     )
-    let allow = EvaluationResult(decision: .allow)
+    let allow = EvaluationResult(outcome: .plain)
     #expect(hostDenyText(from: deny, command: resetHard) != nil)
     #expect(hostDenyText(from: allow, command: resetHard) == nil)
     #expect(deny.decision != allow.decision)

@@ -91,24 +91,30 @@ public func testViewModel(
 ) -> TestViewModel {
     let resultWord = testResultWord(result.decision)
     let tone = decisionTone(result.decision)
-    switch result.decision {
-    case .allow:
+    switch result.outcome {
+    case .quickRejected, .plain, .safeOnly:
         return TestViewModel(
             command: command,
-            span: remapMatchSpan(
-                span: result.matched?.span,
-                matchedText: result.matched?.matchedText,
-                searchText: result.matched?.searchText,
-                onto: command.rawValue
-            ),
-            matchedLabel: result.matched.map { $0.ruleID.rawValue },
             resultWord: resultWord,
             resultTone: tone,
             columns: columns
         )
-    case .deny(let payload):
+    case .hit(let match, _):
+        return TestViewModel(
+            command: command,
+            span: remapMatchSpan(
+                span: match.span,
+                matchedText: match.matchedText,
+                searchText: match.searchText,
+                onto: command.rawValue
+            ),
+            matchedLabel: match.ruleID.rawValue,
+            resultWord: resultWord,
+            resultTone: tone,
+            columns: columns
+        )
+    case .deny(let payload, let matched):
         let deny = denyViewModel(payload, command: command)
-        let matched = result.matched
         return TestViewModel(
             command: command,
             span: remapMatchSpan(

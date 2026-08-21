@@ -31,11 +31,12 @@ struct NoBypassEnvTests {
         try FileManager.default.createDirectory(at: store.baseDirectory, withIntermediateDirectories: true)
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let denied = EvaluationResult(
-            decision: .deny(
+            outcome: .deny(
                 Deny(
                     ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
                     reason: "git reset --hard destroys uncommitted changes"
-                )
+                ),
+                matched: nil
             ),
             matchingView: "git reset --hard"
         )

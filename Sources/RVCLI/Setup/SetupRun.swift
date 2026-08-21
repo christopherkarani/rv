@@ -1,7 +1,6 @@
 import Foundation
 import RVAnalytics
 import RVHooks
-import RVIPC
 import RVPolicy
 import RVPresentation
 
@@ -53,6 +52,7 @@ struct SetupEnvironment {
     var fileManager: FileManager
     var launchctl: any LaunchctlApplying
     var touchLaunchd: Bool
+    var installAnalytics: any InstallAnalyticsCapturing
 
     static func live(environment: [String: String] = ProcessInfo.processInfo.environment) -> SetupEnvironment? {
         guard let home = environment["HOME"], home.isEmpty == false else { return nil }
@@ -66,7 +66,8 @@ struct SetupEnvironment {
                 ?? (home + "/.local/bin/rvd"),
             fileManager: .default,
             launchctl: ProcessLaunchctl(),
-            touchLaunchd: LoginHome.matchesProcessHome(home)
+            touchLaunchd: LoginHome.matchesProcessHome(home),
+            installAnalytics: BlockingInstallAnalytics.live(home: home, environment: environment)
         )
     }
 
@@ -151,21 +152,17 @@ enum SetupRun {
 
         for owned in layout.hostAdapters {
             let host = owned.host
-            let installation = installations.installation(for: host)
             let existingData: Data?
-            switch installation {
-            case .missing:
+            switch installations.installation(for: host).setupPlan(force: force) {
+            case .skipUndetected:
                 continue
-            case .occupied:
-                if force == false {
-                    kinds[host] = .occupied
-                    continue
-                }
+            case .skipOccupied:
+                kinds[host] = .occupied
+                continue
+            case .forceClearThenWrite:
                 try files.backupAndClearOwnedPath(owned.destination)
                 existingData = nil
-            case .absentFile:
-                existingData = nil
-            case .broken(_, let data), .wired(_, let data):
+            case .write(let data):
                 existingData = data
             }
             let adapter = try HostAdapterResources.load(for: owned.hookHost)
@@ -186,40 +183,8 @@ enum SetupRun {
             openCode: kinds[.openCode] ?? .pending,
             wrote: wrote
         )
-        emitInstallAnalytics(report: report, home: env.home)
+        env.installAnalytics.captureInstall(hosts: InstallAnalyticsHosts.from(report.slots))
         return report
-    }
-
-    private static func emitInstallAnalytics(report: SetupReport, home: String) {
-        var environment = ProcessInfo.processInfo.environment
-        environment["HOME"] = home
-        guard let coordinator = AnalyticsBootstrap.live(
-            productVersion: ProtocolVersion.serviceSemver,
-            environment: environment
-        ) else {
-            return
-        }
-        let hosts: [String: String] = [
-            "grok": analyticsStatus(report.grok),
-            "pi": analyticsStatus(report.pi),
-            "opencode": analyticsStatus(report.openCode),
-        ]
-        // Setup is a short-lived CLI process; await delivery before exit.
-        let group = DispatchGroup()
-        group.enter()
-        Task {
-            await coordinator.captureInstall(hosts: hosts)
-            group.leave()
-        }
-        _ = group.wait(timeout: .now() + .seconds(10))
-    }
-
-    private static func analyticsStatus(_ kind: SetupSlotKind) -> String {
-        switch kind {
-        case .pending: "pending"
-        case .wired: "wired"
-        case .occupied: "occupied"
-        }
     }
 
     static func uninstall(
@@ -251,13 +216,13 @@ enum SetupRun {
         var removedPaths: [String] = []
 
         for owned in layout.hostAdapters {
-            switch installations.installation(for: owned.host) {
-            case .broken, .wired:
+            switch installations.installation(for: owned.host).uninstallPlan {
+            case .remove:
                 removedPaths.append(owned.destination)
                 removedHosts.insert(owned.host)
-            case .occupied:
+            case .leaveOccupied:
                 occupiedHosts.insert(owned.host)
-            case .missing, .absentFile:
+            case .skip:
                 break
             }
         }

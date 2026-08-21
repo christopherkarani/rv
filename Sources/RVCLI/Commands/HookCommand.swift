@@ -11,12 +11,13 @@ enum HookRun {
         codec: C,
         evaluate: @Sendable (ShellCommand, String?) async -> EvaluationResult
     ) async -> HookWire {
-        let request = codec.decode(stdin)
-        guard let command = request.command else {
+        switch codec.decode(stdin) {
+        case .request(let request):
+            let result = await evaluate(request.command, request.cwd)
+            return hookWire(from: result, command: request.command, using: codec)
+        case .foreign, .malformed:
             return codec.encodeAllow()
         }
-        let result = await evaluate(command, request.cwd)
-        return hookWire(from: result, command: command, using: codec)
     }
 }
 
@@ -35,7 +36,6 @@ struct Hook: AsyncParsableCommand {
         let client = ServiceClient()
         let outcome = await run(
             stdin: stdin,
-            environment: ProcessInfo.processInfo.environment,
             evaluate: { command, cwd in
                 await client.evaluateResult(command: command, cwd: cwd)
             }
@@ -49,7 +49,6 @@ struct Hook: AsyncParsableCommand {
 
     func run(
         stdin: String,
-        environment _: [String: String],
         evaluate: @Sendable (ShellCommand, String?) async -> EvaluationResult
     ) async -> (stdout: String, stderr: String, exitCode: Int32) {
         let wire: HookWire

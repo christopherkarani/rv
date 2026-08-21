@@ -203,9 +203,7 @@ struct AllowOnceList: AsyncParsableCommand {
                     "cwd": row.cwd,
                 ]
             }
-            let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
-            FileHandle.standardOutput.write(data)
-            FileHandle.standardOutput.write(Data("\n".utf8))
+            FileHandle.standardOutput.write(Data((try RobotJSON.encodeArray(payload) + "\n").utf8))
             return
         }
         if rows.isEmpty {

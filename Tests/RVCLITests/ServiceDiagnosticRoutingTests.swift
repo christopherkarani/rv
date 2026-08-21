@@ -77,7 +77,7 @@ struct ServiceDiagnosticRoutingTests {
                 protocolName: "rv.ipc.v0",
                 serviceSemver: "1.0.0",
                 ok: true,
-                skewReason: "protocol"
+                skewReason: .protocolSkew
             )
         )
 
@@ -139,7 +139,7 @@ struct ServiceDiagnosticRoutingTests {
                 protocolName: "rv.ipc.v1",
                 serviceSemver: "1.0.0",
                 ok: false,
-                skewReason: "core packs unavailable"
+                skewReason: .corePacksUnavailable
             )
         )
 
@@ -158,13 +158,13 @@ struct ServiceDiagnosticRoutingTests {
         #expect(transport.invalidationCount == 1)
     }
 
-    @Test func arbitraryRejectedHandshakeReasonIsNotSurfaced() async throws {
+    @Test func unmappedDaemonRefusalSurfacesAsRejectedWithoutWireDetail() async throws {
         let transport = ScriptedTransport(
             ack: HelloAckView(
                 protocolName: "rv.ipc.v1",
                 serviceSemver: "1.0.0",
                 ok: false,
-                skewReason: "peer supplied detail"
+                skewReason: .protocolSkew
             )
         )
         let client = try isolatedClient(transport: transport)
@@ -182,7 +182,7 @@ struct ServiceDiagnosticRoutingTests {
             )
         )
         #expect(status.lastError == "handshake rejected")
-        #expect(status.lastError?.contains("peer supplied detail") == false)
+        #expect(status.lastError?.contains("protocol") == false)
         #expect(transport.sendCount == 0)
     }
 

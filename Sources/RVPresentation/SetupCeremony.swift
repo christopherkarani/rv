@@ -64,23 +64,21 @@ public func setupCeremonyFrames(
     wrote: Set<SetupHostKind>,
     kind: SetupCeremonyKind
 ) -> [SetupCeremonyFrame]? {
-    func slotKind(_ host: SetupHostKind) -> SetupSlotKind {
-        switch host {
-        case .grok: grok
-        case .pi: pi
-        case .openCode: openCode
-        }
-    }
-    let occupied = SetupHostKind.allCases.filter { slotKind($0) == .occupied }
-    let detected = SetupHostKind.allCases.filter { slotKind($0) != .pending }
-    if detected.isEmpty == false && wrote.isEmpty && occupied.isEmpty {
+    setupCeremonyFrames(
+        SetupSlotSnapshot(grok: grok, pi: pi, openCode: openCode, wrote: wrote),
+        kind: kind
+    )
+}
+
+public func setupCeremonyFrames(
+    _ slots: SetupSlotSnapshot,
+    kind: SetupCeremonyKind
+) -> [SetupCeremonyFrame]? {
+    if slots.isQuiet {
         return nil
     }
 
-    let finalSlots = SetupHostKind.allCases.map { host in
-        SetupSlotView(host: host, kind: slotKind(host), clause: setupSlotClause(host: host, kind: slotKind(host)))
-    }
-    let hasWired = finalSlots.contains { $0.kind == .wired }
+    let finalSlots = slots.slotViews
     var frames: [SetupCeremonyFrame] = []
 
     if kind == .install {
@@ -142,41 +140,22 @@ public func setupCeremonyFrames(
         )
     }
 
-    if hasWired {
-        switch kind {
-        case .install:
-            frames.append(
-                SetupCeremonyFrame(
-                    statusLine: setupCeremonyAllHostsWired,
-                    slots: finalSlots,
-                    pauseNanoseconds: setupCeremonyPhaseGapNs
-                )
-            )
-            frames.append(
-                SetupCeremonyFrame(
-                    slots: finalSlots,
-                    closerLines: [setupCeremonyInstallCloser],
-                    pauseNanoseconds: 0
-                )
-            )
-        case .setup:
-            frames.append(
-                SetupCeremonyFrame(
-                    slots: finalSlots,
-                    closerLines: [setupCeremonyHooksWired],
-                    pauseNanoseconds: 0
-                )
-            )
-        }
-    } else {
+    if slots.closer == .complete, kind == .install {
         frames.append(
             SetupCeremonyFrame(
+                statusLine: setupCeremonyAllHostsWired,
                 slots: finalSlots,
-                closerLines: [setupCeremonyHostlessTitle, setupCeremonyHostlessNext],
-                pauseNanoseconds: 0
+                pauseNanoseconds: setupCeremonyPhaseGapNs
             )
         )
     }
+    frames.append(
+        SetupCeremonyFrame(
+            slots: finalSlots,
+            closerLines: slots.closer.lines(kind: kind),
+            pauseNanoseconds: 0
+        )
+    )
 
     return frames
 }

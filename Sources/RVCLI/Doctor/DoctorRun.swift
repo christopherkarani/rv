@@ -129,9 +129,7 @@ enum DoctorRun {
             grade: model.grade.rawValue,
             ok: model.isHealthy
         )
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        return String(decoding: try encoder.encode(robot), as: UTF8.self)
+        return try RobotJSON.encode(robot)
     }
 }
 

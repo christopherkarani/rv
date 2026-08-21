@@ -2,6 +2,7 @@ import ArgumentParser
 import Foundation
 import RVPresentation
 import RVService
+import RVTheme
 import RVTUI
 
 struct Packs: AsyncParsableCommand {
@@ -31,20 +32,20 @@ struct Packs: AsyncParsableCommand {
                 enabledCount: snapshot.enabledCount,
                 totalCount: snapshot.totalCount
             )
-            let data = try JSONEncoder.robot.encode(payload)
-            FileHandle.standardOutput.write(data)
-            FileHandle.standardOutput.write(Data("\n".utf8))
+            FileHandle.standardOutput.write(Data((try RobotJSON.encode(payload) + "\n").utf8))
             return
         }
 
         let catalog = snapshot.packs.map { ($0.id, $0.description) }
         let enabled = snapshot.packs.filter(\.enabled).map(\.id)
         let model = packsViewModel(enabled: enabled, catalog: catalog)
-        let lines = model.rows.map { row in
-            let flag = row.enabled ? "on " : "off"
-            return "\(flag)  \(row.id.rawValue)  \(row.summary)"
-        }
-        FileHandle.standardOutput.write(Data((lines.joined(separator: "\n") + "\n").utf8))
+        let appearance = CLIAppearance.resolve(
+            json: format.json,
+            robot: format.robot,
+            plain: format.plain,
+            noColor: format.noColor
+        )
+        FileHandle.standardOutput.write(Data(PacksListFormat.pretty(model, appearance: appearance).utf8))
     }
 
     struct Enable: AsyncParsableCommand {
@@ -99,9 +100,7 @@ struct Packs: AsyncParsableCommand {
                 throw ExitCode(1)
             }
             if format.json || format.robot {
-                let data = try JSONEncoder.robot.encode(RobotPackRow(row))
-                FileHandle.standardOutput.write(data)
-                FileHandle.standardOutput.write(Data("\n".utf8))
+                FileHandle.standardOutput.write(Data((try RobotJSON.encode(RobotPackRow(row)) + "\n").utf8))
                 return
             }
             let lines = [
@@ -144,6 +143,19 @@ private func mutate(ids: [String], enabling: Bool) throws {
     let line =
         "\(verb): \(changed) (\(result.enabledCount)/\(result.totalCount) enabled)\n"
     FileHandle.standardOutput.write(Data(line.utf8))
+}
+
+enum PacksListFormat {
+    static func pretty(_ model: PacksViewModel, appearance: CLIAppearance) -> String {
+        let palette: Palette
+        switch appearance {
+        case .robot:
+            palette = colorOffPalette
+        case .pretty(let value):
+            palette = value
+        }
+        return PrettyWriter.join(PacksRenderer().render(model, palette: palette))
+    }
 }
 
 private struct RobotPacksList: Encodable {
@@ -190,10 +202,3 @@ private struct RobotPackRow: Encodable {
     }
 }
 
-private extension JSONEncoder {
-    static var robot: JSONEncoder {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        return encoder
-    }
-}

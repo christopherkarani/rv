@@ -1,5 +1,5 @@
 public struct PackID: RawRepresentable, Hashable, Sendable, Equatable, Codable {
-    public var rawValue: String
+    public let rawValue: String
 
     public init(rawValue: String) {
         self.rawValue = rawValue
@@ -8,6 +8,23 @@ public struct PackID: RawRepresentable, Hashable, Sendable, Equatable, Codable {
     public init?(validating rawValue: String) {
         guard Self.isValid(rawValue) else { return nil }
         self.rawValue = rawValue
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let raw = try container.decode(String.self)
+        guard let validated = PackID(validating: raw) else {
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "invalid PackID"
+            )
+        }
+        self = validated
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
     }
 
     public static let coreFilesystem = PackID(rawValue: "core.filesystem")

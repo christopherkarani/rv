@@ -23,13 +23,15 @@ private func denyResult(
 ) -> EvaluationResult {
     let rule = RuleID(pack: PackID(rawValue: pack), pattern: pattern)
     return EvaluationResult(
-        decision: .deny(Deny(ruleID: rule, reason: reason)),
-        matched: RuleMatch(
-            ruleID: rule,
-            packID: rule.pack,
-            patternName: pattern,
-            severity: .critical,
-            reason: reason
+        outcome: .deny(
+            Deny(ruleID: rule, reason: reason),
+            matched: RuleMatch(
+                ruleID: rule,
+                packID: rule.pack,
+                patternName: pattern,
+                severity: .critical,
+                reason: reason
+            )
         )
     )
 }
@@ -37,25 +39,27 @@ private func denyResult(
 private func mediumAllow() -> EvaluationResult {
     let rule = RuleID(pack: .coreGit, pattern: "stash-drop")
     return EvaluationResult(
-        decision: .allow,
-        matched: RuleMatch(
-            ruleID: rule,
-            packID: .coreGit,
-            patternName: "stash-drop",
-            severity: .medium,
-            reason: "git stash drop deletes a single stash"
+        outcome: .hit(
+            RuleMatch(
+                ruleID: rule,
+                packID: .coreGit,
+                patternName: "stash-drop",
+                severity: .medium,
+                reason: "git stash drop deletes a single stash"
+            ),
+            safe: nil
         )
     )
 }
 
 @Test func denyViewModel_nilOnAllowIncludingMedium() {
-    let allow = EvaluationResult(decision: .allow)
+    let allow = EvaluationResult(outcome: .plain)
     #expect(denyViewModel(from: allow, command: status) == nil)
     #expect(denyViewModel(from: mediumAllow(), command: stashDrop) == nil)
 }
 
 @Test func denyViewModel_nilOnIndeterminate() {
-    let result = EvaluationResult(decision: .indeterminate(.commandTooLarge))
+    let result = EvaluationResult(outcome: .indeterminate(.commandTooLarge))
     #expect(denyViewModel(from: result, command: resetHard) == nil)
 }
 
@@ -71,7 +75,7 @@ private func mediumAllow() -> EvaluationResult {
 }
 
 @Test func explainViewModel_allowHasNoNextAction() {
-    let vm = explainViewModel(from: EvaluationResult(decision: .allow), command: status)
+    let vm = explainViewModel(from: EvaluationResult(outcome: .plain), command: status)
     #expect(vm.fact == "allow")
     #expect(vm.nextAction == nil)
 }
@@ -97,18 +101,18 @@ private func mediumAllow() -> EvaluationResult {
 @Test func testViewModel_denyShowsPackReasonAndColonMatch() throws {
     let reason = "git reset --hard destroys uncommitted changes. Use 'git stash' first."
     let result = EvaluationResult(
-        decision: .deny(
-            Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: reason)
-        ),
-        matched: RuleMatch(
-            ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
-            packID: .coreGit,
-            patternName: "reset-hard",
-            severity: .critical,
-            reason: reason,
-            explanation: resetHardExplanation,
-            span: MatchSpan(start: 0, end: 16),
-            matchedText: "git reset --hard"
+        outcome: .deny(
+            Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: reason),
+            matched: RuleMatch(
+                ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+                packID: .coreGit,
+                patternName: "reset-hard",
+                severity: .critical,
+                reason: reason,
+                explanation: resetHardExplanation,
+                span: MatchSpan(start: 0, end: 16),
+                matchedText: "git reset --hard"
+            )
         )
     )
     let deny = try #require(denyViewModel(from: result, command: resetHard))
@@ -127,7 +131,7 @@ private func mediumAllow() -> EvaluationResult {
 }
 
 @Test func testViewModel_allowIsCommandAndAllowed() {
-    let vm = testViewModel(from: EvaluationResult(decision: .allow), command: status)
+    let vm = testViewModel(from: EvaluationResult(outcome: .plain), command: status)
     #expect(vm.deny == nil)
     #expect(vm.resultWord == "ALLOWED")
     #expect(vm.packDisplay == nil)
@@ -149,7 +153,7 @@ private func mediumAllow() -> EvaluationResult {
 
 @Test func testViewModel_indeterminateUsesPlanSentence() {
     let vm = testViewModel(
-        from: EvaluationResult(decision: .indeterminate(.commandTooLarge)),
+        from: EvaluationResult(outcome: .indeterminate(.commandTooLarge)),
         command: resetHard
     )
     #expect(vm.deny == nil)
@@ -209,15 +213,17 @@ private func mediumAllow() -> EvaluationResult {
     let regex = #"(?:^|[^[:alnum:]_-])git\s+(?:\S+\s+)*reset\s+--hard"#
     let vm = explainViewModel(
         from: EvaluationResult(
-            decision: .deny(Deny(ruleID: rule, reason: reason)),
-            matched: RuleMatch(
-                ruleID: rule,
-                packID: .coreGit,
-                patternName: "reset-hard",
-                severity: .critical,
-                reason: reason,
-                explanation: essay,
-                regex: regex
+            outcome: .deny(
+                Deny(ruleID: rule, reason: reason),
+                matched: RuleMatch(
+                    ruleID: rule,
+                    packID: .coreGit,
+                    patternName: "reset-hard",
+                    severity: .critical,
+                    reason: reason,
+                    explanation: essay,
+                    regex: regex
+                )
             )
         ),
         command: resetHard
@@ -293,7 +299,7 @@ private func mediumAllow() -> EvaluationResult {
 
 @Test func explainViewModel_indeterminateHasIncompleteFact() {
     let vm = explainViewModel(
-        from: EvaluationResult(decision: .indeterminate(.commandTooLarge)),
+        from: EvaluationResult(outcome: .indeterminate(.commandTooLarge)),
         command: resetHard
     )
     #expect(vm.fact == incompleteEvalSentence)
