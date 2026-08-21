@@ -48,10 +48,10 @@ public actor ServiceRuntime {
 
     public func acknowledge(_ hello: Hello) -> HelloAck {
         if hello.protocolName != ProtocolVersion.name {
-            return HelloAck(ok: false, skewReason: "protocol")
+            return HelloAck(ok: false, skewReason: .protocolSkew)
         }
         if !corePacksReady {
-            return HelloAck(ok: false, skewReason: "core packs unavailable")
+            return HelloAck(ok: false, skewReason: .corePacksUnavailable)
         }
         return HelloAck(ok: true)
     }
