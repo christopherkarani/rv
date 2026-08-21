@@ -45,6 +45,7 @@ public enum PackIndexJSON {
         guard file.packCount == 99, file.categories.count == 27 else {
             throw PackLoadError.invalidIndex
         }
+        try validatePackReferences(file)
         return PackIndex(
             pinVersion: file.pinVersion,
             pinTag: file.pinTag,
@@ -55,5 +56,14 @@ public enum PackIndexJSON {
             presets: file.presets,
             tiers: file.tiers
         )
+    }
+
+    private static func validatePackReferences(_ file: PackIndexFile) throws {
+        var declared = Set(file.defaultEnabled)
+        declared.formUnion(file.categories.values.flatMap { $0 })
+        declared.formUnion(file.presets.values.flatMap { $0 })
+        for raw in declared.sorted() where !PackID.isValid(raw) {
+            throw PackLoadError.invalidPackID(raw)
+        }
     }
 }

@@ -30,10 +30,14 @@ public struct PackCatalog: Sendable, Equatable {
             .map { PackEnablement(id: $0, enabled: true, bundled: true) }
     }
 
-    public static func bundlingAll(enabled: Set<PackID>, index: PackIndex) -> PackCatalog {
-        let records = index.packIDs.map { raw in
-            let id = PackID(rawValue: raw)
-            return PackEnablement(id: id, enabled: enabled.contains(id), bundled: true)
+    public static func bundlingAll(enabled: Set<PackID>, index: PackIndex) throws -> PackCatalog {
+        var records: [PackEnablement] = []
+        records.reserveCapacity(index.packIDs.count)
+        for raw in index.packIDs {
+            guard let id = PackID(validating: raw) else {
+                throw PackLoadError.invalidPackID(raw)
+            }
+            records.append(PackEnablement(id: id, enabled: enabled.contains(id), bundled: true))
         }
         return PackCatalog(records: records)
     }

@@ -75,5 +75,6 @@ private struct AcceptingEngine: PatternEngine {
 }
 
 @Test func enableCompileGate_bundledDatabaseSqliteBlockingPatternsCompile() throws {
-    try PackEnableCompileGate.assertBlockingPatternsCompile(packIDs: ["database.sqlite"])
+    let packID = try #require(PackID(validating: "database.sqlite"))
+    try PackEnableCompileGate.assertBlockingPatternsCompile(packIDs: [packID])
 }
