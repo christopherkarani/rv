@@ -154,7 +154,7 @@ enum SetupApply {
             existingData: existingData,
             files: files
         )
-        return AppliedSlot(kind: .wired, wrote: wrote)
+        return .wired(wrote: wrote)
     }
 
     private static func writeLaunchAgent(env: SetupEnvironment, layout: OwnedPaths, files: FileOps) throws {
@@ -186,52 +186,73 @@ enum SetupApply {
     }
 }
 
-private struct AppliedSlot: Equatable, Sendable {
-    var kind: SetupSlotKind
-    var wrote: Bool
+private enum AppliedSlot: Equatable, Sendable {
+    case pending
+    case occupied
+    case wired(wrote: Bool)
 
-    static let pending = AppliedSlot(kind: .pending, wrote: false)
-    static let occupied = AppliedSlot(kind: .occupied, wrote: false)
+    var kind: SetupSlotKind {
+        switch self {
+        case .pending: .pending
+        case .occupied: .occupied
+        case .wired: .wired
+        }
+    }
+
+    var wrote: Bool {
+        switch self {
+        case .wired(true): true
+        case .pending, .occupied, .wired(false): false
+        }
+    }
 }
 
 private struct AppliedSlots: Equatable, Sendable {
-    var grok: AppliedSlot
-    var pi: AppliedSlot
-    var openCode: AppliedSlot
+    let grok: AppliedSlot
+    let pi: AppliedSlot
+    let openCode: AppliedSlot
+
+    func slot(for host: SetupHostKind) -> AppliedSlot {
+        switch host {
+        case .grok: grok
+        case .pi: pi
+        case .openCode: openCode
+        }
+    }
 
     var report: SetupReport {
         SetupReport(
             grok: grok.kind,
             pi: pi.kind,
             openCode: openCode.kind,
-            wrote: Set(
-                zip(
-                    [SetupHostKind.grok, .pi, .openCode],
-                    [grok, pi, openCode]
-                ).compactMap { host, slot in slot.wrote ? host : nil }
-            )
+            wrote: Set(SetupHostKind.allCases.filter { slot(for: $0).wrote })
         )
     }
 }
 
 private struct UninstallHostPlans: Equatable, Sendable {
-    var removed: Set<SetupHostKind>
-    var occupied: Set<SetupHostKind>
-    var destinationsToRemove: [String]
+    let removed: Set<SetupHostKind>
+    let occupied: Set<SetupHostKind>
+    let destinationsToRemove: [String]
 
     init(layout: OwnedPaths, installations: HostAdapterInstallationSnapshot) {
-        let classified = layout.hostAdapters.map { owned in
-            (owned, installations.installation(for: owned.host).uninstallPlan)
+        var removed: Set<SetupHostKind> = []
+        var occupied: Set<SetupHostKind> = []
+        var destinationsToRemove: [String] = []
+        for owned in layout.hostAdapters {
+            switch installations.installation(for: owned.host).uninstallPlan {
+            case .remove:
+                removed.insert(owned.host)
+                destinationsToRemove.append(owned.destination)
+            case .leaveOccupied:
+                occupied.insert(owned.host)
+            case .skip:
+                break
+            }
         }
-        removed = Set(classified.compactMap { pair in
-            pair.1 == .remove ? pair.0.host : nil
-        })
-        occupied = Set(classified.compactMap { pair in
-            pair.1 == .leaveOccupied ? pair.0.host : nil
-        })
-        destinationsToRemove = classified.compactMap { pair in
-            pair.1 == .remove ? pair.0.destination : nil
-        }
+        self.removed = removed
+        self.occupied = occupied
+        self.destinationsToRemove = destinationsToRemove
     }
 }
 
