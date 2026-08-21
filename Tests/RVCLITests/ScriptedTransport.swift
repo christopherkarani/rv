@@ -11,6 +11,8 @@ final class ScriptedTransport: ServiceTransport {
     let responseResult: IPCResult?
 
     private let sentBodies = Mutex<[Data]>([])
+    private let sendTimeouts = Mutex<[Int]>([])
+    private let helloCalls = Mutex(0)
     private let invalidations = Mutex(0)
 
     init(
@@ -31,9 +33,14 @@ final class ScriptedTransport: ServiceTransport {
 
     var sends: [Data] { sentBodies.withLock { $0 } }
 
+    var helloCount: Int { helloCalls.withLock { $0 } }
+
+    var lastSendTimeoutMs: Int? { sendTimeouts.withLock(\.last) }
+
     var invalidationCount: Int { invalidations.withLock { $0 } }
 
     func hello(clientSemver: String) async throws -> HelloAckView {
+        helloCalls.withLock { $0 += 1 }
         if let helloError {
             throw helloError
         }
@@ -50,6 +57,11 @@ final class ScriptedTransport: ServiceTransport {
             return try IPCJSON.encode(IPCResponse(id: request.id, result: responseResult))
         }
         return sendReply ?? Data()
+    }
+
+    func send(_ body: Data, timeoutMs: Int) async throws -> Data {
+        sendTimeouts.withLock { $0.append(timeoutMs) }
+        return try await send(body)
     }
 
     func invalidate() {

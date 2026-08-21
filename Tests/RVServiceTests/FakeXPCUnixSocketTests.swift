@@ -1,9 +1,33 @@
 import Foundation
 import Testing
+import RVIPC
 @testable import RVService
 
 @Suite(.serialized)
 struct FakeXPCUnixSocketTests {
+    @Test func oneShotEvaluateWithoutPriorHello_deniesResetHard() async throws {
+        let runtime = try isolatedRuntime()
+        let path = "/tmp/rv-t14-\(UUID().uuidString).sock"
+        let server = FakeXPCServer(runtime: runtime, path: path)
+        try server.start()
+        defer { server.stop() }
+
+        let client = try retryConnect(path: path)
+        defer { client.close() }
+
+        let reply = try client.sendJSON(
+            evaluateJSON("git reset --hard", clientSemver: ProtocolVersion.serviceSemver)
+        )
+        let result = try #require(reply["result"] as? [String: Any])
+        #expect(result["error"] == nil)
+        let evaluate = try #require(result["evaluate"] as? [String: Any])
+        #expect(evaluate["via"] as? String == "xpc")
+        let payload = try #require(evaluate["result"] as? [String: Any])
+        let decision = try #require(payload["decision"] as? [String: Any])
+        #expect(decision["decision"] as? String == "deny")
+        #expect(decision["ruleID"] as? String == "core.git:reset-hard")
+    }
+
     @Test func handshakeAndEvaluateDenyResetHard() async throws {
         let runtime = try isolatedRuntime()
         let path = "/tmp/rv-t3-\(UUID().uuidString).sock"
@@ -232,8 +256,12 @@ final class RecordingLog: ServiceLog, @unchecked Sendable {
     var snapshot: [ServiceLogEvent] { events }
 }
 
-private func evaluateJSON(_ command: String, cwd: String = "") -> [String: Any] {
-    methodJSON("evaluate", ["request": requestObject(command), "cwd": cwd])
+private func evaluateJSON(_ command: String, cwd: String = "", clientSemver: String? = nil) -> [String: Any] {
+    var params: [String: Any] = ["request": requestObject(command), "cwd": cwd]
+    if let clientSemver {
+        params["clientSemver"] = clientSemver
+    }
+    return methodJSON("evaluate", params)
 }
 
 private func requestObject(_ command: String) -> [String: Any] {

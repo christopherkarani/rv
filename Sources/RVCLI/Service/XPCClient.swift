@@ -34,10 +34,22 @@ public enum ServiceTransportError: Error, Sendable, Equatable {
 }
 
 public protocol ServiceTransport: Sendable {
+    /// One-shot evaluate budget: connect (200) + request (500) = 700 ms.
+    var oneShotEvaluateTimeoutMs: Int { get }
     func hello(clientSemver: String) async throws -> HelloAckView
     func send(_ body: Data) async throws -> Data
+    func send(_ body: Data, timeoutMs: Int) async throws -> Data
     /// Drops the current transport connection after a failed or skewed handshake.
     func invalidate()
+}
+
+extension ServiceTransport {
+    public var oneShotEvaluateTimeoutMs: Int { 700 }
+
+    public func send(_ body: Data, timeoutMs: Int) async throws -> Data {
+        _ = timeoutMs
+        return try await send(body)
+    }
 }
 
 public struct XPCServiceTransport: ServiceTransport, @unchecked Sendable {
@@ -64,8 +76,16 @@ public struct XPCServiceTransport: ServiceTransport, @unchecked Sendable {
         }
     }
 
+    public var oneShotEvaluateTimeoutMs: Int {
+        connectTimeoutMs + requestTimeoutMs
+    }
+
     public func send(_ body: Data) async throws -> Data {
         try await perform(body, timeoutMs: requestTimeoutMs)
+    }
+
+    public func send(_ body: Data, timeoutMs: Int) async throws -> Data {
+        try await perform(body, timeoutMs: timeoutMs)
     }
 
     /// Drops the current XPC connection.

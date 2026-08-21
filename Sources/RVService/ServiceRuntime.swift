@@ -76,13 +76,8 @@ public actor ServiceRuntime {
             let data = (try? IPCJSON.encode(ack)) ?? Data()
             return (data, ack.ok)
         }
-        guard handshakeOK else {
-            let response = IPCResponse(
-                id: UUID(),
-                result: .error(.protocolSkew("handshake required"))
-            )
-            let data = (try? IPCJSON.encode(response)) ?? Data()
-            return (data, false)
+        if handshakeOK == false {
+            return await handleUnreadyIncoming(body)
         }
         do {
             let request = try IPCJSON.decode(IPCRequest.self, from: body)
@@ -92,6 +87,33 @@ public actor ServiceRuntime {
             let response = IPCResponse(id: UUID(), result: .error(.decodeFailed))
             return ((try? IPCJSON.encode(response)) ?? Data(), true)
         }
+    }
+
+    /// Implicit hello on first evaluate when `clientSemver` is set. Old clients Hello first.
+    private func handleUnreadyIncoming(_ body: Data) async -> (Data, Bool) {
+        if let request = try? IPCJSON.decode(IPCRequest.self, from: body),
+           case .evaluate(let params) = request.method,
+           let clientSemver = params.clientSemver,
+           clientSemver.isEmpty == false
+        {
+            let hello = Hello(protocolName: request.protocolName, clientSemver: clientSemver)
+            let ack = acknowledge(hello)
+            if ack.ok == false {
+                let response = IPCResponse(
+                    id: request.id,
+                    result: .error(.protocolSkew(ack.skewReason ?? "protocol"))
+                )
+                return ((try? IPCJSON.encode(response)) ?? Data(), false)
+            }
+            let response = await dispatch(request)
+            return ((try? IPCJSON.encode(response)) ?? Data(), true)
+        }
+        let response = IPCResponse(
+            id: UUID(),
+            result: .error(.protocolSkew("handshake required"))
+        )
+        let data = (try? IPCJSON.encode(response)) ?? Data()
+        return (data, false)
     }
 
     public func dispatch(_ request: IPCRequest) async -> IPCResponse {
