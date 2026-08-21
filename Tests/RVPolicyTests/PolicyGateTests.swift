@@ -117,6 +117,22 @@ struct PolicyGateTests {
         }
     }
 
+    @Test func allowOnceKeepsMatchedRuleDetail() async throws {
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let denied = resetHardDenyWithMatch()
+        try await store.insertGranted(matchingView: denied.matchingView, cwd: "/tmp/ws", now: now)
+        let gated = await PolicyGate.apply(denied, cwd: "/tmp/ws", store: store, now: now)
+        #expect(gated.override == .allowOnce)
+        guard case .hit(let match, safe: nil) = gated.result.outcome else {
+            Issue.record("override must keep the hit structure on an allow")
+            return
+        }
+        #expect(match.ruleID.rawValue == "core.git:reset-hard")
+        #expect(match.severity == .critical)
+        #expect(gated.result.decision == .allow)
+    }
+
     @Test func previewDoesNotSpendGrant() async throws {
         let store = try isolatedStore()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
@@ -179,6 +195,23 @@ private func resetHardDeny() -> EvaluationResult {
             )
         ),
         matchingView: "git reset --hard"
+    )
+}
+
+private func resetHardDenyWithMatch() -> EvaluationResult {
+    let ruleID = RuleID(pack: .coreGit, pattern: "reset-hard")
+    return EvaluationResult(
+        outcome: .deny(
+            Deny(ruleID: ruleID, reason: "git reset --hard destroys uncommitted changes"),
+            matched: RuleMatch(
+                ruleID: ruleID,
+                packID: .coreGit,
+                patternName: "reset-hard",
+                severity: .critical,
+                reason: "git reset --hard destroys uncommitted changes"
+            )
+        ),
+        matchingView: MatchingView("git reset --hard")
     )
 }
 
