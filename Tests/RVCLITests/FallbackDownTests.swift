@@ -33,7 +33,7 @@ struct FallbackDownTests {
 
     @Test func unexpectedEvaluateViaFallsBackInProcessAndStillDenies() async throws {
         let spoofedAllow = EvaluationResult(
-            decision: .allow,
+            outcome: .plain,
             matchingView: MatchingView(resetHard.rawValue)
         )
         let body = try spoofedEvaluateResponse(result: spoofedAllow, via: "inProcess")
@@ -51,7 +51,7 @@ struct FallbackDownTests {
 
     @Test func bogusEvaluateViaFallsBackInProcessAndStillDenies() async throws {
         let spoofedAllow = EvaluationResult(
-            decision: .allow,
+            outcome: .plain,
             matchingView: MatchingView(resetHard.rawValue)
         )
         let body = try spoofedEvaluateResponse(result: spoofedAllow, via: "bogus")

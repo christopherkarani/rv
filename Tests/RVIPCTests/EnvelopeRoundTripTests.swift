@@ -61,7 +61,7 @@ struct EnvelopeRoundTripTests {
     }
 
     @Test func evaluateViaRoundTripsAsXpcAndRejectsOtherPaths() throws {
-        let reply = EvaluateReply(result: EvaluationResult(decision: .allow))
+        let reply = EvaluateReply(result: EvaluationResult(outcome: .plain))
         let data = try IPCJSON.encode(reply)
         let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
         #expect(object["via"] as? String == "xpc")
@@ -140,8 +140,9 @@ extension IPCResult {
     static var allSamples: [NamedResult] {
         let id = UUID(uuidString: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")!
         let deny = EvaluationResult(
-            decision: .deny(
-                Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "destroys uncommitted changes")
+            outcome: .deny(
+                Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "destroys uncommitted changes"),
+                matched: nil
             )
         )
         return [
