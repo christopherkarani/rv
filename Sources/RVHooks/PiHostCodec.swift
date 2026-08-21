@@ -9,20 +9,20 @@ public struct PiHostCodec: HostCodec {
     /// Creates a Pi adapter codec.
     public init() {}
 
-    /// Decodes adapter stdin; `command` is nil for non-bash or unreadable stdin.
-    public func decode(_ stdin: String) -> HookRequest {
+    /// Decodes adapter stdin into a classified outcome.
+    public func decode(_ stdin: String) -> HookDecodeOutcome {
         guard let data = stdin.data(using: .utf8),
               let envelope = try? JSONDecoder().decode(PiEnvelope.self, from: data)
         else {
-            return HookRequest(host: .pi, command: nil)
+            return .malformed(.unreadable)
         }
         guard envelope.toolName == "bash" else {
-            return HookRequest(host: .pi, command: nil)
+            return .foreign
         }
         guard let command = envelope.input?.command, command.isEmpty == false else {
-            return HookRequest(host: .pi, command: nil)
+            return .malformed(.missingCommand)
         }
-        return HookRequest(host: .pi, command: ShellCommand(rawValue: command))
+        return .request(HookRequest(host: .pi, command: ShellCommand(rawValue: command)))
     }
 }
 

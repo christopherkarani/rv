@@ -63,22 +63,32 @@ public func explainViewModel(
     let next: String?
     let packID: PackID?
     let ruleID: RuleID?
-    switch result.decision {
-    case .allow:
+    let match: RuleMatch?
+    switch result.outcome {
+    case .quickRejected, .plain, .safeOnly:
         fact = "allow"
         next = nil
-        packID = result.matched?.packID
-        ruleID = result.matched?.ruleID
-    case .deny(let deny):
+        packID = nil
+        ruleID = nil
+        match = nil
+    case .hit(let hit, _):
+        fact = "allow"
+        next = nil
+        packID = hit.packID
+        ruleID = hit.ruleID
+        match = hit
+    case .deny(let deny, let matched):
         fact = factSentence(from: deny.reason)
         next = denyNextAction
         packID = deny.ruleID.pack
         ruleID = deny.ruleID
+        match = matched
     case .indeterminate:
         fact = incompleteEvalSentence
         next = nil
-        packID = result.matched?.packID
-        ruleID = result.matched?.ruleID
+        packID = nil
+        ruleID = nil
+        match = nil
     }
 
     return ExplainViewModel(
@@ -87,11 +97,11 @@ public func explainViewModel(
         decision: result.decision,
         packID: packID,
         ruleID: ruleID,
-        patternName: result.matched?.patternName,
-        severity: result.matched?.severity,
+        patternName: match?.patternName,
+        severity: match?.severity,
         fact: fact,
-        explanation: result.matched?.explanation,
-        regex: result.matched?.regex,
+        explanation: match?.explanation,
+        regex: match?.regex,
         nextAction: next,
         steps: explainSteps(from: result),
         suggestions: ruleID.map { suggestions(for: $0) } ?? []

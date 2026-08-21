@@ -39,8 +39,9 @@ private func expectResetHardMapperDeny(_ wire: HookWire, exit: Int32) throws {
     #expect(json["decision"] as? String == "deny")
     #expect(json["reason"] as? String == hostDenyText(
         from: EvaluationResult(
-            decision: .deny(
-                Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "x")
+            outcome: .deny(
+                Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "x"),
+                matched: nil
             )
         ),
         command: ShellCommand(rawValue: "git reset --hard")
@@ -80,7 +81,7 @@ private func inProcessEvaluate(_ command: ShellCommand, cwd: String?) async -> E
         let client = try isolatedClient(transport: nil)
         return await client.evaluateResult(command: command, cwd: cwd)
     } catch {
-        return EvaluationResult(decision: .indeterminate(.corePacksUnavailable))
+        return EvaluationResult(outcome: .indeterminate(.corePacksUnavailable))
     }
 }
 
@@ -141,7 +142,7 @@ private func runHook<C: HostCodec>(
 @Test func hookIndeterminate_stillDeniesWhenHostDenyTextNilFallback() async throws {
     let expected = try grokExpected("deny-indeterminate-oversize")
     let wire = try await runHook(stdin: try grokFixture("deny-git-reset-hard.json")) { _, _ in
-        EvaluationResult(decision: .indeterminate(.corePacksUnavailable))
+        EvaluationResult(outcome: .indeterminate(.corePacksUnavailable))
     }
     #expect(wire.stdout == expected.stdout)
     #expect(wire.exitCode == expected.exit)
@@ -151,9 +152,12 @@ private func runHook<C: HostCodec>(
     let probe = EvaluateProbe()
     let expected = try grokExpected("allow-non-shell-read")
     let wire = try await runHook(stdin: try grokFixture("allow-non-shell-read.json")) { command, _ in
-        probe.record(command, result: EvaluationResult(decision: .deny(
-            Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "should not run")
-        )))
+        probe.record(command, result: EvaluationResult(
+            outcome: .deny(
+                Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "should not run"),
+                matched: nil
+            )
+        ))
     }
     #expect(probe.commands.isEmpty)
     #expect(wire.stdout == expected.stdout)
@@ -309,9 +313,12 @@ private func runHook<C: HostCodec>(
         stdin: try hostFixture("pi", "allow-non-shell-read.json"),
         codec: PiHostCodec()
     ) { command, _ in
-        probe.record(command, result: EvaluationResult(decision: .deny(
-            Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "should not run")
-        )))
+        probe.record(command, result: EvaluationResult(
+            outcome: .deny(
+                Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "should not run"),
+                matched: nil
+            )
+        ))
     }
     #expect(probe.commands.isEmpty)
     #expect(wire.stdout == expected.stdout)
@@ -325,9 +332,12 @@ private func runHook<C: HostCodec>(
         stdin: try hostFixture("opencode", "allow-non-shell-read.json"),
         codec: OpenCodeHostCodec()
     ) { command, _ in
-        probe.record(command, result: EvaluationResult(decision: .deny(
-            Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "should not run")
-        )))
+        probe.record(command, result: EvaluationResult(
+            outcome: .deny(
+                Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "should not run"),
+                matched: nil
+            )
+        ))
     }
     #expect(probe.commands.isEmpty)
     #expect(wire.stdout == expected.stdout)

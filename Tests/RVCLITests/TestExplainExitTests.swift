@@ -132,7 +132,11 @@ private func robotProbe() -> ThemeProbe {
 @Test func hostDenyText_stashDropIsNil() async throws {
     let result = try await cliEvaluate("git stash drop")
     #expect(result.decision == .allow)
-    #expect(result.matched?.ruleID.rawValue == "core.git:stash-drop")
+    guard case .hit(let match, _) = result.outcome else {
+        Issue.record("expected stash-drop hit, got \(result.outcome)")
+        return
+    }
+    #expect(match.ruleID.rawValue == "core.git:stash-drop")
     #expect(hostDenyText(from: result, command: ShellCommand(rawValue: "git stash drop")) == nil)
     let pretty = CommandRun.render(
         kind: .test,
@@ -147,7 +151,7 @@ private func robotProbe() -> ThemeProbe {
 }
 
 @Test func hostDenyText_indeterminateNoRuleID() {
-    let result = EvaluationResult(decision: .indeterminate(.commandTooLarge))
+    let result = EvaluationResult(outcome: .indeterminate(.commandTooLarge))
     let text = hostDenyText(from: result, command: ShellCommand(rawValue: "x"))
     #expect(text == "rv could not finish evaluating this command. Run it in Terminal.")
 }
@@ -158,11 +162,12 @@ private func robotProbe() -> ThemeProbe {
 
 @Test func test_prettyDeny_doesNotFallBackToAllow() {
     let result = EvaluationResult(
-        decision: .deny(
+        outcome: .deny(
             Deny(
                 ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
                 reason: "git reset --hard destroys uncommitted changes"
-            )
+            ),
+            matched: nil
         )
     )
     let rendered = CommandRun.render(
@@ -180,7 +185,7 @@ private func robotProbe() -> ThemeProbe {
 @Test func test_prettyIndeterminate_isPlanSentence() {
     let rendered = CommandRun.render(
         kind: .test,
-        result: EvaluationResult(decision: .indeterminate(.corePacksUnavailable)),
+        result: EvaluationResult(outcome: .indeterminate(.corePacksUnavailable)),
         command: ShellCommand(rawValue: "git status"),
         probe: prettyProbe(plain: true),
         requested: .pretty
