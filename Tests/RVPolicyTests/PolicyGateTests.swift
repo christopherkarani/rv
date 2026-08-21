@@ -29,6 +29,7 @@ struct PolicyGateTests {
         #expect(first.result.matched?.ruleID.rawValue == "core.git:reset-hard")
         let second = await PolicyGate.apply(denied, cwd: "/tmp/ws", store: store, now: now)
         #expect(second.override == .none)
+        #expect(second.result.policyOverride == .none)
         guard case .deny = second.result.decision else {
             Issue.record("second evaluate must deny after the grant is spent")
             return
@@ -70,9 +71,38 @@ struct PolicyGateTests {
         let gated = await PolicyGate.apply(allow, cwd: "/tmp/ws", store: store, now: now)
         #expect(gated.override == .none)
         #expect(gated.result.decision == .allow)
+        #expect(gated.result.policyOverride == .none)
         let still = await store.consume(matchingView: "git reset --hard", cwd: "/tmp/ws", now: now)
         guard case .consumed = still else {
             Issue.record("allow must not spend the grant")
+            return
+        }
+    }
+
+    @Test func staleHonorMarkClearedOnEngineAllowPassthrough() async throws {
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let stale = EvaluationResult(
+            decision: .allow,
+            matchingView: "git status",
+            policyOverride: .allowOnce
+        )
+        let gated = await PolicyGate.apply(stale, cwd: "/tmp/ws", store: store, now: now)
+        #expect(gated.override == .none)
+        #expect(gated.result.policyOverride == .none)
+        #expect(gated.result.decision == .allow)
+    }
+
+    @Test func denyWithoutGrantClearsStaleHonorMark() async throws {
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        var denied = resetHardDeny()
+        denied.policyOverride = .allowlist
+        let gated = await PolicyGate.apply(denied, cwd: "/tmp/ws", store: store, now: now)
+        #expect(gated.override == .none)
+        #expect(gated.result.policyOverride == .none)
+        guard case .deny = gated.result.decision else {
+            Issue.record("engine deny without grant must stay deny")
             return
         }
     }

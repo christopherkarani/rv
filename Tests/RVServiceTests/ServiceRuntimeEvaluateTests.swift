@@ -112,6 +112,30 @@ struct ServiceRuntimeEvaluateTests {
         #expect(reply.risk != .critical)
     }
 
+    @Test func dispatchEvaluate_stashDropIsAdvisoryAllow() async throws {
+        let runtime = try isolatedRuntime()
+        let response = await runtime.dispatch(
+            IPCRequest(
+                method: .evaluate(
+                    EvaluateParams(
+                        request: EvaluationRequest(
+                            command: ShellCommand(rawValue: "git stash drop"),
+                            enabledPacks: dayOnePackIDs
+                        )
+                    )
+                )
+            )
+        )
+        guard case .evaluate(let reply) = response.result else {
+            Issue.record("expected evaluate reply")
+            return
+        }
+        #expect(reply.result.decision == .allow)
+        #expect(reply.result.matched?.ruleID.rawValue == "core.git:stash-drop")
+        #expect(reply.result.policyOverride == .none)
+        #expect(reply.result.blockingMatch == nil)
+    }
+
     @Test func classify_advisoryStashDropMapsMedium() async throws {
         let runtime = try isolatedRuntime()
         let response = await runtime.dispatch(

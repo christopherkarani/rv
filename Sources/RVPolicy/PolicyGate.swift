@@ -22,11 +22,13 @@ public enum PolicyGate {
     ) async -> PolicyDecision {
         switch result.decision {
         case .allow:
-            return PolicyDecision(result: result, override: .none)
+            // Engine allows are never honors; clear any stale mark so
+            // PolicyDecision.override and result.policyOverride stay aligned.
+            return synced(result, override: .none)
         case .indeterminate:
             // Miss policy: never allow because evaluation did not finish.
             // Hook layer maps indeterminate → deny voice; do not consume grants.
-            return PolicyDecision(result: result, override: .none)
+            return synced(result, override: .none)
         case .deny(let deny):
             if allowlist.matches(
                 ruleID: deny.ruleID,
@@ -36,7 +38,7 @@ public enum PolicyGate {
                 return allowDecision(result, override: .allowlist)
             }
             guard let cwd, cwd.isEmpty == false, result.matchingView.isEmpty == false else {
-                return PolicyDecision(result: result, override: .none)
+                return synced(result, override: .none)
             }
             switch await store.consume(
                 matchingView: result.matchingView,
@@ -46,7 +48,7 @@ public enum PolicyGate {
             case .consumed:
                 return allowDecision(result, override: .allowOnce)
             case .notFound, .alreadyConsumed, .expired, .unavailable:
-                return PolicyDecision(result: result, override: .none)
+                return synced(result, override: .none)
             }
         }
     }
@@ -61,9 +63,9 @@ public enum PolicyGate {
     ) async -> PolicyDecision {
         switch result.decision {
         case .allow:
-            return PolicyDecision(result: result, override: .none)
+            return synced(result, override: .none)
         case .indeterminate:
-            return PolicyDecision(result: result, override: .none)
+            return synced(result, override: .none)
         case .deny(let deny):
             if allowlist.matches(
                 ruleID: deny.ruleID,
@@ -73,7 +75,7 @@ public enum PolicyGate {
                 return allowDecision(result, override: .allowlist)
             }
             guard let cwd, cwd.isEmpty == false, result.matchingView.isEmpty == false else {
-                return PolicyDecision(result: result, override: .none)
+                return synced(result, override: .none)
             }
             let hit = await store.hasGrant(
                 matchingView: result.matchingView,
@@ -81,7 +83,7 @@ public enum PolicyGate {
                 now: now
             )
             guard hit else {
-                return PolicyDecision(result: result, override: .none)
+                return synced(result, override: .none)
             }
             return allowDecision(result, override: .allowOnce)
         }
@@ -93,7 +95,16 @@ public enum PolicyGate {
     ) -> PolicyDecision {
         var allowed = result
         allowed.decision = .allow
-        allowed.policyOverride = override
-        return PolicyDecision(result: allowed, override: override)
+        return synced(allowed, override: override)
+    }
+
+    /// Single writer for honor marks: `override` and `result.policyOverride` always match.
+    private static func synced(
+        _ result: EvaluationResult,
+        override: PolicyOverride
+    ) -> PolicyDecision {
+        var copy = result
+        copy.policyOverride = override
+        return PolicyDecision(result: copy, override: override)
     }
 }

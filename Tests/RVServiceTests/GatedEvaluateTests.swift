@@ -21,15 +21,21 @@ struct GatedEvaluateTests {
         let gated = GatedEvaluate(session)
         let peeked = await gated.peek(request, cwd: "/tmp/ws", store: store, now: now)
         #expect(peeked.decision == .allow)
+        #expect(peeked.policyOverride == .allowOnce)
+        #expect(peeked.blockingMatch == nil)
+        #expect(peeked.matched?.ruleID.rawValue == "core.git:reset-hard")
 
         let first = await gated.apply(request, cwd: "/tmp/ws", store: store, now: now)
         #expect(first.decision == .allow)
+        #expect(first.policyOverride == .allowOnce)
+        #expect(first.blockingMatch == nil)
         let second = await gated.apply(request, cwd: "/tmp/ws", store: store, now: now)
         guard case .deny(let deny) = second.decision else {
             Issue.record("second apply must deny after the grant is spent")
             return
         }
         #expect(deny.ruleID.rawValue == "core.git:reset-hard")
+        #expect(second.policyOverride == .none)
     }
 
     @Test func missingCwdSkipsHonor() async throws {

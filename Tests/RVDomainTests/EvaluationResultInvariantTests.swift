@@ -12,6 +12,17 @@ struct EvaluationResultInvariantTests {
         #expect(decoded.policyOverride == .none)
     }
 
+    @Test func policyOverrideRoundTrips() throws {
+        let result = EvaluationResult(
+            decision: .allow,
+            matchingView: "git reset --hard",
+            policyOverride: .allowOnce
+        )
+        let encoded = try JSONEncoder().encode(result)
+        let decoded = try JSONDecoder().decode(EvaluationResult.self, from: encoded)
+        #expect(decoded.policyOverride == .allowOnce)
+    }
+
     @Test func stashDropShapedAllowKeepsAdvisoryMatchAndNilBlockingMatch() {
         let rule = RuleID(pack: .coreGit, pattern: "stash-drop")
         let result = EvaluationResult(
