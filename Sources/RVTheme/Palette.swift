@@ -91,7 +91,7 @@ extension Palette {
     }
 }
 
-/// Spec name until T9. Prefer `Palette(for:)`.
+/// Spec name. Prefer `Palette(for:)`.
 public func palette(for capability: ColorCapability) -> Palette {
     Palette(for: capability)
 }

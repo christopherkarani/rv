@@ -7,6 +7,8 @@ public struct DenyViewModel: Equatable, Sendable {
     public var packID: PackID
     public var ruleID: RuleID
     public var fact: String
+    /// Full pack reason for pretty `rv test`. Host and explain use `fact`.
+    public var packReason: String
     public var nextAction: String
 
     public var ruleDisplay: String { displayRuleID(ruleID) }
@@ -17,6 +19,7 @@ public struct DenyViewModel: Equatable, Sendable {
         packID: PackID,
         ruleID: RuleID,
         fact: String,
+        packReason: String,
         nextAction: String
     ) {
         self.decision = decision
@@ -24,6 +27,7 @@ public struct DenyViewModel: Equatable, Sendable {
         self.packID = packID
         self.ruleID = ruleID
         self.fact = fact
+        self.packReason = packReason
         self.nextAction = nextAction
     }
 }
@@ -48,6 +52,7 @@ public func denyViewModel(_ deny: Deny, command: ShellCommand) -> DenyViewModel 
         packID: deny.ruleID.pack,
         ruleID: deny.ruleID,
         fact: factSentence(from: deny.reason),
+        packReason: deny.reason,
         nextAction: denyNextAction
     )
 }

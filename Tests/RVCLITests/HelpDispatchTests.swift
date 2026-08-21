@@ -106,6 +106,8 @@ import RVTheme
     let status = HelpDispatch.text(.serviceStatus, palette: colorOffPalette)
     #expect(status.contains("→ rv service status"))
     #expect(status.contains("→ rv service status --robot"))
+    #expect(status.contains("key=value lines"))
+    #expect(status.contains("Robot JSON") == false)
     #expect(status.contains("Next") == false)
 }
 

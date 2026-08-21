@@ -3,36 +3,21 @@ import RVTUI
 import RVTheme
 
 struct SetupReport: Equatable, Sendable {
-    var grok: SetupSlotKind
-    var pi: SetupSlotKind
-    var openCode: SetupSlotKind
-    var wrote: Set<SetupHostKind>
+    var slots: SetupSlotSnapshot
 
-    var isHostless: Bool { detected.isEmpty }
-
-    var hasWiredSlot: Bool {
-        grok == .wired || pi == .wired || openCode == .wired
+    init(
+        grok: SetupSlotKind,
+        pi: SetupSlotKind,
+        openCode: SetupSlotKind,
+        wrote: Set<SetupHostKind>
+    ) {
+        slots = SetupSlotSnapshot(grok: grok, pi: pi, openCode: openCode, wrote: wrote)
     }
 
-    var occupied: [SetupHostKind] {
-        SetupHostKind.allCases.filter { kind(for: $0) == .occupied }
-    }
-
-    var detected: [SetupHostKind] {
-        SetupHostKind.allCases.filter { kind(for: $0) != .pending }
-    }
-
-    var isQuiet: Bool {
-        detected.isEmpty == false && wrote.isEmpty && occupied.isEmpty
-    }
-
-    func kind(for host: SetupHostKind) -> SetupSlotKind {
-        switch host {
-        case .grok: grok
-        case .pi: pi
-        case .openCode: openCode
-        }
-    }
+    var grok: SetupSlotKind { slots.grok }
+    var pi: SetupSlotKind { slots.pi }
+    var openCode: SetupSlotKind { slots.openCode }
+    var wrote: Set<SetupHostKind> { slots.wrote }
 }
 
 struct UninstallReport: Equatable, Sendable {
@@ -63,13 +48,7 @@ enum SetupFormat {
         case .robot:
             return (robot(report), false)
         case .pretty(let palette):
-            guard let frames = setupCeremonyFrames(
-                grok: report.grok,
-                pi: report.pi,
-                openCode: report.openCode,
-                wrote: report.wrote,
-                kind: ceremonyKind
-            ) else {
+            guard let frames = setupCeremonyFrames(report.slots, kind: ceremonyKind) else {
                 return ("", false)
             }
             return playCeremony(
@@ -136,11 +115,11 @@ enum SetupFormat {
     }
 
     private static func robot(_ report: SetupReport) -> String {
-        if report.isQuiet { return "" }
-        if report.isHostless {
+        if report.slots.isQuiet { return "" }
+        if report.slots.isHostless {
             return SetupRun.hostlessLine + "\n"
         }
-        let skips = report.occupied.map(\.occupiedLine)
+        let skips = report.slots.occupied.map(\.occupiedLine)
         if skips.isEmpty == false {
             return skips.joined(separator: "\n") + "\n"
         }

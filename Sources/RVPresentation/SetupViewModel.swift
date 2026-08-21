@@ -24,6 +24,64 @@ public enum SetupSlotKind: Equatable, Sendable {
     case occupied
 }
 
+/// Closed snapshot of the three setup slots plus which hosts this run wrote.
+public struct SetupSlotSnapshot: Equatable, Sendable {
+    public var grok: SetupSlotKind
+    public var pi: SetupSlotKind
+    public var openCode: SetupSlotKind
+    public var wrote: Set<SetupHostKind>
+
+    public init(
+        grok: SetupSlotKind,
+        pi: SetupSlotKind,
+        openCode: SetupSlotKind,
+        wrote: Set<SetupHostKind>
+    ) {
+        self.grok = grok
+        self.pi = pi
+        self.openCode = openCode
+        self.wrote = wrote
+    }
+
+    public func kind(for host: SetupHostKind) -> SetupSlotKind {
+        switch host {
+        case .grok: grok
+        case .pi: pi
+        case .openCode: openCode
+        }
+    }
+
+    public var occupied: [SetupHostKind] {
+        SetupHostKind.allCases.filter { kind(for: $0) == .occupied }
+    }
+
+    public var detected: [SetupHostKind] {
+        SetupHostKind.allCases.filter { kind(for: $0) != .pending }
+    }
+
+    public var isHostless: Bool { detected.isEmpty }
+
+    public var hasWiredSlot: Bool {
+        grok == .wired || pi == .wired || openCode == .wired
+    }
+
+    /// Second matching run: hosts already present, this run wrote nothing, none occupied.
+    public var isQuiet: Bool {
+        detected.isEmpty == false && wrote.isEmpty && occupied.isEmpty
+    }
+
+    public var closer: SetupCloser {
+        hasWiredSlot ? .complete : .hostless
+    }
+
+    public var slotViews: [SetupSlotView] {
+        SetupHostKind.allCases.map { host in
+            let kind = kind(for: host)
+            return SetupSlotView(host: host, kind: kind, clause: setupSlotClause(host: host, kind: kind))
+        }
+    }
+}
+
 /// One of the three TTY setup rows.
 public struct SetupSlotView: Equatable, Sendable {
     public var host: SetupHostKind
@@ -38,79 +96,24 @@ public struct SetupSlotView: Equatable, Sendable {
     }
 }
 
-/// Pretty closer after the three slots.
+/// Pretty closer after the three slots. `.complete` only when a slot is wired.
 public enum SetupCloser: Equatable, Sendable {
     case complete
     case hostless
 
-    public var title: String {
+    /// Ceremony closer copy. Install substitutes the install-only line; setup stays `Hooks wired`.
+    public func lines(kind: SetupCeremonyKind) -> [String] {
         switch self {
-        case .complete: "Setup complete"
-        case .hostless: "No hosts yet"
+        case .hostless:
+            [setupCeremonyHostlessTitle, setupCeremonyHostlessNext]
+        case .complete:
+            switch kind {
+            case .setup: [setupCeremonyHooksWired]
+            case .install: [setupCeremonyInstallCloser]
+            }
         }
     }
-
-    public var next: String {
-        switch self {
-        case .complete: "Next  rv test 'git reset --hard'"
-        case .hostless: "Next  rv setup"
-        }
-    }
 }
 
-/// TTY `rv setup` show. Circles are the only ink; words stay default terminal color.
-public struct SetupViewModel: Equatable, Sendable {
-    public var slots: [SetupSlotView]
-    public var activity: String
-    public var closer: SetupCloser
-
-    public init(slots: [SetupSlotView], activity: String, closer: SetupCloser) {
-        self.slots = slots
-        self.activity = activity
-        self.closer = closer
-    }
-}
-
-/// Quiet second run, or a painted three-slot show.
-public enum SetupShow: Equatable, Sendable {
-    case quiet
-    case painted(SetupViewModel)
-}
-
-public let setupLookingActivity = "looking for hosts"
 public let setupGrokReloadClause = "reload /hooks"
 public let setupOccupiedClause = "skipped occupied"
-
-/// Builds the TTY show from slot kinds plus which hosts this run wrote.
-public func setupViewModel(
-    grok: SetupSlotKind,
-    pi: SetupSlotKind,
-    openCode: SetupSlotKind,
-    wrote: Set<SetupHostKind>
-) -> SetupShow {
-    func kind(_ host: SetupHostKind) -> SetupSlotKind {
-        switch host {
-        case .grok: grok
-        case .pi: pi
-        case .openCode: openCode
-        }
-    }
-    let occupied = SetupHostKind.allCases.filter { kind($0) == .occupied }
-    let detected = SetupHostKind.allCases.filter { kind($0) != .pending }
-    if detected.isEmpty == false && wrote.isEmpty && occupied.isEmpty {
-        return .quiet
-    }
-    let lastWired = SetupHostKind.allCases.last { wrote.contains($0) }
-    let closer: SetupCloser = (grok == .wired || pi == .wired || openCode == .wired)
-        ? .complete
-        : .hostless
-    return .painted(
-        SetupViewModel(
-            slots: SetupHostKind.allCases.map { host in
-                SetupSlotView(host: host, kind: kind(host), clause: setupSlotClause(host: host, kind: kind(host)))
-            },
-            activity: lastWired.map { "wiring \($0.displayName)" } ?? setupLookingActivity,
-            closer: closer
-        )
-    )
-}

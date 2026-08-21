@@ -31,7 +31,7 @@ import Testing
 }
 
 private struct FirstMatchOnlyEngine: PatternEngine {
-    func compile(_ pattern: String) throws -> String { pattern }
+    func compile(_ pattern: String) throws(PatternCompileError) -> String { pattern }
 
     func firstMatch(_ compiled: String, in text: String) -> Range<String.Index>? {
         text.range(of: compiled)

@@ -8,8 +8,8 @@ Living board for implement sessions. Do **not** re-grill. Do **not** load `docs/
 
 | | Ticket | Notes |
 |---|---|---|
-| Done | T0–T7 | Scaffold through read-only `rv doctor`. Host adapters and service/pack/Host health reporting live. |
-| **Current** | **T8 ∥ T9** | After T1 (already green): allow-once and pack catalog in parallel worktrees per PLAN. |
+| Done | T0–T9 | Scaffold through catalog + `rv packs`. Allow-once and doctor live. |
+| **Current** | **maint** | Operator-surface seams (setup analytics, ceremony snapshot, robot format). |
 
 `docs/factory/PLAN.md` wins product-law conflicts. It is a conflict arbiter, not mandatory full session-start reading.
 
@@ -30,8 +30,6 @@ Living board for implement sessions. Do **not** re-grill. Do **not** load `docs/
 
 | Wave | Tickets | Worktree? |
 |---|---|---|
-| Done | T0 → T1 serial; T2 ∥ T3; T4 then T5; T6 | — |
-| Now | T7 | `feat/t7-doctor` (may have paralleled T6) |
-| Later | T8 ∥ T9 | Yes — separate worktrees |
+| Done | T0 → T1 serial; T2 ∥ T3; T4 then T5; T6; T7; T8 ∥ T9 | — |
 
 Historical factory→T0 handoff: [`HANDOFF.md`](HANDOFF.md) (do not use as session start).

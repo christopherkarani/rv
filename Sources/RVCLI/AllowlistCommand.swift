@@ -116,7 +116,7 @@ struct AllowlistAdd: AsyncParsableCommand {
                 Data("rv allowlist add: requires an interactive TTY\n".utf8)
             )
             throw ExitCode(2)
-        } catch AllowOnceError.lockFailed {
+        } catch AllowlistStoreError.lockFailed {
             FileHandle.standardError.write(Data("rv allowlist add: store unavailable\n".utf8))
             throw ExitCode(2)
         } catch is AllowlistParseError {
@@ -173,7 +173,7 @@ struct AllowlistAddCommand: AsyncParsableCommand {
                 Data("rv allowlist add-command: requires an interactive TTY\n".utf8)
             )
             throw ExitCode(2)
-        } catch AllowOnceError.lockFailed {
+        } catch AllowlistStoreError.lockFailed {
             FileHandle.standardError.write(
                 Data("rv allowlist add-command: store unavailable\n".utf8)
             )
@@ -224,7 +224,7 @@ struct AllowlistRemove: AsyncParsableCommand {
                 Data("rv allowlist remove: requires an interactive TTY\n".utf8)
             )
             throw ExitCode(2)
-        } catch AllowOnceError.lockFailed {
+        } catch AllowlistStoreError.lockFailed {
             FileHandle.standardError.write(Data("rv allowlist remove: store unavailable\n".utf8))
             throw ExitCode(2)
         } catch is AllowlistParseError {
@@ -272,9 +272,7 @@ struct AllowlistList: AsyncParsableCommand {
                     }
                     return row
                 }
-                let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
-                FileHandle.standardOutput.write(data)
-                FileHandle.standardOutput.write(Data("\n".utf8))
+                FileHandle.standardOutput.write(Data((try RobotJSON.encodeArray(payload) + "\n").utf8))
             } else {
                 if entries.isEmpty {
                     FileHandle.standardOutput.write(Data("no allowlist rows\n".utf8))

@@ -20,10 +20,10 @@ public enum HookHost: String, Equatable, Sendable {
 
 public struct HookRequest: Equatable, Sendable {
     public var host: HookHost
-    public var command: ShellCommand?
+    public var command: ShellCommand
     public var cwd: String?
 
-    public init(host: HookHost, command: ShellCommand?, cwd: String? = nil) {
+    public init(host: HookHost, command: ShellCommand, cwd: String? = nil) {
         self.host = host
         self.command = command
         self.cwd = cwd
@@ -42,7 +42,7 @@ public struct HookWire: Equatable, Sendable {
 
 public protocol HostCodec: Sendable {
     var host: HookHost { get }
-    func decode(_ stdin: String) -> HookRequest
+    func decode(_ stdin: String) -> HookDecodeOutcome
     func encodeAllow() -> HookWire
     func encodeDeny(reason: String, rule: String?, next: String?) -> HookWire
 }

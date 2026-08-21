@@ -4,6 +4,7 @@ public enum OutputMode: Equatable, Sendable {
     case browse
 
     /// Resolves pretty / robot / browse from a probe and a requested mode.
+    /// Probe `forbid.json` / `forbid.robot` covers flags and env even when `requested` is `.automatic`.
     public init(probe: ThemeProbe, requested: RequestedMode) {
         if probe.forbid.json || probe.forbid.robot {
             self = .robot
@@ -33,12 +34,12 @@ public enum RequestedMode: Equatable, Sendable {
     case browse
 }
 
-/// Spec name until T9. Prefer `OutputMode(probe:requested:)`.
+/// Spec name. Prefer `OutputMode(probe:requested:)`.
 public func resolveOutputMode(probe: ThemeProbe, requested: RequestedMode) -> OutputMode {
     OutputMode(probe: probe, requested: requested)
 }
 
-/// Spec name until T9. Prefer `probe.isBrowseEligible`.
+/// Spec name. Prefer `probe.isBrowseEligible`.
 public func browseEligible(_ probe: ThemeProbe) -> Bool {
     probe.isBrowseEligible
 }

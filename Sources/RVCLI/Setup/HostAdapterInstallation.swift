@@ -10,6 +10,32 @@ enum HostAdapterInstallation: Equatable, Sendable {
     case broken(path: OwnedHostAdapterPath, existingData: Data)
     case wired(path: OwnedHostAdapterPath, existingData: Data)
 
+    /// What setup should do for this installation, given `--force`.
+    func setupPlan(force: Bool) -> HostAdapterSetupPlan {
+        switch self {
+        case .missing:
+            .skipUndetected
+        case .occupied:
+            force ? .forceClearThenWrite : .skipOccupied
+        case .absentFile:
+            .write(existingData: nil)
+        case .broken(_, let data), .wired(_, let data):
+            .write(existingData: data)
+        }
+    }
+
+    /// What uninstall should do for this installation.
+    var uninstallPlan: HostAdapterUninstallPlan {
+        switch self {
+        case .broken, .wired:
+            .remove
+        case .occupied:
+            .leaveOccupied
+        case .missing, .absentFile:
+            .skip
+        }
+    }
+
     /// Doctor / setup-facing installation state for this path.
     var state: DoctorHostState {
         switch self {
@@ -25,6 +51,19 @@ enum HostAdapterInstallation: Equatable, Sendable {
             .wired
         }
     }
+}
+
+enum HostAdapterSetupPlan: Equatable, Sendable {
+    case skipUndetected
+    case skipOccupied
+    case forceClearThenWrite
+    case write(existingData: Data?)
+}
+
+enum HostAdapterUninstallPlan: Equatable, Sendable {
+    case remove
+    case leaveOccupied
+    case skip
 }
 
 /// Closed snapshot of installation state for every v1 Host.
