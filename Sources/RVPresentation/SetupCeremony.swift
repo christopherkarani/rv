@@ -64,23 +64,22 @@ public func setupCeremonyFrames(
     wrote: Set<SetupHostKind>,
     kind: SetupCeremonyKind
 ) -> [SetupCeremonyFrame]? {
-    func slotKind(_ host: SetupHostKind) -> SetupSlotKind {
-        switch host {
-        case .grok: grok
-        case .pi: pi
-        case .openCode: openCode
-        }
-    }
-    let occupied = SetupHostKind.allCases.filter { slotKind($0) == .occupied }
-    let detected = SetupHostKind.allCases.filter { slotKind($0) != .pending }
-    if detected.isEmpty == false && wrote.isEmpty && occupied.isEmpty {
+    setupCeremonyFrames(
+        SetupSlotSnapshot(grok: grok, pi: pi, openCode: openCode, wrote: wrote),
+        kind: kind
+    )
+}
+
+public func setupCeremonyFrames(
+    _ slots: SetupSlotSnapshot,
+    kind: SetupCeremonyKind
+) -> [SetupCeremonyFrame]? {
+    if slots.isQuiet {
         return nil
     }
 
-    let finalSlots = SetupHostKind.allCases.map { host in
-        SetupSlotView(host: host, kind: slotKind(host), clause: setupSlotClause(host: host, kind: slotKind(host)))
-    }
-    let hasWired = finalSlots.contains { $0.kind == .wired }
+    let finalSlots = slots.slotViews
+    let hasWired = slots.hasWiredSlot
     var frames: [SetupCeremonyFrame] = []
 
     if kind == .install {

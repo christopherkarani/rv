@@ -40,3 +40,19 @@ import Testing
     let show = setupViewModel(grok: .wired, pi: .pending, openCode: .pending, wrote: [])
     #expect(show == .quiet)
 }
+
+@Test func setupSlotSnapshot_quietAndCloserAreOneRule() {
+    let quiet = SetupSlotSnapshot(grok: .wired, pi: .pending, openCode: .pending, wrote: [])
+    #expect(quiet.isQuiet)
+    #expect(setupViewModel(quiet) == .quiet)
+    #expect(setupCeremonyFrames(quiet, kind: .setup) == nil)
+
+    let occupied = SetupSlotSnapshot(grok: .occupied, pi: .pending, openCode: .pending, wrote: [])
+    #expect(occupied.isQuiet == false)
+    #expect(occupied.closer == .hostless)
+
+    let wired = SetupSlotSnapshot(grok: .wired, pi: .pending, openCode: .pending, wrote: [.grok])
+    #expect(wired.isQuiet == false)
+    #expect(wired.closer == .complete)
+    #expect(wired.hasWiredSlot)
+}

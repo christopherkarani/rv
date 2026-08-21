@@ -15,7 +15,7 @@ public struct ColorCapability: Equatable, Sendable {
     }
 }
 
-/// Spec name until T9. Prefer `ColorCapability(probe:mode:)`.
+/// Spec name. Prefer `ColorCapability(probe:mode:)`.
 public func colorCapability(probe: ThemeProbe, mode: OutputMode) -> ColorCapability {
     ColorCapability(probe: probe, mode: mode)
 }

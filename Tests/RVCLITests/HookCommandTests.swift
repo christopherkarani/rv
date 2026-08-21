@@ -234,17 +234,13 @@ private func runHook<C: HostCodec>(
     #expect(parsed.reason.contains("\u{001B}") == false)
 }
 
-@Test func hookRun_deniesResetHardWithTempHomeAndBypassEnv() async throws {
+@Test func hookRun_deniesResetHardWithoutTouchingTempHome() async throws {
     try await withTempHome { home in
         var hook = Hook()
         hook.host = .grok
         let expected = try grokExpected("deny-git-reset-hard")
         let outcome = await hook.run(
             stdin: try grokFixture("deny-git-reset-hard.json"),
-            environment: [
-                "HOME": home.path,
-                "RV_BYPASS": "1",
-            ],
             evaluate: inProcessEvaluate
         )
         try expectResetHardMapperDeny(
@@ -357,7 +353,6 @@ private func runHook<C: HostCodec>(
         let expected = try hostExpected("pi", "deny-git-reset-hard")
         let outcome = await pi.run(
             stdin: try hostFixture("pi", "deny-git-reset-hard.json"),
-            environment: ["HOME": home.path],
             evaluate: inProcessEvaluate
         )
         try expectResetHardMapperDeny(
@@ -372,7 +367,6 @@ private func runHook<C: HostCodec>(
         let openExpected = try hostExpected("opencode", "deny-git-reset-hard")
         let openOutcome = await openCode.run(
             stdin: try hostFixture("opencode", "deny-git-reset-hard.json"),
-            environment: ["HOME": home.path],
             evaluate: inProcessEvaluate
         )
         try expectResetHardMapperDeny(

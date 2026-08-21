@@ -132,8 +132,8 @@ enum HelpCatalog {
                 HelpRow(name: "rv service status [--json] [--robot] [--plain] [--no-color]"),
             ]),
             HelpSection(heading: "Flags", rows: [
-                HelpRow(name: "--json", description: "Robot JSON on stdout"),
-                HelpRow(name: "--robot", description: "Robot JSON on stdout"),
+                HelpRow(name: "--json", description: "key=value lines (same as --robot)"),
+                HelpRow(name: "--robot", description: "key=value lines"),
                 HelpRow(name: "--plain", description: "Disable browse and color"),
                 HelpRow(name: "--no-color", description: "Disable color"),
             ]),

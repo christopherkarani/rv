@@ -272,9 +272,7 @@ struct AllowlistList: AsyncParsableCommand {
                     }
                     return row
                 }
-                let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
-                FileHandle.standardOutput.write(data)
-                FileHandle.standardOutput.write(Data("\n".utf8))
+                FileHandle.standardOutput.write(Data((try RobotJSON.encodeArray(payload) + "\n").utf8))
             } else {
                 if entries.isEmpty {
                     FileHandle.standardOutput.write(Data("no allowlist rows\n".utf8))
