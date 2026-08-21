@@ -42,11 +42,10 @@ public struct GatedEvaluate: Sendable {
         command: ShellCommand,
         home: String? = nil
     ) -> EvaluationRequest {
-        let resolvedHome = home
-            ?? ProcessInfo.processInfo.environment["HOME"].flatMap { $0.isEmpty ? nil : $0 }
-            ?? ""
-        let enabled = (try? PacksFacade.effectiveIDs(home: resolvedHome)) ?? dayOnePackIDs
-        return EvaluationRequest(command: command, enabledPacks: enabled)
+        EvaluationRequest(
+            command: command,
+            enabledPacks: EnabledPacks.resolve(home: home ?? EnabledPacks.processHome())
+        )
     }
 
     /// Wire-path peek for an already-built request (ServiceRuntime explain/classify).
