@@ -16,7 +16,7 @@ public struct RoutedEvaluation: Sendable, Equatable {
 
 public struct ServiceClient: Sendable {
     private let transport: (any ServiceTransport)?
-    private let injectedFallback: GatedEvaluate?
+    private let door: GatedEvaluate
     private let store: AllowOnceStore
 
     public init(
@@ -26,7 +26,7 @@ public struct ServiceClient: Sendable {
         allowOnceDirectory: URL? = nil
     ) {
         self.transport = transport
-        self.injectedFallback = session.map(GatedEvaluate.init)
+        self.door = session.map(GatedEvaluate.init) ?? GatedEvaluate()
         self.store = Self.resolveStore(store: store, allowOnceDirectory: allowOnceDirectory)
     }
 
@@ -57,18 +57,22 @@ public struct ServiceClient: Sendable {
     }
 
     public func evaluate(command: ShellCommand, cwd: String? = nil) async -> RoutedEvaluation {
-        let home = (ProcessInfo.processInfo.environment["HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? "")
-        let enabled = (try? PacksFacade.effectiveIDs(home: home)) ?? dayOnePackIDs
-        let request = EvaluationRequest(command: command, enabledPacks: enabled)
         func inProcessRoute() async -> RoutedEvaluation {
             RoutedEvaluation(
-                result: await inProcessEvaluate(request, cwd: cwd),
+                result: await door.run(
+                    .apply,
+                    command: command,
+                    cwd: cwd,
+                    store: store,
+                    now: Date()
+                ),
                 path: .inProcess
             )
         }
         switch await route() {
         case .xpc(let transport, _):
             do {
+                let request = GatedEvaluate.makeRequest(command: command)
                 let body = try IPCJSON.encode(
                     IPCRequest(method: .evaluate(EvaluateParams(request: request, cwd: cwd)))
                 )
@@ -91,21 +95,12 @@ public struct ServiceClient: Sendable {
         await evaluate(command: command, cwd: cwd).result
     }
 
-    private func inProcessEvaluate(_ request: EvaluationRequest, cwd: String?) async -> EvaluationResult {
-        await fallback().apply(
-            request,
-            cwd: cwd,
-            store: store,
-            now: Date()
-        )
-    }
-
     public func status() async -> ServiceStatusReport {
         ServiceHealth.inspect(await diagnostics()).statusReport
     }
 
     func diagnostics() async -> ServiceDiagnosticResult {
-        let localCorePacksReady = fallback().corePacksReady
+        let localCorePacksReady = door.corePacksReady
         switch await route() {
         case .xpc(let transport, let serviceSemver):
             let request = IPCRequest(method: .doctorSnapshot)
@@ -194,10 +189,6 @@ public struct ServiceClient: Sendable {
         }
     }
 
-    private func fallback() -> GatedEvaluate {
-        injectedFallback ?? GatedEvaluate()
-    }
-
     private enum Route {
         case xpc(any ServiceTransport, serviceSemver: String)
         case down
@@ -237,10 +228,12 @@ public struct ServiceClient: Sendable {
             return .majorVersionMismatch
         }
         if ack.ok == false {
-            if ack.skewReason == "core packs unavailable" {
+            switch ack.skewReason {
+            case .corePacksUnavailable:
                 return .corePacksUnavailable
+            case .protocolSkew, nil:
+                return .rejected
             }
-            return .rejected
         }
         return nil
     }

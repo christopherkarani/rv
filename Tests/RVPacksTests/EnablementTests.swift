@@ -100,3 +100,21 @@ import RVDomain
     )
     #expect(ordered.map(\.rawValue) == ["core.git", "system.disk", "database.sqlite"])
 }
+
+@Test func enablement_orderDropsUnknownIDs() {
+    let index = PackIndex(
+        pinVersion: "0",
+        pinTag: "tag",
+        pinCommit: "commit",
+        packCount: 1,
+        defaultEnabled: [],
+        categories: ["core": ["core.git"]],
+        presets: [:],
+        tiers: ["core": 1]
+    )
+    let ordered = PackSet.order(
+        Set([PackID(rawValue: "core.git"), PackID(rawValue: "not.declared")]),
+        index: index
+    )
+    #expect(ordered.map(\.rawValue) == ["core.git"])
+}

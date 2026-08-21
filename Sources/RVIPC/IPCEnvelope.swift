@@ -20,13 +20,13 @@ public struct HelloAck: Sendable, Equatable, Codable {
     public var protocolName: String
     public var serviceSemver: String
     public var ok: Bool
-    public var skewReason: String?
+    public var skewReason: SkewReason?
 
     public init(
         protocolName: String = ProtocolVersion.name,
         serviceSemver: String = ProtocolVersion.serviceSemver,
         ok: Bool,
-        skewReason: String? = nil
+        skewReason: SkewReason? = nil
     ) {
         self.protocolName = protocolName
         self.serviceSemver = serviceSemver

@@ -68,6 +68,7 @@ public enum PackSet {
                 if tierL != tierR { return tierL < tierR }
                 return lhs.rawValue < rhs.rawValue
             }
+
     }
 
     public static func tier(for packID: PackID, index: PackIndex) -> Int {

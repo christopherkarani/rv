@@ -300,29 +300,17 @@ public actor AllowOnceStore {
 
     private func withFileLock<T>(_ body: () throws -> T) throws -> T {
         try prepareStoreDirectory()
-        let lockURL = RVPolicyPaths.allowOnceLockFile(inConfigDir: baseDirectory)
-        if FileManager.default.fileExists(atPath: lockURL.path) == false {
-            FileManager.default.createFile(
-                atPath: lockURL.path,
-                contents: Data(),
-                attributes: [.posixPermissions: 0o600]
+        do {
+            return try ExclusiveFileLock.withLock(
+                at: RVPolicyPaths.allowOnceLockFile(inConfigDir: baseDirectory),
+                body
             )
+        } catch let error as ExclusiveFileLock.LockError {
+            switch error {
+            case .lockFailed:
+                throw AllowOnceError.lockFailed
+            }
         }
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: lockURL.path, isDirectory: &isDirectory),
-              isDirectory.boolValue == false
-        else {
-            throw AllowOnceError.lockFailed
-        }
-        try setOwnerOnlyFile(lockURL)
-        let fd = lockURL.path.withCString { path in
-            open(path, O_RDWR)
-        }
-        guard fd >= 0 else { throw AllowOnceError.lockFailed }
-        defer { close(fd) }
-        guard flock(fd, LOCK_EX) == 0 else { throw AllowOnceError.lockFailed }
-        defer { _ = flock(fd, LOCK_UN) }
-        return try body()
     }
 
     private func prepareStoreDirectory() throws {

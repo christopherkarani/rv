@@ -16,7 +16,10 @@ public struct RuleID: Hashable, Sendable, Equatable {
         guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty else {
             return nil
         }
-        pack = PackID(rawValue: String(parts[0]))
+        guard let pack = PackID(validating: String(parts[0])) else {
+            return nil
+        }
+        self.pack = pack
         pattern = String(parts[1])
     }
 }

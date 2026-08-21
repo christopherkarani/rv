@@ -9,13 +9,14 @@ public struct TestRenderer: FrameRenderer {
         var lines: [String] = []
         lines += commandBlock(model, palette: palette, width: width)
         lines.append("")
-        if let pack = model.packDisplay {
+        let briefing = denyBriefing(model)
+        if let pack = briefing.pack {
             lines += labeledField("Pack", pack, valueSlot: palette.heading, palette: palette, width: width)
         }
-        if let pattern = model.patternName {
+        if let pattern = briefing.pattern {
             lines += labeledField("Pattern", pattern, valueSlot: palette.mark, palette: palette, width: width)
         }
-        if let reason = model.reason {
+        if let reason = briefing.reason {
             lines += labeledField("Reason", reason, valueSlot: "", palette: palette, width: width)
         }
         if let explanation = model.explanation {
@@ -31,6 +32,13 @@ public struct TestRenderer: FrameRenderer {
         lines.append(resultLine(model, palette: palette))
         return lines
     }
+}
+
+private func denyBriefing(_ model: TestViewModel) -> (pack: String?, pattern: String?, reason: String?) {
+    if let deny = model.deny {
+        return (deny.packID.rawValue, deny.ruleID.pattern, deny.packReason)
+    }
+    return (model.packDisplay, model.patternName, model.reason)
 }
 
 private let commandLabel = "Command: "

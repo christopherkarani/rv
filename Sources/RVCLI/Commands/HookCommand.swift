@@ -11,12 +11,13 @@ enum HookRun {
         codec: C,
         evaluate: @Sendable (ShellCommand, String?) async -> EvaluationResult
     ) async -> HookWire {
-        let request = codec.decode(stdin)
-        guard let command = request.command else {
+        switch codec.decode(stdin) {
+        case .request(let request):
+            let result = await evaluate(request.command, request.cwd)
+            return hookWire(from: result, command: request.command, using: codec)
+        case .foreign, .malformed:
             return codec.encodeAllow()
         }
-        let result = await evaluate(command, request.cwd)
-        return hookWire(from: result, command: command, using: codec)
     }
 }
 
