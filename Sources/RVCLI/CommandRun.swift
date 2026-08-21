@@ -33,10 +33,9 @@ public enum CommandRun {
         store: AllowOnceStore,
         now: Date = Date()
     ) async -> EvaluationResult {
-        let home = (ProcessInfo.processInfo.environment["HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? "")
-        let enabled = (try? PacksFacade.effectiveIDs(home: home)) ?? dayOnePackIDs
-        return await GatedEvaluate().peek(
-            EvaluationRequest(command: ShellCommand(rawValue: raw), enabledPacks: enabled),
+        await GatedEvaluate().run(
+            .peek,
+            command: ShellCommand(rawValue: raw),
             cwd: cwd,
             store: store,
             now: now
