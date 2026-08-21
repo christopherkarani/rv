@@ -28,7 +28,7 @@ public struct CompiledPacks<Compiled: Sendable>: Sendable {
     public static func compile<E: PatternEngine>(
         packs: [PackSnapshot],
         using patterns: E
-    ) throws -> CompiledPacks<Compiled> where Compiled == E.Compiled {
+    ) throws(PatternCompileError) -> CompiledPacks<Compiled> where Compiled == E.Compiled {
         var compiledPacks: [CompiledPack<E.Compiled>] = []
         var quarantined: [RuleID] = []
 
