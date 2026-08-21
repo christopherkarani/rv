@@ -94,6 +94,7 @@ public enum PacksFacade {
     public static func disable(home: String, tokens: [SelectionToken]) throws -> PacksMutationResult {
         try mutate(home: home, tokens: tokens, enabling: false)
     }
+
     public static func effectiveIDs(home: String) throws -> [PackID] {
         let index = try PackRegistry.loadIndex()
         if home.isEmpty {
@@ -140,7 +141,6 @@ public enum PacksFacade {
         enabling: Bool,
         index: PackIndex
     ) throws -> PacksMutationResult {
-        guard !home.isEmpty else { throw PacksCommandError.configUnwritable }
         let expansion: Set<PackID>
         do {
             expansion = try PackSet.expand(tokens, index: index, rejectUnknown: true)
