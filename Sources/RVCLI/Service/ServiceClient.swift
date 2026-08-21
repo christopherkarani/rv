@@ -85,6 +85,15 @@ public struct ServiceClient: Sendable {
             let response = try IPCJSON.decode(IPCResponse.self, from: data)
             // Decode already requires EvaluateReply.via == .xpc; anything else falls back.
             if case .evaluate(let reply) = response.result {
+                if let advertised = reply.serviceSemver,
+                   ProtocolVersion.isMajorSkew(
+                       clientSemver: ProtocolVersion.serviceSemver,
+                       serviceSemver: advertised
+                   )
+                {
+                    transport.invalidate()
+                    return await inProcessRoute()
+                }
                 return RoutedEvaluation(result: reply.result, path: .xpc)
             }
             transport.invalidate()

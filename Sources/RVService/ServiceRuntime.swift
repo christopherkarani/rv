@@ -64,6 +64,12 @@ public actor ServiceRuntime {
         if hello.protocolName != ProtocolVersion.name {
             return HelloAck(ok: false, skewReason: "protocol")
         }
+        if ProtocolVersion.isMajorSkew(
+            clientSemver: hello.clientSemver,
+            serviceSemver: ProtocolVersion.serviceSemver
+        ) {
+            return HelloAck(ok: false, skewReason: "major version")
+        }
         if !corePacksReady {
             return HelloAck(ok: false, skewReason: "core packs unavailable")
         }

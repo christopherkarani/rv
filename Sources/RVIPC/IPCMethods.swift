@@ -46,10 +46,14 @@ public enum EvaluationPath: String, Sendable, Equatable, Codable {
 public struct EvaluateReply: Sendable, Equatable, Codable {
     public var result: EvaluationResult
     public let via: EvaluationPath
+    /// Additive `rv.ipc.v1` field. Old replies omit it; the client then cannot
+    /// prove major skew on that frame and must fall back only when the value is present.
+    public var serviceSemver: String?
 
-    public init(result: EvaluationResult) {
+    public init(result: EvaluationResult, serviceSemver: String? = ProtocolVersion.serviceSemver) {
         self.result = result
         self.via = .xpc
+        self.serviceSemver = serviceSemver
     }
 
     public init(from decoder: Decoder) throws {
@@ -64,17 +68,20 @@ public struct EvaluateReply: Sendable, Equatable, Codable {
             )
         }
         via = decodedVia
+        serviceSemver = try container.decodeIfPresent(String.self, forKey: .serviceSemver)
     }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(result, forKey: .result)
         try container.encode(via, forKey: .via)
+        try container.encodeIfPresent(serviceSemver, forKey: .serviceSemver)
     }
 
     private enum CodingKeys: String, CodingKey {
         case result
         case via
+        case serviceSemver
     }
 }
 

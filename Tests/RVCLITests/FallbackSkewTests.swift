@@ -1,5 +1,6 @@
 import Testing
 import RVDomain
+import RVIPC
 import RVPresentation
 @testable import RVCLI
 
@@ -42,8 +43,10 @@ struct FallbackSkewTests {
     }
 
     @Test func majorSemverMismatchIsSkew() async throws {
+        let allowed = EvaluationResult(decision: .allow, matchingView: "git reset --hard")
         let transport = ScriptedTransport(
-            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "2.0.0", ok: true)
+            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "2.0.0", ok: true),
+            responseResult: .evaluate(EvaluateReply(result: allowed, serviceSemver: "2.0.0"))
         )
         let client = try isolatedClient(transport: transport)
         let reply = await client.evaluate(command: ShellCommand(rawValue: "git reset --hard"))

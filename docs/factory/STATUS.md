@@ -10,7 +10,7 @@ Living board for implement sessions. Do **not** re-grill. Do **not** load `docs/
 |---|---|---|
 | Done | T0–T9 | Scaffold through catalog + `rv packs`. Allow-once and doctor live. |
 | Done | maint | Operator-surface seams (setup analytics, ceremony snapshot, robot format). |
-| **Current** | **T10–T14** | Size + hook speed. Spec: [`specs/phase-5-size-speed.md`](specs/phase-5-size-speed.md). Frontier: T10 ∥ T11 ∥ T12 ∥ T13; T14 after T11. Prompts: `prompts/T10.md` … `T14.md`. Integration: `feat/t10-t14-size-speed`. |
+| **Current** | **T10–T14** | All tickets merged to `feat/t10-t14-size-speed` (PR #36 draft). One-shot evaluate now refuses major-semver-skewed `rvd`. Spec: [`specs/phase-5-size-speed.md`](specs/phase-5-size-speed.md). |
 
 `docs/factory/PLAN.md` wins product-law conflicts. It is a conflict arbiter, not mandatory full session-start reading.
 

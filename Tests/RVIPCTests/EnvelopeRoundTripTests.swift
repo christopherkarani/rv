@@ -66,6 +66,7 @@ struct EnvelopeRoundTripTests {
         let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
         #expect(object["via"] as? String == "xpc")
         #expect(try IPCJSON.decode(EvaluateReply.self, from: data).via == .xpc)
+        #expect(try IPCJSON.decode(EvaluateReply.self, from: data).serviceSemver == ProtocolVersion.serviceSemver)
 
         for badVia in ["inProcess", "bogus"] {
             var spoofed = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -75,6 +76,16 @@ struct EnvelopeRoundTripTests {
                 try IPCJSON.decode(EvaluateReply.self, from: bad)
             }
         }
+    }
+
+    @Test func evaluateReplyServiceSemver_isAdditiveOptionalOnV1() throws {
+        let data = try IPCJSON.encode(EvaluateReply(result: EvaluationResult(decision: .allow)))
+        var object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        object.removeValue(forKey: "serviceSemver")
+        let omitted = try JSONSerialization.data(withJSONObject: object)
+        let decoded = try IPCJSON.decode(EvaluateReply.self, from: omitted)
+        #expect(decoded.via == .xpc)
+        #expect(decoded.serviceSemver == nil)
     }
 
     @Test func evaluateParamsClientSemver_isAdditiveOptionalOnV1() throws {

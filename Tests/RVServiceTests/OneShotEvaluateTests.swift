@@ -23,6 +23,7 @@ struct OneShotEvaluateTests {
         }
         #expect(deny.ruleID.rawValue == "core.git:reset-hard")
         #expect(reply.via == .xpc)
+        #expect(reply.serviceSemver == ProtocolVersion.serviceSemver)
     }
 
     @Test func evaluateWithoutClientSemverAndNoHello_isHandshakeRequired() async throws {
@@ -91,6 +92,27 @@ struct OneShotEvaluateTests {
         #expect(message == "protocol")
         if case .evaluate = response.result {
             Issue.record("do not evaluate against a skewed listener")
+        }
+    }
+
+    @Test func majorSemverImplicitHello_doesNotEvaluate() async throws {
+        let runtime = try isolatedRuntime()
+        let (data, ok) = await runtime.handleIncoming(
+            try evaluateBody(
+                command: "git reset --hard",
+                clientSemver: "2.0.0"
+            ),
+            handshakeOK: false
+        )
+        #expect(ok == false)
+        let response = try IPCJSON.decode(IPCResponse.self, from: data)
+        guard case .error(.protocolSkew(let message)) = response.result else {
+            Issue.record("major semver skew must error, not evaluate")
+            return
+        }
+        #expect(message == "major version")
+        if case .evaluate = response.result {
+            Issue.record("do not evaluate against a major-skewed listener")
         }
     }
 
