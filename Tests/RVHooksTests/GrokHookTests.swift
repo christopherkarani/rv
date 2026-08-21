@@ -45,37 +45,49 @@ private func grokExpected(_ stem: String) throws -> (stdout: String, exit: Int32
     ("allow-medium-stash-drop.json", "git stash drop"),
 ])
 func grokDecode_extractsShellCommand(_ file: String, expected: String) throws {
-    let request = codec.decode(try grokFixture(file))
+    guard case .request(let request) = codec.decode(try grokFixture(file)) else {
+        Issue.record("expected .request for \(file)")
+        return
+    }
     #expect(request.host == .grok)
-    #expect(request.command?.rawValue == expected)
+    #expect(request.command.rawValue == expected)
 }
 
 @Test func grokDecode_oversizeExtractsFullCommand() throws {
     let stdin = grokOversizeHookStdin()
-    let request = codec.decode(stdin)
-    let command = try #require(request.command?.rawValue)
+    guard case .request(let request) = codec.decode(stdin) else {
+        Issue.record("expected .request for oversize stdin")
+        return
+    }
     #expect(request.host == .grok)
-    #expect(command.utf8.count > 65_536)
-    #expect(command.hasSuffix(" git reset --hard"))
+    #expect(request.command.rawValue.utf8.count > 65_536)
+    #expect(request.command.rawValue.hasSuffix(" git reset --hard"))
 }
 
 @Test(arguments: [
     "allow-non-shell-read.json",
-    "allow-empty-command.json",
     "ignore-passive-session-start.json",
-    "malformed.txt",
 ])
-func grokDecode_skipsEvaluate(_ file: String) throws {
-    let request = codec.decode(try grokFixture(file))
-    #expect(request.host == .grok)
-    #expect(request.command == nil)
+func grokDecode_otherToolOrEventIsForeign(_ file: String) throws {
+    #expect(codec.decode(try grokFixture(file)) == .foreign)
+}
+
+@Test func grokDecode_emptyCommandIsMissingCommand() throws {
+    #expect(codec.decode(try grokFixture("allow-empty-command.json")) == .malformed(.missingCommand))
+}
+
+@Test func grokDecode_malformedIsUnreadable() throws {
+    #expect(codec.decode(try grokFixture("malformed.txt")) == .malformed(.unreadable))
 }
 
 @Test func grokDecode_acceptsBashToolName() {
     let stdin = """
     {"hookEventName":"pre_tool_use","toolName":"Bash","toolInput":{"command":"git status"}}
     """
-    #expect(codec.decode(stdin).command?.rawValue == "git status")
+    #expect(
+        codec.decode(stdin)
+            == .request(HookRequest(host: .grok, command: ShellCommand(rawValue: "git status")))
+    )
 }
 
 @Test func grokEncodeAllow_isEmptyExitZero() throws {
