@@ -4,18 +4,33 @@ import RVDomain
 public struct EvaluateParams: Sendable, Equatable, Codable {
     public var request: EvaluationRequest
     public var cwd: String?
+    /// Additive `rv.ipc.v1` field. Old clients omit it and Hello first.
+    public var clientSemver: String?
 
-    public init(request: EvaluationRequest, cwd: String? = nil) {
+    public init(request: EvaluationRequest, cwd: String? = nil, clientSemver: String? = nil) {
         self.request = request
         self.cwd = RequestCwdCoding.nonempty(cwd)
+        self.clientSemver = clientSemver
     }
 
     public init(from decoder: Decoder) throws {
-        (request, cwd) = try RequestCwdCoding.decode(from: decoder)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        request = try container.decode(EvaluationRequest.self, forKey: .request)
+        cwd = RequestCwdCoding.nonempty(try container.decodeIfPresent(String.self, forKey: .cwd))
+        clientSemver = try container.decodeIfPresent(String.self, forKey: .clientSemver)
     }
 
     public func encode(to encoder: Encoder) throws {
-        try RequestCwdCoding.encode(request: request, cwd: cwd, to: encoder)
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(request, forKey: .request)
+        try container.encodeIfPresent(cwd, forKey: .cwd)
+        try container.encodeIfPresent(clientSemver, forKey: .clientSemver)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case request
+        case cwd
+        case clientSemver
     }
 }
 

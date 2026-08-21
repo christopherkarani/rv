@@ -77,6 +77,37 @@ struct EnvelopeRoundTripTests {
         }
     }
 
+    @Test func evaluateParamsClientSemver_isAdditiveOptionalOnV1() throws {
+        let request = EvaluationRequest(
+            command: ShellCommand(rawValue: "git reset --hard"),
+            enabledPacks: dayOnePackIDs
+        )
+        let omitted = try IPCJSON.encode(EvaluateParams(request: request, cwd: "/tmp/ws"))
+        let omittedObject = try #require(JSONSerialization.jsonObject(with: omitted) as? [String: Any])
+        #expect(omittedObject["clientSemver"] == nil)
+        #expect(try IPCJSON.decode(EvaluateParams.self, from: omitted).clientSemver == nil)
+
+        let oldShape = try JSONSerialization.data(withJSONObject: [
+            "request": [
+                "command": "git reset --hard",
+                "enabledPacks": ["core.filesystem", "core.git"],
+            ],
+            "cwd": "/tmp/ws",
+        ])
+        #expect(try IPCJSON.decode(EvaluateParams.self, from: oldShape).clientSemver == nil)
+
+        let withSemver = EvaluateParams(
+            request: request,
+            cwd: "/tmp/ws",
+            clientSemver: ProtocolVersion.serviceSemver
+        )
+        let encoded = try IPCJSON.encode(withSemver)
+        let object = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        #expect(object["clientSemver"] as? String == ProtocolVersion.serviceSemver)
+        #expect(try IPCJSON.decode(EvaluateParams.self, from: encoded) == withSemver)
+        #expect(ProtocolVersion.name == "rv.ipc.v1")
+    }
+
     @Test func emptyCwdOnHonorParamsIsNil() throws {
         let request = EvaluationRequest(
             command: ShellCommand(rawValue: "git reset --hard"),

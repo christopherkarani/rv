@@ -18,7 +18,8 @@ struct FallbackSkewTests {
         let deny = try #require(denyPayload(from: reply.result.decision))
         #expect(deny.ruleID.rawValue == "core.git:reset-hard")
         #expect(reply.path == .inProcess)
-        #expect(transport.sendCount == 0)
+        #expect(transport.sendCount == 1)
+        #expect(transport.helloCount == 0)
 
         let health = ServiceHealth.inspect(await client.diagnostics())
         #expect(
@@ -48,7 +49,8 @@ struct FallbackSkewTests {
         let reply = await client.evaluate(command: ShellCommand(rawValue: "git reset --hard"))
         #expect(reply.path == .inProcess)
         try #require(denyPayload(from: reply.result.decision) != nil)
-        #expect(transport.sendCount == 0)
+        #expect(transport.sendCount == 1)
+        #expect(transport.helloCount == 0)
         let status = await client.status()
         #expect(status.state == "skew")
     }

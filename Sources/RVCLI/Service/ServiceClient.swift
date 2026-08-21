@@ -66,23 +66,30 @@ public struct ServiceClient: Sendable {
                 path: .inProcess
             )
         }
-        switch await route() {
-        case .xpc(let transport, _):
-            do {
-                let body = try IPCJSON.encode(
-                    IPCRequest(method: .evaluate(EvaluateParams(request: request, cwd: cwd)))
+        guard let transport else {
+            return await inProcessRoute()
+        }
+        do {
+            let body = try IPCJSON.encode(
+                IPCRequest(
+                    method: .evaluate(
+                        EvaluateParams(
+                            request: request,
+                            cwd: cwd,
+                            clientSemver: ProtocolVersion.serviceSemver
+                        )
+                    )
                 )
-                let data = try await transport.send(body)
-                let response = try IPCJSON.decode(IPCResponse.self, from: data)
-                // Decode already requires EvaluateReply.via == .xpc; anything else falls back.
-                if case .evaluate(let reply) = response.result {
-                    return RoutedEvaluation(result: reply.result, path: .xpc)
-                }
-                return await inProcessRoute()
-            } catch {
-                return await inProcessRoute()
+            )
+            let data = try await transport.send(body, timeoutMs: transport.oneShotEvaluateTimeoutMs)
+            let response = try IPCJSON.decode(IPCResponse.self, from: data)
+            // Decode already requires EvaluateReply.via == .xpc; anything else falls back.
+            if case .evaluate(let reply) = response.result {
+                return RoutedEvaluation(result: reply.result, path: .xpc)
             }
-        case .down, .skew, .failed:
+            transport.invalidate()
+            return await inProcessRoute()
+        } catch {
             return await inProcessRoute()
         }
     }
