@@ -12,7 +12,7 @@ struct HomeSeamTests {
             allowOnceDirectory: try isolatedAllowOnceDirectory(),
             home: control
         )
-        #expect(denyPayload(from: controlResult.decision) != nil)
+        try #require(denyPayload(from: controlResult.decision) != nil)
 
         let home = try isolatedHome()
         try PacksConfigStore.save(PacksConfig(disabled: ["core.git"]), home: home)
@@ -33,7 +33,7 @@ struct HomeSeamTests {
             home: controlHome
         )
         let controlReply = await controlClient.evaluate(command: ShellCommand(rawValue: "git reset --hard"))
-        #expect(denyPayload(from: controlReply.result.decision) != nil)
+        try #require(denyPayload(from: controlReply.result.decision) != nil)
 
         let home = try isolatedHome()
         try PacksConfigStore.save(PacksConfig(disabled: ["core.git"]), home: home)
