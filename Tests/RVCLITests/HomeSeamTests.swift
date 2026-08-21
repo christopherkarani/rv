@@ -5,9 +5,18 @@ import RVPolicy
 
 struct HomeSeamTests {
     @Test func evaluateCommand_flowsInjectedHomeIntoPackSelection() async throws {
+        let control = try isolatedHome()
+        let controlResult = await CommandRun.evaluateCommand(
+            "git reset --hard",
+            cwd: "/tmp/ws",
+            allowOnceDirectory: try isolatedAllowOnceDirectory(),
+            home: control
+        )
+        #expect(denyPayload(from: controlResult.decision) != nil)
+
         let home = try isolatedHome()
         try PacksConfigStore.save(PacksConfig(disabled: ["core.git"]), home: home)
-        let result = try await CommandRun.evaluateCommand(
+        let result = await CommandRun.evaluateCommand(
             "git reset --hard",
             cwd: "/tmp/ws",
             allowOnceDirectory: try isolatedAllowOnceDirectory(),
@@ -17,6 +26,15 @@ struct HomeSeamTests {
     }
 
     @Test func serviceClient_flowsInjectedHomeIntoPackSelection() async throws {
+        let controlHome = try isolatedHome()
+        let controlClient = ServiceClient(
+            transport: nil,
+            allowOnceDirectory: try isolatedAllowOnceDirectory(),
+            home: controlHome
+        )
+        let controlReply = await controlClient.evaluate(command: ShellCommand(rawValue: "git reset --hard"))
+        #expect(denyPayload(from: controlReply.result.decision) != nil)
+
         let home = try isolatedHome()
         try PacksConfigStore.save(PacksConfig(disabled: ["core.git"]), home: home)
         let client = ServiceClient(
