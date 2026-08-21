@@ -24,6 +24,9 @@ struct PolicyGateTests {
         let first = await PolicyGate.apply(denied, cwd: "/tmp/ws", store: store, now: now)
         #expect(first.override == .allowOnce)
         #expect(first.result.decision == .allow)
+        #expect(first.result.policyOverride == .allowOnce)
+        #expect(first.result.blockingMatch == nil)
+        #expect(first.result.matched?.ruleID.rawValue == "core.git:reset-hard")
         let second = await PolicyGate.apply(denied, cwd: "/tmp/ws", store: store, now: now)
         #expect(second.override == .none)
         guard case .deny = second.result.decision else {
@@ -50,6 +53,8 @@ struct PolicyGateTests {
         )
         #expect(gated.override == .allowlist)
         #expect(gated.result.decision == .allow)
+        #expect(gated.result.policyOverride == .allowlist)
+        #expect(gated.result.blockingMatch == nil)
         let still = await store.consume(matchingView: denied.matchingView, cwd: "/tmp/ws", now: now)
         guard case .consumed = still else {
             Issue.record("allowlist must not spend the grant")
@@ -110,6 +115,8 @@ struct PolicyGateTests {
         let first = await PolicyGate.apply(denied, cwd: "/tmp/a", store: store, now: now)
         #expect(first.override == .allowOnce)
         #expect(first.result.decision == .allow)
+        #expect(first.result.policyOverride == .allowOnce)
+        #expect(first.result.blockingMatch == nil)
         let second = await PolicyGate.apply(denied, cwd: "/tmp/a", store: store, now: now)
         guard case .deny = second.result.decision else {
             Issue.record("second identical command must deny")
@@ -130,6 +137,8 @@ struct PolicyGateTests {
         )
         #expect(preview.override == .allowOnce)
         #expect(preview.result.decision == .allow)
+        #expect(preview.result.policyOverride == .allowOnce)
+        #expect(preview.result.blockingMatch == nil)
         let still = await store.consume(matchingView: denied.matchingView, cwd: "/tmp/ws", now: now)
         guard case .consumed = still else {
             Issue.record("preview must not spend the grant")
@@ -171,13 +180,17 @@ struct PolicyGateTests {
 }
 
 private func resetHardDeny() -> EvaluationResult {
-    EvaluationResult(
-        decision: .deny(
-            Deny(
-                ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
-                reason: "git reset --hard destroys uncommitted changes"
-            )
-        ),
+    let ruleID = RuleID(pack: .coreGit, pattern: "reset-hard")
+    let match = RuleMatch(
+        ruleID: ruleID,
+        packID: .coreGit,
+        patternName: "reset-hard",
+        severity: .critical,
+        reason: "git reset --hard destroys uncommitted changes"
+    )
+    return EvaluationResult(
+        decision: .deny(Deny(ruleID: ruleID, reason: match.reason)),
+        matched: match,
         matchingView: "git reset --hard"
     )
 }

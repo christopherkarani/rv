@@ -181,7 +181,9 @@ public actor ServiceRuntime {
         let risk: ClassifyRisk
         switch result.decision {
         case .allow:
-            if let severity = result.matched?.severity {
+            if result.policyOverride != .none {
+                risk = .safe
+            } else if let severity = result.matched?.severity {
                 risk = ClassifyRisk(rawValue: severity.rawValue) ?? .medium
             } else {
                 risk = .safe

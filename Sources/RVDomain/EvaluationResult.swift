@@ -67,19 +67,30 @@ public struct EvaluationResult: Sendable, Equatable {
     public var quickRejected: Bool
     /// T1-normalized command text this result was decided on.
     public var matchingView: MatchingView
+    public var policyOverride: PolicyOverride
 
     public init(
         decision: Decision,
         matched: RuleMatch? = nil,
         matchedSafe: SafeMatch? = nil,
         quickRejected: Bool = false,
-        matchingView: MatchingView = MatchingView("")
+        matchingView: MatchingView = MatchingView(""),
+        policyOverride: PolicyOverride = .none
     ) {
         self.decision = decision
         self.matched = matched
         self.matchedSafe = matchedSafe
         self.quickRejected = quickRejected
         self.matchingView = matchingView
+        self.policyOverride = policyOverride
+    }
+}
+
+extension EvaluationResult {
+    /// Destructive hit that still blocks. Nil on allow, honor, advisory, and indeterminate.
+    public var blockingMatch: RuleMatch? {
+        guard case .deny = decision else { return nil }
+        return matched
     }
 }
 
@@ -90,6 +101,7 @@ extension EvaluationResult: Codable {
         case matchedSafe
         case quickRejected
         case matchingView
+        case policyOverride
     }
 
     public init(from decoder: Decoder) throws {
@@ -100,6 +112,8 @@ extension EvaluationResult: Codable {
         quickRejected = try container.decodeIfPresent(Bool.self, forKey: .quickRejected) ?? false
         matchingView = try container.decodeIfPresent(MatchingView.self, forKey: .matchingView)
             ?? MatchingView("")
+        policyOverride = try container.decodeIfPresent(PolicyOverride.self, forKey: .policyOverride)
+            ?? .none
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -109,5 +123,6 @@ extension EvaluationResult: Codable {
         try container.encodeIfPresent(matchedSafe, forKey: .matchedSafe)
         try container.encode(quickRejected, forKey: .quickRejected)
         try container.encode(matchingView, forKey: .matchingView)
+        try container.encode(policyOverride, forKey: .policyOverride)
     }
 }

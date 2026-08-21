@@ -78,6 +78,8 @@ struct ServiceRuntimeEvaluateTests {
             return
         }
         #expect(allowed.result.decision == .allow)
+        #expect(allowed.result.policyOverride == .allowOnce)
+        #expect(allowed.result.blockingMatch == nil)
         let second = await runtime.dispatch(
             IPCRequest(method: .evaluate(EvaluateParams(request: request, cwd: "/tmp/ws")))
         )
@@ -89,5 +91,46 @@ struct ServiceRuntimeEvaluateTests {
             Issue.record("second evaluate must deny after the grant is spent")
             return
         }
+    }
+
+    @Test func classify_honoredAllowIsNotHighBecauseLeftoverMatch() async throws {
+        let runtime = ServiceRuntime(allowOnceDirectory: try isolatedAllowOnceDirectory())
+        try await runtime.insertGranted(matchingView: "git reset --hard", cwd: "/tmp/ws")
+        let request = EvaluationRequest(
+            command: ShellCommand(rawValue: "git reset --hard"),
+            enabledPacks: dayOnePackIDs
+        )
+        let response = await runtime.dispatch(
+            IPCRequest(method: .classify(ClassifyParams(request: request, cwd: "/tmp/ws")))
+        )
+        guard case .classify(let reply) = response.result else {
+            Issue.record("expected classify reply")
+            return
+        }
+        #expect(reply.decision == .allow)
+        #expect(reply.risk != .high)
+        #expect(reply.risk != .critical)
+    }
+
+    @Test func classify_advisoryStashDropMapsMedium() async throws {
+        let runtime = try isolatedRuntime()
+        let response = await runtime.dispatch(
+            IPCRequest(
+                method: .classify(
+                    ClassifyParams(
+                        request: EvaluationRequest(
+                            command: ShellCommand(rawValue: "git stash drop"),
+                            enabledPacks: dayOnePackIDs
+                        )
+                    )
+                )
+            )
+        )
+        guard case .classify(let reply) = response.result else {
+            Issue.record("expected classify reply")
+            return
+        }
+        #expect(reply.decision == .allow)
+        #expect(reply.risk == .medium)
     }
 }

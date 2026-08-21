@@ -1,12 +1,6 @@
 import Foundation
 import RVDomain
 
-public enum PolicyOverride: Equatable, Sendable {
-    case none
-    case allowlist
-    case allowOnce
-}
-
 public struct PolicyDecision: Equatable, Sendable {
     public var result: EvaluationResult
     public var override: PolicyOverride
@@ -99,6 +93,7 @@ public enum PolicyGate {
     ) -> PolicyDecision {
         var allowed = result
         allowed.decision = .allow
+        allowed.policyOverride = override
         return PolicyDecision(result: allowed, override: override)
     }
 }
