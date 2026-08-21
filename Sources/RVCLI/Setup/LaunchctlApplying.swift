@@ -5,16 +5,24 @@ protocol LaunchctlApplying {
     func bootout(domain: String, label: String) throws
 }
 
+enum LaunchctlError: Error, Equatable {
+    case nonZeroExit(Int32)
+}
+
 struct ProcessLaunchctl: LaunchctlApplying {
     func bootstrap(domain: String, plist: URL) throws {
         try run(["bootstrap", domain, plist.path])
     }
 
     func bootout(domain: String, label: String) throws {
-        try run(["bootout", "\(domain)/\(label)"])
+        // Already unloaded is success for idempotent uninstall / re-bootstrap.
+        try run(
+            ["bootout", "\(domain)/\(label)"],
+            okStatuses: [0, 3, 5, 113]
+        )
     }
 
-    private func run(_ arguments: [String]) throws {
+    private func run(_ arguments: [String], okStatuses: Set<Int32> = [0]) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
         process.arguments = arguments
@@ -22,6 +30,10 @@ struct ProcessLaunchctl: LaunchctlApplying {
         process.standardError = FileHandle.nullDevice
         try process.run()
         process.waitUntilExit()
+        let status = process.terminationStatus
+        guard okStatuses.contains(status) else {
+            throw LaunchctlError.nonZeroExit(status)
+        }
     }
 }
 

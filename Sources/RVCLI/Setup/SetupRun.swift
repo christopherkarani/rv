@@ -9,11 +9,14 @@ struct SetupOutcome: Equatable, Sendable {
     var stdout: String
     var stderr: String
     var exitCode: Int32
+    /// Pretty ceremony already wrote to the live sink; caller must not reprint `stdout`.
+    var emitted: Bool
 
-    init(stdout: String, stderr: String = "", exitCode: Int32) {
+    init(stdout: String, stderr: String = "", exitCode: Int32, emitted: Bool = false) {
         self.stdout = stdout
         self.stderr = stderr
         self.exitCode = exitCode
+        self.emitted = emitted
     }
 
     static let ok = SetupOutcome(stdout: "", exitCode: 0)
@@ -95,24 +98,40 @@ struct SetupEnvironment {
 enum SetupRun {
     static let hostlessLine = "Run rv setup after Pi, Grok, or OpenCode exists."
     static let robotCompleteLine = "Setup complete. Next  rv test 'git reset --hard'."
+    static let uninstallCompleteLine = "Uninstall complete."
+    static let uninstallAlreadyCleanLine = "Already clean."
     static let launchAgentLabel = "dev.rv.evaluate"
 
     static func setup(
         _ env: SetupEnvironment,
-        appearance: CLIAppearance = .robot
+        appearance: CLIAppearance = .robot,
+        ceremonyKind: SetupCeremonyKind = .setup,
+        force: Bool = false,
+        clock: any SetupCeremonyClock = ZeroSetupCeremonyClock(),
+        animate: Bool = false,
+        write: ((String) -> Void)? = nil
     ) -> SetupOutcome {
         do {
-            let report = try perform(env)
+            let report = try perform(env, force: force)
+            let formatted = SetupFormat.stdout(
+                report: report,
+                appearance: appearance,
+                ceremonyKind: ceremonyKind,
+                clock: clock,
+                animate: animate,
+                write: write
+            )
             return SetupOutcome(
-                stdout: SetupFormat.stdout(report: report, appearance: appearance),
-                exitCode: 0
+                stdout: formatted.text,
+                exitCode: 0,
+                emitted: formatted.emitted
             )
         } catch {
             return SetupOutcome(stdout: "", stderr: "rv setup failed: \(error)\n", exitCode: 1)
         }
     }
 
-    private static func perform(_ env: SetupEnvironment) throws -> SetupReport {
+    private static func perform(_ env: SetupEnvironment, force: Bool) throws -> SetupReport {
         let files = FileOps(fileManager: env.fileManager)
         let layout = OwnedPaths(home: env.home)
         let installations = try HostAdapterInstallation.inspect(
@@ -138,8 +157,12 @@ enum SetupRun {
             case .missing:
                 continue
             case .occupied:
-                kinds[host] = .occupied
-                continue
+                if force == false {
+                    kinds[host] = .occupied
+                    continue
+                }
+                try files.backupAndClearOwnedPath(owned.destination)
+                existingData = nil
             case .absentFile:
                 existingData = nil
             case .broken(_, let data), .wired(_, let data):
@@ -199,7 +222,13 @@ enum SetupRun {
         }
     }
 
-    static func uninstall(_ env: SetupEnvironment) -> SetupOutcome {
+    static func uninstall(
+        _ env: SetupEnvironment,
+        appearance: CLIAppearance = .robot,
+        clock: any SetupCeremonyClock = ZeroSetupCeremonyClock(),
+        animate: Bool = false,
+        write: ((String) -> Void)? = nil
+    ) -> SetupOutcome {
         let files = FileOps(fileManager: env.fileManager)
         let layout = OwnedPaths(home: env.home)
         let installations: HostAdapterInstallationSnapshot
@@ -216,32 +245,53 @@ enum SetupRun {
                 exitCode: 1
             )
         }
-        var removedPaths = [layout.launchAgent, layout.localRv, layout.localRvd]
-        removedPaths.append(contentsOf: [
-            layout.configDirectory + "/analytics-id",
-            layout.configDirectory + "/analytics-counters.json",
-            layout.configDirectory + "/analytics-install-sent",
-            layout.configDirectory + "/analytics-hosts.json",
-        ])
+
+        var removedHosts: Set<SetupHostKind> = []
+        var occupiedHosts: Set<SetupHostKind> = []
+        var removedPaths: [String] = []
+
         for owned in layout.hostAdapters {
             switch installations.installation(for: owned.host) {
             case .broken, .wired:
                 removedPaths.append(owned.destination)
-            case .missing, .absentFile, .occupied:
+                removedHosts.insert(owned.host)
+            case .occupied:
+                occupiedHosts.insert(owned.host)
+            case .missing, .absentFile:
                 break
             }
         }
+
+        let launchAgentExisted = files.fileExists(layout.launchAgent)
+        let binariesExisted = files.fileExists(layout.localRv) || files.fileExists(layout.localRvd)
+        removedPaths.append(contentsOf: [layout.launchAgent, layout.localRv, layout.localRvd])
+
         let configDir = URL(fileURLWithPath: layout.configDirectory, isDirectory: true)
-        for artifact in RVPolicyPaths.uninstallArtifacts(inConfigDir: configDir) {
+        let analytics = AnalyticsPaths(configDirectory: configDir)
+        let configArtifacts =
+            analytics.uninstallArtifacts + RVPolicyPaths.uninstallArtifacts(inConfigDir: configDir)
+        let configExisted = configArtifacts.contains { files.fileExists($0.path) }
+        for artifact in configArtifacts {
             removedPaths.append(artifact.path)
         }
+
         for path in removedPaths {
             files.removeFile(atPath: path)
         }
         files.removeDirectoryIfEmpty(atPath: layout.configDirectory)
+
         if env.touchLaunchd {
-            try? env.launchctl.bootout(domain: "gui/\(getuid())", label: launchAgentLabel)
+            do {
+                try env.launchctl.bootout(domain: "gui/\(getuid())", label: launchAgentLabel)
+            } catch {
+                return SetupOutcome(
+                    stdout: "",
+                    stderr: "rv uninstall failed: unable to unload LaunchAgent\n",
+                    exitCode: 1
+                )
+            }
         }
+
         if removedPaths.contains(where: { files.fileExists($0) }) {
             return SetupOutcome(
                 stdout: "",
@@ -249,7 +299,26 @@ enum SetupRun {
                 exitCode: 1
             )
         }
-        return .ok
+
+        let report = UninstallReport(
+            removedHosts: removedHosts,
+            occupiedHosts: occupiedHosts,
+            removedLaunchAgent: launchAgentExisted,
+            removedBinaries: binariesExisted,
+            removedConfigArtifacts: configExisted
+        )
+        let formatted = SetupFormat.uninstallStdout(
+            report: report,
+            appearance: appearance,
+            clock: clock,
+            animate: animate,
+            write: write
+        )
+        return SetupOutcome(
+            stdout: formatted.text,
+            exitCode: 0,
+            emitted: formatted.emitted
+        )
     }
 
     private static func writeLaunchAgent(env: SetupEnvironment, layout: OwnedPaths, files: FileOps) throws {
@@ -317,5 +386,20 @@ struct FileOps {
             return
         }
         try? fileManager.removeItem(atPath: path)
+    }
+
+    /// Moves an occupied owned path aside (`path.bak`) so setup can rewrite it.
+    /// Symlinks are removed without a backup (nothing useful to restore as bytes).
+    func backupAndClearOwnedPath(_ path: String) throws {
+        if (try? fileManager.destinationOfSymbolicLink(atPath: path)) != nil {
+            try fileManager.removeItem(atPath: path)
+            return
+        }
+        guard fileManager.fileExists(atPath: path) else { return }
+        let backup = path + ".bak"
+        if fileManager.fileExists(atPath: backup) {
+            try fileManager.removeItem(atPath: backup)
+        }
+        try fileManager.moveItem(atPath: path, toPath: backup)
     }
 }

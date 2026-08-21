@@ -1,5 +1,7 @@
 import ArgumentParser
 import Foundation
+import RVPresentation
+import RVTheme
 
 struct Setup: ParsableCommand {
     static let configuration = CommandConfiguration(
@@ -19,28 +21,45 @@ struct Setup: ParsableCommand {
     @Flag(name: .customLong("no-color"), help: "Disable color.")
     var noColor = false
 
+    @Flag(name: .customLong("force"), help: "Replace occupied owned hooks (backs up to *.bak).")
+    var force = false
+
     func run() throws {
         guard let env = SetupEnvironment.live() else {
             FileHandle.standardError.write(Data("rv setup: HOME is not set\n".utf8))
             throw ExitCode(1)
         }
-        let appearance = CLIAppearance.resolve(
+        let resolved = CeremonyCLI.appearance(
             json: json,
             robot: robot,
             plain: plain,
             noColor: noColor
         )
-        let outcome = SetupRun.setup(env, appearance: appearance)
-        if outcome.stdout.isEmpty == false {
-            FileHandle.standardOutput.write(Data(outcome.stdout.utf8))
-        }
-        if outcome.stderr.isEmpty == false {
-            FileHandle.standardError.write(Data(outcome.stderr.utf8))
-        }
-        throw ExitCode(outcome.exitCode)
+        let outcome = SetupRun.setup(
+            env,
+            appearance: resolved.appearance,
+            ceremonyKind: SetupCeremonyKind.fromInstallEnvironment(),
+            force: force,
+            clock: LiveSetupCeremonyClock(),
+            animate: resolved.animate,
+            write: CeremonyCLI.stdoutWriter()
+        )
+        try CeremonyCLI.emit(outcome)
     }
 
     static func helpText() -> String {
-        helpMessage(columns: 100)
+        HelpDispatch.text(.setup, palette: colorOffPalette)
+    }
+}
+
+extension SetupCeremonyKind {
+    static func fromInstallEnvironment(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> SetupCeremonyKind {
+        let raw = environment["RV_FROM_INSTALL"] ?? ""
+        if raw == "1" || raw.lowercased() == "true" || raw.lowercased() == "yes" {
+            return .install
+        }
+        return .setup
     }
 }

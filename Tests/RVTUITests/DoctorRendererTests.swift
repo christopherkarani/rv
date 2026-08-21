@@ -25,22 +25,28 @@ private let doctorRendererFixture = DoctorViewModel(
     config: .readable
 )
 
-@Test func doctorRenderer_emitsOneFactPerLine() {
+@Test func doctorRenderer_emitsSectionedPrettyFacts() {
     let lines = DoctorRenderer().render(doctorRendererFixture, palette: colorOffPalette)
 
     #expect(lines == [
-        "service: running",
-        "protocol: rv.ipc.v1",
-        "service-version: 1.0.0 (compatible)",
-        "service-label: dev.rv.evaluate",
-        "fallback: ready",
-        "launch-agent: loaded",
-        "packs: core.filesystem and core.git enabled; extras off",
-        "host Grok: wired",
-        "host Pi: missing — run rv setup",
-        "host OpenCode: absent-file — run rv setup",
-        "config: readable",
-        "grade: hook",
+        "  Service",
+        "  •  running        1.0.0 · rv.ipc.v1",
+        "                    dev.rv.evaluate · launch-agent loaded · fallback ready",
+        "",
+        "  Hosts",
+        "  •  Grok      wired",
+        "  ◦  Pi        missing",
+        "  ◦  OpenCode  absent-file",
+        "",
+        "  Packs",
+        "    core.filesystem · core.git",
+        "    extras off",
+        "",
+        "  Config",
+        "    readable · grade hook",
+        "",
+        "  Next",
+        "  →  rv setup    Wire Pi and OpenCode",
     ])
 }
 
@@ -50,16 +56,34 @@ private let doctorRendererFixture = DoctorViewModel(
     fixture.service.serviceSemver = nil
 
     let lines = DoctorRenderer().render(fixture, palette: colorOffPalette)
+    let joined = lines.joined(separator: "\n")
 
-    #expect(lines.contains("service: not installed"))
-    #expect(lines.contains("service-version: unavailable"))
+    #expect(joined.contains("not installed"))
+    #expect(joined.contains("unavailable"))
 }
 
-@Test func doctorRenderer_nonWiredHostsHaveOneSetupAction() {
+@Test func doctorRenderer_missingHostsGetSetupNextNotOccupied() {
     let lines = DoctorRenderer().render(doctorRendererFixture, palette: colorOffPalette)
+    let joined = lines.joined(separator: "\n")
 
-    #expect(lines.filter { $0.contains("run rv setup") }.count == 2)
-    #expect(lines.first { $0.contains("host Grok") }?.contains("rv setup") == false)
+    #expect(joined.contains("→  rv setup    Wire Pi and OpenCode"))
+    #expect(joined.contains("Grok") && joined.contains("wired"))
+    #expect(lines.contains { $0.contains("Grok") && $0.contains("rv setup") } == false)
+}
+
+@Test func doctorRenderer_occupiedHostsDoNotClaimSetupFixesThem() {
+    var fixture = doctorRendererFixture
+    fixture.hosts = [
+        DoctorHostView(host: .grok, state: .wired),
+        DoctorHostView(host: .pi, state: .occupied),
+        DoctorHostView(host: .openCode, state: .occupied),
+    ]
+
+    let lines = DoctorRenderer().render(fixture, palette: colorOffPalette)
+    let joined = lines.joined(separator: "\n")
+
+    #expect(joined.contains("→  rv setup --force    Replace occupied Pi and OpenCode"))
+    #expect(joined.contains("→  rv setup    Wire") == false)
 }
 
 @Test func doctorRenderer_brokenRegistryDoesNotClaimPacksAreMissing() {
@@ -67,12 +91,33 @@ private let doctorRendererFixture = DoctorViewModel(
     fixture.packs.registry = .broken
 
     let lines = DoctorRenderer().render(fixture, palette: colorOffPalette)
+    let joined = lines.joined(separator: "\n")
 
-    #expect(lines.contains("packs: broken"))
-    #expect(lines.contains("packs: missing ") == false)
+    #expect(joined.contains("broken"))
+    #expect(joined.contains("missing ") == false)
 }
 
-@Test func doctorRenderer_hasNoANSIOrBoxDrawing() {
+@Test func doctorRenderer_extrasAreCountedNotListed() {
+    var fixture = doctorRendererFixture
+    fixture.packs = DoctorPacksView(
+        enabled: dayOnePackIDs + [
+            PackID(rawValue: "core.network"),
+            PackID(rawValue: "strict_git"),
+            PackID(rawValue: "system.disk"),
+        ],
+        registry: .ready
+    )
+
+    let lines = DoctorRenderer().render(fixture, palette: colorOffPalette)
+    let joined = lines.joined(separator: "\n")
+
+    #expect(joined.contains("core.filesystem · core.git"))
+    #expect(joined.contains("+3 extras"))
+    #expect(joined.contains("core.network") == false)
+    #expect(joined.contains("extras off") == false)
+}
+
+@Test func doctorRenderer_colorOffHasNoANSIOrBoxDrawing() {
     let output = DoctorRenderer()
         .render(doctorRendererFixture, palette: colorOffPalette)
         .joined(separator: "\n")

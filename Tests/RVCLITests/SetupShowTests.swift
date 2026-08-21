@@ -1,5 +1,7 @@
 import Foundation
 import Testing
+import RVAnalytics
+import RVPresentation
 import RVTheme
 @testable import RVCLI
 
@@ -7,24 +9,21 @@ import RVTheme
     try withTempHome { home, layout, launchctl in
         let outcome = SetupRun.setup(
             env(home: home, launchctl: launchctl),
-            appearance: .pretty(colorOffPalette)
+            appearance: .pretty(colorOffPalette),
+            ceremonyKind: .setup
         )
         #expect(outcome.exitCode == 0)
-        #expect(outcome.stdout == """
-        ○ Grok
-        ○ Pi
-        ○ OpenCode
-        looking for hosts
-        No hosts yet
-        Next  rv setup
-
-        """)
-        #expect(FileManager.default.fileExists(atPath: layout.grokDirectory) == false)
+        #expect(outcome.stdout.contains("◦  Grok"))
+        #expect(outcome.stdout.contains("◦  Pi"))
+        #expect(outcome.stdout.contains("◦  OpenCode"))
+        #expect(outcome.stdout.contains(setupCeremonyHostlessTitle))
+        #expect(outcome.stdout.contains(setupCeremonyHostlessNext))
         #expect(outcome.stdout.contains("\u{001B}") == false)
+        #expect(FileManager.default.fileExists(atPath: layout.grokDirectory) == false)
     }
 }
 
-@Test func setup_pretty_grokWired_circleShowAndTestCloser() throws {
+@Test func setup_pretty_grokWired_hooksWiredCloser() throws {
     try withTempHome { home, layout, launchctl in
         try FileManager.default.createDirectory(
             atPath: layout.grokDirectory,
@@ -32,18 +31,31 @@ import RVTheme
         )
         let outcome = SetupRun.setup(
             env(home: home, launchctl: launchctl),
-            appearance: .pretty(colorOffPalette)
+            appearance: .pretty(colorOffPalette),
+            ceremonyKind: .setup
         )
         #expect(outcome.exitCode == 0)
-        #expect(outcome.stdout == """
-        ● Grok  reload /hooks
-        ○ Pi
-        ○ OpenCode
-        wiring Grok
-        Setup complete
-        Next  rv test 'git reset --hard'
+        #expect(outcome.stdout.contains("•  Grok  reload /hooks"))
+        #expect(outcome.stdout.contains(setupCeremonyHooksWired))
+        #expect(outcome.stdout.contains("Setup complete") == false)
+        #expect(FileManager.default.fileExists(atPath: layout.grokHook))
+    }
+}
 
-        """)
+@Test func setup_pretty_install_wired_explainCloser() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(
+            atPath: layout.grokDirectory,
+            withIntermediateDirectories: true
+        )
+        let outcome = SetupRun.setup(
+            env(home: home, launchctl: launchctl),
+            appearance: .pretty(colorOffPalette),
+            ceremonyKind: .install
+        )
+        #expect(outcome.exitCode == 0)
+        #expect(outcome.stdout.contains(setupCeremonyInstallCloser))
+        #expect(outcome.stdout.contains("•  Grok"))
         #expect(FileManager.default.fileExists(atPath: layout.grokHook))
     }
 }
@@ -62,24 +74,19 @@ import RVTheme
         try foreign.write(toFile: layout.grokHook, atomically: true, encoding: .utf8)
         let outcome = SetupRun.setup(
             env(home: home, launchctl: launchctl),
-            appearance: .pretty(colorOffPalette)
+            appearance: .pretty(colorOffPalette),
+            ceremonyKind: .setup
         )
         #expect(outcome.exitCode == 0)
-        #expect(outcome.stdout == """
-        ○ Grok  skipped occupied
-        ● Pi
-        ○ OpenCode
-        wiring Pi
-        Setup complete
-        Next  rv test 'git reset --hard'
-
-        """)
+        #expect(outcome.stdout.contains("◦  Grok  skipped occupied"))
+        #expect(outcome.stdout.contains("•  Pi"))
+        #expect(outcome.stdout.contains(setupCeremonyHooksWired))
         let grokAfter = try String(contentsOfFile: layout.grokHook, encoding: .utf8)
         #expect(grokAfter == foreign)
     }
 }
 
-@Test func setup_pretty_occupiedGrokOnly_neverClaimsComplete() throws {
+@Test func setup_pretty_occupiedGrokOnly_neverClaimsWired() throws {
     try withTempHome { home, layout, launchctl in
         try FileManager.default.createDirectory(
             atPath: layout.grokDirectory + "/hooks",
@@ -89,20 +96,14 @@ import RVTheme
         try foreign.write(toFile: layout.grokHook, atomically: true, encoding: .utf8)
         let outcome = SetupRun.setup(
             env(home: home, launchctl: launchctl),
-            appearance: .pretty(colorOffPalette)
+            appearance: .pretty(colorOffPalette),
+            ceremonyKind: .setup
         )
         #expect(outcome.exitCode == 0)
-        #expect(outcome.stdout.contains("Setup complete") == false)
-        #expect(outcome.stdout.contains("rv test") == false)
-        #expect(outcome.stdout == """
-        ○ Grok  skipped occupied
-        ○ Pi
-        ○ OpenCode
-        looking for hosts
-        No hosts yet
-        Next  rv setup
-
-        """)
+        #expect(outcome.stdout.contains(setupCeremonyHooksWired) == false)
+        #expect(outcome.stdout.contains(setupCeremonyInstallCloser) == false)
+        #expect(outcome.stdout.contains(setupCeremonyHostlessTitle))
+        #expect(outcome.stdout.contains("◦  Grok  skipped occupied"))
         let grokAfter = try String(contentsOfFile: layout.grokHook, encoding: .utf8)
         #expect(grokAfter == foreign)
         #expect(FileManager.default.fileExists(atPath: layout.piDirectory) == false)
@@ -116,10 +117,15 @@ import RVTheme
             atPath: layout.grokDirectory,
             withIntermediateDirectories: true
         )
-        _ = SetupRun.setup(env(home: home, launchctl: launchctl), appearance: .pretty(colorOffPalette))
+        _ = SetupRun.setup(
+            env(home: home, launchctl: launchctl),
+            appearance: .pretty(colorOffPalette),
+            ceremonyKind: .setup
+        )
         let second = SetupRun.setup(
             env(home: home, launchctl: launchctl),
-            appearance: .pretty(colorOffPalette)
+            appearance: .pretty(colorOffPalette),
+            ceremonyKind: .setup
         )
         #expect(second.exitCode == 0)
         #expect(second.stdout == "")
@@ -135,9 +141,14 @@ import RVTheme
         let outcome = SetupRun.setup(env(home: home, launchctl: launchctl), appearance: .robot)
         #expect(outcome.exitCode == 0)
         #expect(outcome.stdout == SetupRun.robotCompleteLine + "\n")
-        #expect(outcome.stdout.contains("○") == false)
-        #expect(outcome.stdout.contains("●") == false)
+        #expect(outcome.stdout.contains("◦") == false)
+        #expect(outcome.stdout.contains("•") == false)
     }
+}
+
+@Test func setup_ceremonyKind_fromInstallEnv() {
+    #expect(SetupCeremonyKind.fromInstallEnvironment(environment: ["RV_FROM_INSTALL": "1"]) == .install)
+    #expect(SetupCeremonyKind.fromInstallEnvironment(environment: [:]) == .setup)
 }
 
 @Test func setupHelp_jsonAndRobotAreOneLineNotJSON() {
@@ -145,3 +156,85 @@ import RVTheme
     #expect(help.contains("Robot JSON") == false)
     #expect(help.contains("One line, no circles"))
 }
+
+@Test func uninstall_pretty_removesWiredHostsAndCloser() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(
+            atPath: layout.grokDirectory,
+            withIntermediateDirectories: true
+        )
+        _ = SetupRun.setup(env(home: home, launchctl: launchctl), appearance: .robot)
+        let outcome = SetupRun.uninstall(
+            env(home: home, launchctl: launchctl),
+            appearance: .pretty(colorOffPalette)
+        )
+        #expect(outcome.exitCode == 0)
+        #expect(outcome.stdout.contains(uninstallCeremonyCloser))
+        #expect(outcome.stdout.contains(uninstallCeremonyHooksRemoved))
+        #expect(outcome.stdout.contains("◦  Grok"))
+        #expect(outcome.stdout.contains("•") == false)
+        #expect(FileManager.default.fileExists(atPath: layout.grokHook) == false)
+    }
+}
+
+@Test func uninstall_pretty_occupiedLeftAlone() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(
+            atPath: layout.grokDirectory + "/hooks",
+            withIntermediateDirectories: true
+        )
+        let foreign = "{\"hooks\":[]}\n"
+        try foreign.write(toFile: layout.grokHook, atomically: true, encoding: .utf8)
+        let outcome = SetupRun.uninstall(
+            env(home: home, launchctl: launchctl),
+            appearance: .pretty(colorOffPalette)
+        )
+        #expect(outcome.exitCode == 0)
+        #expect(outcome.stdout.contains("◦  Grok  left occupied"))
+        #expect(outcome.stdout.contains(uninstallCeremonyAlreadyClean))
+        #expect(outcome.stdout.contains(uninstallCeremonyCloser) == false)
+        #expect(try String(contentsOfFile: layout.grokHook, encoding: .utf8) == foreign)
+    }
+}
+
+@Test func uninstall_pretty_configOnly_claimsComplete() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(
+            atPath: layout.configDirectory,
+            withIntermediateDirectories: true
+        )
+        let configDir = URL(fileURLWithPath: layout.configDirectory, isDirectory: true)
+        let analytics = AnalyticsPaths(configDirectory: configDir)
+        try "x".write(to: analytics.configFile, atomically: true, encoding: .utf8)
+        let outcome = SetupRun.uninstall(
+            env(home: home, launchctl: launchctl),
+            appearance: .pretty(colorOffPalette)
+        )
+        #expect(outcome.exitCode == 0)
+        #expect(outcome.stdout.contains(uninstallCeremonyCloser))
+        #expect(outcome.stdout.contains(uninstallCeremonyAlreadyClean) == false)
+        #expect(FileManager.default.fileExists(atPath: analytics.configFile.path) == false)
+    }
+}
+
+@Test func uninstall_robot_alreadyCleanIsOneLine() throws {
+    try withTempHome { home, _, launchctl in
+        let outcome = SetupRun.uninstall(env(home: home, launchctl: launchctl), appearance: .robot)
+        #expect(outcome.exitCode == 0)
+        #expect(outcome.stdout == SetupRun.uninstallAlreadyCleanLine + "\n")
+    }
+}
+
+@Test func uninstall_robot_afterSetupIsCompleteLine() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(
+            atPath: layout.grokDirectory,
+            withIntermediateDirectories: true
+        )
+        _ = SetupRun.setup(env(home: home, launchctl: launchctl), appearance: .robot)
+        let outcome = SetupRun.uninstall(env(home: home, launchctl: launchctl), appearance: .robot)
+        #expect(outcome.exitCode == 0)
+        #expect(outcome.stdout == SetupRun.uninstallCompleteLine + "\n")
+    }
+}
+

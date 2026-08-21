@@ -113,6 +113,11 @@ public struct DoctorPacksView: Equatable, Sendable {
         enabled.filter { dayOnePackIDs.contains($0) == false }
     }
 
+    /// Enabled day-one packs (stable order).
+    public var dayOneEnabled: [PackID] {
+        dayOnePackIDs.filter { enabled.contains($0) }
+    }
+
     /// Whether the registry is healthy and all day-one packs are enabled.
     public var areDayOnePacksReady: Bool {
         registry == .ready && missingDayOne.isEmpty

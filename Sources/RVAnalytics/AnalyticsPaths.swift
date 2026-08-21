@@ -28,6 +28,11 @@ public struct AnalyticsPaths: Sendable, Equatable {
         configDirectory.appendingPathComponent("analytics-hosts.json", isDirectory: false)
     }
 
+    /// Files `rv uninstall` must delete when present (prefs + identity + counters).
+    public var uninstallArtifacts: [URL] {
+        [configFile, identityFile, countersFile, installSentFile, hostsFile]
+    }
+
     /// Derives config directory from `$HOME/.config/rv`. Returns nil when HOME is unset.
     public static func liveFromEnvironment(
         environment: [String: String] = ProcessInfo.processInfo.environment

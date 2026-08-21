@@ -35,24 +35,104 @@ struct SetupReport: Equatable, Sendable {
     }
 }
 
+struct UninstallReport: Equatable, Sendable {
+    var removedHosts: Set<SetupHostKind>
+    var occupiedHosts: Set<SetupHostKind>
+    var removedLaunchAgent: Bool
+    var removedBinaries: Bool
+    var removedConfigArtifacts: Bool
+
+    var didRemoveAnything: Bool {
+        removedHosts.isEmpty == false
+            || removedLaunchAgent
+            || removedBinaries
+            || removedConfigArtifacts
+    }
+}
+
 enum SetupFormat {
-    static func stdout(report: SetupReport, appearance: CLIAppearance) -> String {
+    static func stdout(
+        report: SetupReport,
+        appearance: CLIAppearance,
+        ceremonyKind: SetupCeremonyKind = .setup,
+        clock: any SetupCeremonyClock = ZeroSetupCeremonyClock(),
+        animate: Bool = false,
+        write: ((String) -> Void)? = nil
+    ) -> (text: String, emitted: Bool) {
         switch appearance {
         case .robot:
-            return robot(report)
+            return (robot(report), false)
         case .pretty(let palette):
-            switch setupViewModel(
+            guard let frames = setupCeremonyFrames(
                 grok: report.grok,
                 pi: report.pi,
                 openCode: report.openCode,
-                wrote: report.wrote
-            ) {
-            case .quiet:
-                return ""
-            case .painted(let model):
-                return PrettyWriter.join(SetupRenderer().render(model, palette: palette))
+                wrote: report.wrote,
+                kind: ceremonyKind
+            ) else {
+                return ("", false)
             }
+            return playCeremony(
+                frames: frames,
+                palette: palette,
+                clock: clock,
+                animate: animate,
+                write: write
+            )
         }
+    }
+
+    static func uninstallStdout(
+        report: UninstallReport,
+        appearance: CLIAppearance,
+        clock: any SetupCeremonyClock = ZeroSetupCeremonyClock(),
+        animate: Bool = false,
+        write: ((String) -> Void)? = nil
+    ) -> (text: String, emitted: Bool) {
+        switch appearance {
+        case .robot:
+            return (uninstallRobot(report), false)
+        case .pretty(let palette):
+            let frames = uninstallCeremonyFrames(
+                removed: report.removedHosts,
+                occupied: report.occupiedHosts,
+                didRemoveAnything: report.didRemoveAnything
+            )
+            return playCeremony(
+                frames: frames,
+                palette: palette,
+                clock: clock,
+                animate: animate,
+                write: write
+            )
+        }
+    }
+
+    private static func playCeremony(
+        frames: [SetupCeremonyFrame],
+        palette: Palette,
+        clock: any SetupCeremonyClock,
+        animate: Bool,
+        write: ((String) -> Void)?
+    ) -> (text: String, emitted: Bool) {
+        if animate, let write {
+            _ = SetupCeremonyPlayer.play(
+                frames: frames,
+                palette: palette,
+                clock: clock,
+                animate: true,
+                write: write
+            )
+            return ("", true)
+        }
+        let text = SetupCeremonyPlayer.play(
+            frames: frames,
+            palette: palette,
+            clock: ZeroSetupCeremonyClock(),
+            animate: false,
+            write: { _ in }
+        )
+        return (text, false)
     }
 
     private static func robot(_ report: SetupReport) -> String {
@@ -65,5 +145,12 @@ enum SetupFormat {
             return skips.joined(separator: "\n") + "\n"
         }
         return SetupRun.robotCompleteLine + "\n"
+    }
+
+    private static func uninstallRobot(_ report: UninstallReport) -> String {
+        if report.didRemoveAnything {
+            return SetupRun.uninstallCompleteLine + "\n"
+        }
+        return SetupRun.uninstallAlreadyCleanLine + "\n"
     }
 }

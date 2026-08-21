@@ -61,10 +61,11 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
         )
 
         #expect(outcome.exitCode == 0)
-        #expect(outcome.stdout.contains("service: not installed"))
-        #expect(outcome.stdout.contains("host Grok: missing — run rv setup"))
-        #expect(outcome.stdout.contains("host Pi: missing — run rv setup"))
-        #expect(outcome.stdout.contains("host OpenCode: missing — run rv setup"))
+        #expect(outcome.stdout.contains("not installed"))
+        #expect(outcome.stdout.contains("Grok") && outcome.stdout.contains("missing"))
+        #expect(outcome.stdout.contains("Pi") && outcome.stdout.contains("missing"))
+        #expect(outcome.stdout.contains("OpenCode") && outcome.stdout.contains("missing"))
+        #expect(outcome.stdout.contains("→  rv setup"))
         #expect(try FileManager.default.contentsOfDirectory(atPath: home.path) == before)
     }
 }
@@ -91,8 +92,8 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
         )
 
         #expect(outcome.exitCode == 0)
-        #expect(outcome.stdout.contains("host Grok: wired"))
-        #expect(outcome.stdout.contains("host Grok: wired — run rv setup") == false)
+        #expect(outcome.stdout.contains("Grok") && outcome.stdout.contains("wired"))
+        #expect(outcome.stdout.contains("→  rv setup    Wire Grok") == false)
     }
 }
 
@@ -125,9 +126,9 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
             appearance: .pretty(colorOffPalette)
         )
 
-        #expect(outcome.stdout.contains("launch-agent: loaded"))
-        #expect(outcome.stdout.contains("service-version: 1.0.0 (compatible)"))
-        #expect(outcome.stdout.contains("service-label: dev.rv.evaluate"))
+        #expect(outcome.stdout.contains("launch-agent loaded"))
+        #expect(outcome.stdout.contains("1.0.0 · rv.ipc.v1"))
+        #expect(outcome.stdout.contains("dev.rv.evaluate"))
     }
 }
 
@@ -142,8 +143,8 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
             appearance: .pretty(colorOffPalette)
         )
 
-        #expect(outcome.stdout.contains("launch-agent: missing"))
-        #expect(outcome.stdout.contains("launch-agent: loaded") == false)
+        #expect(outcome.stdout.contains("launch-agent missing"))
+        #expect(outcome.stdout.contains("launch-agent loaded") == false)
     }
 }
 
@@ -163,7 +164,9 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
         )
 
         #expect(outcome.exitCode == 0)
-        #expect(outcome.stdout.contains("host Grok: occupied — run rv setup"))
+        #expect(outcome.stdout.contains("Grok") && outcome.stdout.contains("occupied"))
+        #expect(outcome.stdout.contains("rv setup --force"))
+        #expect(outcome.stdout.contains("→  rv setup    Wire Grok") == false)
         #expect(try String(contentsOfFile: paths.grokHook, encoding: .utf8) == foreign)
     }
 }
@@ -184,8 +187,9 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
         )
 
         #expect(outcome.exitCode == 0)
-        #expect(outcome.stdout.contains("host Grok: broken — run rv setup"))
-        #expect(outcome.stdout.contains("host Grok: wired") == false)
+        #expect(outcome.stdout.contains("Grok") && outcome.stdout.contains("broken"))
+        #expect(outcome.stdout.contains("→  rv setup"))
+        #expect(outcome.stdout.contains("Grok") && outcome.stdout.contains("wired") == false)
     }
 }
 
@@ -203,7 +207,8 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
         )
 
         #expect(outcome.exitCode == 0)
-        #expect(outcome.stdout.contains("host Grok: absent-file — run rv setup"))
+        #expect(outcome.stdout.contains("Grok") && outcome.stdout.contains("absent-file"))
+        #expect(outcome.stdout.contains("→  rv setup"))
         #expect(FileManager.default.fileExists(atPath: paths.grokHook) == false)
     }
 }
@@ -220,7 +225,7 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
         )
 
         #expect(outcome.exitCode == 1)
-        #expect(outcome.stdout.contains("packs: missing core.filesystem"))
+        #expect(outcome.stdout.contains("missing core.filesystem"))
     }
 }
 
@@ -273,7 +278,7 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
             diagnostics: .xpc(snapshot: snapshot, localCorePacksReady: true),
             appearance: .pretty(colorOffPalette)
         )
-        #expect(pretty.stdout.contains("packs: broken"))
+        #expect(pretty.stdout.contains("broken"))
     }
 }
 
@@ -312,7 +317,7 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
         )
 
         #expect(outcome.exitCode == 1)
-        #expect(outcome.stdout.contains("config: unreadable"))
+        #expect(outcome.stdout.contains("unreadable"))
     }
 }
 
@@ -373,8 +378,9 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
             appearance: .pretty(colorOffPalette)
         )
 
-        #expect(outcome.stdout.contains("service: skew"))
-        #expect(outcome.stdout.contains("service-warning: protocol mismatch"))
+        #expect(outcome.stdout.contains("skew"))
+        #expect(outcome.stdout.contains("protocol mismatch"))
+        #expect(outcome.stdout.contains("running       ") == false)
     }
 }
 
@@ -409,9 +415,9 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
             appearance: .pretty(colorOffPalette)
         )
 
-        #expect(outcome.stdout.contains("service: down"))
-        #expect(outcome.stdout.contains("service: not installed") == false)
-        #expect(outcome.stdout.contains("service-warning: invalid response"))
+        #expect(outcome.stdout.contains("down"))
+        #expect(outcome.stdout.contains("not installed") == false)
+        #expect(outcome.stdout.contains("invalid response"))
     }
 }
 
@@ -441,9 +447,9 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
             appearance: .pretty(colorOffPalette)
         )
 
-        #expect(outcome.stdout.contains("service: down"))
-        #expect(outcome.stdout.contains("service: not installed") == false)
-        #expect(outcome.stdout.contains("launch-agent: installed"))
+        #expect(outcome.stdout.contains("down"))
+        #expect(outcome.stdout.contains("not installed") == false)
+        #expect(outcome.stdout.contains("launch-agent installed"))
         #expect(try String(contentsOfFile: paths.launchAgent, encoding: .utf8) == "plist")
         #expect(try FileManager.default.contentsOfDirectory(atPath: home.path) == before)
     }
@@ -515,9 +521,9 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
             appearance: .pretty(colorOffPalette)
         )
 
-        #expect(outcome.stdout.contains("service: down"))
-        #expect(outcome.stdout.contains("service: not installed") == false)
-        #expect(outcome.stdout.contains("service: running") == false)
+        #expect(outcome.stdout.contains("down"))
+        #expect(outcome.stdout.contains("not installed") == false)
+        #expect(outcome.stdout.contains("running       ") == false)
     }
 }
 
@@ -559,9 +565,9 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
             appearance: .pretty(colorOffPalette)
         )
 
-        #expect(outcome.stdout.contains("service: skew"))
-        #expect(outcome.stdout.contains("service: running") == false)
-        #expect(outcome.stdout.contains("service-warning: service reported an error"))
+        #expect(outcome.stdout.contains("skew"))
+        #expect(outcome.stdout.contains("running       ") == false)
+        #expect(outcome.stdout.contains("service reported an error"))
         #expect(outcome.stdout.contains("peer supplied detail") == false)
     }
 }

@@ -17,6 +17,11 @@ private func installScriptURL() -> URL {
     #expect(text.localizedCaseInsensitiveContains("brew") == false)
 }
 
+@Test func installSh_setsRVFromInstallBeforeSetup() throws {
+    let text = try String(contentsOf: installScriptURL(), encoding: .utf8)
+    #expect(text.contains("RV_FROM_INSTALL=1 exec"))
+}
+
 @Test func readme_hasNoBrewInstallPath() throws {
     let text = try String(
         contentsOf: repoRootURL().appendingPathComponent("README.md"),
