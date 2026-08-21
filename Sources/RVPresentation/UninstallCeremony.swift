@@ -9,15 +9,43 @@ public let uninstallOccupiedClause = "left occupied"
 public let uninstallCeremonyHostRemoveNs: UInt64 = 220_000_000
 public let uninstallCeremonyPhaseGapNs: UInt64 = 280_000_000
 
-/// Builds the uninstall show from which hosts were deleted vs left occupied.
+/// Builds the uninstall show from host removals and whether any owned artifact was deleted.
+///
+/// `didRemoveAnything` is the robot closer contract: pretty must not claim
+/// `Uninstall complete` when nothing was deleted, and must not claim
+/// `Already clean` when config / binaries / LaunchAgent were removed with no host slots.
 public func uninstallCeremonyFrames(
     removed: Set<SetupHostKind>,
-    occupied: Set<SetupHostKind>
+    occupied: Set<SetupHostKind>,
+    didRemoveAnything: Bool
 ) -> [SetupCeremonyFrame] {
+    if didRemoveAnything == false {
+        if occupied.isEmpty {
+            return [
+                SetupCeremonyFrame(
+                    closerLines: [uninstallCeremonyAlreadyClean],
+                    pauseNanoseconds: 0
+                ),
+            ]
+        }
+        let slots = SetupHostKind.allCases.map { host in
+            occupied.contains(host)
+                ? SetupSlotView(host: host, kind: .occupied, clause: uninstallOccupiedClause)
+                : SetupSlotView(host: host, kind: .pending)
+        }
+        return [
+            SetupCeremonyFrame(
+                slots: slots,
+                closerLines: [uninstallCeremonyAlreadyClean],
+                pauseNanoseconds: 0
+            ),
+        ]
+    }
+
     if removed.isEmpty && occupied.isEmpty {
         return [
             SetupCeremonyFrame(
-                closerLines: [uninstallCeremonyAlreadyClean],
+                closerLines: [uninstallCeremonyCloser],
                 pauseNanoseconds: 0
             ),
         ]

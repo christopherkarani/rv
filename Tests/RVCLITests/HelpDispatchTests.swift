@@ -37,6 +37,12 @@ import RVTheme
     #expect(HelpDispatch.topic(arguments: ["setup"]) == nil)
 }
 
+@Test func helpTopic_forceIsSetupOnly() {
+    #expect(HelpDispatch.topic(arguments: ["setup", "--force", "--help"]) == .setup)
+    #expect(HelpDispatch.topic(arguments: ["doctor", "--force", "--help"]) == nil)
+    #expect(HelpDispatch.topic(arguments: ["explain", "--force", "--help"]) == nil)
+}
+
 @Test func helpTopic_unknownHelpPathFallsBackToRoot() {
     #expect(HelpDispatch.topic(arguments: ["help", "nope"]) == .root)
 }

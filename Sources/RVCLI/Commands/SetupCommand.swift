@@ -1,5 +1,4 @@
 import ArgumentParser
-import Darwin
 import Foundation
 import RVPresentation
 import RVTheme
@@ -30,37 +29,22 @@ struct Setup: ParsableCommand {
             FileHandle.standardError.write(Data("rv setup: HOME is not set\n".utf8))
             throw ExitCode(1)
         }
-        let appearance = CLIAppearance.resolve(
+        let resolved = CeremonyCLI.appearance(
             json: json,
             robot: robot,
             plain: plain,
             noColor: noColor
         )
-        let ceremonyKind = SetupCeremonyKind.fromInstallEnvironment()
-        let animate: Bool
-        if case .pretty = appearance {
-            animate = isatty(STDOUT_FILENO) != 0
-        } else {
-            animate = false
-        }
         let outcome = SetupRun.setup(
             env,
-            appearance: appearance,
-            ceremonyKind: ceremonyKind,
+            appearance: resolved.appearance,
+            ceremonyKind: SetupCeremonyKind.fromInstallEnvironment(),
             force: force,
             clock: LiveSetupCeremonyClock(),
-            animate: animate,
-            write: { chunk in
-                FileHandle.standardOutput.write(Data(chunk.utf8))
-            }
+            animate: resolved.animate,
+            write: CeremonyCLI.stdoutWriter()
         )
-        if outcome.emitted == false, outcome.stdout.isEmpty == false {
-            FileHandle.standardOutput.write(Data(outcome.stdout.utf8))
-        }
-        if outcome.stderr.isEmpty == false {
-            FileHandle.standardError.write(Data(outcome.stderr.utf8))
-        }
-        throw ExitCode(outcome.exitCode)
+        try CeremonyCLI.emit(outcome)
     }
 
     static func helpText() -> String {

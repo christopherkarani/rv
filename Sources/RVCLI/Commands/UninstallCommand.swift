@@ -1,7 +1,5 @@
 import ArgumentParser
-import Darwin
 import Foundation
-import RVPresentation
 import RVTheme
 
 struct Uninstall: ParsableCommand {
@@ -27,34 +25,20 @@ struct Uninstall: ParsableCommand {
             FileHandle.standardError.write(Data("rv uninstall: HOME is not set\n".utf8))
             throw ExitCode(1)
         }
-        let appearance = CLIAppearance.resolve(
+        let resolved = CeremonyCLI.appearance(
             json: json,
             robot: robot,
             plain: plain,
             noColor: noColor
         )
-        let animate: Bool
-        if case .pretty = appearance {
-            animate = isatty(STDOUT_FILENO) != 0
-        } else {
-            animate = false
-        }
         let outcome = SetupRun.uninstall(
             env,
-            appearance: appearance,
+            appearance: resolved.appearance,
             clock: LiveSetupCeremonyClock(),
-            animate: animate,
-            write: { chunk in
-                FileHandle.standardOutput.write(Data(chunk.utf8))
-            }
+            animate: resolved.animate,
+            write: CeremonyCLI.stdoutWriter()
         )
-        if outcome.emitted == false, outcome.stdout.isEmpty == false {
-            FileHandle.standardOutput.write(Data(outcome.stdout.utf8))
-        }
-        if outcome.stderr.isEmpty == false {
-            FileHandle.standardError.write(Data(outcome.stderr.utf8))
-        }
-        throw ExitCode(outcome.exitCode)
+        try CeremonyCLI.emit(outcome)
     }
 
     static func helpText() -> String {

@@ -95,7 +95,8 @@ enum SetupFormat {
         case .pretty(let palette):
             let frames = uninstallCeremonyFrames(
                 removed: report.removedHosts,
-                occupied: report.occupiedHosts
+                occupied: report.occupiedHosts,
+                didRemoveAnything: report.didRemoveAnything
             )
             return playCeremony(
                 frames: frames,

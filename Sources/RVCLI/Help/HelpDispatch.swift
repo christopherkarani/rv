@@ -90,7 +90,7 @@ public enum HelpDispatch {
         case "hook":
             return isHookPath(rest) ? .hook : nil
         case "setup":
-            return rest.allSatisfy(isFormatFlag) ? .setup : nil
+            return rest.allSatisfy(isSetupFlag) ? .setup : nil
         case "uninstall":
             return rest.allSatisfy(isFormatFlag) ? .uninstall : nil
         case "doctor":
@@ -108,11 +108,16 @@ public enum HelpDispatch {
 
     private static func isFormatFlag(_ token: String) -> Bool {
         switch token {
-        case "--json", "--robot", "--plain", "--no-color", "--force":
+        case "--json", "--robot", "--plain", "--no-color":
             return true
         default:
             return false
         }
+    }
+
+    /// `--force` is setup-only; do not treat it as a shared format flag.
+    private static func isSetupFlag(_ token: String) -> Bool {
+        token == "--force" || isFormatFlag(token)
     }
 
     private static func isTestFlag(_ token: String) -> Bool {

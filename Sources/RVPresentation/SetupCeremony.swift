@@ -131,7 +131,7 @@ public func setupCeremonyFrames(
             pauseNanoseconds: setupCeremonyHostWireNs
         )
     )
-    for (index, host) in SetupHostKind.allCases.enumerated() {
+    for index in SetupHostKind.allCases.indices {
         revealed[index] = finalSlots[index]
         frames.append(
             SetupCeremonyFrame(
@@ -140,7 +140,6 @@ public func setupCeremonyFrames(
                 pauseNanoseconds: setupCeremonyHostWireNs
             )
         )
-        _ = host
     }
 
     if hasWired {

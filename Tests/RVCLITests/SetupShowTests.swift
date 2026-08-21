@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import RVAnalytics
 import RVPresentation
 import RVTheme
 @testable import RVCLI
@@ -190,8 +191,29 @@ import RVTheme
         )
         #expect(outcome.exitCode == 0)
         #expect(outcome.stdout.contains("◦  Grok  left occupied"))
-        #expect(outcome.stdout.contains(uninstallCeremonyCloser))
+        #expect(outcome.stdout.contains(uninstallCeremonyAlreadyClean))
+        #expect(outcome.stdout.contains(uninstallCeremonyCloser) == false)
         #expect(try String(contentsOfFile: layout.grokHook, encoding: .utf8) == foreign)
+    }
+}
+
+@Test func uninstall_pretty_configOnly_claimsComplete() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(
+            atPath: layout.configDirectory,
+            withIntermediateDirectories: true
+        )
+        let configDir = URL(fileURLWithPath: layout.configDirectory, isDirectory: true)
+        let analytics = AnalyticsPaths(configDirectory: configDir)
+        try "x".write(to: analytics.configFile, atomically: true, encoding: .utf8)
+        let outcome = SetupRun.uninstall(
+            env(home: home, launchctl: launchctl),
+            appearance: .pretty(colorOffPalette)
+        )
+        #expect(outcome.exitCode == 0)
+        #expect(outcome.stdout.contains(uninstallCeremonyCloser))
+        #expect(outcome.stdout.contains(uninstallCeremonyAlreadyClean) == false)
+        #expect(FileManager.default.fileExists(atPath: analytics.configFile.path) == false)
     }
 }
 

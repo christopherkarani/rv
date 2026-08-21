@@ -47,6 +47,14 @@ enum SetupCeremonyPlayer {
             for line in lines {
                 write(clearLine() + line + "\n")
             }
+            // Shrinking frames (download → status) leave stale rows unless cleared.
+            if previousLineCount > lines.count {
+                let stale = previousLineCount - lines.count
+                for _ in 0..<stale {
+                    write(clearLine() + "\n")
+                }
+                write(cursorUp(stale))
+            }
             // FileHandle writes can buffer; without flush the TTY stays blank for the sleeps.
             fflush(stdout)
             previousLineCount = lines.count

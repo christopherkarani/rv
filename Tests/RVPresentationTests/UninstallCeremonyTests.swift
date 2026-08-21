@@ -2,16 +2,24 @@ import Testing
 @testable import RVPresentation
 
 @Test func uninstallCeremony_alreadyClean_singleCloser() {
-    let frames = uninstallCeremonyFrames(removed: [], occupied: [])
+    let frames = uninstallCeremonyFrames(removed: [], occupied: [], didRemoveAnything: false)
     #expect(frames.count == 1)
     #expect(frames[0].closerLines == [uninstallCeremonyAlreadyClean])
+    #expect(frames[0].slots.isEmpty)
+}
+
+@Test func uninstallCeremony_nonHostRemoval_completeWithoutSlots() {
+    let frames = uninstallCeremonyFrames(removed: [], occupied: [], didRemoveAnything: true)
+    #expect(frames.count == 1)
+    #expect(frames[0].closerLines == [uninstallCeremonyCloser])
     #expect(frames[0].slots.isEmpty)
 }
 
 @Test func uninstallCeremony_removesHostsInOrder() {
     let frames = uninstallCeremonyFrames(
         removed: [.grok, .openCode],
-        occupied: [.pi]
+        occupied: [.pi],
+        didRemoveAnything: true
     )
     #expect(frames.first?.title == uninstallCeremonyRemovingTitle)
     #expect(frames.first?.slots[0].kind == .wired)
@@ -31,9 +39,14 @@ import Testing
     #expect(frames.last?.slots.allSatisfy { $0.kind != .wired } == true)
 }
 
-@Test func uninstallCeremony_occupiedOnly_noHooksRemovedTick() {
-    let frames = uninstallCeremonyFrames(removed: [], occupied: [.grok])
+@Test func uninstallCeremony_occupiedOnly_alreadyCleanNotComplete() {
+    let frames = uninstallCeremonyFrames(
+        removed: [],
+        occupied: [.grok],
+        didRemoveAnything: false
+    )
     #expect(frames.contains { $0.statusLine == uninstallCeremonyHooksRemoved } == false)
-    #expect(frames.last?.closerLines == [uninstallCeremonyCloser])
+    #expect(frames.last?.closerLines == [uninstallCeremonyAlreadyClean])
     #expect(frames.last?.slots[0].kind == .occupied)
+    #expect(frames.last?.slots[0].clause == uninstallOccupiedClause)
 }
