@@ -35,7 +35,6 @@ struct Hook: AsyncParsableCommand {
         let client = ServiceClient()
         let outcome = await run(
             stdin: stdin,
-            environment: ProcessInfo.processInfo.environment,
             evaluate: { command, cwd in
                 await client.evaluateResult(command: command, cwd: cwd)
             }
@@ -49,7 +48,6 @@ struct Hook: AsyncParsableCommand {
 
     func run(
         stdin: String,
-        environment _: [String: String],
         evaluate: @Sendable (ShellCommand, String?) async -> EvaluationResult
     ) async -> (stdout: String, stderr: String, exitCode: Int32) {
         let wire: HookWire

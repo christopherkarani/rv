@@ -1,42 +1,49 @@
 import Testing
 @testable import RVPresentation
 
-@Test func setupViewModel_hostless_paintsHostlessCloser() {
-    let show = setupViewModel(grok: .pending, pi: .pending, openCode: .pending, wrote: [])
-    guard case .painted(let model) = show else {
-        Issue.record("expected painted hostless show")
-        return
-    }
-    #expect(model.slots.map(\.kind) == [.pending, .pending, .pending])
-    #expect(model.activity == setupLookingActivity)
-    #expect(model.closer == .hostless)
-    #expect(model.closer.title == "No hosts yet")
-    #expect(model.closer.next == "Next  rv setup")
+@Test func setupSlotSnapshot_hostless_usesHostlessCloserLines() {
+    let slots = SetupSlotSnapshot(grok: .pending, pi: .pending, openCode: .pending, wrote: [])
+    #expect(slots.closer == .hostless)
+    #expect(slots.slotViews.map(\.kind) == [.pending, .pending, .pending])
+    #expect(slots.closer.lines(kind: .setup) == [setupCeremonyHostlessTitle, setupCeremonyHostlessNext])
+    #expect(setupCeremonyFrames(slots, kind: .setup)?.last?.closerLines == slots.closer.lines(kind: .setup))
 }
 
-@Test func setupViewModel_wiredGrok_completeCloserAndReloadClause() {
-    let show = setupViewModel(grok: .wired, pi: .pending, openCode: .pending, wrote: [.grok])
-    guard case .painted(let model) = show else {
-        Issue.record("expected painted wired show")
-        return
-    }
-    #expect(model.slots[0] == SetupSlotView(host: .grok, kind: .wired, clause: setupGrokReloadClause))
-    #expect(model.activity == "wiring Grok")
-    #expect(model.closer == .complete)
-    #expect(model.closer.next.contains("rv test"))
+@Test func setupSlotSnapshot_wiredGrok_completeCloserAndReloadClause() {
+    let slots = SetupSlotSnapshot(grok: .wired, pi: .pending, openCode: .pending, wrote: [.grok])
+    #expect(slots.closer == .complete)
+    #expect(slots.slotViews[0] == SetupSlotView(host: .grok, kind: .wired, clause: setupGrokReloadClause))
+    #expect(slots.closer.lines(kind: .setup) == [setupCeremonyHooksWired])
+    #expect(slots.closer.lines(kind: .install) == [setupCeremonyInstallCloser])
+    #expect(setupCeremonyFrames(slots, kind: .setup)?.last?.closerLines == slots.closer.lines(kind: .setup))
+    #expect(setupCeremonyFrames(slots, kind: .install)?.last?.closerLines == slots.closer.lines(kind: .install))
 }
 
-@Test func setupViewModel_occupiedOnly_neverComplete() {
-    let show = setupViewModel(grok: .occupied, pi: .pending, openCode: .pending, wrote: [])
-    guard case .painted(let model) = show else {
-        Issue.record("expected painted occupied-only show")
-        return
-    }
-    #expect(model.slots[0].clause == setupOccupiedClause)
-    #expect(model.closer == .hostless)
+@Test func setupSlotSnapshot_occupiedOnly_neverComplete() {
+    let slots = SetupSlotSnapshot(grok: .occupied, pi: .pending, openCode: .pending, wrote: [])
+    #expect(slots.isQuiet == false)
+    #expect(slots.closer == .hostless)
+    #expect(slots.slotViews[0].clause == setupOccupiedClause)
+    #expect(setupCeremonyFrames(slots, kind: .setup)?.last?.closerLines == slots.closer.lines(kind: .setup))
 }
 
-@Test func setupViewModel_secondMatchingRun_isQuiet() {
-    let show = setupViewModel(grok: .wired, pi: .pending, openCode: .pending, wrote: [])
-    #expect(show == .quiet)
+@Test func setupSlotSnapshot_secondMatchingRun_isQuiet() {
+    let slots = SetupSlotSnapshot(grok: .wired, pi: .pending, openCode: .pending, wrote: [])
+    #expect(slots.isQuiet)
+    #expect(setupCeremonyFrames(slots, kind: .setup) == nil)
+}
+
+@Test func setupSlotSnapshot_quietAndCloserAreOneRule() {
+    let quiet = SetupSlotSnapshot(grok: .wired, pi: .pending, openCode: .pending, wrote: [])
+    #expect(quiet.isQuiet)
+    #expect(setupCeremonyFrames(quiet, kind: .setup) == nil)
+
+    let occupied = SetupSlotSnapshot(grok: .occupied, pi: .pending, openCode: .pending, wrote: [])
+    #expect(occupied.isQuiet == false)
+    #expect(occupied.closer == .hostless)
+
+    let wired = SetupSlotSnapshot(grok: .wired, pi: .pending, openCode: .pending, wrote: [.grok])
+    #expect(wired.isQuiet == false)
+    #expect(wired.closer == .complete)
+    #expect(wired.hasWiredSlot)
 }

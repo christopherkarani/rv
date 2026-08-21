@@ -23,7 +23,8 @@ func env(
     pathEntries: [String] = [],
     rvPath: String = "/tmp/rv-bin/rv",
     rvdPath: String? = nil,
-    touchLaunchd: Bool = true
+    touchLaunchd: Bool = true,
+    installAnalytics: any InstallAnalyticsCapturing = SilentInstallAnalytics()
 ) -> SetupEnvironment {
     SetupEnvironment(
         home: home.path,
@@ -32,7 +33,8 @@ func env(
         rvdPath: rvdPath ?? home.appendingPathComponent("rvd").path,
         fileManager: .default,
         launchctl: launchctl,
-        touchLaunchd: touchLaunchd
+        touchLaunchd: touchLaunchd,
+        installAnalytics: installAnalytics
     )
 }
 
@@ -66,6 +68,11 @@ private func realGrokHookURL() -> URL? {
         #expect(plist.contains("<key>KeepAlive</key>"))
         #expect(plist.contains("<false/>"))
         #expect(launchctl.bootstraps.count == 1)
+        let analytics = AnalyticsPaths(
+            configDirectory: URL(fileURLWithPath: layout.configDirectory, isDirectory: true)
+        )
+        #expect(FileManager.default.fileExists(atPath: analytics.identityFile.path) == false)
+        #expect(FileManager.default.fileExists(atPath: analytics.hostsFile.path) == false)
     }
     let realAfter = realGrokHookURL().flatMap { try? Data(contentsOf: $0) }
     #expect(realBefore == realAfter)

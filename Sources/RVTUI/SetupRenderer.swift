@@ -42,18 +42,6 @@ public struct SetupRenderer: Sendable {
         return lines.map { $0.isEmpty ? $0 : Self.leadingPad + $0 }
     }
 
-    /// Legacy static three-slot show (tests / fallback).
-    public func render(_ model: SetupViewModel, palette: Palette) -> [String] {
-        render(
-            SetupCeremonyFrame(
-                activity: model.activity,
-                slots: model.slots,
-                closerLines: [model.closer.title, model.closer.next]
-            ),
-            palette: palette
-        )
-    }
-
     private func activityLine(_ model: SetupCeremonyFrame, palette: Palette) -> String {
         let spin: String
         if let index = model.spinnerIndex {
