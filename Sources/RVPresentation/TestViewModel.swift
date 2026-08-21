@@ -14,6 +14,7 @@ public struct TestViewModel: Equatable, Sendable {
     public var resultWord: String
     public var resultTone: DecisionTone
     public var columns: Int
+    public var deny: DenyViewModel?
 
     public init(
         command: ShellCommand,
@@ -26,7 +27,8 @@ public struct TestViewModel: Equatable, Sendable {
         source: String? = nil,
         resultWord: String,
         resultTone: DecisionTone,
-        columns: Int = 80
+        columns: Int = 80,
+        deny: DenyViewModel? = nil
     ) {
         self.command = command
         self.span = span
@@ -39,6 +41,7 @@ public struct TestViewModel: Equatable, Sendable {
         self.resultWord = resultWord
         self.resultTone = resultTone
         self.columns = max(16, columns)
+        self.deny = deny
     }
 }
 
@@ -88,6 +91,7 @@ public func testViewModel(
 ) -> TestViewModel {
     let resultWord = testResultWord(result.decision)
     let tone = decisionTone(result.decision)
+    let deny = denyViewModel(from: result, command: command)
     switch result.decision {
     case .allow:
         return TestViewModel(
@@ -101,9 +105,10 @@ public func testViewModel(
             matchedLabel: result.matched.map { $0.ruleID.rawValue },
             resultWord: resultWord,
             resultTone: tone,
-            columns: columns
+            columns: columns,
+            deny: deny
         )
-    case .deny(let deny):
+    case .deny(let payload):
         let matched = result.matched
         return TestViewModel(
             command: command,
@@ -113,15 +118,16 @@ public func testViewModel(
                 searchText: matched?.searchText,
                 onto: command.rawValue
             ),
-            matchedLabel: (matched?.ruleID ?? deny.ruleID).rawValue,
-            packDisplay: deny.ruleID.pack.rawValue,
-            patternName: deny.ruleID.pattern,
-            reason: deny.reason,
+            matchedLabel: (matched?.ruleID ?? deny?.ruleID ?? payload.ruleID).rawValue,
+            packDisplay: deny?.packID.rawValue ?? payload.ruleID.pack.rawValue,
+            patternName: deny?.ruleID.pattern ?? payload.ruleID.pattern,
+            reason: deny?.packReason ?? payload.reason,
             explanation: matched?.explanation,
             source: testMatchSource,
             resultWord: resultWord,
             resultTone: tone,
-            columns: columns
+            columns: columns,
+            deny: deny
         )
     case .indeterminate:
         return TestViewModel(
@@ -129,7 +135,8 @@ public func testViewModel(
             reason: incompleteEvalSentence,
             resultWord: resultWord,
             resultTone: tone,
-            columns: columns
+            columns: columns,
+            deny: deny
         )
     }
 }

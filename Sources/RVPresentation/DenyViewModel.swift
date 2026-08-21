@@ -11,6 +11,14 @@ public struct DenyViewModel: Equatable, Sendable {
 
     public var ruleDisplay: String { displayRuleID(ruleID) }
 
+    /// Full pack reason for pretty `rv test`. Host and explain use `fact`.
+    public var packReason: String {
+        if case .deny(let deny) = decision {
+            return deny.reason
+        }
+        return fact
+    }
+
     public init(
         decision: Decision,
         command: ShellCommand,

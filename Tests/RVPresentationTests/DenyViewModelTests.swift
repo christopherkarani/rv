@@ -59,14 +59,15 @@ private func mediumAllow() -> EvaluationResult {
     #expect(denyViewModel(from: result, command: resetHard) == nil)
 }
 
-@Test func denyViewModel_factAndNextAction() {
-    let vm = denyViewModel(from: denyResult(), command: resetHard)
-    #expect(vm != nil)
-    #expect(vm?.fact == "git reset --hard destroys uncommitted changes")
-    #expect(vm?.nextAction == "run it in Terminal, or rv allow-once")
-    #expect(vm?.ruleID.rawValue == "core.git:reset-hard")
-    #expect(displayRuleID(vm!.ruleID) == "core.git/reset-hard")
-    #expect(vm?.ruleDisplay == "core.git/reset-hard")
+@Test func denyViewModel_factAndNextAction() throws {
+    let reason = "git reset --hard destroys uncommitted changes. Use 'git stash' first."
+    let vm = try #require(denyViewModel(from: denyResult(reason: reason), command: resetHard))
+    #expect(vm.fact == "git reset --hard destroys uncommitted changes")
+    #expect(vm.packReason == reason)
+    #expect(vm.nextAction == "run it in Terminal, or rv allow-once")
+    #expect(vm.ruleID.rawValue == "core.git:reset-hard")
+    #expect(displayRuleID(vm.ruleID) == "core.git/reset-hard")
+    #expect(vm.ruleDisplay == "core.git/reset-hard")
 }
 
 @Test func explainViewModel_allowHasNoNextAction() {
@@ -93,7 +94,7 @@ private func mediumAllow() -> EvaluationResult {
     )
 }
 
-@Test func testViewModel_denyShowsPackReasonAndColonMatch() {
+@Test func testViewModel_denyShowsPackReasonAndColonMatch() throws {
     let reason = "git reset --hard destroys uncommitted changes. Use 'git stash' first."
     let result = EvaluationResult(
         decision: .deny(
@@ -110,12 +111,15 @@ private func mediumAllow() -> EvaluationResult {
             matchedText: "git reset --hard"
         )
     )
+    let deny = try #require(denyViewModel(from: result, command: resetHard))
     let vm = testViewModel(from: result, command: resetHard)
+    #expect(vm.deny == deny)
     #expect(vm.resultWord == "BLOCKED")
     #expect(vm.resultTone == .deny)
-    #expect(vm.packDisplay == "core.git")
-    #expect(vm.patternName == "reset-hard")
+    #expect(vm.packDisplay == deny.packID.rawValue)
+    #expect(vm.patternName == deny.ruleID.pattern)
     #expect(vm.matchedLabel == "core.git:reset-hard")
+    #expect(vm.reason == deny.packReason)
     #expect(vm.reason == reason)
     #expect(vm.explanation == resetHardExplanation)
     #expect(vm.source == "pack")
@@ -124,6 +128,7 @@ private func mediumAllow() -> EvaluationResult {
 
 @Test func testViewModel_allowIsCommandAndAllowed() {
     let vm = testViewModel(from: EvaluationResult(decision: .allow), command: status)
+    #expect(vm.deny == nil)
     #expect(vm.resultWord == "ALLOWED")
     #expect(vm.packDisplay == nil)
     #expect(vm.reason == nil)
@@ -134,6 +139,7 @@ private func mediumAllow() -> EvaluationResult {
 @Test func testViewModel_mediumAllowKeepsCaretOmitsPackEssay() {
     let result = mediumAllow()
     let vm = testViewModel(from: result, command: stashDrop)
+    #expect(vm.deny == nil)
     #expect(vm.resultWord == "ALLOWED")
     #expect(vm.matchedLabel == "core.git:stash-drop")
     #expect(vm.packDisplay == nil)
@@ -146,6 +152,7 @@ private func mediumAllow() -> EvaluationResult {
         from: EvaluationResult(decision: .indeterminate(.commandTooLarge)),
         command: resetHard
     )
+    #expect(vm.deny == nil)
     #expect(vm.resultWord == "INCOMPLETE")
     #expect(vm.reason == incompleteEvalSentence)
     #expect(vm.source == nil)
