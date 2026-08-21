@@ -14,6 +14,7 @@ public struct TestViewModel: Equatable, Sendable {
     public var resultWord: String
     public var resultTone: DecisionTone
     public var columns: Int
+    public var deny: DenyViewModel?
 
     public init(
         command: ShellCommand,
@@ -26,7 +27,8 @@ public struct TestViewModel: Equatable, Sendable {
         source: String? = nil,
         resultWord: String,
         resultTone: DecisionTone,
-        columns: Int = 80
+        columns: Int = 80,
+        deny: DenyViewModel? = nil
     ) {
         self.command = command
         self.span = span
@@ -39,6 +41,7 @@ public struct TestViewModel: Equatable, Sendable {
         self.resultWord = resultWord
         self.resultTone = resultTone
         self.columns = max(16, columns)
+        self.deny = deny
     }
 }
 
@@ -110,7 +113,8 @@ public func testViewModel(
             resultTone: tone,
             columns: columns
         )
-    case .deny(let deny, let matched):
+    case .deny(let payload, let matched):
+        let deny = denyViewModel(payload, command: command)
         return TestViewModel(
             command: command,
             span: remapMatchSpan(
@@ -120,14 +124,15 @@ public func testViewModel(
                 onto: command.rawValue
             ),
             matchedLabel: (matched?.ruleID ?? deny.ruleID).rawValue,
-            packDisplay: deny.ruleID.pack.rawValue,
+            packDisplay: deny.packID.rawValue,
             patternName: deny.ruleID.pattern,
-            reason: deny.reason,
+            reason: deny.packReason,
             explanation: matched?.explanation,
             source: testMatchSource,
             resultWord: resultWord,
             resultTone: tone,
-            columns: columns
+            columns: columns,
+            deny: deny
         )
     case .indeterminate:
         return TestViewModel(
