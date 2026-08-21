@@ -84,8 +84,8 @@ private final class EncodeDenySpy: HostCodec, @unchecked Sendable {
     var host: HookHost { .grok }
     private(set) var denyCalls: [(reason: String, rule: String?, next: String?)] = []
 
-    func decode(_ stdin: String) -> HookRequest {
-        HookRequest(host: .grok, command: nil)
+    func decode(_ stdin: String) -> HookDecodeOutcome {
+        .malformed(.missingCommand)
     }
 
     func encodeDeny(reason: String, rule: String?, next: String?) -> HookWire {
@@ -98,7 +98,10 @@ private final class EncodeDenySpy: HostCodec, @unchecked Sendable {
     let stdin = """
     {"hookEventName":"pre_tool_use","cwd":"/tmp/ws","toolName":"run_terminal_command","toolInput":{"command":"git status"}}
     """
-    let request = GrokHostCodec().decode(stdin)
-    #expect(request.command?.rawValue == "git status")
+    guard case .request(let request) = GrokHostCodec().decode(stdin) else {
+        Issue.record("expected .request for cwd stdin")
+        return
+    }
+    #expect(request.command.rawValue == "git status")
     #expect(request.cwd == "/tmp/ws")
 }

@@ -9,20 +9,20 @@ public struct OpenCodeHostCodec: HostCodec {
     /// Creates an OpenCode adapter codec.
     public init() {}
 
-    /// Decodes adapter stdin; `command` is nil for non-bash or unreadable stdin.
-    public func decode(_ stdin: String) -> HookRequest {
+    /// Decodes adapter stdin into a classified outcome.
+    public func decode(_ stdin: String) -> HookDecodeOutcome {
         guard let data = stdin.data(using: .utf8),
               let envelope = try? JSONDecoder().decode(OpenCodeEnvelope.self, from: data)
         else {
-            return HookRequest(host: .opencode, command: nil)
+            return .malformed(.unreadable)
         }
         guard envelope.tool == "bash" else {
-            return HookRequest(host: .opencode, command: nil)
+            return .foreign
         }
         guard let command = envelope.args?.command, command.isEmpty == false else {
-            return HookRequest(host: .opencode, command: nil)
+            return .malformed(.missingCommand)
         }
-        return HookRequest(host: .opencode, command: ShellCommand(rawValue: command))
+        return .request(HookRequest(host: .opencode, command: ShellCommand(rawValue: command)))
     }
 }
 
