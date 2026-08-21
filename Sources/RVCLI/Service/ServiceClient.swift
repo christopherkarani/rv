@@ -237,10 +237,12 @@ public struct ServiceClient: Sendable {
             return .majorVersionMismatch
         }
         if ack.ok == false {
-            if ack.skewReason == "core packs unavailable" {
+            switch ack.skewReason {
+            case .corePacksUnavailable:
                 return .corePacksUnavailable
+            case .protocolSkew, nil:
+                return .rejected
             }
-            return .rejected
         }
         return nil
     }

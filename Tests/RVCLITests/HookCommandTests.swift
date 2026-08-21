@@ -186,7 +186,7 @@ private func runHook<C: HostCodec>(
             protocolName: "rv.ipc.v0",
             serviceSemver: "1.0.0",
             ok: false,
-            skewReason: "protocol"
+            skewReason: .protocolSkew
         )
     )
     let client = try isolatedClient(transport: transport)
