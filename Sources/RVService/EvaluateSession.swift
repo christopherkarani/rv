@@ -2,6 +2,7 @@ import Foundation
 import RVDomain
 import RVEngine
 import RVPacks
+import RVPolicy
 
 public struct EvaluateSession: Sendable {
     public let corePacksReady: Bool
@@ -27,7 +28,7 @@ public struct EvaluateSession: Sendable {
         } else {
             // Config extras plus day-one. Catalog disable of core must not
             // uncompile required rules (request evaluate set stays day-one).
-            var ids = (try? PacksFacade.effectiveIDs(home: processHOME())) ?? dayOnePackIDs
+            var ids = EnabledPacks.resolve(home: HomeDirectory.process())
             for id in dayOnePackIDs where !ids.contains(id) {
                 ids.append(id)
             }
@@ -84,8 +85,4 @@ private func callEngineEvaluate(
     compiled: CompiledPacks<ICUCompiledPattern>
 ) -> EvaluationResult {
     evaluate(request, packs: packs, patterns: engine, compiled: compiled)
-}
-
-private func processHOME() -> String {
-    ProcessInfo.processInfo.environment["HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? ""
 }

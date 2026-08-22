@@ -28,8 +28,8 @@ public enum RVPolicyPaths: Sendable {
     }
 
     /// `$HOME/.config/rv` from process `HOME` only. Never reads `XDG_CONFIG_HOME`.
-    public static func configDirectory(home: String) -> URL {
-        URL(fileURLWithPath: home, isDirectory: true)
+    public static func configDirectory(home: HomeDirectory) -> URL {
+        URL(fileURLWithPath: home.rawValue, isDirectory: true)
             .appendingPathComponent(".config", isDirectory: true)
             .appendingPathComponent("rv", isDirectory: true)
     }

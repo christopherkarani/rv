@@ -3,6 +3,7 @@ import Testing
 import RVDomain
 import RVIPC
 import RVPacks
+import RVPolicy
 @testable import RVService
 
 struct EnabledCompileTests {
@@ -91,7 +92,7 @@ struct EnabledCompileTests {
 
     @Test func directConfigEditIsPickedUpByWarmRuntimeEvaluate() async throws {
         let home = try temporaryCompileHome()
-        defer { try? FileManager.default.removeItem(atPath: home) }
+        defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
         let sqlite = PackID(rawValue: "database.sqlite")
         let runtime = ServiceRuntime(
             home: home,
@@ -132,7 +133,7 @@ struct EnabledCompileTests {
 
     @Test func directConfigEditIsHealedByListPacksCoverageCheck() async throws {
         let home = try temporaryCompileHome()
-        defer { try? FileManager.default.removeItem(atPath: home) }
+        defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
         let sqlite = PackID(rawValue: "database.sqlite")
         let runtime = ServiceRuntime(
             home: home,
@@ -151,7 +152,7 @@ struct EnabledCompileTests {
 
     @Test func setPackEnabledGrowsAndShrinksCompiledPackIDs() async throws {
         let home = try temporaryCompileHome()
-        defer { try? FileManager.default.removeItem(atPath: home) }
+        defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
         let sqlite = PackID(rawValue: "database.sqlite")
         let runtime = ServiceRuntime(
             home: home,
@@ -202,9 +203,9 @@ struct EnabledCompileTests {
     }
 }
 
-private func temporaryCompileHome() throws -> String {
+private func temporaryCompileHome() throws -> HomeDirectory {
     let url = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-t11-compile-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-    return url.path
+    return try #require(HomeDirectory(validating: url.path))
 }
