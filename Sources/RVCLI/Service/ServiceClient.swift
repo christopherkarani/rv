@@ -18,26 +18,31 @@ public struct ServiceClient: Sendable {
     private let transport: (any ServiceTransport)?
     private let door: GatedEvaluate
     private let store: AllowOnceStore
+    private let home: String?
 
     public init(
         transport: (any ServiceTransport)? = XPCServiceTransport(),
         session: EvaluateSession? = nil,
         store: AllowOnceStore? = nil,
-        allowOnceDirectory: URL? = nil
+        allowOnceDirectory: URL? = nil,
+        home: String? = ProcessInfo.processInfo.environment["HOME"].flatMap { $0.isEmpty ? nil : $0 }
     ) {
         self.transport = transport
         self.door = session.map(GatedEvaluate.init) ?? GatedEvaluate()
         self.store = Self.resolveStore(store: store, allowOnceDirectory: allowOnceDirectory)
+        self.home = home
     }
 
     public static func missingCore(
         transport: (any ServiceTransport)? = nil,
         allowOnceDirectory: URL? = nil
     ) -> ServiceClient {
-        ServiceClient(
+        let sandbox = isolatedFactoryDirectory()
+        return ServiceClient(
             transport: transport,
             session: .missingCore,
-            allowOnceDirectory: allowOnceDirectory ?? isolatedFactoryDirectory()
+            allowOnceDirectory: allowOnceDirectory ?? sandbox,
+            home: sandbox.path
         )
     }
 
@@ -45,10 +50,12 @@ public struct ServiceClient: Sendable {
         transport: (any ServiceTransport)? = nil,
         allowOnceDirectory: URL? = nil
     ) -> ServiceClient {
-        ServiceClient(
+        let sandbox = isolatedFactoryDirectory()
+        return ServiceClient(
             transport: transport,
             session: .uncompilableCore,
-            allowOnceDirectory: allowOnceDirectory ?? isolatedFactoryDirectory()
+            allowOnceDirectory: allowOnceDirectory ?? sandbox,
+            home: sandbox.path
         )
     }
 
@@ -63,6 +70,7 @@ public struct ServiceClient: Sendable {
                     .apply,
                     command: command,
                     cwd: cwd,
+                    home: home,
                     store: store,
                     now: Date()
                 ),
@@ -72,7 +80,7 @@ public struct ServiceClient: Sendable {
         switch await route() {
         case .xpc(let transport, _):
             do {
-                let request = GatedEvaluate.makeRequest(command: command)
+                let request = GatedEvaluate.makeRequest(command: command, home: home)
                 let body = try IPCJSON.encode(
                     IPCRequest(method: .evaluate(EvaluateParams(request: request, cwd: cwd)))
                 )
