@@ -10,29 +10,44 @@ public actor ServiceRuntime {
     public let corePacksReady: Bool
     public let idleExitSeconds: Int
 
-    private let gated: GatedEvaluate
+    private var gated: GatedEvaluate
     private var catalog: PackCatalog
+    private let sessionSnapshots: [PackSnapshot]
+    private let configHome: String
     private let allowOnce: AllowOnceStore
     private let log: (any ServiceLog)?
     private let analytics: AnalyticsCoordinator?
 
+    package private(set) var compiledPackIDs: [PackID]
+
     public init(
         snapshots: [PackSnapshot]? = nil,
         catalog: PackCatalog? = nil,
+        home: String? = nil,
         allowOnce: AllowOnceStore? = nil,
         allowOnceDirectory: URL? = nil,
         idleExitSeconds: Int = IdleWatchdog.defaultSeconds,
         log: (any ServiceLog)? = nil,
         analytics: AnalyticsCoordinator? = nil
     ) {
-        let gated = GatedEvaluate(EvaluateSession(snapshots: snapshots))
-        self.gated = gated
-        self.corePacksReady = gated.corePacksReady
+        let resolvedHome = home ?? processHOME()
+        self.configHome = resolvedHome
         if let catalog {
             self.catalog = catalog
         } else {
-            self.catalog = (try? PacksFacade.makeCatalog(home: EnabledPacks.processHome())) ?? PackCatalog()
+            self.catalog = (try? PacksFacade.makeCatalog(home: resolvedHome)) ?? PackCatalog()
         }
+        let loaded = snapshots
+            ?? ((try? PackRegistry.loadAll()) ?? ((try? PackRegistry.loadDayOne()) ?? []))
+        self.sessionSnapshots = loaded
+        let session = EvaluateSession(
+            snapshots: loaded,
+            enabledPacks: Self.compileEnabledIDs(from: self.catalog)
+        )
+        self.compiledPackIDs = session.compiledPackIDs
+        let gated = GatedEvaluate(session)
+        self.gated = gated
+        self.corePacksReady = gated.corePacksReady
         if let allowOnce {
             self.allowOnce = allowOnce
         } else if let allowOnceDirectory {
@@ -49,6 +64,12 @@ public actor ServiceRuntime {
         if hello.protocolName != ProtocolVersion.name {
             return HelloAck(ok: false, skewReason: .protocolSkew)
         }
+        if ProtocolVersion.isMajorSkew(
+            clientSemver: hello.clientSemver,
+            serviceSemver: ProtocolVersion.serviceSemver
+        ) {
+            return HelloAck(ok: false, skewReason: .majorVersion)
+        }
         if !corePacksReady {
             return HelloAck(ok: false, skewReason: .corePacksUnavailable)
         }
@@ -61,13 +82,8 @@ public actor ServiceRuntime {
             let data = (try? IPCJSON.encode(ack)) ?? Data()
             return (data, ack.ok)
         }
-        guard handshakeOK else {
-            let response = IPCResponse(
-                id: UUID(),
-                result: .error(.protocolSkew("handshake required"))
-            )
-            let data = (try? IPCJSON.encode(response)) ?? Data()
-            return (data, false)
+        if handshakeOK == false {
+            return await handleUnreadyIncoming(body)
         }
         do {
             let request = try IPCJSON.decode(IPCRequest.self, from: body)
@@ -77,6 +93,33 @@ public actor ServiceRuntime {
             let response = IPCResponse(id: UUID(), result: .error(.decodeFailed))
             return ((try? IPCJSON.encode(response)) ?? Data(), true)
         }
+    }
+
+    /// Implicit hello on first evaluate when `clientSemver` is set. Old clients Hello first.
+    private func handleUnreadyIncoming(_ body: Data) async -> (Data, Bool) {
+        if let request = try? IPCJSON.decode(IPCRequest.self, from: body),
+           case .evaluate(let params) = request.method,
+           let clientSemver = params.clientSemver,
+           clientSemver.isEmpty == false
+        {
+            let hello = Hello(protocolName: request.protocolName, clientSemver: clientSemver)
+            let ack = acknowledge(hello)
+            if ack.ok == false {
+                let response = IPCResponse(
+                    id: request.id,
+                    result: .error(.protocolSkew(ack.skewReason?.rawValue ?? "protocol"))
+                )
+                return ((try? IPCJSON.encode(response)) ?? Data(), false)
+            }
+            let response = await dispatch(request)
+            return ((try? IPCJSON.encode(response)) ?? Data(), true)
+        }
+        let response = IPCResponse(
+            id: UUID(),
+            result: .error(.protocolSkew("handshake required"))
+        )
+        let data = (try? IPCJSON.encode(response)) ?? Data()
+        return (data, false)
     }
 
     public func dispatch(_ request: IPCRequest) async -> IPCResponse {
@@ -241,17 +284,17 @@ public actor ServiceRuntime {
     }
 
     private func setPackEnabled(_ params: SetPackEnabledParams) -> IPCResult {
-        let home = EnabledPacks.processHome()
         do {
             if params.enabled {
-                _ = try PacksFacade.enable(home: home, ids: [params.id.rawValue])
+                _ = try PacksFacade.enable(home: configHome, ids: [params.id.rawValue])
             } else {
-                _ = try PacksFacade.disable(home: home, ids: [params.id.rawValue])
+                _ = try PacksFacade.disable(home: configHome, ids: [params.id.rawValue])
             }
-            catalog = try PacksFacade.makeCatalog(home: home)
+            catalog = try PacksFacade.makeCatalog(home: configHome)
             guard let updated = catalog.records.first(where: { $0.id == params.id }) else {
                 return .error(.packNotFound(params.id))
             }
+            rebuildGated()
             let packs = catalog.records.filter(\.enabled).map(\.id.rawValue)
             if let analytics {
                 Task {
@@ -337,4 +380,30 @@ public actor ServiceRuntime {
     private func elapsedMs(since start: DispatchTime) -> Double {
         Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000
     }
+
+    private func rebuildGated() {
+        let session = EvaluateSession(
+            snapshots: sessionSnapshots,
+            enabledPacks: Self.compileEnabledIDs(from: catalog)
+        )
+        compiledPackIDs = session.compiledPackIDs
+        gated = GatedEvaluate(session)
+    }
+
+    /// Catalog-enabled IDs, plus day-one so a catalog disable cannot uncompile
+    /// required core rules or change the request evaluate set.
+    private static func compileEnabledIDs(from catalog: PackCatalog) -> [PackID] {
+        if catalog.records.isEmpty {
+            return dayOnePackIDs
+        }
+        var ids = catalog.records.filter(\.enabled).map(\.id)
+        for id in dayOnePackIDs where !ids.contains(id) {
+            ids.append(id)
+        }
+        return ids
+    }
+}
+
+private func processHOME() -> String {
+    ProcessInfo.processInfo.environment["HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? ""
 }

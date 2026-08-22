@@ -12,6 +12,10 @@ enum RVEntry {
         if HelpDispatch.tryEmit(arguments: args) {
             return
         }
+        if HookDispatch.matches(args) {
+            await HookDispatch.run(arguments: Array(args.dropFirst()))
+            return
+        }
         await RV.main()
     }
 }

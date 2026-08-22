@@ -4,18 +4,33 @@ import RVDomain
 public struct EvaluateParams: Sendable, Equatable, Codable {
     public var request: EvaluationRequest
     public var cwd: String?
+    /// Additive `rv.ipc.v1` field. Old clients omit it and Hello first.
+    public var clientSemver: String?
 
-    public init(request: EvaluationRequest, cwd: String? = nil) {
+    public init(request: EvaluationRequest, cwd: String? = nil, clientSemver: String? = nil) {
         self.request = request
         self.cwd = RequestCwdCoding.nonempty(cwd)
+        self.clientSemver = clientSemver
     }
 
     public init(from decoder: Decoder) throws {
-        (request, cwd) = try RequestCwdCoding.decode(from: decoder)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        request = try container.decode(EvaluationRequest.self, forKey: .request)
+        cwd = RequestCwdCoding.nonempty(try container.decodeIfPresent(String.self, forKey: .cwd))
+        clientSemver = try container.decodeIfPresent(String.self, forKey: .clientSemver)
     }
 
     public func encode(to encoder: Encoder) throws {
-        try RequestCwdCoding.encode(request: request, cwd: cwd, to: encoder)
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(request, forKey: .request)
+        try container.encodeIfPresent(cwd, forKey: .cwd)
+        try container.encodeIfPresent(clientSemver, forKey: .clientSemver)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case request
+        case cwd
+        case clientSemver
     }
 }
 
@@ -31,10 +46,14 @@ public enum EvaluationPath: String, Sendable, Equatable, Codable {
 public struct EvaluateReply: Sendable, Equatable, Codable {
     public var result: EvaluationResult
     public let via: EvaluationPath
+    /// Additive `rv.ipc.v1` field. Old replies omit it; the client then cannot
+    /// prove major skew on that frame and must fall back only when the value is present.
+    public var serviceSemver: String?
 
-    public init(result: EvaluationResult) {
+    public init(result: EvaluationResult, serviceSemver: String? = ProtocolVersion.serviceSemver) {
         self.result = result
         self.via = .xpc
+        self.serviceSemver = serviceSemver
     }
 
     public init(from decoder: Decoder) throws {
@@ -49,17 +68,20 @@ public struct EvaluateReply: Sendable, Equatable, Codable {
             )
         }
         via = decodedVia
+        serviceSemver = try container.decodeIfPresent(String.self, forKey: .serviceSemver)
     }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(result, forKey: .result)
         try container.encode(via, forKey: .via)
+        try container.encodeIfPresent(serviceSemver, forKey: .serviceSemver)
     }
 
     private enum CodingKeys: String, CodingKey {
         case result
         case via
+        case serviceSemver
     }
 }
 

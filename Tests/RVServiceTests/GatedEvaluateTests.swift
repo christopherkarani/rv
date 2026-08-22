@@ -52,11 +52,55 @@ struct GatedEvaluateTests {
         let applied = await gated.apply(request, cwd: "/tmp/ws", store: store, now: now)
         #expect(applied.decision == .allow)
     }
+
+    @Test func allowPathDoesNotCreateAllowlistFile() async throws {
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let gated = GatedEvaluate()
+        let request = stashDropRequest()
+
+        let peeked = await gated.peek(request, cwd: "/tmp/ws", store: store, now: now)
+        #expect(peeked.decision == .allow)
+        let applied = await gated.apply(request, cwd: "/tmp/ws", store: store, now: now)
+        #expect(applied.decision == .allow)
+
+        let allowlist = AllowlistStore(baseDirectory: store.baseDirectory).fileURL
+        #expect(FileManager.default.fileExists(atPath: allowlist.path) == false)
+    }
+
+    @Test func indeterminateIsNotAllowAndDoesNotHonor() async throws {
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        try await store.insertGranted(matchingView: "git reset --hard", cwd: "/tmp/ws", now: now)
+        let gated = GatedEvaluate(.missingCore)
+        let request = resetHardRequest()
+
+        let peeked = await gated.peek(request, cwd: "/tmp/ws", store: store, now: now)
+        #expect(peeked.decision == .indeterminate(.corePacksUnavailable))
+        let applied = await gated.apply(request, cwd: "/tmp/ws", store: store, now: now)
+        #expect(applied.decision == .indeterminate(.corePacksUnavailable))
+        let still = await store.consume(
+            matchingView: "git reset --hard",
+            cwd: "/tmp/ws",
+            now: now
+        )
+        guard case .consumed = still else {
+            Issue.record("indeterminate must not spend the grant")
+            return
+        }
+    }
 }
 
 private func resetHardRequest() -> EvaluationRequest {
     EvaluationRequest(
         command: ShellCommand(rawValue: "git reset --hard"),
+        enabledPacks: dayOnePackIDs
+    )
+}
+
+private func stashDropRequest() -> EvaluationRequest {
+    EvaluationRequest(
+        command: ShellCommand(rawValue: "git stash drop"),
         enabledPacks: dayOnePackIDs
     )
 }

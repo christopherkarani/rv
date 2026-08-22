@@ -1,6 +1,7 @@
 import Foundation
 import RVDomain
 import Testing
+import RVDomain
 import RVPolicy
 import RVService
 
@@ -82,6 +83,32 @@ import RVService
         #expect(text.contains("mode = \"dark\""))
         #expect(text.contains("[packs]"))
         #expect(text.contains("database.sqlite"))
+    }
+
+    @Test func effectiveIDs_emptyHomeIsDayOne() throws {
+        #expect(try PacksFacade.effectiveIDs(home: "") == dayOnePackIDs)
+    }
+
+    @Test func effectiveIDs_missingConfigTomlIsDayOne() throws {
+        let home = try temporaryHome()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        #expect(
+            FileManager.default.fileExists(atPath: PacksConfigStore.configURL(home: home).path)
+                == false
+        )
+        #expect(try PacksFacade.effectiveIDs(home: home) == dayOnePackIDs)
+    }
+
+    @Test func effectiveIDs_configTomlExtraPackIsIncluded() throws {
+        let home = try temporaryHome()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        try PacksConfigStore.save(
+            PacksConfig(enabled: ["database.sqlite"], disabled: []),
+            home: home
+        )
+        let ids = try PacksFacade.effectiveIDs(home: home)
+        #expect(Set(dayOnePackIDs).isSubset(of: Set(ids)))
+        #expect(ids.contains(PackID(rawValue: "database.sqlite")))
     }
 
     @Test func tokenRoundTrip_persistsOperatorStringsVerbatim() throws {

@@ -78,25 +78,32 @@ public struct GatedEvaluate: Sendable {
         now: Date
     ) async -> EvaluationResult {
         let result = session.evaluate(request)
-        let allowlist = AllowlistStore(baseDirectory: store.baseDirectory)
-            .loadUserSnapshot(workspacePath: cwd, now: now)
-        switch intent {
-        case .peek:
-            return await PolicyGate.peek(
-                result,
-                cwd: cwd,
-                allowlist: allowlist,
-                store: store,
-                now: now
-            ).result
-        case .apply:
-            return await PolicyGate.apply(
-                result,
-                cwd: cwd,
-                allowlist: allowlist,
-                store: store,
-                now: now
-            ).result
+        // Fast path: allow/indeterminate never touch PolicyGate or the
+        // allowlist snapshot; PolicyGate returns them unchanged anyway.
+        switch result.decision {
+        case .allow, .indeterminate:
+            return result
+        case .deny:
+            let allowlist = AllowlistStore(baseDirectory: store.baseDirectory)
+                .loadUserSnapshot(workspacePath: cwd, now: now)
+            switch intent {
+            case .peek:
+                return await PolicyGate.peek(
+                    result,
+                    cwd: cwd,
+                    allowlist: allowlist,
+                    store: store,
+                    now: now
+                ).result
+            case .apply:
+                return await PolicyGate.apply(
+                    result,
+                    cwd: cwd,
+                    allowlist: allowlist,
+                    store: store,
+                    now: now
+                ).result
+            }
         }
     }
 }

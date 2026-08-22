@@ -194,7 +194,8 @@ private func runHook<C: HostCodec>(
     let wire = try await runHook(stdin: try grokFixture("deny-git-reset-hard.json")) { command, _ in
         await client.evaluateResult(command: command)
     }
-    #expect(transport.sendCount == 0)
+    #expect(transport.sendCount == 1)
+    #expect(transport.helloCount == 0)
     try expectResetHardMapperDeny(wire, exit: expected.exit)
 }
 

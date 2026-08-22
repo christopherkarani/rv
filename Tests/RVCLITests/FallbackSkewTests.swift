@@ -1,5 +1,6 @@
 import Testing
 import RVDomain
+import RVIPC
 import RVPresentation
 @testable import RVCLI
 
@@ -18,7 +19,8 @@ struct FallbackSkewTests {
         let deny = try #require(denyPayload(from: reply.result.decision))
         #expect(deny.ruleID.rawValue == "core.git:reset-hard")
         #expect(reply.path == .inProcess)
-        #expect(transport.sendCount == 0)
+        #expect(transport.sendCount == 1)
+        #expect(transport.helloCount == 0)
 
         let health = ServiceHealth.inspect(await client.diagnostics())
         #expect(
@@ -41,14 +43,17 @@ struct FallbackSkewTests {
     }
 
     @Test func majorSemverMismatchIsSkew() async throws {
+        let allowed = EvaluationResult(outcome: .plain, matchingView: "git reset --hard")
         let transport = ScriptedTransport(
-            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "2.0.0", ok: true)
+            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "2.0.0", ok: true),
+            responseResult: .evaluate(EvaluateReply(result: allowed, serviceSemver: "2.0.0"))
         )
         let client = try isolatedClient(transport: transport)
         let reply = await client.evaluate(command: ShellCommand(rawValue: "git reset --hard"))
         #expect(reply.path == .inProcess)
         try #require(denyPayload(from: reply.result.decision) != nil)
-        #expect(transport.sendCount == 0)
+        #expect(transport.sendCount == 1)
+        #expect(transport.helloCount == 0)
         let status = await client.status()
         #expect(status.state == "skew")
     }

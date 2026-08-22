@@ -41,3 +41,13 @@ T2 ArgumentParser is the next real compile bill. Domain public-API edits today r
 - Tests use Swift Testing (`import Testing`). No XCTest.
 - Public surface stays small. Internals are `package` later.
 - No `try!` / IUO on production paths.
+
+## Release artifacts
+
+Measured on this machine 2026-08-21 after `tools/release.sh` (release config + `strip -x`). The pack bundle must travel with the binaries: SPM `Bundle.module` loads `rv_RVPacks.bundle` next to `rv` / `rvd`. Code-sign is not a gate (`strip -x` invalidates an existing signature).
+
+| Artifact | Size |
+|---|---|
+| staged `rv` | 2.3 MB (2,381,792 bytes) |
+| staged `rvd` | 886 KB (907,088 bytes) |
+| `rv_RVPacks.bundle` | 1.0 MB (100 files under `packs/`) |
