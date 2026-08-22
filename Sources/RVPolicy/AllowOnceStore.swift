@@ -16,10 +16,10 @@ public actor AllowOnceStore {
 
     /// Production config dir: `$HOME/.config/rv` only. Does not read `XDG_CONFIG_HOME`.
     nonisolated public static func processHomeConfigDirectory() -> URL? {
-        guard let home = ProcessInfo.processInfo.environment["HOME"], home.isEmpty == false else {
+        guard let home = HomeDirectory.process() else {
             return nil
         }
-        return URL(fileURLWithPath: home, isDirectory: true)
+        return URL(fileURLWithPath: home.rawValue, isDirectory: true)
             .appendingPathComponent(".config", isDirectory: true)
             .appendingPathComponent("rv", isDirectory: true)
     }

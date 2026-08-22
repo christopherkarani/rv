@@ -24,7 +24,7 @@ public struct GatedEvaluate: Sendable {
         _ intent: EvaluationIntent,
         command: ShellCommand,
         cwd: String?,
-        home: String? = nil,
+        home: HomeDirectory? = nil,
         store: AllowOnceStore,
         now: Date
     ) async -> EvaluationResult {
@@ -40,11 +40,11 @@ public struct GatedEvaluate: Sendable {
     /// HOME + effective pack IDs + day-one fallback. Shared by peek/apply and the XPC wire request.
     public static func makeRequest(
         command: ShellCommand,
-        home: String? = nil
+        home: HomeDirectory? = nil
     ) -> EvaluationRequest {
         EvaluationRequest(
             command: command,
-            enabledPacks: EnabledPacks.resolve(home: home ?? EnabledPacks.processHome())
+            enabledPacks: EnabledPacks.resolve(home: home ?? HomeDirectory.process())
         )
     }
 
