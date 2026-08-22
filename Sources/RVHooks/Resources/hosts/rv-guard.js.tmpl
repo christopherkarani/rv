@@ -226,8 +226,11 @@ async function invokeShowToast(ctx, payload) {
     return;
   }
   try {
-    await showToast(payload);
+    const wrapped = await showToast({ body: payload });
+    if (wrapped && wrapped.error) {
+      await showToast(payload);
+    }
   } catch {
-    await showToast({ body: payload });
+    await showToast(payload);
   }
 }

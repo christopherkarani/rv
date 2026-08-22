@@ -71,12 +71,13 @@ struct SetupEnvironment {
         )
     }
 
-    /// Curl install bakes `$HOME/.local/bin/rv`. Do not walk PATH.
+    /// Curl install copies `rv` (C hook), `rv-cli`, and `rvd`.
+    /// Adapters bake `$HOME/.local/bin/rv`, not `rv-cli`. Do not walk PATH.
     static func resolveRv(home: String) -> String {
         home + "/.local/bin/rv"
     }
 
-    /// Prefer `rvd` next to the running `rv`, then `$HOME/.local/bin/rvd`.
+    /// Prefer `rvd` next to the running `rv` / `rv-cli`, then `$HOME/.local/bin/rvd`.
     static func resolveRvd(
         nextTo rvExecutable: String?,
         home: String,
@@ -228,8 +229,12 @@ enum SetupRun {
         }
 
         let launchAgentExisted = files.fileExists(layout.launchAgent)
-        let binariesExisted = files.fileExists(layout.localRv) || files.fileExists(layout.localRvd)
-        removedPaths.append(contentsOf: [layout.launchAgent, layout.localRv, layout.localRvd])
+        let binariesExisted = files.fileExists(layout.localRv)
+            || files.fileExists(layout.localRvCli)
+            || files.fileExists(layout.localRvd)
+        removedPaths.append(
+            contentsOf: [layout.launchAgent, layout.localRv, layout.localRvCli, layout.localRvd]
+        )
 
         let configDir = URL(fileURLWithPath: layout.configDirectory, isDirectory: true)
         let analytics = AnalyticsPaths(configDirectory: configDir)

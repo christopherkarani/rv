@@ -280,6 +280,7 @@ private func fixtureLoginHome() throws -> URL {
             withIntermediateDirectories: true
         )
         try "bin".write(toFile: layout.localRv, atomically: true, encoding: .utf8)
+        try "bin".write(toFile: layout.localRvCli, atomically: true, encoding: .utf8)
         try "bin".write(toFile: layout.localRvd, atomically: true, encoding: .utf8)
         let outcome = SetupRun.uninstall(env(home: home, launchctl: launchctl))
         #expect(outcome.exitCode == 0)
@@ -288,6 +289,7 @@ private func fixtureLoginHome() throws -> URL {
         #expect(FileManager.default.fileExists(atPath: layout.launchAgent) == false)
         #expect(FileManager.default.fileExists(atPath: layout.configDirectory) == false)
         #expect(FileManager.default.fileExists(atPath: layout.localRv) == false)
+        #expect(FileManager.default.fileExists(atPath: layout.localRvCli) == false)
         #expect(FileManager.default.fileExists(atPath: layout.localRvd) == false)
         #expect(FileManager.default.fileExists(atPath: layout.grokDirectory + "/hooks/other.json"))
         #expect(FileManager.default.fileExists(atPath: layout.grokDirectory))
@@ -428,12 +430,41 @@ private func fixtureLoginHome() throws -> URL {
     #expect(plist.contains("<false/>"))
 }
 
+@Test func setup_bakesCHookPathNotRvCli() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(atPath: layout.grokDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(atPath: layout.piDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            atPath: layout.openCodeDirectory,
+            withIntermediateDirectories: true
+        )
+        let rvPath = layout.localRv
+        let outcome = SetupRun.setup(env(home: home, launchctl: launchctl, rvPath: rvPath))
+        #expect(outcome.exitCode == 0)
+        let grok = try String(contentsOfFile: layout.grokHook, encoding: .utf8)
+        let pi = try String(contentsOfFile: layout.piExtension, encoding: .utf8)
+        let openCode = try String(contentsOfFile: layout.openCodePlugin, encoding: .utf8)
+        #expect(grok.contains("\(rvPath) hook --host grok"))
+        #expect(pi.contains(rvPath))
+        #expect(pi.contains("\"hook\""))
+        #expect(pi.contains("\"--host\""))
+        #expect(openCode.contains(rvPath))
+        #expect(openCode.contains("\"hook\""))
+        #expect(openCode.contains("\"--host\""))
+        #expect(grok.contains("rv-cli") == false)
+        #expect(pi.contains("rv-cli") == false)
+        #expect(openCode.contains("rv-cli") == false)
+        #expect(layout.localRvCli.hasSuffix("/.local/bin/rv-cli"))
+    }
+}
+
 @Test func setup_resolveRv_ignoresPATH_bakesHomeLocalBin() throws {
-    try withTempHome { home, _, _ in
+    try withTempHome { home, layout, _ in
         let decoyDir = home.appendingPathComponent("cellar/bin", isDirectory: true)
         try makeExecutable(decoyDir.appendingPathComponent("rv"), contents: "decoy-rv")
         let resolved = SetupEnvironment.resolveRv(home: home.path)
         #expect(resolved == home.path + "/.local/bin/rv")
+        #expect(layout.localRvCli == home.path + "/.local/bin/rv-cli")
     }
 }
 

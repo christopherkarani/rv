@@ -301,7 +301,7 @@ Documented callback:
 | `input.tool` | Evaluate only `"bash"`. Skip `read`, `write`, `edit`, `apply_patch`, MCP, custom tools. |
 | `output.args.command` | Shell string for `bash`. |
 | `throw new Error(reason)` | Deny. Message is `hostDenyText`. This is the documented abort. |
-| `client.tui.showToast` | Display-only chrome on deny. Title `RV · Blocked`, message Why/Cmd/Meta/Next (parsed from `hostDenyText` + command). Variant `error`. Bind the method. v1 `{ body }` vs v2 flat. Best-effort; never skip throw if toast fails. Throw text stays `hostDenyText`. Do not `console.log` / `console.error` (OpenCode dumps those into the TUI). |
+| `client.tui.showToast` | Display-only chrome on deny. Title `RV · Blocked`, message Why/Cmd/Meta/Next (parsed from `hostDenyText` + command). Variant `error`. Bind the method. Call `{ body }`-wrapped first; the plugin client is the legacy SDK (errors resolve, never throw), so fall back to flat only when the wrapped result carries `.error`. Best-effort; never skip throw if toast fails. Throw text stays `hostDenyText`. Do not `console.log` / `console.error` (OpenCode dumps those into the TUI). |
 | mutate `output.args` | **Do not.** |
 | `"tool.execute.after"` | Do not register. |
 | `permission.ask` | Do not register (Allow-button territory). |

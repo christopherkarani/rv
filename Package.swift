@@ -49,7 +49,7 @@ let package = Package(
         .target(
             name: "RVService",
             dependencies: [
-                "RVDomain", "RVEngine", "RVPacks", "RVPolicy", "RVIPC", "RVHistory",
+                "RVDomain", "RVEngine", "RVPacks", "RVPolicy", "RVHooks", "RVIPC", "RVHistory",
                 "RVAnalytics",
             ]
         ),

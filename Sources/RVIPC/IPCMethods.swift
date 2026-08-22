@@ -85,6 +85,87 @@ public struct EvaluateReply: Sendable, Equatable, Codable {
     }
 }
 
+public struct HookEvaluateParams: Sendable, Equatable, Codable {
+    public var host: String
+    public var stdin: String
+    /// Additive `rv.ipc.v1` field. Same implicit-hello rule as `EvaluateParams`.
+    public var clientSemver: String?
+
+    public init(host: String, stdin: String, clientSemver: String? = nil) {
+        self.host = host
+        self.stdin = stdin
+        self.clientSemver = clientSemver
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        host = try container.decode(String.self, forKey: .host)
+        stdin = try container.decode(String.self, forKey: .stdin)
+        clientSemver = try container.decodeIfPresent(String.self, forKey: .clientSemver)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(host, forKey: .host)
+        try container.encode(stdin, forKey: .stdin)
+        try container.encodeIfPresent(clientSemver, forKey: .clientSemver)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case host
+        case stdin
+        case clientSemver
+    }
+}
+
+public struct HookEvaluateReply: Sendable, Equatable, Codable {
+    public var stdout: String
+    public var exitCode: Int32
+    public let via: EvaluationPath
+    /// Additive `rv.ipc.v1` field. Replies without it cannot prove major
+    /// compatibility; both the Swift CLI and the C hook replay through a
+    /// real in-process evaluation instead of trusting them.
+    public var serviceSemver: String?
+
+    public init(stdout: String, exitCode: Int32, serviceSemver: String? = ProtocolVersion.serviceSemver) {
+        self.stdout = stdout
+        self.exitCode = exitCode
+        self.via = .xpc
+        self.serviceSemver = serviceSemver
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        stdout = try container.decode(String.self, forKey: .stdout)
+        exitCode = try container.decode(Int32.self, forKey: .exitCode)
+        let decodedVia = try container.decode(EvaluationPath.self, forKey: .via)
+        guard decodedVia == .xpc else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .via,
+                in: container,
+                debugDescription: "HookEvaluateReply.via must be \"xpc\""
+            )
+        }
+        via = decodedVia
+        serviceSemver = try container.decodeIfPresent(String.self, forKey: .serviceSemver)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(stdout, forKey: .stdout)
+        try container.encode(exitCode, forKey: .exitCode)
+        try container.encode(via, forKey: .via)
+        try container.encodeIfPresent(serviceSemver, forKey: .serviceSemver)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case stdout
+        case exitCode
+        case via
+        case serviceSemver
+    }
+}
+
 public struct ExplainParams: Sendable, Equatable, Codable {
     public var request: EvaluationRequest
     public var cwd: String?
@@ -335,6 +416,7 @@ public struct DoctorSnapshotReply: Sendable, Equatable, Codable {
 
 public enum IPCMethod: Sendable, Equatable {
     case evaluate(EvaluateParams)
+    case hookEvaluate(HookEvaluateParams)
     case explain(ExplainParams)
     case classify(ClassifyParams)
     case listPacks
@@ -345,6 +427,7 @@ public enum IPCMethod: Sendable, Equatable {
 
 public enum IPCResult: Sendable, Equatable {
     case evaluate(EvaluateReply)
+    case hookEvaluate(HookEvaluateReply)
     case explain(ExplainReply)
     case classify(ClassifyReply)
     case listPacks(ListPacksReply)
@@ -357,6 +440,7 @@ public enum IPCResult: Sendable, Equatable {
 extension IPCMethod: Codable {
     private enum CodingKeys: String, CodingKey {
         case evaluate
+        case hookEvaluate
         case explain
         case classify
         case listPacks
@@ -370,6 +454,8 @@ extension IPCMethod: Codable {
         switch self {
         case .evaluate(let params):
             try container.encode(params, forKey: .evaluate)
+        case .hookEvaluate(let params):
+            try container.encode(params, forKey: .hookEvaluate)
         case .explain(let params):
             try container.encode(params, forKey: .explain)
         case .classify(let params):
@@ -389,6 +475,8 @@ extension IPCMethod: Codable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         if let params = try container.decodeIfPresent(EvaluateParams.self, forKey: .evaluate) {
             self = .evaluate(params)
+        } else if let params = try container.decodeIfPresent(HookEvaluateParams.self, forKey: .hookEvaluate) {
+            self = .hookEvaluate(params)
         } else if let params = try container.decodeIfPresent(ExplainParams.self, forKey: .explain) {
             self = .explain(params)
         } else if let params = try container.decodeIfPresent(ClassifyParams.self, forKey: .classify) {
@@ -412,6 +500,7 @@ extension IPCMethod: Codable {
 extension IPCResult: Codable {
     private enum CodingKeys: String, CodingKey {
         case evaluate
+        case hookEvaluate
         case explain
         case classify
         case listPacks
@@ -426,6 +515,8 @@ extension IPCResult: Codable {
         switch self {
         case .evaluate(let reply):
             try container.encode(reply, forKey: .evaluate)
+        case .hookEvaluate(let reply):
+            try container.encode(reply, forKey: .hookEvaluate)
         case .explain(let reply):
             try container.encode(reply, forKey: .explain)
         case .classify(let reply):
@@ -447,6 +538,8 @@ extension IPCResult: Codable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         if let reply = try container.decodeIfPresent(EvaluateReply.self, forKey: .evaluate) {
             self = .evaluate(reply)
+        } else if let reply = try container.decodeIfPresent(HookEvaluateReply.self, forKey: .hookEvaluate) {
+            self = .hookEvaluate(reply)
         } else if let reply = try container.decodeIfPresent(ExplainReply.self, forKey: .explain) {
             self = .explain(reply)
         } else if let reply = try container.decodeIfPresent(ClassifyReply.self, forKey: .classify) {

@@ -44,10 +44,11 @@ T2 ArgumentParser is the next real compile bill. Domain public-API edits today r
 
 ## Release artifacts
 
-Measured on this machine 2026-08-21 after `tools/release.sh` (release config + `strip -x`). The pack bundle must travel with the binaries: SPM `Bundle.module` loads `rv_RVPacks.bundle` next to `rv` / `rvd`. Code-sign is not a gate (`strip -x` invalidates an existing signature).
+Measured on this machine 2026-08-21 after `tools/release.sh`. C `rv` is `clang -Os` + `strip -x` (links libSystem only). Swift `rv-cli` is SPM product `rv` after `strip -x`; `rvd` is the same. Pack bundles must travel with `rv-cli` and `rvd`: SPM `Bundle.module` loads `rv_RVPacks.bundle` next to those binaries. Code-sign is not a gate (`strip -x` invalidates an existing signature).
 
 | Artifact | Size |
 |---|---|
-| staged `rv` | 2.3 MB (2,381,792 bytes) |
+| staged `rv` | 36 KB (36,976 bytes), C hook |
+| staged `rv-cli` | 2.3 MB (2,381,792 bytes), SPM product `rv` |
 | staged `rvd` | 886 KB (907,088 bytes) |
 | `rv_RVPacks.bundle` | 1.0 MB (100 files under `packs/`) |
