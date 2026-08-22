@@ -6,23 +6,23 @@ public struct GrokHostCodec: HostCodec {
 
     public init() {}
 
-    public func decode(_ stdin: String) -> HookRequest {
+    public func decode(_ stdin: String) -> HookDecodeOutcome {
         guard let data = stdin.data(using: .utf8),
               let envelope = try? JSONDecoder().decode(GrokEnvelope.self, from: data)
         else {
-            return HookRequest(host: .grok, command: nil)
+            return .malformed(.unreadable)
         }
         guard envelope.hookEventName == "pre_tool_use" else {
-            return HookRequest(host: .grok, command: nil)
+            return .foreign
         }
         guard Self.shellTools.contains(envelope.toolName ?? "") else {
-            return HookRequest(host: .grok, command: nil)
+            return .foreign
         }
         guard let command = envelope.toolInput?.command, command.isEmpty == false else {
-            return HookRequest(host: .grok, command: nil)
+            return .malformed(.missingCommand)
         }
         let cwd = envelope.cwd.flatMap { $0.isEmpty ? nil : $0 }
-        return HookRequest(host: .grok, command: ShellCommand(rawValue: command), cwd: cwd)
+        return .request(HookRequest(host: .grok, command: ShellCommand(rawValue: command), cwd: cwd))
     }
 
     private static let shellTools: Set<String> = [

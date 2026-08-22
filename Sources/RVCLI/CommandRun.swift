@@ -31,13 +31,14 @@ public enum CommandRun {
         _ raw: String,
         cwd: String,
         store: AllowOnceStore,
-        now: Date = Date()
+        now: Date = Date(),
+        home: String? = ProcessInfo.processInfo.environment["HOME"].flatMap { $0.isEmpty ? nil : $0 }
     ) async -> EvaluationResult {
-        let home = (ProcessInfo.processInfo.environment["HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? "")
-        let enabled = (try? PacksFacade.effectiveIDs(home: home)) ?? dayOnePackIDs
-        return await GatedEvaluate().peek(
-            EvaluationRequest(command: ShellCommand(rawValue: raw), enabledPacks: enabled),
+        await GatedEvaluate().run(
+            .peek,
+            command: ShellCommand(rawValue: raw),
             cwd: cwd,
+            home: home,
             store: store,
             now: now
         )
@@ -47,13 +48,15 @@ public enum CommandRun {
         _ raw: String,
         cwd: String,
         allowOnceDirectory: URL,
-        now: Date = Date()
+        now: Date = Date(),
+        home: String? = ProcessInfo.processInfo.environment["HOME"].flatMap { $0.isEmpty ? nil : $0 }
     ) async -> EvaluationResult {
         await evaluateCommand(
             raw,
             cwd: cwd,
             store: AllowOnceStore(baseDirectory: allowOnceDirectory),
-            now: now
+            now: now,
+            home: home
         )
     }
 
@@ -64,11 +67,12 @@ public enum CommandRun {
         requested: RequestedMode,
         cwd: String,
         store: AllowOnceStore,
-        now: Date = Date()
+        now: Date = Date(),
+        home: String? = ProcessInfo.processInfo.environment["HOME"].flatMap { $0.isEmpty ? nil : $0 }
     ) async -> CLIResult {
         render(
             kind: kind,
-            result: await evaluateCommand(raw, cwd: cwd, store: store, now: now),
+            result: await evaluateCommand(raw, cwd: cwd, store: store, now: now, home: home),
             command: ShellCommand(rawValue: raw),
             probe: probe,
             requested: requested
@@ -82,7 +86,8 @@ public enum CommandRun {
         requested: RequestedMode,
         cwd: String,
         allowOnceDirectory: URL,
-        now: Date = Date()
+        now: Date = Date(),
+        home: String? = ProcessInfo.processInfo.environment["HOME"].flatMap { $0.isEmpty ? nil : $0 }
     ) async -> CLIResult {
         await run(
             kind: kind,
@@ -91,7 +96,8 @@ public enum CommandRun {
             requested: requested,
             cwd: cwd,
             store: AllowOnceStore(baseDirectory: allowOnceDirectory),
-            now: now
+            now: now,
+            home: home
         )
     }
 
@@ -107,7 +113,7 @@ public enum CommandRun {
         let exitCode: Int32 = kind.exitsZeroOnDeny || result.decision == .allow ? 0 : 1
 
         if mode == .robot {
-            return CLIResult(stdout: RobotWriter.line(result: result), exitCode: exitCode)
+            return robotResult(kind: kind, result: result, command: command, exitCode: exitCode)
         }
 
         let lines = kind.usesExplainFrame
@@ -128,6 +134,34 @@ public enum CommandRun {
                 palette: palette
             )
         return CLIResult(stdout: PrettyWriter.join(lines), exitCode: exitCode)
+    }
+
+    private static func robotResult(
+        kind: CLIKind,
+        result: EvaluationResult,
+        command: ShellCommand,
+        exitCode: Int32
+    ) -> CLIResult {
+        // Schema follows the CLI verb, not pretty-frame choice: only `rv explain`
+        // emits `rv.explain.v1`. `rv test` / `rv test --explain` keep `rv.test.v1`.
+        let text: String
+        switch kind {
+        case .explain:
+            text = RobotJSON.encode(
+                explainRobotPayload(
+                    from: explainViewModel(
+                        from: result,
+                        command: command,
+                        normalized: result.matchingView.isEmpty
+                            ? Normalize.matchingView(of: command.rawValue).rawValue
+                            : result.matchingView.rawValue
+                    )
+                ).fields
+            )
+        case .test, .testExplain:
+            text = RobotJSON.encode(testRobotPayload(from: result).fields)
+        }
+        return CLIResult(stdout: text + "\n", exitCode: exitCode)
     }
 
     private static func prettyTestLines(

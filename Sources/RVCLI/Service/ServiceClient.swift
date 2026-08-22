@@ -16,28 +16,33 @@ public struct RoutedEvaluation: Sendable, Equatable {
 
 public struct ServiceClient: Sendable {
     private let transport: (any ServiceTransport)?
-    private let injectedFallback: GatedEvaluate?
+    private let door: GatedEvaluate
     private let store: AllowOnceStore
+    private let home: String?
 
     public init(
         transport: (any ServiceTransport)? = XPCServiceTransport(),
         session: EvaluateSession? = nil,
         store: AllowOnceStore? = nil,
-        allowOnceDirectory: URL? = nil
+        allowOnceDirectory: URL? = nil,
+        home: String? = ProcessInfo.processInfo.environment["HOME"].flatMap { $0.isEmpty ? nil : $0 }
     ) {
         self.transport = transport
-        self.injectedFallback = session.map(GatedEvaluate.init)
+        self.door = session.map(GatedEvaluate.init) ?? GatedEvaluate()
         self.store = Self.resolveStore(store: store, allowOnceDirectory: allowOnceDirectory)
+        self.home = home
     }
 
     public static func missingCore(
         transport: (any ServiceTransport)? = nil,
         allowOnceDirectory: URL? = nil
     ) -> ServiceClient {
-        ServiceClient(
+        let sandbox = isolatedFactoryDirectory()
+        return ServiceClient(
             transport: transport,
             session: .missingCore,
-            allowOnceDirectory: allowOnceDirectory ?? isolatedFactoryDirectory()
+            allowOnceDirectory: allowOnceDirectory ?? sandbox,
+            home: sandbox.path
         )
     }
 
@@ -45,10 +50,12 @@ public struct ServiceClient: Sendable {
         transport: (any ServiceTransport)? = nil,
         allowOnceDirectory: URL? = nil
     ) -> ServiceClient {
-        ServiceClient(
+        let sandbox = isolatedFactoryDirectory()
+        return ServiceClient(
             transport: transport,
             session: .uncompilableCore,
-            allowOnceDirectory: allowOnceDirectory ?? isolatedFactoryDirectory()
+            allowOnceDirectory: allowOnceDirectory ?? sandbox,
+            home: sandbox.path
         )
     }
 
@@ -57,12 +64,16 @@ public struct ServiceClient: Sendable {
     }
 
     public func evaluate(command: ShellCommand, cwd: String? = nil) async -> RoutedEvaluation {
-        let home = (ProcessInfo.processInfo.environment["HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? "")
-        let enabled = (try? PacksFacade.effectiveIDs(home: home)) ?? dayOnePackIDs
-        let request = EvaluationRequest(command: command, enabledPacks: enabled)
         func inProcessRoute() async -> RoutedEvaluation {
             RoutedEvaluation(
-                result: await inProcessEvaluate(request, cwd: cwd),
+                result: await door.run(
+                    .apply,
+                    command: command,
+                    cwd: cwd,
+                    home: home,
+                    store: store,
+                    now: Date()
+                ),
                 path: .inProcess
             )
         }
@@ -70,6 +81,7 @@ public struct ServiceClient: Sendable {
             return await inProcessRoute()
         }
         do {
+            let request = GatedEvaluate.makeRequest(command: command, home: home)
             let body = try IPCJSON.encode(
                 IPCRequest(
                     method: .evaluate(
@@ -107,21 +119,12 @@ public struct ServiceClient: Sendable {
         await evaluate(command: command, cwd: cwd).result
     }
 
-    private func inProcessEvaluate(_ request: EvaluationRequest, cwd: String?) async -> EvaluationResult {
-        await fallback().apply(
-            request,
-            cwd: cwd,
-            store: store,
-            now: Date()
-        )
-    }
-
     public func status() async -> ServiceStatusReport {
         ServiceHealth.inspect(await diagnostics()).statusReport
     }
 
     func diagnostics() async -> ServiceDiagnosticResult {
-        let localCorePacksReady = fallback().corePacksReady
+        let localCorePacksReady = door.corePacksReady
         switch await route() {
         case .xpc(let transport, let serviceSemver):
             let request = IPCRequest(method: .doctorSnapshot)
@@ -210,10 +213,6 @@ public struct ServiceClient: Sendable {
         }
     }
 
-    private func fallback() -> GatedEvaluate {
-        injectedFallback ?? GatedEvaluate()
-    }
-
     private enum Route {
         case xpc(any ServiceTransport, serviceSemver: String)
         case down
@@ -253,10 +252,14 @@ public struct ServiceClient: Sendable {
             return .majorVersionMismatch
         }
         if ack.ok == false {
-            if ack.skewReason == "core packs unavailable" {
+            switch ack.skewReason {
+            case .corePacksUnavailable:
                 return .corePacksUnavailable
+            case .majorVersion:
+                return .majorVersionMismatch
+            case .protocolSkew, nil:
+                return .rejected
             }
-            return .rejected
         }
         return nil
     }

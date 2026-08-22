@@ -24,21 +24,25 @@ private func piExpected(_ stem: String) throws -> (stdout: String, exit: Int32) 
     ("deny-git-reset-hard.json", "git reset --hard"),
 ])
 func piDecode_extractsBashCommand(_ file: String, expected: String) throws {
-    let request = codec.decode(try piFixture(file))
+    guard case .request(let request) = codec.decode(try piFixture(file)) else {
+        Issue.record("expected .request for \(file)")
+        return
+    }
     #expect(request.host == .pi)
-    #expect(request.command?.rawValue == expected)
+    #expect(request.command.rawValue == expected)
 }
 
-@Test func piDecode_nonShellIsNoOp() throws {
-    let request = codec.decode(try piFixture("allow-non-shell-read.json"))
-    #expect(request.host == .pi)
-    #expect(request.command == nil)
+@Test func piDecode_nonShellIsForeign() throws {
+    #expect(codec.decode(try piFixture("allow-non-shell-read.json")) == .foreign)
 }
 
-@Test func piDecode_emptyCommandIsNoOp() {
-    #expect(codec.decode(#"{"toolName":"bash","input":{}}"#).command == nil)
-    #expect(codec.decode(#"{"toolName":"bash","input":{"command":""}}"#).command == nil)
-    #expect(codec.decode("not-json").command == nil)
+@Test func piDecode_emptyCommandIsMissingCommand() {
+    #expect(codec.decode(#"{"toolName":"bash","input":{}}"#) == .malformed(.missingCommand))
+    #expect(codec.decode(#"{"toolName":"bash","input":{"command":""}}"#) == .malformed(.missingCommand))
+}
+
+@Test func piDecode_notJSONIsUnreadable() {
+    #expect(codec.decode("not-json") == .malformed(.unreadable))
 }
 
 @Test func piEncodeAllow_isEmptyExitZero() throws {

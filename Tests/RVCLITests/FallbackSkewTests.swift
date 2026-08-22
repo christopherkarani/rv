@@ -11,7 +11,7 @@ struct FallbackSkewTests {
                 protocolName: "rv.ipc.v0",
                 serviceSemver: "1.0.0",
                 ok: false,
-                skewReason: "protocol"
+                skewReason: .protocolSkew
             )
         )
         let client = try isolatedClient(transport: transport)
@@ -43,7 +43,7 @@ struct FallbackSkewTests {
     }
 
     @Test func majorSemverMismatchIsSkew() async throws {
-        let allowed = EvaluationResult(decision: .allow, matchingView: "git reset --hard")
+        let allowed = EvaluationResult(outcome: .plain, matchingView: "git reset --hard")
         let transport = ScriptedTransport(
             ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "2.0.0", ok: true),
             responseResult: .evaluate(EvaluateReply(result: allowed, serviceSemver: "2.0.0"))

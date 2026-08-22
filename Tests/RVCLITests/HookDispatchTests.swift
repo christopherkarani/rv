@@ -57,8 +57,9 @@ import RVTheme
     #expect(json["decision"] as? String == "deny")
     #expect(json["reason"] as? String == hostDenyText(
         from: EvaluationResult(
-            decision: .deny(
-                Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "x")
+            outcome: .deny(
+                Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "x"),
+                matched: nil
             )
         ),
         command: ShellCommand(rawValue: "git reset --hard")
@@ -135,7 +136,7 @@ private final class DispatchEvaluateProbe: @unchecked Sendable {
 
     func record(_ command: ShellCommand) -> EvaluationResult {
         commands.append(command.rawValue)
-        return EvaluationResult(decision: .allow)
+        return EvaluationResult(outcome: .plain)
     }
 }
 
@@ -165,7 +166,7 @@ private func inProcessEvaluate(_ command: ShellCommand, cwd: String?) async -> E
         let client = try isolatedClient(transport: nil)
         return await client.evaluateResult(command: command, cwd: cwd)
     } catch {
-        return EvaluationResult(decision: .indeterminate(.corePacksUnavailable))
+        return EvaluationResult(outcome: .indeterminate(.corePacksUnavailable))
     }
 }
 

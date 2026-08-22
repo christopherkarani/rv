@@ -6,9 +6,9 @@ public struct HelloAckView: Sendable, Equatable {
     public var protocolName: String
     public var serviceSemver: String
     public var ok: Bool
-    public var skewReason: String?
+    public var skewReason: SkewReason?
 
-    public init(protocolName: String, serviceSemver: String, ok: Bool, skewReason: String? = nil) {
+    public init(protocolName: String, serviceSemver: String, ok: Bool, skewReason: SkewReason? = nil) {
         self.protocolName = protocolName
         self.serviceSemver = serviceSemver
         self.ok = ok

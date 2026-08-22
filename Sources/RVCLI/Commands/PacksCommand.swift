@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import RVDomain
 import RVPresentation
 import RVService
 import RVTheme
@@ -26,13 +27,13 @@ struct Packs: AsyncParsableCommand {
         }
         let snapshot = try PacksFacade.list(home: home, enabledOnly: enabledOnly)
         if format.json || format.robot {
-            let payload = RobotPacksList(
-                schema: "rv.packs.v1",
-                packs: snapshot.packs.map(RobotPackRow.init),
+            let payload = packsRobotPayload(
+                rows: snapshot.packs.map(packsRobotRow),
                 enabledCount: snapshot.enabledCount,
                 totalCount: snapshot.totalCount
             )
-            FileHandle.standardOutput.write(Data((try RobotJSON.encode(payload) + "\n").utf8))
+            let text = try RobotJSON.encode(payload)
+            FileHandle.standardOutput.write(Data((text + "\n").utf8))
             return
         }
 
@@ -95,12 +96,17 @@ struct Packs: AsyncParsableCommand {
             }
             let row: PacksListRow
             do {
-                row = try PacksFacade.info(home: home, id: id)
+                guard let packID = PackID(validating: id) else {
+                    FileHandle.standardError.write(Data("unknown pack id: \(id)\n".utf8))
+                    throw ExitCode(1)
+                }
+                row = try PacksFacade.info(home: home, id: packID)
             } catch PacksCommandError.packNotFound {
                 throw ExitCode(1)
             }
             if format.json || format.robot {
-                FileHandle.standardOutput.write(Data((try RobotJSON.encode(RobotPackRow(row)) + "\n").utf8))
+                let text = try RobotJSON.encode(packsRobotRow(row))
+                FileHandle.standardOutput.write(Data((text + "\n").utf8))
                 return
             }
             let lines = [
@@ -130,16 +136,16 @@ private func mutate(ids: [String], enabling: Bool) throws {
             ? try PacksFacade.enable(home: home, ids: ids)
             : try PacksFacade.disable(home: home, ids: ids)
     } catch PacksCommandError.unknownID(let token) {
-        FileHandle.standardError.write(Data("unknown pack id: \(token)\n".utf8))
+        FileHandle.standardError.write(Data("unknown pack id: \(token.rawValue)\n".utf8))
         throw ExitCode(1)
     } catch PacksCommandError.criticalPatternUncompilable(let rule) {
-        FileHandle.standardError.write(Data("critical pattern uncompilable: \(rule)\n".utf8))
+        FileHandle.standardError.write(Data("critical pattern uncompilable: \(rule.rawValue)\n".utf8))
         throw ExitCode(1)
     } catch {
         throw ExitCode(1)
     }
     let verb = enabling ? "enabled" : "disabled"
-    let changed = result.changed.isEmpty ? "none" : result.changed.joined(separator: ", ")
+    let changed = result.changed.isEmpty ? "none" : result.changed.map(\.rawValue).joined(separator: ", ")
     let line =
         "\(verb): \(changed) (\(result.enabledCount)/\(result.totalCount) enabled)\n"
     FileHandle.standardOutput.write(Data(line.utf8))
@@ -158,47 +164,14 @@ enum PacksListFormat {
     }
 }
 
-private struct RobotPacksList: Encodable {
-    var schema: String
-    var packs: [RobotPackRow]
-    var enabledCount: Int
-    var totalCount: Int
-
-    enum CodingKeys: String, CodingKey {
-        case schema
-        case packs
-        case enabledCount = "enabled_count"
-        case totalCount = "total_count"
-    }
+private func packsRobotRow(_ row: PacksListRow) -> PacksRobotRow {
+    PacksRobotRow(
+        id: row.id,
+        name: row.name,
+        category: row.category,
+        description: row.description,
+        enabled: row.enabled,
+        safePatternCount: row.safePatternCount,
+        destructivePatternCount: row.destructivePatternCount
+    )
 }
-
-private struct RobotPackRow: Encodable {
-    var id: String
-    var name: String
-    var category: String
-    var description: String
-    var enabled: Bool
-    var safePatternCount: Int
-    var destructivePatternCount: Int
-
-    enum CodingKeys: String, CodingKey {
-        case id
-        case name
-        case category
-        case description
-        case enabled
-        case safePatternCount = "safe_pattern_count"
-        case destructivePatternCount = "destructive_pattern_count"
-    }
-
-    init(_ row: PacksListRow) {
-        id = row.id.rawValue
-        name = row.name
-        category = row.category
-        description = row.description
-        enabled = row.enabled
-        safePatternCount = row.safePatternCount
-        destructivePatternCount = row.destructivePatternCount
-    }
-}
-

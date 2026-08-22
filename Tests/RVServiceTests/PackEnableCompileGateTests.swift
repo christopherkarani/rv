@@ -4,7 +4,7 @@ import RVEngine
 @testable import RVService
 
 private struct RejectingEngine: PatternEngine {
-    func compile(_ pattern: String) throws -> String {
+    func compile(_ pattern: String) throws(PatternCompileError) -> String {
         throw PatternCompileError.invalidPattern(name: pattern, message: "reject")
     }
 
@@ -14,7 +14,7 @@ private struct RejectingEngine: PatternEngine {
 }
 
 private struct AcceptingEngine: PatternEngine {
-    func compile(_ pattern: String) throws -> String { pattern }
+    func compile(_ pattern: String) throws(PatternCompileError) -> String { pattern }
     func matches(_ compiled: String, in text: String) -> Bool { false }
     func firstMatch(_ compiled: String, in text: String) -> Range<String.Index>? { nil }
 }
@@ -75,5 +75,6 @@ private struct AcceptingEngine: PatternEngine {
 }
 
 @Test func enableCompileGate_bundledDatabaseSqliteBlockingPatternsCompile() throws {
-    try PackEnableCompileGate.assertBlockingPatternsCompile(packIDs: ["database.sqlite"])
+    let packID = try #require(PackID(validating: "database.sqlite"))
+    try PackEnableCompileGate.assertBlockingPatternsCompile(packIDs: [packID])
 }

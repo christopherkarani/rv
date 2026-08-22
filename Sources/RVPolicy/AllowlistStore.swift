@@ -1,6 +1,9 @@
-import Darwin
 import Foundation
 import RVDomain
+
+public enum AllowlistStoreError: Error, Sendable, Equatable {
+    case lockFailed
+}
 
 public struct AllowlistStore: Sendable {
     public var baseDirectory: URL
@@ -128,32 +131,17 @@ public struct AllowlistStore: Sendable {
 
     private func withFileLock<T>(_ body: () throws -> T) throws -> T {
         try prepareDirectory()
-        let lockURL = RVPolicyPaths.allowlistLockFile(inConfigDir: baseDirectory)
-        if FileManager.default.fileExists(atPath: lockURL.path) == false {
-            FileManager.default.createFile(
-                atPath: lockURL.path,
-                contents: Data(),
-                attributes: [.posixPermissions: 0o600]
+        do {
+            return try ExclusiveFileLock.withLock(
+                at: RVPolicyPaths.allowlistLockFile(inConfigDir: baseDirectory),
+                body
             )
+        } catch let error as ExclusiveFileLock.LockError {
+            switch error {
+            case .lockFailed:
+                throw AllowlistStoreError.lockFailed
+            }
         }
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: lockURL.path, isDirectory: &isDirectory),
-              isDirectory.boolValue == false
-        else {
-            throw AllowOnceError.lockFailed
-        }
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o600],
-            ofItemAtPath: lockURL.path
-        )
-        let fd = lockURL.path.withCString { path in
-            open(path, O_RDWR)
-        }
-        guard fd >= 0 else { throw AllowOnceError.lockFailed }
-        defer { close(fd) }
-        guard flock(fd, LOCK_EX) == 0 else { throw AllowOnceError.lockFailed }
-        defer { _ = flock(fd, LOCK_UN) }
-        return try body()
     }
 
     private func prepareDirectory() throws {

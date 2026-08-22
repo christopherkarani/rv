@@ -79,7 +79,6 @@ public func setupCeremonyFrames(
     }
 
     let finalSlots = slots.slotViews
-    let hasWired = slots.hasWiredSlot
     var frames: [SetupCeremonyFrame] = []
 
     if kind == .install {
@@ -141,41 +140,22 @@ public func setupCeremonyFrames(
         )
     }
 
-    if hasWired {
-        switch kind {
-        case .install:
-            frames.append(
-                SetupCeremonyFrame(
-                    statusLine: setupCeremonyAllHostsWired,
-                    slots: finalSlots,
-                    pauseNanoseconds: setupCeremonyPhaseGapNs
-                )
-            )
-            frames.append(
-                SetupCeremonyFrame(
-                    slots: finalSlots,
-                    closerLines: [setupCeremonyInstallCloser],
-                    pauseNanoseconds: 0
-                )
-            )
-        case .setup:
-            frames.append(
-                SetupCeremonyFrame(
-                    slots: finalSlots,
-                    closerLines: [setupCeremonyHooksWired],
-                    pauseNanoseconds: 0
-                )
-            )
-        }
-    } else {
+    if slots.closer == .complete, kind == .install {
         frames.append(
             SetupCeremonyFrame(
+                statusLine: setupCeremonyAllHostsWired,
                 slots: finalSlots,
-                closerLines: [setupCeremonyHostlessTitle, setupCeremonyHostlessNext],
-                pauseNanoseconds: 0
+                pauseNanoseconds: setupCeremonyPhaseGapNs
             )
         )
     }
+    frames.append(
+        SetupCeremonyFrame(
+            slots: finalSlots,
+            closerLines: slots.closer.lines(kind: kind),
+            pauseNanoseconds: 0
+        )
+    )
 
     return frames
 }

@@ -11,18 +11,17 @@ public func evaluate<E: PatternEngine>(
 ) -> EvaluationResult {
     let raw = request.command.rawValue
     if raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-        return EvaluationResult(decision: .allow, matchingView: MatchingView(""))
+        return EvaluationResult(outcome: .plain, matchingView: MatchingView(""))
     }
     if raw.utf8.count > commandByteCap {
         return EvaluationResult(
-            decision: .indeterminate(.commandTooLarge),
-            quickRejected: false,
+            outcome: .indeterminate(.commandTooLarge),
             matchingView: MatchingView(raw)
         )
     }
     if !corePacksAreReady(snapshots: packs, compiled: compiled) {
         return EvaluationResult(
-            decision: .indeterminate(.corePacksUnavailable),
+            outcome: .indeterminate(.corePacksUnavailable),
             matchingView: MatchingView(raw)
         )
     }
@@ -30,7 +29,7 @@ public func evaluate<E: PatternEngine>(
     let matchingView = Normalize.matchingView(of: raw)
     let enabledSnapshots = enabledPacks(from: packs, enabledIDs: request.enabledPacks)
     if QuickReject.shouldSkip(matchingView: matchingView, enabled: enabledSnapshots) {
-        return EvaluationResult(decision: .allow, quickRejected: true, matchingView: matchingView)
+        return EvaluationResult(outcome: .quickRejected, matchingView: matchingView)
     }
 
     var attempts = 0
@@ -47,7 +46,7 @@ public func evaluate<E: PatternEngine>(
                 attempts: &attempts,
                 budget: budget
             )
-            if let result, isTerminal(result.decision) {
+            if let result, isTerminal(result.outcome) {
                 return withMatchingView(result, matchingView)
             }
         }
@@ -62,7 +61,7 @@ public func evaluate<E: PatternEngine>(
     ) {
         return withMatchingView(result, matchingView)
     }
-    return EvaluationResult(decision: .allow, matchingView: matchingView)
+    return EvaluationResult(outcome: .plain, matchingView: matchingView)
 }
 
 private func withMatchingView(_ result: EvaluationResult, _ matchingView: MatchingView) -> EvaluationResult {
@@ -125,11 +124,11 @@ private func enabledCompiled<Compiled: Sendable>(
     return enabledIDs.compactMap { byID[$0] }
 }
 
-private func isTerminal(_ decision: Decision) -> Bool {
-    switch decision {
+private func isTerminal(_ outcome: EvaluationOutcome) -> Bool {
+    switch outcome {
     case .deny, .indeterminate:
         return true
-    case .allow:
+    case .quickRejected, .plain, .safeOnly, .hit:
         return false
     }
 }
@@ -156,7 +155,7 @@ private func evaluateSingle<E: PatternEngine>(
         for named in pack.safe {
             attempts += 1
             if let budget, attempts > budget {
-                return EvaluationResult(decision: .indeterminate(.budgetExhausted))
+                return EvaluationResult(outcome: .indeterminate(.budgetExhausted))
             }
             if patterns.matches(named.compiled, in: view) {
                 lastSafe = SafeMatch(packID: pack.snapshot.id, patternName: named.name)
@@ -171,7 +170,7 @@ private func evaluateSingle<E: PatternEngine>(
         for rule in pack.destructive {
             attempts += 1
             if let budget, attempts > budget {
-                return EvaluationResult(decision: .indeterminate(.budgetExhausted))
+                return EvaluationResult(outcome: .indeterminate(.budgetExhausted))
             }
             // firstMatch is the sole destructive hit test so span/matchedText cannot disagree with the hit.
             guard let range = patterns.firstMatch(rule.compiled, in: view) else { continue }
@@ -193,8 +192,10 @@ private func evaluateSingle<E: PatternEngine>(
             )
             if rule.rule.severity.blocksByDefault {
                 return EvaluationResult(
-                    decision: .deny(Deny(ruleID: match.ruleID, reason: match.reason)),
-                    matched: match
+                    outcome: .deny(
+                        Deny(ruleID: match.ruleID, reason: match.reason),
+                        matched: match
+                    )
                 )
             }
             if remembered == nil {
@@ -204,10 +205,10 @@ private func evaluateSingle<E: PatternEngine>(
     }
 
     if let remembered {
-        return EvaluationResult(decision: .allow, matched: remembered, matchedSafe: lastSafe)
+        return EvaluationResult(outcome: .hit(remembered, safe: lastSafe))
     }
-    if lastSafe != nil {
-        return EvaluationResult(decision: .allow, matchedSafe: lastSafe)
+    if let lastSafe {
+        return EvaluationResult(outcome: .safeOnly(lastSafe))
     }
     return nil
 }

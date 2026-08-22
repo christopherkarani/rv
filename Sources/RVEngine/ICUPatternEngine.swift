@@ -7,7 +7,7 @@ public struct ICUCompiledPattern: @unchecked Sendable {
 public struct ICUPatternEngine: PatternEngine, Sendable {
     public init() {}
 
-    public func compile(_ pattern: String) throws -> ICUCompiledPattern {
+    public func compile(_ pattern: String) throws(PatternCompileError) -> ICUCompiledPattern {
         do {
             let regex = try NSRegularExpression(pattern: pattern, options: [])
             return ICUCompiledPattern(regex: regex)

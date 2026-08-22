@@ -8,11 +8,12 @@ import RVIPC
 struct OneShotEvaluateClientTests {
     @Test func hookEvaluateIsOneSendWhenClientSemverIsSet_budgetIsConnect200PlusRequest500Equals700Ms() async throws {
         let denied = EvaluationResult(
-            decision: .deny(
+            outcome: .deny(
                 Deny(
                     ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
                     reason: "git reset --hard destroys uncommitted changes"
-                )
+                ),
+                matched: nil
             ),
             matchingView: "git reset --hard"
         )
@@ -71,7 +72,7 @@ struct OneShotEvaluateClientTests {
 
     @Test func oneShotXPCStashDrop_isEmptyAllowOnHookCodec() async throws {
         let allowed = EvaluationResult(
-            decision: .allow,
+            outcome: .plain,
             matchingView: "git stash drop"
         )
         let transport = ScriptedTransport(

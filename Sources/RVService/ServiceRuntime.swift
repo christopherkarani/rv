@@ -62,16 +62,16 @@ public actor ServiceRuntime {
 
     public func acknowledge(_ hello: Hello) -> HelloAck {
         if hello.protocolName != ProtocolVersion.name {
-            return HelloAck(ok: false, skewReason: "protocol")
+            return HelloAck(ok: false, skewReason: .protocolSkew)
         }
         if ProtocolVersion.isMajorSkew(
             clientSemver: hello.clientSemver,
             serviceSemver: ProtocolVersion.serviceSemver
         ) {
-            return HelloAck(ok: false, skewReason: "major version")
+            return HelloAck(ok: false, skewReason: .majorVersion)
         }
         if !corePacksReady {
-            return HelloAck(ok: false, skewReason: "core packs unavailable")
+            return HelloAck(ok: false, skewReason: .corePacksUnavailable)
         }
         return HelloAck(ok: true)
     }
@@ -107,7 +107,7 @@ public actor ServiceRuntime {
             if ack.ok == false {
                 let response = IPCResponse(
                     id: request.id,
-                    result: .error(.protocolSkew(ack.skewReason ?? "protocol"))
+                    result: .error(.protocolSkew(ack.skewReason?.rawValue ?? "protocol"))
                 )
                 return ((try? IPCJSON.encode(response)) ?? Data(), false)
             }
@@ -203,11 +203,27 @@ public actor ServiceRuntime {
         case .allow:
             suggestion = nil
         }
+        let ruleID: RuleID?
+        let packID: PackID?
+        switch result.outcome {
+        case .hit(let match, _):
+            ruleID = match.ruleID
+            packID = match.packID
+        case .safeOnly(let safe):
+            ruleID = nil
+            packID = safe.packID
+        case .deny(_, let match):
+            ruleID = match?.ruleID
+            packID = match?.packID
+        case .quickRejected, .plain, .indeterminate:
+            ruleID = nil
+            packID = nil
+        }
         return ExplainReply(
             result: result,
             normalized: normalized,
-            ruleID: result.matched?.ruleID,
-            packID: result.matched?.packID ?? result.matchedSafe?.packID,
+            ruleID: ruleID,
+            packID: packID,
             suggestion: suggestion,
             stages: stages
         )
@@ -220,21 +236,30 @@ public actor ServiceRuntime {
             store: allowOnce,
             now: Date()
         )
+        let matched: RuleMatch?
+        switch result.outcome {
+        case .hit(let match, _):
+            matched = match
+        case .deny(_, let match):
+            matched = match
+        case .quickRejected, .plain, .safeOnly, .indeterminate:
+            matched = nil
+        }
         let risk: ClassifyRisk
         switch result.decision {
         case .allow:
-            if let severity = result.matched?.severity {
+            if let severity = matched?.severity {
                 risk = ClassifyRisk(rawValue: severity.rawValue) ?? .medium
             } else {
                 risk = .safe
             }
         case .deny:
-            risk = ClassifyRisk(rawValue: result.matched?.severity.rawValue ?? ClassifyRisk.high.rawValue) ?? .high
+            risk = ClassifyRisk(rawValue: matched?.severity.rawValue ?? ClassifyRisk.high.rawValue) ?? .high
         case .indeterminate:
             risk = .high
         }
         var reasons: [ClassifyReason] = []
-        if let matched = result.matched {
+        if let matched {
             reasons.append(
                 ClassifyReason(ruleID: matched.ruleID, explanation: matched.explanation ?? matched.reason)
             )
@@ -251,8 +276,8 @@ public actor ServiceRuntime {
         return ClassifyReply(
             decision: result.decision,
             risk: risk,
-            ruleID: result.matched?.ruleID,
-            packID: result.matched?.packID,
+            ruleID: matched?.ruleID,
+            packID: matched?.packID,
             reasons: reasons,
             suggestions: suggestions
         )
@@ -289,7 +314,7 @@ public actor ServiceRuntime {
     }
 
     private func listPacks() -> ListPacksReply {
-        let home = (ProcessInfo.processInfo.environment["HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? "")
+        let home = EnabledPacks.processHome()
         if let refreshed = try? PacksFacade.makeCatalog(home: home) {
             catalog = refreshed
         }

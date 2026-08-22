@@ -96,71 +96,24 @@ public struct SetupSlotView: Equatable, Sendable {
     }
 }
 
-/// Pretty closer after the three slots.
+/// Pretty closer after the three slots. `.complete` only when a slot is wired.
 public enum SetupCloser: Equatable, Sendable {
     case complete
     case hostless
 
-    public var title: String {
+    /// Ceremony closer copy. Install substitutes the install-only line; setup stays `Hooks wired`.
+    public func lines(kind: SetupCeremonyKind) -> [String] {
         switch self {
-        case .complete: "Setup complete"
-        case .hostless: "No hosts yet"
+        case .hostless:
+            [setupCeremonyHostlessTitle, setupCeremonyHostlessNext]
+        case .complete:
+            switch kind {
+            case .setup: [setupCeremonyHooksWired]
+            case .install: [setupCeremonyInstallCloser]
+            }
         }
     }
-
-    public var next: String {
-        switch self {
-        case .complete: "Next  rv test 'git reset --hard'"
-        case .hostless: "Next  rv setup"
-        }
-    }
 }
 
-/// TTY `rv setup` show. Circles are the only ink; words stay default terminal color.
-public struct SetupViewModel: Equatable, Sendable {
-    public var slots: [SetupSlotView]
-    public var activity: String
-    public var closer: SetupCloser
-
-    public init(slots: [SetupSlotView], activity: String, closer: SetupCloser) {
-        self.slots = slots
-        self.activity = activity
-        self.closer = closer
-    }
-}
-
-/// Quiet second run, or a painted three-slot show.
-public enum SetupShow: Equatable, Sendable {
-    case quiet
-    case painted(SetupViewModel)
-}
-
-public let setupLookingActivity = "looking for hosts"
 public let setupGrokReloadClause = "reload /hooks"
 public let setupOccupiedClause = "skipped occupied"
-
-/// Builds the TTY show from slot kinds plus which hosts this run wrote.
-public func setupViewModel(
-    grok: SetupSlotKind,
-    pi: SetupSlotKind,
-    openCode: SetupSlotKind,
-    wrote: Set<SetupHostKind>
-) -> SetupShow {
-    setupViewModel(
-        SetupSlotSnapshot(grok: grok, pi: pi, openCode: openCode, wrote: wrote)
-    )
-}
-
-public func setupViewModel(_ slots: SetupSlotSnapshot) -> SetupShow {
-    if slots.isQuiet {
-        return .quiet
-    }
-    let lastWired = SetupHostKind.allCases.last { slots.wrote.contains($0) }
-    return .painted(
-        SetupViewModel(
-            slots: slots.slotViews,
-            activity: lastWired.map { "wiring \($0.displayName)" } ?? setupLookingActivity,
-            closer: slots.closer
-        )
-    )
-}

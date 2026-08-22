@@ -116,7 +116,7 @@ struct AllowlistAdd: AsyncParsableCommand {
                 Data("rv allowlist add: requires an interactive TTY\n".utf8)
             )
             throw ExitCode(2)
-        } catch AllowOnceError.lockFailed {
+        } catch AllowlistStoreError.lockFailed {
             FileHandle.standardError.write(Data("rv allowlist add: store unavailable\n".utf8))
             throw ExitCode(2)
         } catch is AllowlistParseError {
@@ -173,7 +173,7 @@ struct AllowlistAddCommand: AsyncParsableCommand {
                 Data("rv allowlist add-command: requires an interactive TTY\n".utf8)
             )
             throw ExitCode(2)
-        } catch AllowOnceError.lockFailed {
+        } catch AllowlistStoreError.lockFailed {
             FileHandle.standardError.write(
                 Data("rv allowlist add-command: store unavailable\n".utf8)
             )
@@ -224,7 +224,7 @@ struct AllowlistRemove: AsyncParsableCommand {
                 Data("rv allowlist remove: requires an interactive TTY\n".utf8)
             )
             throw ExitCode(2)
-        } catch AllowOnceError.lockFailed {
+        } catch AllowlistStoreError.lockFailed {
             FileHandle.standardError.write(Data("rv allowlist remove: store unavailable\n".utf8))
             throw ExitCode(2)
         } catch is AllowlistParseError {

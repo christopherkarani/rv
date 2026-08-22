@@ -4,12 +4,12 @@ import RVPacks
 
 /// T9 enable gate: critical/high ICU misses must not silently skip-and-serve.
 enum PackEnableCompileGate {
-    static func assertBlockingPatternsCompile(packIDs: Set<String>) throws {
+    static func assertBlockingPatternsCompile(packIDs: Set<PackID>) throws {
         let engine = ICUPatternEngine()
-        for id in packIDs.sorted() {
-            let snapshot = try PackRegistry.loadDocument(id: id).snapshot
+        for id in packIDs.sorted(by: { $0.rawValue < $1.rawValue }) {
+            let snapshot = try PackRegistry.loadDocument(id: id.rawValue).snapshot
             if let ruleID = firstUncompilableBlockingRule(in: [snapshot], using: engine) {
-                throw PacksCommandError.criticalPatternUncompilable(ruleID.rawValue)
+                throw PacksCommandError.criticalPatternUncompilable(ruleID)
             }
         }
     }

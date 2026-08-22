@@ -21,13 +21,21 @@ func isolatedAllowOnceDirectory() throws -> URL {
     return root
 }
 
+func isolatedHome() throws -> String {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-cli-home-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    return root.path
+}
+
 func isolatedClient(
     transport: (any ServiceTransport)? = nil,
     allowOnceDirectory: URL? = nil
 ) throws -> ServiceClient {
     ServiceClient(
         transport: transport,
-        allowOnceDirectory: try allowOnceDirectory ?? isolatedAllowOnceDirectory()
+        allowOnceDirectory: try allowOnceDirectory ?? isolatedAllowOnceDirectory(),
+        home: try isolatedHome()
     )
 }
 
@@ -44,7 +52,8 @@ func cliRun(
         probe: probe,
         requested: requested,
         cwd: "/tmp/ws",
-        allowOnceDirectory: try allowOnceDirectory ?? isolatedAllowOnceDirectory()
+        allowOnceDirectory: try allowOnceDirectory ?? isolatedAllowOnceDirectory(),
+        home: try isolatedHome()
     )
 }
 
@@ -55,6 +64,7 @@ func cliEvaluate(
     await CommandRun.evaluateCommand(
         command,
         cwd: "/tmp/ws",
-        allowOnceDirectory: try allowOnceDirectory ?? isolatedAllowOnceDirectory()
+        allowOnceDirectory: try allowOnceDirectory ?? isolatedAllowOnceDirectory(),
+        home: try isolatedHome()
     )
 }

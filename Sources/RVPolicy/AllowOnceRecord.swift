@@ -51,7 +51,7 @@ public struct AllowOnceRecord: Sendable, Equatable, Codable {
     public var commandFingerprint: String
     public var commandRedacted: String
     public var cwd: String
-    public var ruleID: String?
+    public var ruleID: RuleID?
     public var createdAt: Date
     public var expiresAt: Date
     public var consumedAt: Date?
@@ -63,7 +63,7 @@ public struct AllowOnceRecord: Sendable, Equatable, Codable {
         commandFingerprint: String,
         commandRedacted: String,
         cwd: String,
-        ruleID: String?,
+        ruleID: RuleID?,
         createdAt: Date,
         expiresAt: Date,
         consumedAt: Date?
