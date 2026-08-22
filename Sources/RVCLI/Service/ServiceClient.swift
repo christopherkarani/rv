@@ -97,12 +97,17 @@ public struct ServiceClient: Sendable {
             let response = try IPCJSON.decode(IPCResponse.self, from: data)
             // Decode already requires EvaluateReply.via == .xpc; anything else falls back.
             if case .evaluate(let reply) = response.result {
-                if let advertised = reply.serviceSemver,
-                   ProtocolVersion.isMajorSkew(
-                       clientSemver: ProtocolVersion.serviceSemver,
-                       serviceSemver: advertised
-                   )
-                {
+                // A reply without serviceSemver cannot prove major
+                // compatibility, so it is treated like skew: invalidate and
+                // re-route through the always-safe in-process evaluate.
+                guard let advertised = reply.serviceSemver else {
+                    transport.invalidate()
+                    return await inProcessRoute()
+                }
+                if ProtocolVersion.isMajorSkew(
+                    clientSemver: ProtocolVersion.serviceSemver,
+                    serviceSemver: advertised
+                ) {
                     transport.invalidate()
                     return await inProcessRoute()
                 }

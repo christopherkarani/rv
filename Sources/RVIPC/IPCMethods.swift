@@ -46,8 +46,8 @@ public enum EvaluationPath: String, Sendable, Equatable, Codable {
 public struct EvaluateReply: Sendable, Equatable, Codable {
     public var result: EvaluationResult
     public let via: EvaluationPath
-    /// Additive `rv.ipc.v1` field. Old replies omit it; the client then cannot
-    /// prove major skew on that frame and must fall back only when the value is present.
+    /// Additive `rv.ipc.v1` field. Replies without it cannot prove major
+    /// compatibility, so clients reject them and fall back in-process.
     public var serviceSemver: String?
 
     public init(result: EvaluationResult, serviceSemver: String? = ProtocolVersion.serviceSemver) {

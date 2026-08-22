@@ -89,6 +89,66 @@ struct EnabledCompileTests {
         )
     }
 
+    @Test func directConfigEditIsPickedUpByWarmRuntimeEvaluate() async throws {
+        let home = try temporaryCompileHome()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let sqlite = PackID(rawValue: "database.sqlite")
+        let runtime = ServiceRuntime(
+            home: home,
+            allowOnceDirectory: try isolatedAllowOnceDirectory()
+        )
+        #expect(await runtime.compiledPackIDs == dayOnePackIDs)
+
+        // Production path: `rv packs enable` writes config.toml directly; no
+        // XPC notification reaches this warm runtime.
+        _ = try PacksFacade.enable(home: home, ids: [sqlite.rawValue])
+
+        let denied = await runtime.dispatch(
+            IPCRequest(
+                method: .evaluate(
+                    EvaluateParams(
+                        request: EvaluationRequest(
+                            command: ShellCommand(rawValue: "DROP TABLE users"),
+                            enabledPacks: dayOnePackIDs + [sqlite]
+                        )
+                    )
+                )
+            )
+        )
+        guard case .evaluate(let reply) = denied.result else {
+            Issue.record("expected evaluate reply")
+            return
+        }
+        guard case .deny(let deny) = reply.result.decision else {
+            Issue.record("warm runtime must pick up direct config edits; DROP TABLE users must deny")
+            return
+        }
+        #expect(deny.ruleID.rawValue == "database.sqlite:drop-table")
+        #expect(
+            await runtime.compiledPackIDs
+                == (dayOnePackIDs + [sqlite]).sorted { $0.rawValue < $1.rawValue }
+        )
+    }
+
+    @Test func directConfigEditIsHealedByListPacksCoverageCheck() async throws {
+        let home = try temporaryCompileHome()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let sqlite = PackID(rawValue: "database.sqlite")
+        let runtime = ServiceRuntime(
+            home: home,
+            allowOnceDirectory: try isolatedAllowOnceDirectory()
+        )
+        #expect(await runtime.compiledPackIDs == dayOnePackIDs)
+        _ = try PacksFacade.enable(home: home, ids: [sqlite.rawValue])
+
+        _ = await runtime.dispatch(IPCRequest(method: .listPacks))
+
+        #expect(
+            await runtime.compiledPackIDs
+                == (dayOnePackIDs + [sqlite]).sorted { $0.rawValue < $1.rawValue }
+        )
+    }
+
     @Test func setPackEnabledGrowsAndShrinksCompiledPackIDs() async throws {
         let home = try temporaryCompileHome()
         defer { try? FileManager.default.removeItem(atPath: home) }

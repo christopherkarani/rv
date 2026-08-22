@@ -116,6 +116,60 @@ struct OneShotEvaluateTests {
         }
     }
 
+    @Test func majorSemverEvaluateAfterSuccessfulHello_doesNotEvaluate() async throws {
+        let runtime = try isolatedRuntime()
+        let hello = Hello(
+            protocolName: ProtocolVersion.name,
+            clientSemver: ProtocolVersion.serviceSemver
+        )
+        let (_, helloOK) = await runtime.handleIncoming(try IPCJSON.encode(hello), handshakeOK: false)
+        #expect(helloOK == true)
+
+        let (data, ok) = await runtime.handleIncoming(
+            try evaluateBody(command: "git reset --hard", clientSemver: "2.0.0"),
+            handshakeOK: helloOK
+        )
+        #expect(ok == true)
+        let response = try IPCJSON.decode(IPCResponse.self, from: data)
+        guard case .error(.protocolSkew(let message)) = response.result else {
+            Issue.record("major-skewed evaluate must error even on an open handshake")
+            return
+        }
+        #expect(message == SkewReason.majorVersion.rawValue)
+        if case .evaluate = response.result {
+            Issue.record("an open handshake must not carry a skewed clientSemver into evaluation")
+        }
+    }
+
+    @Test func matchingClientSemverAfterSuccessfulHello_stillEvaluates() async throws {
+        let runtime = try isolatedRuntime()
+        let hello = Hello(
+            protocolName: ProtocolVersion.name,
+            clientSemver: ProtocolVersion.serviceSemver
+        )
+        let (_, helloOK) = await runtime.handleIncoming(try IPCJSON.encode(hello), handshakeOK: false)
+        #expect(helloOK == true)
+
+        let (data, ok) = await runtime.handleIncoming(
+            try evaluateBody(
+                command: "git reset --hard",
+                clientSemver: ProtocolVersion.serviceSemver
+            ),
+            handshakeOK: helloOK
+        )
+        #expect(ok == true)
+        let response = try IPCJSON.decode(IPCResponse.self, from: data)
+        guard case .evaluate(let reply) = response.result else {
+            Issue.record("matching clientSemver on an open handshake must still dispatch")
+            return
+        }
+        guard case .deny(let deny) = reply.result.decision else {
+            Issue.record("open-handshake evaluate must still deny git reset --hard")
+            return
+        }
+        #expect(deny.ruleID.rawValue == "core.git:reset-hard")
+    }
+
     @Test func oldHelloThenEvaluateWithoutClientSemver_stillWorks() async throws {
         let runtime = try isolatedRuntime()
         let hello = Hello(protocolName: ProtocolVersion.name, clientSemver: ProtocolVersion.serviceSemver)
