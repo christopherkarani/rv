@@ -16,7 +16,7 @@ Each module keeps a small public API, `package` internals later, and its own tes
 | **RVPolicy** | config merge, allowlist, allow-once | rendering |
 | **RVHooks** | **Pi / Grok / OpenCode** Host adapters: shell codecs, Hook mapper/voice, embedded adapter resources | evaluation, setup mutations |
 | **RVIPC** | `rv.ipc.v1` Codable | transport details |
-| **RVService** | XPC listener, EvaluateSession (compiled day-one packs + evaluate), GatedEvaluate (session then Policy gate), launchd | ArgumentParser, SwiftUI |
+| **RVService** | XPC listener, EvaluationWorld (single assembly), EvaluateSession (compiled day-one packs + evaluate), GatedEvaluate (session then Policy gate), launchd | ArgumentParser, SwiftUI |
 | **RVPresentation** | deny/explain/packs/doctor view models | ANSI |
 | **RVTheme** | palettes, pure capability detect | business rules |
 | **RVTUI** | `FrameRenderer` `render` → `[String]` | opening a TTY |

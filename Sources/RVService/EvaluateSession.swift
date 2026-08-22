@@ -2,7 +2,6 @@ import Foundation
 import RVDomain
 import RVEngine
 import RVPacks
-import RVPolicy
 
 public struct EvaluateSession: Sendable {
     public let corePacksReady: Bool
@@ -15,25 +14,8 @@ public struct EvaluateSession: Sendable {
         snapshots: [PackSnapshot]? = nil,
         enabledPacks: [PackID]? = nil
     ) {
-        let loaded: [PackSnapshot]
-        if let snapshots {
-            loaded = snapshots
-        } else {
-            // Prefer full catalog; fall back to day-one if index is missing.
-            loaded = (try? PackRegistry.loadAll()) ?? ((try? PackRegistry.loadDayOne()) ?? [])
-        }
-        let enabled: [PackID]
-        if let enabledPacks {
-            enabled = enabledPacks
-        } else {
-            // Config extras plus day-one. Catalog disable of core must not
-            // uncompile required rules (request evaluate set stays day-one).
-            var ids = EnabledPacks.resolve(home: HomeDirectory.process())
-            for id in dayOnePackIDs where !ids.contains(id) {
-                ids.append(id)
-            }
-            enabled = ids
-        }
+        let loaded = EvaluationWorld.resolveSnapshots(snapshots)
+        let enabled = enabledPacks ?? EvaluationWorld.enabledIDs(catalog: nil, home: nil)
         let engine = ICUPatternEngine()
         let warmed = CoreWarmup.prepare(
             snapshots: loaded,

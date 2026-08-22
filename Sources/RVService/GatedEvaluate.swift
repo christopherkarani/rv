@@ -10,13 +10,32 @@ public enum EvaluationIntent: Sendable, Equatable {
 
 /// Runs the Evaluate session, then the Policy gate.
 public struct GatedEvaluate: Sendable {
-    public var corePacksReady: Bool { session.corePacksReady }
+    public var corePacksReady: Bool { resolvedSession().corePacksReady }
 
-    private let session: EvaluateSession
+    private enum Source: Sendable {
+        case prepared(EvaluateSession)
+        case deferred(@Sendable () -> EvaluateSession)
+    }
+
+    private let source: Source
 
     /// Creates a door around an Evaluate session.
     public init(_ session: EvaluateSession = EvaluateSession()) {
-        self.session = session
+        self.source = .prepared(session)
+    }
+
+    /// Creates a door that defers session construction until first evaluate.
+    package init(lazySession: @escaping @Sendable () -> EvaluateSession) {
+        self.source = .deferred(lazySession)
+    }
+
+    private func resolvedSession() -> EvaluateSession {
+        switch source {
+        case .prepared(let session):
+            return session
+        case .deferred(let build):
+            return build()
+        }
     }
 
     /// Builds `EvaluationRequest` and runs peek or apply.
@@ -77,7 +96,7 @@ public struct GatedEvaluate: Sendable {
         store: AllowOnceStore,
         now: Date
     ) async -> EvaluationResult {
-        let result = session.evaluate(request)
+        let result = resolvedSession().evaluate(request)
         // Fast path: allow/indeterminate never touch PolicyGate or the
         // allowlist snapshot; PolicyGate returns them unchanged anyway.
         switch result.decision {
