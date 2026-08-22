@@ -31,7 +31,7 @@ Audience: implementer/reviewer subagents. Assumption: base commit `2f380ec` (ori
 
 ## 3. Requirements, Constraints & Guidelines
 
-- **REQ-001**: After TH1 exactly one production site reads `ProcessInfo.processInfo.environment["HOME"]`: `HomeDirectory.process()`.
+- **REQ-001**: After TH1 exactly one production site reads `ProcessInfo.processInfo.environment["HOME"]`: `HomeDirectory.process()`. Other environment readers (analytics/setup/doctor seams that take injected `[String:String]`) are out of scope for this spec.
 - **REQ-002**: `HomeDirectory(validating:)` returns nil for `""`; no other API may construct an empty home.
 - **REQ-003**: Absence of HOME is expressed as `HomeDirectory?`/`nil`, never as an empty string.
 - **REQ-004**: Behavior is preserved: unset HOME ⇒ day-one packs fallback; mutation paths still throw `configUnwritable`; allow-once store unavailable path unchanged.
@@ -96,7 +96,7 @@ this duplication is accepted and intentional.
 
 ## 5. Acceptance Criteria
 
-- **AC-001**: `rg 'environment\["HOME"\]' Sources` returns exactly one site after TH1 (`HomeDirectory.process()`).
+- **AC-001**: `rg 'ProcessInfo\.processInfo\.environment\["HOME"\]' Sources` returns exactly one site after TH1 (`Sources/RVPolicy/HomeDirectory.swift`); other environment seams (analytics/setup/doctor, injected `[String:String]`) are out of scope.
 - **AC-002**: `rg 'home\.isEmpty|isEmpty == false' Sources/RVService/PacksFacade.swift` returns nothing after TH1; absence handled via Optional at one boundary.
 - **AC-003**: All affected module tests green via `tools/gate.sh` after each ticket (no skipped tests).
 - **AC-004**: `rg 'ClassifyRisk\(rawValue' Sources` empty after TH2; existing classify round-trip tests pass unmodified expectations.
