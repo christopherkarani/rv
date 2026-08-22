@@ -37,12 +37,11 @@ public actor ServiceRuntime {
         } else {
             self.catalog = (try? PacksFacade.makeCatalog(home: resolvedHome)) ?? PackCatalog()
         }
-        let loaded = snapshots
-            ?? ((try? PackRegistry.loadAll()) ?? ((try? PackRegistry.loadDayOne()) ?? []))
+        let loaded = EvaluationWorld.resolveSnapshots(snapshots)
         self.sessionSnapshots = loaded
         let session = EvaluateSession(
             snapshots: loaded,
-            enabledPacks: Self.compileEnabledIDs(from: self.catalog)
+            enabledPacks: EvaluationWorld.enabledIDs(catalog: self.catalog, home: resolvedHome)
         )
         self.compiledPackIDs = session.compiledPackIDs
         let gated = GatedEvaluate(session)
@@ -384,23 +383,10 @@ public actor ServiceRuntime {
     private func rebuildGated() {
         let session = EvaluateSession(
             snapshots: sessionSnapshots,
-            enabledPacks: Self.compileEnabledIDs(from: catalog)
+            enabledPacks: EvaluationWorld.enabledIDs(catalog: catalog, home: configHome)
         )
         compiledPackIDs = session.compiledPackIDs
         gated = GatedEvaluate(session)
-    }
-
-    /// Catalog-enabled IDs, plus day-one so a catalog disable cannot uncompile
-    /// required core rules or change the request evaluate set.
-    private static func compileEnabledIDs(from catalog: PackCatalog) -> [PackID] {
-        if catalog.records.isEmpty {
-            return dayOnePackIDs
-        }
-        var ids = catalog.records.filter(\.enabled).map(\.id)
-        for id in dayOnePackIDs where !ids.contains(id) {
-            ids.append(id)
-        }
-        return ids
     }
 }
 
