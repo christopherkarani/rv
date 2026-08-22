@@ -12,6 +12,7 @@ public actor ServiceRuntime {
 
     private var gated: GatedEvaluate
     private var catalog: PackCatalog
+    private var lastUncoveredWanted: Set<PackID> = []
     private let sessionSnapshots: [PackSnapshot]
     private let configHome: String
     private let allowOnce: AllowOnceStore
@@ -130,7 +131,11 @@ public actor ServiceRuntime {
         let result: IPCResult
         switch request.method {
         case .evaluate(let params):
-            result = .evaluate(await makeEvaluateReply(params.request, cwd: params.cwd))
+            if Self.evaluateIsMajorSkewed(params) {
+                result = .error(.protocolSkew(SkewReason.majorVersion.rawValue))
+            } else {
+                result = .evaluate(await makeEvaluateReply(params.request, cwd: params.cwd))
+            }
         case .explain(let params):
             result = .explain(await explain(params))
         case .classify(let params):
@@ -157,9 +162,23 @@ public actor ServiceRuntime {
     }
 
     private func runEvaluate(_ request: EvaluationRequest, cwd: String?) async -> EvaluationResult {
+        rebuildWhenUncovered(wanted: Set(request.enabledPacks))
         let result = await gated.apply(request, cwd: cwd, store: allowOnce, now: Date())
         recordAnalytics(for: result)
         return result
+    }
+
+    /// Frame-level major-version guard: runs even when a Hello on this
+    /// connection already succeeded, so a skewed `clientSemver` can never ride
+    /// an open handshake into an evaluation.
+    private static func evaluateIsMajorSkewed(_ params: EvaluateParams) -> Bool {
+        guard let clientSemver = params.clientSemver, clientSemver.isEmpty == false else {
+            return false
+        }
+        return ProtocolVersion.isMajorSkew(
+            clientSemver: clientSemver,
+            serviceSemver: ProtocolVersion.serviceSemver
+        )
     }
 
     private func recordAnalytics(for result: EvaluationResult) {
@@ -295,6 +314,7 @@ public actor ServiceRuntime {
                 return .error(.packNotFound(params.id))
             }
             rebuildGated()
+            lastUncoveredWanted = []
             let packs = catalog.records.filter(\.enabled).map(\.id.rawValue)
             if let analytics {
                 Task {
@@ -314,10 +334,10 @@ public actor ServiceRuntime {
     }
 
     private func listPacks() -> ListPacksReply {
-        let home = EnabledPacks.processHome()
-        if let refreshed = try? PacksFacade.makeCatalog(home: home) {
+        if let refreshed = try? PacksFacade.makeCatalog(home: configHome) {
             catalog = refreshed
         }
+        rebuildWhenUncovered(wanted: Set(Self.compileEnabledIDs(from: catalog)))
         let packs = catalog.records.map { PackRecord(id: $0.id, enabled: $0.enabled, bundled: $0.bundled) }
         return ListPacksReply(
             packs: packs,
@@ -388,6 +408,19 @@ public actor ServiceRuntime {
         )
         compiledPackIDs = session.compiledPackIDs
         gated = GatedEvaluate(session)
+    }
+
+    /// Warm-runtime self-heal for behind-our-back config edits: `rv packs
+    /// enable` writes config.toml directly, so a request can name packs this
+    /// session never compiled. Uncompiled-but-requested packs are dropped
+    /// toward allow, so rebuild before evaluating. One attempt per distinct
+    /// uncovered wanted-set keeps a pack that can never compile from
+    /// rebuilding on every evaluate.
+    private func rebuildWhenUncovered(wanted: Set<PackID>) {
+        guard !wanted.isSubset(of: Set(compiledPackIDs)), wanted != lastUncoveredWanted else { return }
+        lastUncoveredWanted = wanted
+        catalog = (try? PacksFacade.makeCatalog(home: configHome)) ?? catalog
+        rebuildGated()
     }
 
     /// Catalog-enabled IDs, plus day-one so a catalog disable cannot uncompile
