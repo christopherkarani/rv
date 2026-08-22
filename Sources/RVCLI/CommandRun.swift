@@ -34,7 +34,7 @@ public enum CommandRun {
         now: Date = Date(),
         home: HomeDirectory? = HomeDirectory.process()
     ) async -> EvaluationResult {
-        await GatedEvaluate().run(
+        await EvaluationWorld.assemble(home: home, snapshots: nil, catalog: nil).run(
             .peek,
             command: ShellCommand(rawValue: raw),
             cwd: cwd,
