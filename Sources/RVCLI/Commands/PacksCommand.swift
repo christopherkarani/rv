@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import RVDomain
 import RVPresentation
 import RVService
 import RVTheme
@@ -95,7 +96,11 @@ struct Packs: AsyncParsableCommand {
             }
             let row: PacksListRow
             do {
-                row = try PacksFacade.info(home: home, id: id)
+                guard let packID = PackID(validating: id) else {
+                    FileHandle.standardError.write(Data("unknown pack id: \(id)\n".utf8))
+                    throw ExitCode(1)
+                }
+                row = try PacksFacade.info(home: home, id: packID)
             } catch PacksCommandError.packNotFound {
                 throw ExitCode(1)
             }
@@ -131,16 +136,16 @@ private func mutate(ids: [String], enabling: Bool) throws {
             ? try PacksFacade.enable(home: home, ids: ids)
             : try PacksFacade.disable(home: home, ids: ids)
     } catch PacksCommandError.unknownID(let token) {
-        FileHandle.standardError.write(Data("unknown pack id: \(token)\n".utf8))
+        FileHandle.standardError.write(Data("unknown pack id: \(token.rawValue)\n".utf8))
         throw ExitCode(1)
     } catch PacksCommandError.criticalPatternUncompilable(let rule) {
-        FileHandle.standardError.write(Data("critical pattern uncompilable: \(rule)\n".utf8))
+        FileHandle.standardError.write(Data("critical pattern uncompilable: \(rule.rawValue)\n".utf8))
         throw ExitCode(1)
     } catch {
         throw ExitCode(1)
     }
     let verb = enabling ? "enabled" : "disabled"
-    let changed = result.changed.isEmpty ? "none" : result.changed.joined(separator: ", ")
+    let changed = result.changed.isEmpty ? "none" : result.changed.map(\.rawValue).joined(separator: ", ")
     let line =
         "\(verb): \(changed) (\(result.enabledCount)/\(result.totalCount) enabled)\n"
     FileHandle.standardOutput.write(Data(line.utf8))

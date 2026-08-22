@@ -13,7 +13,7 @@ import RVDomain
 
 @Test func enablement_k8sCategoryAddsThreePlusCore() throws {
     let index = try PackRegistry.loadIndex()
-    let ids = try PackSet.effectiveOrdered(enabled: ["kubernetes"], disabled: [], index: index)
+    let ids = try PackSet.effectiveOrdered(enabled: [.category("kubernetes")], disabled: [], index: index)
     let raw = Set(ids.map(\.rawValue))
     #expect(raw.contains("core.git"))
     #expect(raw.contains("kubernetes.kubectl"))
@@ -25,8 +25,8 @@ import RVDomain
 @Test func enablement_databaseMinusRedis() throws {
     let index = try PackRegistry.loadIndex()
     let ids = try PackSet.effectiveOrdered(
-        enabled: ["database"],
-        disabled: ["database.redis"],
+        enabled: [.category("database")],
+        disabled: [.id(PackID(rawValue: "database.redis"))],
         index: index
     )
     let raw = Set(ids.map(\.rawValue))
@@ -38,8 +38,8 @@ import RVDomain
 @Test func enablement_presetMembership() throws {
     let index = try PackRegistry.loadIndex()
     let ids = try PackSet.effectiveOrdered(
-        enabled: ["careful_company_running_windows"],
-        disabled: ["remote.rsync"],
+        enabled: SelectionToken.parse("careful_company_running_windows", index: index),
+        disabled: [.id(PackID(rawValue: "remote.rsync"))],
         index: index
     )
     let raw = Set(ids.map(\.rawValue))
@@ -54,7 +54,10 @@ import RVDomain
 @Test func enablement_strictGitAndPackageManagers() throws {
     let index = try PackRegistry.loadIndex()
     let ids = try PackSet.effectiveOrdered(
-        enabled: ["strict_git", "package_managers"],
+        enabled: [
+            .id(PackID(rawValue: "strict_git")),
+            .category("package_managers"),
+        ],
         disabled: [],
         index: index
     )
@@ -65,22 +68,53 @@ import RVDomain
 
 @Test func enablement_unknownRejectedWhenAsked() throws {
     let index = try PackRegistry.loadIndex()
-    #expect(throws: PackSetError.unknownID("paranoid")) {
-        _ = try PackSet.expand(["paranoid"], index: index, rejectUnknown: true)
+    #expect(throws: PackSetError.unknownID(.id(PackID(rawValue: "paranoid")))) {
+        _ = try PackSet.expand([.id(PackID(rawValue: "paranoid"))], index: index, rejectUnknown: true)
     }
 }
 
-@Test func enablement_orderDropsInvalidIndexPackIDs() {
+@Test func enablement_unknownSkippedByDefault() throws {
+    let index = try PackRegistry.loadIndex()
+    let expanded = try PackSet.expand(
+        [
+            .id(PackID(rawValue: "paranoid")),
+            .category("nosuchcategory"),
+            .preset("nosuchpreset"),
+            .id(PackID(rawValue: "strict_git")),
+        ],
+        index: index,
+        rejectUnknown: false
+    )
+    #expect(expanded == [PackID(rawValue: "strict_git")])
+}
+
+@Test func enablement_orderIsTierThenName() throws {
+    let index = try PackRegistry.loadIndex()
+    let ordered = PackSet.order(
+        [
+            PackID(rawValue: "system.disk"),
+            PackID(rawValue: "core.git"),
+            PackID(rawValue: "database.sqlite"),
+        ],
+        index: index
+    )
+    #expect(ordered.map(\.rawValue) == ["core.git", "system.disk", "database.sqlite"])
+}
+
+@Test func enablement_orderDropsUnknownIDs() {
     let index = PackIndex(
         pinVersion: "0",
         pinTag: "tag",
         pinCommit: "commit",
-        packCount: 2,
+        packCount: 1,
         defaultEnabled: [],
-        categories: ["core": ["core.git", "Core.Git"]],
+        categories: ["core": ["core.git"]],
         presets: [:],
         tiers: ["core": 1]
     )
-    let ordered = PackSet.order(Set(["core.git", "Core.Git"]), index: index)
+    let ordered = PackSet.order(
+        Set([PackID(rawValue: "core.git"), PackID(rawValue: "not.declared")]),
+        index: index
+    )
     #expect(ordered.map(\.rawValue) == ["core.git"])
 }

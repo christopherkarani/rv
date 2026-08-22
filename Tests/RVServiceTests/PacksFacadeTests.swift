@@ -1,4 +1,5 @@
 import Foundation
+import RVDomain
 import Testing
 import RVPolicy
 import RVService
@@ -38,7 +39,7 @@ import RVService
         #expect(preset.enabledCount == 38)
 
         let before = try PacksConfigStore.load(home: home)
-        #expect(throws: PacksCommandError.unknownID("paranoid")) {
+        #expect(throws: PacksCommandError.unknownID(.id(PackID(rawValue: "paranoid")))) {
             _ = try PacksFacade.enable(home: home, ids: ["paranoid"])
         }
         let after = try PacksConfigStore.load(home: home)
@@ -81,6 +82,50 @@ import RVService
         #expect(text.contains("mode = \"dark\""))
         #expect(text.contains("[packs]"))
         #expect(text.contains("database.sqlite"))
+    }
+
+    @Test func tokenRoundTrip_persistsOperatorStringsVerbatim() throws {
+        let home = try temporaryHome()
+        defer { try? FileManager.default.removeItem(atPath: home) }
+        let url = PacksConfigStore.configURL(home: home)
+
+        _ = try PacksFacade.enable(home: home, tokens: [
+            .category("kubernetes"),
+            .preset("careful_company_running_windows"),
+            .id(PackID(rawValue: "strict_git")),
+        ])
+        _ = try PacksFacade.disable(home: home, tokens: [.id(PackID(rawValue: "core.git"))])
+
+        let text = try String(contentsOf: url, encoding: .utf8)
+        let config = PacksConfigStore.parse(text)
+        #expect(config.enabled == [
+            "careful_company_running_windows",
+            "kubernetes",
+            "strict_git",
+        ])
+        #expect(config.disabled == ["core.git"])
+
+        let snapshot = try PacksFacade.list(home: home)
+        let enabled = Set(snapshot.packs.filter(\.enabled).map(\.id.rawValue))
+        #expect(enabled.contains("kubernetes.helm"))
+        #expect(enabled.contains("careful_company_running_windows.chat"))
+        #expect(enabled.contains("strict_git"))
+        #expect(!enabled.contains("core.git"))
+        // core.filesystem + kubernetes×3 + ccw category∪preset×36 + strict_git − core.git
+        #expect(snapshot.enabledCount == 41)
+        #expect(snapshot.totalCount == 99)
+    }
+
+    @Test func stringVerbArgsAndTokenArgsAgree() throws {
+        let homeA = try temporaryHome()
+        defer { try? FileManager.default.removeItem(atPath: homeA) }
+        let homeB = try temporaryHome()
+        defer { try? FileManager.default.removeItem(atPath: homeB) }
+
+        let fromStrings = try PacksFacade.enable(home: homeA, ids: ["kubernetes"])
+        let fromTokens = try PacksFacade.enable(home: homeB, tokens: [.category("kubernetes")])
+        #expect(fromStrings.changed.map(\.rawValue) == fromTokens.changed.map(\.rawValue))
+        #expect(fromStrings.enabledCount == fromTokens.enabledCount)
     }
 }
 

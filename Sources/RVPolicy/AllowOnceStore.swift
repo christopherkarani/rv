@@ -57,7 +57,7 @@ public actor AllowOnceStore {
                         commandFingerprint: commandFingerprint(view),
                         commandRedacted: redactCommand(view),
                         cwd: cwd,
-                        ruleID: ruleID?.rawValue,
+                        ruleID: ruleID,
                         createdAt: now,
                         expiresAt: now.addingTimeInterval(ttl),
                         consumedAt: nil
