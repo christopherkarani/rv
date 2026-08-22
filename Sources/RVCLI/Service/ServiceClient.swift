@@ -28,8 +28,26 @@ public struct ServiceClient: Sendable {
         home: String? = ProcessInfo.processInfo.environment["HOME"].flatMap { $0.isEmpty ? nil : $0 }
     ) {
         self.transport = transport
-        self.door = session.map(GatedEvaluate.init) ?? GatedEvaluate()
+        if let session {
+            self.door = GatedEvaluate(session)
+        } else {
+            self.door = EvaluationWorld.assemble(home: home, snapshots: nil, catalog: nil)
+        }
         self.store = Self.resolveStore(store: store, allowOnceDirectory: allowOnceDirectory)
+        self.home = home
+    }
+
+    /// Test seam: builds the fallback door from an explicit provider so tests can
+    /// observe when the in-process session is constructed.
+    package init(
+        transport: (any ServiceTransport)?,
+        lazySession: @escaping @Sendable () -> EvaluateSession,
+        allowOnceDirectory: URL?,
+        home: String?
+    ) {
+        self.transport = transport
+        self.door = GatedEvaluate(lazySession: lazySession)
+        self.store = Self.resolveStore(store: nil, allowOnceDirectory: allowOnceDirectory)
         self.home = home
     }
 
