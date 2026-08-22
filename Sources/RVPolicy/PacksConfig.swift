@@ -20,14 +20,14 @@ public enum PacksConfigError: Error, Equatable, Sendable {
 }
 
 public enum PacksConfigStore {
-    public static func configURL(home: String) -> URL {
-        URL(fileURLWithPath: home, isDirectory: true)
+    public static func configURL(home: HomeDirectory) -> URL {
+        URL(fileURLWithPath: home.rawValue, isDirectory: true)
             .appendingPathComponent(".config", isDirectory: true)
             .appendingPathComponent("rv", isDirectory: true)
             .appendingPathComponent("config.toml", isDirectory: false)
     }
 
-    public static func load(home: String, fileManager: FileManager = .default) throws -> PacksConfig {
+    public static func load(home: HomeDirectory, fileManager: FileManager = .default) throws -> PacksConfig {
         let url = configURL(home: home)
         guard fileManager.fileExists(atPath: url.path) else {
             return .empty
@@ -40,7 +40,7 @@ public enum PacksConfigStore {
 
     public static func save(
         _ config: PacksConfig,
-        home: String,
+        home: HomeDirectory,
         fileManager: FileManager = .default
     ) throws {
         let url = configURL(home: home)
