@@ -105,6 +105,53 @@ struct ExplainDispatchTests {
         }
     }
 
+    @Test func classifyRiskFollowsDerivation() async throws {
+        let runtime = ServiceRuntime(
+            catalog: PackCatalog(),
+            allowOnceDirectory: try isolatedAllowOnceDirectory()
+        )
+        let allowed = await runtime.dispatch(
+            IPCRequest(
+                method: .classify(
+                    ClassifyParams(
+                        request: EvaluationRequest(
+                            command: ShellCommand(rawValue: "ls -la"),
+                            enabledPacks: dayOnePackIDs
+                        )
+                    )
+                )
+            )
+        )
+        guard case .classify(let allowReply) = allowed.result else {
+            Issue.record("classify must reply")
+            return
+        }
+        #expect(allowReply.decision == .allow)
+        #expect(allowReply.risk == .safe)
+
+        let denied = await runtime.dispatch(
+            IPCRequest(
+                method: .classify(
+                    ClassifyParams(
+                        request: EvaluationRequest(
+                            command: ShellCommand(rawValue: "git reset --hard"),
+                            enabledPacks: dayOnePackIDs
+                        )
+                    )
+                )
+            )
+        )
+        guard case .classify(let denyReply) = denied.result else {
+            Issue.record("classify must reply")
+            return
+        }
+        guard case .deny = denyReply.decision else {
+            Issue.record("day-one classify must deny git reset --hard")
+            return
+        }
+        #expect(denyReply.risk == .rated(.critical))
+    }
+
     @Test func classifyPeeksGrantWithoutSpending() async throws {
         let runtime = ServiceRuntime(
             catalog: PackCatalog(),
