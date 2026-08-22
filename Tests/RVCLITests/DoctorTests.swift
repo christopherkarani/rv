@@ -74,6 +74,7 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
     try withDoctorHome { home, paths, environment in
         let executable = home.appendingPathComponent("bin/rv")
         try makeExecutable(executable)
+        try makeExecutable(home.appendingPathComponent("bin/rv-cli"))
         try FileManager.default.createDirectory(
             atPath: paths.grokDirectory,
             withIntermediateDirectories: true
@@ -190,6 +191,91 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
         #expect(outcome.stdout.contains("Grok") && outcome.stdout.contains("broken"))
         #expect(outcome.stdout.contains("→  rv setup"))
         #expect(outcome.stdout.contains("Grok") && outcome.stdout.contains("wired") == false)
+    }
+}
+
+@Test func doctor_missingRvCliNextToBakedRvIsBrokenNotWired() throws {
+    try withDoctorHome { home, paths, environment in
+        let executable = home.appendingPathComponent("bin/rv")
+        try makeExecutable(executable)
+        try FileManager.default.createDirectory(
+            atPath: paths.grokDirectory,
+            withIntermediateDirectories: true
+        )
+        let body = try SetupHostKind.grok.adapterResource().rendered(rvPath: executable.path)
+        try FileManager.default.createDirectory(
+            atPath: (paths.grokHook as NSString).deletingLastPathComponent,
+            withIntermediateDirectories: true
+        )
+        try body.write(toFile: paths.grokHook, atomically: true, encoding: .utf8)
+
+        let pretty = DoctorRun.run(
+            environment: environment,
+            diagnostics: localReady,
+            appearance: .pretty(colorOffPalette)
+        )
+        let robot = DoctorRun.run(
+            environment: environment,
+            diagnostics: localReady,
+            appearance: .robot
+        )
+        let object = try #require(
+            JSONSerialization.jsonObject(with: Data(robot.stdout.utf8)) as? [String: Any]
+        )
+        let hosts = try #require(object["hosts"] as? [String: String])
+
+        #expect(pretty.stdout.contains("Grok") && pretty.stdout.contains("broken"))
+        #expect(pretty.stdout.contains("wired") == false)
+        #expect(hosts["grok"] == "broken")
+        #expect(hosts["grok"] != "wired")
+        #expect(object["grade"] as? String == "hook")
+    }
+}
+
+@Test func doctor_nonExecutableRvCliNextToBakedRvIsBrokenNotWired() throws {
+    try withDoctorHome { home, paths, environment in
+        let executable = home.appendingPathComponent("bin/rv")
+        try makeExecutable(executable)
+        let cli = home.appendingPathComponent("bin/rv-cli")
+        try FileManager.default.createDirectory(
+            at: cli.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try "not-exec".write(to: cli, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o644],
+            ofItemAtPath: cli.path
+        )
+        try FileManager.default.createDirectory(
+            atPath: paths.grokDirectory,
+            withIntermediateDirectories: true
+        )
+        let body = try SetupHostKind.grok.adapterResource().rendered(rvPath: executable.path)
+        try FileManager.default.createDirectory(
+            atPath: (paths.grokHook as NSString).deletingLastPathComponent,
+            withIntermediateDirectories: true
+        )
+        try body.write(toFile: paths.grokHook, atomically: true, encoding: .utf8)
+
+        let outcome = DoctorRun.run(
+            environment: environment,
+            diagnostics: localReady,
+            appearance: .pretty(colorOffPalette)
+        )
+        let robot = DoctorRun.run(
+            environment: environment,
+            diagnostics: localReady,
+            appearance: .robot
+        )
+        let object = try #require(
+            JSONSerialization.jsonObject(with: Data(robot.stdout.utf8)) as? [String: Any]
+        )
+        let hosts = try #require(object["hosts"] as? [String: String])
+
+        #expect(outcome.stdout.contains("Grok") && outcome.stdout.contains("broken"))
+        #expect(outcome.stdout.contains("wired") == false)
+        #expect(hosts["grok"] == "broken")
+        #expect(object["grade"] as? String == "hook")
     }
 }
 

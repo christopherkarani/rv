@@ -2,6 +2,7 @@ import Foundation
 import RVAnalytics
 import RVDomain
 import RVEngine
+import RVHooks
 import RVIPC
 import RVPacks
 import RVPolicy
@@ -13,6 +14,7 @@ public actor ServiceRuntime {
     private var gated: GatedEvaluate
     private var catalog: PackCatalog
     private var lastUncoveredWanted: Set<PackID> = []
+    private var lastCoverageRebuildAt: UInt64 = 0
     private let sessionSnapshots: [PackSnapshot]
     private let configHome: String
     private let allowOnce: AllowOnceStore
@@ -99,8 +101,7 @@ public actor ServiceRuntime {
     /// Implicit hello on first evaluate when `clientSemver` is set. Old clients Hello first.
     private func handleUnreadyIncoming(_ body: Data) async -> (Data, Bool) {
         if let request = try? IPCJSON.decode(IPCRequest.self, from: body),
-           case .evaluate(let params) = request.method,
-           let clientSemver = params.clientSemver,
+           let clientSemver = implicitHelloSemver(request.method),
            clientSemver.isEmpty == false
         {
             let hello = Hello(protocolName: request.protocolName, clientSemver: clientSemver)
@@ -123,6 +124,17 @@ public actor ServiceRuntime {
         return (data, false)
     }
 
+    private func implicitHelloSemver(_ method: IPCMethod) -> String? {
+        switch method {
+        case .evaluate(let params):
+            return params.clientSemver
+        case .hookEvaluate(let params):
+            return params.clientSemver
+        case .explain, .classify, .listPacks, .setPackEnabled, .allowOnceConsume, .doctorSnapshot:
+            return nil
+        }
+    }
+
     public func dispatch(_ request: IPCRequest) async -> IPCResponse {
         if request.protocolName != ProtocolVersion.name {
             return IPCResponse(id: request.id, result: .error(.protocolSkew(request.protocolName)))
@@ -131,10 +143,16 @@ public actor ServiceRuntime {
         let result: IPCResult
         switch request.method {
         case .evaluate(let params):
-            if Self.evaluateIsMajorSkewed(params) {
+            if Self.isMajorSkewed(params.clientSemver) {
                 result = .error(.protocolSkew(SkewReason.majorVersion.rawValue))
             } else {
                 result = .evaluate(await makeEvaluateReply(params.request, cwd: params.cwd))
+            }
+        case .hookEvaluate(let params):
+            if Self.isMajorSkewed(params.clientSemver) {
+                result = .error(.protocolSkew(SkewReason.majorVersion.rawValue))
+            } else {
+                result = await makeHookEvaluateResult(params)
             }
         case .explain(let params):
             result = .explain(await explain(params))
@@ -161,6 +179,26 @@ public actor ServiceRuntime {
         EvaluateReply(result: await runEvaluate(request, cwd: cwd))
     }
 
+    private func makeHookEvaluateResult(_ params: HookEvaluateParams) async -> IPCResult {
+        do {
+            let reply = try await HookDoor.run(
+                host: params.host,
+                stdin: params.stdin
+            ) { command, cwd in
+                // Same pack resolution as the rv-cli miss path
+                // (`EnabledPacks.resolve`): a warm rvd must never decide on a
+                // narrower or wider set than a cold one.
+                let request = GatedEvaluate.makeRequest(command: command, home: self.configHome)
+                return await self.runEvaluate(request, cwd: cwd)
+            }
+            return .hookEvaluate(reply)
+        } catch let error as IPCError {
+            return .error(error)
+        } catch {
+            return .error(.engine("hook evaluate failed"))
+        }
+    }
+
     private func runEvaluate(_ request: EvaluationRequest, cwd: String?) async -> EvaluationResult {
         rebuildWhenUncovered(wanted: Set(request.enabledPacks))
         let result = await gated.apply(request, cwd: cwd, store: allowOnce, now: Date())
@@ -170,9 +208,10 @@ public actor ServiceRuntime {
 
     /// Frame-level major-version guard: runs even when a Hello on this
     /// connection already succeeded, so a skewed `clientSemver` can never ride
-    /// an open handshake into an evaluation.
-    private static func evaluateIsMajorSkewed(_ params: EvaluateParams) -> Bool {
-        guard let clientSemver = params.clientSemver, clientSemver.isEmpty == false else {
+    /// an open handshake into an evaluation. Applies to evaluate and
+    /// hookEvaluate alike; an absent or empty semver stays legacy-compatible.
+    private static func isMajorSkewed(_ clientSemver: String?) -> Bool {
+        guard let clientSemver, clientSemver.isEmpty == false else {
             return false
         }
         return ProtocolVersion.isMajorSkew(
@@ -361,6 +400,8 @@ public actor ServiceRuntime {
         switch request.method {
         case .evaluate:
             method = "evaluate"
+        case .hookEvaluate:
+            method = "hookEvaluate"
         case .explain:
             method = "explain"
         case .classify:
@@ -413,12 +454,19 @@ public actor ServiceRuntime {
     /// Warm-runtime self-heal for behind-our-back config edits: `rv packs
     /// enable` writes config.toml directly, so a request can name packs this
     /// session never compiled. Uncompiled-but-requested packs are dropped
-    /// toward allow, so rebuild before evaluating. One attempt per distinct
-    /// uncovered wanted-set keeps a pack that can never compile from
-    /// rebuilding on every evaluate.
+    /// toward allow, so rebuild before evaluating. Failed attempts retry at
+    /// most once per second so a pack that can never compile costs one
+    /// rebuild per interval, not one per evaluate.
     private func rebuildWhenUncovered(wanted: Set<PackID>) {
-        guard !wanted.isSubset(of: Set(compiledPackIDs)), wanted != lastUncoveredWanted else { return }
+        guard !wanted.isSubset(of: Set(compiledPackIDs)) else { return }
+        let now = DispatchTime.now().uptimeNanoseconds
+        if wanted == lastUncoveredWanted,
+           now < lastCoverageRebuildAt &+ 1_000_000_000
+        {
+            return
+        }
         lastUncoveredWanted = wanted
+        lastCoverageRebuildAt = now
         catalog = (try? PacksFacade.makeCatalog(home: configHome)) ?? catalog
         rebuildGated()
     }

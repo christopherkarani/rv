@@ -1,10 +1,11 @@
 import Foundation
+@preconcurrency import XPC
 
 public final class XPCEvaluateClient: @unchecked Sendable {
     public let serviceName: String
-    // lock guards connection and opened. Never invalidate/resume while holding it.
+    // lock guards connection and opened. Never cancel/resume while holding it.
     private let lock = NSLock()
-    private var connection: NSXPCConnection?
+    private var connection: xpc_connection_t?
     private var opened = 0
 
     public init(serviceName: String = RVService.machServiceName) {
@@ -16,30 +17,45 @@ public final class XPCEvaluateClient: @unchecked Sendable {
     }
 
     public func invalidate() {
-        let existing = lock.withLock { () -> NSXPCConnection? in
+        let existing = lock.withLock { () -> xpc_connection_t? in
             let current = connection
             connection = nil
             return current
         }
-        existing?.invalidate()
+        if let existing {
+            xpc_connection_cancel(existing)
+        }
     }
 
     public func perform(_ body: Data) async throws -> Data {
+        if Task.isCancelled {
+            throw XPCEvaluateClientError.cancelled
+        }
         let connection = try liveConnection()
         let once = OnceResume<Data>()
+        let held = XPCHeld(connection)
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 if once.install(continuation) {
                     return
                 }
-                guard let proxy = connection.remoteObjectProxyWithErrorHandler({ error in
-                    once.resume(throwing: error)
-                }) as? RVEvaluateXPC else {
-                    once.resume(throwing: XPCEvaluateClientError.connectFailed)
+                if Task.isCancelled {
+                    once.resume(throwing: XPCEvaluateClientError.cancelled)
                     return
                 }
-                proxy.perform(body) { reply in
-                    once.resume(returning: reply)
+                let message = xpc_dictionary_create_empty()
+                XPCIPCWire.set(body, on: message)
+                xpc_connection_send_message_with_reply(held.object, message, nil) { reply in
+                    let type = xpc_get_type(reply)
+                    if type == XPC_TYPE_ERROR {
+                        once.resume(throwing: XPCEvaluateClientError.connectFailed)
+                        return
+                    }
+                    guard let data = XPCIPCWire.body(from: reply) else {
+                        once.resume(throwing: XPCEvaluateClientError.connectFailed)
+                        return
+                    }
+                    once.resume(returning: data)
                 }
             }
         } onCancel: {
@@ -48,18 +64,20 @@ public final class XPCEvaluateClient: @unchecked Sendable {
         }
     }
 
-    private func liveConnection() throws -> NSXPCConnection {
+    private func liveConnection() throws -> xpc_connection_t {
         if let existing = lock.withLock({ connection }) {
             return existing
         }
 
-        let created = NSXPCConnection(machServiceName: serviceName)
-        created.remoteObjectInterface = NSXPCInterface(with: RVEvaluateXPC.self)
-        created.invalidationHandler = { [weak self] in
-            self?.forget(created)
+        let created = xpc_connection_create_mach_service(serviceName, nil, 0)
+        let heldCreated = XPCHeld(created)
+        xpc_connection_set_event_handler(created) { [weak self] event in
+            if xpc_get_type(event) == XPC_TYPE_ERROR {
+                self?.forget(heldCreated.object)
+            }
         }
 
-        let winner = lock.withLock { () -> NSXPCConnection in
+        let winner = lock.withLock { () -> xpc_connection_t in
             if let existing = connection {
                 return existing
             }
@@ -68,14 +86,14 @@ public final class XPCEvaluateClient: @unchecked Sendable {
             return created
         }
         if winner !== created {
-            created.invalidate()
+            xpc_connection_cancel(created)
             return winner
         }
-        created.resume()
+        xpc_connection_resume(created)
         return created
     }
 
-    private func forget(_ candidate: NSXPCConnection) {
+    private func forget(_ candidate: xpc_connection_t) {
         lock.withLock {
             if connection === candidate {
                 connection = nil

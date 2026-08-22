@@ -161,6 +161,20 @@ private func harnessURL() -> URL {
     #expect(message.contains("Run it in Terminal, or rv allow-once."))
 }
 
+@Test func openCodeAdapter_legacyClientToastsViaWrappedBody() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: ["tool": "bash", "args": ["command": "git reset --hard"]],
+        stub: .stdout(resetHardJSON, exit: 1),
+        legacyClient: true
+    )
+    #expect(result.threw == resetHardReason)
+    #expect(result.toastCount == 1)
+    #expect(result.toastTitle == "RV · Blocked")
+    #expect(result.toastVariant == "error")
+    let message = result.toastMessage ?? ""
+    #expect(message.contains("Blocked git reset --hard"))
+}
+
 @Test func openCodeAdapter_toastThrowStillBlocks() async throws {
     let result = try await runOpenCodeAdapter(
         event: ["tool": "bash", "args": ["command": "git reset --hard"]],
@@ -421,7 +435,8 @@ private func runOpenCodeAdapter(
     timeoutMs: Int? = nil,
     toastThrows: Bool = false,
     toastHangs: Bool = false,
-    toastTimeoutMs: Int? = nil
+    toastTimeoutMs: Int? = nil,
+    legacyClient: Bool = false
 ) async throws -> OpenCodeAdapterRun {
     let payload = try await runAdapter(
         host: .opencode,
@@ -430,7 +445,8 @@ private func runOpenCodeAdapter(
         timeoutMs: timeoutMs,
         toastThrows: toastThrows,
         toastHangs: toastHangs,
-        toastTimeoutMs: toastTimeoutMs
+        toastTimeoutMs: toastTimeoutMs,
+        legacyClient: legacyClient
     )
     let object = try harnessObject(payload.text)
     let toast = firstToast(object)
@@ -469,7 +485,8 @@ private func runAdapter(
     sendMessageThrows: Bool = false,
     toastThrows: Bool = false,
     toastHangs: Bool = false,
-    toastTimeoutMs: Int? = nil
+    toastTimeoutMs: Int? = nil,
+    legacyClient: Bool = false
 ) async throws -> AdapterPayload {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-t5-\(UUID().uuidString)", isDirectory: true)
@@ -537,6 +554,9 @@ private func runAdapter(
     }
     if toastHangs {
         environment["RV_TOAST_HANGS"] = "1"
+    }
+    if legacyClient {
+        environment["RV_TOAST_LEGACY_CLIENT"] = "1"
     }
     switch stub {
     case .missing:

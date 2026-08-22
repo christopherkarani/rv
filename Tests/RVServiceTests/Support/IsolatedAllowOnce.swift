@@ -9,12 +9,22 @@ func isolatedAllowOnceDirectory() throws -> URL {
     return root
 }
 
+func isolatedHomeDirectory() throws -> URL {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-service-home-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    return root
+}
+
 func isolatedRuntime(
     snapshots: [PackSnapshot]? = nil,
-    log: (any ServiceLog)? = nil
+    log: (any ServiceLog)? = nil,
+    home: String? = nil
 ) throws -> ServiceRuntime {
-    ServiceRuntime(
+    let resolvedHome = try home ?? isolatedHomeDirectory().path
+    return ServiceRuntime(
         snapshots: snapshots,
+        home: resolvedHome,
         allowOnceDirectory: try isolatedAllowOnceDirectory(),
         log: log
     )

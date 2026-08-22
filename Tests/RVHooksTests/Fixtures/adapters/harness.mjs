@@ -89,6 +89,14 @@ if (host === "opencode") {
           if (process.env.RV_TOAST_HANGS === "1") {
             return new Promise(() => {});
           }
+          if (
+            process.env.RV_TOAST_LEGACY_CLIENT === "1" &&
+            !(input && typeof input === "object" && "body" in input)
+          ) {
+            return {
+              error: { name: "BadRequest", data: { message: "Expected object, got undefined" } },
+            };
+          }
           toasts.push(input);
         },
         async publish(input) {

@@ -1,4 +1,5 @@
 import Foundation
+import RVHooks
 import RVIPC
 import RVPresentation
 import RVTUI
@@ -85,10 +86,44 @@ enum DoctorRun {
             service: health.service,
             packs: health.packs,
             hosts: SetupHostKind.allCases.map { host in
-                DoctorHostView(host: host, state: installations.state(for: host))
+                DoctorHostView(
+                    host: host,
+                    state: doctorHostState(
+                        installations.installation(for: host),
+                        fileManager: environment.fileManager
+                    )
+                )
             },
             config: configState(path: paths.configDirectory, fileManager: environment.fileManager)
         )
+    }
+
+    /// Miss path needs sibling `rv-cli`. Missing or non-exec is `.broken`, not `.wired`.
+    private static func doctorHostState(
+        _ installation: HostAdapterInstallation,
+        fileManager: FileManager
+    ) -> DoctorHostState {
+        switch installation {
+        case .wired(let owned, let data):
+            guard let text = String(data: data, encoding: .utf8),
+                  let adapter = try? HostAdapterResources.load(for: owned.hookHost),
+                  let bakedRvPath = adapter.bakedRvPath(in: text),
+                  isExecutableRvCli(nextTo: bakedRvPath, fileManager: fileManager)
+            else {
+                return .broken
+            }
+            return .wired
+        case .missing, .absentFile, .occupied, .broken:
+            return installation.state
+        }
+    }
+
+    private static func isExecutableRvCli(
+        nextTo rvPath: String,
+        fileManager: FileManager
+    ) -> Bool {
+        let sibling = (rvPath as NSString).deletingLastPathComponent + "/rv-cli"
+        return fileManager.isExecutableFile(atPath: sibling)
     }
 
     private static func configState(

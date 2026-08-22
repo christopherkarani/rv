@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+@testable import RVCLI
 
 private func repoRootURL() -> URL {
     URL(fileURLWithPath: #filePath)
@@ -12,6 +13,65 @@ private func installScriptURL() -> URL {
     repoRootURL().appendingPathComponent("install.sh")
 }
 
+private func writeExecutable(_ url: URL, contents: String) throws {
+    try FileManager.default.createDirectory(
+        at: url.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+    )
+    try contents.write(to: url, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+}
+
+private func writeDarwinShims(in shim: URL) throws {
+    try FileManager.default.createDirectory(at: shim, withIntermediateDirectories: true)
+    try writeExecutable(
+        shim.appendingPathComponent("uname"),
+        contents: """
+        #!/bin/sh
+        if [ "$1" = "-s" ]; then echo Darwin; exit 0; fi
+        if [ "$1" = "-m" ]; then echo arm64; exit 0; fi
+        echo Darwin
+        """
+    )
+    try writeExecutable(
+        shim.appendingPathComponent("sw_vers"),
+        contents: """
+        #!/bin/sh
+        if [ "$1" = "-productVersion" ]; then echo 26.0; exit 0; fi
+        echo 26.0
+        """
+    )
+}
+
+private func writeDummyTrio(in src: URL) throws {
+    let dummy = "#!/bin/sh\n# installed-dummy\nexit 0\n"
+    for name in ["rv", "rv-cli", "rvd"] {
+        try writeExecutable(src.appendingPathComponent(name), contents: dummy)
+    }
+}
+
+private func runInstallScript(
+    home: URL,
+    src: URL,
+    pathPrefix: String
+) throws -> (status: Int32, stderr: String) {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/bin/sh")
+    process.arguments = [installScriptURL().path]
+    process.environment = [
+        "HOME": home.path,
+        "PATH": pathPrefix + ":/usr/bin:/bin",
+        "RV_INSTALL_BIN": src.path,
+    ]
+    let stderr = Pipe()
+    process.standardError = stderr
+    process.standardOutput = Pipe()
+    try process.run()
+    process.waitUntilExit()
+    let err = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+    return (process.terminationStatus, err)
+}
+
 @Test func installSh_doesNotMentionBrew() throws {
     let text = try String(contentsOf: installScriptURL(), encoding: .utf8)
     #expect(text.localizedCaseInsensitiveContains("brew") == false)
@@ -19,7 +79,8 @@ private func installScriptURL() -> URL {
 
 @Test func installSh_setsRVFromInstallBeforeSetup() throws {
     let text = try String(contentsOf: installScriptURL(), encoding: .utf8)
-    #expect(text.contains("RV_FROM_INSTALL=1 exec"))
+    #expect(text.contains("RV_FROM_INSTALL=1 exec \"$bin/rv\" setup"))
+    #expect(text.contains("exec \"$bin/rv-cli\" setup") == false)
 }
 
 @Test func readme_hasNoBrewInstallPath() throws {
@@ -87,49 +148,212 @@ private func installScriptURL() -> URL {
     )
 
     let src = root.appendingPathComponent("src", isDirectory: true)
-    try FileManager.default.createDirectory(at: src, withIntermediateDirectories: true)
-    let dummy = "#!/bin/sh\n# installed-dummy\nexit 0\n"
-    for name in ["rv", "rvd"] {
-        let url = src.appendingPathComponent(name)
-        try dummy.write(to: url, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
-    }
+    try writeDummyTrio(in: src)
 
     let shim = root.appendingPathComponent("shim", isDirectory: true)
-    try FileManager.default.createDirectory(at: shim, withIntermediateDirectories: true)
-    let uname = shim.appendingPathComponent("uname")
-    try """
-    #!/bin/sh
-    if [ "$1" = "-s" ]; then echo Darwin; exit 0; fi
-    if [ "$1" = "-m" ]; then echo arm64; exit 0; fi
-    echo Darwin
-    """.write(to: uname, atomically: true, encoding: .utf8)
-    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: uname.path)
-    let swVers = shim.appendingPathComponent("sw_vers")
-    try """
-    #!/bin/sh
-    if [ "$1" = "-productVersion" ]; then echo 26.0; exit 0; fi
-    echo 26.0
-    """.write(to: swVers, atomically: true, encoding: .utf8)
-    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: swVers.path)
+    try writeDarwinShims(in: shim)
 
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/bin/sh")
-    process.arguments = [installScriptURL().path]
-    process.environment = [
-        "HOME": home.path,
-        "PATH": shim.path + ":/usr/bin:/bin",
-        "RV_INSTALL_BIN": src.path,
-    ]
-    process.standardError = Pipe()
-    process.standardOutput = Pipe()
-    try process.run()
-    process.waitUntilExit()
+    let result = try runInstallScript(home: home, src: src, pathPrefix: shim.path)
 
-    #expect(process.terminationStatus == 0)
+    #expect(result.status == 0)
     let destType = try FileManager.default.attributesOfItem(atPath: destRv.path)[.type] as? FileAttributeType
     #expect(destType == .typeRegular)
     let destBody = try String(contentsOf: destRv, encoding: .utf8)
     #expect(destBody.contains("installed-dummy"))
     #expect(try Data(contentsOf: victim) == victimBytes)
+}
+
+@Test func installSh_failsWhenRvCliIsMissing() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-install-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let home = root.appendingPathComponent("home", isDirectory: true)
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    let src = root.appendingPathComponent("src", isDirectory: true)
+    let dummy = "#!/bin/sh\nexit 0\n"
+    try writeExecutable(src.appendingPathComponent("rv"), contents: dummy)
+    try writeExecutable(src.appendingPathComponent("rvd"), contents: dummy)
+
+    let shim = root.appendingPathComponent("shim", isDirectory: true)
+    try writeDarwinShims(in: shim)
+
+    let result = try runInstallScript(home: home, src: src, pathPrefix: shim.path)
+    #expect(result.status == 1)
+    #expect(result.stderr.contains("rv-cli"))
+    #expect(FileManager.default.fileExists(atPath: home.path + "/.local/bin/rv") == false)
+    #expect(FileManager.default.fileExists(atPath: home.path + "/.local/bin/rv-cli") == false)
+}
+
+@Test func installSh_failsWhenRvCliIsNotExecutable() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-install-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let home = root.appendingPathComponent("home", isDirectory: true)
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    let src = root.appendingPathComponent("src", isDirectory: true)
+    let dummy = "#!/bin/sh\nexit 0\n"
+    try writeExecutable(src.appendingPathComponent("rv"), contents: dummy)
+    try writeExecutable(src.appendingPathComponent("rvd"), contents: dummy)
+    let cli = src.appendingPathComponent("rv-cli")
+    try dummy.write(to: cli, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: cli.path)
+
+    let shim = root.appendingPathComponent("shim", isDirectory: true)
+    try writeDarwinShims(in: shim)
+
+    let result = try runInstallScript(home: home, src: src, pathPrefix: shim.path)
+    #expect(result.status == 1)
+    #expect(result.stderr.contains("rv-cli"))
+    #expect(FileManager.default.fileExists(atPath: home.path + "/.local/bin/rv-cli") == false)
+}
+
+@Test func installSh_copiesTrioAndPackBundlesThenExecsRvSetup() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-install-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let home = root.appendingPathComponent("home", isDirectory: true)
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    let src = root.appendingPathComponent("src", isDirectory: true)
+    try writeExecutable(
+        src.appendingPathComponent("rv"),
+        contents: """
+        #!/bin/sh
+        # dummy-rv
+        printf 'rv-ran\\n' > "$HOME/.rv-ran"
+        exec "$(dirname "$0")/rv-cli" "$@"
+        """
+    )
+    try writeExecutable(
+        src.appendingPathComponent("rv-cli"),
+        contents: """
+        #!/bin/sh
+        # dummy-rv-cli
+        printf 'from_install=%s argv=%s\\n' "${RV_FROM_INSTALL-}" "$*" > "$HOME/.rv-setup-marker"
+        exit 0
+        """
+    )
+    try writeExecutable(
+        src.appendingPathComponent("rvd"),
+        contents: "#!/bin/sh\n# dummy-rvd\nexit 0\n"
+    )
+    let bundlePack = src.appendingPathComponent("rv_RVPacks.bundle/packs/core.json")
+    try FileManager.default.createDirectory(
+        at: bundlePack.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+    )
+    try "{}\n".write(to: bundlePack, atomically: true, encoding: .utf8)
+
+    let shim = root.appendingPathComponent("shim", isDirectory: true)
+    try writeDarwinShims(in: shim)
+
+    let result = try runInstallScript(home: home, src: src, pathPrefix: shim.path)
+    #expect(result.status == 0)
+
+    let destBin = home.appendingPathComponent(".local/bin")
+    let destRv = destBin.appendingPathComponent("rv")
+    let destCli = destBin.appendingPathComponent("rv-cli")
+    let destRvd = destBin.appendingPathComponent("rvd")
+    #expect(FileManager.default.isExecutableFile(atPath: destRv.path))
+    #expect(FileManager.default.isExecutableFile(atPath: destCli.path))
+    #expect(FileManager.default.isExecutableFile(atPath: destRvd.path))
+    #expect(try String(contentsOf: destRv, encoding: .utf8).contains("dummy-rv"))
+    #expect(try String(contentsOf: destCli, encoding: .utf8).contains("dummy-rv-cli"))
+    #expect(
+        FileManager.default.fileExists(
+            atPath: destBin.appendingPathComponent("rv_RVPacks.bundle/packs/core.json").path
+        )
+    )
+
+    let ran = try String(contentsOfFile: home.path + "/.rv-ran", encoding: .utf8)
+    let marker = try String(contentsOfFile: home.path + "/.rv-setup-marker", encoding: .utf8)
+    #expect(ran.contains("rv-ran"))
+    #expect(marker.contains("from_install=1"))
+    #expect(marker.contains("setup"))
+}
+
+@Test func installSh_copyFailureLeavesPreviousInstallIntact() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-install-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let home = root.appendingPathComponent("home", isDirectory: true)
+    let destBin = home.appendingPathComponent(".local/bin", isDirectory: true)
+    try FileManager.default.createDirectory(at: destBin, withIntermediateDirectories: true)
+    let previous = "#!/bin/sh\n# installed-v1\n"
+    for name in ["rv", "rv-cli", "rvd"] {
+        try writeExecutable(destBin.appendingPathComponent(name), contents: previous)
+    }
+
+    let src = root.appendingPathComponent("src", isDirectory: true)
+    let dummy = "#!/bin/sh\nexit 0\n"
+    try writeExecutable(src.appendingPathComponent("rv"), contents: dummy)
+    try writeExecutable(src.appendingPathComponent("rv-cli"), contents: dummy)
+    // Owner-exec without owner-read: passes the `-x` precheck, fails `cp`.
+    let brokenRvd = src.appendingPathComponent("rvd")
+    try dummy.write(to: brokenRvd, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o100], ofItemAtPath: brokenRvd.path)
+
+    let shim = root.appendingPathComponent("shim", isDirectory: true)
+    try writeDarwinShims(in: shim)
+
+    let result = try runInstallScript(home: home, src: src, pathPrefix: shim.path)
+    #expect(result.status != 0)
+
+    for name in ["rv", "rv-cli", "rvd"] {
+        let dest = destBin.appendingPathComponent(name)
+        #expect(FileManager.default.fileExists(atPath: dest.path))
+        #expect(try String(contentsOf: dest, encoding: .utf8).contains("installed-v1"))
+    }
+    for leftover in [".rv.installing", ".rv-cli.installing", ".rvd.installing"] {
+        #expect(FileManager.default.fileExists(atPath: destBin.appendingPathComponent(leftover).path) == false)
+    }
+}
+
+@Test func installSh_setupBakesLocalRvHookNotRvCli() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-install-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let home = root.appendingPathComponent("home", isDirectory: true)
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    let src = root.appendingPathComponent("src", isDirectory: true)
+    try writeDummyTrio(in: src)
+
+    let shim = root.appendingPathComponent("shim", isDirectory: true)
+    try writeDarwinShims(in: shim)
+
+    let result = try runInstallScript(home: home, src: src, pathPrefix: shim.path)
+    #expect(result.status == 0)
+
+    try FileManager.default.createDirectory(
+        at: home.appendingPathComponent(".grok"),
+        withIntermediateDirectories: true
+    )
+    let destBin = home.appendingPathComponent(".local/bin")
+    let rvPath = destBin.appendingPathComponent("rv").path
+    let launchctl = RecordingLaunchctl()
+    let outcome = SetupRun.setup(
+        env(
+            home: home,
+            launchctl: launchctl,
+            rvPath: rvPath,
+            rvdPath: destBin.appendingPathComponent("rvd").path,
+            touchLaunchd: false
+        )
+    )
+    #expect(outcome.exitCode == 0)
+    let grok = try String(
+        contentsOfFile: home.path + "/.grok/hooks/rv.json",
+        encoding: .utf8
+    )
+    #expect(grok.contains("\(rvPath) hook --host grok"))
+    #expect(grok.contains("rv-cli") == false)
 }

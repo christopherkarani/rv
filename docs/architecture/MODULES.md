@@ -39,7 +39,7 @@ Each module keeps a small public API, `package` internals later, and its own tes
 | `RVAnalytics` | none | Store actor allowed. Network only in PostHog sink. |
 | `RVPresentation` | `RVDomain`, `RVTheme` | View models later. No ANSI. |
 | `RVTUI` | `RVTheme`, `RVPresentation` | `reduce` + `render` later. Must not open a TTY. |
-| `RVService` | `RVDomain`, `RVEngine`, `RVPacks`, `RVPolicy`, `RVIPC`, `RVHistory`, `RVAnalytics` | XPC/`NSObject` edge later. No ArgumentParser, no SwiftUI, no TUI/CLI/Presentation. |
+| `RVService` | `RVDomain`, `RVEngine`, `RVPacks`, `RVPolicy`, `RVHooks`, `RVIPC`, `RVHistory`, `RVAnalytics` | XPC/`NSObject` edge later. No ArgumentParser, no SwiftUI, no TUI/CLI/Presentation. |
 | `RVCLI` | `RVDomain`, `RVEngine`, `RVPolicy`, `RVHooks`, `RVIPC`, `RVPresentation`, `RVTheme`, `RVTUI`, `RVService`, `RVHistory`, `RVAnalytics` | Thin client; typed service diagnostics; service health facts shared by doctor and status; GatedEvaluate for TTY test/explain and hook XPC miss; read-only Host adapter installation state shared by setup and doctor. No regex, no pack parse. |
 
 Each module has a matching `*Tests` target that depends only on that module.

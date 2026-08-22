@@ -21,6 +21,7 @@ struct OwnedPaths: Equatable, Sendable {
     var openCodePlugin: String { home + "/.config/opencode/plugins/rv-guard.js" }
     var launchAgent: String { home + "/Library/LaunchAgents/dev.rv.evaluate.plist" }
     var localRv: String { home + "/.local/bin/rv" }
+    var localRvCli: String { home + "/.local/bin/rv-cli" }
     var localRvd: String { home + "/.local/bin/rvd" }
 
     var hostAdapters: [OwnedHostAdapterPath] {
