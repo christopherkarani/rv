@@ -253,11 +253,6 @@ extension IPCMethod {
                 id: id,
                 method: .setPackEnabled(SetPackEnabledParams(id: .coreGit, enabled: true))
             ),
-            NamedMethod(
-                key: "allowOnceConsume",
-                id: id,
-                method: .allowOnceConsume(AllowOnceConsumeParams(command: "git reset --hard", cwd: "/tmp/ws"))
-            ),
             NamedMethod(key: "doctorSnapshot", id: id, method: .doctorSnapshot),
         ]
     }
@@ -284,7 +279,7 @@ extension IPCResult {
                         ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
                         packID: .coreGit,
                         suggestion: "Run it in Terminal, or rv allow-once.",
-                        stages: [ExplainStage(name: "normalize", elapsedMs: 0.1)]
+                        stages: [ExplainStage(name: .normalize, elapsedMs: 0.1)]
                     )
                 )
             ),
@@ -317,11 +312,6 @@ extension IPCResult {
                 result: .setPackEnabled(
                     SetPackEnabledReply(pack: PackRecord(id: .coreGit, enabled: false, bundled: true))
                 )
-            ),
-            NamedResult(
-                key: "allowOnceConsume",
-                id: id,
-                result: .allowOnceConsume(AllowOnceConsumeReply(consumed: true, tokenID: "tok-1"))
             ),
             NamedResult(
                 key: "doctorSnapshot",

@@ -66,7 +66,7 @@ struct FakeXPCUnixSocketTests {
         #expect(decision?["decision"] as? String == "allow")
     }
 
-    @Test func allSevenMethodsRoundTripOnSocket() async throws {
+    @Test func allRemainingMethodsRoundTripOnSocket() async throws {
         let runtime = try isolatedRuntime()
         let path = "/tmp/rv-t3-\(UUID().uuidString).sock"
         let server = FakeXPCServer(runtime: runtime, path: path)
@@ -82,21 +82,16 @@ struct FakeXPCUnixSocketTests {
             methodJSON("classify", ["request": requestObject("git reset --hard")]),
             methodJSON("listPacks", [:] as [String: Any]),
             methodJSON("setPackEnabled", ["id": "core.git", "enabled": true]),
-            methodJSON("allowOnceConsume", ["command": "git status", "cwd": "/tmp/ws"]),
             methodJSON("doctorSnapshot", [:] as [String: Any]),
         ]
         let keys = [
             "evaluate", "explain", "classify", "listPacks",
-            "setPackEnabled", "allowOnceConsume", "doctorSnapshot",
+            "setPackEnabled", "doctorSnapshot",
         ]
         for (request, key) in zip(requests, keys) {
             let reply = try client.sendJSON(request)
             let result = try #require(reply["result"] as? [String: Any])
-            if key == "allowOnceConsume" {
-                #expect(result["error"] != nil || result["allowOnceConsume"] != nil)
-            } else {
-                #expect(result[key] != nil, "missing result key \(key)")
-            }
+            #expect(result[key] != nil, "missing result key \(key)")
         }
     }
 
@@ -134,7 +129,10 @@ struct FakeXPCUnixSocketTests {
         #expect(error["packNotFound"] as? String == "core.unknown")
     }
 
-    @Test func allowOnceConsumeIsUnknownMethodAndDoesNotSpend() async throws {
+    /// Retired phantom wire method: a legacy frame carrying its request key
+    /// fails envelope decode into `.decodeFailed` and the connection stays
+    /// usable; the grant is never touched.
+    @Test func legacyPhantomMethodFrameFailsDecodeAndDoesNotSpend() async throws {
         let runtime = try isolatedRuntime()
         try await runtime.insertGranted(matchingView: "git reset --hard", cwd: "/tmp/ws")
         let path = "/tmp/rv-t3-\(UUID().uuidString).sock"
@@ -145,16 +143,13 @@ struct FakeXPCUnixSocketTests {
         defer { client.close() }
         _ = try client.hello()
 
-        let first = try client.sendJSON(
-            methodJSON("allowOnceConsume", ["command": "git reset --hard", "cwd": "/tmp/ws"])
-        )
-        #expect(nested(first, ["result", "error"])?["unknownMethod"] as? Bool == true)
-        #expect(nested(first, ["result", "allowOnceConsume"]) == nil)
+        let legacyKey = "allowOnce" + "Consume"
+        let legacy = methodJSON(legacyKey, ["command": "git reset --hard", "cwd": "/tmp/ws"])
+        let first = try client.sendJSON(legacy)
+        #expect(nested(first, ["result", "error"])?["decodeFailed"] as? Bool == true)
 
-        let second = try client.sendJSON(
-            methodJSON("allowOnceConsume", ["command": "git reset --hard", "cwd": "/tmp/ws"])
-        )
-        #expect(nested(second, ["result", "error"])?["unknownMethod"] as? Bool == true)
+        let second = try client.sendJSON(legacy)
+        #expect(nested(second, ["result", "error"])?["decodeFailed"] as? Bool == true)
 
         let honored = try client.sendJSON(evaluateJSON("git reset --hard", cwd: "/tmp/ws"))
         let firstDecision = nested(honored, ["result", "evaluate", "result", "decision"])

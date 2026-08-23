@@ -81,8 +81,10 @@ public struct IPCResponse: Sendable, Equatable, Codable {
 public enum IPCError: Error, Sendable, Equatable, Codable {
     case unknownMethod
     case decodeFailed
-    case protocolSkew(String)
-    case engine(String)
+    case handshakeRequired
+    case protocolSkew(SkewReason?)
+    case hookFailed
+    case packMutationFailed
     case packNotFound(PackID)
     case allowOnceNotFound
     case allowOnceAlreadyConsumed
@@ -91,8 +93,10 @@ public enum IPCError: Error, Sendable, Equatable, Codable {
     private enum CodingKeys: String, CodingKey {
         case unknownMethod
         case decodeFailed
+        case handshakeRequired
         case protocolSkew
-        case engine
+        case hookFailed
+        case packMutationFailed
         case packNotFound
         case allowOnceNotFound
         case allowOnceAlreadyConsumed
@@ -106,10 +110,14 @@ public enum IPCError: Error, Sendable, Equatable, Codable {
             try container.encode(true, forKey: .unknownMethod)
         case .decodeFailed:
             try container.encode(true, forKey: .decodeFailed)
-        case .protocolSkew(let message):
-            try container.encode(message, forKey: .protocolSkew)
-        case .engine(let message):
-            try container.encode(message, forKey: .engine)
+        case .handshakeRequired:
+            try container.encode(true, forKey: .handshakeRequired)
+        case .protocolSkew(let reason):
+            try container.encode(reason, forKey: .protocolSkew)
+        case .hookFailed:
+            try container.encode(true, forKey: .hookFailed)
+        case .packMutationFailed:
+            try container.encode(true, forKey: .packMutationFailed)
         case .packNotFound(let id):
             try container.encode(id, forKey: .packNotFound)
         case .allowOnceNotFound:
@@ -127,10 +135,14 @@ public enum IPCError: Error, Sendable, Equatable, Codable {
             self = .unknownMethod
         } else if container.contains(.decodeFailed) {
             self = .decodeFailed
-        } else if let message = try container.decodeIfPresent(String.self, forKey: .protocolSkew) {
-            self = .protocolSkew(message)
-        } else if let message = try container.decodeIfPresent(String.self, forKey: .engine) {
-            self = .engine(message)
+        } else if container.contains(.handshakeRequired) {
+            self = .handshakeRequired
+        } else if container.contains(.protocolSkew) {
+            self = .protocolSkew(try container.decodeIfPresent(SkewReason.self, forKey: .protocolSkew))
+        } else if container.contains(.hookFailed) {
+            self = .hookFailed
+        } else if container.contains(.packMutationFailed) {
+            self = .packMutationFailed
         } else if let id = try container.decodeIfPresent(PackID.self, forKey: .packNotFound) {
             self = .packNotFound(id)
         } else if container.contains(.allowOnceNotFound) {

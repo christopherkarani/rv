@@ -70,11 +70,11 @@ struct HookEvaluateTests {
         )
         #expect(ok == false)
         let response = try IPCJSON.decode(IPCResponse.self, from: data)
-        guard case .error(.protocolSkew(let message)) = response.result else {
+        guard case .error(.protocolSkew(let reason)) = response.result else {
             Issue.record("major semver skew must error, not evaluate")
             return
         }
-        #expect(message == "major version")
+        #expect(reason == .majorVersion)
         if case .hookEvaluate = response.result {
             Issue.record("do not evaluate hookEvaluate against a major-skewed listener")
         }
@@ -89,11 +89,10 @@ struct HookEvaluateTests {
         )
         #expect(ok == false)
         let response = try IPCJSON.decode(IPCResponse.self, from: data)
-        guard case .error(.protocolSkew(let message)) = response.result else {
+        guard case .error(.handshakeRequired) = response.result else {
             Issue.record("hookEvaluate without clientSemver must stay handshake required")
             return
         }
-        #expect(message == "handshake required")
         if case .hookEvaluate = response.result {
             Issue.record("handshake-required must not evaluate")
         }
