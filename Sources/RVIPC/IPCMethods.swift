@@ -401,7 +401,6 @@ public enum DoctorCheckStatus: String, Sendable, Equatable, Codable {
     case skipped
 }
 
-/// Host-name cases mirror RVHooks.HookHost because RVIPC cannot depend on RVHooks; this duplication is accepted.
 public enum DoctorCheckID: String, Codable, Hashable, Sendable {
     case xpc, `protocol`, packs, launchd, lastError, grok, pi, opencode
 }
