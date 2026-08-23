@@ -50,9 +50,7 @@ private let readyService = DoctorServiceView(
     #expect(incomplete["decision"] as? String == "indeterminate")
     #expect(incomplete["reason"] as? String == incompleteEvalSentence)
 
-    #expect(testRobotPayload(from: denyResult()).fields.map(\.0) == [
-        "schema", "decision", "pack_id", "rule_id", "reason",
-    ])
+    #expect(Set(deny.keys) == ["schema", "decision", "pack_id", "rule_id", "reason"])
 }
 
 @Test func explainRobotPayload_schemaIsNotTestSchema() throws {
