@@ -19,9 +19,10 @@ func isolatedHomeDirectory() throws -> URL {
 func isolatedRuntime(
     snapshots: [PackSnapshot]? = nil,
     log: (any ServiceLog)? = nil,
-    home: String? = nil
+    home: HomeDirectory? = nil
 ) throws -> ServiceRuntime {
-    let resolvedHome = try home ?? isolatedHomeDirectory().path
+    let resolvedHome = try home
+        ?? HomeDirectory(validating: isolatedHomeDirectory().path)
     return ServiceRuntime(
         snapshots: snapshots,
         home: resolvedHome,
