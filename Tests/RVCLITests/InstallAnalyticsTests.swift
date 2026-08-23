@@ -12,6 +12,24 @@ final class RecordingInstallAnalytics: InstallAnalyticsCapturing, @unchecked Sen
     }
 }
 
+final class StalledAnalyticsSink: AnalyticsSink {
+    func capture(_: AnalyticsPayload) async -> Bool {
+        try? await Task.sleep(for: .seconds(30))
+        return true
+    }
+}
+
+func stalledInstallCoordinator(configDirectory: URL) -> AnalyticsCoordinator {
+    AnalyticsCoordinator(
+        paths: AnalyticsPaths(configDirectory: configDirectory),
+        preferences: .optOutDefault,
+        identity: AnalyticsIdentity(distinctID: "test-install"),
+        sink: StalledAnalyticsSink(),
+        productVersion: "0.0.0",
+        platform: PlatformSnapshot(macosVersion: "26.0.0", macosBuild: "25A354")
+    )
+}
+
 @Test func installAnalyticsHosts_mapsSlotKinds() {
     let slots = SetupSlotSnapshot(
         grok: .wired,
@@ -27,17 +45,27 @@ final class RecordingInstallAnalytics: InstallAnalyticsCapturing, @unchecked Sen
 }
 
 @Test func blockingInstallAnalytics_nilCoordinatorReturnsImmediately() {
-    let analytics = BlockingInstallAnalytics(timeoutSeconds: 10, makeCoordinator: { nil })
+    let analytics = BlockingInstallAnalytics(makeCoordinator: { nil })
     analytics.captureInstall(hosts: ["grok": "wired"])
 }
 
-@Test func setup_recordsInstallAnalyticsWithoutWritingIdentity() throws {
+@Test func blockingInstallAnalytics_stalledSinkReturnsWithinDefaultBudget() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-analytics-stall-\(UUID().uuidString)", isDirectory: true)
+    let coordinator = stalledInstallCoordinator(configDirectory: root)
+    let analytics = BlockingInstallAnalytics { coordinator }
+    let start = ContinuousClock.now
+    analytics.captureInstall(hosts: ["grok": "wired"])
+    #expect(start.duration(to: .now) < .seconds(5))
+}
+
+@Test func setupFlow_recordsInstallAnalyticsThroughTheDoor_withoutWritingIdentity() throws {
     try withTempHome { home, layout, launchctl in
         try FileManager.default.createDirectory(atPath: layout.grokDirectory, withIntermediateDirectories: true)
         let analytics = RecordingInstallAnalytics()
-        let outcome = SetupRun.setup(
-            env(home: home, launchctl: launchctl, installAnalytics: analytics)
-        )
+        let environment = env(home: home, launchctl: launchctl, installAnalytics: analytics)
+        let outcome = SetupFlow(makeEnvironment: { environment })
+            .run(SetupIntent(kind: .install, appearance: .robot))
         #expect(outcome.exitCode == 0)
         #expect(analytics.captures == [[
             "grok": "wired",

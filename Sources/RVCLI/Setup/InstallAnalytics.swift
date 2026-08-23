@@ -16,7 +16,7 @@ struct BlockingInstallAnalytics: InstallAnalyticsCapturing {
     var makeCoordinator: @Sendable () -> AnalyticsCoordinator?
 
     init(
-        timeoutSeconds: Int = 10,
+        timeoutSeconds: Int = 2,
         makeCoordinator: @escaping @Sendable () -> AnalyticsCoordinator?
     ) {
         self.timeoutSeconds = timeoutSeconds
