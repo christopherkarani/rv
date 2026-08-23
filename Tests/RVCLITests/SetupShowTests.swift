@@ -280,3 +280,25 @@ import RVTheme
     }
 }
 
+@Test func setupFlow_prettyInstall_rendersCeremonyThroughDoorWithInjectedFactory() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(
+            atPath: layout.grokDirectory,
+            withIntermediateDirectories: true
+        )
+        var environment = env(home: home, launchctl: launchctl)
+        environment.uid = { 4242 }
+        let flow = SetupFlow(makeEnvironment: { environment })
+        let outcome = flow.run(
+            SetupIntent(
+                kind: .install,
+                appearance: .pretty(colorOffPalette),
+                animate: false
+            )
+        )
+        #expect(outcome.exitCode == 0)
+        #expect(outcome.stdout.contains("•  Grok  reload /hooks"))
+        #expect(launchctl.bootstraps.isEmpty == false)
+    }
+}
+

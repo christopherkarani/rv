@@ -762,3 +762,68 @@ private func fixtureLoginHome() throws -> URL {
         #expect(FileManager.default.fileExists(atPath: layout.grokHook) == false)
     }
 }
+
+final class DomainRecordingLaunchctl: LaunchctlApplying {
+    private(set) var bootstrapDomains: [String] = []
+    private(set) var bootoutDomains: [String] = []
+
+    func bootstrap(domain: String, plist _: URL) throws {
+        bootstrapDomains.append(domain)
+    }
+
+    func bootout(domain: String, label _: String) throws {
+        bootoutDomains.append(domain)
+    }
+}
+
+@Test func setupFlow_missingHOME_failsOnceThroughInjectedFactory_withoutFilesystemAccess() {
+    var consultations = 0
+    let flow = SetupFlow(makeEnvironment: {
+        consultations += 1
+        return nil
+    })
+    let outcome = flow.run(SetupIntent(kind: .install))
+    #expect(consultations == 1)
+    #expect(outcome.stdout.isEmpty)
+    #expect(outcome.stderr == "rv setup: HOME is not set\n")
+    #expect(outcome.exitCode == 1)
+}
+
+@Test func setupFlow_uninstallMissingHOME_prefixesUninstall() {
+    let outcome = SetupFlow(makeEnvironment: { nil }).run(SetupIntent(kind: .uninstall))
+    #expect(outcome.stderr == "rv uninstall: HOME is not set\n")
+    #expect(outcome.exitCode == 1)
+}
+
+@Test func setupFlow_oneEntry_routesIntentsToSetupAndUninstallOrchestrations() throws {
+    try withTempHome { home, _, launchctl in
+        var consultations = 0
+        let flow = SetupFlow(makeEnvironment: {
+            consultations += 1
+            return env(home: home, launchctl: launchctl)
+        })
+        let installed = flow.run(SetupIntent(kind: .install, appearance: .robot))
+        #expect(installed.exitCode == 0)
+        #expect(installed.stdout == setupRobotHostlessLine + "\n")
+        let removed = flow.run(SetupIntent(kind: .uninstall, appearance: .robot))
+        #expect(removed.exitCode == 0)
+        #expect(removed.stdout == uninstallRobotCompleteLine + "\n")
+        #expect(consultations == 2)
+    }
+}
+
+@Test func setupFlow_injectedUID_bakesGuiDomainForBootstrapAndBootout() throws {
+    try withTempHome { home, layout, _ in
+        let launchctl = DomainRecordingLaunchctl()
+        var environment = env(home: home, launchctl: launchctl)
+        environment.uid = { 4242 }
+        let flow = SetupFlow(makeEnvironment: { environment })
+        let installed = flow.run(SetupIntent(kind: .install, appearance: .robot))
+        #expect(installed.exitCode == 0)
+        #expect(launchctl.bootstrapDomains == ["gui/4242"])
+        #expect(FileManager.default.fileExists(atPath: layout.launchAgent))
+        let removed = flow.run(SetupIntent(kind: .uninstall, appearance: .robot))
+        #expect(removed.exitCode == 0)
+        #expect(launchctl.bootoutDomains == ["gui/4242", "gui/4242"])
+    }
+}

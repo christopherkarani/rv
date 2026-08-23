@@ -45,23 +45,8 @@ struct SetupEnvironment {
     var launchctl: any LaunchctlApplying
     var touchLaunchd: Bool
     var installAnalytics: any InstallAnalyticsCapturing
-
-    static func live(environment: [String: String] = ProcessInfo.processInfo.environment) -> SetupEnvironment? {
-        guard let home = environment["HOME"], home.isEmpty == false else { return nil }
-        let pathEntries = (environment["PATH"] ?? "").split(separator: ":").map(String.init)
-        let executable = Bundle.main.executableURL
-        return SetupEnvironment(
-            home: home,
-            pathEntries: pathEntries,
-            rvPath: resolveRv(home: home),
-            rvdPath: resolveRvd(nextTo: executable?.path, home: home)
-                ?? (home + "/.local/bin/rvd"),
-            fileManager: .default,
-            launchctl: ProcessLaunchctl(),
-            touchLaunchd: LoginHome.matchesProcessHome(home),
-            installAnalytics: BlockingInstallAnalytics.live(home: home, environment: environment)
-        )
-    }
+    /// Injected so launchd domains are provable without the real uid.
+    var uid: () -> uid_t = { getuid() }
 
     /// Curl install copies `rv` (C hook), `rv-cli`, and `rvd`.
     /// Adapters bake `$HOME/.local/bin/rv`, not `rv-cli`. Do not walk PATH.
@@ -292,7 +277,7 @@ enum SetupRun {
 
         if env.touchLaunchd {
             do {
-                try env.launchctl.bootout(domain: "gui/\(getuid())", label: launchAgentLabel)
+                try env.launchctl.bootout(domain: "gui/\(env.uid())", label: launchAgentLabel)
             } catch {
                 throw SetupError.launchctlApplyFailed(.bootout)
             }
@@ -334,9 +319,9 @@ enum SetupRun {
         }
         if env.touchLaunchd {
             let url = URL(fileURLWithPath: layout.launchAgent)
-            try? env.launchctl.bootout(domain: "gui/\(getuid())", label: launchAgentLabel)
+            try? env.launchctl.bootout(domain: "gui/\(env.uid())", label: launchAgentLabel)
             do {
-                try env.launchctl.bootstrap(domain: "gui/\(getuid())", plist: url)
+                try env.launchctl.bootstrap(domain: "gui/\(env.uid())", plist: url)
             } catch {
                 throw SetupError.launchctlApplyFailed(.bootstrap)
             }

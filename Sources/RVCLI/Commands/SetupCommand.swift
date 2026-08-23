@@ -25,23 +25,21 @@ struct Setup: ParsableCommand {
     var force = false
 
     func run() throws {
-        guard let env = SetupEnvironment.live() else {
-            FileHandle.standardError.write(Data("rv setup: HOME is not set\n".utf8))
-            throw ExitCode(1)
-        }
         let resolved = CeremonyCLI.appearance(
             json: json,
             robot: robot,
             plain: plain,
             noColor: noColor
         )
-        let outcome = SetupRun.setup(
-            env,
-            appearance: resolved.appearance,
-            ceremonyKind: SetupCeremonyKind.fromInstallEnvironment(),
-            force: force,
+        let outcome = SetupFlow.live().run(
+            SetupIntent(
+                kind: .install,
+                force: force,
+                appearance: resolved.appearance,
+                animate: resolved.animate,
+                ceremonyKind: .fromInstallEnvironment()
+            ),
             clock: LiveSetupCeremonyClock(),
-            animate: resolved.animate,
             write: CeremonyCLI.stdoutWriter()
         )
         try CeremonyCLI.emit(outcome)
