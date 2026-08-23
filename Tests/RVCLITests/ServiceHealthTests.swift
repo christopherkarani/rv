@@ -210,7 +210,7 @@ struct ServiceHealthTests {
             state: .down,
             idleExitSeconds: 300,
             packsEnabled: [.coreGit],
-            checks: [DoctorCheck(id: "packs", status: .ok, message: "ready")]
+            checks: [DoctorCheck(id: .packs, status: .ok, message: "ready")]
         )
         let health = ServiceHealth.inspect(
             .xpc(snapshot: snapshot, localCorePacksReady: false)
@@ -261,6 +261,6 @@ private func snapshot(
         idleExitSeconds: 300,
         packsEnabled: dayOnePackIDs,
         lastError: lastError,
-        checks: [DoctorCheck(id: "packs", status: .ok, message: "ready")]
+        checks: [DoctorCheck(id: .packs, status: .ok, message: "ready")]
     )
 }

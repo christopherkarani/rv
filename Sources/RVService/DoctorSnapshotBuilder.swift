@@ -10,24 +10,24 @@ public enum DoctorSnapshotBuilder {
         lastError: String? = nil
     ) -> DoctorSnapshotReply {
         var checks: [DoctorCheck] = [
-            DoctorCheck(id: "xpc", status: .ok, message: "mach service \(RVService.machServiceName)"),
-            DoctorCheck(id: "protocol", status: .ok, message: ProtocolVersion.name),
+            DoctorCheck(id: .xpc, status: .ok, message: "mach service \(RVService.machServiceName)"),
+            DoctorCheck(id: .protocol, status: .ok, message: ProtocolVersion.name),
             DoctorCheck(
-                id: "packs",
+                id: .packs,
                 status: corePacksReady ? .ok : .error,
                 message: corePacksReady ? "core.git and core.filesystem loaded" : "core packs unavailable"
             ),
             DoctorCheck(
-                id: "launchd",
+                id: .launchd,
                 status: .ok,
                 message: "template \(RVService.machServiceName) KeepAlive false idle-exit \(idleExitSeconds)s"
             ),
-            DoctorCheck(id: "pi", status: .skipped, message: "T7"),
-            DoctorCheck(id: "grok", status: .skipped, message: "T7"),
-            DoctorCheck(id: "opencode", status: .skipped, message: "T7"),
+            DoctorCheck(id: .pi, status: .skipped, message: "T7"),
+            DoctorCheck(id: .grok, status: .skipped, message: "T7"),
+            DoctorCheck(id: .opencode, status: .skipped, message: "T7"),
         ]
         if lastError != nil {
-            checks.append(DoctorCheck(id: "lastError", status: .warning, message: "see lastError"))
+            checks.append(DoctorCheck(id: .lastError, status: .warning, message: "see lastError"))
         }
         return DoctorSnapshotReply(
             state: .running,

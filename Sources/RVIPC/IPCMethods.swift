@@ -400,12 +400,17 @@ public enum DoctorCheckStatus: String, Sendable, Equatable, Codable {
     case skipped
 }
 
+/// Host-name cases mirror RVHooks.HookHost because RVIPC cannot depend on RVHooks; this duplication is accepted.
+public enum DoctorCheckID: String, Codable, Hashable, Sendable {
+    case xpc, `protocol`, packs, launchd, lastError, grok, pi, opencode
+}
+
 public struct DoctorCheck: Sendable, Equatable, Codable {
-    public var id: String
+    public var id: DoctorCheckID
     public var status: DoctorCheckStatus
     public var message: String
 
-    public init(id: String, status: DoctorCheckStatus, message: String) {
+    public init(id: DoctorCheckID, status: DoctorCheckStatus, message: String) {
         self.id = id
         self.status = status
         self.message = message
