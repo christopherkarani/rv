@@ -61,7 +61,7 @@ private func isolatedStore() throws -> AllowOnceStore {
         store: store,
         now: now
     )
-    _ = try await AllowOnceCLI.mint(
+    let codeB = try await AllowOnceCLI.mint(
         command: "git status",
         cwd: "/tmp/b",
         tty: tty,
@@ -77,6 +77,7 @@ private func isolatedStore() throws -> AllowOnceStore {
     let hashA = sha256Hex(codeA.lowercased())
     let hashB = rows[1].codeHash
     #expect(hashA == rows[0].codeHash)
+    #expect(hashB == sha256Hex(codeB.lowercased()))
     let rendered = RobotDocument.allowOnceList(allowOnceRobotRows(from: rows)).render()
     #expect(
         rendered
