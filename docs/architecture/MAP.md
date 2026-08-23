@@ -1,7 +1,7 @@
 # rv Architecture Map
 
 > **Source version:** `1.0.0` (`rv.ipc.v1`) — `Package.swift` swift-tools 6.3, Swift 6 language mode, macOS 26 Apple Silicon only.
-> **Generated:** 2026-08-23 from `Package.swift`, `docs/architecture/MODULES.md`, `docs/dev/SWIFT.md`, `docs/dev/PARITY.md`, `CONTEXT.md`, `docs/factory/PLAN.md`, `Sources/**`, `Sources/rv-c/*`, `Tests/**`, `tools/*`.
+> **Synthesized:** 2026-08-23 from `Package.swift`, `docs/architecture/MODULES.md`, `docs/dev/SWIFT.md`, `docs/dev/PARITY.md`, `CONTEXT.md`, `docs/factory/PLAN.md`, `Sources/**`, `Sources/rv-c/*`, `Tests/**`, `tools/*` — hand-maintained view, not auto-generated; `docs/architecture/MODULES.md` + `docs/factory/PLAN.md` are arbiters.
 
 ## 1. Overview
 
@@ -74,8 +74,8 @@
 
 | Module | Purpose | Key Types / Files | Dependencies | Must NOT |
 |---|---|---|---|---|
-| **RVDomain** | Closed type system: decisions, requests, results, packs. Pure value types, `Sendable`. | `Decision` (`allow`/`deny(Deny)`/`indeterminate`), `Deny`, `IndeterminateReason`, `Severity`, `PackID` (`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)?$`), `RuleID` (`pack:pattern`, display `pack/pattern`), `ShellCommand`, `EvaluationRequest/Result`, `EvaluationOutcome`, `MatchingView`, `PackSnapshot`, `ExplainStep`, `Display` · `RVDomain.swift`, `Decision.swift`, `Severity.swift`, `PackID.swift`, `RuleID.swift`, `ShellCommand.swift`, `EvaluationRequest.swift`, `EvaluationResult.swift`, `ExplainStep.swift`, `PackSnapshot.swift`, `Display.swift` | none | I/O, TTY, XPC, `Date`/`FileManager` |
-| **RVEngine** | Functional core `evaluate`. Pure, budgeted, deadline-aware. | `evaluate(_:packs:patterns:compiled:)`, `Normalize.matchingView(of:)`, `QuickReject`, `CompiledPacks`, `PatternEngine`/`ICUPatternEngine`, `commandByteCap=65536`, `isMajorSkew` · `Evaluate.swift`, `Normalize.swift` (role-aware quote strip, wrapper unwrap `sudo/env/command/\\`), `QuickReject.swift`, `ICUPatternEngine.swift`, `PatternEngine.swift`, `CompiledPacks.swift` | `RVDomain` | pack files, hooks, XPC, CLI, TUI |
+| **RVDomain** | Closed type system: decisions, requests, results, packs. Pure value types, `Sendable`. | `Decision` (`allow`/`deny(Deny)`/`indeterminate`), `Deny`, `IndeterminateReason`, `Severity`, `PackID` (`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)?$`), `RuleID` (`pack:pattern`, display `pack/pattern`), `ShellCommand`, `EvaluationRequest/Result`, `EvaluationOutcome`, `MatchingView`, `PackSnapshot`, `ExplainStep`, `Display` · `RVDomain.swift`, `Decision.swift`, `Severity.swift`, `PackID.swift`, `RuleID.swift`, `ShellCommand.swift`, `EvaluationRequest.swift`, `EvaluationResult.swift`, `ExplainStep.swift`, `PackSnapshot.swift`, `Display.swift`, `MatchingView.swift`, `Coding.swift` | none | I/O, TTY, XPC, `Date`/`FileManager` |
+| **RVEngine** | Functional core `evaluate`. Pure, budgeted, deadline-aware. | `evaluate(_:packs:patterns:compiled:)`, `Normalize.matchingView(of:)`, `QuickReject`, `CompiledPacks`, `PatternEngine`/`ICUPatternEngine`, `commandByteCap=65536`, `isMajorSkew` · `Evaluate.swift`, `Normalize.swift` (role-aware quote strip, wrapper unwrap `sudo/env/command/\\`), `QuickReject.swift`, `ICUPatternEngine.swift`, `PatternEngine.swift`, `CompiledPacks.swift`, `RVEngine.swift` | `RVDomain` | pack files, hooks, XPC, CLI, TUI |
 | **RVPacks** | Registry + bundled JSON catalog (99 packs, 27 categories). Disabled by default except day-one. | `PackRegistry.loadAll/loadDayOne/loadIndex`, `PackCatalog`, `PackIndex`, `PackJSON`, `PackEnablement`, `SelectionToken`, `PackDocument` · `RVPacks.swift`, `PackRegistry.swift`, `PackCatalog.swift`, `PackIndex.swift`, `PackJSON.swift`, `PackEnablement.swift`, `SelectionToken.swift` · `Resources/packs/*.json` (`core.git`, `core.filesystem` day-one + 97 off) | `RVDomain` | decisions, rendering |
 | **RVPolicy** | Config merge + overrides: allowlist + single-use allow-once grants. | `PolicyGate.{peek,apply}`, `PolicyDecision/Override`, `AllowOnceStore` (atomic CAS), `AllowOnceRecord`, `Allowlist/AllowlistStore`, `PacksConfig`, `HomeDirectory`, `ExclusiveFileLock` · `PolicyGate.swift`, `AllowOnceStore.swift`, `AllowOnceRecord.swift`, `Allowlist.swift`, `PacksConfig.swift`, `RVPolicyPaths.swift` | `RVDomain` | rendering |
 | **RVHooks** | Pi / Grok / OpenCode **Host adapters**: codecs, HostAdapterResources, Hook mapper/voice. | `HostCodec` protocol, `GrokHostCodec` (`pre_tool_use` + `run_terminal_command`/`run_terminal_cmd`/`Bash`), `PiHostCodec`, `OpenCodeHostCodec`, `HookMapper.hookWire(from:command:using:)`, `HostDenyText`, `HookDecode`, `HookDenyJSON`, `HostAdapterResources` (embed `__RV_BINARY__` → baked `rv` path) · `HostCodec.swift`, `GrokHostCodec.swift`, `PiHostCodec.swift`, `OpenCodeHostCodec.swift`, `HookMapper.swift`, `HostDenyText.swift`, `HostAdapterResources.swift` | `RVDomain` | evaluation, setup mutations, CLI/TUI |
@@ -262,7 +262,7 @@ Explain pipeline ↔ IPC `ExplainStage`: `explainSteps(from:)` maps `EvaluationO
 
 ```
 rv/
-├── Package.swift                     # 12 libs + rv + rvd, swift-tools 6.3, macOS 26, SPM bundle for packs
+├── Package.swift                     # 13 libs + rv + rvd, swift-tools 6.3, macOS 26, SPM bundle for packs
 ├── .swift-version                   # 6.3.3 pin (tools/swift-6.3.3 preferred)
 ├── README.md / AGENTS.md / CONTEXT.md
 ├── spec/spec-architecture-c-hook-pipe.md  # T1–T5 C hook pipe spec (supersedes T15 thin Swift)
@@ -271,9 +271,9 @@ rv/
 ├── Resources/launchd/dev.rv.evaluate.plist  # KeepAlive false, RunAtLoad false
 ├── Sources/
 │   ├── rv-c/                        # C hook (not SPM): rv.c, json_escape.{c,h}, json_reply.{c,h}, tests/
-│   ├── RVDomain/                    # Decision.swift, Severity.swift, PackID.swift, RuleID.swift, etc. (10 files)
+│   ├── RVDomain/                    # Decision.swift, Severity.swift, PackID.swift, RuleID.swift, etc. (13 files)
 │   ├── RVTheme/                     # Palette.swift, ColorCapability.swift, OutputMode.swift, ThemeProbe.swift
-│   ├── RVEngine/                    # Evaluate.swift, Normalize.swift, QuickReject.swift, CompiledPacks.swift, ICUPatternEngine.swift, PatternEngine.swift
+│   ├── RVEngine/                    # Evaluate.swift, Normalize.swift, QuickReject.swift, CompiledPacks.swift, ICUPatternEngine.swift, PatternEngine.swift, RVEngine.swift (7 files)
 │   ├── RVPacks/                     # PackRegistry.swift, PackCatalog.swift, PackIndex.swift, PackJSON.swift, PackEnablement.swift
 │   │   └── Resources/packs/         # 99 JSON packs + index.json (rv_RVPacks.bundle at runtime)
 │   ├── RVPolicy/                    # PolicyGate.swift, AllowOnceStore.swift, Allowlist*.swift, PacksConfig.swift
