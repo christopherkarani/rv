@@ -152,6 +152,15 @@ struct EnvelopeRoundTripTests {
         }
     }
 
+    @Test func classifyRiskRejectsNonStringPayloadsWithDecodingError() throws {
+        let payloads = ["null", "42", "true", "{}", "[]"].map { Data($0.utf8) }
+        for payload in payloads {
+            #expect(throws: DecodingError.self) {
+                try IPCJSON.decode(ClassifyRisk.self, from: payload)
+            }
+        }
+    }
+
     @Test func classifyRiskDeriveMatchesTruthTable() {
         let severities: [Severity] = [.low, .medium, .high, .critical]
         let match = RuleMatch(
