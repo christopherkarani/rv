@@ -85,7 +85,7 @@ struct OneShotEvaluateClientTests {
             .deletingLastPathComponent()
             .appendingPathComponent("RVHooksTests/Fixtures/grok/allow-medium-stash-drop.json")
         let stdin = try String(contentsOf: stdinURL, encoding: .utf8)
-        let wire = await HookRun.run(stdin: stdin, codec: GrokHostCodec()) { command, cwd in
+        let wire = await hookWire(host: .grok, stdin: stdin) { command, cwd in
             await client.evaluateResult(command: command, cwd: cwd)
         }
         #expect(wire.stdout.isEmpty)

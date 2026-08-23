@@ -15,7 +15,7 @@ struct HookEvaluateTests {
         let runtime = try isolatedRuntime()
         let stdin = try grokFixture("deny-git-reset-hard.json")
         let (data, ok) = await runtime.handleIncoming(
-            try hookEvaluateBody(host: "grok", stdin: stdin, clientSemver: ProtocolVersion.serviceSemver),
+            try hookEvaluateBody(host: .grok, stdin: stdin, clientSemver: ProtocolVersion.serviceSemver),
             handshakeOK: false
         )
         #expect(ok == true)
@@ -46,7 +46,7 @@ struct HookEvaluateTests {
 
         let stdin = try grokFixture("deny-git-reset-hard.json")
         let (data, ok) = await runtime.handleIncoming(
-            try hookEvaluateBody(host: "grok", stdin: stdin, clientSemver: ProtocolVersion.serviceSemver),
+            try hookEvaluateBody(host: .grok, stdin: stdin, clientSemver: ProtocolVersion.serviceSemver),
             handshakeOK: false
         )
         #expect(ok == true)
@@ -65,7 +65,7 @@ struct HookEvaluateTests {
         let runtime = try isolatedRuntime()
         let stdin = try grokFixture("deny-git-reset-hard.json")
         let (data, ok) = await runtime.handleIncoming(
-            try hookEvaluateBody(host: "grok", stdin: stdin, clientSemver: "2.0.0"),
+            try hookEvaluateBody(host: .grok, stdin: stdin, clientSemver: "2.0.0"),
             handshakeOK: false
         )
         #expect(ok == false)
@@ -84,7 +84,7 @@ struct HookEvaluateTests {
         let runtime = try isolatedRuntime()
         let stdin = try grokFixture("deny-git-reset-hard.json")
         let (data, ok) = await runtime.handleIncoming(
-            try hookEvaluateBody(host: "grok", stdin: stdin),
+            try hookEvaluateBody(host: .grok, stdin: stdin),
             handshakeOK: false
         )
         #expect(ok == false)
@@ -103,7 +103,7 @@ struct HookEvaluateTests {
         let runtime = try isolatedRuntime()
         let stdin = try grokFixture("allow-medium-stash-drop.json")
         let (data, ok) = await runtime.handleIncoming(
-            try hookEvaluateBody(host: "grok", stdin: stdin, clientSemver: ProtocolVersion.serviceSemver),
+            try hookEvaluateBody(host: .grok, stdin: stdin, clientSemver: ProtocolVersion.serviceSemver),
             handshakeOK: false
         )
         #expect(ok == true)
@@ -117,32 +117,32 @@ struct HookEvaluateTests {
         #expect(reply.exitCode == 0)
     }
 
-    @Test func unknownHost_isIPCErrorAndDoesNotEvaluate() async throws {
-        let probe = EvaluateCallProbe()
-        await #expect(throws: IPCError.engine("unknown host")) {
-            try await HookDoor.run(host: "unknown", stdin: try grokFixture("deny-git-reset-hard.json")) {
-                command, cwd in
-                await probe.evaluate(command, cwd: cwd)
-            }
-        }
-        #expect(probe.calls == 0)
-
+    @Test func unknownHost_failsDecodeAsDecodeFailedAndDoesNotEvaluate() async throws {
         let runtime = try isolatedRuntime()
-        let (data, ok) = await runtime.handleIncoming(
-            try hookEvaluateBody(
-                host: "unknown",
-                stdin: try grokFixture("deny-git-reset-hard.json"),
-                clientSemver: ProtocolVersion.serviceSemver
+        let frame = String(
+            data: try IPCJSON.encode(
+                IPCRequest(
+                    method: .hookEvaluate(
+                        HookEvaluateParams(
+                            host: .grok,
+                            stdin: try grokFixture("deny-git-reset-hard.json"),
+                            clientSemver: ProtocolVersion.serviceSemver
+                        )
+                    )
+                )
             ),
-            handshakeOK: false
+            encoding: .utf8
         )
+        let hostile = try #require(frame.map {
+            $0.replacingOccurrences(of: "\"host\":\"grok\"", with: "\"host\":\"nope\"")
+        })
+        let (data, ok) = await runtime.handleIncoming(Data(hostile.utf8), handshakeOK: true)
         #expect(ok == true)
         let response = try IPCJSON.decode(IPCResponse.self, from: data)
-        guard case .error(.engine(let message)) = response.result else {
-            Issue.record("unknown host must be IPCError")
+        guard case .error(.decodeFailed) = response.result else {
+            Issue.record("unknown host on the wire must fail decode")
             return
         }
-        #expect(message == "unknown host")
         if case .hookEvaluate = response.result {
             Issue.record("unknown host must not return hookEvaluate")
         }
@@ -152,7 +152,7 @@ struct HookEvaluateTests {
         let runtime = try isolatedRuntime()
         let hook = await runtime.handleIncoming(
             try hookEvaluateBody(
-                host: "grok",
+                host: .grok,
                 stdin: try grokFixture("allow-medium-stash-drop.json"),
                 clientSemver: ProtocolVersion.serviceSemver
             ),
@@ -183,7 +183,7 @@ struct HookEvaluateTests {
         let runtime = try isolatedRuntime(log: log)
         _ = await runtime.handleIncoming(
             try hookEvaluateBody(
-                host: "grok",
+                host: .grok,
                 stdin: try grokFixture("deny-git-reset-hard.json"),
                 clientSemver: ProtocolVersion.serviceSemver
             ),
@@ -198,7 +198,7 @@ struct HookEvaluateTests {
 
     @Test func emptyStdin_isEmptyAllow() async throws {
         let probe = EvaluateCallProbe()
-        let reply = try await HookDoor.run(host: "grok", stdin: "") { command, cwd in
+        let reply = try await HookDoor.run(host: .grok, stdin: "") { command, cwd in
             await probe.evaluate(command, cwd: cwd)
         }
         #expect(probe.calls == 0)
@@ -247,7 +247,7 @@ private func grokDenyJSON(_ stdout: String) throws -> [String: Any] {
 }
 
 private func hookEvaluateBody(
-    host: String,
+    host: HookHost,
     stdin: String,
     clientSemver: String? = nil,
     protocolName: String = ProtocolVersion.name

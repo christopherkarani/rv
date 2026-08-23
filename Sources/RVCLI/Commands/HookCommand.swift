@@ -5,22 +5,6 @@ import RVHooks
 
 extension HookHost: ExpressibleByArgument {}
 
-enum HookRun {
-    static func run<C: HostCodec>(
-        stdin: String,
-        codec: C,
-        evaluate: @Sendable (ShellCommand, String?) async -> EvaluationResult
-    ) async -> HookWire {
-        switch codec.decode(stdin) {
-        case .request(let request):
-            let result = await evaluate(request.command, request.cwd)
-            return hookWire(from: result, command: request.command, using: codec)
-        case .foreign, .malformed:
-            return codec.encodeAllow()
-        }
-    }
-}
-
 struct Hook: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "hook",
@@ -51,27 +35,7 @@ struct Hook: AsyncParsableCommand {
         stdin: String,
         evaluate: @Sendable (ShellCommand, String?) async -> EvaluationResult
     ) async -> (stdout: String, stderr: String, exitCode: Int32) {
-        let wire: HookWire
-        switch host {
-        case .grok:
-            wire = await HookRun.run(
-                stdin: stdin,
-                codec: GrokHostCodec(),
-                evaluate: evaluate
-            )
-        case .pi:
-            wire = await HookRun.run(
-                stdin: stdin,
-                codec: PiHostCodec(),
-                evaluate: evaluate
-            )
-        case .opencode:
-            wire = await HookRun.run(
-                stdin: stdin,
-                codec: OpenCodeHostCodec(),
-                evaluate: evaluate
-            )
-        }
+        let wire = await hookWire(host: host, stdin: stdin, evaluate: evaluate)
         return (wire.stdout, "", wire.exitCode)
     }
 }

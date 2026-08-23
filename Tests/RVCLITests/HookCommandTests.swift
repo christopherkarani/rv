@@ -85,17 +85,13 @@ private func inProcessEvaluate(_ command: ShellCommand, cwd: String?) async -> E
     }
 }
 
-private func runHook<C: HostCodec>(
+private func runHook(
     stdin: String,
-    codec: C = GrokHostCodec(),
+    host: HookHost = .grok,
     evaluate: (@Sendable (ShellCommand, String?) async -> EvaluationResult)? = nil
 ) async throws -> HookWire {
     try await withTempHome { _ in
-        await HookRun.run(
-            stdin: stdin,
-            codec: codec,
-            evaluate: evaluate ?? inProcessEvaluate
-        )
+        await hookWire(host: host, stdin: stdin, evaluate: evaluate ?? inProcessEvaluate)
     }
 }
 
@@ -280,7 +276,7 @@ private func runHook<C: HostCodec>(
     let text = try #require(hostDenyText(from: result, command: command))
     let wire = try await runHook(
         stdin: try hostFixture("pi", "deny-git-reset-hard.json"),
-        codec: PiHostCodec()
+        host: .pi
     )
     let json = try denyJSON(wire.stdout)
     #expect(json["reason"] as? String == text)
@@ -297,7 +293,7 @@ private func runHook<C: HostCodec>(
     let text = try #require(hostDenyText(from: result, command: command))
     let wire = try await runHook(
         stdin: try hostFixture("opencode", "deny-git-reset-hard.json"),
-        codec: OpenCodeHostCodec()
+        host: .opencode
     )
     let json = try denyJSON(wire.stdout)
     #expect(json["reason"] as? String == text)
@@ -312,7 +308,7 @@ private func runHook<C: HostCodec>(
     let expected = try hostExpected("pi", "allow-non-shell-read")
     let wire = try await runHook(
         stdin: try hostFixture("pi", "allow-non-shell-read.json"),
-        codec: PiHostCodec()
+        host: .pi
     ) { command, _ in
         probe.record(command, result: EvaluationResult(
             outcome: .deny(
@@ -331,7 +327,7 @@ private func runHook<C: HostCodec>(
     let expected = try hostExpected("opencode", "allow-non-shell-read")
     let wire = try await runHook(
         stdin: try hostFixture("opencode", "allow-non-shell-read.json"),
-        codec: OpenCodeHostCodec()
+        host: .opencode
     ) { command, _ in
         probe.record(command, result: EvaluationResult(
             outcome: .deny(
@@ -350,7 +346,7 @@ private func runHook<C: HostCodec>(
     let expected = try hostExpected("pi", "deny-git-reset-hard")
     let wire = try await runHook(
         stdin: try hostFixture("pi", "deny-git-reset-hard.json"),
-        codec: PiHostCodec()
+        host: .pi
     ) { command, _ in
         await client.evaluateResult(command: command)
     }

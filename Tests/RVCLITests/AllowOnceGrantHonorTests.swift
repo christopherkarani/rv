@@ -39,9 +39,9 @@ struct AllowOnceGrantHonorTests {
         let stdin = """
         {"hookEventName":"pre_tool_use","toolName":"run_terminal_command","toolInput":{"command":"git reset --hard"}}
         """
-        let wire = await HookRun.run(
-            stdin: stdin,
-            codec: GrokHostCodec()
+        let wire = await hookWire(
+            host: .grok,
+            stdin: stdin
         ) { command, cwd in
             await client.evaluateResult(command: command, cwd: cwd)
         }
@@ -65,9 +65,9 @@ struct AllowOnceGrantHonorTests {
         let stdin = """
         {"hookEventName":"pre_tool_use","cwd":"/tmp/ws","toolName":"run_terminal_command","toolInput":{"command":"git reset --hard"}}
         """
-        let wire = await HookRun.run(
-            stdin: stdin,
-            codec: GrokHostCodec()
+        let wire = await hookWire(
+            host: .grok,
+            stdin: stdin
         ) { command, cwd in
             await client.evaluateResult(command: command, cwd: cwd)
         }
