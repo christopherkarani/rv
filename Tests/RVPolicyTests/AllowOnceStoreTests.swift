@@ -221,7 +221,7 @@ struct AllowOnceStoreTests {
         #expect(dir.path == home.appendingPathComponent(".config/rv").path)
         #expect(dir.path.contains("should-not-use-xdg") == false)
         #expect(
-            RVPolicyPaths.configDirectory(home: home.path).path
+            RVPolicyPaths.configDirectory(home: try #require(HomeDirectory(validating: home.path))).path
                 == home.appendingPathComponent(".config/rv").path
         )
     }

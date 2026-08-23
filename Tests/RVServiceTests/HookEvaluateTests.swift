@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import RVDomain
 import RVEngine
+import RVPolicy
 import RVIPC
 @preconcurrency import XPC
 @testable import RVService
@@ -41,7 +42,7 @@ struct HookEvaluateTests {
         try FileManager.default.createDirectory(at: configDir, withIntermediateDirectories: true)
         try Data("[packs]\ndisabled = [\"core.git\"]\n".utf8)
             .write(to: configDir.appendingPathComponent("config.toml"))
-        let runtime = try isolatedRuntime(home: home.path)
+        let runtime = try isolatedRuntime(home: HomeDirectory(validating: home.path))
 
         let stdin = try grokFixture("deny-git-reset-hard.json")
         let (data, ok) = await runtime.handleIncoming(

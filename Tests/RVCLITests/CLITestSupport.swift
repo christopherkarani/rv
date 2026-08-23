@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import RVDomain
 import RVTheme
+import RVPolicy
 @testable import RVCLI
 
 func denyPayload(from decision: Decision) -> Deny? {
@@ -21,11 +22,11 @@ func isolatedAllowOnceDirectory() throws -> URL {
     return root
 }
 
-func isolatedHome() throws -> String {
+func isolatedHome() throws -> HomeDirectory {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-cli-home-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-    return root.path
+    return try #require(HomeDirectory(validating: root.path))
 }
 
 func isolatedClient(

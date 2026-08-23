@@ -7,8 +7,9 @@ import RVPolicy
 struct EvaluateDoorTests {
     @Test func runPeekDoesNotSpendGrantThenApplyDoes() async throws {
         let store = try isolatedDoorStore()
+        let home = try isolatedHome()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
-        let door = GatedEvaluate()
+        let door = GatedEvaluate(EvaluateSession(enabledPacks: dayOnePackIDs))
         let command = ShellCommand(rawValue: "git reset --hard")
         try await store.insertGranted(matchingView: "git reset --hard", cwd: "/tmp/ws", now: now)
 
@@ -16,7 +17,7 @@ struct EvaluateDoorTests {
             .peek,
             command: command,
             cwd: "/tmp/ws",
-            home: "",
+            home: home,
             store: store,
             now: now
         )
@@ -25,7 +26,7 @@ struct EvaluateDoorTests {
             .peek,
             command: command,
             cwd: "/tmp/ws",
-            home: "",
+            home: home,
             store: store,
             now: now
         )
@@ -35,7 +36,7 @@ struct EvaluateDoorTests {
             .apply,
             command: command,
             cwd: "/tmp/ws",
-            home: "",
+            home: home,
             store: store,
             now: now
         )
@@ -44,7 +45,7 @@ struct EvaluateDoorTests {
             .apply,
             command: command,
             cwd: "/tmp/ws",
-            home: "",
+            home: home,
             store: store,
             now: now
         )
@@ -52,13 +53,20 @@ struct EvaluateDoorTests {
         #expect(deny.ruleID.rawValue == "core.git:reset-hard")
     }
 
-    @Test func emptyHomeRequestUsesDayOnePackIDs() {
+    @Test func freshHomeRequestUsesDayOnePackIDs() throws {
         let request = GatedEvaluate.makeRequest(
             command: ShellCommand(rawValue: "git status"),
-            home: ""
+            home: try isolatedHome()
         )
         #expect(request.enabledPacks == dayOnePackIDs)
     }
+}
+
+private func isolatedHome() throws -> HomeDirectory {
+    let url = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-door-home-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+    return try #require(HomeDirectory(validating: url.path))
 }
 
 private func isolatedDoorStore() throws -> AllowOnceStore {

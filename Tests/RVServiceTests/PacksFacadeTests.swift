@@ -8,7 +8,7 @@ import RVService
 @Suite struct PacksFacadeTests {
     @Test func packsJSON_freshHomeHasTwoEnabledOfNinetyNine() throws {
         let home = try temporaryHome()
-        defer { try? FileManager.default.removeItem(atPath: home) }
+        defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
         let snapshot = try PacksFacade.list(home: home)
         #expect(snapshot.totalCount == 99)
         #expect(snapshot.enabledCount == 2)
@@ -19,7 +19,7 @@ import RVService
 
     @Test func enableDatabaseThenDisableRedis() throws {
         let home = try temporaryHome()
-        defer { try? FileManager.default.removeItem(atPath: home) }
+        defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
 
         let enabled = try PacksFacade.enable(home: home, ids: ["database"])
         #expect(enabled.enabledCount == 10)
@@ -34,7 +34,7 @@ import RVService
 
     @Test func enablePresetAndUnknownFailsWithoutWrite() throws {
         let home = try temporaryHome()
-        defer { try? FileManager.default.removeItem(atPath: home) }
+        defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
 
         let preset = try PacksFacade.enable(home: home, ids: ["careful_company_running_windows"])
         #expect(preset.enabledCount == 38)
@@ -49,7 +49,7 @@ import RVService
 
     @Test func disableAlreadyOffExtraIsNoOp() throws {
         let home = try temporaryHome()
-        defer { try? FileManager.default.removeItem(atPath: home) }
+        defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
         let result = try PacksFacade.disable(home: home, ids: ["database.sqlite"])
         #expect(result.changed.isEmpty)
         #expect(result.enabledCount == 2)
@@ -57,7 +57,7 @@ import RVService
 
     @Test func secondEnableIsIdempotent() throws {
         let home = try temporaryHome()
-        defer { try? FileManager.default.removeItem(atPath: home) }
+        defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
         _ = try PacksFacade.enable(home: home, ids: ["database.sqlite"])
         let second = try PacksFacade.enable(home: home, ids: ["database.sqlite"])
         #expect(second.changed.isEmpty)
@@ -66,7 +66,7 @@ import RVService
 
     @Test func enablePreservesNonPacksTomlSections() throws {
         let home = try temporaryHome()
-        defer { try? FileManager.default.removeItem(atPath: home) }
+        defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
         let url = PacksConfigStore.configURL(home: home)
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(),
@@ -85,13 +85,9 @@ import RVService
         #expect(text.contains("database.sqlite"))
     }
 
-    @Test func effectiveIDs_emptyHomeIsDayOne() throws {
-        #expect(try PacksFacade.effectiveIDs(home: "") == dayOnePackIDs)
-    }
-
     @Test func effectiveIDs_missingConfigTomlIsDayOne() throws {
         let home = try temporaryHome()
-        defer { try? FileManager.default.removeItem(atPath: home) }
+        defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
         #expect(
             FileManager.default.fileExists(atPath: PacksConfigStore.configURL(home: home).path)
                 == false
@@ -101,7 +97,7 @@ import RVService
 
     @Test func effectiveIDs_configTomlExtraPackIsIncluded() throws {
         let home = try temporaryHome()
-        defer { try? FileManager.default.removeItem(atPath: home) }
+        defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
         try PacksConfigStore.save(
             PacksConfig(enabled: ["database.sqlite"], disabled: []),
             home: home
@@ -113,7 +109,7 @@ import RVService
 
     @Test func tokenRoundTrip_persistsOperatorStringsVerbatim() throws {
         let home = try temporaryHome()
-        defer { try? FileManager.default.removeItem(atPath: home) }
+        defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
         let url = PacksConfigStore.configURL(home: home)
 
         _ = try PacksFacade.enable(home: home, tokens: [
@@ -145,9 +141,9 @@ import RVService
 
     @Test func stringVerbArgsAndTokenArgsAgree() throws {
         let homeA = try temporaryHome()
-        defer { try? FileManager.default.removeItem(atPath: homeA) }
+        defer { try? FileManager.default.removeItem(atPath: homeA.rawValue) }
         let homeB = try temporaryHome()
-        defer { try? FileManager.default.removeItem(atPath: homeB) }
+        defer { try? FileManager.default.removeItem(atPath: homeB.rawValue) }
 
         let fromStrings = try PacksFacade.enable(home: homeA, ids: ["kubernetes"])
         let fromTokens = try PacksFacade.enable(home: homeB, tokens: [.category("kubernetes")])
@@ -156,9 +152,9 @@ import RVService
     }
 }
 
-private func temporaryHome() throws -> String {
+private func temporaryHome() throws -> HomeDirectory {
     let url = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-packs-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-    return url.path
+    return try #require(HomeDirectory(validating: url.path))
 }

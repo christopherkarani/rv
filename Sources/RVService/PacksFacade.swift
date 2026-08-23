@@ -35,7 +35,7 @@ public enum PacksCommandError: Error, Equatable, Sendable {
 /// In-process packs list / enable / disable for CLI and tests (temp HOME).
 public enum PacksFacade {
     public static func list(
-        home: String,
+        home: HomeDirectory,
         enabledOnly: Bool = false
     ) throws -> PacksListSnapshot {
         let index = try PackRegistry.loadIndex()
@@ -69,7 +69,7 @@ public enum PacksFacade {
         )
     }
 
-    public static func info(home: String, id: PackID) throws -> PacksListRow {
+    public static func info(home: HomeDirectory, id: PackID) throws -> PacksListRow {
         let snapshot = try list(home: home)
         guard let row = snapshot.packs.first(where: { $0.id == id }) else {
             throw PacksCommandError.packNotFound(id)
@@ -79,26 +79,23 @@ public enum PacksFacade {
 
     /// Verb-argument / XPC boundary: raw selection strings become tokens here and
     /// nowhere else downstream of the persisted config.
-    public static func enable(home: String, ids: [String]) throws -> PacksMutationResult {
+    public static func enable(home: HomeDirectory, ids: [String]) throws -> PacksMutationResult {
         try mutate(home: home, ids: ids, enabling: true)
     }
 
-    public static func disable(home: String, ids: [String]) throws -> PacksMutationResult {
+    public static func disable(home: HomeDirectory, ids: [String]) throws -> PacksMutationResult {
         try mutate(home: home, ids: ids, enabling: false)
     }
 
-    public static func enable(home: String, tokens: [SelectionToken]) throws -> PacksMutationResult {
+    public static func enable(home: HomeDirectory, tokens: [SelectionToken]) throws -> PacksMutationResult {
         try mutate(home: home, tokens: tokens, enabling: true)
     }
 
-    public static func disable(home: String, tokens: [SelectionToken]) throws -> PacksMutationResult {
+    public static func disable(home: HomeDirectory, tokens: [SelectionToken]) throws -> PacksMutationResult {
         try mutate(home: home, tokens: tokens, enabling: false)
     }
 
-    public static func effectiveIDs(home: String) throws -> [PackID] {
-        if home.isEmpty {
-            return dayOnePackIDs
-        }
+    public static func effectiveIDs(home: HomeDirectory) throws -> [PackID] {
         let configURL = PacksConfigStore.configURL(home: home)
         if FileManager.default.fileExists(atPath: configURL.path) == false {
             return dayOnePackIDs
@@ -112,14 +109,13 @@ public enum PacksFacade {
         )
     }
 
-    public static func makeCatalog(home: String) throws -> PackCatalog {
+    public static func makeCatalog(home: HomeDirectory) throws -> PackCatalog {
         let index = try PackRegistry.loadIndex()
         let enabled = Set(try effectiveIDs(home: home))
         return try PackCatalog.bundlingAll(enabled: enabled, index: index)
     }
 
-    private static func mutate(home: String, ids: [String], enabling: Bool) throws -> PacksMutationResult {
-        guard !home.isEmpty else { throw PacksCommandError.configUnwritable }
+    private static func mutate(home: HomeDirectory, ids: [String], enabling: Bool) throws -> PacksMutationResult {
         let index = try PackRegistry.loadIndex()
         return try mutate(
             home: home,
@@ -130,17 +126,16 @@ public enum PacksFacade {
     }
 
     private static func mutate(
-        home: String,
+        home: HomeDirectory,
         tokens: [SelectionToken],
         enabling: Bool
     ) throws -> PacksMutationResult {
-        guard !home.isEmpty else { throw PacksCommandError.configUnwritable }
         let index = try PackRegistry.loadIndex()
         return try mutate(home: home, tokens: tokens, enabling: enabling, index: index)
     }
 
     private static func mutate(
-        home: String,
+        home: HomeDirectory,
         tokens: [SelectionToken],
         enabling: Bool,
         index: PackIndex
