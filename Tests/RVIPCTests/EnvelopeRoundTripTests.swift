@@ -197,6 +197,13 @@ struct EnvelopeRoundTripTests {
         )
     }
 
+    @Test func doctorCheckIDRoundTripsLegacyWireBytes() throws {
+        let legacy = Data(#"{"id":"packs","message":"ready","status":"ok"}"#.utf8)
+        let check = try IPCJSON.decode(DoctorCheck.self, from: legacy)
+        #expect(check.id == .packs)
+        #expect(try IPCJSON.encode(check) == legacy)
+    }
+
     @Test func emptyCwdOnHonorParamsIsNil() throws {
         let request = EvaluationRequest(
             command: ShellCommand(rawValue: "git reset --hard"),
@@ -324,7 +331,7 @@ extension IPCResult {
                         state: .running,
                         idleExitSeconds: 300,
                         packsEnabled: [.coreGit],
-                        checks: [DoctorCheck(id: "xpc", status: .ok, message: "listener")]
+                        checks: [DoctorCheck(id: .xpc, status: .ok, message: "listener")]
                     )
                 )
             ),
