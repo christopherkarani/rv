@@ -59,6 +59,17 @@ func stalledInstallCoordinator(configDirectory: URL) -> AnalyticsCoordinator {
     #expect(start.duration(to: .now) < .seconds(5))
 }
 
+@Test func setupFlow_uninstallRecordsNoInstallAnalytics() throws {
+    try withTempHome { home, layout, launchctl in
+        let analytics = RecordingInstallAnalytics()
+        let environment = env(home: home, launchctl: launchctl, installAnalytics: analytics)
+        let outcome = SetupFlow(makeEnvironment: { environment })
+            .run(SetupIntent(kind: .uninstall, appearance: .robot))
+        #expect(outcome.exitCode == 0)
+        #expect(analytics.captures.isEmpty)
+    }
+}
+
 @Test func setupFlow_recordsInstallAnalyticsThroughTheDoor_withoutWritingIdentity() throws {
     try withTempHome { home, layout, launchctl in
         try FileManager.default.createDirectory(atPath: layout.grokDirectory, withIntermediateDirectories: true)
