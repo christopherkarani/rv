@@ -9,48 +9,62 @@ public let uninstallOccupiedClause = "left occupied"
 public let uninstallCeremonyHostRemoveNs: UInt64 = 220_000_000
 public let uninstallCeremonyPhaseGapNs: UInt64 = 280_000_000
 
-/// Builds the uninstall show from host removals and whether any owned artifact was deleted.
+public let uninstallRobotCompleteLine = "Uninstall complete."
+public let uninstallRobotAlreadyCleanLine = "Already clean."
+
+/// Closed taxonomy of terminal `rv uninstall` outcomes. Ceremony frames and
+/// `--robot` lines both switch over it exhaustively.
+public enum UninstallCloser: Equatable, Sendable {
+    /// Deleted at least one owned artifact; payload lists hosts left occupied.
+    case removed(occupied: Set<SetupHostKind>)
+    /// Deleted nothing; payload lists hosts left occupied.
+    case alreadyClean(occupied: Set<SetupHostKind>)
+}
+
+/// Builds the uninstall show from host removals and the terminal closer.
 ///
-/// `didRemoveAnything` is the robot closer contract: pretty must not claim
+/// The closer is the robot contract too: pretty must not claim
 /// `Uninstall complete` when nothing was deleted, and must not claim
 /// `Already clean` when config / binaries / LaunchAgent were removed with no host slots.
 public func uninstallCeremonyFrames(
     removed: Set<SetupHostKind>,
-    occupied: Set<SetupHostKind>,
-    didRemoveAnything: Bool
+    closer: UninstallCloser
 ) -> [SetupCeremonyFrame] {
-    if didRemoveAnything == false {
-        if occupied.isEmpty {
-            return [
-                SetupCeremonyFrame(
-                    closerLines: [uninstallCeremonyAlreadyClean],
-                    pauseNanoseconds: 0
-                ),
-            ]
-        }
-        let slots = SetupHostKind.allCases.map { host in
-            occupied.contains(host)
-                ? SetupSlotView(host: host, kind: .occupied, clause: uninstallOccupiedClause)
-                : SetupSlotView(host: host, kind: .pending)
-        }
+    switch closer {
+    case .alreadyClean(let occupied):
         return [
             SetupCeremonyFrame(
-                slots: slots,
+                slots: occupiedSlots(occupied: occupied),
                 closerLines: [uninstallCeremonyAlreadyClean],
                 pauseNanoseconds: 0
             ),
         ]
+    case .removed(let occupied):
+        guard removed.isEmpty == false || occupied.isEmpty == false else {
+            return [
+                SetupCeremonyFrame(
+                    closerLines: [uninstallCeremonyCloser],
+                    pauseNanoseconds: 0
+                ),
+            ]
+        }
+        return removalAnimation(removed: removed, occupied: occupied)
     }
+}
 
-    if removed.isEmpty && occupied.isEmpty {
-        return [
-            SetupCeremonyFrame(
-                closerLines: [uninstallCeremonyCloser],
-                pauseNanoseconds: 0
-            ),
-        ]
+private func occupiedSlots(occupied: Set<SetupHostKind>) -> [SetupSlotView] {
+    guard occupied.isEmpty == false else { return [] }
+    return SetupHostKind.allCases.map { host in
+        occupied.contains(host)
+            ? SetupSlotView(host: host, kind: .occupied, clause: uninstallOccupiedClause)
+            : SetupSlotView(host: host, kind: .pending)
     }
+}
 
+private func removalAnimation(
+    removed: Set<SetupHostKind>,
+    occupied: Set<SetupHostKind>
+) -> [SetupCeremonyFrame] {
     func slot(for host: SetupHostKind, stillPresent: Bool) -> SetupSlotView {
         if occupied.contains(host) {
             return SetupSlotView(host: host, kind: .occupied, clause: uninstallOccupiedClause)

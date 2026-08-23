@@ -140,9 +140,51 @@ import RVTheme
         )
         let outcome = SetupRun.setup(env(home: home, launchctl: launchctl), appearance: .robot)
         #expect(outcome.exitCode == 0)
-        #expect(outcome.stdout == SetupRun.robotCompleteLine + "\n")
+        #expect(outcome.stdout == setupRobotCompleteLine + "\n")
         #expect(outcome.stdout.contains("◦") == false)
         #expect(outcome.stdout.contains("•") == false)
+    }
+}
+
+@Test func setup_robot_twoOccupied_isExactlyOneLine_andHelpAgrees() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(
+            atPath: (layout.piExtension as NSString).deletingLastPathComponent,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            atPath: layout.grokDirectory + "/hooks",
+            withIntermediateDirectories: true
+        )
+        try "{\"hooks\":[]}\n".write(toFile: layout.grokHook, atomically: true, encoding: .utf8)
+        try "{}\n".write(toFile: layout.piExtension, atomically: true, encoding: .utf8)
+
+        let outcome = SetupRun.setup(env(home: home, launchctl: launchctl), appearance: .robot)
+
+        #expect(outcome.exitCode == 0)
+        let lines = outcome.stdout.split(separator: "\n")
+        #expect(lines.count == 1)
+        #expect(lines.first == "Skipped occupied grok hook., Skipped occupied pi hook.")
+
+        let help = Setup.helpText()
+        #expect(help.contains("One line, no circles"))
+    }
+}
+
+@Test func setup_robot_wiredWithSkips_isStillOneLine() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(
+            atPath: layout.grokDirectory + "/hooks",
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(atPath: layout.piDirectory, withIntermediateDirectories: true)
+        try "{\"hooks\":[]}\n".write(toFile: layout.grokHook, atomically: true, encoding: .utf8)
+
+        let outcome = SetupRun.setup(env(home: home, launchctl: launchctl), appearance: .robot)
+
+        #expect(outcome.exitCode == 0)
+        #expect(outcome.stdout.split(separator: "\n").count == 1)
+        #expect(outcome.stdout == setupRobotCompleteLine + ", Skipped occupied grok hook.\n")
     }
 }
 
@@ -221,7 +263,7 @@ import RVTheme
     try withTempHome { home, _, launchctl in
         let outcome = SetupRun.uninstall(env(home: home, launchctl: launchctl), appearance: .robot)
         #expect(outcome.exitCode == 0)
-        #expect(outcome.stdout == SetupRun.uninstallAlreadyCleanLine + "\n")
+        #expect(outcome.stdout == uninstallRobotAlreadyCleanLine + "\n")
     }
 }
 
@@ -234,7 +276,7 @@ import RVTheme
         _ = SetupRun.setup(env(home: home, launchctl: launchctl), appearance: .robot)
         let outcome = SetupRun.uninstall(env(home: home, launchctl: launchctl), appearance: .robot)
         #expect(outcome.exitCode == 0)
-        #expect(outcome.stdout == SetupRun.uninstallCompleteLine + "\n")
+        #expect(outcome.stdout == uninstallRobotCompleteLine + "\n")
     }
 }
 

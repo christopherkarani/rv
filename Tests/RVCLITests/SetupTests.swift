@@ -67,7 +67,7 @@ private func fixtureLoginHome() throws -> URL {
     try withTempHome { home, layout, launchctl in
         let outcome = SetupRun.setup(env(home: home, launchctl: launchctl))
         #expect(outcome.exitCode == 0)
-        #expect(outcome.stdout == SetupRun.hostlessLine + "\n")
+        #expect(outcome.stdout == setupRobotHostlessLine + "\n")
         #expect(FileManager.default.fileExists(atPath: layout.grokDirectory) == false)
         #expect(FileManager.default.fileExists(atPath: layout.piDirectory) == false)
         #expect(FileManager.default.fileExists(atPath: layout.openCodeDirectory) == false)
@@ -93,7 +93,7 @@ private func fixtureLoginHome() throws -> URL {
         try FileManager.default.createDirectory(atPath: layout.grokDirectory, withIntermediateDirectories: true)
         let outcome = SetupRun.setup(env(home: home, launchctl: launchctl))
         #expect(outcome.exitCode == 0)
-        #expect(outcome.stdout == SetupRun.robotCompleteLine + "\n")
+        #expect(outcome.stdout == setupRobotCompleteLine + "\n")
         let body = try String(contentsOfFile: layout.grokHook, encoding: .utf8)
         #expect(body == (try SetupHostKind.grok.adapterResource().rendered(rvPath: "/tmp/rv-bin/rv")))
         #expect(FileManager.default.fileExists(atPath: layout.piExtension) == false)
@@ -396,8 +396,8 @@ private func fixtureLoginHome() throws -> URL {
         let second = SetupRun.uninstall(env(home: home, launchctl: launchctl))
         #expect(first.exitCode == 0)
         #expect(second.exitCode == 0)
-        #expect(first.stdout == SetupRun.uninstallAlreadyCleanLine + "\n")
-        #expect(second.stdout == SetupRun.uninstallAlreadyCleanLine + "\n")
+        #expect(first.stdout == uninstallRobotAlreadyCleanLine + "\n")
+        #expect(second.stdout == uninstallRobotAlreadyCleanLine + "\n")
     }
 }
 
@@ -510,7 +510,7 @@ private func fixtureLoginHome() throws -> URL {
         #expect(launchctl.bootstraps.isEmpty)
         #expect(FileManager.default.fileExists(atPath: layout.launchAgent) == false)
         #expect(FileManager.default.fileExists(atPath: layout.grokHook))
-        #expect(outcome.stdout.contains(SetupRun.robotCompleteLine))
+        #expect(outcome.stdout.contains(setupRobotCompleteLine))
     }
 }
 
@@ -564,7 +564,7 @@ private func fixtureLoginHome() throws -> URL {
     #expect(env?.touchLaunchd == false)
 }
 
-@Test func setup_occupiedGrok_writesPi_andDoesNotPrintGrokRestart() throws {
+@Test func setup_occupiedGrok_writesPi_joinsSkipOntoOneSuccessLine() throws {
     try withTempHome { home, layout, launchctl in
         try FileManager.default.createDirectory(
             atPath: layout.grokDirectory + "/hooks",
@@ -575,8 +575,8 @@ private func fixtureLoginHome() throws -> URL {
         try foreign.write(toFile: layout.grokHook, atomically: true, encoding: .utf8)
         let outcome = SetupRun.setup(env(home: home, launchctl: launchctl))
         #expect(outcome.exitCode == 0)
-        #expect(outcome.stdout.contains("Skipped occupied grok hook."))
-        #expect(outcome.stdout.contains(SetupRun.robotCompleteLine) == false)
+        #expect(outcome.stdout.split(separator: "\n").count == 1)
+        #expect(outcome.stdout == setupRobotCompleteLine + ", Skipped occupied grok hook.\n")
         let grokAfter = try String(contentsOfFile: layout.grokHook, encoding: .utf8)
         #expect(grokAfter == foreign)
         #expect(FileManager.default.fileExists(atPath: layout.piExtension))
