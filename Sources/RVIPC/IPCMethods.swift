@@ -219,12 +219,56 @@ public struct ExplainReply: Sendable, Equatable, Codable {
     }
 }
 
-public enum ClassifyRisk: String, Sendable, Equatable, Codable {
+public enum ClassifyRisk: Sendable, Equatable {
     case safe
-    case low
-    case medium
-    case high
-    case critical
+    case rated(Severity)
+}
+
+extension ClassifyRisk: Codable {
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let raw = try container.decode(String.self)
+        if raw == "safe" {
+            self = .safe
+        } else if let severity = Severity(rawValue: raw) {
+            self = .rated(severity)
+        } else {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: decoder.codingPath,
+                    debugDescription:
+                        "Cannot initialize ClassifyRisk from invalid String value \(raw)"
+                )
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .safe:
+            try container.encode("safe")
+        case .rated(let severity):
+            try container.encode(severity.rawValue)
+        }
+    }
+}
+
+extension ClassifyRisk {
+    /// Total derivation from Decision × matched rule; no default clause.
+    public static func derive(decision: Decision, matched: RuleMatch?) -> ClassifyRisk {
+        switch decision {
+        case .allow:
+            if let severity = matched?.severity {
+                return .rated(severity)
+            }
+            return .safe
+        case .deny:
+            return .rated(matched?.severity ?? .high)
+        case .indeterminate:
+            return .rated(.high)
+        }
+    }
 }
 
 public struct ClassifyParams: Sendable, Equatable, Codable {

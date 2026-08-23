@@ -303,19 +303,7 @@ public actor ServiceRuntime {
         case .quickRejected, .plain, .safeOnly, .indeterminate:
             matched = nil
         }
-        let risk: ClassifyRisk
-        switch result.decision {
-        case .allow:
-            if let severity = matched?.severity {
-                risk = ClassifyRisk(rawValue: severity.rawValue) ?? .medium
-            } else {
-                risk = .safe
-            }
-        case .deny:
-            risk = ClassifyRisk(rawValue: matched?.severity.rawValue ?? ClassifyRisk.high.rawValue) ?? .high
-        case .indeterminate:
-            risk = .high
-        }
+        let risk = ClassifyRisk.derive(decision: result.decision, matched: matched)
         var reasons: [ClassifyReason] = []
         if let matched {
             reasons.append(
