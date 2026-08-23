@@ -7,6 +7,8 @@ enum RobotDocument {
     case doctor(DoctorRobotPayload)
     case packsList(PacksRobotPayload)
     case packsInfo(PacksRobotRow)
+    case allowlistList([AllowlistRobotRow])
+    case allowOnceList([AllowOnceRobotRow])
 
     func render() -> String {
         switch self {
@@ -20,6 +22,10 @@ enum RobotDocument {
             jsonString(payload)
         case .packsInfo(let payload):
             jsonString(payload)
+        case .allowlistList(let rows):
+            jsonString(rows)
+        case .allowOnceList(let rows):
+            jsonString(rows)
         }
     }
 }
