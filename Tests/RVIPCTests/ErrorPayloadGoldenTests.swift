@@ -112,6 +112,23 @@ struct ErrorPayloadGoldenTests {
         }
     }
 
+    @Test func explainStage_unknownNameFailsDecodeAsDataCorrupted() throws {
+        for bad in ["bogus", "Normalize", "", "normalize "] {
+            let payload = try JSONSerialization.data(
+                withJSONObject: ["name": bad, "elapsedMs": 0.1]
+            )
+            do {
+                _ = try IPCJSON.decode(ExplainStage.self, from: payload)
+                Issue.record("unknown ExplainStage name \(bad) must not decode")
+            } catch let error as DecodingError {
+                guard case .dataCorrupted = error else {
+                    Issue.record("unknown stage name must be dataCorrupted, got \(error)")
+                    return
+                }
+            }
+        }
+    }
+
     /// Retired phantom method: a legacy frame carrying its request key falls
     /// into the envelope decoder's terminal unknown-key branch instead of
     /// decoding into a method.
