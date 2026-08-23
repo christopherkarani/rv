@@ -42,25 +42,25 @@ public actor AllowOnceStore {
         for _ in 0..<8 {
             let code = try generateAllowOnceCode()
             let hash = sha256Hex(code)
-        do {
-            try withFileLock {
-                let fresh = try AllowOnceLedger.mint(
-                    records: loadRecords(),
-                    codeHash: hash,
-                    fingerprint: commandFingerprint(view),
-                    redacted: redactCommand(view),
-                    cwd: cwd,
-                    ruleID: ruleID,
-                    now: now,
-                    ttl: ttl
-                )
-                try writeRecords(fresh)
+            do {
+                try withFileLock {
+                    let fresh = try AllowOnceLedger.mint(
+                        records: loadRecords(),
+                        codeHash: hash,
+                        fingerprint: commandFingerprint(view),
+                        redacted: redactCommand(view),
+                        cwd: cwd,
+                        ruleID: ruleID,
+                        now: now,
+                        ttl: ttl
+                    )
+                    try writeRecords(fresh)
+                }
+                return code
+            } catch let error as AllowOnceError where error == .collision {
+                lastError = error
+                continue
             }
-            return code
-        } catch let error as AllowOnceError where error == .collision {
-            lastError = error
-            continue
-        }
         }
         throw lastError
     }
