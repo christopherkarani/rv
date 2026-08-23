@@ -15,7 +15,7 @@ struct Setup: ParsableCommand {
     @Flag(name: .customLong("robot"), help: "One line, no circles.")
     var robot = false
 
-    @Flag(name: .customLong("plain"), help: "Disable browse and color.")
+    @Flag(name: .customLong("plain"), help: "Disable color.")
     var plain = false
 
     @Flag(name: .customLong("no-color"), help: "Disable color.")

@@ -117,18 +117,22 @@ enum SetupRun {
                 emitted: formatted.emitted
             )
         } catch {
-            return SetupOutcome(stdout: "", stderr: "rv setup failed: \(error)\n", exitCode: 1)
+            return failureOutcome(error, command: .setup)
         }
     }
 
-    private static func perform(_ env: SetupEnvironment, force: Bool) throws -> SetupReport {
+    private static func failureOutcome(
+        _ error: SetupError,
+        command: SetupFailureCommand
+    ) -> SetupOutcome {
+        let output = setupFailureOutput(error, command: command)
+        return SetupOutcome(stdout: "", stderr: output.stderr, exitCode: output.exitCode)
+    }
+
+    private static func perform(_ env: SetupEnvironment, force: Bool) throws(SetupError) -> SetupReport {
         let files = FileOps(fileManager: env.fileManager)
         let layout = OwnedPaths(home: env.home)
-        let installations = try HostAdapterInstallation.inspect(
-            paths: layout,
-            pathEntries: env.pathEntries,
-            fileManager: env.fileManager
-        )
+        let installations = try inspectInstallations(layout: layout, env: env)
         var kinds: [SetupHostKind: SetupSlotKind] = [
             .grok: .pending,
             .pi: .pending,
@@ -136,7 +140,11 @@ enum SetupRun {
         ]
         var wrote: Set<SetupHostKind> = []
 
-        try files.createDirectory(atPath: layout.configDirectory)
+        do {
+            try files.createDirectory(atPath: layout.configDirectory)
+        } catch {
+            throw SetupError.configDirectoryCreateFailed
+        }
         try writeLaunchAgent(env: env, layout: layout, files: files)
 
         for owned in layout.hostAdapters {
@@ -149,18 +157,33 @@ enum SetupRun {
                 kinds[host] = .occupied
                 continue
             case .forceClearThenWrite:
-                try files.backupAndClearOwnedPath(owned.destination)
+                do {
+                    try files.backupAndClearOwnedPath(owned.destination)
+                } catch {
+                    throw SetupError.hostHookClearFailed(host)
+                }
                 existingData = nil
             case .write(let data):
                 existingData = data
             }
-            let adapter = try HostAdapterResources.load(for: owned.hookHost)
-            if try writeOwned(
-                path: owned.destination,
-                contents: adapter.rendered(rvPath: env.rvPath),
-                existingData: existingData,
-                files: files
-            ) {
+            let adapter: HostAdapterResource
+            do {
+                adapter = try HostAdapterResources.load(for: owned.hookHost)
+            } catch {
+                throw SetupError(adapterResourceFailure: error)
+            }
+            let wroteHook: Bool
+            do {
+                wroteHook = try writeOwned(
+                    path: owned.destination,
+                    contents: adapter.rendered(rvPath: env.rvPath),
+                    existingData: existingData,
+                    files: files
+                )
+            } catch {
+                throw SetupError.hostHookWriteFailed(host)
+            }
+            if wroteHook {
                 wrote.insert(host)
             }
             kinds[host] = .wired
@@ -176,6 +199,23 @@ enum SetupRun {
         return report
     }
 
+    private static func inspectInstallations(
+        layout: OwnedPaths,
+        env: SetupEnvironment
+    ) throws(SetupError) -> HostAdapterInstallationSnapshot {
+        do {
+            return try HostAdapterInstallation.inspect(
+                paths: layout,
+                pathEntries: env.pathEntries,
+                fileManager: env.fileManager
+            )
+        } catch let error as HostAdapterResourceError {
+            throw SetupError(adapterResourceFailure: error)
+        } catch {
+            throw SetupError.inspectionFailed
+        }
+    }
+
     static func uninstall(
         _ env: SetupEnvironment,
         appearance: CLIAppearance = .robot,
@@ -183,22 +223,34 @@ enum SetupRun {
         animate: Bool = false,
         write: ((String) -> Void)? = nil
     ) -> SetupOutcome {
-        let files = FileOps(fileManager: env.fileManager)
-        let layout = OwnedPaths(home: env.home)
-        let installations: HostAdapterInstallationSnapshot
         do {
-            installations = try HostAdapterInstallation.inspect(
-                paths: layout,
-                pathEntries: env.pathEntries,
-                fileManager: env.fileManager
+            let formatted = try uninstallPerform(
+                env,
+                appearance: appearance,
+                clock: clock,
+                animate: animate,
+                write: write
+            )
+            return SetupOutcome(
+                stdout: formatted.text,
+                exitCode: 0,
+                emitted: formatted.emitted
             )
         } catch {
-            return SetupOutcome(
-                stdout: "",
-                stderr: "rv uninstall failed: unable to inspect Host adapters\n",
-                exitCode: 1
-            )
+            return failureOutcome(error, command: .uninstall)
         }
+    }
+
+    private static func uninstallPerform(
+        _ env: SetupEnvironment,
+        appearance: CLIAppearance,
+        clock: any SetupCeremonyClock,
+        animate: Bool,
+        write: ((String) -> Void)?
+    ) throws(SetupError) -> (text: String, emitted: Bool) {
+        let files = FileOps(fileManager: env.fileManager)
+        let layout = OwnedPaths(home: env.home)
+        let installations = try inspectInstallations(layout: layout, env: env)
 
         var removedHosts: Set<SetupHostKind> = []
         var occupiedHosts: Set<SetupHostKind> = []
@@ -242,20 +294,12 @@ enum SetupRun {
             do {
                 try env.launchctl.bootout(domain: "gui/\(getuid())", label: launchAgentLabel)
             } catch {
-                return SetupOutcome(
-                    stdout: "",
-                    stderr: "rv uninstall failed: unable to unload LaunchAgent\n",
-                    exitCode: 1
-                )
+                throw SetupError.launchctlApplyFailed(.bootout)
             }
         }
 
         if removedPaths.contains(where: { files.fileExists($0) }) {
-            return SetupOutcome(
-                stdout: "",
-                stderr: "rv uninstall failed: owned path still exists\n",
-                exitCode: 1
-            )
+            throw SetupError.ownedPathStillExists
         }
 
         let report = UninstallReport(
@@ -265,30 +309,37 @@ enum SetupRun {
             removedBinaries: binariesExisted,
             removedConfigArtifacts: configExisted
         )
-        let formatted = SetupFormat.uninstallStdout(
+        return SetupFormat.uninstallStdout(
             report: report,
             appearance: appearance,
             clock: clock,
             animate: animate,
             write: write
         )
-        return SetupOutcome(
-            stdout: formatted.text,
-            exitCode: 0,
-            emitted: formatted.emitted
-        )
     }
 
-    private static func writeLaunchAgent(env: SetupEnvironment, layout: OwnedPaths, files: FileOps) throws {
+    private static func writeLaunchAgent(
+        env: SetupEnvironment,
+        layout: OwnedPaths,
+        files: FileOps
+    ) throws(SetupError) {
         guard env.fileManager.isExecutableFile(atPath: env.rvdPath) else {
             return
         }
         let body = try LaunchAgentTemplate.rendered(rvdPath: env.rvdPath)
-        try files.write(body, to: layout.launchAgent)
+        do {
+            try files.write(body, to: layout.launchAgent)
+        } catch {
+            throw SetupError.launchAgentWriteFailed
+        }
         if env.touchLaunchd {
             let url = URL(fileURLWithPath: layout.launchAgent)
             try? env.launchctl.bootout(domain: "gui/\(getuid())", label: launchAgentLabel)
-            try env.launchctl.bootstrap(domain: "gui/\(getuid())", plist: url)
+            do {
+                try env.launchctl.bootstrap(domain: "gui/\(getuid())", plist: url)
+            } catch {
+                throw SetupError.launchctlApplyFailed(.bootstrap)
+            }
         }
     }
 
