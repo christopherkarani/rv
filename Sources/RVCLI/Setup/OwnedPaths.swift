@@ -1,4 +1,4 @@
-import RVHooks
+import RVDomain
 import RVPresentation
 
 struct OwnedHostAdapterPath: Equatable, Sendable {

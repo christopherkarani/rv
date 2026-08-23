@@ -1,12 +1,6 @@
 import RVDomain
 
-public enum HookHost: String, Equatable, Sendable {
-    case grok
-    /// Pi adapter wire, not a host protocol.
-    case pi
-    /// OpenCode adapter wire, not a host protocol.
-    case opencode
-
+extension HookHost {
     /// Deny process exit: Grok `0` (JSON is the gate), Pi/OpenCode `1`.
     var denyExitCode: Int32 {
         switch self {
