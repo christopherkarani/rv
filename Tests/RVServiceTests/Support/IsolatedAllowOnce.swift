@@ -1,5 +1,6 @@
 import Foundation
 import RVDomain
+import RVPolicy
 @testable import RVService
 
 func isolatedAllowOnceDirectory() throws -> URL {
