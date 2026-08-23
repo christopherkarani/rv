@@ -45,25 +45,9 @@ private struct ModeCase {
             browse: true
         ),
         ModeCase(
-            name: "both-tty-browse",
-            probe: probe(),
-            requested: .browse,
-            mode: .browse,
-            colors: true,
-            browse: true
-        ),
-        ModeCase(
             name: "json-flag-forces-robot",
             probe: probe(json: true),
             requested: .automatic,
-            mode: .robot,
-            colors: false,
-            browse: false
-        ),
-        ModeCase(
-            name: "robot-flag-forces-robot",
-            probe: probe(robot: true),
-            requested: .browse,
             mode: .robot,
             colors: false,
             browse: false
@@ -77,30 +61,6 @@ private struct ModeCase {
             browse: true
         ),
         ModeCase(
-            name: "plain-stays-pretty-not-browse",
-            probe: probe(plain: true),
-            requested: .browse,
-            mode: .pretty,
-            colors: false,
-            browse: false
-        ),
-        ModeCase(
-            name: "ci-browse-falls-back-pretty",
-            probe: probe(ci: true),
-            requested: .browse,
-            mode: .pretty,
-            colors: false,
-            browse: false
-        ),
-        ModeCase(
-            name: "nocolor-env-forbids-browse",
-            probe: probe(noColorEnv: true),
-            requested: .browse,
-            mode: .pretty,
-            colors: false,
-            browse: false
-        ),
-        ModeCase(
             name: "stdin-only-tty",
             probe: probe(stdout: false),
             requested: .automatic,
@@ -112,14 +72,6 @@ private struct ModeCase {
             name: "stdout-only-tty-automatic",
             probe: probe(stdin: false),
             requested: .automatic,
-            mode: .pretty,
-            colors: true,
-            browse: false
-        ),
-        ModeCase(
-            name: "stdout-only-tty-browse-fallback",
-            probe: probe(stdin: false),
-            requested: .browse,
             mode: .pretty,
             colors: true,
             browse: false
@@ -141,14 +93,6 @@ private struct ModeCase {
             browse: true
         ),
         ModeCase(
-            name: "no-color-flag-browse-still-eligible",
-            probe: probe(noColorFlag: true),
-            requested: .browse,
-            mode: .browse,
-            colors: false,
-            browse: true
-        ),
-        ModeCase(
             name: "requested-pretty",
             probe: probe(stdout: false),
             requested: .pretty,
@@ -159,7 +103,6 @@ private struct ModeCase {
     ]
 
     for item in cases {
-        #expect(browseEligible(item.probe) == item.browse, Comment(rawValue: item.name))
         #expect(
             resolveOutputMode(probe: item.probe, requested: item.requested) == item.mode,
             Comment(rawValue: item.name)

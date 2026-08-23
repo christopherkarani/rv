@@ -124,7 +124,7 @@ private func robotProbe() -> ThemeProbe {
             requested: .automatic
         )
         #expect(!result.stdout.utf8.contains(0x1B))
-        #expect(browseEligible(probe) == false || probe.noColorFlag)
+        #expect(!probe.isBrowseEligible || probe.noColorFlag)
     }
 }
 
