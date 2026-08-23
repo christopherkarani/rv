@@ -45,26 +45,18 @@ enum DoctorRun {
                 exitCode: 1
             )
         }
-        do {
-            let stdout: String
-            switch appearance {
-            case .robot:
-                stdout = try robotText(model) + "\n"
-            case .pretty(let palette):
-                stdout = PrettyWriter.join(DoctorRenderer().render(model, palette: palette))
-            }
-            return DoctorOutcome(
-                stdout: stdout,
-                stderr: "",
-                exitCode: model.isHealthy ? 0 : 1
-            )
-        } catch {
-            return DoctorOutcome(
-                stdout: "",
-                stderr: "rv doctor failed\n",
-                exitCode: 1
-            )
+        let stdout: String
+        switch appearance {
+        case .robot:
+            stdout = robotText(model) + "\n"
+        case .pretty(let palette):
+            stdout = PrettyWriter.join(DoctorRenderer().render(model, palette: palette))
         }
+        return DoctorOutcome(
+            stdout: stdout,
+            stderr: "",
+            exitCode: model.isHealthy ? 0 : 1
+        )
     }
 
     private static func inspect(
@@ -140,8 +132,8 @@ enum DoctorRun {
         return .readable
     }
 
-    private static func robotText(_ model: DoctorViewModel) throws -> String {
-        try RobotJSON.encode(doctorRobotPayload(from: model))
+    private static func robotText(_ model: DoctorViewModel) -> String {
+        RobotDocument.doctor(doctorRobotPayload(from: model)).render()
     }
 }
 

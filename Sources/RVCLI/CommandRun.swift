@@ -147,7 +147,7 @@ public enum CommandRun {
         let text: String
         switch kind {
         case .explain:
-            text = RobotJSON.encode(
+            text = RobotDocument.explain(
                 explainRobotPayload(
                     from: explainViewModel(
                         from: result,
@@ -156,10 +156,11 @@ public enum CommandRun {
                             ? Normalize.matchingView(of: command.rawValue).rawValue
                             : result.matchingView.rawValue
                     )
-                ).fields
+                )
             )
+            .render()
         case .test, .testExplain:
-            text = RobotJSON.encode(testRobotPayload(from: result).fields)
+            text = RobotDocument.test(testRobotPayload(from: result)).render()
         }
         return CLIResult(stdout: text + "\n", exitCode: exitCode)
     }
