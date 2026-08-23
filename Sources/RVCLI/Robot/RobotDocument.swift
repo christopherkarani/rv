@@ -10,6 +10,7 @@ enum RobotDocument {
     case packsInfo(PacksRobotRow)
     case allowlistList([AllowlistRobotRow])
     case allowOnceList([AllowOnceRobotRow])
+    case serviceStatus(ServiceStatusReport)
 
     /// Returns this document as JSON with sorted keys and unescaped slashes.
     func render() -> String {
@@ -28,6 +29,8 @@ enum RobotDocument {
             Self.jsonString(rows)
         case .allowOnceList(let rows):
             Self.jsonString(rows)
+        case .serviceStatus(let report):
+            Self.serviceStatusLines(report).joined(separator: "\n")
         }
     }
 
@@ -42,5 +45,19 @@ enum RobotDocument {
                 "RobotDocument payloads are plain values; encoding cannot fail (\(error))"
             )
         }
+    }
+
+    private static func serviceStatusLines(_ report: ServiceStatusReport) -> [String] {
+        var lines = [
+            "state=\(report.state)",
+            "protocol=\(report.protocolName)",
+            "label=\(report.label)",
+            "fallback=\(report.fallback)",
+            "keepAlive=\(report.keepAlive)",
+        ]
+        if let lastError = report.lastError {
+            lines.append("lastError=\(lastError)")
+        }
+        return lines
     }
 }

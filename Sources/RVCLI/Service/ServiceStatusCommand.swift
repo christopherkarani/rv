@@ -24,20 +24,6 @@ public struct ServiceStatusReport: Sendable, Equatable {
         self.lastError = lastError
     }
 
-    public var robotLines: [String] {
-        var lines = [
-            "state=\(state)",
-            "protocol=\(protocolName)",
-            "label=\(label)",
-            "fallback=\(fallback)",
-            "keepAlive=\(keepAlive)",
-        ]
-        if let lastError {
-            lines.append("lastError=\(lastError)")
-        }
-        return lines
-    }
-
     public var plainLines: [String] {
         var lines = [
             "state \(state)",
@@ -55,7 +41,7 @@ public struct ServiceStatusReport: Sendable, Equatable {
 
 public enum ServiceStatusCommand {
     public static func robotText(_ report: ServiceStatusReport) -> String {
-        report.robotLines.joined(separator: "\n")
+        RobotDocument.serviceStatus(report).render()
     }
 
     public static func plainText(_ report: ServiceStatusReport) -> String {

@@ -118,6 +118,36 @@ struct ServiceStatusTests {
         #expect(robot.contains("pack") == false)
     }
 
+    @Test func robotOutputKeepsExactPreMigrationBytes() {
+        let running = ServiceStatusReport(
+            state: "running",
+            fallback: "inactive",
+            keepAlive: true,
+            lastError: "peer supplied detail"
+        )
+        let runningGolden = """
+            state=running
+            protocol=rv.ipc.v1
+            label=dev.rv.evaluate
+            fallback=inactive
+            keepAlive=true
+            lastError=peer supplied detail
+            """
+        #expect(ServiceStatusCommand.robotText(running) == runningGolden)
+        #expect(RobotDocument.serviceStatus(running).render() == runningGolden)
+
+        let down = ServiceStatusReport(state: "down", fallback: "down")
+        let downGolden = """
+            state=down
+            protocol=rv.ipc.v1
+            label=dev.rv.evaluate
+            fallback=down
+            keepAlive=false
+            """
+        #expect(ServiceStatusCommand.robotText(down) == downGolden)
+        #expect(RobotDocument.serviceStatus(down).render() == downGolden)
+    }
+
     @Test func xpcSkewSnapshotReportsSkewNotRunning() async throws {
         let snapshot = DoctorSnapshotReply(
             state: .skew,
