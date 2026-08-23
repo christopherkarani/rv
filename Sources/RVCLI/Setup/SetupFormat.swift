@@ -34,7 +34,7 @@ struct UninstallReport: Equatable, Sendable {
             || removedBinaries
             || removedConfigArtifacts
         return removedAnything
-            ? .removed(occupied: occupiedHosts)
+            ? .removed(hosts: removedHosts, occupied: occupiedHosts)
             : .alreadyClean(occupied: occupiedHosts)
     }
 }
@@ -76,10 +76,7 @@ enum SetupFormat {
         case .robot:
             return (uninstallRobot(report), false)
         case .pretty(let palette):
-            let frames = uninstallCeremonyFrames(
-                removed: report.removedHosts,
-                closer: report.closer
-            )
+            let frames = uninstallCeremonyFrames(closer: report.closer)
             return playCeremony(
                 frames: frames,
                 palette: palette,

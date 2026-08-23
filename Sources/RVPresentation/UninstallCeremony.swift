@@ -15,21 +15,19 @@ public let uninstallRobotAlreadyCleanLine = "Already clean."
 /// Closed taxonomy of terminal `rv uninstall` outcomes. Ceremony frames and
 /// `--robot` lines both switch over it exhaustively.
 public enum UninstallCloser: Equatable, Sendable {
-    /// Deleted at least one owned artifact; payload lists hosts left occupied.
-    case removed(occupied: Set<SetupHostKind>)
+    /// Deleted at least one owned artifact; payloads list the hosts deleted this run
+    /// and the hosts left occupied.
+    case removed(hosts: Set<SetupHostKind>, occupied: Set<SetupHostKind>)
     /// Deleted nothing; payload lists hosts left occupied.
     case alreadyClean(occupied: Set<SetupHostKind>)
 }
 
-/// Builds the uninstall show from host removals and the terminal closer.
+/// Builds the uninstall show from the terminal closer alone.
 ///
 /// The closer is the robot contract too: pretty must not claim
 /// `Uninstall complete` when nothing was deleted, and must not claim
 /// `Already clean` when config / binaries / LaunchAgent were removed with no host slots.
-public func uninstallCeremonyFrames(
-    removed: Set<SetupHostKind>,
-    closer: UninstallCloser
-) -> [SetupCeremonyFrame] {
+public func uninstallCeremonyFrames(closer: UninstallCloser) -> [SetupCeremonyFrame] {
     switch closer {
     case .alreadyClean(let occupied):
         return [
@@ -39,7 +37,7 @@ public func uninstallCeremonyFrames(
                 pauseNanoseconds: 0
             ),
         ]
-    case .removed(let occupied):
+    case .removed(let removed, let occupied):
         guard removed.isEmpty == false || occupied.isEmpty == false else {
             return [
                 SetupCeremonyFrame(
