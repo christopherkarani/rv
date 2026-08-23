@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import RVDomain
 import RVEngine
+import RVPolicy
 import RVIPC
 @preconcurrency import XPC
 @testable import RVService
