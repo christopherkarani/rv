@@ -28,12 +28,18 @@ enum XPCIPCWire {
 /// Raw libxpc listener on `dev.rv.evaluate`. C and Swift share `rv.ipc` xpc_data.
 public final class XPCEvaluateListener: @unchecked Sendable {
     private let runtime: ServiceRuntime
+    private let watchdog: IdleWatchdog
     private let serviceName: String
     private let lock = NSLock()
     private var listener: xpc_connection_t?
 
-    public init(runtime: ServiceRuntime, machServiceName: String = RVService.machServiceName) {
+    public init(
+        runtime: ServiceRuntime,
+        watchdog: IdleWatchdog,
+        machServiceName: String = RVService.machServiceName
+    ) {
         self.runtime = runtime
+        self.watchdog = watchdog
         self.serviceName = machServiceName
     }
 
@@ -72,7 +78,7 @@ public final class XPCEvaluateListener: @unchecked Sendable {
     }
 
     private func accept(_ peer: xpc_connection_t) {
-        let session = XPCPeerSession(runtime: runtime)
+        let session = XPCPeerSession(runtime: runtime, watchdog: watchdog)
         xpc_connection_set_event_handler(peer) { event in
             session.handle(event)
         }
@@ -82,23 +88,38 @@ public final class XPCEvaluateListener: @unchecked Sendable {
 
 final class XPCPeerSession: @unchecked Sendable {
     private let runtime: ServiceRuntime
+    private let watchdog: IdleWatchdog
     private let lock = NSLock()
     private var handshakeOK = false
+    private let beginTransaction: @Sendable () -> Void
+    private let endTransaction: @Sendable () -> Void
 
-    init(runtime: ServiceRuntime) {
+    init(
+        runtime: ServiceRuntime,
+        watchdog: IdleWatchdog,
+        beginTransaction: @escaping @Sendable () -> Void = { xpc_transaction_begin() },
+        endTransaction: @escaping @Sendable () -> Void = { xpc_transaction_end() }
+    ) {
         self.runtime = runtime
+        self.watchdog = watchdog
+        self.beginTransaction = beginTransaction
+        self.endTransaction = endTransaction
     }
 
-    func handle(_ event: xpc_object_t) {
+    @discardableResult
+    func handle(_ event: xpc_object_t) -> Task<Void, Never>? {
         let type = xpc_get_type(event)
         if type == XPC_TYPE_ERROR {
-            return
+            return nil
         }
         guard type == XPC_TYPE_DICTIONARY else {
-            return
+            return nil
         }
+        beginTransaction()
         let held = XPCHeld(event)
-        Task {
+        return Task {
+            defer { self.endTransaction() }
+            await self.watchdog.ping()
             let message = held.object
             let incoming = XPCIPCWire.body(from: message)
             let accepted = self.lock.withLock { self.handshakeOK }
