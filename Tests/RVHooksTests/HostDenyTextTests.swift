@@ -79,3 +79,45 @@ private let resetHard = ShellCommand(rawValue: "git reset --hard")
     #expect(hostDenyText(from: allow, command: resetHard) == nil)
     #expect(deny.decision != allow.decision)
 }
+
+@Test func hostDenyText_multilineCommand_previewsFirstLine() {
+    let command = ShellCommand(
+        rawValue: """
+        cat >> /Users/chriskarani/.grok/skill-observations/log.md << 'EOF'
+        ### Observation 760: placeholder
+        See `origin/<base>...HEAD`
+        EOF
+        """
+    )
+    let rule = RuleID(pack: .coreFilesystem, pattern: "redirect-truncate-dynamic-path")
+    let result = EvaluationResult(
+        outcome: .deny(
+            Deny(ruleID: rule, reason: "dynamic"),
+            matched: nil
+        )
+    )
+    let text = hostDenyText(from: result, command: command)
+    let preview = hookDenyCommandPreview(command)
+    #expect(
+        text
+            == "Blocked \(preview) (core.filesystem/redirect-truncate-dynamic-path). \(hookUnlockNext)"
+    )
+    #expect(preview.hasSuffix("…"))
+    #expect(preview.contains("cat >>"))
+    #expect(preview.contains("Observation 760") == false)
+    #expect(text?.contains("Observation 760") == false)
+    #expect(text?.contains("<base>") == false)
+    #expect(text?.contains("\n") == false)
+    #expect((text?.count ?? 0) < 240)
+}
+
+@Test func hookDenyCommandPreview_shortCommandUnchanged() {
+    #expect(hookDenyCommandPreview(resetHard) == "git reset --hard")
+}
+
+@Test func hookDenyCommandPreview_clipsOverlongFirstLine() {
+    let raw = String(repeating: "a", count: hookDenyCommandPreviewLimit + 8)
+    let preview = hookDenyCommandPreview(ShellCommand(rawValue: raw))
+    #expect(preview == String(repeating: "a", count: hookDenyCommandPreviewLimit) + "…")
+    #expect(preview.contains("\n") == false)
+}

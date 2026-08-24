@@ -121,6 +121,16 @@
       "id": "near.clean-n",
       "command": "git clean -n",
       "expected": "allow"
+    },
+    {
+      "id": "near.markdown-angle-placeholder",
+      "command": "echo `origin/<base>...HEAD`",
+      "expected": "allow"
+    },
+    {
+      "id": "near.quoted-heredoc-angle-placeholder",
+      "command": "cat >> /tmp/rv-obs.md << 'EOF'\nSee `origin/<base>...HEAD`\nEOF",
+      "expected": "allow"
     }
   ]
 }
