@@ -10,13 +10,19 @@ public enum RVDProcess {
             idleExitSeconds: configuration.idleExitSeconds,
             analytics: analytics
         )
-        let listener = XPCEvaluateListener(runtime: runtime)
-        listener.start()
+        let slot = ListenerSlot()
         let watchdog = IdleWatchdog(seconds: configuration.idleExitSeconds) {
-            listener.stop()
+            slot.listener?.stop()
             Darwin.exit(0)
         }
+        let listener = XPCEvaluateListener(runtime: runtime, watchdog: watchdog)
+        slot.listener = listener
+        listener.start()
         Task { await watchdog.ping() }
         RunLoop.main.run()
     }
+}
+
+private final class ListenerSlot: @unchecked Sendable {
+    var listener: XPCEvaluateListener?
 }

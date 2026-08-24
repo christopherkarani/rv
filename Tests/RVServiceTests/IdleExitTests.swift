@@ -1,4 +1,6 @@
+import Foundation
 import Testing
+@preconcurrency import XPC
 @testable import RVService
 
 struct IdleExitTests {
@@ -18,6 +20,22 @@ struct IdleExitTests {
         await watchdog.ping()
         try? await Task.sleep(nanoseconds: 400_000_000)
         #expect(await watchdog.fired == false)
+        try? await Task.sleep(nanoseconds: 800_000_000)
+        #expect(await watchdog.fired)
+    }
+
+    @Test func bootPingAndHandlePingResetIdleTimer() async throws {
+        let watchdog = IdleWatchdog(seconds: 1)
+        await watchdog.ping()
+        try? await Task.sleep(nanoseconds: 400_000_000)
+
+        let session = XPCPeerSession(runtime: try isolatedRuntime(), watchdog: watchdog)
+        let task = try #require(session.handle(xpc_dictionary_create_empty()))
+        await task.value
+
+        try? await Task.sleep(nanoseconds: 400_000_000)
+        #expect(await watchdog.fired == false)
+        #expect(await watchdog.pingCount == 2)
         try? await Task.sleep(nanoseconds: 800_000_000)
         #expect(await watchdog.fired)
     }
