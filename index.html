@@ -145,37 +145,47 @@
       <span>·</span>
       <span>Aug 2026</span>
       <span>·</span>
-      <span class="status" title="Not published yet">DRAFT v6</span>
+      <span class="status" title="Not published yet">DRAFT v7</span>
     </div>
   </header>
 
   <article>
 
-<p>In July an agent on a Windows machine was asked to clear an app's tmp cache. The command it built contained a shell variable inside double quotes, so the outer shell expanded the variable to nothing before rm ever saw it. What one process approved as a scoped cache clear, another process executed as a wipe of /bin, /boot, /etc, and the user's home directory. It ran for four minutes. When the agent itself noticed and tried to kill the runaway rm, its own safety layer refused: killing the cleanup counted as interfering with the workload. The human finally stopped it by shutting down WSL entirely.</p>
+<p>I built a hook that blocks destructive shell commands before Pi's bash tool runs. Mac only, Apple Silicon, macOS 26. It's called rv.</p>
 
-<p>That's issue 82165 against Claude Code, still open, reported by the person who lost the files. It's not alone. There's a developer who watched a quoting mistake turn an approved file copy into <code>rm -rf /*</code> on a production server, taking two websites down with it. There's a home directory wiped by an <code>rm -rf *</code> that ran after the agent created a folder literally named <code>~</code>. There are days of uncommitted work gone because a case-flipped path landed on macOS's case-insensitive filesystem as if it were the real project folder.</p>
+<p>It's regex on the command string. Not a sandbox, not OS-enforced, not expansion-aware. I want to say that up front because the rest of this post is about why even that much is worth having.</p>
 
-<p>I've been thinking about what these share, because I write code with these agents every day and I'm not going to stop. And I think it's this: the command a safety mechanism reads and the command the shell executes are different documents. Every layer between the model and your files can rewrite the text in between. Quoting, variables, tilde, case-folding, all of it happens after whatever checkpoint came before.</p>
+<p>First, what a deny actually looks like. An agent proposes <code>git reset --hard</code>. The hook fires and rv sends back:</p>
 
-<p>The industry's first answer was to ask the human before anything risky. Anthropic published how that goes: users accept 93% of permission prompts. At that rate the prompt isn't oversight, it's ceremony. The people who study warnings for a living have measured click-through rates from under 10% to over 70% depending on context, and Cormac Herley's argument cuts deeper: ignoring noisy warnings is rational when they almost never matter.</p>
+<pre><code>Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once.</code></pre>
 
-<p>So vendors moved to classifiers, models that judge whether a command looks dangerous. Anthropic measured their own honestly: about 17% of genuinely overeager actions get through. And the misses aren't random, they cluster where judgment is hardest, like whether a session's earlier approval really covers this particular action. A model reading the same text as the human inherits the same blind spot: both see the command as written. Neither sees what expansion will do to it.</p>
+<p>Pi blocks the command. It never runs. Same for <code>rm -rf ./src</code>, <code>git push --force</code>, <code>find / -delete</code>, redirects onto /etc. Two packs are on by default: core.filesystem and core.git. There's a catalog of ~99 more, opt-in; system.disk is off on purpose. And some things you'd want blocked are allowed: <code>rm -rf /tmp/build</code> runs fine (temp dirs are safe), so does <code>git push --force-with-lease</code> and <code>git stash drop</code>.</p>
 
-<p>Which suggests a question worth asking: where should the guard sit, and what should it do when unsure? At the point of execution, as close to the shell as possible, failing closed. That's the bet rv makes.</p>
+<p>Some things slip through. A python script that execs rm never looks like rm to the hook. A non-bash tool never meets it at all. Skip or disable the hook and rv sees nothing. Its grade is hook-level, full stop.</p>
 
-<p>rv is a small Mac tool that hooks into your coding agent's shell pipeline. When Pi is about to run a bash command, rv evaluates it first. Recursive deletes get denied, force-pushes get denied, and each denial names the rule that fired. The rules normalize the command first, stripping sudo and env wrappers so <code>sudo rm -rf</code> can't dress itself up as something else.</p>
+<p>Why build this at all? In July an agent on Windows was asked to clear an app's tmp cache. The command contained a variable inside double quotes, so the outer shell expanded it to nothing between approval and execution. What got approved was a cache clear; what ran deleted /bin, /boot, /etc, and the user's home directory for four minutes. When the agent itself noticed and tried to kill the runaway rm, its own safety layer refused, because killing the cleanup counted as interfering with the workload. The human stopped it by shutting down WSL entirely.</p>
 
-<p>You might say: just use a sandbox. Sandboxes are great. E2B's microVMs, devcontainers, Docker isolation, best blast-radius reduction available and I recommend them. But notice which question they answer: how to protect the host from the workspace. Most of us have the other problem, wanting the agent working on this Mac, in this repo, with these credentials, because that's where the work is. Mount your project into a container as a bind mount and a delete inside the container deletes your real files just as dead. If the workspace is the thing you're protecting, the guard needs to run where the command runs.</p>
+<p>That's issue 82165 against Claude Code, still open, reported by the person who lost the files. There are others in the same tracker: a quoting mistake that turned an approved file copy into <code>rm -rf /*</code> on a production server, a home directory wiped by an <code>rm -rf *</code> that ran after the agent made a folder literally named <code>~</code>, days of uncommitted work gone from one case-flipped path on a case-insensitive filesystem.</p>
 
-<p>Designing rv meant deciding what it does when it's unsure. That turned out to be the whole design.</p>
+<p>I'm not claiming rv would have caught all of those. It matches the command text after stripping sudo and env wrappers; it does not expand variables, and it doesn't see what bash does with quotes or globs. <code>rm -rf $EMPTYVAR</code> dies because the rule matches <code>rm -rf</code>, not because rv solved expansion. But there's a gap between "checkpoint saw something" and "shell did something," and right now almost nothing lives in that gap. This is a small thing that lives there.</p>
 
-<p>If rv can't parse the payload a hook sent it, it blocks. An allow-list fails by refusing, loudly, and someone fixes it; a deny-list fails by allowing, silently, forever. Saltzer and Schroeder wrote that principle down in 1975 and it hasn't aged a day. Unknown commands are allowed, though, and that's deliberate: rv ships with few rules precisely because a guard that blocks everything unrecognized gets disabled within the hour, and a disabled guard is worse than none.</p>
+<p>On prompts as a defense: Anthropic published that users accept 93% of permission prompts, and their auto-mode classifier still misses about 17% of overeager actions. Those numbers are why I didn't build another dialog.</p>
 
-<p>There's an escape hatch, on Grok only for now. If rv stops something you meant to run, you can mint a one-time unlock scoped to that exact command in that exact folder, and next time it asks again. Not on Pi or OpenCode yet. Their hook payloads don't carry the working directory today, though rv could forward it, and I won't scope an unlock to less than command-plus-folder, because trust-this-command-anywhere is how you end up back where you started.</p>
+<p>The design calls I argued with myself over:</p>
 
-<p>Two disclosures, since you'd find them eventually anyway. Anonymous usage counters are wired to PostHog: install events and daily counts, never command text or paths, evaluation happens entirely on your Mac. No key ships in the binaries yet, so nothing sends today, but the code is there and now you know. And rv works at the hook layer. It is not a sandbox. A process that skips the hook entirely never meets rv. Hook-grade, that's all it claims to be.</p>
+<p>Garbage payload means block. If rv can't read what the hook sent, the command doesn't run. Unknown commands mean allow, deliberately: two packs can't judge everything, and a guard that blocks what it doesn't recognize gets turned off within the hour, which is worse than it not existing.</p>
 
-<p>Install is one line:</p>
+<p>There's an unlock path, but only on Grok right now. Deny something you meant to run and you can mint a one-time allowance for that exact command in that exact folder. Pi and OpenCode can't do this yet because their hook payloads don't carry the working directory. Pi actually exposes ctx.cwd and our adapter drops it — that's ours to fix, first thing on the list. Until then, no unlock rather than a global bypass.</p>
+
+<p>Two disclosures. Anonymous usage counters are wired to PostHog: install events, daily counts, pack IDs, host wiring. Never command text or paths, evaluation happens locally. No API key ships in the binaries, so nothing sends today, but the code is there and now you know. And rv installs three executables plus a LaunchAgent (rvd, the evaluate service). Uninstall takes all of it back out.</p>
+
+<p>Install:</p>
+
+<pre><code>curl -fsSL <span class="ph" title="Placeholder — real URL pending release">INSTALL_URL</span> | sh</code></pre>
+
+<p>The script writes three binaries to ~/.local/bin, hook files under rv-owned names in your agents' config folders, and the LaunchAgent plist. Foreign hooks untouched.</p>
+
+<p>Here's what I want from posting this: break it. Run weird commands through your agent and tell me what got denied that shouldn't have been, or worse, what slipped through. The packs will grow from real misses, not from me guessing.</p>
 </article>
 </div>
 </body>
