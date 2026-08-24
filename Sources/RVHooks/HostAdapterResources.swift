@@ -1,4 +1,5 @@
 import Foundation
+import RVDomain
 
 /// Failure when an embedded Host adapter resource cannot be decoded.
 package enum HostAdapterResourceError: Error, Equatable, Sendable, CustomStringConvertible {

@@ -86,12 +86,13 @@ public struct EvaluateReply: Sendable, Equatable, Codable {
 }
 
 public struct HookEvaluateParams: Sendable, Equatable, Codable {
-    public var host: String
+    /// Closed host family. Unknown strings fail `init(from:)` with `dataCorrupted`.
+    public var host: HookHost
     public var stdin: String
     /// Additive `rv.ipc.v1` field. Same implicit-hello rule as `EvaluateParams`.
     public var clientSemver: String?
 
-    public init(host: String, stdin: String, clientSemver: String? = nil) {
+    public init(host: HookHost, stdin: String, clientSemver: String? = nil) {
         self.host = host
         self.stdin = stdin
         self.clientSemver = clientSemver
@@ -99,7 +100,7 @@ public struct HookEvaluateParams: Sendable, Equatable, Codable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        host = try container.decode(String.self, forKey: .host)
+        host = try container.decode(HookHost.self, forKey: .host)
         stdin = try container.decode(String.self, forKey: .stdin)
         clientSemver = try container.decodeIfPresent(String.self, forKey: .clientSemver)
     }
@@ -400,7 +401,6 @@ public enum DoctorCheckStatus: String, Sendable, Equatable, Codable {
     case skipped
 }
 
-/// Host-name cases mirror RVHooks.HookHost because RVIPC cannot depend on RVHooks; this duplication is accepted.
 public enum DoctorCheckID: String, Codable, Hashable, Sendable {
     case xpc, `protocol`, packs, launchd, lastError, grok, pi, opencode
 }

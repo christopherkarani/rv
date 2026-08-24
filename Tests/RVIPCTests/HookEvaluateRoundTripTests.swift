@@ -4,9 +4,32 @@ import RVDomain
 @testable import RVIPC
 
 struct HookEvaluateRoundTripTests {
+    @Test func hookEvaluateRequestFrame_bytesMatchGolden() throws {
+        #expect(ProtocolVersion.serviceSemver == "1.0.0")
+        let params = HookEvaluateParams(
+            host: .grok,
+            stdin: #"{"tool":"Bash"}"#,
+            clientSemver: ProtocolVersion.serviceSemver
+        )
+        let id = try #require(UUID(uuidString: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"))
+        let request = IPCRequest(id: id, method: .hookEvaluate(params))
+        let data = try IPCJSON.encode(request)
+        let golden = #"{"id":"AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE","method":{"hookEvaluate":{"clientSemver":"1.0.0","host":"grok","stdin":"{\"tool\":\"Bash\"}"}},"protocol":"rv.ipc.v1"}"#
+        #expect(String(data: data, encoding: .utf8) == golden)
+    }
+
+    @Test func hookEvaluateReplyFrame_bytesMatchGolden() throws {
+        let reply = HookEvaluateReply(stdout: "", exitCode: 1)
+        let id = try #require(UUID(uuidString: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"))
+        let response = IPCResponse(id: id, result: .hookEvaluate(reply))
+        let data = try IPCJSON.encode(response)
+        let golden = #"{"id":"AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE","protocol":"rv.ipc.v1","result":{"hookEvaluate":{"exitCode":1,"serviceSemver":"1.0.0","stdout":"","via":"xpc"}}}"#
+        #expect(String(data: data, encoding: .utf8) == golden)
+    }
+
     @Test func hookEvaluateParams_roundTripsHostStdinAndClientSemver() throws {
         let params = HookEvaluateParams(
-            host: "grok",
+            host: .grok,
             stdin: #"{"tool":"Bash"}"#,
             clientSemver: ProtocolVersion.serviceSemver
         )
@@ -27,7 +50,7 @@ struct HookEvaluateRoundTripTests {
     }
 
     @Test func hookEvaluateParams_omittedClientSemverIsNil() throws {
-        let omitted = try IPCJSON.encode(HookEvaluateParams(host: "pi", stdin: ""))
+        let omitted = try IPCJSON.encode(HookEvaluateParams(host: .pi, stdin: ""))
         let omittedObject = try #require(JSONSerialization.jsonObject(with: omitted) as? [String: Any])
         #expect(omittedObject["clientSemver"] == nil)
         #expect(try IPCJSON.decode(HookEvaluateParams.self, from: omitted).clientSemver == nil)
@@ -37,9 +60,25 @@ struct HookEvaluateRoundTripTests {
             "stdin": "ls",
         ])
         let decoded = try IPCJSON.decode(HookEvaluateParams.self, from: oldShape)
-        #expect(decoded.host == "opencode")
+        #expect(decoded.host == .opencode)
         #expect(decoded.stdin == "ls")
         #expect(decoded.clientSemver == nil)
+    }
+
+    @Test func hookEvaluateParams_unknownHostFailsDecodeWithDataCorrupted() throws {
+        let hostile = try JSONSerialization.data(withJSONObject: [
+            "host": "nope",
+            "stdin": "ls",
+        ])
+        do {
+            _ = try IPCJSON.decode(HookEvaluateParams.self, from: hostile)
+            Issue.record("unknown host string must fail decode")
+        } catch let error as DecodingError {
+            guard case .dataCorrupted = error else {
+                Issue.record("unknown host must be dataCorrupted, got \(error)")
+                return
+            }
+        }
     }
 
     @Test func hookEvaluateReply_roundTripsStdoutExitViaAndServiceSemver() throws {
