@@ -280,7 +280,7 @@ public struct ServiceClient: Sendable {
                 return .corePacksUnavailable
             case .majorVersion:
                 return .majorVersionMismatch
-            case .protocolSkew, nil:
+            case .protocolSkew, .handshakeRequired, nil:
                 return .rejected
             }
         }

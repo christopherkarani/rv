@@ -50,7 +50,7 @@ struct OneShotEvaluateClientTests {
                 serviceSemver: "1.0.0",
                 ok: true
             ),
-            responseResult: .error(.protocolSkew("protocol"))
+            responseResult: .error(.protocolSkew(.protocolSkew))
         )
         let client = try isolatedClient(transport: transport)
         let reply = await client.evaluate(command: ShellCommand(rawValue: "git reset --hard"))

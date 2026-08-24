@@ -108,7 +108,7 @@ public actor ServiceRuntime {
             if ack.ok == false {
                 let response = IPCResponse(
                     id: request.id,
-                    result: .error(.protocolSkew(ack.skewReason?.rawValue ?? "protocol"))
+                    result: .error(.protocolSkew(ack.skewReason ?? .protocolSkew))
                 )
                 return ((try? IPCJSON.encode(response)) ?? Data(), false)
             }
@@ -117,7 +117,7 @@ public actor ServiceRuntime {
         }
         let response = IPCResponse(
             id: UUID(),
-            result: .error(.protocolSkew("handshake required"))
+            result: .error(.protocolSkew(.handshakeRequired))
         )
         let data = (try? IPCJSON.encode(response)) ?? Data()
         return (data, false)
@@ -136,20 +136,20 @@ public actor ServiceRuntime {
 
     public func dispatch(_ request: IPCRequest) async -> IPCResponse {
         if request.protocolName != ProtocolVersion.name {
-            return IPCResponse(id: request.id, result: .error(.protocolSkew(request.protocolName)))
+            return IPCResponse(id: request.id, result: .error(.protocolSkew(.protocolSkew)))
         }
         let started = DispatchTime.now()
         let result: IPCResult
         switch request.method {
         case .evaluate(let params):
             if Self.isMajorSkewed(params.clientSemver) {
-                result = .error(.protocolSkew(SkewReason.majorVersion.rawValue))
+                result = .error(.protocolSkew(.majorVersion))
             } else {
                 result = .evaluate(await makeEvaluateReply(params.request, cwd: params.cwd))
             }
         case .hookEvaluate(let params):
             if Self.isMajorSkewed(params.clientSemver) {
-                result = .error(.protocolSkew(SkewReason.majorVersion.rawValue))
+                result = .error(.protocolSkew(.majorVersion))
             } else {
                 result = await makeHookEvaluateResult(params)
             }

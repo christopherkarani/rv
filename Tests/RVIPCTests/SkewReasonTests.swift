@@ -23,11 +23,18 @@ struct SkewReasonTests {
 
     @Test func rawValuesAreTheLegacyWireStrings() {
         #expect(SkewReason.protocolSkew.rawValue == "protocol")
+        #expect(SkewReason.majorVersion.rawValue == "major version")
         #expect(SkewReason.corePacksUnavailable.rawValue == "core packs unavailable")
+        #expect(SkewReason.handshakeRequired.rawValue == "handshake required")
     }
 
     @Test func bothCasesRoundTrip() throws {
-        for reason in [SkewReason.protocolSkew, .corePacksUnavailable] {
+        for reason in [
+            SkewReason.protocolSkew,
+            .majorVersion,
+            .corePacksUnavailable,
+            .handshakeRequired,
+        ] {
             let ack = HelloAck(ok: false, skewReason: reason)
             #expect(try IPCJSON.decode(HelloAck.self, from: IPCJSON.encode(ack)) == ack)
         }
