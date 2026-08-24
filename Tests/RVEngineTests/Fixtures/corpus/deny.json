@@ -442,6 +442,20 @@
       "expected": "deny",
       "rule_id": "core.filesystem:redirect-truncate-dynamic-path",
       "reason_contains": "dynamic"
+    },
+    {
+      "id": "deny.redirect-dynamic-interior-backtick-space",
+      "command": "echo x > /tmp/` date`.txt",
+      "expected": "deny",
+      "rule_id": "core.filesystem:redirect-truncate-dynamic-path",
+      "reason_contains": "dynamic"
+    },
+    {
+      "id": "deny.redirect-dynamic-relative-backtick-space",
+      "command": "echo x 1> ./db` cat fn`",
+      "expected": "deny",
+      "rule_id": "core.filesystem:redirect-truncate-dynamic-path",
+      "reason_contains": "dynamic"
     }
   ]
 }
