@@ -8,10 +8,11 @@ struct AllowOnceLedgerTests {
 
     @Test func mintFreshHashPrunesExpiredAndAppendsPending() throws {
         let stalePending = Self.record(kind: .pending, hash: "stale", expiresAt: Self.epoch.addingTimeInterval(-1))
+        let staleGranted = Self.record(kind: .granted, hash: "oldg", expiresAt: Self.epoch.addingTimeInterval(-1))
         let oldConsumed = Self.record(kind: .consumed, hash: "spent", expiresAt: Self.epoch.addingTimeInterval(-1))
         let livePending = Self.record(kind: .pending, hash: "live", expiresAt: Self.epoch.addingTimeInterval(60))
         let out = try AllowOnceLedger.mint(
-            records: [stalePending, oldConsumed, livePending],
+            records: [stalePending, staleGranted, oldConsumed, livePending],
             codeHash: "fresh",
             fingerprint: "fp",
             redacted: "git …",
@@ -89,6 +90,22 @@ struct AllowOnceLedgerTests {
         switch try AllowOnceLedger.redeem(records: [stale, live], codeHash: "old", now: Self.epoch) {
         case let .expired(records):
             #expect(records.map(\.codeHash) == ["new"])
+        case .granted:
+            Issue.record("expired pending must not redeem")
+        }
+    }
+
+    @Test func redeemExpiredPendingRemovesOnlyThatRow() throws {
+        let target = Self.record(kind: .pending, hash: "old", expiresAt: Self.epoch.addingTimeInterval(-1))
+        let expiredGranted = Self.record(kind: .granted, hash: "g", expiresAt: Self.epoch.addingTimeInterval(-2))
+        let expiredOtherPending = Self.record(kind: .pending, hash: "p2", expiresAt: Self.epoch.addingTimeInterval(-3))
+        switch try AllowOnceLedger.redeem(
+            records: [expiredGranted, target, expiredOtherPending],
+            codeHash: "old",
+            now: Self.epoch
+        ) {
+        case let .expired(records):
+            #expect(records.map(\.codeHash) == ["g", "p2"])
         case .granted:
             Issue.record("expired pending must not redeem")
         }
@@ -223,6 +240,49 @@ struct AllowOnceLedgerTests {
             expiresAt: Self.epoch.addingTimeInterval(60)
         ))
         #expect(rows.map(\.codeHash) == ["p", "g", "oc"])
+    }
+
+    @Test func exactNowIsStillLive() throws {
+        let pending = Self.record(kind: .pending, hash: "p", expiresAt: Self.epoch)
+        #expect(throws: AllowOnceError.collision) {
+            _ = try AllowOnceLedger.mint(
+                records: [pending],
+                codeHash: "p",
+                fingerprint: "fp",
+                redacted: "git …",
+                cwd: "/tmp/ws",
+                ruleID: nil,
+                now: Self.epoch,
+                ttl: 3600
+            )
+        }
+        switch try AllowOnceLedger.redeem(records: [pending], codeHash: "p", now: Self.epoch) {
+        case let .granted(records, _):
+            #expect(records.map(\.kind) == [.granted])
+        case .expired:
+            Issue.record("expiresAt == now must redeem")
+        }
+        let granted = Self.record(kind: .granted, hash: "g", expiresAt: Self.epoch)
+        switch AllowOnceLedger.consume(
+            records: [granted],
+            fingerprint: "fp",
+            cwd: "/tmp/ws",
+            now: Self.epoch
+        ) {
+        case let .consumed(tokenID, records):
+            #expect(tokenID == "g")
+            #expect(records.map(\.kind) == [.consumed])
+        case .expired, .alreadyConsumed, .notFound:
+            Issue.record("expiresAt == now must consume")
+        }
+        #expect(AllowOnceLedger.rows(records: [pending], now: Self.epoch).map(\.codeHash) == ["p"])
+        let consumed = Self.record(
+            kind: .consumed,
+            hash: "c",
+            expiresAt: Self.epoch,
+            consumedAt: Self.createdAt
+        )
+        #expect(AllowOnceLedger.keepConsumed(records: [consumed], now: Self.epoch).map(\.codeHash) == ["c"])
     }
 
     @Test func keepConsumedRetainsOnlyFreshConsumedForClear() {

@@ -102,6 +102,11 @@ New file `Sources/RVPolicy/AllowOnceLedger.swift`:
 
 ```swift
 enum AllowOnceLedger {
+    enum RedeemOutcome: Equatable, Sendable {
+        case granted(records: [AllowOnceRecord], row: AllowOnceListRow)
+        case expired(records: [AllowOnceRecord])
+    }
+
     enum ConsumeOutcome: Equatable, Sendable {
         case consumed(tokenID: String, records: [AllowOnceRecord])
         case expired([AllowOnceRecord])
@@ -124,7 +129,7 @@ enum AllowOnceLedger {
         records: [AllowOnceRecord],
         codeHash: String,
         now: Date
-    ) throws(AllowOnceError) -> (records: [AllowOnceRecord], row: AllowOnceListRow)
+    ) throws(AllowOnceError) -> RedeemOutcome
 
     static func consume(
         records: [AllowOnceRecord],
@@ -144,7 +149,7 @@ Semantics each function must reproduce (from current `AllowOnceStore`):
 | Function | Semantics to preserve |
 |---|---|
 | `mint` | First prune `expiresAt >= now \|\| kind == .consumed`; if any remaining pending record has equal `codeHash` and `expiresAt >= now`, throw `.collision` without writing; else append new pending record. |
-| `redeem` | Find pending with matching hash → missing: throw `.alreadySpent` if granted/consumed share the hash, else `.unknownCode`; found but `expiresAt < now`: remove it + prune expired pending/granted, throw `.expired`; found and valid: flip to `.granted`, prune expired pending/granted, return records + list row of the granted record. |
+| `redeem` | Find pending with matching hash → missing: throw `.alreadySpent` if granted/consumed share the hash, else `.unknownCode`; found but `expiresAt < now`: remove **only that pending** (do not prune other expired pending/granted) and return `.expired(records:)`; found and valid: flip to `.granted`, prune expired pending/granted, return `.granted(records:, row:)` of the granted record. |
 | `consume` | Filter indices by fingerprint AND cwd. Prefer a granted record with `expiresAt >= now`: flip to `.consumed`, stamp `consumedAt = now`, prune expired granted, return `.consumed(tokenID: its codeHash, records:)`. Else if any related granted record is expired: prune expired granted, return `.expired(records:)`. Else if any related consumed: `.alreadyConsumed`. Else `.notFound`. |
 | `rows` | Keep records where `expiresAt >= now \|\| kind == .consumed`; map each kept record to `AllowOnceListRow` via one shared construction. |
 | `keepConsumed` | Keep only `kind == .consumed && expiresAt >= now`. |
@@ -154,23 +159,12 @@ Actor mapping (stays in `AllowOnceStore`):
 - `consume(...)` maps `.consumed(tokenID, r)` → write r → `.consumed(tokenID:)`;
   `.expired(r)` → write r → `.expired`; others returned unwritten; IO catch →
   `.unavailable` (unchanged).
-- `redeem(...)` writes returned records inside the lock; ledger-thrown
-  `.expired` still persists the pruned records returned by... — note: current
-  code writes on the expired path. To keep that, `redeem` returns pruned
-  records even when throwing? No — throwing functions cannot also return
-  records. Resolution: model expired-redeem as a non-throwing result instead:
-
-```swift
-enum RedeemOutcome {
-    case granted(records: [AllowOnceRecord], row: AllowOnceListRow)
-    case expired(records: [AllowOnceRecord])   // caller writes these
-}
-static func redeem(records:, codeHash:, now:) -> RedeemOutcome   // throws only .unknownCode/.alreadySpent
-```
-
-  Store writes on `.granted` and `.expired`, throws `.expired` upward after
-  writing — net observable behavior identical to today (expired path wrote,
-  then threw `.expired`).
+- `redeem(...)` writes returned records inside the lock on both `.granted`
+  and `.expired`, then throws `.expired` upward after writing on the expired
+  path — net observable behavior identical to today (expired path wrote, then
+  threw `.expired`). Ledger `redeem` throws only `.unknownCode` /
+  `.alreadySpent`; expiry is `RedeemOutcome.expired`, not a thrown error, so
+  the caller can persist the remaining records.
 - `hasGrant`, `insertGranted`, `clear`, `mint` keep their current shapes; only
   their inner transitions delegate to the ledger.
 
