@@ -33,6 +33,12 @@ struct EvaluateSessionTests {
         #expect(result.matched?.ruleID.rawValue == "core.git:stash-drop")
     }
 
+    @Test func nilEnabledPacksCompilesDayOneWithoutProcessHome() {
+        let session = EvaluateSession()
+        #expect(session.corePacksReady)
+        #expect(Set(session.compiledPackIDs) == Set(dayOnePackIDs))
+    }
+
     @Test func emptyEnabledPacksDoesNotRefillDayOne() {
         let session = EvaluateSession(enabledPacks: dayOnePackIDs)
         #expect(session.corePacksReady)

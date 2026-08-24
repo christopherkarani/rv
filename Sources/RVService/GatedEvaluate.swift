@@ -70,14 +70,14 @@ public struct GatedEvaluate: Sendable {
         )
     }
 
-    /// HOME + effective pack IDs + day-one fallback. Shared by peek/apply and the XPC wire request.
+    /// Walk set for peek/apply and the XPC wire request. Nil home is day-one walk.
     public static func makeRequest(
         command: ShellCommand,
         home: HomeDirectory? = nil
     ) -> EvaluationRequest {
         EvaluationRequest(
             command: command,
-            enabledPacks: EnabledPacks.resolve(home: home ?? HomeDirectory.process())
+            enabledPacks: EnabledPacks.resolve(home: home).ids
         )
     }
 

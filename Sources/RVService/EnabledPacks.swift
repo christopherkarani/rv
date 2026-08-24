@@ -9,8 +9,8 @@ public enum EnabledPacks {
     /// A nil home falls back to the day-one packs; an unreadable config or
     /// registry falls back to the day-one packs; a readable config resolves
     /// exactly what it says, empty included.
-    public static func resolve(home: HomeDirectory?) -> [PackID] {
-        guard let home else { return dayOnePackIDs }
-        return (try? PacksFacade.effectiveIDs(home: home)) ?? dayOnePackIDs
+    public static func resolve(home: HomeDirectory?) -> WalkedPackIDs {
+        guard let home else { return WalkedPackIDs(ids: dayOnePackIDs) }
+        return WalkedPackIDs(ids: (try? PacksFacade.effectiveIDs(home: home)) ?? dayOnePackIDs)
     }
 }

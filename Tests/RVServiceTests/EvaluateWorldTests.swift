@@ -6,19 +6,22 @@ import RVPolicy
 @testable import RVService
 
 struct EvaluateWorldTests {
+    @Test func coverageUnionsDayOneOntoEmptyWalk() {
+        let coverage = PackCoverage.unioningDayOne(WalkedPackIDs(ids: []))
+        #expect(coverage.walked.ids.isEmpty)
+        #expect(coverage.compiled.ids == dayOnePackIDs)
+    }
+
     @Test func emptyCatalogFallsBackToDayOneCompileSet() throws {
         let empty = PackCatalog(records: [])
-        #expect(
-            EvaluationWorld.enabledIDs(
-                catalog: empty,
-                home: try isolatedHome()
-            )
-                == dayOnePackIDs
+        let coverage = EvaluationWorld.coverage(
+            catalog: empty,
+            home: try isolatedHome()
         )
+        #expect(coverage.compiled.ids == dayOnePackIDs)
         let session = EvaluationWorld.makeSession(
-            home: try isolatedHome(),
-            snapshots: try PackRegistry.loadDayOne(),
-            catalog: empty
+            coverage: coverage,
+            snapshots: try PackRegistry.loadDayOne()
         )
         #expect(session.corePacksReady)
         #expect(Set(session.compiledPackIDs) == Set(dayOnePackIDs))
@@ -27,13 +30,13 @@ struct EvaluateWorldTests {
     @Test func catalogDisableCannotUncompileDayOneRules() throws {
         var catalog = PackCatalog()
         _ = try catalog.setEnabled(id: .coreGit, enabled: false)
-        let ids = EvaluationWorld.enabledIDs(catalog: catalog, home: try isolatedHome())
-        #expect(ids.contains(.coreGit))
+        let coverage = EvaluationWorld.coverage(catalog: catalog, home: try isolatedHome())
+        #expect(coverage.walked.ids.contains(.coreGit) == false)
+        #expect(coverage.compiled.ids.contains(.coreGit))
 
         let session = EvaluationWorld.makeSession(
-            home: try isolatedHome(),
-            snapshots: try PackRegistry.loadDayOne(),
-            catalog: catalog
+            coverage: coverage,
+            snapshots: try PackRegistry.loadDayOne()
         )
         #expect(session.corePacksReady)
         let result = session.evaluate(resetHardRequest())
@@ -42,6 +45,20 @@ struct EvaluateWorldTests {
             return
         }
         #expect(deny.ruleID.rawValue == "core.git:reset-hard")
+
+        let walkedResult = session.evaluate(
+            EvaluationRequest(
+                command: ShellCommand(rawValue: "git reset --hard"),
+                enabledPacks: coverage.walked.ids
+            )
+        )
+        #expect(walkedResult.decision == .allow)
+    }
+
+    @Test func nilCatalogNilHomeIsDayOneWalkAndCompile() {
+        let coverage = EvaluationWorld.coverage(catalog: nil, home: nil)
+        #expect(coverage.walked.ids == dayOnePackIDs)
+        #expect(coverage.compiled.ids == dayOnePackIDs)
     }
 
     @Test func lazyDoorDefersCompilationUntilFirstUse() async throws {

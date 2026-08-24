@@ -60,6 +60,14 @@ struct EvaluateDoorTests {
         )
         #expect(request.enabledPacks == dayOnePackIDs)
     }
+
+    @Test func nilHomeRequestUsesDayOneWalk() {
+        let request = GatedEvaluate.makeRequest(
+            command: ShellCommand(rawValue: "git status"),
+            home: nil
+        )
+        #expect(request.enabledPacks == dayOnePackIDs)
+    }
 }
 
 private func isolatedHome() throws -> HomeDirectory {

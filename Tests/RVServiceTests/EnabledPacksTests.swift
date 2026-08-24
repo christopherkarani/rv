@@ -8,11 +8,11 @@ import RVService
     @Test func freshHomeResolvesDayOne() throws {
         let home = try temporaryHome()
         defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
-        #expect(EnabledPacks.resolve(home: home) == dayOnePackIDs)
+        #expect(EnabledPacks.resolve(home: home).ids == dayOnePackIDs)
     }
 
     @Test func nilHomeResolvesDayOne() {
-        #expect(EnabledPacks.resolve(home: nil) == dayOnePackIDs)
+        #expect(EnabledPacks.resolve(home: nil).ids == dayOnePackIDs)
     }
 
     @Test func enabledExtrasResolveBeyondDayOne() throws {
@@ -20,15 +20,19 @@ import RVService
         defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
         _ = try PacksFacade.enable(home: home, ids: ["database"])
         let resolved = EnabledPacks.resolve(home: home)
-        #expect(resolved.contains(PackID(rawValue: "database.sqlite")))
-        #expect(resolved.count == 10)
+        #expect(resolved.ids.contains(PackID(rawValue: "database.sqlite")))
+        #expect(resolved.ids.count == 10)
     }
 
     @Test func disabledDayOneStaysResolvedOff() throws {
         let home = try temporaryHome()
         defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
         _ = try PacksFacade.disable(home: home, ids: ["core.git"])
-        #expect(EnabledPacks.resolve(home: home).contains(PackID(rawValue: "core.git")) == false)
+        let walked = EnabledPacks.resolve(home: home)
+        #expect(walked.ids.contains(PackID(rawValue: "core.git")) == false)
+        let coverage = PackCoverage.unioningDayOne(walked)
+        #expect(coverage.walked.ids.contains(PackID(rawValue: "core.git")) == false)
+        #expect(coverage.compiled.ids.contains(PackID(rawValue: "core.git")))
     }
 }
 
