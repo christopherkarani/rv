@@ -439,6 +439,9 @@ private func fixtureLoginHome() throws -> URL {
     #expect(plist.contains("/opt/rvd"))
     #expect(plist.contains("@RVD_PATH@") == false)
     #expect(plist.contains("<false/>"))
+    #expect(plist.contains("<key>LimitLoadToSessionType</key>"))
+    #expect(plist.contains("<string>Aqua</string>"))
+    #expect(plist.contains("<string>Background</string>"))
 }
 
 @Test func setup_bakesCHookPathNotRvCli() throws {

@@ -278,7 +278,7 @@ enum SetupRun {
 
         if env.touchLaunchd {
             do {
-                try env.launchctl.bootout(domain: "gui/\(env.uid())", label: launchAgentLabel)
+                try env.launchctl.bootout(domain: "user/\(env.uid())", label: launchAgentLabel)
             } catch {
                 throw SetupError.launchctlApplyFailed(.bootout)
             }
@@ -320,9 +320,9 @@ enum SetupRun {
         }
         if env.touchLaunchd {
             let url = URL(fileURLWithPath: layout.launchAgent)
-            try? env.launchctl.bootout(domain: "gui/\(env.uid())", label: launchAgentLabel)
+            try? env.launchctl.bootout(domain: "user/\(env.uid())", label: launchAgentLabel)
             do {
-                try env.launchctl.bootstrap(domain: "gui/\(env.uid())", plist: url)
+                try env.launchctl.bootstrap(domain: "user/\(env.uid())", plist: url)
             } catch {
                 throw SetupError.launchctlApplyFailed(.bootstrap)
             }
