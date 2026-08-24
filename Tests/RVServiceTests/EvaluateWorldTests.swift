@@ -55,30 +55,49 @@ struct EvaluateWorldTests {
         })
         #expect(builds.value == 0)
 
-        let denied = await door.run(
-            .apply,
-            command: ShellCommand(rawValue: "git reset --hard"),
-            cwd: nil,
-            home: home,
-            store: store,
-            now: Date(timeIntervalSince1970: 1_700_000_000)
-        )
+        let denied = await applyResetHard(door, home: home, store: store)
         guard case .deny = denied.decision else {
             Issue.record("lazy door must evaluate like an eager one")
             return
         }
         #expect(builds.value == 1)
+    }
+
+    @Test func lazyDoorReusesSessionOnSecondRun() async throws {
+        let builds = BuildCounter()
+        let store = AllowOnceStore(baseDirectory: try isolatedAllowOnceDirectory())
+        let home = try isolatedHome()
+        let snapshots = try PackRegistry.loadDayOne()
+        let door = GatedEvaluate(lazySession: {
+            builds.increment()
+            return EvaluateSession(snapshots: snapshots, enabledPacks: dayOnePackIDs)
+        })
+
+        let first = await applyResetHard(door, home: home, store: store)
+        let second = await applyResetHard(door, home: home, store: store)
+        guard case .deny = first.decision, case .deny = second.decision else {
+            Issue.record("both runs must deny git reset --hard")
+            return
+        }
+        #expect(builds.value == 1)
+    }
+
+    @Test func lazyDoorReusesSessionAfterCorePacksReady() async throws {
+        let builds = BuildCounter()
+        let store = AllowOnceStore(baseDirectory: try isolatedAllowOnceDirectory())
+        let home = try isolatedHome()
+        let snapshots = try PackRegistry.loadDayOne()
+        let door = GatedEvaluate(lazySession: {
+            builds.increment()
+            return EvaluateSession(snapshots: snapshots, enabledPacks: dayOnePackIDs)
+        })
+
         #expect(door.corePacksReady)
-        let deniedAgain = await door.run(
-            .apply,
-            command: ShellCommand(rawValue: "git reset --hard"),
-            cwd: nil,
-            home: home,
-            store: store,
-            now: Date(timeIntervalSince1970: 1_700_000_000)
-        )
-        guard case .deny = deniedAgain.decision else {
-            Issue.record("memoized door must still evaluate")
+        #expect(builds.value == 1)
+
+        let denied = await applyResetHard(door, home: home, store: store)
+        guard case .deny = denied.decision else {
+            Issue.record("corePacksReady must not rebuild before evaluate")
             return
         }
         #expect(builds.value == 1)
@@ -89,14 +108,7 @@ struct EvaluateWorldTests {
         let home = try isolatedHome()
         let snapshots = try PackRegistry.loadDayOne()
         let door = EvaluationWorld.assemble(home: home, snapshots: snapshots, catalog: nil)
-        let result = await door.run(
-            .apply,
-            command: ShellCommand(rawValue: "git reset --hard"),
-            cwd: nil,
-            home: home,
-            store: store,
-            now: Date(timeIntervalSince1970: 1_700_000_000)
-        )
+        let result = await applyResetHard(door, home: home, store: store)
         guard case .deny(let deny) = result.decision else {
             Issue.record("assembled world must deny git reset --hard")
             return
@@ -107,6 +119,21 @@ struct EvaluateWorldTests {
 
 private func isolatedHome() throws -> HomeDirectory {
     try #require(HomeDirectory(validating: isolatedHomeDirectory().path))
+}
+
+private func applyResetHard(
+    _ door: GatedEvaluate,
+    home: HomeDirectory,
+    store: AllowOnceStore
+) async -> EvaluationResult {
+    await door.run(
+        .apply,
+        command: ShellCommand(rawValue: "git reset --hard"),
+        cwd: nil,
+        home: home,
+        store: store,
+        now: Date(timeIntervalSince1970: 1_700_000_000)
+    )
 }
 
 private func resetHardRequest() -> EvaluationRequest {

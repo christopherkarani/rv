@@ -1,4 +1,5 @@
 import Foundation
+import os
 import RVDomain
 import RVPolicy
 
@@ -14,30 +15,10 @@ public struct GatedEvaluate: Sendable {
 
     private enum Source: Sendable {
         case prepared(EvaluateSession)
-        case lazy(SessionBox)
-    }
-
-    /// First-use box for a deferred session. Class identity so copies of the
-    /// door share one compile (allowed at the RVService edge).
-    private final class SessionBox: @unchecked Sendable {
-        private let lock = NSLock()
-        private let build: @Sendable () -> EvaluateSession
-        private var session: EvaluateSession?
-
-        init(build: @escaping @Sendable () -> EvaluateSession) {
-            self.build = build
-        }
-
-        func resolved() -> EvaluateSession {
-            lock.withLock {
-                if let session {
-                    return session
-                }
-                let built = build()
-                session = built
-                return built
-            }
-        }
+        case deferred(
+            build: @Sendable () -> EvaluateSession,
+            slot: OSAllocatedUnfairLock<EvaluateSession?>
+        )
     }
 
     private let source: Source
@@ -49,15 +30,25 @@ public struct GatedEvaluate: Sendable {
 
     /// Creates a door that defers session construction until first use, then reuses it.
     package init(lazySession: @escaping @Sendable () -> EvaluateSession) {
-        self.source = .lazy(SessionBox(build: lazySession))
+        self.source = .deferred(
+            build: lazySession,
+            slot: OSAllocatedUnfairLock(initialState: nil)
+        )
     }
 
     private func resolvedSession() -> EvaluateSession {
         switch source {
         case .prepared(let session):
             return session
-        case .lazy(let box):
-            return box.resolved()
+        case .deferred(let build, let slot):
+            return slot.withLock { stored in
+                if let stored {
+                    return stored
+                }
+                let built = build()
+                stored = built
+                return built
+            }
         }
     }
 

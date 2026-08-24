@@ -44,7 +44,7 @@ package enum EvaluationWorld {
         )
     }
 
-    /// The assembly door; its session builds on first evaluate, never here.
+    /// The assembly door; its session builds on first use, never here.
     package static func assemble(
         home: HomeDirectory?,
         snapshots: [PackSnapshot]?,
