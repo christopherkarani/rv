@@ -145,32 +145,31 @@
       <span>·</span>
       <span>Aug 2026</span>
       <span>·</span>
-      <span class="status" title="Not published yet">DRAFT v2</span>
+      <span class="status" title="Not published yet">DRAFT v3</span>
     </div>
   </header>
 
   <article>
     <p>Last month I asked my coding agent to clean up a build folder and watched it run <code>rm -rf</code> on a path it had guessed. I caught that one. I didn't catch an earlier one, and I'm not going to pretend the files were backed up.</p>
 
-    <p>So I wrote rv. It's a small Mac tool that sits between your coding agent and its shell hooks. When Pi is about to run a shell command, rv looks at it first. Recursive deletes, force-pushes, stuff like that gets blocked before it runs, with a short note about which rule fired.</p>
+    <p>So I wrote rv. It's a small Mac tool that hooks into your coding agent's shell. When Pi is about to run a bash command, rv looks at it first. Recursive deletes outside temp dirs, force-pushes, stuff like that gets blocked before it runs, with a short note about which rule fired.</p>
 
     <p>I want to explain a few decisions because they're the part you'd want to know before trusting this thing.</p>
 
-    <h2>It fails closed</h2>
-    <p>If rv can't understand what the hook sent it, it blocks. That sounds obvious but most tools do the opposite, because blocking feels like breaking. A guard that goes quiet when things get weird isn't a guard, it's decoration.</p>
+    <h2>It fails closed where it can</h2>
+    <p>If rv can't understand the payload a hook sends it, it blocks. Unknown commands are different: they're allowed by design, because rv ships with a small rule set and blocking everything it doesn't recognize would make the tool unusable within an hour. That's a real boundary and I'd rather write it down than let you discover it.</p>
 
-    <h2>Blocking isn't a dead end</h2>
-    <p>If it stops something you actually meant to run, you unlock that exact command for that folder, once. Next time it asks again. I went back and forth on this a lot. "Trust this agent forever" was easier to build and it's how you end up right back where you started.</p>
+    <h2>Blocking isn't a dead end — on Grok, anyway</h2>
+    <p>If rv stops something you actually meant to run, you can mint a one-time unlock for that exact command in that exact folder. Next time, it asks again. On Pi and OpenCode this doesn't work yet, because their hook payloads don't carry the working directory, and I won't scope an unlock to less than command-plus-folder. It's the first thing on my list.</p>
 
-    <h2>Nothing leaves your machine</h2>
-    <p>The evaluation happens locally. No analytics, no telemetry, your commands are not anyone's data. This shouldn't be remarkable but here we are.</p>
+    <p>One thing does leave your machine: anonymous install and daily-active counts, via PostHog, no command text or paths ever. The key isn't baked into the binaries so right now nothing is sent at all, but the code ships and you should know. Your commands stay local. Evaluation happens entirely on your Mac, either in-process or through a small XPC service.</p>
 
     <h2>It doesn't claim more than it does</h2>
     <p>rv works at the hook layer. It is not a sandbox. If some process skips the hook entirely, rv never sees it. I could have blurred this in the marketing and nobody would have checked for months. But you'd find out eventually, probably at the worst possible time, so: hook-grade, that's what it is, that's all it claims to be.</p>
 
     <h2>Install</h2>
     <pre><code>curl -fsSL <span class="ph" title="Placeholder — real URL pending release">INSTALL_URL</span> | sh</code></pre>
-    <p>Two binaries, <code>rv setup</code>, done. Setup only touches rv's own files, so if you already have hooks from something else it leaves those alone. There's an <code>rv doctor</code> for when things seem off, and uninstall actually uninstalls.</p>
+    <p>Three executables land in <code>~/.local/bin</code>, plus <code>rv setup</code> writes its own hook files into your Pi/Grok/OpenCode config folders — rv-owned names only; foreign hooks are left alone. There's an <code>rv doctor</code> for when things seem off, and uninstall removes the binaries and everything rv wired. If a file was already sitting at one of rv's names before setup ran, uninstall leaves that one alone rather than deleting something it doesn't own.</p>
 
     <p>Works with Pi, Grok, and OpenCode today. Shell commands only for now — no file-edit hooks yet. macOS 26 on Apple Silicon, because that's the machine I have and I'd rather support one thing properly than three things approximately.</p>
 
