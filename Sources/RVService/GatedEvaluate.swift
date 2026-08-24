@@ -14,7 +14,30 @@ public struct GatedEvaluate: Sendable {
 
     private enum Source: Sendable {
         case prepared(EvaluateSession)
-        case deferred(@Sendable () -> EvaluateSession)
+        case lazy(SessionBox)
+    }
+
+    /// First-use box for a deferred session. Class identity so copies of the
+    /// door share one compile (allowed at the RVService edge).
+    private final class SessionBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private let build: @Sendable () -> EvaluateSession
+        private var session: EvaluateSession?
+
+        init(build: @escaping @Sendable () -> EvaluateSession) {
+            self.build = build
+        }
+
+        func resolved() -> EvaluateSession {
+            lock.withLock {
+                if let session {
+                    return session
+                }
+                let built = build()
+                session = built
+                return built
+            }
+        }
     }
 
     private let source: Source
@@ -24,17 +47,17 @@ public struct GatedEvaluate: Sendable {
         self.source = .prepared(session)
     }
 
-    /// Creates a door that defers session construction until first evaluate.
+    /// Creates a door that defers session construction until first use, then reuses it.
     package init(lazySession: @escaping @Sendable () -> EvaluateSession) {
-        self.source = .deferred(lazySession)
+        self.source = .lazy(SessionBox(build: lazySession))
     }
 
     private func resolvedSession() -> EvaluateSession {
         switch source {
         case .prepared(let session):
             return session
-        case .deferred(let build):
-            return build()
+        case .lazy(let box):
+            return box.resolved()
         }
     }
 

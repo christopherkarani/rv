@@ -6,15 +6,20 @@ import RVPolicy
 @testable import RVService
 
 struct EvaluateWorldTests {
-    @Test func emptyCatalogFallsBackToDayOneCompileSet() {
+    @Test func emptyCatalogFallsBackToDayOneCompileSet() throws {
+        let empty = PackCatalog(records: [])
         #expect(
             EvaluationWorld.enabledIDs(
-                catalog: PackCatalog(),
-                home: HomeDirectory(validating: "/tmp/rv-world-home")
+                catalog: empty,
+                home: try isolatedHome()
             )
                 == dayOnePackIDs
         )
-        let session = EvaluationWorld.makeSession(home: nil, snapshots: nil, catalog: PackCatalog())
+        let session = EvaluationWorld.makeSession(
+            home: try isolatedHome(),
+            snapshots: try PackRegistry.loadDayOne(),
+            catalog: empty
+        )
         #expect(session.corePacksReady)
         #expect(Set(session.compiledPackIDs) == Set(dayOnePackIDs))
     }
@@ -22,10 +27,14 @@ struct EvaluateWorldTests {
     @Test func catalogDisableCannotUncompileDayOneRules() throws {
         var catalog = PackCatalog()
         _ = try catalog.setEnabled(id: .coreGit, enabled: false)
-        let ids = EvaluationWorld.enabledIDs(catalog: catalog, home: nil)
+        let ids = EvaluationWorld.enabledIDs(catalog: catalog, home: try isolatedHome())
         #expect(ids.contains(.coreGit))
 
-        let session = EvaluationWorld.makeSession(home: nil, snapshots: nil, catalog: catalog)
+        let session = EvaluationWorld.makeSession(
+            home: try isolatedHome(),
+            snapshots: try PackRegistry.loadDayOne(),
+            catalog: catalog
+        )
         #expect(session.corePacksReady)
         let result = session.evaluate(resetHardRequest())
         guard case .deny(let deny) = result.decision else {
@@ -38,9 +47,11 @@ struct EvaluateWorldTests {
     @Test func lazyDoorDefersCompilationUntilFirstUse() async throws {
         let builds = BuildCounter()
         let store = AllowOnceStore(baseDirectory: try isolatedAllowOnceDirectory())
+        let home = try isolatedHome()
+        let snapshots = try PackRegistry.loadDayOne()
         let door = GatedEvaluate(lazySession: {
             builds.increment()
-            return EvaluateSession(enabledPacks: dayOnePackIDs)
+            return EvaluateSession(snapshots: snapshots, enabledPacks: dayOnePackIDs)
         })
         #expect(builds.value == 0)
 
@@ -48,7 +59,7 @@ struct EvaluateWorldTests {
             .apply,
             command: ShellCommand(rawValue: "git reset --hard"),
             cwd: nil,
-            home: nil,
+            home: home,
             store: store,
             now: Date(timeIntervalSince1970: 1_700_000_000)
         )
@@ -57,16 +68,32 @@ struct EvaluateWorldTests {
             return
         }
         #expect(builds.value == 1)
+        #expect(door.corePacksReady)
+        let deniedAgain = await door.run(
+            .apply,
+            command: ShellCommand(rawValue: "git reset --hard"),
+            cwd: nil,
+            home: home,
+            store: store,
+            now: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        guard case .deny = deniedAgain.decision else {
+            Issue.record("memoized door must still evaluate")
+            return
+        }
+        #expect(builds.value == 1)
     }
 
     @Test func assembleRunsTheWorldOnFirstUse() async throws {
         let store = AllowOnceStore(baseDirectory: try isolatedAllowOnceDirectory())
-        let door = EvaluationWorld.assemble(home: nil, snapshots: nil, catalog: nil)
+        let home = try isolatedHome()
+        let snapshots = try PackRegistry.loadDayOne()
+        let door = EvaluationWorld.assemble(home: home, snapshots: snapshots, catalog: nil)
         let result = await door.run(
             .apply,
             command: ShellCommand(rawValue: "git reset --hard"),
             cwd: nil,
-            home: nil,
+            home: home,
             store: store,
             now: Date(timeIntervalSince1970: 1_700_000_000)
         )
@@ -76,6 +103,10 @@ struct EvaluateWorldTests {
         }
         #expect(deny.ruleID.rawValue == "core.git:reset-hard")
     }
+}
+
+private func isolatedHome() throws -> HomeDirectory {
+    try #require(HomeDirectory(validating: isolatedHomeDirectory().path))
 }
 
 private func resetHardRequest() -> EvaluationRequest {
