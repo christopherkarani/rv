@@ -81,7 +81,7 @@ public struct IPCResponse: Sendable, Equatable, Codable {
 public enum IPCError: Error, Sendable, Equatable, Codable {
     case unknownMethod
     case decodeFailed
-    case protocolSkew(String)
+    case protocolSkew(SkewReason)
     case engine(String)
     case packNotFound(PackID)
     case allowOnceNotFound
@@ -106,8 +106,8 @@ public enum IPCError: Error, Sendable, Equatable, Codable {
             try container.encode(true, forKey: .unknownMethod)
         case .decodeFailed:
             try container.encode(true, forKey: .decodeFailed)
-        case .protocolSkew(let message):
-            try container.encode(message, forKey: .protocolSkew)
+        case .protocolSkew(let reason):
+            try container.encode(reason, forKey: .protocolSkew)
         case .engine(let message):
             try container.encode(message, forKey: .engine)
         case .packNotFound(let id):
@@ -127,8 +127,8 @@ public enum IPCError: Error, Sendable, Equatable, Codable {
             self = .unknownMethod
         } else if container.contains(.decodeFailed) {
             self = .decodeFailed
-        } else if let message = try container.decodeIfPresent(String.self, forKey: .protocolSkew) {
-            self = .protocolSkew(message)
+        } else if let reason = try container.decodeIfPresent(SkewReason.self, forKey: .protocolSkew) {
+            self = .protocolSkew(reason)
         } else if let message = try container.decodeIfPresent(String.self, forKey: .engine) {
             self = .engine(message)
         } else if let id = try container.decodeIfPresent(PackID.self, forKey: .packNotFound) {

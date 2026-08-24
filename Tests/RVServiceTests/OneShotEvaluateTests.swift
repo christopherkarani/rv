@@ -34,11 +34,12 @@ struct OneShotEvaluateTests {
         )
         #expect(ok == false)
         let response = try IPCJSON.decode(IPCResponse.self, from: data)
-        guard case .error(.protocolSkew(let message)) = response.result else {
+        guard case .error(.protocolSkew(let reason)) = response.result else {
             Issue.record("old evaluate without Hello must stay handshake required")
             return
         }
-        #expect(message == "handshake required")
+        #expect(reason == .handshakeRequired)
+        #expect(reason.rawValue == "handshake required")
     }
 
     @Test func failedImplicitHello_doesNotEvaluateAndKeepsHandshakeClosed() async throws {
@@ -51,11 +52,12 @@ struct OneShotEvaluateTests {
         let (first, ok) = await runtime.handleIncoming(firstBody, handshakeOK: false)
         #expect(ok == false)
         let firstResponse = try IPCJSON.decode(IPCResponse.self, from: first)
-        guard case .error(.protocolSkew(let message)) = firstResponse.result else {
+        guard case .error(.protocolSkew(let reason)) = firstResponse.result else {
             Issue.record("unready core must not evaluate on implicit hello")
             return
         }
-        #expect(message == "core packs unavailable")
+        #expect(reason == .corePacksUnavailable)
+        #expect(reason.rawValue == "core packs unavailable")
         if case .evaluate = firstResponse.result {
             Issue.record("failed implicit hello must not return evaluate")
         }
@@ -70,7 +72,8 @@ struct OneShotEvaluateTests {
             Issue.record("handshake must stay closed after failed implicit hello")
             return
         }
-        #expect(again == "handshake required")
+        #expect(again == .handshakeRequired)
+        #expect(again.rawValue == "handshake required")
     }
 
     @Test func skewedImplicitHello_doesNotEvaluate() async throws {
@@ -85,11 +88,12 @@ struct OneShotEvaluateTests {
         )
         #expect(ok == false)
         let response = try IPCJSON.decode(IPCResponse.self, from: data)
-        guard case .error(.protocolSkew(let message)) = response.result else {
+        guard case .error(.protocolSkew(let reason)) = response.result else {
             Issue.record("protocol skew must error, not evaluate")
             return
         }
-        #expect(message == "protocol")
+        #expect(reason == .protocolSkew)
+        #expect(reason.rawValue == "protocol")
         if case .evaluate = response.result {
             Issue.record("do not evaluate against a skewed listener")
         }
@@ -106,11 +110,12 @@ struct OneShotEvaluateTests {
         )
         #expect(ok == false)
         let response = try IPCJSON.decode(IPCResponse.self, from: data)
-        guard case .error(.protocolSkew(let message)) = response.result else {
+        guard case .error(.protocolSkew(let reason)) = response.result else {
             Issue.record("major semver skew must error, not evaluate")
             return
         }
-        #expect(message == "major version")
+        #expect(reason == .majorVersion)
+        #expect(reason.rawValue == "major version")
         if case .evaluate = response.result {
             Issue.record("do not evaluate against a major-skewed listener")
         }
@@ -131,13 +136,44 @@ struct OneShotEvaluateTests {
         )
         #expect(ok == true)
         let response = try IPCJSON.decode(IPCResponse.self, from: data)
-        guard case .error(.protocolSkew(let message)) = response.result else {
+        guard case .error(.protocolSkew(let reason)) = response.result else {
             Issue.record("major-skewed evaluate must error even on an open handshake")
             return
         }
-        #expect(message == SkewReason.majorVersion.rawValue)
+        #expect(reason == .majorVersion)
+        #expect(reason.rawValue == "major version")
         if case .evaluate = response.result {
             Issue.record("an open handshake must not carry a skewed clientSemver into evaluation")
+        }
+    }
+
+    @Test func dispatchProtocolNameMismatch_usesProtocolSkewCaseNotRequestName() async throws {
+        let runtime = try isolatedRuntime()
+        let hello = Hello(
+            protocolName: ProtocolVersion.name,
+            clientSemver: ProtocolVersion.serviceSemver
+        )
+        let (_, helloOK) = await runtime.handleIncoming(try IPCJSON.encode(hello), handshakeOK: false)
+        #expect(helloOK == true)
+
+        let (data, ok) = await runtime.handleIncoming(
+            try evaluateBody(
+                command: "git reset --hard",
+                clientSemver: ProtocolVersion.serviceSemver,
+                protocolName: "rv.ipc.v0"
+            ),
+            handshakeOK: helloOK
+        )
+        #expect(ok == true)
+        let response = try IPCJSON.decode(IPCResponse.self, from: data)
+        guard case .error(.protocolSkew(let reason)) = response.result else {
+            Issue.record("open-handshake protocol-name mismatch must be protocolSkew")
+            return
+        }
+        #expect(reason == .protocolSkew)
+        #expect(reason.rawValue == "protocol")
+        if case .evaluate = response.result {
+            Issue.record("do not evaluate a protocol-name mismatch after handshake")
         }
     }
 
