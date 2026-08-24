@@ -1,8 +1,0 @@
-import Foundation
-
-enum RobotJSON {
-    static func encodeArray(_ rows: [[String: String]]) throws -> String {
-        let data = try JSONSerialization.data(withJSONObject: rows, options: [.sortedKeys])
-        return String(decoding: data, as: UTF8.self)
-    }
-}

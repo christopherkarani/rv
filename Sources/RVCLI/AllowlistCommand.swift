@@ -250,7 +250,8 @@ struct AllowlistList: AsyncParsableCommand {
         switch AllowlistCLI.store().loadForValidate(workspacePath: nil) {
         case .missing, .symlinkIntoWorkspace:
             if format.json || format.robot {
-                FileHandle.standardOutput.write(Data("[]\n".utf8))
+                let document = RobotDocument.allowlistList([])
+                FileHandle.standardOutput.write(Data((document.render() + "\n").utf8))
             } else {
                 FileHandle.standardOutput.write(Data("no allowlist rows\n".utf8))
             }
@@ -259,20 +260,8 @@ struct AllowlistList: AsyncParsableCommand {
             throw ExitCode(2)
         case .ok(let entries):
             if format.json || format.robot {
-                let payload: [[String: String]] = entries.map { entry in
-                    var row: [String: String] = [
-                        "reason": entry.reason,
-                        "active": entry.isActive(at: now) ? "true" : "false",
-                    ]
-                    switch entry.selector {
-                    case .rule(let ruleID):
-                        row["rule"] = ruleID.rawValue
-                    case .exactCommand(let command):
-                        row["exact_command"] = command.rawValue
-                    }
-                    return row
-                }
-                FileHandle.standardOutput.write(Data((try RobotJSON.encodeArray(payload) + "\n").utf8))
+                let document = RobotDocument.allowlistList(allowlistRobotRows(from: entries, now: now))
+                FileHandle.standardOutput.write(Data((document.render() + "\n").utf8))
             } else {
                 if entries.isEmpty {
                     FileHandle.standardOutput.write(Data("no allowlist rows\n".utf8))

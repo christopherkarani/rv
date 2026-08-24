@@ -8,6 +8,8 @@ enum RobotDocument {
     case doctor(DoctorRobotPayload)
     case packsList(PacksRobotPayload)
     case packsInfo(PacksRobotRow)
+    case allowlistList([AllowlistRobotRow])
+    case allowOnceList([AllowOnceRobotRow])
 
     /// Returns this document as JSON with sorted keys and unescaped slashes.
     func render() -> String {
@@ -22,6 +24,10 @@ enum RobotDocument {
             Self.jsonString(payload)
         case .packsInfo(let payload):
             Self.jsonString(payload)
+        case .allowlistList(let rows):
+            Self.jsonString(rows)
+        case .allowOnceList(let rows):
+            Self.jsonString(rows)
         }
     }
 
