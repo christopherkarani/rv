@@ -1,0 +1,68 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    if: github.event_name != 'pull_request'
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Swift toolchain
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Developer/Toolchains/swift-6.3.3-RELEASE.xctoolchain
+          key: swift-6.3.3-RELEASE-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install Swift 6.3.3
+        run: |
+          pin="$(tr -d '[:space:]' < .swift-version)"
+          dest="$HOME/Library/Developer/Toolchains/swift-${pin}-RELEASE.xctoolchain"
+          if [[ -x "$dest/usr/bin/swift" ]]; then
+            exit 0
+          fi
+          pkg="swift-${pin}-RELEASE-osx.pkg"
+          curl -fsSL -o "$pkg" \
+            "https://download.swift.org/swift-${pin}-release/xcode/swift-${pin}-RELEASE/${pkg}"
+          sudo installer -pkg "$pkg" -target /
+          mkdir -p "$HOME/Library/Developer/Toolchains"
+          sys="/Library/Developer/Toolchains/swift-${pin}-RELEASE.xctoolchain"
+          if [[ ! -x "$dest/usr/bin/swift" && -x "$sys/usr/bin/swift" ]]; then
+            rm -f "$dest"
+            cp -R "$sys" "$dest"
+          fi
+
+      - name: Preflight + module tests
+        run: |
+          tools/gate.sh \
+            RVDomainTests RVEngineTests RVPacksTests RVPolicyTests \
+            RVHooksTests RVIPCTests RVServiceTests RVPresentationTests \
+            RVThemeTests RVTUITests RVHistoryTests RVAnalyticsTests \
+            RVCorpusTests
+          tools/swift-6.3.3 test --filter RVCLITests --skip CHookPipeTests.cHookProof
+
+      - name: Stage release binaries
+        run: tools/release.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rv-${{ github.ref_name }}
+          path: |
+            .build/release-stage/rv
+            .build/release-stage/rv-cli
+            .build/release-stage/rvd
+            .build/release-stage/*_RVPacks.bundle
+          if-no-files-found: error
