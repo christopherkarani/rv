@@ -23,17 +23,6 @@ public struct TestRobotPayload: Equatable, Sendable, Encodable {
         case ruleID = "rule_id"
         case reason
     }
-
-    /// Stable `rv.test.v1` field order. CLI encodes; it does not choose keys.
-    public var fields: [(String, String)] {
-        robotFields(
-            schema: schema,
-            decision: decision,
-            packID: packID,
-            ruleID: ruleID,
-            reason: reason
-        )
-    }
 }
 
 /// `rv.explain.v1` object projected from `ExplainViewModel`.
@@ -54,24 +43,6 @@ public struct ExplainRobotPayload: Equatable, Sendable, Encodable {
         case reason
         case explanation
         case nextAction = "next_action"
-    }
-
-    /// Stable `rv.explain.v1` field order. CLI encodes; it does not choose keys.
-    public var fields: [(String, String)] {
-        var pairs = robotFields(
-            schema: schema,
-            decision: decision,
-            packID: packID,
-            ruleID: ruleID,
-            reason: reason
-        )
-        if let explanation {
-            pairs.append(("explanation", explanation))
-        }
-        if let nextAction {
-            pairs.append(("next_action", nextAction))
-        }
-        return pairs
     }
 }
 
@@ -261,26 +232,6 @@ private func robotDecision(_ decision: Decision) -> String {
     case .indeterminate:
         "indeterminate"
     }
-}
-
-private func robotFields(
-    schema: String,
-    decision: String,
-    packID: String?,
-    ruleID: String?,
-    reason: String?
-) -> [(String, String)] {
-    var pairs = [("schema", schema), ("decision", decision)]
-    if let packID {
-        pairs.append(("pack_id", packID))
-    }
-    if let ruleID {
-        pairs.append(("rule_id", ruleID))
-    }
-    if let reason {
-        pairs.append(("reason", reason))
-    }
-    return pairs
 }
 
 extension SetupHostKind {
