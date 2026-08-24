@@ -1,4 +1,3 @@
-import Foundation
 import RVDomain
 import RVEngine
 import RVPacks
@@ -10,19 +9,42 @@ public struct EvaluateSession: Sendable {
     private let compiled: CompiledPacks<ICUCompiledPattern>
     private let engine: ICUPatternEngine
 
+    /// Compile-set constructor. `nil` compiles day-one only (empty walk ∪ day-one),
+    /// not process HOME. A non-nil list is compiled as given and is not unioned
+    /// with day-one — pass walk lists through `PackCoverage` first.
     public init(
         snapshots: [PackSnapshot]? = nil,
         enabledPacks: [PackID]? = nil
     ) {
-        let loaded = EvaluationWorld.resolveSnapshots(snapshots)
-        let enabled = enabledPacks ?? EvaluationWorld.enabledIDs(catalog: nil, home: nil)
+        if let enabledPacks {
+            self.init(
+                loadedSnapshots: EvaluationWorld.resolveSnapshots(snapshots),
+                compiledIDs: enabledPacks
+            )
+        } else {
+            self.init(
+                snapshots: snapshots,
+                compiledPacks: PackCoverage.unioningDayOne(WalkedPackIDs(ids: [])).compiled
+            )
+        }
+    }
+
+    /// Compile-set constructor. Walk lists must go through `PackCoverage` first.
+    package init(snapshots: [PackSnapshot]?, compiledPacks: CompiledPackIDs) {
+        self.init(
+            loadedSnapshots: EvaluationWorld.resolveSnapshots(snapshots),
+            compiledIDs: compiledPacks.ids
+        )
+    }
+
+    private init(loadedSnapshots: [PackSnapshot], compiledIDs: [PackID]) {
         let engine = ICUPatternEngine()
         let warmed = CoreWarmup.prepare(
-            snapshots: loaded,
-            enabledPacks: enabled,
+            snapshots: loadedSnapshots,
+            enabledPacks: compiledIDs,
             engine: engine
         )
-        self.snapshots = loaded
+        self.snapshots = loadedSnapshots
         self.engine = engine
         self.compiled = warmed.compiled
         self.corePacksReady = warmed.ready

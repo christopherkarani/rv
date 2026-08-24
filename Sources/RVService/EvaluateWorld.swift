@@ -3,6 +3,47 @@ import RVDomain
 import RVPacks
 import RVPolicy
 
+/// Pack IDs this evaluate walks. Config as written. Empty included. May omit day-one.
+public struct WalkedPackIDs: Sendable, Equatable {
+    public let ids: [PackID]
+
+    public init(ids: [PackID]) {
+        self.ids = ids
+    }
+}
+
+/// Pack IDs compiled into an Evaluate session. Coverage always unions day-one;
+/// an explicit list (tests, empty wire) may omit them.
+public struct CompiledPackIDs: Sendable, Equatable {
+    public let ids: [PackID]
+
+    /// Raw compile list. Does not union day-one; use `PackCoverage.unioningDayOne`
+    /// when the IDs came from a walk set.
+    package init(ids: [PackID]) {
+        self.ids = ids
+    }
+}
+
+/// Walk set plus the compile set derived from it. Compile = walk ∪ day-one.
+public struct PackCoverage: Sendable, Equatable {
+    public let walked: WalkedPackIDs
+    public let compiled: CompiledPackIDs
+
+    private init(walked: WalkedPackIDs, compiled: CompiledPackIDs) {
+        self.walked = walked
+        self.compiled = compiled
+    }
+
+    /// Walked order preserved; missing day-one IDs appended. The only walk→compile union.
+    public static func unioningDayOne(_ walked: WalkedPackIDs) -> PackCoverage {
+        var compiled = walked.ids
+        for id in dayOnePackIDs where !compiled.contains(id) {
+            compiled.append(id)
+        }
+        return PackCoverage(walked: walked, compiled: CompiledPackIDs(ids: compiled))
+    }
+}
+
 /// The one assembly site for an evaluation world: snapshot fallback chain,
 /// enabled-ID rule, and the door around the resulting session.
 package enum EvaluationWorld {
@@ -11,36 +52,32 @@ package enum EvaluationWorld {
         provided ?? ((try? PackRegistry.loadAll()) ?? ((try? PackRegistry.loadDayOne()) ?? []))
     }
 
-    /// Catalog/effective enabled IDs, plus day-one so a catalog disable cannot
-    /// uncompile required core rules or change what a session compiles.
-    package static func enabledIDs(
+    /// Walk from catalog flags or config; compile = walk ∪ day-one.
+    /// Nil home is day-one walk, not process HOME.
+    package static func coverage(
         catalog: PackCatalog?,
         home: HomeDirectory?
-    ) -> [PackID] {
-        let base: [PackID]
+    ) -> PackCoverage {
+        let walked: WalkedPackIDs
         if let catalog {
-            base = catalog.records.isEmpty
+            let ids = catalog.records.isEmpty
                 ? dayOnePackIDs
                 : catalog.records.filter(\.enabled).map(\.id)
+            walked = WalkedPackIDs(ids: ids)
         } else {
-            base = EnabledPacks.resolve(home: home ?? HomeDirectory.process())
+            walked = EnabledPacks.resolve(home: home)
         }
-        var ids = base
-        for id in dayOnePackIDs where !ids.contains(id) {
-            ids.append(id)
-        }
-        return ids
+        return PackCoverage.unioningDayOne(walked)
     }
 
     /// Eager session for callers that need readiness at build time (rvd).
     package static func makeSession(
-        home: HomeDirectory?,
-        snapshots: [PackSnapshot]?,
-        catalog: PackCatalog?
+        coverage: PackCoverage,
+        snapshots: [PackSnapshot]?
     ) -> EvaluateSession {
         EvaluateSession(
             snapshots: resolveSnapshots(snapshots),
-            enabledPacks: enabledIDs(catalog: catalog, home: home)
+            compiledPacks: coverage.compiled
         )
     }
 
@@ -51,7 +88,10 @@ package enum EvaluationWorld {
         catalog: PackCatalog?
     ) -> GatedEvaluate {
         GatedEvaluate(lazySession: {
-            makeSession(home: home, snapshots: snapshots, catalog: catalog)
+            makeSession(
+                coverage: coverage(catalog: catalog, home: home),
+                snapshots: snapshots
+            )
         })
     }
 }

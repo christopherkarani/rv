@@ -42,9 +42,10 @@ public actor ServiceRuntime {
         }
         let loaded = EvaluationWorld.resolveSnapshots(snapshots)
         self.sessionSnapshots = loaded
+        let coverage = EvaluationWorld.coverage(catalog: self.catalog, home: resolvedHome)
         let session = EvaluateSession(
             snapshots: loaded,
-            enabledPacks: EvaluationWorld.enabledIDs(catalog: self.catalog, home: resolvedHome)
+            compiledPacks: coverage.compiled
         )
         self.compiledPackIDs = session.compiledPackIDs
         let gated = GatedEvaluate(session)
@@ -199,7 +200,7 @@ public actor ServiceRuntime {
     }
 
     private func runEvaluate(_ request: EvaluationRequest, cwd: String?) async -> EvaluationResult {
-        rebuildWhenUncovered(wanted: Set(request.enabledPacks))
+        rebuildWhenUncovered(wanted: WalkedPackIDs(ids: request.enabledPacks))
         let result = await gated.apply(request, cwd: cwd, store: allowOnce, now: Date())
         recordAnalytics(for: result)
         return result
@@ -366,7 +367,9 @@ public actor ServiceRuntime {
         if let refreshed = Self.makeCatalog(home: configHome) {
             catalog = refreshed
         }
-        rebuildWhenUncovered(wanted: Set(EvaluationWorld.enabledIDs(catalog: catalog, home: configHome)))
+        rebuildWhenUncovered(
+            wanted: EvaluationWorld.coverage(catalog: catalog, home: configHome).compiled
+        )
         let packs = catalog.records.map { PackRecord(id: $0.id, enabled: $0.enabled, bundled: $0.bundled) }
         return ListPacksReply(
             packs: packs,
@@ -433,12 +436,23 @@ public actor ServiceRuntime {
     }
 
     private func rebuildGated() {
+        let coverage = EvaluationWorld.coverage(catalog: catalog, home: configHome)
         let session = EvaluateSession(
             snapshots: sessionSnapshots,
-            enabledPacks: EvaluationWorld.enabledIDs(catalog: catalog, home: configHome)
+            compiledPacks: coverage.compiled
         )
         compiledPackIDs = session.compiledPackIDs
         gated = GatedEvaluate(session)
+    }
+
+    /// Wire request walk set. Those IDs must already be compiled, or we rebuild.
+    private func rebuildWhenUncovered(wanted: WalkedPackIDs) {
+        rebuildWhenUncovered(wantedIDs: Set(wanted.ids))
+    }
+
+    /// Coverage compile set after catalog refresh (`listPacks`).
+    private func rebuildWhenUncovered(wanted: CompiledPackIDs) {
+        rebuildWhenUncovered(wantedIDs: Set(wanted.ids))
     }
 
     /// Warm-runtime self-heal for behind-our-back config edits: `rv packs
@@ -447,15 +461,15 @@ public actor ServiceRuntime {
     /// toward allow, so rebuild before evaluating. Failed attempts retry at
     /// most once per second so a pack that can never compile costs one
     /// rebuild per interval, not one per evaluate.
-    private func rebuildWhenUncovered(wanted: Set<PackID>) {
-        guard !wanted.isSubset(of: Set(compiledPackIDs)) else { return }
+    private func rebuildWhenUncovered(wantedIDs: Set<PackID>) {
+        guard !wantedIDs.isSubset(of: Set(compiledPackIDs)) else { return }
         let now = DispatchTime.now().uptimeNanoseconds
-        if wanted == lastUncoveredWanted,
+        if wantedIDs == lastUncoveredWanted,
            now < lastCoverageRebuildAt &+ 1_000_000_000
         {
             return
         }
-        lastUncoveredWanted = wanted
+        lastUncoveredWanted = wantedIDs
         lastCoverageRebuildAt = now
         catalog = Self.makeCatalog(home: configHome) ?? catalog
         rebuildGated()
