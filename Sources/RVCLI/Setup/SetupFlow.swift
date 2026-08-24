@@ -57,7 +57,10 @@ struct SetupFlow {
                 force: intent.force,
                 clock: clock,
                 animate: intent.animate,
-                write: write
+                write: write,
+                capture: { slots in
+                    env.installAnalytics.captureInstall(hosts: InstallAnalyticsHosts.from(slots))
+                }
             )
         case .uninstall:
             return SetupRun.uninstall(

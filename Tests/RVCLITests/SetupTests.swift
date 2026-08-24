@@ -827,3 +827,24 @@ final class DomainRecordingLaunchctl: LaunchctlApplying {
         #expect(launchctl.bootoutDomains == ["gui/4242", "gui/4242"])
     }
 }
+
+@Test func setupFlow_stalledInstallSink_completesBoundedSilentlyAndExitsCleanly() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(atPath: layout.grokDirectory, withIntermediateDirectories: true)
+        let stallRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-setup-stall-\(UUID().uuidString)", isDirectory: true)
+        let coordinator = stalledInstallCoordinator(configDirectory: stallRoot)
+        let environment = env(
+            home: home,
+            launchctl: launchctl,
+            installAnalytics: BlockingInstallAnalytics { coordinator }
+        )
+        let flow = SetupFlow(makeEnvironment: { environment })
+        let start = ContinuousClock.now
+        let outcome = flow.run(SetupIntent(kind: .install, appearance: .robot))
+        #expect(start.duration(to: .now) < .seconds(5))
+        #expect(outcome.exitCode == 0)
+        #expect(outcome.stderr.isEmpty)
+        #expect(outcome.stdout == setupRobotCompleteLine + "\n")
+    }
+}

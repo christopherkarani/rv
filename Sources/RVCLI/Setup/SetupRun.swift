@@ -77,6 +77,7 @@ struct SetupEnvironment {
 enum SetupRun {
     static let launchAgentLabel = "dev.rv.evaluate"
 
+    /// The flow door injects `capture` so install-analytics policy stays behind the door.
     static func setup(
         _ env: SetupEnvironment,
         appearance: CLIAppearance = .robot,
@@ -84,10 +85,12 @@ enum SetupRun {
         force: Bool = false,
         clock: any SetupCeremonyClock = ZeroSetupCeremonyClock(),
         animate: Bool = false,
-        write: ((String) -> Void)? = nil
+        write: ((String) -> Void)? = nil,
+        capture: (SetupSlotSnapshot) -> Void = { _ in }
     ) -> SetupOutcome {
         do {
             let report = try perform(env, force: force)
+            capture(report.slots)
             let formatted = SetupFormat.stdout(
                 report: report,
                 appearance: appearance,
@@ -180,7 +183,6 @@ enum SetupRun {
             openCode: kinds[.openCode] ?? .pending,
             wrote: wrote
         )
-        env.installAnalytics.captureInstall(hosts: InstallAnalyticsHosts.from(report.slots))
         return report
     }
 
