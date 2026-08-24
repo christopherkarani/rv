@@ -1,6 +1,7 @@
 import Foundation
 import RVPresentation
 
+/// Closed machine-output document for CLI robot JSON.
 enum RobotDocument {
     case test(TestRobotPayload)
     case explain(ExplainRobotPayload)
@@ -8,27 +9,32 @@ enum RobotDocument {
     case packsList(PacksRobotPayload)
     case packsInfo(PacksRobotRow)
 
+    /// Returns this document as JSON with sorted keys and unescaped slashes.
     func render() -> String {
         switch self {
         case .test(let payload):
-            jsonString(payload)
+            Self.jsonString(payload)
         case .explain(let payload):
-            jsonString(payload)
+            Self.jsonString(payload)
         case .doctor(let payload):
-            jsonString(payload)
+            Self.jsonString(payload)
         case .packsList(let payload):
-            jsonString(payload)
+            Self.jsonString(payload)
         case .packsInfo(let payload):
-            jsonString(payload)
+            Self.jsonString(payload)
         }
     }
-}
 
-private func jsonString(_ value: some Encodable) -> String {
-    let encoder = JSONEncoder()
-    encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-    guard let data = try? encoder.encode(value) else {
-        preconditionFailure("RobotDocument payloads are plain values; encoding cannot fail")
+    private static func jsonString(_ value: some Encodable) -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        do {
+            let data = try encoder.encode(value)
+            return String(decoding: data, as: UTF8.self)
+        } catch {
+            preconditionFailure(
+                "RobotDocument payloads are plain values; encoding cannot fail (\(error))"
+            )
+        }
     }
-    return String(decoding: data, as: UTF8.self)
 }

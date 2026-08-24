@@ -147,18 +147,16 @@ public enum CommandRun {
         let text: String
         switch kind {
         case .explain:
-            text = RobotDocument.explain(
-                explainRobotPayload(
-                    from: explainViewModel(
-                        from: result,
-                        command: command,
-                        normalized: result.matchingView.isEmpty
-                            ? Normalize.matchingView(of: command.rawValue).rawValue
-                            : result.matchingView.rawValue
-                    )
+            let payload = explainRobotPayload(
+                from: explainViewModel(
+                    from: result,
+                    command: command,
+                    normalized: result.matchingView.isEmpty
+                        ? Normalize.matchingView(of: command.rawValue).rawValue
+                        : result.matchingView.rawValue
                 )
             )
-            .render()
+            text = RobotDocument.explain(payload).render()
         case .test, .testExplain:
             text = RobotDocument.test(testRobotPayload(from: result)).render()
         }
