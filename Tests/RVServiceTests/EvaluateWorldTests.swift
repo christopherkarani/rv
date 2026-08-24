@@ -123,6 +123,11 @@ struct EvaluateWorldTests {
         )
     }
 
+    @Test func compileSetFormsPackIDSetWithoutBeingASequence() {
+        let compile = EvaluationWorld.enabledIDs(catalog: nil, home: nil)
+        #expect(Set(compile) == Set(dayOnePackIDs))
+    }
+
     @Test func compileSetUnionsDayOneWhileWalkSetHonorsDisable() throws {
         let home = try isolatedHome()
         defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
