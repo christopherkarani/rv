@@ -39,6 +39,17 @@ struct EvaluateSessionTests {
         #expect(Set(session.compiledPackIDs) == Set(dayOnePackIDs))
     }
 
+    @Test func emptyWalkListOnSessionInitDoesNotUnionButCoverageDoes() {
+        let walked = WalkedPackIDs(ids: [])
+        let fromWalkIDs = EvaluateSession(enabledPacks: walked.ids)
+        #expect(fromWalkIDs.compiledPackIDs.isEmpty)
+        let fromCoverage = EvaluateSession(
+            snapshots: nil,
+            compiledPacks: PackCoverage.unioningDayOne(walked).compiled
+        )
+        #expect(Set(fromCoverage.compiledPackIDs) == Set(dayOnePackIDs))
+    }
+
     @Test func emptyEnabledPacksDoesNotRefillDayOne() {
         let session = EvaluateSession(enabledPacks: dayOnePackIDs)
         #expect(session.corePacksReady)

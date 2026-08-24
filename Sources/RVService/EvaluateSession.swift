@@ -9,17 +9,24 @@ public struct EvaluateSession: Sendable {
     private let compiled: CompiledPacks<ICUCompiledPattern>
     private let engine: ICUPatternEngine
 
+    /// Compile-set constructor. `nil` compiles day-one only (empty walk ∪ day-one),
+    /// not process HOME. A non-nil list is compiled as given and is not unioned
+    /// with day-one — pass walk lists through `PackCoverage` first.
     public init(
         snapshots: [PackSnapshot]? = nil,
         enabledPacks: [PackID]? = nil
     ) {
-        // Nil enabledPacks is the day-one compile set only — not process HOME.
-        let compiledIDs = enabledPacks
-            ?? PackCoverage.unioningDayOne(WalkedPackIDs(ids: [])).compiled.ids
-        self.init(
-            loadedSnapshots: EvaluationWorld.resolveSnapshots(snapshots),
-            compiledIDs: compiledIDs
-        )
+        if let enabledPacks {
+            self.init(
+                loadedSnapshots: EvaluationWorld.resolveSnapshots(snapshots),
+                compiledIDs: enabledPacks
+            )
+        } else {
+            self.init(
+                snapshots: snapshots,
+                compiledPacks: PackCoverage.unioningDayOne(WalkedPackIDs(ids: [])).compiled
+            )
+        }
     }
 
     /// Compile-set constructor. Walk lists must go through `PackCoverage` first.

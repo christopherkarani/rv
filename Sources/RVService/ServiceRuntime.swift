@@ -445,20 +445,22 @@ public actor ServiceRuntime {
         gated = GatedEvaluate(session)
     }
 
+    /// Wire request walk set. Those IDs must already be compiled, or we rebuild.
+    private func rebuildWhenUncovered(wanted: WalkedPackIDs) {
+        rebuildWhenUncovered(wantedIDs: Set(wanted.ids))
+    }
+
+    /// Coverage compile set after catalog refresh (`listPacks`).
+    private func rebuildWhenUncovered(wanted: CompiledPackIDs) {
+        rebuildWhenUncovered(wantedIDs: Set(wanted.ids))
+    }
+
     /// Warm-runtime self-heal for behind-our-back config edits: `rv packs
     /// enable` writes config.toml directly, so a request can name packs this
     /// session never compiled. Uncompiled-but-requested packs are dropped
     /// toward allow, so rebuild before evaluating. Failed attempts retry at
     /// most once per second so a pack that can never compile costs one
     /// rebuild per interval, not one per evaluate.
-    private func rebuildWhenUncovered(wanted: WalkedPackIDs) {
-        rebuildWhenUncovered(wantedIDs: Set(wanted.ids))
-    }
-
-    private func rebuildWhenUncovered(wanted: CompiledPackIDs) {
-        rebuildWhenUncovered(wantedIDs: Set(wanted.ids))
-    }
-
     private func rebuildWhenUncovered(wantedIDs: Set<PackID>) {
         guard !wantedIDs.isSubset(of: Set(compiledPackIDs)) else { return }
         let now = DispatchTime.now().uptimeNanoseconds

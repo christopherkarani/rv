@@ -12,11 +12,14 @@ public struct WalkedPackIDs: Sendable, Equatable {
     }
 }
 
-/// Pack IDs compiled into an Evaluate session. Always includes day-one when built from coverage.
+/// Pack IDs compiled into an Evaluate session. Coverage always unions day-one;
+/// an explicit list (tests, empty wire) may omit them.
 public struct CompiledPackIDs: Sendable, Equatable {
     public let ids: [PackID]
 
-    public init(ids: [PackID]) {
+    /// Raw compile list. Does not union day-one; use `PackCoverage.unioningDayOne`
+    /// when the IDs came from a walk set.
+    package init(ids: [PackID]) {
         self.ids = ids
     }
 }
@@ -25,6 +28,11 @@ public struct CompiledPackIDs: Sendable, Equatable {
 public struct PackCoverage: Sendable, Equatable {
     public let walked: WalkedPackIDs
     public let compiled: CompiledPackIDs
+
+    private init(walked: WalkedPackIDs, compiled: CompiledPackIDs) {
+        self.walked = walked
+        self.compiled = compiled
+    }
 
     /// Walked order preserved; missing day-one IDs appended. The only walk→compile union.
     public static func unioningDayOne(_ walked: WalkedPackIDs) -> PackCoverage {
