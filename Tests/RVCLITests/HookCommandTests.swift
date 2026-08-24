@@ -160,9 +160,30 @@ private func runHook(
     #expect(wire.exitCode == expected.exit)
 }
 
-@Test func hookMalformed_isEmptyAllow() async throws {
+@Test func hookMalformed_failsClosedWithDenyJSONWithoutEvaluating() async throws {
+    let probe = EvaluateProbe()
     let expected = try grokExpected("malformed")
-    let wire = try await runHook(stdin: try grokFixture("malformed.txt"))
+    let wire = try await runHook(stdin: try grokFixture("malformed.txt")) { command, _ in
+        probe.record(command, result: EvaluationResult(
+            outcome: .deny(
+                Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "should not run"),
+                matched: nil
+            )
+        ))
+    }
+    let json = try denyJSON(wire.stdout)
+    #expect(json["decision"] as? String == "deny")
+    #expect(json["reason"] as? String == malformedHookSentence(.unreadable))
+    #expect(json["rule"] == nil)
+    #expect(json["next"] == nil)
+    #expect(probe.commands.isEmpty)
+    #expect(wire.stdout == expected.stdout)
+    #expect(wire.exitCode == expected.exit)
+}
+
+@Test func hookForeignStillAllowsAfterFailClosedMalformed() async throws {
+    let expected = try grokExpected("allow-non-shell-read")
+    let wire = try await runHook(stdin: try grokFixture("allow-non-shell-read.json"))
     #expect(wire.stdout == expected.stdout)
     #expect(wire.exitCode == expected.exit)
 }

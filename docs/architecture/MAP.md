@@ -196,7 +196,7 @@ rvd — ServiceRuntime + XPCListener (dev.rv.evaluate)
   │  HookDoor internals:
   │   GrokHostCodec / PiHostCodec / OpenCodeHostCodec
   │     decode(stdin) → .request(HookRequest{command,cwd}) | .foreign | .malformed
-  │     foreign/malformed → encodeAllow() (empty stdout, exit 0)
+  │     foreign → encodeAllow() (empty stdout, exit 0); malformed → encodeDeny() (fail closed)
   │     else GatedEvaluate → EvaluationResult → HookMapper
   │
   │  GatedEvaluate (EvaluateSession + PolicyGate):

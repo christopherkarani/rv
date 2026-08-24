@@ -1,7 +1,7 @@
 import RVDomain
 
 /// The single codec-dispatch body: decode stdin with the host's concrete codec,
-/// evaluate, and map the result to host wire. `.foreign` and `.malformed` allow.
+/// evaluate, and map the result to host wire. `.foreign` allows; `.malformed` denies.
 public func hookWire(
     host: HookHost,
     stdin: String,
@@ -26,7 +26,9 @@ private func hookBody<C: HostCodec>(
     case .request(let request):
         let result = await evaluate(request.command, request.cwd)
         return hookWire(from: result, command: request.command, using: codec)
-    case .foreign, .malformed:
+    case .foreign:
         return codec.encodeAllow()
+    case .malformed(let malformation):
+        return codec.encodeDeny(reason: malformedHookSentence(malformation), rule: nil, next: nil)
     }
 }
