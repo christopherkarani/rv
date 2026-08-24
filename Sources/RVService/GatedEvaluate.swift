@@ -59,14 +59,16 @@ public struct GatedEvaluate: Sendable {
         cwd: String?,
         home: HomeDirectory? = nil,
         store: AllowOnceStore,
-        now: Date
+        now: Date,
+        allowlist: AllowlistSnapshot
     ) async -> EvaluationResult {
         await gated(
             intent,
             Self.makeRequest(command: command, home: home),
             cwd: cwd,
             store: store,
-            now: now
+            now: now,
+            allowlist: allowlist
         )
     }
 
@@ -87,9 +89,10 @@ public struct GatedEvaluate: Sendable {
         _ request: EvaluationRequest,
         cwd: String?,
         store: AllowOnceStore,
-        now: Date
+        now: Date,
+        allowlist: AllowlistSnapshot
     ) async -> EvaluationResult {
-        await gated(.peek, request, cwd: cwd, store: store, now: now)
+        await gated(.peek, request, cwd: cwd, store: store, now: now, allowlist: allowlist)
     }
 
     /// Wire-path apply for an already-built request (ServiceRuntime evaluate).
@@ -98,9 +101,10 @@ public struct GatedEvaluate: Sendable {
         _ request: EvaluationRequest,
         cwd: String?,
         store: AllowOnceStore,
-        now: Date
+        now: Date,
+        allowlist: AllowlistSnapshot
     ) async -> EvaluationResult {
-        await gated(.apply, request, cwd: cwd, store: store, now: now)
+        await gated(.apply, request, cwd: cwd, store: store, now: now, allowlist: allowlist)
     }
 
     private func gated(
@@ -108,7 +112,8 @@ public struct GatedEvaluate: Sendable {
         _ request: EvaluationRequest,
         cwd: String?,
         store: AllowOnceStore,
-        now: Date
+        now: Date,
+        allowlist: AllowlistSnapshot
     ) async -> EvaluationResult {
         let result = resolvedSession().evaluate(request)
         // Fast path: allow/indeterminate never touch PolicyGate or the
@@ -117,8 +122,6 @@ public struct GatedEvaluate: Sendable {
         case .allow, .indeterminate:
             return result
         case .deny:
-            let allowlist = AllowlistStore(baseDirectory: store.baseDirectory)
-                .loadUserSnapshot(workspacePath: cwd, now: now)
             switch intent {
             case .peek:
                 return await PolicyGate.peek(

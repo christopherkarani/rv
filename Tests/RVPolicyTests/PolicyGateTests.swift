@@ -4,6 +4,60 @@ import RVDomain
 @testable import RVPolicy
 
 struct PolicyGateTests {
+    @Test func decideAllowlistBeforeGrant() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let denied = resetHardDeny()
+        let ruleID = try #require(RuleID(rawValue: "core.git:reset-hard"))
+        let allowlist = AllowlistSnapshot(entries: [
+            AllowlistEntry(selector: .rule(ruleID), reason: "ci", addedAt: now),
+        ])
+        let gated = PolicyGate.decide(
+            denied,
+            cwd: "/tmp/ws",
+            allowlist: allowlist,
+            grant: .pending,
+            now: now
+        )
+        #expect(gated.override == .allowlist)
+        #expect(gated.result.decision == .allow)
+    }
+
+    @Test func decideEmptyCwdSkipsPendingGrant() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let gated = PolicyGate.decide(
+            resetHardDeny(),
+            cwd: "",
+            allowlist: .empty,
+            grant: .pending,
+            now: now
+        )
+        #expect(gated.override == .none)
+        guard case .deny = gated.result.decision else {
+            Issue.record("empty cwd must not honor a pending grant")
+            return
+        }
+    }
+
+    @Test func decideIndeterminateNeverHonorsGrant() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let incomplete = EvaluationResult(
+            outcome: .indeterminate(.commandTooLarge),
+            matchingView: "git reset --hard"
+        )
+        let gated = PolicyGate.decide(
+            incomplete,
+            cwd: "/tmp/ws",
+            allowlist: .empty,
+            grant: .pending,
+            now: now
+        )
+        #expect(gated.override == .none)
+        guard case .indeterminate = gated.result.decision else {
+            Issue.record("indeterminate must stay miss-policy (not allow)")
+            return
+        }
+    }
+
     @Test func denyWithoutGrantStaysDeny() async throws {
         let store = try isolatedStore()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
