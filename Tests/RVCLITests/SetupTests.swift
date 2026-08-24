@@ -1,9 +1,20 @@
 import Foundation
 import Testing
 import RVAnalytics
+import RVHooks
 import RVPolicy
 import RVPresentation
 @testable import RVCLI
+
+final class FailingLaunchctl: LaunchctlApplying {
+    func bootstrap(domain _: String, plist _: URL) throws {
+        throw LaunchctlError.nonZeroExit(1)
+    }
+
+    func bootout(domain _: String, label _: String) throws {
+        throw LaunchctlError.nonZeroExit(1)
+    }
+}
 
 func withTempHome(_ body: (URL, OwnedPaths, RecordingLaunchctl) throws -> Void) throws {
     let root = FileManager.default.temporaryDirectory
@@ -19,7 +30,7 @@ func withTempHome(_ body: (URL, OwnedPaths, RecordingLaunchctl) throws -> Void) 
 
 func env(
     home: URL,
-    launchctl: RecordingLaunchctl,
+    launchctl: any LaunchctlApplying,
     pathEntries: [String] = [],
     rvPath: String = "/tmp/rv-bin/rv",
     rvdPath: String? = nil,
@@ -582,5 +593,172 @@ private func fixtureLoginHome() throws -> URL {
         #expect(FileManager.default.fileExists(atPath: layout.piExtension))
         let pi = try String(contentsOfFile: layout.piExtension, encoding: .utf8)
         #expect(pi == (try SetupHostKind.pi.adapterResource().rendered(rvPath: "/tmp/rv-bin/rv")))
+    }
+}
+
+@Test func setupError_bridgesAdapterResourceFailureToHostKind() {
+    #expect(SetupError(adapterResourceFailure: .missingTemplate(.grok)) == .adapterTemplateMissing(.grok))
+    #expect(SetupError(adapterResourceFailure: .missingTemplate(.pi)) == .adapterTemplateMissing(.pi))
+    #expect(SetupError(adapterResourceFailure: .missingTemplate(.opencode)) == .adapterTemplateMissing(.openCode))
+}
+
+@Test func setupFailureOutput_mapsEveryCaseToStderrLineAndExitCode() {
+    let expected: [(SetupError, SetupFailureCommand, Int32, String)] = [
+        (
+            .adapterTemplateMissing(.pi),
+            .setup,
+            EX_DATAERR,
+            "rv setup failed: missing pi adapter template\n"
+        ),
+        (
+            .launchAgentTemplateMissing,
+            .setup,
+            EX_DATAERR,
+            "rv setup failed: missing LaunchAgent template\n"
+        ),
+        (
+            .configDirectoryCreateFailed,
+            .setup,
+            EX_CANTCREAT,
+            "rv setup failed: unable to create config directory\n"
+        ),
+        (
+            .hostHookClearFailed(.grok),
+            .setup,
+            EX_CANTCREAT,
+            "rv setup failed: unable to clear occupied grok hook\n"
+        ),
+        (
+            .hostHookWriteFailed(.openCode),
+            .setup,
+            EX_CANTCREAT,
+            "rv setup failed: unable to write opencode hook\n"
+        ),
+        (
+            .launchAgentWriteFailed,
+            .setup,
+            EX_CANTCREAT,
+            "rv setup failed: unable to write LaunchAgent\n"
+        ),
+        (
+            .launchctlApplyFailed(.bootstrap),
+            .setup,
+            EX_UNAVAILABLE,
+            "rv setup failed: unable to load LaunchAgent\n"
+        ),
+        (
+            .launchctlApplyFailed(.bootout),
+            .uninstall,
+            EX_UNAVAILABLE,
+            "rv uninstall failed: unable to unload LaunchAgent\n"
+        ),
+        (
+            .ownedPathStillExists,
+            .uninstall,
+            EX_SOFTWARE,
+            "rv uninstall failed: owned path still exists\n"
+        ),
+        (
+            .inspectionFailed,
+            .uninstall,
+            EX_SOFTWARE,
+            "rv uninstall failed: unable to inspect Host adapters\n"
+        ),
+    ]
+    for (error, command, exitCode, stderr) in expected {
+        let output = setupFailureOutput(error, command: command)
+        #expect(output.stderr == stderr)
+        #expect(output.exitCode == exitCode)
+    }
+}
+
+@Test func setup_launchctlBootstrapFails_mapsToUnavailableExitAndKindLine() throws {
+    try withTempHome { home, _, _ in
+        let outcome = SetupRun.setup(env(home: home, launchctl: FailingLaunchctl()))
+        #expect(outcome.stdout.isEmpty)
+        #expect(outcome.stderr == "rv setup failed: unable to load LaunchAgent\n")
+        #expect(outcome.exitCode == EX_UNAVAILABLE)
+    }
+}
+
+@Test func uninstall_launchctlBootoutFails_mapsToUnavailableExitAndKindLine() throws {
+    try withTempHome { home, _, _ in
+        let outcome = SetupRun.uninstall(env(home: home, launchctl: FailingLaunchctl()))
+        #expect(outcome.stdout.isEmpty)
+        #expect(outcome.stderr == "rv uninstall failed: unable to unload LaunchAgent\n")
+        #expect(outcome.exitCode == EX_UNAVAILABLE)
+    }
+}
+
+@Test func setup_configDirectoryBlockedByFile_mapsToCannotCreateExit() throws {
+    try withTempHome { home, layout, launchctl in
+        let configParent = home.appendingPathComponent(".config", isDirectory: true)
+        try FileManager.default.createDirectory(at: configParent, withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: URL(fileURLWithPath: layout.configDirectory))
+
+        let outcome = SetupRun.setup(env(home: home, launchctl: launchctl))
+
+        #expect(outcome.stderr == "rv setup failed: unable to create config directory\n")
+        #expect(outcome.exitCode == EX_CANTCREAT)
+        #expect(FileManager.default.fileExists(atPath: layout.grokHook) == false)
+        #expect(FileManager.default.fileExists(atPath: layout.launchAgent) == false)
+    }
+}
+
+@Test func setup_force_clearFailureInReadOnlyHooksDir_mapsToCannotCreateExit() throws {
+    try withTempHome { home, layout, launchctl in
+        let hooks = layout.grokDirectory + "/hooks"
+        try FileManager.default.createDirectory(atPath: hooks, withIntermediateDirectories: true)
+        try "{\"hooks\":[]}\n".write(toFile: layout.grokHook, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: hooks)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: hooks)
+        }
+
+        let outcome = SetupRun.setup(env(home: home, launchctl: launchctl), force: true)
+
+        #expect(outcome.stderr == "rv setup failed: unable to clear occupied grok hook\n")
+        #expect(outcome.exitCode == EX_CANTCREAT)
+        #expect(FileManager.default.fileExists(atPath: layout.grokHook))
+        #expect(launchctl.bootstraps.isEmpty == false)
+    }
+}
+
+@Test func setup_writeFailureInReadOnlyHooksDir_mapsToCannotCreateExit() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(
+            atPath: layout.grokDirectory,
+            withIntermediateDirectories: true
+        )
+        let hooks = layout.grokDirectory + "/hooks"
+        try FileManager.default.createDirectory(atPath: hooks, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: hooks)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: hooks)
+        }
+
+        let outcome = SetupRun.setup(env(home: home, launchctl: launchctl))
+
+        #expect(outcome.stderr == "rv setup failed: unable to write grok hook\n")
+        #expect(outcome.exitCode == EX_CANTCREAT)
+        #expect(FileManager.default.fileExists(atPath: layout.grokHook) == false)
+    }
+}
+
+@Test func setup_plistWriteFailureInReadOnlyLaunchAgentsDir_mapsToCannotCreateExit() throws {
+    try withTempHome { home, layout, launchctl in
+        let agents = home.appendingPathComponent("Library/LaunchAgents", isDirectory: true)
+        try FileManager.default.createDirectory(at: agents, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: agents.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: agents.path)
+        }
+
+        let outcome = SetupRun.setup(env(home: home, launchctl: launchctl))
+
+        #expect(outcome.stderr == "rv setup failed: unable to write LaunchAgent\n")
+        #expect(outcome.exitCode == EX_CANTCREAT)
+        #expect(launchctl.bootstraps.isEmpty)
+        #expect(FileManager.default.fileExists(atPath: layout.grokHook) == false)
     }
 }
