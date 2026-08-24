@@ -34,13 +34,16 @@ public enum CommandRun {
         now: Date = Date(),
         home: HomeDirectory? = HomeDirectory.process()
     ) async -> EvaluationResult {
-        await EvaluationWorld.assemble(home: home, snapshots: nil, catalog: nil).run(
+        let allowlist = AllowlistStore(baseDirectory: store.baseDirectory)
+            .loadUserSnapshot(workspacePath: cwd, now: now)
+        return await EvaluationWorld.assemble(home: home, snapshots: nil, catalog: nil).run(
             .peek,
             command: ShellCommand(rawValue: raw),
             cwd: cwd,
             home: home,
             store: store,
-            now: now
+            now: now,
+            allowlist: allowlist
         )
     }
 

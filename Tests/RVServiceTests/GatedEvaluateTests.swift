@@ -53,6 +53,46 @@ struct GatedEvaluateTests {
         #expect(applied.decision == .allow)
     }
 
+    @Test func injectedEmptyAllowlistIgnoresSiblingAllowlistFile() async throws {
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let ruleID = try #require(RuleID(rawValue: "core.git:reset-hard"))
+        try AllowlistStore(baseDirectory: store.baseDirectory).add(
+            AllowlistEntry(selector: .rule(ruleID), reason: "ci", addedAt: now),
+            tty: TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+        )
+        let gated = GatedEvaluate()
+        let applied = await gated.apply(
+            resetHardRequest(),
+            cwd: "/tmp/ws",
+            store: store,
+            now: now,
+            allowlist: .empty
+        )
+        guard case .deny = applied.decision else {
+            Issue.record("injected empty snapshot must not load store.baseDirectory")
+            return
+        }
+    }
+
+    @Test func injectedAllowlistSnapshotHonorsWithoutStoreDirectory() async throws {
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let ruleID = try #require(RuleID(rawValue: "core.git:reset-hard"))
+        let allowlist = AllowlistSnapshot(entries: [
+            AllowlistEntry(selector: .rule(ruleID), reason: "ci", addedAt: now),
+        ])
+        let gated = GatedEvaluate()
+        let applied = await gated.apply(
+            resetHardRequest(),
+            cwd: "/tmp/ws",
+            store: store,
+            now: now,
+            allowlist: allowlist
+        )
+        #expect(applied.decision == .allow)
+    }
+
     @Test func allowPathDoesNotCreateAllowlistFile() async throws {
         let store = try isolatedStore()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
