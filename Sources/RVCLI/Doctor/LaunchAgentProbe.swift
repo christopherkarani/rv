@@ -4,7 +4,7 @@ enum LaunchAgentProbe {
     static func isLoaded(label: String, userID: uid_t = getuid()) -> Bool {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-        process.arguments = ["print", "gui/\(userID)/\(label)"]
+        process.arguments = ["print", "user/\(userID)/\(label)"]
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         do {

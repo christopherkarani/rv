@@ -19,5 +19,10 @@
 	<false/>
 	<key>EnableTransactions</key>
 	<true/>
+	<key>LimitLoadToSessionType</key>
+	<array>
+		<string>Aqua</string>
+		<string>Background</string>
+	</array>
 </dict>
 </plist>
