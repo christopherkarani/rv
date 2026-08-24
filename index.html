@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>rv — a guard for your coding agent's shell</title>
+<title>Who gets to say no — rv and the agent shell problem</title>
 <style>
   :root {
     --paper: #fdfcf9;
@@ -138,49 +138,51 @@
 <div class="page">
   <header>
     <p class="kicker">Launch · r/pi</p>
-    <h1>I built a guard for my coding agent's shell, because it almost ate a directory</h1>
-    <p class="dek">rv sits between Pi (or Grok, or OpenCode) and the shell commands it's about to run.</p>
+    <h1>Who gets to say no</h1>
+    <p class="dek">Coding agents run our shells now. The checkpoints we built check the wrong moment.</p>
     <div class="meta">
       <span>Chris Karani</span>
       <span>·</span>
       <span>Aug 2026</span>
       <span>·</span>
-      <span class="status" title="Not published yet">DRAFT v3</span>
+      <span class="status" title="Not published yet">DRAFT v5</span>
     </div>
   </header>
 
   <article>
-    <p>Last month I asked my coding agent to clean up a build folder and watched it run <code>rm -rf</code> on a path it had guessed. I caught that one. I didn't catch an earlier one, and I'm not going to pretend the files were backed up.</p>
 
-    <p>So I wrote rv. It's a small Mac tool that hooks into your coding agent's shell. When Pi is about to run a bash command, rv looks at it first. Recursive deletes outside temp dirs, force-pushes, stuff like that gets blocked before it runs, with a short note about which rule fired.</p>
+<p>In July 2026 an agent on a Windows machine was asked to clear an app's tmp cache. The command it ran contained a shell variable in quotes. The outer shell expanded the variable to nothing, so what the safety layer approved and what rm actually executed were two different commands. One was harmless. The other spent four minutes deleting /bin, /boot, /etc, and everything the user owned.</p>
 
-    <p>I want to explain a few decisions because they're the part you'd want to know before trusting this thing.</p>
+<p>When the user tried to kill the process, the agent's own safety layer blocked it. Killing the agent counted as interfering with its work. Deleting his files didn't.</p>
 
-    <h2>It fails closed where it can</h2>
-    <p>If rv can't understand the payload a hook sends it, it blocks. Unknown commands are different: they're allowed by design, because rv ships with a small rule set and blocking everything it doesn't recognize would make the tool unusable within an hour. That's a real boundary and I'd rather write it down than let you discover it.</p>
+<p>That's issue 82165 against Claude Code. It's not even the worst one. There's a developer who watched a quoting mistake turn an approved file copy into `rm -rf /*` on a production server. Two companies' sites gone, plus their databases and SSL certificates. There's a guy whose home directory vanished because the agent created a folder literally named `~` and then deleted it. There's a typo — one transposed letter in a path — that macOS's case-insensitive filesystem quietly resolved to the real project folder, uncommitted work and all.</p>
 
-    <h2>Blocking isn't a dead end — on Grok, anyway</h2>
-    <p>If rv stops something you actually meant to run, you can mint a one-time unlock for that exact command in that exact folder. Next time, it asks again. On Pi and OpenCode this doesn't work yet, because their hook payloads don't carry the working directory, and I won't scope an unlock to less than command-plus-folder. It's the first thing on my list.</p>
+<p>Every one of these went through some kind of checkpoint first.</p>
 
-    <p>One thing does leave your machine: anonymous install and daily-active counts, via PostHog, no command text or paths ever. The key isn't baked into the binaries so right now nothing is sent at all, but the code ships and you should know. Your commands stay local. Evaluation happens entirely on your Mac, either in-process or through a small XPC service.</p>
+<p>I've been thinking about why, because I write code with these agents every day and I'm not going to stop. And I think the answer is that we built the checkpoints for the command we read, when the danger lives in the command the shell hears. Everything else follows from that mistake.</p>
 
-    <h2>It doesn't claim more than it does</h2>
-    <p>rv works at the hook layer. It is not a sandbox. If some process skips the hook entirely, rv never sees it. I could have blurred this in the marketing and nobody would have checked for months. But you'd find out eventually, probably at the worst possible time, so: hook-grade, that's what it is, that's all it claims to be.</p>
+<p>Consider the main defense: ask the human. Anthropic published the numbers themselves. Users approve 93% of permission prompts. At that point the prompt isn't oversight. It's a rubber stamp with extra keystrokes. The people who study warning dialogs for a living figured this out years ago; click-through rates of 33 to 70 percent show up in every serious study, and one economist pointed out something uncomfortable, which is that ignoring warnings is rational. When they almost never matter, you should stop reading them.</p>
 
-    <h2>Install</h2>
-    <pre><code>curl -fsSL <span class="ph" title="Placeholder — real URL pending release">INSTALL_URL</span> | sh</code></pre>
-    <p>Three executables land in <code>~/.local/bin</code>, plus <code>rv setup</code> writes its own hook files into your Pi/Grok/OpenCode config folders — rv-owned names only; foreign hooks are left alone. There's an <code>rv doctor</code> for when things seem off, and uninstall removes the binaries and everything rv wired. If a file was already sitting at one of rv's names before setup ran, uninstall leaves that one alone rather than deleting something it doesn't own.</p>
+<p>Why not make the dialog smarter? So vendors tried: let a model judge whether a command looks dangerous. Anthropic measured this too. Their classifier misses about 17% of genuinely overeager actions. But here's the detail worth sitting with. The misses aren't random. The classifier reads the same text the human did. A double-quoted SSH string. A variable inside quotes. A case-insensitive filesystem. The shell outsmarts the pattern, and destruction happens after the checkpoint has already said yes.</p>
 
-    <p>Works with Pi, Grok, and OpenCode today. Shell commands only for now — no file-edit hooks yet. macOS 26 on Apple Silicon, because that's the machine I have and I'd rather support one thing properly than three things approximately.</p>
+<p>The problem isn't stupidity. It's timing.</p>
 
-    <div class="ask">
-      <p>Here's what I actually want out of posting this: break it. Run weird commands through your agent. Tell me what got denied that shouldn't have been, or what slipped through that really shouldn't have. The rules are deliberately few. They'll grow from real misses, not from me sitting around imagining disasters.</p>
-    </div>
+<p>All these defenses check the command before expansion, and the shell rewrites it after. It's like inspecting passengers at the airport door and letting anyone who makes it past swap briefcases at the gate. You checked the right thing at the wrong moment.</p>
 
-    <footer>
-      Repo: <span class="ph" title="Placeholder — repo link pending">REPO_URL</span>
-    </footer>
-  </article>
+<p>This is why I wrote rv. It's a small Mac tool that hooks into your coding agent's shell and evaluates commands after they're expanded, right before execution. Recursive deletes outside temp dirs get denied. Force-pushes get denied. The rule set is deliberately small, and each denial comes with a note saying which rule fired and why.</p>
+
+<p>You might say: just use a sandbox. Sandboxes are great. Docker's microVMs, devcontainers, E2B, they're the best blast-radius reduction available and I recommend them. But notice which question they answer. They protect the host from the workspace. Most of us have a different problem: we want the agent working on this Mac, in this repo, with these credentials, because that's where the work is. Run your agent in a container with your project bind-mounted and `rm -rf` deletes your real files just as dead. If the workspace is the thing you're protecting, the guard has to sit where the command runs.</p>
+
+<p>Designing rv meant deciding what it does when it's unsure. That turned out to be the whole design.</p>
+
+<p>If rv can't parse the payload a hook sent it, it blocks. That sounds harsh until you see the alternative. A deny-list fails by allowing, silently; you never find out. An allow-list fails by refusing, loudly, and someone fixes it. Saltzer and Schroeder wrote this down in 1975 and it hasn't aged a day. Unknown commands are allowed, though, and that's deliberate. rv ships with few rules precisely because a guard that blocks everything it doesn't recognize gets disabled within the hour, and a disabled guard is worse than none.</p>
+
+<p>But there's an escape hatch. On Grok, if rv stops something you actually meant to run, you can mint a one-time unlock scoped to that exact command in that exact folder, and next time it asks again. Not on Pi or OpenCode yet. Their hook payloads don't carry the working directory, and I won't scope an unlock to less than command-plus-folder, because "trust this command anywhere" is how you end up back where you started.</p>
+
+<p>What about trust? Two honest disclosures, because you'd find them eventually anyway. Anonymous install counts leave your machine via PostHog. No command text or paths ever; evaluation happens entirely on your Mac. And rv works at the hook layer. It is not a sandbox. A process that skips the hook entirely never meets rv. I could have blurred that and nobody would have noticed for months, but you'd find out at the worst possible time, so: hook-grade, that's all it claims to be.</p>
+
+<p>Install is one line:</p>
+</article>
 </div>
 </body>
 </html>
