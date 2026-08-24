@@ -149,7 +149,8 @@ private func applyResetHard(
         cwd: nil,
         home: home,
         store: store,
-        now: Date(timeIntervalSince1970: 1_700_000_000)
+        now: Date(timeIntervalSince1970: 1_700_000_000),
+        allowlist: .empty
     )
 }
 

@@ -60,7 +60,7 @@ public struct GatedEvaluate: Sendable {
         home: HomeDirectory? = nil,
         store: AllowOnceStore,
         now: Date,
-        allowlist: AllowlistSnapshot = .empty
+        allowlist: AllowlistSnapshot
     ) async -> EvaluationResult {
         await gated(
             intent,
@@ -90,7 +90,7 @@ public struct GatedEvaluate: Sendable {
         cwd: String?,
         store: AllowOnceStore,
         now: Date,
-        allowlist: AllowlistSnapshot = .empty
+        allowlist: AllowlistSnapshot
     ) async -> EvaluationResult {
         await gated(.peek, request, cwd: cwd, store: store, now: now, allowlist: allowlist)
     }
@@ -102,7 +102,7 @@ public struct GatedEvaluate: Sendable {
         cwd: String?,
         store: AllowOnceStore,
         now: Date,
-        allowlist: AllowlistSnapshot = .empty
+        allowlist: AllowlistSnapshot
     ) async -> EvaluationResult {
         await gated(.apply, request, cwd: cwd, store: store, now: now, allowlist: allowlist)
     }
