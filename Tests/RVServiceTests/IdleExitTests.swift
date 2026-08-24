@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import RVService
 
@@ -21,4 +22,17 @@ struct IdleExitTests {
         try? await Task.sleep(nanoseconds: 800_000_000)
         #expect(await watchdog.fired)
     }
+
+    @Test func handleIncoming_recordsActivity() async throws {
+        let hits = ActivityHits()
+        let runtime = try isolatedRuntime(onActivity: { await hits.increment() })
+        #expect(await hits.count == 0)
+        _ = await runtime.handleIncoming(Data(), handshakeOK: false)
+        #expect(await hits.count == 1)
+    }
+}
+
+private actor ActivityHits {
+    private(set) var count = 0
+    func increment() { count += 1 }
 }

@@ -20,7 +20,8 @@ func isolatedHomeDirectory() throws -> URL {
 func isolatedRuntime(
     snapshots: [PackSnapshot]? = nil,
     log: (any ServiceLog)? = nil,
-    home: HomeDirectory? = nil
+    home: HomeDirectory? = nil,
+    onActivity: (@Sendable () async -> Void)? = nil
 ) throws -> ServiceRuntime {
     let resolvedHome = try home
         ?? HomeDirectory(validating: isolatedHomeDirectory().path)
@@ -28,6 +29,7 @@ func isolatedRuntime(
         snapshots: snapshots,
         home: resolvedHome,
         allowOnceDirectory: try isolatedAllowOnceDirectory(),
-        log: log
+        log: log,
+        onActivity: onActivity
     )
 }

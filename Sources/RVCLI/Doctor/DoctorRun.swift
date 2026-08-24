@@ -185,7 +185,8 @@ extension ServiceHealth {
             label: facts.snapshot.label,
             fallback: facts.localCorePacksReady ? .ready : .unavailable,
             launchAgent: facts.launchAgent,
-            warning: facts.snapshot.lastError == nil ? nil : "service reported an error"
+            warning: launchAgentWarning(facts.launchAgent)
+                ?? (facts.snapshot.lastError == nil ? nil : "service reported an error")
         )
     }
 
@@ -201,7 +202,11 @@ extension ServiceHealth {
             label: SetupRun.launchAgentLabel,
             fallback: local.corePacksReady ? .ready : .unavailable,
             launchAgent: local.launchAgent,
-            warning: warning
+            warning: launchAgentWarning(local.launchAgent) ?? warning
         )
+    }
+
+    private func launchAgentWarning(_ agent: DoctorLaunchAgentState) -> String? {
+        agent == .installed ? "LaunchAgent not loaded. Run rv setup." : nil
     }
 }

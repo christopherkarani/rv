@@ -98,7 +98,9 @@ final class XPCPeerSession: @unchecked Sendable {
             return
         }
         let held = XPCHeld(event)
+        xpc_transaction_begin()
         Task {
+            defer { xpc_transaction_end() }
             let message = held.object
             let incoming = XPCIPCWire.body(from: message)
             let accepted = self.lock.withLock { self.handshakeOK }

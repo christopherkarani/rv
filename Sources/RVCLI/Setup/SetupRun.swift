@@ -44,6 +44,7 @@ struct SetupEnvironment {
     var fileManager: FileManager
     var launchctl: any LaunchctlApplying
     var touchLaunchd: Bool
+    var isLaunchAgentLoaded: (String) -> Bool
     var installAnalytics: any InstallAnalyticsCapturing
     /// Injected so launchd domains are provable without the real uid.
     var uid: () -> uid_t = { getuid() }
@@ -325,6 +326,9 @@ enum SetupRun {
             do {
                 try env.launchctl.bootstrap(domain: "gui/\(env.uid())", plist: url)
             } catch {
+                throw SetupError.launchctlApplyFailed(.bootstrap)
+            }
+            guard env.isLaunchAgentLoaded(launchAgentLabel) else {
                 throw SetupError.launchctlApplyFailed(.bootstrap)
             }
         }

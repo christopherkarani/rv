@@ -91,6 +91,7 @@ extension SetupEnvironment {
             fileManager: .default,
             launchctl: ProcessLaunchctl(),
             touchLaunchd: LoginHome.matchesProcessHome(home),
+            isLaunchAgentLoaded: { LaunchAgentProbe.isLoaded(label: $0) },
             installAnalytics: BlockingInstallAnalytics.live(home: home, environment: environment)
         )
     }
