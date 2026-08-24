@@ -21,21 +21,19 @@ struct Uninstall: ParsableCommand {
     var noColor = false
 
     func run() throws {
-        guard let env = SetupEnvironment.live() else {
-            FileHandle.standardError.write(Data("rv uninstall: HOME is not set\n".utf8))
-            throw ExitCode(1)
-        }
         let resolved = CeremonyCLI.appearance(
             json: json,
             robot: robot,
             plain: plain,
             noColor: noColor
         )
-        let outcome = SetupRun.uninstall(
-            env,
-            appearance: resolved.appearance,
+        let outcome = SetupFlow.live().run(
+            SetupIntent(
+                kind: .uninstall,
+                appearance: resolved.appearance,
+                animate: resolved.animate
+            ),
             clock: LiveSetupCeremonyClock(),
-            animate: resolved.animate,
             write: CeremonyCLI.stdoutWriter()
         )
         try CeremonyCLI.emit(outcome)
