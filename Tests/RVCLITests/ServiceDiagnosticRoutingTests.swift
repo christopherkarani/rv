@@ -250,9 +250,9 @@ private func serviceSnapshot() -> DoctorSnapshotReply {
         idleExitSeconds: 300,
         packsEnabled: [.coreGit, .coreFilesystem],
         checks: [
-            DoctorCheck(id: "xpc", status: .ok, message: "listener"),
-            DoctorCheck(id: "protocol", status: .ok, message: "rv.ipc.v1"),
-            DoctorCheck(id: "packs", status: .ok, message: "core packs loaded"),
+            DoctorCheck(id: .xpc, status: .ok, message: "listener"),
+            DoctorCheck(id: .protocol, status: .ok, message: "rv.ipc.v1"),
+            DoctorCheck(id: .packs, status: .ok, message: "core packs loaded"),
         ]
     )
 }

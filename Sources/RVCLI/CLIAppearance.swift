@@ -16,14 +16,13 @@ enum CLIAppearance: Equatable, Sendable {
         )
     }
 
-    /// CI is one line, no circles. T2 `OutputMode` still maps CI+TTY browse to pretty.
     static func resolve(probe: ThemeProbe, requested: RequestedMode) -> CLIAppearance {
         if probe.ci { return .robot }
         let mode = OutputMode(probe: probe, requested: requested)
         switch mode {
         case .robot:
             return .robot
-        case .pretty, .browse:
+        case .pretty:
             return .pretty(Palette(for: ColorCapability(probe: probe, mode: mode)))
         }
     }

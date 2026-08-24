@@ -1,6 +1,7 @@
 import ArgumentParser
 import Foundation
 import RVDomain
+import RVPolicy
 import RVPresentation
 import RVService
 import RVTheme
@@ -21,7 +22,7 @@ struct Packs: AsyncParsableCommand {
     var format: FormatFlags
 
     func run() async throws {
-        guard let home = ProcessInfo.processInfo.environment["HOME"], !home.isEmpty else {
+        guard let home = HomeDirectory.process() else {
             FileHandle.standardError.write(Data("rv packs: HOME is not set\n".utf8))
             throw ExitCode(1)
         }
@@ -90,7 +91,7 @@ struct Packs: AsyncParsableCommand {
         var id: String
 
         func run() async throws {
-            guard let home = ProcessInfo.processInfo.environment["HOME"], !home.isEmpty else {
+            guard let home = HomeDirectory.process() else {
                 FileHandle.standardError.write(Data("rv packs: HOME is not set\n".utf8))
                 throw ExitCode(1)
             }
@@ -126,7 +127,7 @@ private func mutate(ids: [String], enabling: Bool) throws {
     guard !ids.isEmpty else {
         throw ValidationError("missing pack id")
     }
-    guard let home = ProcessInfo.processInfo.environment["HOME"], !home.isEmpty else {
+    guard let home = HomeDirectory.process() else {
         FileHandle.standardError.write(Data("rv packs: HOME is not set\n".utf8))
         throw ExitCode(1)
     }

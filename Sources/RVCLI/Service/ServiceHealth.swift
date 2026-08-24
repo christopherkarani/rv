@@ -87,7 +87,7 @@ extension ServiceHealth {
     var packCheckReady: Bool {
         switch self {
         case .reachable(let facts):
-            facts.snapshot.checks.first { $0.id == "packs" }?.status == .ok
+            facts.snapshot.checks.first { $0.id == .packs }?.status == .ok
         case .down(let source), .skew(_, let source):
             source.packCheckReady
         case .notInstalled(let local), .requestFailed(_, let local):
@@ -127,7 +127,7 @@ extension ServiceHealth.Source {
     var packCheckReady: Bool {
         switch self {
         case .xpc(let facts):
-            facts.snapshot.checks.first { $0.id == "packs" }?.status == .ok
+            facts.snapshot.checks.first { $0.id == .packs }?.status == .ok
         case .local(let local):
             local.corePacksReady
         }

@@ -100,7 +100,7 @@ struct OneShotEvaluateClientTests {
             state: .running,
             idleExitSeconds: 300,
             packsEnabled: [.coreGit, .coreFilesystem],
-            checks: [DoctorCheck(id: "xpc", status: .ok, message: "listener")]
+            checks: [DoctorCheck(id: .xpc, status: .ok, message: "listener")]
         )
         let transport = ScriptedTransport(
             ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", ok: true),

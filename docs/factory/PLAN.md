@@ -45,7 +45,7 @@ Hexagonal. Engine never imports CLI, TUI, or XPC. Each module: small public API,
 | **RVService** | XPC listener, warm registry, launchd | ArgumentParser, SwiftUI |
 | **RVPresentation** | deny/explain/packs/doctor view models | ANSI |
 | **RVTheme** | palettes, pure capability detect | business rules |
-| **RVTUI** | browse kit, `render` → `[String]`, key map | opening a TTY |
+| **RVTUI** | `FrameRenderer` `render` → `[String]` | opening a TTY |
 | **RVCLI** | ArgumentParser, output mode, thin XPC client, fallback, Host adapter setup mutations | regex, pack parse |
 | **RVHistory** | later; off by default | logging full argv |
 | **RVAnalytics** | anonymous install / DAU / product counters (PostHog); opt-out config | command text, paths, secrets; hook-process network |
@@ -65,7 +65,7 @@ Hexagonal. Engine never imports CLI, TUI, or XPC. Each module: small public API,
 - Small capability protocols (`PatternEngine`, `HostCodec`, `FrameRenderer`). Prefer `some`; `any` only for mixed lists.
 - Functional core / imperative shell. Pure `evaluate` (no `Date()` / `FileManager` / `ProcessInfo`).
 - Typed errors. `Sendable` + actors for stores. No `try!` / `!` on production paths.
-- TUI: `reduce` + `render` → `[String]`.
+- TUI: `FrameRenderer.render` → `[String]`.
 
 Copy into `AGENTS.md` and `docs/dev/SWIFT.md` at T0.
 
@@ -73,7 +73,7 @@ Copy into `AGENTS.md` and `docs/dev/SWIFT.md` at T0.
 
 - Allow: **silent**. No banner on hook allow.
 - Deny: host-native reason string is the block path. Pi may show a display-only transcript card. Pretty denial panel only on TTY `rv test` / `explain` / human CLI.
-- Three modes: robot / pretty / browse. Browse only if both stdin+stdout TTY and not `--json`/`--robot`/`--plain`/`CI`/`NO_COLOR`.
+- Two modes: robot / pretty. No browse TUI. `--json`/`--robot` force robot; automatic is pretty when stdout is a TTY, otherwise robot. `--plain`/`CI`/`NO_COLOR`/`TERM=dumb` kill color.
 - `rv setup`: no wizard, no pack list, no LaunchAgent row, no questions. TTY pretty plays a short paced ceremony (search → wire hosts → `Hooks wired`). `install.sh` sets `RV_FROM_INSTALL=1` so setup also shows a theatrical download bar and closes with `Install complete, run rv explain "rm -rf" to test`. Slot marks are `◦` / `•` (`Palette.muted` / `Palette.heading`); progress bar uses thin horizontal rules. Occupied stays hollow with a skip clause unless `--force` (backup + rewrite owned name). Hostless: `No hosts yet` / `Next  rv setup`. Non-TTY / `--robot` / `CI`: one line, no ceremony sleeps. Quiet when a second matching run writes nothing.
 - `rv uninstall`: removes only rv-owned files. TTY pretty paces host removal (`Removing Hooks` → hollow circles → `✓ Hooks removed` → `Uninstall complete`). Occupied owned names stay hollow with `left occupied`. Closer follows `didRemoveAnything` (same contract as robot): nothing deleted → `Already clean` (still paint occupied slots when present); non-host artifact deletes with no host slots → `Uninstall complete` without a fake host show. Robot: `Uninstall complete.` / `Already clean.` One line, no sleeps.
 - Voice: one fact, one next action. Vercel-quiet.
