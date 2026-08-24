@@ -113,11 +113,14 @@ private let resetHard = ShellCommand(rawValue: "git reset --hard")
 
 @Test func hookDenyCommandPreview_shortCommandUnchanged() {
     #expect(hookDenyCommandPreview(resetHard) == "git reset --hard")
+    #expect(hookDenyCommandPreview(ShellCommand(rawValue: "git reset --hard\n")) == "git reset --hard")
 }
 
 @Test func hookDenyCommandPreview_clipsOverlongFirstLine() {
+    let exact = String(repeating: "a", count: hookDenyCommandPreviewLimit)
+    #expect(hookDenyCommandPreview(ShellCommand(rawValue: exact)) == exact)
     let raw = String(repeating: "a", count: hookDenyCommandPreviewLimit + 8)
     let preview = hookDenyCommandPreview(ShellCommand(rawValue: raw))
-    #expect(preview == String(repeating: "a", count: hookDenyCommandPreviewLimit) + "…")
+    #expect(preview == exact + "…")
     #expect(preview.contains("\n") == false)
 }

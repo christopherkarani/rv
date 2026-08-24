@@ -10,9 +10,13 @@ public let hookDenyCommandPreviewLimit = 96
 /// first lines become a trailing ellipsis so Grok/Pi/OpenCode never paste
 /// a heredoc body into the transcript.
 public func hookDenyCommandPreview(_ command: ShellCommand) -> String {
+    var raw = command.rawValue
+    while let last = raw.last, last == "\n" || last == "\r" {
+        raw.removeLast()
+    }
     var firstLine = ""
     var sawBreak = false
-    for ch in command.rawValue {
+    for ch in raw {
         if ch == "\n" || ch == "\r" {
             sawBreak = true
             break

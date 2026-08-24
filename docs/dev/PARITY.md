@@ -32,5 +32,6 @@ Bundled pack documents: **99** IDs / **27** categories from the pin. Default-on 
 | “34 safe / 16 destructive” | full core packs are larger | ignore counts; extract full packs |
 | `rm -rf /var/log` as `rm-rf-general` | extracted `rm-rf-root-home` regex matches any `/` prefix | source-first: `rm-rf-root-home` |
 | `git restore --worktree` / `-W` as `restore-worktree-explicit` | first blocking match is `restore-worktree` (listed first; only excludes staged flags) | `restore-worktree`. Explicit name is `git restore -S -W` |
+| `redirect-truncate-dynamic-path` final backtick | 0.11.0 treats a last-character `` ` `` as expansion | `$`/`\` anywhere; backtick at start **or interior** (not a final markdown closer). Allow: `near.quoted-heredoc-angle-placeholder`. |
 
 Never quarantine `core.git:reset-hard` or `core.filesystem:fork-bomb`.

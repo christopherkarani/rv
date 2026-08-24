@@ -435,6 +435,13 @@
       "expected": "deny",
       "rule_id": "core.filesystem:redirect-truncate-dynamic-path",
       "reason_contains": "dynamic"
+    },
+    {
+      "id": "deny.redirect-dynamic-interior-backtick",
+      "command": "echo x > /tmp/`date`.txt",
+      "expected": "deny",
+      "rule_id": "core.filesystem:redirect-truncate-dynamic-path",
+      "reason_contains": "dynamic"
     }
   ]
 }
