@@ -70,8 +70,12 @@ public struct SetupSlotSnapshot: Equatable, Sendable {
         detected.isEmpty == false && wrote.isEmpty && occupied.isEmpty
     }
 
+    /// Terminal outcome of the run. Sole owner of closer decisions for every renderer.
     public var closer: SetupCloser {
-        hasWiredSlot ? .complete : .hostless
+        if isQuiet { return .quiet }
+        if isHostless { return .hostless }
+        if hasWiredSlot { return .complete(skipped: occupied) }
+        return .skipped(skipped: occupied)
     }
 
     public var slotViews: [SetupSlotView] {
@@ -96,21 +100,44 @@ public struct SetupSlotView: Equatable, Sendable {
     }
 }
 
-/// Pretty closer after the three slots. `.complete` only when a slot is wired.
+/// Closed taxonomy of terminal `rv setup` outcomes. One owner: ceremony closers,
+/// pretty text, and `--robot` lines all switch over it exhaustively.
 public enum SetupCloser: Equatable, Sendable {
-    case complete
+    /// Second matching run wrote nothing new; nothing prints.
+    case quiet
+    /// No hosts detected.
     case hostless
+    /// At least one host wired this run; payload lists occupied skips in host order.
+    case complete(skipped: [SetupHostKind])
+    /// Every detected host was occupied; nothing wired.
+    case skipped(skipped: [SetupHostKind])
 
-    /// Ceremony closer copy. Install substitutes the install-only line; setup stays `Hooks wired`.
+    /// Ceremony closer lines for `kind`.
+    /// Quiet is empty; hostless and occupied-only both return the hostless pair;
+    /// complete is `Hooks wired` (setup) or the install closer.
     public func lines(kind: SetupCeremonyKind) -> [String] {
         switch self {
-        case .hostless:
-            [setupCeremonyHostlessTitle, setupCeremonyHostlessNext]
+        case .quiet: []
+        case .hostless, .skipped: [setupCeremonyHostlessTitle, setupCeremonyHostlessNext]
         case .complete:
             switch kind {
             case .setup: [setupCeremonyHooksWired]
             case .install: [setupCeremonyInstallCloser]
             }
+        }
+    }
+}
+
+public let setupRobotHostlessLine = "Run rv setup after Pi, Grok, or OpenCode exists."
+public let setupRobotCompleteLine = "Setup complete. Next  rv test 'git reset --hard'."
+
+extension SetupHostKind {
+    /// `--robot` skip sentence for an occupied owned hook.
+    public var robotSkipLine: String {
+        switch self {
+        case .grok: "Skipped occupied grok hook."
+        case .pi: "Skipped occupied pi hook."
+        case .openCode: "Skipped occupied opencode hook."
         }
     }
 }

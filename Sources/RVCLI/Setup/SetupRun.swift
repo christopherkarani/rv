@@ -22,14 +22,6 @@ struct SetupOutcome: Equatable, Sendable {
 }
 
 extension SetupHostKind {
-    var occupiedLine: String {
-        switch self {
-        case .grok: "Skipped occupied grok hook."
-        case .pi: "Skipped occupied pi hook."
-        case .openCode: "Skipped occupied opencode hook."
-        }
-    }
-
     func adapterResource() throws -> HostAdapterResource {
         try HostAdapterResources.load(for: hookHost)
     }
@@ -98,10 +90,6 @@ struct SetupEnvironment {
 }
 
 enum SetupRun {
-    static let hostlessLine = "Run rv setup after Pi, Grok, or OpenCode exists."
-    static let robotCompleteLine = "Setup complete. Next  rv test 'git reset --hard'."
-    static let uninstallCompleteLine = "Uninstall complete."
-    static let uninstallAlreadyCleanLine = "Already clean."
     static let launchAgentLabel = "dev.rv.evaluate"
 
     static func setup(
