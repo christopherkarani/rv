@@ -44,26 +44,17 @@ public actor AllowOnceStore {
             let hash = sha256Hex(code)
             do {
                 try withFileLock {
-                    var records = loadRecords().filter { $0.expiresAt >= now || $0.kind == .consumed }
-                    if records.contains(where: {
-                        $0.kind == .pending && $0.codeHash == hash && $0.expiresAt >= now
-                    }) {
-                        throw AllowOnceError.collision
-                    }
-                    let record = AllowOnceRecord(
-                        schemaVersion: 1,
-                        kind: .pending,
+                    let fresh = try AllowOnceLedger.mint(
+                        records: loadRecords(),
                         codeHash: hash,
-                        commandFingerprint: commandFingerprint(view),
-                        commandRedacted: redactCommand(view),
+                        fingerprint: commandFingerprint(view),
+                        redacted: redactCommand(view),
                         cwd: cwd,
                         ruleID: ruleID,
-                        createdAt: now,
-                        expiresAt: now.addingTimeInterval(ttl),
-                        consumedAt: nil
+                        now: now,
+                        ttl: ttl
                     )
-                    records.append(record)
-                    try writeRecords(records)
+                    try writeRecords(fresh)
                 }
                 return code
             } catch let error as AllowOnceError where error == .collision {
@@ -88,37 +79,14 @@ public actor AllowOnceStore {
         }
         let hash = sha256Hex(normalized)
         return try withFileLock {
-            var records = loadRecords()
-            guard let index = records.firstIndex(where: {
-                $0.kind == .pending && $0.codeHash == hash
-            }) else {
-                if records.contains(where: {
-                    ($0.kind == .granted || $0.kind == .consumed) && $0.codeHash == hash
-                }) {
-                    throw AllowOnceError.alreadySpent
-                }
-                throw AllowOnceError.unknownCode
-            }
-            var pending = records[index]
-            guard pending.expiresAt >= now else {
-                records.remove(at: index)
+            switch try AllowOnceLedger.redeem(records: loadRecords(), codeHash: hash, now: now) {
+            case let .expired(records):
                 try writeRecords(records)
                 throw AllowOnceError.expired
+            case let .granted(records, row):
+                try writeRecords(records)
+                return row
             }
-            pending.kind = .granted
-            records[index] = pending
-            records.removeAll {
-                ($0.kind == .pending || $0.kind == .granted) && $0.expiresAt < now
-            }
-            try writeRecords(records)
-            return AllowOnceListRow(
-                kind: .granted,
-                codeHash: pending.codeHash,
-                commandRedacted: pending.commandRedacted,
-                cwd: pending.cwd,
-                createdAt: pending.createdAt,
-                expiresAt: pending.expiresAt
-            )
         }
     }
 
@@ -174,37 +142,23 @@ public actor AllowOnceStore {
         }
         do {
             return try withFileLock {
-                var records = loadRecords()
-                let related = records.indices.filter {
-                    records[$0].commandFingerprint == fingerprint && records[$0].cwd == cwd
-                }
-                if let index = related.first(where: {
-                    records[$0].kind == .granted && records[$0].expiresAt >= now
-                }) {
-                    var granted = records[index]
-                    granted.kind = .consumed
-                    granted.consumedAt = now
-                    records[index] = granted
-                    records.removeAll {
-                        $0.kind == .granted && $0.expiresAt < now
-                    }
+                switch AllowOnceLedger.consume(
+                    records: loadRecords(),
+                    fingerprint: fingerprint,
+                    cwd: cwd,
+                    now: now
+                ) {
+                case let .consumed(tokenID, records):
                     try writeRecords(records)
-                    return .consumed(tokenID: granted.codeHash)
-                }
-                let hadExpiredGrant = related.contains {
-                    records[$0].kind == .granted && records[$0].expiresAt < now
-                }
-                if hadExpiredGrant {
-                    records.removeAll {
-                        $0.kind == .granted && $0.expiresAt < now
-                    }
+                    return .consumed(tokenID: tokenID)
+                case let .expired(records):
                     try writeRecords(records)
                     return .expired
-                }
-                if related.contains(where: { records[$0].kind == .consumed }) {
+                case .alreadyConsumed:
                     return .alreadyConsumed
+                case .notFound:
+                    return .notFound
                 }
-                return .notFound
             }
         } catch {
             return .unavailable
@@ -212,36 +166,13 @@ public actor AllowOnceStore {
     }
 
     public func list(now: Date) async -> [AllowOnceListRow] {
-        loadRecords().compactMap { record in
-            guard record.expiresAt >= now || record.kind == .consumed else { return nil }
-            guard record.kind != .consumed else {
-                return AllowOnceListRow(
-                    kind: record.kind,
-                    codeHash: record.codeHash,
-                    commandRedacted: record.commandRedacted,
-                    cwd: record.cwd,
-                    createdAt: record.createdAt,
-                    expiresAt: record.expiresAt
-                )
-            }
-            return AllowOnceListRow(
-                kind: record.kind,
-                codeHash: record.codeHash,
-                commandRedacted: record.commandRedacted,
-                cwd: record.cwd,
-                createdAt: record.createdAt,
-                expiresAt: record.expiresAt
-            )
-        }
+        AllowOnceLedger.rows(records: loadRecords(), now: now)
     }
 
     public func clear(tty: TTYCapability, now: Date) async throws {
         guard allowsInteractiveAllowOnce(tty) else { throw AllowOnceError.ttyRequired }
         try withFileLock {
-            let kept = loadRecords().filter { record in
-                record.kind == .consumed && record.expiresAt >= now
-            }
-            try writeRecords(kept)
+            try writeRecords(AllowOnceLedger.keepConsumed(records: loadRecords(), now: now))
         }
     }
 

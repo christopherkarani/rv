@@ -27,11 +27,15 @@ struct UninstallReport: Equatable, Sendable {
     var removedBinaries: Bool
     var removedConfigArtifacts: Bool
 
-    var didRemoveAnything: Bool {
-        removedHosts.isEmpty == false
+    /// Terminal outcome; single owner of the removed-vs-clean decision.
+    var closer: UninstallCloser {
+        let removedAnything = removedHosts.isEmpty == false
             || removedLaunchAgent
             || removedBinaries
             || removedConfigArtifacts
+        return removedAnything
+            ? .removed(hosts: removedHosts, occupied: occupiedHosts)
+            : .alreadyClean(occupied: occupiedHosts)
     }
 }
 
@@ -72,11 +76,7 @@ enum SetupFormat {
         case .robot:
             return (uninstallRobot(report), false)
         case .pretty(let palette):
-            let frames = uninstallCeremonyFrames(
-                removed: report.removedHosts,
-                occupied: report.occupiedHosts,
-                didRemoveAnything: report.didRemoveAnything
-            )
+            let frames = uninstallCeremonyFrames(report.closer)
             return playCeremony(
                 frames: frames,
                 palette: palette,
@@ -115,21 +115,24 @@ enum SetupFormat {
     }
 
     private static func robot(_ report: SetupReport) -> String {
-        if report.slots.isQuiet { return "" }
-        if report.slots.isHostless {
-            return SetupRun.hostlessLine + "\n"
+        switch report.slots.closer {
+        case .quiet:
+            ""
+        case .hostless:
+            setupRobotHostlessLine + "\n"
+        case .complete(let skipped):
+            ([setupRobotCompleteLine] + skipped.map(\.robotSkipLine)).joined(separator: ", ") + "\n"
+        case .skipped(let skipped):
+            skipped.map(\.robotSkipLine).joined(separator: ", ") + "\n"
         }
-        let skips = report.slots.occupied.map(\.occupiedLine)
-        if skips.isEmpty == false {
-            return skips.joined(separator: "\n") + "\n"
-        }
-        return SetupRun.robotCompleteLine + "\n"
     }
 
     private static func uninstallRobot(_ report: UninstallReport) -> String {
-        if report.didRemoveAnything {
-            return SetupRun.uninstallCompleteLine + "\n"
+        switch report.closer {
+        case .removed:
+            uninstallRobotCompleteLine + "\n"
+        case .alreadyClean:
+            uninstallRobotAlreadyCleanLine + "\n"
         }
-        return SetupRun.uninstallAlreadyCleanLine + "\n"
     }
 }

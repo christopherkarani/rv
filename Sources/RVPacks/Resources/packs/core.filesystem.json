@@ -393,7 +393,7 @@
     },
     {
       "name": "redirect-truncate-dynamic-path",
-      "pattern": "(?<![<>])(?:&>|>&|\\*>|(?:[0-9]+|\\{[A-Za-z_][A-Za-z0-9_]*\\})?>\\|?)\\s*(?:[^|;&\\s]*[\\\\$`]|~[A-Za-z_][^|;&\\s]*|(?!(?:/tmp|/var/tmp)(?:/|(?=[\\s|;&]|$)))/[^|;&\\s]*['\"?*\\[][^|;&\\s]*|[%!][^|;&\\s]*|\\^(?!(?:/tmp|/var/tmp)(?:/|(?=[\\s|;&]|$)))[^|;&\\s]+)",
+      "pattern": "(?<![<>])(?:&>|>&|\\*>|(?:[0-9]+|\\{[A-Za-z_][A-Za-z0-9_]*\\})?>\\|?)\\s*(?:(?:[^|;&\\s]*[\\\\$][^|;&\\s]*|[^|;&\\s]*`(?:[^|;&\\s]|\\s+[^|;&`]*`))|~[A-Za-z_][^|;&\\s]*|(?!(?:/tmp|/var/tmp)(?:/|(?=[\\s|;&]|$)))/[^|;&\\s]*['\"?*\\[][^|;&\\s]*|[%!][^|;&\\s]*|\\^(?!(?:/tmp|/var/tmp)(?:/|(?=[\\s|;&]|$)))[^|;&\\s]+)",
       "severity": "high",
       "description": "shell redirect to a dynamic or escaped path may truncate a sensitive file and requires human approval.",
       "explanation": "The redirect target is expanded by the shell at runtime, so the engine cannot prove where it points before the file is opened with O_TRUNC.\n\n\\ Safer alternatives: \\ - Resolve and inspect the target path first. \\ - Use a literal `/tmp/<subdir>/scratch` path for disposable output. \\ - Use append (`>>`) when preserving existing content is acceptable."

@@ -74,7 +74,7 @@ public func setupCeremonyFrames(
     _ slots: SetupSlotSnapshot,
     kind: SetupCeremonyKind
 ) -> [SetupCeremonyFrame]? {
-    if slots.isQuiet {
+    if slots.closer == .quiet {
         return nil
     }
 
@@ -140,7 +140,7 @@ public func setupCeremonyFrames(
         )
     }
 
-    if slots.closer == .complete, kind == .install {
+    if case .complete = slots.closer, kind == .install {
         frames.append(
             SetupCeremonyFrame(
                 statusLine: setupCeremonyAllHostsWired,

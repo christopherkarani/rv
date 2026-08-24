@@ -79,39 +79,37 @@ private func object(from stdout: String) throws -> [String: Any] {
     #expect(json["next_action"] == nil)
     #expect(
         trimOneNewline(deny.stdout)
-            == #"{"schema":"rv.test.v1","decision":"deny","pack_id":"core.git","rule_id":"core.git:reset-hard","reason":"git reset --hard destroys uncommitted changes"}"#
+            == #"{"decision":"deny","pack_id":"core.git","reason":"git reset --hard destroys uncommitted changes","rule_id":"core.git:reset-hard","schema":"rv.test.v1"}"#
     )
 }
 
 @Test func testRobot_stdoutKeepsStableTestSchemaAndBytes() throws {
     let allow = renderRobot(kind: .test, result: EvaluationResult(outcome: .plain), command: "git status")
     #expect(allow.exitCode == 0)
-    #expect(trimOneNewline(allow.stdout) == #"{"schema":"rv.test.v1","decision":"allow"}"#)
+    #expect(trimOneNewline(allow.stdout) == #"{"decision":"allow","schema":"rv.test.v1"}"#)
 
     let deny = renderRobot(kind: .test, result: denyResult(), command: "git reset --hard")
     #expect(deny.exitCode == 1)
     #expect(
         trimOneNewline(deny.stdout)
-            == #"{"schema":"rv.test.v1","decision":"deny","pack_id":"core.git","rule_id":"core.git:reset-hard","reason":"git reset --hard destroys uncommitted changes"}"#
+            == #"{"decision":"deny","pack_id":"core.git","reason":"git reset --hard destroys uncommitted changes","rule_id":"core.git:reset-hard","schema":"rv.test.v1"}"#
     )
 }
 
 @Test func commandRunRobot_encodesPresentationPayloads() throws {
     let result = denyResult()
     let testOut = renderRobot(kind: .test, result: result, command: "git reset --hard")
-    let encodedTest = RobotJSON.encode(testRobotPayload(from: result).fields)
-    #expect(trimOneNewline(testOut.stdout) == encodedTest)
+    #expect(trimOneNewline(testOut.stdout) == RobotDocument.test(testRobotPayload(from: result)).render())
 
     let model = explainViewModel(
         from: result,
         command: ShellCommand(rawValue: "git reset --hard")
     )
     let explainOut = renderRobot(kind: .explain, result: result, command: "git reset --hard")
-    let encodedExplain = RobotJSON.encode(explainRobotPayload(from: model).fields)
-    #expect(trimOneNewline(explainOut.stdout) == encodedExplain)
+    #expect(trimOneNewline(explainOut.stdout) == RobotDocument.explain(explainRobotPayload(from: model)).render())
 }
 
-@Test func robotJSON_encodesDoctorAndPacksFieldSets() throws {
+@Test func render_encodesDoctorAndPacksFieldSets() throws {
     let doctor = DoctorViewModel(
         service: DoctorServiceView(
             state: .down,
@@ -126,7 +124,7 @@ private func object(from stdout: String) throws -> [String: Any] {
         hosts: [DoctorHostView(host: .pi, state: .wired)],
         config: .unreadable
     )
-    let doctorJSON = try object(from: try RobotJSON.encode(doctorRobotPayload(from: doctor)))
+    let doctorJSON = try object(from: RobotDocument.doctor(doctorRobotPayload(from: doctor)).render())
     let service = try #require(doctorJSON["service"] as? [String: Any])
     let packs = try #require(doctorJSON["packs"] as? [String: Any])
 
@@ -147,7 +145,7 @@ private func object(from stdout: String) throws -> [String: Any] {
         destructivePatternCount: 4
     )
     let packsJSON = try object(
-        from: try RobotJSON.encode(packsRobotPayload(rows: [row], enabledCount: 1, totalCount: 99))
+        from: RobotDocument.packsList(packsRobotPayload(rows: [row], enabledCount: 1, totalCount: 99)).render()
     )
     let encodedRows = try #require(packsJSON["packs"] as? [[String: Any]])
     let encodedRow = try #require(encodedRows.first)
