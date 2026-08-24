@@ -2,7 +2,7 @@ import Foundation
 import RVPolicy
 
 struct AllowOnceRobotRow: Equatable, Sendable, Encodable {
-    var kind: String
+    var kind: AllowOnceRecord.Kind
     var codeHash: String
     var commandRedacted: String
     var cwd: String
@@ -18,7 +18,7 @@ struct AllowOnceRobotRow: Equatable, Sendable, Encodable {
 func allowOnceRobotRows(from rows: [AllowOnceListRow]) -> [AllowOnceRobotRow] {
     rows.map { row in
         AllowOnceRobotRow(
-            kind: row.kind.rawValue,
+            kind: row.kind,
             codeHash: row.codeHash,
             commandRedacted: row.commandRedacted,
             cwd: row.cwd
