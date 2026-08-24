@@ -32,7 +32,7 @@ T2 ArgumentParser is the next real compile bill. Domain public-API edits today r
 - Small capability protocols (`PatternEngine`, `HostCodec`, `FrameRenderer`). Prefer `some`; `any` only for mixed lists.
 - Functional core / imperative shell. Pure `evaluate` (no `Date()` / `FileManager` / `ProcessInfo`).
 - Typed errors. `Sendable` + actors for stores. No `try!` / `!` on production paths.
-- TUI: `reduce` + `render` → `[String]`.
+- TUI: `FrameRenderer.render` → `[String]`.
 
 ## Layout
 

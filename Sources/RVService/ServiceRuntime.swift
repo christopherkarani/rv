@@ -16,7 +16,7 @@ public actor ServiceRuntime {
     private var lastUncoveredWanted: Set<PackID> = []
     private var lastCoverageRebuildAt: UInt64 = 0
     private let sessionSnapshots: [PackSnapshot]
-    private let configHome: String
+    private let configHome: HomeDirectory?
     private let allowOnce: AllowOnceStore
     private let log: (any ServiceLog)?
     private let analytics: AnalyticsCoordinator?
@@ -26,19 +26,19 @@ public actor ServiceRuntime {
     public init(
         snapshots: [PackSnapshot]? = nil,
         catalog: PackCatalog? = nil,
-        home: String? = nil,
+        home: HomeDirectory? = nil,
         allowOnce: AllowOnceStore? = nil,
         allowOnceDirectory: URL? = nil,
         idleExitSeconds: Int = IdleWatchdog.defaultSeconds,
         log: (any ServiceLog)? = nil,
         analytics: AnalyticsCoordinator? = nil
     ) {
-        let resolvedHome = home ?? processHOME()
+        let resolvedHome = home ?? HomeDirectory.process()
         self.configHome = resolvedHome
         if let catalog {
             self.catalog = catalog
         } else {
-            self.catalog = (try? PacksFacade.makeCatalog(home: resolvedHome)) ?? PackCatalog()
+            self.catalog = Self.makeCatalog(home: resolvedHome) ?? PackCatalog()
         }
         let loaded = snapshots
             ?? ((try? PackRegistry.loadAll()) ?? ((try? PackRegistry.loadDayOne()) ?? []))
@@ -303,19 +303,7 @@ public actor ServiceRuntime {
         case .quickRejected, .plain, .safeOnly, .indeterminate:
             matched = nil
         }
-        let risk: ClassifyRisk
-        switch result.decision {
-        case .allow:
-            if let severity = matched?.severity {
-                risk = ClassifyRisk(rawValue: severity.rawValue) ?? .medium
-            } else {
-                risk = .safe
-            }
-        case .deny:
-            risk = ClassifyRisk(rawValue: matched?.severity.rawValue ?? ClassifyRisk.high.rawValue) ?? .high
-        case .indeterminate:
-            risk = .high
-        }
+        let risk = ClassifyRisk.derive(decision: result.decision, matched: matched)
         var reasons: [ClassifyReason] = []
         if let matched {
             reasons.append(
@@ -342,6 +330,9 @@ public actor ServiceRuntime {
     }
 
     private func setPackEnabled(_ params: SetPackEnabledParams) -> IPCResult {
+        guard let configHome else {
+            return .error(.engine("pack enable failed"))
+        }
         do {
             if params.enabled {
                 _ = try PacksFacade.enable(home: configHome, ids: [params.id.rawValue])
@@ -373,7 +364,7 @@ public actor ServiceRuntime {
     }
 
     private func listPacks() -> ListPacksReply {
-        if let refreshed = try? PacksFacade.makeCatalog(home: configHome) {
+        if let refreshed = Self.makeCatalog(home: configHome) {
             catalog = refreshed
         }
         rebuildWhenUncovered(wanted: Set(Self.compileEnabledIDs(from: catalog)))
@@ -467,8 +458,19 @@ public actor ServiceRuntime {
         }
         lastUncoveredWanted = wanted
         lastCoverageRebuildAt = now
-        catalog = (try? PacksFacade.makeCatalog(home: configHome)) ?? catalog
+        catalog = Self.makeCatalog(home: configHome) ?? catalog
         rebuildGated()
+    }
+
+    /// Catalog for a home; nil home mirrors the old empty-HOME catalog with the day-one packs enabled.
+    private static func makeCatalog(home: HomeDirectory?) -> PackCatalog? {
+        guard let home else {
+            return try? PackCatalog.bundlingAll(
+                enabled: Set(dayOnePackIDs),
+                index: PackRegistry.loadIndex()
+            )
+        }
+        return try? PacksFacade.makeCatalog(home: home)
     }
 
     /// Catalog-enabled IDs, plus day-one so a catalog disable cannot uncompile
@@ -483,8 +485,4 @@ public actor ServiceRuntime {
         }
         return ids
     }
-}
-
-private func processHOME() -> String {
-    ProcessInfo.processInfo.environment["HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? ""
 }

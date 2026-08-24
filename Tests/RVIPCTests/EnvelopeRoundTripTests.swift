@@ -119,6 +119,91 @@ struct EnvelopeRoundTripTests {
         #expect(ProtocolVersion.name == "rv.ipc.v1")
     }
 
+    @Test func classifyRiskRoundTripsAllFiveWireStrings() throws {
+        let samples: [(string: String, risk: ClassifyRisk)] = [
+            ("safe", .safe),
+            ("low", .rated(.low)),
+            ("medium", .rated(.medium)),
+            ("high", .rated(.high)),
+            ("critical", .rated(.critical)),
+        ]
+        for sample in samples {
+            let encoded = try IPCJSON.encode(sample.risk)
+            #expect(String(data: encoded, encoding: .utf8) == "\"\(sample.string)\"")
+            let decoded = try IPCJSON.decode(ClassifyRisk.self, from: encoded)
+            #expect(decoded == sample.risk)
+            let legacy = Data("\"\(sample.string)\"".utf8)
+            #expect(try IPCJSON.decode(ClassifyRisk.self, from: legacy) == sample.risk)
+        }
+    }
+
+    @Test func classifyRiskRejectsUnknownStringsAsDataCorrupted() throws {
+        for bad in ["bogus", "Safe", "severe", ""] {
+            let payload = try JSONEncoder().encode(bad)
+            do {
+                _ = try IPCJSON.decode(ClassifyRisk.self, from: payload)
+                Issue.record("unknown ClassifyRisk string must not decode")
+            } catch let error as DecodingError {
+                guard case .dataCorrupted = error else {
+                    Issue.record("expected dataCorrupted, got \(error)")
+                    return
+                }
+            }
+        }
+    }
+
+    @Test func classifyRiskRejectsNonStringPayloadsWithDecodingError() throws {
+        let payloads = ["null", "42", "true", "{}", "[]"].map { Data($0.utf8) }
+        for payload in payloads {
+            #expect(throws: DecodingError.self) {
+                try IPCJSON.decode(ClassifyRisk.self, from: payload)
+            }
+        }
+    }
+
+    @Test func classifyRiskDeriveMatchesTruthTable() {
+        let severities: [Severity] = [.low, .medium, .high, .critical]
+        let match = RuleMatch(
+            ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+            packID: .coreGit,
+            patternName: "reset-hard",
+            severity: .high,
+            reason: "destroys uncommitted changes"
+        )
+        for severity in severities {
+            let matched = RuleMatch(
+                ruleID: match.ruleID,
+                packID: match.packID,
+                patternName: match.patternName,
+                severity: severity,
+                reason: match.reason
+            )
+            #expect(
+                ClassifyRisk.derive(decision: .allow, matched: matched) == .rated(severity)
+            )
+            #expect(
+                ClassifyRisk.derive(decision: .deny(Deny(ruleID: match.ruleID, reason: match.reason)), matched: matched)
+                    == .rated(severity)
+            )
+        }
+        #expect(ClassifyRisk.derive(decision: .allow, matched: nil) == .safe)
+        #expect(
+            ClassifyRisk.derive(decision: .deny(Deny(ruleID: match.ruleID, reason: match.reason)), matched: nil)
+                == .rated(.high)
+        )
+        #expect(ClassifyRisk.derive(decision: .indeterminate(.corePacksUnavailable), matched: nil) == .rated(.high))
+        #expect(
+            ClassifyRisk.derive(decision: .indeterminate(.budgetExhausted), matched: match) == .rated(.high)
+        )
+    }
+
+    @Test func doctorCheckIDRoundTripsLegacyWireBytes() throws {
+        let legacy = Data(#"{"id":"packs","message":"ready","status":"ok"}"#.utf8)
+        let check = try IPCJSON.decode(DoctorCheck.self, from: legacy)
+        #expect(check.id == .packs)
+        #expect(try IPCJSON.encode(check) == legacy)
+    }
+
     @Test func emptyCwdOnHonorParamsIsNil() throws {
         let request = EvaluationRequest(
             command: ShellCommand(rawValue: "git reset --hard"),
@@ -209,7 +294,7 @@ extension IPCResult {
                 result: .classify(
                     ClassifyReply(
                         decision: deny.decision,
-                        risk: .critical,
+                        risk: .rated(.critical),
                         ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
                         packID: .coreGit
                     )
@@ -246,7 +331,7 @@ extension IPCResult {
                         state: .running,
                         idleExitSeconds: 300,
                         packsEnabled: [.coreGit],
-                        checks: [DoctorCheck(id: "xpc", status: .ok, message: "listener")]
+                        checks: [DoctorCheck(id: .xpc, status: .ok, message: "listener")]
                     )
                 )
             ),

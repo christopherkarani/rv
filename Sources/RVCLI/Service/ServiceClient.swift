@@ -18,14 +18,14 @@ public struct ServiceClient: Sendable {
     private let transport: (any ServiceTransport)?
     private let door: GatedEvaluate
     private let store: AllowOnceStore
-    private let home: String?
+    private let home: HomeDirectory?
 
     public init(
         transport: (any ServiceTransport)? = XPCServiceTransport(),
         session: EvaluateSession? = nil,
         store: AllowOnceStore? = nil,
         allowOnceDirectory: URL? = nil,
-        home: String? = ProcessInfo.processInfo.environment["HOME"].flatMap { $0.isEmpty ? nil : $0 }
+        home: HomeDirectory? = HomeDirectory.process()
     ) {
         self.transport = transport
         self.door = session.map(GatedEvaluate.init) ?? GatedEvaluate()
@@ -42,7 +42,7 @@ public struct ServiceClient: Sendable {
             transport: transport,
             session: .missingCore,
             allowOnceDirectory: allowOnceDirectory ?? sandbox,
-            home: sandbox.path
+            home: HomeDirectory(validating: sandbox.path)
         )
     }
 
@@ -55,7 +55,7 @@ public struct ServiceClient: Sendable {
             transport: transport,
             session: .uncompilableCore,
             allowOnceDirectory: allowOnceDirectory ?? sandbox,
-            home: sandbox.path
+            home: HomeDirectory(validating: sandbox.path)
         )
     }
 

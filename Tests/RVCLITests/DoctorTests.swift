@@ -35,7 +35,7 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
         state: .running,
         idleExitSeconds: 300,
         packsEnabled: packs,
-        checks: [DoctorCheck(id: "packs", status: .ok, message: "ready")]
+        checks: [DoctorCheck(id: .packs, status: .ok, message: "ready")]
     )
 }
 
@@ -578,7 +578,7 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
             state: .down,
             idleExitSeconds: 300,
             packsEnabled: dayOnePackIDs,
-            checks: [DoctorCheck(id: "packs", status: .ok, message: "ready")]
+            checks: [DoctorCheck(id: .packs, status: .ok, message: "ready")]
         )
         let diagnostics = ServiceDiagnosticResult.xpc(
             snapshot: snapshot,
@@ -621,7 +621,7 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
             idleExitSeconds: 300,
             packsEnabled: dayOnePackIDs,
             lastError: "peer supplied detail",
-            checks: [DoctorCheck(id: "packs", status: .ok, message: "ready")]
+            checks: [DoctorCheck(id: .packs, status: .ok, message: "ready")]
         )
         let diagnostics = ServiceDiagnosticResult.xpc(
             snapshot: snapshot,

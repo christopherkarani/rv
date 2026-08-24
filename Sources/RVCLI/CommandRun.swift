@@ -32,7 +32,7 @@ public enum CommandRun {
         cwd: String,
         store: AllowOnceStore,
         now: Date = Date(),
-        home: String? = ProcessInfo.processInfo.environment["HOME"].flatMap { $0.isEmpty ? nil : $0 }
+        home: HomeDirectory? = HomeDirectory.process()
     ) async -> EvaluationResult {
         await GatedEvaluate().run(
             .peek,
@@ -49,7 +49,7 @@ public enum CommandRun {
         cwd: String,
         allowOnceDirectory: URL,
         now: Date = Date(),
-        home: String? = ProcessInfo.processInfo.environment["HOME"].flatMap { $0.isEmpty ? nil : $0 }
+        home: HomeDirectory? = HomeDirectory.process()
     ) async -> EvaluationResult {
         await evaluateCommand(
             raw,
@@ -68,7 +68,7 @@ public enum CommandRun {
         cwd: String,
         store: AllowOnceStore,
         now: Date = Date(),
-        home: String? = ProcessInfo.processInfo.environment["HOME"].flatMap { $0.isEmpty ? nil : $0 }
+        home: HomeDirectory? = HomeDirectory.process()
     ) async -> CLIResult {
         render(
             kind: kind,
@@ -87,7 +87,7 @@ public enum CommandRun {
         cwd: String,
         allowOnceDirectory: URL,
         now: Date = Date(),
-        home: String? = ProcessInfo.processInfo.environment["HOME"].flatMap { $0.isEmpty ? nil : $0 }
+        home: HomeDirectory? = HomeDirectory.process()
     ) async -> CLIResult {
         await run(
             kind: kind,
@@ -147,18 +147,16 @@ public enum CommandRun {
         let text: String
         switch kind {
         case .explain:
-            text = RobotDocument.explain(
-                explainRobotPayload(
-                    from: explainViewModel(
-                        from: result,
-                        command: command,
-                        normalized: result.matchingView.isEmpty
-                            ? Normalize.matchingView(of: command.rawValue).rawValue
-                            : result.matchingView.rawValue
-                    )
+            let payload = explainRobotPayload(
+                from: explainViewModel(
+                    from: result,
+                    command: command,
+                    normalized: result.matchingView.isEmpty
+                        ? Normalize.matchingView(of: command.rawValue).rawValue
+                        : result.matchingView.rawValue
                 )
             )
-            .render()
+            text = RobotDocument.explain(payload).render()
         case .test, .testExplain:
             text = RobotDocument.test(testRobotPayload(from: result)).render()
         }
