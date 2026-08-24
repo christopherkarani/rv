@@ -31,7 +31,6 @@ private struct ModeCase {
     var requested: RequestedMode
     var mode: OutputMode
     var colors: Bool
-    var browse: Bool
 }
 
 @Test func outputMode_table() {
@@ -41,125 +40,60 @@ private struct ModeCase {
             probe: probe(),
             requested: .automatic,
             mode: .pretty,
-            colors: true,
-            browse: true
-        ),
-        ModeCase(
-            name: "both-tty-browse",
-            probe: probe(),
-            requested: .browse,
-            mode: .browse,
-            colors: true,
-            browse: true
+            colors: true
         ),
         ModeCase(
             name: "json-flag-forces-robot",
             probe: probe(json: true),
             requested: .automatic,
             mode: .robot,
-            colors: false,
-            browse: false
-        ),
-        ModeCase(
-            name: "robot-flag-forces-robot",
-            probe: probe(robot: true),
-            requested: .browse,
-            mode: .robot,
-            colors: false,
-            browse: false
+            colors: false
         ),
         ModeCase(
             name: "requested-robot",
             probe: probe(),
             requested: .robot,
             mode: .robot,
-            colors: false,
-            browse: true
-        ),
-        ModeCase(
-            name: "plain-stays-pretty-not-browse",
-            probe: probe(plain: true),
-            requested: .browse,
-            mode: .pretty,
-            colors: false,
-            browse: false
-        ),
-        ModeCase(
-            name: "ci-browse-falls-back-pretty",
-            probe: probe(ci: true),
-            requested: .browse,
-            mode: .pretty,
-            colors: false,
-            browse: false
-        ),
-        ModeCase(
-            name: "nocolor-env-forbids-browse",
-            probe: probe(noColorEnv: true),
-            requested: .browse,
-            mode: .pretty,
-            colors: false,
-            browse: false
+            colors: false
         ),
         ModeCase(
             name: "stdin-only-tty",
             probe: probe(stdout: false),
             requested: .automatic,
             mode: .robot,
-            colors: false,
-            browse: false
+            colors: false
         ),
         ModeCase(
             name: "stdout-only-tty-automatic",
             probe: probe(stdin: false),
             requested: .automatic,
             mode: .pretty,
-            colors: true,
-            browse: false
-        ),
-        ModeCase(
-            name: "stdout-only-tty-browse-fallback",
-            probe: probe(stdin: false),
-            requested: .browse,
-            mode: .pretty,
-            colors: true,
-            browse: false
+            colors: true
         ),
         ModeCase(
             name: "piped-automatic-robot",
             probe: probe(stdin: false, stdout: false),
             requested: .automatic,
             mode: .robot,
-            colors: false,
-            browse: false
+            colors: false
         ),
         ModeCase(
             name: "term-dumb-pretty-no-color",
             probe: probe(termDumb: true),
             requested: .automatic,
             mode: .pretty,
-            colors: false,
-            browse: true
-        ),
-        ModeCase(
-            name: "no-color-flag-browse-still-eligible",
-            probe: probe(noColorFlag: true),
-            requested: .browse,
-            mode: .browse,
-            colors: false,
-            browse: true
+            colors: false
         ),
         ModeCase(
             name: "requested-pretty",
             probe: probe(stdout: false),
             requested: .pretty,
             mode: .pretty,
-            colors: false,
-            browse: false
+            colors: false
         ),
     ]
 
     for item in cases {
-        #expect(browseEligible(item.probe) == item.browse, Comment(rawValue: item.name))
         #expect(
             resolveOutputMode(probe: item.probe, requested: item.requested) == item.mode,
             Comment(rawValue: item.name)
@@ -177,7 +111,6 @@ private struct ModeCase {
             ColorCapability(probe: item.probe, mode: resolved).colorsEnabled == item.colors,
             Comment(rawValue: item.name)
         )
-        #expect(item.probe.isBrowseEligible == item.browse, Comment(rawValue: item.name))
     }
 }
 

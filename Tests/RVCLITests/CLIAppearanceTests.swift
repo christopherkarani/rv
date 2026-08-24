@@ -10,14 +10,6 @@ import RVTheme
     #expect(appearance == .robot)
 }
 
-@Test func cliAppearance_ciForcesRobot_evenWhenBrowseWasRequested() {
-    let appearance = CLIAppearance.resolve(
-        probe: operatorProbe(ci: true, stdoutIsTTY: true),
-        requested: .browse
-    )
-    #expect(appearance == .robot)
-}
-
 @Test func cliAppearance_ttyAutomaticWithoutCIIsPretty() {
     let probe = operatorProbe(ci: false, stdoutIsTTY: true, noColor: true)
     let appearance = CLIAppearance.resolve(probe: probe, requested: .automatic)
