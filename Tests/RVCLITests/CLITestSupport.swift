@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import RVDomain
+import RVService
 import RVTheme
 import RVPolicy
 @testable import RVCLI
@@ -35,6 +36,19 @@ func isolatedClient(
 ) throws -> ServiceClient {
     ServiceClient(
         transport: transport,
+        allowOnceDirectory: try allowOnceDirectory ?? isolatedAllowOnceDirectory(),
+        home: try isolatedHome()
+    )
+}
+
+func isolatedClient(
+    transport: (any ServiceTransport)?,
+    lazySession: @escaping @Sendable () -> EvaluateSession,
+    allowOnceDirectory: URL? = nil
+) throws -> ServiceClient {
+    ServiceClient(
+        transport: transport,
+        lazySession: lazySession,
         allowOnceDirectory: try allowOnceDirectory ?? isolatedAllowOnceDirectory(),
         home: try isolatedHome()
     )
