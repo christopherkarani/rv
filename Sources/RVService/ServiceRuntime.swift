@@ -20,6 +20,7 @@ public actor ServiceRuntime {
     private let allowOnce: AllowOnceStore
     private let log: (any ServiceLog)?
     private let analytics: AnalyticsCoordinator?
+    private let onActivity: (@Sendable () async -> Void)?
 
     package private(set) var compiledPackIDs: [PackID]
 
@@ -31,7 +32,8 @@ public actor ServiceRuntime {
         allowOnceDirectory: URL? = nil,
         idleExitSeconds: Int = IdleWatchdog.defaultSeconds,
         log: (any ServiceLog)? = nil,
-        analytics: AnalyticsCoordinator? = nil
+        analytics: AnalyticsCoordinator? = nil,
+        onActivity: (@Sendable () async -> Void)? = nil
     ) {
         let resolvedHome = home ?? HomeDirectory.process()
         self.configHome = resolvedHome
@@ -61,6 +63,7 @@ public actor ServiceRuntime {
         self.idleExitSeconds = idleExitSeconds
         self.log = log
         self.analytics = analytics
+        self.onActivity = onActivity
     }
 
     public func acknowledge(_ hello: Hello) -> HelloAck {
@@ -80,6 +83,9 @@ public actor ServiceRuntime {
     }
 
     public func handleIncoming(_ body: Data, handshakeOK: Bool) async -> (Data, Bool) {
+        if let onActivity {
+            await onActivity()
+        }
         if let hello = try? IPCJSON.decode(Hello.self, from: body), hello.clientSemver.isEmpty == false {
             let ack = acknowledge(hello)
             let data = (try? IPCJSON.encode(ack)) ?? Data()

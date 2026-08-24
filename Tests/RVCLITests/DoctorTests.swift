@@ -541,6 +541,35 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
     }
 }
 
+@Test func doctor_installedAgentNotLoadedWarnsToRerunSetup() throws {
+    try withDoctorHome { _, paths, environment in
+        try FileManager.default.createDirectory(
+            atPath: (paths.launchAgent as NSString).deletingLastPathComponent,
+            withIntermediateDirectories: true
+        )
+        try "plist".write(toFile: paths.launchAgent, atomically: true, encoding: .utf8)
+        let diagnostics = ServiceDiagnosticResult.local(
+            ServiceFallbackDiagnostic(
+                cause: .requestFailed(.transport(.connectFailed)),
+                corePacksReady: true
+            )
+        )
+        let outcome = DoctorRun.run(
+            environment: environment,
+            diagnostics: diagnostics,
+            appearance: .robot
+        )
+        let object = try #require(
+            JSONSerialization.jsonObject(with: Data(outcome.stdout.utf8)) as? [String: Any]
+        )
+        let service = try #require(object["service"] as? [String: Any])
+        #expect(outcome.exitCode == 0)
+        #expect(service["launch_agent"] as? String == "installed")
+        #expect(service["warning"] as? String == "LaunchAgent not loaded. Run rv setup.")
+        #expect(object["ok"] as? Bool == true)
+    }
+}
+
 @Test func doctor_unavailableLocalCoreReportsNoEnabledPacks() throws {
     try withDoctorHome { _, _, environment in
         let diagnostics = ServiceDiagnosticResult.local(

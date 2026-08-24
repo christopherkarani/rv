@@ -35,6 +35,7 @@ func env(
     rvPath: String = "/tmp/rv-bin/rv",
     rvdPath: String? = nil,
     touchLaunchd: Bool = true,
+    isLaunchAgentLoaded: @escaping (String) -> Bool = { _ in true },
     installAnalytics: any InstallAnalyticsCapturing = SilentInstallAnalytics()
 ) -> SetupEnvironment {
     SetupEnvironment(
@@ -45,6 +46,7 @@ func env(
         fileManager: .default,
         launchctl: launchctl,
         touchLaunchd: touchLaunchd,
+        isLaunchAgentLoaded: isLaunchAgentLoaded,
         installAnalytics: installAnalytics
     )
 }
@@ -418,6 +420,18 @@ private func fixtureLoginHome() throws -> URL {
         #expect(outcome.exitCode == 0)
         #expect(FileManager.default.fileExists(atPath: layout.launchAgent))
         #expect(launchctl.bootstraps.isEmpty)
+    }
+}
+
+@Test func setup_failsWhenLaunchAgentDoesNotLoad() throws {
+    try withTempHome { home, layout, launchctl in
+        let outcome = SetupRun.setup(
+            env(home: home, launchctl: launchctl, isLaunchAgentLoaded: { _ in false })
+        )
+        #expect(outcome.exitCode == EX_UNAVAILABLE)
+        #expect(outcome.stderr == "rv setup failed: unable to load LaunchAgent\n")
+        #expect(launchctl.bootstraps.count == 1)
+        #expect(FileManager.default.fileExists(atPath: layout.launchAgent))
     }
 }
 
