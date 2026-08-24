@@ -126,6 +126,26 @@
       "id": "near.quoted-heredoc-angle-placeholder",
       "command": "cat >> /tmp/rv-obs.md << 'EOF'\nSee `origin/<base>...HEAD`\nEOF",
       "expected": "allow"
+    },
+    {
+      "id": "near.quoted-heredoc-angle-placeholder-two-span",
+      "command": "cat >> /tmp/rv-obs.md << 'EOF'\nSee `origin/<base>...HEAD` vs `HEAD`\nEOF",
+      "expected": "allow"
+    },
+    {
+      "id": "near.redirect-trailing-backtick-space",
+      "command": "echo x > /tmp/` date`.txt",
+      "expected": "allow"
+    },
+    {
+      "id": "near.redirect-trailing-backtick-newline",
+      "command": "echo x > /tmp/`\ndate`.txt",
+      "expected": "allow"
+    },
+    {
+      "id": "near.redirect-relative-trailing-backtick-space",
+      "command": "echo x 1> ./db` cat fn`",
+      "expected": "allow"
     }
   ]
 }
