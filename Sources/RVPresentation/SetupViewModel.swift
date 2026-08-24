@@ -112,7 +112,9 @@ public enum SetupCloser: Equatable, Sendable {
     /// Every detected host was occupied; nothing wired.
     case skipped(skipped: [SetupHostKind])
 
-    /// Ceremony closer copy. Install substitutes the install-only line; setup stays `Hooks wired`.
+    /// Ceremony closer lines for `kind`.
+    /// Quiet is empty; hostless and occupied-only both return the hostless pair;
+    /// complete is `Hooks wired` (setup) or the install closer.
     public func lines(kind: SetupCeremonyKind) -> [String] {
         switch self {
         case .quiet: []
@@ -130,6 +132,7 @@ public let setupRobotHostlessLine = "Run rv setup after Pi, Grok, or OpenCode ex
 public let setupRobotCompleteLine = "Setup complete. Next  rv test 'git reset --hard'."
 
 extension SetupHostKind {
+    /// `--robot` skip sentence for an occupied owned hook.
     public var robotSkipLine: String {
         switch self {
         case .grok: "Skipped occupied grok hook."

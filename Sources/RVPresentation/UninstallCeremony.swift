@@ -22,12 +22,12 @@ public enum UninstallCloser: Equatable, Sendable {
     case alreadyClean(occupied: Set<SetupHostKind>)
 }
 
-/// Builds the uninstall show from the terminal closer alone.
+/// Paced uninstall frames for `closer`. Never empty.
 ///
 /// The closer is the robot contract too: pretty must not claim
 /// `Uninstall complete` when nothing was deleted, and must not claim
 /// `Already clean` when config / binaries / LaunchAgent were removed with no host slots.
-public func uninstallCeremonyFrames(closer: UninstallCloser) -> [SetupCeremonyFrame] {
+public func uninstallCeremonyFrames(_ closer: UninstallCloser) -> [SetupCeremonyFrame] {
     switch closer {
     case .alreadyClean(let occupied):
         return [

@@ -76,7 +76,7 @@ enum SetupFormat {
         case .robot:
             return (uninstallRobot(report), false)
         case .pretty(let palette):
-            let frames = uninstallCeremonyFrames(closer: report.closer)
+            let frames = uninstallCeremonyFrames(report.closer)
             return playCeremony(
                 frames: frames,
                 palette: palette,
