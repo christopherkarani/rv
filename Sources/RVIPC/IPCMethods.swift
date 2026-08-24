@@ -186,12 +186,36 @@ public struct ExplainParams: Sendable, Equatable, Codable {
 }
 
 public struct ExplainStage: Sendable, Equatable, Codable {
-    public var name: String
+    /// Raw value is the wire-stable stage name (`normalize`, `quick-reject`, …).
+    public var name: ExplainStep.ID
     public var elapsedMs: Double
 
-    public init(name: String, elapsedMs: Double) {
+    public init(name: ExplainStep.ID, elapsedMs: Double) {
         self.name = name
         self.elapsedMs = elapsedMs
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let raw = try container.decode(String.self, forKey: .name)
+        guard let id = ExplainStep.ID(rawValue: raw) else {
+            throw DecodingError.dataCorrupted(
+                .init(codingPath: decoder.codingPath, debugDescription: "unknown ExplainStage name")
+            )
+        }
+        name = id
+        elapsedMs = try container.decode(Double.self, forKey: .elapsedMs)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(name.rawValue, forKey: .name)
+        try container.encode(elapsedMs, forKey: .elapsedMs)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case elapsedMs
     }
 }
 
@@ -367,26 +391,6 @@ public struct SetPackEnabledReply: Sendable, Equatable, Codable {
     }
 }
 
-public struct AllowOnceConsumeParams: Sendable, Equatable, Codable {
-    public var command: String
-    public var cwd: String
-
-    public init(command: String, cwd: String) {
-        self.command = command
-        self.cwd = cwd
-    }
-}
-
-public struct AllowOnceConsumeReply: Sendable, Equatable, Codable {
-    public var consumed: Bool
-    public var tokenID: String?
-
-    public init(consumed: Bool, tokenID: String? = nil) {
-        self.consumed = consumed
-        self.tokenID = tokenID
-    }
-}
-
 public enum ServiceState: String, Sendable, Equatable, Codable {
     case running
     case idleExitArmed
@@ -401,6 +405,7 @@ public enum DoctorCheckStatus: String, Sendable, Equatable, Codable {
     case skipped
 }
 
+/// Host-name cases mirror `RVDomain.HookHost`; the remaining cases name doctor subsystems.
 public enum DoctorCheckID: String, Codable, Hashable, Sendable {
     case xpc, `protocol`, packs, launchd, lastError, grok, pi, opencode
 }
@@ -470,7 +475,6 @@ public enum IPCMethod: Sendable, Equatable {
     case classify(ClassifyParams)
     case listPacks
     case setPackEnabled(SetPackEnabledParams)
-    case allowOnceConsume(AllowOnceConsumeParams)
     case doctorSnapshot
 }
 
@@ -481,7 +485,6 @@ public enum IPCResult: Sendable, Equatable {
     case classify(ClassifyReply)
     case listPacks(ListPacksReply)
     case setPackEnabled(SetPackEnabledReply)
-    case allowOnceConsume(AllowOnceConsumeReply)
     case doctorSnapshot(DoctorSnapshotReply)
     case error(IPCError)
 }
@@ -494,7 +497,6 @@ extension IPCMethod: Codable {
         case classify
         case listPacks
         case setPackEnabled
-        case allowOnceConsume
         case doctorSnapshot
     }
 
@@ -513,8 +515,6 @@ extension IPCMethod: Codable {
             try container.encode(EmptyPayload(), forKey: .listPacks)
         case .setPackEnabled(let params):
             try container.encode(params, forKey: .setPackEnabled)
-        case .allowOnceConsume(let params):
-            try container.encode(params, forKey: .allowOnceConsume)
         case .doctorSnapshot:
             try container.encode(EmptyPayload(), forKey: .doctorSnapshot)
         }
@@ -534,8 +534,6 @@ extension IPCMethod: Codable {
             self = .listPacks
         } else if let params = try container.decodeIfPresent(SetPackEnabledParams.self, forKey: .setPackEnabled) {
             self = .setPackEnabled(params)
-        } else if let params = try container.decodeIfPresent(AllowOnceConsumeParams.self, forKey: .allowOnceConsume) {
-            self = .allowOnceConsume(params)
         } else if container.contains(.doctorSnapshot) {
             self = .doctorSnapshot
         } else {
@@ -554,7 +552,6 @@ extension IPCResult: Codable {
         case classify
         case listPacks
         case setPackEnabled
-        case allowOnceConsume
         case doctorSnapshot
         case error
     }
@@ -574,8 +571,6 @@ extension IPCResult: Codable {
             try container.encode(reply, forKey: .listPacks)
         case .setPackEnabled(let reply):
             try container.encode(reply, forKey: .setPackEnabled)
-        case .allowOnceConsume(let reply):
-            try container.encode(reply, forKey: .allowOnceConsume)
         case .doctorSnapshot(let reply):
             try container.encode(reply, forKey: .doctorSnapshot)
         case .error(let error):
@@ -597,8 +592,6 @@ extension IPCResult: Codable {
             self = .listPacks(reply)
         } else if let reply = try container.decodeIfPresent(SetPackEnabledReply.self, forKey: .setPackEnabled) {
             self = .setPackEnabled(reply)
-        } else if let reply = try container.decodeIfPresent(AllowOnceConsumeReply.self, forKey: .allowOnceConsume) {
-            self = .allowOnceConsume(reply)
         } else if let reply = try container.decodeIfPresent(DoctorSnapshotReply.self, forKey: .doctorSnapshot) {
             self = .doctorSnapshot(reply)
         } else if let error = try container.decodeIfPresent(IPCError.self, forKey: .error) {

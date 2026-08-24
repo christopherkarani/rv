@@ -109,7 +109,7 @@ public actor ServiceRuntime {
             if ack.ok == false {
                 let response = IPCResponse(
                     id: request.id,
-                    result: .error(.protocolSkew(ack.skewReason?.rawValue ?? "protocol"))
+                    result: .error(.protocolSkew(ack.skewReason))
                 )
                 return ((try? IPCJSON.encode(response)) ?? Data(), false)
             }
@@ -118,7 +118,7 @@ public actor ServiceRuntime {
         }
         let response = IPCResponse(
             id: UUID(),
-            result: .error(.protocolSkew("handshake required"))
+            result: .error(.handshakeRequired)
         )
         let data = (try? IPCJSON.encode(response)) ?? Data()
         return (data, false)
@@ -130,27 +130,27 @@ public actor ServiceRuntime {
             return params.clientSemver
         case .hookEvaluate(let params):
             return params.clientSemver
-        case .explain, .classify, .listPacks, .setPackEnabled, .allowOnceConsume, .doctorSnapshot:
+        case .explain, .classify, .listPacks, .setPackEnabled, .doctorSnapshot:
             return nil
         }
     }
 
     public func dispatch(_ request: IPCRequest) async -> IPCResponse {
         if request.protocolName != ProtocolVersion.name {
-            return IPCResponse(id: request.id, result: .error(.protocolSkew(request.protocolName)))
+            return IPCResponse(id: request.id, result: .error(.protocolSkew(.protocolSkew)))
         }
         let started = DispatchTime.now()
         let result: IPCResult
         switch request.method {
         case .evaluate(let params):
             if Self.isMajorSkewed(params.clientSemver) {
-                result = .error(.protocolSkew(SkewReason.majorVersion.rawValue))
+                result = .error(.protocolSkew(.majorVersion))
             } else {
                 result = .evaluate(await makeEvaluateReply(params.request, cwd: params.cwd))
             }
         case .hookEvaluate(let params):
             if Self.isMajorSkewed(params.clientSemver) {
-                result = .error(.protocolSkew(SkewReason.majorVersion.rawValue))
+                result = .error(.protocolSkew(.majorVersion))
             } else {
                 result = await makeHookEvaluateResult(params)
             }
@@ -162,8 +162,6 @@ public actor ServiceRuntime {
             result = .listPacks(listPacks())
         case .setPackEnabled(let params):
             result = setPackEnabled(params)
-        case .allowOnceConsume:
-            result = .error(.unknownMethod)
         case .doctorSnapshot:
             result = .doctorSnapshot(doctorSnapshot())
         }
@@ -192,10 +190,8 @@ public actor ServiceRuntime {
                 return await self.runEvaluate(request, cwd: cwd)
             }
             return .hookEvaluate(reply)
-        } catch let error as IPCError {
-            return .error(error)
         } catch {
-            return .error(.engine("hook evaluate failed"))
+            return .error(.hookFailed)
         }
     }
 
@@ -250,7 +246,7 @@ public actor ServiceRuntime {
             ? Normalize.matchingView(of: params.request.command.rawValue).rawValue
             : result.matchingView.rawValue
         let stages = explainSteps(from: result).map {
-            ExplainStage(name: $0.id.rawValue, elapsedMs: 0)
+            ExplainStage(name: $0.id, elapsedMs: 0)
         }
         let suggestion: String?
         switch result.decision {
@@ -331,7 +327,7 @@ public actor ServiceRuntime {
 
     private func setPackEnabled(_ params: SetPackEnabledParams) -> IPCResult {
         guard let configHome else {
-            return .error(.engine("pack enable failed"))
+            return .error(.packMutationFailed)
         }
         do {
             if params.enabled {
@@ -359,7 +355,7 @@ public actor ServiceRuntime {
         } catch PacksCommandError.unknownID {
             return .error(.packNotFound(params.id))
         } catch {
-            return .error(.engine("pack enable failed"))
+            return .error(.packMutationFailed)
         }
     }
 
@@ -401,8 +397,6 @@ public actor ServiceRuntime {
             method = "listPacks"
         case .setPackEnabled:
             method = "setPackEnabled"
-        case .allowOnceConsume:
-            method = "allowOnce.consume"
         case .doctorSnapshot:
             method = "doctorSnapshot"
         }

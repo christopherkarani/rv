@@ -27,7 +27,7 @@ struct ExplainDispatchTests {
             return
         }
         #expect(reply.stages.map(\.name) == [
-            "normalize", "quick-reject", "safe", "destructive",
+            ExplainStep.ID.normalize, .quickReject, .safe, .destructive,
         ])
         #expect(reply.stages.allSatisfy { $0.elapsedMs == 0 })
         guard case .deny(let deny) = reply.result.decision else {
@@ -59,7 +59,7 @@ struct ExplainDispatchTests {
             return
         }
         #expect(reply.stages.map(\.name) == [
-            "normalize", "quick-reject", "default",
+            ExplainStep.ID.normalize, .quickReject, .default,
         ])
         #expect(reply.stages.allSatisfy { $0.elapsedMs == 0 })
         #expect(reply.result.decision == .allow)
