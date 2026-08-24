@@ -120,17 +120,12 @@ public struct AllowlistStore: Sendable {
     }
 
     private func writeAllUnlocked(_ entries: [AllowlistEntry]) throws {
-        try prepareDirectory()
         let body = AllowlistTOML.render(entries)
-        try body.write(to: fileURL, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o600],
-            ofItemAtPath: fileURL.path
-        )
+        try SecureFileIO.writeAtomicallyOwnerOnly(body, to: fileURL)
     }
 
     private func withFileLock<T>(_ body: () throws -> T) throws -> T {
-        try prepareDirectory()
+        try SecureFileIO.prepareOwnerOnlyDirectory(baseDirectory)
         do {
             return try ExclusiveFileLock.withLock(
                 at: RVPolicyPaths.allowlistLockFile(inConfigDir: baseDirectory),
@@ -142,17 +137,6 @@ public struct AllowlistStore: Sendable {
                 throw AllowlistStoreError.lockFailed
             }
         }
-    }
-
-    private func prepareDirectory() throws {
-        try FileManager.default.createDirectory(
-            at: baseDirectory,
-            withIntermediateDirectories: true
-        )
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o700],
-            ofItemAtPath: baseDirectory.path
-        )
     }
 
     private func isSymlinkIntoWorkspace(url: URL, workspacePath: String?) -> Bool {

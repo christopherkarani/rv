@@ -45,14 +45,18 @@ public enum PacksConfigStore {
     ) throws {
         let url = configURL(home: home)
         let directory = url.deletingLastPathComponent()
-        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        let existing = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
-        let body = mergePacksSection(existing: existing, config: config)
-        guard let data = body.data(using: .utf8) else {
-            throw PacksConfigError.unwritable
-        }
         do {
-            try data.write(to: url, options: .atomic)
+            // Read-merge-write serialized so two `rv packs` mutations cannot
+            // drop each other's [packs] section. Directory is prepared before
+            // locking so the lock file itself has somewhere to live.
+            try SecureFileIO.prepareOwnerOnlyDirectory(directory, fileManager: fileManager)
+            return try ExclusiveFileLock.withLock(
+                at: RVPolicyPaths.packsConfigLockFile(inConfigDir: directory)
+            ) {
+                let existing = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+                let body = mergePacksSection(existing: existing, config: config)
+                try SecureFileIO.writeAtomicallyOwnerOnly(body, to: url, fileManager: fileManager)
+            }
         } catch {
             throw PacksConfigError.unwritable
         }

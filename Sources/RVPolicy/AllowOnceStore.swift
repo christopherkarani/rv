@@ -202,7 +202,6 @@ public actor AllowOnceStore {
     }
 
     private func writeRecords(_ records: [AllowOnceRecord]) throws {
-        try prepareStoreDirectory()
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.sortedKeys]
@@ -214,23 +213,11 @@ public actor AllowOnceStore {
             return line
         }
         let body = lines.joined(separator: "\n") + (lines.isEmpty ? "" : "\n")
-        let temp = fileURL.appendingPathExtension("tmp")
-        try body.write(to: temp, atomically: true, encoding: .utf8)
-        try setOwnerOnlyFile(temp)
-        let renamed: Int32 = fileURL.withUnsafeFileSystemRepresentation { dest in
-            temp.withUnsafeFileSystemRepresentation { src in
-                guard let dest, let src else { return Int32(-1) }
-                return rename(src, dest)
-            }
-        }
-        if renamed != 0 {
-            throw AllowOnceError.encodeFailed
-        }
-        try setOwnerOnlyFile(fileURL)
+        try SecureFileIO.writeAtomicallyOwnerOnly(body, to: fileURL)
     }
 
     private func withFileLock<T>(_ body: () throws -> T) throws -> T {
-        try prepareStoreDirectory()
+        try SecureFileIO.prepareOwnerOnlyDirectory(baseDirectory)
         do {
             return try ExclusiveFileLock.withLock(
                 at: RVPolicyPaths.allowOnceLockFile(inConfigDir: baseDirectory),
@@ -242,24 +229,6 @@ public actor AllowOnceStore {
                 throw AllowOnceError.lockFailed
             }
         }
-    }
-
-    private func prepareStoreDirectory() throws {
-        try FileManager.default.createDirectory(
-            at: baseDirectory,
-            withIntermediateDirectories: true
-        )
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o700],
-            ofItemAtPath: baseDirectory.path
-        )
-    }
-
-    private func setOwnerOnlyFile(_ url: URL) throws {
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o600],
-            ofItemAtPath: url.path
-        )
     }
 }
 
