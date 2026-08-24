@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rv — a guard for your coding agent's shell</title>
+<style>
+  :root {
+    --paper: #fdfcf9;
+    --ink: #1a1a18;
+    --muted: #6b6862;
+    --rule: #e4e1da;
+    --accent: #8c3b2e;
+    --code-bg: #f3f0ea;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { -webkit-font-smoothing: antialiased; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    font-size: 19px;
+    line-height: 1.65;
+    text-rendering: optimizeLegibility;
+  }
+  .page {
+    max-width: 620px;
+    margin: 0 auto;
+    padding: 5rem 1.5rem 8rem;
+  }
+  header {
+    margin-bottom: 3.5rem;
+  }
+  .kicker {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 1.25rem;
+  }
+  h1 {
+    font-size: clamp(2rem, 5vw, 2.75rem);
+    font-weight: 500;
+    line-height: 1.15;
+    letter-spacing: -0.01em;
+    margin-bottom: 1rem;
+    text-wrap: balance;
+  }
+  .dek {
+    font-size: 1.05rem;
+    color: var(--muted);
+    font-style: italic;
+    max-width: 34em;
+  }
+  .meta {
+    display: flex;
+    gap: 1rem;
+    align-items: baseline;
+    margin-top: 2rem;
+    padding-top: 1.25rem;
+    border-top: 1px solid var(--rule);
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.72rem;
+    color: var(--muted);
+    letter-spacing: 0.04em;
+  }
+  .status {
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    padding: 0.15rem 0.5rem;
+  }
+  article p {
+    margin-bottom: 1.35rem;
+    text-wrap: pretty;
+  }
+  article p:first-of-type::first-letter {
+    font-size: 1em; /* no drop cap; the draft is casual */
+  }
+  h2 {
+    font-size: 1.15rem;
+    font-weight: 600;
+    margin: 2.75rem 0 1rem;
+    letter-spacing: -0.005em;
+  }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    padding: 1rem 1.25rem;
+    margin: 1.75rem 0;
+    overflow-x: auto;
+  }
+  code {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.82rem;
+    color: var(--ink);
+  }
+  p code {
+    background: var(--code-bg);
+    padding: 0.1em 0.35em;
+    border-radius: 3px;
+    font-size: 0.85em;
+  }
+  .ph {
+    color: var(--accent);
+    border-bottom: 1px dashed currentColor;
+    cursor: help;
+  }
+  .ask {
+    margin: 2.5rem 0 0;
+    padding: 1.5rem 1.75rem;
+    border-top: 1px solid var(--rule);
+    border-bottom: 1px solid var(--rule);
+  }
+  footer {
+    margin-top: 3rem;
+    font-size: 0.85rem;
+    color: var(--muted);
+  }
+  footer a {
+    color: var(--accent);
+    text-decoration: none;
+    border-bottom: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  }
+  @media (max-width: 480px) {
+    body { font-size: 17px; }
+    .page { padding-top: 3rem; }
+  }
+  @media print {
+    body { font-size: 12pt; background: white; }
+    .page { max-width: none; padding: 0; }
+    .kicker, .meta, footer { color: #444; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <p class="kicker">Launch · r/pi</p>
+    <h1>I built a guard for my coding agent's shell, because it almost ate a directory</h1>
+    <p class="dek">rv sits between Pi (or Grok, or OpenCode) and the shell commands it's about to run.</p>
+    <div class="meta">
+      <span>Chris Karani</span>
+      <span>·</span>
+      <span>Aug 2026</span>
+      <span>·</span>
+      <span class="status" title="Not published yet">DRAFT v2</span>
+    </div>
+  </header>
+
+  <article>
+    <p>Last month I asked my coding agent to clean up a build folder and watched it run <code>rm -rf</code> on a path it had guessed. I caught that one. I didn't catch an earlier one, and I'm not going to pretend the files were backed up.</p>
+
+    <p>So I wrote rv. It's a small Mac tool that sits between your coding agent and its shell hooks. When Pi is about to run a shell command, rv looks at it first. Recursive deletes, force-pushes, stuff like that gets blocked before it runs, with a short note about which rule fired.</p>
+
+    <p>I want to explain a few decisions because they're the part you'd want to know before trusting this thing.</p>
+
+    <h2>It fails closed</h2>
+    <p>If rv can't understand what the hook sent it, it blocks. That sounds obvious but most tools do the opposite, because blocking feels like breaking. A guard that goes quiet when things get weird isn't a guard, it's decoration.</p>
+
+    <h2>Blocking isn't a dead end</h2>
+    <p>If it stops something you actually meant to run, you unlock that exact command for that folder, once. Next time it asks again. I went back and forth on this a lot. "Trust this agent forever" was easier to build and it's how you end up right back where you started.</p>
+
+    <h2>Nothing leaves your machine</h2>
+    <p>The evaluation happens locally. No analytics, no telemetry, your commands are not anyone's data. This shouldn't be remarkable but here we are.</p>
+
+    <h2>It doesn't claim more than it does</h2>
+    <p>rv works at the hook layer. It is not a sandbox. If some process skips the hook entirely, rv never sees it. I could have blurred this in the marketing and nobody would have checked for months. But you'd find out eventually, probably at the worst possible time, so: hook-grade, that's what it is, that's all it claims to be.</p>
+
+    <h2>Install</h2>
+    <pre><code>curl -fsSL <span class="ph" title="Placeholder — real URL pending release">INSTALL_URL</span> | sh</code></pre>
+    <p>Two binaries, <code>rv setup</code>, done. Setup only touches rv's own files, so if you already have hooks from something else it leaves those alone. There's an <code>rv doctor</code> for when things seem off, and uninstall actually uninstalls.</p>
+
+    <p>Works with Pi, Grok, and OpenCode today. Shell commands only for now — no file-edit hooks yet. macOS 26 on Apple Silicon, because that's the machine I have and I'd rather support one thing properly than three things approximately.</p>
+
+    <div class="ask">
+      <p>Here's what I actually want out of posting this: break it. Run weird commands through your agent. Tell me what got denied that shouldn't have been, or what slipped through that really shouldn't have. The rules are deliberately few. They'll grow from real misses, not from me sitting around imagining disasters.</p>
+    </div>
+
+    <footer>
+      Repo: <span class="ph" title="Placeholder — repo link pending">REPO_URL</span>
+    </footer>
+  </article>
+</div>
+</body>
+</html>
