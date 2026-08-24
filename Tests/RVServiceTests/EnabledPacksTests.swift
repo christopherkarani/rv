@@ -2,17 +2,17 @@ import Foundation
 import Testing
 import RVDomain
 import RVPolicy
-import RVService
+@testable import RVService
 
-@Suite struct EnabledPacksTests {
+struct EnabledPacksTests {
     @Test func freshHomeResolvesDayOne() throws {
         let home = try temporaryHome()
         defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
-        #expect(EnabledPacks.resolve(home: home) == dayOnePackIDs)
+        #expect(EnabledPacks.resolve(home: home) == WalkSet(ids: dayOnePackIDs))
     }
 
     @Test func nilHomeResolvesDayOne() {
-        #expect(EnabledPacks.resolve(home: nil) == dayOnePackIDs)
+        #expect(EnabledPacks.resolve(home: nil) == WalkSet(ids: dayOnePackIDs))
     }
 
     @Test func enabledExtrasResolveBeyondDayOne() throws {
@@ -20,15 +20,28 @@ import RVService
         defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
         _ = try PacksFacade.enable(home: home, ids: ["database"])
         let resolved = EnabledPacks.resolve(home: home)
-        #expect(resolved.contains(PackID(rawValue: "database.sqlite")))
-        #expect(resolved.count == 10)
+        #expect(resolved.ids.contains(PackID(rawValue: "database.sqlite")))
+        #expect(resolved.ids.count == 10)
     }
 
     @Test func disabledDayOneStaysResolvedOff() throws {
         let home = try temporaryHome()
         defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
         _ = try PacksFacade.disable(home: home, ids: ["core.git"])
-        #expect(EnabledPacks.resolve(home: home).contains(PackID(rawValue: "core.git")) == false)
+        #expect(EnabledPacks.resolve(home: home).ids.contains(PackID(rawValue: "core.git")) == false)
+    }
+
+    @Test func emptyEffectiveConfigStaysEmptyWalkSet() throws {
+        let home = try temporaryHome()
+        defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
+        try PacksConfigStore.save(
+            PacksConfig(
+                enabled: [],
+                disabled: ["core.git", "core.filesystem"]
+            ),
+            home: home
+        )
+        #expect(EnabledPacks.resolve(home: home) == WalkSet(ids: []))
     }
 }
 

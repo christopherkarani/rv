@@ -13,7 +13,7 @@ struct EvaluateWorldTests {
                 catalog: empty,
                 home: try isolatedHome()
             )
-                == dayOnePackIDs
+                == CompileSet(ids: dayOnePackIDs)
         )
         let session = EvaluationWorld.makeSession(
             home: try isolatedHome(),
@@ -28,7 +28,7 @@ struct EvaluateWorldTests {
         var catalog = PackCatalog()
         _ = try catalog.setEnabled(id: .coreGit, enabled: false)
         let ids = EvaluationWorld.enabledIDs(catalog: catalog, home: try isolatedHome())
-        #expect(ids.contains(.coreGit))
+        #expect(ids.ids.contains(.coreGit))
 
         let session = EvaluationWorld.makeSession(
             home: try isolatedHome(),
@@ -114,6 +114,26 @@ struct EvaluateWorldTests {
             return
         }
         #expect(deny.ruleID.rawValue == "core.git:reset-hard")
+    }
+
+    @Test func nilCatalogAndNilHomeIsDayOneCompileSet() {
+        #expect(
+            EvaluationWorld.enabledIDs(catalog: nil, home: nil)
+                == CompileSet(ids: dayOnePackIDs)
+        )
+    }
+
+    @Test func compileSetUnionsDayOneWhileWalkSetHonorsDisable() throws {
+        let home = try isolatedHome()
+        defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
+        _ = try PacksFacade.disable(home: home, ids: ["core.git"])
+        let walk = EnabledPacks.resolve(home: home)
+        #expect(walk.ids.contains(.coreGit) == false)
+
+        let catalog = try PacksFacade.makeCatalog(home: home)
+        let compile = EvaluationWorld.enabledIDs(catalog: catalog, home: home)
+        #expect(compile.ids.contains(.coreGit))
+        #expect(compile != CompileSet(ids: walk.ids))
     }
 }
 

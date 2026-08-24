@@ -1,5 +1,6 @@
 import Testing
 import RVDomain
+import RVPacks
 @testable import RVService
 
 struct EvaluateSessionTests {
@@ -76,5 +77,23 @@ struct EvaluateSessionTests {
         if case .allow = result.decision {
             Issue.record("uncompilable required rule must never allow")
         }
+    }
+
+    @Test func defaultSessionCompilesDayOne() {
+        let session = EvaluateSession()
+        #expect(Set(session.compiledPackIDs) == Set(dayOnePackIDs))
+        #expect(session.corePacksReady)
+    }
+
+    @Test func compileSetCompilesThoseIDs() {
+        let compile = CompileSet(ids: dayOnePackIDs)
+        let session = EvaluateSession(enabledPacks: compile)
+        #expect(Set(session.compiledPackIDs) == Set(dayOnePackIDs))
+    }
+
+    @Test func emptyCompileSetCompilesNone() throws {
+        let snapshots = try PackRegistry.loadDayOne()
+        let session = EvaluateSession(snapshots: snapshots, enabledPacks: CompileSet(ids: []))
+        #expect(session.compiledPackIDs.isEmpty)
     }
 }

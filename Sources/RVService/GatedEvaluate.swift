@@ -70,14 +70,22 @@ public struct GatedEvaluate: Sendable {
         )
     }
 
-    /// HOME + effective pack IDs + day-one fallback. Shared by peek/apply and the XPC wire request.
+    /// Walk-set resolution. Nil home is day-one, not the process environment HOME.
     public static func makeRequest(
         command: ShellCommand,
         home: HomeDirectory? = nil
     ) -> EvaluationRequest {
+        makeRequest(command: command, walkSet: EnabledPacks.resolve(home: home))
+    }
+
+    /// Maps `WalkSet.ids` onto the wire request. Empty means none.
+    package static func makeRequest(
+        command: ShellCommand,
+        walkSet: WalkSet
+    ) -> EvaluationRequest {
         EvaluationRequest(
             command: command,
-            enabledPacks: EnabledPacks.resolve(home: home ?? HomeDirectory.process())
+            enabledPacks: walkSet.ids
         )
     }
 

@@ -13,23 +13,24 @@ package enum EvaluationWorld {
 
     /// Catalog/effective enabled IDs, plus day-one so a catalog disable cannot
     /// uncompile required core rules or change what a session compiles.
+    /// Nil home is day-one, not the process environment HOME.
     package static func enabledIDs(
         catalog: PackCatalog?,
         home: HomeDirectory?
-    ) -> [PackID] {
+    ) -> CompileSet {
         let base: [PackID]
         if let catalog {
             base = catalog.records.isEmpty
                 ? dayOnePackIDs
                 : catalog.records.filter(\.enabled).map(\.id)
         } else {
-            base = EnabledPacks.resolve(home: home ?? HomeDirectory.process())
+            base = EnabledPacks.resolve(home: home).ids
         }
         var ids = base
         for id in dayOnePackIDs where !ids.contains(id) {
             ids.append(id)
         }
-        return ids
+        return CompileSet(ids: ids)
     }
 
     /// Eager session for callers that need readiness at build time (rvd).

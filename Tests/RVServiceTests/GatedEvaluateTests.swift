@@ -89,6 +89,14 @@ struct GatedEvaluateTests {
             return
         }
     }
+
+    @Test func nilHomeMakeRequestWalksDayOne() {
+        let request = GatedEvaluate.makeRequest(
+            command: ShellCommand(rawValue: "git status"),
+            home: nil
+        )
+        #expect(request.enabledPacks == dayOnePackIDs)
+    }
 }
 
 private func resetHardRequest() -> EvaluationRequest {

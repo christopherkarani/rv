@@ -10,16 +10,28 @@ public struct EvaluateSession: Sendable {
     private let compiled: CompiledPacks<ICUCompiledPattern>
     private let engine: ICUPatternEngine
 
+    /// `enabledPacks` is the compile set. Nil compiles day-one, not process HOME.
     public init(
         snapshots: [PackSnapshot]? = nil,
         enabledPacks: [PackID]? = nil
     ) {
+        self.init(
+            snapshots: snapshots,
+            enabledPacks: enabledPacks.map { CompileSet(ids: $0) }
+                ?? EvaluationWorld.enabledIDs(catalog: nil, home: nil)
+        )
+    }
+
+    /// Compiles `enabledPacks`. Distinct from a `WalkSet`; empty compiles none.
+    package init(
+        snapshots: [PackSnapshot]? = nil,
+        enabledPacks: CompileSet
+    ) {
         let loaded = EvaluationWorld.resolveSnapshots(snapshots)
-        let enabled = enabledPacks ?? EvaluationWorld.enabledIDs(catalog: nil, home: nil)
         let engine = ICUPatternEngine()
         let warmed = CoreWarmup.prepare(
             snapshots: loaded,
-            enabledPacks: enabled,
+            enabledPacks: enabledPacks.ids,
             engine: engine
         )
         self.snapshots = loaded
