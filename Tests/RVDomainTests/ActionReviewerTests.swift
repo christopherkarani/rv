@@ -56,6 +56,55 @@ struct ActionReviewerTests {
         )
     }
 
+    @Test func reviewRequest_redactsSecretShapedValuesAndMidTokenPrefixes() {
+        let dirty = ProposedAction.shell(
+            ShellAction(
+                fingerprint: ActionFingerprint(
+                    rawValue: "shell:git.push https://ghp_exampletoken@github.com/org/repo.git"
+                ),
+                effects: ActionEffects(kinds: [.remoteSharedBranchMutation]),
+                resources: ActionResources(remoteName: "origin", branchName: "main"),
+                scope: ActionScope(
+                    workingDirectory: WorkingDirectory(validating: "/tmp/ghp_exampletoken")
+                ),
+                supportingCommand: ShellCommand(
+                    rawValue: "COUNT=2 FOO=ghp_exampletoken OPENAI_KEY=sk-proj-example git push https://ghp_exampletoken@github.com/org/repo.git"
+                )
+            )
+        )
+        let request = ReviewRequest(
+            action: dirty,
+            context: ReviewContext(
+                repository: RepositoryReviewContext(name: "rv", currentBranch: "main")
+            )
+        )
+
+        #expect(request.action.fingerprint.rawValue.contains("ghp_exampletoken") == false)
+        #expect(
+            request.action.fingerprint.rawValue
+                == "shell:git.push \(ReviewSanitizer.redactedPlaceholder)"
+        )
+        #expect(request.action.supportingCommand?.rawValue.contains("ghp_exampletoken") == false)
+        #expect(request.action.supportingCommand?.rawValue.contains("sk-proj-example") == false)
+        #expect(request.action.supportingCommand?.rawValue.contains("COUNT=2") == true)
+        #expect(request.action.supportingCommand?.rawValue.contains("FOO=[redacted]") == true)
+        #expect(
+            request.action.supportingCommand?.rawValue.contains("OPENAI_KEY=[redacted]") == true
+        )
+        #expect(request.action.supportingCommand?.rawValue.contains("git push") == true)
+        #expect(
+            request.action.supportingCommand?.rawValue.contains(
+                "git push \(ReviewSanitizer.redactedPlaceholder)"
+            ) == true
+        )
+        guard case .shell(let shell) = request.action else {
+            Issue.record("expected shell action")
+            return
+        }
+        #expect(shell.scope.workingDirectory?.rawValue.contains("ghp_exampletoken") == false)
+        #expect(shell.scope.workingDirectory?.rawValue == ReviewSanitizer.redactedPlaceholder)
+    }
+
     @Test func unsupportedReviewer_fallsBackToAskNotAllow() async {
         let reviewer = StubActionReviewer(
             providerID: ReviewerProviderID(rawValue: "stub.unsupported"),

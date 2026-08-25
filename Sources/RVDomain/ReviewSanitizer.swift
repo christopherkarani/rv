@@ -12,13 +12,19 @@ public enum ReviewSanitizer: Sendable {
 
     public static func sanitize(_ shell: ShellAction) -> ShellAction {
         ShellAction(
-            fingerprint: shell.fingerprint,
+            fingerprint: ActionFingerprint(
+                rawValue: redactCredentials(in: shell.fingerprint.rawValue)
+            ),
             effects: shell.effects,
             resources: ActionResources(
                 remoteName: sanitizeField(shell.resources.remoteName),
                 branchName: sanitizeField(shell.resources.branchName)
             ),
-            scope: shell.scope,
+            scope: ActionScope(
+                workingDirectory: shell.scope.workingDirectory.flatMap { directory in
+                    WorkingDirectory(rawValue: redactCredentials(in: directory.rawValue))
+                }
+            ),
             supportingCommand: shell.supportingCommand.map { command in
                 ShellCommand(rawValue: redactCredentials(in: command.rawValue))
             }
@@ -82,11 +88,16 @@ public enum ReviewSanitizer: Sendable {
     private static func redactAssignmentOrPrefix(_ token: String) -> String {
         if let equals = token.firstIndex(of: "=") {
             let key = String(token[..<equals])
-            if looksLikeSecretKey(key) {
+            let value = String(token[token.index(after: equals)...])
+            // Keep a non-secret key when only the value is credential-shaped.
+            // If the key itself carries a prefix/PAT, drop the whole token.
+            if looksLikeSecretValue(key) == false,
+               looksLikeSecretKey(key) || looksLikeSecretValue(value)
+            {
                 return "\(key)=\(redactedPlaceholder)"
             }
         }
-        if hasSecretPrefix(token) {
+        if containsSecretPrefix(token) {
             return redactedPlaceholder
         }
         return token
@@ -126,18 +137,22 @@ public enum ReviewSanitizer: Sendable {
     }
 
     private static func looksLikeSecretValue(_ value: String) -> Bool {
-        looksLikePEM(value) || hasSecretPrefix(value)
+        looksLikePEM(value) || containsSecretPrefix(value)
     }
 
     private static func looksLikePEM(_ text: String) -> Bool {
         text.contains("PRIVATE KEY") || text.contains("BEGIN OPENSSH")
     }
 
-    private static func hasSecretPrefix(_ token: String) -> Bool {
-        for prefix in secretValuePrefixes where token.hasPrefix(prefix) {
-            return true
+    /// Secret prefixes may sit after `://`, `@`, `:`, `=`, or `/` rather than at
+    /// the whitespace-token start (URL-embedded PATs, `FOO=ghp_…`).
+    private static func containsSecretPrefix(_ token: String) -> Bool {
+        token.split { character in
+            character == ":" || character == "=" || character == "@" || character == "/"
         }
-        return false
+        .contains { segment in
+            secretValuePrefixes.contains { segment.hasPrefix($0) }
+        }
     }
 
     private static let secretKeyFragments = [
