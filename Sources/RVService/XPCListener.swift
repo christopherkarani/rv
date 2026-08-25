@@ -1,3 +1,4 @@
+#if canImport(XPC)
 import Foundation
 import RVIPC
 @preconcurrency import XPC
@@ -150,3 +151,5 @@ final class XPCHeld: @unchecked Sendable {
         self.object = object
     }
 }
+#endif
+

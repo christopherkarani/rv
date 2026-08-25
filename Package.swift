@@ -87,15 +87,9 @@ let coreTestTargets: [Target] = [
     ),
 ]
 
-// 6.3.3 `swift test` has no --target and still typechecks every listed
-// target/product. Keep Service/CLI/XPC + their tests off the Linux graph
-// (OPE-260). They stay Darwin; P2/P3 own Linux rvd/CLI.
-#if os(Linux)
-let darwinLibraryTargets: [Target] = []
-let darwinProducts: [Product] = []
-let darwinTestTargets: [Target] = []
-#else
-let darwinLibraryTargets: [Target] = [
+// P2 (OPE-261): RVService + rvd + RVServiceTests return to the Linux graph.
+// XPC is #if canImport(XPC). RVCLI / rv stay Darwin (P3).
+let serviceLibraryAndDaemon: [Target] = [
     .target(
         name: "RVService",
         dependencies: [
@@ -103,6 +97,25 @@ let darwinLibraryTargets: [Target] = [
             "RVAnalytics",
         ]
     ),
+    .executableTarget(
+        name: "rvd",
+        dependencies: ["RVService"]
+    ),
+]
+let serviceProducts: [Product] = [
+    .library(name: "RVService", targets: ["RVService"]),
+    .executable(name: "rvd", targets: ["rvd"]),
+]
+let serviceTestTargets: [Target] = [
+    .testTarget(name: "RVServiceTests", dependencies: ["RVService"]),
+]
+
+#if os(Linux)
+let darwinCLITargets: [Target] = []
+let darwinCLIProducts: [Product] = []
+let darwinCLITests: [Target] = []
+#else
+let darwinCLITargets: [Target] = [
     .target(
         name: "RVCLI",
         dependencies: [
@@ -122,19 +135,12 @@ let darwinLibraryTargets: [Target] = [
             .product(name: "ArgumentParser", package: "swift-argument-parser"),
         ]
     ),
-    .executableTarget(
-        name: "rvd",
-        dependencies: ["RVService"]
-    ),
 ]
-let darwinProducts: [Product] = [
-    .library(name: "RVService", targets: ["RVService"]),
+let darwinCLIProducts: [Product] = [
     .library(name: "RVCLI", targets: ["RVCLI"]),
     .executable(name: "rv", targets: ["rv"]),
-    .executable(name: "rvd", targets: ["rvd"]),
 ]
-let darwinTestTargets: [Target] = [
-    .testTarget(name: "RVServiceTests", dependencies: ["RVService"]),
+let darwinCLITests: [Target] = [
     .testTarget(name: "RVCLITests", dependencies: ["RVCLI"]),
 ]
 #endif
@@ -144,10 +150,11 @@ let package = Package(
     platforms: [
         .macOS(.v26),
     ],
-    products: coreProducts + darwinProducts,
+    products: coreProducts + serviceProducts + darwinCLIProducts,
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.7.0"),
     ] + extraPackageDependencies,
-    targets: coreLibraryTargets + darwinLibraryTargets + coreTestTargets + darwinTestTargets,
+    targets: coreLibraryTargets + serviceLibraryAndDaemon + darwinCLITargets
+        + coreTestTargets + serviceTestTargets + darwinCLITests,
     swiftLanguageModes: [.v6]
 )

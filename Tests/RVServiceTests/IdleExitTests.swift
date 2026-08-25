@@ -1,14 +1,16 @@
 import Foundation
 import Testing
+#if canImport(XPC)
 @preconcurrency import XPC
+#endif
 @testable import RVService
 
+@Suite(.serialized)
 struct IdleExitTests {
     @Test func injectedOneSecondIdleFiresWithoutKeepAlive() async throws {
         let watchdog = IdleWatchdog(seconds: 1)
         await watchdog.ping()
-        try? await Task.sleep(nanoseconds: 1_300_000_000)
-        #expect(await watchdog.fired)
+        #expect(await waitUntilIdleFired(watchdog))
         let configuration = try RVDLaunch.parse(arguments: ["rvd"])
         #expect(configuration.idleExitSeconds == 300)
     }
@@ -20,10 +22,10 @@ struct IdleExitTests {
         await watchdog.ping()
         try? await Task.sleep(nanoseconds: 400_000_000)
         #expect(await watchdog.fired == false)
-        try? await Task.sleep(nanoseconds: 800_000_000)
-        #expect(await watchdog.fired)
+        #expect(await waitUntilIdleFired(watchdog))
     }
 
+    #if canImport(XPC)
     @Test func bootPingAndHandlePingResetIdleTimer() async throws {
         let watchdog = IdleWatchdog(seconds: 1)
         await watchdog.ping()
@@ -39,4 +41,19 @@ struct IdleExitTests {
         try? await Task.sleep(nanoseconds: 800_000_000)
         #expect(await watchdog.fired)
     }
+    #endif
+}
+
+/// `Task.sleep(1.3s)` after a 1s watchdog is too tight under a parallel Linux
+/// suite: the fire task can miss the window. Poll with a 3s deadline.
+private func waitUntilIdleFired(
+    _ watchdog: IdleWatchdog,
+    timeoutNanoseconds: UInt64 = 3_000_000_000
+) async -> Bool {
+    let deadline = ContinuousClock.now + .nanoseconds(Int64(timeoutNanoseconds))
+    while ContinuousClock.now < deadline {
+        if await watchdog.fired { return true }
+        try? await Task.sleep(nanoseconds: 50_000_000)
+    }
+    return await watchdog.fired
 }

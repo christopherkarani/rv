@@ -1,0 +1,11 @@
+[Unit]
+Description=rv evaluate service
+
+[Service]
+Type=simple
+ExecStart=@RVD_PATH@ --socket
+# Idle-exit is rvd IdleWatchdog (~300s). KeepAlive equivalent stays off.
+Restart=no
+
+[Install]
+WantedBy=default.target

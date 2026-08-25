@@ -1,3 +1,4 @@
+#if canImport(XPC)
 import Foundation
 @preconcurrency import XPC
 
@@ -174,3 +175,5 @@ final class OnceResume<T: Sendable>: @unchecked Sendable {
         }
     }
 }
+#endif
+

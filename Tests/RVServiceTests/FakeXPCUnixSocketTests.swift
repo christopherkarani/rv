@@ -1,3 +1,4 @@
+#if canImport(Darwin)
 import Foundation
 import Testing
 import RVDomain
@@ -247,16 +248,6 @@ struct FakeXPCUnixSocketTests {
     }
 }
 
-final class RecordingLog: ServiceLog, @unchecked Sendable {
-    nonisolated(unsafe) private var events: [ServiceLogEvent] = []
-
-    func record(_ event: ServiceLogEvent) {
-        events.append(event)
-    }
-
-    var snapshot: [ServiceLogEvent] { events }
-}
-
 private func evaluateJSON(
     _ command: String,
     cwd: WorkingDirectory? = nil,
@@ -297,3 +288,5 @@ private func nested(_ root: [String: Any], _ path: [String]) -> [String: Any]? {
     }
     return current as? [String: Any]
 }
+#endif
+

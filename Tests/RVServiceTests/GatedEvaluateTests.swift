@@ -1,5 +1,4 @@
 import Foundation
-import os
 import Testing
 import RVDomain
 import RVPolicy
@@ -112,7 +111,7 @@ struct GatedEvaluateTests {
     @Test func allowPathDoesNotInvokeAllowlistLoader() async throws {
         let store = try isolatedStore()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
-        let calls = OSAllocatedUnfairLock(initialState: 0)
+        let calls = UnfairLock(0)
         let gated = GatedEvaluate()
         let applied = await gated.apply(
             stashDropRequest(),

@@ -1,3 +1,4 @@
+#if canImport(XPC)
 import Foundation
 import Testing
 @testable import RVService
@@ -96,3 +97,5 @@ struct OnceResumeTests {
         #expect(client.openedConnectionCount == 0)
     }
 }
+#endif
+
