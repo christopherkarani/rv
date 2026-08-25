@@ -53,26 +53,22 @@ download_release_asset() {
 
 fetch_pack_bundles() {
   dest="$1"
-  api="https://api.github.com/repos/christopherkarani/rv/releases/latest"
-  json="$(curl -fSL "$api" 2>/dev/null || true)"
-  names=""
-  if [ -n "$json" ]; then
-    names="$(printf '%s\n' "$json" | sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*_RVPacks\.bundle\)".*/\1/p')"
+  # GitHub release assets are files. A bare *_RVPacks.bundle file is not a
+  # payload: staging only copies a directory. Optional tarball unpacks to
+  # $dest/rv_RVPacks.bundle so the existing [ -d ] stage works. 404 is fine.
+  name="rv_RVPacks.bundle.tar.gz"
+  url="$release_base/$name"
+  tarball="$dest/$name"
+  if curl -fSL "$url" -o "$tarball" 2>/dev/null; then
+    if tar -xzf "$tarball" -C "$dest"; then
+      rm -f "$tarball"
+      return 0
+    fi
+    rm -f "$tarball"
+    echo "rv: failed to unpack $name" >&2
+    exit 1
   fi
-  if [ -n "$names" ]; then
-    printf '%s\n' "$names" > "$dest/.pack-bundle-names"
-    while IFS= read -r name; do
-      [ -n "$name" ] || continue
-      download_release_asset "$dest" "$name"
-    done < "$dest/.pack-bundle-names"
-    rm -f "$dest/.pack-bundle-names"
-    return 0
-  fi
-  # Not listed (or API unavailable): probe the SPM bundle name. 404 is fine.
-  if curl -fSL "$release_base/rv_RVPacks.bundle" -o "$dest/rv_RVPacks.bundle" 2>/dev/null; then
-    return 0
-  fi
-  rm -f "$dest/rv_RVPacks.bundle"
+  rm -f "$tarball"
 }
 
 if [ -n "${RV_INSTALL_BIN:-}" ]; then

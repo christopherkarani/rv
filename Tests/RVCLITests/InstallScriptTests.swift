@@ -361,8 +361,42 @@ private func runInstallScript(
 @Test func installSh_fetchesGitHubLatestWhenInstallBinUnset() throws {
     let text = try String(contentsOf: installScriptURL(), encoding: .utf8)
     #expect(text.contains("https://github.com/christopherkarani/rv/releases/latest/download"))
+    #expect(text.contains("rv_RVPacks.bundle.tar.gz"))
+    #expect(text.contains("tar -xzf"))
     #expect(text.contains("curl -fSL"))
     #expect(text.contains("run rv-cli") == false)
+    #expect(text.contains("$release_base/rv_RVPacks.bundle") == false)
+}
+
+private func writePackBundleTarball(in assets: URL) throws {
+    let bundleDir = assets.appendingPathComponent("rv_RVPacks.bundle", isDirectory: true)
+    let bundlePack = bundleDir.appendingPathComponent("packs/core.json")
+    try FileManager.default.createDirectory(
+        at: bundlePack.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+    )
+    try "{}\n".write(to: bundlePack, atomically: true, encoding: .utf8)
+
+    let tarball = assets.appendingPathComponent("rv_RVPacks.bundle.tar.gz")
+    let tar = Process()
+    tar.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
+    tar.arguments = ["-czf", tarball.path, "rv_RVPacks.bundle"]
+    tar.currentDirectoryURL = assets
+    tar.standardOutput = Pipe()
+    tar.standardError = Pipe()
+    try tar.run()
+    tar.waitUntilExit()
+    guard tar.terminationStatus == 0 else {
+        struct TarFailed: Error {}
+        throw TarFailed()
+    }
+    // GitHub serves a tarball file, not a directory asset.
+    try FileManager.default.removeItem(at: bundleDir)
+}
+
+private func isDirectory(_ url: URL) -> Bool {
+    var isDir: ObjCBool = false
+    return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) && isDir.boolValue
 }
 
 private func writeCurlShim(
@@ -396,18 +430,12 @@ private func writeCurlShim(
           esac
         done
         name="${url##*/}"
-        case "$url" in
-          *api.github.com*/releases/latest)
-            printf '%s\\n' '{"assets":[{"name":"rv_RVPacks.bundle"}]}'
-            exit 0
-            ;;
-        esac
         src="\(assets.path)/$name"
-        if [ -z "$out" ] || [ ! -e "$src" ]; then
+        if [ -z "$out" ] || [ ! -f "$src" ]; then
           echo "curl: (22) The requested URL returned error: 404" >&2
           exit 22
         fi
-        cp -R "$src" "$out"
+        cp "$src" "$out"
         exit 0
         """
     )
@@ -442,12 +470,9 @@ private func writeCurlShim(
         assets.appendingPathComponent("rvd"),
         contents: "#!/bin/sh\nexit 0\n"
     )
-    let bundlePack = assets.appendingPathComponent("rv_RVPacks.bundle/packs/core.json")
-    try FileManager.default.createDirectory(
-        at: bundlePack.deletingLastPathComponent(),
-        withIntermediateDirectories: true
-    )
-    try "{}\n".write(to: bundlePack, atomically: true, encoding: .utf8)
+    try writePackBundleTarball(in: assets)
+    #expect(FileManager.default.fileExists(atPath: assets.appendingPathComponent("rv_RVPacks.bundle.tar.gz").path))
+    #expect(isDirectory(assets.appendingPathComponent("rv_RVPacks.bundle")) == false)
 
     let shim = root.appendingPathComponent("shim", isDirectory: true)
     try writeDarwinShims(in: shim)
@@ -471,14 +496,74 @@ private func writeCurlShim(
     #expect(FileManager.default.isExecutableFile(atPath: destBin.appendingPathComponent("rv").path))
     #expect(FileManager.default.isExecutableFile(atPath: destBin.appendingPathComponent("rv-cli").path))
     #expect(FileManager.default.isExecutableFile(atPath: destBin.appendingPathComponent("rvd").path))
+    let destBundle = destBin.appendingPathComponent("rv_RVPacks.bundle")
+    // Fetch only saw a tarball file; dest directory means extract made
+    // $src/rv_RVPacks.bundle a directory so the [ -d ] stage ran.
+    #expect(isDirectory(destBundle))
     #expect(
         FileManager.default.fileExists(
-            atPath: destBin.appendingPathComponent("rv_RVPacks.bundle/packs/core.json").path
+            atPath: destBundle.appendingPathComponent("packs/core.json").path
         )
     )
     let marker = try String(contentsOfFile: home.path + "/.rv-setup-marker", encoding: .utf8)
     #expect(marker.contains("from_install=1"))
     #expect(marker.contains("setup"))
+}
+
+@Test func installSh_missingPackTarballStillInstallsTrio() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-install-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let home = root.appendingPathComponent("home", isDirectory: true)
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    let assets = root.appendingPathComponent("assets", isDirectory: true)
+    try writeExecutable(
+        assets.appendingPathComponent("rv"),
+        contents: """
+        #!/bin/sh
+        exec "$(dirname "$0")/rv-cli" "$@"
+        """
+    )
+    try writeExecutable(
+        assets.appendingPathComponent("rv-cli"),
+        contents: """
+        #!/bin/sh
+        printf 'from_install=%s argv=%s\\n' "${RV_FROM_INSTALL-}" "$*" > "$HOME/.rv-setup-marker"
+        exit 0
+        """
+    )
+    try writeExecutable(
+        assets.appendingPathComponent("rvd"),
+        contents: "#!/bin/sh\nexit 0\n"
+    )
+
+    let shim = root.appendingPathComponent("shim", isDirectory: true)
+    try writeDarwinShims(in: shim)
+    try writeCurlShim(in: shim, assets: assets)
+
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/bin/sh")
+    process.arguments = [installScriptURL().path]
+    process.environment = [
+        "HOME": home.path,
+        "PATH": shim.path + ":/usr/bin:/bin",
+    ]
+    let stderr = Pipe()
+    process.standardError = stderr
+    process.standardOutput = Pipe()
+    try process.run()
+    process.waitUntilExit()
+    #expect(process.terminationStatus == 0)
+
+    let destBin = home.appendingPathComponent(".local/bin")
+    #expect(FileManager.default.isExecutableFile(atPath: destBin.appendingPathComponent("rv").path))
+    #expect(FileManager.default.isExecutableFile(atPath: destBin.appendingPathComponent("rv-cli").path))
+    #expect(FileManager.default.isExecutableFile(atPath: destBin.appendingPathComponent("rvd").path))
+    #expect(isDirectory(destBin.appendingPathComponent("rv_RVPacks.bundle")) == false)
+    let marker = try String(contentsOfFile: home.path + "/.rv-setup-marker", encoding: .utf8)
+    #expect(marker.contains("from_install=1"))
 }
 
 @Test func installSh_failedDownloadLeavesPreviousInstallIntact() throws {
