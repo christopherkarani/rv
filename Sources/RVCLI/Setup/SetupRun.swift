@@ -110,76 +110,112 @@ enum SetupRun {
         let files = FileOps(fileManager: env.fileManager)
         let layout = OwnedPaths(home: env.home)
         let installations = try inspectInstallations(layout: layout, env: env)
-        var grokKind: SetupSlotKind = .pending
-        var piKind: SetupSlotKind = .pending
-        var openCodeKind: SetupSlotKind = .pending
+        let plan = SetupWorkPlanBuilder.make(
+            installations: installations,
+            layout: layout,
+            force: force,
+            rvdIsExecutable: env.fileManager.isExecutableFile(atPath: env.rvdPath)
+        )
+        return try interpret(plan, env: env, layout: layout, files: files)
+    }
+
+    private static func interpret(
+        _ plan: SetupWorkPlan,
+        env: SetupEnvironment,
+        layout: OwnedPaths,
+        files: FileOps
+    ) throws(SetupError) -> SetupReport {
+        var slots: [HookHost: SetupSlotKind] = [
+            .grok: .pending,
+            .pi: .pending,
+            .opencode: .pending,
+        ]
         var wrote: Set<HookHost> = []
 
-        func assign(_ kind: SetupSlotKind, to host: HookHost) {
-            switch host {
-            case .grok: grokKind = kind
-            case .pi: piKind = kind
-            case .opencode: openCodeKind = kind
-            }
-        }
-
-        do {
-            try files.createDirectory(atPath: layout.configDirectory)
-        } catch {
-            throw SetupError.configDirectoryCreateFailed
-        }
-        try writeLaunchAgent(env: env, layout: layout, files: files)
-
-        for owned in layout.hostAdapters {
-            let host = owned.host
-            let existingData: Data?
-            switch installations.installation(for: host).setupPlan(force: force) {
-            case .skipUndetected:
-                continue
-            case .skipOccupied:
-                assign(.occupied, to: host)
-                continue
-            case .forceClearThenWrite:
+        for step in plan.steps {
+            switch step {
+            case .createConfigDirectory:
                 do {
-                    try files.backupAndClearOwnedPath(owned.destination)
+                    try files.createDirectory(atPath: layout.configDirectory)
+                } catch {
+                    throw SetupError.configDirectoryCreateFailed
+                }
+            case .skipLaunchAgent:
+                break
+            case .writeLaunchAgent:
+                try writeLaunchAgent(env: env, layout: layout, files: files)
+            case .skipUndetected(_):
+                break
+            case .skipOccupied(let host):
+                slots[host] = .occupied
+            case .forceClearThenWrite(let host):
+                do {
+                    try files.backupAndClearOwnedPath(layout.hostAdapter(for: host).destination)
                 } catch {
                     throw SetupError.hostHookClearFailed(host)
                 }
-                existingData = nil
-            case .write(let data):
-                existingData = data
-            }
-            let adapter: HostAdapterResource
-            do {
-                adapter = try HostAdapterResources.load(for: owned.host)
-            } catch {
-                throw SetupError(adapterResourceFailure: error)
-            }
-            let wroteHook: Bool
-            do {
-                wroteHook = try writeOwned(
-                    path: owned.destination,
-                    contents: adapter.rendered(rvPath: env.rvPath),
-                    existingData: existingData,
-                    files: files
+                try writeHost(
+                    host,
+                    existingData: nil,
+                    env: env,
+                    layout: layout,
+                    files: files,
+                    slots: &slots,
+                    wrote: &wrote
                 )
-            } catch {
-                throw SetupError.hostHookWriteFailed(host)
+            case .write(let host, let existingData):
+                try writeHost(
+                    host,
+                    existingData: existingData,
+                    env: env,
+                    layout: layout,
+                    files: files,
+                    slots: &slots,
+                    wrote: &wrote
+                )
             }
-            if wroteHook {
-                wrote.insert(host)
-            }
-            assign(.wired, to: host)
         }
 
         let report = SetupReport(
-            grok: grokKind,
-            pi: piKind,
-            openCode: openCodeKind,
+            grok: slots[.grok] ?? .pending,
+            pi: slots[.pi] ?? .pending,
+            openCode: slots[.opencode] ?? .pending,
             wrote: wrote
         )
         env.installAnalytics.captureInstall(hosts: InstallAnalyticsHosts.from(report.slots))
         return report
+    }
+
+    private static func writeHost(
+        _ host: HookHost,
+        existingData: Data?,
+        env: SetupEnvironment,
+        layout: OwnedPaths,
+        files: FileOps,
+        slots: inout [HookHost: SetupSlotKind],
+        wrote: inout Set<HookHost>
+    ) throws(SetupError) {
+        let adapter: HostAdapterResource
+        do {
+            adapter = try HostAdapterResources.load(for: host)
+        } catch {
+            throw SetupError(adapterResourceFailure: error)
+        }
+        let wroteHook: Bool
+        do {
+            wroteHook = try writeOwned(
+                path: layout.hostAdapter(for: host).destination,
+                contents: adapter.rendered(rvPath: env.rvPath),
+                existingData: existingData,
+                files: files
+            )
+        } catch {
+            throw SetupError.hostHookWriteFailed(host)
+        }
+        if wroteHook {
+            wrote.insert(host)
+        }
+        slots[host] = .wired
     }
 
     private static func inspectInstallations(
@@ -306,9 +342,6 @@ enum SetupRun {
         layout: OwnedPaths,
         files: FileOps
     ) throws(SetupError) {
-        guard env.fileManager.isExecutableFile(atPath: env.rvdPath) else {
-            return
-        }
         let body = try LaunchAgentTemplate.rendered(rvdPath: env.rvdPath)
         do {
             try files.write(body, to: layout.launchAgent)

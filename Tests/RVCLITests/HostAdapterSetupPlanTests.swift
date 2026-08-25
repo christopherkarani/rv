@@ -31,3 +31,89 @@ import Testing
     #expect(HostAdapterInstallation.missing(path).uninstallPlan == .skip)
     #expect(HostAdapterInstallation.absentFile(path).uninstallPlan == .skip)
 }
+
+@Test func workPlan_occupiedGrokAndAbsentPi_skipsGrokWritesPiWithoutFilesystem() throws {
+    let homePath = "/tmp/rv-workplan-absent-\(UUID().uuidString)"
+    let layout = OwnedPaths(home: try #require(HomeDirectory(validating: homePath)))
+    let installations = HostAdapterInstallationSnapshot(
+        grok: .occupied(layout.hostAdapter(for: .grok)),
+        pi: .absentFile(layout.hostAdapter(for: .pi)),
+        openCode: .missing(layout.hostAdapter(for: .opencode))
+    )
+
+    let plan = SetupWorkPlanBuilder.make(
+        installations: installations,
+        layout: layout,
+        force: false,
+        rvdIsExecutable: true
+    )
+
+    #expect(plan.steps == [
+        .createConfigDirectory,
+        .writeLaunchAgent,
+        .skipOccupied(.grok),
+        .write(.pi, existingData: nil),
+        .skipUndetected(.opencode),
+    ])
+    #expect(
+        FileManager.default.fileExists(atPath: homePath) == false,
+        "plan builder must not create HOME"
+    )
+}
+
+@Test func workPlan_rvdNotExecutable_skipsLaunchAgent() throws {
+    let homePath = "/tmp/rv-workplan-no-rvd-\(UUID().uuidString)"
+    let layout = OwnedPaths(home: try #require(HomeDirectory(validating: homePath)))
+    let installations = HostAdapterInstallationSnapshot(
+        grok: .missing(layout.hostAdapter(for: .grok)),
+        pi: .missing(layout.hostAdapter(for: .pi)),
+        openCode: .missing(layout.hostAdapter(for: .opencode))
+    )
+
+    let plan = SetupWorkPlanBuilder.make(
+        installations: installations,
+        layout: layout,
+        force: false,
+        rvdIsExecutable: false
+    )
+
+    #expect(plan.steps.contains(.skipLaunchAgent))
+    #expect(plan.steps.contains(.writeLaunchAgent) == false)
+    #expect(plan.steps == [
+        .createConfigDirectory,
+        .skipLaunchAgent,
+        .skipUndetected(.grok),
+        .skipUndetected(.pi),
+        .skipUndetected(.opencode),
+    ])
+    #expect(
+        FileManager.default.fileExists(atPath: homePath) == false,
+        "plan builder must not create HOME"
+    )
+}
+
+@Test func workPlan_forceOccupied_isForceClearThenWrite() throws {
+    let layout = OwnedPaths(home: try #require(HomeDirectory(validating: "/tmp")))
+    let installations = HostAdapterInstallationSnapshot(
+        grok: .occupied(layout.hostAdapter(for: .grok)),
+        pi: .missing(layout.hostAdapter(for: .pi)),
+        openCode: .missing(layout.hostAdapter(for: .opencode))
+    )
+
+    let plan = SetupWorkPlanBuilder.make(
+        installations: installations,
+        layout: layout,
+        force: true,
+        rvdIsExecutable: true
+    )
+
+    #expect(plan.steps.contains(.forceClearThenWrite(.grok)))
+    #expect(plan.steps.contains(.skipOccupied(.grok)) == false)
+    #expect(plan.steps == [
+        .createConfigDirectory,
+        .writeLaunchAgent,
+        .forceClearThenWrite(.grok),
+        .skipUndetected(.pi),
+        .skipUndetected(.opencode),
+    ])
+}
