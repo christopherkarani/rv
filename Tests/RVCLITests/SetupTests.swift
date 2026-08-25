@@ -824,7 +824,16 @@ final class DomainRecordingLaunchctl: LaunchctlApplying {
     }
 }
 
-@Test func setupFlow_injectedUID_bakesUserDomainForBootstrapAndBootout() throws {
+@Test func launchdDomain_agentPrintTarget_isGuiSession() {
+    #expect(LaunchdDomain.gui(4242) == "gui/4242")
+    #expect(LaunchdDomain.user(4242) == "user/4242")
+    #expect(
+        LaunchdDomain.agentPrintTarget(uid: 4242, label: SetupRun.launchAgentLabel)
+            == "gui/4242/dev.rv.evaluate"
+    )
+}
+
+@Test func setupFlow_injectedUID_bakesGuiDomainForBootstrapAndBootout() throws {
     try withTempHome { home, layout, _ in
         let launchctl = DomainRecordingLaunchctl()
         var environment = env(home: home, launchctl: launchctl)
@@ -832,10 +841,13 @@ final class DomainRecordingLaunchctl: LaunchctlApplying {
         let flow = SetupFlow(makeEnvironment: { environment })
         let installed = flow.run(SetupIntent(kind: .install, appearance: .robot))
         #expect(installed.exitCode == 0)
-        #expect(launchctl.bootstrapDomains == ["user/4242"])
+        #expect(launchctl.bootstrapDomains == ["gui/4242"])
         #expect(FileManager.default.fileExists(atPath: layout.launchAgent))
         let removed = flow.run(SetupIntent(kind: .uninstall, appearance: .robot))
         #expect(removed.exitCode == 0)
-        #expect(launchctl.bootoutDomains == ["user/4242", "user/4242"])
+        #expect(launchctl.bootoutDomains == [
+            "user/4242", "gui/4242",
+            "user/4242", "gui/4242",
+        ])
     }
 }

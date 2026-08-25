@@ -305,8 +305,10 @@ enum SetupRun {
         files.removeDirectoryIfEmpty(atPath: layout.configDirectory)
 
         if env.touchLaunchd {
+            let uid = env.uid()
+            try? env.launchctl.bootout(domain: LaunchdDomain.user(uid), label: launchAgentLabel)
             do {
-                try env.launchctl.bootout(domain: "user/\(env.uid())", label: launchAgentLabel)
+                try env.launchctl.bootout(domain: LaunchdDomain.gui(uid), label: launchAgentLabel)
             } catch {
                 throw SetupError.launchctlApplyFailed(.bootout)
             }
@@ -345,9 +347,12 @@ enum SetupRun {
         }
         if env.touchLaunchd {
             let url = URL(fileURLWithPath: layout.launchAgent)
-            try? env.launchctl.bootout(domain: "user/\(env.uid())", label: launchAgentLabel)
+            let uid = env.uid()
+            let domain = LaunchdDomain.gui(uid)
+            try? env.launchctl.bootout(domain: LaunchdDomain.user(uid), label: launchAgentLabel)
+            try? env.launchctl.bootout(domain: domain, label: launchAgentLabel)
             do {
-                try env.launchctl.bootstrap(domain: "user/\(env.uid())", plist: url)
+                try env.launchctl.bootstrap(domain: domain, plist: url)
             } catch {
                 throw SetupError.launchctlApplyFailed(.bootstrap)
             }

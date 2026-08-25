@@ -1,5 +1,16 @@
 import Foundation
 
+/// Aqua/GUI session domain. Hosts (Pi, Grok, OpenCode) run here — not `user/<uid>`.
+enum LaunchdDomain {
+    static func gui(_ uid: uid_t) -> String { "gui/\(uid)" }
+    static func user(_ uid: uid_t) -> String { "user/\(uid)" }
+
+    /// `launchctl print` target for the live agent (gui session).
+    static func agentPrintTarget(uid: uid_t, label: String) -> String {
+        "\(gui(uid))/\(label)"
+    }
+}
+
 protocol LaunchctlApplying {
     func bootstrap(domain: String, plist: URL) throws
     func bootout(domain: String, label: String) throws
