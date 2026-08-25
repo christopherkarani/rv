@@ -13,10 +13,10 @@ Mac-native destructive-command guard for coding-agent **shell** hooks.
 v1 is curl only. Hero (real HOME, when you mean it):
 
 ```sh
-curl -fsSL https://github.com/christopherkarani/rv/releases/latest/download/install.sh | sh
+curl -fsSL https://rykanv.com/install | sh
 ```
 
-Until a release exists, local:
+Same script lives on the GitHub release if you want the direct file. Local dogfood:
 
 ```sh
 RV_INSTALL_BIN=/path/to/release-stage ./install.sh
