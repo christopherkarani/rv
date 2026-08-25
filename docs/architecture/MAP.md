@@ -190,7 +190,7 @@ rvd — ServiceRuntime + XPCListener (dev.rv.evaluate)
   │   }
   │
   │  HookDoor internals:
-  │   GrokHostCodec / PiHostCodec / OpenCodeHostCodec
+  │   GrokHostCodec / PiHostCodec / OpenCodeHostCodec / ClaudeHostCodec
   │     decode(stdin) → .request(HookRequest{command,cwd}) | .foreign | .malformed
   │     foreign/malformed → encodeAllow() (empty stdout, exit 0)
   │     else GatedEvaluate → EvaluationResult → HookMapper
@@ -203,11 +203,16 @@ rvd — ServiceRuntime + XPCListener (dev.rv.evaluate)
   │            else AllowOnceStore.consume(matchingView,cwd) atomically → allow or deny
   │
   │  HookMapper.hookWire(from:result, command, codec):
-  │   allow → codec.encodeAllow()
-  │   deny(Deny) → codec.encodeDeny(reason: hostDenyLine(cmd, ruleID), rule: displayRuleID, next: "Run it in Terminal, or rv allow-once.")
-  │   indeterminate → codec.encodeDeny(reason: "rv could not finish evaluating this command. Run it in Terminal.", rule:nil)
-  │   HostCodec.encodeDeny → HookWire(stdout: hookDenyJSON(reason,rule,next)+"\n", exitCode: host.denyExitCode)
-  │     grok=0 (JSON is gate, empty+0 is allow), pi=1, opencode=1
+  │   .claude → ClaudeHostCodec.encodeRichDeny(from:result, command)   # rich JSON, exit 0
+  │     allow → encodeAllow()
+  │     deny + match → {systemMessage, hookSpecificOutput.permissionDecision:"deny", …}
+  │     deny without match / indeterminate → encodeDeny → claudeIndeterminateDenyJSON
+  │   .grok/.pi/.opencode stay on short encodeDeny:
+  │     allow → codec.encodeAllow()
+  │     deny(Deny) → codec.encodeDeny(reason: hostDenyLine(cmd, ruleID), rule: displayRuleID, next: "Run it in Terminal, or rv allow-once.")
+  │     indeterminate → codec.encodeDeny(reason: "rv could not finish evaluating this command. Run it in Terminal.", rule:nil)
+  │     HostCodec.encodeDeny → HookWire(stdout: hookDenyJSON(reason,rule,next)+"\n", exitCode: host.denyExitCode)
+  │   denyExitCode: grok/claude=0 (JSON is the gate, empty+0 is allow), pi/opencode=1
   │
   ▼ reply
   HookEvaluateReply { stdout, exitCode, via:"xpc", serviceSemver:"1.0.0" }
@@ -217,6 +222,7 @@ rvd — ServiceRuntime + XPCListener (dev.rv.evaluate)
 rv (C) writes stdout + exitCode (or miss_replay produced same via rv-cli → ServiceClient one-shot evaluate → same codecs)
 Host interprets:
   Grok: {"decision":"deny","reason":"<hostDenyText>"} exit 0 → block; empty exit 0 → allow; exit 2 fallback deny (last_resort)
+  Claude: rich JSON {systemMessage, hookSpecificOutput.permissionDecision:"deny"} exit 0 → block; empty exit 0 → allow
   Pi:    JSON hookDeny → block; empty → allow (extension throws)
   OpenCode: same JSON via plugin; rv-cli miss throws + toast attempted before throw
 ```
@@ -277,7 +283,7 @@ rv/
 │   ├── RVPacks/                     # PackRegistry.swift, PackCatalog.swift, PackIndex.swift, PackJSON.swift, PackEnablement.swift
 │   │   └── Resources/packs/         # 95 JSON packs + index.json (rv_RVPacks.bundle at runtime)
 │   ├── RVPolicy/                    # PolicyGate.swift, AllowOnceStore.swift, Allowlist*.swift, PacksConfig.swift
-│   ├── RVHooks/                     # HostCodec.swift, Grok/Pi/OpenCodeHostCodec.swift, HookMapper.swift, HostAdapterResources.swift
+│   ├── RVHooks/                     # HostCodec.swift, Grok/Pi/OpenCode/ClaudeHostCodec.swift, ClaudeRichDeny.swift, HookMapper.swift, HostAdapterResources.swift
 │   │   └── Resources/hosts/         # embedded templates: rv_json_tmpl, rv_guard_ts_tmpl, rv_guard_js_tmpl (embedInCode)
 │   ├── RVIPC/                       # IPCEnvelope.swift, IPCMethods.swift, ProtocolVersion.swift, FrameCodec.swift, IPCJSON.swift, SkewReason.swift
 │   ├── RVService/                   # EvaluateSession.swift, GatedEvaluate.swift, ServiceRuntime.swift, HookDoor.swift, XPCListener.swift, IdleExit.swift, RVDLaunch.swift, DoctorSnapshotBuilder.swift, …
