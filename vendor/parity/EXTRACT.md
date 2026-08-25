@@ -17,7 +17,7 @@ python3 tools/extract-packs/extract_packs.py \
   --source-root /path/to/checkout-at-v0.11.0
 ```
 
-Pin checks: `Cargo.toml` `version = "0.11.0"` and `git rev-parse HEAD` must equal the commit above. If `pack_count != 99`, stop and re-diff against the pinned tree.
+Pin checks: `Cargo.toml` `version = "0.11.0"` and `git rev-parse HEAD` must equal the commit above. Upstream still has 99 `create_pack` sources. The extractor writes 95 bundled IDs (drops `windows.*`) and 26 categories. If bundled `pack_count != 95`, stop and re-diff against the pin plus this exclusion.
 
 Day-one-only (legacy):
 
@@ -29,7 +29,7 @@ python3 tools/extract-packs/extract_core_packs.py --source-root /path/to/checkou
 
 | Path | Role |
 |---|---|
-| `Sources/RVPacks/Resources/packs/index.json` | 99 IDs, 27 categories, presets, tiers, default-on = core only |
+| `Sources/RVPacks/Resources/packs/index.json` | 95 IDs, 26 categories, `careful_company_running_windows` preset (no `windows.*` members), tiers, default-on = core only |
 | `Sources/RVPacks/Resources/packs/<id>.json` | One document per pack (filename == id) |
 
 Index keys use `pin_version` / `pin_tag` / `pin_commit` (not upstream product tokens) so Sources stay clean of factory-forbidden names. Decoded pattern text still matches the pin.

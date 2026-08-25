@@ -9,7 +9,7 @@ Not ryk. Not line-for-line Rust. Repo: `~/CodingProjects/rv` (`christopherkarani
 - **Job:** Mac-native destructive-command guard for coding-agent **shell** hooks. Day-one win: Pi / Grok / OpenCode block `git reset --hard` via a fast XPC-backed hook. User forgets rv until a block. Not a ryk replacement. Not a `dcg` binary alias. Mac app later, same `rv.ipc.v1`.
 - **Name:** `rv` (CLI/hook client), `rvd` (XPC service). Prefix `RV_`. Config `~/.config/rv/`.
 - **Parity source:** DCG **0.11.0** decisions/packs/contracts.
-- **Platform v1:** **macOS 26, Apple Silicon only.** No Linux/Windows. No claimed 14/15 matrix. Windows/Linux pack *patterns* may live in the catalog as data; do not claim those OSes.
+- **Platform v1:** **macOS 26, Apple Silicon only.** No Linux/Windows. No claimed 14/15 matrix. Linux pack *patterns* and the `careful_company_running_windows` egress packs may live in the catalog as data; do not claim those OSes. The `windows.*` OS packs are excluded from the bundled catalog.
 - **XPC is in v1.** App is not. `rvd` is **on-demand** LaunchAgent (`dev.rv.evaluate`), idle-exit ~5m. Not KeepAlive by default. Down/skew → **in-process evaluate**. Never allow because XPC missed.
 - **Install:** v1 is **curl only.** Hero is `curl -fsSL …/install | sh` (real HOME → `$HOME/.local/bin/{rv,rvd}`, then `rv setup`). No Homebrew formula, tap, bottle, or `post_install` in v1. T6 must not add a formula stub or brew README path. Homebrew is Phase 4+. `install.sh` places binaries and execs `rv setup`. Setup owns the TTY show.
 - **Hosts v1:** **Pi, Grok, OpenCode only.** Shell/command tools only. No Read/Edit/MCP.
@@ -26,7 +26,7 @@ Not ryk. Not line-for-line Rust. Repo: `~/CodingProjects/rv` (`christopherkarani
 
 **v1 scoreboard:** same decision + `rule_id` as DCG **0.11.0 engine source** (critical/high → deny; medium/low → allow + match). SKILL.md marketing rows that disagree are quarantine fixtures, not the scoreboard. Hook JSON/exit codes for **Grok / Pi / OpenCode shell events**. Quiet allow, native deny text.
 
-**Later (not v1 gate):** all 99 packs enabled-by-default (they stay in catalog, off), Claude/Codex/etc., scan, MCP, heredoc/AST, SARIF, Mac app, Intel, older macOS, Homebrew.
+**Later (not v1 gate):** remaining bundled packs enabled-by-default (95 IDs stay in catalog, off; `windows.*` stay excluded), Claude/Codex/etc., scan, MCP, heredoc/AST, SARIF, Mac app, Intel, older macOS, Homebrew.
 
 `dcg test` vs `rv test` agree-rate is the long-term scoreboard when `dcg` is on PATH. Do not block v1 on it.
 

@@ -34,22 +34,25 @@ let frozenPackIDs: Set<String> = [
     "storage.azure_blob", "storage.gcs", "storage.minio", "storage.s3",
     "strict_git",
     "system.disk", "system.permissions", "system.services",
-    "windows.filesystem", "windows.misc", "windows.powershell", "windows.system",
 ]
 
-@Test func catalogLoad_decodesNinetyNinePacks() throws {
+@Test func catalogLoad_decodesNinetyFivePacksWithoutWindowsOSCatalogs() throws {
     let index = try PackRegistry.loadIndex()
-    #expect(index.packCount == 99)
-    #expect(index.categories.count == 27)
+    #expect(index.packCount == 95)
+    #expect(index.categories.count == 26)
+    #expect(index.categories["windows"] == nil)
+    #expect(index.categories["careful_company_running_windows"]?.count == 6)
+    #expect(index.presets["careful_company_running_windows"]?.contains("windows.filesystem") == false)
+    #expect(index.presets["careful_company_running_windows"]?.count == 26)
     #expect(Set(index.defaultEnabled) == Set(["core.filesystem", "core.git"]))
     #expect(Set(index.packIDs) == frozenPackIDs)
 
     let documents = try PackRegistry.loadAllDocuments()
-    #expect(documents.count == 99)
+    #expect(documents.count == 95)
     #expect(Set(documents.map(\.id.rawValue)) == frozenPackIDs)
 }
 
-@Test func catalogLoad_resourcesAreIndexPlusNinetyNine() throws {
+@Test func catalogLoad_resourcesAreIndexPlusNinetyFive() throws {
     let packsDir = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()
         .deletingLastPathComponent()
@@ -60,7 +63,7 @@ let frozenPackIDs: Set<String> = [
         includingPropertiesForKeys: nil
     ).filter { $0.pathExtension == "json" }
     let names = Set(jsonFiles.map(\.lastPathComponent))
-    #expect(names.count == 100)
+    #expect(names.count == 96)
     #expect(names.contains("index.json"))
     #expect(names.contains("core.git.json"))
     #expect(names.contains("core.filesystem.json"))
