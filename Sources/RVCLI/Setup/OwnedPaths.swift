@@ -1,4 +1,5 @@
 import RVDomain
+import RVPolicy
 import RVPresentation
 
 struct OwnedHostAdapterPath: Equatable, Sendable {
@@ -10,19 +11,19 @@ struct OwnedHostAdapterPath: Equatable, Sendable {
 }
 
 struct OwnedPaths: Equatable, Sendable {
-    var home: String
+    var home: HomeDirectory
 
-    var configDirectory: String { home + "/.config/rv" }
-    var grokDirectory: String { home + "/.grok" }
-    var grokHook: String { home + "/.grok/hooks/rv.json" }
-    var piDirectory: String { home + "/.pi" }
-    var piExtension: String { home + "/.pi/agent/extensions/rv-guard.ts" }
-    var openCodeDirectory: String { home + "/.config/opencode" }
-    var openCodePlugin: String { home + "/.config/opencode/plugins/rv-guard.js" }
-    var launchAgent: String { home + "/Library/LaunchAgents/dev.rv.evaluate.plist" }
-    var localRv: String { home + "/.local/bin/rv" }
-    var localRvCli: String { home + "/.local/bin/rv-cli" }
-    var localRvd: String { home + "/.local/bin/rvd" }
+    var configDirectory: String { home.rawValue + "/.config/rv" }
+    var grokDirectory: String { home.rawValue + "/.grok" }
+    var grokHook: String { home.rawValue + "/.grok/hooks/rv.json" }
+    var piDirectory: String { home.rawValue + "/.pi" }
+    var piExtension: String { home.rawValue + "/.pi/agent/extensions/rv-guard.ts" }
+    var openCodeDirectory: String { home.rawValue + "/.config/opencode" }
+    var openCodePlugin: String { home.rawValue + "/.config/opencode/plugins/rv-guard.js" }
+    var launchAgent: String { home.rawValue + "/Library/LaunchAgents/dev.rv.evaluate.plist" }
+    var localRv: String { home.rawValue + "/.local/bin/rv" }
+    var localRvCli: String { home.rawValue + "/.local/bin/rv-cli" }
+    var localRvd: String { home.rawValue + "/.local/bin/rvd" }
 
     var hostAdapters: [OwnedHostAdapterPath] {
         SetupHostKind.allCases.map(hostAdapter)

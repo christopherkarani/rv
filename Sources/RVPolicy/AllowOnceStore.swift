@@ -10,8 +10,8 @@ public actor AllowOnceStore {
         self.baseDirectory = baseDirectory
     }
 
-    nonisolated public static func live() -> AllowOnceStore {
-        AllowOnceStore(baseDirectory: processHomeConfigDirectory() ?? fallbackRoot)
+    nonisolated public static func live(home: HomeDirectory) -> AllowOnceStore {
+        AllowOnceStore(baseDirectory: RVPolicyPaths.configDirectory(home: home))
     }
 
     /// Production config dir: `$HOME/.config/rv` only. Does not read `XDG_CONFIG_HOME`.
@@ -269,6 +269,3 @@ private func generateAllowOnceCode() throws -> String {
     guard status == errSecSuccess else { throw AllowOnceError.encodeFailed }
     return bytes.map { String(format: "%02x", $0) }.joined()
 }
-
-private let fallbackRoot: URL = FileManager.default.temporaryDirectory
-    .appendingPathComponent("rv-allow-once-nohome", isDirectory: true)

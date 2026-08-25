@@ -1,10 +1,11 @@
 import Foundation
+import RVPolicy
 import RVPresentation
 import Testing
 @testable import RVCLI
 
-@Test func setupPlan_missingAndOccupiedAndWrite() {
-    let path = OwnedPaths(home: "/tmp").hostAdapter(for: .grok)
+@Test func setupPlan_missingAndOccupiedAndWrite() throws {
+    let path = OwnedPaths(home: try #require(HomeDirectory(validating: "/tmp"))).hostAdapter(for: .grok)
     let payload = Data("wired".utf8)
     #expect(HostAdapterInstallation.missing(path).setupPlan(force: false) == .skipUndetected)
     #expect(HostAdapterInstallation.missing(path).setupPlan(force: true) == .skipUndetected)
@@ -21,8 +22,8 @@ import Testing
     )
 }
 
-@Test func uninstallPlan_removeOccupiedSkip() {
-    let path = OwnedPaths(home: "/tmp").hostAdapter(for: .pi)
+@Test func uninstallPlan_removeOccupiedSkip() throws {
+    let path = OwnedPaths(home: try #require(HomeDirectory(validating: "/tmp"))).hostAdapter(for: .pi)
     let payload = Data("x".utf8)
     #expect(HostAdapterInstallation.broken(path: path, existingData: payload).uninstallPlan == .remove)
     #expect(HostAdapterInstallation.wired(path: path, existingData: payload).uninstallPlan == .remove)

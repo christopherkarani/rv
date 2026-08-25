@@ -25,7 +25,14 @@ func withTempHome(_ body: (URL, OwnedPaths, RecordingLaunchctl) throws -> Void) 
     try "#!/bin/sh\n".write(to: dummyRvd, atomically: true, encoding: .utf8)
     try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dummyRvd.path)
     let launchctl = RecordingLaunchctl()
-    try body(root, OwnedPaths(home: root.path), launchctl)
+    try body(root, OwnedPaths(home: try #require(HomeDirectory(validating: root.path))), launchctl)
+}
+
+func testHomeDirectory(_ path: String) -> HomeDirectory {
+    if let home = HomeDirectory(validating: path) {
+        return home
+    }
+    preconditionFailure("test HomeDirectory requires a non-empty path")
 }
 
 func env(
@@ -38,7 +45,7 @@ func env(
     installAnalytics: any InstallAnalyticsCapturing = SilentInstallAnalytics()
 ) -> SetupEnvironment {
     SetupEnvironment(
-        home: home.path,
+        home: testHomeDirectory(home.path),
         pathEntries: pathEntries,
         rvPath: rvPath,
         rvdPath: rvdPath ?? home.appendingPathComponent("rvd").path,
@@ -563,11 +570,12 @@ private func fixtureLoginHome() throws -> URL {
 @Test func setup_live_usesHOME() {
     let home = "/tmp/rv-setup-live-\(UUID().uuidString)"
     let env = SetupEnvironment.live(environment: ["HOME": home, "PATH": "/usr/bin:/bin"])
-    #expect(env?.home == home)
+    #expect(env?.home.rawValue == home)
     #expect(env?.pathEntries == ["/usr/bin", "/bin"])
 }
 
 @Test func setup_live_emptyHOME_isNil() {
+    #expect(HomeDirectory(validating: "") == nil)
     #expect(SetupEnvironment.live(environment: ["HOME": ""]) == nil)
     #expect(SetupEnvironment.live(environment: [:]) == nil)
 }

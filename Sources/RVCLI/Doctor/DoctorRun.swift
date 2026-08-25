@@ -1,11 +1,12 @@
 import Foundation
 import RVHooks
 import RVIPC
+import RVPolicy
 import RVPresentation
 import RVTUI
 
 struct DoctorEnvironment {
-    var home: String
+    var home: HomeDirectory
     var pathEntries: [String]
     var fileManager: FileManager
     var launchAgentLoaded: Bool
@@ -13,7 +14,7 @@ struct DoctorEnvironment {
     static func live(
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> DoctorEnvironment? {
-        guard let home = environment["HOME"], home.isEmpty == false else { return nil }
+        guard let home = HomeDirectory(validating: environment["HOME"] ?? "") else { return nil }
         return DoctorEnvironment(
             home: home,
             pathEntries: (environment["PATH"] ?? "").split(separator: ":").map(String.init),

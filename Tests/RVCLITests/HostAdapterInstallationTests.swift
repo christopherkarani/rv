@@ -1,4 +1,5 @@
 import Foundation
+import RVPolicy
 import RVPresentation
 import Testing
 @testable import RVCLI
@@ -10,7 +11,7 @@ private func withInstallationHome(
         .appendingPathComponent("rv-host-inspection-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: home) }
-    try body(home, OwnedPaths(home: home.path))
+    try body(home, OwnedPaths(home: try #require(HomeDirectory(validating: home.path))))
 }
 
 @Test(arguments: SetupHostKind.allCases)
