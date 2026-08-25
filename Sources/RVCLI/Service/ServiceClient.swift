@@ -89,8 +89,7 @@ public struct ServiceClient: Sendable {
     public func evaluate(command: ShellCommand, cwd: String? = nil) async -> RoutedEvaluation {
         func inProcessRoute() async -> RoutedEvaluation {
             let now = clock()
-            let allowlist = AllowlistStore(baseDirectory: store.baseDirectory)
-                .loadUserSnapshot(workspacePath: cwd, now: now)
+            let baseDirectory = store.baseDirectory
             return RoutedEvaluation(
                 result: await door.run(
                     .apply,
@@ -99,7 +98,10 @@ public struct ServiceClient: Sendable {
                     home: home,
                     store: store,
                     now: now,
-                    allowlist: allowlist
+                    allowlist: {
+                        AllowlistStore(baseDirectory: baseDirectory)
+                            .loadUserSnapshot(workspacePath: cwd, now: now)
+                    }
                 ),
                 path: .inProcess
             )

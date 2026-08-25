@@ -53,6 +53,8 @@ public struct GatedEvaluate: Sendable {
     }
 
     /// Builds `EvaluationRequest` and runs peek or apply.
+    ///
+    /// `allowlist` is invoked only on deny (T13: allow/indeterminate skip allowlist I/O).
     public func run(
         _ intent: EvaluationIntent,
         command: ShellCommand,
@@ -60,7 +62,7 @@ public struct GatedEvaluate: Sendable {
         home: HomeDirectory? = nil,
         store: AllowOnceStore,
         now: Date,
-        allowlist: AllowlistSnapshot
+        allowlist: @escaping @Sendable () -> AllowlistSnapshot
     ) async -> EvaluationResult {
         await gated(
             intent,
@@ -90,7 +92,7 @@ public struct GatedEvaluate: Sendable {
         cwd: String?,
         store: AllowOnceStore,
         now: Date,
-        allowlist: AllowlistSnapshot
+        allowlist: @escaping @Sendable () -> AllowlistSnapshot
     ) async -> EvaluationResult {
         await gated(.peek, request, cwd: cwd, store: store, now: now, allowlist: allowlist)
     }
@@ -102,7 +104,7 @@ public struct GatedEvaluate: Sendable {
         cwd: String?,
         store: AllowOnceStore,
         now: Date,
-        allowlist: AllowlistSnapshot
+        allowlist: @escaping @Sendable () -> AllowlistSnapshot
     ) async -> EvaluationResult {
         await gated(.apply, request, cwd: cwd, store: store, now: now, allowlist: allowlist)
     }
@@ -113,21 +115,22 @@ public struct GatedEvaluate: Sendable {
         cwd: String?,
         store: AllowOnceStore,
         now: Date,
-        allowlist: AllowlistSnapshot
+        allowlist: @escaping @Sendable () -> AllowlistSnapshot
     ) async -> EvaluationResult {
         let result = resolvedSession().evaluate(request)
         // Fast path: allow/indeterminate never touch PolicyGate or the
-        // allowlist snapshot; PolicyGate returns them unchanged anyway.
+        // allowlist loader; PolicyGate returns them unchanged anyway.
         switch result.decision {
         case .allow, .indeterminate:
             return result
         case .deny:
+            let snapshot = allowlist()
             switch intent {
             case .peek:
                 return await PolicyGate.peek(
                     result,
                     cwd: cwd,
-                    allowlist: allowlist,
+                    allowlist: snapshot,
                     store: store,
                     now: now
                 ).result
@@ -135,7 +138,7 @@ public struct GatedEvaluate: Sendable {
                 return await PolicyGate.apply(
                     result,
                     cwd: cwd,
-                    allowlist: allowlist,
+                    allowlist: snapshot,
                     store: store,
                     now: now
                 ).result

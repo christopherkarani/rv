@@ -205,12 +205,16 @@ public actor ServiceRuntime {
     private func runEvaluate(_ request: EvaluationRequest, cwd: String?) async -> EvaluationResult {
         rebuildWhenUncovered(wanted: WalkedPackIDs(ids: request.enabledPacks))
         let now = clock()
+        let baseDirectory = allowOnce.baseDirectory
         let result = await gated.apply(
             request,
             cwd: cwd,
             store: allowOnce,
             now: now,
-            allowlist: loadAllowlist(cwd: cwd, now: now)
+            allowlist: {
+                AllowlistStore(baseDirectory: baseDirectory)
+                    .loadUserSnapshot(workspacePath: cwd, now: now)
+            }
         )
         recordAnalytics(for: result)
         return result
@@ -251,12 +255,17 @@ public actor ServiceRuntime {
 
     private func explain(_ params: ExplainParams) async -> ExplainReply {
         let now = clock()
+        let baseDirectory = allowOnce.baseDirectory
+        let cwd = params.cwd
         let result = await gated.peek(
             params.request,
-            cwd: params.cwd,
+            cwd: cwd,
             store: allowOnce,
             now: now,
-            allowlist: loadAllowlist(cwd: params.cwd, now: now)
+            allowlist: {
+                AllowlistStore(baseDirectory: baseDirectory)
+                    .loadUserSnapshot(workspacePath: cwd, now: now)
+            }
         )
         let normalized = result.matchingView.isEmpty
             ? Normalize.matchingView(of: params.request.command.rawValue).rawValue
@@ -301,12 +310,17 @@ public actor ServiceRuntime {
 
     private func classify(_ params: ClassifyParams) async -> ClassifyReply {
         let now = clock()
+        let baseDirectory = allowOnce.baseDirectory
+        let cwd = params.cwd
         let result = await gated.peek(
             params.request,
-            cwd: params.cwd,
+            cwd: cwd,
             store: allowOnce,
             now: now,
-            allowlist: loadAllowlist(cwd: params.cwd, now: now)
+            allowlist: {
+                AllowlistStore(baseDirectory: baseDirectory)
+                    .loadUserSnapshot(workspacePath: cwd, now: now)
+            }
         )
         let matched: RuleMatch?
         switch result.outcome {
@@ -487,11 +501,6 @@ public actor ServiceRuntime {
         lastCoverageRebuildAt = now
         catalog = Self.makeCatalog(home: configHome) ?? catalog
         rebuildGated()
-    }
-
-    private func loadAllowlist(cwd: String?, now: Date) -> AllowlistSnapshot {
-        AllowlistStore(baseDirectory: allowOnce.baseDirectory)
-            .loadUserSnapshot(workspacePath: cwd, now: now)
     }
 
     /// Catalog for a home; nil home mirrors the old empty-HOME catalog with the day-one packs enabled.

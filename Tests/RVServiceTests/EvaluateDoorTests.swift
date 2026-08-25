@@ -20,7 +20,7 @@ struct EvaluateDoorTests {
             home: home,
             store: store,
             now: now,
-            allowlist: .empty
+            allowlist: { .empty }
         )
         #expect(peeked.decision == .allow)
         let peekedAgain = await door.run(
@@ -30,7 +30,7 @@ struct EvaluateDoorTests {
             home: home,
             store: store,
             now: now,
-            allowlist: .empty
+            allowlist: { .empty }
         )
         #expect(peekedAgain.decision == .allow)
 
@@ -41,7 +41,7 @@ struct EvaluateDoorTests {
             home: home,
             store: store,
             now: now,
-            allowlist: .empty
+            allowlist: { .empty }
         )
         #expect(first.decision == .allow)
         let second = await door.run(
@@ -51,7 +51,7 @@ struct EvaluateDoorTests {
             home: home,
             store: store,
             now: now,
-            allowlist: .empty
+            allowlist: { .empty }
         )
         let deny = try #require(denyPayload(from: second.decision))
         #expect(deny.ruleID.rawValue == "core.git:reset-hard")
