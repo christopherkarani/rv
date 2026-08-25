@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rv — Reddit posting desk</title>
+<style>
+  :root {
+    --paper: #f4f0e7;
+    --ink: #1c1b16;
+    --muted: #6d685c;
+    --line: #d9d2c3;
+    --panel: #fbf8f1;
+    --accent: #8c3b2e;
+    --ok: #2f5d3a;
+    --code: #efe9db;
+    --shadow: 0 1px 0 rgba(28,27,22,.06);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "Iowan Old Style", Palatino, Georgia, serif;
+    font-size: 15px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+  }
+  .app {
+    display: grid;
+    grid-template-columns: 280px 1fr;
+    grid-template-rows: auto 1fr;
+    min-height: 100%;
+  }
+  header {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1rem 1.25rem;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel);
+  }
+  header h1 {
+    font-family: "Iowan Old Style", Palatino, Georgia, serif;
+    font-size: 1.15rem;
+    font-weight: 500;
+    margin: 0;
+  }
+  header p { margin: 0; color: var(--muted); font-size: .82rem; }
+  nav {
+    border-right: 1px solid var(--line);
+    background: var(--panel);
+    padding: .75rem;
+  }
+  nav h2 {
+    font-size: .68rem;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: .25rem .5rem .75rem;
+    font-weight: 600;
+  }
+  .post-btn {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    padding: .7rem .75rem;
+    margin-bottom: .4rem;
+    cursor: pointer;
+    color: inherit;
+    font: inherit;
+  }
+  .post-btn:hover { background: var(--code); }
+  .post-btn.active {
+    background: #fff;
+    border-color: var(--line);
+    box-shadow: var(--shadow);
+  }
+  .post-btn .sub { font-family: ui-monospace, Menlo, monospace; font-size: .72rem; color: var(--accent); }
+  .post-btn .ttl { display: block; margin-top: .2rem; font-weight: 560; }
+  .post-btn .st { display: block; margin-top: .15rem; color: var(--muted); font-size: .75rem; }
+  main {
+    display: grid;
+    grid-template-rows: auto auto 1fr auto;
+    min-width: 0;
+    background: var(--paper);
+  }
+  .bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .5rem;
+    align-items: center;
+    padding: .85rem 1.1rem;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel);
+  }
+  button.act, a.act {
+    appearance: none;
+    border: 1px solid var(--line);
+    background: #fff;
+    color: var(--ink);
+    font: inherit;
+    font-size: .84rem;
+    padding: .45rem .7rem;
+    border-radius: 5px;
+    cursor: pointer;
+    text-decoration: none;
+    min-height: 36px;
+    display: inline-flex;
+    align-items: center;
+  }
+  button.act:hover, a.act:hover { border-color: #c4bba8; }
+  button.act.primary { background: var(--ink); color: #fbf8f1; border-color: var(--ink); }
+  button.act.primary:hover { background: #2c2a24; }
+  .toast {
+    margin-left: auto;
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: .75rem;
+    color: var(--ok);
+    min-height: 1em;
+  }
+  .meta {
+    padding: .85rem 1.15rem .15rem;
+    color: var(--muted);
+    font-size: .82rem;
+  }
+  .meta a { color: var(--accent); }
+  .title-row {
+    padding: .2rem 1.15rem .85rem;
+    border-bottom: 1px solid var(--line);
+  }
+  .title-row h2 {
+    font-family: "Iowan Old Style", Palatino, Georgia, serif;
+    font-size: 1.45rem;
+    font-weight: 500;
+    margin: 0 0 .4rem;
+    text-wrap: pretty;
+  }
+  .notes { color: var(--muted); font-size: .82rem; max-width: 62ch; }
+  .body-wrap {
+    overflow: auto;
+    padding: 1rem 1.15rem 1.5rem;
+  }
+  textarea {
+    width: 100%;
+    min-height: 100%;
+    height: calc(100vh - 280px);
+    min-height: 320px;
+    resize: vertical;
+    border: 1px solid var(--line);
+    background: #fff;
+    color: var(--ink);
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 12.5px;
+    line-height: 1.55;
+    padding: 1rem;
+    border-radius: 6px;
+  }
+  .comment {
+    padding: .85rem 1.15rem 1.2rem;
+    border-top: 1px solid var(--line);
+    background: var(--panel);
+  }
+  .comment label {
+    display: block;
+    font-size: .68rem;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: .4rem;
+  }
+  .comment pre {
+    margin: 0;
+    white-space: pre-wrap;
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 12px;
+    background: var(--code);
+    padding: .75rem .85rem;
+    border-radius: 5px;
+  }
+  @media (max-width: 780px) {
+    .app { grid-template-columns: 1fr; }
+    nav { border-right: 0; border-bottom: 1px solid var(--line); }
+    header { flex-direction: column; }
+    .toast { margin-left: 0; width: 100%; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>rv posting desk</h1>
+    <p>Copy the title and body, then paste into Reddit yourself. Nothing here posts.</p>
+  </header>
+  <nav>
+    <h2>Posts</h2>
+    <div id="list"></div>
+  </nav>
+  <main>
+    <div class="bar">
+      <button class="act primary" id="copyBoth" type="button">Copy title + body</button>
+      <button class="act" id="copyTitle" type="button">Copy title</button>
+      <button class="act" id="copyBody" type="button">Copy body</button>
+      <button class="act" id="copyComment" type="button">Copy first comment</button>
+      <a class="act" id="openSubmit" href="#" target="_blank" rel="noopener">Open Reddit submit</a>
+      <a class="act" id="openPreview" href="#" target="_blank" rel="noopener">Preview</a>
+      <span class="toast" id="toast" aria-live="polite"></span>
+    </div>
+    <div class="title-row">
+      <div class="meta" id="meta"></div>
+      <h2 id="title"></h2>
+      <p class="notes" id="notes"></p>
+    </div>
+    <div class="body-wrap">
+      <textarea id="body" spellcheck="false"></textarea>
+    </div>
+    <div class="comment">
+      <label>First comment (optional)</label>
+      <pre id="comment"></pre>
+    </div>
+  </main>
+</div>
+<script id="posts-json" type="application/json">[
+  {
+    "id": "pi",
+    "subreddit": "r/pi",
+    "submit": "https://www.reddit.com/r/pi/submit/?type=TEXT",
+    "preview": "https://christopherkarani.github.io/rv/",
+    "status": "DRAFT v6",
+    "title": "Who gets to say no",
+    "notes": "Text post. Essay restored after the v7 rewrite. Placeholders already filled (install + repo). Do not claim OS-enforced / Seatbelt. Claude Code is mentioned only as issue 82165, not as a shipped host.",
+    "first_comment": "Wrote this after watching agents get approval on one string and execute another. rv is hook-grade, not a sandbox, and it says so in the post. If something slips or over-blocks, I want the command.",
+    "body": "In July an agent on a Windows machine was asked to clear an app's tmp cache. The command it built contained a shell variable inside double quotes, so the outer shell expanded the variable to nothing before rm ever saw it. What one process approved as a scoped cache clear, another process executed as a wipe of /bin, /boot, /etc, and the user's home directory. It ran for four minutes. When the agent itself noticed and tried to kill the runaway rm, its own safety layer refused: killing the cleanup counted as interfering with the workload. The human finally stopped it by shutting down WSL entirely.\n\nThat's issue 82165 against Claude Code, still open, reported by the person who lost the files. It's not alone. There's a developer who watched a quoting mistake turn an approved file copy into `rm -rf /*` on a production server, taking two websites down with it. There's a home directory wiped by an `rm -rf *` that ran after the agent created a folder literally named `~`. There are days of uncommitted work gone because a case-flipped path landed on macOS's case-insensitive filesystem as if it were the real project folder.\n\nI've been thinking about what these share, because I write code with these agents every day and I'm not going to stop. And I think it's this: the command a safety mechanism reads and the command the shell executes are different documents. Every layer between the model and your files can rewrite the text in between. Quoting, variables, tilde, case-folding, all of it happens after whatever checkpoint came before.\n\nThe industry's first answer was to ask the human before anything risky. Anthropic published how that goes: users accept 93% of permission prompts. At that rate the prompt isn't oversight, it's ceremony. The people who study warnings for a living have measured click-through rates from under 10% to over 70% depending on context, and Cormac Herley's argument cuts deeper: ignoring noisy warnings is rational when they almost never matter.\n\nSo vendors moved to classifiers, models that judge whether a command looks dangerous. Anthropic measured their own honestly: about 17% of genuinely overeager actions get through. And the misses aren't random, they cluster where judgment is hardest, like whether a session's earlier approval really covers this particular action. A model reading the same text as the human inherits the same blind spot: both see the command as written. Neither sees what expansion will do to it.\n\nWhich suggests a question worth asking: where should the guard sit, and what should it do when unsure? At the point of execution, as close to the shell as possible, failing closed. That's the bet rv makes.\n\nrv is a small Mac tool that hooks into your coding agent's shell pipeline. When Pi is about to run a bash command, [rv](https://github.com/christopherkarani/rv) evaluates it first. Recursive deletes get denied, force-pushes get denied, and each denial names the rule that fired. The rules normalize the command first, stripping sudo and env wrappers so `sudo rm -rf` can't dress itself up as something else.\n\nYou might say: just use a sandbox. Sandboxes are great. E2B's microVMs, devcontainers, Docker isolation, best blast-radius reduction available and I recommend them. But notice which question they answer: how to protect the host from the workspace. Most of us have the other problem, wanting the agent working on this Mac, in this repo, with these credentials, because that's where the work is. Mount your project into a container as a bind mount and a delete inside the container deletes your real files just as dead. If the workspace is the thing you're protecting, the guard needs to run where the command runs.\n\nDesigning rv meant deciding what it does when it's unsure. That turned out to be the whole design.\n\nIf rv can't parse the payload a hook sent it, it blocks. An allow-list fails by refusing, loudly, and someone fixes it; a deny-list fails by allowing, silently, forever. Saltzer and Schroeder wrote that principle down in 1975 and it hasn't aged a day. Unknown commands are allowed, though, and that's deliberate: rv ships with few rules precisely because a guard that blocks everything unrecognized gets disabled within the hour, and a disabled guard is worse than none.\n\nThere's an escape hatch, on Grok only for now. If rv stops something you meant to run, you can mint a one-time unlock scoped to that exact command in that exact folder, and next time it asks again. Not on Pi or OpenCode yet. Their hook payloads don't carry the working directory today, though rv could forward it, and I won't scope an unlock to less than command-plus-folder, because trust-this-command-anywhere is how you end up back where you started.\n\nTwo disclosures, since you'd find them eventually anyway. Anonymous usage counters are wired to PostHog: install events and daily counts, never command text or paths, evaluation happens entirely on your Mac. No key ships in the binaries yet, so nothing sends today, but the code is there and now you know. And rv works at the hook layer. It is not a sandbox. A process that skips the hook entirely never meets rv. Hook-grade, that's all it claims to be.\n\nInstall is one line:\n\n```sh\ncurl -fsSL https://rykanv.com/install | sh\n```\n\nThe code is public at [github.com/christopherkarani/rv](https://github.com/christopherkarani/rv). v1 is macOS 26 on Apple Silicon, wired into Pi today, with other hosts close behind.\n\nI'm not claiming this replaces sandboxes, and I'm not asking anyone to trust another model's opinion about danger. It's one narrow thing: when your agent decides to run a command, something beside the shell reads the same text the shell will execute and refuses the handful of patterns that have already deleted people's home directories. The approval gap doesn't close by hoping prompts get better. It closes where the command runs.\n"
+  },
+  {
+    "id": "swift",
+    "subreddit": "r/swift",
+    "submit": "https://www.reddit.com/r/swift/submit/?type=TEXT",
+    "preview": "https://christopherkarani.github.io/rv/rswift.html",
+    "status": "DRAFT v3",
+    "title": "What's the conservative design for a guard?",
+    "notes": "Text post. Grok + Paul Graham pass already applied. Claude Code is a fourth codec on open PRs (CL-T2–T4), not claimed as merged to main. REPO_URL filled to github.com/christopherkarani/rv.",
+    "first_comment": "Happy to talk through the module graph, the Decision enum / host codecs, or why unknown commands default-allow. Code: https://github.com/christopherkarani/rv",
+    "body": "I spent the last few months writing a Swift program called rv. It sits on a Mac and blocks destructive shell commands before coding agents like Pi, Grok, or OpenCode run them. There's a longer story on GitHub Pages if you want it, but this post is about the Swift engineering, because that's the part I'd want to read.\n\nWhat's the conservative design for a guard? The obvious move is to block anything you don't recognize, and I don't think that's right. Two default-on packs can't judge everything, and a guard that blocks what it doesn't recognize gets disabled within the hour. So unknown commands default-allow.\n\nThe engine is deliberately boring: you normalize the command string, strip sudo and env wrappers, and quick-reject on keywords, then safe patterns first, destructive second, else allow.\n\nBut evaluation wasn't the interesting problem. Mapping was. Pi wants a TS extension, OpenCode a JS plugin, Grok a JSON hook file. Instead of per-host branching, there's one switch over a closed Decision enum in a hook mapper, with small host codecs turning the result into each host's native block format.\n\nWhat does a fourth host cost? We just added Claude Code on that same mapper, and it was still one codec. Claude only gates PreToolUse when the tool is Bash; other tools and events are foreign, so they allow. The deny has to be Claude-native (`hookSpecificOutput.permissionDecision: \"deny\"` plus a richer reason), not Grok's `{decision,reason}` JSON. Setup doesn't drop an exclusive owned file. It merges into `~/.claude/settings.json`, and uninstall strips only the rv-fingerprinted hooks.\n\nThis is fail-closed as copy, not just behavior. An unreadable hook payload blocks the command on Pi, Grok, and OpenCode, but Claude's spec is fail-open on unreadable or missing command, so the codec follows the host. The deny sentence lives in exactly one module shared by the hook layer and the TUI:\n\n```\nBlocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once.\n```\n\nWhat happens if the daemon is down or versions skew? Evaluation falls back to in-process rather than letting the command through. There's no allow-because-XPC-missed, and that constraint shaped a lot of the architecture.\n\nTyped throws finally earn their keep. Regex compilation throws PatternCompileError with the offending pattern attached, and the compiler makes every call site deal with it. No try? swallowing a bad rule into silence; a malformed pack pattern fails loudly at load.\n\nThe shape of it is 16 SPM modules, strict language mode 6, one external dependency (argument-parser). Value types go all the way down through the core: Domain, Engine, and Packs are structs and enums only. Classes exist at exactly two kinds of edges: actors where shared mutable state is real (the allow-once store, the service runtime), and the XPC boundary.\n\nAnd the unglamorous bit I like most is tools/gate.sh, which infers which test targets to run from your git diff. Touch RVEngine and you run RVEngineTests, and it refuses to exit green if it would run zero tests.\n\nThe numbers, since people ask: about 14k lines of source, about 14.4k lines of tests across 15 targets (one per module, plus a cross-module corpus suite). Two default-on rule packs ship day one, 81 ICU regex patterns between filesystem and git, and another 100 packs sit opt-in in the catalog. But it's macOS 26 and Apple Silicon only, and install.sh refuses anything else. It's hook-grade, not a sandbox, and it evaluates normalized text, not anything post-expansion.\n\nIf you're doing strict-concurrency Swift or thinking about hexagonal layouts in SPM, the repo is https://github.com/christopherkarani/rv, and I'd genuinely like pushback on the module graph.\n"
+  }
+]</script>
+<script>
+const posts = JSON.parse(document.getElementById('posts-json').textContent);
+let current = posts[0];
+const $ = (id) => document.getElementById(id);
+
+function toast(msg) {
+  $('toast').textContent = msg;
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => { $('toast').textContent = ''; }, 2200);
+}
+
+async function copy(text, label) {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast('copied ' + label);
+  } catch (err) {
+    toast('copy failed — select the field and copy manually');
+  }
+}
+
+function renderList() {
+  const list = $('list');
+  list.innerHTML = '';
+  posts.forEach((p) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'post-btn' + (p.id === current.id ? ' active' : '');
+    b.innerHTML = '<span class="sub">' + p.subreddit + '</span><span class="ttl"></span><span class="st"></span>';
+    b.querySelector('.ttl').textContent = p.title;
+    b.querySelector('.st').textContent = p.status;
+    b.addEventListener('click', () => { current = p; render(); });
+    list.appendChild(b);
+  });
+}
+
+function render() {
+  renderList();
+  $('title').textContent = current.title;
+  $('notes').textContent = current.notes;
+  $('meta').innerHTML = current.subreddit + ' · ' + current.status + ' · ' + current.body.trim().split(/\s+/).length + ' words';
+  $('body').value = current.body;
+  $('comment').textContent = current.first_comment;
+  $('openSubmit').href = current.submit;
+  $('openPreview').href = current.preview;
+}
+
+$('copyTitle').onclick = () => copy(current.title, 'title');
+$('copyBody').onclick = () => copy($('body').value, 'body');
+$('copyBoth').onclick = () => copy(current.title + '\\n\\n' + $('body').value, 'title + body');
+$('copyComment').onclick = () => copy(current.first_comment, 'first comment');
+$('body').addEventListener('input', () => { current.body = $('body').value; });
+
+render();
+</script>
+</body>
+</html>
