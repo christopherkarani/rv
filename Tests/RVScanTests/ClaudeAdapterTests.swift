@@ -104,11 +104,12 @@ import RVDomain
     not-json
     {"type":"assistant","sessionId":"s","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"x"}}]}}
     {"type":"assistant","sessionId":"s","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":""}}]}}
+    {"type":"assistant","sessionId":"s","timestamp":"2026-08-20T12:00:02.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"2","name":"Shell","input":{"command":"git clean -fdx"}}]}}
     """
     let url = URL(fileURLWithPath: "/tmp/inline-claude.jsonl")
     let events = try ClaudeSessionStoreAdapter().extract(
         fileURL: url,
         data: Data(payload.utf8)
     )
-    #expect(events.map(\.command.rawValue) == ["git reset --hard"])
+    #expect(events.map(\.command.rawValue) == ["git reset --hard", "git clean -fdx"])
 }
