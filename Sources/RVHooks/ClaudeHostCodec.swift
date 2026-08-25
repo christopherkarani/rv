@@ -26,10 +26,7 @@ public struct ClaudeHostCodec: HostCodec {
     }
 
     public func encodeDeny(reason: String, rule: String?, next: String?) -> HookWire {
-        guard rule == nil else {
-            preconditionFailure("Claude rich deny requires encodeRichDeny(from:command:)")
-        }
-        return HookWire(
+        HookWire(
             stdout: claudeIndeterminateDenyJSON(reason: reason),
             exitCode: host.denyExitCode
         )
@@ -42,10 +39,10 @@ public struct ClaudeHostCodec: HostCodec {
         case .indeterminate:
             return encodeDeny(reason: incompleteEvalSentence, rule: nil, next: nil)
         case .deny(let deny):
-            guard case .deny(_, let matched?) = result.outcome else {
-                preconditionFailure("Claude rich deny requires matched RuleMatch")
-            }
             let hostDenyText = hostDenyLine(command: command, ruleID: deny.ruleID)
+            guard case .deny(_, let matched?) = result.outcome else {
+                return encodeDeny(reason: hostDenyText, rule: nil, next: nil)
+            }
             return HookWire(
                 stdout: claudeRichDenyJSON(
                     hostDenyText: hostDenyText,
