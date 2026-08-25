@@ -463,6 +463,69 @@
       "expected": "deny",
       "rule_id": "core.filesystem:redirect-truncate-dynamic-path",
       "reason_contains": "dynamic"
+    },
+    {
+      "id": "deny.secret-cat-env",
+      "command": "cat .env",
+      "expected": "deny",
+      "rule_id": "core.secrets:env",
+      "reason_contains": "sensitive path"
+    },
+    {
+      "id": "deny.secret-xxd-env",
+      "command": "xxd .env",
+      "expected": "deny",
+      "rule_id": "core.secrets:env",
+      "reason_contains": "sensitive path"
+    },
+    {
+      "id": "deny.secret-id-rsa",
+      "command": "cat ~/.ssh/id_rsa",
+      "expected": "deny",
+      "rule_id": "core.secrets:id-rsa",
+      "reason_contains": "sensitive path"
+    },
+    {
+      "id": "deny.secret-dd-if-env",
+      "command": "dd if=.env of=/tmp/x",
+      "expected": "deny",
+      "rule_id": "core.secrets:env",
+      "reason_contains": "sensitive path"
+    },
+    {
+      "id": "deny.secret-rg-files-ssh",
+      "command": "rg --files ~/.ssh",
+      "expected": "deny",
+      "rule_id": "core.secrets:home-ssh",
+      "reason_contains": "sensitive path"
+    },
+    {
+      "id": "deny.secret-pi-auth",
+      "command": "cat ~/.pi/agent/auth.json",
+      "expected": "deny",
+      "rule_id": "core.secrets:host-pi-auth",
+      "reason_contains": "sensitive path"
+    },
+    {
+      "id": "deny.secret-grep-f-env",
+      "command": "grep -f .env pattern",
+      "expected": "deny",
+      "rule_id": "core.secrets:env",
+      "reason_contains": "sensitive path"
+    },
+    {
+      "id": "deny.secret-rm-env",
+      "command": "rm .env",
+      "expected": "deny",
+      "rule_id": "core.secrets:env",
+      "reason_contains": "sensitive path"
+    },
+    {
+      "id": "deny.rm-rf-ssh-stays-filesystem",
+      "command": "rm -rf ~/.ssh",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
     }
   ]
 }
