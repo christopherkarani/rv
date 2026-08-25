@@ -302,6 +302,81 @@ private func runHook(
 @Test func hookHostOption_parsesPiAndOpenCode() throws {
     #expect(try Hook.parse(["--host", "pi"]).host == .pi)
     #expect(try Hook.parse(["--host", "opencode"]).host == .opencode)
+    #expect(try Hook.parse(["--host", "claude"]).host == .claude)
+}
+
+@Test func hookClaudeDenyResetHard_emitsRichDeny() async throws {
+    let expected = try hostExpected("claude", "deny-git-reset-hard")
+    let wire = try await runHook(
+        stdin: try hostFixture("claude", "deny-git-reset-hard.json"),
+        host: .claude
+    )
+    #expect(wire.exitCode == expected.exit)
+    #expect(wire.stdout.contains("\"permissionDecision\":\"deny\""))
+    #expect(wire.stdout.contains("\"ruleId\":\"core.git:reset-hard\""))
+    #expect(wire.stdout.contains("\"allowOnceCommand\":\"rv allow-once\""))
+    #expect(wire.stdout.contains("RV · Blocked"))
+    #expect(wire.stdout.contains("allowOnceCode") == false)
+}
+
+@Test func hookClaudeAllowGitStatus_emptyStdoutExitZero() async throws {
+    let expected = try hostExpected("claude", "allow-git-status")
+    let wire = try await runHook(
+        stdin: try hostFixture("claude", "allow-git-status.json"),
+        host: .claude
+    )
+    #expect(wire.stdout == expected.stdout)
+    #expect(wire.exitCode == expected.exit)
+}
+
+@Test func hookClaudeNonShellRead_doesNotEvaluate() async throws {
+    let probe = EvaluateProbe()
+    let expected = try hostExpected("claude", "allow-non-shell-read")
+    let wire = try await runHook(
+        stdin: try hostFixture("claude", "allow-non-shell-read.json"),
+        host: .claude
+    ) { command, _ in
+        probe.record(command, result: EvaluationResult(
+            outcome: .deny(
+                Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "should not run"),
+                matched: nil
+            )
+        ))
+    }
+    #expect(probe.commands.isEmpty)
+    #expect(wire.stdout == expected.stdout)
+    #expect(wire.exitCode == expected.exit)
+}
+
+@Test func hookClaudeXPCDown_stillDeniesResetHard() async throws {
+    let client = try isolatedClient(transport: nil)
+    let expected = try hostExpected("claude", "deny-git-reset-hard")
+    let wire = try await runHook(
+        stdin: try hostFixture("claude", "deny-git-reset-hard.json"),
+        host: .claude
+    ) { command, _ in
+        await client.evaluateResult(command: command)
+    }
+    #expect(wire.exitCode == expected.exit)
+    #expect(wire.stdout.contains("\"permissionDecision\":\"deny\""))
+    #expect(wire.stdout.contains("\"ruleId\":\"core.git:reset-hard\""))
+}
+
+@Test func hookRun_claudeDenyWithTempHome() async throws {
+    try await withTempHome { home in
+        var hook = Hook()
+        hook.host = .claude
+        let expected = try hostExpected("claude", "deny-git-reset-hard")
+        let outcome = await hook.run(
+            stdin: try hostFixture("claude", "deny-git-reset-hard.json"),
+            evaluate: inProcessEvaluate
+        )
+        #expect(outcome.exitCode == expected.exit)
+        #expect(outcome.stdout.contains("\"permissionDecision\":\"deny\""))
+        #expect(outcome.stdout.contains("\"ruleId\":\"core.git:reset-hard\""))
+        #expect(outcome.stderr.isEmpty)
+        #expect(FileManager.default.fileExists(atPath: home.appendingPathComponent(".claude").path) == false)
+    }
 }
 
 @Test func hookPiDenyResetHard_reasonEqualsHostDenyText() async throws {
