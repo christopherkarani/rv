@@ -95,13 +95,9 @@ private func writeLinuxSetupTrio(in src: URL, swiftRV: URL) throws {
         exec "$(dirname "$0")/rv-cli" "$@"
         """
     )
-    try writeExecutable(
-        src.appendingPathComponent("rv-cli"),
-        contents: """
-        #!/bin/sh
-        exec "\(swiftRV.path)" "$@"
-        """
-    )
+    let destCli = src.appendingPathComponent("rv-cli")
+    try FileManager.default.copyItem(at: swiftRV, to: destCli)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: destCli.path)
     try writeExecutable(
         src.appendingPathComponent("rvd"),
         contents: "#!/bin/sh\n# dummy-rvd\nexit 0\n"
