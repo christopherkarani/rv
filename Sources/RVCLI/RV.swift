@@ -8,6 +8,7 @@ public struct RV: AsyncParsableCommand {
             Test.self,
             Explain.self,
             Packs.self,
+            Scan.self,
             Service.self,
             Hook.self,
             Setup.self,
