@@ -13,7 +13,7 @@ Each module keeps a small public API, `package` internals later, and its own tes
 | **RVDomain** | `Decision`, `Severity`, `PackID`, `RuleID`, `SecretPathCatalog`, `EvaluationRequest/Result`, Explain pipeline (`ExplainStep`), `ProposedAction`, `HardPolicyDecision`, `ActionReviewer`, `PendingApproval` | I/O, TTY, XPC |
 | **RVEngine** | normalize, quick-reject, safe then destructive, secret-path on allow, deadline, `PatternEngine` | pack files, hooks |
 | **RVPacks** | registry, bundled JSON, enable/disable | decisions, rendering |
-| **RVPolicy** | config merge, allowlist, allow-once, durable `PendingApprovalStore` | rendering |
+| **RVPolicy** | config merge, allowlist, allow-once, durable `PendingApprovalStore`, Apple Foundation Models `ActionReviewer` adapter (shadow), `ShadowReviewRunner` | rendering |
 | **RVHooks** | **Pi / Grok / OpenCode** Host adapters: shell codecs, Hook mapper/voice, embedded adapter resources | evaluation, setup mutations |
 | **RVIPC** | `rv.ipc.v1` Codable | transport details |
 | **RVService** | XPC listener, EvaluationWorld (single assembly), EvaluateSession (compiled day-one packs + evaluate), GatedEvaluate (session then Policy gate), launchd | ArgumentParser, SwiftUI |
@@ -32,7 +32,7 @@ Each module keeps a small public API, `package` internals later, and its own tes
 | `RVTheme` | none | Palettes in T2. No business rules. |
 | `RVEngine` | `RVDomain` | Must not depend on Packs, Hooks, CLI, TUI, Service. |
 | `RVPacks` | `RVDomain` | Bundled catalog JSON (95 packs, excluding `windows.*` OS catalogs); default-on remains core only. |
-| `RVPolicy` | `RVDomain` | Packs config merge; allowlist / allow-once. Darwin: CryptoKit. Linux: `Crypto` (swift-crypto) added on that graph only. |
+| `RVPolicy` | `RVDomain` | Packs config merge; allowlist / allow-once; AFM shadow reviewer. Darwin: CryptoKit. Linux: `Crypto` (swift-crypto) added on that graph only. |
 | `RVHooks` | `RVDomain` | Complete Pi/Grok/OpenCode Host adapter behavior; no setup mutations. |
 | `RVIPC` | `RVDomain` | `rv.ipc.v1` Codable later. |
 | `RVHistory` | `RVDomain` | **Stub.** Off by default forever until a later ticket enables it. Must not log argv. |
@@ -45,3 +45,5 @@ Each module keeps a small public API, `package` internals later, and its own tes
 Each module has a matching `*Tests` target that depends only on that module.
 
 On Linux (OPE-261–262), `RVService`, `rvd`, `RVCLI`, `rv`, and their tests are on the graph. XPC types stay behind `#if canImport(XPC)`; Linux `rvd` listens on AF_UNIX under `$XDG_RUNTIME_DIR`. The C `rv` hook talks that socket; miss still execs `rv-cli`. Darwin `RVPolicy` stays `RVDomain` + CryptoKit; Linux `RVPolicy` adds `Crypto` (swift-crypto).
+
+**Shadow review (OPE-250).** `FoundationModelsActionReviewer` implements `ActionReviewer` in RVPolicy (`#if canImport(FoundationModels)`). `ShadowReviewRunner` invokes it only for `HardPolicyDecision.reviewEligible` and records a `ShadowReviewRecord` (decision, confidence, rationale category, latency, disagreement, missing-context reasons, model-unavailable). The live decision is the deterministic/human path; the runner never calls `ReviewBind.apply`. Promotion thresholds live in `AutoReviewPromotionThresholds` and are measurement constants only — guarded Auto-review is OPE-253.
