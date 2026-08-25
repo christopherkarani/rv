@@ -55,6 +55,7 @@ enum InstallAnalyticsHosts {
             "grok": status(slots.grok),
             "pi": status(slots.pi),
             "opencode": status(slots.openCode),
+            "claude": status(slots.claude),
         ]
     }
 

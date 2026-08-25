@@ -7,6 +7,6 @@ public enum HookHost: String, Codable, Hashable, Sendable, CaseIterable {
     /// Claude Code settings-merge host.
     case claude
 
-    /// Exclusive owned-file setup/doctor slots. Claude settings merge is CL-T4.
-    public static let setupSlotOrder: [HookHost] = [.grok, .pi, .opencode]
+    /// Setup/doctor slots. Claude is settings-merge, not an exclusive owned file.
+    public static let setupSlotOrder: [HookHost] = [.grok, .pi, .opencode, .claude]
 }
