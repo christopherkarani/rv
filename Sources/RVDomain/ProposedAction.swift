@@ -18,9 +18,11 @@ public struct ActionFingerprint: RawRepresentable, Hashable, Sendable, Equatable
     }
 }
 
-/// Closed placeholder set for typed effects. The IR ticket owns growth.
+/// Typed effects the semantic policy engine matches. Further IR growth is OPE-156.
 public enum ActionEffectKind: String, Sendable, Equatable, Codable {
     case remoteSharedBranchMutation
+    case localBranchCreate
+    case workingTreeDiscard
 }
 
 public struct ActionEffects: Sendable, Equatable, Codable {
@@ -89,6 +91,27 @@ public enum ProposedAction: Sendable, Equatable, Codable {
         switch self {
         case .shell(let action):
             return action.supportingCommand
+        }
+    }
+
+    public var effects: ActionEffects {
+        switch self {
+        case .shell(let action):
+            return action.effects
+        }
+    }
+
+    public var resources: ActionResources {
+        switch self {
+        case .shell(let action):
+            return action.resources
+        }
+    }
+
+    public var scope: ActionScope {
+        switch self {
+        case .shell(let action):
+            return action.scope
         }
     }
 }

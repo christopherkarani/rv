@@ -19,6 +19,26 @@ public enum ShadowReviewRunner: Sendable {
         }
     }
 
+    /// Evaluates through `ActionPolicyEngine`, then shadows that verdict.
+    /// The runner still invokes the reviewer only for `reviewEligible`.
+    public static func run(
+        action: ProposedAction,
+        context: ReviewContext,
+        policy: EffectiveActionPolicy,
+        reviewer: some ActionReviewer
+    ) async -> ShadowReviewResult {
+        let verdict = ActionPolicyEngine.evaluate(
+            action: action,
+            context: context,
+            policy: policy
+        )
+        return await run(
+            hardDecision: verdict.decision,
+            request: ReviewRequest(action: action, context: context),
+            reviewer: reviewer
+        )
+    }
+
     /// Runs a shadow review when eligible. Always returns `live` unchanged.
     public static func run(
         hardDecision: HardPolicyDecision,
