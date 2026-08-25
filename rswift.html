@@ -40,8 +40,8 @@
   <header>
     <p class="kicker">Draft · r/swift</p>
     <h1>What's the conservative design for a guard?</h1>
-    <p class="dek">Notes from a 16-module Swift 6 package that blocks destructive agent shell commands. Hook-grade, not a sandbox.</p>
-    <div class="meta"><span>Chris Karani</span><span>·</span><span>Aug 2026</span><span>·</span><span class="status">DRAFT v2</span></div>
+    <p class="dek">Notes from a 16-module Swift 6 package that blocks destructive agent shell commands. Four hosts, one mapper. Hook-grade, not a sandbox.</p>
+    <div class="meta"><span>Chris Karani</span><span>·</span><span>Aug 2026</span><span>·</span><span class="status">DRAFT v3</span></div>
   </header>
   <article>
     <p>I spent the last few months writing a Swift program called rv. It sits on a Mac and blocks destructive shell commands before coding agents like Pi, Grok, or OpenCode run them. There's a longer story on GitHub Pages if you want it, but this post is about the Swift engineering, because that's the part I'd want to read.</p>
@@ -50,9 +50,11 @@
 
     <p>The engine is deliberately boring: you normalize the command string, strip sudo and env wrappers, and quick-reject on keywords, then safe patterns first, destructive second, else allow.</p>
 
-    <p>But evaluation wasn't the interesting problem. Mapping was. Pi wants a TS extension, OpenCode a JS plugin, Grok a JSON hook file. Instead of per-host branching, there's one switch over a closed Decision enum in a hook mapper, with small host codecs turning the result into each host's native block format, so adding a fourth host means writing one codec.</p>
+    <p>But evaluation wasn't the interesting problem. Mapping was. Pi wants a TS extension, OpenCode a JS plugin, Grok a JSON hook file. Instead of per-host branching, there's one switch over a closed Decision enum in a hook mapper, with small host codecs turning the result into each host's native block format.</p>
 
-    <p>This is fail-closed as copy, not just behavior. An unreadable hook payload blocks the command, and the deny sentence lives in exactly one module shared by the hook layer and the TUI:</p>
+    <p>What does a fourth host cost? We just added Claude Code on that same mapper, and it was still one codec. Claude only gates PreToolUse when the tool is Bash; other tools and events are foreign, so they allow. The deny has to be Claude-native (<code>hookSpecificOutput.permissionDecision: "deny"</code> plus a richer reason), not Grok's <code>{decision,reason}</code> JSON. Setup doesn't drop an exclusive owned file. It merges into <code>~/.claude/settings.json</code>, and uninstall strips only the rv-fingerprinted hooks.</p>
+
+    <p>This is fail-closed as copy, not just behavior. An unreadable hook payload blocks the command on Pi, Grok, and OpenCode, but Claude's spec is fail-open on unreadable or missing command, so the codec follows the host. The deny sentence lives in exactly one module shared by the hook layer and the TUI:</p>
 
     <pre><code>Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once.</code></pre>
 
