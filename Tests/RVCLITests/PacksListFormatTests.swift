@@ -54,7 +54,7 @@ import Testing
             ),
         ],
         enabledCount: 1,
-        totalCount: 99
+        totalCount: 95
     )
 
     #expect(model.groups.map(\.category) == ["core", "database"])
