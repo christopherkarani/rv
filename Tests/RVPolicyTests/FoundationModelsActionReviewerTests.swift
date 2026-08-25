@@ -8,6 +8,7 @@ struct FoundationModelsActionReviewerTests {
         let reviewer = FoundationModelsActionReviewer()
         #expect(reviewer.providerID == FoundationModelsActionReviewer.defaultProviderID)
         #expect(reviewer.timeout == FoundationModelsActionReviewer.defaultTimeout)
+        #expect(reviewer.usesSystemModel)
     }
 
     @Test func secretsNeverEnterCapturedPayload() async {
@@ -28,18 +29,12 @@ struct FoundationModelsActionReviewerTests {
             context: dirty
         )
         let box = PayloadBox()
-        let reviewer = FoundationModelsActionReviewer { payload in
+        let reviewer = FoundationModelsActionReviewer(usesSystemModel: false) { payload in
             box.payload = payload
         }
 
-        let thrown: ActionReviewerError?
-        do {
-            _ = try await reviewer.review(request)
-            thrown = nil
-        } catch let error as ActionReviewerError {
-            thrown = error
-        } catch {
-            thrown = .unsupported
+        await #expect(throws: ActionReviewerError.unsupported) {
+            try await reviewer.review(request)
         }
 
         let payload = try #require(box.payload)
@@ -49,9 +44,6 @@ struct FoundationModelsActionReviewerTests {
         #expect(payload.text.contains("effects: remoteSharedBranchMutation"))
         #expect(payload.text.contains("resources.remoteName: origin"))
         #expect(payload.text.contains(ReviewSanitizer.redactedPlaceholder))
-        if thrown != nil {
-            #expect(thrown == .unsupported || thrown == .timeout)
-        }
     }
 
     @Test func prompt_putsSemanticFieldsBeforeSupportingCommand() throws {
@@ -140,7 +132,7 @@ struct FoundationModelsActionReviewerTests {
             log: log
         )
         let reviewers: [any ActionReviewer] = [
-            FoundationModelsActionReviewer(),
+            FoundationModelsActionReviewer(usesSystemModel: false),
             fake,
         ]
         #expect(reviewers[0].providerID != reviewers[1].providerID)
@@ -159,6 +151,7 @@ struct FoundationModelsActionReviewerTests {
             reviewer: reviewers[1]
         )
         #expect(afm.live == live)
+        #expect(afm.shadow.modelUnavailable)
         #expect(swapped.live == live)
         #expect(swapped.shadow.decision == .allow)
         #expect(await log.count == 1)

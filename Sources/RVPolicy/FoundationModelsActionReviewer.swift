@@ -16,13 +16,25 @@ public struct FoundationModelsActionReviewer: ActionReviewer {
 
     public var providerID: ReviewerProviderID { Self.defaultProviderID }
     public var timeout: Duration
+    /// Production is `true`. Tests set `false` so payload capture cannot
+    /// invoke the on-device model. False still builds the sanitized payload
+    /// and then throws `.unsupported` — it cannot allow.
+    package let usesSystemModel: Bool
     private let observePayload: (@Sendable (ReviewPromptPayload) -> Void)?
 
-    public init(
+    public init(timeout: Duration = Self.defaultTimeout) {
+        self.timeout = timeout
+        self.usesSystemModel = true
+        self.observePayload = nil
+    }
+
+    package init(
         timeout: Duration = Self.defaultTimeout,
+        usesSystemModel: Bool,
         observePayload: (@Sendable (ReviewPromptPayload) -> Void)? = nil
     ) {
         self.timeout = timeout
+        self.usesSystemModel = usesSystemModel
         self.observePayload = observePayload
     }
 
@@ -30,7 +42,7 @@ public struct FoundationModelsActionReviewer: ActionReviewer {
         let payload = ReviewPromptBuilder.payload(for: request)
         observePayload?(payload)
         #if canImport(FoundationModels)
-        if #available(macOS 26, *) {
+        if usesSystemModel, #available(macOS 26, *) {
             return try await ReviewTimeout.run(timeout: timeout) {
                 try await FoundationModelsReviewClient.review(payload: payload)
             }
