@@ -24,7 +24,11 @@ Site: [rykanv.com](https://rykanv.com) · Docs: [rykanv.com/docs/introduction](h
 
 ## Why this exists
 
-Instructions in `AGENTS.md` do not stop `git reset --hard` or `rm -rf`. The host is about to run a shell tool. rv evaluates that command against local packs and returns allow or deny before the shell starts.
+Coding agents write and run shell. `AGENTS.md` is a suggestion. The moment that matters is the tool call.
+
+rv sits on that wire. The host is about to run a command. Packs return allow or deny. Deny means the shell never starts.
+
+A workspace sandbox still lets `git reset --hard` and `rm -rf .` run inside the project. rv blocks those operations on the tool call.
 
 ## Quick start
 
@@ -35,6 +39,14 @@ rv test 'git reset --hard'
 ```
 
 Then start Pi, Grok, or OpenCode as you normally do.
+
+Prove a deny without running anything:
+
+```sh
+rv test 'rm -rf /'
+rv explain 'git push --force'
+rv test 'cat .env'
+```
 
 ## What it does
 
@@ -48,8 +60,6 @@ Then start Pi, Grok, or OpenCode as you normally do.
 | Hosts | Pi, Grok, OpenCode — wired by `rv setup` |
 | Platform | macOS 26, Apple Silicon |
 
-A workspace sandbox still lets `git reset --hard` and `rm -rf .` run inside the project. rv blocks those operations on the tool call, before the shell starts.
-
 ## Supported hosts
 
 | Host | After `rv setup` |
@@ -57,6 +67,8 @@ A workspace sandbox still lets `git reset --hard` and `rm -rf .` run inside the 
 | Grok | `~/.grok/hooks/rv.json` |
 | Pi | `~/.pi/agent/extensions/rv-guard.ts` |
 | OpenCode | `~/.config/opencode/plugins/rv-guard.js` |
+
+`rv setup` is idempotent. It writes rv-owned adapters, `~/.config/rv/`, and the evaluate LaunchAgent.
 
 ## Commands
 
@@ -72,35 +84,65 @@ rv doctor                        # health
 rv uninstall                     # rv-owned files only
 ```
 
-```sh
-rv allow-once 'git reset --hard'
-# next matching call in this repo is allowed once
-```
-
 ## How it works
 
 1. The agent is about to run a shell command.
-2. The host adapter sends the command (and `cwd` when it has one) to rv.
+2. The host adapter sends the command, and `cwd` when the host has one.
 3. Packs decide allow or deny.
 4. Deny means the command does not run.
 
-`cwd` scopes `allow-once`. Same command, different repo, still denied.
+Same path for `rv test` and the live hook. If you can prove a deny with `rv test`, the wired host uses that evaluator.
+
+## Example
+
+Agent asks the host to run `git reset --hard`.
+
+```
+command: git reset --hard
+cwd:     /Users/you/app
+pack:    core.git
+result:  deny
+```
+
+The host gets deny. The working tree stays. Grant one exception in that directory with `rv allow-once`.
+
+## Allow once
+
+Need this one reset in this repo:
+
+```sh
+rv allow-once 'git reset --hard'
+```
+
+The next matching call in this working directory is allowed. The same command in another repo still denies. `cwd` is what the host reports for the tool call.
 
 ## Packs
+
+Day-one packs ship next to the binaries. The public installer unpacks the bundle.
 
 ```sh
 rv packs
 rv test 'rm -rf /'
-rv test 'cat .env'
+rv test 'cat ~/.ssh/id_rsa'
 ```
 
-The installer unpacks the pack bundle next to the binaries. `rv setup` is idempotent and only writes rv-owned paths.
+Enable and disable packs locally. `rv explain` names the pack that would fire.
+
+## From source
+
+```sh
+tools/release.sh
+RV_INSTALL_BIN=$PWD/.build/release-stage ./install.sh
+rv setup
+```
 
 ## Uninstall
 
 ```sh
 rv uninstall
 ```
+
+Removes rv-owned files only. Agent configs rv did not write stay.
 
 ## License
 
