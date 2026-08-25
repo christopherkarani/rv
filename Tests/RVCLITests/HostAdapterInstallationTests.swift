@@ -15,7 +15,7 @@ private func withInstallationHome(
     try body(home, OwnedPaths(home: try #require(HomeDirectory(validating: home.path))))
 }
 
-@Test(arguments: HookHost.allCases)
+@Test(arguments: HookHost.setupSlotOrder)
 func hostInstallation_missingIsReadOnly(_ host: HookHost) throws {
     try withInstallationHome { home, paths in
         let before = try FileManager.default.contentsOfDirectory(atPath: home.path)
@@ -31,7 +31,7 @@ func hostInstallation_missingIsReadOnly(_ host: HookHost) throws {
     }
 }
 
-@Test(arguments: HookHost.allCases)
+@Test(arguments: HookHost.setupSlotOrder)
 func hostInstallation_detectedWithoutOwnedFileIsAbsentFile(_ host: HookHost) throws {
     try withInstallationHome { _, paths in
         let owned = paths.hostAdapter(for: host)
@@ -51,7 +51,7 @@ func hostInstallation_detectedWithoutOwnedFileIsAbsentFile(_ host: HookHost) thr
     }
 }
 
-@Test(arguments: HookHost.allCases)
+@Test(arguments: HookHost.setupSlotOrder)
 func hostInstallation_foreignOwnedBytesAreOccupiedAndUnchanged(_ host: HookHost) throws {
     try withInstallationHome { _, paths in
         let owned = paths.hostAdapter(for: host)
@@ -73,7 +73,7 @@ func hostInstallation_foreignOwnedBytesAreOccupiedAndUnchanged(_ host: HookHost)
     }
 }
 
-@Test(arguments: HookHost.allCases)
+@Test(arguments: HookHost.setupSlotOrder)
 func hostInstallation_symlinkAtOwnedNameIsOccupiedWithoutFollowing(_ host: HookHost) throws {
     try withInstallationHome { home, paths in
         let owned = paths.hostAdapter(for: host)
@@ -100,7 +100,7 @@ func hostInstallation_symlinkAtOwnedNameIsOccupiedWithoutFollowing(_ host: HookH
     }
 }
 
-@Test(arguments: HookHost.allCases)
+@Test(arguments: HookHost.setupSlotOrder)
 func hostInstallation_danglingSymlinkAtOwnedNameIsOccupied(_ host: HookHost) throws {
     try withInstallationHome { _, paths in
         let owned = paths.hostAdapter(for: host)
@@ -127,7 +127,7 @@ func hostInstallation_danglingSymlinkAtOwnedNameIsOccupied(_ host: HookHost) thr
     }
 }
 
-@Test(arguments: HookHost.allCases)
+@Test(arguments: HookHost.setupSlotOrder)
 func hostInstallation_currentResourceWithMissingExecutableIsBroken(_ host: HookHost) throws {
     try withInstallationHome { _, paths in
         let owned = paths.hostAdapter(for: host)
@@ -149,7 +149,7 @@ func hostInstallation_currentResourceWithMissingExecutableIsBroken(_ host: HookH
     }
 }
 
-@Test(arguments: HookHost.allCases)
+@Test(arguments: HookHost.setupSlotOrder)
 func hostInstallation_currentResourceWithExecutableIsWired(_ host: HookHost) throws {
     try withInstallationHome { home, paths in
         let owned = paths.hostAdapter(for: host)

@@ -9,8 +9,12 @@ import Testing
     #expect(HookHost.claude.rawValue == "claude")
 }
 
-@Test func hookHost_allCasesAreSetupSlotOrder() {
-    #expect(HookHost.allCases.map(\.rawValue) == ["grok", "pi", "opencode"])
+@Test func hookHost_allCasesAreDeclarationOrder() {
+    #expect(HookHost.allCases.map(\.rawValue) == ["grok", "pi", "opencode", "claude"])
+}
+
+@Test func hookHost_setupSlotOrderExcludesClaude() {
+    #expect(HookHost.setupSlotOrder.map(\.rawValue) == ["grok", "pi", "opencode"])
 }
 
 @Test func hookHost_codableIsJSONString() throws {

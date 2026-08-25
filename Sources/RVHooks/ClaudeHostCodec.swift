@@ -21,7 +21,7 @@ public struct ClaudeHostCodec: HostCodec {
         guard let command = envelope.toolInput?.command, command.isEmpty == false else {
             return .malformed(.missingCommand)
         }
-        let cwd = envelope.cwd.flatMap { $0.isEmpty ? nil : $0 }
+        let cwd = envelope.cwd.flatMap { WorkingDirectory(validating: $0) }
         return .request(HookRequest(host: .claude, command: ShellCommand(rawValue: command), cwd: cwd))
     }
 

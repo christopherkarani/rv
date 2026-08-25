@@ -7,7 +7,7 @@ import RVTheme
 private func hostlessFrame() -> SetupCeremonyFrame {
     SetupCeremonyFrame(
         activity: setupCeremonySearchActivity,
-        slots: HookHost.allCases.map { SetupSlotView(host: $0, kind: .pending) },
+        slots: HookHost.setupSlotOrder.map { SetupSlotView(host: $0, kind: .pending) },
         closerLines: [setupCeremonyHostlessTitle, setupCeremonyHostlessNext]
     )
 }

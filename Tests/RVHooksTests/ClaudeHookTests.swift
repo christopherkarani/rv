@@ -82,7 +82,7 @@ func claudeDecode_otherToolOrEventIsForeign(_ file: String) throws {
         return
     }
     #expect(request.command.rawValue == "git status")
-    #expect(request.cwd == "/tmp/ws")
+    #expect(request.cwd == WorkingDirectory(validating: "/tmp/ws"))
 }
 
 @Test func claudeEncodeAllow_isEmptyExitZero() throws {

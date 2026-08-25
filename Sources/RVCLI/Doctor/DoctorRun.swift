@@ -79,7 +79,7 @@ enum DoctorRun {
         return DoctorViewModel(
             service: health.service,
             packs: health.packs,
-            hosts: HookHost.allCases.map { host in
+            hosts: HookHost.setupSlotOrder.map { host in
                 DoctorHostView(
                     host: host,
                     state: doctorHostState(

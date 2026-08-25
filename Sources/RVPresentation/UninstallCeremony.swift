@@ -54,7 +54,7 @@ public func uninstallCeremonyFrames(_ closer: UninstallCloser) -> [SetupCeremony
 
 private func occupiedSlots(occupied: Set<HookHost>) -> [SetupSlotView] {
     guard occupied.isEmpty == false else { return [] }
-    return HookHost.allCases.map { host in
+    return HookHost.setupSlotOrder.map { host in
         occupied.contains(host)
             ? SetupSlotView(host: host, kind: .occupied, clause: uninstallOccupiedClause)
             : SetupSlotView(host: host, kind: .pending)
@@ -78,7 +78,7 @@ private func removalAnimation(
     var stillPresent = removed
     var frames: [SetupCeremonyFrame] = []
 
-    let initial = HookHost.allCases.map { slot(for: $0, stillPresent: stillPresent.contains($0)) }
+    let initial = HookHost.setupSlotOrder.map { slot(for: $0, stillPresent: stillPresent.contains($0)) }
     frames.append(
         SetupCeremonyFrame(
             title: uninstallCeremonyRemovingTitle,
@@ -87,9 +87,9 @@ private func removalAnimation(
         )
     )
 
-    for host in HookHost.allCases where removed.contains(host) {
+    for host in HookHost.setupSlotOrder where removed.contains(host) {
         stillPresent.remove(host)
-        let slots = HookHost.allCases.map { slot(for: $0, stillPresent: stillPresent.contains($0)) }
+        let slots = HookHost.setupSlotOrder.map { slot(for: $0, stillPresent: stillPresent.contains($0)) }
         frames.append(
             SetupCeremonyFrame(
                 title: uninstallCeremonyRemovingTitle,
@@ -99,7 +99,7 @@ private func removalAnimation(
         )
     }
 
-    let finalSlots = HookHost.allCases.map { slot(for: $0, stillPresent: false) }
+    let finalSlots = HookHost.setupSlotOrder.map { slot(for: $0, stillPresent: false) }
     if removed.isEmpty == false {
         frames.append(
             SetupCeremonyFrame(

@@ -24,7 +24,7 @@ struct OwnedPaths: Equatable, Sendable {
     var localRvd: String { home.rawValue + "/.local/bin/rvd" }
 
     var hostAdapters: [OwnedHostAdapterPath] {
-        HookHost.allCases.map(hostAdapter)
+        HookHost.setupSlotOrder.map(hostAdapter)
     }
 
     func hostAdapter(for host: HookHost) -> OwnedHostAdapterPath {
@@ -49,6 +49,13 @@ struct OwnedPaths: Equatable, Sendable {
                 detectionDirectory: openCodeDirectory,
                 executableName: "opencode",
                 destination: openCodePlugin
+            )
+        case .claude:
+            OwnedHostAdapterPath(
+                host: .claude,
+                detectionDirectory: home.rawValue + "/.claude",
+                executableName: "claude",
+                destination: home.rawValue + "/.claude/settings.json"
             )
         }
     }

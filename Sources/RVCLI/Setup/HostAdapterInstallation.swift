@@ -97,6 +97,15 @@ struct HostAdapterInstallationSnapshot: Equatable, Sendable {
             pi
         case .opencode:
             openCode
+        case .claude:
+            .missing(
+                OwnedHostAdapterPath(
+                    host: .claude,
+                    detectionDirectory: "",
+                    executableName: "claude",
+                    destination: ""
+                )
+            )
         }
     }
 }
