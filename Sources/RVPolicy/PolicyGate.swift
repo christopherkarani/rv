@@ -18,20 +18,19 @@ public struct PolicyDecision: Equatable, Sendable {
 }
 
 public enum PolicyGate {
-    /// Spends a matching grant. Hook / `rvd` / in-process fallback.
-    public static func apply(
+    /// Total override order. No store, clock, or filesystem.
+    public static func decide(
         _ result: EvaluationResult,
         cwd: String?,
-        allowlist: AllowlistSnapshot = .empty,
-        store: AllowOnceStore,
+        allowlist: AllowlistSnapshot,
+        grant: GrantPresence,
         now: Date
-    ) async -> PolicyDecision {
+    ) -> PolicyDecision {
         switch result.decision {
         case .allow:
             return PolicyDecision(result: result, override: .none)
         case .indeterminate:
             // Miss policy: never allow because evaluation did not finish.
-            // Hook layer maps indeterminate → deny voice; do not consume grants.
             return PolicyDecision(result: result, override: .none)
         case .deny(let deny):
             if allowlist.matches(
@@ -44,16 +43,48 @@ public enum PolicyGate {
             guard let cwd, cwd.isEmpty == false, result.matchingView.isEmpty == false else {
                 return PolicyDecision(result: result, override: .none)
             }
-            switch await store.consume(
-                matchingView: result.matchingView,
-                cwd: cwd,
-                now: now
-            ) {
-            case .consumed:
+            switch grant {
+            case .pending:
                 return allowDecision(result, override: .allowOnce)
-            case .notFound, .alreadyConsumed, .expired, .unavailable:
+            case .none:
                 return PolicyDecision(result: result, override: .none)
             }
+        }
+    }
+
+    /// Spends a matching grant. Hook / `rvd` / in-process fallback.
+    public static func apply(
+        _ result: EvaluationResult,
+        cwd: String?,
+        allowlist: AllowlistSnapshot = .empty,
+        store: AllowOnceStore,
+        now: Date
+    ) async -> PolicyDecision {
+        let withoutGrant = decide(
+            result,
+            cwd: cwd,
+            allowlist: allowlist,
+            grant: .none,
+            now: now
+        )
+        guard let cwd = honorCwd(result, cwd: cwd, withoutGrant: withoutGrant) else {
+            return withoutGrant
+        }
+        switch await store.consume(
+            matchingView: result.matchingView,
+            cwd: cwd,
+            now: now
+        ) {
+        case .consumed:
+            return decide(
+                result,
+                cwd: cwd,
+                allowlist: allowlist,
+                grant: .pending,
+                now: now
+            )
+        case .notFound, .alreadyConsumed, .expired, .unavailable:
+            return withoutGrant
         }
     }
 
@@ -65,32 +96,46 @@ public enum PolicyGate {
         store: AllowOnceStore,
         now: Date
     ) async -> PolicyDecision {
-        switch result.decision {
-        case .allow:
-            return PolicyDecision(result: result, override: .none)
-        case .indeterminate:
-            return PolicyDecision(result: result, override: .none)
-        case .deny(let deny):
-            if allowlist.matches(
-                ruleID: deny.ruleID,
-                matchingView: result.matchingView,
-                now: now
-            ) {
-                return allowDecision(result, override: .allowlist)
-            }
-            guard let cwd, cwd.isEmpty == false, result.matchingView.isEmpty == false else {
-                return PolicyDecision(result: result, override: .none)
-            }
-            let hit = await store.hasGrant(
-                matchingView: result.matchingView,
-                cwd: cwd,
-                now: now
-            )
-            guard hit else {
-                return PolicyDecision(result: result, override: .none)
-            }
-            return allowDecision(result, override: .allowOnce)
+        let withoutGrant = decide(
+            result,
+            cwd: cwd,
+            allowlist: allowlist,
+            grant: .none,
+            now: now
+        )
+        guard let cwd = honorCwd(result, cwd: cwd, withoutGrant: withoutGrant) else {
+            return withoutGrant
         }
+        let grant: GrantPresence = await store.hasGrant(
+            matchingView: result.matchingView,
+            cwd: cwd,
+            now: now
+        ) ? .pending : .none
+        return decide(
+            result,
+            cwd: cwd,
+            allowlist: allowlist,
+            grant: grant,
+            now: now
+        )
+    }
+
+    /// Consume / hasGrant only when decide would still need a pending grant.
+    private static func honorCwd(
+        _ result: EvaluationResult,
+        cwd: String?,
+        withoutGrant: PolicyDecision
+    ) -> String? {
+        guard
+            withoutGrant.override == .none,
+            case .deny = result.decision,
+            let cwd,
+            cwd.isEmpty == false,
+            result.matchingView.isEmpty == false
+        else {
+            return nil
+        }
+        return cwd
     }
 
     private static func allowDecision(

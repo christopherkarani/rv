@@ -167,6 +167,47 @@ struct AllowlistCommandTests {
     }
 }
 
+struct CommandRunAllowlistTests {
+    @Test func evaluateCommandHonorsAllowlistFromStoreDirectory() async throws {
+        let root = try isolatedAllowOnceDirectory()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let ruleID = try #require(RuleID(rawValue: "core.git:reset-hard"))
+        try AllowlistStore(baseDirectory: root).add(
+            AllowlistEntry(selector: .rule(ruleID), reason: "ci", addedAt: now),
+            tty: TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+        )
+        let result = await CommandRun.evaluateCommand(
+            "git reset --hard",
+            cwd: "/tmp/ws",
+            store: AllowOnceStore(baseDirectory: root),
+            now: now,
+            home: try isolatedHome()
+        )
+        #expect(result.decision == .allow)
+    }
+
+    @Test func inProcessServiceClientHonorsAllowlistFromStoreDirectory() async throws {
+        let root = try isolatedAllowOnceDirectory()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let ruleID = try #require(RuleID(rawValue: "core.git:reset-hard"))
+        try AllowlistStore(baseDirectory: root).add(
+            AllowlistEntry(selector: .rule(ruleID), reason: "ci", addedAt: now),
+            tty: TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+        )
+        let client = ServiceClient(
+            transport: nil,
+            allowOnceDirectory: root,
+            home: try isolatedHome(),
+            clock: { now }
+        )
+        let reply = await client.evaluate(
+            command: ShellCommand(rawValue: "git reset --hard"),
+            cwd: "/tmp/ws"
+        )
+        #expect(reply.result.decision == .allow)
+    }
+}
+
 private func isolatedStore() throws -> AllowOnceStore {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-allow-once-cli-\(UUID().uuidString)", isDirectory: true)

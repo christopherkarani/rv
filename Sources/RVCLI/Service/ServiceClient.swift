@@ -19,13 +19,15 @@ public struct ServiceClient: Sendable {
     private let door: GatedEvaluate
     private let store: AllowOnceStore
     private let home: HomeDirectory?
+    private let clock: @Sendable () -> Date
 
     public init(
         transport: (any ServiceTransport)? = XPCServiceTransport(),
         session: EvaluateSession? = nil,
         store: AllowOnceStore? = nil,
         allowOnceDirectory: URL? = nil,
-        home: HomeDirectory? = HomeDirectory.process()
+        home: HomeDirectory? = HomeDirectory.process(),
+        clock: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.transport = transport
         if let session {
@@ -35,6 +37,7 @@ public struct ServiceClient: Sendable {
         }
         self.store = Self.resolveStore(store: store, allowOnceDirectory: allowOnceDirectory)
         self.home = home
+        self.clock = clock
     }
 
     /// Test seam: builds the fallback door from an explicit provider so tests can
@@ -43,12 +46,14 @@ public struct ServiceClient: Sendable {
         transport: (any ServiceTransport)?,
         lazySession: @escaping @Sendable () -> EvaluateSession,
         allowOnceDirectory: URL?,
-        home: HomeDirectory?
+        home: HomeDirectory?,
+        clock: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.transport = transport
         self.door = GatedEvaluate(lazySession: lazySession)
         self.store = Self.resolveStore(store: nil, allowOnceDirectory: allowOnceDirectory)
         self.home = home
+        self.clock = clock
     }
 
     public static func missingCore(
@@ -83,14 +88,20 @@ public struct ServiceClient: Sendable {
 
     public func evaluate(command: ShellCommand, cwd: String? = nil) async -> RoutedEvaluation {
         func inProcessRoute() async -> RoutedEvaluation {
-            RoutedEvaluation(
+            let now = clock()
+            let baseDirectory = store.baseDirectory
+            return RoutedEvaluation(
                 result: await door.run(
                     .apply,
                     command: command,
                     cwd: cwd,
                     home: home,
                     store: store,
-                    now: Date()
+                    now: now,
+                    allowlist: {
+                        AllowlistStore(baseDirectory: baseDirectory)
+                            .loadUserSnapshot(workspacePath: cwd, now: now)
+                    }
                 ),
                 path: .inProcess
             )
