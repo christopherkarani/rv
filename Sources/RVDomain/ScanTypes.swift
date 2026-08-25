@@ -24,7 +24,7 @@ public struct ScanBounds: Sendable, Equatable {
 }
 
 /// Known host session-store kinds for forensics discovery.
-public enum ScanHostID: String, Sendable, Equatable {
+public enum ScanHostID: String, Sendable, Equatable, Hashable {
     case claude
     case pi
     case grok
@@ -37,14 +37,14 @@ public struct ExtractedEvent: Sendable, Equatable {
     public var sessionID: String?
     public var sourcePath: String
     public var occurredAt: Date?
-    public var command: String
+    public var command: ShellCommand
 
     public init(
         host: ScanHostID,
         sessionID: String? = nil,
         sourcePath: String,
         occurredAt: Date? = nil,
-        command: String
+        command: ShellCommand
     ) {
         self.host = host
         self.sessionID = sessionID
@@ -62,7 +62,7 @@ public struct ScanFinding: Sendable, Equatable {
     public var occurredAt: Date?
     public var ruleID: RuleID
     public var packID: PackID
-    public var matchingView: String
+    public var matchingView: MatchingView
     public var count: Int
     public var lastSeen: Date?
 
@@ -73,7 +73,7 @@ public struct ScanFinding: Sendable, Equatable {
         occurredAt: Date? = nil,
         ruleID: RuleID,
         packID: PackID,
-        matchingView: String,
+        matchingView: MatchingView,
         count: Int = 1,
         lastSeen: Date? = nil
     ) {
