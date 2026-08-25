@@ -10,7 +10,7 @@ Each module keeps a small public API, `package` internals later, and its own tes
 
 | Module | Owns | Must not |
 |---|---|---|
-| **RVDomain** | `Decision`, `Severity`, `PackID`, `RuleID`, `SecretPathCatalog`, `EvaluationRequest/Result`, Explain pipeline (`ExplainStep`) | I/O, TTY, XPC |
+| **RVDomain** | `Decision`, `Severity`, `PackID`, `RuleID`, `SecretPathCatalog`, `EvaluationRequest/Result`, Explain pipeline (`ExplainStep`), `ProposedAction`, `HardPolicyDecision`, `ActionReviewer` | I/O, TTY, XPC |
 | **RVEngine** | normalize, quick-reject, safe then destructive, secret-path on allow, deadline, `PatternEngine` | pack files, hooks |
 | **RVPacks** | registry, bundled JSON, enable/disable | decisions, rendering |
 | **RVPolicy** | config merge, allowlist, allow-once | rendering |
