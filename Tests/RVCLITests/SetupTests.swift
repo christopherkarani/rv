@@ -735,6 +735,25 @@ private func fixtureLoginHome() throws -> URL {
     }
 }
 
+@Test func setup_force_clearFailure_doesNotWriteLaterHosts() throws {
+    try withTempHome { home, layout, launchctl in
+        let hooks = layout.grokDirectory + "/hooks"
+        try FileManager.default.createDirectory(atPath: hooks, withIntermediateDirectories: true)
+        try "{\"hooks\":[]}\n".write(toFile: layout.grokHook, atomically: true, encoding: .utf8)
+        try FileManager.default.createDirectory(atPath: layout.piDirectory, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: hooks)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: hooks)
+        }
+
+        let outcome = SetupRun.setup(env(home: home, launchctl: launchctl), force: true)
+
+        #expect(outcome.stderr == "rv setup failed: unable to clear occupied grok hook\n")
+        #expect(outcome.exitCode == EX_CANTCREAT)
+        #expect(FileManager.default.fileExists(atPath: layout.piExtension) == false)
+    }
+}
+
 @Test func setup_writeFailureInReadOnlyHooksDir_mapsToCannotCreateExit() throws {
     try withTempHome { home, layout, launchctl in
         try FileManager.default.createDirectory(

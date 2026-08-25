@@ -119,6 +119,23 @@ enum SetupRun {
         let files = FileOps(fileManager: env.fileManager)
         let layout = OwnedPaths(home: env.home)
         let installations = try inspectInstallations(layout: layout, env: env)
+        let plan = SetupWorkPlanBuilder.make(
+            installations: installations,
+            layout: layout,
+            force: force,
+            rvdIsExecutable: env.fileManager.isExecutableFile(atPath: env.rvdPath)
+        )
+        let report = try interpret(plan, env: env, layout: layout, files: files)
+        env.installAnalytics.captureInstall(hosts: InstallAnalyticsHosts.from(report.slots))
+        return report
+    }
+
+    private static func interpret(
+        _ plan: SetupWorkPlan,
+        env: SetupEnvironment,
+        layout: OwnedPaths,
+        files: FileOps
+    ) throws(SetupError) -> SetupReport {
         var kinds: [SetupHostKind: SetupSlotKind] = [
             .grok: .pending,
             .pi: .pending,
@@ -126,63 +143,76 @@ enum SetupRun {
         ]
         var wrote: Set<SetupHostKind> = []
 
-        do {
-            try files.createDirectory(atPath: layout.configDirectory)
-        } catch {
-            throw SetupError.configDirectoryCreateFailed
-        }
-        try writeLaunchAgent(env: env, layout: layout, files: files)
-
-        for owned in layout.hostAdapters {
-            let host = owned.host
-            let existingData: Data?
-            switch installations.installation(for: host).setupPlan(force: force) {
-            case .skipUndetected:
-                continue
-            case .skipOccupied:
-                kinds[host] = .occupied
-                continue
-            case .forceClearThenWrite:
+        for step in plan.steps {
+            switch step {
+            case .createConfigDirectory:
                 do {
-                    try files.backupAndClearOwnedPath(owned.destination)
+                    try files.createDirectory(atPath: layout.configDirectory)
+                } catch {
+                    throw SetupError.configDirectoryCreateFailed
+                }
+            case .writeLaunchAgent:
+                try writeLaunchAgent(env: env, layout: layout, files: files)
+            case .skipLaunchAgent, .skipUndetected(_):
+                break
+            case .skipOccupied(let host):
+                kinds[host] = .occupied
+            case .forceClearThenWrite(let host):
+                do {
+                    try files.backupAndClearOwnedPath(layout.hostAdapter(for: host).destination)
                 } catch {
                     throw SetupError.hostHookClearFailed(host)
                 }
-                existingData = nil
-            case .write(let data):
-                existingData = data
-            }
-            let adapter: HostAdapterResource
-            do {
-                adapter = try HostAdapterResources.load(for: owned.hookHost)
-            } catch {
-                throw SetupError(adapterResourceFailure: error)
-            }
-            let wroteHook: Bool
-            do {
-                wroteHook = try writeOwned(
-                    path: owned.destination,
-                    contents: adapter.rendered(rvPath: env.rvPath),
+                if try writeHost(host, existingData: nil, env: env, layout: layout, files: files) {
+                    wrote.insert(host)
+                }
+                kinds[host] = .wired
+            case .write(let host, let existingData):
+                if try writeHost(
+                    host,
                     existingData: existingData,
+                    env: env,
+                    layout: layout,
                     files: files
-                )
-            } catch {
-                throw SetupError.hostHookWriteFailed(host)
+                ) {
+                    wrote.insert(host)
+                }
+                kinds[host] = .wired
             }
-            if wroteHook {
-                wrote.insert(host)
-            }
-            kinds[host] = .wired
         }
 
-        let report = SetupReport(
+        return SetupReport(
             grok: kinds[.grok] ?? .pending,
             pi: kinds[.pi] ?? .pending,
             openCode: kinds[.openCode] ?? .pending,
             wrote: wrote
         )
-        env.installAnalytics.captureInstall(hosts: InstallAnalyticsHosts.from(report.slots))
-        return report
+    }
+
+    private static func writeHost(
+        _ host: SetupHostKind,
+        existingData: Data?,
+        env: SetupEnvironment,
+        layout: OwnedPaths,
+        files: FileOps
+    ) throws(SetupError) -> Bool {
+        let owned = layout.hostAdapter(for: host)
+        let adapter: HostAdapterResource
+        do {
+            adapter = try HostAdapterResources.load(for: owned.hookHost)
+        } catch {
+            throw SetupError(adapterResourceFailure: error)
+        }
+        do {
+            return try writeOwned(
+                path: owned.destination,
+                contents: adapter.rendered(rvPath: env.rvPath),
+                existingData: existingData,
+                files: files
+            )
+        } catch {
+            throw SetupError.hostHookWriteFailed(host)
+        }
     }
 
     private static func inspectInstallations(
@@ -309,9 +339,6 @@ enum SetupRun {
         layout: OwnedPaths,
         files: FileOps
     ) throws(SetupError) {
-        guard env.fileManager.isExecutableFile(atPath: env.rvdPath) else {
-            return
-        }
         let body = try LaunchAgentTemplate.rendered(rvdPath: env.rvdPath)
         do {
             try files.write(body, to: layout.launchAgent)
