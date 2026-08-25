@@ -17,6 +17,14 @@ public enum RVPolicyPaths: Sendable {
         configDir.appendingPathComponent(".allowlist.lock", isDirectory: false)
     }
 
+    public static func pendingApprovalsFile(inConfigDir configDir: URL) -> URL {
+        configDir.appendingPathComponent("pending-approvals.jsonl", isDirectory: false)
+    }
+
+    public static func pendingApprovalsLockFile(inConfigDir configDir: URL) -> URL {
+        configDir.appendingPathComponent(".pending-approvals.lock", isDirectory: false)
+    }
+
     /// Files T6 / `rv uninstall` must delete when present (policy artifacts + locks).
     public static func uninstallArtifacts(inConfigDir configDir: URL) -> [URL] {
         [
@@ -24,6 +32,8 @@ public enum RVPolicyPaths: Sendable {
             allowOnceFile(inConfigDir: configDir),
             allowOnceLockFile(inConfigDir: configDir),
             allowlistLockFile(inConfigDir: configDir),
+            pendingApprovalsFile(inConfigDir: configDir),
+            pendingApprovalsLockFile(inConfigDir: configDir),
         ]
     }
 

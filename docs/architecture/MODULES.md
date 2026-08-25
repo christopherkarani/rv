@@ -10,10 +10,10 @@ Each module keeps a small public API, `package` internals later, and its own tes
 
 | Module | Owns | Must not |
 |---|---|---|
-| **RVDomain** | `Decision`, `Severity`, `PackID`, `RuleID`, `SecretPathCatalog`, `EvaluationRequest/Result`, Explain pipeline (`ExplainStep`), `ProposedAction`, `HardPolicyDecision`, `ActionReviewer` | I/O, TTY, XPC |
+| **RVDomain** | `Decision`, `Severity`, `PackID`, `RuleID`, `SecretPathCatalog`, `EvaluationRequest/Result`, Explain pipeline (`ExplainStep`), `ProposedAction`, `HardPolicyDecision`, `ActionReviewer`, `PendingApproval` | I/O, TTY, XPC |
 | **RVEngine** | normalize, quick-reject, safe then destructive, secret-path on allow, deadline, `PatternEngine` | pack files, hooks |
 | **RVPacks** | registry, bundled JSON, enable/disable | decisions, rendering |
-| **RVPolicy** | config merge, allowlist, allow-once | rendering |
+| **RVPolicy** | config merge, allowlist, allow-once, durable `PendingApprovalStore` | rendering |
 | **RVHooks** | **Pi / Grok / OpenCode** Host adapters: shell codecs, Hook mapper/voice, embedded adapter resources | evaluation, setup mutations |
 | **RVIPC** | `rv.ipc.v1` Codable | transport details |
 | **RVService** | XPC listener, EvaluationWorld (single assembly), EvaluateSession (compiled day-one packs + evaluate), GatedEvaluate (session then Policy gate), launchd | ArgumentParser, SwiftUI |
