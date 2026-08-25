@@ -149,10 +149,10 @@ T4 locked behavior:
 
 | Evaluate | stdout | exit | Notes |
 |---|---|---|---|
-| Allow (non-shell, empty command, default-allow, medium/low match) | **empty** | `0` | Silent. Do not emit `{"decision":"allow"}`. Do not emit a reason. |
+| Allow (non-shell, default-allow, medium/low match) | **empty** | `0` | Silent. Do not emit `{"decision":"allow"}`. Do not emit a reason. Empty command is the Parse failure row (`missingCommand`), not this one. |
 | Deny (engine deny) | `{"decision":"deny","reason":"<hostDenyText>"}` plus a trailing newline | `0` | JSON is the gate. `reason` is T2 `hostDenyText` only. |
 | Indeterminate (oversize / budget / core packs unloadable) | `{"decision":"deny","reason":"rv could not finish evaluating this command. Run it in Terminal."}` | `0` | Not empty allow. No pack `rule_id`. |
-| Parse failure / unreadable stdin | empty | `0` | Fail-open, matching Grok. No pretty stderr. |
+| Parse failure / unreadable stdin / missing command | `{"decision":"deny","reason":"<malformedHookSentence>"}` plus a trailing newline | `0` | Fail-closed. No pack `rule`/`next`. Evaluate is not called. No pretty stderr. |
 | `rvd` down or version-skewed | *(evaluate in-process, then the Allow, Deny, or Indeterminate row)* | — | Never allow *because* XPC missed. Never treat in-process `indeterminate` as the Allow row. |
 
 Do **not**:
@@ -221,10 +221,10 @@ Checked-in under `Tests/RVHooksTests/Fixtures/grok/`. Each case is stdin file + 
 | `deny-git-reset-hard.json` | `command: git reset --hard` | stdout JSON `decision=deny`, `reason` equals T2 `hostDenyText` for that result (contains `core.git/reset-hard` or T1’s locked `RuleID` display, and `rv allow-once`), exit 0 |
 | `deny-reason-is-one-line.json` | same deny | `reason` has no `\\n`, no `═`, no CSI |
 | `allow-non-shell-read.json` | `toolName: read_file` (or `Read`) | empty stdout, exit 0, **evaluate not called** |
-| `allow-empty-command.json` | `toolInput: {}` | empty stdout, exit 0 |
+| `deny-empty-command.json` | `toolInput: {}` | deny JSON, reason is `malformedHookSentence(.missingCommand)`, no pack `rule`/`next`, **evaluate not called**, exit 0 |
 | `allow-legacy-run-terminal-cmd.json` | `toolName: run_terminal_cmd`, `git status` | empty stdout, exit 0 |
 | `ignore-passive-session-start.json` | `hookEventName: session_start` | empty stdout, exit 0 |
-| `malformed.txt` | not JSON | empty stdout, exit 0 |
+| `malformed.txt` | not JSON | deny JSON, reason is `malformedHookSentence(.unreadable)`, no pack `rule`/`next`, **evaluate not called**, exit 0 |
 | `allow-medium-stash-drop.json` | `command: git stash drop` | empty stdout, exit 0 — **not** deny JSON |
 | `deny-indeterminate-oversize.json` | command longer than 65_536 bytes that also contains `git reset --hard` | deny JSON, reason is the incomplete-eval sentence, no pack `rule_id`, exit 0 |
 

@@ -225,9 +225,23 @@ private func runHook(
     try expectResetHardMapperDeny(wire, exit: expected.exit)
 }
 
-@Test func hookAllowEmptyCommand_emptyStdoutExitZero() async throws {
-    let expected = try grokExpected("allow-empty-command")
-    let wire = try await runHook(stdin: try grokFixture("allow-empty-command.json"))
+@Test func hookEmptyCommand_failsClosedWithMissingCommandDenyJSONWithoutEvaluating() async throws {
+    let probe = EvaluateProbe()
+    let expected = try grokExpected("deny-empty-command")
+    let wire = try await runHook(stdin: try grokFixture("deny-empty-command.json")) { command, _ in
+        probe.record(command, result: EvaluationResult(
+            outcome: .deny(
+                Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "should not run"),
+                matched: nil
+            )
+        ))
+    }
+    let json = try denyJSON(wire.stdout)
+    #expect(json["decision"] as? String == "deny")
+    #expect(json["reason"] as? String == malformedHookSentence(.missingCommand))
+    #expect(json["rule"] == nil)
+    #expect(json["next"] == nil)
+    #expect(probe.commands.isEmpty)
     #expect(wire.stdout == expected.stdout)
     #expect(wire.exitCode == expected.exit)
 }
