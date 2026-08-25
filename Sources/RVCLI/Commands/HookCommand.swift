@@ -20,7 +20,7 @@ struct Hook: AsyncParsableCommand {
         let client = ServiceClient()
         let outcome = await run(
             stdin: stdin,
-            evaluate: { command, cwd in
+            evaluate: { (command: ShellCommand, cwd: WorkingDirectory?) in
                 await client.evaluateResult(command: command, cwd: cwd)
             }
         )
