@@ -84,7 +84,7 @@
 | **RVPresentation** | Deny/explain/packs/doctor view models (no ANSI). | `ExplainViewModel`, `TestViewModel`, `DenyViewModel`, `DoctorViewModel`, `PacksViewModel`, `SetupViewModel`, `SetupCeremony/UninstallCeremony`, `RobotPayloads`, `ExplanationLines`, `Suggestions`, `DecisionWord` · `ExplainViewModel.swift`, `TestViewModel.swift`, `DenyViewModel.swift`, `DoctorViewModel.swift`, `PacksViewModel.swift`, `SetupViewModel.swift`, `RobotPayloads.swift` | `RVDomain`, `RVTheme` | ANSI |
 | **RVTheme** | Palettes + pure capability detection. No business rules. | `Palette` (`fact/muted/deny/allow/heading/mark/trace/silver`, `RegexInk`), `ColorCapability`, `OutputMode` (`robot`/`pretty`/`browse`), `ThemeProbe` · `Palette.swift`, `ColorCapability.swift`, `OutputMode.swift`, `ThemeProbe.swift` | none | business rules |
 | **RVTUI** | Browse kit `reduce + render → [String]`, key map. | `BrowseState`, `Render.browseFrame/render`, `Reduce`, `KeyMap`, `ExplainRenderer`, `TestRenderer`, `PacksRenderer`, `DoctorRenderer`, `SetupRenderer`, `FrameRenderer`, `RegexPaint`, `TreeLines` · `RVTUI.swift`, `Render.swift`, `Reduce.swift`, `BrowseState.swift`, `KeyMap.swift` | `RVTheme`, `RVPresentation` | opening a TTY |
-| **RVCLI** | ArgumentParser tree, output mode, thin XPC client, setup/uninstall state machine, TTY path. | `RV` (`@main` ParsableCommand), `Commands/{Test,Explain,Packs,Doctor,Setup,Uninstall,Hook,Service}`, `CommandInvocation/CommandRun`, `Hook/HookDispatch`, `Service/{ServiceClient,XPCClient,ServiceHealth,ServiceDiagnostics}`, `Setup/{SetupRun,HostAdapterInstallation,LaunchAgentTemplate,OwnedPaths}`, `Doctor/DoctorRun`, `Help/HelpDispatch`, `RobotDocument`, `PrettyWriter` · `RVCLI.swift`, `RV.swift`, `Commands/*.swift` | `RVDomain`, `RVEngine`, `RVPolicy`, `RVHooks`, `RVIPC`, `RVPresentation`, `RVTheme`, `RVTUI`, `RVService`, `RVHistory`, `RVAnalytics`, `ArgumentParser` | regex, pack JSON parse (packs are data) |
+| **RVCLI** | ArgumentParser tree, output mode, thin XPC client, setup/uninstall state machine, TTY path. | `RV` (`@main` ParsableCommand), `Commands/{Test,Explain,Packs,Doctor,Setup,Uninstall,Hook,Service}`, `CommandInvocation/CommandRun`, `Hook/HookDispatch`, `Service/{ServiceClient,XPCClient,ServiceHealth,ServiceDiagnostics}`, `Setup/{SetupRun,HostAdapterInstallation,ClaudeSettingsMerge,LaunchAgentTemplate,OwnedPaths}`, `Doctor/DoctorRun`, `Help/HelpDispatch`, `RobotDocument`, `PrettyWriter` · `RVCLI.swift`, `RV.swift`, `Commands/*.swift` | `RVDomain`, `RVEngine`, `RVPolicy`, `RVHooks`, `RVIPC`, `RVPresentation`, `RVTheme`, `RVTUI`, `RVService`, `RVHistory`, `RVAnalytics`, `ArgumentParser` | regex, pack JSON parse (packs are data) |
 | **RVHistory** | **Stub** — history off by default, never logs full argv/paths. | `RVHistory` enum stub · `RVHistory.swift` | `RVDomain` | logging full argv, `os_log` command text |
 | **RVAnalytics** | Anonymous product analytics (PostHog), opt-out via `analytics.enabled` in `~/.config/rv/config.json`. Never host hook process. | `AnalyticsCoordinator` (`recordDecision`, `flushDailyIfNeeded`), `AnalyticsIdentity/Sink/Paths/Preferences`, `PostHogSink`, `AnalyticsNotice` · `AnalyticsCoordinator.swift`, `RVAnalytics.swift` | none (actor ok) | command text/paths/secrets; hook-process I/O; network in non-sink |
 | **rv** (exec) | Swift operator entry. Help fast-path + hook fast-path → `RV`. | `Sources/rv/main.swift` → `HelpDispatch` → `HookDispatch` → `RV.main()` | `RVCLI` | — |
@@ -150,9 +150,9 @@ Order guarantee per `docs/dev/PARITY.md`: `normalize → quick-reject → safe �
 ### (b) Hook Request Flow (host adapter → C hook → rvd → mapper → host wire)
 
 ```
-Host (Grok / Pi / OpenCode)
+Host (Grok / Pi / OpenCode / Claude)
   │ spawns  $HOME/.local/bin/rv hook --host {grok,pi,opencode,claude}
-  │ stdin = raw host JSON (Grok pre_tool_use + tool_input.command, Pi tool event, OC plugin payload)
+  │ stdin = raw host JSON (Grok pre_tool_use + tool_input.command, Pi tool event, OC plugin payload, Claude PreToolUse/Bash)
   ▼
 rv (C) — Sources/rv-c/rv.c — 36 KB stripped
   │ parse_hook_argv: --host/--host=, default grok, invalid→ exec rv-cli, -h/--help→ exec rv-cli

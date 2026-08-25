@@ -40,6 +40,7 @@ private func grokWiredFrame() -> SetupCeremonyFrame {
     let lines = SetupRenderer().render(grokWiredFrame(), palette: colorOffPalette)
     #expect(lines.contains(SetupRenderer.leadingPad + "•  Grok  reload /hooks"))
     #expect(lines.contains(SetupRenderer.leadingPad + "◦  Pi"))
+    #expect(lines.contains(SetupRenderer.leadingPad + "◦  Claude"))
     #expect(lines.contains(SetupRenderer.leadingPad + setupCeremonyWiringTitle))
     #expect(lines.contains(SetupRenderer.leadingPad + setupCeremonyHooksWired))
 }
