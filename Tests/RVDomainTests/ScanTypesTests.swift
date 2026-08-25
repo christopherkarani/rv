@@ -25,13 +25,13 @@ import Testing
         sessionID: "s1",
         sourcePath: "/tmp/fixture/session.jsonl",
         occurredAt: when,
-        command: "git reset --hard"
+        command: ShellCommand(rawValue: "git reset --hard")
     )
     #expect(event.host == .pi)
     #expect(event.sessionID == "s1")
     #expect(event.sourcePath == "/tmp/fixture/session.jsonl")
     #expect(event.occurredAt == when)
-    #expect(event.command == "git reset --hard")
+    #expect(event.command.rawValue == "git reset --hard")
 }
 
 @Test func scanFinding_reusesRuleIDAndPackID() {
@@ -41,13 +41,13 @@ import Testing
         sourcePath: "/tmp/fixture/session.jsonl",
         ruleID: rule,
         packID: .coreGit,
-        matchingView: "git reset --hard",
+        matchingView: MatchingView("git reset --hard"),
         count: 3
     )
     #expect(finding.ruleID.rawValue == "core.git:reset-hard")
     #expect(finding.packID == .coreGit)
     #expect(finding.count == 3)
-    #expect(finding.matchingView == "git reset --hard")
+    #expect(finding.matchingView.rawValue == "git reset --hard")
 }
 
 @Test func scanReport_holdsFindingsAndWarnings() {
@@ -57,7 +57,7 @@ import Testing
         sourcePath: "/tmp/a",
         ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
         packID: .coreGit,
-        matchingView: "git reset --hard"
+        matchingView: MatchingView("git reset --hard")
     )
     let report = ScanReport(
         findings: [finding],
@@ -76,13 +76,17 @@ import Testing
 @Test func scanTypes_areSendableValueTypes() {
     let bounds: any Sendable = ScanBounds.default
     let host: any Sendable = ScanHostID.opencode
-    let event: any Sendable = ExtractedEvent(host: .opencode, sourcePath: "p", command: "true")
+    let event: any Sendable = ExtractedEvent(
+        host: .opencode,
+        sourcePath: "p",
+        command: ShellCommand(rawValue: "true")
+    )
     let finding: any Sendable = ScanFinding(
         host: .opencode,
         sourcePath: "p",
         ruleID: RuleID(pack: .coreFilesystem, pattern: "rm-rf"),
         packID: .coreFilesystem,
-        matchingView: "rm -rf /"
+        matchingView: MatchingView("rm -rf /")
     )
     let warning: any Sendable = ScanWarning(code: "cap.file-size", message: "skipped")
     let report: any Sendable = ScanReport()
