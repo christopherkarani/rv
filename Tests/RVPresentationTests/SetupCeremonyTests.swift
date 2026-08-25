@@ -71,7 +71,7 @@ import Testing
         grok: .wired,
         pi: .occupied,
         openCode: .wired,
-        wrote: [.grok, .openCode],
+        wrote: [.grok, .opencode],
         kind: .setup
     )
     guard let frames else {

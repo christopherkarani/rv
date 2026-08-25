@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import RVAnalytics
+import RVDomain
 import RVHooks
 import RVPolicy
 import RVPresentation
@@ -113,7 +114,7 @@ private func fixtureLoginHome() throws -> URL {
         #expect(outcome.exitCode == 0)
         #expect(outcome.stdout == setupRobotCompleteLine + "\n")
         let body = try String(contentsOfFile: layout.grokHook, encoding: .utf8)
-        #expect(body == (try SetupHostKind.grok.adapterResource().rendered(rvPath: "/tmp/rv-bin/rv")))
+        #expect(body == (try HookHost.grok.adapterResource().rendered(rvPath: "/tmp/rv-bin/rv")))
         #expect(FileManager.default.fileExists(atPath: layout.piExtension) == false)
         let extras = try FileManager.default.contentsOfDirectory(atPath: layout.grokDirectory)
         #expect(extras == ["hooks"])
@@ -129,7 +130,7 @@ private func fixtureLoginHome() throws -> URL {
         let outcome = SetupRun.setup(env(home: home, launchctl: launchctl))
         #expect(outcome.exitCode == 0)
         let body = try String(contentsOfFile: layout.piExtension, encoding: .utf8)
-        #expect(body == (try SetupHostKind.pi.adapterResource().rendered(rvPath: "/tmp/rv-bin/rv")))
+        #expect(body == (try HookHost.pi.adapterResource().rendered(rvPath: "/tmp/rv-bin/rv")))
         #expect(FileManager.default.fileExists(atPath: layout.piDirectory + "/settings.json") == false)
         #expect(FileManager.default.fileExists(atPath: layout.grokHook) == false)
     }
@@ -141,7 +142,7 @@ private func fixtureLoginHome() throws -> URL {
         let outcome = SetupRun.setup(env(home: home, launchctl: launchctl))
         #expect(outcome.exitCode == 0)
         let body = try String(contentsOfFile: layout.openCodePlugin, encoding: .utf8)
-        #expect(body == (try SetupHostKind.openCode.adapterResource().rendered(rvPath: "/tmp/rv-bin/rv")))
+        #expect(body == (try HookHost.opencode.adapterResource().rendered(rvPath: "/tmp/rv-bin/rv")))
         #expect(FileManager.default.fileExists(atPath: layout.grokHook) == false)
     }
 }
@@ -173,7 +174,7 @@ private func fixtureLoginHome() throws -> URL {
         #expect(outcome.exitCode == 0)
         #expect(outcome.stdout.contains("Skipped occupied grok hook.") == false)
         let wired = try String(contentsOfFile: layout.grokHook, encoding: .utf8)
-        #expect(wired == (try SetupHostKind.grok.adapterResource().rendered(rvPath: "/tmp/rv-bin/rv")))
+        #expect(wired == (try HookHost.grok.adapterResource().rendered(rvPath: "/tmp/rv-bin/rv")))
         let backup = try String(contentsOfFile: layout.grokHook + ".bak", encoding: .utf8)
         #expect(backup == foreign)
     }
@@ -195,7 +196,7 @@ private func fixtureLoginHome() throws -> URL {
         #expect(outcome.exitCode == 0)
         #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: layout.grokHook)) == nil)
         let wired = try String(contentsOfFile: layout.grokHook, encoding: .utf8)
-        #expect(wired == (try SetupHostKind.grok.adapterResource().rendered(rvPath: "/tmp/rv-bin/rv")))
+        #expect(wired == (try HookHost.grok.adapterResource().rendered(rvPath: "/tmp/rv-bin/rv")))
         #expect(FileManager.default.fileExists(atPath: layout.grokHook + ".bak") == false)
     }
 }
@@ -214,7 +215,7 @@ private func fixtureLoginHome() throws -> URL {
         #expect(try String(contentsOfFile: sibling, encoding: .utf8) == "{\"foreign\":true}\n")
         #expect(
             try String(contentsOfFile: layout.grokHook, encoding: .utf8)
-                == (try SetupHostKind.grok.adapterResource().rendered(rvPath: "/tmp/rv-bin/rv"))
+                == (try HookHost.grok.adapterResource().rendered(rvPath: "/tmp/rv-bin/rv"))
         )
     }
 }
@@ -603,14 +604,14 @@ private func fixtureLoginHome() throws -> URL {
         #expect(grokAfter == foreign)
         #expect(FileManager.default.fileExists(atPath: layout.piExtension))
         let pi = try String(contentsOfFile: layout.piExtension, encoding: .utf8)
-        #expect(pi == (try SetupHostKind.pi.adapterResource().rendered(rvPath: "/tmp/rv-bin/rv")))
+        #expect(pi == (try HookHost.pi.adapterResource().rendered(rvPath: "/tmp/rv-bin/rv")))
     }
 }
 
 @Test func setupError_bridgesAdapterResourceFailureToHostKind() {
     #expect(SetupError(adapterResourceFailure: .missingTemplate(.grok)) == .adapterTemplateMissing(.grok))
     #expect(SetupError(adapterResourceFailure: .missingTemplate(.pi)) == .adapterTemplateMissing(.pi))
-    #expect(SetupError(adapterResourceFailure: .missingTemplate(.opencode)) == .adapterTemplateMissing(.openCode))
+    #expect(SetupError(adapterResourceFailure: .missingTemplate(.opencode)) == .adapterTemplateMissing(.opencode))
 }
 
 @Test func setupFailureOutput_mapsEveryCaseToStderrLineAndExitCode() {
@@ -640,7 +641,7 @@ private func fixtureLoginHome() throws -> URL {
             "rv setup failed: unable to clear occupied grok hook\n"
         ),
         (
-            .hostHookWriteFailed(.openCode),
+            .hostHookWriteFailed(.opencode),
             .setup,
             EX_CANTCREAT,
             "rv setup failed: unable to write opencode hook\n"

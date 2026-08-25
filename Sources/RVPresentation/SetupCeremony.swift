@@ -1,3 +1,5 @@
+import RVDomain
+
 /// Whether the paced TTY show includes the theatrical download beat.
 public enum SetupCeremonyKind: Equatable, Sendable {
     /// `install.sh` → `RV_FROM_INSTALL=1`. Download bar, then hosts, then install closer.
@@ -61,7 +63,7 @@ public func setupCeremonyFrames(
     grok: SetupSlotKind,
     pi: SetupSlotKind,
     openCode: SetupSlotKind,
-    wrote: Set<SetupHostKind>,
+    wrote: Set<HookHost>,
     kind: SetupCeremonyKind
 ) -> [SetupCeremonyFrame]? {
     setupCeremonyFrames(
@@ -100,7 +102,7 @@ public func setupCeremonyFrames(
         )
     }
 
-    let emptySlots = SetupHostKind.allCases.map {
+    let emptySlots = HookHost.allCases.map {
         SetupSlotView(host: $0, kind: .pending)
     }
     for spin in 0..<setupCeremonySpinnerFrames.count {
@@ -129,7 +131,7 @@ public func setupCeremonyFrames(
             pauseNanoseconds: setupCeremonyHostWireNs
         )
     )
-    for index in SetupHostKind.allCases.indices {
+    for index in HookHost.allCases.indices {
         revealed[index] = finalSlots[index]
         frames.append(
             SetupCeremonyFrame(
@@ -160,7 +162,7 @@ public func setupCeremonyFrames(
     return frames
 }
 
-public func setupSlotClause(host: SetupHostKind, kind: SetupSlotKind) -> String? {
+public func setupSlotClause(host: HookHost, kind: SetupSlotKind) -> String? {
     switch kind {
     case .wired where host == .grok:
         return setupGrokReloadClause

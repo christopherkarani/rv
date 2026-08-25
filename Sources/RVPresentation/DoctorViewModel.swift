@@ -127,12 +127,12 @@ public struct DoctorPacksView: Equatable, Sendable {
 /// One Host adapter fact rendered by doctor.
 public struct DoctorHostView: Equatable, Sendable {
     /// Supported Host.
-    public var host: SetupHostKind
+    public var host: HookHost
     /// Installation state at the Host's owned path.
     public var state: DoctorHostState
 
     /// Creates a Host adapter fact.
-    public init(host: SetupHostKind, state: DoctorHostState) {
+    public init(host: HookHost, state: DoctorHostState) {
         self.host = host
         self.state = state
     }

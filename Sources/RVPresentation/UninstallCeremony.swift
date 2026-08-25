@@ -1,3 +1,5 @@
+import RVDomain
+
 /// Deterministic paced frames for `rv uninstall`. Reuses `SetupCeremonyFrame`.
 
 public let uninstallCeremonyRemovingTitle = "Removing Hooks"
@@ -17,9 +19,9 @@ public let uninstallRobotAlreadyCleanLine = "Already clean."
 public enum UninstallCloser: Equatable, Sendable {
     /// Deleted at least one owned artifact; payloads list the hosts deleted this run
     /// and the hosts left occupied.
-    case removed(hosts: Set<SetupHostKind>, occupied: Set<SetupHostKind>)
+    case removed(hosts: Set<HookHost>, occupied: Set<HookHost>)
     /// Deleted nothing; payload lists hosts left occupied.
-    case alreadyClean(occupied: Set<SetupHostKind>)
+    case alreadyClean(occupied: Set<HookHost>)
 }
 
 /// Paced uninstall frames for `closer`. Never empty.
@@ -50,9 +52,9 @@ public func uninstallCeremonyFrames(_ closer: UninstallCloser) -> [SetupCeremony
     }
 }
 
-private func occupiedSlots(occupied: Set<SetupHostKind>) -> [SetupSlotView] {
+private func occupiedSlots(occupied: Set<HookHost>) -> [SetupSlotView] {
     guard occupied.isEmpty == false else { return [] }
-    return SetupHostKind.allCases.map { host in
+    return HookHost.allCases.map { host in
         occupied.contains(host)
             ? SetupSlotView(host: host, kind: .occupied, clause: uninstallOccupiedClause)
             : SetupSlotView(host: host, kind: .pending)
@@ -60,10 +62,10 @@ private func occupiedSlots(occupied: Set<SetupHostKind>) -> [SetupSlotView] {
 }
 
 private func removalAnimation(
-    removed: Set<SetupHostKind>,
-    occupied: Set<SetupHostKind>
+    removed: Set<HookHost>,
+    occupied: Set<HookHost>
 ) -> [SetupCeremonyFrame] {
-    func slot(for host: SetupHostKind, stillPresent: Bool) -> SetupSlotView {
+    func slot(for host: HookHost, stillPresent: Bool) -> SetupSlotView {
         if occupied.contains(host) {
             return SetupSlotView(host: host, kind: .occupied, clause: uninstallOccupiedClause)
         }
@@ -76,7 +78,7 @@ private func removalAnimation(
     var stillPresent = removed
     var frames: [SetupCeremonyFrame] = []
 
-    let initial = SetupHostKind.allCases.map { slot(for: $0, stillPresent: stillPresent.contains($0)) }
+    let initial = HookHost.allCases.map { slot(for: $0, stillPresent: stillPresent.contains($0)) }
     frames.append(
         SetupCeremonyFrame(
             title: uninstallCeremonyRemovingTitle,
@@ -85,9 +87,9 @@ private func removalAnimation(
         )
     )
 
-    for host in SetupHostKind.allCases where removed.contains(host) {
+    for host in HookHost.allCases where removed.contains(host) {
         stillPresent.remove(host)
-        let slots = SetupHostKind.allCases.map { slot(for: $0, stillPresent: stillPresent.contains($0)) }
+        let slots = HookHost.allCases.map { slot(for: $0, stillPresent: stillPresent.contains($0)) }
         frames.append(
             SetupCeremonyFrame(
                 title: uninstallCeremonyRemovingTitle,
@@ -97,7 +99,7 @@ private func removalAnimation(
         )
     }
 
-    let finalSlots = SetupHostKind.allCases.map { slot(for: $0, stillPresent: false) }
+    let finalSlots = HookHost.allCases.map { slot(for: $0, stillPresent: false) }
     if removed.isEmpty == false {
         frames.append(
             SetupCeremonyFrame(

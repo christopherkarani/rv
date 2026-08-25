@@ -72,7 +72,7 @@ private let readyService = DoctorServiceView(
     let model = DoctorViewModel(
         service: readyService,
         packs: DoctorPacksView(enabled: dayOnePackIDs, registry: .ready),
-        hosts: SetupHostKind.allCases.map { DoctorHostView(host: $0, state: .missing) },
+        hosts: HookHost.allCases.map { DoctorHostView(host: $0, state: .missing) },
         config: .readable
     )
     let json = try object(from: doctorRobotPayload(from: model))

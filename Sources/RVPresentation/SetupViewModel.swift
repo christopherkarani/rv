@@ -1,15 +1,12 @@
-/// v1 host shown as a TTY setup slot.
-public enum SetupHostKind: Equatable, Hashable, Sendable, CaseIterable {
-    case grok
-    case pi
-    case openCode
+import RVDomain
 
+extension HookHost {
     /// Slot label. Unpainted on the TTY show.
     public var displayName: String {
         switch self {
         case .grok: "Grok"
         case .pi: "Pi"
-        case .openCode: "OpenCode"
+        case .opencode: "OpenCode"
         }
     }
 }
@@ -29,13 +26,13 @@ public struct SetupSlotSnapshot: Equatable, Sendable {
     public var grok: SetupSlotKind
     public var pi: SetupSlotKind
     public var openCode: SetupSlotKind
-    public var wrote: Set<SetupHostKind>
+    public var wrote: Set<HookHost>
 
     public init(
         grok: SetupSlotKind,
         pi: SetupSlotKind,
         openCode: SetupSlotKind,
-        wrote: Set<SetupHostKind>
+        wrote: Set<HookHost>
     ) {
         self.grok = grok
         self.pi = pi
@@ -43,20 +40,20 @@ public struct SetupSlotSnapshot: Equatable, Sendable {
         self.wrote = wrote
     }
 
-    public func kind(for host: SetupHostKind) -> SetupSlotKind {
+    public func kind(for host: HookHost) -> SetupSlotKind {
         switch host {
         case .grok: grok
         case .pi: pi
-        case .openCode: openCode
+        case .opencode: openCode
         }
     }
 
-    public var occupied: [SetupHostKind] {
-        SetupHostKind.allCases.filter { kind(for: $0) == .occupied }
+    public var occupied: [HookHost] {
+        HookHost.allCases.filter { kind(for: $0) == .occupied }
     }
 
-    public var detected: [SetupHostKind] {
-        SetupHostKind.allCases.filter { kind(for: $0) != .pending }
+    public var detected: [HookHost] {
+        HookHost.allCases.filter { kind(for: $0) != .pending }
     }
 
     public var isHostless: Bool { detected.isEmpty }
@@ -79,7 +76,7 @@ public struct SetupSlotSnapshot: Equatable, Sendable {
     }
 
     public var slotViews: [SetupSlotView] {
-        SetupHostKind.allCases.map { host in
+        HookHost.allCases.map { host in
             let kind = kind(for: host)
             return SetupSlotView(host: host, kind: kind, clause: setupSlotClause(host: host, kind: kind))
         }
@@ -88,12 +85,12 @@ public struct SetupSlotSnapshot: Equatable, Sendable {
 
 /// One of the three TTY setup rows.
 public struct SetupSlotView: Equatable, Sendable {
-    public var host: SetupHostKind
+    public var host: HookHost
     public var kind: SetupSlotKind
     /// Unpainted clause (`reload /hooks`, `skipped occupied`). Nil when the row is bare.
     public var clause: String?
 
-    public init(host: SetupHostKind, kind: SetupSlotKind, clause: String? = nil) {
+    public init(host: HookHost, kind: SetupSlotKind, clause: String? = nil) {
         self.host = host
         self.kind = kind
         self.clause = clause
@@ -108,9 +105,9 @@ public enum SetupCloser: Equatable, Sendable {
     /// No hosts detected.
     case hostless
     /// At least one host wired this run; payload lists occupied skips in host order.
-    case complete(skipped: [SetupHostKind])
+    case complete(skipped: [HookHost])
     /// Every detected host was occupied; nothing wired.
-    case skipped(skipped: [SetupHostKind])
+    case skipped(skipped: [HookHost])
 
     /// Ceremony closer lines for `kind`.
     /// Quiet is empty; hostless and occupied-only both return the hostless pair;
@@ -131,13 +128,13 @@ public enum SetupCloser: Equatable, Sendable {
 public let setupRobotHostlessLine = "Run rv setup after Pi, Grok, or OpenCode exists."
 public let setupRobotCompleteLine = "Setup complete. Next  rv test 'git reset --hard'."
 
-extension SetupHostKind {
+extension HookHost {
     /// `--robot` skip sentence for an occupied owned hook.
     public var robotSkipLine: String {
         switch self {
         case .grok: "Skipped occupied grok hook."
         case .pi: "Skipped occupied pi hook."
-        case .openCode: "Skipped occupied opencode hook."
+        case .opencode: "Skipped occupied opencode hook."
         }
     }
 }

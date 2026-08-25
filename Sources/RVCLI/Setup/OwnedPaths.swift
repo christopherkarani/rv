@@ -1,10 +1,8 @@
 import RVDomain
 import RVPolicy
-import RVPresentation
 
 struct OwnedHostAdapterPath: Equatable, Sendable {
-    var host: SetupHostKind
-    var hookHost: HookHost
+    var host: HookHost
     var detectionDirectory: String
     var executableName: String
     var destination: String
@@ -26,15 +24,14 @@ struct OwnedPaths: Equatable, Sendable {
     var localRvd: String { home.rawValue + "/.local/bin/rvd" }
 
     var hostAdapters: [OwnedHostAdapterPath] {
-        SetupHostKind.allCases.map(hostAdapter)
+        HookHost.allCases.map(hostAdapter)
     }
 
-    func hostAdapter(for host: SetupHostKind) -> OwnedHostAdapterPath {
+    func hostAdapter(for host: HookHost) -> OwnedHostAdapterPath {
         switch host {
         case .grok:
             OwnedHostAdapterPath(
                 host: .grok,
-                hookHost: .grok,
                 detectionDirectory: grokDirectory,
                 executableName: "grok",
                 destination: grokHook
@@ -42,15 +39,13 @@ struct OwnedPaths: Equatable, Sendable {
         case .pi:
             OwnedHostAdapterPath(
                 host: .pi,
-                hookHost: .pi,
                 detectionDirectory: piDirectory,
                 executableName: "pi",
                 destination: piExtension
             )
-        case .openCode:
+        case .opencode:
             OwnedHostAdapterPath(
-                host: .openCode,
-                hookHost: .opencode,
+                host: .opencode,
                 detectionDirectory: openCodeDirectory,
                 executableName: "opencode",
                 destination: openCodePlugin
