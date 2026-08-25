@@ -32,6 +32,7 @@ extension SetupHostKind {
         case .grok: .grok
         case .pi: .pi
         case .openCode: .opencode
+        case .claude: .claude
         }
     }
 
@@ -123,6 +124,7 @@ enum SetupRun {
             .grok: .pending,
             .pi: .pending,
             .openCode: .pending,
+            .claude: .pending,
         ]
         var wrote: Set<SetupHostKind> = []
 
@@ -136,6 +138,7 @@ enum SetupRun {
         for owned in layout.hostAdapters {
             let host = owned.host
             let existingData: Data?
+            var mergeForce = false
             switch installations.installation(for: host).setupPlan(force: force) {
             case .skipUndetected:
                 continue
@@ -143,31 +146,54 @@ enum SetupRun {
                 kinds[host] = .occupied
                 continue
             case .forceClearThenWrite:
-                do {
-                    try files.backupAndClearOwnedPath(owned.destination)
-                } catch {
-                    throw SetupError.hostHookClearFailed(host)
+                if host == .claude {
+                    existingData = files.readData(owned.destination)
+                    mergeForce = true
+                } else {
+                    do {
+                        try files.backupAndClearOwnedPath(owned.destination)
+                    } catch {
+                        throw SetupError.hostHookClearFailed(host)
+                    }
+                    existingData = nil
                 }
-                existingData = nil
             case .write(let data):
-                existingData = data
-            }
-            let adapter: HostAdapterResource
-            do {
-                adapter = try HostAdapterResources.load(for: owned.hookHost)
-            } catch {
-                throw SetupError(adapterResourceFailure: error)
+                if host == .claude {
+                    existingData = data ?? files.readData(owned.destination)
+                } else {
+                    existingData = data
+                }
             }
             let wroteHook: Bool
-            do {
-                wroteHook = try writeOwned(
-                    path: owned.destination,
-                    contents: adapter.rendered(rvPath: env.rvPath),
-                    existingData: existingData,
-                    files: files
-                )
-            } catch {
-                throw SetupError.hostHookWriteFailed(host)
+            if host == .claude {
+                do {
+                    wroteHook = try writeClaudeSettings(
+                        path: owned.destination,
+                        rvPath: env.rvPath,
+                        existingData: existingData,
+                        force: mergeForce,
+                        files: files
+                    )
+                } catch {
+                    throw SetupError.hostHookWriteFailed(host)
+                }
+            } else {
+                let adapter: HostAdapterResource
+                do {
+                    adapter = try HostAdapterResources.load(for: owned.hookHost)
+                } catch {
+                    throw SetupError(adapterResourceFailure: error)
+                }
+                do {
+                    wroteHook = try writeOwned(
+                        path: owned.destination,
+                        contents: adapter.rendered(rvPath: env.rvPath),
+                        existingData: existingData,
+                        files: files
+                    )
+                } catch {
+                    throw SetupError.hostHookWriteFailed(host)
+                }
             }
             if wroteHook {
                 wrote.insert(host)
@@ -179,6 +205,7 @@ enum SetupRun {
             grok: kinds[.grok] ?? .pending,
             pi: kinds[.pi] ?? .pending,
             openCode: kinds[.openCode] ?? .pending,
+            claude: kinds[.claude] ?? .pending,
             wrote: wrote
         )
         env.installAnalytics.captureInstall(hosts: InstallAnalyticsHosts.from(report.slots))
@@ -245,8 +272,14 @@ enum SetupRun {
         for owned in layout.hostAdapters {
             switch installations.installation(for: owned.host).uninstallPlan {
             case .remove:
-                removedPaths.append(owned.destination)
-                removedHosts.insert(owned.host)
+                if owned.host == .claude {
+                    if try removeClaudeRVHooks(at: owned.destination, files: files) {
+                        removedHosts.insert(owned.host)
+                    }
+                } else {
+                    removedPaths.append(owned.destination)
+                    removedHosts.insert(owned.host)
+                }
             case .leaveOccupied:
                 occupiedHosts.insert(owned.host)
             case .skip:
@@ -329,6 +362,59 @@ enum SetupRun {
         }
     }
 
+    /// Writes Claude settings merge when missing or different. Returns whether a write occurred.
+    private static func writeClaudeSettings(
+        path: String,
+        rvPath: String,
+        existingData: Data?,
+        force: Bool,
+        files: FileOps
+    ) throws(SetupError) -> Bool {
+        let merged: (data: Data, wrote: Bool)
+        do {
+            merged = try ClaudeSettingsMerge.merge(
+                existingData: existingData,
+                rvPath: rvPath,
+                force: force
+            )
+        } catch {
+            throw SetupError.hostHookWriteFailed(.claude)
+        }
+        if merged.wrote == false {
+            return false
+        }
+        do {
+            try files.writeData(merged.data, to: path)
+        } catch {
+            throw SetupError.hostHookWriteFailed(.claude)
+        }
+        return true
+    }
+
+    /// Removes rv-fingerprinted Claude handlers only. Returns whether anything changed.
+    private static func removeClaudeRVHooks(at path: String, files: FileOps) throws(SetupError) -> Bool {
+        guard let data = files.readData(path) else { return false }
+        let next: Data?
+        do {
+            next = try ClaudeSettingsMerge.uninstall(existingData: data)
+        } catch {
+            throw SetupError.hostHookWriteFailed(.claude)
+        }
+        guard let next else {
+            files.removeFile(atPath: path)
+            return true
+        }
+        if next == data {
+            return false
+        }
+        do {
+            try files.writeData(next, to: path)
+        } catch {
+            throw SetupError.hostHookWriteFailed(.claude)
+        }
+        return true
+    }
+
     /// Writes `contents` when missing or different. Returns whether a write occurred.
     private static func writeOwned(
         path: String,
@@ -364,6 +450,11 @@ struct FileOps {
     func write(_ contents: String, to path: String) throws {
         try createDirectory(atPath: (path as NSString).deletingLastPathComponent)
         try contents.write(toFile: path, atomically: true, encoding: .utf8)
+    }
+
+    func writeData(_ data: Data, to path: String) throws {
+        try createDirectory(atPath: (path as NSString).deletingLastPathComponent)
+        try data.write(to: URL(fileURLWithPath: path), options: .atomic)
     }
 
     func createDirectory(atPath path: String) throws {

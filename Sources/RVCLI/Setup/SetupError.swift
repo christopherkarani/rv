@@ -53,7 +53,7 @@ enum SetupError: Error, Equatable, Sendable {
         case .missingTemplate(.opencode):
             self = .adapterTemplateMissing(.openCode)
         case .missingTemplate(.claude):
-            self = .inspectionFailed
+            self = .adapterTemplateMissing(.claude)
         }
     }
 }
@@ -64,6 +64,7 @@ extension SetupHostKind {
         case .grok: "grok"
         case .pi: "pi"
         case .openCode: "opencode"
+        case .claude: "claude"
         }
     }
 }

@@ -23,6 +23,7 @@ final class RecordingInstallAnalytics: InstallAnalyticsCapturing, @unchecked Sen
         "grok": "wired",
         "pi": "occupied",
         "opencode": "pending",
+        "claude": "pending",
     ])
 }
 
@@ -43,6 +44,7 @@ final class RecordingInstallAnalytics: InstallAnalyticsCapturing, @unchecked Sen
             "grok": "wired",
             "pi": "pending",
             "opencode": "pending",
+            "claude": "pending",
         ]])
         let paths = AnalyticsPaths(
             configDirectory: URL(fileURLWithPath: layout.configDirectory, isDirectory: true)

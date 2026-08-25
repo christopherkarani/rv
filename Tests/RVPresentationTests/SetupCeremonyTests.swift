@@ -79,9 +79,10 @@ import Testing
         return
     }
     let wiring = frames.filter { $0.title == setupCeremonyWiringTitle }
-    #expect(wiring.count >= 4)
-    #expect(wiring[0].slots.map(\.kind) == [.pending, .pending, .pending])
-    #expect(wiring[1].slots.map(\.kind) == [.wired, .pending, .pending])
-    #expect(wiring[2].slots.map(\.kind) == [.wired, .occupied, .pending])
-    #expect(wiring[3].slots.map(\.kind) == [.wired, .occupied, .wired])
+    #expect(wiring.count >= 5)
+    #expect(wiring[0].slots.map(\.kind) == [.pending, .pending, .pending, .pending])
+    #expect(wiring[1].slots.map(\.kind) == [.wired, .pending, .pending, .pending])
+    #expect(wiring[2].slots.map(\.kind) == [.wired, .occupied, .pending, .pending])
+    #expect(wiring[3].slots.map(\.kind) == [.wired, .occupied, .wired, .pending])
+    #expect(wiring[4].slots.map(\.kind) == [.wired, .occupied, .wired, .pending])
 }

@@ -20,6 +20,8 @@ struct OwnedPaths: Equatable, Sendable {
     var piExtension: String { home.rawValue + "/.pi/agent/extensions/rv-guard.ts" }
     var openCodeDirectory: String { home.rawValue + "/.config/opencode" }
     var openCodePlugin: String { home.rawValue + "/.config/opencode/plugins/rv-guard.js" }
+    var claudeDirectory: String { home.rawValue + "/.claude" }
+    var claudeSettings: String { home.rawValue + "/.claude/settings.json" }
     var launchAgent: String { home.rawValue + "/Library/LaunchAgents/dev.rv.evaluate.plist" }
     var localRv: String { home.rawValue + "/.local/bin/rv" }
     var localRvCli: String { home.rawValue + "/.local/bin/rv-cli" }
@@ -54,6 +56,14 @@ struct OwnedPaths: Equatable, Sendable {
                 detectionDirectory: openCodeDirectory,
                 executableName: "opencode",
                 destination: openCodePlugin
+            )
+        case .claude:
+            OwnedHostAdapterPath(
+                host: .claude,
+                hookHost: .claude,
+                detectionDirectory: claudeDirectory,
+                executableName: "claude",
+                destination: claudeSettings
             )
         }
     }

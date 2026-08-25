@@ -243,6 +243,8 @@ extension SetupHostKind {
             "pi"
         case .openCode:
             "opencode"
+        case .claude:
+            "claude"
         }
     }
 }

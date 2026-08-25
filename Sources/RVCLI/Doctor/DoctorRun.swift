@@ -98,6 +98,14 @@ enum DoctorRun {
     ) -> DoctorHostState {
         switch installation {
         case .wired(let owned, let data):
+            if owned.host == .claude {
+                guard case .wired(let bakedRvPath) = ClaudeSettingsMerge.inspectionState(of: data),
+                      isExecutableRvCli(nextTo: bakedRvPath, fileManager: fileManager)
+                else {
+                    return .broken
+                }
+                return .wired
+            }
             guard let text = String(data: data, encoding: .utf8),
                   let adapter = try? HostAdapterResources.load(for: owned.hookHost),
                   let bakedRvPath = adapter.bakedRvPath(in: text),

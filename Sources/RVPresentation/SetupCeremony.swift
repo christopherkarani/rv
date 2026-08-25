@@ -61,11 +61,12 @@ public func setupCeremonyFrames(
     grok: SetupSlotKind,
     pi: SetupSlotKind,
     openCode: SetupSlotKind,
+    claude: SetupSlotKind = .pending,
     wrote: Set<SetupHostKind>,
     kind: SetupCeremonyKind
 ) -> [SetupCeremonyFrame]? {
     setupCeremonyFrames(
-        SetupSlotSnapshot(grok: grok, pi: pi, openCode: openCode, wrote: wrote),
+        SetupSlotSnapshot(grok: grok, pi: pi, openCode: openCode, claude: claude, wrote: wrote),
         kind: kind
     )
 }

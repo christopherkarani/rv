@@ -14,6 +14,24 @@ private func withInstallationHome(
     try body(home, OwnedPaths(home: try #require(HomeDirectory(validating: home.path))))
 }
 
+private func writeWiredAdapter(
+    host: SetupHostKind,
+    destination: String,
+    rvPath: String
+) throws {
+    try FileManager.default.createDirectory(
+        atPath: (destination as NSString).deletingLastPathComponent,
+        withIntermediateDirectories: true
+    )
+    if host == .claude {
+        let merged = try ClaudeSettingsMerge.merge(existingData: nil, rvPath: rvPath, force: false)
+        try merged.data.write(to: URL(fileURLWithPath: destination))
+    } else {
+        let body = try host.adapterResource().rendered(rvPath: rvPath)
+        try body.write(toFile: destination, atomically: true, encoding: .utf8)
+    }
+}
+
 @Test(arguments: SetupHostKind.allCases)
 func hostInstallation_missingIsReadOnly(_ host: SetupHostKind) throws {
     try withInstallationHome { home, paths in
@@ -69,6 +87,40 @@ func hostInstallation_foreignOwnedBytesAreOccupiedAndUnchanged(_ host: SetupHost
 
         #expect(snapshot.state(for: host) == .occupied)
         #expect(try Data(contentsOf: URL(fileURLWithPath: owned.destination)) == foreign)
+    }
+}
+
+@Test func hostInstallation_claudeForeignJSONWithoutFingerprintIsAbsentFile() throws {
+    try withInstallationHome { _, paths in
+        let owned = paths.hostAdapter(for: .claude)
+        let foreign = """
+        {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  { "type": "command", "command": "dcg evaluate", "timeout": 5 }
+                ]
+              }
+            ]
+          }
+        }
+        """
+        try FileManager.default.createDirectory(
+            atPath: owned.detectionDirectory,
+            withIntermediateDirectories: true
+        )
+        try foreign.write(toFile: owned.destination, atomically: true, encoding: .utf8)
+
+        let snapshot = try HostAdapterInstallation.inspect(
+            paths: paths,
+            pathEntries: [],
+            fileManager: .default
+        )
+
+        #expect(snapshot.state(for: .claude) == .absentFile)
+        #expect(try String(contentsOfFile: owned.destination, encoding: .utf8) == foreign)
     }
 }
 
@@ -130,12 +182,7 @@ func hostInstallation_danglingSymlinkAtOwnedNameIsOccupied(_ host: SetupHostKind
 func hostInstallation_currentResourceWithMissingExecutableIsBroken(_ host: SetupHostKind) throws {
     try withInstallationHome { _, paths in
         let owned = paths.hostAdapter(for: host)
-        let body = try host.adapterResource().rendered(rvPath: "/nonexistent/rv")
-        try FileManager.default.createDirectory(
-            atPath: (owned.destination as NSString).deletingLastPathComponent,
-            withIntermediateDirectories: true
-        )
-        try body.write(toFile: owned.destination, atomically: true, encoding: .utf8)
+        try writeWiredAdapter(host: host, destination: owned.destination, rvPath: "/nonexistent/rv")
 
         let snapshot = try HostAdapterInstallation.inspect(
             paths: paths,
@@ -154,12 +201,11 @@ func hostInstallation_currentResourceWithExecutableIsWired(_ host: SetupHostKind
         let owned = paths.hostAdapter(for: host)
         let executable = home.appendingPathComponent("bin/rv")
         try makeExecutable(executable)
-        let body = try host.adapterResource().rendered(rvPath: executable.path)
         try FileManager.default.createDirectory(
-            atPath: (owned.destination as NSString).deletingLastPathComponent,
+            atPath: owned.detectionDirectory,
             withIntermediateDirectories: true
         )
-        try body.write(toFile: owned.destination, atomically: true, encoding: .utf8)
+        try writeWiredAdapter(host: host, destination: owned.destination, rvPath: executable.path)
 
         let snapshot = try HostAdapterInstallation.inspect(
             paths: paths,
