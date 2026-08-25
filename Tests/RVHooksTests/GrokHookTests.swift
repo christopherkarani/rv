@@ -146,3 +146,25 @@ private func grokDenyObject(_ stdout: String) throws -> GrokDenyObject {
     let reason = try #require(object["reason"] as? String)
     return GrokDenyObject(reason: reason, keys: Array(object.keys))
 }
+
+@Test func grokDecode_emptyCwdIsNil() {
+    let stdin = """
+    {"hookEventName":"pre_tool_use","cwd":"","toolName":"run_terminal_command","toolInput":{"command":"git status"}}
+    """
+    guard case .request(let request) = codec.decode(stdin) else {
+        Issue.record("expected .request for empty cwd")
+        return
+    }
+    #expect(request.cwd == nil)
+}
+
+@Test func grokDecode_missingCwdIsNil() {
+    let stdin = """
+    {"hookEventName":"pre_tool_use","toolName":"run_terminal_command","toolInput":{"command":"git status"}}
+    """
+    guard case .request(let request) = codec.decode(stdin) else {
+        Issue.record("expected .request for missing cwd")
+        return
+    }
+    #expect(request.cwd == nil)
+}

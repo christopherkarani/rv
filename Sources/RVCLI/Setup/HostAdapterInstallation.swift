@@ -1,4 +1,5 @@
 import Foundation
+import RVDomain
 import RVHooks
 import RVPresentation
 
@@ -83,18 +84,18 @@ struct HostAdapterInstallationSnapshot: Equatable, Sendable {
     }
 
     /// Returns the doctor-facing state for `host`.
-    func state(for host: SetupHostKind) -> DoctorHostState {
+    func state(for host: HookHost) -> DoctorHostState {
         installation(for: host).state
     }
 
     /// Returns the full installation record for `host`.
-    func installation(for host: SetupHostKind) -> HostAdapterInstallation {
+    func installation(for host: HookHost) -> HostAdapterInstallation {
         switch host {
         case .grok:
             grok
         case .pi:
             pi
-        case .openCode:
+        case .opencode:
             openCode
         }
     }
@@ -119,7 +120,7 @@ extension HostAdapterInstallation {
                 fileManager: fileManager
             ),
             openCode: try inspect(
-                path: paths.hostAdapter(for: .openCode),
+                path: paths.hostAdapter(for: .opencode),
                 pathEntries: pathEntries,
                 fileManager: fileManager
             )
@@ -146,7 +147,7 @@ extension HostAdapterInstallation {
             return .occupied(path)
         }
 
-        let adapter = try HostAdapterResources.load(for: path.hookHost)
+        let adapter = try HostAdapterResources.load(for: path.host)
         guard let bakedRvPath = adapter.bakedRvPath(in: text) else {
             return .occupied(path)
         }

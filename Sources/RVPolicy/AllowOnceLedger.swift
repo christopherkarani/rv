@@ -19,7 +19,7 @@ enum AllowOnceLedger {
         codeHash: String,
         fingerprint: String,
         redacted: String,
-        cwd: String,
+        cwd: WorkingDirectory,
         ruleID: RuleID?,
         now: Date,
         ttl: TimeInterval
@@ -80,7 +80,7 @@ enum AllowOnceLedger {
     static func consume(
         records: [AllowOnceRecord],
         fingerprint: String,
-        cwd: String,
+        cwd: WorkingDirectory,
         now: Date
     ) -> ConsumeOutcome {
         let related = records.indices.filter {

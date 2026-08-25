@@ -1,4 +1,5 @@
 import Foundation
+import RVDomain
 import RVPolicy
 import RVPresentation
 import Testing
@@ -14,8 +15,8 @@ private func withInstallationHome(
     try body(home, OwnedPaths(home: try #require(HomeDirectory(validating: home.path))))
 }
 
-@Test(arguments: SetupHostKind.allCases)
-func hostInstallation_missingIsReadOnly(_ host: SetupHostKind) throws {
+@Test(arguments: HookHost.allCases)
+func hostInstallation_missingIsReadOnly(_ host: HookHost) throws {
     try withInstallationHome { home, paths in
         let before = try FileManager.default.contentsOfDirectory(atPath: home.path)
 
@@ -30,8 +31,8 @@ func hostInstallation_missingIsReadOnly(_ host: SetupHostKind) throws {
     }
 }
 
-@Test(arguments: SetupHostKind.allCases)
-func hostInstallation_detectedWithoutOwnedFileIsAbsentFile(_ host: SetupHostKind) throws {
+@Test(arguments: HookHost.allCases)
+func hostInstallation_detectedWithoutOwnedFileIsAbsentFile(_ host: HookHost) throws {
     try withInstallationHome { _, paths in
         let owned = paths.hostAdapter(for: host)
         try FileManager.default.createDirectory(
@@ -50,8 +51,8 @@ func hostInstallation_detectedWithoutOwnedFileIsAbsentFile(_ host: SetupHostKind
     }
 }
 
-@Test(arguments: SetupHostKind.allCases)
-func hostInstallation_foreignOwnedBytesAreOccupiedAndUnchanged(_ host: SetupHostKind) throws {
+@Test(arguments: HookHost.allCases)
+func hostInstallation_foreignOwnedBytesAreOccupiedAndUnchanged(_ host: HookHost) throws {
     try withInstallationHome { _, paths in
         let owned = paths.hostAdapter(for: host)
         let foreign = Data([0xFF, 0x00, 0x41])
@@ -72,8 +73,8 @@ func hostInstallation_foreignOwnedBytesAreOccupiedAndUnchanged(_ host: SetupHost
     }
 }
 
-@Test(arguments: SetupHostKind.allCases)
-func hostInstallation_symlinkAtOwnedNameIsOccupiedWithoutFollowing(_ host: SetupHostKind) throws {
+@Test(arguments: HookHost.allCases)
+func hostInstallation_symlinkAtOwnedNameIsOccupiedWithoutFollowing(_ host: HookHost) throws {
     try withInstallationHome { home, paths in
         let owned = paths.hostAdapter(for: host)
         let target = home.appendingPathComponent("foreign-adapter")
@@ -99,8 +100,8 @@ func hostInstallation_symlinkAtOwnedNameIsOccupiedWithoutFollowing(_ host: Setup
     }
 }
 
-@Test(arguments: SetupHostKind.allCases)
-func hostInstallation_danglingSymlinkAtOwnedNameIsOccupied(_ host: SetupHostKind) throws {
+@Test(arguments: HookHost.allCases)
+func hostInstallation_danglingSymlinkAtOwnedNameIsOccupied(_ host: HookHost) throws {
     try withInstallationHome { _, paths in
         let owned = paths.hostAdapter(for: host)
         try FileManager.default.createDirectory(
@@ -126,8 +127,8 @@ func hostInstallation_danglingSymlinkAtOwnedNameIsOccupied(_ host: SetupHostKind
     }
 }
 
-@Test(arguments: SetupHostKind.allCases)
-func hostInstallation_currentResourceWithMissingExecutableIsBroken(_ host: SetupHostKind) throws {
+@Test(arguments: HookHost.allCases)
+func hostInstallation_currentResourceWithMissingExecutableIsBroken(_ host: HookHost) throws {
     try withInstallationHome { _, paths in
         let owned = paths.hostAdapter(for: host)
         let body = try host.adapterResource().rendered(rvPath: "/nonexistent/rv")
@@ -148,8 +149,8 @@ func hostInstallation_currentResourceWithMissingExecutableIsBroken(_ host: Setup
     }
 }
 
-@Test(arguments: SetupHostKind.allCases)
-func hostInstallation_currentResourceWithExecutableIsWired(_ host: SetupHostKind) throws {
+@Test(arguments: HookHost.allCases)
+func hostInstallation_currentResourceWithExecutableIsWired(_ host: HookHost) throws {
     try withInstallationHome { home, paths in
         let owned = paths.hostAdapter(for: host)
         let executable = home.appendingPathComponent("bin/rv")

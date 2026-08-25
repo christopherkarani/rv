@@ -224,7 +224,7 @@ private final class EvaluateCallProbe: @unchecked Sendable {
 
     var calls: Int { lock.withLock { count } }
 
-    func evaluate(_ command: ShellCommand, cwd: String?) async -> EvaluationResult {
+    func evaluate(_ command: ShellCommand, cwd: WorkingDirectory?) async -> EvaluationResult {
         _ = command
         _ = cwd
         lock.withLock { count += 1 }

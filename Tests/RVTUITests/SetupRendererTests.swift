@@ -1,4 +1,5 @@
 import Testing
+import RVDomain
 import RVPresentation
 import RVTheme
 @testable import RVTUI
@@ -6,7 +7,7 @@ import RVTheme
 private func hostlessFrame() -> SetupCeremonyFrame {
     SetupCeremonyFrame(
         activity: setupCeremonySearchActivity,
-        slots: SetupHostKind.allCases.map { SetupSlotView(host: $0, kind: .pending) },
+        slots: HookHost.allCases.map { SetupSlotView(host: $0, kind: .pending) },
         closerLines: [setupCeremonyHostlessTitle, setupCeremonyHostlessNext]
     )
 }
@@ -17,7 +18,7 @@ private func grokWiredFrame() -> SetupCeremonyFrame {
         slots: [
             SetupSlotView(host: .grok, kind: .wired, clause: setupGrokReloadClause),
             SetupSlotView(host: .pi, kind: .pending),
-            SetupSlotView(host: .openCode, kind: .pending),
+            SetupSlotView(host: .opencode, kind: .pending),
         ],
         closerLines: [setupCeremonyHooksWired]
     )

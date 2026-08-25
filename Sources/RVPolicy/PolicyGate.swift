@@ -21,7 +21,7 @@ public enum PolicyGate {
     /// Total override order. No store, clock, or filesystem.
     public static func decide(
         _ result: EvaluationResult,
-        cwd: String?,
+        cwd: WorkingDirectory?,
         allowlist: AllowlistSnapshot,
         grant: GrantPresence,
         now: Date
@@ -40,7 +40,7 @@ public enum PolicyGate {
             ) {
                 return allowDecision(result, override: .allowlist)
             }
-            guard let cwd, cwd.isEmpty == false, result.matchingView.isEmpty == false else {
+            guard cwd != nil, result.matchingView.isEmpty == false else {
                 return PolicyDecision(result: result, override: .none)
             }
             switch grant {
@@ -55,7 +55,7 @@ public enum PolicyGate {
     /// Spends a matching grant. Hook / `rvd` / in-process fallback.
     public static func apply(
         _ result: EvaluationResult,
-        cwd: String?,
+        cwd: WorkingDirectory?,
         allowlist: AllowlistSnapshot = .empty,
         store: AllowOnceStore,
         now: Date
@@ -91,7 +91,7 @@ public enum PolicyGate {
     /// Shows a matching grant / allowlist without spending it. TTY `test` / `explain`.
     public static func peek(
         _ result: EvaluationResult,
-        cwd: String?,
+        cwd: WorkingDirectory?,
         allowlist: AllowlistSnapshot = .empty,
         store: AllowOnceStore,
         now: Date
@@ -123,14 +123,13 @@ public enum PolicyGate {
     /// Consume / hasGrant only when decide would still need a pending grant.
     private static func honorCwd(
         _ result: EvaluationResult,
-        cwd: String?,
+        cwd: WorkingDirectory?,
         withoutGrant: PolicyDecision
-    ) -> String? {
+    ) -> WorkingDirectory? {
         guard
             withoutGrant.override == .none,
             case .deny = result.decision,
             let cwd,
-            cwd.isEmpty == false,
             result.matchingView.isEmpty == false
         else {
             return nil

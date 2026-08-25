@@ -11,7 +11,7 @@ struct GatedEvaluateTests {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let session = EvaluateSession()
         let request = resetHardRequest()
-        try await store.insertGranted(matchingView: "git reset --hard", cwd: "/tmp/ws", now: now)
+        try await store.insertGranted(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
 
         let engine = session.evaluate(request)
         guard case .deny = engine.decision else {
@@ -20,12 +20,12 @@ struct GatedEvaluateTests {
         }
 
         let gated = GatedEvaluate(session)
-        let peeked = await gated.peek(request, cwd: "/tmp/ws", store: store, now: now, allowlist: { .empty })
+        let peeked = await gated.peek(request, cwd: wd("/tmp/ws"), store: store, now: now, allowlist: { .empty })
         #expect(peeked.decision == .allow)
 
-        let first = await gated.apply(request, cwd: "/tmp/ws", store: store, now: now, allowlist: { .empty })
+        let first = await gated.apply(request, cwd: wd("/tmp/ws"), store: store, now: now, allowlist: { .empty })
         #expect(first.decision == .allow)
-        let second = await gated.apply(request, cwd: "/tmp/ws", store: store, now: now, allowlist: { .empty })
+        let second = await gated.apply(request, cwd: wd("/tmp/ws"), store: store, now: now, allowlist: { .empty })
         guard case .deny(let deny) = second.decision else {
             Issue.record("second apply must deny after the grant is spent")
             return
@@ -38,19 +38,19 @@ struct GatedEvaluateTests {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let gated = GatedEvaluate()
         let request = resetHardRequest()
-        try await store.insertGranted(matchingView: "git reset --hard", cwd: "/tmp/ws", now: now)
+        try await store.insertGranted(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
 
         let peeked = await gated.peek(request, cwd: nil, store: store, now: now, allowlist: { .empty })
         guard case .deny = peeked.decision else {
             Issue.record("missing cwd must skip honor")
             return
         }
-        let appliedEmpty = await gated.apply(request, cwd: "", store: store, now: now, allowlist: { .empty })
+        let appliedEmpty = await gated.apply(request, cwd: nil, store: store, now: now, allowlist: { .empty })
         guard case .deny = appliedEmpty.decision else {
             Issue.record("empty cwd must skip honor")
             return
         }
-        let applied = await gated.apply(request, cwd: "/tmp/ws", store: store, now: now, allowlist: { .empty })
+        let applied = await gated.apply(request, cwd: wd("/tmp/ws"), store: store, now: now, allowlist: { .empty })
         #expect(applied.decision == .allow)
     }
 
@@ -65,7 +65,7 @@ struct GatedEvaluateTests {
         let gated = GatedEvaluate()
         let applied = await gated.apply(
             resetHardRequest(),
-            cwd: "/tmp/ws",
+            cwd: wd("/tmp/ws"),
             store: store,
             now: now,
             allowlist: { .empty }
@@ -86,7 +86,7 @@ struct GatedEvaluateTests {
         let gated = GatedEvaluate()
         let applied = await gated.apply(
             resetHardRequest(),
-            cwd: "/tmp/ws",
+            cwd: wd("/tmp/ws"),
             store: store,
             now: now,
             allowlist: { allowlist }
@@ -100,9 +100,9 @@ struct GatedEvaluateTests {
         let gated = GatedEvaluate()
         let request = stashDropRequest()
 
-        let peeked = await gated.peek(request, cwd: "/tmp/ws", store: store, now: now, allowlist: { .empty })
+        let peeked = await gated.peek(request, cwd: wd("/tmp/ws"), store: store, now: now, allowlist: { .empty })
         #expect(peeked.decision == .allow)
-        let applied = await gated.apply(request, cwd: "/tmp/ws", store: store, now: now, allowlist: { .empty })
+        let applied = await gated.apply(request, cwd: wd("/tmp/ws"), store: store, now: now, allowlist: { .empty })
         #expect(applied.decision == .allow)
 
         let allowlist = AllowlistStore(baseDirectory: store.baseDirectory).fileURL
@@ -116,7 +116,7 @@ struct GatedEvaluateTests {
         let gated = GatedEvaluate()
         let applied = await gated.apply(
             stashDropRequest(),
-            cwd: "/tmp/ws",
+            cwd: wd("/tmp/ws"),
             store: store,
             now: now,
             allowlist: {
@@ -131,17 +131,17 @@ struct GatedEvaluateTests {
     @Test func indeterminateIsNotAllowAndDoesNotHonor() async throws {
         let store = try isolatedStore()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
-        try await store.insertGranted(matchingView: "git reset --hard", cwd: "/tmp/ws", now: now)
+        try await store.insertGranted(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
         let gated = GatedEvaluate(.missingCore)
         let request = resetHardRequest()
 
-        let peeked = await gated.peek(request, cwd: "/tmp/ws", store: store, now: now, allowlist: { .empty })
+        let peeked = await gated.peek(request, cwd: wd("/tmp/ws"), store: store, now: now, allowlist: { .empty })
         #expect(peeked.decision == .indeterminate(.corePacksUnavailable))
-        let applied = await gated.apply(request, cwd: "/tmp/ws", store: store, now: now, allowlist: { .empty })
+        let applied = await gated.apply(request, cwd: wd("/tmp/ws"), store: store, now: now, allowlist: { .empty })
         #expect(applied.decision == .indeterminate(.corePacksUnavailable))
         let still = await store.consume(
             matchingView: "git reset --hard",
-            cwd: "/tmp/ws",
+            cwd: wd("/tmp/ws"),
             now: now
         )
         guard case .consumed = still else {

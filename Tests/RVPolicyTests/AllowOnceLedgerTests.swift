@@ -16,7 +16,7 @@ struct AllowOnceLedgerTests {
             codeHash: "fresh",
             fingerprint: "fp",
             redacted: "git …",
-            cwd: "/tmp/ws",
+            cwd: wd("/tmp/ws"),
             ruleID: nil,
             now: Self.epoch,
             ttl: 3600
@@ -27,7 +27,7 @@ struct AllowOnceLedgerTests {
         #expect(out.last?.createdAt == Self.epoch)
         #expect(out.last?.expiresAt == Self.epoch.addingTimeInterval(3600))
         #expect(out.last?.commandFingerprint == "fp")
-        #expect(out.last?.cwd == "/tmp/ws")
+        #expect(out.last?.cwd == wd("/tmp/ws"))
     }
 
     @Test func mintCollidesWithLivePendingSameHash() {
@@ -38,7 +38,7 @@ struct AllowOnceLedgerTests {
                 codeHash: "dup",
                 fingerprint: "fp",
                 redacted: "git …",
-                cwd: "/tmp/ws",
+                cwd: wd("/tmp/ws"),
                 ruleID: nil,
                 now: Self.epoch,
                 ttl: 3600
@@ -53,7 +53,7 @@ struct AllowOnceLedgerTests {
             codeHash: "dup",
             fingerprint: "fp",
             redacted: "git …",
-            cwd: "/tmp/ws",
+            cwd: wd("/tmp/ws"),
             ruleID: nil,
             now: Self.epoch,
             ttl: 3600
@@ -75,7 +75,7 @@ struct AllowOnceLedgerTests {
                 kind: .granted,
                 codeHash: "hit",
                 commandRedacted: target.commandRedacted,
-                cwd: "/tmp/ws",
+                cwd: wd("/tmp/ws"),
                 createdAt: Self.createdAt,
                 expiresAt: Self.epoch.addingTimeInterval(60)
             ))
@@ -144,7 +144,7 @@ struct AllowOnceLedgerTests {
         switch AllowOnceLedger.consume(
             records: [expiredSibling, consumedSibling, fresh],
             fingerprint: "fp",
-            cwd: "/tmp/ws",
+            cwd: wd("/tmp/ws"),
             now: Self.epoch
         ) {
         case let .consumed(tokenID, records):
@@ -164,7 +164,7 @@ struct AllowOnceLedgerTests {
         let outcome = AllowOnceLedger.consume(
             records: [staleA, otherView, staleB],
             fingerprint: "fp",
-            cwd: "/tmp/ws",
+            cwd: wd("/tmp/ws"),
             now: Self.epoch
         )
         #expect(outcome == .expired([otherView]))
@@ -181,7 +181,7 @@ struct AllowOnceLedgerTests {
         let outcome = AllowOnceLedger.consume(
             records: [expiredGrant, spentBefore],
             fingerprint: "fp",
-            cwd: "/tmp/ws",
+            cwd: wd("/tmp/ws"),
             now: Self.epoch
         )
         guard case let .expired(records) = outcome else {
@@ -198,22 +198,22 @@ struct AllowOnceLedgerTests {
             expiresAt: Self.epoch.addingTimeInterval(60),
             consumedAt: Self.epoch.addingTimeInterval(-5)
         )
-        let outcome = AllowOnceLedger.consume(records: [spent], fingerprint: "fp", cwd: "/tmp/ws", now: Self.epoch)
+        let outcome = AllowOnceLedger.consume(records: [spent], fingerprint: "fp", cwd: wd("/tmp/ws"), now: Self.epoch)
         #expect(outcome == .alreadyConsumed)
     }
 
     @Test func consumeWrongCwdOrFingerprintIsNotFound() {
         let grant = Self.record(kind: .granted, hash: "tok", expiresAt: Self.epoch.addingTimeInterval(60))
-        let wrongCwd = AllowOnceLedger.consume(records: [grant], fingerprint: "fp", cwd: "/tmp/other", now: Self.epoch)
+        let wrongCwd = AllowOnceLedger.consume(records: [grant], fingerprint: "fp", cwd: wd("/tmp/other"), now: Self.epoch)
         #expect(wrongCwd == .notFound)
         let wrongFingerprint = AllowOnceLedger.consume(
             records: [grant],
             fingerprint: "other-fp",
-            cwd: "/tmp/ws",
+            cwd: wd("/tmp/ws"),
             now: Self.epoch
         )
         #expect(wrongFingerprint == .notFound)
-        #expect(AllowOnceLedger.consume(records: [], fingerprint: "fp", cwd: "/tmp/ws", now: Self.epoch) == .notFound)
+        #expect(AllowOnceLedger.consume(records: [], fingerprint: "fp", cwd: wd("/tmp/ws"), now: Self.epoch) == .notFound)
     }
 
     @Test func rowsKeepLiveAndConsumedPastExpiryDropOthers() {
@@ -235,7 +235,7 @@ struct AllowOnceLedgerTests {
             kind: .pending,
             codeHash: "p",
             commandRedacted: livePending.commandRedacted,
-            cwd: "/tmp/ws",
+            cwd: wd("/tmp/ws"),
             createdAt: Self.createdAt,
             expiresAt: Self.epoch.addingTimeInterval(60)
         ))
@@ -250,7 +250,7 @@ struct AllowOnceLedgerTests {
                 codeHash: "p",
                 fingerprint: "fp",
                 redacted: "git …",
-                cwd: "/tmp/ws",
+                cwd: wd("/tmp/ws"),
                 ruleID: nil,
                 now: Self.epoch,
                 ttl: 3600
@@ -266,7 +266,7 @@ struct AllowOnceLedgerTests {
         switch AllowOnceLedger.consume(
             records: [granted],
             fingerprint: "fp",
-            cwd: "/tmp/ws",
+            cwd: wd("/tmp/ws"),
             now: Self.epoch
         ) {
         case let .consumed(tokenID, records):
@@ -311,7 +311,7 @@ private extension AllowOnceLedgerTests {
             codeHash: hash,
             commandFingerprint: fingerprint,
             commandRedacted: "git …",
-            cwd: "/tmp/ws",
+            cwd: wd("/tmp/ws"),
             ruleID: nil,
             createdAt: createdAt,
             expiresAt: expiresAt,

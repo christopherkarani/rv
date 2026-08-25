@@ -20,7 +20,7 @@ struct Hook: AsyncParsableCommand {
         let client = ServiceClient()
         let outcome = await run(
             stdin: stdin,
-            evaluate: { command, cwd in
+            evaluate: { (command: ShellCommand, cwd: WorkingDirectory?) in
                 await client.evaluateResult(command: command, cwd: cwd)
             }
         )
@@ -33,7 +33,7 @@ struct Hook: AsyncParsableCommand {
 
     func run(
         stdin: String,
-        evaluate: @Sendable (ShellCommand, String?) async -> EvaluationResult
+        evaluate: @Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult
     ) async -> (stdout: String, stderr: String, exitCode: Int32) {
         let wire = await hookWire(host: host, stdin: stdin, evaluate: evaluate)
         return (wire.stdout, "", wire.exitCode)

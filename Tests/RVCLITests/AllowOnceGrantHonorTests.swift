@@ -9,19 +9,19 @@ struct AllowOnceGrantHonorTests {
     @Test func peekDoesNotSpendGrantAndHookMissConsumesOnce() async throws {
         let directory = try isolatedAllowOnceDirectory()
         let client = try isolatedClient(transport: nil, allowOnceDirectory: directory)
-        try await client.insertGranted(matchingView: "git reset --hard", cwd: "/tmp/ws")
+        try await client.insertGranted(matchingView: "git reset --hard", cwd: wd("/tmp/ws"))
 
         let peeked = try await cliEvaluate("git reset --hard", allowOnceDirectory: directory)
         #expect(peeked.decision == .allow)
         let first = await client.evaluateResult(
             command: ShellCommand(rawValue: "git reset --hard"),
-            cwd: "/tmp/ws"
+            cwd: wd("/tmp/ws")
         )
         #expect(first.decision == .allow)
 
         let second = await client.evaluateResult(
             command: ShellCommand(rawValue: "git reset --hard"),
-            cwd: "/tmp/ws"
+            cwd: wd("/tmp/ws")
         )
         guard case .deny(let deny) = second.decision else {
             Issue.record("second hook-miss evaluate must deny after the grant is spent")
@@ -34,7 +34,7 @@ struct AllowOnceGrantHonorTests {
         let directory = try isolatedAllowOnceDirectory()
         let processCwd = FileManager.default.currentDirectoryPath
         let client = try isolatedClient(transport: nil, allowOnceDirectory: directory)
-        try await client.insertGranted(matchingView: "git reset --hard", cwd: processCwd)
+        try await client.insertGranted(matchingView: "git reset --hard", cwd: wd(processCwd))
 
         let stdin = """
         {"hookEventName":"pre_tool_use","toolName":"run_terminal_command","toolInput":{"command":"git reset --hard"}}
@@ -52,7 +52,7 @@ struct AllowOnceGrantHonorTests {
 
         let honored = await client.evaluateResult(
             command: ShellCommand(rawValue: "git reset --hard"),
-            cwd: processCwd
+            cwd: wd(processCwd)
         )
         #expect(honored.decision == .allow)
     }
@@ -60,7 +60,7 @@ struct AllowOnceGrantHonorTests {
     @Test func hookPresentCwdHonorsGrantOnce() async throws {
         let directory = try isolatedAllowOnceDirectory()
         let client = try isolatedClient(transport: nil, allowOnceDirectory: directory)
-        try await client.insertGranted(matchingView: "git reset --hard", cwd: "/tmp/ws")
+        try await client.insertGranted(matchingView: "git reset --hard", cwd: wd("/tmp/ws"))
 
         let stdin = """
         {"hookEventName":"pre_tool_use","cwd":"/tmp/ws","toolName":"run_terminal_command","toolInput":{"command":"git reset --hard"}}
@@ -77,7 +77,7 @@ struct AllowOnceGrantHonorTests {
 
         let second = await client.evaluateResult(
             command: ShellCommand(rawValue: "git reset --hard"),
-            cwd: "/tmp/ws"
+            cwd: wd("/tmp/ws")
         )
         guard case .deny(let deny) = second.decision else {
             Issue.record("second evaluate must deny after the grant is spent")
@@ -89,7 +89,7 @@ struct AllowOnceGrantHonorTests {
     @Test func xpcEvaluateSuccessDoesNotApplyLocalGrant() async throws {
         let directory = try isolatedAllowOnceDirectory()
         let storeClient = try isolatedClient(transport: nil, allowOnceDirectory: directory)
-        try await storeClient.insertGranted(matchingView: "git reset --hard", cwd: "/tmp/ws")
+        try await storeClient.insertGranted(matchingView: "git reset --hard", cwd: wd("/tmp/ws"))
 
         let denied = EvaluationResult(
             outcome: .deny(
@@ -108,7 +108,7 @@ struct AllowOnceGrantHonorTests {
         let client = try isolatedClient(transport: transport, allowOnceDirectory: directory)
         let reply = await client.evaluate(
             command: ShellCommand(rawValue: "git reset --hard"),
-            cwd: "/tmp/ws"
+            cwd: wd("/tmp/ws")
         )
         #expect(reply.path == .xpc)
         try #require(denyPayload(from: reply.result.decision) != nil)
@@ -116,7 +116,7 @@ struct AllowOnceGrantHonorTests {
 
         let honored = await storeClient.evaluateResult(
             command: ShellCommand(rawValue: "git reset --hard"),
-            cwd: "/tmp/ws"
+            cwd: wd("/tmp/ws")
         )
         #expect(honored.decision == .allow)
     }

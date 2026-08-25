@@ -176,11 +176,11 @@ public actor ServiceRuntime {
         return IPCResponse(id: request.id, result: result)
     }
 
-    package func insertGranted(matchingView: MatchingView, cwd: String, now: Date = Date()) async throws {
+    package func insertGranted(matchingView: MatchingView, cwd: WorkingDirectory, now: Date = Date()) async throws {
         try await allowOnce.insertGranted(matchingView: matchingView, cwd: cwd, now: now)
     }
 
-    public func makeEvaluateReply(_ request: EvaluationRequest, cwd: String? = nil) async -> EvaluateReply {
+    public func makeEvaluateReply(_ request: EvaluationRequest, cwd: WorkingDirectory? = nil) async -> EvaluateReply {
         EvaluateReply(result: await runEvaluate(request, cwd: cwd))
     }
 
@@ -204,7 +204,7 @@ public actor ServiceRuntime {
         }
     }
 
-    private func runEvaluate(_ request: EvaluationRequest, cwd: String?) async -> EvaluationResult {
+    private func runEvaluate(_ request: EvaluationRequest, cwd: WorkingDirectory?) async -> EvaluationResult {
         rebuildWhenUncovered(wanted: WalkedPackIDs(ids: request.enabledPacks))
         let now = clock()
         let baseDirectory = allowOnce.baseDirectory
@@ -215,7 +215,7 @@ public actor ServiceRuntime {
             now: now,
             allowlist: {
                 AllowlistStore(baseDirectory: baseDirectory)
-                    .loadUserSnapshot(workspacePath: cwd, now: now)
+                    .loadUserSnapshot(workspacePath: cwd.map(\.rawValue), now: now)
             }
         )
         recordAnalytics(for: result)
@@ -266,7 +266,7 @@ public actor ServiceRuntime {
             now: now,
             allowlist: {
                 AllowlistStore(baseDirectory: baseDirectory)
-                    .loadUserSnapshot(workspacePath: cwd, now: now)
+                    .loadUserSnapshot(workspacePath: cwd.map(\.rawValue), now: now)
             }
         )
         let normalized = result.matchingView.isEmpty
@@ -321,7 +321,7 @@ public actor ServiceRuntime {
             now: now,
             allowlist: {
                 AllowlistStore(baseDirectory: baseDirectory)
-                    .loadUserSnapshot(workspacePath: cwd, now: now)
+                    .loadUserSnapshot(workspacePath: cwd.map(\.rawValue), now: now)
             }
         )
         let matched: RuleMatch?

@@ -13,7 +13,7 @@ struct AllowOnceTTYTests {
         await #expect(throws: AllowOnceError.ttyRequired) {
             try await AllowOnceCLI.mint(
                 command: "git reset --hard",
-                cwd: "/tmp/a",
+                cwd: wd("/tmp/a"),
                 tty: tty,
                 robot: false,
                 store: store,
@@ -33,7 +33,7 @@ struct AllowOnceTTYTests {
         let ok = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
         let code = try await store.mint(
             matchingView: "git reset --hard",
-            cwd: "/tmp/a",
+            cwd: wd("/tmp/a"),
             ruleID: nil,
             tty: ok,
             now: now
@@ -56,7 +56,7 @@ struct AllowOnceTTYTests {
         let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
         let code = try await AllowOnceCLI.mint(
             command: "git reset --hard",
-            cwd: "/tmp/a",
+            cwd: wd("/tmp/a"),
             tty: tty,
             robot: false,
             store: store,
@@ -70,7 +70,7 @@ struct AllowOnceTTYTests {
             now: now
         )
         #expect(row.kind == .granted)
-        #expect(row.cwd == "/tmp/a")
+        #expect(row.cwd == wd("/tmp/a"))
         let denied = EvaluationResult(
             outcome: .deny(
                 Deny(
@@ -81,9 +81,9 @@ struct AllowOnceTTYTests {
             ),
             matchingView: "git reset --hard"
         )
-        let first = await PolicyGate.apply(denied, cwd: "/tmp/a", store: store, now: now)
+        let first = await PolicyGate.apply(denied, cwd: wd("/tmp/a"), store: store, now: now)
         #expect(first.override == .allowOnce)
-        let second = await PolicyGate.apply(denied, cwd: "/tmp/a", store: store, now: now)
+        let second = await PolicyGate.apply(denied, cwd: wd("/tmp/a"), store: store, now: now)
         guard case .deny = second.result.decision else {
             Issue.record("second must deny")
             return
@@ -97,7 +97,7 @@ struct AllowOnceTTYTests {
         await #expect(throws: AllowOnceError.robotRefused) {
             try await AllowOnceCLI.mint(
                 command: "git reset --hard",
-                cwd: "/tmp/a",
+                cwd: wd("/tmp/a"),
                 tty: tty,
                 robot: true,
                 store: store,
@@ -179,7 +179,7 @@ struct CommandRunAllowlistTests {
         )
         let result = await CommandRun.evaluateCommand(
             "git reset --hard",
-            cwd: "/tmp/ws",
+            cwd: wd("/tmp/ws"),
             store: AllowOnceStore(baseDirectory: root),
             now: now,
             home: try isolatedHome()
@@ -203,7 +203,7 @@ struct CommandRunAllowlistTests {
         )
         let reply = await client.evaluate(
             command: ShellCommand(rawValue: "git reset --hard"),
-            cwd: "/tmp/ws"
+            cwd: wd("/tmp/ws")
         )
         #expect(reply.result.decision == .allow)
     }

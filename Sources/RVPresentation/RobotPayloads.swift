@@ -202,7 +202,7 @@ public func doctorRobotPayload(from model: DoctorViewModel) -> DoctorRobotPayloa
             extrasEnabled: model.packs.extrasEnabled.map(\.rawValue)
         ),
         hosts: Dictionary(
-            uniqueKeysWithValues: model.hosts.map { ($0.host.robotName, $0.state.rawValue) }
+            uniqueKeysWithValues: model.hosts.map { ($0.host.rawValue, $0.state.rawValue) }
         ),
         config: model.config.rawValue,
         grade: model.grade.rawValue,
@@ -231,18 +231,5 @@ private func robotDecision(_ decision: Decision) -> String {
         "deny"
     case .indeterminate:
         "indeterminate"
-    }
-}
-
-extension SetupHostKind {
-    fileprivate var robotName: String {
-        switch self {
-        case .grok:
-            "grok"
-        case .pi:
-            "pi"
-        case .openCode:
-            "opencode"
-        }
     }
 }

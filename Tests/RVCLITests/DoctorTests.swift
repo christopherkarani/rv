@@ -80,7 +80,7 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
             atPath: paths.grokDirectory,
             withIntermediateDirectories: true
         )
-        let body = try SetupHostKind.grok.adapterResource().rendered(rvPath: executable.path)
+        let body = try HookHost.grok.adapterResource().rendered(rvPath: executable.path)
         try FileManager.default.createDirectory(
             atPath: (paths.grokHook as NSString).deletingLastPathComponent,
             withIntermediateDirectories: true
@@ -179,7 +179,7 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
             atPath: (paths.grokHook as NSString).deletingLastPathComponent,
             withIntermediateDirectories: true
         )
-        let body = try SetupHostKind.grok.adapterResource().rendered(rvPath: "/nonexistent/rv")
+        let body = try HookHost.grok.adapterResource().rendered(rvPath: "/nonexistent/rv")
         try body.write(toFile: paths.grokHook, atomically: true, encoding: .utf8)
 
         let outcome = DoctorRun.run(
@@ -203,7 +203,7 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
             atPath: paths.grokDirectory,
             withIntermediateDirectories: true
         )
-        let body = try SetupHostKind.grok.adapterResource().rendered(rvPath: executable.path)
+        let body = try HookHost.grok.adapterResource().rendered(rvPath: executable.path)
         try FileManager.default.createDirectory(
             atPath: (paths.grokHook as NSString).deletingLastPathComponent,
             withIntermediateDirectories: true
@@ -251,7 +251,7 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
             atPath: paths.grokDirectory,
             withIntermediateDirectories: true
         )
-        let body = try SetupHostKind.grok.adapterResource().rendered(rvPath: executable.path)
+        let body = try HookHost.grok.adapterResource().rendered(rvPath: executable.path)
         try FileManager.default.createDirectory(
             atPath: (paths.grokHook as NSString).deletingLastPathComponent,
             withIntermediateDirectories: true

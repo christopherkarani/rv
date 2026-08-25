@@ -3,13 +3,13 @@ import RVDomain
 
 public struct EvaluateParams: Sendable, Equatable, Codable {
     public var request: EvaluationRequest
-    public var cwd: String?
+    public var cwd: WorkingDirectory?
     /// Additive `rv.ipc.v1` field. Old clients omit it and Hello first.
     public var clientSemver: String?
 
-    public init(request: EvaluationRequest, cwd: String? = nil, clientSemver: String? = nil) {
+    public init(request: EvaluationRequest, cwd: WorkingDirectory? = nil, clientSemver: String? = nil) {
         self.request = request
-        self.cwd = RequestCwdCoding.nonempty(cwd)
+        self.cwd = cwd
         self.clientSemver = clientSemver
     }
 
@@ -169,11 +169,11 @@ public struct HookEvaluateReply: Sendable, Equatable, Codable {
 
 public struct ExplainParams: Sendable, Equatable, Codable {
     public var request: EvaluationRequest
-    public var cwd: String?
+    public var cwd: WorkingDirectory?
 
-    public init(request: EvaluationRequest, cwd: String? = nil) {
+    public init(request: EvaluationRequest, cwd: WorkingDirectory? = nil) {
         self.request = request
-        self.cwd = RequestCwdCoding.nonempty(cwd)
+        self.cwd = cwd
     }
 
     public init(from decoder: Decoder) throws {
@@ -274,11 +274,11 @@ extension ClassifyRisk {
 
 public struct ClassifyParams: Sendable, Equatable, Codable {
     public var request: EvaluationRequest
-    public var cwd: String?
+    public var cwd: WorkingDirectory?
 
-    public init(request: EvaluationRequest, cwd: String? = nil) {
+    public init(request: EvaluationRequest, cwd: WorkingDirectory? = nil) {
         self.request = request
-        self.cwd = RequestCwdCoding.nonempty(cwd)
+        self.cwd = cwd
     }
 
     public init(from decoder: Decoder) throws {
@@ -619,18 +619,18 @@ enum RequestCwdCoding {
         case cwd
     }
 
-    static func nonempty(_ cwd: String?) -> String? {
-        cwd.flatMap { $0.isEmpty ? nil : $0 }
+    static func nonempty(_ cwd: String?) -> WorkingDirectory? {
+        cwd.flatMap { WorkingDirectory(validating: $0) }
     }
 
-    static func decode(from decoder: Decoder) throws -> (EvaluationRequest, String?) {
+    static func decode(from decoder: Decoder) throws -> (EvaluationRequest, WorkingDirectory?) {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let request = try container.decode(EvaluationRequest.self, forKey: .request)
         let cwd = nonempty(try container.decodeIfPresent(String.self, forKey: .cwd))
         return (request, cwd)
     }
 
-    static func encode(request: EvaluationRequest, cwd: String?, to encoder: Encoder) throws {
+    static func encode(request: EvaluationRequest, cwd: WorkingDirectory?, to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(request, forKey: .request)
         try container.encodeIfPresent(cwd, forKey: .cwd)
