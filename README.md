@@ -5,7 +5,7 @@ Mac-native destructive-command guard for coding-agent **shell** hooks.
 - **Names:** `rv` (the only command), `rvd` (XPC service). Prefix `RV_`. Config `~/.config/rv/`.
 - **Platform:** macOS 26, Apple Silicon only. Swift 6.3.
 - **Hosts:** Pi, Grok, OpenCode. Shell / command tools only.
-- **License:** Apache 2.0
+- **License:** MIT
 - **Grade:** hook. Not OS-enforced.
 
 ## Install

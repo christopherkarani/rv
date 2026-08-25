@@ -19,7 +19,7 @@ Not ryk. Not line-for-line Rust. Repo: `~/CodingProjects/rv` (`christopherkarani
 - **Setup mutations:** only rv-owned files. Foreign hooks untouched. Occupied owned name → skip that host (TTY hollow + skip clause; non-TTY one line) unless `rv setup --force` (backup `*.bak`, then rewrite). Uninstall removes only rv files. **No ryk special-case.**
 - **Hostless install:** success. TTY closer: `No hosts yet` then `Next  rv setup`. Non-TTY: one line to run `rv setup` after a host exists.
 - **Privacy:** no command text in `os_log`. History **off** by default; when on, no raw secrets. Full command only in TTY `explain`/`test`. Anonymous product analytics (installs / DAU / host+pack counters) may run **opt-out** via `RVAnalytics` / PostHog; never command text, paths, or secrets; never from host hook processes.
-- **License:** deferred.
+- **License:** MIT.
 - **Repo:** work only in `~/CodingProjects/rv`. Never implement inside ryk.
 
 ## What 1:1 means (v1 vs later)
