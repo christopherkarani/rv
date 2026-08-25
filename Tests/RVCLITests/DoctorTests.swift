@@ -127,6 +127,65 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
     }
 }
 
+@Test func doctor_claudeOccupiedFingerprint_reportsOccupied() throws {
+    try withDoctorHome { _, paths, environment in
+        try FileManager.default.createDirectory(
+            atPath: paths.claudeDirectory,
+            withIntermediateDirectories: true
+        )
+        let occupied = """
+        {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  { "type": "command", "command": "/old/rv hook --host claude", "timeout": 10 }
+                ]
+              }
+            ]
+          }
+        }
+        """
+        try occupied.write(toFile: paths.claudeSettings, atomically: true, encoding: .utf8)
+
+        let outcome = DoctorRun.run(
+            environment: environment,
+            diagnostics: localReady,
+            appearance: .pretty(colorOffPalette)
+        )
+
+        #expect(outcome.exitCode == 0)
+        #expect(outcome.stdout.contains("Claude") && outcome.stdout.contains("occupied"))
+        #expect(try String(contentsOfFile: paths.claudeSettings, encoding: .utf8) == occupied)
+    }
+}
+
+@Test func doctor_claudeMissingBakedRv_reportsBrokenNotWired() throws {
+    try withDoctorHome { _, paths, environment in
+        try FileManager.default.createDirectory(
+            atPath: paths.claudeDirectory,
+            withIntermediateDirectories: true
+        )
+        let merged = try ClaudeSettingsMerge.merge(
+            existingData: nil,
+            rvPath: "/nonexistent/rv",
+            force: false
+        )
+        try merged.data.write(to: URL(fileURLWithPath: paths.claudeSettings))
+
+        let outcome = DoctorRun.run(
+            environment: environment,
+            diagnostics: localReady,
+            appearance: .pretty(colorOffPalette)
+        )
+
+        #expect(outcome.exitCode == 0)
+        #expect(outcome.stdout.contains("Claude") && outcome.stdout.contains("broken"))
+        #expect(outcome.stdout.contains("wired") == false)
+    }
+}
+
 @Test func doctor_reachableServiceReportsLaunchAgentLoadedAndCompatibleVersion() throws {
     try withDoctorHome { _, _, initialEnvironment in
         var environment = initialEnvironment

@@ -325,7 +325,15 @@ enum SetupRun {
                     removedHosts.insert(owned.host)
                 }
             case .leaveOccupied:
-                occupiedHosts.insert(owned.host)
+                if owned.host == .claude {
+                    if try stripClaudeFingerprintLeavingOccupied(at: owned.destination, files: files) {
+                        removedHosts.insert(owned.host)
+                    } else {
+                        occupiedHosts.insert(owned.host)
+                    }
+                } else {
+                    occupiedHosts.insert(owned.host)
+                }
             case .skip:
                 break
             }
@@ -476,12 +484,41 @@ enum SetupRun {
 
     /// Removes rv-fingerprinted Claude handlers only. Returns whether anything changed.
     private static func removeClaudeRVHooks(at path: String, files: FileOps) throws(SetupError) -> Bool {
+        try applyClaudeUninstall(at: path, files: files, unreadable: .fail)
+    }
+
+    /// Stale rv fingerprints are occupied for setup, but uninstall still strips them.
+    private static func stripClaudeFingerprintLeavingOccupied(
+        at path: String,
+        files: FileOps
+    ) throws(SetupError) -> Bool {
+        try applyClaudeUninstall(at: path, files: files, unreadable: .leave)
+    }
+
+    private enum ClaudeUnreadableUninstall {
+        case fail
+        case leave
+    }
+
+    private static func applyClaudeUninstall(
+        at path: String,
+        files: FileOps,
+        unreadable: ClaudeUnreadableUninstall
+    ) throws(SetupError) -> Bool {
+        if (try? files.fileManager.destinationOfSymbolicLink(atPath: path)) != nil {
+            return false
+        }
         guard let data = files.readData(path) else { return false }
         let next: Data?
         do {
             next = try ClaudeSettingsMerge.uninstall(existingData: data)
         } catch {
-            throw SetupError.hostHookWriteFailed(.claude)
+            switch unreadable {
+            case .fail:
+                throw SetupError.hostHookWriteFailed(.claude)
+            case .leave:
+                return false
+            }
         }
         guard let next else {
             files.removeFile(atPath: path)
