@@ -357,3 +357,171 @@ private func runInstallScript(
     #expect(grok.contains("\(rvPath) hook --host grok"))
     #expect(grok.contains("rv-cli") == false)
 }
+
+@Test func installSh_fetchesGitHubLatestWhenInstallBinUnset() throws {
+    let text = try String(contentsOf: installScriptURL(), encoding: .utf8)
+    #expect(text.contains("https://github.com/christopherkarani/rv/releases/latest/download"))
+    #expect(text.contains("curl -fSL"))
+    #expect(text.contains("run rv-cli") == false)
+}
+
+private func writeCurlShim(
+    in shim: URL,
+    assets: URL,
+    failAll: Bool = false
+) throws {
+    try writeExecutable(
+        shim.appendingPathComponent("curl"),
+        contents: """
+        #!/bin/sh
+        if [ "\(failAll ? "1" : "0")" = "1" ]; then
+          echo "curl: (22) The requested URL returned error: 404" >&2
+          exit 22
+        fi
+        out=""
+        url=""
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            -o)
+              out="$2"
+              shift 2
+              ;;
+            -*)
+              shift
+              ;;
+            *)
+              url="$1"
+              shift
+              ;;
+          esac
+        done
+        name="${url##*/}"
+        case "$url" in
+          *api.github.com*/releases/latest)
+            printf '%s\\n' '{"assets":[{"name":"rv_RVPacks.bundle"}]}'
+            exit 0
+            ;;
+        esac
+        src="\(assets.path)/$name"
+        if [ -z "$out" ] || [ ! -e "$src" ]; then
+          echo "curl: (22) The requested URL returned error: 404" >&2
+          exit 22
+        fi
+        cp -R "$src" "$out"
+        exit 0
+        """
+    )
+}
+
+@Test func installSh_downloadsReleaseTrioWhenInstallBinUnset() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-install-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let home = root.appendingPathComponent("home", isDirectory: true)
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    let assets = root.appendingPathComponent("assets", isDirectory: true)
+    try writeExecutable(
+        assets.appendingPathComponent("rv"),
+        contents: """
+        #!/bin/sh
+        printf 'rv-ran\\n' > "$HOME/.rv-ran"
+        exec "$(dirname "$0")/rv-cli" "$@"
+        """
+    )
+    try writeExecutable(
+        assets.appendingPathComponent("rv-cli"),
+        contents: """
+        #!/bin/sh
+        printf 'from_install=%s argv=%s\\n' "${RV_FROM_INSTALL-}" "$*" > "$HOME/.rv-setup-marker"
+        exit 0
+        """
+    )
+    try writeExecutable(
+        assets.appendingPathComponent("rvd"),
+        contents: "#!/bin/sh\nexit 0\n"
+    )
+    let bundlePack = assets.appendingPathComponent("rv_RVPacks.bundle/packs/core.json")
+    try FileManager.default.createDirectory(
+        at: bundlePack.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+    )
+    try "{}\n".write(to: bundlePack, atomically: true, encoding: .utf8)
+
+    let shim = root.appendingPathComponent("shim", isDirectory: true)
+    try writeDarwinShims(in: shim)
+    try writeCurlShim(in: shim, assets: assets)
+
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/bin/sh")
+    process.arguments = [installScriptURL().path]
+    process.environment = [
+        "HOME": home.path,
+        "PATH": shim.path + ":/usr/bin:/bin",
+    ]
+    let stderr = Pipe()
+    process.standardError = stderr
+    process.standardOutput = Pipe()
+    try process.run()
+    process.waitUntilExit()
+    #expect(process.terminationStatus == 0)
+
+    let destBin = home.appendingPathComponent(".local/bin")
+    #expect(FileManager.default.isExecutableFile(atPath: destBin.appendingPathComponent("rv").path))
+    #expect(FileManager.default.isExecutableFile(atPath: destBin.appendingPathComponent("rv-cli").path))
+    #expect(FileManager.default.isExecutableFile(atPath: destBin.appendingPathComponent("rvd").path))
+    #expect(
+        FileManager.default.fileExists(
+            atPath: destBin.appendingPathComponent("rv_RVPacks.bundle/packs/core.json").path
+        )
+    )
+    let marker = try String(contentsOfFile: home.path + "/.rv-setup-marker", encoding: .utf8)
+    #expect(marker.contains("from_install=1"))
+    #expect(marker.contains("setup"))
+}
+
+@Test func installSh_failedDownloadLeavesPreviousInstallIntact() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-install-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let home = root.appendingPathComponent("home", isDirectory: true)
+    let destBin = home.appendingPathComponent(".local/bin", isDirectory: true)
+    try FileManager.default.createDirectory(at: destBin, withIntermediateDirectories: true)
+    let previous = "#!/bin/sh\n# installed-v1\n"
+    for name in ["rv", "rv-cli", "rvd"] {
+        try writeExecutable(destBin.appendingPathComponent(name), contents: previous)
+    }
+
+    let shim = root.appendingPathComponent("shim", isDirectory: true)
+    try writeDarwinShims(in: shim)
+    try writeCurlShim(
+        in: shim,
+        assets: root.appendingPathComponent("missing"),
+        failAll: true
+    )
+
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/bin/sh")
+    process.arguments = [installScriptURL().path]
+    process.environment = [
+        "HOME": home.path,
+        "PATH": shim.path + ":/usr/bin:/bin",
+    ]
+    let stderr = Pipe()
+    process.standardError = stderr
+    process.standardOutput = Pipe()
+    try process.run()
+    process.waitUntilExit()
+    let err = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+    #expect(process.terminationStatus != 0)
+    #expect(err.contains("failed to download"))
+    #expect(err.contains("run rv-cli") == false)
+
+    for name in ["rv", "rv-cli", "rvd"] {
+        let dest = destBin.appendingPathComponent(name)
+        #expect(try String(contentsOf: dest, encoding: .utf8).contains("installed-v1"))
+    }
+}
