@@ -38,7 +38,10 @@ public struct ScanClassify: Sendable {
         do {
             compiled = try CompiledPacks.compile(packs: toCompile, using: engine)
         } catch {
-            compiled = CompiledPacks(packs: [])
+            throw ScanClassifyError.packsUnavailable
+        }
+        guard corePacksAreReady(snapshots: loaded, compiled: compiled) else {
+            throw ScanClassifyError.packsUnavailable
         }
 
         self.enabledPacks = enabledPacks
