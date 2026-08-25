@@ -22,13 +22,15 @@ public struct OpenCodeHostCodec: HostCodec {
         guard let command = envelope.args?.command, command.isEmpty == false else {
             return .malformed(.missingCommand)
         }
-        return .request(HookRequest(host: .opencode, command: ShellCommand(rawValue: command)))
+        let cwd = envelope.cwd.flatMap { WorkingDirectory(validating: $0) }
+        return .request(HookRequest(host: .opencode, command: ShellCommand(rawValue: command), cwd: cwd))
     }
 }
 
 private struct OpenCodeEnvelope: Decodable {
     var tool: String?
     var args: OpenCodeArgs?
+    var cwd: String?
 }
 
 private struct OpenCodeArgs: Decodable {

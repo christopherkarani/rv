@@ -22,13 +22,15 @@ public struct PiHostCodec: HostCodec {
         guard let command = envelope.input?.command, command.isEmpty == false else {
             return .malformed(.missingCommand)
         }
-        return .request(HookRequest(host: .pi, command: ShellCommand(rawValue: command)))
+        let cwd = envelope.cwd.flatMap { WorkingDirectory(validating: $0) }
+        return .request(HookRequest(host: .pi, command: ShellCommand(rawValue: command), cwd: cwd))
     }
 }
 
 private struct PiEnvelope: Decodable {
     var toolName: String?
     var input: PiInput?
+    var cwd: String?
 }
 
 private struct PiInput: Decodable {
