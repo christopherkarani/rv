@@ -32,7 +32,7 @@ Each module keeps a small public API, `package` internals later, and its own tes
 | `RVTheme` | none | Palettes in T2. No business rules. |
 | `RVEngine` | `RVDomain` | Must not depend on Packs, Hooks, CLI, TUI, Service. |
 | `RVPacks` | `RVDomain` | Bundled catalog JSON (95 packs, excluding `windows.*` OS catalogs); default-on remains core only. |
-| `RVPolicy` | `RVDomain` | Packs config merge; allowlist / allow-once. |
+| `RVPolicy` | `RVDomain` | Packs config merge; allowlist / allow-once. Darwin: CryptoKit. Linux: `Crypto` (swift-crypto) added on that graph only. |
 | `RVHooks` | `RVDomain` | Complete Pi/Grok/OpenCode Host adapter behavior; no setup mutations. |
 | `RVIPC` | `RVDomain` | `rv.ipc.v1` Codable later. |
 | `RVHistory` | `RVDomain` | **Stub.** Off by default forever until a later ticket enables it. Must not log argv. |
@@ -43,3 +43,5 @@ Each module keeps a small public API, `package` internals later, and its own tes
 | `RVCLI` | `RVDomain`, `RVEngine`, `RVPolicy`, `RVHooks`, `RVIPC`, `RVPresentation`, `RVTheme`, `RVTUI`, `RVService`, `RVHistory`, `RVAnalytics` | Thin client; typed service diagnostics; service health facts shared by doctor and status; GatedEvaluate for TTY test/explain and hook XPC miss; read-only Host adapter installation state shared by setup and doctor. No regex, no pack parse. |
 
 Each module has a matching `*Tests` target that depends only on that module.
+
+On Linux (OPE-260), `RVService`, `RVCLI`, `rv`, and `rvd` (and their tests) are omitted from the package graph so core `swift test` does not typecheck XPC. Darwin `RVPolicy` stays `RVDomain` + CryptoKit; Linux `RVPolicy` adds `Crypto` (swift-crypto). The Darwin Service/CLI graph is unchanged.

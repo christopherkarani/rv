@@ -1,29 +1,32 @@
+#if canImport(Darwin)
 import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Foundation
+import Synchronization
 import Testing
-import os
 @testable import RVPolicy
 
 struct ExclusiveFileLockTests {
     @Test func concurrentBodiesSerializeOnSameLock() async throws {
         let root = try makeDirectory("concurrent")
         let lockURL = root.appendingPathComponent(".probe.lock")
-        let tickets = OSAllocatedUnfairLock(initialState: [Int]())
+        let tickets = TicketLog()
         let iterations = 16
         try await withThrowingTaskGroup(of: Void.self) { group in
             for _ in 0..<iterations {
-                try group.addTask {
+                group.addTask {
                     try ExclusiveFileLock.withLock(at: lockURL) {
-                        let ticket = tickets.withLock { $0.count }
+                        let ticket = tickets.count()
                         usleep(10_000)
-                        tickets.withLock { $0.append(ticket) }
+                        tickets.append(ticket)
                     }
                 }
             }
             try await group.waitForAll()
         }
-        let observed = tickets.withLock { $0 }
-        #expect(observed == Array(0..<iterations))
+        #expect(tickets.snapshot() == Array(0..<iterations))
     }
 
     @Test func lockFileModeIsOwnerOnlyAfterCreation() throws {
@@ -89,6 +92,24 @@ struct ExclusiveFileLockTests {
             try ExclusiveFileLock.withLock(at: lockURL) {}
         }
         #expect(FileManager.default.fileExists(atPath: missingRoot.path) == false)
+    }
+}
+
+/// `Mutex` is `~Copyable` and cannot be captured into a sending task body.
+/// A tiny `Sendable` box keeps Synchronization as the lock (not `os`).
+private final class TicketLog: Sendable {
+    private let tickets = Mutex<[Int]>([])
+
+    func count() -> Int {
+        tickets.withLock { $0.count }
+    }
+
+    func append(_ ticket: Int) {
+        tickets.withLock { $0.append(ticket) }
+    }
+
+    func snapshot() -> [Int] {
+        tickets.withLock { $0 }
     }
 }
 
