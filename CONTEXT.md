@@ -71,3 +71,7 @@ _Avoid_: ExplainStage
 **Secret-path guard**:
 The allow-path scan of path-shaped operands on the matching view against `SecretPathCatalog`. Deny `rule_id` is `core.secrets:<pattern>`. Not a catalog pack. Not a third day-one ICU pack. Does not rewrite matching view.
 _Avoid_: secret pack, path sandbox, realpath
+
+**Session forensics**:
+Offline `rv scan` / `rv scan sessions`: read known host session stores (or a path of known layouts), extract shell candidates, run the same `evaluate`, list deny-only findings. Not `RVHistory`, not repo/CI `rv scan repo`, not live hook enforcement. Fence: `docs/factory/specs/phase-4-session-scan.md`.
+_Avoid_: history scan, recon, audit log (unless meaning this CLI)
