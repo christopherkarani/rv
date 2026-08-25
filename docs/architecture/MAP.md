@@ -74,8 +74,8 @@
 
 | Module | Purpose | Key Types / Files | Dependencies | Must NOT |
 |---|---|---|---|---|
-| **RVDomain** | Closed type system: decisions, requests, results, packs. Pure value types, `Sendable`. | `Decision` (`allow`/`deny(Deny)`/`indeterminate`), `Deny`, `IndeterminateReason`, `Severity`, `PackID` (`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)?$`), `RuleID` (`pack:pattern`, display `pack/pattern`), `ShellCommand`, `EvaluationRequest/Result`, `EvaluationOutcome`, `MatchingView`, `PackSnapshot`, `ExplainStep`, `Display` · `RVDomain.swift`, `Decision.swift`, `Severity.swift`, `PackID.swift`, `RuleID.swift`, `ShellCommand.swift`, `EvaluationRequest.swift`, `EvaluationResult.swift`, `ExplainStep.swift`, `PackSnapshot.swift`, `Display.swift`, `MatchingView.swift`, `Coding.swift` | none | I/O, TTY, XPC, `Date`/`FileManager` |
-| **RVEngine** | Functional core `evaluate`. Pure, budgeted, deadline-aware. | `evaluate(_:packs:patterns:compiled:)`, `Normalize.matchingView(of:)`, `QuickReject`, `CompiledPacks`, `PatternEngine`/`ICUPatternEngine`, `commandByteCap=65536`, `isMajorSkew` · `Evaluate.swift`, `Normalize.swift` (role-aware quote strip, wrapper unwrap `sudo/env/command/\\`), `QuickReject.swift`, `ICUPatternEngine.swift`, `PatternEngine.swift`, `CompiledPacks.swift`, `RVEngine.swift` | `RVDomain` | pack files, hooks, XPC, CLI, TUI |
+| **RVDomain** | Closed type system: decisions, requests, results, packs. Pure value types, `Sendable`. | `Decision` (`allow`/`deny(Deny)`/`indeterminate`), `Deny`, `IndeterminateReason`, `Severity`, `PackID` (`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)?$`, virtual `coreSecrets`), `RuleID` (`pack:pattern`, display `pack/pattern`), `SecretPathCatalog` / `SecretPathRule` / `SecretPathKind`, `ShellCommand`, `EvaluationRequest/Result`, `EvaluationOutcome`, `MatchingView`, `PackSnapshot`, `ExplainStep`, `Display` · `RVDomain.swift`, `Decision.swift`, `Severity.swift`, `PackID.swift`, `RuleID.swift`, `SecretPathCatalog.swift`, `ShellCommand.swift`, `EvaluationRequest.swift`, `EvaluationResult.swift`, `ExplainStep.swift`, `PackSnapshot.swift`, `Display.swift`, `MatchingView.swift`, `Coding.swift` | none | I/O, TTY, XPC, `Date`/`FileManager` |
+| **RVEngine** | Functional core `evaluate`. Pure, budgeted, deadline-aware. | `evaluate(_:packs:secrets:patterns:compiled:)`, `Normalize.matchingView(of:)`, `QuickReject`, `SecretPathGuard` (allow-path operand table), `CompiledPacks`, `PatternEngine`/`ICUPatternEngine`, `commandByteCap=65536`, `isMajorSkew` · `Evaluate.swift`, `Normalize.swift` (role-aware quote strip, wrapper unwrap `sudo/env/command/\\`), `QuickReject.swift`, `SecretPathGuard.swift`, `ICUPatternEngine.swift`, `PatternEngine.swift`, `CompiledPacks.swift`, `RVEngine.swift` | `RVDomain` | pack files, hooks, XPC, CLI, TUI |
 | **RVPacks** | Registry + bundled JSON catalog (95 packs, 26 categories; `windows.*` OS catalogs excluded). Disabled by default except day-one. | `PackRegistry.loadAll/loadDayOne/loadIndex`, `PackCatalog`, `PackIndex`, `PackJSON`, `PackEnablement`, `SelectionToken`, `PackDocument` · `RVPacks.swift`, `PackRegistry.swift`, `PackCatalog.swift`, `PackIndex.swift`, `PackJSON.swift`, `PackEnablement.swift`, `SelectionToken.swift` · `Resources/packs/*.json` (`core.git`, `core.filesystem` day-one + 93 off) | `RVDomain` | decisions, rendering |
 | **RVPolicy** | Config merge + overrides: allowlist + single-use allow-once grants. | `PolicyGate.{peek,apply}`, `PolicyDecision/Override`, `AllowOnceStore` (atomic CAS), `AllowOnceRecord`, `Allowlist/AllowlistStore`, `PacksConfig`, `HomeDirectory`, `ExclusiveFileLock` · `PolicyGate.swift`, `AllowOnceStore.swift`, `AllowOnceRecord.swift`, `Allowlist.swift`, `PacksConfig.swift`, `RVPolicyPaths.swift` | `RVDomain` | rendering |
 | **RVHooks** | Pi / Grok / OpenCode **Host adapters**: codecs, HostAdapterResources, Hook mapper/voice. | `HostCodec` protocol, `GrokHostCodec` (`pre_tool_use` + `run_terminal_command`/`run_terminal_cmd`/`Bash`), `PiHostCodec`, `OpenCodeHostCodec`, `HookMapper.hookWire(from:command:using:)`, `HostDenyText`, `HookDecode`, `HookDenyJSON`, `HostAdapterResources` (embed `__RV_BINARY__` → baked `rv` path) · `HostCodec.swift`, `GrokHostCodec.swift`, `PiHostCodec.swift`, `OpenCodeHostCodec.swift`, `HookMapper.swift`, `HostDenyText.swift`, `HostAdapterResources.swift` | `RVDomain` | evaluation, setup mutations, CLI/TUI |
@@ -139,13 +139,17 @@ ShellCommand.rawValue (e.g. `"  \"git\" reset --hard "`)
         ▼  6. Attach MatchingView, isTerminal? (deny/indeterminate   │
               terminal per segment) else plain                        │
         │                                                            │
+        ▼  7. Secret-path on allow (.quickRejected/.plain/.safeOnly/ │
+              .hit): SecretPathGuard.firstHit → deny core.secrets:*  │
+              Pack deny / indeterminate unchanged. `.empty` is a no-op│
+        │                                                            │
         ▼                                                         ────┘
 EvaluationResult { outcome, matchingView }
   plain | quickRejected | safeOnly | hit | deny | indeterminate
   matchedSafe / matched carried for explain/classify
 ```
 
-Order guarantee per `docs/dev/PARITY.md`: `normalize → quick-reject → safe → destructive → default allow`. Safe runs before destructive so exits-early if safe matches.
+Order guarantee per `docs/dev/PARITY.md`: `normalize → quick-reject → safe → destructive → secret-path on allow → default allow`. Safe runs before destructive so exits-early if safe matches.
 
 ### (b) Hook Request Flow (host adapter → C hook → rvd → mapper → host wire)
 

@@ -29,6 +29,7 @@ public struct PackID: RawRepresentable, Hashable, Sendable, Equatable, Codable {
 
     public static let coreFilesystem = PackID(rawValue: "core.filesystem")
     public static let coreGit = PackID(rawValue: "core.git")
+    public static let coreSecrets = PackID(rawValue: "core.secrets")
 
     public static func isValid(_ rawValue: String) -> Bool {
         let scalars = Array(rawValue.unicodeScalars)
