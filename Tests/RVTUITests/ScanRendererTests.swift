@@ -106,3 +106,21 @@ private func sampleReport() -> ScanReport {
     #expect(scanBrowseReduce(state, .down).selectedIndex == 0)
     #expect(scanBrowseReduce(state, .up).selectedIndex == 0)
 }
+
+@Test func scanBrowseRender_clampsOutOfRangeSelection() {
+    let state = ScanBrowseState(model: scanViewModel(from: sampleReport()), selectedIndex: 99)
+    let lines = scanBrowseRender(state, palette: colorOffPalette)
+    let joined = lines.joined(separator: "\n")
+
+    #expect(state.selectedIndex == 1)
+    #expect(joined.contains("› core.filesystem:rm-rf-general  rm …"))
+    #expect(joined.contains(" core.git:reset-hard  git … ×3"))
+}
+
+@Test func scanPrettyRenderer_showCommandPrintsFullCommand() {
+    let vm = scanViewModel(from: sampleReport(), showCommand: true)
+    let joined = ScanPrettyRenderer().render(vm, palette: colorOffPalette).joined(separator: "\n")
+
+    #expect(joined.contains("git reset --hard"))
+    #expect(joined.contains("rm -rf ./src"))
+}

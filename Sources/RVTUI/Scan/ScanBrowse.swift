@@ -7,7 +7,12 @@ public struct ScanBrowseState: Equatable, Sendable {
 
     public init(model: ScanViewModel, selectedIndex: Int = 0) {
         self.model = model
-        self.selectedIndex = selectedIndex
+        self.selectedIndex = Self.clampedSelection(selectedIndex, rowCount: model.rows.count)
+    }
+
+    fileprivate static func clampedSelection(_ selectedIndex: Int, rowCount: Int) -> Int {
+        guard rowCount > 0 else { return 0 }
+        return min(max(0, selectedIndex), rowCount - 1)
     }
 }
 
@@ -38,19 +43,21 @@ public func scanBrowseReduce(_ state: ScanBrowseState, _ event: ScanBrowseEvent)
     case .enter, .quit, .noop:
         break
     }
+    next.selectedIndex = ScanBrowseState.clampedSelection(next.selectedIndex, rowCount: next.model.rows.count)
     return next
 }
 
 public func scanBrowseRender(_ state: ScanBrowseState, palette: Palette) -> [String] {
+    let selectedIndex = ScanBrowseState.clampedSelection(state.selectedIndex, rowCount: state.model.rows.count)
     var lines: [String] = [paint("RV SCAN", slot: palette.silver, reset: palette.reset), ""]
     if state.model.rows.isEmpty {
         lines.append(paint("No deny findings.", slot: palette.muted, reset: palette.reset))
     } else {
         for (index, row) in state.model.rows.enumerated() {
-            lines.append(browseListLine(row, selected: index == state.selectedIndex, palette: palette))
+            lines.append(browseListLine(row, selected: index == selectedIndex, palette: palette))
         }
         lines.append("")
-        lines.append(contentsOf: browseDetail(state.model.rows[state.selectedIndex], palette: palette))
+        lines.append(contentsOf: browseDetail(state.model.rows[selectedIndex], palette: palette))
     }
     for warning in state.model.warnings {
         lines.append(
