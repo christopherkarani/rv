@@ -70,8 +70,8 @@ rendering, setup flow, analytics.
 - **REQ-103**: Exactly one production codec-dispatch body exists, in RVHooks, e.g.
   `public func hookWire(host:stdin:evaluate:) async -> HookWire`: one exhaustive
   `switch host` selecting the concrete codec (no existentials needed — generic inner
-  function over `some HostCodec`), one decode→evaluate→hookWire body. `.foreign` and
-  `.malformed` decode outcomes still encode allow.
+  function over `some HostCodec`), one decode→evaluate→hookWire body. `.foreign`
+  still encodes allow; `.malformed` fails closed through `encodeDeny`.
 - **REQ-104**: `HookDoor.run(host:stdin:evaluate:)` keeps its signature shape but takes
   the closed host type and delegates to the single dispatch; its default/unknown-host
   arm and `IPCError.engine("unknown host")` throw disappear (unrepresentable).

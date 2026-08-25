@@ -506,11 +506,22 @@ printf 'AC-011-miss ok\n'
 
 clear_cli
 set +e
-run_hook "$FIXTURES/allow-empty-command.json" >"$PROOF_ROOT/ac004.out" 2>"$PROOF_ROOT/ac004.err"
+run_hook "$FIXTURES/deny-empty-command.json" >"$PROOF_ROOT/ac004.out" 2>"$PROOF_ROOT/ac004.err"
 ac004=$?
 set -e
 [[ "$ac004" -eq 0 ]] || fail "AC-004 empty-command exit $ac004"
-[[ ! -s "$PROOF_ROOT/ac004.out" ]] || fail "AC-004 empty-command stdout not empty"
+python3 - "$PROOF_ROOT/ac004.out" <<'PY' || fail "AC-004 empty-command was not missingCommand deny JSON"
+import json, sys
+obj = json.loads(open(sys.argv[1], encoding="utf-8").read())
+if obj.get("decision") != "deny":
+    raise SystemExit("decision=%r" % (obj.get("decision"),))
+if obj.get("reason") != "rv received a shell hook with no command text and blocked the command. Run it in Terminal.":
+    raise SystemExit("reason=%r" % (obj.get("reason"),))
+if obj.get("rule") or obj.get("next"):
+    raise SystemExit("unexpected rule/next")
+if "hookSpecificOutput" in obj or "updatedInput" in obj or "block" in obj:
+    raise SystemExit("extra host keys present")
+PY
 cli_invoked || fail "AC-004 empty-command did not take miss"
 
 clear_cli

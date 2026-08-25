@@ -10,13 +10,14 @@ public enum HookMalformation: Equatable, Sendable {
 
 /// Closed result of decoding host hook stdin.
 ///
-/// `.foreign` and `.malformed` both fail open through `encodeAllow`; spelling them
-/// out keeps that product law explicit instead of hidden behind `command == nil`.
+/// `.foreign` fails open through `encodeAllow`: the event is not ours to grade.
+/// `.malformed` fails closed through `encodeDeny`: the payload claimed this host
+/// but could not be decoded, matching the C shim's fail-closed `_exit(2)`.
 public enum HookDecodeOutcome: Equatable, Sendable {
     /// This adapter owns the invocation; `command` is always present.
     case request(HookRequest)
     /// Not a shell invocation for this host (other tool or event).
     case foreign
-    /// Addressed to this host but unparseable — fail-open on purpose.
+    /// Addressed to this host but unparseable — fail closed on purpose.
     case malformed(HookMalformation)
 }

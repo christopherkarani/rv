@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import RVDomain
 import RVEngine
+import RVHooks
 import RVPolicy
 import RVIPC
 @preconcurrency import XPC
@@ -198,14 +199,31 @@ struct HookEvaluateTests {
         #expect(blob.contains("/tmp/rv-hook-fixture") == false)
     }
 
-    @Test func emptyStdin_isEmptyAllow() async throws {
+    @Test func emptyStdin_failsClosedWithDenyJSON() async throws {
         let probe = EvaluateCallProbe()
         let reply = try await HookDoor.run(host: .grok, stdin: "") { command, cwd in
             await probe.evaluate(command, cwd: cwd)
         }
+        let object = try JSONSerialization.jsonObject(with: Data(reply.stdout.utf8))
+        let json = try #require(object as? [String: Any])
+        #expect(json["decision"] as? String == "deny")
+        #expect(json["reason"] as? String == malformedHookSentence(.unreadable))
         #expect(probe.calls == 0)
-        #expect(reply.stdout.isEmpty)
         #expect(reply.exitCode == 0)
+        #expect(reply.via == .xpc)
+    }
+
+    @Test func missingCommand_failsClosedWithDenyJSONAndDenyExitCode() async throws {
+        let probe = EvaluateCallProbe()
+        let reply = try await HookDoor.run(host: .pi, stdin: "{\"toolName\":\"bash\",\"input\":{}}") { command, cwd in
+            await probe.evaluate(command, cwd: cwd)
+        }
+        let object = try JSONSerialization.jsonObject(with: Data(reply.stdout.utf8))
+        let json = try #require(object as? [String: Any])
+        #expect(json["decision"] as? String == "deny")
+        #expect(json["reason"] as? String == malformedHookSentence(.missingCommand))
+        #expect(probe.calls == 0)
+        #expect(reply.exitCode == 1)
         #expect(reply.via == .xpc)
     }
 

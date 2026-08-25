@@ -3,6 +3,17 @@ import RVDomain
 /// Unlock next-step on hook voice. TTY deny next-action keeps its own casing.
 public let hookUnlockNext = "Run it in Terminal, or rv allow-once."
 
+/// Hook-voice deny sentence for a payload addressed to this host that could not
+/// be decoded. Fail-closed twin of `incompleteEvalSentence`.
+public func malformedHookSentence(_ malformation: HookMalformation) -> String {
+    switch malformation {
+    case .unreadable:
+        return "rv received a hook payload it could not read and blocked the command. Run it in Terminal."
+    case .missingCommand:
+        return "rv received a shell hook with no command text and blocked the command. Run it in Terminal."
+    }
+}
+
 /// Max characters of the command's first line in hook deny JSON.
 public let hookDenyCommandPreviewLimit = 96
 

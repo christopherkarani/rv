@@ -73,7 +73,7 @@ func grokDecode_otherToolOrEventIsForeign(_ file: String) throws {
 }
 
 @Test func grokDecode_emptyCommandIsMissingCommand() throws {
-    #expect(codec.decode(try grokFixture("allow-empty-command.json")) == .malformed(.missingCommand))
+    #expect(codec.decode(try grokFixture("deny-empty-command.json")) == .malformed(.missingCommand))
 }
 
 @Test func grokDecode_malformedIsUnreadable() throws {
