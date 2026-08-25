@@ -80,6 +80,16 @@ extension SetupEnvironment {
         guard let home = HomeDirectory(validating: environment["HOME"] ?? "") else { return nil }
         let pathEntries = (environment["PATH"] ?? "").split(separator: ":").map(String.init)
         let executable = Bundle.main.executableURL
+        let loginHome = LoginHome.matchesProcessHome(home.rawValue)
+#if os(Linux)
+        let supervisor = EvaluateSupervisor.systemdUser
+        let touchLaunchd = false
+        let touchSystemd = loginHome
+#else
+        let supervisor = EvaluateSupervisor.launchd
+        let touchLaunchd = loginHome
+        let touchSystemd = false
+#endif
         return SetupEnvironment(
             home: home,
             pathEntries: pathEntries,
@@ -88,7 +98,10 @@ extension SetupEnvironment {
                 ?? (home.rawValue + "/.local/bin/rvd"),
             fileManager: .default,
             launchctl: ProcessLaunchctl(),
-            touchLaunchd: LoginHome.matchesProcessHome(home.rawValue),
+            systemctl: ProcessSystemctl(),
+            touchLaunchd: touchLaunchd,
+            touchSystemd: touchSystemd,
+            supervisor: supervisor,
             installAnalytics: BlockingInstallAnalytics.live(home: home, environment: environment)
         )
     }

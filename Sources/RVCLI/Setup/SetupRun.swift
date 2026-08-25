@@ -1,3 +1,8 @@
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Foundation
 import RVAnalytics
 import RVDomain
@@ -35,7 +40,10 @@ struct SetupEnvironment {
     var rvdPath: String
     var fileManager: FileManager
     var launchctl: any LaunchctlApplying
+    var systemctl: any SystemctlApplying
     var touchLaunchd: Bool
+    var touchSystemd: Bool
+    var supervisor: EvaluateSupervisor
     var installAnalytics: any InstallAnalyticsCapturing
     /// Injected so launchd domains are provable without the real uid.
     var uid: () -> uid_t = { getuid() }
@@ -143,7 +151,12 @@ enum SetupRun {
             case .skipLaunchAgent:
                 break
             case .writeLaunchAgent:
-                try writeLaunchAgent(env: env, layout: layout, files: files)
+                switch env.supervisor {
+                case .launchd:
+                    try writeLaunchAgent(env: env, layout: layout, files: files)
+                case .systemdUser:
+                    try writeSystemdUserUnit(env: env, layout: layout, files: files)
+                }
             case .skipUndetected(_):
                 break
             case .skipOccupied(let host):
@@ -282,12 +295,13 @@ enum SetupRun {
             }
         }
 
-        let launchAgentExisted = files.fileExists(layout.launchAgent)
+        let servicePath = evaluateServicePath(layout: layout, supervisor: env.supervisor)
+        let launchAgentExisted = files.fileExists(servicePath)
         let binariesExisted = files.fileExists(layout.localRv)
             || files.fileExists(layout.localRvCli)
             || files.fileExists(layout.localRvd)
         removedPaths.append(
-            contentsOf: [layout.launchAgent, layout.localRv, layout.localRvCli, layout.localRvd]
+            contentsOf: [servicePath, layout.localRv, layout.localRvCli, layout.localRvd]
         )
 
         let configDir = URL(fileURLWithPath: layout.configDirectory, isDirectory: true)
@@ -304,13 +318,20 @@ enum SetupRun {
         }
         files.removeDirectoryIfEmpty(atPath: layout.configDirectory)
 
-        if env.touchLaunchd {
+        if env.supervisor == .launchd, env.touchLaunchd {
             let uid = env.uid()
             try? env.launchctl.bootout(domain: LaunchdDomain.user(uid), label: launchAgentLabel)
             do {
                 try env.launchctl.bootout(domain: LaunchdDomain.gui(uid), label: launchAgentLabel)
             } catch {
                 throw SetupError.launchctlApplyFailed(.bootout)
+            }
+        }
+        if env.supervisor == .systemdUser, env.touchSystemd {
+            do {
+                try env.systemctl.disableNow(unit: SystemdUserTemplate.unitName)
+            } catch {
+                throw SetupError.systemdApplyFailed(.disable)
             }
         }
 
@@ -356,6 +377,35 @@ enum SetupRun {
             } catch {
                 throw SetupError.launchctlApplyFailed(.bootstrap)
             }
+        }
+    }
+
+    private static func writeSystemdUserUnit(
+        env: SetupEnvironment,
+        layout: OwnedPaths,
+        files: FileOps
+    ) throws(SetupError) {
+        let body = try SystemdUserTemplate.rendered(rvdPath: env.rvdPath)
+        do {
+            try files.write(body, to: layout.systemdUserUnit)
+        } catch {
+            throw SetupError.systemdUnitWriteFailed
+        }
+        if env.touchSystemd {
+            do {
+                try env.systemctl.enableNow(unit: SystemdUserTemplate.unitName)
+            } catch {
+                throw SetupError.systemdApplyFailed(.enable)
+            }
+        }
+    }
+
+    private static func evaluateServicePath(layout: OwnedPaths, supervisor: EvaluateSupervisor) -> String {
+        switch supervisor {
+        case .launchd:
+            layout.launchAgent
+        case .systemdUser:
+            layout.systemdUserUnit
         }
     }
 

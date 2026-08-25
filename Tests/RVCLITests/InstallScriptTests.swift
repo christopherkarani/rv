@@ -63,6 +63,51 @@ private func writeDummyTrio(in src: URL) throws {
     }
 }
 
+private func findSwiftRVExecutable() -> URL? {
+    if let override = ProcessInfo.processInfo.environment["RV_SWIFT_RV"] {
+        let url = URL(fileURLWithPath: override)
+        if FileManager.default.isExecutableFile(atPath: url.path) {
+            return url
+        }
+    }
+    let build = repoRootURL().appendingPathComponent(".build")
+    let names = [
+        "debug/rv",
+        "x86_64-unknown-linux-gnu/debug/rv",
+        "aarch64-unknown-linux-gnu/debug/rv",
+        "arm64-apple-macosx/debug/rv",
+    ]
+    for name in names {
+        let candidate = build.appendingPathComponent(name)
+        if FileManager.default.isExecutableFile(atPath: candidate.path) {
+            return candidate
+        }
+    }
+    return nil
+}
+
+/// C-hook shaped `rv` plus Swift `rv-cli`. Dummy `rv` that exits 0 hides setup.
+private func writeLinuxSetupTrio(in src: URL, swiftRV: URL) throws {
+    try writeExecutable(
+        src.appendingPathComponent("rv"),
+        contents: """
+        #!/bin/sh
+        exec "$(dirname "$0")/rv-cli" "$@"
+        """
+    )
+    try writeExecutable(
+        src.appendingPathComponent("rv-cli"),
+        contents: """
+        #!/bin/sh
+        exec "\(swiftRV.path)" "$@"
+        """
+    )
+    try writeExecutable(
+        src.appendingPathComponent("rvd"),
+        contents: "#!/bin/sh\n# dummy-rvd\nexit 0\n"
+    )
+}
+
 private func runInstallScript(
     home: URL,
     src: URL,
@@ -94,6 +139,8 @@ private func runInstallScript(
     let text = try String(contentsOf: installScriptURL(), encoding: .utf8)
     #expect(text.contains("RV_FROM_INSTALL=1 exec \"$bin/rv\" setup"))
     #expect(text.contains("exec \"$bin/rv-cli\" setup") == false)
+    #expect(text.contains("launchctl") == false)
+    #expect(text.contains("LaunchAgent") == false)
 }
 
 @Test func readme_hasNoBrewInstallPath() throws {
@@ -190,7 +237,12 @@ private func proveLinuxInstall(arch: String) throws {
     let home = root.appendingPathComponent("home", isDirectory: true)
     try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
     let src = root.appendingPathComponent("src", isDirectory: true)
+#if os(Linux)
+    let swiftRV = try #require(findSwiftRVExecutable(), "Swift rv product must be on the Linux graph")
+    try writeLinuxSetupTrio(in: src, swiftRV: swiftRV)
+#else
     try writeDummyTrio(in: src)
+#endif
 
     let shim = root.appendingPathComponent("shim", isDirectory: true)
     try writeLinuxShims(in: shim, arch: arch)
@@ -202,6 +254,16 @@ private func proveLinuxInstall(arch: String) throws {
     #expect(FileManager.default.isExecutableFile(atPath: destBin.appendingPathComponent("rv").path))
     #expect(FileManager.default.isExecutableFile(atPath: destBin.appendingPathComponent("rv-cli").path))
     #expect(FileManager.default.isExecutableFile(atPath: destBin.appendingPathComponent("rvd").path))
+#if os(Linux)
+    let layout = OwnedPaths(home: try #require(HomeDirectory(validating: home.path)))
+    #expect(FileManager.default.fileExists(atPath: layout.launchAgent) == false)
+    #expect(FileManager.default.fileExists(atPath: layout.systemdUserUnit))
+    let unit = try String(contentsOfFile: layout.systemdUserUnit, encoding: .utf8)
+    #expect(unit.contains("Restart=no"))
+    #expect(unit.contains("Restart=always") == false)
+    #expect(unit.contains("--socket"))
+    #expect(unit.contains(destBin.appendingPathComponent("rvd").path))
+#endif
 }
 
 @Test func installSh_replacesDestSymlinkWithoutFollowing() throws {

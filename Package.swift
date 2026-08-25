@@ -121,6 +121,7 @@ let cliTargets: [Target] = [
         ],
         resources: [
             .embedInCode("Resources/launchd"),
+            .embedInCode("Resources/systemd"),
         ]
     ),
     .executableTarget(
@@ -136,7 +137,7 @@ let cliProducts: [Product] = [
     .executable(name: "rv", targets: ["rv"]),
 ]
 let cliTestTargets: [Target] = [
-    .testTarget(name: "RVCLITests", dependencies: ["RVCLI"]),
+    .testTarget(name: "RVCLITests", dependencies: ["RVCLI", "RVService"]),
 ]
 
 let package = Package(
