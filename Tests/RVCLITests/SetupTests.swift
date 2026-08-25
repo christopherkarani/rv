@@ -989,6 +989,80 @@ private func claudePreToolUseEntries(_ settings: [String: Any]) throws -> [[Stri
     }
 }
 
+@Test func uninstall_claudeOccupiedFingerprint_stripsHandlerAndPreservesForeign() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(
+            atPath: layout.claudeDirectory,
+            withIntermediateDirectories: true
+        )
+        let occupied = """
+        {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  { "type": "command", "command": "dcg evaluate", "timeout": 5 },
+                  { "type": "command", "command": "/old/rv hook --host claude", "timeout": 10 }
+                ]
+              }
+            ]
+          }
+        }
+        """
+        try occupied.write(toFile: layout.claudeSettings, atomically: true, encoding: .utf8)
+
+        let outcome = SetupRun.uninstall(env(home: home, launchctl: launchctl))
+
+        #expect(outcome.exitCode == 0)
+        let settings = try claudeSettingsObject(at: layout.claudeSettings)
+        let entries = try claudePreToolUseEntries(settings)
+        #expect(entries.count == 1)
+        let hooks = try #require(entries[0]["hooks"] as? [[String: Any]])
+        #expect(hooks.map { $0["command"] as? String } == ["dcg evaluate"])
+    }
+}
+
+@Test func uninstall_claudeUnreadableOccupied_leavesBytes() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(
+            atPath: layout.claudeDirectory,
+            withIntermediateDirectories: true
+        )
+        let garbage = Data([0xFF, 0x00, 0x41])
+        try garbage.write(to: URL(fileURLWithPath: layout.claudeSettings))
+
+        let outcome = SetupRun.uninstall(env(home: home, launchctl: launchctl))
+
+        #expect(outcome.exitCode == 0)
+        #expect(try Data(contentsOf: URL(fileURLWithPath: layout.claudeSettings)) == garbage)
+    }
+}
+
+@Test func uninstall_claudeOccupiedSymlink_doesNotFollowOrReplace() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(
+            atPath: layout.claudeDirectory,
+            withIntermediateDirectories: true
+        )
+        let target = home.appendingPathComponent("foreign-settings.json")
+        try claudeForeignSettings().write(to: target, atomically: true, encoding: .utf8)
+        try FileManager.default.createSymbolicLink(
+            atPath: layout.claudeSettings,
+            withDestinationPath: target.path
+        )
+
+        let outcome = SetupRun.uninstall(env(home: home, launchctl: launchctl))
+
+        #expect(outcome.exitCode == 0)
+        #expect(
+            try FileManager.default.destinationOfSymbolicLink(atPath: layout.claudeSettings)
+                == target.path
+        )
+        #expect(try String(contentsOf: target, encoding: .utf8) == claudeForeignSettings())
+    }
+}
+
 @Test func setup_doesNotMkdirClaudeOnlyToDetect() throws {
     try withTempHome { home, layout, launchctl in
         let bin = home.appendingPathComponent("bin", isDirectory: true)
