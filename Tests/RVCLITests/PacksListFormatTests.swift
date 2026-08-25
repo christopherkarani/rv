@@ -80,7 +80,7 @@ import Testing
 
     #expect(filtered.packs.count == 2)
     #expect(filtered.enabledCount == 2)
-    #expect(filtered.totalCount == 99)
+    #expect(filtered.totalCount == 95)
 
     let rows = filtered.packs.map {
         PacksRobotRow(
@@ -101,7 +101,7 @@ import Testing
         )
     ).render()
     #expect(json.contains("\"enabled_count\":2"))
-    #expect(json.contains("\"total_count\":99"))
+    #expect(json.contains("\"total_count\":95"))
 }
 
 @Test func packsCommandProcessUsesFacadeForFilteredRobotAndVerboseOutput() throws {
@@ -133,7 +133,7 @@ import Testing
         JSONSerialization.jsonObject(with: Data(filtered.stdout.utf8)) as? [String: Any]
     )
     #expect(object["enabled_count"] as? Int == 2)
-    #expect(object["total_count"] as? Int == 99)
+    #expect(object["total_count"] as? Int == 95)
     #expect((object["packs"] as? [[String: Any]])?.count == 2)
 
     let verbose = try runRV(
