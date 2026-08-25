@@ -26,7 +26,7 @@ Not ryk. Not line-for-line Rust. Repo: `~/CodingProjects/rv` (`christopherkarani
 
 **v1 scoreboard:** same decision + `rule_id` as DCG **0.11.0 engine source** (critical/high → deny; medium/low → allow + match). SKILL.md marketing rows that disagree are quarantine fixtures, not the scoreboard. Hook JSON/exit codes for **Grok / Pi / OpenCode shell events**. Quiet allow, native deny text.
 
-**Later (not v1 gate):** remaining bundled packs enabled-by-default (95 IDs stay in catalog, off; `windows.*` stay excluded), Claude/Codex/etc., scan, MCP, heredoc/AST, SARIF, Mac app, Intel, older macOS, Homebrew.
+**Later (not v1 gate):** remaining bundled packs enabled-by-default (95 IDs stay in catalog, off; `windows.*` stay excluded), Claude/Codex/etc., scan (session forensics fence `docs/factory/specs/phase-4-session-scan.md`; repo/CI later), MCP, heredoc/AST (shared extract ladder for session forensics **and** the live destructive-command guard — surface → bounded unwrap → heredoc/AST; details in `docs/factory/specs/phase-4-later.md`), SARIF, Mac app, Intel, older macOS, Homebrew.
 
 `dcg test` vs `rv test` agree-rate is the long-term scoreboard when `dcg` is on PATH. Do not block v1 on it.
 

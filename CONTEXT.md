@@ -55,3 +55,7 @@ _Avoid_: explain projection, briefing, ExplainStage (the IPC timing row)
 **Explain step**:
 One stage in the Explain pipeline, including that stage's outcome (scanned or skipped, rule hit or none, allow or incomplete).
 _Avoid_: ExplainStage
+
+**Session forensics**:
+Offline `rv scan` / `rv scan sessions`: read known host session stores (or a path of known layouts), extract shell candidates, run the same `evaluate`, list deny-only findings. Not `RVHistory`, not repo/CI `rv scan repo`, not live hook enforcement. Fence: `docs/factory/specs/phase-4-session-scan.md`.
+_Avoid_: history scan, recon, audit log (unless meaning this CLI)
