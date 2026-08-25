@@ -1,6 +1,7 @@
 import ArgumentParser
 import Foundation
 import RVDomain
+import RVPacks
 import RVPolicy
 import RVPresentation
 import RVService
@@ -15,8 +16,26 @@ struct Packs: AsyncParsableCommand {
         defaultSubcommand: nil
     )
 
-    @Flag(name: .customLong("enabled"), help: "Only effective-on packs.")
+    @Flag(name: .customLong("enabled"), help: "Only enabled packs.")
     var enabledOnly = false
+
+    @Flag(name: .customLong("all"), help: "List all packs grouped by category. (Default: all)")
+    var all = false
+
+    @Flag(name: .customLong("verbose"), help: "Show descriptions and pattern counts.")
+    var verbose = false
+
+    @Flag(name: .customLong("expand"), help: "Show all patterns when --verbose. By default truncates to --max-patterns.")
+    var expand = false
+
+    @Option(name: .customLong("max-patterns"), help: "Maximum patterns per section when --verbose (default 10).")
+    var maxPatterns: Int = 10
+
+    @Option(name: .customLong("category"), help: "Filter to a single category.")
+    var category: String?
+
+    @Option(name: .customLong("search"), help: "Filter by id, name, or description.")
+    var search: String?
 
     @OptionGroup
     var format: FormatFlags
@@ -26,28 +45,92 @@ struct Packs: AsyncParsableCommand {
             FileHandle.standardError.write(Data("rv packs: HOME is not set\n".utf8))
             throw ExitCode(1)
         }
-        let snapshot = try PacksFacade.list(home: home, enabledOnly: enabledOnly)
+        // Always load full snapshot; filtering is local so --json and pretty share the same view.
+        let full = try PacksFacade.list(home: home, enabledOnly: false)
+        var rows = full.packs
+
+        if let cat = category?.trimmingCharacters(in: .whitespacesAndNewlines), !cat.isEmpty {
+            rows = rows.filter { $0.category == cat }
+        }
+        if let q = search?.trimmingCharacters(in: .whitespacesAndNewlines), !q.isEmpty {
+            let needle = q.lowercased()
+            rows = rows.filter {
+                $0.id.rawValue.lowercased().contains(needle)
+                    || $0.name.lowercased().contains(needle)
+                    || $0.category.lowercased().contains(needle)
+                    || $0.description.lowercased().contains(needle)
+            }
+        }
+        if enabledOnly {
+            rows = rows.filter(\.enabled)
+        }
+
         if format.json || format.robot {
+            // JSON respects same filters; counts reflect filtered view's enabled vs filtered total for discoverability,
+            // but keep original total for legend parity when no filter.
+            let enabledInView = rows.filter(\.enabled).count
             let payload = packsRobotPayload(
-                rows: snapshot.packs.map(packsRobotRow),
-                enabledCount: snapshot.enabledCount,
-                totalCount: snapshot.totalCount
+                rows: rows.map(packsRobotRow),
+                enabledCount: enabledInView,
+                totalCount: rows.count
             )
             let text = RobotDocument.packsList(payload).render()
             FileHandle.standardOutput.write(Data((text + "\n").utf8))
             return
         }
 
-        let catalog = snapshot.packs.map { ($0.id, $0.description) }
-        let enabled = snapshot.packs.filter(\.enabled).map(\.id)
-        let model = packsViewModel(enabled: enabled, catalog: catalog)
+        if rows.isEmpty {
+            let hint: String
+            if category != nil || search != nil {
+                hint = "No packs match. Try `rv packs` or `rv packs --search <term>`.\n"
+            } else if enabledOnly {
+                hint = "No packs enabled. Try `rv packs` to see available packs.\n"
+            } else {
+                hint = "No packs found.\n"
+            }
+            FileHandle.standardOutput.write(Data(hint.utf8))
+            return
+        }
+
+        // Replica: `rv packs` default is upstream grouped `Available packs:` (like --all).
+        // Collapsed quiet path removed; use --enabled/--category/--search to narrow.
+        let verboseFlag = verbose
+        let expandFlag = expand
+        let maxPat = max(1, maxPatterns)
+
+        // Load pattern details only when verbose (matches upstream --verbose + --expand).
+        let groupedRows: [(id: PackID, name: String, category: String, description: String, enabled: Bool, safe: Int, destructive: Int, safePatterns: [NamedPattern], destructivePatterns: [DestructiveRule])]
+        if verboseFlag {
+            groupedRows = rows.map { r in
+                let doc = try? PackRegistry.loadDocument(id: r.id.rawValue)
+                return (
+                    id: r.id,
+                    name: r.name,
+                    category: r.category,
+                    description: r.description,
+                    enabled: r.enabled,
+                    safe: r.safePatternCount,
+                    destructive: r.destructivePatternCount,
+                    safePatterns: doc?.safe ?? [],
+                    destructivePatterns: doc?.destructive ?? []
+                )
+            }
+        } else {
+            groupedRows = rows.map {
+                (id: $0.id, name: $0.name, category: $0.category, description: $0.description, enabled: $0.enabled, safe: $0.safePatternCount, destructive: $0.destructivePatternCount, safePatterns: [], destructivePatterns: [])
+            }
+        }
+        let enabledInView = rows.filter(\.enabled).count
+        let model = groupedPacksViewModel(rows: groupedRows, enabledCount: enabledInView, totalCount: rows.count)
+
         let appearance = CLIAppearance.resolve(
             json: format.json,
             robot: format.robot,
             plain: format.plain,
             noColor: format.noColor
         )
-        FileHandle.standardOutput.write(Data(PacksListFormat.pretty(model, appearance: appearance).utf8))
+        let text = PacksListFormat.prettyGrouped(model, appearance: appearance, verbose: verboseFlag, expand: expandFlag, maxPatterns: maxPat, collapsed: false)
+        FileHandle.standardOutput.write(Data(text.utf8))
     }
 
     struct Enable: AsyncParsableCommand {
@@ -162,6 +245,24 @@ enum PacksListFormat {
             palette = value
         }
         return PrettyWriter.join(PacksRenderer().render(model, palette: palette))
+    }
+
+    static func prettyGrouped(
+        _ model: PacksGroupedViewModel,
+        appearance: CLIAppearance,
+        verbose: Bool,
+        expand: Bool = false,
+        maxPatterns: Int = 10,
+        collapsed: Bool = false
+    ) -> String {
+        let palette: Palette
+        switch appearance {
+        case .robot:
+            palette = colorOffPalette
+        case .pretty(let value):
+            palette = value
+        }
+        return PrettyWriter.join(PacksRenderer().renderGrouped(model, palette: palette, verbose: verbose, expand: expand, maxPatterns: maxPatterns, collapsed: collapsed))
     }
 }
 

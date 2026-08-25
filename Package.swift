@@ -56,7 +56,7 @@ let package = Package(
         .target(
             name: "RVCLI",
             dependencies: [
-                "RVDomain", "RVEngine", "RVPolicy", "RVHooks", "RVIPC",
+                "RVDomain", "RVEngine", "RVPacks", "RVPolicy", "RVHooks", "RVIPC",
                 "RVPresentation", "RVTheme", "RVTUI", "RVService", "RVHistory",
                 "RVAnalytics",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
