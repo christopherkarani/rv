@@ -13,16 +13,16 @@ Mac-native destructive-command guard for coding-agent **shell** hooks.
 v1 is curl only. Hero (real HOME, when you mean it):
 
 ```sh
-curl -fsSL …/install | sh
+curl -fsSL https://github.com/christopherkarani/rv/releases/latest/download/install.sh | sh
 ```
 
-Until a release URL is locked, the same script is:
+Until a release exists, local:
 
 ```sh
-RV_INSTALL_BIN=/path/to/dir-with-rv-and-rvd ./install.sh
+RV_INSTALL_BIN=/path/to/release-stage ./install.sh
 ```
 
-`install.sh` copies `rv` and `rvd` to `$HOME/.local/bin` and execs `rv setup`. It refuses anything that is not macOS 26 on Apple Silicon.
+`install.sh` stages the hook client, the operator sibling, and `rvd` to `$HOME/.local/bin`, then runs `rv setup`. It refuses anything that is not macOS 26 on Apple Silicon.
 
 ```sh
 rv setup      # idempotent; honors process HOME only
