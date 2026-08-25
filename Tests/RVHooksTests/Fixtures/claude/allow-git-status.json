@@ -1,0 +1,8 @@
+{
+  "hook_event_name": "PreToolUse",
+  "session_id": "abc-123",
+  "cwd": "/tmp/rv-hook-fixture",
+  "tool_name": "Bash",
+  "tool_input": { "command": "git status" },
+  "timestamp": "2026-04-14T12:00:00Z"
+}

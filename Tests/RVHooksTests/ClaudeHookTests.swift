@@ -1,0 +1,149 @@
+import Foundation
+import Testing
+import RVDomain
+@testable import RVHooks
+
+private let codec = ClaudeHostCodec()
+private let resetHard = ShellCommand(rawValue: "git reset --hard")
+
+private func claudeFixture(_ name: String) throws -> String {
+    let url = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .appendingPathComponent("Fixtures/claude/\(name)")
+    return try String(contentsOf: url, encoding: .utf8)
+}
+
+private func claudeExpected(_ stem: String) throws -> (stdout: String, exit: Int32) {
+    let stdout = try claudeFixture("\(stem).out")
+    let exitText = try claudeFixture("\(stem).exit")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    let code = try #require(Int32(exitText))
+    return (stdout, code)
+}
+
+private let resetHardMatch = RuleMatch(
+    ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+    packID: .coreGit,
+    patternName: "reset-hard",
+    severity: .critical,
+    reason: "git reset --hard destroys uncommitted changes. Use 'git stash' first.",
+    explanation: "Discards every uncommitted change."
+)
+
+private func resetHardDenyResult() -> EvaluationResult {
+    EvaluationResult(
+        outcome: .deny(
+            Deny(
+                ruleID: resetHardMatch.ruleID,
+                reason: resetHardMatch.reason
+            ),
+            matched: resetHardMatch
+        )
+    )
+}
+
+@Test(arguments: [
+    ("allow-git-status.json", "git status"),
+    ("deny-git-reset-hard.json", "git reset --hard"),
+])
+func claudeDecode_extractsShellCommand(_ file: String, expected: String) throws {
+    guard case .request(let request) = codec.decode(try claudeFixture(file)) else {
+        Issue.record("expected .request for \(file)")
+        return
+    }
+    #expect(request.host == .claude)
+    #expect(request.command.rawValue == expected)
+}
+
+@Test(arguments: [
+    "allow-non-shell-read.json",
+])
+func claudeDecode_otherToolOrEventIsForeign(_ file: String) throws {
+    #expect(codec.decode(try claudeFixture(file)) == .foreign)
+}
+
+@Test func claudeDecode_emptyCommandIsMissingCommand() throws {
+    #expect(codec.decode(try claudeFixture("allow-empty-command.json")) == .malformed(.missingCommand))
+}
+
+@Test func claudeDecode_malformedIsUnreadable() throws {
+    #expect(codec.decode(try claudeFixture("malformed.txt")) == .malformed(.unreadable))
+}
+
+@Test func claudeDecode_readsCwdWhenPresent() throws {
+    let stdin = """
+    {"hook_event_name":"PreToolUse","cwd":"/tmp/ws","tool_name":"Bash","tool_input":{"command":"git status"}}
+    """
+    guard case .request(let request) = codec.decode(stdin) else {
+        Issue.record("expected .request for cwd stdin")
+        return
+    }
+    #expect(request.command.rawValue == "git status")
+    #expect(request.cwd == "/tmp/ws")
+}
+
+@Test func claudeEncodeAllow_isEmptyExitZero() throws {
+    let wire = codec.encodeAllow()
+    let expected = try claudeExpected("allow-git-status")
+    #expect(wire.stdout == expected.stdout)
+    #expect(wire.exitCode == expected.exit)
+    #expect(wire.stdout.isEmpty)
+}
+
+@Test func claudeEncodeRichDeny_matchesResetHardFixture() throws {
+    let wire = codec.encodeRichDeny(from: resetHardDenyResult(), command: resetHard)
+    let expected = try claudeExpected("deny-git-reset-hard")
+    #expect(wire.stdout == expected.stdout)
+    #expect(wire.exitCode == expected.exit)
+    #expect(wire.stdout.hasSuffix("\n"))
+    #expect(wire.stdout.contains("\"permissionDecision\":\"deny\""))
+    #expect(wire.stdout.contains("\"systemMessage\""))
+    #expect(wire.stdout.contains("RV · Blocked"))
+    #expect(wire.stdout.contains("\"ruleId\":\"core.git:reset-hard\""))
+    #expect(wire.stdout.contains("\"allowOnceCommand\":\"rv allow-once\""))
+    #expect(wire.stdout.contains("allowOnceCode") == false)
+    #expect(wire.stdout.contains("allowOnceFullHash") == false)
+}
+
+@Test func claudeEncodeRichDeny_reasonIsMultiLine() throws {
+    let wire = codec.encodeRichDeny(from: resetHardDenyResult(), command: resetHard)
+    let parsed = try claudeDenyObject(wire.stdout)
+    #expect(parsed.systemMessage.hasPrefix("RV · Blocked\n"))
+    #expect(parsed.permissionDecisionReason.contains("\n"))
+    #expect(parsed.permissionDecisionReason.contains("Reason:"))
+    #expect(parsed.permissionDecisionReason.contains("Rule: core.git:reset-hard"))
+    #expect(parsed.permissionDecisionReason.contains("Command: git reset --hard"))
+    #expect(parsed.permissionDecisionReason.contains("═") == false)
+    #expect(parsed.permissionDecisionReason.contains("\u{001B}") == false)
+}
+
+@Test func claudeEncodeDeny_indeterminateUsesPlanSentence() throws {
+    let wire = codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: nil)
+    let expected = try claudeExpected("deny-indeterminate-oversize")
+    #expect(wire.stdout == expected.stdout)
+    #expect(wire.exitCode == expected.exit)
+    #expect(wire.stdout.contains("core.git") == false)
+    #expect(wire.stdout.contains("reset-hard") == false)
+    #expect(wire.stdout.contains("\"remediation\"") == false)
+}
+
+private struct ClaudeDenyObject {
+    var systemMessage: String
+    var permissionDecisionReason: String
+}
+
+private func claudeDenyObject(_ stdout: String) throws -> ClaudeDenyObject {
+    let data = try #require(stdout.data(using: .utf8))
+    let object = try #require(
+        JSONSerialization.jsonObject(with: data) as? [String: Any]
+    )
+    let systemMessage = try #require(object["systemMessage"] as? String)
+    let hookSpecificOutput = try #require(object["hookSpecificOutput"] as? [String: Any])
+    let permissionDecisionReason = try #require(
+        hookSpecificOutput["permissionDecisionReason"] as? String
+    )
+    return ClaudeDenyObject(
+        systemMessage: systemMessage,
+        permissionDecisionReason: permissionDecisionReason
+    )
+}

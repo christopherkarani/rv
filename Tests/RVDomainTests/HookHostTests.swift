@@ -6,6 +6,7 @@ import Testing
     #expect(HookHost.grok.rawValue == "grok")
     #expect(HookHost.pi.rawValue == "pi")
     #expect(HookHost.opencode.rawValue == "opencode")
+    #expect(HookHost.claude.rawValue == "claude")
 }
 
 @Test func hookHost_allCasesAreSetupSlotOrder() {
