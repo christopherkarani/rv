@@ -1,5 +1,8 @@
 <p align="center">
-  <img src="docs/assets/rv-banner.png" alt="rv — shell guard for coding agents" width="1280">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/rv-banner-dark.png">
+    <img src="docs/assets/rv-banner.png" alt="rv — shell guard for coding agents" width="1280">
+  </picture>
 </p>
 
 <p align="center">
