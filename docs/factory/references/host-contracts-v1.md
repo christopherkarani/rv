@@ -29,6 +29,14 @@ rv owns codecs. Do not copy ryk leftover-ask-as-permit. Do not copy DCG fail-ope
 - DCG does not auto-install OpenCode; community plugins have shipped wrong JSON field names. rv must pin fixtures from a current OpenCode plugin API, not from a broken gist.
 - Occupied slot: skip + one line.
 
+## Claude Code (post-v1; see `docs/factory/specs/claude-host.md`)
+
+- Discover: `~/.claude/`. Setup **merges** into `$HOME/.claude/settings.json` (shared file; not an exclusive owned filename).
+- Matcher: `PreToolUse` / `Bash` only. Absolute `…/rv hook --host claude`, `timeout` 5. Foreign hooks (incl. dcg) untouched. Occupied = rv fingerprint present but not current shape → skip unless `--force`.
+- Stdin (snake_case): `hook_event_name: "PreToolUse"`, `tool_name: "Bash"`, `tool_input.command`. `cwd` when present. Non-Bash tools: allow (empty). Malformed: allow (host fail-open).
+- Deny stdout (exit 0): `systemMessage` branded `RV · Blocked` + short hostDenyText; `hookSpecificOutput` with `permissionDecision: "deny"`, rich `permissionDecisionReason`, `ruleId` / `packId` / `severity`, `remediation` (`explanation`, optional `safeAlternative`, `allowOnceCommand: "rv allow-once"`). **No** `allowOnceCode` / redeemable code. Indeterminate: deny envelope + incomplete-eval sentence, no pack fields.
+- Allow: empty stdout, exit 0. No `permissionDecision: "ask"` in this ship (CL-later-ask). No Read/Edit/Write/MCP matchers (CL-later-secrets / CL-later-mcp).
+
 ## Shared deny text
 
 `hostDenyText`: one sentence + display `rule_id` (`pack/pattern`) + next step. Never include a redeemable code. Canonical: `Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once.`

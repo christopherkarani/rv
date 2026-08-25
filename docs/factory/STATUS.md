@@ -12,6 +12,8 @@ Living board for implement sessions. Do **not** re-grill. Do **not** load `docs/
 | Done | maint | Operator-surface seams (setup analytics, ceremony snapshot, robot format). |
 | Done | T10–T14 | Merged to `feat/t10-t14-size-speed` (PR #36 draft). One-shot evaluate refuses major-semver-skewed `rvd`. Spec: [`specs/phase-5-size-speed.md`](specs/phase-5-size-speed.md). |
 | Done | C hook T1–T5 | Implemented on `feat/c-hook-pipe` (PR #43). C `rv` pipes `hookEvaluate` to `rvd`; miss execs `rv-cli`. Spec: [`spec/spec-architecture-c-hook-pipe.md`](../../spec/spec-architecture-c-hook-pipe.md). |
+| Done | Claude CL-T1 | Spec landed: [`specs/claude-host.md`](specs/claude-host.md). Contracts Claude row matches. Settings merge + rich Bash deny law. |
+| Next | Claude CL-T2–T5 | Codec, dispatch, setup merge, MODULES. Fenced later: CL-later-ask, CL-later-secrets, CL-later-mcp. |
 
 `docs/factory/PLAN.md` wins product-law conflicts. It is a conflict arbiter, not mandatory full session-start reading.
 
@@ -29,6 +31,7 @@ Living board for implement sessions. Do **not** re-grill. Do **not** load `docs/
 | `specs/phase-4-later.md` | Landed (fence only) |
 | `specs/phase-5-size-speed.md` | Implementing (T10–T14) |
 | [`spec/spec-architecture-c-hook-pipe.md`](../../spec/spec-architecture-c-hook-pipe.md) | Implemented (T1–T5). C hook pipe + Swift miss. Supersedes the T15 thin-Swift fence. |
+| [`specs/claude-host.md`](specs/claude-host.md) | Landed (CL-T1). CL-T2–T5 implement. |
 
 ## Parallel rules (reminder)
 
