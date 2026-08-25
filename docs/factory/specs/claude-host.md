@@ -12,7 +12,14 @@ Additive host after v1 Pi / Grok / OpenCode. Locked product choices: **settings 
 
 Parity source for *decisions* remains DCG **0.11.0** engine. Claude *wire* follows current Claude Code hooks docs (`hookSpecificOutput.permissionDecision`), not Grok’s `{decision,reason}`.
 
-If this file conflicts with `docs/factory/PLAN.md`, PLAN wins except where this spec explicitly amends Claude-only chrome (rich fields + `systemMessage`). Shared unlock law (no redeemable code on the host wire) is not amended.
+If this file conflicts with `docs/factory/PLAN.md`, PLAN wins except where this spec explicitly amends Claude-only law:
+
+- **Chrome:** rich `permissionDecisionReason` plus `systemMessage` (not Grok `{decision,reason}`).
+- **Settings merge:** destination is the shared `$HOME/.claude/settings.json`. PLAN exclusive owned-file occupancy (#11: occupied = owned filename is not the current template) does **not** apply to that file.
+- **Occupied fingerprint:** occupied = an rv-fingerprinted PreToolUse handler (`command` contains `hook --host claude`) whose shape is not the current template (modulo absolute path rewrite). Presence of `settings.json` with model, MCP, permissions, or foreign hooks is not occupied.
+- **`--force`:** replace **only** rv-fingerprinted handlers. PLAN #20 `*.bak` whole-file rewrite does **not** apply to `settings.json`.
+
+These occupancy / merge / `--force` rules are product amendments, not optional chrome. Shared unlock law (no redeemable code on the host wire) is not amended.
 
 ## 1. Purpose & Scope
 
@@ -40,7 +47,7 @@ Audience: implementer and reviewer subagents. Base: current `worktree/lucky-rive
 - **Claude Host adapter:** rv-owned integration that turns a Claude `PreToolUse` Bash event into a `HookRequest` and returns Claude-native deny/allow wire plus optional `systemMessage` chrome.
 - **Settings merge:** additive edit of `$HOME/.claude/settings.json` hooks; not an exclusive owned filename like `rv.json`.
 - **rv fingerprint:** a PreToolUse command hook whose `command` string contains `hook --host claude`.
-- **Rich deny:** Claude-only stdout object with `systemMessage`, `hookSpecificOutput.permissionDecision: "deny"`, reason, `ruleId`, `packId`, `severity`, and `remediation` (no redeemable code).
+- **Rich deny:** Claude-only stdout object with `systemMessage` and `hookSpecificOutput` containing **only** the documented Claude Code fields (`hookEventName`, `permissionDecision`, `permissionDecisionReason`). Pack / rule / severity / remediation live inside the reason text (no redeemable code).
 - **Short hostDenyText:** existing one-sentence voice (`Blocked … (pack/pattern). Run it in Terminal, or rv allow-once.`). Still the Pi/Grok/OpenCode reason; also the one-line spine inside Claude’s rich reason and `systemMessage`.
 
 ## 3. Requirements
@@ -50,7 +57,7 @@ Audience: implementer and reviewer subagents. Base: current `worktree/lucky-rive
 - **REQ-001**: `HookHost` gains `claude` (`rawValue` `"claude"`). Unknown host decode stays fail-closed at IPC where already strict.
 - **REQ-002**: `ClaudeHostCodec` decodes snake_case Claude stdin. Shell iff `hook_event_name == "PreToolUse"` and `tool_name == "Bash"`. Command from `tool_input.command` (non-empty string). `cwd` from `cwd` when non-empty. Other events / tools → `.foreign` → allow. Unreadable / missing command → `.malformed` → allow (Claude fail-open).
 - **REQ-003**: Allow → empty stdout, exit `0`.
-- **REQ-004**: Engine deny → exit `0` and JSON:
+- **REQ-004**: Engine deny → exit `0` and JSON locked to documented Claude Code fields. Extra `hookSpecificOutput` keys are **not** on the host wire: Claude treats exit-0 JSON that fails schema validation as a non-blocking error and the action proceeds, so extras can fail-open a deny (e.g. `git reset --hard`).
 
 ```json
 {
@@ -58,18 +65,12 @@ Audience: implementer and reviewer subagents. Base: current `worktree/lucky-rive
   "hookSpecificOutput": {
     "hookEventName": "PreToolUse",
     "permissionDecision": "deny",
-    "permissionDecisionReason": "<rich reason>",
-    "ruleId": "<pack:pattern>",
-    "packId": "<pack>",
-    "severity": "<low|medium|high|critical>",
-    "remediation": {
-      "explanation": "<pack explanation or omitted>",
-      "safeAlternative": "<short safer tip or omitted>",
-      "allowOnceCommand": "rv allow-once"
-    }
+    "permissionDecisionReason": "<rich reason>"
   }
 }
 ```
+
+Do not emit `ruleId`, `packId`, `severity`, `remediation`, `updatedInput`, `additionalContext`, or any other key under `hookSpecificOutput`. Pack / rule / severity / remediation belong in `permissionDecisionReason` (REQ-005).
 
 - **REQ-005**: Rich reason body (Claude `permissionDecisionReason`) is multi-line, DCG-shaped teaching copy built only from Domain facts already on `EvaluationResult` / `RuleMatch`:
   1. Line: `RV · Blocked`
@@ -77,11 +78,14 @@ Audience: implementer and reviewer subagents. Base: current `worktree/lucky-rive
   3. Section: `Reason:` + pack/match `reason`
   4. Section: `Explanation:` + `RuleMatch.explanation` when present (omit section if nil/empty)
   5. Section: `Rule:` + colon `rule_id`
-  6. Section: `Command:` + `hookDenyCommandPreview(command)`
-  7. Closing: `If you need this, run it in Terminal, or use rv allow-once in a TTY.`
-- **REQ-006**: Never emit `allowOnceCode`, `allowOnceFullHash`, or any redeemable code. `remediation.allowOnceCommand` is exactly the string `rv allow-once` (verb name only). Omit empty `explanation` / `safeAlternative` keys rather than sending `""`.
+  6. Section: `Pack:` + pack id
+  7. Section: `Severity:` + `low|medium|high|critical` when present (omit section if nil/empty)
+  8. Section: `Safer:` + `safeAlternative` when present (omit section if nil/empty)
+  9. Section: `Command:` + `hookDenyCommandPreview(command)`
+  10. Closing: `If you need this, run it in Terminal, or use rv allow-once in a TTY.`
+- **REQ-006**: Never emit `allowOnceCode`, `allowOnceFullHash`, or any redeemable code. Never emit `remediation` or `allowOnceCommand` as JSON keys. The closing line of REQ-005 is the only allow-once teaching copy; the verb name is exactly `rv allow-once`.
 - **REQ-007**: `safeAlternative` may be derived from match `reason` when no better Domain field exists; do **not** import `RVPresentation` into `RVHooks` for suggestion catalogs.
-- **REQ-008**: Indeterminate → same Claude deny envelope; `permissionDecisionReason` and `systemMessage` use the incomplete-eval sentence only; omit `ruleId` / `packId` / `severity` / `remediation`.
+- **REQ-008**: Indeterminate → same Claude deny envelope; `permissionDecisionReason` and `systemMessage` use the incomplete-eval sentence only; omit Reason / Explanation / Rule / Pack / Severity / Safer / Command sections.
 - **REQ-009**: Do not emit `"permissionDecision": "ask"` or `"allow"` in this ship. Do not use exit `2` as the primary gate (JSON deny + exit 0). Do not write stderr panels on the success path.
 - **REQ-010**: No command text in `os_log`. No `RV_BYPASS` or any env the hook child honors to skip evaluate.
 - **REQ-011**: Grok / Pi / OpenCode codecs and adapters unchanged (still short deny). Claude is the only rich encoder.
@@ -106,7 +110,7 @@ Audience: implementer and reviewer subagents. Base: current `worktree/lucky-rive
 
 Absolute path = baked install `rv` (same resolution as other hosts). Never register bare `rv` on PATH. Matcher is **`Bash` only** (macOS product; no PowerShell).
 
-- **REQ-014**: Merge rules: preserve foreign hooks (including `dcg`). If an rv-fingerprinted handler already matches the current template (modulo absolute path rewrite), treat as wired / path-fix only. If fingerprint present but shape is not current rv and `--force` is unset → **occupied** → skip. With `--force`, replace the rv-fingerprinted handler(s) only.
+- **REQ-014**: Merge rules: preserve foreign hooks (including `dcg`), plus model / MCP / permissions keys. If an rv-fingerprinted handler already matches the current template (modulo absolute path rewrite), treat as wired / path-fix only. If fingerprint present but shape is not current rv and `--force` is unset → **occupied** → skip. With `--force`, replace the rv-fingerprinted handler(s) only. Do not skip, `*.bak`, or rewrite the whole `settings.json` (PLAN #20 does not apply).
 - **REQ-015**: Uninstall removes only rv-fingerprinted Claude handlers; leave the rest of `settings.json` (and the file itself if non-empty of foreign content).
 - **REQ-016**: Doctor uses the same installation states as other hosts: missing / absent-file / occupied / broken / wired, interpreted for the shared settings file + fingerprint (broken = fingerprint present, baked `rv` missing or non-exec).
 
@@ -122,19 +126,20 @@ Absolute path = baked install `rv` (same resolution as other hosts). Never regis
 - **CON-003**: Temp `HOME` in tests. No live-HOME mutation in CI.
 - **CON-004**: Do not claim OS-enforced / Seatbelt. Grade remains hook.
 - **GUD-001**: Prefer extending `HostCodec` with an optional rich payload or a Claude-specific encode path over forking a second hook runtime.
-- **GUD-002**: Fixtures pin exact stdout JSON (stable key order via explicit encoder), including a `git reset --hard` rich deny and a silent allow (`git status` or empty foreign).
+- **GUD-002**: Fixtures pin exact stdout JSON (stable key order via explicit encoder), including a `git reset --hard` rich deny and a silent allow (`git status` or empty foreign). Deny fixtures must use the documented `hookSpecificOutput` keys only.
 - **PAT-001**: Functional core / imperative shell — pure encode/decode in Hooks; FileManager only in CLI setup.
 
 ## 5. Acceptance criteria
 
-- **AC-001**: Fixture: Claude Bash `git reset --hard` → exit 0, `permissionDecision` deny, `systemMessage` starts with `RV · Blocked`, `ruleId` `core.git:reset-hard`, no allow-once code fields, `allowOnceCommand` is `rv allow-once`.
+- **AC-001**: Fixture: Claude Bash `git reset --hard` → exit 0, `permissionDecision` deny, `systemMessage` starts with `RV · Blocked`, `permissionDecisionReason` contains `Rule: core.git:reset-hard` and `rv allow-once`, no allow-once code fields.
 - **AC-002**: Fixture: allow path (non-destructive or medium/low) → empty stdout, exit 0.
-- **AC-003**: Fixture: indeterminate → Claude deny envelope, incomplete-eval sentence, no pack fields.
+- **AC-003**: Fixture: indeterminate → Claude deny envelope, incomplete-eval sentence, no pack / rule / severity / remediation sections in the reason.
 - **AC-004**: Fixture: `tool_name` Read/Edit/Write/MCP → empty allow (foreign).
-- **AC-005**: Temp HOME setup: detected `.claude` → settings contain rv fingerprint + absolute `hook --host claude`; foreign PreToolUse entry unchanged; occupied fingerprint skipped without `--force`.
+- **AC-005**: Temp HOME setup: detected `.claude` → settings contain rv fingerprint + absolute `hook --host claude`; foreign PreToolUse entry and non-hook keys unchanged; occupied fingerprint skipped without `--force`; `--force` replaces only rv-fingerprinted handlers and does not `*.bak` `settings.json`.
 - **AC-006**: Uninstall removes only rv fingerprint; foreign hooks remain.
 - **AC-007**: `tools/gate.sh` green for touched targets (`RVDomainTests`, `RVHooksTests`, `RVCLITests`, and any dispatch/service hook host enum tests).
 - **AC-008**: Fresh-context review (subagent loads `swift-pr-review` + project `swift-hook-xpc`) returns no blocking issues before merge.
+- **AC-009**: Deny stdout `hookSpecificOutput` keys are exactly `hookEventName`, `permissionDecision`, `permissionDecisionReason`. No undocumented keys (`ruleId`, `packId`, `severity`, `remediation`, `updatedInput`, `additionalContext`, or others).
 
 ## 6. Ticket graph
 

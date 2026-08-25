@@ -31,10 +31,10 @@ rv owns codecs. Do not copy ryk leftover-ask-as-permit. Do not copy DCG fail-ope
 
 ## Claude Code (post-v1; see `docs/factory/specs/claude-host.md`)
 
-- Discover: `~/.claude/`. Setup **merges** into `$HOME/.claude/settings.json` (shared file; not an exclusive owned filename).
-- Matcher: `PreToolUse` / `Bash` only. Absolute `…/rv hook --host claude`, `timeout` 5. Foreign hooks (incl. dcg) untouched. Occupied = rv fingerprint present but not current shape → skip unless `--force`.
+- Discover: `~/.claude/`. Setup **merges** into `$HOME/.claude/settings.json` (shared file; not an exclusive owned filename). PLAN #11 filename occupancy and PLAN #20 `*.bak` whole-file rewrite do **not** apply to `settings.json`.
+- Matcher: `PreToolUse` / `Bash` only. Absolute `…/rv hook --host claude`, `timeout` 5. Foreign hooks (incl. dcg) and non-hook keys (model / MCP / permissions) untouched. Occupied = rv-fingerprinted handler present but not current shape → skip unless `--force`. `--force` replaces **only** rv-fingerprinted handlers.
 - Stdin (snake_case): `hook_event_name: "PreToolUse"`, `tool_name: "Bash"`, `tool_input.command`. `cwd` when present. Non-Bash tools: allow (empty). Malformed: allow (host fail-open).
-- Deny stdout (exit 0): `systemMessage` branded `RV · Blocked` + short hostDenyText; `hookSpecificOutput` with `permissionDecision: "deny"`, rich `permissionDecisionReason`, `ruleId` / `packId` / `severity`, `remediation` (`explanation`, optional `safeAlternative`, `allowOnceCommand: "rv allow-once"`). **No** `allowOnceCode` / redeemable code. Indeterminate: deny envelope + incomplete-eval sentence, no pack fields.
+- Deny stdout (exit 0): documented Claude fields only — `systemMessage` branded `RV · Blocked` + short hostDenyText; `hookSpecificOutput` with exactly `hookEventName`, `permissionDecision: "deny"`, rich `permissionDecisionReason`. Pack / rule / severity / remediation live inside the reason text. **No** extra `hookSpecificOutput` keys (`ruleId`, `packId`, `severity`, `remediation`, …): schema-invalid exit-0 JSON is a non-blocking error and the action proceeds. **No** `allowOnceCode` / redeemable code. Indeterminate: deny envelope + incomplete-eval sentence; no pack sections in the reason.
 - Allow: empty stdout, exit 0. No `permissionDecision: "ask"` in this ship (CL-later-ask). No Read/Edit/Write/MCP matchers (CL-later-secrets / CL-later-mcp).
 
 ## Shared deny text
