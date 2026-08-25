@@ -1,0 +1,1 @@
+{"systemMessage":"rv could not finish evaluating this command. Run it in Terminal.","hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"rv could not finish evaluating this command. Run it in Terminal."}}

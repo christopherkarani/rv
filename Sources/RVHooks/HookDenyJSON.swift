@@ -9,7 +9,7 @@ func hookDenyJSON(reason: String, rule: String? = nil, next: String? = nil) -> S
     return "{\(body)}\n"
 }
 
-private func jsonQuoted(_ value: String) -> String {
+func jsonQuoted(_ value: String) -> String {
     var output = "\""
     for scalar in value.unicodeScalars {
         switch scalar {

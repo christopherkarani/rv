@@ -4,4 +4,6 @@ public enum HookHost: String, Codable, Hashable, Sendable {
     case pi
     /// OpenCode adapter wire, not a host protocol.
     case opencode
+    /// Claude Code settings-merge host.
+    case claude
 }

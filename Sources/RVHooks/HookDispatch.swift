@@ -14,6 +14,8 @@ public func hookWire(
         return await hookBody(stdin: stdin, codec: PiHostCodec(), evaluate: evaluate)
     case .opencode:
         return await hookBody(stdin: stdin, codec: OpenCodeHostCodec(), evaluate: evaluate)
+    case .claude:
+        preconditionFailure("CL-T3 owns HookDispatch claude wire")
     }
 }
 

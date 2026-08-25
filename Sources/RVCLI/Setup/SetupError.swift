@@ -58,6 +58,8 @@ extension SetupHostKind {
         case .grok: self = .grok
         case .pi: self = .pi
         case .opencode: self = .openCode
+        case .claude:
+            fatalError("CL-T4 owns SetupHostKind.claude")
         }
     }
 
