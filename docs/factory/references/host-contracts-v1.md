@@ -29,6 +29,14 @@ rv owns codecs. Do not copy ryk leftover-ask-as-permit. Do not copy DCG fail-ope
 - DCG does not auto-install OpenCode; community plugins have shipped wrong JSON field names. rv must pin fixtures from a current OpenCode plugin API, not from a broken gist.
 - Occupied slot: skip + one line.
 
+## Claude Code (post-v1; see `docs/factory/specs/claude-host.md`)
+
+- Discover: `~/.claude/`. Setup **merges** into `$HOME/.claude/settings.json` (shared file; not an exclusive owned filename). PLAN #11 filename occupancy and PLAN #20 `*.bak` whole-file rewrite do **not** apply to `settings.json`.
+- Matcher: `PreToolUse` / `Bash` only. Absolute `…/rv hook --host claude`, `timeout` 5. Foreign hooks (incl. dcg) and non-hook keys (model / MCP / permissions) untouched. Occupied = rv-fingerprinted handler present but not current shape → skip unless `--force`. `--force` replaces **only** rv-fingerprinted handlers.
+- Stdin (snake_case): `hook_event_name: "PreToolUse"`, `tool_name: "Bash"`, `tool_input.command`. `cwd` when present. Non-Bash tools: allow (empty). Malformed: allow (host fail-open).
+- Deny stdout (exit 0): documented Claude fields only — `systemMessage` branded `RV · Blocked` + short hostDenyText; `hookSpecificOutput` with exactly `hookEventName`, `permissionDecision: "deny"`, rich `permissionDecisionReason`. Pack / rule / severity / remediation live inside the reason text. **No** extra `hookSpecificOutput` keys (`ruleId`, `packId`, `severity`, `remediation`, …): schema-invalid exit-0 JSON is a non-blocking error and the action proceeds. **No** `allowOnceCode` / redeemable code. Indeterminate: deny envelope + incomplete-eval sentence; no pack sections in the reason.
+- Allow: empty stdout, exit 0. No `permissionDecision: "ask"` in this ship (CL-later-ask). No Read/Edit/Write/MCP matchers (CL-later-secrets / CL-later-mcp).
+
 ## Shared deny text
 
 `hostDenyText`: one sentence + display `rule_id` (`pack/pattern`) + next step. Never include a redeemable code. Canonical: `Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once.`
