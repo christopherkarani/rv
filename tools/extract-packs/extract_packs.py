@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Extract all 99 pack JSON documents from a local pinned 0.11.0 upstream tree.
+"""Extract the supported pack JSON documents from a pinned 0.11.0 upstream tree.
 
 Usage:
   python3 tools/extract-packs/extract_packs.py --source-root /path/to/checkout
@@ -21,13 +21,13 @@ from pathlib import Path
 # Reuse core extractor primitives.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from extract_core_packs import (  # noqa: E402
+    _FORBIDDEN,
     FS_DESTRUCTIVE_NAMES,
     FS_SAFE_NAMES,
     GIT_DESTRUCTIVE_NAMES,
     GIT_SAFE_NAMES,
     PINNED_COMMIT,
     PINNED_VERSION,
-    _FORBIDDEN,
     assert_names,
     extract_macros,
     hygiene,
@@ -46,7 +46,9 @@ def scrub_forbidden_tokens(blob: str) -> str:
 
 def write_catalog_pack(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    blob = scrub_forbidden_tokens(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+    blob = scrub_forbidden_tokens(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
+    )
     if _FORBIDDEN.search(blob):
         raise SystemExit(f"refusing to write {path}: forbidden token remains")
     path.write_text(blob)
@@ -60,12 +62,6 @@ FROZEN_IDS = [
     "backup.rclone",
     "backup.restic",
     "backup.velero",
-    "careful_company_running_windows.chat",
-    "careful_company_running_windows.email",
-    "careful_company_running_windows.guardrails",
-    "careful_company_running_windows.transfer",
-    "careful_company_running_windows.tunnel",
-    "careful_company_running_windows.upload",
     "cdn.cloudflare_workers",
     "cdn.cloudfront",
     "cdn.fastly",
@@ -148,39 +144,15 @@ FROZEN_IDS = [
     "system.disk",
     "system.permissions",
     "system.services",
-    "windows.filesystem",
-    "windows.misc",
-    "windows.powershell",
-    "windows.system",
 ]
 
-PRESET_MEMBERS = [
-    "backup.borg",
-    "backup.rclone",
-    "backup.restic",
-    "backup.velero",
-    "cloud.aws",
-    "cloud.azure",
-    "cloud.gcp",
-    "database.bigquery",
-    "database.mongodb",
-    "database.mysql",
-    "database.postgresql",
-    "database.redis",
-    "database.snowflake",
-    "database.sqlite",
-    "database.supabase",
-    "remote.rsync",
-    "remote.scp",
-    "remote.ssh",
-    "secrets.aws_secrets",
-    "secrets.doppler",
-    "secrets.onepassword",
-    "secrets.vault",
-    "storage.azure_blob",
-    "storage.gcs",
-    "storage.minio",
-    "storage.s3",
+EXCLUDED_IDS = [
+    "careful_company_running_windows.chat",
+    "careful_company_running_windows.email",
+    "careful_company_running_windows.guardrails",
+    "careful_company_running_windows.transfer",
+    "careful_company_running_windows.tunnel",
+    "careful_company_running_windows.upload",
     "windows.filesystem",
     "windows.misc",
     "windows.powershell",
@@ -214,8 +186,6 @@ TIERS = {
     "secrets": 10,
     "monitoring": 10,
     "payment": 10,
-    "windows": 11,
-    "careful_company_running_windows": 12,
 }
 
 
@@ -367,9 +337,7 @@ def build_index(pack_ids: list[str]) -> dict:
         "pack_count": len(pack_ids),
         "default_enabled": ["core.filesystem", "core.git"],
         "categories": dict(sorted(categories.items())),
-        "presets": {
-            "careful_company_running_windows": list(PRESET_MEMBERS),
-        },
+        "presets": {},
         "tiers": tiers,
     }
 
@@ -389,12 +357,15 @@ def main() -> int:
 
     sources = find_pack_sources(root)
     if len(sources) != 99:
-        raise SystemExit(f"extractor found {len(sources)} packs with create_pack, want 99")
+        raise SystemExit(
+            f"extractor found {len(sources)} packs with create_pack, want 99"
+        )
 
     got_ids = sorted(sources)
-    if got_ids != FROZEN_IDS:
-        missing = [i for i in FROZEN_IDS if i not in sources]
-        extra = [i for i in got_ids if i not in FROZEN_IDS]
+    expected_source_ids = sorted(FROZEN_IDS + EXCLUDED_IDS)
+    if got_ids != expected_source_ids:
+        missing = [i for i in expected_source_ids if i not in sources]
+        extra = [i for i in got_ids if i not in expected_source_ids]
         raise SystemExit(f"ID set mismatch. missing={missing} extra={extra}")
 
     dest = Path(args.dest)
@@ -410,7 +381,9 @@ def main() -> int:
         destructive = extract_macros(src, "destructive_pattern")
         if pack_id == "core.git":
             destructive = inject_git_semantic(destructive)
-            assert_names("core.git safe", [p["name"] for p in safe], GIT_SAFE_NAMES, drift)
+            assert_names(
+                "core.git safe", [p["name"] for p in safe], GIT_SAFE_NAMES, drift
+            )
             assert_names(
                 "core.git destructive",
                 [p["name"] for p in destructive],
@@ -431,16 +404,17 @@ def main() -> int:
         write_catalog_pack(dest / f"{pack_id}.json", payload)
 
     index = build_index(FROZEN_IDS)
-    if len(index["categories"]) != 27:
-        raise SystemExit(f"want 27 categories, got {len(index['categories'])}")
+    if len(index["categories"]) != 25:
+        raise SystemExit(f"want 25 categories, got {len(index['categories'])}")
     write_catalog_pack(dest / "index.json", index)
-
 
     # Remove stray JSON that is not index or a frozen pack.
     allowed = {f"{i}.json" for i in FROZEN_IDS} | {"index.json"}
     for path in dest.glob("*.json"):
         if path.name not in allowed:
-            raise SystemExit(f"unexpected pack file {path.name}; refuse partial catalog")
+            raise SystemExit(
+                f"unexpected pack file {path.name}; refuse partial catalog"
+            )
 
     print(f"wrote {len(FROZEN_IDS)} packs + index.json → {dest}")
     if drift:

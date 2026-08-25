@@ -76,7 +76,7 @@
 |---|---|---|---|---|
 | **RVDomain** | Closed type system: decisions, requests, results, packs. Pure value types, `Sendable`. | `Decision` (`allow`/`deny(Deny)`/`indeterminate`), `Deny`, `IndeterminateReason`, `Severity`, `PackID` (`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)?$`), `RuleID` (`pack:pattern`, display `pack/pattern`), `ShellCommand`, `EvaluationRequest/Result`, `EvaluationOutcome`, `MatchingView`, `PackSnapshot`, `ExplainStep`, `Display` · `RVDomain.swift`, `Decision.swift`, `Severity.swift`, `PackID.swift`, `RuleID.swift`, `ShellCommand.swift`, `EvaluationRequest.swift`, `EvaluationResult.swift`, `ExplainStep.swift`, `PackSnapshot.swift`, `Display.swift`, `MatchingView.swift`, `Coding.swift` | none | I/O, TTY, XPC, `Date`/`FileManager` |
 | **RVEngine** | Functional core `evaluate`. Pure, budgeted, deadline-aware. | `evaluate(_:packs:patterns:compiled:)`, `Normalize.matchingView(of:)`, `QuickReject`, `CompiledPacks`, `PatternEngine`/`ICUPatternEngine`, `commandByteCap=65536`, `isMajorSkew` · `Evaluate.swift`, `Normalize.swift` (role-aware quote strip, wrapper unwrap `sudo/env/command/\\`), `QuickReject.swift`, `ICUPatternEngine.swift`, `PatternEngine.swift`, `CompiledPacks.swift`, `RVEngine.swift` | `RVDomain` | pack files, hooks, XPC, CLI, TUI |
-| **RVPacks** | Registry + bundled JSON catalog (99 packs, 27 categories). Disabled by default except day-one. | `PackRegistry.loadAll/loadDayOne/loadIndex`, `PackCatalog`, `PackIndex`, `PackJSON`, `PackEnablement`, `SelectionToken`, `PackDocument` · `RVPacks.swift`, `PackRegistry.swift`, `PackCatalog.swift`, `PackIndex.swift`, `PackJSON.swift`, `PackEnablement.swift`, `SelectionToken.swift` · `Resources/packs/*.json` (`core.git`, `core.filesystem` day-one + 97 off) | `RVDomain` | decisions, rendering |
+| **RVPacks** | Registry + bundled JSON catalog (89 packs, 25 categories; Windows catalogs excluded). Disabled by default except day-one. | `PackRegistry.loadAll/loadDayOne/loadIndex`, `PackCatalog`, `PackIndex`, `PackJSON`, `PackEnablement`, `SelectionToken`, `PackDocument` · `RVPacks.swift`, `PackRegistry.swift`, `PackCatalog.swift`, `PackIndex.swift`, `PackJSON.swift`, `PackEnablement.swift`, `SelectionToken.swift` · `Resources/packs/*.json` (`core.git`, `core.filesystem` day-one + 87 off) | `RVDomain` | decisions, rendering |
 | **RVPolicy** | Config merge + overrides: allowlist + single-use allow-once grants. | `PolicyGate.{peek,apply}`, `PolicyDecision/Override`, `AllowOnceStore` (atomic CAS), `AllowOnceRecord`, `Allowlist/AllowlistStore`, `PacksConfig`, `HomeDirectory`, `ExclusiveFileLock` · `PolicyGate.swift`, `AllowOnceStore.swift`, `AllowOnceRecord.swift`, `Allowlist.swift`, `PacksConfig.swift`, `RVPolicyPaths.swift` | `RVDomain` | rendering |
 | **RVHooks** | Pi / Grok / OpenCode **Host adapters**: codecs, HostAdapterResources, Hook mapper/voice. | `HostCodec` protocol, `GrokHostCodec` (`pre_tool_use` + `run_terminal_command`/`run_terminal_cmd`/`Bash`), `PiHostCodec`, `OpenCodeHostCodec`, `HookMapper.hookWire(from:command:using:)`, `HostDenyText`, `HookDecode`, `HookDenyJSON`, `HostAdapterResources` (embed `__RV_BINARY__` → baked `rv` path) · `HostCodec.swift`, `GrokHostCodec.swift`, `PiHostCodec.swift`, `OpenCodeHostCodec.swift`, `HookMapper.swift`, `HostDenyText.swift`, `HostAdapterResources.swift` | `RVDomain` | evaluation, setup mutations, CLI/TUI |
 | **RVIPC** | `rv.ipc.v1` Codable envelope + frame codec. | `IPCRequest/Response`, `IPCMethod`/`IPCResult` (`evaluate`, `hookEvaluate`, `explain`, `classify`, `listPacks`, `setPackEnabled`, `allowOnceConsume`, `doctorSnapshot`), `EvaluateParams/Reply`, `HookEvaluateParams/Reply`, `ExplainParams/Reply`, `ClassifyParams/Reply`, `DoctorSnapshotReply`, `Hello/HelloAck`, `ProtocolVersion` (`1.0.0`, `isMajorSkew`), `FrameCodec` (u32 BE len + 1 MiB cap), `SkewReason` · `IPCEnvelope.swift`, `IPCMethods.swift`, `ProtocolVersion.swift`, `FrameCodec.swift`, `IPCJSON.swift` | `RVDomain` | transport details |
@@ -275,7 +275,7 @@ rv/
 │   ├── RVTheme/                     # Palette.swift, ColorCapability.swift, OutputMode.swift, ThemeProbe.swift
 │   ├── RVEngine/                    # Evaluate.swift, Normalize.swift, QuickReject.swift, CompiledPacks.swift, ICUPatternEngine.swift, PatternEngine.swift, RVEngine.swift (7 files)
 │   ├── RVPacks/                     # PackRegistry.swift, PackCatalog.swift, PackIndex.swift, PackJSON.swift, PackEnablement.swift
-│   │   └── Resources/packs/         # 99 JSON packs + index.json (rv_RVPacks.bundle at runtime)
+│   │   └── Resources/packs/         # 89 JSON packs + index.json (rv_RVPacks.bundle at runtime)
 │   ├── RVPolicy/                    # PolicyGate.swift, AllowOnceStore.swift, Allowlist*.swift, PacksConfig.swift
 │   ├── RVHooks/                     # HostCodec.swift, Grok/Pi/OpenCodeHostCodec.swift, HookMapper.swift, HostAdapterResources.swift
 │   │   └── Resources/hosts/         # embedded templates: rv_json_tmpl, rv_guard_ts_tmpl, rv_guard_js_tmpl (embedInCode)
@@ -329,12 +329,14 @@ Build: `clang -Os` + `strip -x`, `otool -L` must not list Foundation/CFNetwork/S
 **Wire:** Mach XPC `dev.rv.evaluate`, `xpc_dictionary` key `rv.ipc` carrying UTF-8 JSON bytes (`IPCJSON`). Tests use Unix `FrameCodec` (4-byte BE len prefix, max 1 MiB). No `--socket` in production `rvd`.
 
 **Envelope:**
+
 - Client hello (edge): `Hello { protocol:"rv.ipc.v1", clientSemver:"1.0.0" }` → `HelloAck { protocol, serviceSemver, ok, skewReason? }`. `acknowledge` checks protocol, `ProtocolVersion.isMajorSkew`, `corePacksReady`.
 - One-shot: `IPCRequest { id:UUID, protocol, method }` + `clientSemver` on `evaluate`/`hookEvaluate` for implicit hello. Unready → `handleUnreadyIncoming` → if `clientSemver` present → `acknowledge` → `ok? dispatch : error(protocolSkew "handshake required")`. Per-method major-skew check even after handshake.
 - `IPCMethod`: `evaluate(EvaluateParams{request,cwd,clientSemver?})`, `hookEvaluate(HookEvaluateParams{host,stdin,clientSemver?})`, `explain`, `classify`, `listPacks`, `setPackEnabled`, `allowOnceConsume` (stub → error), `doctorSnapshot`.
 - `IPCResult`: mirror + `error(IPCError)`, `EvaluateReply{result, via:"xpc", serviceSemver}`, `HookEvaluateReply{stdout, exitCode, via, serviceSemver}`, `ExplainReply{result,normalized,ruleID,packID,suggestion,stages}`, `ClassifyReply`, `ListPacksReply`, `DoctorSnapshotReply`.
 
 **ServiceRuntime** (`ServiceRuntime.swift` 488 lines):
+
 - `init(snapshots?, catalog?, home, allowOnce?, idleExitSeconds, log, analytics)`: builds `PackCatalog` via `PacksFacade`, snapshots via `PackRegistry`, `CoreWarmup.prepare` → `CompiledPacks` (quarantine non-compiling pattern, never quarantine reset-hard/fork-bomb), `GatedEvaluate`, `AllowOnceStore.live()`.
 - `acknowledge`, `handleIncoming(body, handshakeOK)`, `dispatch(IPCRequest)` (logs `ServiceLogEvent` without command text), `makeEvaluateReply`, `makeHookEvaluateResult` (→ `HookDoor.run` with `GatedEvaluate.makeRequest`), `explain/classify` (both `gated.peek`), `listPacks`, `setPackEnabled` (enable/disable via `PacksFacade`, rebuild gated, analytics note), `doctorSnapshot`, `recordAnalytics(kind)` (→ `AnalyticsCoordinator`).
 
@@ -348,13 +350,14 @@ Build: `clang -Os` + `strip -x`, `otool -L` must not list Foundation/CFNetwork/S
 
 **Parity — upstream 0.11.0** (`docs/dev/PARITY.md`): Tag `v0.11.0` `6d4fcaef…` commit `2ed7eeef…`, pin `vendor/parity/PIN`. Scoreboard is 0.11.0 *engine source* (critical/high deny, medium/low allow+match). `rm -rf ${TMPDIR}/build` stays deny `rm-rf-general`; `git stash drop` allow; `git restore --worktree` vs `-W/-S` naming; `rm -rf /var/log` → `rm-rf-root-home`; `fork-bomb` empty-paren force-scan. `rv test` vs upstream agree rate is long-term, not v1 gate.
 
-**Catalog:** 99 IDs / 27 categories extracted via `tools/extract-packs --source-root` into `Resources/packs/*.json`. Day-one compiled = `{core.filesystem, core.git}` only; `system.disk` and Windows packs exist in bundle but off until `rv packs enable`. `rv packs` mutates `$HOME/.config/rv/config.toml` `[packs]`; `listPacks` + `PacksFacade` + `rebuildWhenUncovered(wanted:)` self-heal (at-most 1/s).
+**Catalog:** 89 IDs / 25 categories extracted via `tools/extract-packs --source-root` into `Resources/packs/*.json`. The Windows category and `careful_company_running_windows` preset are excluded. Day-one compiled = `{core.filesystem, core.git}` only. `rv packs` mutates `$HOME/.config/rv/config.toml` `[packs]`; `listPacks` + `PacksFacade` + `rebuildWhenUncovered(wanted:)` self-heal (at-most 1/s).
 
 **Analytics (`RVAnalytics`):** Actor `AnalyticsCoordinator` + `AnalyticsPreferences` (opt-out `analytics.enabled` in `config.json`, missing = on) + `AnalyticsIdentity` (stable distinctID) + `AnalyticsPaths` (`~/.config/rv/`) + sinks `PostHogSink`/`NoOpAnalyticsSink` + `PlatformSnapshot`. Captures `install` once + `daily_active` at-most daily (allow/deny/indeterminate counts, enabled pack IDs, host statuses). Never command text/paths/secrets; host hook processes never call it. `tools` + `install.sh` trigger `captureInstall` only.
 
 **History (`RVHistory`):** Stub enum, off by default forever until a later ticket. `RVService` depends on it but never writes; `ServiceLog` records only method/decision/ruleID/elapsed/requestID, never command.
 
 **Safety laws (from `docs/factory/PLAN.md`):**
+
 - Down/skew never becomes allow (in-process evaluate). Indeterminate → host deny sentence without rule_id.
 - `hostDenyText` canonical: `Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once.`; incomplete: `rv could not finish evaluating this command. Run it in Terminal.`
 - No `RV_BYPASS`, no host Allow UI, no foreign hook writes, no live-HOME tests, no `os_log` command text, no Seatbelt/OS-enforced claim, no Homebrew in v1.
@@ -366,6 +369,7 @@ Build: `clang -Os` + `strip -x`, `otool -L` must not list Foundation/CFNetwork/S
 ## 9. Quick Reference
 
 **Install / Run:**
+
 ```sh
 RV_INSTALL_BIN=/path/to/staged ./install.sh   # → ~/.local/bin/{rv,rv-cli,rvd} + bundle
 rv setup            # bake adapters, write LaunchAgent (KeepAlive false)
@@ -377,6 +381,7 @@ rv allow-once "Blocked …"            # TTY only, spends {matchingView,cwd} gra
 ```
 
 **Verify:**
+
 ```sh
 tools/gate.sh --quiet RVIPCTests RVServiceTests RVCLITests RVHooksTests
 otool -L ~/.local/bin/rv | grep -v Foundation

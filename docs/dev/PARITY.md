@@ -19,7 +19,7 @@ Evaluation order: normalize → quick-reject → safe patterns first → destruc
 
 ## Catalog (T9)
 
-Bundled pack documents: **99** IDs / **27** categories from the pin. Default-on remains `{core.filesystem, core.git}` only. Upstream 0.11.0 also default-on `system.disk` (and Windows packs on Windows); **rv v1 keeps those off** until the operator enables them. Enabling the rest of the catalog by default is Phase 4+, not v1.
+Bundled pack documents: **89** IDs / **25** categories from the pin. The Windows category and `careful_company_running_windows` preset are intentionally excluded. Default-on remains `{core.filesystem, core.git}` only. Enabling the rest of the catalog by default is Phase 4+, not v1.
 
 `rv packs` lists / enable / disable under `$HOME/.config/rv/config.toml` `[packs]`. Agree-rate vs an upstream CLI is still **not** a gate.
 

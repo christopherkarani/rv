@@ -2,7 +2,7 @@ import Testing
 import RVDomain
 @testable import RVPacks
 
-@Test func selectionToken_parseClassifiesPackCategoryAndPreset() throws {
+@Test func selectionToken_parseClassifiesPackAndCategory() throws {
     let index = try PackRegistry.loadIndex()
     #expect(
         SelectionToken.parse("database.redis", index: index)
@@ -11,10 +11,7 @@ import RVDomain
     #expect(SelectionToken.parse("database", index: index) == [.category("database")])
     #expect(
         SelectionToken.parse("careful_company_running_windows", index: index)
-            == [
-                .category("careful_company_running_windows"),
-                .preset("careful_company_running_windows"),
-            ]
+            == [.id(PackID(rawValue: "careful_company_running_windows"))]
     )
 }
 

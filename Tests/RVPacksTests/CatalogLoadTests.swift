@@ -6,9 +6,6 @@ import RVDomain
 let frozenPackIDs: Set<String> = [
     "apigateway.apigee", "apigateway.aws", "apigateway.kong",
     "backup.borg", "backup.rclone", "backup.restic", "backup.velero",
-    "careful_company_running_windows.chat", "careful_company_running_windows.email",
-    "careful_company_running_windows.guardrails", "careful_company_running_windows.transfer",
-    "careful_company_running_windows.tunnel", "careful_company_running_windows.upload",
     "cdn.cloudflare_workers", "cdn.cloudfront", "cdn.fastly",
     "cicd.circleci", "cicd.github_actions", "cicd.gitlab_ci", "cicd.jenkins",
     "cloud.aws", "cloud.azure", "cloud.gcp",
@@ -34,22 +31,24 @@ let frozenPackIDs: Set<String> = [
     "storage.azure_blob", "storage.gcs", "storage.minio", "storage.s3",
     "strict_git",
     "system.disk", "system.permissions", "system.services",
-    "windows.filesystem", "windows.misc", "windows.powershell", "windows.system",
 ]
 
-@Test func catalogLoad_decodesNinetyNinePacks() throws {
+@Test func catalogLoad_decodesEightyNinePacksWithoutRemovedWindowsCatalogs() throws {
     let index = try PackRegistry.loadIndex()
-    #expect(index.packCount == 99)
-    #expect(index.categories.count == 27)
+    #expect(index.packCount == 89)
+    #expect(index.categories.count == 25)
+    #expect(index.categories["windows"] == nil)
+    #expect(index.categories["careful_company_running_windows"] == nil)
+    #expect(index.presets["careful_company_running_windows"] == nil)
     #expect(Set(index.defaultEnabled) == Set(["core.filesystem", "core.git"]))
     #expect(Set(index.packIDs) == frozenPackIDs)
 
     let documents = try PackRegistry.loadAllDocuments()
-    #expect(documents.count == 99)
+    #expect(documents.count == 89)
     #expect(Set(documents.map(\.id.rawValue)) == frozenPackIDs)
 }
 
-@Test func catalogLoad_resourcesAreIndexPlusNinetyNine() throws {
+@Test func catalogLoad_resourcesAreIndexPlusEightyNine() throws {
     let packsDir = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()
         .deletingLastPathComponent()
@@ -60,7 +59,7 @@ let frozenPackIDs: Set<String> = [
         includingPropertiesForKeys: nil
     ).filter { $0.pathExtension == "json" }
     let names = Set(jsonFiles.map(\.lastPathComponent))
-    #expect(names.count == 100)
+    #expect(names.count == 90)
     #expect(names.contains("index.json"))
     #expect(names.contains("core.git.json"))
     #expect(names.contains("core.filesystem.json"))
