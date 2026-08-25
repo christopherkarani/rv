@@ -6,11 +6,11 @@ import RVPolicy
 import RVService
 
 @Suite struct PacksFacadeTests {
-    @Test func packsJSON_freshHomeHasTwoEnabledOfEightyNine() throws {
+    @Test func packsJSON_freshHomeHasTwoEnabledOfNinetyFive() throws {
         let home = try temporaryHome()
         defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
         let snapshot = try PacksFacade.list(home: home)
-        #expect(snapshot.totalCount == 89)
+        #expect(snapshot.totalCount == 95)
         #expect(snapshot.enabledCount == 2)
         #expect(Set(snapshot.packs.filter(\.enabled).map(\.id.rawValue)) == [
             "core.filesystem", "core.git",
@@ -32,15 +32,19 @@ import RVService
         #expect(!ids.contains("database.redis"))
     }
 
-    @Test func removedWindowsPresetAndUnknownFailWithoutWrite() throws {
+    @Test func enablePresetAndUnknownFailsWithoutWrite() throws {
         let home = try temporaryHome()
         defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
 
-        #expect(throws: PacksCommandError.unknownID(.id(PackID(rawValue: "careful_company_running_windows")))) {
-            _ = try PacksFacade.enable(home: home, ids: ["careful_company_running_windows"])
-        }
+        let preset = try PacksFacade.enable(home: home, ids: ["careful_company_running_windows"])
+        #expect(preset.enabledCount == 34)
+        #expect(!Set(try PacksFacade.effectiveIDs(home: home).map(\.rawValue)).contains("windows.filesystem"))
+
         let before = try PacksConfigStore.load(home: home)
 
+        #expect(throws: PacksCommandError.unknownID(.id(PackID(rawValue: "windows.filesystem")))) {
+            _ = try PacksFacade.enable(home: home, ids: ["windows.filesystem"])
+        }
         #expect(throws: PacksCommandError.unknownID(.id(PackID(rawValue: "paranoid")))) {
             _ = try PacksFacade.enable(home: home, ids: ["paranoid"])
         }
@@ -115,7 +119,7 @@ import RVService
 
         _ = try PacksFacade.enable(home: home, tokens: [
             .category("kubernetes"),
-            .category("database"),
+            .preset("careful_company_running_windows"),
             .id(PackID(rawValue: "strict_git")),
         ])
         _ = try PacksFacade.disable(home: home, tokens: [.id(PackID(rawValue: "core.git"))])
@@ -123,7 +127,7 @@ import RVService
         let text = try String(contentsOf: url, encoding: .utf8)
         let config = PacksConfigStore.parse(text)
         #expect(config.enabled == [
-            "database",
+            "careful_company_running_windows",
             "kubernetes",
             "strict_git",
         ])
@@ -132,12 +136,13 @@ import RVService
         let snapshot = try PacksFacade.list(home: home)
         let enabled = Set(snapshot.packs.filter(\.enabled).map(\.id.rawValue))
         #expect(enabled.contains("kubernetes.helm"))
-        #expect(enabled.contains("database.sqlite"))
+        #expect(enabled.contains("careful_company_running_windows.chat"))
         #expect(enabled.contains("strict_git"))
         #expect(!enabled.contains("core.git"))
-        // core.filesystem + kubernetes×3 + database×8 + strict_git − core.git
-        #expect(snapshot.enabledCount == 13)
-        #expect(snapshot.totalCount == 89)
+        #expect(!enabled.contains("windows.filesystem"))
+        // core.filesystem + kubernetes×3 + ccw category∪preset×32 + strict_git − core.git
+        #expect(snapshot.enabledCount == 37)
+        #expect(snapshot.totalCount == 95)
     }
 
     @Test func stringVerbArgsAndTokenArgsAgree() throws {

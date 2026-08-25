@@ -42,7 +42,7 @@ struct PackIndexFile: Decodable {
 public enum PackIndexJSON {
     public static func decode(_ data: Data) throws -> PackIndex {
         let file = try JSONDecoder().decode(PackIndexFile.self, from: data)
-        guard file.packCount == 89, file.categories.count == 25 else {
+        guard file.packCount == 95, file.categories.count == 26 else {
             throw PackLoadError.invalidIndex
         }
         try validatePackReferences(file)

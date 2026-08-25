@@ -9,7 +9,7 @@ import RVPolicy
 struct EnabledCompileTests {
     @Test func dayOneEnabledCompilesExactlyTwoPackIDs() throws {
         let all = try PackRegistry.loadAll()
-        #expect(all.count == 89)
+        #expect(all.count == 95)
         let session = EvaluateSession(snapshots: all, enabledPacks: dayOnePackIDs)
         #expect(session.compiledPackIDs == dayOnePackIDs)
         #expect(session.corePacksReady)

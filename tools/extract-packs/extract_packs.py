@@ -62,6 +62,12 @@ FROZEN_IDS = [
     "backup.rclone",
     "backup.restic",
     "backup.velero",
+    "careful_company_running_windows.chat",
+    "careful_company_running_windows.email",
+    "careful_company_running_windows.guardrails",
+    "careful_company_running_windows.transfer",
+    "careful_company_running_windows.tunnel",
+    "careful_company_running_windows.upload",
     "cdn.cloudflare_workers",
     "cdn.cloudfront",
     "cdn.fastly",
@@ -147,16 +153,39 @@ FROZEN_IDS = [
 ]
 
 EXCLUDED_IDS = [
-    "careful_company_running_windows.chat",
-    "careful_company_running_windows.email",
-    "careful_company_running_windows.guardrails",
-    "careful_company_running_windows.transfer",
-    "careful_company_running_windows.tunnel",
-    "careful_company_running_windows.upload",
     "windows.filesystem",
     "windows.misc",
     "windows.powershell",
     "windows.system",
+]
+
+PRESET_MEMBERS = [
+    "backup.borg",
+    "backup.rclone",
+    "backup.restic",
+    "backup.velero",
+    "cloud.aws",
+    "cloud.azure",
+    "cloud.gcp",
+    "database.bigquery",
+    "database.mongodb",
+    "database.mysql",
+    "database.postgresql",
+    "database.redis",
+    "database.snowflake",
+    "database.sqlite",
+    "database.supabase",
+    "remote.rsync",
+    "remote.scp",
+    "remote.ssh",
+    "secrets.aws_secrets",
+    "secrets.doppler",
+    "secrets.onepassword",
+    "secrets.vault",
+    "storage.azure_blob",
+    "storage.gcs",
+    "storage.minio",
+    "storage.s3",
 ]
 
 TIERS = {
@@ -186,6 +215,7 @@ TIERS = {
     "secrets": 10,
     "monitoring": 10,
     "payment": 10,
+    "careful_company_running_windows": 12,
 }
 
 
@@ -337,7 +367,9 @@ def build_index(pack_ids: list[str]) -> dict:
         "pack_count": len(pack_ids),
         "default_enabled": ["core.filesystem", "core.git"],
         "categories": dict(sorted(categories.items())),
-        "presets": {},
+        "presets": {
+            "careful_company_running_windows": list(PRESET_MEMBERS),
+        },
         "tiers": tiers,
     }
 
@@ -404,8 +436,8 @@ def main() -> int:
         write_catalog_pack(dest / f"{pack_id}.json", payload)
 
     index = build_index(FROZEN_IDS)
-    if len(index["categories"]) != 25:
-        raise SystemExit(f"want 25 categories, got {len(index['categories'])}")
+    if len(index["categories"]) != 26:
+        raise SystemExit(f"want 26 categories, got {len(index['categories'])}")
     write_catalog_pack(dest / "index.json", index)
 
     # Remove stray JSON that is not index or a frozen pack.

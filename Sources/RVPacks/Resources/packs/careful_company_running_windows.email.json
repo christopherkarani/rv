@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "pin_version": "0.11.0",
+  "id": "careful_company_running_windows.email",
+  "name": "Careful Company: Outbound Email",
+  "version": "0.11.0",
+  "description": "Blocks sending email from the workstation: `Send-MailMessage`, \\ `System.Net.Mail.SmtpClient`, Outlook COM automation, Microsoft Graph \\ `sendMail`, transactional mail-API send endpoints (SendGrid/Mailgun/Postmark/\\ Resend/SparkPost/Brevo/Mailjet), `aws ses send-email`, and SMTP CLI tools \\ (`blat`, `swaks`, `msmtp`, `curl --mail-rcpt`).",
+  "category": "careful_company_running_windows",
+  "enabled_by_default": false,
+  "keywords": [],
+  "safe_patterns": [],
+  "destructive_patterns": [
+    {
+      "name": "send-mailmessage",
+      "pattern": "(?i)\\bsend-mailmessage\\b",
+      "severity": "high",
+      "description": "Send-MailMessage sends email from this machine to arbitrary recipients.",
+      "explanation": "`Send-MailMessage` sends mail through an SMTP server with whatever recipients, subject, \\ body, and `-Attachments` the command supplies. It is the shortest path from \"the agent \\ can read a file\" to \"the file left the company\", and the mail is sent under a real \\ identity.\n\n\\ Safer alternatives: \\ - Write the intended message to a file and let a person review and send it \\ - If one automated send is approved, allowlist that rule rather than the whole pack"
+    },
+    {
+      "name": "dotnet-smtp-client",
+      "pattern": "(?i)\\bsmtpclient\\b[^\\r\\n]*\\.send(?:mail)?(?:async)?\\s*\\(",
+      "severity": "high",
+      "description": "System.Net.Mail.SmtpClient sends email directly from .NET, bypassing Send-MailMessage.",
+      "explanation": "`[System.Net.Mail.SmtpClient]` sends mail straight from .NET, which is the usual \\ workaround when `Send-MailMessage` is unavailable or being watched, and \\ `.Attachments.Add(...)` on the message carries any readable file out with it. Both the \\ client and a `.Send`/`.SendAsync`/`.SendMailAsync` call are required, so constructing \\ the client (or a `MailMessage` draft) without sending is not matched.\n\n\\ Safer alternatives: \\ - Hand the content to a person instead of transmitting it \\ - Route approved automated mail through a reviewed service, not an ad-hoc one-liner"
+    },
+    {
+      "name": "outlook-com-send",
+      "pattern": "(?i)(?:(?:(?<!['\"])\\bnew-object\\b[^\\r\\n;|&#]*?-comobject\\s+['\"]?outlook\\.application\\b['\"]?|(?<!['\"])\\[(?:type|system\\.type|runtime\\.interopservices\\.marshal)\\]::(?:getactiveobject|gettypefromprogid)\\s*\\(\\s*['\"]outlook\\.application['\"])[^\\r\\n]*\\.send\\s*\\(|(?:(?<!['\"])\\bnew-object\\b[^\\r\\n;|&#]*?-comobject\\s+['\"]?outlook\\.application\\b['\"]?|(?<!['\"])\\[(?:type|system\\.type|runtime\\.interopservices\\.marshal)\\]::(?:getactiveobject|gettypefromprogid)\\s*\\(\\s*['\"]outlook\\.application['\"])[\\s\\S]*?\\bcreateitem\\s*\\(\\s*(?:0x0|0|(?:\\[[^\\]\\r\\n]+\\]::)?olmailitem)\\s*\\)[\\s\\S]*?\\.send\\s*\\(|(?:(?<!['\"])\\bnew-object\\b[^\\r\\n;|&#]*?-comobject\\s+['\"]?cdo\\.message\\b['\"]?|(?<!['\"])\\[(?:type|system\\.type)\\]::gettypefromprogid\\s*\\(\\s*['\"]cdo\\.message['\"])[\\s\\S]*?\\.send\\s*\\()",
+      "severity": "high",
+      "description": "Outlook/CDO COM automation sends mail as the signed-in user through the real mail client.",
+      "explanation": "`New-Object -ComObject Outlook.Application` plus `.CreateItem(0)` and `.Send()` produces \\ genuine mail from the logged-in mailbox — it appears in Sent Items and passes every \\ sender check, because it really is the user. Both the COM object and a `.Send()` are \\ required, and a multi-line Outlook flow must also create a mail item, so obtaining the \\ object to read a calendar, or building a draft and calling `.Display()`, is not matched. \\ The evaluator's size-limited whole-command pass follows its per-segment passes, and the \\ PowerShell scan extractor preserves a bounded Outlook creation/send sequence, so both \\ one-liners and ordinary multi-line `.ps1` mailers are caught. \\ `CDO.Message` — the classic scriptable SMTP COM object — is covered by the same rule, \\ including the `[type]::GetTypeFromProgID(...)` form that avoids `New-Object`.\n\n\\ Safer alternatives: \\ - Draft the item and leave it unsent for the user to review (`.Display()`, not `.Send()`) \\ - Ask the operator to send it themselves"
+    },
+    {
+      "name": "curl-smtp-send",
+      "pattern": "(?i)\\bcurl(?:\\.exe)?\\b[^|&;\\r\\n]*(?:\\s--mail-(?:from|rcpt)\\b|\\ssmtps?://)",
+      "severity": "high",
+      "description": "curl can speak SMTP directly; --mail-from/--mail-rcpt sends email.",
+      "explanation": "`curl` is not only an HTTP client: with `smtp://`/`smtps://` plus `--mail-from` and \\ `--mail-rcpt` it sends mail, and `-T` supplies the message body from a file. This is an \\ easy channel to miss because the command looks like an ordinary web request.\n\n\\ Safer alternatives: \\ - Use curl for HTTP only; leave mail to a reviewed, approved path \\ - Have the operator send the message manually"
+    },
+    {
+      "name": "graph-send-mail",
+      "pattern": "(?i)graph\\.microsoft\\.com/[^\\s\\x22']*/sendmail\\b|\\bsend-mguser(?:mail|message)\\b",
+      "severity": "high",
+      "description": "Microsoft Graph sendMail sends email as the authenticated mailbox.",
+      "explanation": "`POST https://graph.microsoft.com/v1.0/me/sendMail` (or `Send-MgUserMail`) sends mail as \\ the authenticated mailbox using the token already on the machine. Recipients and \\ attachments come from the request body, so no SMTP server is needed and no mail client \\ has to be installed.\n\n\\ Safer alternatives: \\ - Use Graph read scopes for inspection; leave sends to an approved service principal \\ - Create a draft (`POST /me/messages`) for a person to review instead of sending"
+    },
+    {
+      "name": "mail-api-send-endpoint",
+      "pattern": "(?i)https?://(?:api\\.sendgrid\\.com/v3/mail/send|api(?:\\.eu)?\\.mailgun\\.net/v\\d+/[^\\s/\\x22']+/messages|api\\.postmarkapp\\.com/email|api\\.resend\\.com/emails|api\\.sparkpost\\.com/api/v\\d+/transmissions|api\\.brevo\\.com/v3/smtp/email|api\\.mailjet\\.com/v3(?:\\.1)?/send|api\\.smtp2go\\.com/v3/email/send)",
+      "severity": "high",
+      "description": "POST to a transactional mail-API send endpoint delivers email to arbitrary recipients.",
+      "explanation": "A send endpoint on SendGrid, Mailgun, Postmark, Resend, SparkPost, Brevo, Mailjet, or \\ SMTP2GO accepts any recipient list, body, and base64 attachment in the request, using \\ the API key already configured on the machine. It needs no mail client and leaves no \\ trace in the user's Sent Items.\n\n\\ Safer alternatives: \\ - Read-only API calls (template and event lookups) are unaffected — use those to inspect \\ - Route approved sends through the application's reviewed code path"
+    },
+    {
+      "name": "aws-ses-send",
+      "pattern": "(?i)\\baws(?:\\.exe)?\\s+ses(?:v2)?\\s+send-(?:email|raw-email|bulk-email|templated-email)\\b",
+      "severity": "high",
+      "description": "aws ses send-email delivers email to arbitrary recipients from the CLI.",
+      "explanation": "`aws ses send-email` / `send-raw-email` sends mail using the machine's AWS credentials. \\ `send-raw-email` accepts a complete MIME message, so an attachment of any readable file \\ is a single command away.\n\n\\ Safer alternatives: \\ - `aws ses get-send-quota` / `list-identities` for inspection without sending \\ - Send through the application's approved path with a scoped role"
+    },
+    {
+      "name": "mail-forwarding-rule",
+      "pattern": "(?i)\\b(?:new|set)-inboxrule\\b[^|&;\\r\\n]*\\s-(?:forwardto|forwardasattachmentto|redirectto)\\b|\\bset-mailbox\\b[^|&;\\r\\n]*\\s-forwarding(?:smtpaddress|address)\\b|\\bnew-transportrule\\b[^|&;\\r\\n]*\\s-blindcopyto\\b",
+      "severity": "critical",
+      "description": "A mailbox forwarding rule keeps sending mail outward long after the command finishes.",
+      "explanation": "`New-InboxRule -ForwardTo`, `Set-Mailbox -ForwardingSmtpAddress`, and \\ `New-TransportRule -BlindCopyTo` redirect mail automatically and indefinitely. Unlike a \\ single send, this survives the session, needs no further commands, and is invisible to \\ the mailbox owner — which is exactly why it is a standard business-email-compromise \\ step rather than an administrative convenience.\n\n\\ Safer alternatives: \\ - `Get-InboxRule` / `Get-Mailbox | Select ForwardingSmtpAddress` to audit existing rules \\ - Have a mail administrator make any forwarding change, with a change record"
+    },
+    {
+      "name": "smtp-cli-tool",
+      "pattern": "(?i)^\\s*(?:(?:\\d*(?:>>?|<<|<>|<)(?:&\\d+|[\\x22'][^\\x22'\\r\\n]*[\\x22']|[^\\s|&]+)|\\d*(?:>>?|<<|<>|<)\\s+(?:[\\x22'][^\\x22'\\r\\n]*[\\x22']|[^\\s|&]+))\\s*)*(?:&\\s*)?[\\x22']?(?:(?:[a-z]:[\\\\/]|\\\\\\\\|\\.{1,2}[\\\\/])[^|&;\\r\\n\\x22']*[\\\\/])?(?:(?:blat|swaks|msmtp|mailsend|sendemail|smtp-cli)(?:\\.exe)?|git(?:\\.exe)?\\s+send-email)\\b[\\x22']?",
+      "severity": "high",
+      "description": "blat/swaks/msmtp/mailsend/sendemail and `git send-email` are command-line mail senders.",
+      "explanation": "These small utilities exist for one purpose: sending mail (with attachments) from a \\ script. `git send-email` is the same thing for patches — it mails the contents of \\ commits to arbitrary addresses through an SMTP server. Their presence on a developer \\ workstation is usually incidental, so a call to one is worth an explicit approval.\n\n\\ Safer alternatives: \\ - Leave the content on disk for a person to review and send \\ - Allowlist the specific command if a scheduled, reviewed send needs it"
+    }
+  ]
+}

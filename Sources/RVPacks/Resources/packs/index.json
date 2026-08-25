@@ -3,7 +3,7 @@
   "pin_version": "0.11.0",
   "pin_tag": "v0.11.0",
   "pin_commit": "2ed7eeef1ae63d204495f02312c657dd6d9bf73d",
-  "pack_count": 89,
+  "pack_count": 95,
   "default_enabled": [
     "core.filesystem",
     "core.git"
@@ -19,6 +19,14 @@
       "backup.rclone",
       "backup.restic",
       "backup.velero"
+    ],
+    "careful_company_running_windows": [
+      "careful_company_running_windows.chat",
+      "careful_company_running_windows.email",
+      "careful_company_running_windows.guardrails",
+      "careful_company_running_windows.transfer",
+      "careful_company_running_windows.tunnel",
+      "careful_company_running_windows.upload"
     ],
     "cdn": [
       "cdn.cloudflare_workers",
@@ -149,10 +157,40 @@
       "system.services"
     ]
   },
-  "presets": {},
+  "presets": {
+    "careful_company_running_windows": [
+      "backup.borg",
+      "backup.rclone",
+      "backup.restic",
+      "backup.velero",
+      "cloud.aws",
+      "cloud.azure",
+      "cloud.gcp",
+      "database.bigquery",
+      "database.mongodb",
+      "database.mysql",
+      "database.postgresql",
+      "database.redis",
+      "database.snowflake",
+      "database.sqlite",
+      "database.supabase",
+      "remote.rsync",
+      "remote.scp",
+      "remote.ssh",
+      "secrets.aws_secrets",
+      "secrets.doppler",
+      "secrets.onepassword",
+      "secrets.vault",
+      "storage.azure_blob",
+      "storage.gcs",
+      "storage.minio",
+      "storage.s3"
+    ]
+  },
   "tiers": {
     "apigateway": 4,
     "backup": 7,
+    "careful_company_running_windows": 12,
     "cdn": 4,
     "cicd": 10,
     "cloud": 4,
