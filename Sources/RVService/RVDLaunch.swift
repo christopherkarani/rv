@@ -1,4 +1,4 @@
-import RVIPC
+import RVDomain
 
 public struct RVDConfiguration: Sendable, Equatable {
     public var idleExitSeconds: Int
@@ -11,7 +11,7 @@ public enum RVDLaunchError: Error, Sendable, Equatable {
 }
 
 public enum RVDLaunch {
-    public static let versionLine = ProtocolVersion.serviceSemver
+    public static let versionLine = ProductVersion.semver
 
     public static func parse(arguments: [String]) throws -> RVDConfiguration {
         if arguments.contains(where: { $0 == "--socket" || $0.hasPrefix("--socket=") }) {
