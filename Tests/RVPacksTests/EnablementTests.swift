@@ -35,7 +35,7 @@ import RVDomain
     #expect(raw.filter { $0.hasPrefix("database.") }.count == 7)
 }
 
-@Test func enablement_presetMembership() throws {
+@Test func enablement_presetMembershipDropsWindowsOSPacks() throws {
     let index = try PackRegistry.loadIndex()
     let ids = try PackSet.effectiveOrdered(
         enabled: SelectionToken.parse("careful_company_running_windows", index: index),
@@ -45,10 +45,22 @@ import RVDomain
     let raw = Set(ids.map(\.rawValue))
     #expect(raw.contains("careful_company_running_windows.chat"))
     #expect(raw.contains("database.sqlite"))
-    #expect(raw.contains("windows.system"))
+    #expect(!raw.contains("windows.system"))
+    #expect(!raw.contains("windows.filesystem"))
     #expect(!raw.contains("remote.rsync"))
-    // 2 core + 6 leaves + 30 members - 1 disabled = 37
-    #expect(ids.count == 37)
+    // 2 core + 6 leaves + 26 members - 1 disabled = 33
+    #expect(ids.count == 33)
+}
+
+@Test func enablement_windowsOSPackIsRejected() throws {
+    let index = try PackRegistry.loadIndex()
+    #expect(throws: PackSetError.unknownID(.id(PackID(rawValue: "windows.filesystem")))) {
+        _ = try PackSet.expand(
+            [.id(PackID(rawValue: "windows.filesystem"))],
+            index: index,
+            rejectUnknown: true
+        )
+    }
 }
 
 @Test func enablement_strictGitAndPackageManagers() throws {

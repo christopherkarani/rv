@@ -3,7 +3,7 @@
   "pin_version": "0.11.0",
   "pin_tag": "v0.11.0",
   "pin_commit": "2ed7eeef1ae63d204495f02312c657dd6d9bf73d",
-  "pack_count": 99,
+  "pack_count": 95,
   "default_enabled": [
     "core.filesystem",
     "core.git"
@@ -155,12 +155,6 @@
       "system.disk",
       "system.permissions",
       "system.services"
-    ],
-    "windows": [
-      "windows.filesystem",
-      "windows.misc",
-      "windows.powershell",
-      "windows.system"
     ]
   },
   "presets": {
@@ -190,11 +184,7 @@
       "storage.azure_blob",
       "storage.gcs",
       "storage.minio",
-      "storage.s3",
-      "windows.filesystem",
-      "windows.misc",
-      "windows.powershell",
-      "windows.system"
+      "storage.s3"
     ]
   },
   "tiers": {
@@ -223,7 +213,6 @@
     "secrets": 10,
     "storage": 1,
     "strict_git": 9,
-    "system": 2,
-    "windows": 11
+    "system": 2
   }
 }
