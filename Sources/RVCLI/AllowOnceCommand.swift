@@ -25,8 +25,24 @@ enum AllowOnceCLI {
         return (tty, json || robot)
     }
 
-    static func store() -> AllowOnceStore {
-        AllowOnceStore.live()
+    static func home(
+        from environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> HomeDirectory? {
+        HomeDirectory(validating: environment["HOME"] ?? "")
+    }
+
+    static func requireHome(
+        from environment: [String: String] = ProcessInfo.processInfo.environment
+    ) throws -> HomeDirectory {
+        guard let home = home(from: environment) else {
+            FileHandle.standardError.write(Data("rv allow-once: HOME is not set\n".utf8))
+            throw ExitCode(1)
+        }
+        return home
+    }
+
+    static func store(home: HomeDirectory) -> AllowOnceStore {
+        AllowOnceStore.live(home: home)
     }
 
     static func redeem(
@@ -101,7 +117,7 @@ struct AllowOnceCommand: AsyncParsableCommand {
                 code: code,
                 tty: live.tty,
                 robot: live.robot,
-                store: AllowOnceCLI.store(),
+                store: AllowOnceCLI.store(home: try AllowOnceCLI.requireHome()),
                 now: Date()
             )
             FileHandle.standardOutput.write(
@@ -157,7 +173,7 @@ struct AllowOnceMint: AsyncParsableCommand {
                 cwd: FileManager.default.currentDirectoryPath,
                 tty: live.tty,
                 robot: live.robot,
-                store: AllowOnceCLI.store(),
+                store: AllowOnceCLI.store(home: try AllowOnceCLI.requireHome()),
                 now: Date()
             )
             FileHandle.standardOutput.write(
@@ -193,7 +209,7 @@ struct AllowOnceList: AsyncParsableCommand {
     var format: FormatFlags
 
     func run() async throws {
-        let rows = await AllowOnceCLI.store().list(now: Date())
+        let rows = await AllowOnceCLI.store(home: try AllowOnceCLI.requireHome()).list(now: Date())
         if format.json || format.robot {
             let document = RobotDocument.allowOnceList(allowOnceRobotRows(from: rows))
             FileHandle.standardOutput.write(Data((document.render() + "\n").utf8))
@@ -228,7 +244,7 @@ struct AllowOnceClear: AsyncParsableCommand {
             noColor: format.noColor
         )
         do {
-            try await AllowOnceCLI.store().clear(tty: live.tty, now: Date())
+            try await AllowOnceCLI.store(home: try AllowOnceCLI.requireHome()).clear(tty: live.tty, now: Date())
             FileHandle.standardOutput.write(Data("cleared allow-once rows\n".utf8))
         } catch AllowOnceError.ttyRequired {
             FileHandle.standardError.write(

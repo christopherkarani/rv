@@ -1,3 +1,4 @@
+import ArgumentParser
 import Foundation
 import Testing
 import RVDomain
@@ -205,6 +206,52 @@ struct CommandRunAllowlistTests {
             cwd: "/tmp/ws"
         )
         #expect(reply.result.decision == .allow)
+    }
+}
+
+struct OperatorHomeStoreTests {
+    @Test func allowOnceCLI_emptyHOME_isAbsence() {
+        #expect(AllowOnceCLI.home(from: [:]) == nil)
+        #expect(AllowOnceCLI.home(from: ["HOME": ""]) == nil)
+        #expect(throws: ExitCode(1)) {
+            try AllowOnceCLI.requireHome(from: [:])
+        }
+        #expect(throws: ExitCode(1)) {
+            try AllowOnceCLI.requireHome(from: ["HOME": ""])
+        }
+    }
+
+    @Test func allowOnceCLI_store_usesConfigDirNotSharedFallback() throws {
+        let home = try #require(HomeDirectory(validating: "/tmp/rv-allow-once-home-\(UUID().uuidString)"))
+        let store = AllowOnceCLI.store(home: home)
+        #expect(store.baseDirectory == RVPolicyPaths.configDirectory(home: home))
+        #expect(store.baseDirectory.path.contains("rv-allow-once-nohome") == false)
+    }
+
+    @Test func allowlistCLI_emptyHOME_isAbsence() {
+        #expect(AllowlistCLI.home(from: [:]) == nil)
+        #expect(AllowlistCLI.home(from: ["HOME": ""]) == nil)
+        #expect(throws: ExitCode(1)) {
+            try AllowlistCLI.requireHome(from: [:])
+        }
+        #expect(throws: ExitCode(1)) {
+            try AllowlistCLI.requireHome(from: ["HOME": ""])
+        }
+    }
+
+    @Test func allowlistCLI_store_usesConfigDirNotSharedFallback() throws {
+        let home = try #require(HomeDirectory(validating: "/tmp/rv-allowlist-home-\(UUID().uuidString)"))
+        let store = AllowlistCLI.store(home: home)
+        #expect(store.baseDirectory == RVPolicyPaths.configDirectory(home: home))
+        #expect(store.baseDirectory.path.contains("rv-allowlist-nohome") == false)
+    }
+
+    @Test func commandInvocation_nilHome_usesUniqueEphemeralNotSharedFallback() {
+        let first = CommandInvocation.allowOnceStore(home: nil)
+        let second = CommandInvocation.allowOnceStore(home: nil)
+        #expect(first.baseDirectory.path.contains("rv-allow-once-nohome") == false)
+        #expect(second.baseDirectory.path.contains("rv-allow-once-nohome") == false)
+        #expect(first.baseDirectory != second.baseDirectory)
     }
 }
 

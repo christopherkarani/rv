@@ -24,11 +24,24 @@ enum AllowlistCLI {
         )
     }
 
-    static func store() -> AllowlistStore {
-        let base = AllowOnceStore.processHomeConfigDirectory()
-            ?? FileManager.default.temporaryDirectory
-                .appendingPathComponent("rv-allowlist-nohome", isDirectory: true)
-        return AllowlistStore(baseDirectory: base)
+    static func home(
+        from environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> HomeDirectory? {
+        HomeDirectory(validating: environment["HOME"] ?? "")
+    }
+
+    static func requireHome(
+        from environment: [String: String] = ProcessInfo.processInfo.environment
+    ) throws -> HomeDirectory {
+        guard let home = home(from: environment) else {
+            FileHandle.standardError.write(Data("rv allowlist: HOME is not set\n".utf8))
+            throw ExitCode(1)
+        }
+        return home
+    }
+
+    static func store(home: HomeDirectory) -> AllowlistStore {
+        AllowlistStore(baseDirectory: RVPolicyPaths.configDirectory(home: home))
     }
 }
 
@@ -107,7 +120,7 @@ struct AllowlistAdd: AsyncParsableCommand {
             addedAt: Date()
         )
         do {
-            try AllowlistCLI.store().add(entry, tty: tty)
+            try AllowlistCLI.store(home: try AllowlistCLI.requireHome()).add(entry, tty: tty)
             FileHandle.standardOutput.write(
                 Data("added \(ruleID.rawValue)\n".utf8)
             )
@@ -164,7 +177,7 @@ struct AllowlistAddCommand: AsyncParsableCommand {
             addedAt: Date()
         )
         do {
-            try AllowlistCLI.store().add(entry, tty: tty)
+            try AllowlistCLI.store(home: try AllowlistCLI.requireHome()).add(entry, tty: tty)
             FileHandle.standardOutput.write(
                 Data("added exact command\n".utf8)
             )
@@ -213,7 +226,7 @@ struct AllowlistRemove: AsyncParsableCommand {
         do {
             let trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
             let normalized = Normalize.matchingView(of: trimmed).rawValue
-            let removed = try AllowlistCLI.store().remove(
+            let removed = try AllowlistCLI.store(home: try AllowlistCLI.requireHome()).remove(
                 matching: trimmed,
                 tty: tty,
                 exactCommandAliases: normalized == trimmed ? [] : [normalized]
@@ -247,7 +260,7 @@ struct AllowlistList: AsyncParsableCommand {
 
     func run() async throws {
         let now = Date()
-        switch AllowlistCLI.store().loadForValidate(workspacePath: nil) {
+        switch AllowlistCLI.store(home: try AllowlistCLI.requireHome()).loadForValidate(workspacePath: nil) {
         case .missing, .symlinkIntoWorkspace:
             if format.json || format.robot {
                 let document = RobotDocument.allowlistList([])
@@ -292,7 +305,7 @@ struct AllowlistValidate: AsyncParsableCommand {
     )
 
     func run() async throws {
-        switch AllowlistCLI.store().loadForValidate(workspacePath: nil) {
+        switch AllowlistCLI.store(home: try AllowlistCLI.requireHome()).loadForValidate(workspacePath: nil) {
         case .missing:
             FileHandle.standardOutput.write(Data("allowlist: missing (ok)\n".utf8))
         case .symlinkIntoWorkspace:

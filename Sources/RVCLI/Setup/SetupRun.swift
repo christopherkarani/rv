@@ -38,7 +38,7 @@ extension SetupHostKind {
 }
 
 struct SetupEnvironment {
-    var home: String
+    var home: HomeDirectory
     var pathEntries: [String]
     var rvPath: String
     var rvdPath: String

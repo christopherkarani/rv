@@ -1,6 +1,7 @@
 import Foundation
 import RVDomain
 import RVIPC
+import RVPolicy
 import RVPresentation
 import RVTheme
 import Testing
@@ -15,9 +16,9 @@ private func withDoctorHome(
     defer { try? FileManager.default.removeItem(at: home) }
     try body(
         home,
-        OwnedPaths(home: home.path),
+        OwnedPaths(home: try #require(HomeDirectory(validating: home.path))),
         DoctorEnvironment(
-            home: home.path,
+            home: try #require(HomeDirectory(validating: home.path)),
             pathEntries: [],
             fileManager: .default,
             launchAgentLoaded: false
@@ -660,4 +661,17 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
 
 @Test func doctor_isRegisteredOnRootCommand() {
     #expect(RV.configuration.subcommands.contains { $0.configuration.commandName == "doctor" })
+}
+
+@Test func doctor_live_usesHOME() {
+    let home = "/tmp/rv-doctor-live-\(UUID().uuidString)"
+    let environment = DoctorEnvironment.live(environment: ["HOME": home, "PATH": "/usr/bin:/bin"])
+    #expect(environment?.home.rawValue == home)
+    #expect(environment?.pathEntries == ["/usr/bin", "/bin"])
+}
+
+@Test func doctor_live_emptyHOME_isNil() {
+    #expect(HomeDirectory(validating: "") == nil)
+    #expect(DoctorEnvironment.live(environment: ["HOME": ""]) == nil)
+    #expect(DoctorEnvironment.live(environment: [:]) == nil)
 }

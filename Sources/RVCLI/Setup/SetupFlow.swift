@@ -1,4 +1,5 @@
 import Foundation
+import RVPolicy
 import RVPresentation
 
 /// Which lifecycle operation an intent asks for. Selects the orchestration
@@ -76,18 +77,18 @@ extension SetupEnvironment {
     static func live(
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> SetupEnvironment? {
-        guard let home = environment["HOME"], home.isEmpty == false else { return nil }
+        guard let home = HomeDirectory(validating: environment["HOME"] ?? "") else { return nil }
         let pathEntries = (environment["PATH"] ?? "").split(separator: ":").map(String.init)
         let executable = Bundle.main.executableURL
         return SetupEnvironment(
             home: home,
             pathEntries: pathEntries,
-            rvPath: resolveRv(home: home),
-            rvdPath: resolveRvd(nextTo: executable?.path, home: home)
-                ?? (home + "/.local/bin/rvd"),
+            rvPath: resolveRv(home: home.rawValue),
+            rvdPath: resolveRvd(nextTo: executable?.path, home: home.rawValue)
+                ?? (home.rawValue + "/.local/bin/rvd"),
             fileManager: .default,
             launchctl: ProcessLaunchctl(),
-            touchLaunchd: LoginHome.matchesProcessHome(home),
+            touchLaunchd: LoginHome.matchesProcessHome(home.rawValue),
             installAnalytics: BlockingInstallAnalytics.live(home: home, environment: environment)
         )
     }

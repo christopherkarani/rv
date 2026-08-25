@@ -234,6 +234,13 @@ struct AllowOnceStoreTests {
         #expect(names.contains(".allow-once.lock"))
         #expect(names.contains(".allowlist.lock"))
     }
+
+    @Test func live_usesConfigDirectoryUnderHome() throws {
+        let home = try #require(HomeDirectory(validating: "/tmp/rv-home-\(UUID().uuidString)"))
+        let store = AllowOnceStore.live(home: home)
+        #expect(store.baseDirectory == RVPolicyPaths.configDirectory(home: home))
+        #expect(store.baseDirectory.path.contains("rv-allow-once-nohome") == false)
+    }
 }
 
 private enum AllowOnceConsumeProbe {

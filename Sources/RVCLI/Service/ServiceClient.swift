@@ -35,7 +35,7 @@ public struct ServiceClient: Sendable {
         } else {
             self.door = EvaluationWorld.assemble(home: home, snapshots: nil, catalog: nil)
         }
-        self.store = Self.resolveStore(store: store, allowOnceDirectory: allowOnceDirectory)
+        self.store = Self.resolveStore(store: store, allowOnceDirectory: allowOnceDirectory, home: home)
         self.home = home
         self.clock = clock
     }
@@ -51,7 +51,7 @@ public struct ServiceClient: Sendable {
     ) {
         self.transport = transport
         self.door = GatedEvaluate(lazySession: lazySession)
-        self.store = Self.resolveStore(store: nil, allowOnceDirectory: allowOnceDirectory)
+        self.store = Self.resolveStore(store: nil, allowOnceDirectory: allowOnceDirectory, home: home)
         self.home = home
         self.clock = clock
     }
@@ -305,7 +305,8 @@ public struct ServiceClient: Sendable {
 
     private static func resolveStore(
         store: AllowOnceStore?,
-        allowOnceDirectory: URL?
+        allowOnceDirectory: URL?,
+        home: HomeDirectory?
     ) -> AllowOnceStore {
         if let store {
             return store
@@ -313,7 +314,10 @@ public struct ServiceClient: Sendable {
         if let allowOnceDirectory {
             return AllowOnceStore(baseDirectory: allowOnceDirectory)
         }
-        return .live()
+        if let home {
+            return AllowOnceStore.live(home: home)
+        }
+        return AllowOnceStore(baseDirectory: isolatedFactoryDirectory())
     }
 
     private static func isolatedFactoryDirectory() -> URL {

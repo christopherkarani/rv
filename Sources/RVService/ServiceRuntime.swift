@@ -57,8 +57,10 @@ public actor ServiceRuntime {
             self.allowOnce = allowOnce
         } else if let allowOnceDirectory {
             self.allowOnce = AllowOnceStore(baseDirectory: allowOnceDirectory)
+        } else if let resolvedHome {
+            self.allowOnce = AllowOnceStore.live(home: resolvedHome)
         } else {
-            self.allowOnce = AllowOnceStore.live()
+            self.allowOnce = AllowOnceStore(baseDirectory: uniqueEphemeralAllowOnceDirectory())
         }
         self.idleExitSeconds = idleExitSeconds
         self.log = log
@@ -513,4 +515,9 @@ public actor ServiceRuntime {
         }
         return try? PacksFacade.makeCatalog(home: home)
     }
+}
+
+private func uniqueEphemeralAllowOnceDirectory() -> URL {
+    FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-allow-once-\(UUID().uuidString)", isDirectory: true)
 }

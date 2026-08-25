@@ -1,6 +1,7 @@
 import Foundation
 import RVAnalytics
 import RVIPC
+import RVPolicy
 import RVPresentation
 
 protocol InstallAnalyticsCapturing: Sendable {
@@ -24,12 +25,12 @@ struct BlockingInstallAnalytics: InstallAnalyticsCapturing {
     }
 
     static func live(
-        home: String,
+        home: HomeDirectory,
         environment: [String: String],
         productVersion: String = ProtocolVersion.serviceSemver
     ) -> BlockingInstallAnalytics {
         var environment = environment
-        environment["HOME"] = home
+        environment["HOME"] = home.rawValue
         let captured = environment
         return BlockingInstallAnalytics {
             AnalyticsBootstrap.live(productVersion: productVersion, environment: captured)
