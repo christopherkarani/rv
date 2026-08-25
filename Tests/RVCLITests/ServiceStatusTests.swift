@@ -1,6 +1,7 @@
 import RVDomain
 import RVIPC
 import RVPresentation
+import RVService
 import Testing
 @testable import RVCLI
 
@@ -55,7 +56,11 @@ struct ServiceStatusTests {
         #expect(report.state == "running")
         #expect(report.fallback == "inactive")
         #expect(report.keepAlive == false)
+#if canImport(XPC)
         #expect(XPCServiceTransport.serviceName == "dev.rv.evaluate")
+#else
+        #expect(RVService.machServiceName == "dev.rv.evaluate")
+#endif
     }
 
     @Test func requestFailureIsDownNotFalseRunning() async throws {

@@ -22,7 +22,11 @@ public struct ServiceClient: Sendable {
     private let clock: @Sendable () -> Date
 
     public init(
+#if canImport(XPC)
         transport: (any ServiceTransport)? = XPCServiceTransport(),
+#else
+        transport: (any ServiceTransport)? = nil,
+#endif
         session: EvaluateSession? = nil,
         store: AllowOnceStore? = nil,
         allowOnceDirectory: URL? = nil,

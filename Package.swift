@@ -87,8 +87,8 @@ let coreTestTargets: [Target] = [
     ),
 ]
 
-// P2 (OPE-261): RVService + rvd + RVServiceTests return to the Linux graph.
-// XPC is #if canImport(XPC). RVCLI / rv stay Darwin (P3).
+// P2 (OPE-261): RVService + rvd + RVServiceTests on the Linux graph.
+// P3 (OPE-262): RVCLI + rv + RVCLITests return. XPC stays #if canImport(XPC).
 let serviceLibraryAndDaemon: [Target] = [
     .target(
         name: "RVService",
@@ -110,12 +110,7 @@ let serviceTestTargets: [Target] = [
     .testTarget(name: "RVServiceTests", dependencies: ["RVService"]),
 ]
 
-#if os(Linux)
-let darwinCLITargets: [Target] = []
-let darwinCLIProducts: [Product] = []
-let darwinCLITests: [Target] = []
-#else
-let darwinCLITargets: [Target] = [
+let cliTargets: [Target] = [
     .target(
         name: "RVCLI",
         dependencies: [
@@ -136,25 +131,24 @@ let darwinCLITargets: [Target] = [
         ]
     ),
 ]
-let darwinCLIProducts: [Product] = [
+let cliProducts: [Product] = [
     .library(name: "RVCLI", targets: ["RVCLI"]),
     .executable(name: "rv", targets: ["rv"]),
 ]
-let darwinCLITests: [Target] = [
+let cliTestTargets: [Target] = [
     .testTarget(name: "RVCLITests", dependencies: ["RVCLI"]),
 ]
-#endif
 
 let package = Package(
     name: "rv",
     platforms: [
         .macOS(.v26),
     ],
-    products: coreProducts + serviceProducts + darwinCLIProducts,
+    products: coreProducts + serviceProducts + cliProducts,
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.7.0"),
     ] + extraPackageDependencies,
-    targets: coreLibraryTargets + serviceLibraryAndDaemon + darwinCLITargets
-        + coreTestTargets + serviceTestTargets + darwinCLITests,
+    targets: coreLibraryTargets + serviceLibraryAndDaemon + cliTargets
+        + coreTestTargets + serviceTestTargets + cliTestTargets,
     swiftLanguageModes: [.v6]
 )

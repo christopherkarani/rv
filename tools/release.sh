@@ -41,10 +41,31 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ "$(uname -m)" != "arm64" ]]; then
-  printf "release: Apple Silicon only\n" >&2
-  exit 1
-fi
+OS="$(uname -s)"
+ARCH="$(uname -m)"
+CLANG_OS_FLAGS=()
+case "$OS" in
+  Darwin)
+    if [[ "$ARCH" != "arm64" ]]; then
+      printf "release: Apple Silicon only\n" >&2
+      exit 1
+    fi
+    CLANG_OS_FLAGS=(-arch arm64 -mmacosx-version-min=26.0)
+    ;;
+  Linux)
+    case "$ARCH" in
+      aarch64|x86_64) ;;
+      *)
+        printf "release: Linux aarch64 or x86_64 only\n" >&2
+        exit 1
+        ;;
+    esac
+    ;;
+  *)
+    printf "release: macOS 26 Apple Silicon, or Linux aarch64/x86_64\n" >&2
+    exit 1
+    ;;
+esac
 
 if [[ ! -x "$SWIFT_WRAP" ]]; then
   printf "release: missing executable %s\n" "$SWIFT_WRAP" >&2
@@ -66,19 +87,22 @@ bash "$C_SRC/tests/run.sh"
 rm -rf "$STAGE"
 mkdir -p "$STAGE"
 
-clang -Os -arch arm64 -mmacosx-version-min=26.0 -std=c11 -Wall \
+clang -Os "${CLANG_OS_FLAGS[@]}" -std=c11 -Wall \
   -I "$C_SRC" \
   -o "$STAGE/rv" \
   "$C_SRC/json_escape.c" \
   "$C_SRC/json_reply.c" \
   "$C_SRC/rv.c"
 chmod 755 "$STAGE/rv"
-strip -x "$STAGE/rv"
-
-if otool -L "$STAGE/rv" | grep -E 'Foundation|CFNetwork' >/dev/null; then
-  printf "release: C rv must not link Foundation or CFNetwork\n" >&2
-  otool -L "$STAGE/rv" >&2
-  exit 1
+if [[ "$OS" == "Darwin" ]]; then
+  strip -x "$STAGE/rv"
+  if otool -L "$STAGE/rv" | grep -E 'Foundation|CFNetwork' >/dev/null; then
+    printf "release: C rv must not link Foundation or CFNetwork\n" >&2
+    otool -L "$STAGE/rv" >&2
+    exit 1
+  fi
+else
+  strip "$STAGE/rv"
 fi
 
 set +e
@@ -89,7 +113,9 @@ if [[ "$rv_st" -ne 0 ]]; then
   printf "release: swift build --product rv failed (exit %s)\n" "$rv_st" >&2
   printf "Staged C rv at %s/rv (Swift rv-cli/rvd pending hookEvaluate dispatch)\n" "$STAGE" >&2
   ls -l "$STAGE/rv" >&2
-  otool -L "$STAGE/rv" >&2
+  if [[ "$OS" == "Darwin" ]]; then
+    otool -L "$STAGE/rv" >&2
+  fi
   exit "$rv_st"
 fi
 BIN_DIR="$("$SWIFT_WRAP" build -c release --show-bin-path)"

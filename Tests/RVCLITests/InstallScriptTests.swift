@@ -22,6 +22,19 @@ private func writeExecutable(_ url: URL, contents: String) throws {
     try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
 }
 
+private func writeLinuxShims(in shim: URL, arch: String = "x86_64") throws {
+    try FileManager.default.createDirectory(at: shim, withIntermediateDirectories: true)
+    try writeExecutable(
+        shim.appendingPathComponent("uname"),
+        contents: """
+        #!/bin/sh
+        if [ "$1" = "-s" ]; then echo Linux; exit 0; fi
+        if [ "$1" = "-m" ]; then echo \(arch); exit 0; fi
+        echo Linux
+        """
+    )
+}
+
 private func writeDarwinShims(in shim: URL) throws {
     try FileManager.default.createDirectory(at: shim, withIntermediateDirectories: true)
     try writeExecutable(
@@ -91,7 +104,7 @@ private func runInstallScript(
     #expect(text.localizedCaseInsensitiveContains("brew") == false)
 }
 
-@Test func installSh_refusesNonDarwin() throws {
+@Test func installSh_refusesWindows() throws {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-install-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -102,9 +115,9 @@ private func runInstallScript(
     let uname = shim.appendingPathComponent("uname")
     try """
     #!/bin/sh
-    if [ "$1" = "-s" ]; then echo Linux; exit 0; fi
+    if [ "$1" = "-s" ]; then echo Windows_NT; exit 0; fi
     if [ "$1" = "-m" ]; then echo x86_64; exit 0; fi
-    echo Linux
+    echo Windows_NT
     """.write(to: uname, atomically: true, encoding: .utf8)
     try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: uname.path)
 
@@ -123,8 +136,40 @@ private func runInstallScript(
     process.waitUntilExit()
     let err = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
     #expect(process.terminationStatus == 1)
-    #expect(err.contains("macOS 26 on Apple Silicon only"))
+    #expect(err.contains("macOS 26 Apple Silicon, or Linux aarch64/x86_64"))
+    #expect(err.localizedCaseInsensitiveContains("windows") == false)
     #expect(FileManager.default.fileExists(atPath: root.path + "/.local/bin/rv") == false)
+}
+
+@Test func installSh_acceptsLinuxX86_64() throws {
+    try proveLinuxInstall(arch: "x86_64")
+}
+
+@Test func installSh_acceptsLinuxAarch64() throws {
+    try proveLinuxInstall(arch: "aarch64")
+}
+
+private func proveLinuxInstall(arch: String) throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-install-linux-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let home = root.appendingPathComponent("home", isDirectory: true)
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    let src = root.appendingPathComponent("src", isDirectory: true)
+    try writeDummyTrio(in: src)
+
+    let shim = root.appendingPathComponent("shim", isDirectory: true)
+    try writeLinuxShims(in: shim, arch: arch)
+
+    let result = try runInstallScript(home: home, src: src, pathPrefix: shim.path)
+    #expect(result.status == 0)
+
+    let destBin = home.appendingPathComponent(".local/bin")
+    #expect(FileManager.default.isExecutableFile(atPath: destBin.appendingPathComponent("rv").path))
+    #expect(FileManager.default.isExecutableFile(atPath: destBin.appendingPathComponent("rv-cli").path))
+    #expect(FileManager.default.isExecutableFile(atPath: destBin.appendingPathComponent("rvd").path))
 }
 
 @Test func installSh_replacesDestSymlinkWithoutFollowing() throws {

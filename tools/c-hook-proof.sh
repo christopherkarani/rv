@@ -23,6 +23,83 @@ fail() {
   exit 1
 }
 
+clang_c_hook() {
+  local dest="$1"
+  local os arch
+  local flags=()
+  os="$(uname -s)"
+  arch="$(uname -m)"
+  case "$os" in
+    Darwin)
+      flags=(-arch arm64 -mmacosx-version-min=26.0)
+      ;;
+    Linux)
+      case "$arch" in
+        aarch64|x86_64) ;;
+        *) fail "Linux aarch64 or x86_64 only" ;;
+      esac
+      ;;
+    *)
+      fail "macOS 26 Apple Silicon, or Linux aarch64/x86_64"
+      ;;
+  esac
+  clang -Os "${flags[@]}" -std=c11 -Wall \
+    -I "$ROOT/Sources/rv-c" \
+    -o "$dest" \
+    "$ROOT/Sources/rv-c/json_escape.c" \
+    "$ROOT/Sources/rv-c/json_reply.c" \
+    "$ROOT/Sources/rv-c/rv.c"
+  chmod 755 "$dest"
+}
+
+linux_c_hook_proof() {
+  local out home bin fixture st
+  out="${TMPDIR:-/tmp}/rv-c-hook-linux-$$"
+  mkdir -p "$out/home/.local/bin"
+  home="$out/home"
+  bin="$home/.local/bin"
+  clang_c_hook "$out/rv"
+  printf 'linux-clang ok %s\n' "$out/rv"
+  file "$out/rv" || true
+
+  set +e
+  HOME="$home" PATH="/usr/bin:/bin" "$out/rv" hook --host grok \
+    <"$FIXTURES/deny-git-reset-hard.json" \
+    >"$out/last-resort.out" 2>"$out/last-resort.err"
+  st=$?
+  set -e
+  if [[ "$st" -ne 2 ]]; then
+    fail "last_resort without rv-cli must _exit(2), got $st"
+  fi
+  printf 'linux-last_resort ok exit=%s\n' "$st"
+
+  cp "$out/rv" "$bin/rv"
+  chmod 755 "$bin/rv"
+  cat >"$bin/rv-cli" <<'EOF'
+#!/bin/sh
+cat
+exit 2
+EOF
+  chmod 755 "$bin/rv-cli"
+
+  set +e
+  HOME="$home" PATH="/usr/bin:/bin" "$bin/rv" hook --host grok \
+    <"$FIXTURES/deny-git-reset-hard.json" \
+    >"$out/miss.out" 2>"$out/miss.err"
+  st=$?
+  set -e
+  if [[ "$st" -ne 2 ]]; then
+    fail "miss_replay must call rv-cli (exit 2), got $st"
+  fi
+  fixture="$(tr -d '\n' <"$FIXTURES/deny-git-reset-hard.json")"
+  if ! grep -q 'git reset --hard' "$out/miss.out"; then
+    fail "miss_replay did not replay the deny fixture to rv-cli"
+  fi
+  printf 'linux-miss_replay ok exit=%s\n' "$st"
+  printf 'linux-c-hook-proof ok\n'
+  rm -rf "$out"
+}
+
 LOGIN_HOME="$(python3 -c 'import pwd, os; print(pwd.getpwuid(os.getuid()).pw_dir)')"
 [[ -n "$LOGIN_HOME" ]] || fail "could not resolve login HOME via getpwuid"
 LIVE_PLIST="$LOGIN_HOME/Library/LaunchAgents/dev.rv.evaluate.plist"
@@ -78,6 +155,11 @@ for _i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 2
 done
 
 [[ -d "$FIXTURES" ]] || fail "missing Grok fixtures at $FIXTURES"
+
+if [[ "$(uname -s)" == "Linux" ]]; then
+  linux_c_hook_proof
+  exit 0
+fi
 
 stage_ok() {
   [[ -x "$STAGE/rv" && -x "$STAGE/rv-cli" && -x "$STAGE/rvd" ]] || return 1

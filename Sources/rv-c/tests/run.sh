@@ -6,20 +6,41 @@ ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 SRC="$ROOT/Sources/rv-c"
 OUT="${RV_C_TEST_OUT:-$ROOT/.build/rv-c-tests}"
 
-if [[ "$(uname -m)" != "arm64" ]]; then
-  printf "rv-c tests: Apple Silicon only\n" >&2
-  exit 1
-fi
+OS="$(uname -s)"
+ARCH="$(uname -m)"
+CLANG_OS_FLAGS=()
+case "$OS" in
+  Darwin)
+    if [[ "$ARCH" != "arm64" ]]; then
+      printf "rv-c tests: Apple Silicon only\n" >&2
+      exit 1
+    fi
+    CLANG_OS_FLAGS=(-arch arm64 -mmacosx-version-min=26.0)
+    ;;
+  Linux)
+    case "$ARCH" in
+      aarch64|x86_64) ;;
+      *)
+        printf "rv-c tests: Linux aarch64 or x86_64 only\n" >&2
+        exit 1
+        ;;
+    esac
+    ;;
+  *)
+    printf "rv-c tests: macOS 26 Apple Silicon, or Linux aarch64/x86_64\n" >&2
+    exit 1
+    ;;
+esac
 
 mkdir -p "$OUT"
-clang -Os -arch arm64 -mmacosx-version-min=26.0 -std=c11 -Wall \
+clang -Os "${CLANG_OS_FLAGS[@]}" -std=c11 -Wall \
   -I "$SRC" \
   -o "$OUT/json_escape_test" \
   "$SRC/tests/json_escape_test.c" \
   "$SRC/json_escape.c"
 "$OUT/json_escape_test"
 
-clang -Os -arch arm64 -mmacosx-version-min=26.0 -std=c11 -Wall \
+clang -Os "${CLANG_OS_FLAGS[@]}" -std=c11 -Wall \
   -I "$SRC" \
   -o "$OUT/json_reply_test" \
   "$SRC/tests/json_reply_test.c" \
@@ -27,17 +48,19 @@ clang -Os -arch arm64 -mmacosx-version-min=26.0 -std=c11 -Wall \
   "$SRC/json_reply.c"
 "$OUT/json_reply_test"
 
-clang -Os -arch arm64 -mmacosx-version-min=26.0 -std=c11 -Wall \
+clang -Os "${CLANG_OS_FLAGS[@]}" -std=c11 -Wall \
   -I "$SRC" \
   -o "$OUT/rv" \
   "$SRC/json_escape.c" \
   "$SRC/json_reply.c" \
   "$SRC/rv.c"
 
-if otool -L "$OUT/rv" | grep -E 'Foundation|CFNetwork' >/dev/null; then
-  printf "rv-c tests: C rv must not link Foundation or CFNetwork\n" >&2
-  otool -L "$OUT/rv" >&2
-  exit 1
+if [[ "$OS" == "Darwin" ]]; then
+  if otool -L "$OUT/rv" | grep -E 'Foundation|CFNetwork' >/dev/null; then
+    printf "rv-c tests: C rv must not link Foundation or CFNetwork\n" >&2
+    otool -L "$OUT/rv" >&2
+    exit 1
+  fi
 fi
 
 PROBE="$OUT/argv-probe"

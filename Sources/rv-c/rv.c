@@ -1,7 +1,12 @@
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
 #include "json_escape.h"
 #include "json_reply.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <signal.h>
 #include <stdint.h>
@@ -11,9 +16,14 @@
 #include <strings.h>
 #include <unistd.h>
 #include <sys/wait.h>
-#include <uuid/uuid.h>
+#ifdef __APPLE__
 #include <dispatch/dispatch.h>
 #include <xpc/xpc.h>
+#else
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <sys/un.h>
+#endif
 
 extern char **environ;
 
@@ -403,6 +413,56 @@ static int is_major_skew(const char *client, const char *service) {
     return c != s;
 }
 
+/* RFC 4122 UUID v4 from /dev/urandom. Not Apple-only; not libuuid. */
+static int rv_uuid_v4(char out[37]) {
+    unsigned char b[16];
+    size_t got = 0;
+    int fd = open("/dev/urandom", O_RDONLY);
+    if (fd < 0) {
+        return -1;
+    }
+    while (got < sizeof b) {
+        ssize_t n = read(fd, b + got, sizeof b - got);
+        if (n < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            close(fd);
+            return -1;
+        }
+        if (n == 0) {
+            close(fd);
+            return -1;
+        }
+        got += (size_t)n;
+    }
+    close(fd);
+    b[6] = (unsigned char)((b[6] & 0x0f) | 0x40);
+    b[8] = (unsigned char)((b[8] & 0x3f) | 0x80);
+    (void)snprintf(
+        out,
+        37,
+        "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+        b[0],
+        b[1],
+        b[2],
+        b[3],
+        b[4],
+        b[5],
+        b[6],
+        b[7],
+        b[8],
+        b[9],
+        b[10],
+        b[11],
+        b[12],
+        b[13],
+        b[14],
+        b[15]
+    );
+    return 0;
+}
+
 static const char kIdPrefix[] = "{\"id\":\"";
 static const char kAfterId[] =
     "\",\"method\":{\"hookEvaluate\":{\"clientSemver\":\"1.0.0\",\"host\":\"";
@@ -416,7 +476,6 @@ static char *build_request(
     size_t *out_len,
     char request_id[37]
 ) {
-    uuid_t u;
     char uuid[37];
     size_t esc_len = 0;
     size_t host_len;
@@ -428,8 +487,9 @@ static char *build_request(
     if (rv_json_escape(stdin_bytes, stdin_len, NULL, 0, &esc_len) != 0) {
         return NULL;
     }
-    uuid_generate(u);
-    uuid_unparse_lower(u, uuid);
+    if (rv_uuid_v4(uuid) != 0) {
+        return NULL;
+    }
     memcpy(request_id, uuid, sizeof uuid);
     host_len = strlen(host);
     total = (sizeof kIdPrefix - 1) + 36 + (sizeof kAfterId - 1) + host_len
@@ -461,6 +521,7 @@ static char *build_request(
     return json;
 }
 
+#ifdef __APPLE__
 struct XpcWait {
     dispatch_semaphore_t sem;
     xpc_object_t reply;
@@ -572,6 +633,144 @@ static int xpc_hook_evaluate(
     free(wait);
     return 0;
 }
+#else
+
+#define RV_UNIX_PATH_MAX 108
+#define RV_FRAME_MAX 1048576
+
+static int send_nosig(int fd, const void *p, size_t n) {
+    const unsigned char *b = (const unsigned char *)p;
+    while (n > 0) {
+        ssize_t w = send(fd, b, n, MSG_NOSIGNAL);
+        if (w < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return -1;
+        }
+        if (w == 0) {
+            return -1;
+        }
+        b += (size_t)w;
+        n -= (size_t)w;
+    }
+    return 0;
+}
+
+static int recv_exact(int fd, void *p, size_t n) {
+    unsigned char *b = (unsigned char *)p;
+    while (n > 0) {
+        ssize_t r = recv(fd, b, n, 0);
+        if (r < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return -1;
+        }
+        if (r == 0) {
+            return -1;
+        }
+        b += (size_t)r;
+        n -= (size_t)r;
+    }
+    return 0;
+}
+
+static void write_be32(unsigned char out[4], uint32_t v) {
+    out[0] = (unsigned char)(v >> 24);
+    out[1] = (unsigned char)(v >> 16);
+    out[2] = (unsigned char)(v >> 8);
+    out[3] = (unsigned char)v;
+}
+
+static uint32_t read_be32(const unsigned char in[4]) {
+    return ((uint32_t)in[0] << 24) | ((uint32_t)in[1] << 16)
+        | ((uint32_t)in[2] << 8) | (uint32_t)in[3];
+}
+
+/* $XDG_RUNTIME_DIR/rv/evaluate.sock. Unset/empty XDG is miss (fail-closed). */
+static int unix_socket_path(char *out, size_t cap) {
+    const char *xdg = getenv("XDG_RUNTIME_DIR");
+    int n;
+    if (xdg == NULL || xdg[0] == '\0') {
+        return -1;
+    }
+    n = snprintf(out, cap, "%s/rv/evaluate.sock", xdg);
+    if (n <= 0 || (size_t)n >= cap || (size_t)n + 1 > RV_UNIX_PATH_MAX) {
+        return -1;
+    }
+    return 0;
+}
+
+static int unix_hook_evaluate(
+    const void *json,
+    size_t json_len,
+    char **reply_json,
+    size_t *reply_len
+) {
+    char path[RV_UNIX_PATH_MAX];
+    int fd;
+    struct sockaddr_un addr;
+    struct timeval tv;
+    unsigned char header[4];
+    uint32_t n;
+    char *copy;
+
+    if (json_len == 0 || json_len > RV_FRAME_MAX) {
+        return -1;
+    }
+    if (unix_socket_path(path, sizeof path) != 0) {
+        return -1;
+    }
+
+    fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (fd < 0) {
+        return -1;
+    }
+    tv.tv_sec = RV_XPC_TIMEOUT_MS / 1000;
+    tv.tv_usec = (RV_XPC_TIMEOUT_MS % 1000) * 1000;
+    (void)setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    (void)setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
+
+    memset(&addr, 0, sizeof addr);
+    addr.sun_family = AF_UNIX;
+    memcpy(addr.sun_path, path, strlen(path) + 1);
+    if (connect(fd, (struct sockaddr *)&addr, sizeof addr) != 0) {
+        close(fd);
+        return -1;
+    }
+
+    write_be32(header, (uint32_t)json_len);
+    if (send_nosig(fd, header, 4) != 0 || send_nosig(fd, json, json_len) != 0) {
+        close(fd);
+        return -1;
+    }
+    if (recv_exact(fd, header, 4) != 0) {
+        close(fd);
+        return -1;
+    }
+    n = read_be32(header);
+    if (n == 0 || n > RV_FRAME_MAX) {
+        close(fd);
+        return -1;
+    }
+    copy = (char *)malloc((size_t)n + 1);
+    if (copy == NULL) {
+        close(fd);
+        return -1;
+    }
+    if (recv_exact(fd, copy, (size_t)n) != 0) {
+        free(copy);
+        close(fd);
+        return -1;
+    }
+    close(fd);
+    copy[n] = '\0';
+    *reply_json = copy;
+    *reply_len = (size_t)n;
+    return 0;
+}
+#endif
 
 int main(int argc, char **argv) {
     const char *host = NULL;
@@ -617,10 +816,17 @@ int main(int argc, char **argv) {
         miss_replay(argv, host, stdin_buf.p, stdin_buf.len);
     }
 
+#ifdef __APPLE__
     if (xpc_hook_evaluate(request, request_len, &reply_json, &reply_len) != 0) {
         free(request);
         miss_replay(argv, host, stdin_buf.p, stdin_buf.len);
     }
+#else
+    if (unix_hook_evaluate(request, request_len, &reply_json, &reply_len) != 0) {
+        free(request);
+        miss_replay(argv, host, stdin_buf.p, stdin_buf.len);
+    }
+#endif
     free(request);
 
     memset(&reply, 0, sizeof reply);
