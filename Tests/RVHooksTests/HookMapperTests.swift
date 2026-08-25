@@ -37,6 +37,51 @@ import RVDomain
     #expect(wire.exitCode == 0)
 }
 
+@Test func hookWire_claudeRichDenyUsesEncodeRichDeny() throws {
+    let resetHard = ShellCommand(rawValue: "git reset --hard")
+    let match = RuleMatch(
+        ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+        packID: .coreGit,
+        patternName: "reset-hard",
+        severity: .critical,
+        reason: "git reset --hard destroys uncommitted changes. Use 'git stash' first.",
+        explanation: "Discards every uncommitted change."
+    )
+    let result = EvaluationResult(
+        outcome: .deny(
+            Deny(ruleID: match.ruleID, reason: match.reason),
+            matched: match
+        )
+    )
+    let wire = hookWire(from: result, command: resetHard, using: ClaudeHostCodec())
+    #expect(wire.exitCode == 0)
+    #expect(wire.stdout.contains("\"permissionDecision\":\"deny\""))
+    #expect(wire.stdout.contains("\"ruleId\":\"core.git:reset-hard\""))
+    #expect(wire.stdout.contains("\"decision\":\"deny\"") == false)
+}
+
+@Test func hookWire_claudeAllowIsEmpty() {
+    let wire = hookWire(
+        from: EvaluationResult(outcome: .plain),
+        command: ShellCommand(rawValue: "git status"),
+        using: ClaudeHostCodec()
+    )
+    #expect(wire.stdout.isEmpty)
+    #expect(wire.exitCode == 0)
+}
+
+@Test func hookWire_claudeIndeterminateOmitsPackFields() throws {
+    let wire = hookWire(
+        from: EvaluationResult(outcome: .indeterminate(.commandTooLarge)),
+        command: ShellCommand(rawValue: "x"),
+        using: ClaudeHostCodec()
+    )
+    #expect(wire.exitCode == 0)
+    #expect(wire.stdout.contains(incompleteEvalSentence))
+    #expect(wire.stdout.contains("core.git") == false)
+    #expect(wire.stdout.contains("\"remediation\"") == false)
+}
+
 @Test func hookWire_indeterminateOmitsRule() throws {
     let wire = hookWire(
         from: EvaluationResult(outcome: .indeterminate(.commandTooLarge)),
