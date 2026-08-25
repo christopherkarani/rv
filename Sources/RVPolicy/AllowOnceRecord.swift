@@ -50,7 +50,7 @@ public struct AllowOnceRecord: Sendable, Equatable, Codable {
     public var codeHash: String
     public var commandFingerprint: String
     public var commandRedacted: String
-    public var cwd: String
+    public var cwd: WorkingDirectory
     public var ruleID: RuleID?
     public var createdAt: Date
     public var expiresAt: Date
@@ -62,7 +62,7 @@ public struct AllowOnceRecord: Sendable, Equatable, Codable {
         codeHash: String,
         commandFingerprint: String,
         commandRedacted: String,
-        cwd: String,
+        cwd: WorkingDirectory,
         ruleID: RuleID?,
         createdAt: Date,
         expiresAt: Date,
@@ -98,7 +98,7 @@ public struct AllowOnceListRow: Sendable, Equatable {
     public var kind: AllowOnceRecord.Kind
     public var codeHash: String
     public var commandRedacted: String
-    public var cwd: String
+    public var cwd: WorkingDirectory
     public var createdAt: Date
     public var expiresAt: Date
 }

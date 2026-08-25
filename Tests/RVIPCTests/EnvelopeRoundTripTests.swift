@@ -93,7 +93,7 @@ struct EnvelopeRoundTripTests {
             command: ShellCommand(rawValue: "git reset --hard"),
             enabledPacks: dayOnePackIDs
         )
-        let omitted = try IPCJSON.encode(EvaluateParams(request: request, cwd: "/tmp/ws"))
+        let omitted = try IPCJSON.encode(EvaluateParams(request: request, cwd: wd("/tmp/ws")))
         let omittedObject = try #require(JSONSerialization.jsonObject(with: omitted) as? [String: Any])
         #expect(omittedObject["clientSemver"] == nil)
         #expect(try IPCJSON.decode(EvaluateParams.self, from: omitted).clientSemver == nil)
@@ -109,7 +109,7 @@ struct EnvelopeRoundTripTests {
 
         let withSemver = EvaluateParams(
             request: request,
-            cwd: "/tmp/ws",
+            cwd: wd("/tmp/ws"),
             clientSemver: ProtocolVersion.serviceSemver
         )
         let encoded = try IPCJSON.encode(withSemver)
@@ -209,11 +209,11 @@ struct EnvelopeRoundTripTests {
             command: ShellCommand(rawValue: "git reset --hard"),
             enabledPacks: dayOnePackIDs
         )
-        #expect(EvaluateParams(request: request, cwd: "").cwd == nil)
-        #expect(ExplainParams(request: request, cwd: "").cwd == nil)
-        #expect(ClassifyParams(request: request, cwd: "").cwd == nil)
+        #expect(EvaluateParams(request: request, cwd: nil).cwd == nil)
+        #expect(ExplainParams(request: request, cwd: nil).cwd == nil)
+        #expect(ClassifyParams(request: request, cwd: nil).cwd == nil)
 
-        let payload = try IPCJSON.encode(EvaluateParams(request: request, cwd: "/tmp/ws"))
+        let payload = try IPCJSON.encode(EvaluateParams(request: request, cwd: wd("/tmp/ws")))
         var object = try #require(JSONSerialization.jsonObject(with: payload) as? [String: Any])
         object["cwd"] = ""
         let emptied = try JSONSerialization.data(withJSONObject: object)

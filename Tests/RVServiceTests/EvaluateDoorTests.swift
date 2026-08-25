@@ -11,12 +11,12 @@ struct EvaluateDoorTests {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let door = GatedEvaluate(EvaluateSession(enabledPacks: dayOnePackIDs))
         let command = ShellCommand(rawValue: "git reset --hard")
-        try await store.insertGranted(matchingView: "git reset --hard", cwd: "/tmp/ws", now: now)
+        try await store.insertGranted(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
 
         let peeked = await door.run(
             .peek,
             command: command,
-            cwd: "/tmp/ws",
+            cwd: wd("/tmp/ws"),
             home: home,
             store: store,
             now: now,
@@ -26,7 +26,7 @@ struct EvaluateDoorTests {
         let peekedAgain = await door.run(
             .peek,
             command: command,
-            cwd: "/tmp/ws",
+            cwd: wd("/tmp/ws"),
             home: home,
             store: store,
             now: now,
@@ -37,7 +37,7 @@ struct EvaluateDoorTests {
         let first = await door.run(
             .apply,
             command: command,
-            cwd: "/tmp/ws",
+            cwd: wd("/tmp/ws"),
             home: home,
             store: store,
             now: now,
@@ -47,7 +47,7 @@ struct EvaluateDoorTests {
         let second = await door.run(
             .apply,
             command: command,
-            cwd: "/tmp/ws",
+            cwd: wd("/tmp/ws"),
             home: home,
             store: store,
             now: now,

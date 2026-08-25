@@ -5,7 +5,7 @@ import RVDomain
 public func hookWire(
     host: HookHost,
     stdin: String,
-    evaluate: @Sendable (ShellCommand, String?) async -> EvaluationResult
+    evaluate: @Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult
 ) async -> HookWire {
     switch host {
     case .grok:
@@ -20,7 +20,7 @@ public func hookWire(
 private func hookBody<C: HostCodec>(
     stdin: String,
     codec: C,
-    evaluate: @Sendable (ShellCommand, String?) async -> EvaluationResult
+    evaluate: @Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult
 ) async -> HookWire {
     switch codec.decode(stdin) {
     case .request(let request):

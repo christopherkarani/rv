@@ -105,5 +105,5 @@ private final class EncodeDenySpy: HostCodec, @unchecked Sendable {
         return
     }
     #expect(request.command.rawValue == "git status")
-    #expect(request.cwd == "/tmp/ws")
+    #expect(request.cwd == wd("/tmp/ws"))
 }

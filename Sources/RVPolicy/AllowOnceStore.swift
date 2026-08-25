@@ -26,7 +26,7 @@ public actor AllowOnceStore {
 
     public func mint(
         matchingView: MatchingView,
-        cwd: String,
+        cwd: WorkingDirectory,
         ruleID: RuleID?,
         tty: TTYCapability,
         now: Date,
@@ -94,7 +94,7 @@ public actor AllowOnceStore {
     /// Not a human unlock path — does not require a TTY. Keep `package` so CLI cannot plant grants.
     package func insertGranted(
         matchingView: MatchingView,
-        cwd: String,
+        cwd: WorkingDirectory,
         now: Date,
         ttl: TimeInterval = 24 * 60 * 60
     ) async throws {
@@ -117,7 +117,7 @@ public actor AllowOnceStore {
         }
     }
 
-    public func hasGrant(matchingView: MatchingView, cwd: String, now: Date) async -> Bool {
+    public func hasGrant(matchingView: MatchingView, cwd: WorkingDirectory, now: Date) async -> Bool {
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
             return false
         }
@@ -133,7 +133,7 @@ public actor AllowOnceStore {
 
     public func consume(
         matchingView: MatchingView,
-        cwd: String,
+        cwd: WorkingDirectory,
         now: Date
     ) async -> AllowOnceConsumeStatus {
         let fingerprint = commandFingerprint(matchingView)

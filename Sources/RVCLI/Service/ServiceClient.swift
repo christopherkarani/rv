@@ -82,11 +82,11 @@ public struct ServiceClient: Sendable {
         )
     }
 
-    package func insertGranted(matchingView: MatchingView, cwd: String, now: Date = Date()) async throws {
+    package func insertGranted(matchingView: MatchingView, cwd: WorkingDirectory, now: Date = Date()) async throws {
         try await store.insertGranted(matchingView: matchingView, cwd: cwd, now: now)
     }
 
-    public func evaluate(command: ShellCommand, cwd: String? = nil) async -> RoutedEvaluation {
+    public func evaluate(command: ShellCommand, cwd: WorkingDirectory? = nil) async -> RoutedEvaluation {
         func inProcessRoute() async -> RoutedEvaluation {
             let now = clock()
             let baseDirectory = store.baseDirectory
@@ -100,7 +100,7 @@ public struct ServiceClient: Sendable {
                     now: now,
                     allowlist: {
                         AllowlistStore(baseDirectory: baseDirectory)
-                            .loadUserSnapshot(workspacePath: cwd, now: now)
+                            .loadUserSnapshot(workspacePath: cwd.map(\.rawValue), now: now)
                     }
                 ),
                 path: .inProcess
@@ -154,7 +154,7 @@ public struct ServiceClient: Sendable {
         }
     }
 
-    public func evaluateResult(command: ShellCommand, cwd: String? = nil) async -> EvaluationResult {
+    public func evaluateResult(command: ShellCommand, cwd: WorkingDirectory? = nil) async -> EvaluationResult {
         await evaluate(command: command, cwd: cwd).result
     }
 

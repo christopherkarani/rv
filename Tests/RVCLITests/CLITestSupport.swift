@@ -83,3 +83,7 @@ func cliEvaluate(
         home: try isolatedHome()
     )
 }
+
+func wd(_ raw: String) -> WorkingDirectory {
+    WorkingDirectory(validating: raw)!
+}

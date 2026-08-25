@@ -43,7 +43,7 @@ private func decoded(_ json: String) throws -> NSArray {
             kind: .granted,
             codeHash: hashA,
             commandRedacted: "git …",
-            cwd: "/tmp/a",
+            cwd: wd("/tmp/a"),
             createdAt: Date(timeIntervalSince1970: 1),
             expiresAt: Date(timeIntervalSince1970: 2)
         ),
@@ -51,7 +51,7 @@ private func decoded(_ json: String) throws -> NSArray {
             kind: .pending,
             codeHash: hashB,
             commandRedacted: "git …",
-            cwd: "/tmp/b",
+            cwd: wd("/tmp/b"),
             createdAt: Date(timeIntervalSince1970: 1),
             expiresAt: Date(timeIntervalSince1970: 2)
         ),
