@@ -153,7 +153,7 @@ enum HelpCatalog {
                 HelpRow(name: "rv hook [--host <host>]"),
             ]),
             HelpSection(heading: "Flags", rows: [
-                HelpRow(name: "--host <host>", description: "Host codec: grok (default), pi, opencode"),
+                HelpRow(name: "--host <host>", description: "Host codec: grok (default), pi, opencode, claude"),
             ]),
         ]
     )
