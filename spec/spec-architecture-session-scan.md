@@ -34,7 +34,7 @@ Implementers of rv (Swift 6.3 language mode 6, macOS 26, Apple Silicon) and revi
 
 - CLI: `rv scan` and `rv scan sessions` (same behavior).
 - Auto-discovery of **known host session roots** under an injectable home directory.
-- Path argument: scan a directory tree for **known session layouts** only; optional `--include-glob`.
+- Path argument: scan a directory tree for **known session layouts** only; `--include-glob` is allowed only with a path.
 - Surface-field extraction only (stage 1 of the shared extractor ladder).
 - `evaluate` deny-only findings; default day-one packs; optional `--packs`.
 - Redacted command display by default; `--show-command` for full matching view.
@@ -42,7 +42,7 @@ Implementers of rv (Swift 6.3 language mode 6, macOS 26, Apple Silicon) and revi
 - Default time window 7 days; `--days N`; `--all`.
 - Output modes: pretty, robot, browse.
 - Exit 0 on successful scan even when findings exist; `--fail-on-findings` for a non-zero gate.
-- Soft, non-mutating setup nudge when relevant host adapters appear unwired.
+- Soft, non-mutating setup nudge when a `HookHost.setupSlotOrder` host adapter appears unwired (not Claude store hits until CL-T4).
 - New SPM module `RVScan` plus Presentation/TUI/CLI wiring.
 - Temp-HOME fixtures per host layout. No live-HOME tests.
 
@@ -83,7 +83,7 @@ Implementers of rv (Swift 6.3 language mode 6, macOS 26, Apple Silicon) and revi
 | **Finding** | An extracted event (or dedupe group) whose `evaluate` `Decision` is `deny`. |
 | **Day-one packs** | `core.git` and `core.filesystem`. |
 | **Policy gate** | Post-evaluate allow-once / allowlist step used by hooks. **Must not run** during session forensics classify. |
-| **Soft setup nudge** | At most one trailing human-facing hint from **T9 CLI** to run `rv setup` / doctor when hosts that produced events look unwired. Never mutates config. Not a `ScanReport` field. |
+| **Soft setup nudge** | At most one trailing human-facing hint from **T9 CLI** to run `rv setup` / doctor when a **`HookHost.setupSlotOrder`** host (v1: Pi, Grok, OpenCode) that produced events looks unwired. Never mutates config. Not a `ScanReport` field. Claude store hits must not recommend `rv setup` until CL-T4 writes a Claude adapter. |
 | **Hard caps** | Fixed limits on walk depth, file count, total bytes, and per-file size. Exceeding a cap stops further reads for that scope and is reported; it is not a crash. |
 
 # 3. Requirements, Constraints & Guidelines
@@ -91,9 +91,9 @@ Implementers of rv (Swift 6.3 language mode 6, macOS 26, Apple Silicon) and revi
 ## Functional
 
 - **REQ-001**: `rv scan` and `rv scan sessions` shall execute session forensics with identical classify semantics.
-- **REQ-002**: With no path argument, the tool shall discover only **registered known host roots** under the injectable home directory. It shall not recursively walk the entire home directory.
-- **REQ-003**: With a path argument, the tool shall walk that tree for **known session layouts** only, unless `--include-glob` adds explicit patterns. Unknown files are skipped, not parsed as shell by default.
-- **REQ-004**: Default time window shall be the last **7** days based on event timestamp when present, else file modification time. `--days N` overrides. `--all` disables the time filter (bounds still apply).
+- **REQ-002**: With no path argument, the tool shall discover only **registered known host roots** under the injectable home directory. It shall not recursively walk the entire home directory. Auto mode shall never apply extra `--include-glob` patterns under that home.
+- **REQ-003**: With a path argument, the tool shall walk that tree for **known session layouts** only, unless `--include-glob` adds explicit patterns **under that path**. Unknown files are skipped, not parsed as shell by default. `--include-glob` is **path-mode only**: if it is given with no path argument, the CLI shall fail with a usage error (non-zero; not a successful empty scan) and shall not walk HOME.
+- **REQ-004**: Default time window shall be the last **7** days relative to `SessionScanRequest.now`, based on event timestamp when present, else file modification time. `--days N` overrides. `--all` disables the time filter (bounds still apply). The scan core must not call `Date()`.
 - **REQ-005**: Extraction shall be **surface fields only** for this specification’s ship. Unknown shapes yield no event (not a deny).
 - **REQ-006**: Classify shall call `RVEngine.evaluate` with snapshots loaded via `RVPacks` (bundled `PackRegistry` / pack JSON). Do not assemble `EvaluateSession`, `GatedEvaluate`, or any other RVService session. Pack set default = day-one. Secret-path catalog stays `SecretPathCatalog.dayOne` (`evaluate`’s default) unless a later secret-path finding changes that default. `--packs` may select enabled catalog packs or an explicit id list as defined in the CLI ticket; empty `--packs` must not silently mean “all catalog.”
 - **REQ-007**: Only `Decision.deny` becomes a finding. Allow (including matched medium/low), and indeterminate, are omitted from the finding list.
@@ -102,7 +102,7 @@ Implementers of rv (Swift 6.3 language mode 6, macOS 26, Apple Silicon) and revi
 - **REQ-010**: Default listing shall **dedupe** by matching view string + `rule_id` (colon form for the dedupe key). Each group exposes `count` and `last_seen`. `--all-events` emits one row per extracted deny event.
 - **REQ-011**: Output modes shall be pretty, robot, and browse, reusing existing CLI mode wiring. Robot and pretty/browse share one finding schema; do not invent a parallel `--json` schema.
 - **REQ-012**: Process exit code shall be **0** when the scan completes successfully, including when findings exist. With `--fail-on-findings`, exit **2** if the finding list (after dedupe rules for the chosen mode) is non-empty. Usage/parse errors keep existing ArgumentParser behavior.
-- **REQ-013**: After findings (or after an empty successful scan), **T9 CLI** (not `RVScan`) may emit **at most one** soft setup nudge in pretty/browse when a discovered host kind that produced events has Host adapter installation state that is not `wired`. Compute that in `RVCLI` from installation state (`HostAdapterInstallationSnapshot`). Robot may include a boolean or short code field on the CLI robot document. `ScanReport` must not carry setup-nudge state. Scan must not call setup writers.
+- **REQ-013**: After findings (or after an empty successful scan), **T9 CLI** (not `RVScan`) may emit **at most one** soft setup nudge in pretty/browse when a discovered host kind that produced events (1) is in `HookHost.setupSlotOrder` (v1: Pi, Grok, OpenCode) and (2) has Host adapter installation state that is not `wired`. Claude store hits must not recommend `rv setup` until CL-T4 actually writes a Claude adapter (`HostAdapterInstallationSnapshot.installation(for: .claude)` is hard-coded `.missing` today; `setupSlotOrder` excludes Claude). Compute the nudge in `RVCLI` from installation state (`HostAdapterInstallationSnapshot`). Robot may include a boolean or short code field on the CLI robot document. `ScanReport` must not carry setup-nudge state. Scan must not call setup writers.
 - **REQ-014**: First-ship store adapters shall include **Claude** session/transcript layouts and day-one hosts **Pi**, **Grok**, and **OpenCode** where a documented on-disk layout exists. A host with no readable layout documents “unsupported store” in adapter docs/tests and contributes zero events without failing the whole scan.
 - **REQ-015**: `--host <id>` shall restrict discovery and adapters to that host kind.
 - **REQ-016**: Hard caps (mandatory constants, package-visible):
@@ -164,7 +164,13 @@ Implementers of rv (Swift 6.3 language mode 6, macOS 26, Apple Silicon) and revi
 
 ## 4.2 Public types (normative concepts)
 
-Implementations may nest types, but these concepts must exist as `public` API on `RVScan` and/or `RVDomain`:
+Implementations may nest types. Split ownership so Domain stays `Date`/`FileManager`-free (`docs/architecture/MAP.md` Domain must-nots). **T1 must not edit `MAP.md`.**
+
+**T1 on `RVDomain`:** `ScanBounds`, `ScanHome`, `ScanHostID`, and reuse of existing `RuleID` / `PackID` only. No `ExtractedEvent`, `ScanFinding`, `ScanReport`, or `Date` on Domain.
+
+**T2 on `RVScan`:** `ExtractedEvent`, `ScanFinding`, `ScanWarning`, `ScanReport`, `SessionScanRequest`, `SessionScan`. Timestamps may be `Date?` here.
+
+### Domain (T1)
 
 ```swift
 public struct ScanBounds: Sendable {
@@ -178,6 +184,14 @@ public enum ScanHostID: String, Sendable {
     case claude, pi, grok, opencode
 }
 
+public struct ScanHome: Hashable, Sendable {
+    public let path: String            // non-empty; failable init. Not RVPolicy.HomeDirectory.
+}
+```
+
+### RVScan (T2)
+
+```swift
 public struct ExtractedEvent: Sendable {
     public var host: ScanHostID
     public var sessionID: String?
@@ -203,35 +217,32 @@ public struct ScanWarning: Sendable {
     public var message: String
 }
 
-public struct ScanHome: Hashable, Sendable {
-    public let path: String            // non-empty; failable init. Not RVPolicy.HomeDirectory.
-}
-
 public struct ScanReport: Sendable {
     public var findings: [ScanFinding]
     public var warnings: [ScanWarning]
     public var filesScanned: Int
     public var eventsExtracted: Int
 }
-```
 
-`ScanReport` does not include setup-nudge state. T9 CLI reads Host adapter installation state and may set robot `setup_nudge`.
+public struct SessionScanRequest: Sendable {
+    // optional root path, ScanHome, host filter, days/`all`, pack ids, allEvents, bounds
+    public var now: Date               // injected; scan core must not call Date()
+}
 
-Classify entry point (name may vary):
-
-```swift
 public struct SessionScan: Sendable {
     public func run(_ request: SessionScanRequest) throws -> ScanReport
 }
 ```
 
-`SessionScanRequest` carries: optional root path, `ScanHome` for auto roots, host filter, days/`all`, pack ids, allEvents, bounds (default constants). Render flags such as `showCommand` may remain CLI-only.
+`ScanReport` does not include setup-nudge state. T9 CLI reads Host adapter installation state and may set robot `setup_nudge`.
+
+`SessionScanRequest.now` is the clock for the default 7-day window (AC-005). CLI supplies `Date()`; tests inject a fixed instant. Render flags such as `showCommand` may remain CLI-only.
 
 ## 4.3 Robot document (session scan)
 
 ```json
 {
-  "schema": "rv.scan.sessions",
+  "schema": "rv.scan.sessions.v1",
   "findings": [
     {
       "host": "claude",
@@ -259,7 +270,7 @@ public struct SessionScan: Sendable {
 
 | Flag | Type | Default |
 |---|---|---|
-| `path` | optional directory | auto roots |
+| `path` | optional directory | auto roots (required when `--include-glob` is set) |
 | `--host` | optional `ScanHostID` | all registered |
 | `--days` | `UInt` | `7` |
 | `--all` | flag | off |
@@ -267,10 +278,12 @@ public struct SessionScan: Sendable {
 | `--show-command` | flag | off |
 | `--all-events` | flag | off |
 | `--fail-on-findings` | flag | off |
-| `--include-glob` | repeatable string | none |
+| `--include-glob` | repeatable string | none; **path-mode only** |
 | output mode | existing pretty/robot/browse | existing CLI default |
 
 When `--all` and `--days` are both set, `--all` wins.
+
+`--include-glob` with no `path` is a usage error (non-zero). Auto mode never applies extra globs under HOME.
 
 ## 4.5 Store adapter protocol
 
@@ -283,7 +296,7 @@ public protocol SessionStoreAdapter: Sendable {
 }
 ```
 
-Auto mode unions `roots(home:)`. Path mode: walk path; call `recognizes` / `--include-glob`; then `extract`.
+Auto mode unions `roots(home:)` and never applies `--include-glob`. Path mode: walk path; call `recognizes` / `--include-glob`; then `extract`.
 
 Concrete production paths are documented beside each adapter; fixtures live under `Tests/RVScanTests/Fixtures/`. Unsupported layout → zero roots, scan continues.
 
@@ -293,23 +306,24 @@ Concrete production paths are documented beside each adapter; fixtures live unde
 - **AC-002**: Given the same fixture with only `git status` (allow), when scan runs, then findings are empty and exit is 0.
 - **AC-003**: Given three identical deny events, when scan runs without `--all-events`, then one finding row has `count == 3`. With `--all-events`, three rows appear.
 - **AC-004**: Given default redaction, when pretty/robot render a multi-token deny, then the command field shows first-token `…` form and not the full argv. With `--show-command`, full matching view appears.
-- **AC-005**: Given an event older than 7 days and a newer deny, when default `--days 7` runs, then only the newer deny is reported. With `--all`, both are eligible (subject to caps).
+- **AC-005**: Given an event older than 7 days and a newer deny relative to an injected `SessionScanRequest.now`, when default `--days 7` runs, then only the newer deny is reported. With `--all`, both are eligible (subject to caps). Tests must not rely on wall-clock `Date()`.
 - **AC-006**: Given a successful scan with findings and without `--fail-on-findings`, when the CLI finishes, then exit code is 0. With `--fail-on-findings`, exit code is 2.
 - **AC-007**: Given Policy allow-once grants that would honor the same matching view on a hook path, when scan classifies, then the finding still appears (Policy gate off).
 - **AC-008**: Given scan execution, when completed, then no `RVHistory` file is created and no grant file is consumed.
 - **AC-009**: Given a path walk that exceeds `maxFiles`, when scan stops, then a `cap.files` warning is present and prior findings are still returned.
-- **AC-010**: Given auto mode under a temp home with only fixtures for registered roots, when scan runs, then files outside those roots are not read.
+- **AC-010**: Given auto mode under a temp home with only fixtures for registered roots, when scan runs, then files outside those roots are not read. Auto mode does not apply extra globs under HOME.
 - **AC-011**: Given `--host pi`, when Claude-only fixtures exist, then no Claude findings appear.
-- **AC-012**: Given unwired installation state for a host that produced events, when pretty mode runs, then T9 CLI emits at most one setup nudge line and no setup files are written. `RVScan` / `ScanReport` do not inspect installation state.
+- **AC-012**: Given unwired installation state for a `HookHost.setupSlotOrder` host (Pi, Grok, or OpenCode) that produced events, when pretty mode runs, then T9 CLI emits at most one setup nudge line and no setup files are written. Given Claude-only store events, pretty mode does **not** print `run rv setup` on the strength of those hits (CL-T4 has not written a Claude adapter). `RVScan` / `ScanReport` do not inspect installation state.
 - **AC-013**: Given `rv scan repo` is not implemented, when users run `rv scan` / `rv scan sessions`, then behavior matches this spec; help does not advertise a working repo scanner.
 - **AC-014**: The system shall not read or honor `RV_BYPASS`.
 - **AC-015**: Gate: `tools/gate.sh` includes `RVScanTests` and touched `RVCLITests` / `RVPresentationTests` / `RVTUITests` as applicable.
+- **AC-016**: Given `--include-glob` with no path argument (including auto mode plus `--include-glob '**/*.jsonl'`), when the CLI runs, then it exits non-zero as a usage error and does not walk HOME.
 
 ## 5b. Tickets (task graph)
 
 ```
-T1 Domain scan DTOs + bounds constants
-T2 RVScan module + discovery walk + adapter protocol   (blocked by T1)
+T1 Domain ScanBounds + ScanHome + ScanHostID
+T2 RVScan module + walk + adapter protocol + Date DTOs (blocked by T1)
 T3 Classify pipeline (evaluate deny-only)              (blocked by T2)
 T4 Claude store adapter + fixtures                     (blocked by T2)
 T5 Pi + Grok + OpenCode adapters + fixtures            (blocked by T2)
@@ -324,15 +338,15 @@ Wave 1: **T1**. Wave 2: **T2**. Wave 3: **T3 ∥ T4 ∥ T5**. Wave 4: **T6**. Wa
 
 | id | title | depends-on | exclusive-writes | acceptance | review-hint |
 |---|---|---|---|---|---|
-| **T1** | Scan DTOs and bounds constants on Domain | none | `Sources/RVDomain/ScanTypes.swift` (new); `Tests/RVDomainTests/ScanTypesTests.swift` (new) | Types are `Sendable`; bounds constants match REQ-016; reuse `RuleID` / `PackID`; `ScanHome` is a non-empty-path newtype (not `RVPolicy.HomeDirectory`); `ScanReport` has no setup-nudge field | `≤100` |
-| **T2** | `RVScan` target, walker caps, `SessionStoreAdapter` | T1 | `Package.swift` (add `RVScan` + `RVScanTests` only); `Sources/RVScan/**` (scaffold, bounds, walker, protocol); `Tests/RVScanTests/WalkerBoundsTests.swift` (new); `docs/architecture/MODULES.md` (RVScan row only) | Walker stops at depth/files/bytes caps with warnings; no live HOME; `roots(home:)` takes Domain `ScanHome` or `URL`, not `RVPolicy.HomeDirectory` | `101–1499` |
+| **T1** | Scan bounds, `ScanHome`, `ScanHostID` on Domain | none | `Sources/RVDomain/ScanTypes.swift` (new); `Tests/RVDomainTests/ScanTypesTests.swift` (new) | Types are `Sendable`; bounds constants match REQ-016; reuse `RuleID` / `PackID`; `ScanHome` is a non-empty-path newtype (not `RVPolicy.HomeDirectory`); **no** `Date`/`FileManager`/`ExtractedEvent`/`ScanFinding`/`ScanReport` on Domain; do not edit `MAP.md` | `≤100` |
+| **T2** | `RVScan` target, walker caps, `SessionStoreAdapter`, Date-bearing DTOs | T1 | `Package.swift` (add `RVScan` + `RVScanTests` only); `Sources/RVScan/**` (scaffold, bounds, walker, protocol, `ExtractedEvent`/`ScanFinding`/`ScanReport`/`SessionScanRequest`); `Tests/RVScanTests/WalkerBoundsTests.swift` (new); `docs/architecture/MODULES.md` (RVScan row only) | Walker stops at depth/files/bytes caps with warnings; no live HOME; `roots(home:)` takes Domain `ScanHome` or `URL`, not `RVPolicy.HomeDirectory`; `ExtractedEvent.occurredAt` / `ScanFinding.lastSeen` may be `Date?`; `SessionScanRequest.now: Date`; `ScanReport` has no setup-nudge field | `101–1499` |
 | **T3** | Classify: events → evaluate → deny findings | T2 | `Sources/RVScan/Classify/**` (new); `Tests/RVScanTests/ClassifyTests.swift` (new) | AC-001/002/007/008 against in-memory events; day-one default; call `RVEngine.evaluate` with `RVPacks`-loaded snapshots; secrets `.dayOne`; no `EvaluateSession` / `GatedEvaluate` / RVService / Policy import | `101–1499` |
 | **T4** | Claude session store adapter + fixtures | T2 | `Sources/RVScan/Adapters/Claude/**` (new); `Tests/RVScanTests/Fixtures/claude/**` (new); `Tests/RVScanTests/ClaudeAdapterTests.swift` (new) | AC-001 via Claude fixture tree; unrecognized files skipped | `101–1499` |
 | **T5** | Pi, Grok, OpenCode store adapters + fixtures | T2 | `Sources/RVScan/Adapters/Pi/**` (new); `Sources/RVScan/Adapters/Grok/**` (new); `Sources/RVScan/Adapters/OpenCode/**` (new); matching `Tests/RVScanTests/Fixtures/{pi,grok,opencode}/**` + adapter tests (new) | Each host extracts a documented shell field or documents zero-root unsupported with a test; host filter unit-tested | `101–1499` |
-| **T6** | Time window + dedupe | T3 | `Sources/RVScan/Dedupe.swift` (new); `Sources/RVScan/TimeWindow.swift` (new); `Tests/RVScanTests/DedupeTimeTests.swift` (new) | AC-003, AC-005 | `≤100` |
+| **T6** | Time window + dedupe | T3 | `Sources/RVScan/Dedupe.swift` (new); `Sources/RVScan/TimeWindow.swift` (new); `Tests/RVScanTests/DedupeTimeTests.swift` (new) | AC-003, AC-005 using injected `SessionScanRequest.now` (no `Date()` in TimeWindow) | `≤100` |
 | **T7** | Presentation + TUI finding frames | T6 | `Sources/RVPresentation/Scan/**` (new); `Sources/RVTUI/Scan/**` (new); matching new Presentation/TUI tests only | Pretty lines include rule_id + redacted command; browse renders frames without opening a TTY | `101–1499` |
-| **T8** | CLI `Scan` command, robot schema, flags | T4, T5, T7 | `Sources/RVCLI/Commands/ScanCommand.swift` (new); `Sources/RVCLI/Robot/ScanRobot.swift` (new); `Sources/RVCLI/RV.swift` (register subcommand only); `Tests/RVCLITests/ScanCommandTests.swift` (new); `Package.swift` (`RVCLI` → add `RVScan` dependency only) | AC-004, AC-006, AC-010, AC-011, AC-013; robot schema `rv.scan.sessions` | `101–1499` |
-| **T9** | Setup nudge + fail-on-findings + gate | T8 | `Sources/RVCLI/Commands/ScanCommand.swift` (nudge + exit only); `Tests/RVCLITests/ScanNudgeTests.swift` (new); `tools/gate.sh` (`RVScanTests` filter only) | AC-006, AC-012, AC-015; CLI computes the nudge from Host adapter installation state; do not add `setupNudgeRecommended` to `ScanReport` | `101–1499` |
+| **T8** | CLI `Scan` command, robot schema, flags | T4, T5, T7 | `Sources/RVCLI/Commands/ScanCommand.swift` (new); `Sources/RVCLI/Robot/ScanRobot.swift` (new); `Sources/RVCLI/RV.swift` (register subcommand only); `Sources/RVPresentation/RobotPayloads.swift` (`RobotSchema.scanSessions` constant only); `Tests/RVCLITests/ScanCommandTests.swift` (new); `Package.swift` (`RVCLI` → add `RVScan` dependency only) | AC-004, AC-006, AC-010, AC-011, AC-013, AC-016; robot schema `rv.scan.sessions.v1` next to existing `RobotSchema` constants | `101–1499` |
+| **T9** | Setup nudge + fail-on-findings + gate | T8 | `Sources/RVCLI/Commands/ScanCommand.swift` (nudge + exit only); `Tests/RVCLITests/ScanNudgeTests.swift` (new); `tools/gate.sh` (`RVScanTests` filter only) | AC-006, AC-012, AC-015; CLI computes the nudge from Host adapter installation state for `HookHost.setupSlotOrder` hosts only; Claude store hits must not recommend `rv setup` until CL-T4; do not add `setupNudgeRecommended` to `ScanReport` | `101–1499` |
 | **T10** | Docs cross-links | T9 | `docs/factory/STATUS.md` (board note only); `docs/factory/specs/phase-4-session-scan.md` (implement pointer + ticket ids only) | Fence points at this spec; STATUS lists it | `≤100` |
 
 **Parallelism:** After T2, **T3 ∥ T4 ∥ T5** on separate worktrees with exclusive paths. **T6** waits on T3. **T8** waits on T4 ∧ T5 ∧ T7.
@@ -358,7 +372,7 @@ Policy gate stays off because the command already executed; scan classifies stri
 
 Surface extraction ships first so host field maps can harden before unwrap/AST complexity lands on the shared ladder used later by the live guard.
 
-Claude store adapters ship for discovery without requiring Claude hook codecs in-process — same release train, parallel tickets, no hard dependency.
+Claude store adapters ship for discovery without requiring Claude hook codecs in-process — same release train, parallel tickets, no hard dependency. Finding Claude transcripts must not claim rv blocked Claude, and must not nudge `rv setup`, until CL-T4 actually writes a Claude adapter.
 
 # 8. Dependencies & External Integrations
 
@@ -402,6 +416,9 @@ rv scan sessions --days 30
 # Folder of known layouts
 rv scan /tmp/agent-sessions --host claude
 
+# Extra globs only with a path
+rv scan /tmp/agent-sessions --include-glob '**/*.jsonl'
+
 # Scripts / CI gate
 rv scan --robot --fail-on-findings
 # exit 0 → no deny findings
@@ -419,6 +436,8 @@ Edge cases:
 - Indeterminate evaluate → not a finding.
 - Matching allow with RuleMatch (medium/low) → not a finding.
 - `--all` and `--days` together → `--all` wins.
+- `--include-glob` with no path (including `rv scan --include-glob '**/*.jsonl'`) → usage error; HOME is not walked.
+- Claude-only transcript hits → no `run rv setup` nudge until CL-T4 writes a Claude adapter.
 
 # 10. Validation Criteria
 

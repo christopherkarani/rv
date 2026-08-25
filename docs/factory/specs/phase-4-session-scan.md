@@ -32,7 +32,7 @@ Flags (session forensics):
 |---|---|
 | *(no path)* | Auto-discover **known host session roots** (bounded; never recursively crawl `$HOME`) |
 | `<path>` | Scan that tree for **known session layouts** only |
-| `--include-glob` | Opt-in extra globs under a path (still hard-capped) |
+| `--include-glob` | Opt-in extra globs under a **path argument** only (still hard-capped). Usage error if given with no path. Auto mode never applies extra globs under HOME. |
 | `--host` | Restrict to one host store kind |
 | `--days N` | Time window (default **7**) |
 | `--all` | All readable history in scope (still hard-capped) |
@@ -54,7 +54,7 @@ Output modes: **pretty**, **robot**, **browse** — one finding schema; do not i
 | History | **Do not write** `RVHistory` (or any persist) as a side effect of scan evaluate. |
 | Dedupe | Default: collapse by **matching view + `rule_id`**; show count + last-seen. `--all-events` = one row per extracted event. |
 | Display | Redacted command by default; `--show-command` for full matching view. Robot/JSON follows the same redaction unless `--show-command`. |
-| Post-finding | **Read-only.** List findings. If host adapters look unwired, **one soft nudge** toward `rv setup` / doctor. Scan must not install hooks, enable packs, or mutate config. |
+| Post-finding | **Read-only.** List findings. If a **setup-slot** host adapter (Pi, Grok, OpenCode — `HookHost.setupSlotOrder`) looks unwired after producing events, **one soft nudge** toward `rv setup` / doctor. Claude store hits must not recommend `rv setup` until CL-T4 writes a Claude adapter. Scan must not install hooks, enable packs, or mutate config. |
 
 A finding is “this extracted command **denies** under the chosen packs,” not proof of exfiltration, not a new risk taxonomy, and not “the live hook blocked it in that session.”
 
@@ -62,7 +62,7 @@ A finding is “this extracted command **denies** under the chosen packs,” not
 
 - **Broad known stores** for wow: Claude session/transcript layouts plus day-one hosts (Pi, Grok, OpenCode) where stores are readable.
 - Additional hosts = additive **store adapters** (discovery + field map → command strings). Not a home spider.
-- **Claude hook codecs** and **Claude session-store adapters** may ship on the **same release train** as **parallel tickets** with **no hard code dependency**. Docs must not claim “rv blocked this in Claude” unless that host’s hook adapter is actually wired.
+- **Claude hook codecs** and **Claude session-store adapters** may ship on the **same release train** as **parallel tickets** with **no hard code dependency**. Docs must not claim “rv blocked this in Claude” unless that host’s hook adapter is actually wired. Claude store hits must not recommend `rv setup` until CL-T4 writes a Claude adapter.
 
 ## Extraction (first ship vs later)
 
@@ -76,7 +76,7 @@ Law: extractors feed `EvaluationRequest`; they do not replace evaluate. Full lad
 
 ## Bounds and privacy
 
-- No recursive `$HOME` crawl. Known roots + path mode + optional globs only.
+- No recursive `$HOME` crawl. Known roots + path mode. `--include-glob` is path-mode only (usage error without a path; auto mode never applies extra globs under HOME).
 - Hard caps on depth, file count, and bytes (exact numbers = implement ticket; must exist).
 - No command text in `os_log`.
 - No raw secrets in default output; redaction matches history-oriented rules when history exists.
@@ -104,7 +104,7 @@ Law: extractors feed `EvaluationRequest`; they do not replace evaluate. Full lad
 - Whether browse shares the TTY pager used by other operator surfaces.
 - Exact `--packs` CLI parsing shape (enabled vs explicit ids) — constrained by architecture REQ-006; finalize in T8.
 
-Hard caps, robot schema `rv.scan.sessions`, and ticket exclusive-writes are locked in [`spec/spec-architecture-session-scan.md`](../../../spec/spec-architecture-session-scan.md).
+Hard caps, robot schema `rv.scan.sessions.v1`, and ticket exclusive-writes are locked in [`spec/spec-architecture-session-scan.md`](../../../spec/spec-architecture-session-scan.md).
 
 If an implement prompt cites this fence without following that architecture spec’s § 5b exclusive-writes, refuse and return to `docs/factory/PLAN.md` / `STATUS.md`.
 
