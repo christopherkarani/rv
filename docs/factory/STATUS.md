@@ -29,7 +29,7 @@ Living board for implement sessions. Do **not** re-grill. Do **not** load `docs/
 | `specs/phase-2-packs.md` | Landed |
 | `specs/phase-3-allow.md` | Landed |
 | `specs/phase-4-later.md` | Landed (fence only) |
-| `specs/phase-4-session-scan.md` | Landed (fence only) — session forensics; implement cut: [`spec/spec-architecture-session-scan.md`](../../../spec/spec-architecture-session-scan.md) (T1–T10) |
+| `specs/phase-4-session-scan.md` | Landed (fence only) — session forensics; implement cut: [`spec/spec-architecture-session-scan.md`](../../spec/spec-architecture-session-scan.md) (T1–T10) |
 | `specs/phase-5-size-speed.md` | Implementing (T10–T14) |
 | [`spec/spec-architecture-c-hook-pipe.md`](../../spec/spec-architecture-c-hook-pipe.md) | Implemented (T1–T5). C hook pipe + Swift miss. Supersedes the T15 thin-Swift fence. |
 | [`specs/claude-host.md`](specs/claude-host.md) | Landed (CL-T1). CL-T2–T5 implement. |
