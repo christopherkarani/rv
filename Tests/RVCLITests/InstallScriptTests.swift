@@ -149,6 +149,38 @@ private func runInstallScript(
     try proveLinuxInstall(arch: "aarch64")
 }
 
+@Test func installSh_copiesLinuxResourcesDirectory() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-install-linux-resources-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let home = root.appendingPathComponent("home", isDirectory: true)
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    let src = root.appendingPathComponent("src", isDirectory: true)
+    try writeDummyTrio(in: src)
+    let resourcePack = src.appendingPathComponent("rv_RVPacks.resources/packs/core.git.json")
+    try FileManager.default.createDirectory(
+        at: resourcePack.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+    )
+    try "{}\n".write(to: resourcePack, atomically: true, encoding: .utf8)
+
+    let shim = root.appendingPathComponent("shim", isDirectory: true)
+    try writeLinuxShims(in: shim, arch: "x86_64")
+
+    let result = try runInstallScript(home: home, src: src, pathPrefix: shim.path)
+    #expect(result.status == 0)
+    #expect(
+        FileManager.default.fileExists(
+            atPath: home.appendingPathComponent(".local/bin/rv_RVPacks.resources/packs/core.git.json").path
+        )
+    )
+    #expect(
+        isDirectory(home.appendingPathComponent(".local/bin/rv_RVPacks.bundle")) == false
+    )
+}
+
 private func proveLinuxInstall(arch: String) throws {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-install-linux-\(UUID().uuidString)", isDirectory: true)

@@ -126,8 +126,10 @@ tmp_rv=""
 tmp_cli=""
 tmp_rvd=""
 
-# Pack JSON lives in SPM *_RVPacks.bundle next to the binaries (tools/release.sh).
-for bundle in "$src"/*_RVPacks.bundle; do
+# Pack JSON lives next to the binaries (tools/release.sh). Darwin SPM emits
+# *_RVPacks.bundle; Linux SPM emits *_RVPacks.resources. Bundle.module loads
+# whichever name this platform's accessor baked.
+for bundle in "$src"/*_RVPacks.bundle "$src"/*_RVPacks.resources; do
   [ -d "$bundle" ] || continue
   name="$(basename "$bundle")"
   rm -rf "$bin/$name"

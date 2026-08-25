@@ -19,8 +19,8 @@ Usage: tools/release.sh
   clang -Os the C hook → stage as rv (stripped)
   swift build -c release --product rv → stage as rv-cli (strip -x)
   swift build -c release --product rvd → stage as rvd (strip -x)
-  copy *_RVPacks.bundle into .build/release-stage
-    (override with RV_RELEASE_STAGE)
+  copy *_RVPacks.bundle (Darwin) or *_RVPacks.resources (Linux)
+    into .build/release-stage (override with RV_RELEASE_STAGE)
 
 Does not codesign. Does not write $HOME/.local/bin.
 C is not an SPM product. SPM product rv stays the Swift operator (rv-cli).
@@ -128,7 +128,9 @@ chmod 755 "$STAGE/rv-cli"
 strip -x "$STAGE/rv-cli"
 
 copied=0
-for bundle in "$BIN_DIR"/*_RVPacks.bundle; do
+# Darwin SPM emits *_RVPacks.bundle; Linux SPM emits *_RVPacks.resources.
+# Bundle.module looks next to the relocated binary, then a baked .build path.
+for bundle in "$BIN_DIR"/*_RVPacks.bundle "$BIN_DIR"/*_RVPacks.resources; do
   [[ -d "$bundle" ]] || continue
   name="$(basename "$bundle")"
   rm -rf "$STAGE/$name"
@@ -156,7 +158,7 @@ cp "$BIN_DIR/rvd" "$STAGE/rvd"
 chmod 755 "$STAGE/rvd"
 strip -x "$STAGE/rvd"
 
-for bundle in "$BIN_DIR"/*_RVPacks.bundle; do
+for bundle in "$BIN_DIR"/*_RVPacks.bundle "$BIN_DIR"/*_RVPacks.resources; do
   [[ -d "$bundle" ]] || continue
   name="$(basename "$bundle")"
   rm -rf "$STAGE/$name"
@@ -165,13 +167,13 @@ for bundle in "$BIN_DIR"/*_RVPacks.bundle; do
 done
 
 if [[ "$copied" -eq 0 ]]; then
-  printf "release: no *_RVPacks.bundle next to products in %s\n" "$BIN_DIR" >&2
+  printf "release: no *_RVPacks.bundle or *_RVPacks.resources next to products in %s\n" "$BIN_DIR" >&2
   exit 1
 fi
 
 printf "Staged %s\n" "$STAGE"
 ls -l "$STAGE/rv" "$STAGE/rv-cli" "$STAGE/rvd"
-for bundle in "$STAGE"/*_RVPacks.bundle; do
+for bundle in "$STAGE"/*_RVPacks.bundle "$STAGE"/*_RVPacks.resources; do
   [[ -d "$bundle" ]] || continue
   ls -ld "$bundle"
   du -sh "$bundle"
