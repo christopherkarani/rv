@@ -43,3 +43,5 @@ Each module keeps a small public API, `package` internals later, and its own tes
 | `RVCLI` | `RVDomain`, `RVEngine`, `RVPolicy`, `RVHooks`, `RVIPC`, `RVPresentation`, `RVTheme`, `RVTUI`, `RVService`, `RVHistory`, `RVAnalytics` | Thin client; typed service diagnostics; service health facts shared by doctor and status; GatedEvaluate for TTY test/explain and hook XPC miss; read-only Host adapter installation state shared by setup and doctor. No regex, no pack parse. |
 
 Each module has a matching `*Tests` target that depends only on that module.
+
+On Linux (OPE-260), `RVService`, `RVCLI`, `rv`, and `rvd` (and their tests) are omitted from the package graph so core `swift test` does not typecheck XPC. The Darwin graph is unchanged.

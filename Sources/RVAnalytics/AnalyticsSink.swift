@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 public protocol AnalyticsSink: Sendable {
     /// Returns `true` only when the event was accepted by the transport.
