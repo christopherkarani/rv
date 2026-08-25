@@ -179,7 +179,8 @@ static int is_help_flag(const char *s) {
 static int is_valid_host(const char *s) {
     return strcmp(s, "grok") == 0
         || strcmp(s, "pi") == 0
-        || strcmp(s, "opencode") == 0;
+        || strcmp(s, "opencode") == 0
+        || strcmp(s, "claude") == 0;
 }
 
 /* 0 = pipe, 1 = exec rv-cli with the same argv. */

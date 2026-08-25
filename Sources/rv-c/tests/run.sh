@@ -106,6 +106,20 @@ if ! grep -q -- '--host' "$NUL_LOG" || ! grep -q -- 'grok' "$NUL_LOG"; then
   printf "rv-c tests: NUL miss argv was not hook --host grok\n" >&2
   exit 1
 fi
+
+CLAUDE_NUL_LOG="$OUT/nul-claude.argv"
+set +e
+printf 'a\0b' | RV_C_ARGV_LOG="$CLAUDE_NUL_LOG" RV_C_STDIN_LOG="/dev/null" "$PROBE/rv" hook --host claude
+claude_nul_st=$?
+set -e
+if [[ "$claude_nul_st" -ne 17 ]]; then
+  printf "rv-c tests: Claude NUL miss expected replay exit 17, got %s\n" "$claude_nul_st" >&2
+  exit 1
+fi
+if ! grep -q -- '--host' "$CLAUDE_NUL_LOG" || ! grep -q -- 'claude' "$CLAUDE_NUL_LOG"; then
+  printf "rv-c tests: Claude NUL miss argv was not hook --host claude\n" >&2
+  exit 1
+fi
 if [[ "$(wc -c < "$NUL_STDIN" | tr -d ' ')" != "3" ]]; then
   printf "rv-c tests: NUL miss did not replay exact stdin\n" >&2
   exit 1
