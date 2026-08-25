@@ -1,6 +1,8 @@
 import Foundation
 import Testing
+#if canImport(XPC)
 @preconcurrency import XPC
+#endif
 @testable import RVService
 
 struct IdleExitTests {
@@ -24,6 +26,7 @@ struct IdleExitTests {
         #expect(await watchdog.fired)
     }
 
+    #if canImport(XPC)
     @Test func bootPingAndHandlePingResetIdleTimer() async throws {
         let watchdog = IdleWatchdog(seconds: 1)
         await watchdog.ping()
@@ -39,4 +42,5 @@ struct IdleExitTests {
         try? await Task.sleep(nanoseconds: 800_000_000)
         #expect(await watchdog.fired)
     }
+    #endif
 }

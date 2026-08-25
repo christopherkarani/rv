@@ -1,9 +1,11 @@
-#if canImport(Darwin)
-import Darwin
+#if os(Linux)
+#if canImport(Glibc)
+import Glibc
+#endif
 import Foundation
-import RVService
+import RVIPC
 
-enum UnixFrameError: Error {
+enum UnixFrameError: Error, Sendable, Equatable {
     case socket
     case bind
     case listen
@@ -12,43 +14,52 @@ enum UnixFrameError: Error {
     case pathTooLong
 }
 
+/// Linux AF_UNIX frames. Pathname sockets only. `send` uses `MSG_NOSIGNAL`.
 enum UnixFrameIO {
     static func writeFrame(fd: Int32, body: Data) throws {
-        try writeAll(fd: fd, data: try ServiceFrames.encode(body: body))
+        try sendAll(fd: fd, data: try ServiceFrames.encode(body: body))
     }
 
     static func readFrame(fd: Int32) throws -> Data {
-        let header = try readExact(fd: fd, count: 4)
-        var frame = header
+        let header = try recvExact(fd: fd, count: 4)
         let length = header.withUnsafeBytes { raw in
             raw.loadUnaligned(as: UInt32.self).bigEndian
         }
-        let body = try readExact(fd: fd, count: Int(length))
+        let body = try recvExact(fd: fd, count: Int(length))
+        var frame = header
         frame.append(body)
         return try ServiceFrames.decode(frame)
     }
 
-    static func readExact(fd: Int32, count: Int) throws -> Data {
+    static func recvExact(fd: Int32, count: Int) throws -> Data {
         var data = Data(count: count)
         var offset = 0
         while offset < count {
             let n = data.withUnsafeMutableBytes { buf -> Int in
                 guard let base = buf.baseAddress else { return -1 }
-                return Darwin.read(fd, base + offset, count - offset)
+                return recv(fd, base + offset, count - offset, 0)
             }
-            if n <= 0 { throw UnixFrameError.eof }
+            if n < 0 {
+                if errno == EINTR { continue }
+                throw UnixFrameError.eof
+            }
+            if n == 0 { throw UnixFrameError.eof }
             offset += n
         }
         return data
     }
 
-    static func writeAll(fd: Int32, data: Data) throws {
+    static func sendAll(fd: Int32, data: Data) throws {
         var offset = 0
         try data.withUnsafeBytes { buf in
             guard let base = buf.baseAddress else { throw UnixFrameError.eof }
             while offset < data.count {
-                let n = Darwin.write(fd, base + offset, data.count - offset)
-                if n <= 0 { throw UnixFrameError.eof }
+                let n = send(fd, base + offset, data.count - offset, Int32(MSG_NOSIGNAL))
+                if n < 0 {
+                    if errno == EINTR { continue }
+                    throw UnixFrameError.eof
+                }
+                if n == 0 { throw UnixFrameError.eof }
                 offset += n
             }
         }
@@ -56,7 +67,6 @@ enum UnixFrameIO {
 
     static func sockaddr(path: String) throws -> sockaddr_un {
         var addr = sockaddr_un()
-        addr.sun_len = UInt8(MemoryLayout<sockaddr_un>.stride)
         addr.sun_family = sa_family_t(AF_UNIX)
         let maxPath = MemoryLayout.size(ofValue: addr.sun_path)
         guard path.utf8.count + 1 <= maxPath else {
@@ -72,36 +82,43 @@ enum UnixFrameIO {
     }
 }
 
-final class FakeXPCServer: @unchecked Sendable {
-    let path: String
-    let runtime: ServiceRuntime
+/// AF_UNIX listener for Linux `rvd --socket`. Same `FrameCodec` algebra as tests.
+public final class UnixEvaluateListener: @unchecked Sendable {
+    private let runtime: ServiceRuntime
+    private let watchdog: IdleWatchdog
+    public let socketURL: URL
     private var listenFD: Int32 = -1
     private var source: DispatchSourceRead?
-    private let queue = DispatchQueue(label: "rv.fake-xpc")
+    private let queue = DispatchQueue(label: "rv.unix-evaluate")
 
-    init(runtime: ServiceRuntime, path: String) {
+    public init(runtime: ServiceRuntime, watchdog: IdleWatchdog, socketURL: URL) {
         self.runtime = runtime
-        self.path = path
+        self.watchdog = watchdog
+        self.socketURL = socketURL
     }
 
-    func start() throws {
-        unlink(path)
-        let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+    public func start() throws {
+        try UnixSocketPath.prepareRuntime(for: socketURL)
+        let fd = socket(AF_UNIX, Int32(SOCK_STREAM | SOCK_CLOEXEC), 0)
         guard fd >= 0 else { throw UnixFrameError.socket }
-        var nosig = Int32(1)
-        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &nosig, socklen_t(MemoryLayout<Int32>.size))
-        var addr = try UnixFrameIO.sockaddr(path: path)
+        var addr = try UnixFrameIO.sockaddr(path: socketURL.path)
         let bindOK = withUnsafePointer(to: &addr) { ptr in
             ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                Darwin.bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.stride))
+                bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
             }
         }
         guard bindOK == 0 else {
-            Darwin.close(fd)
+            close(fd)
             throw UnixFrameError.bind
         }
-        guard Darwin.listen(fd, 8) == 0 else {
-            Darwin.close(fd)
+        do {
+            try UnixSocketPath.assertSocketMode(socketURL)
+        } catch {
+            close(fd)
+            throw error
+        }
+        guard listen(fd, 8) == 0 else {
+            close(fd)
             throw UnixFrameError.listen
         }
         listenFD = fd
@@ -110,34 +127,36 @@ final class FakeXPCServer: @unchecked Sendable {
             self?.acceptOne()
         }
         source.setCancelHandler {
-            Darwin.close(fd)
+            close(fd)
         }
         self.source = source
         source.resume()
     }
 
-    func stop() {
+    public func stop() {
         source?.cancel()
         source = nil
         listenFD = -1
-        unlink(path)
+        try? FileManager.default.removeItem(at: socketURL)
     }
 
     private func acceptOne() {
-        let client = Darwin.accept(listenFD, nil, nil)
+        let client = accept(listenFD, nil, nil)
         guard client >= 0 else { return }
         queue.async { self.serve(client) }
     }
 
     private func serve(_ fd: Int32) {
         var handshakeOK = false
-        defer { Darwin.close(fd) }
+        defer { close(fd) }
         while true {
             guard let body = try? UnixFrameIO.readFrame(fd: fd) else { return }
-            let gate = ReplyGate()
+            let gate = UnixReplyGate()
             let runtime = self.runtime
+            let watchdog = self.watchdog
             let accepted = handshakeOK
             Task {
+                await watchdog.ping()
                 let pair = await runtime.handleIncoming(body, handshakeOK: accepted)
                 gate.finish(pair)
             }
@@ -148,7 +167,7 @@ final class FakeXPCServer: @unchecked Sendable {
     }
 }
 
-final class FakeXPCClient {
+final class UnixEvaluateClient {
     let path: String
     private var fd: Int32 = -1
 
@@ -157,44 +176,35 @@ final class FakeXPCClient {
     }
 
     func connect() throws {
-        let sock = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+        let sock = socket(AF_UNIX, Int32(SOCK_STREAM | SOCK_CLOEXEC), 0)
         guard sock >= 0 else { throw UnixFrameError.socket }
         var addr = try UnixFrameIO.sockaddr(path: path)
         let ok = withUnsafePointer(to: &addr) { ptr in
             ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                Darwin.connect(sock, $0, socklen_t(MemoryLayout<sockaddr_un>.stride))
+                connect(sock, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
             }
         }
         guard ok == 0 else {
-            Darwin.close(sock)
+            close(sock)
             throw UnixFrameError.connect
         }
         fd = sock
     }
 
-    func hello() throws -> [String: Any] {
-        let body = Data(#"{"protocol":"rv.ipc.v1","clientSemver":"1.0.0"}"#.utf8)
+    func send(body: Data) throws -> Data {
         try UnixFrameIO.writeFrame(fd: fd, body: body)
-        let reply = try UnixFrameIO.readFrame(fd: fd)
-        return try JSONSerialization.jsonObject(with: reply) as? [String: Any] ?? [:]
-    }
-
-    func sendJSON(_ object: [String: Any]) throws -> [String: Any] {
-        let body = try JSONSerialization.data(withJSONObject: object)
-        try UnixFrameIO.writeFrame(fd: fd, body: body)
-        let reply = try UnixFrameIO.readFrame(fd: fd)
-        return try JSONSerialization.jsonObject(with: reply) as? [String: Any] ?? [:]
+        return try UnixFrameIO.readFrame(fd: fd)
     }
 
     func close() {
         if fd >= 0 {
-            Darwin.close(fd)
+            Glibc.close(fd)
             fd = -1
         }
     }
 }
 
-final class ReplyGate: @unchecked Sendable {
+final class UnixReplyGate: @unchecked Sendable {
     private let sem = DispatchSemaphore(value: 0)
     private var pair: (Data, Bool) = (Data(), false)
 
@@ -209,10 +219,10 @@ final class ReplyGate: @unchecked Sendable {
     }
 }
 
-func retryConnect(path: String, attempts: Int = 40) throws -> FakeXPCClient {
+func retryUnixConnect(path: String, attempts: Int = 40) throws -> UnixEvaluateClient {
     var last: Error = UnixFrameError.connect
     for _ in 0..<attempts {
-        let client = FakeXPCClient(path: path)
+        let client = UnixEvaluateClient(path: path)
         do {
             try client.connect()
             return client
@@ -224,4 +234,3 @@ func retryConnect(path: String, attempts: Int = 40) throws -> FakeXPCClient {
     throw last
 }
 #endif
-

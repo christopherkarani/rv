@@ -1,5 +1,4 @@
 import Foundation
-import os
 import RVDomain
 import RVPolicy
 
@@ -17,7 +16,7 @@ public struct GatedEvaluate: Sendable {
         case prepared(EvaluateSession)
         case deferred(
             build: @Sendable () -> EvaluateSession,
-            slot: OSAllocatedUnfairLock<EvaluateSession?>
+            slot: UnfairLock<EvaluateSession?>
         )
     }
 
@@ -32,7 +31,7 @@ public struct GatedEvaluate: Sendable {
     package init(lazySession: @escaping @Sendable () -> EvaluateSession) {
         self.source = .deferred(
             build: lazySession,
-            slot: OSAllocatedUnfairLock(initialState: nil)
+            slot: UnfairLock(nil)
         )
     }
 

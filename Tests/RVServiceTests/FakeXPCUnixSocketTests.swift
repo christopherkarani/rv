@@ -1,3 +1,4 @@
+#if canImport(Darwin)
 import Foundation
 import Testing
 import RVDomain
@@ -297,3 +298,5 @@ private func nested(_ root: [String: Any], _ path: [String]) -> [String: Any]? {
     }
     return current as? [String: Any]
 }
+#endif
+

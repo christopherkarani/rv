@@ -1,3 +1,4 @@
+#if canImport(XPC)
 import Foundation
 import Testing
 @preconcurrency import XPC
@@ -106,3 +107,5 @@ private final class TransactionProbe: @unchecked Sendable {
     func begin() { lock.withLock { begins += 1 } }
     func end() { lock.withLock { ends += 1 } }
 }
+#endif
+

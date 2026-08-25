@@ -5,7 +5,9 @@ import RVEngine
 import RVHooks
 import RVPolicy
 import RVIPC
+#if canImport(XPC)
 @preconcurrency import XPC
+#endif
 @testable import RVService
 
 private let canonicalResetHardDeny =
@@ -248,6 +250,7 @@ struct HookEvaluateTests {
         #expect(reply.via == .xpc)
     }
 
+    #if canImport(XPC)
     @Test func xpcIPCFrame_roundTripsJSONData() {
         let payload = Data("{\"decision\":\"deny\"}".utf8)
         let dictionary = xpc_dictionary_create_empty()
@@ -255,6 +258,7 @@ struct HookEvaluateTests {
         #expect(XPCIPCWire.key == "rv.ipc")
         #expect(XPCIPCWire.body(from: dictionary) == payload)
     }
+    #endif
 }
 
 private final class EvaluateCallProbe: @unchecked Sendable {

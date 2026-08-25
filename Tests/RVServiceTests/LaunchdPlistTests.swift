@@ -18,6 +18,25 @@ struct LaunchdPlistTests {
         #expect((plist["RunAtLoad"] as? Bool) != true)
     }
 
+    #if os(Linux)
+    @Test func linuxAcceptsSocketFlag() throws {
+        let flagged = try RVDLaunch.parse(arguments: ["rvd", "--socket"])
+        #expect(flagged.idleExitSeconds == 300)
+        let equals = try RVDLaunch.parse(arguments: ["rvd", "--socket=/ignored"])
+        #expect(equals.idleExitSeconds == 300)
+        #expect(equals.printVersion == false)
+    }
+
+    @Test func linuxSocketSourcesHaveNoBSDFlags() throws {
+        let url = packageRoot()
+            .appendingPathComponent("Sources/RVService/UnixFrameTransport.swift")
+        let text = try String(contentsOf: url, encoding: .utf8)
+        #expect(text.contains("sun_len") == false)
+        #expect(text.contains("SO_NOSIGPIPE") == false)
+        #expect(text.contains("MSG_NOSIGNAL"))
+        #expect(text.contains("AF_UNIX"))
+    }
+    #else
     @Test func productionRejectsSocketFlag() {
         #expect(throws: RVDLaunchError.socketUnsupported) {
             try RVDLaunch.parse(arguments: ["rvd", "--socket", "/tmp/rv.sock"])
@@ -32,6 +51,9 @@ struct LaunchdPlistTests {
         let files = try swiftFiles(under: root.appendingPathComponent("RVService"))
             + swiftFiles(under: root.appendingPathComponent("rvd"))
         for url in files {
+            if url.lastPathComponent == "UnixFrameTransport.swift" {
+                continue
+            }
             let text = try String(contentsOf: url, encoding: .utf8)
             #expect(text.contains("AF_UNIX") == false)
             #expect(text.contains("NWListener") == false)
@@ -41,6 +63,7 @@ struct LaunchdPlistTests {
         }
         let _: XPCEvaluateListener.Type = XPCEvaluateListener.self
     }
+    #endif
 }
 
 private func packageRoot() -> URL {

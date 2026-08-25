@@ -20,6 +20,11 @@ enum RVD {
                 Data("rvd: production transport is XPC; --socket is not supported\n".utf8)
             )
             Foundation.exit(2)
+        } catch UnixSocketPathError.runtimeDirectoryMissing {
+            FileHandle.standardError.write(
+                Data("rvd: XDG_RUNTIME_DIR is required\n".utf8)
+            )
+            Foundation.exit(1)
         } catch {
             FileHandle.standardError.write(Data("rvd: launch failed\n".utf8))
             Foundation.exit(1)
