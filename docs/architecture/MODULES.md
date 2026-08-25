@@ -32,7 +32,7 @@ Each module keeps a small public API, `package` internals later, and its own tes
 | `RVTheme` | none | Palettes in T2. No business rules. |
 | `RVEngine` | `RVDomain` | Must not depend on Packs, Hooks, CLI, TUI, Service. |
 | `RVPacks` | `RVDomain` | Bundled catalog JSON (95 packs, excluding `windows.*` OS catalogs); default-on remains core only. |
-| `RVPolicy` | `RVDomain` | Packs config merge; allowlist / allow-once. |
+| `RVPolicy` | `RVDomain`, Crypto (swift-crypto) | Packs config merge; allowlist / allow-once. SHA-256 is CryptoKit on Darwin, `Crypto` on Linux. |
 | `RVHooks` | `RVDomain` | Complete Pi/Grok/OpenCode Host adapter behavior; no setup mutations. |
 | `RVIPC` | `RVDomain` | `rv.ipc.v1` Codable later. |
 | `RVHistory` | `RVDomain` | **Stub.** Off by default forever until a later ticket enables it. Must not log argv. |

@@ -1,7 +1,10 @@
+#if canImport(Darwin)
 import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Foundation
 import RVDomain
-import Security
 
 public actor AllowOnceStore {
     nonisolated public let baseDirectory: URL
@@ -264,8 +267,8 @@ public actor AllowOnceStore {
 }
 
 private func generateAllowOnceCode() throws -> String {
-    var bytes = [UInt8](repeating: 0, count: 3)
-    let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
-    guard status == errSecSuccess else { throw AllowOnceError.encodeFailed }
+    // Linux 6.3.3 has no SystemRandomNumberGenerator.fill; CSPRNG via the generator.
+    var generator = SystemRandomNumberGenerator()
+    let bytes = (0..<3).map { _ in UInt8.random(in: 0...255, using: &generator) }
     return bytes.map { String(format: "%02x", $0) }.joined()
 }

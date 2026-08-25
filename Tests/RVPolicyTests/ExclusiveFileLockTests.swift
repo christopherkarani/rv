@@ -1,14 +1,18 @@
+#if canImport(Darwin)
 import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Foundation
+import Synchronization
 import Testing
-import os
 @testable import RVPolicy
 
 struct ExclusiveFileLockTests {
     @Test func concurrentBodiesSerializeOnSameLock() async throws {
         let root = try makeDirectory("concurrent")
         let lockURL = root.appendingPathComponent(".probe.lock")
-        let tickets = OSAllocatedUnfairLock(initialState: [Int]())
+        let tickets = Mutex<[Int]>([])
         let iterations = 16
         try await withThrowingTaskGroup(of: Void.self) { group in
             for _ in 0..<iterations {
