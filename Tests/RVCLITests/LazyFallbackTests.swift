@@ -11,12 +11,9 @@ struct LazyFallbackTests {
 
     @Test func answeringTransportNeverBuildsInProcessSession() async throws {
         let allowed = EvaluationResult(outcome: .plain, matchingView: MatchingView(resetHard.rawValue))
-        let body = try IPCJSON.encode(
-            IPCResponse(id: UUID(), result: .evaluate(EvaluateReply(result: allowed)))
-        )
         let transport = ScriptedTransport(
             ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", ok: true),
-            sendReply: body
+            responseResult: .evaluate(EvaluateReply(result: allowed))
         )
         let sessions = Mutex(0)
         let client = try isolatedClient(transport: transport) {

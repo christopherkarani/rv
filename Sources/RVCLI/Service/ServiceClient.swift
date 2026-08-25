@@ -110,20 +110,25 @@ public struct ServiceClient: Sendable {
             return await inProcessRoute()
         }
         do {
-            let request = GatedEvaluate.makeRequest(command: command, home: home)
-            let body = try IPCJSON.encode(
-                IPCRequest(
-                    method: .evaluate(
-                        EvaluateParams(
-                            request: request,
-                            cwd: cwd,
-                            clientSemver: ProtocolVersion.serviceSemver
-                        )
+            let evaluationRequest = GatedEvaluate.makeRequest(command: command, home: home)
+            let request = IPCRequest(
+                method: .evaluate(
+                    EvaluateParams(
+                        request: evaluationRequest,
+                        cwd: cwd,
+                        clientSemver: ProtocolVersion.serviceSemver
                     )
                 )
             )
+            let body = try IPCJSON.encode(request)
             let data = try await transport.send(body, timeoutMs: transport.oneShotEvaluateTimeoutMs)
             let response = try IPCJSON.decode(IPCResponse.self, from: data)
+            guard response.id == request.id,
+                  response.protocolName == request.protocolName
+            else {
+                transport.invalidate()
+                return await inProcessRoute()
+            }
             // Decode already requires EvaluateReply.via == .xpc; anything else falls back.
             if case .evaluate(let reply) = response.result {
                 // A reply without serviceSemver cannot prove major

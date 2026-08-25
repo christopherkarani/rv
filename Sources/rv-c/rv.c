@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <unistd.h>
 #include <sys/wait.h>
 #include <uuid/uuid.h>
@@ -29,6 +30,12 @@ struct ByteBuf {
     int has_nul;
 };
 
+enum BufferReadResult {
+    BUF_READ_ERROR = -1,
+    BUF_READ_OK = 0,
+    BUF_READ_LIMIT = 1
+};
+
 static void buf_free(struct ByteBuf *b) {
     free(b->p);
     b->p = NULL;
@@ -37,7 +44,7 @@ static void buf_free(struct ByteBuf *b) {
     b->has_nul = 0;
 }
 
-static int buf_grow(struct ByteBuf *b, size_t add) {
+static int buf_grow_to(struct ByteBuf *b, size_t add, size_t max_cap) {
     size_t need;
     size_t ncap;
     unsigned char *np;
@@ -45,13 +52,19 @@ static int buf_grow(struct ByteBuf *b, size_t add) {
         return -1;
     }
     need = b->len + add;
+    if (need > max_cap) {
+        return -1;
+    }
     if (need <= b->cap) {
         return 0;
     }
     ncap = b->cap == 0 ? 4096 : b->cap;
+    if (ncap > max_cap) {
+        ncap = max_cap;
+    }
     while (ncap < need) {
-        if (ncap > ((size_t)-1) / 2) {
-            ncap = need;
+        if (ncap > max_cap / 2) {
+            ncap = max_cap;
             break;
         }
         ncap *= 2;
@@ -65,29 +78,60 @@ static int buf_grow(struct ByteBuf *b, size_t add) {
     return 0;
 }
 
-static int buf_read_fd(struct ByteBuf *b, int fd) {
+static int buf_read_fd_limited(struct ByteBuf *b, int fd, size_t limit) {
+    const size_t max_cap = limit == SIZE_MAX ? SIZE_MAX : limit + 1;
     for (;;) {
         size_t room;
         ssize_t r;
-        if (buf_grow(b, 4096) != 0) {
-            return -1;
+
+        if (b->len == limit) {
+            unsigned char extra;
+            do {
+                r = read(fd, &extra, 1);
+            } while (r < 0 && errno == EINTR);
+            if (r < 0) {
+                return BUF_READ_ERROR;
+            }
+            if (r == 0) {
+                return BUF_READ_OK;
+            }
+            if (buf_grow_to(b, 1, max_cap) != 0) {
+                return BUF_READ_ERROR;
+            }
+            b->p[b->len] = extra;
+            if (extra == 0) {
+                b->has_nul = 1;
+            }
+            b->len += 1;
+            return BUF_READ_LIMIT;
         }
-        room = b->cap - b->len;
+
+        room = limit - b->len;
+        if (room > 4096) {
+            room = 4096;
+        }
+        if (buf_grow_to(b, room, max_cap) != 0) {
+            return BUF_READ_ERROR;
+        }
         r = read(fd, b->p + b->len, room);
         if (r < 0) {
             if (errno == EINTR) {
                 continue;
             }
-            return -1;
+            return BUF_READ_ERROR;
         }
         if (r == 0) {
-            return 0;
+            return BUF_READ_OK;
         }
         if (memchr(b->p + b->len, 0, (size_t)r) != NULL) {
             b->has_nul = 1;
         }
         b->len += (size_t)r;
     }
+}
+
+static int buf_read_fd(struct ByteBuf *b, int fd) {
+    return buf_read_fd_limited(b, fd, SIZE_MAX);
 }
 
 static int write_all(int fd, const void *p, size_t n) {
@@ -107,6 +151,25 @@ static int write_all(int fd, const void *p, size_t n) {
         n -= (size_t)w;
     }
     return 0;
+}
+
+static int copy_fd(int input_fd, int output_fd) {
+    unsigned char buffer[8192];
+    for (;;) {
+        ssize_t r = read(input_fd, buffer, sizeof buffer);
+        if (r < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return -1;
+        }
+        if (r == 0) {
+            return 0;
+        }
+        if (write_all(output_fd, buffer, (size_t)r) != 0) {
+            return -1;
+        }
+    }
 }
 
 static int is_help_flag(const char *s) {
@@ -204,11 +267,12 @@ static void exec_same_argv(char **argv) {
     _exit(2);
 }
 
-static void miss_replay(
+static void miss_replay_with_tail(
     char **argv,
     const char *host,
     const unsigned char *stdin_bytes,
-    size_t stdin_len
+    size_t stdin_len,
+    int tail_fd
 ) {
     const char *cli;
     int in_pipe[2];
@@ -251,7 +315,15 @@ static void miss_replay(
     }
     close(in_pipe[0]);
     close(out_pipe[1]);
+    /*
+     * rv-cli reads stdin to EOF before producing its reply. Keep this write
+     * serial with the existing child contract; a streaming child would need
+     * a full-duplex pump here to avoid a pipe cycle.
+     */
     wr = write_all(in_pipe[1], stdin_bytes, stdin_len);
+    if (wr == 0 && tail_fd >= 0) {
+        wr = copy_fd(tail_fd, in_pipe[1]);
+    }
     close(in_pipe[1]);
     memset(&out, 0, sizeof out);
     if (buf_read_fd(&out, out_pipe[0]) != 0) {
@@ -281,6 +353,15 @@ static void miss_replay(
     }
     buf_free(&out);
     last_resort();
+}
+
+static void miss_replay(
+    char **argv,
+    const char *host,
+    const unsigned char *stdin_bytes,
+    size_t stdin_len
+) {
+    miss_replay_with_tail(argv, host, stdin_bytes, stdin_len, -1);
 }
 
 static int major_of(const char *semver) {
@@ -331,7 +412,8 @@ static char *build_request(
     const char *host,
     const unsigned char *stdin_bytes,
     size_t stdin_len,
-    size_t *out_len
+    size_t *out_len,
+    char request_id[37]
 ) {
     uuid_t u;
     char uuid[37];
@@ -347,6 +429,7 @@ static char *build_request(
     }
     uuid_generate(u);
     uuid_unparse_lower(u, uuid);
+    memcpy(request_id, uuid, sizeof uuid);
     host_len = strlen(host);
     total = (sizeof kIdPrefix - 1) + 36 + (sizeof kAfterId - 1) + host_len
         + (sizeof kAfterHost - 1) + esc_len + (sizeof kSuffix - 1);
@@ -496,6 +579,7 @@ int main(int argc, char **argv) {
     size_t request_len = 0;
     char *reply_json = NULL;
     size_t reply_len = 0;
+    char request_id[37];
     struct RvHookReply reply;
 
     /*
@@ -510,9 +594,14 @@ int main(int argc, char **argv) {
     }
 
     memset(&stdin_buf, 0, sizeof stdin_buf);
-    if (buf_read_fd(&stdin_buf, STDIN_FILENO) != 0) {
+    int stdin_read = buf_read_fd_limited(&stdin_buf, STDIN_FILENO, RV_STDIN_XPC_MAX);
+    if (stdin_read == BUF_READ_ERROR) {
         buf_free(&stdin_buf);
         last_resort();
+    }
+
+    if (stdin_read == BUF_READ_LIMIT) {
+        miss_replay_with_tail(argv, host, stdin_buf.p, stdin_buf.len, STDIN_FILENO);
     }
 
     if (stdin_buf.has_nul
@@ -522,7 +611,7 @@ int main(int argc, char **argv) {
         miss_replay(argv, host, stdin_buf.p, stdin_buf.len);
     }
 
-    request = build_request(host, stdin_buf.p, stdin_buf.len, &request_len);
+    request = build_request(host, stdin_buf.p, stdin_buf.len, &request_len, request_id);
     if (request == NULL) {
         miss_replay(argv, host, stdin_buf.p, stdin_buf.len);
     }
@@ -539,6 +628,11 @@ int main(int argc, char **argv) {
         miss_replay(argv, host, stdin_buf.p, stdin_buf.len);
     }
     free(reply_json);
+
+    if (!reply.has_id || strcasecmp(reply.id, request_id) != 0) {
+        rv_hook_reply_free(&reply);
+        miss_replay(argv, host, stdin_buf.p, stdin_buf.len);
+    }
 
     /*
      * Same semver law as the Swift CLI client: an unprovable reply (no

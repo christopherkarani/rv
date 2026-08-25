@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 import RVDomain
 import RVIPC
@@ -71,5 +72,35 @@ struct FallbackSkewTests {
         #expect(transport.helloCount == 0)
         let status = await client.status()
         #expect(status.state == "skew")
+    }
+
+    @Test func mismatchedEvaluateResponseIDFallsBackInProcess() async throws {
+        let allowed = EvaluationResult(outcome: .plain, matchingView: "git status")
+        let transport = ScriptedTransport(
+            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", ok: true),
+            responseResult: .evaluate(EvaluateReply(result: allowed)),
+            responseID: UUID()
+        )
+        let client = try isolatedClient(transport: transport)
+
+        let reply = await client.evaluate(command: ShellCommand(rawValue: "git status"))
+
+        #expect(reply.path == .inProcess)
+        #expect(transport.invalidationCount == 1)
+    }
+
+    @Test func mismatchedEvaluateResponseProtocolFallsBackInProcess() async throws {
+        let allowed = EvaluationResult(outcome: .plain, matchingView: "git status")
+        let transport = ScriptedTransport(
+            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", ok: true),
+            responseResult: .evaluate(EvaluateReply(result: allowed)),
+            responseProtocolName: "rv.ipc.v0"
+        )
+        let client = try isolatedClient(transport: transport)
+
+        let reply = await client.evaluate(command: ShellCommand(rawValue: "git status"))
+
+        #expect(reply.path == .inProcess)
+        #expect(transport.invalidationCount == 1)
     }
 }

@@ -101,15 +101,9 @@ struct AllowOnceGrantHonorTests {
             ),
             matchingView: "git reset --hard"
         )
-        let body = try IPCJSON.encode(
-            IPCResponse(
-                id: UUID(),
-                result: .evaluate(EvaluateReply(result: denied))
-            )
-        )
         let transport = ScriptedTransport(
             ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", ok: true),
-            sendReply: body
+            responseResult: .evaluate(EvaluateReply(result: denied))
         )
         let client = try isolatedClient(transport: transport, allowOnceDirectory: directory)
         let reply = await client.evaluate(
