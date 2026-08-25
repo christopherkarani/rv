@@ -1,6 +1,23 @@
 // swift-tools-version: 6.3
 import PackageDescription
 
+// Crypto / swift-crypto is Linux-only. Darwin RVPolicy keeps CryptoKit and
+// must not fetch swift-crypto + swift-asn1 (OPE-260 review).
+#if os(Linux)
+let extraPackageDependencies: [Package.Dependency] = [
+    .package(url: "https://github.com/apple/swift-crypto", from: "4.5.1"),
+]
+let policyTargetDependencies: [Target.Dependency] = [
+    "RVDomain",
+    .product(name: "Crypto", package: "swift-crypto"),
+]
+#else
+let extraPackageDependencies: [Package.Dependency] = []
+let policyTargetDependencies: [Target.Dependency] = [
+    "RVDomain",
+]
+#endif
+
 let coreLibraryTargets: [Target] = [
     .target(name: "RVDomain"),
     .target(name: "RVTheme"),
@@ -12,10 +29,7 @@ let coreLibraryTargets: [Target] = [
     ),
     .target(
         name: "RVPolicy",
-        dependencies: [
-            "RVDomain",
-            .product(name: "Crypto", package: "swift-crypto"),
-        ]
+        dependencies: policyTargetDependencies
     ),
     .target(
         name: "RVHooks",
@@ -133,8 +147,7 @@ let package = Package(
     products: coreProducts + darwinProducts,
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.7.0"),
-        .package(url: "https://github.com/apple/swift-crypto", from: "4.5.1"),
-    ],
+    ] + extraPackageDependencies,
     targets: coreLibraryTargets + darwinLibraryTargets + coreTestTargets + darwinTestTargets,
     swiftLanguageModes: [.v6]
 )

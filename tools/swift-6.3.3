@@ -18,13 +18,22 @@ fi
 TOOLCHAIN_BIN="$HOME/Library/Developer/Toolchains/swift-${PIN}-RELEASE.xctoolchain/usr/bin"
 SWIFT="$TOOLCHAIN_BIN/swift"
 if [[ ! -x "$SWIFT" ]]; then
+  # PATH fallback is Linux-only. Darwin fail-closes so a missing
+  # ~/Library/Developer/Toolchains pin cannot silently use /usr/bin/swift.
+  if [[ "$(uname -s)" != "Linux" ]]; then
+    printf "swift-6.3.3: toolchain not found at %s\n" "$SWIFT" >&2
+    printf "swift-6.3.3: install Swift %s or fix .swift-version\n" "$PIN" >&2
+    exit 1
+  fi
   PATH_SWIFT="$(command -v swift 2>/dev/null || true)"
   PATH_VER=""
   if [[ -n "$PATH_SWIFT" && -x "$PATH_SWIFT" ]]; then
     PATH_VER="$("$PATH_SWIFT" --version 2>/dev/null | head -n 1 || true)"
   fi
-  # Token-match the pin so 6.3.30 does not satisfy 6.3.3.
-  if [[ -n "$PATH_VER" ]] && printf '%s\n' "$PATH_VER" | grep -Eq "(^|[^0-9])${PIN}([^0-9]|$)"; then
+  # Escape pin dots so 6.3.3 cannot match 6<any>3<any>3. Token edges
+  # still reject 6.3.30.
+  PIN_RE="$(printf '%s' "$PIN" | sed 's/\./\\./g')"
+  if [[ -n "$PATH_VER" ]] && printf '%s\n' "$PATH_VER" | grep -Eq "(^|[^0-9])${PIN_RE}([^0-9]|$)"; then
     SWIFT="$PATH_SWIFT"
     TOOLCHAIN_BIN="$(cd "$(dirname "$PATH_SWIFT")" && pwd)"
   else
