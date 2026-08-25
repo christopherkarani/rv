@@ -408,6 +408,17 @@ private func runHook(
     }
     #expect(wire.stdout.isEmpty)
     #expect(wire.exitCode == 0)
+    #expect(wire.stdout.contains("\"decision\":\"deny\"") == false)
+
+    let second = await client.evaluateResult(
+        command: ShellCommand(rawValue: "git reset --hard"),
+        cwd: wd("/tmp/ws")
+    )
+    guard case .deny(let deny) = second.decision else {
+        Issue.record("second evaluate must deny after the grant is spent")
+        return
+    }
+    #expect(deny.ruleID.rawValue == "core.git:reset-hard")
 }
 
 @Test func hookOpenCodeDenyResetHard_reasonEqualsHostDenyText() async throws {
