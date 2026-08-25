@@ -11,7 +11,7 @@ struct AllowOnceStoreTests {
         await #expect(throws: AllowOnceError.ttyRequired) {
             try await store.mint(
                 matchingView: "git reset --hard",
-                cwd: "/tmp/a",
+                cwd: wd("/tmp/a"),
                 ruleID: nil,
                 tty: tty,
                 now: now
@@ -27,7 +27,7 @@ struct AllowOnceStoreTests {
         await #expect(throws: AllowOnceError.ttyRequired) {
             try await store.mint(
                 matchingView: "git reset --hard",
-                cwd: "/tmp/a",
+                cwd: wd("/tmp/a"),
                 ruleID: nil,
                 tty: tty,
                 now: now
@@ -41,7 +41,7 @@ struct AllowOnceStoreTests {
         let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
         let code = try await store.mint(
             matchingView: "git reset --hard",
-            cwd: "/tmp/a",
+            cwd: wd("/tmp/a"),
             ruleID: nil,
             tty: tty,
             now: now
@@ -52,8 +52,8 @@ struct AllowOnceStoreTests {
         #expect(disk.contains("code_hash"))
         #expect(disk.contains("short_code") == false)
         _ = try await store.redeem(code: code, tty: tty, now: now)
-        let first = await store.consume(matchingView: "git reset --hard", cwd: "/tmp/a", now: now)
-        let second = await store.consume(matchingView: "git reset --hard", cwd: "/tmp/a", now: now)
+        let first = await store.consume(matchingView: "git reset --hard", cwd: wd("/tmp/a"), now: now)
+        let second = await store.consume(matchingView: "git reset --hard", cwd: wd("/tmp/a"), now: now)
         guard case .consumed = first else {
             Issue.record("first consume should succeed")
             return
@@ -67,9 +67,9 @@ struct AllowOnceStoreTests {
     @Test func fileStoreConsumesOnce() async throws {
         let store = try isolatedStore()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
-        try await store.insertGranted(matchingView: "git reset --hard", cwd: "/tmp/ws", now: now)
-        let first = await store.consume(matchingView: "git reset --hard", cwd: "/tmp/ws", now: now)
-        let second = await store.consume(matchingView: "git reset --hard", cwd: "/tmp/ws", now: now)
+        try await store.insertGranted(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
+        let first = await store.consume(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
+        let second = await store.consume(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
         guard case .consumed = first else {
             Issue.record("first consume should succeed")
             return
@@ -83,11 +83,11 @@ struct AllowOnceStoreTests {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let writer = AllowOnceStore(baseDirectory: root)
         let now = Date(timeIntervalSince1970: 1_700_000_000)
-        try await writer.insertGranted(matchingView: "git stash clear", cwd: "/tmp/ws", now: now)
+        try await writer.insertGranted(matchingView: "git stash clear", cwd: wd("/tmp/ws"), now: now)
         let a = AllowOnceStore(baseDirectory: root)
         let b = AllowOnceStore(baseDirectory: root)
-        async let first = a.consume(matchingView: "git stash clear", cwd: "/tmp/ws", now: now)
-        async let second = b.consume(matchingView: "git stash clear", cwd: "/tmp/ws", now: now)
+        async let first = a.consume(matchingView: "git stash clear", cwd: wd("/tmp/ws"), now: now)
+        async let second = b.consume(matchingView: "git stash clear", cwd: wd("/tmp/ws"), now: now)
         let results = await [first, second]
         let consumed = results.filter {
             if case .consumed = $0 { return true }
@@ -117,7 +117,7 @@ struct AllowOnceStoreTests {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let writer = AllowOnceStore(baseDirectory: root)
         let now = Date(timeIntervalSince1970: 1_700_000_000)
-        try await writer.insertGranted(matchingView: "git reset --hard", cwd: "/tmp/ws", now: now)
+        try await writer.insertGranted(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
         let runner = try #require(testHostExecutableURL())
         let processA = try startConsumeProbe(executable: runner, directory: root, outputName: "a.status")
         let processB = try startConsumeProbe(executable: runner, directory: root, outputName: "b.status")
@@ -134,10 +134,10 @@ struct AllowOnceStoreTests {
     @Test func wrongCwdDoesNotConsume() async throws {
         let store = try isolatedStore()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
-        try await store.insertGranted(matchingView: "git reset --hard", cwd: "/tmp/ws", now: now)
-        let miss = await store.consume(matchingView: "git reset --hard", cwd: "/tmp/other", now: now)
+        try await store.insertGranted(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
+        let miss = await store.consume(matchingView: "git reset --hard", cwd: wd("/tmp/other"), now: now)
         #expect(miss == .notFound)
-        let hit = await store.consume(matchingView: "git reset --hard", cwd: "/tmp/ws", now: now)
+        let hit = await store.consume(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
         guard case .consumed = hit else {
             Issue.record("matching cwd should consume")
             return
@@ -148,7 +148,7 @@ struct AllowOnceStoreTests {
         let store = try isolatedStore()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         #expect(
-            await store.consume(matchingView: "git reset --hard", cwd: "/tmp/ws", now: now)
+            await store.consume(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
                 == .notFound
         )
     }
@@ -156,10 +156,10 @@ struct AllowOnceStoreTests {
     @Test func lockFailureIsUnavailable() async throws {
         let store = try isolatedStore()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
-        try await store.insertGranted(matchingView: "git reset --hard", cwd: "/tmp/ws", now: now)
+        try await store.insertGranted(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
         try sabotageLock(in: store.baseDirectory)
         #expect(
-            await store.consume(matchingView: "git reset --hard", cwd: "/tmp/ws", now: now)
+            await store.consume(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
                 == .unavailable
         )
     }
@@ -169,13 +169,13 @@ struct AllowOnceStoreTests {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         try await store.insertGranted(
             matchingView: "git reset --hard",
-            cwd: "/tmp/ws",
+            cwd: wd("/tmp/ws"),
             now: now,
             ttl: 1
         )
         let later = now.addingTimeInterval(2)
         #expect(
-            await store.consume(matchingView: "git reset --hard", cwd: "/tmp/ws", now: later) == .expired
+            await store.consume(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: later) == .expired
         )
     }
 
@@ -185,8 +185,8 @@ struct AllowOnceStoreTests {
         try FileManager.default.createDirectory(at: store.baseDirectory, withIntermediateDirectories: true)
         let junk = "{not-json}\n"
         try junk.write(to: jsonl(store), atomically: true, encoding: .utf8)
-        try await store.insertGranted(matchingView: "git reset --hard", cwd: "/tmp/ws", now: now)
-        let hit = await store.consume(matchingView: "git reset --hard", cwd: "/tmp/ws", now: now)
+        try await store.insertGranted(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
+        let hit = await store.consume(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
         guard case .consumed = hit else {
             Issue.record("valid grant after corrupt line must consume")
             return
@@ -196,7 +196,7 @@ struct AllowOnceStoreTests {
     @Test func storeFilesAreOwnerOnly() async throws {
         let store = try isolatedStore()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
-        try await store.insertGranted(matchingView: "git reset --hard", cwd: "/tmp/ws", now: now)
+        try await store.insertGranted(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
         let lock = RVPolicyPaths.allowOnceLockFile(inConfigDir: store.baseDirectory)
         #expect(try posixMode(store.baseDirectory) == 0o700)
         #expect(try posixMode(jsonl(store)) == 0o600)
@@ -259,7 +259,7 @@ private enum AllowOnceConsumeProbe {
         let store = AllowOnceStore(baseDirectory: root)
         let status = await store.consume(
             matchingView: "git reset --hard",
-            cwd: "/tmp/ws",
+            cwd: wd("/tmp/ws"),
             now: now
         )
         let line: String

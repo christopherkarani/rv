@@ -1,11 +1,22 @@
 import RVDomain
 
+@_disfavoredOverload
+public func hookWire(
+    host: HookHost,
+    stdin: String,
+    evaluate: @Sendable (ShellCommand, String?) async -> EvaluationResult
+) async -> HookWire {
+    await hookWire(host: host, stdin: stdin) { command, cwd in
+        await evaluate(command, cwd.map(\.rawValue))
+    }
+}
+
 /// The single codec-dispatch body: decode stdin with the host's concrete codec,
 /// evaluate, and map the result to host wire. `.foreign` and `.malformed` allow.
 public func hookWire(
     host: HookHost,
     stdin: String,
-    evaluate: @Sendable (ShellCommand, String?) async -> EvaluationResult
+    evaluate: @Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult
 ) async -> HookWire {
     switch host {
     case .grok:
@@ -20,7 +31,7 @@ public func hookWire(
 private func hookBody<C: HostCodec>(
     stdin: String,
     codec: C,
-    evaluate: @Sendable (ShellCommand, String?) async -> EvaluationResult
+    evaluate: @Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult
 ) async -> HookWire {
     switch codec.decode(stdin) {
     case .request(let request):

@@ -57,7 +57,7 @@ enum AllowOnceCLI {
 
     static func mint(
         command: String,
-        cwd: String,
+        cwd: WorkingDirectory,
         tty: TTYCapability,
         robot: Bool,
         store: AllowOnceStore,
@@ -121,7 +121,7 @@ struct AllowOnceCommand: AsyncParsableCommand {
                 now: Date()
             )
             FileHandle.standardOutput.write(
-                Data("granted \(row.commandRedacted) (cwd \(row.cwd))\n".utf8)
+                Data("granted \(row.commandRedacted) (cwd \(row.cwd.rawValue))\n".utf8)
             )
         } catch AllowOnceError.ttyRequired {
             FileHandle.standardError.write(
@@ -168,9 +168,13 @@ struct AllowOnceMint: AsyncParsableCommand {
             noColor: format.noColor
         )
         do {
+            guard let cwd = WorkingDirectory(validating: FileManager.default.currentDirectoryPath) else {
+                FileHandle.standardError.write(Data("rv allow-once mint: missing working directory\n".utf8))
+                throw ExitCode(2)
+            }
             let code = try await AllowOnceCLI.mint(
                 command: raw,
-                cwd: FileManager.default.currentDirectoryPath,
+                cwd: cwd,
                 tty: live.tty,
                 robot: live.robot,
                 store: AllowOnceCLI.store(home: try AllowOnceCLI.requireHome()),
@@ -221,7 +225,7 @@ struct AllowOnceList: AsyncParsableCommand {
         }
         for row in rows {
             FileHandle.standardOutput.write(
-                Data("\(row.kind.rawValue) \(row.commandRedacted) cwd=\(row.cwd)\n".utf8)
+                Data("\(row.kind.rawValue) \(row.commandRedacted) cwd=\(row.cwd.rawValue)\n".utf8)
             )
         }
     }

@@ -86,3 +86,25 @@ import Testing
     #expect(String(data: data, encoding: .utf8) == "\"git reset --hard\"")
     #expect(try JSONDecoder().decode(MatchingView.self, from: data) == view)
 }
+
+@Test func workingDirectory_rejectsEmptyAndAcceptsNonempty() throws {
+    #expect(WorkingDirectory(validating: "") == nil)
+    let cwd = try #require(WorkingDirectory(validating: "/tmp/ws"))
+    #expect(cwd.rawValue == "/tmp/ws")
+    #expect(WorkingDirectory(rawValue: "") == nil)
+    #expect(WorkingDirectory(rawValue: "/tmp/ws") != nil)
+}
+
+@Test func workingDirectory_codableIsJSONString() throws {
+    let cwd = try #require(WorkingDirectory(validating: "/tmp/ws"))
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = .withoutEscapingSlashes
+    let data = try encoder.encode(cwd)
+    #expect(String(data: data, encoding: .utf8) == "\"/tmp/ws\"")
+    #expect(try JSONDecoder().decode(WorkingDirectory.self, from: data) == cwd)
+
+    let empty = try JSONEncoder().encode("")
+    #expect(throws: DecodingError.self) {
+        _ = try JSONDecoder().decode(WorkingDirectory.self, from: empty)
+    }
+}

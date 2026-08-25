@@ -65,13 +65,13 @@ struct ServiceRuntimeEvaluateTests {
 
     @Test func dispatchEvaluate_grantHonorsOnceForCwd() async throws {
         let runtime = ServiceRuntime(allowOnceDirectory: try isolatedAllowOnceDirectory())
-        try await runtime.insertGranted(matchingView: "git reset --hard", cwd: "/tmp/ws")
+        try await runtime.insertGranted(matchingView: "git reset --hard", cwd: wd("/tmp/ws"))
         let request = EvaluationRequest(
             command: ShellCommand(rawValue: "git reset --hard"),
             enabledPacks: dayOnePackIDs
         )
         let first = await runtime.dispatch(
-            IPCRequest(method: .evaluate(EvaluateParams(request: request, cwd: "/tmp/ws")))
+            IPCRequest(method: .evaluate(EvaluateParams(request: request, cwd: wd("/tmp/ws"))))
         )
         guard case .evaluate(let allowed) = first.result else {
             Issue.record("expected evaluate reply")
@@ -79,7 +79,7 @@ struct ServiceRuntimeEvaluateTests {
         }
         #expect(allowed.result.decision == .allow)
         let second = await runtime.dispatch(
-            IPCRequest(method: .evaluate(EvaluateParams(request: request, cwd: "/tmp/ws")))
+            IPCRequest(method: .evaluate(EvaluateParams(request: request, cwd: wd("/tmp/ws"))))
         )
         guard case .evaluate(let denied) = second.result else {
             Issue.record("expected second evaluate reply")

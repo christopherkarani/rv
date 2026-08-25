@@ -15,9 +15,9 @@ extension HookHost {
 public struct HookRequest: Equatable, Sendable {
     public var host: HookHost
     public var command: ShellCommand
-    public var cwd: String?
+    public var cwd: WorkingDirectory?
 
-    public init(host: HookHost, command: ShellCommand, cwd: String? = nil) {
+    public init(host: HookHost, command: ShellCommand, cwd: WorkingDirectory? = nil) {
         self.host = host
         self.command = command
         self.cwd = cwd

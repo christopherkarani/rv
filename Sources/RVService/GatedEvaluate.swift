@@ -58,7 +58,7 @@ public struct GatedEvaluate: Sendable {
     public func run(
         _ intent: EvaluationIntent,
         command: ShellCommand,
-        cwd: String?,
+        cwd: WorkingDirectory?,
         home: HomeDirectory? = nil,
         store: AllowOnceStore,
         now: Date,
@@ -89,7 +89,7 @@ public struct GatedEvaluate: Sendable {
     /// CLI and in-process fallback must use `run(.peek, ...)` so pack resolution stays shared.
     func peek(
         _ request: EvaluationRequest,
-        cwd: String?,
+        cwd: WorkingDirectory?,
         store: AllowOnceStore,
         now: Date,
         allowlist: @escaping @Sendable () -> AllowlistSnapshot
@@ -101,7 +101,7 @@ public struct GatedEvaluate: Sendable {
     /// CLI and in-process fallback must use `run(.apply, ...)` so pack resolution stays shared.
     func apply(
         _ request: EvaluationRequest,
-        cwd: String?,
+        cwd: WorkingDirectory?,
         store: AllowOnceStore,
         now: Date,
         allowlist: @escaping @Sendable () -> AllowlistSnapshot
@@ -112,7 +112,7 @@ public struct GatedEvaluate: Sendable {
     private func gated(
         _ intent: EvaluationIntent,
         _ request: EvaluationRequest,
-        cwd: String?,
+        cwd: WorkingDirectory?,
         store: AllowOnceStore,
         now: Date,
         allowlist: @escaping @Sendable () -> AllowlistSnapshot

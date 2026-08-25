@@ -71,13 +71,13 @@ struct ExplainDispatchTests {
             catalog: PackCatalog(),
             allowOnceDirectory: try isolatedAllowOnceDirectory()
         )
-        try await runtime.insertGranted(matchingView: "git reset --hard", cwd: "/tmp/ws")
+        try await runtime.insertGranted(matchingView: "git reset --hard", cwd: wd("/tmp/ws"))
         let request = EvaluationRequest(
             command: ShellCommand(rawValue: "git reset --hard"),
             enabledPacks: dayOnePackIDs
         )
         let explained = await runtime.dispatch(
-            IPCRequest(method: .explain(ExplainParams(request: request, cwd: "/tmp/ws")))
+            IPCRequest(method: .explain(ExplainParams(request: request, cwd: wd("/tmp/ws"))))
         )
         guard case .explain(let reply) = explained.result else {
             Issue.record("explain must reply")
@@ -85,7 +85,7 @@ struct ExplainDispatchTests {
         }
         #expect(reply.result.decision == .allow)
         let first = await runtime.dispatch(
-            IPCRequest(method: .evaluate(EvaluateParams(request: request, cwd: "/tmp/ws")))
+            IPCRequest(method: .evaluate(EvaluateParams(request: request, cwd: wd("/tmp/ws"))))
         )
         guard case .evaluate(let allowed) = first.result else {
             Issue.record("expected evaluate reply")
@@ -93,7 +93,7 @@ struct ExplainDispatchTests {
         }
         #expect(allowed.result.decision == .allow)
         let second = await runtime.dispatch(
-            IPCRequest(method: .evaluate(EvaluateParams(request: request, cwd: "/tmp/ws")))
+            IPCRequest(method: .evaluate(EvaluateParams(request: request, cwd: wd("/tmp/ws"))))
         )
         guard case .evaluate(let denied) = second.result else {
             Issue.record("expected second evaluate reply")
@@ -157,13 +157,13 @@ struct ExplainDispatchTests {
             catalog: PackCatalog(),
             allowOnceDirectory: try isolatedAllowOnceDirectory()
         )
-        try await runtime.insertGranted(matchingView: "git reset --hard", cwd: "/tmp/ws")
+        try await runtime.insertGranted(matchingView: "git reset --hard", cwd: wd("/tmp/ws"))
         let request = EvaluationRequest(
             command: ShellCommand(rawValue: "git reset --hard"),
             enabledPacks: dayOnePackIDs
         )
         let classified = await runtime.dispatch(
-            IPCRequest(method: .classify(ClassifyParams(request: request, cwd: "/tmp/ws")))
+            IPCRequest(method: .classify(ClassifyParams(request: request, cwd: wd("/tmp/ws"))))
         )
         guard case .classify(let reply) = classified.result else {
             Issue.record("classify must reply")
@@ -171,7 +171,7 @@ struct ExplainDispatchTests {
         }
         #expect(reply.decision == .allow)
         let first = await runtime.dispatch(
-            IPCRequest(method: .evaluate(EvaluateParams(request: request, cwd: "/tmp/ws")))
+            IPCRequest(method: .evaluate(EvaluateParams(request: request, cwd: wd("/tmp/ws"))))
         )
         guard case .evaluate(let allowed) = first.result else {
             Issue.record("expected evaluate reply")

@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import RVDomain
 import RVIPC
 @testable import RVService
 
@@ -136,7 +137,7 @@ struct FakeXPCUnixSocketTests {
 
     @Test func allowOnceConsumeIsUnknownMethodAndDoesNotSpend() async throws {
         let runtime = try isolatedRuntime()
-        try await runtime.insertGranted(matchingView: "git reset --hard", cwd: "/tmp/ws")
+        try await runtime.insertGranted(matchingView: "git reset --hard", cwd: wd("/tmp/ws"))
         let path = "/tmp/rv-t3-\(UUID().uuidString).sock"
         let server = FakeXPCServer(runtime: runtime, path: path)
         try server.start()
@@ -156,11 +157,11 @@ struct FakeXPCUnixSocketTests {
         )
         #expect(nested(second, ["result", "error"])?["unknownMethod"] as? Bool == true)
 
-        let honored = try client.sendJSON(evaluateJSON("git reset --hard", cwd: "/tmp/ws"))
+        let honored = try client.sendJSON(evaluateJSON("git reset --hard", cwd: wd("/tmp/ws")))
         let firstDecision = nested(honored, ["result", "evaluate", "result", "decision"])
         #expect(firstDecision?["decision"] as? String == "allow")
 
-        let spent = try client.sendJSON(evaluateJSON("git reset --hard", cwd: "/tmp/ws"))
+        let spent = try client.sendJSON(evaluateJSON("git reset --hard", cwd: wd("/tmp/ws")))
         let secondDecision = nested(spent, ["result", "evaluate", "result", "decision"])
         #expect(secondDecision?["decision"] as? String == "deny")
         #expect(secondDecision?["ruleID"] as? String == "core.git:reset-hard")
@@ -256,8 +257,15 @@ final class RecordingLog: ServiceLog, @unchecked Sendable {
     var snapshot: [ServiceLogEvent] { events }
 }
 
-private func evaluateJSON(_ command: String, cwd: String = "", clientSemver: String? = nil) -> [String: Any] {
-    var params: [String: Any] = ["request": requestObject(command), "cwd": cwd]
+private func evaluateJSON(
+    _ command: String,
+    cwd: WorkingDirectory? = nil,
+    clientSemver: String? = nil
+) -> [String: Any] {
+    var params: [String: Any] = ["request": requestObject(command)]
+    if let cwd {
+        params["cwd"] = cwd.rawValue
+    }
     if let clientSemver {
         params["clientSemver"] = clientSemver
     }

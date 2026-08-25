@@ -40,7 +40,7 @@ struct NoBypassEnvTests {
             ),
             matchingView: "git reset --hard"
         )
-        let gated = await PolicyGate.apply(denied, cwd: "/tmp/a", store: store, now: now)
+        let gated = await PolicyGate.apply(denied, cwd: wd("/tmp/a"), store: store, now: now)
         #expect(gated.override == .none)
         guard case .deny = gated.result.decision else {
             Issue.record("PolicyGate must still deny when skip-shaped envs are set")

@@ -161,7 +161,7 @@ private func dispatchDenyJSON(_ stdout: String) throws -> [String: Any] {
     return try #require(object as? [String: Any])
 }
 
-private func inProcessEvaluate(_ command: ShellCommand, cwd: String?) async -> EvaluationResult {
+private func inProcessEvaluate(_ command: ShellCommand, cwd: WorkingDirectory?) async -> EvaluationResult {
     do {
         let client = try isolatedClient(transport: nil)
         return await client.evaluateResult(command: command, cwd: cwd)

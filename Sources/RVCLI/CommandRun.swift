@@ -34,6 +34,22 @@ public enum CommandRun {
         now: Date = Date(),
         home: HomeDirectory? = HomeDirectory.process()
     ) async -> EvaluationResult {
+        await evaluateCommand(
+            raw,
+            cwd: WorkingDirectory(validating: cwd),
+            store: store,
+            now: now,
+            home: home
+        )
+    }
+
+    public static func evaluateCommand(
+        _ raw: String,
+        cwd: WorkingDirectory?,
+        store: AllowOnceStore,
+        now: Date = Date(),
+        home: HomeDirectory? = HomeDirectory.process()
+    ) async -> EvaluationResult {
         let baseDirectory = store.baseDirectory
         return await EvaluationWorld.assemble(home: home, snapshots: nil, catalog: nil).run(
             .peek,
@@ -44,7 +60,7 @@ public enum CommandRun {
             now: now,
             allowlist: {
                 AllowlistStore(baseDirectory: baseDirectory)
-                    .loadUserSnapshot(workspacePath: cwd, now: now)
+                    .loadUserSnapshot(workspacePath: cwd.map(\.rawValue), now: now)
             }
         )
     }
@@ -52,6 +68,22 @@ public enum CommandRun {
     public static func evaluateCommand(
         _ raw: String,
         cwd: String,
+        allowOnceDirectory: URL,
+        now: Date = Date(),
+        home: HomeDirectory? = HomeDirectory.process()
+    ) async -> EvaluationResult {
+        await evaluateCommand(
+            raw,
+            cwd: WorkingDirectory(validating: cwd),
+            store: AllowOnceStore(baseDirectory: allowOnceDirectory),
+            now: now,
+            home: home
+        )
+    }
+
+    public static func evaluateCommand(
+        _ raw: String,
+        cwd: WorkingDirectory?,
         allowOnceDirectory: URL,
         now: Date = Date(),
         home: HomeDirectory? = HomeDirectory.process()
@@ -75,6 +107,28 @@ public enum CommandRun {
         now: Date = Date(),
         home: HomeDirectory? = HomeDirectory.process()
     ) async -> CLIResult {
+        await run(
+            kind: kind,
+            command: raw,
+            probe: probe,
+            requested: requested,
+            cwd: WorkingDirectory(validating: cwd),
+            store: store,
+            now: now,
+            home: home
+        )
+    }
+
+    public static func run(
+        kind: CLIKind,
+        command raw: String,
+        probe: ThemeProbe,
+        requested: RequestedMode,
+        cwd: WorkingDirectory?,
+        store: AllowOnceStore,
+        now: Date = Date(),
+        home: HomeDirectory? = HomeDirectory.process()
+    ) async -> CLIResult {
         render(
             kind: kind,
             result: await evaluateCommand(raw, cwd: cwd, store: store, now: now, home: home),
@@ -90,6 +144,28 @@ public enum CommandRun {
         probe: ThemeProbe,
         requested: RequestedMode,
         cwd: String,
+        allowOnceDirectory: URL,
+        now: Date = Date(),
+        home: HomeDirectory? = HomeDirectory.process()
+    ) async -> CLIResult {
+        await run(
+            kind: kind,
+            command: raw,
+            probe: probe,
+            requested: requested,
+            cwd: WorkingDirectory(validating: cwd),
+            store: AllowOnceStore(baseDirectory: allowOnceDirectory),
+            now: now,
+            home: home
+        )
+    }
+
+    public static func run(
+        kind: CLIKind,
+        command raw: String,
+        probe: ThemeProbe,
+        requested: RequestedMode,
+        cwd: WorkingDirectory?,
         allowOnceDirectory: URL,
         now: Date = Date(),
         home: HomeDirectory? = HomeDirectory.process()

@@ -7,7 +7,7 @@ struct EvaluateDoorTests {
     @Test func ttyPeekLeavesGrantUnspentThenInProcessApplyConsumesOnce() async throws {
         let directory = try isolatedAllowOnceDirectory()
         let client = try isolatedClient(transport: nil, allowOnceDirectory: directory)
-        try await client.insertGranted(matchingView: "git reset --hard", cwd: "/tmp/ws")
+        try await client.insertGranted(matchingView: "git reset --hard", cwd: wd("/tmp/ws"))
 
         let firstPeek = try await cliEvaluate("git reset --hard", allowOnceDirectory: directory)
         #expect(firstPeek.decision == .allow)
@@ -16,13 +16,13 @@ struct EvaluateDoorTests {
 
         let applied = await client.evaluate(
             command: ShellCommand(rawValue: "git reset --hard"),
-            cwd: "/tmp/ws"
+            cwd: wd("/tmp/ws")
         )
         #expect(applied.result.decision == .allow)
         #expect(applied.path == .inProcess)
         let spent = await client.evaluateResult(
             command: ShellCommand(rawValue: "git reset --hard"),
-            cwd: "/tmp/ws"
+            cwd: wd("/tmp/ws")
         )
         let deny = try #require(denyPayload(from: spent.decision))
         #expect(deny.ruleID.rawValue == "core.git:reset-hard")

@@ -21,7 +21,7 @@ func allowOnceRobotRows(from rows: [AllowOnceListRow]) -> [AllowOnceRobotRow] {
             kind: row.kind,
             codeHash: row.codeHash,
             commandRedacted: row.commandRedacted,
-            cwd: row.cwd
+            cwd: row.cwd.rawValue
         )
     }
 }
