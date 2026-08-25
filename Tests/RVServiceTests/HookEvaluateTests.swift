@@ -32,6 +32,27 @@ struct HookEvaluateTests {
         #expect(json["reason"] as? String == canonicalResetHardDeny)
     }
 
+    @Test func implicitHello_claudeResetHardReturnsRichDenyWire() async throws {
+        let runtime = try isolatedRuntime()
+        let stdin = try claudeFixture("deny-git-reset-hard.json")
+        let (data, ok) = await runtime.handleIncoming(
+            try hookEvaluateBody(host: .claude, stdin: stdin, clientSemver: ProtocolVersion.serviceSemver),
+            handshakeOK: false
+        )
+        #expect(ok == true)
+        let response = try IPCJSON.decode(IPCResponse.self, from: data)
+        guard case .hookEvaluate(let reply) = response.result else {
+            Issue.record("implicit hello claude hookEvaluate must dispatch")
+            return
+        }
+        #expect(reply.via == .xpc)
+        #expect(reply.exitCode == 0)
+        #expect(reply.stdout.contains("\"permissionDecision\":\"deny\""))
+        #expect(reply.stdout.contains("\"ruleId\":\"core.git:reset-hard\""))
+        #expect(reply.stdout.contains("\"decision\":\"deny\"") == false)
+        #expect(reply.stdout.contains("allowOnceCode") == false)
+    }
+
     /// Warm-rvd hook evaluation must resolve packs through the same door as
     /// the rv-cli miss path (`EnabledPacks.resolve`), never a hardcoded
     /// day-one set: a config that disables `core.git` must allow here, or
@@ -240,6 +261,14 @@ private func grokFixture(_ name: String) throws -> String {
         .deletingLastPathComponent()
         .deletingLastPathComponent()
         .appendingPathComponent("RVHooksTests/Fixtures/grok/\(name)")
+    return try String(contentsOf: url, encoding: .utf8)
+}
+
+private func claudeFixture(_ name: String) throws -> String {
+    let url = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .appendingPathComponent("RVHooksTests/Fixtures/claude/\(name)")
     return try String(contentsOf: url, encoding: .utf8)
 }
 

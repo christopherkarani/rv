@@ -63,6 +63,9 @@ struct HookEvaluateRoundTripTests {
         #expect(decoded.host == .opencode)
         #expect(decoded.stdin == "ls")
         #expect(decoded.clientSemver == nil)
+
+        let claude = try IPCJSON.encode(HookEvaluateParams(host: .claude, stdin: "ls"))
+        #expect(try IPCJSON.decode(HookEvaluateParams.self, from: claude).host == .claude)
     }
 
     @Test func hookEvaluateParams_unknownHostFailsDecodeWithDataCorrupted() throws {

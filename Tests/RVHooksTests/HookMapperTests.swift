@@ -27,6 +27,22 @@ import RVDomain
     #expect(wire.exitCode == 0)
 }
 
+@Test func hookWire_piAndOpenCodeStayShortDeny() throws {
+    let result = EvaluationResult(
+        outcome: .deny(
+            Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "x"),
+            matched: nil
+        )
+    )
+    let command = ShellCommand(rawValue: "git reset --hard")
+    let pi = hookWire(from: result, command: command, using: PiHostCodec())
+    let openCode = hookWire(from: result, command: command, using: OpenCodeHostCodec())
+    #expect(pi.stdout.contains("\"permissionDecision\"") == false)
+    #expect(pi.stdout.contains("\"decision\":\"deny\""))
+    #expect(openCode.stdout.contains("\"permissionDecision\"") == false)
+    #expect(openCode.stdout.contains("\"decision\":\"deny\""))
+}
+
 @Test func hookWire_allowIsEmpty() {
     let wire = hookWire(
         from: EvaluationResult(outcome: .plain),
