@@ -24,9 +24,9 @@ These are later. They are not v1 gates, not T0–T9 acceptance, and not implied 
 |---|---|---|
 | Remaining packs enabled-by-default | Policy decision to turn the rest of the catalog on for new installs | T9 imports remaining pack JSON **disabled**. Day-one packs stay `core.git` + `core.filesystem` only |
 | Claude / Codex / etc. | Additional host codecs and setup writers (Claude Code, Codex, Gemini, Copilot, Cursor, Hermes, Antigravity, and any other DCG-shaped host) | Hosts are **Pi, Grok, OpenCode** shell/command tools only |
-| Scan | `rv scan` (files, staged, git-diff, pre-commit / CI) | No scan command. Hook evaluates the command the agent proposed, not the repo |
+| Scan | **Session forensics** (default `rv scan` / `rv scan sessions`): offline host-session stores → extract → `evaluate` → deny findings — fence [`phase-4-session-scan.md`](phase-4-session-scan.md). **Repo/CI** later as `rv scan repo` (files, staged, git-diff, pre-commit) | No scan command. Hook evaluates the command the agent proposed, not past sessions or the repo |
 | MCP | Hooking MCP / Read / Edit tools, **or** shipping an rv MCP server | Shell events only. No Read / Edit / MCP |
-| Heredoc / AST | In-hook or scan-time heredoc / `python -c` / `bash -c` extraction and language-aware matching | Normalize + pack patterns on the command string. No AST pipeline |
+| Heredoc / AST | Shared command extractors (surface → bounded unwrap → heredoc/AST) that feed `EvaluationRequest` for **session forensics** and the **live destructive-command guard** (hook / evaluate path). Ordered roadmap below — not a second decision engine | Normalize + pack patterns on the command string as received. No extract / AST pipeline |
 | SARIF | Real SARIF 2.1.0 (or a deliberate alias policy) for CI | No SARIF. Robot / pretty / browse only |
 | Mac app | SwiftUI (or other AppKit) companion: packs, doctor, allow-once, explain | `rvd` is in v1. The app is not. CLI / TTY is the human surface |
 | Intel | `x86_64-apple-macos` as a claimed target | Apple Silicon only |
@@ -51,9 +51,9 @@ Each item below is real DCG-shaped work. Pulling any of it into v1 breaks the da
 
 - **Remaining packs enabled-by-default.** T9’s job is a disabled catalog plus `rv packs`. Flipping defaults is a product decision (false-positive rate, deny UX, doctor noise). Doing it during import mixes “data is present” with “policy is on.”
 - **Claude / Codex / etc.** Each host is its own stdin JSON, exit-code, and deny-shape contract. v1 already serializes Grok then Pi then OpenCode (T4 → T5). More codecs before those fixtures are green multiplies hook bugs and setup writers. Codex in particular rejects unknown deny fields; that is a later codec, not a reason to change v1 deny text.
-- **Scan.** Scan is a file/CI product: extractors, path filters, fail-on severity, pre-commit install. It is not the hook. Shipping it in v1 invents a second evaluation driver before the first hook contract is proven.
+- **Scan.** Two later products under one umbrella: (1) **session forensics** — read known host stores, feed `evaluate`, list denials ([`phase-4-session-scan.md`](phase-4-session-scan.md)); (2) **repo/CI** — files/staged/diff/pre-commit. Neither is the live hook. Shipping either in v1 invents a second driver before the first hook contract is proven.
 - **MCP.** Read / Edit / MCP events are not shell. They need new codecs, a wider threat story, and a clear “what rv is not” rewrite. v1 is shell-only so the hook path stays one shape.
-- **Heredoc / AST.** Bounded extract + parse + inner-shell recursion is a latency and false-positive program. v1’s engine is normalize → quick-reject → safe → destructive → default allow on the command string. AST work must not become a T1 corpus blocker.
+- **Heredoc / AST.** Bounded extract + parse + inner-shell recursion is a latency and false-positive program. v1’s engine is normalize → quick-reject → safe → destructive → default allow on the command string. AST work must not become a T1 corpus blocker. It remains Phase 4+ with the ordered roadmap in **Heredoc / AST roadmap** below — prove offline first, then the live guard.
 - **SARIF.** SARIF is a CI report schema. v1 output modes are robot / pretty / browse. Teaching every command a `sarif` alias (or a real SARIF emitter) before `rv scan` exists is wasted surface.
 - **Mac app.** The plan already made IPC app-ready. Building SwiftUI before T3’s `evaluate` / fallback / `rv service status` are real creates a second client against a moving contract.
 - **Intel / older macOS.** A claimed matrix is test hardware, install artifacts, and support. v1 is macOS 26 Apple Silicon so “it runs here” is one sentence.
@@ -68,7 +68,7 @@ Later features plug in. They do not fork the product.
 1. **One IPC: `rv.ipc.v1`.** The Mac app uses this contract. Do not invent a second IPC, a second Codable surface, a private app-only XPC protocol, or a SwiftUI-shaped request type. Add methods by versioning `rv.ipc.v1` (or a later `rv.ipc.v2` that the app and CLI both speak) — never “app IPC” vs “hook IPC.”
 2. **v1 IPC verbs stay.** `evaluate`, `explain`, `classify`, `listPacks`, `setPackEnabled`, `allowOnce.consume`, `doctorSnapshot`. Unix socket remains **tests only**. Production transport stays XPC (`dev.rv.evaluate`).
 3. **Hexagonal law.** Engine never imports CLI, TUI, XPC, or SwiftUI. Domain stays I/O-free. A Mac app, MCP server, or `rv scan` is another adapter. `RVHistory` must not become the place decisions are made.
-4. **Evaluation order (DCG).** normalize → quick-reject → safe patterns first → destructive → default allow. Heredoc / AST / scan extractors, when they exist, feed `EvaluationRequest` — they do not replace this order.
+4. **Evaluation order (DCG).** normalize → quick-reject → safe patterns first → destructive → default allow. Heredoc / AST / scan extractors, when they exist, feed one or more `EvaluationRequest`s — they do not replace this order, invent a second `Decision` taxonomy, or live inside `RVHistory`.
 5. **Packs are data.** Catalog JSON, enable/disable in `RVPacks` / `RVPolicy`. Do not explode the remaining packs into 99 Swift files. T9’s disabled import is the later enable switch.
 6. **Identity and files.** Name `rv` / `rvd`, prefix `RV_`, config `~/.config/rv/`. Setup mutates only rv-owned files. Uninstall removes only rv files. No ryk special-case. No `RV_BYPASS` ever.
 7. **Host codecs live in `RVHooks`.** New hosts are new codecs + fixtures, not a second hook runtime. v1 codecs stay Pi / Grok / OpenCode shell events.
@@ -91,6 +91,34 @@ These are product law. Phase 4+ does not relax them.
 
 Default-off remains the history privacy feature. Analytics is a separate, opt-out product counter surface; disclosure UX can land later via `AnalyticsNotice` without changing transport.
 
+## Heredoc / AST roadmap
+
+Phase 4+ direction (product law). Not an implement ticket. Not a v1 gate.
+
+**Goal.** Agents hide destroys inside wrappers (`bash -c '…'`), chains, and heredoc bodies. Surface command strings under-report. Extractors recover candidate command text; **`evaluate` still decides** (same packs, same `rule_id`).
+
+**Shared stages** (both session forensics and the live destructive-command guard consume the same extractor ladder; do not fork a scan-only risk engine):
+
+| Stage | What | First consumer |
+|---|---|---|
+| **1. Surface fields** | Host/tool `command` (and known shell-tool fields) only | Session forensics first ship |
+| **2. Bounded unwrap** | One level of `bash -c` / `sh -c` / simple `;` / `&&` / `\|` split — still string in, string out | Session forensics, then optional guard |
+| **3. Heredoc + AST** | Heredoc body recovery + language-aware parse / inner-shell walk | Session forensics first (offline OK); live guard only after FP + latency budget |
+
+**Live destructive-command guard (hook / in-process evaluate):**
+
+- v1 / current: no extract pipeline — evaluate the host-provided command string.
+- After stage 1–2 are proven on forensics: allow **config-gated** unwrap on the hook path (off by default until measured).
+- Stage 3 on the default hot path only when latency and false-positive cost are acceptable; otherwise stay scan-only or opt-in.
+- Never block allow on “extractor failed” — fail open to evaluating the surface string (or fail closed only under an explicit strict mode documented later). Do not invent `RV_BYPASS`.
+
+**Hard rules:**
+
+- Extractors feed `EvaluationRequest`; they do not replace normalize → quick-reject → safe → destructive → default allow.
+- One extractor module (adapter/engine-adjacent), two callers: forensics CLI and hook evaluate path — not two pattern catalogs.
+- Session-forensics first ship stays **stage 1 (surface only)**; stages 2–3 are follow-on tickets.
+- Repo/CI `rv scan` (files, staged, git-diff), if built, may reuse extractors for embedded shell in files — still the same ladder, still feeds `evaluate`.
+
 ## Open questions
 
 Do not answer these in T0–T9. Do not “pick a default” in product code to get unblocked.
@@ -98,7 +126,7 @@ Do not answer these in T0–T9. Do not “pick a default” in product code to g
 - After T9, do remaining catalog packs ever become enabled-by-default, or stay opt-in forever (possibly with a documented profile)?
 - Host order after Pi / Grok / OpenCode: Claude first, Codex first, or installer-detected only?
 - MCP later means: intercept MCP / Read / Edit tool events, ship an rv MCP server, or both?
-- Heredoc / AST: in the interactive hook (latency budget), scan-only, or a config-gated hook path?
+- Heredoc / AST live-guard default: stay opt-in / config-gated forever, or eventually on for all hook evaluates once stage 3 clears a written latency + FP gate? (Roadmap order is decided above; default-on is not.)
 - SARIF: real SARIF 2.1.0 only on `rv scan` (DCG’s split), with `sarif` as a JSON alias elsewhere — or SARIF nowhere until scan exists?
 - History enable UX: config key, `rv history on`, app toggle (still `rv.ipc.v1`), retention, and redaction rules?
 - Intel / older macOS: claimed support with CI, or best-effort unsigned extras?
@@ -111,7 +139,8 @@ Do not answer these in T0–T9. Do not “pick a default” in product code to g
 This spec is done when all of the following are true. It is **not** done when any later feature exists.
 
 - This file lives at `docs/factory/specs/phase-4-later.md` and is the fence for post-v1 work.
-- The later surface is enumerated: remaining-packs default, Claude/Codex/etc., scan, MCP, heredoc/AST, SARIF, Mac app, Intel, older macOS, history on-by-choice.
+- The later surface is enumerated: remaining-packs default, Claude/Codex/etc., scan (session forensics + later repo/CI), MCP, heredoc/AST, SARIF, Mac app, Intel, older macOS, history on-by-choice.
+- Session forensics product law is fenced at [`phase-4-session-scan.md`](phase-4-session-scan.md).
 - Privacy law is written as forever: history off until explicit enable; no command text in `os_log`; no raw secrets.
 - Mac app is specified as a client of **the same** `rv.ipc.v1`. A second IPC is forbidden.
 - Kickoff rule is written: no Phase 4+ implement work until v1 T0–T9 are done.
