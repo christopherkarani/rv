@@ -10,6 +10,7 @@ let package = Package(
         .library(name: "RVDomain", targets: ["RVDomain"]),
         .library(name: "RVEngine", targets: ["RVEngine"]),
         .library(name: "RVPacks", targets: ["RVPacks"]),
+        .library(name: "RVScan", targets: ["RVScan"]),
         .library(name: "RVPolicy", targets: ["RVPolicy"]),
         .library(name: "RVHooks", targets: ["RVHooks"]),
         .library(name: "RVIPC", targets: ["RVIPC"]),
@@ -34,6 +35,10 @@ let package = Package(
             name: "RVPacks",
             dependencies: ["RVDomain"],
             resources: [.copy("Resources/packs")]
+        ),
+        .target(
+            name: "RVScan",
+            dependencies: ["RVDomain", "RVEngine", "RVPacks"]
         ),
         .target(name: "RVPolicy", dependencies: ["RVDomain"]),
         .target(
@@ -83,6 +88,7 @@ let package = Package(
             exclude: ["Fixtures"]
         ),
         .testTarget(name: "RVPacksTests", dependencies: ["RVPacks"]),
+        .testTarget(name: "RVScanTests", dependencies: ["RVScan"]),
         .testTarget(name: "RVPolicyTests", dependencies: ["RVPolicy"]),
         .testTarget(
             name: "RVHooksTests",
