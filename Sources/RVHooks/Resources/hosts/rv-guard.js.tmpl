@@ -16,7 +16,14 @@ export const RvGuard = async (ctx) => {
       if (typeof command !== "string" || command.length === 0) {
         return;
       }
-      const mapped = await consultRv(command);
+      const hostCwd =
+        typeof input.cwd === "string"
+          ? input.cwd
+          : typeof input.directory === "string"
+            ? input.directory
+            : undefined;
+      const cwd = pickCwd(hostCwd);
+      const mapped = await consultRv(command, cwd);
       if (mapped.action === "block") {
         await showBlockToast(ctx, mapped, command);
         throw new Error(mapped.reason);
@@ -25,12 +32,21 @@ export const RvGuard = async (ctx) => {
   };
 };
 
-function consultRv(command) {
-  const stdin = JSON.stringify({
-    tool: "bash",
-    args: { command },
-  });
-  return spawnRvHook("opencode", stdin);
+function pickCwd(hostCwd) {
+  if (typeof hostCwd === "string" && hostCwd.length > 0) return hostCwd;
+  try {
+    const cwd = process.cwd();
+    if (typeof cwd === "string" && cwd.length > 0) return cwd;
+  } catch {
+    // omit
+  }
+  return undefined;
+}
+
+function consultRv(command, cwd) {
+  const payload = { tool: "bash", args: { command } };
+  if (cwd) payload.cwd = cwd;
+  return spawnRvHook("opencode", JSON.stringify(payload));
 }
 
 function spawnRvHook(host, stdin) {

@@ -324,13 +324,13 @@ stdin is JSON **we** define so fixtures can lock the codec. It mirrors the host 
 **Pi adapter → `rv hook --host pi` stdin:**
 
 ```json
-{ "toolName": "bash", "input": { "command": "git reset --hard" } }
+{ "toolName": "bash", "input": { "command": "git reset --hard" }, "cwd": "/Users/you/project" }
 ```
 
 **OpenCode adapter → `rv hook --host opencode` stdin:**
 
 ```json
-{ "tool": "bash", "args": { "command": "git reset --hard" } }
+{ "tool": "bash", "args": { "command": "git reset --hard" }, "cwd": "/Users/you/project" }
 ```
 
 **`rv hook --host pi|opencode` stdout / exit** (RV-owned, adapter-only):

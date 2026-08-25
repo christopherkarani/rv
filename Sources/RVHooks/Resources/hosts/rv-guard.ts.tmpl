@@ -28,7 +28,8 @@ export default function (pi) {
     if (typeof command !== "string" || command.length === 0) {
       return;
     }
-    const mapped = await consultRv(command);
+    const cwd = pickCwd(event && (event.cwd || event.cwdPath));
+    const mapped = await consultRv(command, cwd);
     if (mapped.action === "block") {
       showDecision(pi, ctx, cardFromBlock(mapped, command));
       return { block: true, reason: mapped.reason };
@@ -265,12 +266,21 @@ function truncate(value, max) {
   return `${value.slice(0, max - 3)}...`;
 }
 
-function consultRv(command) {
-  const stdin = JSON.stringify({
-    toolName: "bash",
-    input: { command },
-  });
-  return spawnRvHook("pi", stdin);
+function pickCwd(hostCwd) {
+  if (typeof hostCwd === "string" && hostCwd.length > 0) return hostCwd;
+  try {
+    const cwd = process.cwd();
+    if (typeof cwd === "string" && cwd.length > 0) return cwd;
+  } catch {
+    // omit
+  }
+  return undefined;
+}
+
+function consultRv(command, cwd) {
+  const payload = { toolName: "bash", input: { command } };
+  if (cwd) payload.cwd = cwd;
+  return spawnRvHook("pi", JSON.stringify(payload));
 }
 
 function spawnRvHook(host, stdin) {
