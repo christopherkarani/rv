@@ -75,3 +75,36 @@ func openCodeDecode_extractsBashCommand(_ file: String, expected: String) throws
     #expect(PiHostCodec().encodeDeny(reason: reason).exitCode == 1)
     #expect(GrokHostCodec().encodeDeny(reason: reason).exitCode == 0)
 }
+
+@Test func openCodeDecode_readsCwd() {
+    let stdin = """
+    {"tool":"bash","cwd":"/tmp/ws","args":{"command":"git status"}}
+    """
+    guard case .request(let request) = codec.decode(stdin) else {
+        Issue.record("expected .request for cwd stdin")
+        return
+    }
+    #expect(request.cwd?.rawValue == "/tmp/ws")
+}
+
+@Test func openCodeDecode_emptyCwdIsNil() {
+    let stdin = """
+    {"tool":"bash","cwd":"","args":{"command":"git status"}}
+    """
+    guard case .request(let request) = codec.decode(stdin) else {
+        Issue.record("expected .request for empty cwd")
+        return
+    }
+    #expect(request.cwd == nil)
+}
+
+@Test func openCodeDecode_missingCwdIsNil() {
+    let stdin = """
+    {"tool":"bash","args":{"command":"git status"}}
+    """
+    guard case .request(let request) = codec.decode(stdin) else {
+        Issue.record("expected .request for missing cwd")
+        return
+    }
+    #expect(request.cwd == nil)
+}

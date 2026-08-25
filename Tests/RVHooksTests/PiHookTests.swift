@@ -74,3 +74,36 @@ func piDecode_extractsBashCommand(_ file: String, expected: String) throws {
     #expect(wire.stdout.contains(reason))
     #expect(wire.stdout.contains("core.git") == false)
 }
+
+@Test func piDecode_readsCwd() {
+    let stdin = """
+    {"toolName":"bash","cwd":"/tmp/ws","input":{"command":"git status"}}
+    """
+    guard case .request(let request) = codec.decode(stdin) else {
+        Issue.record("expected .request for cwd stdin")
+        return
+    }
+    #expect(request.cwd?.rawValue == "/tmp/ws")
+}
+
+@Test func piDecode_emptyCwdIsNil() {
+    let stdin = """
+    {"toolName":"bash","cwd":"","input":{"command":"git status"}}
+    """
+    guard case .request(let request) = codec.decode(stdin) else {
+        Issue.record("expected .request for empty cwd")
+        return
+    }
+    #expect(request.cwd == nil)
+}
+
+@Test func piDecode_missingCwdIsNil() {
+    let stdin = """
+    {"toolName":"bash","input":{"command":"git status"}}
+    """
+    guard case .request(let request) = codec.decode(stdin) else {
+        Issue.record("expected .request for missing cwd")
+        return
+    }
+    #expect(request.cwd == nil)
+}
