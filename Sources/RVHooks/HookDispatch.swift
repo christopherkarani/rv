@@ -15,7 +15,11 @@ public func hookWire(
     case .opencode:
         return await hookBody(stdin: stdin, codec: OpenCodeHostCodec(), evaluate: evaluate)
     case .claude:
-        preconditionFailure("CL-T3 owns HookDispatch claude wire")
+        return ClaudeHostCodec().encodeDeny(
+            reason: incompleteEvalSentence,
+            rule: nil,
+            next: nil
+        )
     }
 }
 

@@ -1,0 +1,8 @@
+{
+  "hook_event_name": "PreToolUse",
+  "session_id": "abc-123",
+  "cwd": "/tmp/rv-hook-fixture",
+  "tool_name": "mcp__demo__tool",
+  "tool_input": { "name": "demo" },
+  "timestamp": "2026-04-14T12:00:00Z"
+}

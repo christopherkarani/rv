@@ -57,6 +57,9 @@ func claudeDecode_extractsShellCommand(_ file: String, expected: String) throws 
 
 @Test(arguments: [
     "allow-non-shell-read.json",
+    "allow-non-shell-edit.json",
+    "allow-non-shell-write.json",
+    "allow-non-shell-mcp.json",
 ])
 func claudeDecode_otherToolOrEventIsForeign(_ file: String) throws {
     #expect(codec.decode(try claudeFixture(file)) == .foreign)
@@ -125,6 +128,33 @@ func claudeDecode_otherToolOrEventIsForeign(_ file: String) throws {
     #expect(wire.stdout.contains("core.git") == false)
     #expect(wire.stdout.contains("reset-hard") == false)
     #expect(wire.stdout.contains("\"remediation\"") == false)
+}
+
+@Test func claudeEncodeDeny_withRuleStillClaudeDenyEnvelope() throws {
+    let wire = codec.encodeDeny(
+        reason: hostDenyLine(command: resetHard, ruleID: resetHardMatch.ruleID),
+        rule: displayRuleID(resetHardMatch.ruleID),
+        next: hookUnlockNext
+    )
+    #expect(wire.exitCode == 0)
+    #expect(wire.stdout.contains("\"permissionDecision\":\"deny\""))
+    #expect(wire.stdout.contains("\"decision\":\"deny\"") == false)
+    #expect(wire.stdout.contains("allowOnceCode") == false)
+    #expect(wire.stdout.contains("\"remediation\"") == false)
+}
+
+@Test func claudeEncodeRichDeny_unmatchedDenyIsFailClosed() throws {
+    let result = EvaluationResult(
+        outcome: .deny(
+            Deny(ruleID: resetHardMatch.ruleID, reason: resetHardMatch.reason),
+            matched: nil
+        )
+    )
+    let wire = codec.encodeRichDeny(from: result, command: resetHard)
+    #expect(wire.exitCode == 0)
+    #expect(wire.stdout.contains("\"permissionDecision\":\"deny\""))
+    #expect(wire.stdout.contains("allowOnceCode") == false)
+    #expect(wire.stdout.isEmpty == false)
 }
 
 private struct ClaudeDenyObject {

@@ -46,23 +46,19 @@ enum SetupError: Error, Equatable, Sendable {
 
     init(adapterResourceFailure error: HostAdapterResourceError) {
         switch error {
-        case .missingTemplate(let host):
-            self = .adapterTemplateMissing(SetupHostKind(hook: host))
+        case .missingTemplate(.grok):
+            self = .adapterTemplateMissing(.grok)
+        case .missingTemplate(.pi):
+            self = .adapterTemplateMissing(.pi)
+        case .missingTemplate(.opencode):
+            self = .adapterTemplateMissing(.openCode)
+        case .missingTemplate(.claude):
+            self = .inspectionFailed
         }
     }
 }
 
 extension SetupHostKind {
-    init(hook host: HookHost) {
-        switch host {
-        case .grok: self = .grok
-        case .pi: self = .pi
-        case .opencode: self = .openCode
-        case .claude:
-            fatalError("CL-T4 owns SetupHostKind.claude")
-        }
-    }
-
     var failureLabel: String {
         switch self {
         case .grok: "grok"
