@@ -16,6 +16,13 @@ enum UnixFrameError: Error, Sendable, Equatable {
 
 /// Linux AF_UNIX frames. Pathname sockets only. `send` uses `MSG_NOSIGNAL`.
 enum UnixFrameIO {
+    static func openStream() throws -> Int32 {
+        let flags = Int32(SOCK_STREAM.rawValue) | Int32(SOCK_CLOEXEC.rawValue)
+        let fd = Glibc.socket(AF_UNIX, flags, 0)
+        guard fd >= 0 else { throw UnixFrameError.socket }
+        return fd
+    }
+
     static func writeFrame(fd: Int32, body: Data) throws {
         try sendAll(fd: fd, data: try ServiceFrames.encode(body: body))
     }
@@ -37,7 +44,7 @@ enum UnixFrameIO {
         while offset < count {
             let n = data.withUnsafeMutableBytes { buf -> Int in
                 guard let base = buf.baseAddress else { return -1 }
-                return recv(fd, base + offset, count - offset, 0)
+                return Glibc.recv(fd, base + offset, count - offset, 0)
             }
             if n < 0 {
                 if errno == EINTR { continue }
@@ -54,7 +61,7 @@ enum UnixFrameIO {
         try data.withUnsafeBytes { buf in
             guard let base = buf.baseAddress else { throw UnixFrameError.eof }
             while offset < data.count {
-                let n = send(fd, base + offset, data.count - offset, Int32(MSG_NOSIGNAL))
+                let n = Glibc.send(fd, base + offset, data.count - offset, Int32(MSG_NOSIGNAL))
                 if n < 0 {
                     if errno == EINTR { continue }
                     throw UnixFrameError.eof
@@ -75,7 +82,7 @@ enum UnixFrameIO {
         path.withCString { cString in
             withUnsafeMutablePointer(to: &addr.sun_path) { sunPath in
                 let dest = UnsafeMutableRawPointer(sunPath).assumingMemoryBound(to: CChar.self)
-                _ = strncpy(dest, cString, maxPath - 1)
+                _ = Glibc.strncpy(dest, cString, maxPath - 1)
             }
         }
         return addr
@@ -99,26 +106,25 @@ public final class UnixEvaluateListener: @unchecked Sendable {
 
     public func start() throws {
         try UnixSocketPath.prepareRuntime(for: socketURL)
-        let fd = socket(AF_UNIX, Int32(SOCK_STREAM | SOCK_CLOEXEC), 0)
-        guard fd >= 0 else { throw UnixFrameError.socket }
+        let fd = try UnixFrameIO.openStream()
         var addr = try UnixFrameIO.sockaddr(path: socketURL.path)
         let bindOK = withUnsafePointer(to: &addr) { ptr in
             ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+                Glibc.bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
             }
         }
         guard bindOK == 0 else {
-            close(fd)
+            _ = Glibc.close(fd)
             throw UnixFrameError.bind
         }
         do {
             try UnixSocketPath.assertSocketMode(socketURL)
         } catch {
-            close(fd)
+            _ = Glibc.close(fd)
             throw error
         }
-        guard listen(fd, 8) == 0 else {
-            close(fd)
+        guard Glibc.listen(fd, 8) == 0 else {
+            _ = Glibc.close(fd)
             throw UnixFrameError.listen
         }
         listenFD = fd
@@ -127,7 +133,7 @@ public final class UnixEvaluateListener: @unchecked Sendable {
             self?.acceptOne()
         }
         source.setCancelHandler {
-            close(fd)
+            _ = Glibc.close(fd)
         }
         self.source = source
         source.resume()
@@ -141,14 +147,14 @@ public final class UnixEvaluateListener: @unchecked Sendable {
     }
 
     private func acceptOne() {
-        let client = accept(listenFD, nil, nil)
+        let client = Glibc.accept(listenFD, nil, nil)
         guard client >= 0 else { return }
         queue.async { self.serve(client) }
     }
 
     private func serve(_ fd: Int32) {
         var handshakeOK = false
-        defer { close(fd) }
+        defer { _ = Glibc.close(fd) }
         while true {
             guard let body = try? UnixFrameIO.readFrame(fd: fd) else { return }
             let gate = UnixReplyGate()
@@ -176,16 +182,15 @@ final class UnixEvaluateClient {
     }
 
     func connect() throws {
-        let sock = socket(AF_UNIX, Int32(SOCK_STREAM | SOCK_CLOEXEC), 0)
-        guard sock >= 0 else { throw UnixFrameError.socket }
+        let sock = try UnixFrameIO.openStream()
         var addr = try UnixFrameIO.sockaddr(path: path)
         let ok = withUnsafePointer(to: &addr) { ptr in
             ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                connect(sock, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+                Glibc.connect(sock, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
             }
         }
         guard ok == 0 else {
-            close(sock)
+            _ = Glibc.close(sock)
             throw UnixFrameError.connect
         }
         fd = sock
@@ -228,7 +233,7 @@ func retryUnixConnect(path: String, attempts: Int = 40) throws -> UnixEvaluateCl
             return client
         } catch {
             last = error
-            usleep(50_000)
+            Glibc.usleep(50_000)
         }
     }
     throw last

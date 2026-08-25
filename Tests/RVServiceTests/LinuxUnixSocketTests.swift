@@ -78,7 +78,7 @@ struct LinuxUnixSocketTests {
         let socketURL = try UnixSocketPath.resolve(xdgRuntimeDir: xdg.path)
         let process = Process()
         process.executableURL = rvd
-        process.arguments = ["--socket"]
+        process.arguments = ["--socket", "--idle-exit-seconds", "2"]
         process.environment = [
             "XDG_RUNTIME_DIR": xdg.path,
             "HOME": home.path,
@@ -90,6 +90,9 @@ struct LinuxUnixSocketTests {
         try process.run()
         defer {
             process.terminate()
+            if process.isRunning {
+                _ = Glibc.kill(process.processIdentifier, SIGKILL)
+            }
             process.waitUntilExit()
         }
 

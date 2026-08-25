@@ -9,7 +9,9 @@ package final class UnfairLock<Value: Sendable>: Sendable {
         storage = Mutex(initial)
     }
 
-    package func withLock<Result>(_ body: (inout Value) throws -> Result) rethrows -> Result {
+    package func withLock<Result>(
+        _ body: (inout sending Value) throws -> sending Result
+    ) rethrows -> Result {
         try storage.withLock(body)
     }
 }
