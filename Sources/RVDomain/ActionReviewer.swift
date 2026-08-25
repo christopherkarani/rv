@@ -101,8 +101,8 @@ public struct ReviewContext: Sendable, Equatable, Codable {
 }
 
 public struct ReviewRequest: Sendable, Equatable, Codable {
-    public var action: ProposedAction
-    public var context: ReviewContext
+    public let action: ProposedAction
+    public let context: ReviewContext
 
     public init(action: ProposedAction, context: ReviewContext) {
         self.action = ReviewSanitizer.sanitize(action)
