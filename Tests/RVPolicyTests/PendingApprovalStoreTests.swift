@@ -16,7 +16,7 @@ struct PendingApprovalStoreTests {
         #expect(created.state == .awaitingHuman)
 
         let afterRestart = PendingApprovalStore(baseDirectory: root)
-        let reloaded = try await afterRestart.record(id: created.id, now: Self.now)
+        let reloaded = try await afterRestart.load(id: created.id, now: Self.now)
         #expect(reloaded == created)
         let listed = try await afterRestart.list(now: Self.now)
         #expect(listed.map(\.id) == [created.id])
@@ -78,7 +78,7 @@ struct PendingApprovalStoreTests {
         let results = await [first, second]
         #expect(results.filter(\.isSuccess).count == 1)
         #expect(results.filter { $0 == .alreadyResolved }.count == 1)
-        let winner = try await writer.record(id: created.id, now: Self.now)
+        let winner = try await writer.load(id: created.id, now: Self.now)
         guard case .resolved(let resolution) = winner.state else {
             Issue.record("exactly one resolve must persist")
             return
@@ -116,7 +116,7 @@ struct PendingApprovalStoreTests {
         let later = Self.now.addingTimeInterval(2)
         let listed = try await writer.list(now: later)
         #expect(listed.isEmpty)
-        let timedOut = try await writer.record(id: created.id, now: later)
+        let timedOut = try await writer.load(id: created.id, now: later)
         guard case .timedOut = timedOut.state else {
             Issue.record("autoDeny must persist timedOut")
             return

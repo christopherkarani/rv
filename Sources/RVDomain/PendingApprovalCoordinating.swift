@@ -8,7 +8,7 @@ public protocol PendingApprovalCoordinating: Sendable {
     /// Awaiting-human records after timeout sweep.
     func list(now: Date) async throws -> [PendingApproval]
     /// Load one record by id after timeout sweep, including terminal rows.
-    func record(id: ApprovalID, now: Date) async throws -> PendingApproval
+    func load(id: ApprovalID, now: Date) async throws -> PendingApproval
     /// Record a human decision exactly once for this id + fingerprint + identity.
     func resolve(
         id: ApprovalID,

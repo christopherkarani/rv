@@ -36,7 +36,7 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
         return PendingApprovalLedger.awaitingHuman(swept, now: now)
     }
 
-    public func record(id: ApprovalID, now: Date) async throws -> PendingApproval {
+    public func load(id: ApprovalID, now: Date) async throws -> PendingApproval {
         try mutate(now: now) { records in
             let (record, next) = try PendingApprovalLedger.record(in: records, id: id, now: now)
             return Mutation(record: record, records: next, event: nil)
