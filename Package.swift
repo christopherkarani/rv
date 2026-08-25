@@ -133,7 +133,7 @@ let cliTargets: [Target] = [
         name: "RVCLI",
         dependencies: [
             "RVDomain", "RVEngine", "RVPolicy", "RVHooks", "RVIPC",
-            "RVPresentation", "RVTheme", "RVTUI", "RVService", "RVHistory",
+            "RVPresentation", "RVScan", "RVTheme", "RVTUI", "RVService", "RVHistory",
             "RVAnalytics",
             .product(name: "ArgumentParser", package: "swift-argument-parser"),
         ],
@@ -155,7 +155,7 @@ let cliProducts: [Product] = [
     .executable(name: "rv", targets: ["rv"]),
 ]
 let cliTestTargets: [Target] = [
-    .testTarget(name: "RVCLITests", dependencies: ["RVCLI", "RVService"]),
+    .testTarget(name: "RVCLITests", dependencies: ["RVCLI", "RVService", "RVScan"]),
 ]
 
 let package = Package(
