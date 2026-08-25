@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rv — the Swift engineering | draft for r/swift</title>
+<style>
+  :root {
+    --paper: #fdfcf9; --ink: #1a1a18; --muted: #6b6862;
+    --rule: #e4e1da; --accent: #8c3b2e; --code-bg: #f3f0ea;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--paper); color: var(--ink);
+    font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    font-size: 19px; line-height: 1.65; -webkit-font-smoothing: antialiased;
+  }
+  .page { max-width: 620px; margin: 0 auto; padding: 5rem 1.5rem 8rem; }
+  .kicker { font-family: ui-monospace, Menlo, monospace; font-size: 0.72rem;
+    letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent); margin-bottom: 1.25rem; }
+  h1 { font-size: clamp(1.9rem, 5vw, 2.6rem); font-weight: 500; line-height: 1.15; margin-bottom: 1rem; text-wrap: balance; }
+  .dek { font-size: 1.05rem; color: var(--muted); font-style: italic; max-width: 34em; }
+  .meta { display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 2rem; padding-top: 1.25rem; border-top: 1px solid var(--rule);
+    font-family: ui-monospace, Menlo, monospace; font-size: 0.72rem; color: var(--muted); }
+  .status { border: 1px solid var(--rule); border-radius: 3px; padding: 0.15rem 0.5rem; }
+  article p { margin-bottom: 1.35rem; text-wrap: pretty; }
+  pre { background: var(--code-bg); border: 1px solid var(--rule); border-radius: 4px;
+    padding: 1rem 1.25rem; margin: 1.75rem 0; overflow-x: auto; }
+  code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.82rem; }
+  p code { background: var(--code-bg); padding: 0.1em 0.35em; border-radius: 3px; font-size: 0.85em; }
+  .ph { color: var(--accent); border-bottom: 1px dashed currentColor; cursor: help; }
+  footer { margin-top: 2.5rem; padding-top: 1.25rem; border-top: 1px solid var(--rule);
+    font-size: 0.85rem; color: var(--muted); }
+  footer a { color: var(--accent); text-decoration: none; border-bottom: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); }
+  @media (max-width: 480px) { body { font-size: 17px; } .page { padding-top: 3rem; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <p class="kicker">Draft · r/swift</p>
+    <h1>rv: what I learned writing a 16-module Swift&nbsp;6 package that blocks destructive agent shell commands</h1>
+    <p class="dek">Strict concurrency, typed throws, and one Decision enum mapped to three hosts. The engineering notes behind a small Mac security tool.</p>
+    <div class="meta"><span>Chris Karani</span><span>·</span><span>Aug 2026</span><span>·</span><span class="status">DRAFT</span></div>
+  </header>
+  <article>
+    <p>I spent the last few months building a Swift tool called rv: a Mac-native guard that blocks destructive shell commands before coding agents like Pi, Grok, or OpenCode run them. It's on GitHub Pages if you want the longer story; this post is about the Swift engineering, because that's the part I'd want to read.</p>
+
+    <p>The shape of it: 16 SPM modules, strict language mode 6, one external dependency (argument-parser). Value types all the way down through the core: Domain, Engine, and Packs are structs and enums only. Classes exist at exactly two kinds of edges. Actors where shared mutable state is real (the allow-once store, the service runtime), and the XPC boundary.</p>
+
+    <p>Some things I'm pleased with:</p>
+
+    <p>Typed throws finally earning their keep. Regex compilation throws <code>PatternCompileError</code> with the offending pattern attached, and the compiler makes every call site deal with it. No <code>try?</code> swallowing a bad rule into silence; a malformed pack pattern fails loudly at load.</p>
+
+    <p>One Decision enum, three hosts. The interesting problem wasn't evaluation, it was mapping: Pi wants a TS extension, OpenCode a JS plugin, Grok a JSON hook file. Instead of per-host branching, there's one switch over a closed <code>Decision</code> enum in a hook mapper, with small host codecs turning the result into each host's native block format. Adding a fourth host means writing one codec.</p>
+
+    <p>Fail-closed as copy, not just behavior. An unreadable hook payload blocks the command, and the deny sentence lives in exactly one module shared by the hook layer and the TUI:</p>
+
+    <pre><code>Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once.</code></pre>
+
+    <p>No allow-because-XPC-missed either. If the daemon is down or versions skew, evaluation falls back to in-process rather than letting the command through. That constraint shaped a lot of the architecture.</p>
+
+    <p>The gate script might be my favorite unglamorous bit: <code>tools/gate.sh</code> infers which test targets to run from your git diff (touch RVEngine, run RVEngineTests) and refuses to exit green if it would run zero tests.</p>
+
+    <p>Numbers, since people ask: ~14k lines of source, ~14.4k lines of tests across 15 targets (one per module, plus a cross-module corpus suite). Two default-on rule packs ship day one, 81 ICU regex patterns between filesystem and git. Another 100 packs sit opt-in in the catalog. The engine itself is deliberately boring: normalize the command string (strip sudo/env wrappers), quick-reject on keywords, safe patterns first, destructive second, else allow. Default-allow on unknown commands, because two packs can't judge everything and a guard that blocks what it doesn't recognize gets disabled within the hour.</p>
+
+    <p>Honest limits: it's macOS 26 / Apple Silicon only (install.sh refuses anything else), it's hook-grade not a sandbox, and it evaluates normalized text, not anything post-expansion.</p>
+
+    <p>Repo: <span class="ph" title="Placeholder — repo link pending">REPO_URL</span>. If you're doing strict-concurrency Swift or thinking about hexagonal layouts in SPM, I'd genuinely like pushback on the module graph.</p>
+  </article>
+  <footer>
+    Longer essay (r/pi): <a href="../">Who gets to say no</a>
+  </footer>
+</div>
+</body>
+</html>
