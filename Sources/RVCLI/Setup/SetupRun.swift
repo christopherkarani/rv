@@ -125,12 +125,12 @@ enum SetupRun {
         layout: OwnedPaths,
         files: FileOps
     ) throws(SetupError) -> SetupReport {
-        var slots: [HookHost: SetupSlotKind] = [
-            .grok: .pending,
-            .pi: .pending,
-            .opencode: .pending,
-        ]
-        var wrote: Set<HookHost> = []
+        var slots = SetupSlotSnapshot(
+            grok: .pending,
+            pi: .pending,
+            openCode: .pending,
+            wrote: []
+        )
 
         for step in plan.steps {
             switch step {
@@ -147,40 +147,42 @@ enum SetupRun {
             case .skipUndetected(_):
                 break
             case .skipOccupied(let host):
-                slots[host] = .occupied
+                slots.assign(.occupied, to: host)
             case .forceClearThenWrite(let host):
                 do {
                     try files.backupAndClearOwnedPath(layout.hostAdapter(for: host).destination)
                 } catch {
                     throw SetupError.hostHookClearFailed(host)
                 }
-                try writeHost(
+                if try writeHost(
                     host,
                     existingData: nil,
                     env: env,
                     layout: layout,
-                    files: files,
-                    slots: &slots,
-                    wrote: &wrote
-                )
+                    files: files
+                ) {
+                    slots.wrote.insert(host)
+                }
+                slots.assign(.wired, to: host)
             case .write(let host, let existingData):
-                try writeHost(
+                if try writeHost(
                     host,
                     existingData: existingData,
                     env: env,
                     layout: layout,
-                    files: files,
-                    slots: &slots,
-                    wrote: &wrote
-                )
+                    files: files
+                ) {
+                    slots.wrote.insert(host)
+                }
+                slots.assign(.wired, to: host)
             }
         }
 
         let report = SetupReport(
-            grok: slots[.grok] ?? .pending,
-            pi: slots[.pi] ?? .pending,
-            openCode: slots[.opencode] ?? .pending,
-            wrote: wrote
+            grok: slots.grok,
+            pi: slots.pi,
+            openCode: slots.openCode,
+            wrote: slots.wrote
         )
         env.installAnalytics.captureInstall(hosts: InstallAnalyticsHosts.from(report.slots))
         return report
@@ -191,19 +193,16 @@ enum SetupRun {
         existingData: Data?,
         env: SetupEnvironment,
         layout: OwnedPaths,
-        files: FileOps,
-        slots: inout [HookHost: SetupSlotKind],
-        wrote: inout Set<HookHost>
-    ) throws(SetupError) {
+        files: FileOps
+    ) throws(SetupError) -> Bool {
         let adapter: HostAdapterResource
         do {
             adapter = try HostAdapterResources.load(for: host)
         } catch {
             throw SetupError(adapterResourceFailure: error)
         }
-        let wroteHook: Bool
         do {
-            wroteHook = try writeOwned(
+            return try writeOwned(
                 path: layout.hostAdapter(for: host).destination,
                 contents: adapter.rendered(rvPath: env.rvPath),
                 existingData: existingData,
@@ -212,10 +211,6 @@ enum SetupRun {
         } catch {
             throw SetupError.hostHookWriteFailed(host)
         }
-        if wroteHook {
-            wrote.insert(host)
-        }
-        slots[host] = .wired
     }
 
     private static func inspectInstallations(
@@ -426,5 +421,15 @@ struct FileOps {
             try fileManager.removeItem(atPath: backup)
         }
         try fileManager.moveItem(atPath: path, toPath: backup)
+    }
+}
+
+private extension SetupSlotSnapshot {
+    mutating func assign(_ kind: SetupSlotKind, to host: HookHost) {
+        switch host {
+        case .grok: grok = kind
+        case .pi: pi = kind
+        case .opencode: openCode = kind
+        }
     }
 }
