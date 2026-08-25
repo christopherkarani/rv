@@ -57,7 +57,7 @@ Available checks:
   no-bypass             No RV_BYPASS or env that skips evaluate
   no-ns-home             No NSHomeDirectory() in Sources or Tests
   no-os-log-cmdtext     No command text written to os_log (structural check)
-  name-hygiene          No dcg/ryk tokens outside docs/factory/
+  name-hygiene          No leftover dcg/ryk tokens outside docs/factory/ (rykanv brand/domain allowed)
   one-cli-surface       README/help must not list rv-cli as a command
   no-xctest             Tests use Swift Testing, not XCTest
   no-main-in-library     No main.swift or @main in library targets
@@ -220,12 +220,15 @@ check_no_os_log_cmdtext() {
 
 check_name_hygiene() {
   # PLAN #20: no dcg or ryk tokens outside docs/factory/ in product files.
+  # Product exception (Chris): rykanv / Rykan V / rykanv.com are brand/domain,
+  # not leftover ryk. A line whose only hit is inside those forms is allowed.
+  # Bare ryk (CLI/product name), .ryk policy paths, and dcg still FAIL.
   #
   # Two tiers:
-  #   FAIL  — token in product code (any tracked file under ROOT except the
-  #           excluded paths below). Scanning the whole tree (not a hardcoded
-  #           file allowlist) means a NEW root file (CHANGELOG.md, install
-  #           script, …) is covered automatically.
+  #   FAIL  — leftover token in product code (any tracked file under ROOT
+  #           except the excluded paths below). Scanning the whole tree (not
+  #           a hardcoded file allowlist) means a NEW root file (CHANGELOG.md,
+  #           install script, …) is covered automatically.
   #   WARN  — token in agent-config dotfiles (.ryk, .claude-plugin, .agents)
   #           These are pre-existing multi-tool configs, not product code, but
   #           worth surfacing so an agent doesn't "clean up" what looks stray.
@@ -235,10 +238,12 @@ check_name_hygiene() {
   # tools/README.md (documents the tokens), .gitignore (path reference).
   #
   # Uses POSIX grep (not rg) so there is no hidden ripgrep dependency.
+  # python3 (already required above) strips the allowed brand/domain forms
+  # so rykanv does not count as the ryk substring.
 
   # Product files: whole tree, narrowed by extension, minus known-OK paths.
-  local product_matches
-  product_matches=$(grep -rni 'dcg\|ryk' \
+  local product_raw
+  product_raw=$(grep -rni 'dcg\|ryk' \
     "$ROOT" \
     --include='*.swift' --include='*.md' --include='*.json' --include='*.sh' --include='Package.swift' \
     2>/dev/null \
@@ -247,9 +252,32 @@ check_name_hygiene() {
     | grep -v 'tools/preflight.sh' | grep -v 'tools/README.md' \
     | grep -v '/.ryk/' | grep -v '/.claude-plugin/' | grep -v '/.agents/' \
     | grep -v '/.skynex/' \
-    | grep -v '\.gitignore' \
-    | cut -d: -f1 \
-    | sort -u || true)
+    | grep -v '\.gitignore' || true)
+  local product_matches err
+  product_matches=$(printf '%s\n' "$product_raw" | python3 -c '
+import re, sys
+brand = re.compile(r"(?i)(?<![a-z])(?:rykanv(?:\.com)?|rykan[ \t]+v)(?![a-z])")
+leftover = re.compile(r"(?i)dcg|ryk")
+files = set()
+for raw in sys.stdin:
+    line = raw.rstrip("\n")
+    if not line:
+        continue
+    path, sep, rest = line.partition(":")
+    if not sep:
+        continue
+    _, sep2, text = rest.partition(":")
+    body = text if sep2 else rest
+    if leftover.search(brand.sub("", body)):
+        files.add(path)
+for path in sorted(files):
+    print(path)
+' 2>&1) || err=1
+  if [ "${err:-0}" = 1 ]; then
+    printf "  %b✗ Name hygiene: brand-allow filter failed%b\n" "$RED" "$NC"
+    echo "$product_matches" | indent
+    return 1
+  fi
   local pcount
   pcount=$(echo "$product_matches" | grep -c . || true)
 
