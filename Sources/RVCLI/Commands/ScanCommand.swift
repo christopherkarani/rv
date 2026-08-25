@@ -2,6 +2,7 @@ import ArgumentParser
 import Darwin
 import Foundation
 import RVDomain
+import RVPolicy
 import RVPresentation
 import RVScan
 import RVTheme
@@ -31,6 +32,9 @@ struct ScanSessionsFlags: ParsableArguments {
 
     @Flag(name: .customLong("all-events"), help: "Emit one row per deny event (skip dedupe).")
     var allEvents = false
+
+    @Flag(name: .customLong("fail-on-findings"), help: "Exit 2 when deny findings exist.")
+    var failOnFindings = false
 
     @Option(name: .customLong("include-glob"), help: "Extra glob patterns under an explicit path.")
     var includeGlobs: [String] = []
@@ -107,7 +111,10 @@ struct ScanSessions: AsyncParsableCommand {
                     includeGlobs: flags.includeGlobs,
                     bounds: .default,
                     now: Date(),
-                    fileManager: .default
+                    fileManager: .default,
+                    pathEntries: (ProcessInfo.processInfo.environment["PATH"] ?? "")
+                        .split(separator: ":")
+                        .map(String.init)
                 )
             )
         } catch ScanRun.Error.pathNotFound(let missing) {
@@ -122,6 +129,7 @@ struct ScanSessions: AsyncParsableCommand {
         let outcome = ScanRun.render(
             report: report,
             showCommand: flags.showCommand,
+            failOnFindings: flags.failOnFindings,
             appearance: appearance,
             probe: probe
         )
@@ -149,6 +157,7 @@ enum ScanRun {
         var bounds: ScanBounds
         var now: Date
         var fileManager: FileManager
+        var pathEntries: [String] = []
     }
 
     enum Error: Swift.Error, Equatable {
@@ -244,17 +253,23 @@ enum ScanRun {
             warnings: warnings,
             filesScanned: filesScanned,
             eventsExtracted: events.count,
-            setupNudgeRecommended: false
+            setupNudgeRecommended: setupNudgeRecommended(
+                events: events,
+                home: request.home,
+                pathEntries: request.pathEntries,
+                fileManager: request.fileManager
+            )
         )
     }
 
     static func render(
         report: ScanReport,
         showCommand: Bool,
+        failOnFindings: Bool = false,
         appearance: CLIAppearance,
         probe: ThemeProbe
     ) -> ScanOutcome {
-        let exitCode: Int32 = 0
+        let exitCode: Int32 = (failOnFindings && report.findings.isEmpty == false) ? 2 : 0
         switch appearance {
         case .robot:
             return ScanOutcome(
@@ -273,6 +288,25 @@ enum ScanRun {
         }
     }
 
+    private static func setupNudgeRecommended(
+        events: [ExtractedEvent],
+        home: ScanHome,
+        pathEntries: [String],
+        fileManager: FileManager
+    ) -> Bool {
+        let setupHosts = Set(events.compactMap(\.host.setupHostKind))
+        guard setupHosts.isEmpty == false else { return false }
+        guard let homeDirectory = HomeDirectory(validating: home.path) else { return false }
+        guard let snapshot = try? HostAdapterInstallation.inspect(
+            paths: OwnedPaths(home: homeDirectory),
+            pathEntries: pathEntries,
+            fileManager: fileManager
+        ) else {
+            return false
+        }
+        return setupHosts.contains { snapshot.state(for: $0) != .wired }
+    }
+
     private static func selectedAdapters(hostFilter: ScanHostID?) -> [any SessionStoreAdapter] {
         guard let hostFilter else { return adapters }
         return adapters.filter { $0.host == hostFilter }
@@ -283,6 +317,22 @@ enum ScanRun {
             let url = URL(fileURLWithPath: path)
             let values = try? url.resourceValues(forKeys: [.contentModificationDateKey])
             return values?.contentModificationDate
+        }
+    }
+}
+
+private extension ScanHostID {
+    /// v1 setup/doctor Hosts only. Claude has session forensics without a Host adapter install path.
+    var setupHostKind: SetupHostKind? {
+        switch self {
+        case .claude:
+            nil
+        case .pi:
+            .pi
+        case .grok:
+            .grok
+        case .opencode:
+            .openCode
         }
     }
 }

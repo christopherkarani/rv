@@ -134,6 +134,11 @@ infer_filters() {
       add_filter "$(basename "$d")"
     done
   fi
+
+  # Session forensics suite once the module exists (AC-015).
+  if [[ -d Tests/RVScanTests ]]; then
+    add_filter "RVScanTests"
+  fi
 }
 
 if [[ "$EXPLICIT" -eq 0 ]]; then

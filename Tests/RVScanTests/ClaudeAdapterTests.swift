@@ -24,7 +24,7 @@ import RVDomain
 }
 
 @Test func claudeAdapter_extractsGitResetHardFromFixture() throws {
-    let fixture = try fixtureURL("projects/-tmp-rv-scan-fixture/ac001-reset-hard.jsonl")
+    let fixture = try fixtureURL("claude/projects/-tmp-rv-scan-fixture/ac001-reset-hard.jsonl")
     let data = try Data(contentsOf: fixture)
     let events = try ClaudeSessionStoreAdapter().extract(fileURL: fixture, data: data)
 
@@ -37,7 +37,7 @@ import RVDomain
 }
 
 @Test func claudeAdapter_extractsGitStatusAllowCandidate() throws {
-    let fixture = try fixtureURL("projects/-tmp-rv-scan-fixture/allow-status.jsonl")
+    let fixture = try fixtureURL("claude/projects/-tmp-rv-scan-fixture/allow-status.jsonl")
     let data = try Data(contentsOf: fixture)
     let events = try ClaudeSessionStoreAdapter().extract(fileURL: fixture, data: data)
     #expect(events.map(\.command.rawValue) == ["git status"])
@@ -51,8 +51,8 @@ import RVDomain
             .appendingPathComponent("-tmp-rv-scan-fixture", isDirectory: true)
         try FileManager.default.createDirectory(at: projects, withIntermediateDirectories: true)
 
-        let reset = try fixtureURL("projects/-tmp-rv-scan-fixture/ac001-reset-hard.jsonl")
-        let noise = try fixtureURL("projects/-tmp-rv-scan-fixture/noise.txt")
+        let reset = try fixtureURL("claude/projects/-tmp-rv-scan-fixture/ac001-reset-hard.jsonl")
+        let noise = try fixtureURL("claude/projects/-tmp-rv-scan-fixture/noise.txt")
         try FileManager.default.copyItem(
             at: reset,
             to: projects.appendingPathComponent("ac001-reset-hard.jsonl")
@@ -112,27 +112,4 @@ import RVDomain
         data: Data(payload.utf8)
     )
     #expect(events.map(\.command.rawValue) == ["git reset --hard", "git clean -fdx"])
-}
-
-private func fixtureURL(_ relative: String) throws -> URL {
-    let base = URL(fileURLWithPath: #filePath)
-        .deletingLastPathComponent()
-        .appendingPathComponent("Fixtures/claude", isDirectory: true)
-    let url = base.appendingPathComponent(relative)
-    guard FileManager.default.fileExists(atPath: url.path) else {
-        throw ClaudeFixtureError.missing(url.path)
-    }
-    return url
-}
-
-private enum ClaudeFixtureError: Error {
-    case missing(String)
-}
-
-private func withTempHome(_ body: (URL) throws -> Void) throws {
-    let root = FileManager.default.temporaryDirectory
-        .appendingPathComponent("rv-scan-claude-\(UUID().uuidString)", isDirectory: true)
-    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: root) }
-    try body(root)
 }
