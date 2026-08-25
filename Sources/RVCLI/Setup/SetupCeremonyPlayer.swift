@@ -60,7 +60,8 @@ enum SetupCeremonyPlayer {
                 write(cursorUp(stale))
             }
             // FileHandle writes can buffer; without flush the TTY stays blank for the sleeps.
-            fflush(stdout)
+            // Glibc `stdout` is a mutable FILE* — flush all stdio instead of naming it.
+            fflush(nil)
             previousLineCount = lines.count
             clock.sleep(nanoseconds: frame.pauseNanoseconds)
         }
