@@ -396,6 +396,20 @@ private func runHook(
     #expect(wire.stdout.contains(text))
 }
 
+@Test func hookPiPresentCwdHonorsGrantOnce() async throws {
+    let directory = try isolatedAllowOnceDirectory()
+    let client = try isolatedClient(transport: nil, allowOnceDirectory: directory)
+    try await client.insertGranted(matchingView: "git reset --hard", cwd: wd("/tmp/ws"))
+    let stdin = """
+    {"toolName":"bash","cwd":"/tmp/ws","input":{"command":"git reset --hard"}}
+    """
+    let wire = try await runHook(stdin: stdin, host: .pi) { command, cwd in
+        await client.evaluateResult(command: command, cwd: cwd)
+    }
+    #expect(wire.stdout.isEmpty)
+    #expect(wire.exitCode == 0)
+}
+
 @Test func hookOpenCodeDenyResetHard_reasonEqualsHostDenyText() async throws {
     let expected = try hostExpected("opencode", "deny-git-reset-hard")
     let command = ShellCommand(rawValue: "git reset --hard")
