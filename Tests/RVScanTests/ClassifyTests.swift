@@ -113,6 +113,13 @@ import RVDomain
         #expect(text.contains("import RVHistory") == false)
         #expect(text.contains("AllowOnce") == false)
         #expect(text.contains("GatedEvaluate") == false)
+        #expect(text.contains("PolicyGate") == false)
+    }
+}
+
+@Test func classify_rejectsEnabledPacksThatCannotWarmCore() {
+    #expect(throws: ScanClassifyError.packsUnavailable) {
+        try ScanClassify(enabledPacks: [PackID(rawValue: "no.such.pack")])
     }
 }
 
