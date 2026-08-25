@@ -20,6 +20,7 @@ public actor ServiceRuntime {
     private let allowOnce: AllowOnceStore
     private let log: (any ServiceLog)?
     private let analytics: AnalyticsCoordinator?
+    private let clock: @Sendable () -> Date
 
     package private(set) var compiledPackIDs: [PackID]
 
@@ -31,7 +32,8 @@ public actor ServiceRuntime {
         allowOnceDirectory: URL? = nil,
         idleExitSeconds: Int = IdleWatchdog.defaultSeconds,
         log: (any ServiceLog)? = nil,
-        analytics: AnalyticsCoordinator? = nil
+        analytics: AnalyticsCoordinator? = nil,
+        clock: @escaping @Sendable () -> Date = { Date() }
     ) {
         let resolvedHome = home ?? HomeDirectory.process()
         self.configHome = resolvedHome
@@ -61,6 +63,7 @@ public actor ServiceRuntime {
         self.idleExitSeconds = idleExitSeconds
         self.log = log
         self.analytics = analytics
+        self.clock = clock
     }
 
     public func acknowledge(_ hello: Hello) -> HelloAck {
@@ -201,7 +204,18 @@ public actor ServiceRuntime {
 
     private func runEvaluate(_ request: EvaluationRequest, cwd: String?) async -> EvaluationResult {
         rebuildWhenUncovered(wanted: WalkedPackIDs(ids: request.enabledPacks))
-        let result = await gated.apply(request, cwd: cwd, store: allowOnce, now: Date())
+        let now = clock()
+        let baseDirectory = allowOnce.baseDirectory
+        let result = await gated.apply(
+            request,
+            cwd: cwd,
+            store: allowOnce,
+            now: now,
+            allowlist: {
+                AllowlistStore(baseDirectory: baseDirectory)
+                    .loadUserSnapshot(workspacePath: cwd, now: now)
+            }
+        )
         recordAnalytics(for: result)
         return result
     }
@@ -240,11 +254,18 @@ public actor ServiceRuntime {
     }
 
     private func explain(_ params: ExplainParams) async -> ExplainReply {
+        let now = clock()
+        let baseDirectory = allowOnce.baseDirectory
+        let cwd = params.cwd
         let result = await gated.peek(
             params.request,
-            cwd: params.cwd,
+            cwd: cwd,
             store: allowOnce,
-            now: Date()
+            now: now,
+            allowlist: {
+                AllowlistStore(baseDirectory: baseDirectory)
+                    .loadUserSnapshot(workspacePath: cwd, now: now)
+            }
         )
         let normalized = result.matchingView.isEmpty
             ? Normalize.matchingView(of: params.request.command.rawValue).rawValue
@@ -288,11 +309,18 @@ public actor ServiceRuntime {
     }
 
     private func classify(_ params: ClassifyParams) async -> ClassifyReply {
+        let now = clock()
+        let baseDirectory = allowOnce.baseDirectory
+        let cwd = params.cwd
         let result = await gated.peek(
             params.request,
-            cwd: params.cwd,
+            cwd: cwd,
             store: allowOnce,
-            now: Date()
+            now: now,
+            allowlist: {
+                AllowlistStore(baseDirectory: baseDirectory)
+                    .loadUserSnapshot(workspacePath: cwd, now: now)
+            }
         )
         let matched: RuleMatch?
         switch result.outcome {
