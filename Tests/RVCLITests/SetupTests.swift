@@ -824,6 +824,15 @@ final class DomainRecordingLaunchctl: LaunchctlApplying {
     }
 }
 
+@Test func launchdDomain_agentPrintTarget_isGuiSession() {
+    #expect(LaunchdDomain.gui(4242) == "gui/4242")
+    #expect(LaunchdDomain.user(4242) == "user/4242")
+    #expect(
+        LaunchdDomain.agentPrintTarget(uid: 4242, label: SetupRun.launchAgentLabel)
+            == "gui/4242/dev.rv.evaluate"
+    )
+}
+
 @Test func setupFlow_injectedUID_bakesGuiDomainForBootstrapAndBootout() throws {
     try withTempHome { home, layout, _ in
         let launchctl = DomainRecordingLaunchctl()
@@ -836,6 +845,9 @@ final class DomainRecordingLaunchctl: LaunchctlApplying {
         #expect(FileManager.default.fileExists(atPath: layout.launchAgent))
         let removed = flow.run(SetupIntent(kind: .uninstall, appearance: .robot))
         #expect(removed.exitCode == 0)
-        #expect(launchctl.bootoutDomains == ["gui/4242", "gui/4242"])
+        #expect(launchctl.bootoutDomains == [
+            "user/4242", "gui/4242",
+            "user/4242", "gui/4242",
+        ])
     }
 }
