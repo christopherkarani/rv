@@ -22,19 +22,10 @@ struct SetupOutcome: Equatable, Sendable {
     static let ok = SetupOutcome(stdout: "", exitCode: 0)
 }
 
-extension SetupHostKind {
+extension HookHost {
     func adapterResource() throws -> HostAdapterResource {
-        try HostAdapterResources.load(for: hookHost)
+        try HostAdapterResources.load(for: self)
     }
-
-    private var hookHost: HookHost {
-        switch self {
-        case .grok: .grok
-        case .pi: .pi
-        case .openCode: .opencode
-        }
-    }
-
 }
 
 struct SetupEnvironment {
@@ -119,12 +110,18 @@ enum SetupRun {
         let files = FileOps(fileManager: env.fileManager)
         let layout = OwnedPaths(home: env.home)
         let installations = try inspectInstallations(layout: layout, env: env)
-        var kinds: [SetupHostKind: SetupSlotKind] = [
-            .grok: .pending,
-            .pi: .pending,
-            .openCode: .pending,
-        ]
-        var wrote: Set<SetupHostKind> = []
+        var grokKind: SetupSlotKind = .pending
+        var piKind: SetupSlotKind = .pending
+        var openCodeKind: SetupSlotKind = .pending
+        var wrote: Set<HookHost> = []
+
+        func assign(_ kind: SetupSlotKind, to host: HookHost) {
+            switch host {
+            case .grok: grokKind = kind
+            case .pi: piKind = kind
+            case .opencode: openCodeKind = kind
+            }
+        }
 
         do {
             try files.createDirectory(atPath: layout.configDirectory)
@@ -140,7 +137,7 @@ enum SetupRun {
             case .skipUndetected:
                 continue
             case .skipOccupied:
-                kinds[host] = .occupied
+                assign(.occupied, to: host)
                 continue
             case .forceClearThenWrite:
                 do {
@@ -154,7 +151,7 @@ enum SetupRun {
             }
             let adapter: HostAdapterResource
             do {
-                adapter = try HostAdapterResources.load(for: owned.hookHost)
+                adapter = try HostAdapterResources.load(for: owned.host)
             } catch {
                 throw SetupError(adapterResourceFailure: error)
             }
@@ -172,13 +169,13 @@ enum SetupRun {
             if wroteHook {
                 wrote.insert(host)
             }
-            kinds[host] = .wired
+            assign(.wired, to: host)
         }
 
         let report = SetupReport(
-            grok: kinds[.grok] ?? .pending,
-            pi: kinds[.pi] ?? .pending,
-            openCode: kinds[.openCode] ?? .pending,
+            grok: grokKind,
+            pi: piKind,
+            openCode: openCodeKind,
             wrote: wrote
         )
         env.installAnalytics.captureInstall(hosts: InstallAnalyticsHosts.from(report.slots))
@@ -238,8 +235,8 @@ enum SetupRun {
         let layout = OwnedPaths(home: env.home)
         let installations = try inspectInstallations(layout: layout, env: env)
 
-        var removedHosts: Set<SetupHostKind> = []
-        var occupiedHosts: Set<SetupHostKind> = []
+        var removedHosts: Set<HookHost> = []
+        var occupiedHosts: Set<HookHost> = []
         var removedPaths: [String] = []
 
         for owned in layout.hostAdapters {

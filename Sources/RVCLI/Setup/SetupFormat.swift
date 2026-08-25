@@ -1,3 +1,4 @@
+import RVDomain
 import RVPresentation
 import RVTUI
 import RVTheme
@@ -9,7 +10,7 @@ struct SetupReport: Equatable, Sendable {
         grok: SetupSlotKind,
         pi: SetupSlotKind,
         openCode: SetupSlotKind,
-        wrote: Set<SetupHostKind>
+        wrote: Set<HookHost>
     ) {
         slots = SetupSlotSnapshot(grok: grok, pi: pi, openCode: openCode, wrote: wrote)
     }
@@ -17,12 +18,12 @@ struct SetupReport: Equatable, Sendable {
     var grok: SetupSlotKind { slots.grok }
     var pi: SetupSlotKind { slots.pi }
     var openCode: SetupSlotKind { slots.openCode }
-    var wrote: Set<SetupHostKind> { slots.wrote }
+    var wrote: Set<HookHost> { slots.wrote }
 }
 
 struct UninstallReport: Equatable, Sendable {
-    var removedHosts: Set<SetupHostKind>
-    var occupiedHosts: Set<SetupHostKind>
+    var removedHosts: Set<HookHost>
+    var occupiedHosts: Set<HookHost>
     var removedLaunchAgent: Bool
     var removedBinaries: Bool
     var removedConfigArtifacts: Bool

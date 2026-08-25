@@ -8,6 +8,10 @@ import Testing
     #expect(HookHost.opencode.rawValue == "opencode")
 }
 
+@Test func hookHost_allCasesAreSetupSlotOrder() {
+    #expect(HookHost.allCases.map(\.rawValue) == ["grok", "pi", "opencode"])
+}
+
 @Test func hookHost_codableIsJSONString() throws {
     let data = try JSONEncoder().encode(HookHost.opencode)
     #expect(String(data: data, encoding: .utf8) == "\"opencode\"")

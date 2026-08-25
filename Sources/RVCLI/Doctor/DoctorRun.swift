@@ -1,4 +1,5 @@
 import Foundation
+import RVDomain
 import RVHooks
 import RVIPC
 import RVPolicy
@@ -78,7 +79,7 @@ enum DoctorRun {
         return DoctorViewModel(
             service: health.service,
             packs: health.packs,
-            hosts: SetupHostKind.allCases.map { host in
+            hosts: HookHost.allCases.map { host in
                 DoctorHostView(
                     host: host,
                     state: doctorHostState(
@@ -99,7 +100,7 @@ enum DoctorRun {
         switch installation {
         case .wired(let owned, let data):
             guard let text = String(data: data, encoding: .utf8),
-                  let adapter = try? HostAdapterResources.load(for: owned.hookHost),
+                  let adapter = try? HostAdapterResources.load(for: owned.host),
                   let bakedRvPath = adapter.bakedRvPath(in: text),
                   isExecutableRvCli(nextTo: bakedRvPath, fileManager: fileManager)
             else {

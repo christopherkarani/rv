@@ -1,7 +1,6 @@
 import Foundation
 import RVDomain
 import RVHooks
-import RVPresentation
 
 /// Which command a setup-lifecycle failure belongs to. Selects the stderr
 /// prefix only; the failure phrase and exit code come from the error case.
@@ -26,15 +25,15 @@ enum LaunchctlAction {
 /// 70 internal software error (post-condition violated, state unreadable).
 enum SetupError: Error, Equatable, Sendable {
     /// Embedded Host adapter template missing or lacks its placeholder.
-    case adapterTemplateMissing(SetupHostKind)
+    case adapterTemplateMissing(HookHost)
     /// Embedded launchd plist template missing or lacks its placeholder.
     case launchAgentTemplateMissing
     /// Could not create the rv config directory.
     case configDirectoryCreateFailed
     /// Could not move an occupied owned hook aside during --force.
-    case hostHookClearFailed(SetupHostKind)
+    case hostHookClearFailed(HookHost)
     /// Could not write an owned hook payload.
-    case hostHookWriteFailed(SetupHostKind)
+    case hostHookWriteFailed(HookHost)
     /// Could not write the LaunchAgent plist.
     case launchAgentWriteFailed
     /// launchctl refused or failed the given step.
@@ -47,25 +46,7 @@ enum SetupError: Error, Equatable, Sendable {
     init(adapterResourceFailure error: HostAdapterResourceError) {
         switch error {
         case .missingTemplate(let host):
-            self = .adapterTemplateMissing(SetupHostKind(hook: host))
-        }
-    }
-}
-
-extension SetupHostKind {
-    init(hook host: HookHost) {
-        switch host {
-        case .grok: self = .grok
-        case .pi: self = .pi
-        case .opencode: self = .openCode
-        }
-    }
-
-    var failureLabel: String {
-        switch self {
-        case .grok: "grok"
-        case .pi: "pi"
-        case .openCode: "opencode"
+            self = .adapterTemplateMissing(host)
         }
     }
 }
@@ -80,7 +61,7 @@ func setupFailureOutput(
     let exitCode: Int32
     switch error {
     case .adapterTemplateMissing(let host):
-        phrase = "missing \(host.failureLabel) adapter template"
+        phrase = "missing \(host.rawValue) adapter template"
         exitCode = EX_DATAERR
     case .launchAgentTemplateMissing:
         phrase = "missing LaunchAgent template"
@@ -89,10 +70,10 @@ func setupFailureOutput(
         phrase = "unable to create config directory"
         exitCode = EX_CANTCREAT
     case .hostHookClearFailed(let host):
-        phrase = "unable to clear occupied \(host.failureLabel) hook"
+        phrase = "unable to clear occupied \(host.rawValue) hook"
         exitCode = EX_CANTCREAT
     case .hostHookWriteFailed(let host):
-        phrase = "unable to write \(host.failureLabel) hook"
+        phrase = "unable to write \(host.rawValue) hook"
         exitCode = EX_CANTCREAT
     case .launchAgentWriteFailed:
         phrase = "unable to write LaunchAgent"

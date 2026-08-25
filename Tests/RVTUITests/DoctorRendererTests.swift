@@ -20,7 +20,7 @@ private let doctorRendererFixture = DoctorViewModel(
     hosts: [
         DoctorHostView(host: .grok, state: .wired),
         DoctorHostView(host: .pi, state: .missing),
-        DoctorHostView(host: .openCode, state: .absentFile),
+        DoctorHostView(host: .opencode, state: .absentFile),
     ],
     config: .readable
 )
@@ -76,7 +76,7 @@ private let doctorRendererFixture = DoctorViewModel(
     fixture.hosts = [
         DoctorHostView(host: .grok, state: .wired),
         DoctorHostView(host: .pi, state: .occupied),
-        DoctorHostView(host: .openCode, state: .occupied),
+        DoctorHostView(host: .opencode, state: .occupied),
     ]
 
     let lines = DoctorRenderer().render(fixture, palette: colorOffPalette)

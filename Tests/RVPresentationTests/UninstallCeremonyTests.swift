@@ -17,7 +17,7 @@ import Testing
 
 @Test func uninstallCeremony_removesHostsInOrder() {
     let frames = uninstallCeremonyFrames(
-        .removed(hosts: [.grok, .openCode], occupied: [.pi])
+        .removed(hosts: [.grok, .opencode], occupied: [.pi])
     )
     #expect(frames.first?.title == uninstallCeremonyRemovingTitle)
     #expect(frames.first?.slots[0].kind == .wired)
