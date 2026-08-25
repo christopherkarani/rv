@@ -511,6 +511,24 @@ enum RvHookReplyKind rv_parse_hook_reply(
             }
             free(proto);
             saw_protocol = 1;
+        } else if (key_eq(key, key_len, "id")) {
+            char *id = NULL;
+            size_t id_len = 0;
+            free(key);
+            if (local.has_id || parse_string(&c, &id, &id_len) != 0) {
+                free(id);
+                rv_hook_reply_free(&local);
+                return RV_HOOK_REPLY_MISS;
+            }
+            if (id_len != 36) {
+                free(id);
+                rv_hook_reply_free(&local);
+                return RV_HOOK_REPLY_MISS;
+            }
+            memcpy(local.id, id, 36);
+            local.id[36] = '\0';
+            local.has_id = 1;
+            free(id);
         } else if (key_eq(key, key_len, "result")) {
             free(key);
             if (parse_result(&c, &local) != 0) {
@@ -527,7 +545,7 @@ enum RvHookReplyKind rv_parse_hook_reply(
         }
     }
     skip_ws(&c);
-    if (c.p != c.end || c.err || !saw_protocol || !saw_result) {
+    if (c.p != c.end || c.err || !local.has_id || !saw_protocol || !saw_result) {
         rv_hook_reply_free(&local);
         return RV_HOOK_REPLY_MISS;
     }

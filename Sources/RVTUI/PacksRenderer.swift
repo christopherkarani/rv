@@ -15,8 +15,8 @@ public struct PacksRenderer: FrameRenderer {
         }
     }
 
-    // Replica of upstream packs plain fallback + rich tree (src/output/tree.rs:1007):
-    // Tree with Rounded guides (├──, ╰──, │), ●/○, verbose patterns, legend.
+    /// Renders the grouped catalog with rounded tree guides, enabled markers,
+    /// optional pattern details, and a legend.
     public func renderGrouped(
         _ model: PacksGroupedViewModel,
         palette: Palette,
@@ -52,7 +52,6 @@ public struct PacksRenderer: FrameRenderer {
             return lines
         }
 
-        // Tree replica — DCG rich `pack_list_tree` with Rounded guides.
         var categoryItems: [OutlineItem] = []
         for group in model.groups {
             var packItems: [OutlineItem] = []
@@ -64,7 +63,7 @@ public struct PacksRenderer: FrameRenderer {
                     let desc = singleLine(pack.description)
                     label = "\(mark) \(pack.id.rawValue) - \(desc) (\(pack.safePatternCount) safe, \(pack.destructivePatternCount) destructive)"
                 } else {
-                    label = "\(mark) \(pack.id.rawValue) - \(pack.name)"
+                    label = "\(mark) \(pack.id.rawValue) - \(singleLine(pack.description))"
                 }
                 if verbose && (!pack.safePatterns.isEmpty || !pack.destructivePatterns.isEmpty) {
                     var patternChildren: [OutlineItem] = []
@@ -174,6 +173,20 @@ public struct PacksRenderer: FrameRenderer {
     }
 
     private func singleLine(_ text: String) -> String {
-        text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        let characters = Array(text)
+        var unwrapped = String()
+        var index = 0
+        while index < characters.count {
+            if characters[index] == "\\",
+               index + 1 < characters.count,
+               characters[index + 1].isWhitespace
+            {
+                index += 1
+                continue
+            }
+            unwrapped.append(characters[index])
+            index += 1
+        }
+        return unwrapped.split(whereSeparator: \.isWhitespace).joined(separator: " ")
     }
 }

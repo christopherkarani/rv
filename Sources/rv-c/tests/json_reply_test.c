@@ -71,6 +71,9 @@ int main(void) {
     const char *evaluate =
         "{\"id\":\"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\",\"protocol\":\"rv.ipc.v1\","
         "\"result\":{\"evaluate\":{\"via\":\"xpc\"}}}";
+    const char *missing_id =
+        "{\"protocol\":\"rv.ipc.v1\","
+        "\"result\":{\"hookEvaluate\":{\"exitCode\":0,\"stdout\":\"\",\"via\":\"xpc\"}}}";
 
     expect_ok("deny_wire", ok, "{\"decision\":\"deny\"}", 0, 1, "1.0.0");
     expect_ok("empty_allow", allow, "", 0, 0, NULL);
@@ -78,6 +81,7 @@ int main(void) {
     expect_miss("result_error", err);
     expect_miss("protocol_skew", proto_bad);
     expect_miss("unexpected_evaluate", evaluate);
+    expect_miss("missing_id", missing_id);
     expect_miss("truncated", "{\"protocol\":\"rv.ipc.v1\"");
     expect_miss("empty", "");
 

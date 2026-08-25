@@ -1,7 +1,6 @@
 import ArgumentParser
 import Foundation
 import RVDomain
-import RVPacks
 import RVPolicy
 import RVPresentation
 import RVService
@@ -45,34 +44,21 @@ struct Packs: AsyncParsableCommand {
             FileHandle.standardError.write(Data("rv packs: HOME is not set\n".utf8))
             throw ExitCode(1)
         }
-        // Always load full snapshot; filtering is local so --json and pretty share the same view.
+        // Always load the full snapshot; filtering is local so JSON and pretty share the same view.
         let full = try PacksFacade.list(home: home, enabledOnly: false)
-        var rows = full.packs
-
-        if let cat = category?.trimmingCharacters(in: .whitespacesAndNewlines), !cat.isEmpty {
-            rows = rows.filter { $0.category == cat }
-        }
-        if let q = search?.trimmingCharacters(in: .whitespacesAndNewlines), !q.isEmpty {
-            let needle = q.lowercased()
-            rows = rows.filter {
-                $0.id.rawValue.lowercased().contains(needle)
-                    || $0.name.lowercased().contains(needle)
-                    || $0.category.lowercased().contains(needle)
-                    || $0.description.lowercased().contains(needle)
-            }
-        }
-        if enabledOnly {
-            rows = rows.filter(\.enabled)
-        }
+        let filtered = PacksListFilter.apply(
+            full,
+            category: category,
+            search: search,
+            enabledOnly: enabledOnly && !all
+        )
+        let rows = filtered.packs
 
         if format.json || format.robot {
-            // JSON respects same filters; counts reflect filtered view's enabled vs filtered total for discoverability,
-            // but keep original total for legend parity when no filter.
-            let enabledInView = rows.filter(\.enabled).count
             let payload = packsRobotPayload(
                 rows: rows.map(packsRobotRow),
-                enabledCount: enabledInView,
-                totalCount: rows.count
+                enabledCount: filtered.enabledCount,
+                totalCount: filtered.totalCount
             )
             let text = RobotDocument.packsList(payload).render()
             FileHandle.standardOutput.write(Data((text + "\n").utf8))
@@ -92,36 +78,30 @@ struct Packs: AsyncParsableCommand {
             return
         }
 
-        // Replica: `rv packs` default is upstream grouped `Available packs:` (like --all).
+        // `rv packs` defaults to the complete grouped catalog; filters narrow that view.
         // Collapsed quiet path removed; use --enabled/--category/--search to narrow.
         let verboseFlag = verbose
         let expandFlag = expand
         let maxPat = max(1, maxPatterns)
 
-        // Load pattern details only when verbose (matches upstream --verbose + --expand).
-        let groupedRows: [(id: PackID, name: String, category: String, description: String, enabled: Bool, safe: Int, destructive: Int, safePatterns: [NamedPattern], destructivePatterns: [DestructiveRule])]
-        if verboseFlag {
-            groupedRows = rows.map { r in
-                let doc = try? PackRegistry.loadDocument(id: r.id.rawValue)
-                return (
-                    id: r.id,
-                    name: r.name,
-                    category: r.category,
-                    description: r.description,
-                    enabled: r.enabled,
-                    safe: r.safePatternCount,
-                    destructive: r.destructivePatternCount,
-                    safePatterns: doc?.safe ?? [],
-                    destructivePatterns: doc?.destructive ?? []
-                )
-            }
-        } else {
-            groupedRows = rows.map {
-                (id: $0.id, name: $0.name, category: $0.category, description: $0.description, enabled: $0.enabled, safe: $0.safePatternCount, destructive: $0.destructivePatternCount, safePatterns: [], destructivePatterns: [])
-            }
+        let groupedRows = rows.map { row in
+            GroupedPackRow(
+                id: row.id,
+                name: row.name,
+                category: row.category,
+                description: row.description,
+                enabled: row.enabled,
+                safePatternCount: row.safePatternCount,
+                destructivePatternCount: row.destructivePatternCount,
+                safePatterns: verboseFlag ? row.safePatterns : [],
+                destructivePatterns: verboseFlag ? row.destructivePatterns : []
+            )
         }
-        let enabledInView = rows.filter(\.enabled).count
-        let model = groupedPacksViewModel(rows: groupedRows, enabledCount: enabledInView, totalCount: rows.count)
+        let model = groupedPacksViewModel(
+            rows: groupedRows,
+            enabledCount: filtered.enabledCount,
+            totalCount: filtered.totalCount
+        )
 
         let appearance = CLIAppearance.resolve(
             json: format.json,
@@ -206,6 +186,39 @@ struct Packs: AsyncParsableCommand {
     }
 }
 
+enum PacksListFilter {
+    static func apply(
+        _ snapshot: PacksListSnapshot,
+        category: String?,
+        search: String?,
+        enabledOnly: Bool
+    ) -> PacksListSnapshot {
+        var rows = snapshot.packs
+
+        if let category = category?.trimmingCharacters(in: .whitespacesAndNewlines), !category.isEmpty {
+            rows = rows.filter { $0.category == category }
+        }
+        if let search = search?.trimmingCharacters(in: .whitespacesAndNewlines), !search.isEmpty {
+            let needle = search.lowercased()
+            rows = rows.filter {
+                $0.id.rawValue.lowercased().contains(needle)
+                    || $0.name.lowercased().contains(needle)
+                    || $0.category.lowercased().contains(needle)
+                    || $0.description.lowercased().contains(needle)
+            }
+        }
+        if enabledOnly {
+            rows = rows.filter(\.enabled)
+        }
+
+        return PacksListSnapshot(
+            packs: rows,
+            enabledCount: snapshot.enabledCount,
+            totalCount: snapshot.totalCount
+        )
+    }
+}
+
 private func mutate(ids: [String], enabling: Bool) throws {
     guard !ids.isEmpty else {
         throw ValidationError("missing pack id")
@@ -262,7 +275,16 @@ enum PacksListFormat {
         case .pretty(let value):
             palette = value
         }
-        return PrettyWriter.join(PacksRenderer().renderGrouped(model, palette: palette, verbose: verbose, expand: expand, maxPatterns: maxPatterns, collapsed: collapsed))
+        return PrettyWriter.join(
+            PacksRenderer().renderGrouped(
+                model,
+                palette: palette,
+                verbose: verbose,
+                expand: expand,
+                maxPatterns: maxPatterns,
+                collapsed: collapsed
+            )
+        )
     }
 }
 

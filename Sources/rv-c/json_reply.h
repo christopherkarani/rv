@@ -10,6 +10,8 @@ enum RvHookReplyKind {
 };
 
 struct RvHookReply {
+    int has_id;
+    char id[37];
     char *stdout_bytes;
     size_t stdout_len;
     int32_t exit_code;

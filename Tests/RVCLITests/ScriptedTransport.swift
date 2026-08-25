@@ -9,6 +9,8 @@ final class ScriptedTransport: ServiceTransport {
     let sendError: ServiceTransportError?
     let sendReply: Data?
     let responseResult: IPCResult?
+    let responseID: UUID?
+    let responseProtocolName: String?
 
     private let sentBodies = Mutex<[Data]>([])
     private let sendTimeouts = Mutex<[Int]>([])
@@ -20,13 +22,17 @@ final class ScriptedTransport: ServiceTransport {
         helloError: ServiceTransportError? = nil,
         sendError: ServiceTransportError? = nil,
         sendReply: Data? = nil,
-        responseResult: IPCResult? = nil
+        responseResult: IPCResult? = nil,
+        responseID: UUID? = nil,
+        responseProtocolName: String? = nil
     ) {
         self.ack = ack
         self.helloError = helloError
         self.sendError = sendError
         self.sendReply = sendReply
         self.responseResult = responseResult
+        self.responseID = responseID
+        self.responseProtocolName = responseProtocolName
     }
 
     var sendCount: Int { sentBodies.withLock(\.count) }
@@ -54,7 +60,13 @@ final class ScriptedTransport: ServiceTransport {
         }
         if let responseResult {
             let request = try IPCJSON.decode(IPCRequest.self, from: body)
-            return try IPCJSON.encode(IPCResponse(id: request.id, result: responseResult))
+            return try IPCJSON.encode(
+                IPCResponse(
+                    id: responseID ?? request.id,
+                    protocolName: responseProtocolName ?? request.protocolName,
+                    result: responseResult
+                )
+            )
         }
         return sendReply ?? Data()
     }

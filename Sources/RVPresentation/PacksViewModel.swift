@@ -28,19 +28,30 @@ public func packsViewModel(enabled: [PackID], catalog: [(PackID, String)]) -> Pa
     return PacksViewModel(rows: rows)
 }
 
-// MARK: - Grouped (quiet default)
+// MARK: - Grouped pack presentation
 
+/// A pack row used by the grouped catalog presentation.
 public struct GroupedPackRow: Equatable, Sendable {
+    /// The stable pack identifier.
     public var id: PackID
+    /// The human-readable pack name.
     public var name: String
+    /// The catalog category containing the pack.
     public var category: String
+    /// The short description shown in verbose output.
     public var description: String
+    /// Whether the pack is in the effective enabled set.
     public var enabled: Bool
+    /// The number of safe patterns in the pack.
     public var safePatternCount: Int
+    /// The number of destructive rules in the pack.
     public var destructivePatternCount: Int
+    /// The safe patterns shown by verbose expansion.
     public var safePatterns: [NamedPattern]
+    /// The destructive rules shown by verbose expansion.
     public var destructivePatterns: [DestructiveRule]
 
+    /// Creates a grouped pack row.
     public init(
         id: PackID,
         name: String,
@@ -64,24 +75,35 @@ public struct GroupedPackRow: Equatable, Sendable {
     }
 }
 
+/// Packs grouped by their catalog category.
 public struct PackCategoryGroup: Equatable, Sendable {
+    /// The category identifier.
     public var category: String
+    /// The packs in this category, sorted by stable identifier.
     public var packs: [GroupedPackRow]
 
+    /// Creates a category group.
     public init(category: String, packs: [GroupedPackRow]) {
         self.category = category
         self.packs = packs
     }
 
+    /// The number of enabled packs in the group.
     public var enabledCount: Int { packs.filter(\.enabled).count }
+    /// The number of packs in the group.
     public var totalCount: Int { packs.count }
 }
 
+/// The complete grouped pack catalog used by the TUI renderer.
 public struct PacksGroupedViewModel: Equatable, Sendable {
+    /// The sorted category groups.
     public var groups: [PackCategoryGroup]
+    /// The catalog-wide enabled count.
     public var enabledCount: Int
+    /// The catalog-wide pack count.
     public var totalCount: Int
 
+    /// Creates a grouped pack view model.
     public init(groups: [PackCategoryGroup], enabledCount: Int, totalCount: Int) {
         self.groups = groups
         self.enabledCount = enabledCount
@@ -89,25 +111,21 @@ public struct PacksGroupedViewModel: Equatable, Sendable {
     }
 }
 
+/// Groups pack rows by category and sorts both categories and pack IDs.
+///
+/// - Parameters:
+///   - rows: The rows to group.
+///   - enabledCount: The catalog-wide enabled count.
+///   - totalCount: The catalog-wide pack count.
+/// - Returns: A deterministic grouped view model.
 public func groupedPacksViewModel(
-    rows: [(id: PackID, name: String, category: String, description: String, enabled: Bool, safe: Int, destructive: Int, safePatterns: [NamedPattern], destructivePatterns: [DestructiveRule])],
+    rows: [GroupedPackRow],
     enabledCount: Int,
     totalCount: Int
 ) -> PacksGroupedViewModel {
     var byCategory: [String: [GroupedPackRow]] = [:]
-    for r in rows {
-        let row = GroupedPackRow(
-            id: r.id,
-            name: r.name,
-            category: r.category,
-            description: r.description,
-            enabled: r.enabled,
-            safePatternCount: r.safe,
-            destructivePatternCount: r.destructive,
-            safePatterns: r.safePatterns,
-            destructivePatterns: r.destructivePatterns
-        )
-        byCategory[r.category, default: []].append(row)
+    for row in rows {
+        byCategory[row.category, default: []].append(row)
     }
     let groups = byCategory
         .map { (cat, packs) in
@@ -115,16 +133,4 @@ public func groupedPacksViewModel(
         }
         .sorted { $0.category < $1.category }
     return PacksGroupedViewModel(groups: groups, enabledCount: enabledCount, totalCount: totalCount)
-}
-
-public func groupedPacksViewModel(
-    rows: [(id: PackID, name: String, category: String, description: String, enabled: Bool, safe: Int, destructive: Int)],
-    enabledCount: Int,
-    totalCount: Int
-) -> PacksGroupedViewModel {
-    groupedPacksViewModel(
-        rows: rows.map { (id: $0.id, name: $0.name, category: $0.category, description: $0.description, enabled: $0.enabled, safe: $0.safe, destructive: $0.destructive, safePatterns: [], destructivePatterns: []) },
-        enabledCount: enabledCount,
-        totalCount: totalCount
-    )
 }

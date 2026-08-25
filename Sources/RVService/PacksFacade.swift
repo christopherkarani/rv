@@ -11,12 +11,23 @@ public struct PacksListRow: Equatable, Sendable {
     public var enabled: Bool
     public var safePatternCount: Int
     public var destructivePatternCount: Int
+    /// The bundled safe patterns, available to verbose pack presentation.
+    public var safePatterns: [NamedPattern]
+    /// The bundled destructive rules, available to verbose pack presentation.
+    public var destructivePatterns: [DestructiveRule]
 }
 
 public struct PacksListSnapshot: Equatable, Sendable {
     public var packs: [PacksListRow]
     public var enabledCount: Int
     public var totalCount: Int
+
+    /// Creates a pack catalog snapshot with catalog-wide counts.
+    public init(packs: [PacksListRow], enabledCount: Int, totalCount: Int) {
+        self.packs = packs
+        self.enabledCount = enabledCount
+        self.totalCount = totalCount
+    }
 }
 
 public struct PacksMutationResult: Equatable, Sendable {
@@ -55,7 +66,9 @@ public enum PacksFacade {
                 description: doc.description,
                 enabled: on.contains(doc.id),
                 safePatternCount: doc.safe.count,
-                destructivePatternCount: doc.destructive.count
+                destructivePatternCount: doc.destructive.count,
+                safePatterns: doc.safe,
+                destructivePatterns: doc.destructive
             )
         }
         rows.sort { $0.id.rawValue < $1.id.rawValue }

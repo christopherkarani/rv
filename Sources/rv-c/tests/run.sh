@@ -111,6 +111,76 @@ if [[ "$(wc -c < "$NUL_STDIN" | tr -d ' ')" != "3" ]]; then
   exit 1
 fi
 
+# Bounded oversize read: the hook must start the miss child after the XPC
+# prefix limit, without waiting for EOF, and then replay the unread tail.
+LIMIT="$OUT/bounded-stdin-probe"
+rm -rf "$LIMIT"
+mkdir -p "$LIMIT"
+cp "$OUT/rv" "$LIMIT/rv"
+cat > "$LIMIT/rv-cli" <<'EOF'
+#!/bin/sh
+: > "${RV_C_START_LOG:?}"
+cat > "${RV_C_STDIN_LOG:?}"
+wc -c < "$RV_C_STDIN_LOG" > "${RV_C_COUNT_LOG:?}"
+exit 17
+EOF
+chmod 755 "$LIMIT/rv-cli"
+FIFO="$LIMIT/stdin"
+mkfifo "$FIFO"
+{
+  head -c 1048576 /dev/zero | tr '\0' 'x'
+  printf 'x'
+  printf 'tail-data-1234567'
+} > "$LIMIT/expected"
+(
+  head -c 1048576 /dev/zero | tr '\0' 'x'
+  printf 'x'
+  while [[ ! -f "$LIMIT/release" ]]; do
+    sleep 0.01
+  done
+  printf 'tail-data-1234567'
+) > "$FIFO" &
+limit_writer=$!
+set +e
+RV_C_START_LOG="$LIMIT/started" RV_C_COUNT_LOG="$LIMIT/count" \
+  RV_C_STDIN_LOG="$LIMIT/replayed" \
+  "$LIMIT/rv" hook --host grok < "$FIFO" >/dev/null 2>&1 &
+limit_rv=$!
+set -e
+limit_started=0
+for _ in $(seq 1 100); do
+  if [[ -f "$LIMIT/started" ]]; then
+    limit_started=1
+    break
+  fi
+  sleep 0.01
+done
+if [[ "$limit_started" -ne 1 ]]; then
+  kill "$limit_rv" "$limit_writer" 2>/dev/null || true
+  wait "$limit_rv" 2>/dev/null || true
+  wait "$limit_writer" 2>/dev/null || true
+  printf "rv-c tests: bounded stdin waited for EOF before miss replay\n" >&2
+  exit 1
+fi
+touch "$LIMIT/release"
+set +e
+wait "$limit_rv"
+limit_status=$?
+set -e
+wait "$limit_writer" 2>/dev/null || true
+if [[ "$limit_status" -ne 17 ]]; then
+  printf "rv-c tests: bounded stdin replay exited %s, expected 17\n" "$limit_status" >&2
+  exit 1
+fi
+if [[ "$(tr -d '[:space:]' < "$LIMIT/count")" != "1048594" ]]; then
+  printf "rv-c tests: bounded stdin replay truncated the unread tail\n" >&2
+  exit 1
+fi
+if ! cmp -s "$LIMIT/expected" "$LIMIT/replayed"; then
+  printf "rv-c tests: bounded stdin replay changed input bytes\n" >&2
+  exit 1
+fi
+
 EMPTY="$OUT/empty-home"
 rm -rf "$EMPTY"
 mkdir -p "$EMPTY"
@@ -153,7 +223,7 @@ cp "$OUT/rv" "$DIER/rv"
 printf '#!/bin/sh\nexit 9\n' > "$DIER/rv-cli"
 chmod 755 "$DIER/rv" "$DIER/rv-cli"
 SIG_STDIN="$OUT/sigpipe.stdin"
-{ printf 'a\0b'; head -c 200000 /dev/zero | tr '\0' 'x'; } > "$SIG_STDIN"
+{ printf 'a\0b'; head -c 1200000 /dev/zero | tr '\0' 'x'; } > "$SIG_STDIN"
 set +e
 "$DIER/rv" hook --host grok < "$SIG_STDIN"
 sig_st=$?
