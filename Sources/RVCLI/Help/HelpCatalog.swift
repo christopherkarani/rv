@@ -38,7 +38,7 @@ enum HelpCatalog {
                 HelpRow(name: "service", description: "Is rvd running, down, or skewed"),
             ]),
             HelpSection(heading: "Advanced", rows: [
-                HelpRow(name: "hook", description: "Host stdin adapter (Pi / Grok / OpenCode)"),
+                HelpRow(name: "hook", description: "Host stdin adapter (Pi / Grok / OpenCode / Claude)"),
                 HelpRow(name: "uninstall", description: "Remove rv-owned hooks, config, and LaunchAgent"),
             ]),
         ],

@@ -18,6 +18,7 @@ private func grokWiredFrame() -> SetupCeremonyFrame {
             SetupSlotView(host: .grok, kind: .wired, clause: setupGrokReloadClause),
             SetupSlotView(host: .pi, kind: .pending),
             SetupSlotView(host: .openCode, kind: .pending),
+            SetupSlotView(host: .claude, kind: .pending),
         ],
         closerLines: [setupCeremonyHooksWired]
     )
@@ -28,6 +29,7 @@ private func grokWiredFrame() -> SetupCeremonyFrame {
     #expect(lines.contains(SetupRenderer.leadingPad + "◦  Grok"))
     #expect(lines.contains(SetupRenderer.leadingPad + "◦  Pi"))
     #expect(lines.contains(SetupRenderer.leadingPad + "◦  OpenCode"))
+    #expect(lines.contains(SetupRenderer.leadingPad + "◦  Claude"))
     #expect(lines.contains(SetupRenderer.leadingPad + setupCeremonySearchActivity))
     #expect(lines.contains(SetupRenderer.leadingPad + setupCeremonyHostlessTitle))
     #expect(lines.contains(SetupRenderer.leadingPad + setupCeremonyHostlessNext))

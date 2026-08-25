@@ -7,11 +7,11 @@
 
 **rv** is a Mac-native destructive-command guard for coding-agent *shell* hooks. Two binaries:
 
-- `rv` — C hook + Swift operator `rv-cli` (installed as `rv` + `rv-cli` in `$HOME/.local/bin`). Hosts spawn `$HOME/.local/bin/rv hook --host {grok,pi,opencode}`; the C hook pipes `hookEvaluate` to `rvd`, or `exec`s `rv-cli hook` on miss.
+- `rv` — C hook + Swift operator `rv-cli` (installed as `rv` + `rv-cli` in `$HOME/.local/bin`). Hosts spawn `$HOME/.local/bin/rv hook --host {grok,pi,opencode,claude}`; the C hook pipes `hookEvaluate` to `rvd`, or `exec`s `rv-cli hook` on miss.
 - `rvd` — on-demand Mach XPC service `dev.rv.evaluate`, `KeepAlive false`, idle-exit ~300 s. Owns compiled day-one packs and gated evaluation.
 
 **Day-one win:** `git reset --hard` → `deny core.git:reset-hard`. `git stash drop` → `allow` + match (medium). Oversize / missing core → `indeterminate` → host deny without rule_id.
-**Hosts v1:** Pi (`~/.pi/agent/extensions/rv-guard.ts`), Grok (`~/.grok/hooks/rv.json`), OpenCode (`~/.config/opencode/plugins/rv-guard.js`). Shell/command tools only; no Read/Edit/MCP hooks. Quiet allow, native deny text. Pi also shows display-only transcript card (`registerMessageRenderer` → `string[]`); OpenCode also shows display-only toast; card/toast never replace `throw`.
+**Hosts v1:** Pi (`~/.pi/agent/extensions/rv-guard.ts`), Grok (`~/.grok/hooks/rv.json`), OpenCode (`~/.config/opencode/plugins/rv-guard.js`), Claude (`~/.claude/settings.json` merge, PreToolUse/Bash only). Shell/command tools only; no Read/Edit/MCP hooks. Quiet allow; Pi/Grok/OpenCode short deny text; Claude rich deny JSON (`systemMessage` + `hookSpecificOutput`). Pi also shows display-only transcript card (`registerMessageRenderer` → `string[]`); OpenCode also shows display-only toast; card/toast never replace `throw`.
 **Platform:** macOS 26, Apple Silicon, Swift 6.3.3, `clang -Os` for C. No Linux/Windows/macOS 14/15 claim. Config dir `$HOME/.config/rv/` (`HOME` only, no `XDG_CONFIG_HOME`). Grade is *hook*, not OS-enforced. `RV_BYPASS` is forbidden.
 
 ---
@@ -78,7 +78,7 @@
 | **RVEngine** | Functional core `evaluate`. Pure, budgeted, deadline-aware. | `evaluate(_:packs:patterns:compiled:)`, `Normalize.matchingView(of:)`, `QuickReject`, `CompiledPacks`, `PatternEngine`/`ICUPatternEngine`, `commandByteCap=65536`, `isMajorSkew` · `Evaluate.swift`, `Normalize.swift` (role-aware quote strip, wrapper unwrap `sudo/env/command/\\`), `QuickReject.swift`, `ICUPatternEngine.swift`, `PatternEngine.swift`, `CompiledPacks.swift`, `RVEngine.swift` | `RVDomain` | pack files, hooks, XPC, CLI, TUI |
 | **RVPacks** | Registry + bundled JSON catalog (95 packs, 26 categories; `windows.*` OS catalogs excluded). Disabled by default except day-one. | `PackRegistry.loadAll/loadDayOne/loadIndex`, `PackCatalog`, `PackIndex`, `PackJSON`, `PackEnablement`, `SelectionToken`, `PackDocument` · `RVPacks.swift`, `PackRegistry.swift`, `PackCatalog.swift`, `PackIndex.swift`, `PackJSON.swift`, `PackEnablement.swift`, `SelectionToken.swift` · `Resources/packs/*.json` (`core.git`, `core.filesystem` day-one + 93 off) | `RVDomain` | decisions, rendering |
 | **RVPolicy** | Config merge + overrides: allowlist + single-use allow-once grants. | `PolicyGate.{peek,apply}`, `PolicyDecision/Override`, `AllowOnceStore` (atomic CAS), `AllowOnceRecord`, `Allowlist/AllowlistStore`, `PacksConfig`, `HomeDirectory`, `ExclusiveFileLock` · `PolicyGate.swift`, `AllowOnceStore.swift`, `AllowOnceRecord.swift`, `Allowlist.swift`, `PacksConfig.swift`, `RVPolicyPaths.swift` | `RVDomain` | rendering |
-| **RVHooks** | Pi / Grok / OpenCode **Host adapters**: codecs, HostAdapterResources, Hook mapper/voice. | `HostCodec` protocol, `GrokHostCodec` (`pre_tool_use` + `run_terminal_command`/`run_terminal_cmd`/`Bash`), `PiHostCodec`, `OpenCodeHostCodec`, `HookMapper.hookWire(from:command:using:)`, `HostDenyText`, `HookDecode`, `HookDenyJSON`, `HostAdapterResources` (embed `__RV_BINARY__` → baked `rv` path) · `HostCodec.swift`, `GrokHostCodec.swift`, `PiHostCodec.swift`, `OpenCodeHostCodec.swift`, `HookMapper.swift`, `HostDenyText.swift`, `HostAdapterResources.swift` | `RVDomain` | evaluation, setup mutations, CLI/TUI |
+| **RVHooks** | Pi / Grok / OpenCode / Claude **Host adapters**: codecs, rich deny (Claude), HostAdapterResources, Hook mapper/voice. | `HostCodec` protocol, `GrokHostCodec` (`pre_tool_use` + `run_terminal_command`/`run_terminal_cmd`/`Bash`), `PiHostCodec`, `OpenCodeHostCodec`, `ClaudeHostCodec` (`PreToolUse` + `Bash`, rich `permissionDecision` deny), `ClaudeRichDeny`, `HookMapper.hookWire(from:command:using:)`, `HostDenyText`, `HookDecode`, `HookDenyJSON`, `HostAdapterResources` (embed `__RV_BINARY__` → baked `rv` path) · `HostCodec.swift`, `GrokHostCodec.swift`, `PiHostCodec.swift`, `OpenCodeHostCodec.swift`, `ClaudeHostCodec.swift`, `ClaudeRichDeny.swift`, `HookMapper.swift`, `HostDenyText.swift`, `HostAdapterResources.swift` | `RVDomain` | evaluation, setup mutations, CLI/TUI |
 | **RVIPC** | `rv.ipc.v1` Codable envelope + frame codec. | `IPCRequest/Response`, `IPCMethod`/`IPCResult` (`evaluate`, `hookEvaluate`, `explain`, `classify`, `listPacks`, `setPackEnabled`, `allowOnceConsume`, `doctorSnapshot`), `EvaluateParams/Reply`, `HookEvaluateParams/Reply`, `ExplainParams/Reply`, `ClassifyParams/Reply`, `DoctorSnapshotReply`, `Hello/HelloAck`, `ProtocolVersion` (`1.0.0`, `isMajorSkew`), `FrameCodec` (u32 BE len + 1 MiB cap), `SkewReason` · `IPCEnvelope.swift`, `IPCMethods.swift`, `ProtocolVersion.swift`, `FrameCodec.swift`, `IPCJSON.swift` | `RVDomain` | transport details |
 | **RVService** | XPC listener + warm evaluate runtime + launchd. Only `class`/`NSObject` edge. | `EvaluateSession` (CoreWarmup, compiled day-one, `corePacksReady`), `GatedEvaluate` (peek vs apply + PolicyGate), `ServiceRuntime` (`handleIncoming`, `dispatch`, `HookDoor.run`, `doctorSnapshot`, `recordAnalytics`), `HookDoor`, `XPCListener/XPCPeerSession` (`xpc_data` key `rv.ipc`), `RVDLaunch/RVDProcess`, `IdleExit`, `PacksFacade`, `EnabledPacks`, `DoctorSnapshotBuilder`, `ServiceFrames`, `XPCEvaluateClient` · `RVService.swift`, `EvaluateSession.swift`, `GatedEvaluate.swift`, `ServiceRuntime.swift`, `HookDoor.swift`, `XPCListener.swift` | `RVDomain`, `RVEngine`, `RVPacks`, `RVPolicy`, `RVHooks`, `RVIPC`, `RVHistory`, `RVAnalytics` | `ArgumentParser`, SwiftUI, TUI/CLI/Presentation |
 | **RVPresentation** | Deny/explain/packs/doctor view models (no ANSI). | `ExplainViewModel`, `TestViewModel`, `DenyViewModel`, `DoctorViewModel`, `PacksViewModel`, `SetupViewModel`, `SetupCeremony/UninstallCeremony`, `RobotPayloads`, `ExplanationLines`, `Suggestions`, `DecisionWord` · `ExplainViewModel.swift`, `TestViewModel.swift`, `DenyViewModel.swift`, `DoctorViewModel.swift`, `PacksViewModel.swift`, `SetupViewModel.swift`, `RobotPayloads.swift` | `RVDomain`, `RVTheme` | ANSI |
@@ -151,7 +151,7 @@ Order guarantee per `docs/dev/PARITY.md`: `normalize → quick-reject → safe �
 
 ```
 Host (Grok / Pi / OpenCode)
-  │ spawns  $HOME/.local/bin/rv hook --host {grok,pi,opencode}
+  │ spawns  $HOME/.local/bin/rv hook --host {grok,pi,opencode,claude}
   │ stdin = raw host JSON (Grok pre_tool_use + tool_input.command, Pi tool event, OC plugin payload)
   ▼
 rv (C) — Sources/rv-c/rv.c — 36 KB stripped
@@ -291,7 +291,7 @@ rv/
 │   └── rvd/main.swift               # @main RVD: RVDLaunch.parse → RVDProcess.run
 ├── Tests/
 │   ├── RVDomainTests/ / RVEngineTests/ (Fixtures/corpus/) / RVPacksTests/ / RVPolicyTests/
-│   ├── RVHooksTests/ (Fixtures/{grok,pi,opencode,adapters}/)
+│   ├── RVHooksTests/ (Fixtures/{grok,pi,opencode,claude,adapters}/)
 │   ├── RVIPCTests/ / RVServiceTests/ (Support/UnixFrameChannel) / RVPresentationTests/
 │   ├── RVThemeTests/ / RVTUITests/ / RVCLITests/ / RVHistoryTests/ / RVAnalyticsTests/
 │   └── RVCorpusTests/ (corpus agree)
