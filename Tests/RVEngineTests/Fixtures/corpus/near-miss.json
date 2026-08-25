@@ -126,6 +126,36 @@
       "id": "near.quoted-heredoc-angle-placeholder",
       "command": "cat >> /tmp/rv-obs.md << 'EOF'\nSee `origin/<base>...HEAD`\nEOF",
       "expected": "allow"
+    },
+    {
+      "id": "near.echo-env",
+      "command": "echo .env",
+      "expected": "allow"
+    },
+    {
+      "id": "near.printf-env",
+      "command": "printf .env",
+      "expected": "allow"
+    },
+    {
+      "id": "near.env-example",
+      "command": "cat .env.example",
+      "expected": "allow"
+    },
+    {
+      "id": "near.find-name-env",
+      "command": "find . -name .env",
+      "expected": "allow"
+    },
+    {
+      "id": "near.rg-pattern-env",
+      "command": "rg .env",
+      "expected": "allow"
+    },
+    {
+      "id": "near.grep-pattern-env-readme",
+      "command": "grep .env README.md",
+      "expected": "allow"
     }
   ]
 }

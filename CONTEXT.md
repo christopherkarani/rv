@@ -55,3 +55,7 @@ _Avoid_: explain projection, briefing, ExplainStage (the IPC timing row)
 **Explain step**:
 One stage in the Explain pipeline, including that stage's outcome (scanned or skipped, rule hit or none, allow or incomplete).
 _Avoid_: ExplainStage
+
+**Secret-path guard**:
+The allow-path scan of path-shaped operands on the matching view against `SecretPathCatalog`. Deny `rule_id` is `core.secrets:<pattern>`. Not a catalog pack. Not a third day-one ICU pack. Does not rewrite matching view.
+_Avoid_: secret pack, path sandbox, realpath

@@ -6,6 +6,7 @@ public let commandByteCap = 65_536
 public func evaluate<E: PatternEngine>(
     _ request: EvaluationRequest,
     packs: [PackSnapshot],
+    secrets: SecretPathCatalog = .dayOne,
     patterns: E,
     compiled: CompiledPacks<E.Compiled>
 ) -> EvaluationResult {
@@ -29,7 +30,10 @@ public func evaluate<E: PatternEngine>(
     let matchingView = Normalize.matchingView(of: raw)
     let enabledSnapshots = enabledPacks(from: packs, enabledIDs: request.enabledPacks)
     if QuickReject.shouldSkip(matchingView: matchingView, enabled: enabledSnapshots) {
-        return EvaluationResult(outcome: .quickRejected, matchingView: matchingView)
+        return foldSecretPathIfAllow(
+            EvaluationResult(outcome: .quickRejected, matchingView: matchingView),
+            catalog: secrets
+        )
     }
 
     var attempts = 0
@@ -59,9 +63,39 @@ public func evaluate<E: PatternEngine>(
         attempts: &attempts,
         budget: budget
     ) {
-        return withMatchingView(result, matchingView)
+        let viewed = withMatchingView(result, matchingView)
+        if isTerminal(result.outcome) {
+            return viewed
+        }
+        return foldSecretPathIfAllow(viewed, catalog: secrets)
     }
-    return EvaluationResult(outcome: .plain, matchingView: matchingView)
+    return foldSecretPathIfAllow(
+        EvaluationResult(outcome: .plain, matchingView: matchingView),
+        catalog: secrets
+    )
+}
+
+private func foldSecretPathIfAllow(
+    _ result: EvaluationResult,
+    catalog: SecretPathCatalog
+) -> EvaluationResult {
+    switch result.outcome {
+    case .quickRejected, .plain, .safeOnly, .hit:
+        break
+    case .deny, .indeterminate:
+        return result
+    }
+    guard !catalog.rules.isEmpty else { return result }
+    guard let matched = SecretPathGuard.firstHit(in: result.matchingView, catalog: catalog) else {
+        return result
+    }
+    return EvaluationResult(
+        outcome: .deny(
+            Deny(ruleID: matched.ruleID, reason: matched.reason),
+            matched: matched
+        ),
+        matchingView: result.matchingView
+    )
 }
 
 private func withMatchingView(_ result: EvaluationResult, _ matchingView: MatchingView) -> EvaluationResult {

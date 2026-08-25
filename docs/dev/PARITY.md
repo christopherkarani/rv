@@ -15,7 +15,7 @@ Pinned 0.11.0 engine source is the scoreboard. T1 implements in-process `evaluat
 
 Machine-readable pin: `vendor/parity/PIN`.
 
-Evaluation order: normalize → quick-reject → safe patterns first → destructive → default allow.
+Evaluation order: normalize → quick-reject → safe patterns first → destructive → secret-path on allow → default allow. The pin scoreboard is unchanged. Secret-path only fires when that walk would allow.
 
 ## Catalog (T9)
 
