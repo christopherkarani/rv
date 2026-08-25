@@ -1,0 +1,4 @@
+{"type":"session","version":3,"id":"pi-sess-fixture-1","timestamp":"2026-01-15T12:00:00.000Z","cwd":"/tmp/rv-scan-fixture"}
+{"type":"message","id":"m1","parentId":null,"timestamp":"2026-01-15T12:01:00.000Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"plan"},{"type":"toolCall","id":"tc-deny","name":"bash","arguments":{"command":"git reset --hard"}},{"type":"toolCall","id":"tc-read","name":"read","arguments":{"path":"/tmp/x"}}],"timestamp":1736942460000}}
+{"type":"message","id":"m2","parentId":"m1","timestamp":"2026-01-15T12:01:05.000Z","message":{"role":"toolResult","toolCallId":"tc-deny","toolName":"bash","content":[{"type":"text","text":"ok"}],"isError":false}}
+{"type":"message","id":"m3","parentId":"m2","timestamp":"2026-01-15T12:02:00.000Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"tc-allow","name":"bash","arguments":{"command":"git status"}}],"timestamp":1736942520000}}

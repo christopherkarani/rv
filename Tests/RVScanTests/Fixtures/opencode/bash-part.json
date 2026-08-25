@@ -1,0 +1,1 @@
+{"type":"tool","tool":"bash","callID":"tool_fixture_1","state":{"status":"completed","input":{"command":"git reset --hard","description":"reset"},"output":"ok","time":{"start":1736942460000,"end":1736942460100}}}
