@@ -102,7 +102,7 @@ public func setupCeremonyFrames(
         )
     }
 
-    let emptySlots = HookHost.allCases.map {
+    let emptySlots = HookHost.setupSlotOrder.map {
         SetupSlotView(host: $0, kind: .pending)
     }
     for spin in 0..<setupCeremonySpinnerFrames.count {
@@ -131,7 +131,7 @@ public func setupCeremonyFrames(
             pauseNanoseconds: setupCeremonyHostWireNs
         )
     )
-    for index in HookHost.allCases.indices {
+    for index in HookHost.setupSlotOrder.indices {
         revealed[index] = finalSlots[index]
         frames.append(
             SetupCeremonyFrame(

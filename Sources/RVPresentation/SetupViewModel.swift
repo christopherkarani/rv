@@ -7,6 +7,7 @@ extension HookHost {
         case .grok: "Grok"
         case .pi: "Pi"
         case .opencode: "OpenCode"
+        case .claude: "Claude"
         }
     }
 }
@@ -45,15 +46,16 @@ public struct SetupSlotSnapshot: Equatable, Sendable {
         case .grok: grok
         case .pi: pi
         case .opencode: openCode
+        case .claude: .pending
         }
     }
 
     public var occupied: [HookHost] {
-        HookHost.allCases.filter { kind(for: $0) == .occupied }
+        HookHost.setupSlotOrder.filter { kind(for: $0) == .occupied }
     }
 
     public var detected: [HookHost] {
-        HookHost.allCases.filter { kind(for: $0) != .pending }
+        HookHost.setupSlotOrder.filter { kind(for: $0) != .pending }
     }
 
     public var isHostless: Bool { detected.isEmpty }
@@ -76,7 +78,7 @@ public struct SetupSlotSnapshot: Equatable, Sendable {
     }
 
     public var slotViews: [SetupSlotView] {
-        HookHost.allCases.map { host in
+        HookHost.setupSlotOrder.map { host in
             let kind = kind(for: host)
             return SetupSlotView(host: host, kind: kind, clause: setupSlotClause(host: host, kind: kind))
         }
@@ -135,6 +137,7 @@ extension HookHost {
         case .grok: "Skipped occupied grok hook."
         case .pi: "Skipped occupied pi hook."
         case .opencode: "Skipped occupied opencode hook."
+        case .claude: "Skipped occupied claude hook."
         }
     }
 }

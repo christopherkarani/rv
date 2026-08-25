@@ -4,7 +4,7 @@ extension HookHost {
     /// Deny process exit: Grok `0` (JSON is the gate), Pi/OpenCode `1`.
     var denyExitCode: Int32 {
         switch self {
-        case .grok:
+        case .grok, .claude:
             return 0
         case .pi, .opencode:
             return 1

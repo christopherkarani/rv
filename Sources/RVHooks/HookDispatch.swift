@@ -14,6 +14,12 @@ public func hookWire(
         return await hookBody(stdin: stdin, codec: PiHostCodec(), evaluate: evaluate)
     case .opencode:
         return await hookBody(stdin: stdin, codec: OpenCodeHostCodec(), evaluate: evaluate)
+    case .claude:
+        return ClaudeHostCodec().encodeDeny(
+            reason: incompleteEvalSentence,
+            rule: nil,
+            next: nil
+        )
     }
 }
 

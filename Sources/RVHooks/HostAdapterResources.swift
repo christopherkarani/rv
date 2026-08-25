@@ -110,6 +110,8 @@ package enum HostAdapterResources {
             bytes = PackageResources.rv_guard_ts_tmpl
         case .opencode:
             bytes = PackageResources.rv_guard_js_tmpl
+        case .claude:
+            throw HostAdapterResourceError.missingTemplate(host)
         }
         guard let text = String(bytes: bytes, encoding: .utf8),
               text.isEmpty == false,

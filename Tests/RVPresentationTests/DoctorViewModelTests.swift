@@ -16,7 +16,7 @@ private let readyPacks = DoctorPacksView(
     registry: .ready
 )
 
-private let missingHosts = HookHost.allCases.map {
+private let missingHosts = HookHost.setupSlotOrder.map {
     DoctorHostView(host: $0, state: .missing)
 }
 
@@ -30,7 +30,7 @@ private let missingHosts = HookHost.allCases.map {
 
     #expect(model.isHealthy)
     #expect(model.grade == .hook)
-    #expect(model.hosts.map(\.host) == HookHost.allCases)
+    #expect(model.hosts.map(\.host) == HookHost.setupSlotOrder)
 }
 
 @Test func doctorViewModel_missingDayOnePackIsUnhealthy() {

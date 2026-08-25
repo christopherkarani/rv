@@ -435,6 +435,7 @@ private extension SetupSlotSnapshot {
         case .grok: grok = kind
         case .pi: pi = kind
         case .opencode: openCode = kind
+        case .claude: break
         }
     }
 }
