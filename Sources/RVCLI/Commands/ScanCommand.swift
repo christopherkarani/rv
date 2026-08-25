@@ -32,9 +32,6 @@ struct ScanSessionsFlags: ParsableArguments {
     @Flag(name: .customLong("all-events"), help: "Emit one row per deny event (skip dedupe).")
     var allEvents = false
 
-    @Flag(name: .customLong("fail-on-findings"), help: "Exit 2 when deny findings exist.")
-    var failOnFindings = false
-
     @Option(name: .customLong("include-glob"), help: "Extra glob patterns under an explicit path.")
     var includeGlobs: [String] = []
 
