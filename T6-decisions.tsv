@@ -1,5 +1,0 @@
-ts	phase	decision	why	evidence	result
-2026-08-25T19:40:00Z	design	ScanTimeWindow + ScanFindingInstantResolver; filter uses injectable now and file mtime fallback for nil occurredAt	REQ-004 + T6-nil-timestamp note; keeps classify pure	Sources/RVScan/TimeWindow.swift	chosen
-2026-08-25T19:40:00Z	design	ScanDedupeKey = matchingView.rawValue + ruleID.rawValue (colon); merge sums count, max lastSeen, keeps latest provenance	REQ-010 + AC-003	Sources/RVScan/Dedupe.swift	chosen
-2026-08-25T19:40:00Z	design	architect skipped	dedupe/time API locked by spec §4.2 + AC-003/005	T3-decisions.tsv precedent	skipped
-2026-08-25T19:41:00Z	nil-ts	Effective instant order: lastSeen ?? occurredAt ?? fileMtime(sourcePath); exclude when all nil under active window	Grok adapter may emit nil occurredAt; mtime keeps events visible	T6-nil-timestamp.md	chosen
