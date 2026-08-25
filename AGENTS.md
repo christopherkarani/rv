@@ -33,6 +33,7 @@ Gate: `tools/gate.sh` (runs `preflight` + filtered tests via `tools/swift-6.3.3`
 
 ## Forbidden (condensed)
 
+- One user command: `rv`. Do not present `rv-cli` as a CLI or install hero. It is the on-disk operator sibling the hook client execs. Vocabulary: `CONTEXT.md`.
 - No `RV_BYPASS` or any env a hook child honors to skip evaluate.
 - No allow-because-XPC-missed (down or skew must in-process evaluate).
 - No Read/Edit/MCP hooks in v1.

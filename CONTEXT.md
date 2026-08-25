@@ -4,6 +4,18 @@ Mac-native destructive-command guard for coding-agent shell hooks. Day-one hosts
 
 ## Language
 
+**CLI surface**:
+`rv`. Humans type `rv <subcommand>`. Hosts spawn `rv hook`. There is no second command.
+_Avoid_: rv-cli as a product, “the Swift CLI”, listing rv-cli next to rv and rvd as three tools
+
+**Hook client**:
+The C program installed at `$HOME/.local/bin/rv`. Pipes `hookEvaluate` to rvd. Non-hook argv and XPC miss exec the operator.
+_Avoid_: C matcher, C evaluator
+
+**Operator**:
+The Swift binary that implements test/setup/doctor/packs/explain/allow-once and the hook miss path. SPM product name is still `rv`. Install stages it next to the hook client under the on-disk name `rv-cli`. That name is a sibling path, not a CLI surface.
+_Avoid_: rv-cli CLI, operator CLI, three CLIs
+
 **Evaluate session**:
 The compiled day-one packs from which a Decision is produced. TTY test/explain and a hook miss share one; TTY never asks rvd. It does not honor allow-once grants.
 _Avoid_: in-process fallback, composer, warm evaluate

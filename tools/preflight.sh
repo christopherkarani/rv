@@ -58,6 +58,7 @@ Available checks:
   no-ns-home             No NSHomeDirectory() in Sources or Tests
   no-os-log-cmdtext     No command text written to os_log (structural check)
   name-hygiene          No dcg/ryk tokens outside docs/factory/
+  one-cli-surface       README/help must not list rv-cli as a command
   no-xctest             Tests use Swift Testing, not XCTest
   no-main-in-library     No main.swift or @main in library targets
   graph-no-engine-packs  RVEngine does not import RVPacks
@@ -274,6 +275,26 @@ check_name_hygiene() {
   return 0
 }
 
+check_one_cli_surface() {
+  # PLAN #25: only user command is rv. On-disk operator name may live in
+  # install/C/doctor internals. README and help catalogs must not tell a
+  # human to type rv-cli.
+  local matches
+  matches=$(grep -n 'rv-cli' \
+    "$ROOT/README.md" \
+    "$SOURCES/RVCLI/Help/HelpCatalog.swift" \
+    2>/dev/null || true)
+  local count
+  count=$(printf '%s\n' "$matches" | grep -c . || true)
+  if [ "$count" -gt 0 ]; then
+    printf "  %b✗ One CLI surface: rv-cli in README or help%b (%d)\n" "$RED" "$NC" "$count"
+    echo "$matches" | head -10 | indent
+    return 1
+  fi
+  if [ "$QUIET" -eq 0 ]; then printf "  %b✓%b %s\n" "$GREEN" "$NC" "One CLI surface: README/help do not list rv-cli"; fi
+  return 0
+}
+
 check_no_xctest() {
   # Word-boundary: avoid matching import XCTestHelper / import XCTestMocks.
   check_empty "Tests use Swift Testing, not XCTest" 'import XCTest$' "$TESTS" --include='*.swift'
@@ -482,6 +503,7 @@ ALL_CHECKS=(
   no-ns-home
   no-os-log-cmdtext
   name-hygiene
+  one-cli-surface
   no-xctest
   no-main-in-library
   graph-no-engine-packs
@@ -502,6 +524,7 @@ run_check() {
     no-ns-home)             check_no_ns_home ;;
     no-os-log-cmdtext)      check_no_os_log_cmdtext ;;
     name-hygiene)           check_name_hygiene ;;
+    one-cli-surface)        check_one_cli_surface ;;
     no-xctest)              check_no_xctest ;;
     no-main-in-library)     check_no_main_in_library ;;
     graph-no-engine-packs)  check_graph_no_engine_packs ;;

@@ -5,10 +5,11 @@
 
 ## 1. Overview
 
-**rv** is a Mac-native destructive-command guard for coding-agent *shell* hooks. Two binaries:
+**rv** is a Mac-native destructive-command guard for coding-agent *shell* hooks. One CLI: `rv`. `rvd` is the service.
 
-- `rv` — C hook + Swift operator `rv-cli` (installed as `rv` + `rv-cli` in `$HOME/.local/bin`). Hosts spawn `$HOME/.local/bin/rv hook --host {grok,pi,opencode}`; the C hook pipes `hookEvaluate` to `rvd`, or `exec`s `rv-cli hook` on miss.
-- `rvd` — on-demand Mach XPC service `dev.rv.evaluate`, `KeepAlive false`, idle-exit ~300 s. Owns compiled day-one packs and gated evaluation.
+- **Hook client** — C program installed as `$HOME/.local/bin/rv`. Hosts spawn `rv hook --host {grok,pi,opencode}`. Pipes `hookEvaluate` to `rvd`, or execs the **operator** on miss / non-hook argv.
+- **Operator** — Swift binary (SPM product `rv`) staged on disk as `rv-cli` so C can keep the `rv` path. Not a second CLI. Do not document it as a command.
+- **Service** — `rvd`, on-demand Mach XPC `dev.rv.evaluate`, `KeepAlive false`, idle-exit ~300 s. Owns compiled day-one packs and gated evaluation.
 
 **Day-one win:** `git reset --hard` → `deny core.git:reset-hard`. `git stash drop` → `allow` + match (medium). Oversize / missing core → `indeterminate` → host deny without rule_id.
 **Hosts v1:** Pi (`~/.pi/agent/extensions/rv-guard.ts`), Grok (`~/.grok/hooks/rv.json`), OpenCode (`~/.config/opencode/plugins/rv-guard.js`). Shell/command tools only; no Read/Edit/MCP hooks. Quiet allow, native deny text. Pi also shows display-only transcript card (`registerMessageRenderer` → `string[]`); OpenCode also shows display-only toast; card/toast never replace `throw`.
