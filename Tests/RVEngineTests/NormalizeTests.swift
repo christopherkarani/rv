@@ -65,6 +65,15 @@ import Testing
     #expect(applyRoleAwareQuotes("git reset \"--hard\"") == "git reset --hard")
 }
 
+@Test func normalize_preservesEmptyQuotedArguments() {
+    let tokens = tokenizeCommand("git commit -m \"\" \"git push --force\"")
+    #expect(tokens.map(\.decoded) == ["git", "commit", "-m", "", "git push --force"])
+    #expect(
+        applyRoleAwareQuotes("git commit -m \"\" \"git push --force\"")
+            == "git commit -m   git push --force"
+    )
+}
+
 @Test func normalize_concatenatesAdjacentQuotes() {
     #expect(Normalize.matchingView(of: "git reset --'hard'") == "git reset --hard")
     #expect(Normalize.matchingView(of: "git reset --\"hard\"") == "git reset --hard")

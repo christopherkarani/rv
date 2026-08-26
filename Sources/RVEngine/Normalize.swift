@@ -47,6 +47,7 @@ func tokenizeCommand(_ text: String) -> [CommandToken] {
         }
         guard index < text.endIndex else { break }
 
+        let tokenStart = index
         var decoded = ""
         var wasQuoted = false
 
@@ -96,7 +97,7 @@ func tokenizeCommand(_ text: String) -> [CommandToken] {
             index = text.index(after: index)
         }
 
-        if !decoded.isEmpty {
+        if index > tokenStart {
             tokens.append(CommandToken(decoded: decoded, wasQuoted: wasQuoted))
         }
     }
