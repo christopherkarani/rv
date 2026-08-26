@@ -5,8 +5,6 @@ import RVDomain
 
 @Suite("PendingApproval store")
 struct PendingApprovalStoreTests {
-    private static let now = Date(timeIntervalSince1970: 1_700_000_000)
-
     @Test func processRestartReloadsPendingAndResolvedRecords() async throws {
         let root = try isolatedDirectory()
         let first = PendingApprovalStore(baseDirectory: root)
@@ -313,6 +311,7 @@ private func consumeResult(
 }
 
 private extension PendingApprovalStoreTests {
+    static let now = Date(timeIntervalSince1970: 1_700_000_000)
     static let fingerprint = ActionFingerprint(rawValue: "shell:git.force-push:origin:main")
     static let identity = ApprovalIdentity(
         session: SessionIdentity(rawValue: "sess-1"),
