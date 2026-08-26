@@ -14,25 +14,25 @@ Indeterminate never consumes. Replay without a live grant is ask or deny again, 
 
 **Bridge (shared).** `ApprovalContinuation.hostNative` exists. There is no `ApprovalBridge` yet. Product Ask is `BoundReview.mandatoryHuman` (`02.md` `.ask`). `BoundReview.decision` still projects Ask to `Decision.deny`, so `HookMapper` never pauses.
 
-Shared work: stop collapsing Ask to deny before Ask-capable hosts; carry Ask on the operator→adapter wire without adding `Decision.ask`; resolve Allow once / Deny through PolicyGate. Grok, and any host with no pause, stay deny or TTY — never `encodeAllow` on Ask.
+Shared work: stop collapsing Ask to deny before hosts that can spend first (Pi confirm); carry Ask on the operator→adapter wire without adding `Decision.ask`; resolve Allow once / Deny through PolicyGate. Grok, OpenCode, Claude (until a spend-first callback), and any host with no pause, stay deny or TTY — never `encodeAllow` on Ask.
 
 `PendingApproval` / OPE-246 is after host Ask. Not the 264 pause.
 
 Pause only for `mandatoryHuman` once that verdict is on the hook door. Pack deny stays `encodeDeny`. TTY allow-once still unlocks pack deny.
 
-**Pause (host-specific).** Official APIs from 267 only. Shared is when to pause. Fail-closed: no UI, confirm false, timeout, cancel, crash, missing API → deny or TTY, never silent allow.
+**Pause (host-specific).** Official APIs from 267 only. Shared is when to pause. Fail-closed: no UI, confirm false, timeout, cancel, crash, missing API → deny or TTY, never silent allow. A pause that lets the tool run before a PolicyGate spend is leftover-ask-as-permit — do not call it. Stay deny-or-TTY until a same-turn or callback spend exists (Pi confirm, OpenClaw `onResolution`).
 
 ## Per host (only 267)
 
 **Pi (264).** Official pause: `ctx.ui.confirm` in `rv-guard.ts` (tests forbid it today). Same `tool_call`: yes → PolicyGate spend then allow; no / `hasUI` false / confirm false → `{ block: true }`. Card stays chrome. Confirm-yes without the store is the 267 hole.
 
-**OpenCode (264).** No official RV pause. Plugin path is throw or return. Do not invent `permission.ask`. Ask → throw or TTY. Host permission prompts do not reach PolicyGate. Toast stays chrome.
+**OpenCode (264).** No official RV pause. Plugin path is throw or return. Do not invent `permission.ask`. Ask → throw or TTY (the tool does not run). Host permission prompts do not reach PolicyGate. Toast stays chrome.
 
-**Claude (264).** Official pause: `permissionDecision: "ask"`. Documented `hookSpecificOutput` keys only (extras fail-open a deny). Claude Allow is not a PolicyGate grant (267, CL-later-ask). This call may run; replay must re-enter the hook and must not auto-allow. If the host caches Allow and skips the hook, stay on deny — do not emit ask. TTY allow-once remains the RV grant.
+**Claude (264).** Official pause exists (`permissionDecision: "ask"`) but first-call host Allow runs the tool with no PolicyGate spend — leftover-ask-as-permit (267, CL-later-ask). Do not emit `"ask"` until a callback can spend first, then allow. Until that callback exists: deny or TTY, same as OpenCode. Documented `hookSpecificOutput` keys only if ask is ever emitted (extras fail-open a deny). TTY allow-once remains the RV grant.
 
-**OpenClaw (after 264).** Official pause: `requireApproval`. Hard deny stays `{ block: true }` (`block` wins). `onResolution` allow-once → PolicyGate spend. Host `allow-always` is not this grant and not createRule; this-call-only or deny. Timeout / no route / cancel → block.
+**OpenClaw (after 264).** Official pause: `requireApproval`. Hard deny stays `{ block: true }` (`block` wins). `onResolution` allow-once → PolicyGate spend then allow. Host `allow-always` is not this grant and not createRule; this-call-only or deny. Timeout / no route / cancel → block.
 
-**Hermes (after OpenClaw).** Official pause: `{"action": "approve"}`. Exceptions still `{ action: "block" }`. Hermes-gate Allow is not a PolicyGate grant (267). Same replay rule as Claude. If post-Allow retry skips `pre_tool_call`, stay on block.
+**Hermes (after OpenClaw).** Official pause exists (`{"action": "approve"}`) but first-call Hermes-gate Allow runs the tool with no PolicyGate spend — leftover-ask-as-permit (267). Do not return `approve` until a callback can spend first, then allow. Until that callback exists: `{ action: "block" }` or TTY. Exceptions still block.
 
 ## Order
 
@@ -47,4 +47,4 @@ Grok stays deny-or-TTY. No extra hosts.
 
 Auto-review / OPE-253. No reviewer path. No live `reviewEligible`. `PendingApproval` always-on. createRule / Always Allow.
 
-264 can be pulled from the shared + Pi / OpenCode / Claude rows. This ticket writes no Ask.
+264 can be pulled from shared grant writer + bridge, Pi spend-then-allow, and OpenCode / Claude deny-or-TTY. This ticket writes no Ask.
