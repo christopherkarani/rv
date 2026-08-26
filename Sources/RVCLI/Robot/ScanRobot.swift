@@ -54,7 +54,8 @@ struct ScanWarningRobotRow: Equatable, Sendable, Encodable {
 
 func scanSessionsRobotPayload(
     from report: ScanReport,
-    showCommand: Bool
+    showCommand: Bool,
+    setupNudge: Bool = false
 ) -> ScanSessionsRobotPayload {
     ScanSessionsRobotPayload(
         schema: RobotSchema.scanSessions,
@@ -62,17 +63,18 @@ func scanSessionsRobotPayload(
         warnings: report.warnings.map { ScanWarningRobotRow(code: $0.code, message: $0.message) },
         filesScanned: report.filesScanned,
         eventsExtracted: report.eventsExtracted,
-        setupNudge: false
+        setupNudge: setupNudge
     )
 }
 
 func renderScanSessionsRobot(
     from report: ScanReport,
-    showCommand: Bool
+    showCommand: Bool,
+    setupNudge: Bool = false
 ) -> String {
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-    let payload = scanSessionsRobotPayload(from: report, showCommand: showCommand)
+    let payload = scanSessionsRobotPayload(from: report, showCommand: showCommand, setupNudge: setupNudge)
     do {
         let data = try encoder.encode(payload)
         return String(decoding: data, as: UTF8.self)
