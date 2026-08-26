@@ -11,9 +11,79 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Extra hygiene only. Not the Swift gate (OPE-263).
   preflight:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - run: tools/preflight.sh --quiet
+
+  # Gate: official Swift 6.3.3 Linux tarball, then unfiltered `swift test`.
+  # Not apt swift. Not tools/gate.sh --filter. Not swift test --filter
+  # (6.3.3 SPM has no --target; --filter still typechecks everything).
+  test:
+    name: swift test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache official Swift Linux tarball
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/share/swift
+            ~/.cache/swift
+          key: official-swift-${{ hashFiles('.swift-version') }}-ubuntu24.04-${{ runner.arch }}
+
+      - name: Tarball runtime deps (not apt swift)
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            binutils \
+            git \
+            gnupg2 \
+            libc6-dev \
+            libcurl4-openssl-dev \
+            libedit2 \
+            libgcc-13-dev \
+            libncurses-dev \
+            libpython3-dev \
+            libsqlite3-0 \
+            libstdc++-13-dev \
+            libxml2-dev \
+            libz3-dev \
+            pkg-config \
+            tzdata \
+            zip \
+            unzip \
+            zlib1g-dev
+          if dpkg-query -W -f='${Status}\n' swift swiftlang 2>/dev/null \
+            | grep -q 'install ok installed'; then
+            printf 'pr: apt swift/swiftlang is present; refuse\n' >&2
+            exit 1
+          fi
+
+      - name: Install official Swift 6.3.3 Linux tarball
+        run: |
+          bin="$(tools/install-official-swift-linux.sh --print-bin)"
+          echo "$bin" >> "$GITHUB_PATH"
+          echo "Official tarball bin: $bin"
+
+      - name: Confirm official Swift 6.3.3
+        run: |
+          echo "swift=$(command -v swift)"
+          swift --version
+          pin="$(tr -d '[:space:]' < .swift-version)"
+          swift --version | head -n 1 | grep -Eq "Swift version ${pin}( |$)"
+          case "$(command -v swift)" in
+            */.local/share/swift/swift-*-RELEASE-*/usr/bin/swift) ;;
+            *)
+              echo "swift is not the official tarball install" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Swift tests
+        run: swift test

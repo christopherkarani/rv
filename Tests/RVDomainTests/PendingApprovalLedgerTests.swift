@@ -415,22 +415,22 @@ struct PendingApprovalLedgerTests {
     }
 
     @Test func resumeAndRetryContinuationsRoundTrip() throws {
-        let resume = try PendingApprovalLedger.create(
+        let (resume, _) = try PendingApprovalLedger.create(
             records: [],
             request: Self.request(
                 id: "resume",
                 continuation: .resume(ApprovalResumeToken(rawValue: "tok-1"))
             ),
             now: Self.now
-        ).record
-        let retry = try PendingApprovalLedger.create(
+        )
+        let (retry, _) = try PendingApprovalLedger.create(
             records: [],
             request: Self.request(
                 id: "retry",
                 continuation: .retry(Self.fingerprint)
             ),
             now: Self.now
-        ).record
+        )
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         let decoder = JSONDecoder()
