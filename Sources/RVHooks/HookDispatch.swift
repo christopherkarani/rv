@@ -18,6 +18,8 @@ public func hookWire(
         return await hookBody(stdin: stdin, codec: ClaudeHostCodec(), evaluate: evaluate)
     case .openclaw:
         return await hookBody(stdin: stdin, codec: OpenClawHostCodec(), evaluate: evaluate)
+    case .hermes:
+        return await hookBody(stdin: stdin, codec: HermesHostCodec(), evaluate: evaluate)
     }
 }
 

@@ -15,6 +15,7 @@ Living board for implement sessions. Do **not** re-grill. Do **not** load `docs/
 | Done | session scan T1–T10 | `rv scan` / `rv scan sessions` session forensics. Spec: [`spec/spec-architecture-session-scan.md`](../../spec/spec-architecture-session-scan.md). |
 | Done | Claude CL-T1–T5 | Codec, dispatch, settings merge, doctor, MODULES. Spec: [`specs/claude-host.md`](specs/claude-host.md). |
 | Done | OpenClaw host (OPE-266) | Host only, no Ask. `HookHost.openclaw`, `before_tool_call` / `exec`, exclusive `~/.openclaw/extensions/rv-guard/`, fail-closed sqlite scan. |
+| Done | Hermes host (OPE-265) | Host only, no Ask. `HookHost.hermes`, `pre_tool_call` / `terminal`, exclusive `~/.hermes/plugins/rv-guard/`, fail-closed sqlite scan. |
 | Next | Claude CL-later-ask | Fenced: `permissionDecision: "ask"`. Not started. |
 | Next | Claude CL-later-secrets | Fenced: Read/Edit/Write secret-path guards. Not started. |
 | Next | Claude CL-later-mcp | Fenced: MCP tool-name / args policy. Not started. |

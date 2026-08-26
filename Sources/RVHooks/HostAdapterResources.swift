@@ -112,6 +112,8 @@ package enum HostAdapterResources {
             bytes = PackageResources.rv_guard_js_tmpl
         case .openclaw:
             bytes = PackageResources.rv_guard_openclaw_js_tmpl
+        case .hermes:
+            bytes = PackageResources.rv_guard_hermes_py_tmpl
         case .claude:
             throw HostAdapterResourceError.missingTemplate(host)
         }
@@ -124,14 +126,18 @@ package enum HostAdapterResources {
         return HostAdapterResource(template: text)
     }
 
-    /// Returns the OpenClaw plugin manifest (`openclaw.plugin.json`).
+    /// Returns the OpenClaw plugin manifest or Hermes `plugin.yaml`.
     package static func loadPluginManifest(
         for host: HookHost
     ) throws(HostAdapterResourceError) -> String {
-        guard host == .openclaw else {
+        switch host {
+        case .openclaw:
+            return try loadCompanion(PackageResources.openclaw_plugin_json, host: host)
+        case .hermes:
+            return try loadCompanion(PackageResources.hermes_plugin_yaml, host: host)
+        case .grok, .pi, .opencode, .claude:
             throw HostAdapterResourceError.missingTemplate(host)
         }
-        return try loadCompanion(PackageResources.openclaw_plugin_json, host: host)
     }
 
     /// Returns the OpenClaw package manifest (`package.json`).

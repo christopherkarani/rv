@@ -16,6 +16,7 @@ import Testing
     #expect(ScanHostID.grok.rawValue == "grok")
     #expect(ScanHostID.opencode.rawValue == "opencode")
     #expect(ScanHostID.openclaw.rawValue == "openclaw")
+    #expect(ScanHostID.hermes.rawValue == "hermes")
 }
 
 @Test func scanHome_rejectsEmptyPath() {

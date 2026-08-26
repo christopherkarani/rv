@@ -45,6 +45,10 @@ import RVDomain
     #expect(openClaw.stdout.contains("\"permissionDecision\"") == false)
     #expect(openClaw.stdout.contains("\"decision\":\"deny\""))
     #expect(openClaw.exitCode == 1)
+    let hermes = hookWire(from: result, command: command, using: HermesHostCodec())
+    #expect(hermes.stdout.contains("\"permissionDecision\"") == false)
+    #expect(hermes.stdout.contains("\"decision\":\"deny\""))
+    #expect(hermes.exitCode == 1)
 }
 
 @Test func hookWire_allowIsEmpty() {

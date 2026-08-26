@@ -38,7 +38,7 @@ enum HelpCatalog {
                 HelpRow(name: "service", description: "Is rvd running, down, or skewed"),
             ]),
             HelpSection(heading: "Advanced", rows: [
-                HelpRow(name: "hook", description: "Host stdin adapter (Pi / Grok / OpenCode / Claude / OpenClaw)"),
+                HelpRow(name: "hook", description: "Host stdin adapter (Pi / Grok / OpenCode / Claude / OpenClaw / Hermes)"),
                 HelpRow(name: "uninstall", description: "Remove rv-owned hooks, config, and LaunchAgent"),
             ]),
         ],
@@ -153,7 +153,7 @@ enum HelpCatalog {
                 HelpRow(name: "rv hook [--host <host>]"),
             ]),
             HelpSection(heading: "Flags", rows: [
-                HelpRow(name: "--host <host>", description: "Host codec: grok (default), pi, opencode, claude, openclaw"),
+                HelpRow(name: "--host <host>", description: "Host codec: grok (default), pi, opencode, claude, openclaw, hermes"),
             ]),
         ]
     )

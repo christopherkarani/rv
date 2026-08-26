@@ -74,19 +74,22 @@ struct HostAdapterInstallationSnapshot: Equatable, Sendable {
     private var openCode: HostAdapterInstallation
     private var claude: HostAdapterInstallation
     private var openClaw: HostAdapterInstallation
+    private var hermes: HostAdapterInstallation
 
     init(
         grok: HostAdapterInstallation,
         pi: HostAdapterInstallation,
         openCode: HostAdapterInstallation,
         claude: HostAdapterInstallation,
-        openClaw: HostAdapterInstallation
+        openClaw: HostAdapterInstallation,
+        hermes: HostAdapterInstallation
     ) {
         self.grok = grok
         self.pi = pi
         self.openCode = openCode
         self.claude = claude
         self.openClaw = openClaw
+        self.hermes = hermes
     }
 
     /// Returns the doctor-facing state for `host`.
@@ -107,6 +110,8 @@ struct HostAdapterInstallationSnapshot: Equatable, Sendable {
             claude
         case .openclaw:
             openClaw
+        case .hermes:
+            hermes
         }
     }
 }
@@ -141,6 +146,11 @@ extension HostAdapterInstallation {
             ),
             openClaw: try inspect(
                 path: paths.hostAdapter(for: .openclaw),
+                pathEntries: pathEntries,
+                fileManager: fileManager
+            ),
+            hermes: try inspect(
+                path: paths.hostAdapter(for: .hermes),
                 pathEntries: pathEntries,
                 fileManager: fileManager
             )

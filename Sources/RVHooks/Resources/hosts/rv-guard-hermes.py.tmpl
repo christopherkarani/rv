@@ -1,0 +1,105 @@
+"""RV destructive-command guard for Hermes terminal.
+
+Registers ``pre_tool_call`` only. Deny is ``{"action": "block", "message"}``.
+Missing rv / timeout / crash / non-JSON deny. Exceptions never escape — Hermes
+isolates hook errors and would otherwise fail open.
+"""
+
+import json
+import os
+import subprocess
+
+RV_BINARY = "__RV_BINARY__"
+RV_HOOK_TIMEOUT_S = 5
+
+
+def register(ctx):
+    ctx.register_hook("pre_tool_call", _on_pre_tool_call)
+
+
+def _on_pre_tool_call(tool_name="", args=None, **kwargs):
+    try:
+        return _guard(tool_name, args, kwargs)
+    except Exception:
+        return {"action": "block", "message": "rv failed"}
+
+
+def _guard(tool_name, args, kwargs):
+    if tool_name != "terminal":
+        return None
+    mapped = _consult_rv(_envelope(tool_name, args, kwargs))
+    if mapped["action"] == "block":
+        return {"action": "block", "message": mapped["reason"]}
+    return None
+
+
+def _envelope(tool_name, args, kwargs):
+    args = args if isinstance(args, dict) else {}
+    command = args.get("command")
+    workdir = args.get("workdir")
+    cwd = _pick_cwd(workdir)
+    session_id = kwargs.get("session_id")
+    task_id = kwargs.get("task_id")
+    payload = {"toolName": tool_name, "args": {}}
+    if isinstance(command, str):
+        payload["args"]["command"] = command
+    if isinstance(workdir, str) and workdir:
+        payload["args"]["workdir"] = workdir
+    if cwd:
+        payload["cwd"] = cwd
+    if isinstance(session_id, str) and session_id:
+        payload["sessionId"] = session_id
+    if isinstance(task_id, str) and task_id:
+        payload["taskId"] = task_id
+    return payload
+
+
+def _pick_cwd(host_cwd):
+    if isinstance(host_cwd, str) and host_cwd:
+        return host_cwd
+    try:
+        cwd = os.getcwd()
+        if isinstance(cwd, str) and cwd:
+            return cwd
+    except Exception:
+        pass
+    return None
+
+
+def _consult_rv(payload):
+    return _spawn_rv_hook("hermes", json.dumps(payload))
+
+
+def _spawn_rv_hook(host, stdin):
+    try:
+        completed = subprocess.run(
+            [RV_BINARY, "hook", "--host", host],
+            input=stdin,
+            capture_output=True,
+            text=True,
+            timeout=RV_HOOK_TIMEOUT_S,
+        )
+    except FileNotFoundError:
+        return {"action": "block", "reason": "rv missing"}
+    except (OSError, subprocess.TimeoutExpired):
+        return {"action": "block", "reason": "rv failed"}
+    return _map_rv_hook_result(completed.stdout, completed.returncode)
+
+
+def _map_rv_hook_result(stdout, exit_code):
+    trimmed = (stdout or "").strip()
+    if trimmed:
+        try:
+            parsed = json.loads(trimmed)
+            if isinstance(parsed, dict) and parsed.get("decision") == "deny":
+                reason = parsed.get("reason")
+                return {
+                    "action": "block",
+                    "reason": reason if isinstance(reason, str) else "",
+                }
+        except (ValueError, TypeError):
+            pass
+        return {"action": "block", "reason": "rv failed"}
+    if exit_code == 0:
+        return {"action": "allow"}
+    return {"action": "block", "reason": "rv failed"}

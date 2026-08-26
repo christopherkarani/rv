@@ -304,6 +304,7 @@ private func runHook(
     #expect(try Hook.parse(["--host", "opencode"]).host == .opencode)
     #expect(try Hook.parse(["--host", "claude"]).host == .claude)
     #expect(try Hook.parse(["--host", "openclaw"]).host == .openclaw)
+    #expect(try Hook.parse(["--host", "hermes"]).host == .hermes)
 }
 
 @Test func hookClaudeDenyResetHard_emitsRichDeny() async throws {
@@ -502,6 +503,65 @@ private func runHook(
     #expect(probe.commands.isEmpty)
     #expect(wire.stdout == expected.stdout)
     #expect(wire.exitCode == expected.exit)
+}
+
+@Test func hookHermesDenyResetHard_reasonEqualsHostDenyText() async throws {
+    let expected = try hostExpected("hermes", "deny-git-reset-hard")
+    let command = ShellCommand(rawValue: "git reset --hard")
+    let result = try await cliEvaluate(command.rawValue)
+    let text = try #require(hostDenyText(from: result, command: command))
+    let wire = try await runHook(
+        stdin: try hostFixture("hermes", "deny-git-reset-hard.json"),
+        host: .hermes
+    )
+    let json = try denyJSON(wire.stdout)
+    #expect(json["reason"] as? String == text)
+    #expect(json["rule"] as? String == "core.git/reset-hard")
+    #expect(wire.exitCode == expected.exit)
+    #expect(wire.exitCode == 1)
+    #expect(wire.stdout.contains(text))
+}
+
+@Test func hookHermesAllowGitStatus_emptyStdoutExitZero() async throws {
+    let expected = try hostExpected("hermes", "allow-git-status")
+    let wire = try await runHook(
+        stdin: try hostFixture("hermes", "allow-git-status.json"),
+        host: .hermes
+    )
+    #expect(wire.stdout == expected.stdout)
+    #expect(wire.exitCode == expected.exit)
+}
+
+@Test func hookHermesNonShellRead_doesNotEvaluate() async throws {
+    let probe = EvaluateProbe()
+    let expected = try hostExpected("hermes", "allow-non-shell-read")
+    let wire = try await runHook(
+        stdin: try hostFixture("hermes", "allow-non-shell-read.json"),
+        host: .hermes
+    ) { command, _ in
+        probe.record(command, result: EvaluationResult(
+            outcome: .deny(
+                Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "should not run"),
+                matched: nil
+            )
+        ))
+    }
+    #expect(probe.commands.isEmpty)
+    #expect(wire.stdout == expected.stdout)
+    #expect(wire.exitCode == expected.exit)
+}
+
+@Test func hookHermesMalformed_deniesWithoutEvaluating() async throws {
+    let probe = EvaluateProbe()
+    let wire = try await runHook(
+        stdin: "not-json",
+        host: .hermes
+    ) { command, _ in
+        probe.record(command, result: EvaluationResult(outcome: .plain))
+    }
+    #expect(probe.commands.isEmpty)
+    #expect(wire.stdout.contains("\"decision\":\"deny\""))
+    #expect(wire.exitCode == 1)
 }
 
 @Test func hookOpenClawMalformed_deniesWithoutEvaluating() async throws {

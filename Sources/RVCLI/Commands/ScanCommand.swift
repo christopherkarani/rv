@@ -219,6 +219,7 @@ enum ScanRun {
         GrokStoreAdapter(),
         OpenCodeStoreAdapter(),
         OpenClawStoreAdapter(),
+        HermesStoreAdapter(),
     ]
 
     static func run(_ request: Request) throws -> ScanReport {
@@ -391,6 +392,7 @@ private extension ScanHostID {
         case .grok: .grok
         case .opencode: .opencode
         case .openclaw: .openclaw
+        case .hermes: .hermes
         }
     }
 }

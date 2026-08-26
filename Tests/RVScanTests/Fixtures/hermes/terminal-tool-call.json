@@ -1,0 +1,1 @@
+[{"id":"call_1","function":{"name":"terminal","arguments":"{\"command\":\"git reset --hard\",\"workdir\":\"/tmp/ws\"}"}}]

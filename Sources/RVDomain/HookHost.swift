@@ -8,7 +8,9 @@ public enum HookHost: String, Codable, Hashable, Sendable, CaseIterable {
     case claude
     /// OpenClaw plugin wire, not a host protocol.
     case openclaw
+    /// Hermes plugin wire, not a host protocol.
+    case hermes
 
     /// Setup/doctor slots. Claude is settings-merge, not an exclusive owned file.
-    public static let setupSlotOrder: [HookHost] = [.grok, .pi, .opencode, .claude, .openclaw]
+    public static let setupSlotOrder: [HookHost] = [.grok, .pi, .opencode, .claude, .openclaw, .hermes]
 }
