@@ -7,35 +7,38 @@ import RVTheme
 
 private let resetHardRule = RuleID(pack: .coreGit, pattern: "reset-hard")
 
-private func sampleReport() -> ScanReport {
-    ScanReport(
-        findings: [
-            ScanFinding(
+private func sampleModel(showCommand: Bool = false) -> ScanViewModel {
+    ScanViewModel(
+        rows: [
+            scanFindingRow(
                 host: .claude,
                 sessionID: "sess-1",
                 sourcePath: "/tmp/fixture/session.jsonl",
                 ruleID: resetHardRule,
                 packID: .coreGit,
                 matchingView: MatchingView("git reset --hard"),
-                count: 3
+                count: 3,
+                showCommand: showCommand
             ),
-            ScanFinding(
+            scanFindingRow(
                 host: .pi,
                 sourcePath: "/tmp/pi/session.jsonl",
                 ruleID: RuleID(pack: .coreFilesystem, pattern: "rm-rf-general"),
                 packID: .coreFilesystem,
-                matchingView: MatchingView("rm -rf ./src")
+                matchingView: MatchingView("rm -rf ./src"),
+                showCommand: showCommand
             ),
         ],
-        warnings: [ScanWarning(code: "cap.files", message: "Stopped after 10000 files")],
+        warnings: [ScanWarningRow(code: "cap.files", message: "Stopped after 10000 files")],
         filesScanned: 12,
         eventsExtracted: 40,
-        setupNudgeRecommended: true
+        setupNudgeRecommended: true,
+        showCommand: showCommand
     )
 }
 
 @Test func scanPrettyRenderer_includesRuleIDAndRedactedCommand() {
-    let vm = scanViewModel(from: sampleReport())
+    let vm = sampleModel()
     let lines = ScanPrettyRenderer().render(vm, palette: colorOffPalette)
     let joined = lines.joined(separator: "\n")
 
@@ -52,7 +55,7 @@ private func sampleReport() -> ScanReport {
 }
 
 @Test func scanPrettyRenderer_emptyFindings() {
-    let vm = scanViewModel(from: ScanReport(filesScanned: 4, eventsExtracted: 0))
+    let vm = ScanViewModel(rows: [], filesScanned: 4, eventsExtracted: 0)
     let lines = ScanPrettyRenderer().render(vm, palette: colorOffPalette)
     let joined = lines.joined(separator: "\n")
 
@@ -61,7 +64,7 @@ private func sampleReport() -> ScanReport {
 }
 
 @Test func scanBrowseReduce_movesSelectionWithinBounds() {
-    let state = scanBrowseState(model: scanViewModel(from: sampleReport()))
+    let state = scanBrowseState(model: sampleModel())
     #expect(state.selectedIndex == 0)
 
     let down = scanBrowseReduce(state, .down)
@@ -78,7 +81,7 @@ private func sampleReport() -> ScanReport {
 }
 
 @Test func scanBrowseRender_paintsSelectedRowWithoutTTY() {
-    var state = scanBrowseState(model: scanViewModel(from: sampleReport()))
+    var state = scanBrowseState(model: sampleModel())
     state = scanBrowseReduce(state, .down)
     let lines = scanBrowseRender(state, palette: colorOffPalette)
     let joined = lines.joined(separator: "\n")
@@ -92,7 +95,7 @@ private func sampleReport() -> ScanReport {
 }
 
 @Test func scanBrowseRender_emptyFindingsStillFrames() {
-    let state = scanBrowseState(model: scanViewModel(from: ScanReport()))
+    let state = scanBrowseState(model: ScanViewModel(rows: []))
     let lines = scanBrowseRender(state, palette: colorOffPalette)
     let joined = lines.joined(separator: "\n")
 
@@ -102,13 +105,13 @@ private func sampleReport() -> ScanReport {
 }
 
 @Test func scanBrowseReduce_noOpOnEmptyList() {
-    let state = scanBrowseState(model: scanViewModel(from: ScanReport()))
+    let state = scanBrowseState(model: ScanViewModel(rows: []))
     #expect(scanBrowseReduce(state, .down).selectedIndex == 0)
     #expect(scanBrowseReduce(state, .up).selectedIndex == 0)
 }
 
 @Test func scanBrowseRender_clampsOutOfRangeSelection() {
-    let state = ScanBrowseState(model: scanViewModel(from: sampleReport()), selectedIndex: 99)
+    let state = ScanBrowseState(model: sampleModel(), selectedIndex: 99)
     let lines = scanBrowseRender(state, palette: colorOffPalette)
     let joined = lines.joined(separator: "\n")
 
@@ -118,7 +121,7 @@ private func sampleReport() -> ScanReport {
 }
 
 @Test func scanPrettyRenderer_showCommandPrintsFullCommand() {
-    let vm = scanViewModel(from: sampleReport(), showCommand: true)
+    let vm = sampleModel(showCommand: true)
     let joined = ScanPrettyRenderer().render(vm, palette: colorOffPalette).joined(separator: "\n")
 
     #expect(joined.contains("git reset --hard"))

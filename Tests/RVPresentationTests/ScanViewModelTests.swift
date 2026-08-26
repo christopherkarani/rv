@@ -5,8 +5,12 @@ import RVDomain
 
 private let resetHardRule = RuleID(pack: .coreGit, pattern: "reset-hard")
 
-private func sampleFinding(command: String = "git reset --hard", count: Int = 1) -> ScanFinding {
-    ScanFinding(
+private func sampleRow(
+    command: String = "git reset --hard",
+    count: Int = 1,
+    showCommand: Bool = false
+) -> ScanFindingRow {
+    scanFindingRow(
         host: .claude,
         sessionID: "sess-1",
         sourcePath: "/tmp/fixture/session.jsonl",
@@ -15,7 +19,8 @@ private func sampleFinding(command: String = "git reset --hard", count: Int = 1)
         packID: .coreGit,
         matchingView: MatchingView(command),
         count: count,
-        lastSeen: Date(timeIntervalSince1970: 1_724_100_000)
+        lastSeen: Date(timeIntervalSince1970: 1_724_100_000),
+        showCommand: showCommand
     )
 }
 
@@ -27,7 +32,7 @@ private func sampleFinding(command: String = "git reset --hard", count: Int = 1)
 }
 
 @Test func scanFindingRow_redactsByDefault() {
-    let row = scanFindingRow(from: sampleFinding(), showCommand: false)
+    let row = sampleRow()
     #expect(row.ruleLabel == "core.git:reset-hard")
     #expect(row.commandDisplay == "git …")
     #expect(row.host == .claude)
@@ -35,20 +40,19 @@ private func sampleFinding(command: String = "git reset --hard", count: Int = 1)
 }
 
 @Test func scanFindingRow_showCommandUsesMatchingView() {
-    let row = scanFindingRow(from: sampleFinding(), showCommand: true)
+    let row = sampleRow(showCommand: true)
     #expect(row.commandDisplay == "git reset --hard")
 }
 
-@Test func scanViewModel_mapsReportFields() {
-    let warning = ScanWarning(code: "cap.files", message: "Stopped after 10000 files")
-    let report = ScanReport(
-        findings: [sampleFinding(count: 3)],
+@Test func scanViewModel_holdsRowsAndWarnings() {
+    let warning = ScanWarningRow(code: "cap.files", message: "Stopped after 10000 files")
+    let vm = ScanViewModel(
+        rows: [sampleRow(count: 3)],
         warnings: [warning],
         filesScanned: 12,
         eventsExtracted: 40,
         setupNudgeRecommended: true
     )
-    let vm = scanViewModel(from: report)
     #expect(vm.rows.count == 1)
     #expect(vm.rows[0].commandDisplay == "git …")
     #expect(vm.rows[0].count == 3)
@@ -59,8 +63,8 @@ private func sampleFinding(command: String = "git reset --hard", count: Int = 1)
     #expect(vm.showCommand == false)
 }
 
-@Test func scanViewModel_emptyReport() {
-    let vm = scanViewModel(from: ScanReport())
+@Test func scanViewModel_emptyDefaults() {
+    let vm = ScanViewModel(rows: [])
     #expect(vm.rows.isEmpty)
     #expect(vm.warnings.isEmpty)
     #expect(vm.filesScanned == 0)

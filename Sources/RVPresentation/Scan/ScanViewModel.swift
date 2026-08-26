@@ -38,10 +38,22 @@ public struct ScanFindingRow: Equatable, Sendable {
     }
 }
 
+/// One walk/extract warning for pretty and browse surfaces.
+public struct ScanWarningRow: Equatable, Sendable {
+    public var code: String
+    public var message: String
+
+    public init(code: String, message: String) {
+        self.code = code
+        self.message = message
+    }
+}
+
 /// Read-only scan report projection for human frames.
+/// CLI maps findings into this type and passes `setupNudgeRecommended`.
 public struct ScanViewModel: Equatable, Sendable {
     public var rows: [ScanFindingRow]
-    public var warnings: [ScanWarning]
+    public var warnings: [ScanWarningRow]
     public var filesScanned: Int
     public var eventsExtracted: Int
     public var setupNudgeRecommended: Bool
@@ -49,7 +61,7 @@ public struct ScanViewModel: Equatable, Sendable {
 
     public init(
         rows: [ScanFindingRow],
-        warnings: [ScanWarning] = [],
+        warnings: [ScanWarningRow] = [],
         filesScanned: Int = 0,
         eventsExtracted: Int = 0,
         setupNudgeRecommended: Bool = false,
@@ -64,36 +76,31 @@ public struct ScanViewModel: Equatable, Sendable {
     }
 }
 
+/// Projects Domain scan fields plus a matching view into a finding row.
 public func scanFindingRow(
-    from finding: ScanFinding,
+    host: ScanHostID,
+    sessionID: String? = nil,
+    sourcePath: String,
+    occurredAt: Date? = nil,
+    ruleID: RuleID,
+    packID: PackID,
+    matchingView: MatchingView,
+    count: Int = 1,
+    lastSeen: Date? = nil,
     showCommand: Bool
 ) -> ScanFindingRow {
     let commandDisplay = showCommand
-        ? finding.matchingView.rawValue
-        : redactMatchingView(finding.matchingView)
+        ? matchingView.rawValue
+        : redactMatchingView(matchingView)
     return ScanFindingRow(
-        host: finding.host,
-        sessionID: finding.sessionID,
-        sourcePath: finding.sourcePath,
-        occurredAt: finding.occurredAt,
-        ruleID: finding.ruleID,
-        packID: finding.packID,
+        host: host,
+        sessionID: sessionID,
+        sourcePath: sourcePath,
+        occurredAt: occurredAt,
+        ruleID: ruleID,
+        packID: packID,
         commandDisplay: commandDisplay,
-        count: finding.count,
-        lastSeen: finding.lastSeen
-    )
-}
-
-public func scanViewModel(
-    from report: ScanReport,
-    showCommand: Bool = false
-) -> ScanViewModel {
-    ScanViewModel(
-        rows: report.findings.map { scanFindingRow(from: $0, showCommand: showCommand) },
-        warnings: report.warnings,
-        filesScanned: report.filesScanned,
-        eventsExtracted: report.eventsExtracted,
-        setupNudgeRecommended: report.setupNudgeRecommended,
-        showCommand: showCommand
+        count: count,
+        lastSeen: lastSeen
     )
 }
