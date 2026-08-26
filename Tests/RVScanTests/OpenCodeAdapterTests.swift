@@ -89,6 +89,39 @@ import RVDomain
     }
 }
 
+@Test func openCodeAdapter_walHeaderDatabaseExtractsBashPart() throws {
+    try withTempHome { homeURL in
+        let dbURL = homeURL.appendingPathComponent("opencode.db")
+        let partJSON = try String(contentsOf: fixtureURL("opencode/bash-part.json"), encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        try writeOpenCodeFixtureDatabase(at: dbURL, sessionID: "ses_wal", partJSON: partJSON)
+        var data = try Data(contentsOf: dbURL)
+        #expect(data.count > 19)
+        data[18] = 2
+        data[19] = 2
+        let adapter = OpenCodeStoreAdapter()
+        let events = try adapter.extract(fileURL: dbURL, data: data)
+        #expect(events.map(\.command.rawValue) == ["git reset --hard"])
+        #expect(events.isEmpty == false)
+    }
+}
+
+@Test func openCodeAdapter_headerValidDeserializeFailureIsUnreadable() throws {
+    try withTempHome { homeURL in
+        let source = homeURL.appendingPathComponent("opencode.db")
+        var image = Data("SQLite format 3\u{0}".utf8)
+        image.append(Data(count: 512 - image.count))
+        image[16] = 0
+        image[17] = 0x03
+        image[18] = 1
+        image[19] = 1
+        let adapter = OpenCodeStoreAdapter()
+        #expect(throws: OpenCodeStoreError.unreadable(sourcePath: source.path)) {
+            _ = try adapter.extract(fileURL: source, data: image)
+        }
+    }
+}
+
 @Test func openCodeAdapter_extractUsesProvidedDataNotPath() throws {
     try withTempHome { homeURL in
         let store = homeURL.appendingPathComponent(".local/share/opencode", isDirectory: true)

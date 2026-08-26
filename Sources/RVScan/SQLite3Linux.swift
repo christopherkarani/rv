@@ -4,6 +4,9 @@
 typealias sqlite3_destructor_type = @convention(c) (UnsafeMutableRawPointer?) -> Void
 
 let SQLITE_OK: Int32 = 0
+let SQLITE_CORRUPT: Int32 = 11
+let SQLITE_CANTOPEN: Int32 = 14
+let SQLITE_NOTADB: Int32 = 26
 let SQLITE_ROW: Int32 = 100
 let SQLITE_DONE: Int32 = 101
 let SQLITE_OPEN_READONLY: Int32 = 0x00000001
