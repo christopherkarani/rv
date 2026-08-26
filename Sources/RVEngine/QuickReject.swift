@@ -25,20 +25,19 @@ public enum QuickReject {
     }
 
     public static func containsEmptyParenPair(_ text: String) -> Bool {
-        let bytes = Array(text.utf8)
-        var index = 0
-        while index < bytes.count {
-            guard let open = bytes[index...].firstIndex(of: UInt8(ascii: "(")) else {
-                return false
+        let bytes = text.utf8
+        var index = bytes.startIndex
+        while index != bytes.endIndex {
+            if bytes[index] == UInt8(ascii: "(") {
+                var cursor = bytes.index(after: index)
+                while cursor != bytes.endIndex, isASCIIWhitespace(bytes[cursor]) {
+                    cursor = bytes.index(after: cursor)
+                }
+                if cursor != bytes.endIndex, bytes[cursor] == UInt8(ascii: ")") {
+                    return true
+                }
             }
-            var cursor = open + 1
-            while cursor < bytes.count, isASCIIWhitespace(bytes[cursor]) {
-                cursor += 1
-            }
-            if cursor < bytes.count, bytes[cursor] == UInt8(ascii: ")") {
-                return true
-            }
-            index = open + 1
+            index = bytes.index(after: index)
         }
         return false
     }
@@ -47,25 +46,39 @@ public enum QuickReject {
 /// Word characters are ASCII alnum / `_` / `-`, matching the pack delimiter `[^[:alnum:]_-]`.
 /// That keeps `.gitignore` and `digit` from lighting `git`, while `$(git reset --hard)` still hits.
 private func asciiWordHit(_ keyword: String, in text: String) -> Bool {
-    let haystack = Array(text.utf8)
-    let needle = Array(keyword.utf8)
-    guard !needle.isEmpty, haystack.count >= needle.count else { return false }
-    var index = 0
-    while index + needle.count <= haystack.count {
-        if asciiEqualsCaseInsensitive(haystack[index..<(index + needle.count)], needle),
-           !isASCIIWordByte(index == 0 ? nil : haystack[index - 1]),
-           !isASCIIWordByte(
-               index + needle.count == haystack.count ? nil : haystack[index + needle.count]
-           )
-        {
-            return true
+    let haystack = text.utf8
+    let needle = keyword.utf8
+    let needleCount = needle.count
+    guard needleCount > 0, haystack.count >= needleCount else { return false }
+
+    var start = haystack.startIndex
+    while start != haystack.endIndex {
+        guard let matchEnd = haystack.index(
+            start,
+            offsetBy: needleCount,
+            limitedBy: haystack.endIndex
+        ) else {
+            break
         }
-        index += 1
+
+        if asciiEqualsCaseInsensitive(haystack[start..<matchEnd], needle) {
+            let before: UInt8? = start == haystack.startIndex
+                ? nil
+                : haystack[haystack.index(before: start)]
+            let after: UInt8? = matchEnd == haystack.endIndex ? nil : haystack[matchEnd]
+            if !isASCIIWordByte(before), !isASCIIWordByte(after) {
+                return true
+            }
+        }
+        start = haystack.index(after: start)
     }
     return false
 }
 
-private func asciiEqualsCaseInsensitive(_ slice: ArraySlice<UInt8>, _ needle: [UInt8]) -> Bool {
+private func asciiEqualsCaseInsensitive<H: Collection, N: Collection>(
+    _ slice: H,
+    _ needle: N
+) -> Bool where H.Element == UInt8, N.Element == UInt8 {
     guard slice.count == needle.count else { return false }
     for (byte, expected) in zip(slice, needle) {
         if byte.lowercasedASCII != expected.lowercasedASCII {

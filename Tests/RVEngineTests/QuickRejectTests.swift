@@ -41,3 +41,24 @@ private let filesystemPack = PackSnapshot(
     #expect(!QuickReject.shouldSkip(matchingView: ":(){ :|:& };:", enabled: enabled))
     #expect(QuickReject.containsEmptyParenPair("foo ( ) { bar; }"))
 }
+
+@Test func quickReject_asciiKeywordsPreserveCaseAndWordBoundaries() {
+    #expect(QuickReject.keywordHits("git", in: "GIT status"))
+    #expect(QuickReject.keywordHits("git", in: "git/status"))
+    #expect(QuickReject.keywordHits("git", in: "égit"))
+    #expect(QuickReject.keywordHits("git", in: "gité"))
+    #expect(!QuickReject.keywordHits("git", in: "digit status"))
+    #expect(!QuickReject.keywordHits("git", in: "gitignore"))
+    #expect(!QuickReject.keywordHits("git", in: "git-branch"))
+    #expect(!QuickReject.keywordHits("git", in: "git_branch"))
+}
+
+@Test func quickReject_emptyKeywordAndParenWhitespaceKeepExistingSemantics() {
+    #expect(!QuickReject.keywordHits("", in: "git status"))
+    #expect(QuickReject.keywordHits("café", in: "café"))
+    #expect(!QuickReject.keywordHits("café", in: "CAFÉ"))
+    #expect(QuickReject.containsEmptyParenPair("🧪 ( \t\n\r )"))
+    #expect(QuickReject.containsEmptyParenPair("()"))
+    #expect(!QuickReject.containsEmptyParenPair("🧪 (\u{00A0})"))
+    #expect(!QuickReject.containsEmptyParenPair("( \n ]"))
+}
