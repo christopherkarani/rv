@@ -1,5 +1,7 @@
 # Host Ask investigation (OPE-267)
 
+Build map: [host-ask-plan.md](host-ask-plan.md) (OPE-268).
+
 Investigation only. No Ask code. Main `d67c383`. Linux + macOS.
 
 **RV wire today:** allow or deny before the command runs. None of these five pause for Ask. `HookMapper` switches on `Decision`. Allow is empty stdout / exit 0. Deny and indeterminate call `encodeDeny` (Claude is the only rich encoder). Adapters honor `decision=deny` regardless of exit; missing `rv`, timeout, or crash is a host block (`rv missing` / `rv failed`), never silent allow. `HardPolicyDecision.mandatoryHuman` / `BoundReview` still project to `Decision.deny` on this wire. `ApprovalContinuation.hostNative` is a domain type only.
