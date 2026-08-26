@@ -35,9 +35,11 @@ public struct OpenCodeStoreAdapter: SessionStoreAdapter {
         try Self.events(in: data, sourcePath: fileURL.path)
     }
 
+    private static let sqliteHeader = Data("SQLite format 3\u{0}".utf8)
+
     private static func events(in data: Data, sourcePath: String) throws -> [ExtractedEvent] {
         let db = try deserializedDatabase(from: data, sourcePath: sourcePath)
-        defer { sqlite3_close(db) }
+        defer { _ = sqlite3_close(db) }
 
         let sql = "SELECT session_id, data FROM part;"
         var statement: OpaquePointer?
@@ -46,7 +48,7 @@ public struct OpenCodeStoreAdapter: SessionStoreAdapter {
         else {
             throw OpenCodeStoreError.prepareFailed(sourcePath: sourcePath)
         }
-        defer { sqlite3_finalize(statement) }
+        defer { _ = sqlite3_finalize(statement) }
 
         var events: [ExtractedEvent] = []
         while sqlite3_step(statement) == SQLITE_ROW {
@@ -81,19 +83,19 @@ public struct OpenCodeStoreAdapter: SessionStoreAdapter {
         from data: Data,
         sourcePath: String
     ) throws -> OpaquePointer {
-        guard data.isEmpty == false else {
+        guard data.starts(with: sqliteHeader) else {
             throw OpenCodeStoreError.unreadable(sourcePath: sourcePath)
         }
 
         var db: OpaquePointer?
         guard sqlite3_open(":memory:", &db) == SQLITE_OK, let db else {
-            if let db { sqlite3_close(db) }
+            if let db { _ = sqlite3_close(db) }
             throw OpenCodeStoreError.unreadable(sourcePath: sourcePath)
         }
 
         let byteCount = data.count
         guard let raw = sqlite3_malloc64(sqlite3_uint64(byteCount)) else {
-            sqlite3_close(db)
+            _ = sqlite3_close(db)
             throw OpenCodeStoreError.unreadable(sourcePath: sourcePath)
         }
 
@@ -104,7 +106,7 @@ public struct OpenCodeStoreAdapter: SessionStoreAdapter {
         }
         guard copied else {
             sqlite3_free(raw)
-            sqlite3_close(db)
+            _ = sqlite3_close(db)
             throw OpenCodeStoreError.unreadable(sourcePath: sourcePath)
         }
 
@@ -119,7 +121,7 @@ public struct OpenCodeStoreAdapter: SessionStoreAdapter {
         )
         guard status == SQLITE_OK else {
             sqlite3_free(raw)
-            sqlite3_close(db)
+            _ = sqlite3_close(db)
             throw OpenCodeStoreError.unreadable(sourcePath: sourcePath)
         }
         return db
