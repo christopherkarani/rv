@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import RVDomain
 import RVIPC
+import RVPolicy
 @testable import RVService
 
 struct ServiceRuntimeEvaluateTests {
