@@ -96,6 +96,57 @@ public struct GatedEvaluate: Sendable {
         await gated(.peek, request, cwd: cwd, store: store, now: now, allowlist: allowlist)
     }
 
+    /// Host Ask spend: honor an existing grant, else plant+spend this turn. Fail-closed.
+    public func spendHostAsk(
+        command: ShellCommand,
+        cwd: WorkingDirectory?,
+        home: HomeDirectory? = nil,
+        store: AllowOnceStore,
+        now: Date,
+        allowlist: @escaping @Sendable () -> AllowlistSnapshot
+    ) async -> EvaluationResult {
+        await spendHostAsk(
+            Self.makeRequest(command: command, home: home),
+            cwd: cwd,
+            store: store,
+            now: now,
+            allowlist: allowlist
+        )
+    }
+
+    func spendHostAsk(
+        _ request: EvaluationRequest,
+        cwd: WorkingDirectory?,
+        store: AllowOnceStore,
+        now: Date,
+        allowlist: @escaping @Sendable () -> AllowlistSnapshot
+    ) async -> EvaluationResult {
+        let result = resolvedSession().evaluate(request)
+        switch result.decision {
+        case .allow, .indeterminate:
+            return result
+        case .deny:
+            let snapshot = allowlist()
+            let applied = await PolicyGate.apply(
+                result,
+                cwd: cwd,
+                allowlist: snapshot,
+                store: store,
+                now: now
+            )
+            if case .allow = applied.result.decision {
+                return applied.result
+            }
+            return await PolicyGate.spendHostAllowOnce(
+                result,
+                cwd: cwd,
+                allowlist: snapshot,
+                store: store,
+                now: now
+            ).result
+        }
+    }
+
     /// Wire-path apply for an already-built request (ServiceRuntime evaluate).
     /// CLI and in-process fallback must use `run(.apply, ...)` so pack resolution stays shared.
     func apply(

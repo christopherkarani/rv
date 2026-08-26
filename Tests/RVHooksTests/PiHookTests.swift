@@ -97,6 +97,29 @@ func piDecode_extractsBashCommand(_ file: String, expected: String) throws {
     #expect(request.cwd == nil)
 }
 
+@Test func piDecode_readsHostAskSpend() {
+    let stdin = """
+    {"toolName":"bash","cwd":"/tmp/ws","input":{"command":"git reset --hard"},"hostAsk":"spend"}
+    """
+    guard case .request(let request) = codec.decode(stdin) else {
+        Issue.record("expected .request for hostAsk spend")
+        return
+    }
+    #expect(request.hostAsk == .spend)
+    #expect(request.cwd?.rawValue == "/tmp/ws")
+}
+
+@Test func piEncodeAsk_isNotEmptyAllow() {
+    let reason =
+        "Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once."
+    let wire = codec.encodeAsk(reason: reason, rule: "core.git/reset-hard", next: hookUnlockNext)
+    #expect(wire.exitCode == 1)
+    #expect(wire.stdout.isEmpty == false)
+    #expect(wire.stdout.contains("\"decision\":\"ask\""))
+    #expect(wire.stdout.contains("\"continuation\":\"hostNative\""))
+    #expect(wire.stdout.contains(reason))
+}
+
 @Test func piDecode_missingCwdIsNil() {
     let stdin = """
     {"toolName":"bash","input":{"command":"git status"}}

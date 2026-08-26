@@ -53,6 +53,9 @@ extension Decision: Codable {
         case "indeterminate":
             let reason = try container.decode(IndeterminateReason.self, forKey: .indeterminateReason)
             self = .indeterminate(reason)
+        case "ask":
+            // Leftover unused ask is not a permit.
+            self = .deny(HostNativeAsk.leftoverAskDeny)
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .decision,

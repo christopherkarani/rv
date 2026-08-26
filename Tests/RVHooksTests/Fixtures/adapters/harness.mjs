@@ -37,7 +37,17 @@ if (host === "pi") {
     );
     process.exit(2);
   }
-  const ctx = { ui: {} };
+  const ctx = {
+    ui: {
+      hasUI: process.env.RV_HAS_UI !== "0",
+      async confirm() {
+        if (process.env.RV_HAS_UI === "0") {
+          return false;
+        }
+        return process.env.RV_CONFIRM_YES === "1";
+      },
+    },
+  };
   const result = await registered[0].fn(event, ctx);
   let rendererProbe = "missing";
   let lines = null;

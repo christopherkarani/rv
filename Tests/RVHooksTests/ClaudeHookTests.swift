@@ -143,6 +143,16 @@ func claudeDecode_otherToolOrEventIsForeign(_ file: String) throws {
     #expect(wire.stdout.contains("\"remediation\"") == false)
 }
 
+@Test func claudeEncodeRichDeny_neverEmitsPermissionAsk() throws {
+    let leftover = EvaluationResult(
+        outcome: .deny(HostNativeAsk.leftoverAskDeny, matched: nil)
+    )
+    let wire = codec.encodeRichDeny(from: leftover, command: resetHard)
+    #expect(wire.stdout.contains("\"permissionDecision\":\"ask\"") == false)
+    #expect(wire.stdout.contains("\"permissionDecision\":\"deny\""))
+    #expect(wire.stdout.isEmpty == false)
+}
+
 @Test func claudeEncodeRichDeny_unmatchedDenyIsFailClosed() throws {
     let result = EvaluationResult(
         outcome: .deny(

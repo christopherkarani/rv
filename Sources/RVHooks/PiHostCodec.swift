@@ -23,7 +23,15 @@ public struct PiHostCodec: HostCodec {
             return .malformed(.missingCommand)
         }
         let cwd = envelope.cwd.flatMap { WorkingDirectory(validating: $0) }
-        return .request(HookRequest(host: .pi, command: ShellCommand(rawValue: command), cwd: cwd))
+        let hostAsk = envelope.hostAsk.flatMap(HostAskHookIntent.init(rawValue:))
+        return .request(
+            HookRequest(
+                host: .pi,
+                command: ShellCommand(rawValue: command),
+                cwd: cwd,
+                hostAsk: hostAsk
+            )
+        )
     }
 }
 
@@ -31,6 +39,7 @@ private struct PiEnvelope: Decodable {
     var toolName: String?
     var input: PiInput?
     var cwd: String?
+    var hostAsk: String?
 }
 
 private struct PiInput: Decodable {

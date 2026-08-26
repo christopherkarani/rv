@@ -134,6 +134,46 @@ public actor AllowOnceStore {
         }
     }
 
+    /// Host Allow once: plant a granted row and spend it this turn. Not TTY-gated.
+    public func plantAndConsume(
+        matchingView: MatchingView,
+        cwd: WorkingDirectory,
+        now: Date,
+        ttl: TimeInterval = 24 * 60 * 60
+    ) async -> AllowOnceConsumeStatus {
+        let trimmed = matchingView.rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else {
+            return .notFound
+        }
+        let view = MatchingView(trimmed)
+        do {
+            return try withFileLock {
+                switch AllowOnceLedger.plantAndConsume(
+                    records: loadRecords(),
+                    fingerprint: commandFingerprint(view),
+                    redacted: redactCommand(view),
+                    cwd: cwd,
+                    now: now,
+                    ttl: ttl,
+                    codeHash: sha256Hex(UUID().uuidString)
+                ) {
+                case let .consumed(tokenID, records):
+                    try writeRecords(records)
+                    return .consumed(tokenID: tokenID)
+                case let .expired(records):
+                    try writeRecords(records)
+                    return .expired
+                case .alreadyConsumed:
+                    return .alreadyConsumed
+                case .notFound:
+                    return .notFound
+                }
+            }
+        } catch {
+            return .unavailable
+        }
+    }
+
     public func consume(
         matchingView: MatchingView,
         cwd: WorkingDirectory,
