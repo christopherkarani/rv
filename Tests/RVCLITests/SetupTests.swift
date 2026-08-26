@@ -96,6 +96,7 @@ private func fixtureLoginHome() throws -> URL {
         #expect(FileManager.default.fileExists(atPath: layout.grokDirectory) == false)
         #expect(FileManager.default.fileExists(atPath: layout.piDirectory) == false)
         #expect(FileManager.default.fileExists(atPath: layout.openCodeDirectory) == false)
+        #expect(FileManager.default.fileExists(atPath: layout.claudeDirectory) == false)
         #expect(FileManager.default.fileExists(atPath: layout.configDirectory))
         #expect(FileManager.default.fileExists(atPath: layout.launchAgent))
         let plist = try String(contentsOfFile: layout.launchAgent, encoding: .utf8)
@@ -885,5 +886,368 @@ final class DomainRecordingLaunchctl: LaunchctlApplying {
             "user/4242", "gui/4242",
             "user/4242", "gui/4242",
         ])
+    }
+}
+
+private func claudeForeignSettings() -> String {
+    """
+    {
+      "hooks": {
+        "PreToolUse": [
+          {
+            "matcher": "Bash",
+            "hooks": [
+              { "type": "command", "command": "dcg evaluate", "timeout": 5 }
+            ]
+          }
+        ]
+      }
+    }
+    """
+}
+
+private func claudeSettingsObject(at path: String) throws -> [String: Any] {
+    let data = try Data(contentsOf: URL(fileURLWithPath: path))
+    return try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+}
+
+private func claudePreToolUseEntries(_ settings: [String: Any]) throws -> [[String: Any]] {
+    let hooks = try #require(settings["hooks"] as? [String: Any])
+    return try #require(hooks["PreToolUse"] as? [[String: Any]])
+}
+
+private func posixMode(_ url: URL) throws -> Int {
+    let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
+    let raw = attrs[.posixPermissions] as? NSNumber
+    return (raw?.intValue ?? 0) & 0o777
+}
+
+@Test func setup_claudeOnly_mergesFingerprintAndPreservesForeignEntry() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(
+            atPath: layout.claudeDirectory,
+            withIntermediateDirectories: true
+        )
+        let foreign = claudeForeignSettings()
+        try foreign.write(toFile: layout.claudeSettings, atomically: true, encoding: .utf8)
+
+        let outcome = SetupRun.setup(env(home: home, launchctl: launchctl))
+
+        #expect(outcome.exitCode == 0)
+        let settings = try claudeSettingsObject(at: layout.claudeSettings)
+        let entries = try claudePreToolUseEntries(settings)
+        #expect(entries.count == 2)
+        #expect(entries[0]["matcher"] as? String == "Bash")
+        let foreignHooks = try #require(entries[0]["hooks"] as? [[String: Any]])
+        #expect(foreignHooks.count == 1)
+        #expect(foreignHooks[0]["command"] as? String == "dcg evaluate")
+        let rvHooks = try #require(entries[1]["hooks"] as? [[String: Any]])
+        #expect(rvHooks.count == 1)
+        let command = try #require(rvHooks[0]["command"] as? String)
+        #expect(command == "/tmp/rv-bin/rv hook --host claude")
+        #expect(command.hasPrefix("/"))
+        #expect(rvHooks[0]["timeout"] as? Int == 5)
+    }
+}
+
+@Test func setup_claudeOccupiedFingerprint_skipsWithoutForce() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(
+            atPath: layout.claudeDirectory,
+            withIntermediateDirectories: true
+        )
+        let occupied = """
+        {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  { "type": "command", "command": "/old/rv hook --host claude", "timeout": 10 }
+                ]
+              }
+            ]
+          }
+        }
+        """
+        try occupied.write(toFile: layout.claudeSettings, atomically: true, encoding: .utf8)
+
+        let outcome = SetupRun.setup(env(home: home, launchctl: launchctl))
+
+        #expect(outcome.exitCode == 0)
+        #expect(outcome.stdout.contains("Skipped occupied claude hook."))
+        #expect(try String(contentsOfFile: layout.claudeSettings, encoding: .utf8) == occupied)
+    }
+}
+
+@Test func setup_claudeForce_replacesFingerprintedHandlerOnly() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(
+            atPath: layout.claudeDirectory,
+            withIntermediateDirectories: true
+        )
+        let foreign = claudeForeignSettings()
+        try foreign.write(toFile: layout.claudeSettings, atomically: true, encoding: .utf8)
+        let stale = """
+        {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  { "type": "command", "command": "dcg evaluate", "timeout": 5 },
+                  { "type": "command", "command": "/old/rv hook --host claude", "timeout": 10 }
+                ]
+              }
+            ]
+          }
+        }
+        """
+        try stale.write(toFile: layout.claudeSettings, atomically: true, encoding: .utf8)
+
+        let outcome = SetupRun.setup(env(home: home, launchctl: launchctl), force: true)
+
+        #expect(outcome.exitCode == 0)
+        let entries = try claudePreToolUseEntries(try claudeSettingsObject(at: layout.claudeSettings))
+        #expect(entries.count == 2)
+        let shared = try #require(entries[0]["hooks"] as? [[String: Any]])
+        #expect(shared.map { $0["command"] as? String } == ["dcg evaluate"])
+        let command = try #require((entries[1]["hooks"] as? [[String: Any]])?.first?["command"] as? String)
+        #expect(command == "/tmp/rv-bin/rv hook --host claude")
+    }
+}
+
+@Test func uninstall_claudeRemovesFingerprintOnly() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(
+            atPath: layout.claudeDirectory,
+            withIntermediateDirectories: true
+        )
+        let foreign = claudeForeignSettings()
+        try foreign.write(toFile: layout.claudeSettings, atomically: true, encoding: .utf8)
+        _ = SetupRun.setup(env(home: home, launchctl: launchctl))
+
+        let outcome = SetupRun.uninstall(env(home: home, launchctl: launchctl))
+
+        #expect(outcome.exitCode == 0)
+        let settings = try claudeSettingsObject(at: layout.claudeSettings)
+        let entries = try claudePreToolUseEntries(settings)
+        #expect(entries.count == 1)
+        let foreignHooks = try #require(entries[0]["hooks"] as? [[String: Any]])
+        #expect(foreignHooks.count == 1)
+        #expect(foreignHooks[0]["command"] as? String == "dcg evaluate")
+        #expect(
+            foreignHooks.contains { hook in
+                (hook["command"] as? String)?.contains("hook --host claude") == true
+            } == false
+        )
+    }
+}
+
+@Test func uninstall_claudeOccupiedFingerprint_stripsHandlerAndPreservesForeign() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(
+            atPath: layout.claudeDirectory,
+            withIntermediateDirectories: true
+        )
+        let occupied = """
+        {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  { "type": "command", "command": "dcg evaluate", "timeout": 5 },
+                  { "type": "command", "command": "/old/rv hook --host claude", "timeout": 10 }
+                ]
+              }
+            ]
+          }
+        }
+        """
+        try occupied.write(toFile: layout.claudeSettings, atomically: true, encoding: .utf8)
+
+        let outcome = SetupRun.uninstall(env(home: home, launchctl: launchctl))
+
+        #expect(outcome.exitCode == 0)
+        let settings = try claudeSettingsObject(at: layout.claudeSettings)
+        let entries = try claudePreToolUseEntries(settings)
+        #expect(entries.count == 1)
+        let hooks = try #require(entries[0]["hooks"] as? [[String: Any]])
+        #expect(hooks.map { $0["command"] as? String } == ["dcg evaluate"])
+    }
+}
+
+@Test func uninstall_claudeUnreadableOccupied_leavesBytes() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(
+            atPath: layout.claudeDirectory,
+            withIntermediateDirectories: true
+        )
+        let garbage = Data([0xFF, 0x00, 0x41])
+        try garbage.write(to: URL(fileURLWithPath: layout.claudeSettings))
+
+        let outcome = SetupRun.uninstall(env(home: home, launchctl: launchctl))
+
+        #expect(outcome.exitCode == 0)
+        #expect(try Data(contentsOf: URL(fileURLWithPath: layout.claudeSettings)) == garbage)
+    }
+}
+
+@Test func uninstall_claudeOccupiedSymlink_doesNotFollowOrReplace() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(
+            atPath: layout.claudeDirectory,
+            withIntermediateDirectories: true
+        )
+        let target = home.appendingPathComponent("foreign-settings.json")
+        try claudeForeignSettings().write(to: target, atomically: true, encoding: .utf8)
+        try FileManager.default.createSymbolicLink(
+            atPath: layout.claudeSettings,
+            withDestinationPath: target.path
+        )
+
+        let outcome = SetupRun.uninstall(env(home: home, launchctl: launchctl))
+
+        #expect(outcome.exitCode == 0)
+        #expect(
+            try FileManager.default.destinationOfSymbolicLink(atPath: layout.claudeSettings)
+                == target.path
+        )
+        #expect(try String(contentsOf: target, encoding: .utf8) == claudeForeignSettings())
+    }
+}
+
+@Test func setup_force_claudeOccupiedSymlink_doesNotFollowOrReplace() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(
+            atPath: layout.claudeDirectory,
+            withIntermediateDirectories: true
+        )
+        let target = home.appendingPathComponent("foreign-settings.json")
+        try claudeForeignSettings().write(to: target, atomically: true, encoding: .utf8)
+        try FileManager.default.createSymbolicLink(
+            atPath: layout.claudeSettings,
+            withDestinationPath: target.path
+        )
+
+        let outcome = SetupRun.setup(env(home: home, launchctl: launchctl), force: true)
+
+        #expect(outcome.exitCode == 0)
+        #expect(outcome.stdout.contains("Skipped occupied claude hook."))
+        #expect(
+            try FileManager.default.destinationOfSymbolicLink(atPath: layout.claudeSettings)
+                == target.path
+        )
+        #expect(try String(contentsOf: target, encoding: .utf8) == claudeForeignSettings())
+        #expect(FileManager.default.fileExists(atPath: layout.claudeSettings + ".bak") == false)
+    }
+}
+
+@Test func setup_claudeSettingsRewrite_preservesRestrictedPermissions() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(
+            atPath: layout.claudeDirectory,
+            withIntermediateDirectories: true
+        )
+        try claudeForeignSettings().write(toFile: layout.claudeSettings, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: layout.claudeSettings
+        )
+
+        let outcome = SetupRun.setup(env(home: home, launchctl: launchctl))
+
+        #expect(outcome.exitCode == 0)
+        #expect(try posixMode(URL(fileURLWithPath: layout.claudeSettings)) == 0o600)
+        let command = try #require(
+            (try claudePreToolUseEntries(try claudeSettingsObject(at: layout.claudeSettings))
+                .last?["hooks"] as? [[String: Any]])?.first?["command"] as? String
+        )
+        #expect(command == "/tmp/rv-bin/rv hook --host claude")
+    }
+}
+
+@Test func setup_claudeNewSettings_createsOwnerOnlyPermissions() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(
+            atPath: layout.claudeDirectory,
+            withIntermediateDirectories: true
+        )
+
+        let outcome = SetupRun.setup(env(home: home, launchctl: launchctl))
+
+        #expect(outcome.exitCode == 0)
+        #expect(try posixMode(URL(fileURLWithPath: layout.claudeSettings)) == 0o600)
+    }
+}
+
+@Test func uninstall_claudeSettingsRewrite_preservesRestrictedPermissions() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(
+            atPath: layout.claudeDirectory,
+            withIntermediateDirectories: true
+        )
+        let stale = """
+        {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  { "type": "command", "command": "dcg evaluate", "timeout": 5 },
+                  { "type": "command", "command": "/old/rv hook --host claude", "timeout": 10 }
+                ]
+              }
+            ]
+          }
+        }
+        """
+        try stale.write(toFile: layout.claudeSettings, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: layout.claudeSettings
+        )
+
+        let outcome = SetupRun.uninstall(env(home: home, launchctl: launchctl))
+
+        #expect(outcome.exitCode == 0)
+        #expect(try posixMode(URL(fileURLWithPath: layout.claudeSettings)) == 0o600)
+        let entries = try claudePreToolUseEntries(try claudeSettingsObject(at: layout.claudeSettings))
+        #expect(entries.count == 1)
+        let hooks = try #require(entries[0]["hooks"] as? [[String: Any]])
+        #expect(hooks.map { $0["command"] as? String } == ["dcg evaluate"])
+    }
+}
+
+@Test func fileOps_writeData_refusesSymbolicLink() throws {
+    try withTempHome { home, _, _ in
+        let target = home.appendingPathComponent("target.json")
+        let link = home.appendingPathComponent("link.json")
+        try Data("secret\n".utf8).write(to: target)
+        try FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: target.path)
+        let files = FileOps(fileManager: .default)
+
+        #expect(throws: FileOpsError.symbolicLink) {
+            try files.writeData(Data("{}".utf8), to: link.path)
+        }
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: link.path) == target.path)
+        #expect(try String(contentsOf: target, encoding: .utf8) == "secret\n")
+    }
+}
+
+@Test func setup_doesNotMkdirClaudeOnlyToDetect() throws {
+    try withTempHome { home, layout, launchctl in
+        let bin = home.appendingPathComponent("bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let claude = bin.appendingPathComponent("claude")
+        try "#!/bin/sh\n".write(to: claude, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: claude.path)
+
+        let outcome = SetupRun.setup(env(home: home, launchctl: launchctl, pathEntries: [bin.path]))
+
+        #expect(outcome.exitCode == 0)
+        #expect(FileManager.default.fileExists(atPath: layout.claudeSettings))
+        #expect(FileManager.default.fileExists(atPath: layout.claudeDirectory))
     }
 }

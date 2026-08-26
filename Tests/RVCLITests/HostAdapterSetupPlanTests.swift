@@ -38,7 +38,8 @@ import Testing
     let installations = HostAdapterInstallationSnapshot(
         grok: .occupied(layout.hostAdapter(for: .grok)),
         pi: .absentFile(layout.hostAdapter(for: .pi)),
-        openCode: .missing(layout.hostAdapter(for: .opencode))
+        openCode: .missing(layout.hostAdapter(for: .opencode)),
+        claude: .missing(layout.hostAdapter(for: .claude))
     )
 
     let plan = SetupWorkPlanBuilder.make(
@@ -54,6 +55,7 @@ import Testing
         .skipOccupied(.grok),
         .write(.pi, existingData: nil),
         .skipUndetected(.opencode),
+        .skipUndetected(.claude),
     ])
     #expect(
         FileManager.default.fileExists(atPath: homePath) == false,
@@ -67,7 +69,8 @@ import Testing
     let installations = HostAdapterInstallationSnapshot(
         grok: .missing(layout.hostAdapter(for: .grok)),
         pi: .missing(layout.hostAdapter(for: .pi)),
-        openCode: .missing(layout.hostAdapter(for: .opencode))
+        openCode: .missing(layout.hostAdapter(for: .opencode)),
+        claude: .missing(layout.hostAdapter(for: .claude))
     )
 
     let plan = SetupWorkPlanBuilder.make(
@@ -85,6 +88,7 @@ import Testing
         .skipUndetected(.grok),
         .skipUndetected(.pi),
         .skipUndetected(.opencode),
+        .skipUndetected(.claude),
     ])
     #expect(
         FileManager.default.fileExists(atPath: homePath) == false,
@@ -97,7 +101,8 @@ import Testing
     let installations = HostAdapterInstallationSnapshot(
         grok: .occupied(layout.hostAdapter(for: .grok)),
         pi: .missing(layout.hostAdapter(for: .pi)),
-        openCode: .missing(layout.hostAdapter(for: .opencode))
+        openCode: .missing(layout.hostAdapter(for: .opencode)),
+        claude: .missing(layout.hostAdapter(for: .claude))
     )
 
     let plan = SetupWorkPlanBuilder.make(
@@ -115,5 +120,6 @@ import Testing
         .forceClearThenWrite(.grok),
         .skipUndetected(.pi),
         .skipUndetected(.opencode),
+        .skipUndetected(.claude),
     ])
 }

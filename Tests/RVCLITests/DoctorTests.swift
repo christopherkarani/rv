@@ -66,6 +66,7 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
         #expect(outcome.stdout.contains("Grok") && outcome.stdout.contains("missing"))
         #expect(outcome.stdout.contains("Pi") && outcome.stdout.contains("missing"))
         #expect(outcome.stdout.contains("OpenCode") && outcome.stdout.contains("missing"))
+        #expect(outcome.stdout.contains("Claude") && outcome.stdout.contains("missing"))
         #expect(outcome.stdout.contains("→  rv setup"))
         #expect(try FileManager.default.contentsOfDirectory(atPath: home.path) == before)
     }
@@ -96,6 +97,92 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
         #expect(outcome.exitCode == 0)
         #expect(outcome.stdout.contains("Grok") && outcome.stdout.contains("wired"))
         #expect(outcome.stdout.contains("→  rv setup    Wire Grok") == false)
+    }
+}
+
+@Test func doctor_wiredClaudeReportsWired() throws {
+    try withDoctorHome { home, paths, environment in
+        let executable = home.appendingPathComponent("bin/rv")
+        try makeExecutable(executable)
+        try makeExecutable(home.appendingPathComponent("bin/rv-cli"))
+        try FileManager.default.createDirectory(
+            atPath: paths.claudeDirectory,
+            withIntermediateDirectories: true
+        )
+        let merged = try ClaudeSettingsMerge.merge(
+            existingData: nil,
+            rvPath: executable.path,
+            force: false
+        )
+        try merged.data.write(to: URL(fileURLWithPath: paths.claudeSettings))
+
+        let outcome = DoctorRun.run(
+            environment: environment,
+            diagnostics: localReady,
+            appearance: .pretty(colorOffPalette)
+        )
+
+        #expect(outcome.exitCode == 0)
+        #expect(outcome.stdout.contains("Claude") && outcome.stdout.contains("wired"))
+    }
+}
+
+@Test func doctor_claudeOccupiedFingerprint_reportsOccupied() throws {
+    try withDoctorHome { _, paths, environment in
+        try FileManager.default.createDirectory(
+            atPath: paths.claudeDirectory,
+            withIntermediateDirectories: true
+        )
+        let occupied = """
+        {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  { "type": "command", "command": "/old/rv hook --host claude", "timeout": 10 }
+                ]
+              }
+            ]
+          }
+        }
+        """
+        try occupied.write(toFile: paths.claudeSettings, atomically: true, encoding: .utf8)
+
+        let outcome = DoctorRun.run(
+            environment: environment,
+            diagnostics: localReady,
+            appearance: .pretty(colorOffPalette)
+        )
+
+        #expect(outcome.exitCode == 0)
+        #expect(outcome.stdout.contains("Claude") && outcome.stdout.contains("occupied"))
+        #expect(try String(contentsOfFile: paths.claudeSettings, encoding: .utf8) == occupied)
+    }
+}
+
+@Test func doctor_claudeMissingBakedRv_reportsBrokenNotWired() throws {
+    try withDoctorHome { _, paths, environment in
+        try FileManager.default.createDirectory(
+            atPath: paths.claudeDirectory,
+            withIntermediateDirectories: true
+        )
+        let merged = try ClaudeSettingsMerge.merge(
+            existingData: nil,
+            rvPath: "/nonexistent/rv",
+            force: false
+        )
+        try merged.data.write(to: URL(fileURLWithPath: paths.claudeSettings))
+
+        let outcome = DoctorRun.run(
+            environment: environment,
+            diagnostics: localReady,
+            appearance: .pretty(colorOffPalette)
+        )
+
+        #expect(outcome.exitCode == 0)
+        #expect(outcome.stdout.contains("Claude") && outcome.stdout.contains("broken"))
+        #expect(outcome.stdout.contains("wired") == false)
     }
 }
 

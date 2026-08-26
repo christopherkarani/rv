@@ -137,6 +137,7 @@ enum SetupRun {
             grok: .pending,
             pi: .pending,
             openCode: .pending,
+            claude: .pending,
             wrote: []
         )
 
@@ -162,23 +163,54 @@ enum SetupRun {
             case .skipOccupied(let host):
                 slots.assign(.occupied, to: host)
             case .forceClearThenWrite(let host):
-                do {
-                    try files.backupAndClearOwnedPath(layout.hostAdapter(for: host).destination)
-                } catch {
-                    throw SetupError.hostHookClearFailed(host)
+                if host == .claude {
+                    let dest = layout.hostAdapter(for: host).destination
+                    if files.isSymbolicLink(dest) {
+                        slots.assign(.occupied, to: host)
+                    } else {
+                        let existingData = files.readData(dest)
+                        if try writeClaudeSettings(
+                            path: dest,
+                            rvPath: env.rvPath,
+                            existingData: existingData,
+                            force: true,
+                            files: files
+                        ) {
+                            slots.wrote.insert(host)
+                        }
+                        slots.assign(.wired, to: host)
+                    }
+                } else {
+                    do {
+                        try files.backupAndClearOwnedPath(layout.hostAdapter(for: host).destination)
+                    } catch {
+                        throw SetupError.hostHookClearFailed(host)
+                    }
+                    if try writeHost(
+                        host,
+                        existingData: nil,
+                        env: env,
+                        layout: layout,
+                        files: files
+                    ) {
+                        slots.wrote.insert(host)
+                    }
+                    slots.assign(.wired, to: host)
                 }
-                if try writeHost(
-                    host,
-                    existingData: nil,
-                    env: env,
-                    layout: layout,
-                    files: files
-                ) {
-                    slots.wrote.insert(host)
-                }
-                slots.assign(.wired, to: host)
             case .write(let host, let existingData):
-                if try writeHost(
+                if host == .claude {
+                    let data = existingData ?? files.readData(layout.hostAdapter(for: host).destination)
+                    if try writeClaudeSettings(
+                        path: layout.hostAdapter(for: host).destination,
+                        rvPath: env.rvPath,
+                        existingData: data,
+                        force: false,
+                        files: files
+                    ) {
+                        slots.wrote.insert(host)
+                    }
+                    slots.assign(.wired, to: host)
+                } else if try writeHost(
                     host,
                     existingData: existingData,
                     env: env,
@@ -186,8 +218,10 @@ enum SetupRun {
                     files: files
                 ) {
                     slots.wrote.insert(host)
+                    slots.assign(.wired, to: host)
+                } else {
+                    slots.assign(.wired, to: host)
                 }
-                slots.assign(.wired, to: host)
             }
         }
 
@@ -195,6 +229,7 @@ enum SetupRun {
             grok: slots.grok,
             pi: slots.pi,
             openCode: slots.openCode,
+            claude: slots.claude,
             wrote: slots.wrote
         )
         env.installAnalytics.captureInstall(hosts: InstallAnalyticsHosts.from(report.slots))
@@ -286,10 +321,24 @@ enum SetupRun {
         for owned in layout.hostAdapters {
             switch installations.installation(for: owned.host).uninstallPlan {
             case .remove:
-                removedPaths.append(owned.destination)
-                removedHosts.insert(owned.host)
+                if owned.host == .claude {
+                    if try removeClaudeRVHooks(at: owned.destination, files: files) {
+                        removedHosts.insert(owned.host)
+                    }
+                } else {
+                    removedPaths.append(owned.destination)
+                    removedHosts.insert(owned.host)
+                }
             case .leaveOccupied:
-                occupiedHosts.insert(owned.host)
+                if owned.host == .claude {
+                    if try stripClaudeFingerprintLeavingOccupied(at: owned.destination, files: files) {
+                        removedHosts.insert(owned.host)
+                    } else {
+                        occupiedHosts.insert(owned.host)
+                    }
+                } else {
+                    occupiedHosts.insert(owned.host)
+                }
             case .skip:
                 break
             }
@@ -409,6 +458,91 @@ enum SetupRun {
         }
     }
 
+    /// Writes Claude settings merge when missing or different. Returns whether a write occurred.
+    private static func writeClaudeSettings(
+        path: String,
+        rvPath: String,
+        existingData: Data?,
+        force: Bool,
+        files: FileOps
+    ) throws(SetupError) -> Bool {
+        if files.isSymbolicLink(path) {
+            return false
+        }
+        let merged: (data: Data, wrote: Bool)
+        do {
+            merged = try ClaudeSettingsMerge.merge(
+                existingData: existingData,
+                rvPath: rvPath,
+                force: force
+            )
+        } catch {
+            throw SetupError.hostHookWriteFailed(.claude)
+        }
+        if merged.wrote == false {
+            return false
+        }
+        do {
+            try files.writeData(merged.data, to: path)
+        } catch {
+            throw SetupError.hostHookWriteFailed(.claude)
+        }
+        return true
+    }
+
+    /// Removes rv-fingerprinted Claude handlers only. Returns whether anything changed.
+    private static func removeClaudeRVHooks(at path: String, files: FileOps) throws(SetupError) -> Bool {
+        try applyClaudeUninstall(at: path, files: files, unreadable: .fail)
+    }
+
+    /// Stale rv fingerprints are occupied for setup, but uninstall still strips them.
+    private static func stripClaudeFingerprintLeavingOccupied(
+        at path: String,
+        files: FileOps
+    ) throws(SetupError) -> Bool {
+        try applyClaudeUninstall(at: path, files: files, unreadable: .leave)
+    }
+
+    private enum ClaudeUnreadableUninstall {
+        case fail
+        case leave
+    }
+
+    private static func applyClaudeUninstall(
+        at path: String,
+        files: FileOps,
+        unreadable: ClaudeUnreadableUninstall
+    ) throws(SetupError) -> Bool {
+        if files.isSymbolicLink(path) {
+            return false
+        }
+        guard let data = files.readData(path) else { return false }
+        let next: Data?
+        do {
+            next = try ClaudeSettingsMerge.uninstall(existingData: data)
+        } catch {
+            switch unreadable {
+            case .fail:
+                throw SetupError.hostHookWriteFailed(.claude)
+            case .leave:
+                return false
+            }
+        }
+        guard let next else {
+            files.removeFile(atPath: path)
+            return true
+        }
+        if next == data {
+            return false
+        }
+        do {
+            try files.writeData(next, to: path)
+        } catch {
+            throw SetupError.hostHookWriteFailed(.claude)
+        }
+        return true
+    }
+
     /// Writes `contents` when missing or different. Returns whether a write occurred.
     private static func writeOwned(
         path: String,
@@ -423,6 +557,10 @@ enum SetupRun {
         try files.write(contents, to: path)
         return true
     }
+}
+
+enum FileOpsError: Error, Equatable, Sendable {
+    case symbolicLink
 }
 
 struct FileOps {
@@ -446,6 +584,27 @@ struct FileOps {
         try contents.write(toFile: path, atomically: true, encoding: .utf8)
     }
 
+    func writeData(_ data: Data, to path: String) throws {
+        try createDirectory(atPath: (path as NSString).deletingLastPathComponent)
+        if isSymbolicLink(path) {
+            throw FileOpsError.symbolicLink
+        }
+        let mode = posixMode(at: path) ?? 0o600
+        try data.write(to: URL(fileURLWithPath: path), options: .atomic)
+        try fileManager.setAttributes([.posixPermissions: mode], ofItemAtPath: path)
+    }
+
+    func isSymbolicLink(_ path: String) -> Bool {
+        (try? fileManager.destinationOfSymbolicLink(atPath: path)) != nil
+    }
+
+    private func posixMode(at path: String) -> Int? {
+        guard let raw = (try? fileManager.attributesOfItem(atPath: path))?[.posixPermissions] as? NSNumber else {
+            return nil
+        }
+        return raw.intValue & 0o777
+    }
+
     func createDirectory(atPath path: String) throws {
         try fileManager.createDirectory(atPath: path, withIntermediateDirectories: true)
     }
@@ -466,7 +625,7 @@ struct FileOps {
     /// Moves an occupied owned path aside (`path.bak`) so setup can rewrite it.
     /// Symlinks are removed without a backup (nothing useful to restore as bytes).
     func backupAndClearOwnedPath(_ path: String) throws {
-        if (try? fileManager.destinationOfSymbolicLink(atPath: path)) != nil {
+        if isSymbolicLink(path) {
             try fileManager.removeItem(atPath: path)
             return
         }
@@ -485,7 +644,7 @@ private extension SetupSlotSnapshot {
         case .grok: grok = kind
         case .pi: pi = kind
         case .opencode: openCode = kind
-        case .claude: break
+        case .claude: claude = kind
         }
     }
 }

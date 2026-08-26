@@ -72,15 +72,18 @@ struct HostAdapterInstallationSnapshot: Equatable, Sendable {
     private var grok: HostAdapterInstallation
     private var pi: HostAdapterInstallation
     private var openCode: HostAdapterInstallation
+    private var claude: HostAdapterInstallation
 
     init(
         grok: HostAdapterInstallation,
         pi: HostAdapterInstallation,
-        openCode: HostAdapterInstallation
+        openCode: HostAdapterInstallation,
+        claude: HostAdapterInstallation
     ) {
         self.grok = grok
         self.pi = pi
         self.openCode = openCode
+        self.claude = claude
     }
 
     /// Returns the doctor-facing state for `host`.
@@ -98,14 +101,7 @@ struct HostAdapterInstallationSnapshot: Equatable, Sendable {
         case .opencode:
             openCode
         case .claude:
-            .missing(
-                OwnedHostAdapterPath(
-                    host: .claude,
-                    detectionDirectory: "",
-                    executableName: "claude",
-                    destination: ""
-                )
-            )
+            claude
         }
     }
 }
@@ -132,11 +128,61 @@ extension HostAdapterInstallation {
                 path: paths.hostAdapter(for: .opencode),
                 pathEntries: pathEntries,
                 fileManager: fileManager
+            ),
+            claude: try inspect(
+                path: paths.hostAdapter(for: .claude),
+                pathEntries: pathEntries,
+                fileManager: fileManager
             )
         )
     }
 
     private static func inspect(
+        path: OwnedHostAdapterPath,
+        pathEntries: [String],
+        fileManager: FileManager
+    ) throws -> HostAdapterInstallation {
+        if path.host == .claude {
+            return try inspectClaude(path: path, pathEntries: pathEntries, fileManager: fileManager)
+        }
+        return try inspectExclusive(path: path, pathEntries: pathEntries, fileManager: fileManager)
+    }
+
+    private static func inspectClaude(
+        path: OwnedHostAdapterPath,
+        pathEntries: [String],
+        fileManager: FileManager
+    ) throws -> HostAdapterInstallation {
+        guard isDetected(path, pathEntries: pathEntries, fileManager: fileManager) else {
+            return .missing(path)
+        }
+        if (try? fileManager.destinationOfSymbolicLink(atPath: path.destination)) != nil {
+            return .occupied(path)
+        }
+        guard fileManager.fileExists(atPath: path.destination) else {
+            return .absentFile(path)
+        }
+        guard let data = fileManager.contents(atPath: path.destination) else {
+            return .occupied(path)
+        }
+
+        switch ClaudeSettingsMerge.inspectionState(of: data) {
+        case .absentFile:
+            return .absentFile(path)
+        case .occupied:
+            return .occupied(path)
+        case .wired(let bakedPath):
+            let executable = bakedPath.isEmpty == false
+                && bakedPath.hasPrefix("/")
+                && fileManager.isExecutableFile(atPath: bakedPath)
+            if executable {
+                return .wired(path: path, existingData: data)
+            }
+            return .broken(path: path, existingData: data)
+        }
+    }
+
+    private static func inspectExclusive(
         path: OwnedHostAdapterPath,
         pathEntries: [String],
         fileManager: FileManager

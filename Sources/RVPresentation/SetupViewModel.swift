@@ -27,17 +27,20 @@ public struct SetupSlotSnapshot: Equatable, Sendable {
     public var grok: SetupSlotKind
     public var pi: SetupSlotKind
     public var openCode: SetupSlotKind
+    public var claude: SetupSlotKind
     public var wrote: Set<HookHost>
 
     public init(
         grok: SetupSlotKind,
         pi: SetupSlotKind,
         openCode: SetupSlotKind,
+        claude: SetupSlotKind = .pending,
         wrote: Set<HookHost>
     ) {
         self.grok = grok
         self.pi = pi
         self.openCode = openCode
+        self.claude = claude
         self.wrote = wrote
     }
 
@@ -46,7 +49,7 @@ public struct SetupSlotSnapshot: Equatable, Sendable {
         case .grok: grok
         case .pi: pi
         case .opencode: openCode
-        case .claude: .pending
+        case .claude: claude
         }
     }
 
@@ -61,7 +64,7 @@ public struct SetupSlotSnapshot: Equatable, Sendable {
     public var isHostless: Bool { detected.isEmpty }
 
     public var hasWiredSlot: Bool {
-        grok == .wired || pi == .wired || openCode == .wired
+        grok == .wired || pi == .wired || openCode == .wired || claude == .wired
     }
 
     /// Second matching run: hosts already present, this run wrote nothing, none occupied.
