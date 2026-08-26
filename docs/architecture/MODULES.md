@@ -10,7 +10,7 @@ Each module keeps a small public API, `package` internals later, and its own tes
 
 | Module | Owns | Must not |
 |---|---|---|
-| **RVDomain** | `Decision`, `Severity`, `PackID`, `RuleID`, `SecretPathCatalog`, `EvaluationRequest/Result`, Explain pipeline (`ExplainStep`), `ProposedAction`, `HardPolicyDecision`, `ActionReviewer`, `PendingApproval` | I/O, TTY, XPC |
+| **RVDomain** | `Decision`, `Severity`, `PackID`, `RuleID`, `SecretPathCatalog`, `EvaluationRequest/Result`, Explain pipeline (`ExplainStep`), `ProposedAction`, `HardPolicyDecision`, `ActionPolicyEngine`, `ActionReviewer`, `PendingApproval` | I/O, TTY, XPC |
 | **RVEngine** | normalize, quick-reject, safe then destructive, secret-path on allow, deadline, `PatternEngine` | pack files, hooks |
 | **RVPacks** | registry, bundled JSON, enable/disable | decisions, rendering |
 | **RVPolicy** | config merge, allowlist, allow-once, durable `PendingApprovalStore`, Apple Foundation Models `ActionReviewer` adapter (shadow), `ShadowReviewRunner` | rendering |
@@ -46,4 +46,6 @@ Each module has a matching `*Tests` target that depends only on that module.
 
 On Linux (OPE-261–262), `RVService`, `rvd`, `RVCLI`, `rv`, and their tests are on the graph. XPC types stay behind `#if canImport(XPC)`; Linux `rvd` listens on AF_UNIX under `$XDG_RUNTIME_DIR`. The C `rv` hook talks that socket; miss still execs `rv-cli`. Darwin `RVPolicy` stays `RVDomain` + CryptoKit; Linux `RVPolicy` adds `Crypto` (swift-crypto).
 
-**Shadow review (OPE-250).** `FoundationModelsActionReviewer` implements `ActionReviewer` in RVPolicy (`#if canImport(FoundationModels)`). `ShadowReviewRunner` invokes it only for `HardPolicyDecision.reviewEligible` and records a `ShadowReviewRecord` (decision, confidence, rationale category, latency, disagreement, missing-context reasons, model-unavailable). The live decision is the deterministic/human path; the runner never calls `ReviewBind.apply`. Promotion thresholds live in `AutoReviewPromotionThresholds` and are measurement constants only — guarded Auto-review is OPE-253.
+**Semantic policy (OPE-157).** `ActionPolicyEngine` is the pure evaluator: `ProposedAction` + context + `EffectiveActionPolicy` → `HardPolicyDecision`. Built-in `hardDeny` / `mandatoryHuman` cannot be weakened by repo/user overlay or `ReviewBind` (including a stub `.allow`). Legacy pack verdicts apply only when no semantic rule covers the action. `supportingCommand` is evidence, not the primary input.
+
+**Shadow review (OPE-250).** `FoundationModelsActionReviewer` implements `ActionReviewer` in RVPolicy (`#if canImport(FoundationModels)`). `ShadowReviewRunner` invokes it only for `HardPolicyDecision.reviewEligible` and records a `ShadowReviewRecord` (decision, confidence, rationale category, latency, disagreement, missing-context reasons, model-unavailable). The live decision is the deterministic/human path; the runner never calls `ReviewBind.apply`. The runner consumes the engine's `HardPolicyDecision` — it does not turn shadow into live Auto-review (OPE-253). Promotion thresholds live in `AutoReviewPromotionThresholds` and are measurement constants only.

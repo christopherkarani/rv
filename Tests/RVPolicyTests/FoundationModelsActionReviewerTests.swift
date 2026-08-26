@@ -11,7 +11,7 @@ struct FoundationModelsActionReviewerTests {
         #expect(reviewer.usesSystemModel)
     }
 
-    @Test func secretsNeverEnterCapturedPayload() async {
+    @Test func secretsNeverEnterCapturedPayload() async throws {
         let secret = "ghp_NeverInPrompt99"
         let dirty = ReviewContext(
             repository: RepositoryReviewContext(name: secret, currentBranch: "main"),

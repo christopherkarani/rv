@@ -1,5 +1,13 @@
-/// Deterministic hard-policy verdict. Minimal surface so a reviewer can be bound
-/// without owning the later semantic policy engine.
+/// Closed evaluation zone. Carried on `ActionPolicyExplanation` so two runs
+/// can compare zone + rule + reason without a full explain pipeline.
+public enum ActionPolicyZone: String, Sendable, Equatable, Codable {
+    case hardAllow
+    case mandatoryHuman
+    case hardDeny
+    case reviewEligible
+}
+
+/// Deterministic hard-policy verdict produced by `ActionPolicyEngine`.
 public enum HardPolicyDecision: Sendable, Equatable, Codable {
     case hardAllow
     case hardDeny(Deny)
@@ -7,6 +15,19 @@ public enum HardPolicyDecision: Sendable, Equatable, Codable {
     /// Reviewer advice may apply only in this zone. `fallback` is the Ask/Deny
     /// that wins when the review is missing, weak, or conflicting.
     case reviewEligible(fallback: Deny)
+
+    public var zone: ActionPolicyZone {
+        switch self {
+        case .hardAllow:
+            return .hardAllow
+        case .hardDeny:
+            return .hardDeny
+        case .mandatoryHuman:
+            return .mandatoryHuman
+        case .reviewEligible:
+            return .reviewEligible
+        }
+    }
 }
 
 /// Authorization after hard policy and optional advisory review.
