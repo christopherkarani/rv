@@ -123,7 +123,10 @@ else
   export GNUPGHOME
   cleanup_gpg() { rm -rf "$GNUPGHOME"; }
   trap cleanup_gpg EXIT
-  curl -fsSL "https://www.swift.org/keys/all-keys.asc" | gpg --batch --import
+  # swift.org serves the keyring gzip-compressed; without --compressed
+  # curl stores 1f 8b … and gpg reports "no valid OpenPGP data found".
+  curl -fsSL --compressed "https://www.swift.org/keys/all-keys.asc" \
+    | gpg --batch --import
   gpg --batch --verify "$SIG_PATH" "$TAR_PATH"
   trap - EXIT
   cleanup_gpg
