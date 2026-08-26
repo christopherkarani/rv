@@ -47,6 +47,10 @@ func hostAdapter_bakedRvPath_rejectsModifiedAndForeignBytes(host: HookHost) thro
     #expect(hermesPlugin.contains("pre_tool_call"))
     #expect(hermesPlugin.contains("name: rv-guard"))
     #expect(hermesPlugin.contains("\nhooks:") == false)
+    let openCodeTui = try HostAdapterResources.loadOpenCodeTuiPlugin()
+    #expect(openCodeTui.contains("id: \"rv-guard-tui\""))
+    #expect(openCodeTui.contains("DialogConfirm"))
+    #expect(openCodeTui.contains("permission.ask") == false)
 }
 
 @Test func hostAdapter_piAndOpenCode_matchOnlyTheirOwnRender() throws {

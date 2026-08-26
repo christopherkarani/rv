@@ -7,6 +7,7 @@ const RV_TOAST_TITLE = "RV · Blocked";
 const RV_CMD_PREVIEW = 96;
 const RV_MISSING_COMMAND =
   "rv received a shell hook with no command text and blocked the command. Run it in Terminal.";
+const RV_ASK_TIMEOUT_MS = 120000;
 
 const gatedCallIDs = new Set();
 
@@ -154,7 +155,7 @@ async function gateCommand(ctx, input, output, command, tool) {
   const cwd = pickCwd(hostCwd);
   const mapped = await consultRv(command, cwd, tool);
   if (mapped.action === "ask") {
-    const allowed = await confirmAsk(ctx, input, output, mapped);
+    const allowed = await confirmAsk(ctx, input, output, mapped, command);
     if (!allowed) {
       await failClosed(ctx, mapped, command);
     }
@@ -170,7 +171,7 @@ async function gateCommand(ctx, input, output, command, tool) {
   }
 }
 
-async function confirmAsk(ctx, input, output, mapped) {
+async function confirmAsk(ctx, input, output, mapped, command) {
   try {
     if (ctx?.ui?.hasUI === false) {
       return false;
@@ -188,10 +189,157 @@ async function confirmAsk(ctx, input, output, mapped) {
       }
       return isAllowOnceResolution(await ask(prompt));
     }
-    return false;
+    return await confirmOfficialPermission(ctx, input, mapped, command);
   } catch {
     return false;
   }
+}
+
+async function confirmOfficialPermission(ctx, input, mapped, command) {
+  const sessionID = stringCommand(input && input.sessionID);
+  if (!sessionID) {
+    return false;
+  }
+  const subscribe = ctx && ctx.client && ctx.client.event && ctx.client.event.subscribe;
+  if (typeof subscribe !== "function") {
+    return false;
+  }
+  const sub = await subscribe();
+  const stream = permissionEventStream(sub);
+  if (!stream) {
+    return false;
+  }
+  const created = await createOfficialPermission(ctx, sessionID, input, mapped, command);
+  if (!created || created.effect === "deny" || created.effect === "allow") {
+    return false;
+  }
+  if (created.effect !== "ask" || !created.id) {
+    return false;
+  }
+  return await Promise.race([
+    readOfficialPermissionReply(stream, created.id, sessionID),
+    new Promise((resolve) => {
+      setTimeout(() => resolve(false), RV_ASK_TIMEOUT_MS);
+    }),
+  ]);
+}
+
+async function createOfficialPermission(ctx, sessionID, input, mapped, command) {
+  const body = {
+    // Default build agent is `*: allow`. Unmatched "rv" is leftover-ask-as-permit
+    // (immediate allow). `external_directory` last-matches ask on 1.18.18.
+    action: "external_directory",
+    resources: ["/rv-ask"],
+    metadata: {
+      rv: true,
+      command,
+      reason: typeof mapped.reason === "string" ? mapped.reason : "",
+    },
+  };
+  const callID = stringCommand(input && input.callID);
+  const messageID = stringCommand(input && input.messageID);
+  if (callID && messageID) {
+    body.source = { type: "tool", messageID, callID };
+  }
+  const session = ctx && ctx.client && ctx.client.session;
+  const create =
+    (session && session.permission && session.permission.create) ??
+    (ctx && ctx.client && ctx.client.permission && ctx.client.permission.create) ??
+    (ctx &&
+      ctx.client &&
+      ctx.client.v2 &&
+      ctx.client.v2.session &&
+      ctx.client.v2.session.permission &&
+      ctx.client.v2.session.permission.create);
+  if (typeof create === "function") {
+    return unwrapPermissionCreate(
+      await create({
+        ...body,
+        sessionID,
+        path: { sessionID, id: sessionID },
+      }),
+    );
+  }
+  return createOfficialPermissionFetch(ctx, sessionID, body);
+}
+
+async function createOfficialPermissionFetch(ctx, sessionID, body) {
+  const base = ctx && ctx.serverUrl;
+  if (!base) {
+    return undefined;
+  }
+  const url = new URL(`api/session/${sessionID}/permission`, base);
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response || response.ok === false) {
+    return undefined;
+  }
+  return unwrapPermissionCreate(await response.json());
+}
+
+function unwrapPermissionCreate(value) {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const row = value.data && typeof value.data === "object" ? value.data : value;
+  const inner = row.data && typeof row.data === "object" && row.id == null ? row.data : row;
+  const id = stringCommand(inner.id);
+  const effect = typeof inner.effect === "string" ? inner.effect : undefined;
+  if (!id && !effect) {
+    return undefined;
+  }
+  return { id, effect };
+}
+
+function permissionEventStream(sub) {
+  if (!sub) {
+    return undefined;
+  }
+  if (typeof sub[Symbol.asyncIterator] === "function") {
+    return sub;
+  }
+  if (sub.stream && typeof sub.stream[Symbol.asyncIterator] === "function") {
+    return sub.stream;
+  }
+  if (sub.data && typeof sub.data[Symbol.asyncIterator] === "function") {
+    return sub.data;
+  }
+  return undefined;
+}
+
+async function readOfficialPermissionReply(stream, requestID, sessionID) {
+  for await (const event of stream) {
+    const reply = permissionReplyFromEvent(event, requestID, sessionID);
+    if (reply === undefined) {
+      continue;
+    }
+    return reply === "once" || reply === "always";
+  }
+  return false;
+}
+
+function permissionReplyFromEvent(event, requestID, sessionID) {
+  if (!event || typeof event !== "object") {
+    return undefined;
+  }
+  const replied = "permission.v2.replied";
+  const legacy = ["permission", "replied"].join(".");
+  if (event.type !== replied && event.type !== legacy) {
+    return undefined;
+  }
+  const props = event.properties ?? event.data ?? {};
+  const id = stringCommand(props.requestID ?? props.id);
+  if (id !== requestID) {
+    return undefined;
+  }
+  const session = stringCommand(props.sessionID);
+  if (session && session !== sessionID) {
+    return undefined;
+  }
+  return typeof props.reply === "string" ? props.reply : undefined;
 }
 
 function isAllowOnceResolution(value) {

@@ -305,7 +305,15 @@ enum SetupRun {
                 existingData: files.readData(pluginPath),
                 files: files
             )
-        case .grok, .pi, .opencode, .claude:
+        case .opencode:
+            let tui = try HostAdapterResources.loadOpenCodeTuiPlugin()
+            return try writeOwned(
+                path: directory + "/rv-guard-tui.js",
+                contents: tui,
+                existingData: files.readData(directory + "/rv-guard-tui.js"),
+                files: files
+            )
+        case .grok, .pi, .claude:
             return false
         }
     }
@@ -384,6 +392,9 @@ enum SetupRun {
                     if owned.host == .hermes {
                         let directory = (owned.destination as NSString).deletingLastPathComponent
                         removedPaths.append(directory + "/plugin.yaml")
+                    }
+                    if owned.host == .opencode {
+                        removedPaths.append(layout.openCodeTuiPlugin)
                     }
                     removedHosts.insert(owned.host)
                 }

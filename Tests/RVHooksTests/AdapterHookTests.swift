@@ -61,10 +61,15 @@ private func harnessURL() -> URL {
     #expect(source.contains("RV · Blocked"))
     #expect(source.contains("hostAsk: \"spend\""))
     #expect(source.contains("onResolution"))
+    #expect(source.contains("session.permission.create"))
     #expect(source.contains("permission.ask") == false)
     #expect(source.contains("tool: {") == false)
     #expect(source.contains("console.log") == false)
     #expect(source.contains("console.error") == false)
+    let tui = try HostAdapterResources.loadOpenCodeTuiPlugin()
+    #expect(tui.contains("DialogConfirm"))
+    #expect(tui.contains("RV · Ask"))
+    #expect(tui.contains("permission.ask") == false)
 }
 
 @Test func openClawTemplate_registersBeforeToolCallExecAndBlocks() throws {
@@ -287,6 +292,82 @@ private func harnessURL() -> URL {
     )
     #expect(result.threw == resetHardReason)
     #expect(result.spawnCount == 1)
+}
+
+@Test func openCodeAdapter_sessionShellEnvOfficialConfirmSpendsThenAllows() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: [
+            "hook": "shell.env",
+            "cwd": "/tmp/ws",
+            "sessionID": "ses_1",
+            "callID": "call_1",
+            "command": "git reset --hard",
+        ],
+        stub: .stdout(askResetHardJSON, exit: 1),
+        permissionReply: "once",
+        secondStub: .stdout("", exit: 0)
+    )
+    #expect(result.threw == nil)
+    #expect(result.spawnCount == 2)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
+    #expect(result.lastStdin?.contains("git reset --hard") == true)
+    #expect(result.toastCount == 0)
+}
+
+@Test func openCodeAdapter_sessionShellEnvOfficialConfirmRejectDoesNotAllow() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: [
+            "hook": "shell.env",
+            "cwd": "/tmp/ws",
+            "sessionID": "ses_1",
+            "callID": "call_1",
+            "command": "git reset --hard",
+        ],
+        stub: .stdout(askResetHardJSON, exit: 1),
+        permissionReply: "reject",
+        secondStub: .stdout("", exit: 0)
+    )
+    #expect(result.threw == resetHardReason)
+    #expect(result.spawnCount == 1)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
+}
+
+@Test func openCodeAdapter_sessionShellEnvOfficialFetchConfirmSpendsThenAllows() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: [
+            "hook": "shell.env",
+            "cwd": "/tmp/ws",
+            "sessionID": "ses_1",
+            "callID": "call_1",
+            "command": "git reset --hard",
+        ],
+        stub: .stdout(askResetHardJSON, exit: 1),
+        permissionReply: "fetch-once",
+        secondStub: .stdout("", exit: 0)
+    )
+    #expect(result.threw == nil)
+    #expect(result.spawnCount == 2)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
+    #expect(result.lastStdin?.contains("git reset --hard") == true)
+    #expect(result.toastCount == 0)
+}
+
+@Test func openCodeAdapter_sessionShellEnvOfficialCreateAllowIsNotAPermit() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: [
+            "hook": "shell.env",
+            "cwd": "/tmp/ws",
+            "sessionID": "ses_1",
+            "callID": "call_1",
+            "command": "git reset --hard",
+        ],
+        stub: .stdout(askResetHardJSON, exit: 1),
+        permissionReply: "allow",
+        secondStub: .stdout("", exit: 0)
+    )
+    #expect(result.threw == resetHardReason)
+    #expect(result.spawnCount == 1)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
 }
 
 @Test func openCodeAdapter_sessionShellEnvConfirmSpendsThenAllows() async throws {
@@ -915,6 +996,7 @@ private func runOpenCodeAdapter(
     confirmYes: Bool = false,
     hasUI: Bool = true,
     resolutionAllow: Bool = false,
+    permissionReply: String? = nil,
     secondStub: StubRV? = nil,
     sessionMessages: [String: Any]? = nil
 ) async throws -> OpenCodeAdapterRun {
@@ -930,6 +1012,7 @@ private func runOpenCodeAdapter(
         confirmYes: confirmYes,
         hasUI: hasUI,
         resolutionAllow: resolutionAllow,
+        permissionReply: permissionReply,
         secondStub: secondStub,
         sessionMessages: sessionMessages
     )
@@ -979,6 +1062,7 @@ private func runAdapter(
     confirmYes: Bool = false,
     hasUI: Bool = true,
     resolutionAllow: Bool = false,
+    permissionReply: String? = nil,
     secondStub: StubRV? = nil,
     sessionMessages: [String: Any]? = nil
 ) async throws -> AdapterPayload {
@@ -1071,6 +1155,9 @@ private func runAdapter(
     }
     if resolutionAllow {
         environment["RV_RESOLUTION_ALLOW"] = "1"
+    }
+    if let permissionReply {
+        environment["RV_PERMISSION_REPLY"] = permissionReply
     }
     if let sessionMessages {
         let data = try JSONSerialization.data(withJSONObject: sessionMessages)

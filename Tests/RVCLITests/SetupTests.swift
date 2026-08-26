@@ -150,7 +150,16 @@ private func fixtureLoginHome() throws -> URL {
         #expect(outcome.exitCode == 0)
         let body = try String(contentsOfFile: layout.openCodePlugin, encoding: .utf8)
         #expect(body == (try HookHost.opencode.adapterResource().rendered(rvPath: "/tmp/rv-bin/rv")))
+        let tui = try String(contentsOfFile: layout.openCodeTuiPlugin, encoding: .utf8)
+        #expect(tui.contains("DialogConfirm"))
+        #expect(tui.contains("RV · Ask"))
+        #expect(tui.contains("permission.ask") == false)
         #expect(FileManager.default.fileExists(atPath: layout.grokHook) == false)
+
+        let uninstall = SetupRun.uninstall(env(home: home, launchctl: launchctl))
+        #expect(uninstall.exitCode == 0)
+        #expect(FileManager.default.fileExists(atPath: layout.openCodePlugin) == false)
+        #expect(FileManager.default.fileExists(atPath: layout.openCodeTuiPlugin) == false)
     }
 }
 

@@ -140,6 +140,9 @@ if (host === "opencode") {
       },
     };
   }
+  if (process.env.RV_PERMISSION_REPLY) {
+    installOfficialPermission(ctx, process.env.RV_PERMISSION_REPLY);
+  }
   const plugin = await mod.RvGuard(ctx);
   const keys = Object.keys(plugin);
   const unexpected = keys.filter(
@@ -164,6 +167,83 @@ if (host === "opencode") {
     );
   }
   process.exit(0);
+}
+
+function installOfficialPermission(ctx, reply) {
+  const fetchOnly = reply.startsWith("fetch-");
+  const effectReply = fetchOnly ? reply.slice("fetch-".length) : reply;
+  const requestID = "per_test";
+  const session = ctx.client.session ?? {};
+  if (!fetchOnly) {
+    session.permission = {
+      async create() {
+        if (effectReply === "allow") {
+          return { data: { id: requestID, effect: "allow" } };
+        }
+        if (effectReply === "deny") {
+          return { data: { id: requestID, effect: "deny" } };
+        }
+        return { data: { id: requestID, effect: "ask" } };
+      },
+    };
+  }
+  ctx.client.session = session;
+  ctx.client.event = {
+    async subscribe() {
+      return {
+        stream: (async function* () {
+          if (effectReply === "once" || effectReply === "always" || effectReply === "reject") {
+            yield {
+              type: "permission.v2.replied",
+              properties: {
+                sessionID: "ses_1",
+                requestID,
+                reply: effectReply,
+              },
+            };
+          }
+        })(),
+      };
+    },
+  };
+  ctx.serverUrl = new URL("http://127.0.0.1:4096/");
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    const href = String(url);
+    if (
+      href.includes("/api/session/") &&
+      href.includes("/permission") &&
+      init &&
+      init.method === "POST"
+    ) {
+      if (effectReply === "allow") {
+        return {
+          ok: true,
+          async json() {
+            return { data: { id: requestID, effect: "allow" } };
+          },
+        };
+      }
+      if (effectReply === "deny") {
+        return {
+          ok: true,
+          async json() {
+            return { data: { id: requestID, effect: "deny" } };
+          },
+        };
+      }
+      return {
+        ok: true,
+        async json() {
+          return { data: { id: requestID, effect: "ask" } };
+        },
+      };
+    }
+    if (typeof previousFetch === "function") {
+      return previousFetch(url, init);
+    }
+    throw new Error(`unexpected fetch ${href}`);
+  };
 }
 
 async function runOpenCodeStep(plugin, event, flags) {
