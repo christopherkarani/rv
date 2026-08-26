@@ -25,67 +25,77 @@ public enum QuickReject {
     }
 
     public static func containsEmptyParenPair(_ text: String) -> Bool {
-        let bytes = text.utf8
-        var index = bytes.startIndex
-        while index != bytes.endIndex {
-            if bytes[index] == UInt8(ascii: "(") {
-                var cursor = bytes.index(after: index)
-                while cursor != bytes.endIndex, isASCIIWhitespace(bytes[cursor]) {
-                    cursor = bytes.index(after: cursor)
+        withUTF8Buffer(text) { bytes in
+            var index = 0
+            while index < bytes.count {
+                if bytes[index] == UInt8(ascii: "(") {
+                    var cursor = index + 1
+                    while cursor < bytes.count, isASCIIWhitespace(bytes[cursor]) {
+                        cursor += 1
+                    }
+                    if cursor < bytes.count, bytes[cursor] == UInt8(ascii: ")") {
+                        return true
+                    }
                 }
-                if cursor != bytes.endIndex, bytes[cursor] == UInt8(ascii: ")") {
-                    return true
-                }
+                index += 1
             }
-            index = bytes.index(after: index)
+            return false
         }
-        return false
     }
 }
 
 /// Word characters are ASCII alnum / `_` / `-`, matching the pack delimiter `[^[:alnum:]_-]`.
 /// That keeps `.gitignore` and `digit` from lighting `git`, while `$(git reset --hard)` still hits.
 private func asciiWordHit(_ keyword: String, in text: String) -> Bool {
-    let haystack = text.utf8
-    let needle = keyword.utf8
-    let needleCount = needle.count
-    guard needleCount > 0, haystack.count >= needleCount else { return false }
+    withUTF8Buffer(text) { haystack in
+        withUTF8Buffer(keyword) { needle in
+            let needleCount = needle.count
+            guard needleCount > 0, haystack.count >= needleCount else { return false }
 
-    var start = haystack.startIndex
-    while start != haystack.endIndex {
-        guard let matchEnd = haystack.index(
-            start,
-            offsetBy: needleCount,
-            limitedBy: haystack.endIndex
-        ) else {
-            break
-        }
-
-        if asciiEqualsCaseInsensitive(haystack[start..<matchEnd], needle) {
-            let before: UInt8? = start == haystack.startIndex
-                ? nil
-                : haystack[haystack.index(before: start)]
-            let after: UInt8? = matchEnd == haystack.endIndex ? nil : haystack[matchEnd]
-            if !isASCIIWordByte(before), !isASCIIWordByte(after) {
-                return true
+            for start in 0...(haystack.count - needleCount) {
+                if asciiEqualsCaseInsensitive(haystack, start: start, needle: needle) {
+                    let before: UInt8? = start == 0 ? nil : haystack[start - 1]
+                    let after: UInt8? = start + needleCount == haystack.count
+                        ? nil
+                        : haystack[start + needleCount]
+                    if !isASCIIWordByte(before), !isASCIIWordByte(after) {
+                        return true
+                    }
+                }
             }
+            return false
         }
-        start = haystack.index(after: start)
     }
-    return false
 }
 
-private func asciiEqualsCaseInsensitive<H: Collection, N: Collection>(
-    _ slice: H,
-    _ needle: N
-) -> Bool where H.Element == UInt8, N.Element == UInt8 {
-    guard slice.count == needle.count else { return false }
-    for (byte, expected) in zip(slice, needle) {
-        if byte.lowercasedASCII != expected.lowercasedASCII {
+private func asciiEqualsCaseInsensitive(
+    _ haystack: UnsafeBufferPointer<UInt8>,
+    start: Int,
+    needle: UnsafeBufferPointer<UInt8>
+) -> Bool {
+    for offset in 0..<needle.count {
+        if haystack[start + offset].lowercasedASCII != needle[offset].lowercasedASCII {
             return false
         }
     }
     return true
+}
+
+private func withUTF8Buffer<Result>(
+    _ text: String,
+    _ body: (UnsafeBufferPointer<UInt8>) -> Result
+) -> Result {
+    if let result = text.utf8.withContiguousStorageIfAvailable(body) {
+        return result
+    }
+    let count = text.utf8.count
+    return text.withCString { cString in
+        let bytes = UnsafeBufferPointer(
+            start: UnsafeRawPointer(cString).assumingMemoryBound(to: UInt8.self),
+            count: count
+        )
+        return body(bytes)
+    }
 }
 
 private func isASCIIWordByte(_ byte: UInt8?) -> Bool {
