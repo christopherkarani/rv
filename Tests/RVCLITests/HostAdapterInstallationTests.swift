@@ -101,7 +101,7 @@ func hostInstallation_foreignOwnedBytesAreOccupiedAndUnchanged(_ host: HookHost)
               {
                 "matcher": "Bash",
                 "hooks": [
-                  { "type": "command", "command": "dcg evaluate", "timeout": 5 }
+                  { "type": "command", "command": "other-guard evaluate", "timeout": 5 }
                 ]
               }
             ]

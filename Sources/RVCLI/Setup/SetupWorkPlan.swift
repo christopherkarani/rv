@@ -23,7 +23,6 @@ enum SetupWorkPlanBuilder {
         rvdIsExecutable: Bool
     ) -> SetupWorkPlan {
         var steps: [SetupWorkStep] = [.createConfigDirectory]
-        steps.append(rvdIsExecutable ? .writeLaunchAgent : .skipLaunchAgent)
         for owned in layout.hostAdapters {
             let host = owned.host
             switch installations.installation(for: host).setupPlan(force: force) {
@@ -37,6 +36,9 @@ enum SetupWorkPlanBuilder {
                 steps.append(.write(host, existingData: existingData))
             }
         }
+        // Hosts before LaunchAgent: a launchctl miss must not skip hook wiring.
+        // Hooks still evaluate in-process when rvd is down.
+        steps.append(rvdIsExecutable ? .writeLaunchAgent : .skipLaunchAgent)
         return SetupWorkPlan(steps: steps)
     }
 }

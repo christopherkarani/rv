@@ -51,11 +51,11 @@ import Testing
 
     #expect(plan.steps == [
         .createConfigDirectory,
-        .writeLaunchAgent,
         .skipOccupied(.grok),
         .write(.pi, existingData: nil),
         .skipUndetected(.opencode),
         .skipUndetected(.claude),
+        .writeLaunchAgent,
     ])
     #expect(
         FileManager.default.fileExists(atPath: homePath) == false,
@@ -84,11 +84,11 @@ import Testing
     #expect(plan.steps.contains(.writeLaunchAgent) == false)
     #expect(plan.steps == [
         .createConfigDirectory,
-        .skipLaunchAgent,
         .skipUndetected(.grok),
         .skipUndetected(.pi),
         .skipUndetected(.opencode),
         .skipUndetected(.claude),
+        .skipLaunchAgent,
     ])
     #expect(
         FileManager.default.fileExists(atPath: homePath) == false,
@@ -116,10 +116,10 @@ import Testing
     #expect(plan.steps.contains(.skipOccupied(.grok)) == false)
     #expect(plan.steps == [
         .createConfigDirectory,
-        .writeLaunchAgent,
         .forceClearThenWrite(.grok),
         .skipUndetected(.pi),
         .skipUndetected(.opencode),
         .skipUndetected(.claude),
+        .writeLaunchAgent,
     ])
 }

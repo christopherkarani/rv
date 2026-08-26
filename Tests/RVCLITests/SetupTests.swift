@@ -769,7 +769,7 @@ private func fixtureLoginHome() throws -> URL {
         #expect(outcome.stderr == "rv setup failed: unable to clear occupied grok hook\n")
         #expect(outcome.exitCode == EX_CANTCREAT)
         #expect(FileManager.default.fileExists(atPath: layout.grokHook))
-        #expect(launchctl.bootstraps.isEmpty == false)
+        #expect(launchctl.bootstraps.isEmpty)
     }
 }
 
@@ -809,6 +809,66 @@ private func fixtureLoginHome() throws -> URL {
         #expect(outcome.exitCode == EX_CANTCREAT)
         #expect(launchctl.bootstraps.isEmpty)
         #expect(FileManager.default.fileExists(atPath: layout.grokHook) == false)
+    }
+}
+
+struct AlreadyRegisteredLaunchctl: LaunchctlApplying {
+    func bootstrap(domain _: String, plist _: URL) throws {
+        throw LaunchctlError.nonZeroExit(5)
+    }
+
+    func bootout(domain _: String, label _: String) throws {}
+
+    func isLoaded(domain: String, label _: String) -> Bool {
+        domain.hasPrefix("gui/")
+    }
+}
+
+final class GuiMissUserOKLaunchctl: LaunchctlApplying {
+    private(set) var bootstrapDomains: [String] = []
+
+    func bootstrap(domain: String, plist _: URL) throws {
+        bootstrapDomains.append(domain)
+        if domain.hasPrefix("gui/") {
+            throw LaunchctlError.nonZeroExit(125)
+        }
+    }
+
+    func bootout(domain _: String, label _: String) throws {}
+}
+
+@Test func setup_alreadyRegisteredLaunchAgent_isIdempotentSuccess() throws {
+    try withTempHome { home, layout, _ in
+        try FileManager.default.createDirectory(atPath: layout.grokDirectory, withIntermediateDirectories: true)
+        let outcome = SetupRun.setup(env(home: home, launchctl: AlreadyRegisteredLaunchctl()))
+        #expect(outcome.exitCode == 0)
+        #expect(outcome.stderr.isEmpty)
+        #expect(FileManager.default.fileExists(atPath: layout.grokHook))
+        #expect(FileManager.default.fileExists(atPath: layout.launchAgent))
+    }
+}
+
+@Test func setup_guiBootstrapMiss_fallsBackToUserDomain() throws {
+    try withTempHome { home, layout, _ in
+        let launchctl = GuiMissUserOKLaunchctl()
+        var environment = env(home: home, launchctl: launchctl)
+        environment.uid = { 4242 }
+        let outcome = SetupRun.setup(environment)
+        #expect(outcome.exitCode == 0)
+        #expect(launchctl.bootstrapDomains == ["gui/4242", "user/4242"])
+        #expect(FileManager.default.fileExists(atPath: layout.launchAgent))
+    }
+}
+
+@Test func setup_launchctlBootstrapFails_stillWiresDetectedHosts() throws {
+    try withTempHome { home, layout, _ in
+        try FileManager.default.createDirectory(atPath: layout.grokDirectory, withIntermediateDirectories: true)
+        let outcome = SetupRun.setup(env(home: home, launchctl: FailingLaunchctl()))
+        #expect(outcome.stdout.isEmpty)
+        #expect(outcome.stderr == "rv setup failed: unable to load LaunchAgent\n")
+        #expect(outcome.exitCode == EX_UNAVAILABLE)
+        #expect(FileManager.default.fileExists(atPath: layout.grokHook))
+        #expect(FileManager.default.fileExists(atPath: layout.launchAgent))
     }
 }
 
@@ -868,6 +928,8 @@ final class DomainRecordingLaunchctl: LaunchctlApplying {
         LaunchdDomain.agentPrintTarget(uid: 4242, label: SetupRun.launchAgentLabel)
             == "gui/4242/dev.rv.evaluate"
     )
+    #expect(LaunchdDomain.bootoutOrder(uid: 4242) == ["user/4242", "gui/4242"])
+    #expect(LaunchdDomain.bootstrapOrder(uid: 4242) == ["gui/4242", "user/4242"])
 }
 
 @Test func setupFlow_injectedUID_bakesGuiDomainForBootstrapAndBootout() throws {
@@ -897,7 +959,7 @@ private func claudeForeignSettings() -> String {
           {
             "matcher": "Bash",
             "hooks": [
-              { "type": "command", "command": "dcg evaluate", "timeout": 5 }
+              { "type": "command", "command": "other-guard evaluate", "timeout": 5 }
             ]
           }
         ]
@@ -940,7 +1002,7 @@ private func posixMode(_ url: URL) throws -> Int {
         #expect(entries[0]["matcher"] as? String == "Bash")
         let foreignHooks = try #require(entries[0]["hooks"] as? [[String: Any]])
         #expect(foreignHooks.count == 1)
-        #expect(foreignHooks[0]["command"] as? String == "dcg evaluate")
+        #expect(foreignHooks[0]["command"] as? String == "other-guard evaluate")
         let rvHooks = try #require(entries[1]["hooks"] as? [[String: Any]])
         #expect(rvHooks.count == 1)
         let command = try #require(rvHooks[0]["command"] as? String)
@@ -995,7 +1057,7 @@ private func posixMode(_ url: URL) throws -> Int {
               {
                 "matcher": "Bash",
                 "hooks": [
-                  { "type": "command", "command": "dcg evaluate", "timeout": 5 },
+                  { "type": "command", "command": "other-guard evaluate", "timeout": 5 },
                   { "type": "command", "command": "/old/rv hook --host claude", "timeout": 10 }
                 ]
               }
@@ -1011,7 +1073,7 @@ private func posixMode(_ url: URL) throws -> Int {
         let entries = try claudePreToolUseEntries(try claudeSettingsObject(at: layout.claudeSettings))
         #expect(entries.count == 2)
         let shared = try #require(entries[0]["hooks"] as? [[String: Any]])
-        #expect(shared.map { $0["command"] as? String } == ["dcg evaluate"])
+        #expect(shared.map { $0["command"] as? String } == ["other-guard evaluate"])
         let command = try #require((entries[1]["hooks"] as? [[String: Any]])?.first?["command"] as? String)
         #expect(command == "/tmp/rv-bin/rv hook --host claude")
     }
@@ -1035,7 +1097,7 @@ private func posixMode(_ url: URL) throws -> Int {
         #expect(entries.count == 1)
         let foreignHooks = try #require(entries[0]["hooks"] as? [[String: Any]])
         #expect(foreignHooks.count == 1)
-        #expect(foreignHooks[0]["command"] as? String == "dcg evaluate")
+        #expect(foreignHooks[0]["command"] as? String == "other-guard evaluate")
         #expect(
             foreignHooks.contains { hook in
                 (hook["command"] as? String)?.contains("hook --host claude") == true
@@ -1057,7 +1119,7 @@ private func posixMode(_ url: URL) throws -> Int {
               {
                 "matcher": "Bash",
                 "hooks": [
-                  { "type": "command", "command": "dcg evaluate", "timeout": 5 },
+                  { "type": "command", "command": "other-guard evaluate", "timeout": 5 },
                   { "type": "command", "command": "/old/rv hook --host claude", "timeout": 10 }
                 ]
               }
@@ -1074,7 +1136,7 @@ private func posixMode(_ url: URL) throws -> Int {
         let entries = try claudePreToolUseEntries(settings)
         #expect(entries.count == 1)
         let hooks = try #require(entries[0]["hooks"] as? [[String: Any]])
-        #expect(hooks.map { $0["command"] as? String } == ["dcg evaluate"])
+        #expect(hooks.map { $0["command"] as? String } == ["other-guard evaluate"])
     }
 }
 
@@ -1195,7 +1257,7 @@ private func posixMode(_ url: URL) throws -> Int {
               {
                 "matcher": "Bash",
                 "hooks": [
-                  { "type": "command", "command": "dcg evaluate", "timeout": 5 },
+                  { "type": "command", "command": "other-guard evaluate", "timeout": 5 },
                   { "type": "command", "command": "/old/rv hook --host claude", "timeout": 10 }
                 ]
               }
@@ -1216,7 +1278,7 @@ private func posixMode(_ url: URL) throws -> Int {
         let entries = try claudePreToolUseEntries(try claudeSettingsObject(at: layout.claudeSettings))
         #expect(entries.count == 1)
         let hooks = try #require(entries[0]["hooks"] as? [[String: Any]])
-        #expect(hooks.map { $0["command"] as? String } == ["dcg evaluate"])
+        #expect(hooks.map { $0["command"] as? String } == ["other-guard evaluate"])
     }
 }
 

@@ -416,16 +416,36 @@ enum SetupRun {
             throw SetupError.launchAgentWriteFailed
         }
         if env.touchLaunchd {
-            let url = URL(fileURLWithPath: layout.launchAgent)
-            let uid = env.uid()
-            let domain = LaunchdDomain.gui(uid)
-            try? env.launchctl.bootout(domain: LaunchdDomain.user(uid), label: launchAgentLabel)
+            try loadLaunchAgent(env: env, plist: URL(fileURLWithPath: layout.launchAgent))
+        }
+    }
+
+    /// `launchctl bootstrap` if needed. Already-registered (exit 5) is success
+    /// when `print` shows the job. Prefer `gui/`; fall back to `user/` when Aqua
+    /// is missing so `curl | sh` from a Background session still completes.
+    private static func loadLaunchAgent(env: SetupEnvironment, plist: URL) throws(SetupError) {
+        let uid = env.uid()
+        for domain in LaunchdDomain.bootoutOrder(uid: uid) {
             try? env.launchctl.bootout(domain: domain, label: launchAgentLabel)
-            do {
-                try env.launchctl.bootstrap(domain: domain, plist: url)
-            } catch {
-                throw SetupError.launchctlApplyFailed(.bootstrap)
+        }
+        for domain in LaunchdDomain.bootstrapOrder(uid: uid) {
+            if acceptBootstrap(env.launchctl, domain: domain, plist: plist) {
+                return
             }
+        }
+        throw SetupError.launchctlApplyFailed(.bootstrap)
+    }
+
+    private static func acceptBootstrap(
+        _ launchctl: any LaunchctlApplying,
+        domain: String,
+        plist: URL
+    ) -> Bool {
+        do {
+            try launchctl.bootstrap(domain: domain, plist: plist)
+            return true
+        } catch {
+            return launchctl.isLoaded(domain: domain, label: launchAgentLabel)
         }
     }
 
