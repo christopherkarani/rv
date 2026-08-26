@@ -44,4 +44,4 @@ Each module keeps a small public API, `package` internals later, and its own tes
 
 Each module has a matching `*Tests` target that depends only on that module.
 
-On Linux (OPE-261), `RVService`, `rvd`, and `RVServiceTests` are on the graph. XPC types stay behind `#if canImport(XPC)`; Linux `rvd` listens on AF_UNIX under `$XDG_RUNTIME_DIR`. `RVCLI` and `rv` stay Darwin (P3). Darwin `RVPolicy` stays `RVDomain` + CryptoKit; Linux `RVPolicy` adds `Crypto` (swift-crypto).
+On Linux (OPE-261–262), `RVService`, `rvd`, `RVCLI`, `rv`, and their tests are on the graph. XPC types stay behind `#if canImport(XPC)`; Linux `rvd` listens on AF_UNIX under `$XDG_RUNTIME_DIR`. The C `rv` hook talks that socket; miss still execs `rv-cli`. Darwin `RVPolicy` stays `RVDomain` + CryptoKit; Linux `RVPolicy` adds `Crypto` (swift-crypto).

@@ -1,4 +1,8 @@
+#if canImport(Darwin)
 import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Foundation
 import RVTheme
 
@@ -50,7 +54,12 @@ enum ThemeProbeFactory {
 private func stdoutColumns(stdoutIsTTY: Bool) -> Int {
     guard stdoutIsTTY else { return 80 }
     var size = winsize()
-    guard ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) == 0, size.ws_col > 0 else {
+#if canImport(Glibc)
+    let request = UInt(TIOCGWINSZ)
+#else
+    let request = TIOCGWINSZ
+#endif
+    guard ioctl(STDOUT_FILENO, request, &size) == 0, size.ws_col > 0 else {
         return 80
     }
     return Int(size.ws_col)

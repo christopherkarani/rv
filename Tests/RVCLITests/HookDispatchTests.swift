@@ -198,6 +198,8 @@ private func builtRVExecutable() -> URL? {
     let relatives = [
         ".build/debug/rv",
         ".build/arm64-apple-macosx/debug/rv",
+        ".build/x86_64-unknown-linux-gnu/debug/rv",
+        ".build/aarch64-unknown-linux-gnu/debug/rv",
     ]
     for root in roots {
         for relative in relatives {

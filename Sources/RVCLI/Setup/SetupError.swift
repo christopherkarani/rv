@@ -28,6 +28,8 @@ enum SetupError: Error, Equatable, Sendable {
     case adapterTemplateMissing(HookHost)
     /// Embedded launchd plist template missing or lacks its placeholder.
     case launchAgentTemplateMissing
+    /// Embedded systemd user unit template missing or lacks its placeholder.
+    case systemdUnitTemplateMissing
     /// Could not create the rv config directory.
     case configDirectoryCreateFailed
     /// Could not move an occupied owned hook aside during --force.
@@ -38,6 +40,10 @@ enum SetupError: Error, Equatable, Sendable {
     case launchAgentWriteFailed
     /// launchctl refused or failed the given step.
     case launchctlApplyFailed(LaunchctlAction)
+    /// Could not write the systemd user unit.
+    case systemdUnitWriteFailed
+    /// systemctl --user refused or failed the given step.
+    case systemdApplyFailed(SystemctlAction)
     /// Post-uninstall validation found an owned path that survived removal.
     case ownedPathStillExists
     /// Installed-adapter state could not be determined for an unexpected reason.
@@ -66,6 +72,9 @@ func setupFailureOutput(
     case .launchAgentTemplateMissing:
         phrase = "missing LaunchAgent template"
         exitCode = EX_DATAERR
+    case .systemdUnitTemplateMissing:
+        phrase = "missing systemd unit template"
+        exitCode = EX_DATAERR
     case .configDirectoryCreateFailed:
         phrase = "unable to create config directory"
         exitCode = EX_CANTCREAT
@@ -83,6 +92,15 @@ func setupFailureOutput(
         exitCode = EX_UNAVAILABLE
     case .launchctlApplyFailed(.bootout):
         phrase = "unable to unload LaunchAgent"
+        exitCode = EX_UNAVAILABLE
+    case .systemdUnitWriteFailed:
+        phrase = "unable to write systemd unit"
+        exitCode = EX_CANTCREAT
+    case .systemdApplyFailed(.enable):
+        phrase = "unable to enable systemd unit"
+        exitCode = EX_UNAVAILABLE
+    case .systemdApplyFailed(.disable):
+        phrase = "unable to disable systemd unit"
         exitCode = EX_UNAVAILABLE
     case .ownedPathStillExists:
         phrase = "owned path still exists"

@@ -19,6 +19,7 @@ struct OwnedPaths: Equatable, Sendable {
     var openCodeDirectory: String { home.rawValue + "/.config/opencode" }
     var openCodePlugin: String { home.rawValue + "/.config/opencode/plugins/rv-guard.js" }
     var launchAgent: String { home.rawValue + "/Library/LaunchAgents/dev.rv.evaluate.plist" }
+    var systemdUserUnit: String { home.rawValue + "/.config/systemd/user/dev.rv.evaluate.service" }
     var localRv: String { home.rawValue + "/.local/bin/rv" }
     var localRvCli: String { home.rawValue + "/.local/bin/rv-cli" }
     var localRvd: String { home.rawValue + "/.local/bin/rvd" }

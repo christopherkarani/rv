@@ -22,6 +22,19 @@ private func writeExecutable(_ url: URL, contents: String) throws {
     try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
 }
 
+private func writeLinuxShims(in shim: URL, arch: String = "x86_64") throws {
+    try FileManager.default.createDirectory(at: shim, withIntermediateDirectories: true)
+    try writeExecutable(
+        shim.appendingPathComponent("uname"),
+        contents: """
+        #!/bin/sh
+        if [ "$1" = "-s" ]; then echo Linux; exit 0; fi
+        if [ "$1" = "-m" ]; then echo \(arch); exit 0; fi
+        echo Linux
+        """
+    )
+}
+
 private func writeDarwinShims(in shim: URL) throws {
     try FileManager.default.createDirectory(at: shim, withIntermediateDirectories: true)
     try writeExecutable(
@@ -48,6 +61,47 @@ private func writeDummyTrio(in src: URL) throws {
     for name in ["rv", "rv-cli", "rvd"] {
         try writeExecutable(src.appendingPathComponent(name), contents: dummy)
     }
+}
+
+private func findSwiftRVExecutable() -> URL? {
+    if let override = ProcessInfo.processInfo.environment["RV_SWIFT_RV"] {
+        let url = URL(fileURLWithPath: override)
+        if FileManager.default.isExecutableFile(atPath: url.path) {
+            return url
+        }
+    }
+    let build = repoRootURL().appendingPathComponent(".build")
+    let names = [
+        "debug/rv",
+        "x86_64-unknown-linux-gnu/debug/rv",
+        "aarch64-unknown-linux-gnu/debug/rv",
+        "arm64-apple-macosx/debug/rv",
+    ]
+    for name in names {
+        let candidate = build.appendingPathComponent(name)
+        if FileManager.default.isExecutableFile(atPath: candidate.path) {
+            return candidate
+        }
+    }
+    return nil
+}
+
+/// C-hook shaped `rv` plus Swift `rv-cli`. Dummy `rv` that exits 0 hides setup.
+private func writeLinuxSetupTrio(in src: URL, swiftRV: URL) throws {
+    try writeExecutable(
+        src.appendingPathComponent("rv"),
+        contents: """
+        #!/bin/sh
+        exec "$(dirname "$0")/rv-cli" "$@"
+        """
+    )
+    let destCli = src.appendingPathComponent("rv-cli")
+    try FileManager.default.copyItem(at: swiftRV, to: destCli)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: destCli.path)
+    try writeExecutable(
+        src.appendingPathComponent("rvd"),
+        contents: "#!/bin/sh\n# dummy-rvd\nexit 0\n"
+    )
 }
 
 private func runInstallScript(
@@ -81,6 +135,8 @@ private func runInstallScript(
     let text = try String(contentsOf: installScriptURL(), encoding: .utf8)
     #expect(text.contains("RV_FROM_INSTALL=1 exec \"$bin/rv\" setup"))
     #expect(text.contains("exec \"$bin/rv-cli\" setup") == false)
+    #expect(text.contains("launchctl") == false)
+    #expect(text.contains("LaunchAgent") == false)
 }
 
 @Test func readme_hasNoBrewInstallPath() throws {
@@ -91,7 +147,7 @@ private func runInstallScript(
     #expect(text.localizedCaseInsensitiveContains("brew") == false)
 }
 
-@Test func installSh_refusesNonDarwin() throws {
+@Test func installSh_refusesWindows() throws {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-install-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -102,9 +158,9 @@ private func runInstallScript(
     let uname = shim.appendingPathComponent("uname")
     try """
     #!/bin/sh
-    if [ "$1" = "-s" ]; then echo Linux; exit 0; fi
+    if [ "$1" = "-s" ]; then echo Windows_NT; exit 0; fi
     if [ "$1" = "-m" ]; then echo x86_64; exit 0; fi
-    echo Linux
+    echo Windows_NT
     """.write(to: uname, atomically: true, encoding: .utf8)
     try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: uname.path)
 
@@ -123,8 +179,88 @@ private func runInstallScript(
     process.waitUntilExit()
     let err = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
     #expect(process.terminationStatus == 1)
-    #expect(err.contains("macOS 26 on Apple Silicon only"))
+    #expect(err.contains("macOS 26 Apple Silicon, or Linux aarch64/x86_64"))
+    #expect(err.localizedCaseInsensitiveContains("windows") == false)
     #expect(FileManager.default.fileExists(atPath: root.path + "/.local/bin/rv") == false)
+}
+
+@Test func installSh_acceptsLinuxX86_64() throws {
+    try proveLinuxInstall(arch: "x86_64")
+}
+
+@Test func installSh_acceptsLinuxAarch64() throws {
+    try proveLinuxInstall(arch: "aarch64")
+}
+
+@Test func installSh_copiesLinuxResourcesDirectory() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-install-linux-resources-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let home = root.appendingPathComponent("home", isDirectory: true)
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    let src = root.appendingPathComponent("src", isDirectory: true)
+    try writeDummyTrio(in: src)
+    let resourcePack = src.appendingPathComponent("rv_RVPacks.resources/packs/core.git.json")
+    try FileManager.default.createDirectory(
+        at: resourcePack.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+    )
+    try "{}\n".write(to: resourcePack, atomically: true, encoding: .utf8)
+
+    let shim = root.appendingPathComponent("shim", isDirectory: true)
+    try writeLinuxShims(in: shim, arch: "x86_64")
+
+    let result = try runInstallScript(home: home, src: src, pathPrefix: shim.path)
+    #expect(result.status == 0)
+    #expect(
+        FileManager.default.fileExists(
+            atPath: home.appendingPathComponent(".local/bin/rv_RVPacks.resources/packs/core.git.json").path
+        )
+    )
+    #expect(
+        isDirectory(home.appendingPathComponent(".local/bin/rv_RVPacks.bundle")) == false
+    )
+}
+
+private func proveLinuxInstall(arch: String) throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-install-linux-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let home = root.appendingPathComponent("home", isDirectory: true)
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    let src = root.appendingPathComponent("src", isDirectory: true)
+#if os(Linux)
+    let swiftRV = try #require(findSwiftRVExecutable(), "Swift rv product must be on the Linux graph")
+    try writeLinuxSetupTrio(in: src, swiftRV: swiftRV)
+#else
+    try writeDummyTrio(in: src)
+#endif
+
+    let shim = root.appendingPathComponent("shim", isDirectory: true)
+    try writeLinuxShims(in: shim, arch: arch)
+
+    let result = try runInstallScript(home: home, src: src, pathPrefix: shim.path)
+    #expect(result.status == 0)
+
+    let destBin = home.appendingPathComponent(".local/bin")
+    #expect(FileManager.default.isExecutableFile(atPath: destBin.appendingPathComponent("rv").path))
+    #expect(FileManager.default.isExecutableFile(atPath: destBin.appendingPathComponent("rv-cli").path))
+    #expect(FileManager.default.isExecutableFile(atPath: destBin.appendingPathComponent("rvd").path))
+#if os(Linux)
+    let launchdPlist = home.appendingPathComponent("Library/LaunchAgents/dev.rv.evaluate.plist")
+    let systemdUnit = home.appendingPathComponent(".config/systemd/user/dev.rv.evaluate.service")
+    #expect(FileManager.default.fileExists(atPath: launchdPlist.path) == false)
+    #expect(FileManager.default.fileExists(atPath: systemdUnit.path))
+    let unit = try String(contentsOf: systemdUnit, encoding: .utf8)
+    #expect(unit.contains("Restart=no"))
+    #expect(unit.contains("Restart=always") == false)
+    #expect(unit.contains("--socket"))
+    #expect(unit.contains(destBin.appendingPathComponent("rvd").path))
+#endif
 }
 
 @Test func installSh_replacesDestSymlinkWithoutFollowing() throws {

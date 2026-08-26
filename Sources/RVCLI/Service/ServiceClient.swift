@@ -21,6 +21,7 @@ public struct ServiceClient: Sendable {
     private let home: HomeDirectory?
     private let clock: @Sendable () -> Date
 
+#if canImport(XPC)
     public init(
         transport: (any ServiceTransport)? = XPCServiceTransport(),
         session: EvaluateSession? = nil,
@@ -29,7 +30,44 @@ public struct ServiceClient: Sendable {
         home: HomeDirectory? = HomeDirectory.process(),
         clock: @escaping @Sendable () -> Date = { Date() }
     ) {
-        self.transport = transport
+        self.init(
+            resolvedTransport: transport,
+            session: session,
+            store: store,
+            allowOnceDirectory: allowOnceDirectory,
+            home: home,
+            clock: clock
+        )
+    }
+#else
+    public init(
+        transport: (any ServiceTransport)? = nil,
+        session: EvaluateSession? = nil,
+        store: AllowOnceStore? = nil,
+        allowOnceDirectory: URL? = nil,
+        home: HomeDirectory? = HomeDirectory.process(),
+        clock: @escaping @Sendable () -> Date = { Date() }
+    ) {
+        self.init(
+            resolvedTransport: transport,
+            session: session,
+            store: store,
+            allowOnceDirectory: allowOnceDirectory,
+            home: home,
+            clock: clock
+        )
+    }
+#endif
+
+    private init(
+        resolvedTransport: (any ServiceTransport)?,
+        session: EvaluateSession?,
+        store: AllowOnceStore?,
+        allowOnceDirectory: URL?,
+        home: HomeDirectory?,
+        clock: @escaping @Sendable () -> Date
+    ) {
+        self.transport = resolvedTransport
         if let session {
             self.door = GatedEvaluate(session)
         } else {

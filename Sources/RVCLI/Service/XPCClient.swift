@@ -52,6 +52,7 @@ extension ServiceTransport {
     }
 }
 
+#if canImport(XPC)
 public struct XPCServiceTransport: ServiceTransport, @unchecked Sendable {
     public static let serviceName = RVService.machServiceName
     public var connectTimeoutMs: Int
@@ -118,3 +119,4 @@ public struct XPCServiceTransport: ServiceTransport, @unchecked Sendable {
         }
     }
 }
+#endif

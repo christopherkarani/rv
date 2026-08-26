@@ -43,6 +43,9 @@ func env(
     rvPath: String = "/tmp/rv-bin/rv",
     rvdPath: String? = nil,
     touchLaunchd: Bool = true,
+    systemctl: any SystemctlApplying = SilentSystemctl(),
+    touchSystemd: Bool = false,
+    supervisor: EvaluateSupervisor = .launchd,
     installAnalytics: any InstallAnalyticsCapturing = SilentInstallAnalytics()
 ) -> SetupEnvironment {
     SetupEnvironment(
@@ -52,7 +55,10 @@ func env(
         rvdPath: rvdPath ?? home.appendingPathComponent("rvd").path,
         fileManager: .default,
         launchctl: launchctl,
+        systemctl: systemctl,
         touchLaunchd: touchLaunchd,
+        touchSystemd: touchSystemd,
+        supervisor: supervisor,
         installAnalytics: installAnalytics
     )
 }
@@ -585,6 +591,12 @@ private func fixtureLoginHome() throws -> URL {
     let home = "/tmp/rv-setup-not-login-\(UUID().uuidString)"
     let env = SetupEnvironment.live(environment: ["HOME": home, "PATH": ""])
     #expect(env?.touchLaunchd == false)
+    #expect(env?.touchSystemd == false)
+#if os(Linux)
+    #expect(env?.supervisor == .systemdUser)
+#else
+    #expect(env?.supervisor == .launchd)
+#endif
 }
 
 @Test func setup_occupiedGrok_writesPi_joinsSkipOntoOneSuccessLine() throws {
@@ -629,6 +641,12 @@ private func fixtureLoginHome() throws -> URL {
             "rv setup failed: missing LaunchAgent template\n"
         ),
         (
+            .systemdUnitTemplateMissing,
+            .setup,
+            EX_DATAERR,
+            "rv setup failed: missing systemd unit template\n"
+        ),
+        (
             .configDirectoryCreateFailed,
             .setup,
             EX_CANTCREAT,
@@ -663,6 +681,24 @@ private func fixtureLoginHome() throws -> URL {
             .uninstall,
             EX_UNAVAILABLE,
             "rv uninstall failed: unable to unload LaunchAgent\n"
+        ),
+        (
+            .systemdUnitWriteFailed,
+            .setup,
+            EX_CANTCREAT,
+            "rv setup failed: unable to write systemd unit\n"
+        ),
+        (
+            .systemdApplyFailed(.enable),
+            .setup,
+            EX_UNAVAILABLE,
+            "rv setup failed: unable to enable systemd unit\n"
+        ),
+        (
+            .systemdApplyFailed(.disable),
+            .uninstall,
+            EX_UNAVAILABLE,
+            "rv uninstall failed: unable to disable systemd unit\n"
         ),
         (
             .ownedPathStillExists,

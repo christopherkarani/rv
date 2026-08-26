@@ -105,15 +105,22 @@ import Testing
 }
 
 @Test func packsCommandProcessUsesFacadeForFilteredRobotAndVerboseOutput() throws {
-    let binaryCandidates = [
-        URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-            .appendingPathComponent(".build/arm64-apple-macosx/debug/rv"),
+    let roots = [
+        URL(fileURLWithPath: FileManager.default.currentDirectoryPath),
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent(".build/arm64-apple-macosx/debug/rv"),
+            .deletingLastPathComponent(),
     ]
+    let relatives = [
+        ".build/debug/rv",
+        ".build/arm64-apple-macosx/debug/rv",
+        ".build/x86_64-unknown-linux-gnu/debug/rv",
+        ".build/aarch64-unknown-linux-gnu/debug/rv",
+    ]
+    let binaryCandidates = roots.flatMap { root in
+        relatives.map { root.appendingPathComponent($0) }
+    }
     let binary = try #require(
         binaryCandidates.first(where: { FileManager.default.isExecutableFile(atPath: $0.path) })
     )

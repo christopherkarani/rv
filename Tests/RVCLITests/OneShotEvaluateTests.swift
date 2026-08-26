@@ -37,10 +37,12 @@ struct OneShotEvaluateClientTests {
         }
         #expect(params.clientSemver == ProtocolVersion.serviceSemver)
 
+#if canImport(XPC)
         let defaults = XPCServiceTransport()
         #expect(defaults.connectTimeoutMs == 200)
         #expect(defaults.requestTimeoutMs == 500)
         #expect(defaults.oneShotEvaluateTimeoutMs == 700)
+#endif
     }
 
     @Test func skewedImplicitHelloFallsBackInProcessAndStillDeniesResetHard() async throws {

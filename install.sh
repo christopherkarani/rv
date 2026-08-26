@@ -1,24 +1,37 @@
 #!/bin/sh
 # Install rv (C hook), rv-cli, and rvd into $HOME/.local/bin, then run rv setup.
-# macOS 26 + arm64 only. Tests must set HOME to a temp directory.
+# Darwin: macOS 26 + arm64. Linux: aarch64 or x86_64. No Windows.
+# Tests must set HOME to a temp directory.
 # Unset RV_INSTALL_BIN downloads the latest GitHub release trio into a temp
 # dir, then uses the same atomic stage+setup path as a local stage.
 set -eu
 
 refuse() {
-  echo "rv: macOS 26 on Apple Silicon only" >&2
+  echo "rv: macOS 26 Apple Silicon, or Linux aarch64/x86_64" >&2
   exit 1
 }
 
 os="$(uname -s)"
 arch="$(uname -m)"
-ver="$(sw_vers -productVersion 2>/dev/null || true)"
 
-[ "$os" = "Darwin" ] || refuse
-[ "$arch" = "arm64" ] || refuse
-case "$ver" in
-  26.*) ;;
-  *) refuse ;;
+case "$os" in
+  Darwin)
+    [ "$arch" = "arm64" ] || refuse
+    ver="$(sw_vers -productVersion 2>/dev/null || true)"
+    case "$ver" in
+      26.*) ;;
+      *) refuse ;;
+    esac
+    ;;
+  Linux)
+    case "$arch" in
+      aarch64|x86_64) ;;
+      *) refuse ;;
+    esac
+    ;;
+  *)
+    refuse
+    ;;
 esac
 
 : "${HOME:?HOME is required}"
@@ -113,8 +126,10 @@ tmp_rv=""
 tmp_cli=""
 tmp_rvd=""
 
-# Pack JSON lives in SPM *_RVPacks.bundle next to the binaries (tools/release.sh).
-for bundle in "$src"/*_RVPacks.bundle; do
+# Pack JSON lives next to the binaries (tools/release.sh). Darwin SPM emits
+# *_RVPacks.bundle; Linux SPM emits *_RVPacks.resources. Bundle.module loads
+# whichever name this platform's accessor baked.
+for bundle in "$src"/*_RVPacks.bundle "$src"/*_RVPacks.resources; do
   [ -d "$bundle" ] || continue
   name="$(basename "$bundle")"
   rm -rf "$bin/$name"

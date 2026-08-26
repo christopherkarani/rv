@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import Testing
 import RVTheme
@@ -103,3 +104,4 @@ private func proveHelpDispatch(stage: URL) throws {
     #expect(text.contains("OVERVIEW:") == false)
     #expect(text.contains("SUBCOMMANDS:") == false)
 }
+#endif
