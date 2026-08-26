@@ -132,25 +132,28 @@ if (host === "opencode") {
       },
     };
   }
+  if (process.env.RV_SESSION_MESSAGES) {
+    const messages = JSON.parse(process.env.RV_SESSION_MESSAGES);
+    ctx.client.session = {
+      async messages() {
+        return messages;
+      },
+    };
+  }
   const plugin = await mod.RvGuard(ctx);
   const keys = Object.keys(plugin);
-  if (keys.length !== 1 || keys[0] !== "tool.execute.before") {
+  const unexpected = keys.filter(
+    (name) => name !== "tool.execute.before" && name !== "shell.env"
+  );
+  if (!keys.includes("tool.execute.before") || unexpected.length > 0) {
     process.stdout.write(JSON.stringify({ error: "unexpected hooks", keys }));
     process.exit(2);
   }
-  const input = { tool: event.tool };
-  if (typeof event.cwd === "string") {
-    input.cwd = event.cwd;
-  }
-  if (confirmYes && hasUI) {
-    input.ask = async () => true;
-  }
-  const output = { args: event.args ?? {} };
-  if (resolutionAllow) {
-    output.onResolution = async () => ({ status: "allow-once" });
-  }
+  const steps = Array.isArray(event.steps) ? event.steps : [event];
   try {
-    await plugin["tool.execute.before"](input, output);
+    for (const step of steps) {
+      await runOpenCodeStep(plugin, step, { confirmYes, resolutionAllow, hasUI });
+    }
     process.stdout.write(JSON.stringify({ threw: null, toasts }));
   } catch (error) {
     process.stdout.write(
@@ -161,6 +164,60 @@ if (host === "opencode") {
     );
   }
   process.exit(0);
+}
+
+async function runOpenCodeStep(plugin, event, flags) {
+  const hookName = event.hook === "shell.env" ? "shell.env" : "tool.execute.before";
+  if (hookName === "shell.env") {
+    const fn = plugin["shell.env"];
+    if (typeof fn !== "function") {
+      return;
+    }
+    const input = {};
+    if (typeof event.cwd === "string") {
+      input.cwd = event.cwd;
+    }
+    if (typeof event.sessionID === "string") {
+      input.sessionID = event.sessionID;
+    }
+    if (typeof event.callID === "string") {
+      input.callID = event.callID;
+    }
+    if (typeof event.command === "string") {
+      input.command = event.command;
+    }
+    if (flags.confirmYes && flags.hasUI) {
+      input.ask = async () => true;
+    }
+    const output = { env: event.env ?? {} };
+    if (event.args) {
+      output.args = event.args;
+    }
+    if (flags.resolutionAllow) {
+      output.onResolution = async () => ({ status: "allow-once" });
+    }
+    await fn(input, output);
+    return;
+  }
+
+  const input = { tool: event.tool };
+  if (typeof event.cwd === "string") {
+    input.cwd = event.cwd;
+  }
+  if (typeof event.sessionID === "string") {
+    input.sessionID = event.sessionID;
+  }
+  if (typeof event.callID === "string") {
+    input.callID = event.callID;
+  }
+  if (flags.confirmYes && flags.hasUI) {
+    input.ask = async () => true;
+  }
+  const output = { args: event.args ?? {} };
+  if (flags.resolutionAllow) {
+    output.onResolution = async () => ({ status: "allow-once" });
+  }
+  await plugin["tool.execute.before"](input, output);
 }
 
 process.stdout.write(JSON.stringify({ error: "unknown host" }));

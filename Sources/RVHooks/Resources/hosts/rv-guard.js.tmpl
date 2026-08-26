@@ -5,50 +5,174 @@ const RV_HOOK_TIMEOUT_MS = 5000;
 const RV_TOAST_TIMEOUT_MS = 1500;
 const RV_TOAST_TITLE = "RV · Blocked";
 const RV_CMD_PREVIEW = 96;
+const RV_MISSING_COMMAND =
+  "rv received a shell hook with no command text and blocked the command. Run it in Terminal.";
+
+const gatedCallIDs = new Set();
 
 export const RvGuard = async (ctx) => {
   return {
     "tool.execute.before": async (input, output) => {
-      if (input.tool !== "bash") {
+      if (!isShellTool(input && input.tool)) {
         return;
       }
-      const command = output.args && output.args.command;
-      if (typeof command !== "string" || command.length === 0) {
+      const command = commandFromTool(input, output);
+      if (!command) {
+        await failClosed(ctx, { action: "block", reason: RV_MISSING_COMMAND }, "");
+      }
+      await gateCommand(ctx, input, output, command, input.tool);
+      rememberGated(input && input.callID);
+    },
+    "shell.env": async (input, output) => {
+      if (isGated(input && input.callID)) {
         return;
       }
-      const hostCwd =
-        typeof input.cwd === "string"
-          ? input.cwd
-          : typeof input.directory === "string"
-            ? input.directory
-            : undefined;
-      const cwd = pickCwd(hostCwd);
-      const mapped = await consultRv(command, cwd);
-      if (mapped.action === "ask") {
-        const allowed = await confirmAsk(ctx, input, output, mapped);
-        if (!allowed) {
-          await showBlockToast(ctx, mapped, command);
-          throw new Error(mapped.reason);
-        }
-        const spent = await consultRvSpend(command, cwd);
-        if (spent.action !== "allow") {
-          const blocked = spent.action === "block" || spent.action === "ask" ? spent : mapped;
-          await showBlockToast(ctx, blocked, command);
-          throw new Error(
-            typeof blocked.reason === "string" && blocked.reason.length > 0
-              ? blocked.reason
-              : mapped.reason,
-          );
-        }
-        return;
+      const command =
+        commandFromShellEnv(input, output) ?? (await commandFromSession(ctx, input));
+      if (!command) {
+        await failClosed(ctx, { action: "block", reason: RV_MISSING_COMMAND }, "");
       }
-      if (mapped.action === "block") {
-        await showBlockToast(ctx, mapped, command);
-        throw new Error(mapped.reason);
-      }
+      await gateCommand(ctx, input, output, command, "session.shell");
+      rememberGated(input && input.callID);
     },
   };
 };
+
+function isShellTool(tool) {
+  return tool === "bash" || tool === "session.shell";
+}
+
+function stringCommand(value) {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function commandFromRecord(record) {
+  if (!record || typeof record !== "object") {
+    return undefined;
+  }
+  return (
+    stringCommand(record.command) ??
+    stringCommand(record.cmd) ??
+    commandFromRecord(record.args) ??
+    commandFromRecord(record.input) ??
+    commandFromRecord(record.state && record.state.input)
+  );
+}
+
+function commandFromTool(input, output) {
+  return commandFromRecord(output && output.args) ?? commandFromRecord(input);
+}
+
+function commandFromShellEnv(input, output) {
+  return commandFromRecord(input) ?? commandFromRecord(output);
+}
+
+async function commandFromSession(ctx, input) {
+  const sessionID = stringCommand(input && input.sessionID);
+  const session = ctx && ctx.client && ctx.client.session;
+  if (!sessionID || !session || typeof session.messages !== "function") {
+    return undefined;
+  }
+  let result;
+  try {
+    result = await session.messages({
+      sessionID,
+      path: { id: sessionID },
+    });
+  } catch {
+    return undefined;
+  }
+  const matches = [];
+  collectPartCommands(result, matches, 0);
+  const callID = stringCommand(input && input.callID);
+  if (callID) {
+    const exact = matches.find((row) => row.callID === callID);
+    if (exact) {
+      return exact.command;
+    }
+  }
+  const last = matches[matches.length - 1];
+  return last && last.command;
+}
+
+function collectPartCommands(value, acc, depth) {
+  if (depth > 10 || value == null) {
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectPartCommands(item, acc, depth + 1);
+    }
+    return;
+  }
+  if (typeof value !== "object") {
+    return;
+  }
+  const command =
+    commandFromRecord(value.state && value.state.input) ??
+    commandFromRecord(value.input) ??
+    commandFromRecord(value.args) ??
+    stringCommand(value.command);
+  const tool = value.tool ?? value.toolName;
+  const callID = value.callID ?? value.callId;
+  if (command && (tool == null || isShellTool(tool) || value.type === "tool")) {
+    acc.push({ callID, command });
+  }
+  if (value.parts) {
+    collectPartCommands(value.parts, acc, depth + 1);
+  }
+  if (value.data) {
+    collectPartCommands(value.data, acc, depth + 1);
+  }
+  if (value.messages) {
+    collectPartCommands(value.messages, acc, depth + 1);
+  }
+}
+
+function rememberGated(callID) {
+  if (typeof callID === "string" && callID.length > 0) {
+    gatedCallIDs.add(callID);
+  }
+}
+
+function isGated(callID) {
+  return typeof callID === "string" && gatedCallIDs.has(callID);
+}
+
+async function failClosed(ctx, mapped, command) {
+  await showBlockToast(ctx, mapped, command);
+  throw new Error(
+    typeof mapped.reason === "string" && mapped.reason.length > 0
+      ? mapped.reason
+      : RV_MISSING_COMMAND,
+  );
+}
+
+async function gateCommand(ctx, input, output, command, tool) {
+  const hostCwd =
+    typeof input.cwd === "string"
+      ? input.cwd
+      : typeof input.directory === "string"
+        ? input.directory
+        : undefined;
+  const cwd = pickCwd(hostCwd);
+  const mapped = await consultRv(command, cwd, tool);
+  if (mapped.action === "ask") {
+    const allowed = await confirmAsk(ctx, input, output, mapped);
+    if (!allowed) {
+      await failClosed(ctx, mapped, command);
+    }
+    const spent = await consultRvSpend(command, cwd, tool);
+    if (spent.action !== "allow") {
+      const blocked = spent.action === "block" || spent.action === "ask" ? spent : mapped;
+      await failClosed(ctx, blocked.reason ? blocked : mapped, command);
+    }
+    return;
+  }
+  if (mapped.action === "block") {
+    await failClosed(ctx, mapped, command);
+  }
+}
 
 async function confirmAsk(ctx, input, output, mapped) {
   try {
@@ -107,16 +231,20 @@ function pickCwd(hostCwd) {
   return undefined;
 }
 
-function consultRv(command, cwd) {
-  const payload = { tool: "bash", args: { command } };
+function consultRv(command, cwd, tool) {
+  const payload = { tool: wireTool(tool), args: { command } };
   if (cwd) payload.cwd = cwd;
   return spawnRvHook("opencode", JSON.stringify(payload));
 }
 
-function consultRvSpend(command, cwd) {
-  const payload = { tool: "bash", args: { command }, hostAsk: "spend" };
+function consultRvSpend(command, cwd, tool) {
+  const payload = { tool: wireTool(tool), args: { command }, hostAsk: "spend" };
   if (cwd) payload.cwd = cwd;
   return spawnRvHook("opencode", JSON.stringify(payload));
+}
+
+function wireTool(tool) {
+  return tool === "session.shell" ? "session.shell" : "bash";
 }
 
 function spawnRvHook(host, stdin) {

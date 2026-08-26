@@ -36,6 +36,23 @@ func openCodeDecode_extractsBashCommand(_ file: String, expected: String) throws
     #expect(codec.decode(try openCodeFixture("allow-non-shell-read.json")) == .foreign)
 }
 
+@Test func openCodeDecode_sessionShellExtractsCommand() {
+    let stdin = """
+    {"tool":"session.shell","args":{"command":"git reset --hard"}}
+    """
+    guard case .request(let request) = codec.decode(stdin) else {
+        Issue.record("expected .request for session.shell")
+        return
+    }
+    #expect(request.host == .opencode)
+    #expect(request.command.rawValue == "git reset --hard")
+}
+
+@Test func openCodeDecode_sessionShellEmptyCommandIsMissingCommand() {
+    #expect(codec.decode(#"{"tool":"session.shell","args":{}}"#) == .malformed(.missingCommand))
+    #expect(codec.decode(#"{"tool":"session.shell","args":{"command":""}}"#) == .malformed(.missingCommand))
+}
+
 @Test func openCodeDecode_emptyCommandIsMissingCommand() {
     #expect(codec.decode(#"{"tool":"bash","args":{}}"#) == .malformed(.missingCommand))
     #expect(codec.decode(#"{"tool":"bash","args":{"command":""}}"#) == .malformed(.missingCommand))

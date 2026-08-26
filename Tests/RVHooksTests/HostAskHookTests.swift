@@ -140,6 +140,33 @@ func hookWire_firstCallAllowCannotSkipPolicyGate(_ host: HookHost) throws {
     #expect(wire.stdout.isEmpty == false)
 }
 
+@Test func hookWire_openCodeSessionShellResetHardIsNotAllow() async throws {
+    let stdin = """
+    {"tool":"session.shell","args":{"command":"git reset --hard"}}
+    """
+    let deny = Deny(
+        ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+        reason: "x"
+    )
+    let leftover = HostNativeAsk.leftoverAskDeny
+    let denyWire = await hookWire(host: .opencode, stdin: stdin) { _, _ in
+        EvaluationResult(outcome: .deny(deny, matched: nil))
+    }
+    let leftoverWire = await hookWire(host: .opencode, stdin: stdin) { _, _ in
+        EvaluationResult(outcome: .deny(leftover, matched: nil))
+    }
+    let denyJSON = try #require(
+        JSONSerialization.jsonObject(with: Data(denyWire.stdout.utf8)) as? [String: Any]
+    )
+    let leftoverJSON = try #require(
+        JSONSerialization.jsonObject(with: Data(leftoverWire.stdout.utf8)) as? [String: Any]
+    )
+    #expect(denyWire.stdout.isEmpty == false)
+    #expect(denyJSON["decision"] as? String != "allow")
+    #expect(leftoverJSON["decision"] as? String == "deny")
+    #expect(HostNativeAsk.leftoverAskIsPermit("ask") == false)
+}
+
 @Test func hookWire_openCodeSpendIntentWithoutCallbackDenies() async throws {
     let stdin = """
     {"tool":"bash","cwd":"/tmp/ws","args":{"command":"git reset --hard"},"hostAsk":"spend"}

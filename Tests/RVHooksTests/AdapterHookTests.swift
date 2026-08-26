@@ -52,9 +52,11 @@ private func harnessURL() -> URL {
     #expect(source.contains("render(width)"))
 }
 
-@Test func openCodeTemplate_registersOnlyExecuteBefore() throws {
+@Test func openCodeTemplate_registersExecuteBeforeAndShellEnv() throws {
     let source = try adapterSource(for: .opencode, rvPath: "/opt/rv")
     #expect(source.contains("\"tool.execute.before\""))
+    #expect(source.contains("\"shell.env\""))
+    #expect(source.contains("session.shell"))
     #expect(source.contains("showToast"))
     #expect(source.contains("RV · Blocked"))
     #expect(source.contains("hostAsk: \"spend\""))
@@ -203,6 +205,180 @@ private func harnessURL() -> URL {
     #expect(result.block == nil)
     #expect(result.spawnCount == 2)
     #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
+}
+
+@Test func openCodeAdapter_sessionShellResetHardThrowsHostDenyText() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: ["tool": "session.shell", "args": ["command": "git reset --hard"]],
+        stub: .stdout(resetHardJSON, exit: 1)
+    )
+    #expect(result.threw == resetHardReason)
+    #expect(result.spawned == true)
+}
+
+@Test func openCodeAdapter_sessionShellAskJSONDoesNotAllow() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: ["tool": "session.shell", "args": ["command": "git reset --hard"]],
+        stub: .stdout(askResetHardJSON, exit: 1)
+    )
+    #expect(result.threw == resetHardReason)
+    #expect(result.toastCount == 1)
+    #expect(result.spawnCount == 1)
+}
+
+@Test func openCodeAdapter_sessionShellConfirmYesSpendsThenAllows() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: [
+            "tool": "session.shell",
+            "cwd": "/tmp/ws",
+            "args": ["command": "git reset --hard"],
+        ],
+        stub: .stdout(askResetHardJSON, exit: 1),
+        confirmYes: true,
+        secondStub: .stdout("", exit: 0)
+    )
+    #expect(result.threw == nil)
+    #expect(result.spawnCount == 2)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
+    #expect(result.toastCount == 0)
+}
+
+@Test func openCodeAdapter_sessionShellFailedSpendDoesNotRunTool() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: [
+            "tool": "session.shell",
+            "cwd": "/tmp/ws",
+            "args": ["command": "git reset --hard"],
+        ],
+        stub: .stdout(askResetHardJSON, exit: 1),
+        confirmYes: true,
+        secondStub: .stdout(resetHardJSON, exit: 1)
+    )
+    #expect(result.threw == resetHardReason)
+    #expect(result.spawnCount == 2)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
+}
+
+@Test func openCodeAdapter_sessionShellEnvResetHardThrows() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: [
+            "hook": "shell.env",
+            "cwd": "/tmp/ws",
+            "sessionID": "ses_1",
+            "callID": "call_1",
+        ],
+        stub: .stdout(resetHardJSON, exit: 1),
+        sessionMessages: tuiShellMessages(callID: "call_1", command: "git reset --hard")
+    )
+    #expect(result.threw == resetHardReason)
+    #expect(result.spawned == true)
+}
+
+@Test func openCodeAdapter_sessionShellEnvAskDoesNotAllow() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: [
+            "hook": "shell.env",
+            "cwd": "/tmp/ws",
+            "sessionID": "ses_1",
+            "callID": "call_1",
+            "command": "git reset --hard",
+        ],
+        stub: .stdout(askResetHardJSON, exit: 1)
+    )
+    #expect(result.threw == resetHardReason)
+    #expect(result.spawnCount == 1)
+}
+
+@Test func openCodeAdapter_sessionShellEnvConfirmSpendsThenAllows() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: [
+            "hook": "shell.env",
+            "cwd": "/tmp/ws",
+            "sessionID": "ses_1",
+            "callID": "call_1",
+            "command": "git reset --hard",
+        ],
+        stub: .stdout(askResetHardJSON, exit: 1),
+        confirmYes: true,
+        secondStub: .stdout("", exit: 0)
+    )
+    #expect(result.threw == nil)
+    #expect(result.spawnCount == 2)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
+}
+
+@Test func openCodeAdapter_sessionShellEnvFailedSpendDoesNotRunTool() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: [
+            "hook": "shell.env",
+            "cwd": "/tmp/ws",
+            "sessionID": "ses_1",
+            "callID": "call_1",
+            "command": "git reset --hard",
+        ],
+        stub: .stdout(askResetHardJSON, exit: 1),
+        confirmYes: true,
+        secondStub: .stdout(resetHardJSON, exit: 1)
+    )
+    #expect(result.threw == resetHardReason)
+    #expect(result.spawnCount == 2)
+}
+
+@Test func openCodeAdapter_sessionShellEnvMissingCommandDoesNotAllow() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: [
+            "hook": "shell.env",
+            "cwd": "/tmp/ws",
+            "sessionID": "ses_1",
+            "callID": "call_missing",
+        ],
+        stub: .stdout("", exit: 0)
+    )
+    #expect(result.threw == missingShellCommandReason)
+    #expect(result.spawned == false)
+}
+
+@Test func openCodeAdapter_bashThenShellEnvDoesNotSilentAllowResetHard() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: [
+            "steps": [
+                [
+                    "tool": "bash",
+                    "callID": "c1",
+                    "args": ["command": "git reset --hard"],
+                ],
+                [
+                    "hook": "shell.env",
+                    "callID": "c1",
+                    "cwd": "/tmp/ws",
+                ],
+            ]
+        ],
+        stub: .stdout(askResetHardJSON, exit: 1)
+    )
+    #expect(result.threw == resetHardReason)
+    #expect(result.spawnCount == 1)
+}
+
+@Test func openCodeAdapter_allowedBashDoesNotFailClosedOnFollowUpShellEnv() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: [
+            "steps": [
+                [
+                    "tool": "bash",
+                    "callID": "c1",
+                    "args": ["command": "git status"],
+                ],
+                [
+                    "hook": "shell.env",
+                    "callID": "c1",
+                    "cwd": "/tmp/ws",
+                ],
+            ]
+        ],
+        stub: .stdout("", exit: 0)
+    )
+    #expect(result.threw == nil)
 }
 
 @Test func openCodeAdapter_askJSONDoesNotAllow() async throws {
@@ -508,6 +684,8 @@ func adapters_mapRvHookResultMatrix(host: String, kind: String) async throws {
     }
 }
 
+private let missingShellCommandReason =
+    "rv received a shell hook with no command text and blocked the command. Run it in Terminal."
 private let resetHardJSON =
     "{\"decision\":\"deny\",\"reason\":\"Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once.\",\"rule\":\"core.git/reset-hard\",\"next\":\"Run it in Terminal, or rv allow-once.\"}\n"
 private let askResetHardJSON =
@@ -615,6 +793,23 @@ private func rendererProbe(from object: [String: Any]) -> RendererProbe {
     }
 }
 
+private func tuiShellMessages(callID: String, command: String) -> [String: Any] {
+    [
+        "data": [
+            [
+                "parts": [
+                    [
+                        "type": "tool",
+                        "tool": "bash",
+                        "callID": callID,
+                        "state": ["input": ["command": command]],
+                    ]
+                ]
+            ]
+        ]
+    ]
+}
+
 private func runOpenCodeAdapter(
     event: [String: Any],
     stub: StubRV,
@@ -626,7 +821,8 @@ private func runOpenCodeAdapter(
     confirmYes: Bool = false,
     hasUI: Bool = true,
     resolutionAllow: Bool = false,
-    secondStub: StubRV? = nil
+    secondStub: StubRV? = nil,
+    sessionMessages: [String: Any]? = nil
 ) async throws -> OpenCodeAdapterRun {
     let payload = try await runAdapter(
         host: .opencode,
@@ -640,7 +836,8 @@ private func runOpenCodeAdapter(
         confirmYes: confirmYes,
         hasUI: hasUI,
         resolutionAllow: resolutionAllow,
-        secondStub: secondStub
+        secondStub: secondStub,
+        sessionMessages: sessionMessages
     )
     let object = try harnessObject(payload.text)
     let toast = firstToast(object)
@@ -688,7 +885,8 @@ private func runAdapter(
     confirmYes: Bool = false,
     hasUI: Bool = true,
     resolutionAllow: Bool = false,
-    secondStub: StubRV? = nil
+    secondStub: StubRV? = nil,
+    sessionMessages: [String: Any]? = nil
 ) async throws -> AdapterPayload {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-t5-\(UUID().uuidString)", isDirectory: true)
@@ -779,6 +977,10 @@ private func runAdapter(
     }
     if resolutionAllow {
         environment["RV_RESOLUTION_ALLOW"] = "1"
+    }
+    if let sessionMessages {
+        let data = try JSONSerialization.data(withJSONObject: sessionMessages)
+        environment["RV_SESSION_MESSAGES"] = try #require(String(data: data, encoding: .utf8))
     }
     if let secondStub {
         switch secondStub {
