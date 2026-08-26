@@ -22,7 +22,7 @@ public enum SetupSlotKind: Equatable, Sendable {
     case occupied
 }
 
-/// Closed snapshot of the three setup slots plus which hosts this run wrote.
+/// Closed snapshot of the setup slots plus which hosts this run wrote.
 public struct SetupSlotSnapshot: Equatable, Sendable {
     public var grok: SetupSlotKind
     public var pi: SetupSlotKind
@@ -88,7 +88,7 @@ public struct SetupSlotSnapshot: Equatable, Sendable {
     }
 }
 
-/// One of the three TTY setup rows.
+/// One TTY setup row.
 public struct SetupSlotView: Equatable, Sendable {
     public var host: HookHost
     public var kind: SetupSlotKind
@@ -130,7 +130,7 @@ public enum SetupCloser: Equatable, Sendable {
     }
 }
 
-public let setupRobotHostlessLine = "Run rv setup after Pi, Grok, or OpenCode exists."
+public let setupRobotHostlessLine = "Run rv setup after Pi, Grok, OpenCode, or Claude exists."
 public let setupRobotCompleteLine = "Setup complete. Next  rv test 'git reset --hard'."
 
 extension HookHost {

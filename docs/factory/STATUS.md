@@ -13,8 +13,10 @@ Living board for implement sessions. Do **not** re-grill. Do **not** load `docs/
 | Done | T10–T14 | Merged to `feat/t10-t14-size-speed` (PR #36 draft). One-shot evaluate refuses major-semver-skewed `rvd`. Spec: [`specs/phase-5-size-speed.md`](specs/phase-5-size-speed.md). |
 | Done | C hook T1–T5 | Implemented on `feat/c-hook-pipe` (PR #43). C `rv` pipes `hookEvaluate` to `rvd`; miss execs `rv-cli`. Spec: [`spec/spec-architecture-c-hook-pipe.md`](../../spec/spec-architecture-c-hook-pipe.md). |
 | Done | session scan T1–T10 | `rv scan` / `rv scan sessions` session forensics. Spec: [`spec/spec-architecture-session-scan.md`](../../spec/spec-architecture-session-scan.md). |
-| Done | Claude CL-T1 | Spec landed: [`specs/claude-host.md`](specs/claude-host.md). Contracts Claude row matches. Settings merge + rich Bash deny law. |
-| Next | Claude CL-T2–T5 | Codec, dispatch, setup merge, MODULES. Fenced later: CL-later-ask, CL-later-secrets, CL-later-mcp. |
+| Done | Claude CL-T1–T5 | Codec, dispatch, settings merge, doctor, MODULES. Spec: [`specs/claude-host.md`](specs/claude-host.md). |
+| Next | Claude CL-later-ask | Fenced: `permissionDecision: "ask"`. Not started. |
+| Next | Claude CL-later-secrets | Fenced: Read/Edit/Write secret-path guards. Not started. |
+| Next | Claude CL-later-mcp | Fenced: MCP tool-name / args policy. Not started. |
 
 `docs/factory/PLAN.md` wins product-law conflicts. It is a conflict arbiter, not mandatory full session-start reading.
 
@@ -33,7 +35,7 @@ Living board for implement sessions. Do **not** re-grill. Do **not** load `docs/
 | `specs/phase-4-session-scan.md` | Implemented (T1–T10). Session forensics `rv scan`. Spec: [`spec/spec-architecture-session-scan.md`](../../spec/spec-architecture-session-scan.md) |
 | `specs/phase-5-size-speed.md` | Implementing (T10–T14) |
 | [`spec/spec-architecture-c-hook-pipe.md`](../../spec/spec-architecture-c-hook-pipe.md) | Implemented (T1–T5). C hook pipe + Swift miss. Supersedes the T15 thin-Swift fence. |
-| [`specs/claude-host.md`](specs/claude-host.md) | Landed (CL-T1). CL-T2–T5 implement. |
+| [`specs/claude-host.md`](specs/claude-host.md) | Implemented (CL-T1–T5). Fenced later: CL-later-ask, CL-later-secrets, CL-later-mcp. |
 
 ## Parallel rules (reminder)
 

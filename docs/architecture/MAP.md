@@ -7,12 +7,12 @@
 
 **rv** is a Mac-native destructive-command guard for coding-agent *shell* hooks. One CLI: `rv`. `rvd` is the service.
 
-- **Hook client** — C program installed as `$HOME/.local/bin/rv`. Hosts spawn `rv hook --host {grok,pi,opencode}`. Pipes `hookEvaluate` to `rvd`, or execs the **operator** on miss / non-hook argv.
+- **Hook client** — C program installed as `$HOME/.local/bin/rv`. Hosts spawn `rv hook --host {grok,pi,opencode,claude}`. Pipes `hookEvaluate` to `rvd`, or execs the **operator** on miss / non-hook argv.
 - **Operator** — Swift binary (SPM product `rv`) staged on disk as `rv-cli` so C can keep the `rv` path. Not a second CLI. Do not document it as a command.
 - **Service** — `rvd`, on-demand Mach XPC `dev.rv.evaluate`, `KeepAlive false`, idle-exit ~300 s. Owns compiled day-one packs and gated evaluation.
 
 **Day-one win:** `git reset --hard` → `deny core.git:reset-hard`. `git stash drop` → `allow` + match (medium). Oversize / missing core → `indeterminate` → host deny without rule_id.
-**Hosts v1:** Pi (`~/.pi/agent/extensions/rv-guard.ts`), Grok (`~/.grok/hooks/rv.json`), OpenCode (`~/.config/opencode/plugins/rv-guard.js`). Shell/command tools only; no Read/Edit/MCP hooks. Quiet allow, native deny text. Pi also shows display-only transcript card (`registerMessageRenderer` → `string[]`); OpenCode also shows display-only toast; card/toast never replace `throw`.
+**Hosts v1:** Pi (`~/.pi/agent/extensions/rv-guard.ts`), Grok (`~/.grok/hooks/rv.json`), OpenCode (`~/.config/opencode/plugins/rv-guard.js`), Claude (`~/.claude/settings.json` merge, PreToolUse/Bash only). Shell/command tools only; no Read/Edit/MCP hooks. Quiet allow; Pi/Grok/OpenCode short deny text; Claude rich deny JSON (`systemMessage` + `hookSpecificOutput`). Pi also shows display-only transcript card (`registerMessageRenderer` → `string[]`); OpenCode also shows display-only toast; card/toast never replace `throw`.
 **Platform:** macOS 26, Apple Silicon, Swift 6.3.3, `clang -Os` for C. No Linux/Windows/macOS 14/15 claim. Config dir `$HOME/.config/rv/` (`HOME` only, no `XDG_CONFIG_HOME`). Grade is *hook*, not OS-enforced. `RV_BYPASS` is forbidden.
 
 ---
@@ -79,7 +79,7 @@
 | **RVEngine** | Functional core `evaluate`. Pure, budgeted, deadline-aware. | `evaluate(_:packs:secrets:patterns:compiled:)`, `Normalize.matchingView(of:)`, `QuickReject`, `SecretPathGuard` (allow-path operand table), `CompiledPacks`, `PatternEngine`/`ICUPatternEngine`, `commandByteCap=65536`, `isMajorSkew` · `Evaluate.swift`, `Normalize.swift` (role-aware quote strip, wrapper unwrap `sudo/env/command/\\`), `QuickReject.swift`, `SecretPathGuard.swift`, `ICUPatternEngine.swift`, `PatternEngine.swift`, `CompiledPacks.swift`, `RVEngine.swift` | `RVDomain` | pack files, hooks, XPC, CLI, TUI |
 | **RVPacks** | Registry + bundled JSON catalog (95 packs, 26 categories; `windows.*` OS catalogs excluded). Disabled by default except day-one. | `PackRegistry.loadAll/loadDayOne/loadIndex`, `PackCatalog`, `PackIndex`, `PackJSON`, `PackEnablement`, `SelectionToken`, `PackDocument` · `RVPacks.swift`, `PackRegistry.swift`, `PackCatalog.swift`, `PackIndex.swift`, `PackJSON.swift`, `PackEnablement.swift`, `SelectionToken.swift` · `Resources/packs/*.json` (`core.git`, `core.filesystem` day-one + 93 off) | `RVDomain` | decisions, rendering |
 | **RVPolicy** | Config merge + overrides: allowlist + single-use allow-once grants. | `PolicyGate.{peek,apply}`, `PolicyDecision/Override`, `AllowOnceStore` (atomic CAS), `AllowOnceRecord`, `Allowlist/AllowlistStore`, `PacksConfig`, `HomeDirectory`, `ExclusiveFileLock` · `PolicyGate.swift`, `AllowOnceStore.swift`, `AllowOnceRecord.swift`, `Allowlist.swift`, `PacksConfig.swift`, `RVPolicyPaths.swift` | `RVDomain` | rendering |
-| **RVHooks** | Pi / Grok / OpenCode **Host adapters**: codecs, HostAdapterResources, Hook mapper/voice. | `HostCodec` protocol, `GrokHostCodec` (`pre_tool_use` + `run_terminal_command`/`run_terminal_cmd`/`Bash`), `PiHostCodec`, `OpenCodeHostCodec`, `HookMapper.hookWire(from:command:using:)`, `HostDenyText`, `HookDecode`, `HookDenyJSON`, `HostAdapterResources` (embed `__RV_BINARY__` → baked `rv` path) · `HostCodec.swift`, `GrokHostCodec.swift`, `PiHostCodec.swift`, `OpenCodeHostCodec.swift`, `HookMapper.swift`, `HostDenyText.swift`, `HostAdapterResources.swift` | `RVDomain` | evaluation, setup mutations, CLI/TUI |
+| **RVHooks** | Pi / Grok / OpenCode / Claude **Host adapters**: codecs, HostAdapterResources, Hook mapper/voice. | `HostCodec` protocol, `GrokHostCodec`, `PiHostCodec`, `OpenCodeHostCodec`, `ClaudeHostCodec` + `ClaudeRichDeny`, `HookMapper.hookWire(from:command:using:)`, `HostDenyText`, `HookDecode`, `HookDenyJSON`, `HostAdapterResources` · `HostCodec.swift`, `GrokHostCodec.swift`, `PiHostCodec.swift`, `OpenCodeHostCodec.swift`, `ClaudeHostCodec.swift`, `ClaudeRichDeny.swift`, `HookMapper.swift`, `HostDenyText.swift`, `HostAdapterResources.swift` | `RVDomain` | evaluation, setup mutations, CLI/TUI |
 | **RVIPC** | `rv.ipc.v1` Codable envelope + frame codec. | `IPCRequest/Response`, `IPCMethod`/`IPCResult` (`evaluate`, `hookEvaluate`, `explain`, `classify`, `listPacks`, `setPackEnabled`, `allowOnceConsume`, `doctorSnapshot`), `EvaluateParams/Reply`, `HookEvaluateParams/Reply`, `ExplainParams/Reply`, `ClassifyParams/Reply`, `DoctorSnapshotReply`, `Hello/HelloAck`, `ProtocolVersion` (`1.0.0`, `isMajorSkew`), `FrameCodec` (u32 BE len + 1 MiB cap), `SkewReason` · `IPCEnvelope.swift`, `IPCMethods.swift`, `ProtocolVersion.swift`, `FrameCodec.swift`, `IPCJSON.swift` | `RVDomain` | transport details |
 | **RVService** | XPC listener + warm evaluate runtime + launchd. Only `class`/`NSObject` edge. | `EvaluateSession` (CoreWarmup, compiled day-one, `corePacksReady`), `GatedEvaluate` (peek vs apply + PolicyGate), `ServiceRuntime` (`handleIncoming`, `dispatch`, `HookDoor.run`, `doctorSnapshot`, `recordAnalytics`), `HookDoor`, `XPCListener/XPCPeerSession` (`xpc_data` key `rv.ipc`), `RVDLaunch/RVDProcess`, `IdleExit`, `PacksFacade`, `EnabledPacks`, `DoctorSnapshotBuilder`, `ServiceFrames`, `XPCEvaluateClient` · `RVService.swift`, `EvaluateSession.swift`, `GatedEvaluate.swift`, `ServiceRuntime.swift`, `HookDoor.swift`, `XPCListener.swift` | `RVDomain`, `RVEngine`, `RVPacks`, `RVPolicy`, `RVHooks`, `RVIPC`, `RVHistory`, `RVAnalytics` | `ArgumentParser`, SwiftUI, TUI/CLI/Presentation |
 | **RVPresentation** | Deny/explain/packs/doctor view models (no ANSI). | `ExplainViewModel`, `TestViewModel`, `DenyViewModel`, `DoctorViewModel`, `PacksViewModel`, `SetupViewModel`, `SetupCeremony/UninstallCeremony`, `RobotPayloads`, `ExplanationLines`, `Suggestions`, `DecisionWord` · `ExplainViewModel.swift`, `TestViewModel.swift`, `DenyViewModel.swift`, `DoctorViewModel.swift`, `PacksViewModel.swift`, `SetupViewModel.swift`, `RobotPayloads.swift` | `RVDomain`, `RVTheme` | ANSI |
@@ -155,9 +155,9 @@ Order guarantee per `docs/dev/PARITY.md`: `normalize → quick-reject → safe �
 ### (b) Hook Request Flow (host adapter → C hook → rvd → mapper → host wire)
 
 ```
-Host (Grok / Pi / OpenCode)
-  │ spawns  $HOME/.local/bin/rv hook --host {grok,pi,opencode}
-  │ stdin = raw host JSON (Grok pre_tool_use + tool_input.command, Pi tool event, OC plugin payload)
+Host (Grok / Pi / OpenCode / Claude)
+  │ spawns  $HOME/.local/bin/rv hook --host {grok,pi,opencode,claude}
+  │ stdin = raw host JSON (Grok pre_tool_use + tool_input.command, Pi tool event, OC plugin payload, Claude PreToolUse/Bash)
   ▼
 rv (C) — Sources/rv-c/rv.c — 36 KB stripped
   │ parse_hook_argv: --host/--host=, default grok, invalid→ exec rv-cli, -h/--help→ exec rv-cli
@@ -195,7 +195,7 @@ rvd — ServiceRuntime + XPCListener (dev.rv.evaluate)
   │   }
   │
   │  HookDoor internals:
-  │   GrokHostCodec / PiHostCodec / OpenCodeHostCodec
+  │   GrokHostCodec / PiHostCodec / OpenCodeHostCodec / ClaudeHostCodec
   │     decode(stdin) → .request(HookRequest{command,cwd}) | .foreign | .malformed
   │     foreign → encodeAllow() (empty stdout, exit 0); malformed → encodeDeny() (fail closed)
   │     else GatedEvaluate → EvaluationResult → HookMapper
@@ -208,11 +208,16 @@ rvd — ServiceRuntime + XPCListener (dev.rv.evaluate)
   │            else AllowOnceStore.consume(matchingView,cwd) atomically → allow or deny
   │
   │  HookMapper.hookWire(from:result, command, codec):
-  │   allow → codec.encodeAllow()
-  │   deny(Deny) → codec.encodeDeny(reason: hostDenyLine(cmd, ruleID), rule: displayRuleID, next: "Run it in Terminal, or rv allow-once.")
-  │   indeterminate → codec.encodeDeny(reason: "rv could not finish evaluating this command. Run it in Terminal.", rule:nil)
-  │   HostCodec.encodeDeny → HookWire(stdout: hookDenyJSON(reason,rule,next)+"\n", exitCode: host.denyExitCode)
-  │     grok=0 (JSON is gate, empty+0 is allow), pi=1, opencode=1
+  │   .claude → ClaudeHostCodec.encodeRichDeny(from:result, command)   # rich JSON, exit 0
+  │     allow → encodeAllow()
+  │     deny + match → {systemMessage, hookSpecificOutput.permissionDecision:"deny", …}
+  │     deny without match / indeterminate → encodeDeny → claudeIndeterminateDenyJSON
+  │   .grok/.pi/.opencode stay on short encodeDeny:
+  │     allow → codec.encodeAllow()
+  │     deny(Deny) → codec.encodeDeny(reason: hostDenyLine(cmd, ruleID), rule: displayRuleID, next: "Run it in Terminal, or rv allow-once.")
+  │     indeterminate → codec.encodeDeny(reason: "rv could not finish evaluating this command. Run it in Terminal.", rule:nil)
+  │     HostCodec.encodeDeny → HookWire(stdout: hookDenyJSON(reason,rule,next)+"\n", exitCode: host.denyExitCode)
+  │   denyExitCode: grok/claude=0 (JSON is the gate, empty+0 is allow), pi/opencode=1
   │
   ▼ reply
   HookEvaluateReply { stdout, exitCode, via:"xpc", serviceSemver:"1.0.0" }
@@ -222,6 +227,7 @@ rvd — ServiceRuntime + XPCListener (dev.rv.evaluate)
 rv (C) writes stdout + exitCode (or miss_replay produced same via rv-cli → ServiceClient one-shot evaluate → same codecs)
 Host interprets:
   Grok: {"decision":"deny","reason":"<hostDenyText>"} exit 0 → block; empty exit 0 → allow; exit 2 fallback deny (last_resort)
+  Claude: rich JSON {systemMessage, hookSpecificOutput.permissionDecision:"deny"} exit 0 → block; empty exit 0 → allow
   Pi:    JSON hookDeny → block; empty → allow (extension throws)
   OpenCode: same JSON via plugin; rv-cli miss throws + toast attempted before throw
 ```
@@ -282,7 +288,7 @@ rv/
 │   ├── RVPacks/                     # PackRegistry.swift, PackCatalog.swift, PackIndex.swift, PackJSON.swift, PackEnablement.swift
 │   │   └── Resources/packs/         # 95 JSON packs + index.json (rv_RVPacks.bundle at runtime)
 │   ├── RVPolicy/                    # PolicyGate.swift, AllowOnceStore.swift, Allowlist*.swift, PacksConfig.swift
-│   ├── RVHooks/                     # HostCodec.swift, Grok/Pi/OpenCodeHostCodec.swift, HookMapper.swift, HostAdapterResources.swift
+│   ├── RVHooks/                     # HostCodec.swift, Grok/Pi/OpenCode/ClaudeHostCodec.swift, ClaudeRichDeny.swift, HookMapper.swift, HostAdapterResources.swift
 │   │   └── Resources/hosts/         # embedded templates: rv_json_tmpl, rv_guard_ts_tmpl, rv_guard_js_tmpl (embedInCode)
 │   ├── RVIPC/                       # IPCEnvelope.swift, IPCMethods.swift, ProtocolVersion.swift, FrameCodec.swift, IPCJSON.swift, SkewReason.swift
 │   ├── RVService/                   # EvaluateSession.swift, GatedEvaluate.swift, ServiceRuntime.swift, HookDoor.swift, XPCListener.swift, IdleExit.swift, RVDLaunch.swift, DoctorSnapshotBuilder.swift, …

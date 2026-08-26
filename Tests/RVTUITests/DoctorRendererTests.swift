@@ -21,6 +21,7 @@ private let doctorRendererFixture = DoctorViewModel(
         DoctorHostView(host: .grok, state: .wired),
         DoctorHostView(host: .pi, state: .missing),
         DoctorHostView(host: .opencode, state: .absentFile),
+        DoctorHostView(host: .claude, state: .missing),
     ],
     config: .readable
 )
@@ -37,6 +38,7 @@ private let doctorRendererFixture = DoctorViewModel(
         "  •  Grok      wired",
         "  ◦  Pi        missing",
         "  ◦  OpenCode  absent-file",
+        "  ◦  Claude    missing",
         "",
         "  Packs",
         "    core.filesystem · core.git",
@@ -46,7 +48,7 @@ private let doctorRendererFixture = DoctorViewModel(
         "    readable · grade hook",
         "",
         "  Next",
-        "  →  rv setup    Wire Pi and OpenCode",
+        "  →  rv setup    Wire Pi, OpenCode, and Claude",
     ])
 }
 
@@ -66,7 +68,7 @@ private let doctorRendererFixture = DoctorViewModel(
     let lines = DoctorRenderer().render(doctorRendererFixture, palette: colorOffPalette)
     let joined = lines.joined(separator: "\n")
 
-    #expect(joined.contains("→  rv setup    Wire Pi and OpenCode"))
+    #expect(joined.contains("→  rv setup    Wire Pi, OpenCode, and Claude"))
     #expect(joined.contains("Grok") && joined.contains("wired"))
     #expect(lines.contains { $0.contains("Grok") && $0.contains("rv setup") } == false)
 }
@@ -77,6 +79,7 @@ private let doctorRendererFixture = DoctorViewModel(
         DoctorHostView(host: .grok, state: .wired),
         DoctorHostView(host: .pi, state: .occupied),
         DoctorHostView(host: .opencode, state: .occupied),
+        DoctorHostView(host: .claude, state: .wired),
     ]
 
     let lines = DoctorRenderer().render(fixture, palette: colorOffPalette)
