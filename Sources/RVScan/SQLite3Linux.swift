@@ -8,6 +8,11 @@ let SQLITE_ROW: Int32 = 100
 let SQLITE_DONE: Int32 = 101
 let SQLITE_OPEN_READONLY: Int32 = 0x00000001
 let SQLITE_OPEN_URI: Int32 = 0x00000040
+let SQLITE_DESERIALIZE_FREEONCLOSE: Int32 = 1
+let SQLITE_DESERIALIZE_READONLY: Int32 = 4
+
+typealias sqlite3_int64 = Int64
+typealias sqlite3_uint64 = UInt64
 
 @_silgen_name("sqlite3_open")
 func sqlite3_open(
@@ -67,5 +72,21 @@ func sqlite3_bind_text(
     _ value: UnsafePointer<CChar>?,
     _ n: Int32,
     _ destructor: sqlite3_destructor_type?
+) -> Int32
+
+@_silgen_name("sqlite3_malloc64")
+func sqlite3_malloc64(_ n: sqlite3_uint64) -> UnsafeMutableRawPointer?
+
+@_silgen_name("sqlite3_free")
+func sqlite3_free(_ p: UnsafeMutableRawPointer?)
+
+@_silgen_name("sqlite3_deserialize")
+func sqlite3_deserialize(
+    _ db: OpaquePointer?,
+    _ zSchema: UnsafePointer<CChar>?,
+    _ pData: UnsafeMutablePointer<UInt8>?,
+    _ szDb: sqlite3_int64,
+    _ szBuf: sqlite3_int64,
+    _ mFlags: UInt32
 ) -> Int32
 #endif

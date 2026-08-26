@@ -4,6 +4,15 @@ import RVDomain
 import SQLite3
 #endif
 
+/// Fail-closed OpenCode store I/O. Empty, invalid, or unprepared database
+/// bytes are an error, not a successful empty event list.
+public enum OpenCodeStoreError: Error, Sendable, Equatable {
+    /// `data` is empty, not SQLite, or could not be opened.
+    case unreadable(sourcePath: String)
+    /// Database opened but the `part` query could not be prepared.
+    case prepareFailed(sourcePath: String)
+}
+
 /// OpenCode session store at `$HOME/.local/share/opencode/opencode.db`.
 /// Surface field: `part.data` JSON with `type == "tool"`, `tool == "bash"`,
 /// and `state.input.command` (string).
@@ -20,18 +29,14 @@ public struct OpenCodeStoreAdapter: SessionStoreAdapter {
         fileURL.lastPathComponent == "opencode.db"
     }
 
-    public func extract(fileURL: URL, data _: Data) throws -> [ExtractedEvent] {
-        try Self.extractParts(fromDatabaseAt: fileURL)
+    /// Surface-extract bash `part` rows from provided store bytes.
+    /// `fileURL` is provenance only; missing or unreadable `data` throws.
+    public func extract(fileURL: URL, data: Data) throws -> [ExtractedEvent] {
+        try Self.events(in: data, sourcePath: fileURL.path)
     }
 
-    private static func extractParts(fromDatabaseAt fileURL: URL) throws -> [ExtractedEvent] {
-        var db: OpaquePointer?
-        let flags = SQLITE_OPEN_READONLY | SQLITE_OPEN_URI
-        let openStatus = sqlite3_open_v2(fileURL.path, &db, flags, nil)
-        guard openStatus == SQLITE_OK, let db else {
-            if let db { sqlite3_close(db) }
-            return []
-        }
+    private static func events(in data: Data, sourcePath: String) throws -> [ExtractedEvent] {
+        let db = try deserializedDatabase(from: data, sourcePath: sourcePath)
         defer { sqlite3_close(db) }
 
         let sql = "SELECT session_id, data FROM part;"
@@ -39,17 +44,16 @@ public struct OpenCodeStoreAdapter: SessionStoreAdapter {
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK,
               let statement
         else {
-            return []
+            throw OpenCodeStoreError.prepareFailed(sourcePath: sourcePath)
         }
         defer { sqlite3_finalize(statement) }
 
         var events: [ExtractedEvent] = []
-        let sourcePath = fileURL.path
         while sqlite3_step(statement) == SQLITE_ROW {
             let sessionID = Self.textColumn(statement, index: 0)
             guard let dataText = Self.textColumn(statement, index: 1),
-                  let data = dataText.data(using: .utf8),
-                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let payload = dataText.data(using: .utf8),
+                  let object = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
                   (object["type"] as? String) == "tool",
                   (object["tool"] as? String) == "bash",
                   let state = object["state"] as? [String: Any],
@@ -71,6 +75,54 @@ public struct OpenCodeStoreAdapter: SessionStoreAdapter {
             )
         }
         return events
+    }
+
+    private static func deserializedDatabase(
+        from data: Data,
+        sourcePath: String
+    ) throws -> OpaquePointer {
+        guard data.isEmpty == false else {
+            throw OpenCodeStoreError.unreadable(sourcePath: sourcePath)
+        }
+
+        var db: OpaquePointer?
+        guard sqlite3_open(":memory:", &db) == SQLITE_OK, let db else {
+            if let db { sqlite3_close(db) }
+            throw OpenCodeStoreError.unreadable(sourcePath: sourcePath)
+        }
+
+        let byteCount = data.count
+        guard let raw = sqlite3_malloc64(sqlite3_uint64(byteCount)) else {
+            sqlite3_close(db)
+            throw OpenCodeStoreError.unreadable(sourcePath: sourcePath)
+        }
+
+        let copied = data.withUnsafeBytes { buffer -> Bool in
+            guard let base = buffer.baseAddress else { return false }
+            raw.copyMemory(from: base, byteCount: byteCount)
+            return true
+        }
+        guard copied else {
+            sqlite3_free(raw)
+            sqlite3_close(db)
+            throw OpenCodeStoreError.unreadable(sourcePath: sourcePath)
+        }
+
+        let flags = UInt32(bitPattern: SQLITE_DESERIALIZE_READONLY | SQLITE_DESERIALIZE_FREEONCLOSE)
+        let status = sqlite3_deserialize(
+            db,
+            "main",
+            raw.assumingMemoryBound(to: UInt8.self),
+            sqlite3_int64(byteCount),
+            sqlite3_int64(byteCount),
+            flags
+        )
+        guard status == SQLITE_OK else {
+            sqlite3_free(raw)
+            sqlite3_close(db)
+            throw OpenCodeStoreError.unreadable(sourcePath: sourcePath)
+        }
+        return db
     }
 
     private static func textColumn(_ statement: OpaquePointer, index: Int32) -> String? {

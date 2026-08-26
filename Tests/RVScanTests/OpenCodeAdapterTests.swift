@@ -26,7 +26,8 @@ import RVDomain
 
         let adapter = OpenCodeStoreAdapter()
         #expect(adapter.recognizes(fileURL: dbURL))
-        let events = try adapter.extract(fileURL: dbURL, data: Data())
+        let data = try Data(contentsOf: dbURL)
+        let events = try adapter.extract(fileURL: dbURL, data: data)
         #expect(events.map(\.command.rawValue) == ["git reset --hard"])
         #expect(events.allSatisfy { $0.host == .opencode })
         #expect(events.allSatisfy { $0.sessionID == "ses_fixture_1" })
@@ -59,6 +60,60 @@ import RVDomain
     }
 }
 
+@Test func openCodeAdapter_openOrPrepareFailureIsNotEmptySuccess() throws {
+    try withTempHome { homeURL in
+        let adapter = OpenCodeStoreAdapter()
+        let source = homeURL.appendingPathComponent("opencode.db")
+
+        #expect(throws: OpenCodeStoreError.unreadable(sourcePath: source.path)) {
+            _ = try adapter.extract(fileURL: source, data: Data())
+        }
+        #expect(throws: OpenCodeStoreError.unreadable(sourcePath: source.path)) {
+            _ = try adapter.extract(fileURL: source, data: Data("not-a-database".utf8))
+        }
+
+        let noPart = homeURL.appendingPathComponent("no-part.db")
+        try writeSQLiteDatabase(at: noPart, sql: "CREATE TABLE other (id TEXT);")
+        let noPartBytes = try Data(contentsOf: noPart)
+        #expect(throws: OpenCodeStoreError.prepareFailed(sourcePath: noPart.path)) {
+            _ = try adapter.extract(fileURL: noPart, data: noPartBytes)
+        }
+
+        let emptyPart = homeURL.appendingPathComponent("empty-part.db")
+        try writeSQLiteDatabase(at: emptyPart, sql: openCodePartDDL)
+        let empty = try adapter.extract(
+            fileURL: emptyPart,
+            data: Data(contentsOf: emptyPart)
+        )
+        #expect(empty.isEmpty)
+    }
+}
+
+@Test func openCodeAdapter_extractUsesProvidedDataNotPath() throws {
+    try withTempHome { homeURL in
+        let store = homeURL.appendingPathComponent(".local/share/opencode", isDirectory: true)
+        try FileManager.default.createDirectory(at: store, withIntermediateDirectories: true)
+        let dbURL = store.appendingPathComponent("opencode.db")
+        let partJSON = try String(contentsOf: fixtureURL("opencode/bash-part.json"), encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        try writeOpenCodeFixtureDatabase(at: dbURL, sessionID: "ses_disk", partJSON: partJSON)
+        let diskBytes = try Data(contentsOf: dbURL)
+
+        let adapter = OpenCodeStoreAdapter()
+        #expect(throws: OpenCodeStoreError.unreadable(sourcePath: dbURL.path)) {
+            _ = try adapter.extract(fileURL: dbURL, data: Data("not-sqlite".utf8))
+        }
+
+        try FileManager.default.removeItem(at: dbURL)
+        try Data("different-on-disk".utf8).write(to: dbURL)
+        let events = try adapter.extract(fileURL: dbURL, data: diskBytes)
+        #expect(events.map(\.command.rawValue) == ["git reset --hard"])
+        #expect(events.allSatisfy { $0.host == .opencode })
+        #expect(events.allSatisfy { $0.sessionID == "ses_disk" })
+        #expect(events.allSatisfy { $0.sourcePath == dbURL.path })
+    }
+}
+
 @Test func dayOneAdapters_hostIDsAreDistinct() {
     let hosts = [
         PiStoreAdapter().host,
@@ -69,34 +124,52 @@ import RVDomain
     #expect(hosts.contains(.claude) == false)
 }
 
+private enum OpenCodeFixtureError: Error {
+    case openFailed
+    case execFailed
+    case prepareFailed
+    case insertFailed
+}
+
+private let openCodePartDDL = """
+CREATE TABLE part (
+  id TEXT PRIMARY KEY,
+  message_id TEXT,
+  session_id TEXT,
+  time_created INTEGER,
+  time_updated INTEGER,
+  data TEXT
+);
+"""
+
+private func writeSQLiteDatabase(at url: URL, sql: String? = nil) throws {
+    var db: OpaquePointer?
+    guard sqlite3_open(url.path, &db) == SQLITE_OK, let db else {
+        throw OpenCodeFixtureError.openFailed
+    }
+    defer { sqlite3_close(db) }
+    if let sql {
+        guard sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK else {
+            throw OpenCodeFixtureError.execFailed
+        }
+    }
+}
+
 private func writeOpenCodeFixtureDatabase(at url: URL, sessionID: String, partJSON: String) throws {
     var db: OpaquePointer?
     guard sqlite3_open(url.path, &db) == SQLITE_OK, let db else {
-        Issue.record("failed to create fixture sqlite db")
-        return
+        throw OpenCodeFixtureError.openFailed
     }
     defer { sqlite3_close(db) }
 
-    let ddl = """
-    CREATE TABLE part (
-      id TEXT PRIMARY KEY,
-      message_id TEXT,
-      session_id TEXT,
-      time_created INTEGER,
-      time_updated INTEGER,
-      data TEXT
-    );
-    """
-    guard sqlite3_exec(db, ddl, nil, nil, nil) == SQLITE_OK else {
-        Issue.record("failed to create part table")
-        return
+    guard sqlite3_exec(db, openCodePartDDL, nil, nil, nil) == SQLITE_OK else {
+        throw OpenCodeFixtureError.execFailed
     }
 
     var statement: OpaquePointer?
     let insert = "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, 1, 1, ?);"
     guard sqlite3_prepare_v2(db, insert, -1, &statement, nil) == SQLITE_OK, let statement else {
-        Issue.record("failed to prepare insert")
-        return
+        throw OpenCodeFixtureError.prepareFailed
     }
     defer { sqlite3_finalize(statement) }
 
@@ -106,7 +179,6 @@ private func writeOpenCodeFixtureDatabase(at url: URL, sessionID: String, partJS
     _ = sessionID.withCString { sqlite3_bind_text(statement, 3, $0, -1, transient) }
     _ = partJSON.withCString { sqlite3_bind_text(statement, 4, $0, -1, transient) }
     guard sqlite3_step(statement) == SQLITE_DONE else {
-        Issue.record("failed to insert part row")
-        return
+        throw OpenCodeFixtureError.insertFailed
     }
 }
