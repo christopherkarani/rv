@@ -14,42 +14,21 @@
   <img src="https://img.shields.io/badge/hosts-Pi%20%7C%20Grok%20%7C%20OpenCode-334155" alt="Hosts">
 </p>
 
-```sh
-curl -fsSL https://rykanv.com/install | sh
-```
 
-# rv
+# rv (Rykan V)
 
-**Agents generate actions. rv authorizes them before they run.**
-
-A local shell guard for coding agents. Pi, Grok, and OpenCode send the tool call to rv. Destructive git and filesystem commands deny. Secret paths like `.env` deny. You keep using the agent you already use.
+**Control what your agent can do, rv blocks dangerous commands before they can run**
 
 Site: [rykanv.com](https://rykanv.com) · Docs: [rykanv.com/docs/introduction](https://rykanv.com/docs/introduction) · Discord: [discord.gg/uZn9MDUYKx](https://discord.gg/uZn9MDUYKx)
 
 ## Why this exists
 
-Coding agents write and run shell. `AGENTS.md` is a suggestion. The moment that matters is the tool call.
-
-rv sits on that wire. The host is about to run a command. Packs return allow or deny. Deny means the shell never starts.
-
-A workspace sandbox still lets `git reset --hard` and `rm -rf .` run inside the project. rv blocks those operations on the tool call.
+Everyday I find a new victim of rm -rf, when agents are deep in work, they can make mistakes. Irreversible mistakes, like sending a badly formatted email to your hottest sales lead or deletes your production db, rv acts as the control layer you enforce on your agents to block them from doing this. setup is simple, run the curl command and the script and rv will place itself before the hook runs.
 
 ## Quick start
 
 ```sh
 curl -fsSL https://rykanv.com/install | sh
-rv setup
-rv test 'git reset --hard'
-```
-
-Then start Pi, Grok, or OpenCode as you normally do.
-
-Prove a deny without running anything:
-
-```sh
-rv test 'rm -rf /'
-rv explain 'git push --force'
-rv test 'cat .env'
 ```
 
 ## What it does
@@ -72,81 +51,20 @@ rv test 'cat .env'
 | Pi | `~/.pi/agent/extensions/rv-guard.ts` |
 | OpenCode | `~/.config/opencode/plugins/rv-guard.js` |
 
-`rv setup` is idempotent. It writes rv-owned adapters, `~/.config/rv/`, and the evaluate LaunchAgent.
 
 ## Commands
 
-One command: `rv`.
-
 ```sh
 rv setup                         # wire hosts
+rv scn                           # scan repo for destructive actions in the past
 rv test 'git reset --hard'       # evaluate, do not run
 rv explain 'git reset --hard'    # which pack would fire
 rv allow-once 'git reset --hard' # next matching call in this cwd
 rv packs                         # catalog
+rv packs enable <pack>           # Enable a pack
 rv doctor                        # health
-rv uninstall                     # rv-owned files only
+rv uninstall                     # raw dog it
 ```
-
-## How it works
-
-1. The agent is about to run a shell command.
-2. The host adapter sends the command, and `cwd` when the host has one.
-3. Packs decide allow or deny.
-4. Deny means the command does not run.
-
-Same path for `rv test` and the live hook. If you can prove a deny with `rv test`, the wired host uses that evaluator.
-
-## Example
-
-Agent asks the host to run `git reset --hard`.
-
-```
-command: git reset --hard
-cwd:     /Users/you/app
-pack:    core.git
-result:  deny
-```
-
-The host gets deny. The working tree stays. Grant one exception in that directory with `rv allow-once`.
-
-## Allow once
-
-Need this one reset in this repo:
-
-```sh
-rv allow-once 'git reset --hard'
-```
-
-The next matching call in this working directory is allowed. The same command in another repo still denies. `cwd` is what the host reports for the tool call.
-
-## Packs
-
-Day-one packs ship next to the binaries. The public installer unpacks the bundle.
-
-```sh
-rv packs
-rv test 'rm -rf /'
-rv test 'cat ~/.ssh/id_rsa'
-```
-
-Enable and disable packs locally. `rv explain` names the pack that would fire.
-
-## From source
-
-```sh
-tools/release.sh
-RV_INSTALL_BIN=$PWD/.build/release-stage ./install.sh
-rv setup
-```
-
-## Uninstall
-
-```sh
-rv uninstall
-```
-
-Removes rv-owned files only. Agent configs rv did not write stay.
 
 ## License
 
