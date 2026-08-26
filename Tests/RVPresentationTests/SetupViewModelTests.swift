@@ -4,7 +4,7 @@ import Testing
 @Test func setupSlotSnapshot_hostless_usesHostlessCloserLines() {
     let slots = SetupSlotSnapshot(grok: .pending, pi: .pending, openCode: .pending, wrote: [])
     #expect(slots.closer == .hostless)
-    #expect(slots.slotViews.map(\.kind) == [.pending, .pending, .pending, .pending])
+    #expect(slots.slotViews.map(\.kind) == [.pending, .pending, .pending, .pending, .pending])
     #expect(slots.closer.lines(kind: .setup) == [setupCeremonyHostlessTitle, setupCeremonyHostlessNext])
     #expect(setupCeremonyFrames(slots, kind: .setup)?.last?.closerLines == slots.closer.lines(kind: .setup))
 }
