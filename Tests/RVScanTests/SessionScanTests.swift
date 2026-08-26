@@ -79,14 +79,19 @@ import RVDomain
 
 @Test func sessionScan_runRootListingFailureThrows() throws {
     try withTempTree { root in
+        try FileManager.default.setAttributes([.posixPermissions: 0o111], ofItemAtPath: root.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root.path)
+        }
+        #expect(throws: (any Error).self) {
+            try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
+        }
+
         let home = try #require(ScanHome(validating: root.path))
         let now = Date(timeIntervalSince1970: 1_777_000_000)
         let expected = URL(fileURLWithPath: root.path, isDirectory: true).standardizedFileURL.path
         #expect(throws: SessionScanError.listingFailed(expected)) {
-            try SessionScan().run(
-                SessionScanRequest(home: home, now: now, rootPath: root.path),
-                fileManager: ListFailingFileManager()
-            )
+            try SessionScan().run(SessionScanRequest(home: home, now: now, rootPath: root.path))
         }
     }
 }
@@ -148,14 +153,4 @@ private func withTempTree(_ body: (URL) throws -> Void) throws {
 
 private func writeFile(_ url: URL, contents: String) throws {
     try Data(contents.utf8).write(to: url, options: .atomic)
-}
-
-private final class ListFailingFileManager: FileManager, @unchecked Sendable {
-    override func contentsOfDirectory(
-        at url: URL,
-        includingPropertiesForKeys keys: [URLResourceKey]?,
-        options mask: FileManager.DirectoryEnumerationOptions = []
-    ) throws -> [URL] {
-        throw CocoaError(.fileReadNoPermission)
-    }
 }

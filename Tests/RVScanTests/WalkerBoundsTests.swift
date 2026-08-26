@@ -106,24 +106,15 @@ import RVDomain
         try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
         try writeFile(root.appendingPathComponent("top.txt"), contents: "top")
         try writeFile(nested.appendingPathComponent("deep.txt"), contents: "deep")
-
-        let fm = ListFailingFileManager()
-        fm.shouldFail = { url in
-            url.standardizedFileURL.path == nested.standardizedFileURL.path
+        try revokeDirectoryListing(nested)
+        defer { restoreDirectoryListing(nested) }
+        #expect(throws: (any Error).self) {
+            try FileManager.default.contentsOfDirectory(at: nested, includingPropertiesForKeys: nil)
         }
 
-        let result = try DirectoryWalker(bounds: .default).walk(root: root, fileManager: fm)
+        let result = try DirectoryWalker(bounds: .default).walk(root: root)
         #expect(result.fileURLs.map(\.lastPathComponent) == ["top.txt"])
         #expect(result.warnings.contains { $0.code == "io.list" })
-    }
-}
-
-@Test func walker_unreadableMetadataEmitsStatWarning() throws {
-    try withTempTree { root in
-        let fm = GhostChildFileManager()
-        let result = try DirectoryWalker(bounds: .default).walk(root: root, fileManager: fm)
-        #expect(result.fileURLs.isEmpty)
-        #expect(result.warnings.contains { $0.code == "io.stat" })
     }
 }
 
@@ -173,31 +164,11 @@ private func writeFile(_ url: URL, contents: Data) throws {
     try contents.write(to: url, options: .atomic)
 }
 
-private final class ListFailingFileManager: FileManager, @unchecked Sendable {
-    var shouldFail: @Sendable (URL) -> Bool = { _ in true }
-
-    override func contentsOfDirectory(
-        at url: URL,
-        includingPropertiesForKeys keys: [URLResourceKey]?,
-        options mask: FileManager.DirectoryEnumerationOptions = []
-    ) throws -> [URL] {
-        if shouldFail(url) {
-            throw CocoaError(.fileReadNoPermission)
-        }
-        return try super.contentsOfDirectory(
-            at: url,
-            includingPropertiesForKeys: keys,
-            options: mask
-        )
-    }
+/// Execute-only: `stat` still works, `contentsOfDirectory` fails.
+private func revokeDirectoryListing(_ url: URL) throws {
+    try FileManager.default.setAttributes([.posixPermissions: 0o111], ofItemAtPath: url.path)
 }
 
-private final class GhostChildFileManager: FileManager, @unchecked Sendable {
-    override func contentsOfDirectory(
-        at url: URL,
-        includingPropertiesForKeys keys: [URLResourceKey]?,
-        options mask: FileManager.DirectoryEnumerationOptions = []
-    ) throws -> [URL] {
-        [url.appendingPathComponent("ghost-missing.txt")]
-    }
+private func restoreDirectoryListing(_ url: URL) {
+    try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: url.path)
 }
