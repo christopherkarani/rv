@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(SQLite3)
 import SQLite3
+#endif
 import Testing
 import RVDomain
 @testable import RVScan

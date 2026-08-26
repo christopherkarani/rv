@@ -1,6 +1,8 @@
 import Foundation
 import RVDomain
+#if canImport(SQLite3)
 import SQLite3
+#endif
 
 /// OpenCode session store at `$HOME/.local/share/opencode/opencode.db`.
 /// Surface field: `part.data` JSON with `type == "tool"`, `tool == "bash"`,
