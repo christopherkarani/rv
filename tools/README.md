@@ -91,7 +91,7 @@ tools/gate.sh --quiet <Target>Tests
 | `no-bypass` | `RV_BYPASS` | |
 | `no-ns-home` | `NSHomeDirectory()` | `ProcessInfo.processInfo.environment["HOME"]` (correct) |
 | `no-os-log-cmdtext` | os_log/Logger usage (warns for manual review) | can't detect command text in log calls structurally |
-| `name-hygiene` | leftover `dcg`/`ryk` in product files | `rykanv` / `Rykan V` / `rykanv.com` (brand/domain), same tokens in `docs/factory/` (allowed), agent dotfiles (warns) |
+| `name-hygiene` | leftover `dcg`/`ryk` tokens in product files (letter-bounded) | `rykanv` / `Rykan V` / `rykanv.com` (brand/domain), Foundation `isDirectoryKey`, same tokens in `docs/factory/` (allowed), agent dotfiles (warns) |
 | `no-xctest` | `import XCTest` | `import Testing` (correct) |
 | `no-main-in-library` | `main.swift`/`@main` in library targets | same in `Sources/rv`/`Sources/rvd` (correct) |
 | `graph-no-engine-packs` | `import RVPacks` in RVEngine | |

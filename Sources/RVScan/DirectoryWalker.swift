@@ -11,23 +11,31 @@ public struct ScanWarning: Sendable, Equatable {
     }
 }
 
+/// Fail-closed when the walk root cannot be listed.
+public enum DirectoryWalkError: Error, Sendable, Equatable {
+    case listingFailed(String)
+}
+
 /// Result of a bounded directory walk (discovery only; no extract).
 public struct DirectoryWalkResult: Sendable, Equatable {
     public var fileURLs: [URL]
     public var warnings: [ScanWarning]
     public var filesVisited: Int
     public var bytesAccounted: Int64
+    public var skippedOversize: Int
 
     public init(
         fileURLs: [URL] = [],
         warnings: [ScanWarning] = [],
         filesVisited: Int = 0,
-        bytesAccounted: Int64 = 0
+        bytesAccounted: Int64 = 0,
+        skippedOversize: Int = 0
     ) {
         self.fileURLs = fileURLs
         self.warnings = warnings
         self.filesVisited = filesVisited
         self.bytesAccounted = bytesAccounted
+        self.skippedOversize = skippedOversize
     }
 }
 
@@ -39,15 +47,18 @@ public struct DirectoryWalker: Sendable {
         self.bounds = bounds
     }
 
-    public func walk(root: URL, fileManager: FileManager = .default) -> DirectoryWalkResult {
+    public func walk(root: URL, fileManager: FileManager = .default) throws -> DirectoryWalkResult {
         let root = root.standardizedFileURL
         var fileURLs: [URL] = []
         var warnings: [ScanWarning] = []
         var bytesAccounted: Int64 = 0
+        var filesVisited = 0
+        var skippedOversize = 0
         var stopped = false
         var depthWarned = false
         var bytesWarned = false
         var filesWarned = false
+        var fileSizeWarned = false
 
         let keys: Set<URLResourceKey> = [
             .isRegularFileKey,
@@ -68,6 +79,15 @@ public struct DirectoryWalker: Sendable {
                     options: []
                 )
             } catch {
+                if depth == 0 {
+                    throw DirectoryWalkError.listingFailed(directory.path)
+                }
+                warnings.append(
+                    ScanWarning(
+                        code: "io.list",
+                        message: "Failed to list \(directory.path)"
+                    )
+                )
                 continue
             }
 
@@ -92,6 +112,12 @@ public struct DirectoryWalker: Sendable {
                 do {
                     values = try item.resourceValues(forKeys: keys)
                 } catch {
+                    warnings.append(
+                        ScanWarning(
+                            code: "io.stat",
+                            message: "Failed to read metadata for \(item.path)"
+                        )
+                    )
                     continue
                 }
 
@@ -104,20 +130,21 @@ public struct DirectoryWalker: Sendable {
                     continue
                 }
 
-                guard values.isRegularFile == true else { continue }
-
-                let size = Int64(values.fileSize ?? 0)
-                if size > bounds.maxFileBytes {
-                    warnings.append(
-                        ScanWarning(
-                            code: "cap.file-size",
-                            message: "Skipped file over \(bounds.maxFileBytes) bytes"
+                if values.isRegularFile != true {
+                    if values.isSymbolicLink == nil,
+                       values.isDirectory == nil,
+                       values.isRegularFile == nil {
+                        warnings.append(
+                            ScanWarning(
+                                code: "io.stat",
+                                message: "Failed to read metadata for \(item.path)"
+                            )
                         )
-                    )
+                    }
                     continue
                 }
 
-                if fileURLs.count >= bounds.maxFiles {
+                if filesVisited >= bounds.maxFiles {
                     if filesWarned == false {
                         warnings.append(
                             ScanWarning(
@@ -129,6 +156,22 @@ public struct DirectoryWalker: Sendable {
                     }
                     stopped = true
                     break
+                }
+
+                let size = Int64(values.fileSize ?? 0)
+                if size > bounds.maxFileBytes {
+                    if fileSizeWarned == false {
+                        warnings.append(
+                            ScanWarning(
+                                code: "cap.file-size",
+                                message: "Skipped file over \(bounds.maxFileBytes) bytes"
+                            )
+                        )
+                        fileSizeWarned = true
+                    }
+                    skippedOversize += 1
+                    filesVisited += 1
+                    continue
                 }
 
                 if bytesAccounted + size > bounds.maxTotalBytes {
@@ -146,6 +189,7 @@ public struct DirectoryWalker: Sendable {
                 }
 
                 fileURLs.append(item.standardizedFileURL)
+                filesVisited += 1
                 bytesAccounted += size
             }
         }
@@ -153,8 +197,9 @@ public struct DirectoryWalker: Sendable {
         return DirectoryWalkResult(
             fileURLs: fileURLs,
             warnings: warnings,
-            filesVisited: fileURLs.count,
-            bytesAccounted: bytesAccounted
+            filesVisited: filesVisited,
+            bytesAccounted: bytesAccounted,
+            skippedOversize: skippedOversize
         )
     }
 }

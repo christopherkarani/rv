@@ -57,7 +57,7 @@ Available checks:
   no-bypass             No RV_BYPASS or env that skips evaluate
   no-ns-home             No NSHomeDirectory() in Sources or Tests
   no-os-log-cmdtext     No command text written to os_log (structural check)
-  name-hygiene          No leftover dcg/ryk tokens outside docs/factory/ (rykanv brand/domain allowed)
+  name-hygiene          No leftover dcg/ryk tokens outside docs/factory/ (letter-bounded; rykanv brand/domain allowed)
   one-cli-surface       README/help must not list rv-cli as a command
   no-xctest             Tests use Swift Testing, not XCTest
   no-main-in-library     No main.swift or @main in library targets
@@ -224,6 +224,9 @@ check_name_hygiene() {
   # not leftover ryk. A line whose only hit is inside those forms is allowed.
   # Bare ryk (CLI/product name), .ryk policy paths, and dcg still FAIL.
   #
+  # Matches are letter-bounded so an identifier that only contains the letter
+  # sequence (Foundation URLResourceKey.isDirectoryKey) is not a leftover.
+  #
   # Two tiers:
   #   FAIL  — leftover token in product code (any tracked file under ROOT
   #           except the excluded paths below). Scanning the whole tree (not
@@ -243,7 +246,7 @@ check_name_hygiene() {
 
   # Product files: whole tree, narrowed by extension, minus known-OK paths.
   local product_raw
-  product_raw=$(grep -rni 'dcg\|ryk' \
+  product_raw=$(grep -rniE '(^|[^[:alpha:]])(dcg|ryk)([^[:alpha:]]|$)' \
     "$ROOT" \
     --include='*.swift' --include='*.md' --include='*.json' --include='*.sh' --include='Package.swift' \
     2>/dev/null \
@@ -257,7 +260,7 @@ check_name_hygiene() {
   product_matches=$(printf '%s\n' "$product_raw" | python3 -c '
 import re, sys
 brand = re.compile(r"(?i)(?<![a-z])(?:rykanv(?:\.com)?|rykan[ \t]+v)(?![a-z])")
-leftover = re.compile(r"(?i)dcg|ryk")
+leftover = re.compile(r"(?i)(?<![a-z])(?:dcg|ryk)(?![a-z])")
 files = set()
 for raw in sys.stdin:
     line = raw.rstrip("\n")

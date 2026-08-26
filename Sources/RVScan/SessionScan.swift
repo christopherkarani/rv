@@ -94,7 +94,9 @@ public struct SessionScanRequest: Sendable, Equatable {
 }
 
 public enum SessionScanError: Error, Sendable, Equatable {
+    case missingRoot
     case pathNotFound(String)
+    case listingFailed(String)
 }
 
 /// Session-forensics entry. Extract/classify/dedupe land in later tickets.
@@ -106,7 +108,7 @@ public struct SessionScan: Sendable {
         fileManager: FileManager = .default
     ) throws -> ScanReport {
         guard let rootPath = request.rootPath else {
-            return ScanReport()
+            throw SessionScanError.missingRoot
         }
 
         let root = URL(fileURLWithPath: rootPath, isDirectory: true).standardizedFileURL
@@ -117,7 +119,12 @@ public struct SessionScan: Sendable {
             throw SessionScanError.pathNotFound(rootPath)
         }
 
-        let walk = DirectoryWalker(bounds: request.bounds).walk(root: root, fileManager: fileManager)
+        let walk: DirectoryWalkResult
+        do {
+            walk = try DirectoryWalker(bounds: request.bounds).walk(root: root, fileManager: fileManager)
+        } catch DirectoryWalkError.listingFailed(let path) {
+            throw SessionScanError.listingFailed(path)
+        }
         return ScanReport(
             findings: [],
             warnings: walk.warnings,
