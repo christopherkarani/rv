@@ -39,7 +39,8 @@ import Testing
         grok: .occupied(layout.hostAdapter(for: .grok)),
         pi: .absentFile(layout.hostAdapter(for: .pi)),
         openCode: .missing(layout.hostAdapter(for: .opencode)),
-        claude: .missing(layout.hostAdapter(for: .claude))
+        claude: .missing(layout.hostAdapter(for: .claude)),
+        openClaw: .missing(layout.hostAdapter(for: .openclaw))
     )
 
     let plan = SetupWorkPlanBuilder.make(
@@ -55,6 +56,7 @@ import Testing
         .write(.pi, existingData: nil),
         .skipUndetected(.opencode),
         .skipUndetected(.claude),
+        .skipUndetected(.openclaw),
         .writeLaunchAgent,
     ])
     #expect(
@@ -70,7 +72,8 @@ import Testing
         grok: .missing(layout.hostAdapter(for: .grok)),
         pi: .missing(layout.hostAdapter(for: .pi)),
         openCode: .missing(layout.hostAdapter(for: .opencode)),
-        claude: .missing(layout.hostAdapter(for: .claude))
+        claude: .missing(layout.hostAdapter(for: .claude)),
+        openClaw: .missing(layout.hostAdapter(for: .openclaw))
     )
 
     let plan = SetupWorkPlanBuilder.make(
@@ -88,6 +91,7 @@ import Testing
         .skipUndetected(.pi),
         .skipUndetected(.opencode),
         .skipUndetected(.claude),
+        .skipUndetected(.openclaw),
         .skipLaunchAgent,
     ])
     #expect(
@@ -102,7 +106,8 @@ import Testing
         grok: .occupied(layout.hostAdapter(for: .grok)),
         pi: .missing(layout.hostAdapter(for: .pi)),
         openCode: .missing(layout.hostAdapter(for: .opencode)),
-        claude: .missing(layout.hostAdapter(for: .claude))
+        claude: .missing(layout.hostAdapter(for: .claude)),
+        openClaw: .missing(layout.hostAdapter(for: .openclaw))
     )
 
     let plan = SetupWorkPlanBuilder.make(
@@ -120,6 +125,7 @@ import Testing
         .skipUndetected(.pi),
         .skipUndetected(.opencode),
         .skipUndetected(.claude),
+        .skipUndetected(.openclaw),
         .writeLaunchAgent,
     ])
 }

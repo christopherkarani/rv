@@ -8,6 +8,7 @@ extension HookHost {
         case .pi: "Pi"
         case .opencode: "OpenCode"
         case .claude: "Claude"
+        case .openclaw: "OpenClaw"
         }
     }
 }
@@ -28,6 +29,7 @@ public struct SetupSlotSnapshot: Equatable, Sendable {
     public var pi: SetupSlotKind
     public var openCode: SetupSlotKind
     public var claude: SetupSlotKind
+    public var openClaw: SetupSlotKind
     public var wrote: Set<HookHost>
 
     public init(
@@ -35,12 +37,14 @@ public struct SetupSlotSnapshot: Equatable, Sendable {
         pi: SetupSlotKind,
         openCode: SetupSlotKind,
         claude: SetupSlotKind = .pending,
+        openClaw: SetupSlotKind = .pending,
         wrote: Set<HookHost>
     ) {
         self.grok = grok
         self.pi = pi
         self.openCode = openCode
         self.claude = claude
+        self.openClaw = openClaw
         self.wrote = wrote
     }
 
@@ -50,6 +54,7 @@ public struct SetupSlotSnapshot: Equatable, Sendable {
         case .pi: pi
         case .opencode: openCode
         case .claude: claude
+        case .openclaw: openClaw
         }
     }
 
@@ -64,7 +69,7 @@ public struct SetupSlotSnapshot: Equatable, Sendable {
     public var isHostless: Bool { detected.isEmpty }
 
     public var hasWiredSlot: Bool {
-        grok == .wired || pi == .wired || openCode == .wired || claude == .wired
+        grok == .wired || pi == .wired || openCode == .wired || claude == .wired || openClaw == .wired
     }
 
     /// Second matching run: hosts already present, this run wrote nothing, none occupied.
@@ -130,7 +135,7 @@ public enum SetupCloser: Equatable, Sendable {
     }
 }
 
-public let setupRobotHostlessLine = "Run rv setup after Pi, Grok, OpenCode, or Claude exists."
+public let setupRobotHostlessLine = "Run rv setup after Pi, Grok, OpenCode, Claude, or OpenClaw exists."
 public let setupRobotCompleteLine = "Setup complete. Next  rv test 'git reset --hard'."
 
 extension HookHost {
@@ -141,6 +146,7 @@ extension HookHost {
         case .pi: "Skipped occupied pi hook."
         case .opencode: "Skipped occupied opencode hook."
         case .claude: "Skipped occupied claude hook."
+        case .openclaw: "Skipped occupied openclaw hook."
         }
     }
 }

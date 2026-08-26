@@ -138,6 +138,7 @@ enum SetupRun {
             pi: .pending,
             openCode: .pending,
             claude: .pending,
+            openClaw: .pending,
             wrote: []
         )
 
@@ -230,6 +231,7 @@ enum SetupRun {
             pi: slots.pi,
             openCode: slots.openCode,
             claude: slots.claude,
+            openClaw: slots.openClaw,
             wrote: slots.wrote
         )
         env.installAnalytics.captureInstall(hosts: InstallAnalyticsHosts.from(report.slots))
@@ -250,15 +252,47 @@ enum SetupRun {
             throw SetupError(adapterResourceFailure: error)
         }
         do {
-            return try writeOwned(
-                path: layout.hostAdapter(for: host).destination,
+            let destination = layout.hostAdapter(for: host).destination
+            let wroteAdapter = try writeOwned(
+                path: destination,
                 contents: adapter.rendered(rvPath: env.rvPath),
                 existingData: existingData,
                 files: files
             )
+            let wroteCompanions = try writeCompanions(
+                host,
+                directory: (destination as NSString).deletingLastPathComponent,
+                files: files
+            )
+            return wroteAdapter || wroteCompanions
         } catch {
             throw SetupError.hostHookWriteFailed(host)
         }
+    }
+
+    private static func writeCompanions(
+        _ host: HookHost,
+        directory: String,
+        files: FileOps
+    ) throws -> Bool {
+        guard host == .openclaw else { return false }
+        let pluginJSON = try HostAdapterResources.loadPluginManifest(for: host)
+        let packageJSON = try HostAdapterResources.loadPackageManifest(for: host)
+        let pluginPath = directory + "/openclaw.plugin.json"
+        let packagePath = directory + "/package.json"
+        let wrotePlugin = try writeOwned(
+            path: pluginPath,
+            contents: pluginJSON,
+            existingData: files.readData(pluginPath),
+            files: files
+        )
+        let wrotePackage = try writeOwned(
+            path: packagePath,
+            contents: packageJSON,
+            existingData: files.readData(packagePath),
+            files: files
+        )
+        return wrotePlugin || wrotePackage
     }
 
     private static func inspectInstallations(
@@ -327,6 +361,11 @@ enum SetupRun {
                     }
                 } else {
                     removedPaths.append(owned.destination)
+                    if owned.host == .openclaw {
+                        let directory = (owned.destination as NSString).deletingLastPathComponent
+                        removedPaths.append(directory + "/openclaw.plugin.json")
+                        removedPaths.append(directory + "/package.json")
+                    }
                     removedHosts.insert(owned.host)
                 }
             case .leaveOccupied:
@@ -365,6 +404,9 @@ enum SetupRun {
         for path in removedPaths {
             files.removeFile(atPath: path)
         }
+        files.removeDirectoryIfEmpty(
+            atPath: (layout.openClawPlugin as NSString).deletingLastPathComponent
+        )
         files.removeDirectoryIfEmpty(atPath: layout.configDirectory)
 
         if env.supervisor == .launchd, env.touchLaunchd {
@@ -665,6 +707,7 @@ private extension SetupSlotSnapshot {
         case .pi: pi = kind
         case .opencode: openCode = kind
         case .claude: claude = kind
+        case .openclaw: openClaw = kind
         }
     }
 }

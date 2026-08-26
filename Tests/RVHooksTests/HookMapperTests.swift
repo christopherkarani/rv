@@ -41,6 +41,10 @@ import RVDomain
     #expect(pi.stdout.contains("\"decision\":\"deny\""))
     #expect(openCode.stdout.contains("\"permissionDecision\"") == false)
     #expect(openCode.stdout.contains("\"decision\":\"deny\""))
+    let openClaw = hookWire(from: result, command: command, using: OpenClawHostCodec())
+    #expect(openClaw.stdout.contains("\"permissionDecision\"") == false)
+    #expect(openClaw.stdout.contains("\"decision\":\"deny\""))
+    #expect(openClaw.exitCode == 1)
 }
 
 @Test func hookWire_allowIsEmpty() {

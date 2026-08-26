@@ -1,0 +1,8 @@
+{
+  "toolName": "exec",
+  "params": { "command": "git status", "workdir": "/tmp/ws" },
+  "cwd": "/tmp/ws",
+  "sessionId": "sess_1",
+  "sessionKey": "main",
+  "toolKind": "exec"
+}

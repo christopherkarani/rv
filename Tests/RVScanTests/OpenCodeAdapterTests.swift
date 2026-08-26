@@ -152,8 +152,9 @@ import RVDomain
         PiStoreAdapter().host,
         GrokStoreAdapter().host,
         OpenCodeStoreAdapter().host,
+        OpenClawStoreAdapter().host,
     ]
-    #expect(Set(hosts) == [.pi, .grok, .opencode])
+    #expect(Set(hosts) == [.pi, .grok, .opencode, .openclaw])
     #expect(hosts.contains(.claude) == false)
 }
 

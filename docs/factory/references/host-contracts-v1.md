@@ -37,6 +37,33 @@ rv owns codecs. Do not copy ryk leftover-ask-as-permit. Do not copy DCG fail-ope
 - Deny stdout (exit 0): documented Claude fields only — `systemMessage` branded `RV · Blocked` + short hostDenyText; `hookSpecificOutput` with exactly `hookEventName`, `permissionDecision: "deny"`, rich `permissionDecisionReason`. Pack / rule / severity / remediation live inside the reason text. **No** extra `hookSpecificOutput` keys (`ruleId`, `packId`, `severity`, `remediation`, …): schema-invalid exit-0 JSON is a non-blocking error and the action proceeds. **No** `allowOnceCode` / redeemable code. Indeterminate: deny envelope + incomplete-eval sentence; no pack sections in the reason.
 - Allow: empty stdout, exit 0. No `permissionDecision: "ask"` in this ship (CL-later-ask). No Read/Edit/Write/MCP matchers (CL-later-secrets / CL-later-mcp).
 
+## OpenClaw (OPE-266; host only, no Ask)
+
+- Discover: `~/.openclaw/` exists or `openclaw` on PATH. Linux and macOS only. No Windows path.
+- Setup writes an **exclusive plugin directory** `$HOME/.openclaw/extensions/rv-guard/`:
+  - `index.js` — rv-owned adapter (`__RV_BINARY__` baked)
+  - `openclaw.plugin.json` — `id: "rv-guard"`, `activation.onStartup: true`
+  - `package.json` — `"type": "module"` and `openclaw.extensions: ["./index.js"]`
+  Occupancy is the exclusive `index.js` (same baked-path inspect as Pi / OpenCode). Do not merge `openclaw.json`.
+- Real intercept: plugin typed lifecycle hook `before_tool_call` via `api.on(...)`, matcher `["exec"]`. Canonical shell tool is `exec`. `params.command` is the shell text; `params.workdir` is cwd. Outer code-mode exec (`toolKind: "code_mode_exec"`) is **foreign**, not shell.
+- Adapter stdin to `rv hook --host openclaw` (rv-owned envelope, not “OpenClaw sent this”):
+
+  ```json
+  {
+    "toolName": "exec",
+    "params": { "command": "git status", "workdir": "/tmp/ws" },
+    "cwd": "/tmp/ws",
+    "sessionId": "sess_1",
+    "sessionKey": "main",
+    "toolKind": "exec"
+  }
+  ```
+
+  Decode: unreadable JSON → deny. `toolName != "exec"` or `toolKind == "code_mode_exec"` → foreign allow. Exec with missing/empty `params.command` → deny. cwd is `params.workdir` then envelope `cwd`. session is `sessionId` then `sessionKey`.
+- Deny: plugin returns `{ block: true, blockReason }` where `blockReason` is `hostDenyText`. `block: true` is terminal. **No** `requireApproval` (Ask is out of scope). Missing `rv` → `{ block: true, blockReason: "rv missing" }`. Timeout/crash → `{ block: true, blockReason: "rv failed" }`. Operator stdout is short `{decision,reason}` JSON and exit **1**.
+- Session store: per-agent SQLite `$HOME/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`, table `transcript_events (session_id, event_json, created_at)`. `extract(fileURL:data:)` uses **`data`**, never reopens the path. sqlite open / prepare / unreadable bytes **throw**. Empty valid `transcript_events` may return `[]`. Skip non-exec / unparseable rows.
+- Occupied slot: skip + one line. No Ask UI. No AFM / ActionReviewer.
+
 ## Shared deny text
 
 `hostDenyText`: one sentence + display `rule_id` (`pack/pattern`) + next step. Never include a redeemable code. Canonical: `Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once.`

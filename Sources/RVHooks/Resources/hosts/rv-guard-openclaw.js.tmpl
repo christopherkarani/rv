@@ -1,0 +1,160 @@
+import { spawn } from "node:child_process";
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+
+const RV_BINARY = "__RV_BINARY__";
+const RV_HOOK_TIMEOUT_MS = 5000;
+
+export default definePluginEntry({
+  id: "rv-guard",
+  name: "RV",
+  description: "Destructive-command guard for OpenClaw exec.",
+  register(api) {
+    api.on(
+      "before_tool_call",
+      async (event, ctx) => {
+        if (event.toolName !== "exec") {
+          return;
+        }
+        const toolKind =
+          typeof event.toolKind === "string"
+            ? event.toolKind
+            : ctx && typeof ctx.toolKind === "string"
+              ? ctx.toolKind
+              : undefined;
+        if (toolKind === "code_mode_exec") {
+          return;
+        }
+        const params = event.params && typeof event.params === "object" ? event.params : {};
+        const command = params.command;
+        const workdir = typeof params.workdir === "string" ? params.workdir : undefined;
+        const cwd = pickCwd(workdir);
+        const sessionId =
+          ctx && typeof ctx.sessionId === "string" && ctx.sessionId.length > 0
+            ? ctx.sessionId
+            : undefined;
+        const sessionKey =
+          ctx && typeof ctx.sessionKey === "string" && ctx.sessionKey.length > 0
+            ? ctx.sessionKey
+            : undefined;
+        const payload = { toolName: "exec", params: {} };
+        if (typeof command === "string") {
+          payload.params.command = command;
+        }
+        if (workdir) {
+          payload.params.workdir = workdir;
+        }
+        if (cwd) {
+          payload.cwd = cwd;
+        }
+        if (sessionId) {
+          payload.sessionId = sessionId;
+        }
+        if (sessionKey) {
+          payload.sessionKey = sessionKey;
+        }
+        if (toolKind) {
+          payload.toolKind = toolKind;
+        }
+        const mapped = await consultRv(payload);
+        if (mapped.action === "block") {
+          return { block: true, blockReason: mapped.reason };
+        }
+      },
+      { matcher: ["exec"] },
+    );
+  },
+});
+
+function pickCwd(hostCwd) {
+  if (typeof hostCwd === "string" && hostCwd.length > 0) return hostCwd;
+  try {
+    const cwd = process.cwd();
+    if (typeof cwd === "string" && cwd.length > 0) return cwd;
+  } catch {
+    // omit
+  }
+  return undefined;
+}
+
+function consultRv(payload) {
+  return spawnRvHook("openclaw", JSON.stringify(payload));
+}
+
+function spawnRvHook(host, stdin) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (value) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      resolve(mapRvHookResult(value));
+    };
+
+    let child;
+    try {
+      child = spawn(RV_BINARY, ["hook", "--host", host], {
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+    } catch (error) {
+      done({ error });
+      return;
+    }
+
+    const chunks = [];
+    child.stdout.on("data", (chunk) => {
+      chunks.push(chunk);
+    });
+    child.on("error", (error) => {
+      done({ error });
+    });
+
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      done({ timedOut: true });
+    }, RV_HOOK_TIMEOUT_MS);
+
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      done({
+        stdout: Buffer.concat(chunks).toString("utf8"),
+        exitCode: code,
+      });
+    });
+
+    try {
+      child.stdin.end(stdin, "utf8");
+    } catch (error) {
+      done({ error });
+    }
+  });
+}
+
+function mapRvHookResult(value) {
+  if (value.error && value.error.code === "ENOENT") {
+    return { action: "block", reason: "rv missing" };
+  }
+  if (value.error || value.timedOut) {
+    return { action: "block", reason: "rv failed" };
+  }
+  const stdout = value.stdout ?? "";
+  const trimmed = stdout.trim();
+  if (trimmed.length > 0) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (parsed && parsed.decision === "deny") {
+        return {
+          action: "block",
+          reason: typeof parsed.reason === "string" ? parsed.reason : "",
+        };
+      }
+    } catch {
+      // non-JSON from a started rv is a failure, not allow
+    }
+    return { action: "block", reason: "rv failed" };
+  }
+  if (value.exitCode === 0) {
+    return { action: "allow" };
+  }
+  return { action: "block", reason: "rv failed" };
+}

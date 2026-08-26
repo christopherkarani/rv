@@ -154,6 +154,33 @@ private func fixtureLoginHome() throws -> URL {
     }
 }
 
+@Test func setup_openClawOnly_writesPluginAndCompanions() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(atPath: layout.openClawDirectory, withIntermediateDirectories: true)
+        let outcome = SetupRun.setup(env(home: home, launchctl: launchctl))
+        #expect(outcome.exitCode == 0)
+        let body = try String(contentsOfFile: layout.openClawPlugin, encoding: .utf8)
+        #expect(body == (try HookHost.openclaw.adapterResource().rendered(rvPath: "/tmp/rv-bin/rv")))
+        #expect(body.contains("before_tool_call"))
+        #expect(body.contains("requireApproval") == false)
+        let directory = (layout.openClawPlugin as NSString).deletingLastPathComponent
+        let pluginJSON = try String(
+            contentsOfFile: directory + "/openclaw.plugin.json",
+            encoding: .utf8
+        )
+        let packageJSON = try String(contentsOfFile: directory + "/package.json", encoding: .utf8)
+        #expect(pluginJSON.contains("\"onStartup\": true"))
+        #expect(packageJSON.contains("\"./index.js\""))
+        #expect(FileManager.default.fileExists(atPath: layout.grokHook) == false)
+
+        let uninstall = SetupRun.uninstall(env(home: home, launchctl: launchctl))
+        #expect(uninstall.exitCode == 0)
+        #expect(FileManager.default.fileExists(atPath: layout.openClawPlugin) == false)
+        #expect(FileManager.default.fileExists(atPath: directory + "/openclaw.plugin.json") == false)
+        #expect(FileManager.default.fileExists(atPath: directory + "/package.json") == false)
+    }
+}
+
 @Test func setup_occupiedOwnedName_skipsAndLeavesBytes() throws {
     try withTempHome { home, layout, launchctl in
         try FileManager.default.createDirectory(atPath: layout.grokDirectory + "/hooks", withIntermediateDirectories: true)

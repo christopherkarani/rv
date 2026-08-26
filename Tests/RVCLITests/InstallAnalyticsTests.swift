@@ -24,6 +24,7 @@ final class RecordingInstallAnalytics: InstallAnalyticsCapturing, @unchecked Sen
         "pi": "occupied",
         "opencode": "pending",
         "claude": "pending",
+        "openclaw": "pending",
     ])
 }
 
@@ -45,6 +46,7 @@ final class RecordingInstallAnalytics: InstallAnalyticsCapturing, @unchecked Sen
             "pi": "pending",
             "opencode": "pending",
             "claude": "pending",
+            "openclaw": "pending",
         ]])
         let paths = AnalyticsPaths(
             configDirectory: URL(fileURLWithPath: layout.configDirectory, isDirectory: true)

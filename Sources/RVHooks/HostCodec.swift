@@ -1,12 +1,12 @@
 import RVDomain
 
 extension HookHost {
-    /// Deny process exit: Grok `0` (JSON is the gate), Pi/OpenCode `1`.
+    /// Deny process exit: Grok `0` (JSON is the gate), Pi/OpenCode/OpenClaw `1`.
     var denyExitCode: Int32 {
         switch self {
         case .grok, .claude:
             return 0
-        case .pi, .opencode:
+        case .pi, .opencode, .openclaw:
             return 1
         }
     }
@@ -16,11 +16,18 @@ public struct HookRequest: Equatable, Sendable {
     public var host: HookHost
     public var command: ShellCommand
     public var cwd: WorkingDirectory?
+    public var session: String?
 
-    public init(host: HookHost, command: ShellCommand, cwd: WorkingDirectory? = nil) {
+    public init(
+        host: HookHost,
+        command: ShellCommand,
+        cwd: WorkingDirectory? = nil,
+        session: String? = nil
+    ) {
         self.host = host
         self.command = command
         self.cwd = cwd
+        self.session = session
     }
 }
 

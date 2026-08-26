@@ -68,6 +68,9 @@ func sqlite3_step(_ pStmt: OpaquePointer?) -> Int32
 @_silgen_name("sqlite3_column_text")
 func sqlite3_column_text(_ pStmt: OpaquePointer?, _ iCol: Int32) -> UnsafePointer<UInt8>?
 
+@_silgen_name("sqlite3_column_int64")
+func sqlite3_column_int64(_ pStmt: OpaquePointer?, _ iCol: Int32) -> sqlite3_int64
+
 @_silgen_name("sqlite3_bind_text")
 func sqlite3_bind_text(
     _ pStmt: OpaquePointer?,

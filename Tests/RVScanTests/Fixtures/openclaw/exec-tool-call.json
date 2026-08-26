@@ -1,0 +1,1 @@
+{"type":"toolCall","name":"exec","arguments":{"command":"git reset --hard","workdir":"/tmp/ws"}}
