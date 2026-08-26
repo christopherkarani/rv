@@ -30,4 +30,19 @@ public enum FrameCodec: Sendable {
         if declared == 0 { throw FrameCodecError.empty }
         return frame.subdata(in: 4..<expected)
     }
+
+    public static func decode(header: Data, body: Data) throws -> Data {
+        guard header.count >= 4 else { throw FrameCodecError.truncated }
+        let declared = header.withUnsafeBytes { raw -> UInt32 in
+            raw.loadUnaligned(as: UInt32.self).bigEndian
+        }
+        guard declared <= UInt32(maxBodyBytes) else { throw FrameCodecError.oversized }
+        guard header.count == 4 else { throw FrameCodecError.lengthMismatch }
+
+        let expected = Int(declared)
+        guard body.count >= expected else { throw FrameCodecError.truncated }
+        guard body.count == expected else { throw FrameCodecError.lengthMismatch }
+        if declared == 0 { throw FrameCodecError.empty }
+        return body
+    }
 }

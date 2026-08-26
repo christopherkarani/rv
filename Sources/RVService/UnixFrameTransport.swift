@@ -33,9 +33,7 @@ enum UnixFrameIO {
             raw.loadUnaligned(as: UInt32.self).bigEndian
         }
         let body = try recvExact(fd: fd, count: Int(length))
-        var frame = header
-        frame.append(body)
-        return try ServiceFrames.decode(frame)
+        return try FrameCodec.decode(header: header, body: body)
     }
 
     static func recvExact(fd: Int32, count: Int) throws -> Data {
