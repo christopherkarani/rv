@@ -22,6 +22,9 @@ struct Hook: AsyncParsableCommand {
             stdin: stdin,
             evaluate: { (command: ShellCommand, cwd: WorkingDirectory?) in
                 await client.evaluateResult(command: command, cwd: cwd)
+            },
+            spendHostAsk: { (command: ShellCommand, cwd: WorkingDirectory?) in
+                await client.spendHostAsk(command: command, cwd: cwd)
             }
         )
         FileHandle.standardOutput.write(Data(outcome.stdout.utf8))
@@ -33,9 +36,15 @@ struct Hook: AsyncParsableCommand {
 
     func run(
         stdin: String,
-        evaluate: @Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult
+        evaluate: @Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult,
+        spendHostAsk: (@Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult)? = nil
     ) async -> (stdout: String, stderr: String, exitCode: Int32) {
-        let wire = await hookWire(host: host, stdin: stdin, evaluate: evaluate)
+        let wire = await hookWire(
+            host: host,
+            stdin: stdin,
+            evaluate: evaluate,
+            spendHostAsk: spendHostAsk
+        )
         return (wire.stdout, "", wire.exitCode)
     }
 }

@@ -30,12 +30,51 @@ export default function (pi) {
     }
     const cwd = pickCwd(event && (event.cwd || event.cwdPath));
     const mapped = await consultRv(command, cwd);
+    if (mapped.action === "ask") {
+      const allowed = await confirmAsk(ctx, mapped);
+      if (!allowed) {
+        showDecision(pi, ctx, cardFromBlock(mapped, command));
+        return { block: true, reason: mapped.reason };
+      }
+      const spent = await consultRvSpend(command, cwd);
+      if (spent.action !== "allow") {
+        const blocked = spent.action === "block" || spent.action === "ask" ? spent : mapped;
+        showDecision(pi, ctx, cardFromBlock(blocked, command));
+        return {
+          block: true,
+          reason: typeof spent.reason === "string" && spent.reason.length > 0
+            ? spent.reason
+            : mapped.reason,
+        };
+      }
+      clearWidget(ctx);
+      return;
+    }
     if (mapped.action === "block") {
       showDecision(pi, ctx, cardFromBlock(mapped, command));
       return { block: true, reason: mapped.reason };
     }
     clearWidget(ctx);
   });
+}
+
+async function confirmAsk(ctx, mapped) {
+  try {
+    if (ctx?.ui?.hasUI === false) {
+      return false;
+    }
+    if (typeof ctx?.ui?.confirm !== "function") {
+      return false;
+    }
+    const ok = await ctx.ui.confirm({
+      message: typeof mapped.reason === "string" && mapped.reason.length > 0
+        ? mapped.reason
+        : "Allow this command once?",
+    });
+    return ok === true;
+  } catch {
+    return false;
+  }
 }
 
 function showDecision(pi, ctx, card) {
@@ -283,6 +322,12 @@ function consultRv(command, cwd) {
   return spawnRvHook("pi", JSON.stringify(payload));
 }
 
+function consultRvSpend(command, cwd) {
+  const payload = { toolName: "bash", input: { command }, hostAsk: "spend" };
+  if (cwd) payload.cwd = cwd;
+  return spawnRvHook("pi", JSON.stringify(payload));
+}
+
 function spawnRvHook(host, stdin) {
   return new Promise((resolve) => {
     let settled = false;
@@ -345,9 +390,18 @@ function mapRvHookResult(value) {
   if (trimmed.length > 0) {
     try {
       const parsed = JSON.parse(trimmed);
-      if (parsed && parsed.decision === "deny") {
+      if (parsed && parsed.decision === "ask") {
         return {
-          action: "block",
+          action: "ask",
+          reason: typeof parsed.reason === "string" ? parsed.reason : "",
+          rule: typeof parsed.rule === "string" ? parsed.rule : undefined,
+          next: typeof parsed.next === "string" ? parsed.next : undefined,
+        };
+      }
+      if (parsed && parsed.decision === "deny") {
+        const unlockable = typeof parsed.rule === "string" && parsed.rule.length > 0;
+        return {
+          action: unlockable ? "ask" : "block",
           reason: typeof parsed.reason === "string" ? parsed.reason : "",
           rule: typeof parsed.rule === "string" ? parsed.rule : undefined,
           next: typeof parsed.next === "string" ? parsed.next : undefined,

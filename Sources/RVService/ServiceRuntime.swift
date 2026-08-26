@@ -188,14 +188,18 @@ public actor ServiceRuntime {
         do {
             let reply = try await HookDoor.run(
                 host: params.host,
-                stdin: params.stdin
-            ) { command, cwd in
-                // Same pack resolution as the rv-cli miss path
-                // (`EnabledPacks.resolve`): a warm rvd must never decide on a
-                // narrower or wider set than a cold one.
-                let request = GatedEvaluate.makeRequest(command: command, home: self.configHome)
-                return await self.runEvaluate(request, cwd: cwd)
-            }
+                stdin: params.stdin,
+                evaluate: { command, cwd in
+                    // Same pack resolution as the rv-cli miss path
+                    // (`EnabledPacks.resolve`): a warm rvd must never decide on a
+                    // narrower or wider set than a cold one.
+                    let request = GatedEvaluate.makeRequest(command: command, home: self.configHome)
+                    return await self.runEvaluate(request, cwd: cwd)
+                },
+                spendHostAsk: { command, cwd in
+                    await self.runSpendHostAsk(command: command, cwd: cwd)
+                }
+            )
             return .hookEvaluate(reply)
         } catch let error as IPCError {
             return .error(error)
@@ -211,6 +215,25 @@ public actor ServiceRuntime {
         let result = await gated.apply(
             request,
             cwd: cwd,
+            store: allowOnce,
+            now: now,
+            allowlist: {
+                AllowlistStore(baseDirectory: baseDirectory)
+                    .loadUserSnapshot(workspacePath: cwd.map(\.rawValue), now: now)
+            }
+        )
+        recordAnalytics(for: result)
+        return result
+    }
+
+    private func runSpendHostAsk(command: ShellCommand, cwd: WorkingDirectory?) async -> EvaluationResult {
+        rebuildWhenUncovered(wanted: WalkedPackIDs(ids: EnabledPacks.resolve(home: configHome).ids))
+        let now = clock()
+        let baseDirectory = allowOnce.baseDirectory
+        let result = await gated.spendHostAsk(
+            command: command,
+            cwd: cwd,
+            home: configHome,
             store: allowOnce,
             now: now,
             allowlist: {

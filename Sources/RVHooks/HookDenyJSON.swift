@@ -1,3 +1,14 @@
+func hookAskJSON(reason: String, rule: String? = nil, next: String? = nil) -> String {
+    var body = "\"decision\":\"ask\",\"reason\":\(jsonQuoted(reason)),\"continuation\":\"hostNative\""
+    if let rule, rule.isEmpty == false {
+        body += ",\"rule\":\(jsonQuoted(rule))"
+    }
+    if let next, next.isEmpty == false {
+        body += ",\"next\":\(jsonQuoted(next))"
+    }
+    return "{\(body)}\n"
+}
+
 func hookDenyJSON(reason: String, rule: String? = nil, next: String? = nil) -> String {
     var body = "\"decision\":\"deny\",\"reason\":\(jsonQuoted(reason))"
     if let rule, rule.isEmpty == false {

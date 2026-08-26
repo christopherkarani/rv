@@ -39,7 +39,8 @@ private func harnessURL() -> URL {
     #expect(source.contains("Cmd"))
     #expect(source.contains("Meta"))
     #expect(source.contains("Next"))
-    #expect(source.contains("confirm") == false)
+    #expect(source.contains("ui?.confirm"))
+    #expect(source.contains("hostAsk: \"spend\""))
     #expect(source.contains("terminate: true") == false)
     #expect(source.contains("user_bash") == false)
     #expect(source.contains("permission.ask") == false)
@@ -140,6 +141,75 @@ private func harnessURL() -> URL {
     #expect(result.messageCount == 0)
     #expect(result.rendererType == "rv-decision")
     #expect(result.rendererProbe == .missing)
+}
+
+@Test func piAdapter_confirmYesSpendsThenAllows() async throws {
+    let result = try await runPiAdapter(
+        event: ["toolName": "bash", "input": ["command": "git reset --hard"], "cwd": "/tmp/ws"],
+        stub: .stdout(askResetHardJSON, exit: 1),
+        confirmYes: true,
+        secondStub: .stdout("", exit: 0)
+    )
+    #expect(result.block == nil)
+    #expect(result.spawnCount == 2)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
+    #expect(result.messageCount == 0)
+}
+
+@Test func piAdapter_confirmYesFailedSpendDoesNotRunTool() async throws {
+    let result = try await runPiAdapter(
+        event: ["toolName": "bash", "input": ["command": "git reset --hard"], "cwd": "/tmp/ws"],
+        stub: .stdout(askResetHardJSON, exit: 1),
+        confirmYes: true,
+        secondStub: .stdout(resetHardJSON, exit: 1)
+    )
+    #expect(result.block == true)
+    #expect(result.reason == resetHardReason)
+    #expect(result.spawnCount == 2)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
+}
+
+@Test func piAdapter_confirmYesMissingSpendDoesNotRunTool() async throws {
+    let result = try await runPiAdapter(
+        event: ["toolName": "bash", "input": ["command": "git reset --hard"], "cwd": "/tmp/ws"],
+        stub: .stdout(askResetHardJSON, exit: 1),
+        confirmYes: true
+    )
+    #expect(result.block == true)
+    #expect(result.spawnCount == 2)
+}
+
+@Test func piAdapter_hasUIFalseDoesNotSpend() async throws {
+    let result = try await runPiAdapter(
+        event: ["toolName": "bash", "input": ["command": "git reset --hard"], "cwd": "/tmp/ws"],
+        stub: .stdout(askResetHardJSON, exit: 1),
+        confirmYes: true,
+        hasUI: false,
+        secondStub: .stdout("", exit: 0)
+    )
+    #expect(result.block == true)
+    #expect(result.spawnCount == 1)
+}
+
+@Test func piAdapter_unlockableDenyConfirmYesSpendsThenAllows() async throws {
+    let result = try await runPiAdapter(
+        event: ["toolName": "bash", "input": ["command": "git reset --hard"], "cwd": "/tmp/ws"],
+        stub: .stdout(resetHardJSON, exit: 1),
+        confirmYes: true,
+        secondStub: .stdout("", exit: 0)
+    )
+    #expect(result.block == nil)
+    #expect(result.spawnCount == 2)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
+}
+
+@Test func openCodeAdapter_askJSONDoesNotAllow() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: ["tool": "bash", "args": ["command": "git reset --hard"]],
+        stub: .stdout(askResetHardJSON, exit: 1)
+    )
+    #expect(result.threw == resetHardReason)
+    #expect(result.toastCount == 1)
 }
 
 @Test func piAdapter_nonBashDoesNotSpawn() async throws {
@@ -365,6 +435,8 @@ func adapters_mapRvHookResultMatrix(host: String, kind: String) async throws {
 
 private let resetHardJSON =
     "{\"decision\":\"deny\",\"reason\":\"Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once.\",\"rule\":\"core.git/reset-hard\",\"next\":\"Run it in Terminal, or rv allow-once.\"}\n"
+private let askResetHardJSON =
+    "{\"decision\":\"ask\",\"reason\":\"Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once.\",\"continuation\":\"hostNative\",\"rule\":\"core.git/reset-hard\",\"next\":\"Run it in Terminal, or rv allow-once.\"}\n"
 private let wrapperResetHardCommand = "echo \"$(git reset --hard)\""
 private let wrapperResetHardReason =
     "Blocked echo \"$(git reset --hard)\" (core.git/reset-hard). Run it in Terminal, or rv allow-once."
@@ -389,6 +461,8 @@ private struct PiAdapterRun {
     var block: Bool?
     var reason: String?
     var spawned: Bool
+    var spawnCount: Int
+    var lastStdin: String?
     var rendererType: String?
     var messageCount: Int
     var triggerTurn: Bool?
@@ -413,14 +487,20 @@ private func runPiAdapter(
     event: [String: Any],
     stub: StubRV,
     timeoutMs: Int? = nil,
-    sendMessageThrows: Bool = false
+    sendMessageThrows: Bool = false,
+    confirmYes: Bool = false,
+    hasUI: Bool = true,
+    secondStub: StubRV? = nil
 ) async throws -> PiAdapterRun {
     let payload = try await runAdapter(
         host: .pi,
         event: event,
         stub: stub,
         timeoutMs: timeoutMs,
-        sendMessageThrows: sendMessageThrows
+        sendMessageThrows: sendMessageThrows,
+        confirmYes: confirmYes,
+        hasUI: hasUI,
+        secondStub: secondStub
     )
     let object = try harnessObject(payload.text)
     let result = object["result"] as? [String: Any]
@@ -433,6 +513,8 @@ private func runPiAdapter(
         block: result?["block"] as? Bool,
         reason: result?["reason"] as? String,
         spawned: payload.spawned,
+        spawnCount: payload.spawnCount,
+        lastStdin: payload.lastStdin,
         rendererType: object["rendererType"] as? String,
         messageCount: messages.count,
         triggerTurn: options?["triggerTurn"] as? Bool,
@@ -502,6 +584,8 @@ private func firstToast(_ object: [String: Any]) -> [String: Any]? {
 private struct AdapterPayload {
     var text: String
     var spawned: Bool
+    var spawnCount: Int
+    var lastStdin: String?
 }
 
 private func runAdapter(
@@ -513,7 +597,10 @@ private func runAdapter(
     toastThrows: Bool = false,
     toastHangs: Bool = false,
     toastTimeoutMs: Int? = nil,
-    legacyClient: Bool = false
+    legacyClient: Bool = false,
+    confirmYes: Bool = false,
+    hasUI: Bool = true,
+    secondStub: StubRV? = nil
 ) async throws -> AdapterPayload {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-t5-\(UUID().uuidString)", isDirectory: true)
@@ -531,13 +618,24 @@ private func runAdapter(
         rvPath = root.appendingPathComponent("rv-stub").path
         let script = """
         #!/bin/sh
+        n=0
         if [ -n "$RV_STUB_DIR" ]; then
           mkdir -p "$RV_STUB_DIR"
+          if [ -f "$RV_STUB_DIR/n" ]; then
+            n=$(cat "$RV_STUB_DIR/n")
+          fi
+          n=$((n+1))
+          echo "$n" > "$RV_STUB_DIR/n"
           echo spawned > "$RV_STUB_DIR/spawned"
-          cat > "$RV_STUB_DIR/stdin"
+          cat > "$RV_STUB_DIR/stdin.$n"
+          cp "$RV_STUB_DIR/stdin.$n" "$RV_STUB_DIR/stdin"
         fi
         if [ -n "$RV_STUB_SLEEP" ]; then
           sleep "$RV_STUB_SLEEP"
+        fi
+        if [ "$n" -ge 2 ] && [ -n "${RV_STUB_STDOUT_2+x}" ]; then
+          printf '%s' "$RV_STUB_STDOUT_2"
+          exit "${RV_STUB_EXIT_2:-0}"
         fi
         if [ -n "$RV_STUB_STDOUT" ]; then
           printf '%s' "$RV_STUB_STDOUT"
@@ -585,6 +683,21 @@ private func runAdapter(
     if legacyClient {
         environment["RV_TOAST_LEGACY_CLIENT"] = "1"
     }
+    if confirmYes {
+        environment["RV_CONFIRM_YES"] = "1"
+    }
+    if hasUI == false {
+        environment["RV_HAS_UI"] = "0"
+    }
+    if let secondStub {
+        switch secondStub {
+        case .stdout(let stdout, let exitCode):
+            environment["RV_STUB_STDOUT_2"] = stdout
+            environment["RV_STUB_EXIT_2"] = String(exitCode)
+        case .missing, .sleep:
+            break
+        }
+    }
     switch stub {
     case .missing:
         break
@@ -622,7 +735,20 @@ private func runAdapter(
     let spawned = FileManager.default.fileExists(
         atPath: stubDir.appendingPathComponent("spawned").path
     )
-    return AdapterPayload(text: text, spawned: spawned)
+    let spawnCount = Int(
+        (try? String(contentsOf: stubDir.appendingPathComponent("n"), encoding: .utf8))
+            ?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "0"
+    ) ?? 0
+    let lastStdin = try? String(
+        contentsOf: stubDir.appendingPathComponent("stdin"),
+        encoding: .utf8
+    )
+    return AdapterPayload(
+        text: text,
+        spawned: spawned,
+        spawnCount: spawnCount,
+        lastStdin: lastStdin
+    )
 }
 
 private func harnessObject(_ text: String) throws -> [String: Any] {

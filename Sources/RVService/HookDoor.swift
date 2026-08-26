@@ -7,9 +7,10 @@ public struct HookDoor: Sendable {
     public static func run(
         host: HookHost,
         stdin: String,
-        evaluate: @Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult
+        evaluate: @Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult,
+        spendHostAsk: (@Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult)? = nil
     ) async throws -> HookEvaluateReply {
-        reply(await hookWire(host: host, stdin: stdin, evaluate: evaluate))
+        reply(await hookWire(host: host, stdin: stdin, evaluate: evaluate, spendHostAsk: spendHostAsk))
     }
 
     private static func reply(_ wire: HookWire) -> HookEvaluateReply {

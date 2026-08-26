@@ -148,6 +148,48 @@ struct GatedEvaluateTests {
             return
         }
     }
+
+    @Test func spendHostAskPlantsThenReplayDenies() async throws {
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let gated = GatedEvaluate()
+        let first = await gated.spendHostAsk(
+            resetHardRequest(),
+            cwd: wd("/tmp/ws"),
+            store: store,
+            now: now,
+            allowlist: { .empty }
+        )
+        #expect(first.decision == .allow)
+        let second = await gated.apply(
+            resetHardRequest(),
+            cwd: wd("/tmp/ws"),
+            store: store,
+            now: now,
+            allowlist: { .empty }
+        )
+        guard case .deny = second.decision else {
+            Issue.record("replay after host spend must deny")
+            return
+        }
+    }
+
+    @Test func spendHostAskMissingCwdDoesNotAllow() async throws {
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let gated = GatedEvaluate()
+        let spent = await gated.spendHostAsk(
+            resetHardRequest(),
+            cwd: nil,
+            store: store,
+            now: now,
+            allowlist: { .empty }
+        )
+        guard case .deny = spent.decision else {
+            Issue.record("missing cwd spend must deny")
+            return
+        }
+    }
 }
 
 private func resetHardRequest() -> EvaluationRequest {

@@ -111,6 +111,34 @@ enum AllowOnceLedger {
         return .notFound
     }
 
+    /// Plant a granted row and consume it in one pass. Same-turn host Allow once.
+    static func plantAndConsume(
+        records: [AllowOnceRecord],
+        fingerprint: String,
+        redacted: String,
+        cwd: WorkingDirectory,
+        now: Date,
+        ttl: TimeInterval,
+        codeHash: String
+    ) -> ConsumeOutcome {
+        var updated = records
+        updated.append(
+            AllowOnceRecord(
+                schemaVersion: 1,
+                kind: .granted,
+                codeHash: codeHash,
+                commandFingerprint: fingerprint,
+                commandRedacted: redacted,
+                cwd: cwd,
+                ruleID: nil,
+                createdAt: now,
+                expiresAt: now.addingTimeInterval(ttl),
+                consumedAt: nil
+            )
+        )
+        return consume(records: updated, fingerprint: fingerprint, cwd: cwd, now: now)
+    }
+
     static func rows(records: [AllowOnceRecord], now: Date) -> [AllowOnceListRow] {
         records.compactMap { record in
             guard record.expiresAt >= now || record.kind == .consumed else { return nil }

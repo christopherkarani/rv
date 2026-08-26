@@ -111,7 +111,7 @@ function mapRvHookResult(value) {
   if (trimmed.length > 0) {
     try {
       const parsed = JSON.parse(trimmed);
-      if (parsed && parsed.decision === "deny") {
+      if (parsed && (parsed.decision === "deny" || parsed.decision === "ask")) {
         return {
           action: "block",
           reason: typeof parsed.reason === "string" ? parsed.reason : "",

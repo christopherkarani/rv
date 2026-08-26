@@ -196,6 +196,23 @@ public struct ServiceClient: Sendable {
         await evaluate(command: command, cwd: cwd).result
     }
 
+    /// Plant+spend a host Allow once on the same grant file evaluate uses.
+    public func spendHostAsk(command: ShellCommand, cwd: WorkingDirectory? = nil) async -> EvaluationResult {
+        let now = clock()
+        let baseDirectory = store.baseDirectory
+        return await door.spendHostAsk(
+            command: command,
+            cwd: cwd,
+            home: home,
+            store: store,
+            now: now,
+            allowlist: {
+                AllowlistStore(baseDirectory: baseDirectory)
+                    .loadUserSnapshot(workspacePath: cwd.map(\.rawValue), now: now)
+            }
+        )
+    }
+
     public func status() async -> ServiceStatusReport {
         ServiceHealth.inspect(await diagnostics()).statusReport
     }

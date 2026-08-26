@@ -88,6 +88,50 @@ public enum PolicyGate {
         }
     }
 
+    /// Host Allow once: plant and spend this turn. Fail-closed. Indeterminate never spends.
+    public static func spendHostAllowOnce(
+        _ result: EvaluationResult,
+        cwd: WorkingDirectory?,
+        allowlist: AllowlistSnapshot = .empty,
+        store: AllowOnceStore,
+        now: Date
+    ) async -> PolicyDecision {
+        switch result.decision {
+        case .allow:
+            return PolicyDecision(result: result, override: .none)
+        case .indeterminate:
+            return PolicyDecision(result: result, override: .none)
+        case .deny:
+            let withoutGrant = decide(
+                result,
+                cwd: cwd,
+                allowlist: allowlist,
+                grant: .none,
+                now: now
+            )
+            if withoutGrant.override == .allowlist {
+                return withoutGrant
+            }
+            switch await HostGrantWriter.plantAndSpend(
+                matchingView: result.matchingView,
+                cwd: cwd,
+                store: store,
+                now: now
+            ) {
+            case .spent:
+                return decide(
+                    result,
+                    cwd: cwd,
+                    allowlist: allowlist,
+                    grant: .pending,
+                    now: now
+                )
+            case .rejected:
+                return withoutGrant
+            }
+        }
+    }
+
     /// Shows a matching grant / allowlist without spending it. TTY `test` / `explain`.
     public static func peek(
         _ result: EvaluationResult,
