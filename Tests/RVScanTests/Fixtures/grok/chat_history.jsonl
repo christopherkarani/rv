@@ -1,0 +1,5 @@
+{"type":"system","content":"fixture system"}
+{"type":"user","content":"do work"}
+{"type":"assistant","content":"","tool_calls":[{"id":"call-1","name":"run_terminal_command","arguments":"{\"command\":\"git reset --hard\",\"description\":\"reset\"}"},{"id":"call-2","name":"grep","arguments":"{\"pattern\":\"x\"}"}]}
+{"type":"tool_result","tool_call_id":"call-1","content":"ok"}
+{"type":"assistant","content":"","tool_calls":[{"id":"call-3","name":"Bash","arguments":"{\"command\":\"git status\"}"}]}

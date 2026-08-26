@@ -11,11 +11,17 @@ let policyTargetDependencies: [Target.Dependency] = [
     "RVDomain",
     .product(name: "Crypto", package: "swift-crypto"),
 ]
+// Official Linux tarball has no SQLite3 clang module. OpenCode talks system
+// libsqlite3 (no SPM package). Darwin keeps `import SQLite3`.
+let scanLinkerSettings: [LinkerSetting] = [
+    .linkedLibrary("sqlite3"),
+]
 #else
 let extraPackageDependencies: [Package.Dependency] = []
 let policyTargetDependencies: [Target.Dependency] = [
     "RVDomain",
 ]
+let scanLinkerSettings: [LinkerSetting] = []
 #endif
 
 let coreLibraryTargets: [Target] = [
@@ -29,7 +35,8 @@ let coreLibraryTargets: [Target] = [
     ),
     .target(
         name: "RVScan",
-        dependencies: ["RVDomain", "RVEngine", "RVPacks"]
+        dependencies: ["RVDomain", "RVEngine", "RVPacks"],
+        linkerSettings: scanLinkerSettings
     ),
     .target(
         name: "RVPolicy",
@@ -70,7 +77,12 @@ let coreTestTargets: [Target] = [
         exclude: ["Fixtures"]
     ),
     .testTarget(name: "RVPacksTests", dependencies: ["RVPacks"]),
-    .testTarget(name: "RVScanTests", dependencies: ["RVScan"]),
+    .testTarget(
+        name: "RVScanTests",
+        dependencies: ["RVScan"],
+        exclude: ["Fixtures"],
+        linkerSettings: scanLinkerSettings
+    ),
     .testTarget(name: "RVPolicyTests", dependencies: ["RVPolicy"]),
     .testTarget(
         name: "RVHooksTests",

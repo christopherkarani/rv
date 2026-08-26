@@ -29,5 +29,7 @@ public protocol SessionStoreAdapter: Sendable {
     var host: ScanHostID { get }
     func roots(home: ScanHome) -> [URL]
     func recognizes(fileURL: URL) -> Bool
+    /// Map recognized store bytes to surface events. `fileURL` is provenance;
+    /// `data` is the store.
     func extract(fileURL: URL, data: Data) throws -> [ExtractedEvent]
 }

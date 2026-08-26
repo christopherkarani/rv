@@ -51,6 +51,7 @@ jobs:
             libncurses-dev \
             libpython3-dev \
             libsqlite3-0 \
+            libsqlite3-dev \
             libstdc++-13-dev \
             libxml2-dev \
             libz3-dev \
