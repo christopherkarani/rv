@@ -735,10 +735,13 @@ private func runAdapter(
     let spawned = FileManager.default.fileExists(
         atPath: stubDir.appendingPathComponent("spawned").path
     )
-    let spawnCount = Int(
-        (try? String(contentsOf: stubDir.appendingPathComponent("n"), encoding: .utf8))
-            ?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "0"
-    ) ?? 0
+    let spawnCountText = (
+        try? String(
+            contentsOf: stubDir.appendingPathComponent("n"),
+            encoding: .utf8
+        )
+    )?.trimmingCharacters(in: .whitespacesAndNewlines)
+    let spawnCount = Int(spawnCountText ?? "0") ?? 0
     let lastStdin = try? String(
         contentsOf: stubDir.appendingPathComponent("stdin"),
         encoding: .utf8
