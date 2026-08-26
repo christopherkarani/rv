@@ -6,6 +6,7 @@ import Glibc
 import ArgumentParser
 import Foundation
 import RVDomain
+import RVPolicy
 import RVPresentation
 import RVScan
 import RVTheme
@@ -35,6 +36,9 @@ struct ScanSessionsFlags: ParsableArguments {
 
     @Flag(name: .customLong("all-events"), help: "Emit one row per deny event (skip dedupe).")
     var allEvents = false
+
+    @Flag(name: .customLong("fail-on-findings"), help: "Exit 2 when deny findings exist.")
+    var failOnFindings = false
 
     @Option(name: .customLong("include-glob"), help: "Extra glob patterns under an explicit path.")
     var includeGlobs: [String] = []
@@ -104,9 +108,9 @@ struct ScanSessions: AsyncParsableCommand {
             json: format.json,
             robot: format.robot
         ))
-        let report: ScanReport
+        let result: ScanRunResult
         do {
-            report = try ScanRun.run(
+            result = try ScanRun.execute(
                 ScanRun.Request(
                     rootPath: path,
                     home: scanHome,
@@ -129,9 +133,20 @@ struct ScanSessions: AsyncParsableCommand {
         } catch {
             throw error
         }
+        let pathEntries = (ProcessInfo.processInfo.environment["PATH"] ?? "")
+            .split(separator: ":")
+            .map(String.init)
+        let setupNudge = scanSetupNudgeRecommended(
+            hosts: result.eventHosts,
+            home: scanHome,
+            pathEntries: pathEntries,
+            fileManager: .default
+        )
         let outcome = ScanRun.render(
-            report: report,
+            report: result.report,
             showCommand: flags.showCommand,
+            failOnFindings: flags.failOnFindings,
+            setupNudgeRecommended: setupNudge,
             appearance: appearance,
             probe: probe
         )
@@ -145,6 +160,11 @@ struct ScanSessions: AsyncParsableCommand {
 struct ScanOutcome: Equatable, Sendable {
     var stdout: String
     var exitCode: Int32
+}
+
+struct ScanRunResult: Equatable, Sendable {
+    var report: ScanReport
+    var eventHosts: Set<ScanHostID>
 }
 
 enum ScanRun {
@@ -201,6 +221,10 @@ enum ScanRun {
     ]
 
     static func run(_ request: Request) throws -> ScanReport {
+        try execute(request).report
+    }
+
+    static func execute(_ request: Request) throws -> ScanRunResult {
         if request.includeGlobs.isEmpty == false, request.rootPath == nil {
             throw Error.includeGlobRequiresPath
         }
@@ -279,29 +303,42 @@ enum ScanRun {
         let inWindow = request.timeWindow.filter(rawFindings, now: request.now, resolver: resolver)
         let findings = ScanDedupe.apply(inWindow, allEvents: request.allEvents, resolver: resolver)
 
-        return ScanReport(
-            findings: findings,
-            warnings: warnings,
-            filesScanned: filesScanned,
-            eventsExtracted: events.count
+        return ScanRunResult(
+            report: ScanReport(
+                findings: findings,
+                warnings: warnings,
+                filesScanned: filesScanned,
+                eventsExtracted: events.count
+            ),
+            eventHosts: Set(events.map(\.host))
         )
     }
 
     static func render(
         report: ScanReport,
         showCommand: Bool,
+        failOnFindings: Bool = false,
+        setupNudgeRecommended: Bool = false,
         appearance: CLIAppearance,
         probe: ThemeProbe
     ) -> ScanOutcome {
-        let exitCode: Int32 = 0
+        let exitCode: Int32 = (failOnFindings && report.findings.isEmpty == false) ? 2 : 0
         switch appearance {
         case .robot:
             return ScanOutcome(
-                stdout: renderScanSessionsRobot(from: report, showCommand: showCommand) + "\n",
+                stdout: renderScanSessionsRobot(
+                    from: report,
+                    showCommand: showCommand,
+                    setupNudge: setupNudgeRecommended
+                ) + "\n",
                 exitCode: exitCode
             )
         case .pretty(let palette):
-            let model = scanCommandViewModel(from: report, showCommand: showCommand)
+            let model = scanCommandViewModel(
+                from: report,
+                showCommand: showCommand,
+                setupNudgeRecommended: setupNudgeRecommended
+            )
             let lines: [String]
             if probe.isBrowseEligible {
                 lines = scanBrowseRender(scanBrowseState(model: model), palette: palette)
@@ -326,13 +363,47 @@ enum ScanRun {
     }
 }
 
-private func scanCommandViewModel(from report: ScanReport, showCommand: Bool) -> ScanViewModel {
+func scanSetupNudgeRecommended(
+    hosts: Set<ScanHostID>,
+    home: ScanHome,
+    pathEntries: [String],
+    fileManager: FileManager
+) -> Bool {
+    let setupHosts = Set(hosts.map(\.hookHost))
+    guard setupHosts.isEmpty == false else { return false }
+    guard let homeDirectory = HomeDirectory(validating: home.path) else { return false }
+    guard let snapshot = try? HostAdapterInstallation.inspect(
+        paths: OwnedPaths(home: homeDirectory),
+        pathEntries: pathEntries,
+        fileManager: fileManager
+    ) else {
+        return false
+    }
+    return setupHosts.contains { snapshot.state(for: $0) != .wired }
+}
+
+private extension ScanHostID {
+    var hookHost: HookHost {
+        switch self {
+        case .claude: .claude
+        case .pi: .pi
+        case .grok: .grok
+        case .opencode: .opencode
+        }
+    }
+}
+
+private func scanCommandViewModel(
+    from report: ScanReport,
+    showCommand: Bool,
+    setupNudgeRecommended: Bool
+) -> ScanViewModel {
     ScanViewModel(
         rows: report.findings.map { scanFindingRow(from: $0, showCommand: showCommand) },
         warnings: report.warnings.map { ScanWarningRow(code: $0.code, message: $0.message) },
         filesScanned: report.filesScanned,
         eventsExtracted: report.eventsExtracted,
-        setupNudgeRecommended: false,
+        setupNudgeRecommended: setupNudgeRecommended,
         showCommand: showCommand
     )
 }

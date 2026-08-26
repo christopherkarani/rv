@@ -6,7 +6,7 @@ Locked product map from a grill session. If this file and [`PLAN.md`](../PLAN.md
 
 Parity source remains DCG **0.11.0** decisions / `rule_id`s. Repo remains `~/CodingProjects/rv`. Never implement inside sibling products. Do not invent `RV_BYPASS`.
 
-**No implement kickoff until** tickets in [`spec/spec-architecture-session-scan.md`](../../../spec/spec-architecture-session-scan.md) § 5b are cut into worktrees with exclusive writes. This fence alone does not authorize product code; the architecture spec is the implementable cut.
+**Implemented (T1–T10).** Ticket DAG and exclusive writes: [`spec/spec-architecture-session-scan.md`](../../../spec/spec-architecture-session-scan.md) § 5b. This fence remains product law; further session-forensics code needs a new § 5b cut.
 
 ## Goal
 
@@ -77,7 +77,7 @@ Law: extractors feed `EvaluationRequest`; they do not replace evaluate. Full lad
 ## Bounds and privacy
 
 - No recursive `$HOME` crawl. Known roots + path mode. `--include-glob` is path-mode only (usage error without a path; auto mode never applies extra globs under HOME).
-- Hard caps on depth, file count, and bytes (exact numbers = implement ticket; must exist).
+- Hard caps on depth, file count, and bytes (REQ-016 / T1; locked in architecture spec).
 - No command text in `os_log`.
 - No raw secrets in default output; redaction matches history-oriented rules when history exists.
 - Scan must not silently enable history, analytics phone-home from host stores, or network pack install.
@@ -102,16 +102,16 @@ Law: extractors feed `EvaluationRequest`; they do not replace evaluate. Full lad
 
 - Per-host production path strings (fixtures + adapter comments; no live HOME).
 - Whether browse shares the TTY pager used by other operator surfaces.
-- Exact `--packs` CLI parsing shape (enabled vs explicit ids) — constrained by architecture REQ-006; finalize in T8.
+- Exact `--packs` CLI parsing shape (enabled vs explicit ids) — REQ-006; shipped in T8.
 
-Hard caps, robot schema `rv.scan.sessions.v1`, and ticket exclusive-writes are locked in [`spec/spec-architecture-session-scan.md`](../../../spec/spec-architecture-session-scan.md).
+Hard caps, robot schema `rv.scan.sessions.v1`, and ticket exclusive-writes (T1–T10 **done**) are locked in [`spec/spec-architecture-session-scan.md`](../../../spec/spec-architecture-session-scan.md) § 5b.
 
-If an implement prompt cites this fence without following that architecture spec’s § 5b exclusive-writes, refuse and return to `docs/factory/PLAN.md` / `STATUS.md`.
+Further session-forensics work must add new tickets under § 5b with exclusive writes; do not bypass that law. Arbiter: `docs/factory/PLAN.md` / `STATUS.md`.
 
 ## Definition of done (for this fence only)
 
 - This file exists at `docs/factory/specs/phase-4-session-scan.md`.
 - [`phase-4-later.md`](phase-4-later.md) Scan row distinguishes **session forensics** (this file) from **repo/CI** scan.
 - Heredoc/AST shared ladder remains in `phase-4-later.md`; first ship of this feature stays surface extraction.
-- Implementable architecture + ticket DAG: [`spec/spec-architecture-session-scan.md`](../../../spec/spec-architecture-session-scan.md).
-- No product code was required to land this fence.
+- Implementable architecture + ticket DAG: [`spec/spec-architecture-session-scan.md`](../../../spec/spec-architecture-session-scan.md) § 5b (T1–T10 **implemented** — `rv scan` / `rv scan sessions`).
+- Fence-only landing did not require product code; T1–T10 implementation did.
