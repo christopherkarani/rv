@@ -57,7 +57,7 @@ func scanSessionsRobotPayload(
     showCommand: Bool
 ) -> ScanSessionsRobotPayload {
     ScanSessionsRobotPayload(
-        schema: "rv.scan.sessions",
+        schema: RobotSchema.scanSessions,
         findings: report.findings.map { scanFindingRobotRow(from: $0, showCommand: showCommand) },
         warnings: report.warnings.map { ScanWarningRobotRow(code: $0.code, message: $0.message) },
         filesScanned: report.filesScanned,

@@ -6,6 +6,7 @@ public enum RobotSchema {
     public static let explain = "rv.explain.v1"
     public static let doctor = "rv.doctor.v1"
     public static let packs = "rv.packs.v1"
+    public static let scanSessions = "rv.scan.sessions.v1"
 }
 
 /// `rv.test.v1` object. Keys stay stable.

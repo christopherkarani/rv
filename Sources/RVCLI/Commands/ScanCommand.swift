@@ -77,6 +77,12 @@ struct ScanSessions: AsyncParsableCommand {
     @OptionGroup
     var format: FormatFlags
 
+    func validate() throws {
+        if flags.includeGlobs.isEmpty == false, path == nil {
+            throw ValidationError("--include-glob requires a path argument")
+        }
+    }
+
     func run() async throws {
         let homePath = ProcessInfo.processInfo.environment["HOME"] ?? ""
         guard let scanHome = ScanHome(validating: homePath) else {
@@ -149,11 +155,38 @@ enum ScanRun {
         var bounds: ScanBounds
         var now: Date
         var fileManager: FileManager
+
+        static func fixture(
+            rootPath: String? = nil,
+            home: ScanHome,
+            hostFilter: ScanHostID? = nil,
+            timeWindow: ScanTimeWindow = .all,
+            packIDs: [PackID] = dayOnePackIDs,
+            allEvents: Bool = false,
+            includeGlobs: [String] = [],
+            bounds: ScanBounds = .default,
+            now: Date = Date(),
+            fileManager: FileManager = .default
+        ) -> Request {
+            Request(
+                rootPath: rootPath,
+                home: home,
+                hostFilter: hostFilter,
+                timeWindow: timeWindow,
+                packIDs: packIDs,
+                allEvents: allEvents,
+                includeGlobs: includeGlobs,
+                bounds: bounds,
+                now: now,
+                fileManager: fileManager
+            )
+        }
     }
 
     enum Error: Swift.Error, Equatable {
         case pathNotFound(String)
         case packsUnavailable
+        case includeGlobRequiresPath
     }
 
     private static let adapters: [any SessionStoreAdapter] = [
@@ -164,6 +197,9 @@ enum ScanRun {
     ]
 
     static func run(_ request: Request) throws -> ScanReport {
+        if request.includeGlobs.isEmpty == false, request.rootPath == nil {
+            throw Error.includeGlobRequiresPath
+        }
         let selected = selectedAdapters(hostFilter: request.hostFilter)
         let walker = DirectoryWalker(bounds: request.bounds)
         var warnings: [ScanWarning] = []
@@ -288,24 +324,26 @@ enum ScanRun {
 
 private func scanCommandViewModel(from report: ScanReport, showCommand: Bool) -> ScanViewModel {
     ScanViewModel(
-        rows: report.findings.map { finding in
-            scanFindingRow(
-                host: finding.host,
-                sessionID: finding.sessionID,
-                sourcePath: finding.sourcePath,
-                occurredAt: finding.occurredAt,
-                ruleID: finding.ruleID,
-                packID: finding.packID,
-                matchingView: finding.matchingView,
-                count: finding.count,
-                lastSeen: finding.lastSeen,
-                showCommand: showCommand
-            )
-        },
+        rows: report.findings.map { scanFindingRow(from: $0, showCommand: showCommand) },
         warnings: report.warnings.map { ScanWarningRow(code: $0.code, message: $0.message) },
         filesScanned: report.filesScanned,
         eventsExtracted: report.eventsExtracted,
         setupNudgeRecommended: false,
+        showCommand: showCommand
+    )
+}
+
+private func scanFindingRow(from finding: ScanFinding, showCommand: Bool) -> ScanFindingRow {
+    scanFindingRow(
+        host: finding.host,
+        sessionID: finding.sessionID,
+        sourcePath: finding.sourcePath,
+        occurredAt: finding.occurredAt,
+        ruleID: finding.ruleID,
+        packID: finding.packID,
+        matchingView: finding.matchingView,
+        count: finding.count,
+        lastSeen: finding.lastSeen,
         showCommand: showCommand
     )
 }

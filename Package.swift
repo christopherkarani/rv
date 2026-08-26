@@ -155,7 +155,7 @@ let cliProducts: [Product] = [
     .executable(name: "rv", targets: ["rv"]),
 ]
 let cliTestTargets: [Target] = [
-    .testTarget(name: "RVCLITests", dependencies: ["RVCLI", "RVService", "RVScan"]),
+    .testTarget(name: "RVCLITests", dependencies: ["RVCLI", "RVService"]),
 ]
 
 let package = Package(

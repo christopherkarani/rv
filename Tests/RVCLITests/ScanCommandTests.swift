@@ -4,7 +4,6 @@ import RVDomain
 import RVPresentation
 import RVTheme
 @testable import RVCLI
-@testable import RVScan
 
 private func scanFixtureURL(_ relativePath: String) throws -> URL {
     let base = URL(fileURLWithPath: #filePath)
@@ -67,18 +66,7 @@ private func decodedJSON(_ text: String) throws -> [String: Any] {
     try withTempScanHome { home, homeURL in
         try installClaudeFixture(into: homeURL)
         let report = try ScanRun.run(
-            ScanRun.Request(
-                rootPath: nil,
-                home: home,
-                hostFilter: nil,
-                timeWindow: .all,
-                packIDs: dayOnePackIDs,
-                allEvents: false,
-                includeGlobs: [],
-                bounds: .default,
-                now: Date(),
-                fileManager: .default
-            )
+            .fixture(home: home)
         )
         #expect(report.findings.count == 1)
         #expect(report.findings.first?.ruleID.rawValue == "core.git:reset-hard")
@@ -96,18 +84,7 @@ private func decodedJSON(_ text: String) throws -> [String: Any] {
         try payload.write(to: outside, atomically: true, encoding: .utf8)
 
         let report = try ScanRun.run(
-            ScanRun.Request(
-                rootPath: nil,
-                home: home,
-                hostFilter: nil,
-                timeWindow: .all,
-                packIDs: dayOnePackIDs,
-                allEvents: false,
-                includeGlobs: [],
-                bounds: .default,
-                now: Date(),
-                fileManager: .default
-            )
+            .fixture(home: home)
         )
 
         #expect(report.findings.count == 1)
@@ -122,18 +99,7 @@ private func decodedJSON(_ text: String) throws -> [String: Any] {
         try installPiFixture(into: homeURL)
 
         let report = try ScanRun.run(
-            ScanRun.Request(
-                rootPath: nil,
-                home: home,
-                hostFilter: .pi,
-                timeWindow: .all,
-                packIDs: dayOnePackIDs,
-                allEvents: false,
-                includeGlobs: [],
-                bounds: .default,
-                now: Date(),
-                fileManager: .default
-            )
+            .fixture(home: home, hostFilter: .pi)
         )
 
         #expect(report.findings.allSatisfy { $0.host == .pi })
@@ -142,21 +108,27 @@ private func decodedJSON(_ text: String) throws -> [String: Any] {
     }
 }
 
+@Test func scanRun_includeGlobWithoutPath_failsClosedWithoutWalkingHome() throws {
+    try withTempScanHome { home, homeURL in
+        try installClaudeFixture(into: homeURL)
+        do {
+            _ = try ScanRun.run(
+                .fixture(home: home, includeGlobs: ["**/*.jsonl"])
+            )
+            Issue.record("expected includeGlobRequiresPath without walking HOME")
+        } catch ScanRun.Error.includeGlobRequiresPath {
+            // usage error; registered roots under HOME must not be walked
+        }
+    }
+}
+
 @Test func scanRun_missingPath_failsClosed() throws {
     let missing = "/tmp/rv-scan-missing-\(UUID().uuidString)"
     do {
         _ = try ScanRun.run(
-            ScanRun.Request(
+            .fixture(
                 rootPath: missing,
-                home: try #require(ScanHome(validating: "/tmp")),
-                hostFilter: nil,
-                timeWindow: .default,
-                packIDs: dayOnePackIDs,
-                allEvents: false,
-                includeGlobs: [],
-                bounds: .default,
-                now: Date(),
-                fileManager: .default
+                home: try #require(ScanHome(validating: "/tmp"))
             )
         )
         Issue.record("expected pathNotFound for missing path")
@@ -169,22 +141,12 @@ private func decodedJSON(_ text: String) throws -> [String: Any] {
     try withTempScanHome { home, homeURL in
         try installClaudeFixture(into: homeURL)
         let report = try ScanRun.run(
-            ScanRun.Request(
-                rootPath: nil,
-                home: home,
-                hostFilter: nil,
-                timeWindow: .all,
-                packIDs: dayOnePackIDs,
-                allEvents: false,
-                includeGlobs: [],
-                bounds: .default,
-                now: Date(),
-                fileManager: .default
-            )
+            .fixture(home: home)
         )
         let json = renderScanSessionsRobot(from: report, showCommand: false)
         let object = try decodedJSON(json)
-        #expect(object["schema"] as? String == "rv.scan.sessions")
+        #expect(object["schema"] as? String == "rv.scan.sessions.v1")
+        #expect(RobotSchema.scanSessions == "rv.scan.sessions.v1")
         let findings = try #require(object["findings"] as? [[String: Any]])
         let row = try #require(findings.first)
         #expect(row["command_redacted"] as? String == "git …")
@@ -198,18 +160,7 @@ private func decodedJSON(_ text: String) throws -> [String: Any] {
     try withTempScanHome { home, homeURL in
         try installClaudeFixture(into: homeURL)
         let report = try ScanRun.run(
-            ScanRun.Request(
-                rootPath: nil,
-                home: home,
-                hostFilter: nil,
-                timeWindow: .all,
-                packIDs: dayOnePackIDs,
-                allEvents: false,
-                includeGlobs: [],
-                bounds: .default,
-                now: Date(),
-                fileManager: .default
-            )
+            .fixture(home: home)
         )
         let json = renderScanSessionsRobot(from: report, showCommand: true)
         let object = try decodedJSON(json)
@@ -224,18 +175,7 @@ private func decodedJSON(_ text: String) throws -> [String: Any] {
     try withTempScanHome { home, homeURL in
         try installClaudeFixture(into: homeURL)
         let report = try ScanRun.run(
-            ScanRun.Request(
-                rootPath: nil,
-                home: home,
-                hostFilter: nil,
-                timeWindow: .all,
-                packIDs: dayOnePackIDs,
-                allEvents: false,
-                includeGlobs: [],
-                bounds: .default,
-                now: Date(),
-                fileManager: .default
-            )
+            .fixture(home: home)
         )
         let outcome = ScanRun.render(
             report: report,
@@ -271,18 +211,7 @@ private func decodedJSON(_ text: String) throws -> [String: Any] {
         )
 
         let report = try ScanRun.run(
-            ScanRun.Request(
-                rootPath: nil,
-                home: home,
-                hostFilter: nil,
-                timeWindow: .all,
-                packIDs: dayOnePackIDs,
-                allEvents: false,
-                includeGlobs: [],
-                bounds: .default,
-                now: Date(),
-                fileManager: .default
-            )
+            .fixture(home: home)
         )
 
         let pretty = ScanRun.render(
