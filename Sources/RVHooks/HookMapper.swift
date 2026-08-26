@@ -10,7 +10,7 @@ public func hookWire<C: HostCodec>(
     switch codec.host {
     case .claude:
         return ClaudeHostCodec().encodeRichDeny(from: result, command: command)
-    case .grok, .pi, .opencode, .openclaw:
+    case .grok, .pi, .opencode, .openclaw, .hermes:
         switch result.decision {
         case .allow:
             return codec.encodeAllow()

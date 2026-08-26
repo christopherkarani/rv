@@ -64,6 +64,31 @@ rv owns codecs. Do not copy ryk leftover-ask-as-permit. Do not copy DCG fail-ope
 - Session store: per-agent SQLite `$HOME/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`, table `transcript_events (session_id, event_json, created_at)`. `extract(fileURL:data:)` uses **`data`**, never reopens the path. sqlite open / prepare / unreadable bytes **throw**. Empty valid `transcript_events` may return `[]`. Skip non-exec / unparseable rows.
 - Occupied slot: skip + one line. No Ask UI. No AFM / ActionReviewer.
 
+## Hermes (OPE-265; host only, no Ask)
+
+- Discover: `~/.hermes/` exists or `hermes` on PATH. Linux and macOS only. No Windows path.
+- Setup writes an **exclusive plugin directory** `$HOME/.hermes/plugins/rv-guard/`:
+  - `__init__.py` — rv-owned adapter (`__RV_BINARY__` baked)
+  - `plugin.yaml` — `name: rv-guard`, `provides_hooks: [pre_tool_call]`
+  Occupancy is the exclusive `__init__.py` (same baked-path inspect as Pi / OpenCode / OpenClaw). Do not merge `config.yaml` and do not write gateway `~/.hermes/hooks/`. Hermes user plugins are opt-in: after setup, enable with `hermes plugins enable rv-guard`.
+- Real intercept: plugin hook `pre_tool_call` via `ctx.register_hook(...)`. Canonical shell tool is `terminal`. `args.command` is the shell text; `args.workdir` is per-command cwd. `execute_code` and other tools are **foreign**, not shell.
+- Adapter stdin to `rv hook --host hermes` (rv-owned envelope, not “Hermes sent this”):
+
+  ```json
+  {
+    "toolName": "terminal",
+    "args": { "command": "git status", "workdir": "/tmp/ws" },
+    "cwd": "/tmp/ws",
+    "sessionId": "sess_1",
+    "taskId": "task_1"
+  }
+  ```
+
+  Decode: unreadable JSON → deny. `toolName != "terminal"` → foreign allow. Terminal with missing/empty `args.command` → deny. cwd is `args.workdir` then envelope `cwd`. session is `sessionId` then `taskId`.
+- Deny: plugin returns `{"action": "block", "message"}` where `message` is `hostDenyText`. **No** `{"action": "approve"}` (Ask is out of scope). Missing `rv` → `{"action": "block", "message": "rv missing"}`. Timeout/crash / hook exception → `{"action": "block", "message": "rv failed"}` (Hermes isolates hook errors and would otherwise fail open). Operator stdout is short `{decision,reason}` JSON and exit **1**.
+- Session store: `$HOME/.hermes/state.db`, table `messages (session_id, tool_calls, timestamp)`. `tool_calls` is JSON (OpenAI-style `function.name` / `arguments.command`, or a top-level `name`). `extract(fileURL:data:)` uses **`data`**, never reopens the path. sqlite open / prepare / unreadable bytes **throw**. Empty valid `messages` may return `[]`. Skip non-terminal / unparseable rows.
+- Occupied slot: skip + one line. No Ask UI. No AFM / ActionReviewer.
+
 ## Shared deny text
 
 `hostDenyText`: one sentence + display `rule_id` (`pack/pattern`) + next step. Never include a redeemable code. Canonical: `Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once.`

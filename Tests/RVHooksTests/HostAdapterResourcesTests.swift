@@ -3,7 +3,7 @@ import RVDomain
 import Testing
 @testable import RVHooks
 
-@Test(arguments: [HookHost.grok, .pi, .opencode, .openclaw])
+@Test(arguments: [HookHost.grok, .pi, .opencode, .openclaw, .hermes])
 func hostAdapter_bakedRvPath_roundTripsAllResources(host: HookHost) throws {
     let adapter = try HostAdapterResources.load(for: host)
     let rvPath = "/Applications/rv/bin/rv"
@@ -12,7 +12,7 @@ func hostAdapter_bakedRvPath_roundTripsAllResources(host: HookHost) throws {
     #expect(adapter.bakedRvPath(in: rendered) == rvPath)
 }
 
-@Test(arguments: [HookHost.grok, .pi, .opencode, .openclaw])
+@Test(arguments: [HookHost.grok, .pi, .opencode, .openclaw, .hermes])
 func hostAdapter_bakedRvPath_rejectsModifiedAndForeignBytes(host: HookHost) throws {
     let adapter = try HostAdapterResources.load(for: host)
     let rendered = adapter.rendered(rvPath: "/opt/rv/bin/rv")
@@ -42,6 +42,11 @@ func hostAdapter_bakedRvPath_rejectsModifiedAndForeignBytes(host: HookHost) thro
     #expect(throws: HostAdapterResourceError.missingTemplate(.pi)) {
         _ = try HostAdapterResources.loadPluginManifest(for: .pi)
     }
+    let hermesPlugin = try HostAdapterResources.loadPluginManifest(for: .hermes)
+    #expect(hermesPlugin.contains("provides_hooks:"))
+    #expect(hermesPlugin.contains("pre_tool_call"))
+    #expect(hermesPlugin.contains("name: rv-guard"))
+    #expect(hermesPlugin.contains("\nhooks:") == false)
 }
 
 @Test func hostAdapter_piAndOpenCode_matchOnlyTheirOwnRender() throws {
@@ -66,16 +71,16 @@ func hostAdapter_bakedRvPath_rejectsModifiedAndForeignBytes(host: HookHost) thro
 
 @Test func hostAdapter_quotedPath_piAndOpenCodeBakeOriginalPath() throws {
     let path = #"/tmp/rv-"bin"/rv"#
-    for host in [HookHost.pi, .opencode, .openclaw] {
+    for host in [HookHost.pi, .opencode, .openclaw, .hermes] {
         let adapter = try HostAdapterResources.load(for: host)
         let body = adapter.rendered(rvPath: path)
         #expect(adapter.matchesCurrent(body))
         #expect(adapter.bakedRvPath(in: body) == path)
-        #expect(jsBinaryLiteral(in: body) == path)
+        #expect(binaryLiteral(in: body) == path)
     }
 }
 
-@Test(arguments: [HookHost.grok, .pi, .opencode, .openclaw])
+@Test(arguments: [HookHost.grok, .pi, .opencode, .openclaw, .hermes])
 func hostAdapter_controlAndBackslashPath_roundTrips(host: HookHost) throws {
     let path = "/tmp/rv-\t\"bin\"\\\r/rv"
     let adapter = try HostAdapterResources.load(for: host)
@@ -86,7 +91,7 @@ func hostAdapter_controlAndBackslashPath_roundTrips(host: HookHost) throws {
         let json = try JSONSerialization.jsonObject(with: Data(body.utf8))
         #expect(try grokHookCommand(json) == path + " hook --host grok")
     } else {
-        #expect(jsBinaryLiteral(in: body) == path)
+        #expect(binaryLiteral(in: body) == path)
     }
 }
 
@@ -100,8 +105,8 @@ private func grokHookCommand(_ json: Any) throws -> String {
     return command
 }
 
-private func jsBinaryLiteral(in body: String) -> String? {
-    let marker = "const RV_BINARY = "
+private func binaryLiteral(in body: String) -> String? {
+    let marker = "RV_BINARY = "
     guard let start = body.range(of: marker) else { return nil }
     let rest = body[start.upperBound...]
     guard rest.first == "\"" else { return nil }

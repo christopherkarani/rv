@@ -181,6 +181,29 @@ private func fixtureLoginHome() throws -> URL {
     }
 }
 
+@Test func setup_hermesOnly_writesPluginAndCompanion() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(atPath: layout.hermesDirectory, withIntermediateDirectories: true)
+        let outcome = SetupRun.setup(env(home: home, launchctl: launchctl))
+        #expect(outcome.exitCode == 0)
+        let body = try String(contentsOfFile: layout.hermesPlugin, encoding: .utf8)
+        #expect(body == (try HookHost.hermes.adapterResource().rendered(rvPath: "/tmp/rv-bin/rv")))
+        #expect(body.contains("pre_tool_call"))
+        #expect(body.contains("\"action\": \"approve\"") == false)
+        let directory = (layout.hermesPlugin as NSString).deletingLastPathComponent
+        let pluginYAML = try String(contentsOfFile: directory + "/plugin.yaml", encoding: .utf8)
+        #expect(pluginYAML.contains("provides_hooks:"))
+        #expect(pluginYAML.contains("pre_tool_call"))
+        #expect(pluginYAML.contains("name: rv-guard"))
+        #expect(FileManager.default.fileExists(atPath: layout.grokHook) == false)
+
+        let uninstall = SetupRun.uninstall(env(home: home, launchctl: launchctl))
+        #expect(uninstall.exitCode == 0)
+        #expect(FileManager.default.fileExists(atPath: layout.hermesPlugin) == false)
+        #expect(FileManager.default.fileExists(atPath: directory + "/plugin.yaml") == false)
+    }
+}
+
 @Test func setup_occupiedOwnedName_skipsAndLeavesBytes() throws {
     try withTempHome { home, layout, launchctl in
         try FileManager.default.createDirectory(atPath: layout.grokDirectory + "/hooks", withIntermediateDirectories: true)

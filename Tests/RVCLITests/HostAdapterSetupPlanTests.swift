@@ -40,7 +40,8 @@ import Testing
         pi: .absentFile(layout.hostAdapter(for: .pi)),
         openCode: .missing(layout.hostAdapter(for: .opencode)),
         claude: .missing(layout.hostAdapter(for: .claude)),
-        openClaw: .missing(layout.hostAdapter(for: .openclaw))
+        openClaw: .missing(layout.hostAdapter(for: .openclaw)),
+        hermes: .missing(layout.hostAdapter(for: .hermes))
     )
 
     let plan = SetupWorkPlanBuilder.make(
@@ -57,6 +58,7 @@ import Testing
         .skipUndetected(.opencode),
         .skipUndetected(.claude),
         .skipUndetected(.openclaw),
+        .skipUndetected(.hermes),
         .writeLaunchAgent,
     ])
     #expect(
@@ -73,7 +75,8 @@ import Testing
         pi: .missing(layout.hostAdapter(for: .pi)),
         openCode: .missing(layout.hostAdapter(for: .opencode)),
         claude: .missing(layout.hostAdapter(for: .claude)),
-        openClaw: .missing(layout.hostAdapter(for: .openclaw))
+        openClaw: .missing(layout.hostAdapter(for: .openclaw)),
+        hermes: .missing(layout.hostAdapter(for: .hermes))
     )
 
     let plan = SetupWorkPlanBuilder.make(
@@ -92,6 +95,7 @@ import Testing
         .skipUndetected(.opencode),
         .skipUndetected(.claude),
         .skipUndetected(.openclaw),
+        .skipUndetected(.hermes),
         .skipLaunchAgent,
     ])
     #expect(
@@ -107,7 +111,8 @@ import Testing
         pi: .missing(layout.hostAdapter(for: .pi)),
         openCode: .missing(layout.hostAdapter(for: .opencode)),
         claude: .missing(layout.hostAdapter(for: .claude)),
-        openClaw: .missing(layout.hostAdapter(for: .openclaw))
+        openClaw: .missing(layout.hostAdapter(for: .openclaw)),
+        hermes: .missing(layout.hostAdapter(for: .hermes))
     )
 
     let plan = SetupWorkPlanBuilder.make(
@@ -126,6 +131,7 @@ import Testing
         .skipUndetected(.opencode),
         .skipUndetected(.claude),
         .skipUndetected(.openclaw),
+        .skipUndetected(.hermes),
         .writeLaunchAgent,
     ])
 }

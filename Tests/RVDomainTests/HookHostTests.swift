@@ -8,14 +8,15 @@ import Testing
     #expect(HookHost.opencode.rawValue == "opencode")
     #expect(HookHost.claude.rawValue == "claude")
     #expect(HookHost.openclaw.rawValue == "openclaw")
+    #expect(HookHost.hermes.rawValue == "hermes")
 }
 
 @Test func hookHost_allCasesAreDeclarationOrder() {
-    #expect(HookHost.allCases.map(\.rawValue) == ["grok", "pi", "opencode", "claude", "openclaw"])
+    #expect(HookHost.allCases.map(\.rawValue) == ["grok", "pi", "opencode", "claude", "openclaw", "hermes"])
 }
 
-@Test func hookHost_setupSlotOrderIncludesOpenClaw() {
-    #expect(HookHost.setupSlotOrder.map(\.rawValue) == ["grok", "pi", "opencode", "claude", "openclaw"])
+@Test func hookHost_setupSlotOrderIncludesOpenClawAndHermes() {
+    #expect(HookHost.setupSlotOrder.map(\.rawValue) == ["grok", "pi", "opencode", "claude", "openclaw", "hermes"])
 }
 
 @Test func hookHost_codableIsJSONString() throws {

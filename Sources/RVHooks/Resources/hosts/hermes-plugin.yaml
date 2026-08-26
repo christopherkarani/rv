@@ -1,0 +1,5 @@
+name: rv-guard
+version: 1.0.0
+description: Destructive-command guard for Hermes terminal.
+provides_hooks:
+  - pre_tool_call

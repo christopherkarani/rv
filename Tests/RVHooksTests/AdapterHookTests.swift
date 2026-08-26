@@ -75,6 +75,19 @@ private func harnessURL() -> URL {
     #expect(source.contains("RV_BYPASS") == false)
 }
 
+@Test func hermesTemplate_registersPreToolCallTerminalAndBlocks() throws {
+    let source = try adapterSource(for: .hermes, rvPath: "/opt/rv")
+    #expect(source.contains("pre_tool_call"))
+    #expect(source.contains("**kwargs"))
+    #expect(source.contains("tool_name != \"terminal\""))
+    #expect(source.contains("\"action\": \"block\""))
+    #expect(source.contains("\"hermes\""))
+    #expect(source.contains("RV_BINARY = \"/opt/rv\""))
+    #expect(source.contains("\"action\": \"approve\"") == false)
+    #expect(source.contains("permission.ask") == false)
+    #expect(source.contains("RV_BYPASS") == false)
+}
+
 @Test func piAdapter_resetHardBlocksWithHostDenyText() async throws {
     let result = try await runPiAdapter(
         event: ["toolName": "bash", "input": ["command": "git reset --hard"]],

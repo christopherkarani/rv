@@ -12,6 +12,7 @@ struct SetupReport: Equatable, Sendable {
         openCode: SetupSlotKind,
         claude: SetupSlotKind = .pending,
         openClaw: SetupSlotKind = .pending,
+        hermes: SetupSlotKind = .pending,
         wrote: Set<HookHost>
     ) {
         slots = SetupSlotSnapshot(
@@ -20,6 +21,7 @@ struct SetupReport: Equatable, Sendable {
             openCode: openCode,
             claude: claude,
             openClaw: openClaw,
+            hermes: hermes,
             wrote: wrote
         )
     }
@@ -29,6 +31,7 @@ struct SetupReport: Equatable, Sendable {
     var openCode: SetupSlotKind { slots.openCode }
     var claude: SetupSlotKind { slots.claude }
     var openClaw: SetupSlotKind { slots.openClaw }
+    var hermes: SetupSlotKind { slots.hermes }
     var wrote: Set<HookHost> { slots.wrote }
 }
 

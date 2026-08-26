@@ -65,6 +65,7 @@ public func setupCeremonyFrames(
     openCode: SetupSlotKind,
     claude: SetupSlotKind = .pending,
     openClaw: SetupSlotKind = .pending,
+    hermes: SetupSlotKind = .pending,
     wrote: Set<HookHost>,
     kind: SetupCeremonyKind
 ) -> [SetupCeremonyFrame]? {
@@ -75,6 +76,7 @@ public func setupCeremonyFrames(
             openCode: openCode,
             claude: claude,
             openClaw: openClaw,
+            hermes: hermes,
             wrote: wrote
         ),
         kind: kind

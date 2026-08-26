@@ -139,6 +139,7 @@ enum SetupRun {
             openCode: .pending,
             claude: .pending,
             openClaw: .pending,
+            hermes: .pending,
             wrote: []
         )
 
@@ -232,6 +233,7 @@ enum SetupRun {
             openCode: slots.openCode,
             claude: slots.claude,
             openClaw: slots.openClaw,
+            hermes: slots.hermes,
             wrote: slots.wrote
         )
         env.installAnalytics.captureInstall(hosts: InstallAnalyticsHosts.from(report.slots))
@@ -275,24 +277,37 @@ enum SetupRun {
         directory: String,
         files: FileOps
     ) throws -> Bool {
-        guard host == .openclaw else { return false }
-        let pluginJSON = try HostAdapterResources.loadPluginManifest(for: host)
-        let packageJSON = try HostAdapterResources.loadPackageManifest(for: host)
-        let pluginPath = directory + "/openclaw.plugin.json"
-        let packagePath = directory + "/package.json"
-        let wrotePlugin = try writeOwned(
-            path: pluginPath,
-            contents: pluginJSON,
-            existingData: files.readData(pluginPath),
-            files: files
-        )
-        let wrotePackage = try writeOwned(
-            path: packagePath,
-            contents: packageJSON,
-            existingData: files.readData(packagePath),
-            files: files
-        )
-        return wrotePlugin || wrotePackage
+        switch host {
+        case .openclaw:
+            let pluginJSON = try HostAdapterResources.loadPluginManifest(for: host)
+            let packageJSON = try HostAdapterResources.loadPackageManifest(for: host)
+            let pluginPath = directory + "/openclaw.plugin.json"
+            let packagePath = directory + "/package.json"
+            let wrotePlugin = try writeOwned(
+                path: pluginPath,
+                contents: pluginJSON,
+                existingData: files.readData(pluginPath),
+                files: files
+            )
+            let wrotePackage = try writeOwned(
+                path: packagePath,
+                contents: packageJSON,
+                existingData: files.readData(packagePath),
+                files: files
+            )
+            return wrotePlugin || wrotePackage
+        case .hermes:
+            let pluginYAML = try HostAdapterResources.loadPluginManifest(for: host)
+            let pluginPath = directory + "/plugin.yaml"
+            return try writeOwned(
+                path: pluginPath,
+                contents: pluginYAML,
+                existingData: files.readData(pluginPath),
+                files: files
+            )
+        case .grok, .pi, .opencode, .claude:
+            return false
+        }
     }
 
     private static func inspectInstallations(
@@ -366,6 +381,10 @@ enum SetupRun {
                         removedPaths.append(directory + "/openclaw.plugin.json")
                         removedPaths.append(directory + "/package.json")
                     }
+                    if owned.host == .hermes {
+                        let directory = (owned.destination as NSString).deletingLastPathComponent
+                        removedPaths.append(directory + "/plugin.yaml")
+                    }
                     removedHosts.insert(owned.host)
                 }
             case .leaveOccupied:
@@ -406,6 +425,9 @@ enum SetupRun {
         }
         files.removeDirectoryIfEmpty(
             atPath: (layout.openClawPlugin as NSString).deletingLastPathComponent
+        )
+        files.removeDirectoryIfEmpty(
+            atPath: (layout.hermesPlugin as NSString).deletingLastPathComponent
         )
         files.removeDirectoryIfEmpty(atPath: layout.configDirectory)
 
@@ -708,6 +730,7 @@ private extension SetupSlotSnapshot {
         case .opencode: openCode = kind
         case .claude: claude = kind
         case .openclaw: openClaw = kind
+        case .hermes: hermes = kind
         }
     }
 }
