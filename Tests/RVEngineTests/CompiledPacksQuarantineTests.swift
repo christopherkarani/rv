@@ -71,3 +71,31 @@ private func pack(
     #expect(result.packs[0].destructive.isEmpty)
     #expect(result.quarantined == [RuleID(pack: .coreGit, pattern: "noise")])
 }
+
+@Test func compiledPackIndexPreservesEnabledOrderAndDuplicates() throws {
+    let result = try CompiledPacks<String>.compile(
+        packs: [pack(.coreGit, safe: ["git"]), pack(.coreFilesystem, safe: ["rm"])],
+        using: SelectiveEngine(rejected: [])
+    )
+    let enabledIDs: [PackID] = [.coreFilesystem, .coreGit, .coreFilesystem]
+
+    let indices = enabledIDs.compactMap { result.packIndex(for: $0) }
+    #expect(indices == [1, 0, 1])
+    #expect(indices.map { result.packs[$0].snapshot.id } == enabledIDs)
+}
+
+@Test func compiledPackIndexUsesFirstDuplicateIDAndRefreshesAfterMutation() throws {
+    var result = try CompiledPacks<String>.compile(
+        packs: [
+            pack(.coreGit, safe: ["first"]),
+            pack(.coreGit, safe: ["second"]),
+            pack(.coreFilesystem, safe: ["rm"]),
+        ],
+        using: SelectiveEngine(rejected: [])
+    )
+    #expect(result.packIndex(for: .coreGit) == 0)
+
+    result.packs = [result.packs[1], result.packs[2]]
+    #expect(result.packIndex(for: .coreGit) == 0)
+    #expect(result.packs[result.packIndex(for: .coreGit) ?? -1].safe[0].name == "second")
+}
