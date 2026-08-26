@@ -47,7 +47,6 @@ func tokenizeCommand(_ text: String) -> [CommandToken] {
         }
         guard index < text.endIndex else { break }
 
-        var raw = ""
         var decoded = ""
         var wasQuoted = false
 
@@ -69,6 +68,7 @@ func tokenizeCommand(_ text: String) -> [CommandToken] {
                 continue
             }
             if ch == "`" {
+                let start = index
                 index = text.index(after: index)
                 while index < text.endIndex, text[index] != "`" {
                     index = text.index(after: index)
@@ -76,7 +76,7 @@ func tokenizeCommand(_ text: String) -> [CommandToken] {
                 if index < text.endIndex {
                     index = text.index(after: index)
                 }
-                decoded.append(contentsOf: text[text.index(before: text.index(before: index))..<index])
+                decoded.append(contentsOf: text[start..<index])
                 continue
             }
             if ch == "\"" || ch == "'" {
@@ -104,7 +104,7 @@ func tokenizeCommand(_ text: String) -> [CommandToken] {
 }
 
 func applyRoleAwareQuotes(_ text: String) -> String {
-    let tokens = tokenizeCommand(text)
+    var tokens = tokenizeCommand(text)
     guard !tokens.isEmpty else { return text }
     var commandBase: String?
     var pendingDataFlag = false

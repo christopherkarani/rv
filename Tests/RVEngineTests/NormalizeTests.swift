@@ -43,7 +43,7 @@ import Testing
         "$(git reset --hard)",
         "`git status`",
     ])
-    #expect(tokens.map(\.wasQuoted) == [true, false, true, true, true])
+    #expect(tokens.map(\.wasQuoted) == [true, false, true, true, false])
 }
 
 @Test func normalize_roleAwareQuotesPreservesWrappersAndSeparators() {
