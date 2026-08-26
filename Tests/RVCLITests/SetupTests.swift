@@ -916,6 +916,12 @@ private func claudePreToolUseEntries(_ settings: [String: Any]) throws -> [[Stri
     return try #require(hooks["PreToolUse"] as? [[String: Any]])
 }
 
+private func posixMode(_ url: URL) throws -> Int {
+    let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
+    let raw = attrs[.posixPermissions] as? NSNumber
+    return (raw?.intValue ?? 0) & 0o777
+}
+
 @Test func setup_claudeOnly_mergesFingerprintAndPreservesForeignEntry() throws {
     try withTempHome { home, layout, launchctl in
         try FileManager.default.createDirectory(
@@ -1109,6 +1115,124 @@ private func claudePreToolUseEntries(_ settings: [String: Any]) throws -> [[Stri
                 == target.path
         )
         #expect(try String(contentsOf: target, encoding: .utf8) == claudeForeignSettings())
+    }
+}
+
+@Test func setup_force_claudeOccupiedSymlink_doesNotFollowOrReplace() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(
+            atPath: layout.claudeDirectory,
+            withIntermediateDirectories: true
+        )
+        let target = home.appendingPathComponent("foreign-settings.json")
+        try claudeForeignSettings().write(to: target, atomically: true, encoding: .utf8)
+        try FileManager.default.createSymbolicLink(
+            atPath: layout.claudeSettings,
+            withDestinationPath: target.path
+        )
+
+        let outcome = SetupRun.setup(env(home: home, launchctl: launchctl), force: true)
+
+        #expect(outcome.exitCode == 0)
+        #expect(outcome.stdout.contains("Skipped occupied claude hook."))
+        #expect(
+            try FileManager.default.destinationOfSymbolicLink(atPath: layout.claudeSettings)
+                == target.path
+        )
+        #expect(try String(contentsOf: target, encoding: .utf8) == claudeForeignSettings())
+        #expect(FileManager.default.fileExists(atPath: layout.claudeSettings + ".bak") == false)
+    }
+}
+
+@Test func setup_claudeSettingsRewrite_preservesRestrictedPermissions() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(
+            atPath: layout.claudeDirectory,
+            withIntermediateDirectories: true
+        )
+        try claudeForeignSettings().write(toFile: layout.claudeSettings, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: layout.claudeSettings
+        )
+
+        let outcome = SetupRun.setup(env(home: home, launchctl: launchctl))
+
+        #expect(outcome.exitCode == 0)
+        #expect(try posixMode(URL(fileURLWithPath: layout.claudeSettings)) == 0o600)
+        let command = try #require(
+            (try claudePreToolUseEntries(try claudeSettingsObject(at: layout.claudeSettings))
+                .last?["hooks"] as? [[String: Any]])?.first?["command"] as? String
+        )
+        #expect(command == "/tmp/rv-bin/rv hook --host claude")
+    }
+}
+
+@Test func setup_claudeNewSettings_createsOwnerOnlyPermissions() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(
+            atPath: layout.claudeDirectory,
+            withIntermediateDirectories: true
+        )
+
+        let outcome = SetupRun.setup(env(home: home, launchctl: launchctl))
+
+        #expect(outcome.exitCode == 0)
+        #expect(try posixMode(URL(fileURLWithPath: layout.claudeSettings)) == 0o600)
+    }
+}
+
+@Test func uninstall_claudeSettingsRewrite_preservesRestrictedPermissions() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(
+            atPath: layout.claudeDirectory,
+            withIntermediateDirectories: true
+        )
+        let stale = """
+        {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  { "type": "command", "command": "dcg evaluate", "timeout": 5 },
+                  { "type": "command", "command": "/old/rv hook --host claude", "timeout": 10 }
+                ]
+              }
+            ]
+          }
+        }
+        """
+        try stale.write(toFile: layout.claudeSettings, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: layout.claudeSettings
+        )
+
+        let outcome = SetupRun.uninstall(env(home: home, launchctl: launchctl))
+
+        #expect(outcome.exitCode == 0)
+        #expect(try posixMode(URL(fileURLWithPath: layout.claudeSettings)) == 0o600)
+        let entries = try claudePreToolUseEntries(try claudeSettingsObject(at: layout.claudeSettings))
+        #expect(entries.count == 1)
+        let hooks = try #require(entries[0]["hooks"] as? [[String: Any]])
+        #expect(hooks.map { $0["command"] as? String } == ["dcg evaluate"])
+    }
+}
+
+@Test func fileOps_writeData_refusesSymbolicLink() throws {
+    try withTempHome { home, _, _ in
+        let target = home.appendingPathComponent("target.json")
+        let link = home.appendingPathComponent("link.json")
+        try Data("secret\n".utf8).write(to: target)
+        try FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: target.path)
+        let files = FileOps(fileManager: .default)
+
+        #expect(throws: FileOpsError.symbolicLink) {
+            try files.writeData(Data("{}".utf8), to: link.path)
+        }
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: link.path) == target.path)
+        #expect(try String(contentsOf: target, encoding: .utf8) == "secret\n")
     }
 }
 

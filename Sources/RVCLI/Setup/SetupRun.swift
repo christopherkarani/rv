@@ -164,17 +164,22 @@ enum SetupRun {
                 slots.assign(.occupied, to: host)
             case .forceClearThenWrite(let host):
                 if host == .claude {
-                    let existingData = files.readData(layout.hostAdapter(for: host).destination)
-                    if try writeClaudeSettings(
-                        path: layout.hostAdapter(for: host).destination,
-                        rvPath: env.rvPath,
-                        existingData: existingData,
-                        force: true,
-                        files: files
-                    ) {
-                        slots.wrote.insert(host)
+                    let dest = layout.hostAdapter(for: host).destination
+                    if files.isSymbolicLink(dest) {
+                        slots.assign(.occupied, to: host)
+                    } else {
+                        let existingData = files.readData(dest)
+                        if try writeClaudeSettings(
+                            path: dest,
+                            rvPath: env.rvPath,
+                            existingData: existingData,
+                            force: true,
+                            files: files
+                        ) {
+                            slots.wrote.insert(host)
+                        }
+                        slots.assign(.wired, to: host)
                     }
-                    slots.assign(.wired, to: host)
                 } else {
                     do {
                         try files.backupAndClearOwnedPath(layout.hostAdapter(for: host).destination)
@@ -461,6 +466,9 @@ enum SetupRun {
         force: Bool,
         files: FileOps
     ) throws(SetupError) -> Bool {
+        if files.isSymbolicLink(path) {
+            return false
+        }
         let merged: (data: Data, wrote: Bool)
         do {
             merged = try ClaudeSettingsMerge.merge(
@@ -505,7 +513,7 @@ enum SetupRun {
         files: FileOps,
         unreadable: ClaudeUnreadableUninstall
     ) throws(SetupError) -> Bool {
-        if (try? files.fileManager.destinationOfSymbolicLink(atPath: path)) != nil {
+        if files.isSymbolicLink(path) {
             return false
         }
         guard let data = files.readData(path) else { return false }
@@ -551,6 +559,10 @@ enum SetupRun {
     }
 }
 
+enum FileOpsError: Error, Equatable, Sendable {
+    case symbolicLink
+}
+
 struct FileOps {
     var fileManager: FileManager
 
@@ -574,7 +586,23 @@ struct FileOps {
 
     func writeData(_ data: Data, to path: String) throws {
         try createDirectory(atPath: (path as NSString).deletingLastPathComponent)
+        if isSymbolicLink(path) {
+            throw FileOpsError.symbolicLink
+        }
+        let mode = posixMode(at: path) ?? 0o600
         try data.write(to: URL(fileURLWithPath: path), options: .atomic)
+        try fileManager.setAttributes([.posixPermissions: mode], ofItemAtPath: path)
+    }
+
+    func isSymbolicLink(_ path: String) -> Bool {
+        (try? fileManager.destinationOfSymbolicLink(atPath: path)) != nil
+    }
+
+    private func posixMode(at path: String) -> Int? {
+        guard let raw = (try? fileManager.attributesOfItem(atPath: path))?[.posixPermissions] as? NSNumber else {
+            return nil
+        }
+        return raw.intValue & 0o777
     }
 
     func createDirectory(atPath path: String) throws {
@@ -597,7 +625,7 @@ struct FileOps {
     /// Moves an occupied owned path aside (`path.bak`) so setup can rewrite it.
     /// Symlinks are removed without a backup (nothing useful to restore as bytes).
     func backupAndClearOwnedPath(_ path: String) throws {
-        if (try? fileManager.destinationOfSymbolicLink(atPath: path)) != nil {
+        if isSymbolicLink(path) {
             try fileManager.removeItem(atPath: path)
             return
         }
