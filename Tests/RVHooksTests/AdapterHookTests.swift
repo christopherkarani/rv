@@ -338,6 +338,100 @@ private func harnessURL() -> URL {
     #expect(result.spawned == false)
 }
 
+@Test func openCodeAdapter_sessionShellEnvPriorAllowLastMatchDoesNotPermitResetHard() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: [
+            "hook": "shell.env",
+            "cwd": "/tmp/ws",
+            "sessionID": "ses_1",
+            "callID": "call_new",
+        ],
+        stub: .stdout("", exit: 0),
+        sessionMessages: tuiShellMessages(callID: "call_old", command: "git status")
+    )
+    #expect(result.threw == missingShellCommandReason)
+    #expect(result.spawned == false)
+    #expect(result.lastStdin == nil)
+}
+
+@Test func openCodeAdapter_sessionShellEnvMissingCallIDDoesNotLastMatchAllow() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: [
+            "hook": "shell.env",
+            "cwd": "/tmp/ws",
+            "sessionID": "ses_1",
+        ],
+        stub: .stdout("", exit: 0),
+        sessionMessages: tuiShellMessages(callID: "call_old", command: "git status")
+    )
+    #expect(result.threw == missingShellCommandReason)
+    #expect(result.spawned == false)
+}
+
+@Test func openCodeAdapter_sessionShellEnvNonShellToolCommandIsNotAPermit() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: [
+            "hook": "shell.env",
+            "cwd": "/tmp/ws",
+            "sessionID": "ses_1",
+            "callID": "call_new",
+        ],
+        stub: .stdout("", exit: 0),
+        sessionMessages: tuiShellMessages(
+            parts: [tuiShellPart(callID: "call_new", command: "git status", tool: "read")]
+        )
+    )
+    #expect(result.threw == missingShellCommandReason)
+    #expect(result.spawned == false)
+}
+
+@Test func openCodeAdapter_sessionShellEnvUsesThisCallIDNotPriorAllow() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: [
+            "hook": "shell.env",
+            "cwd": "/tmp/ws",
+            "sessionID": "ses_1",
+            "callID": "call_new",
+        ],
+        stub: .stdout(resetHardJSON, exit: 1),
+        sessionMessages: tuiShellMessages(
+            parts: [
+                tuiShellPart(callID: "call_old", command: "git status"),
+                tuiShellPart(callID: "call_new", command: "git reset --hard"),
+            ]
+        )
+    )
+    #expect(result.threw == resetHardReason)
+    #expect(result.lastStdin?.contains("git reset --hard") == true)
+    #expect(result.lastStdin?.contains("git status") == false)
+}
+
+@Test func openCodeAdapter_sessionShellEnvPriorGatedAllowDoesNotPermitNewCall() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: [
+            "steps": [
+                [
+                    "hook": "shell.env",
+                    "cwd": "/tmp/ws",
+                    "sessionID": "ses_1",
+                    "callID": "call_old",
+                    "command": "git status",
+                ],
+                [
+                    "hook": "shell.env",
+                    "cwd": "/tmp/ws",
+                    "sessionID": "ses_1",
+                    "callID": "call_new",
+                ],
+            ]
+        ],
+        stub: .stdout("", exit: 0),
+        sessionMessages: tuiShellMessages(callID: "call_old", command: "git status")
+    )
+    #expect(result.threw == missingShellCommandReason)
+    #expect(result.spawnCount == 1)
+}
+
 @Test func openCodeAdapter_bashThenShellEnvDoesNotSilentAllowResetHard() async throws {
     let result = try await runOpenCodeAdapter(
         event: [
@@ -793,21 +887,21 @@ private func rendererProbe(from object: [String: Any]) -> RendererProbe {
     }
 }
 
-private func tuiShellMessages(callID: String, command: String) -> [String: Any] {
+private func tuiShellPart(callID: String, command: String, tool: String = "bash") -> [String: Any] {
     [
-        "data": [
-            [
-                "parts": [
-                    [
-                        "type": "tool",
-                        "tool": "bash",
-                        "callID": callID,
-                        "state": ["input": ["command": command]],
-                    ]
-                ]
-            ]
-        ]
+        "type": "tool",
+        "tool": tool,
+        "callID": callID,
+        "state": ["input": ["command": command]],
     ]
+}
+
+private func tuiShellMessages(parts: [[String: Any]]) -> [String: Any] {
+    ["data": [["parts": parts]]]
+}
+
+private func tuiShellMessages(callID: String, command: String) -> [String: Any] {
+    tuiShellMessages(parts: [tuiShellPart(callID: callID, command: command)])
 }
 
 private func runOpenCodeAdapter(

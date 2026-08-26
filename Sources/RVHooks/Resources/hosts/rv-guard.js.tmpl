@@ -69,8 +69,9 @@ function commandFromShellEnv(input, output) {
 
 async function commandFromSession(ctx, input) {
   const sessionID = stringCommand(input && input.sessionID);
+  const callID = stringCommand(input && input.callID);
   const session = ctx && ctx.client && ctx.client.session;
-  if (!sessionID || !session || typeof session.messages !== "function") {
+  if (!sessionID || !callID || !session || typeof session.messages !== "function") {
     return undefined;
   }
   let result;
@@ -84,15 +85,8 @@ async function commandFromSession(ctx, input) {
   }
   const matches = [];
   collectPartCommands(result, matches, 0);
-  const callID = stringCommand(input && input.callID);
-  if (callID) {
-    const exact = matches.find((row) => row.callID === callID);
-    if (exact) {
-      return exact.command;
-    }
-  }
-  const last = matches[matches.length - 1];
-  return last && last.command;
+  const exact = matches.find((row) => row.callID === callID);
+  return exact && exact.command;
 }
 
 function collectPartCommands(value, acc, depth) {
@@ -108,15 +102,17 @@ function collectPartCommands(value, acc, depth) {
   if (typeof value !== "object") {
     return;
   }
-  const command =
-    commandFromRecord(value.state && value.state.input) ??
-    commandFromRecord(value.input) ??
-    commandFromRecord(value.args) ??
-    stringCommand(value.command);
   const tool = value.tool ?? value.toolName;
-  const callID = value.callID ?? value.callId;
-  if (command && (tool == null || isShellTool(tool) || value.type === "tool")) {
-    acc.push({ callID, command });
+  const callID = stringCommand(value.callID ?? value.callId);
+  if (isShellTool(tool) && callID) {
+    const command =
+      commandFromRecord(value.state && value.state.input) ??
+      commandFromRecord(value.input) ??
+      commandFromRecord(value.args) ??
+      stringCommand(value.command);
+    if (command) {
+      acc.push({ callID, command });
+    }
   }
   if (value.parts) {
     collectPartCommands(value.parts, acc, depth + 1);
