@@ -37,17 +37,8 @@ public struct HermesStoreAdapter: SessionStoreAdapter {
 
     private static let sqliteHeader = Data("SQLite format 3\u{0}".utf8)
 
-    private struct OpenedDatabase {
-        let db: OpaquePointer
-        let buffer: UnsafeMutableRawPointer
-    }
-
     private static func events(in data: Data, sourcePath: String) throws -> [ExtractedEvent] {
         let opened = try deserializedDatabase(from: data, sourcePath: sourcePath)
-        defer {
-            _ = sqlite3_close(opened.db)
-            sqlite3_free(opened.buffer)
-        }
 
         let sql = "SELECT session_id, tool_calls, timestamp FROM messages;"
         var statement: OpaquePointer?
@@ -92,7 +83,7 @@ public struct HermesStoreAdapter: SessionStoreAdapter {
     private static func deserializedDatabase(
         from data: Data,
         sourcePath: String
-    ) throws -> OpenedDatabase {
+    ) throws -> OwnedSQLiteDatabase {
         guard data.starts(with: sqliteHeader) else {
             throw HermesStoreError.unreadable(sourcePath: sourcePath)
         }
@@ -129,9 +120,9 @@ public struct HermesStoreAdapter: SessionStoreAdapter {
             header[19] = 1
         }
 
-        // Caller owns P: sqlite3_free after sqlite3_close. Do not set
-        // FREEONCLOSE — SQLite frees P itself on deserialize failure
-        // when that bit is set, which double-frees if we also free.
+        // OwnedSQLiteDatabase closes the handle before freeing P. Do not set
+        // FREEONCLOSE — SQLite frees P itself on deserialize failure when that
+        // bit is set, which would double-free if we also free it.
         let flags = UInt32(bitPattern: SQLITE_DESERIALIZE_READONLY)
         let status = sqlite3_deserialize(
             db,
@@ -146,7 +137,7 @@ public struct HermesStoreAdapter: SessionStoreAdapter {
             _ = sqlite3_close(db)
             throw HermesStoreError.unreadable(sourcePath: sourcePath)
         }
-        return OpenedDatabase(db: db, buffer: raw)
+        return OwnedSQLiteDatabase(db: db, buffer: raw)
     }
 
     private static func extractCommands(from toolCallsJSON: String) -> [String] {
