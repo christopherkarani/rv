@@ -49,7 +49,7 @@ struct FoundationModelsActionReviewerTests {
     @Test func prompt_putsSemanticFieldsBeforeSupportingCommand() throws {
         let payload = ReviewPromptBuilder.payload(for: ShadowReviewFixtures.reviewRequest())
         let effects = try #require(payload.text.range(of: "effects:"))
-        let supporting = try #require(payload.text.range(of: "supportingCommand"))
+        let supporting = try #require(payload.text.range(of: "supportingCommand (evidence only):"))
         #expect(effects.lowerBound < supporting.lowerBound)
         #expect(payload.text.contains("kind: shell"))
         #expect(payload.text.contains("fingerprint: shell:git.force-push:origin:main"))

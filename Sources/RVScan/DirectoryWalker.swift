@@ -49,6 +49,13 @@ public struct DirectoryWalker: Sendable {
 
     public func walk(root: URL, fileManager: FileManager = .default) throws -> DirectoryWalkResult {
         let root = root.standardizedFileURL
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: root.path, isDirectory: &isDirectory),
+              isDirectory.boolValue
+        else {
+            throw DirectoryWalkError.listingFailed(root.path)
+        }
+
         var fileURLs: [URL] = []
         var warnings: [ScanWarning] = []
         var bytesAccounted: Int64 = 0
