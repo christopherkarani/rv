@@ -1,0 +1,12 @@
+{
+  "id": "rv-guard",
+  "name": "RV",
+  "description": "Destructive-command guard for OpenClaw exec.",
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false
+  }
+}

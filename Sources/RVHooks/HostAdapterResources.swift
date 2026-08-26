@@ -91,7 +91,7 @@ enum HostAdapterString {
     }
 }
 
-/// Embedded Host adapter templates for the three v1 hosts.
+/// Embedded Host adapter templates for the supported hosts.
 package enum HostAdapterResources {
     fileprivate static let rvPlaceholder = "__RV_BINARY__"
 
@@ -110,6 +110,8 @@ package enum HostAdapterResources {
             bytes = PackageResources.rv_guard_ts_tmpl
         case .opencode:
             bytes = PackageResources.rv_guard_js_tmpl
+        case .openclaw:
+            bytes = PackageResources.rv_guard_openclaw_js_tmpl
         case .claude:
             throw HostAdapterResourceError.missingTemplate(host)
         }
@@ -120,5 +122,37 @@ package enum HostAdapterResources {
             throw HostAdapterResourceError.missingTemplate(host)
         }
         return HostAdapterResource(template: text)
+    }
+
+    /// Returns the OpenClaw plugin manifest (`openclaw.plugin.json`).
+    package static func loadPluginManifest(
+        for host: HookHost
+    ) throws(HostAdapterResourceError) -> String {
+        guard host == .openclaw else {
+            throw HostAdapterResourceError.missingTemplate(host)
+        }
+        return try loadCompanion(PackageResources.openclaw_plugin_json, host: host)
+    }
+
+    /// Returns the OpenClaw package manifest (`package.json`).
+    package static func loadPackageManifest(
+        for host: HookHost
+    ) throws(HostAdapterResourceError) -> String {
+        guard host == .openclaw else {
+            throw HostAdapterResourceError.missingTemplate(host)
+        }
+        return try loadCompanion(PackageResources.openclaw_package_json, host: host)
+    }
+
+    private static func loadCompanion(
+        _ bytes: [UInt8],
+        host: HookHost
+    ) throws(HostAdapterResourceError) -> String {
+        guard let text = String(bytes: bytes, encoding: .utf8),
+              text.isEmpty == false
+        else {
+            throw HostAdapterResourceError.missingTemplate(host)
+        }
+        return text
     }
 }

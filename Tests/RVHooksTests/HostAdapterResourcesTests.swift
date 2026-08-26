@@ -1,9 +1,9 @@
 import Foundation
 import RVDomain
-import RVHooks
 import Testing
+@testable import RVHooks
 
-@Test(arguments: [HookHost.grok, .pi, .opencode])
+@Test(arguments: [HookHost.grok, .pi, .opencode, .openclaw])
 func hostAdapter_bakedRvPath_roundTripsAllResources(host: HookHost) throws {
     let adapter = try HostAdapterResources.load(for: host)
     let rvPath = "/Applications/rv/bin/rv"
@@ -12,7 +12,7 @@ func hostAdapter_bakedRvPath_roundTripsAllResources(host: HookHost) throws {
     #expect(adapter.bakedRvPath(in: rendered) == rvPath)
 }
 
-@Test(arguments: [HookHost.grok, .pi, .opencode])
+@Test(arguments: [HookHost.grok, .pi, .opencode, .openclaw])
 func hostAdapter_bakedRvPath_rejectsModifiedAndForeignBytes(host: HookHost) throws {
     let adapter = try HostAdapterResources.load(for: host)
     let rendered = adapter.rendered(rvPath: "/opt/rv/bin/rv")
@@ -29,6 +29,19 @@ func hostAdapter_bakedRvPath_rejectsModifiedAndForeignBytes(host: HookHost) thro
     #expect(adapter.matchesCurrent(newPath))
     #expect(adapter.matchesCurrent(oldPath + "\nextra") == false)
     #expect(adapter.matchesCurrent("{\"hooks\":[]}\n") == false)
+}
+
+@Test func hostAdapter_openClawCompanions_areNonEmptyAndClaudeHasNoTemplate() throws {
+    #expect(throws: HostAdapterResourceError.missingTemplate(.claude)) {
+        _ = try HostAdapterResources.load(for: .claude)
+    }
+    let plugin = try HostAdapterResources.loadPluginManifest(for: .openclaw)
+    let package = try HostAdapterResources.loadPackageManifest(for: .openclaw)
+    #expect(plugin.contains("\"onStartup\": true"))
+    #expect(package.contains("\"./index.js\""))
+    #expect(throws: HostAdapterResourceError.missingTemplate(.pi)) {
+        _ = try HostAdapterResources.loadPluginManifest(for: .pi)
+    }
 }
 
 @Test func hostAdapter_piAndOpenCode_matchOnlyTheirOwnRender() throws {
@@ -53,7 +66,7 @@ func hostAdapter_bakedRvPath_rejectsModifiedAndForeignBytes(host: HookHost) thro
 
 @Test func hostAdapter_quotedPath_piAndOpenCodeBakeOriginalPath() throws {
     let path = #"/tmp/rv-"bin"/rv"#
-    for host in [HookHost.pi, .opencode] {
+    for host in [HookHost.pi, .opencode, .openclaw] {
         let adapter = try HostAdapterResources.load(for: host)
         let body = adapter.rendered(rvPath: path)
         #expect(adapter.matchesCurrent(body))
@@ -62,7 +75,7 @@ func hostAdapter_bakedRvPath_rejectsModifiedAndForeignBytes(host: HookHost) thro
     }
 }
 
-@Test(arguments: [HookHost.grok, .pi, .opencode])
+@Test(arguments: [HookHost.grok, .pi, .opencode, .openclaw])
 func hostAdapter_controlAndBackslashPath_roundTrips(host: HookHost) throws {
     let path = "/tmp/rv-\t\"bin\"\\\r/rv"
     let adapter = try HostAdapterResources.load(for: host)

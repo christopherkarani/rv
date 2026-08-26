@@ -1,6 +1,6 @@
 # rv
 
-Mac-native destructive-command guard for coding-agent shell hooks. Day-one hosts: Pi, Grok, OpenCode.
+Mac-native destructive-command guard for coding-agent shell hooks. Day-one hosts: Pi, Grok, OpenCode. Also: Claude (settings merge) and OpenClaw (`~/.openclaw/extensions/rv-guard/`, host only, no Ask).
 
 ## Language
 
@@ -25,7 +25,7 @@ The T1-normalized command text an EvaluationResult was decided on. The Policy ga
 _Avoid_: raw argv as the grant key
 
 **Policy gate**:
-The step after the Evaluate session. On engine deny, hook miss and rvd may spend one allow-once grant for this matching view and cwd and return allow. Missing cwd still skips honor. All four v1 codecs populate cwd when the adapter/host provides it. Hook process directory is still not a fill-in (adapter process.cwd is allowed as fallback). TTY test/explain and XPC explain/classify use the same gate without spending. Not a pack rule.
+The step after the Evaluate session. On engine deny, hook miss and rvd may spend one allow-once grant for this matching view and cwd and return allow. Missing cwd still skips honor. Host codecs populate cwd when the adapter/host provides it. Hook process directory is still not a fill-in (adapter process.cwd is allowed as fallback). TTY test/explain and XPC explain/classify use the same gate without spending. Not a pack rule.
 _Avoid_: honor wrapper, consume-on-evaluate
 
 **Allow-once grant**:
@@ -45,7 +45,7 @@ The read-only classification of rvd reachability: reachable, down, not-installed
 _Avoid_: mapping down/skew/request-failed separately in doctor or status
 
 **Hook mapper**:
-EvaluationResult to HookWire after the Policy gate. One Decision switch, four HostCodecs (Claude uses the rich encoder). Owns hook voice.
+EvaluationResult to HookWire after the Policy gate. One Decision switch, HostCodecs (Claude uses the rich encoder; OpenClaw is short deny). Owns hook voice.
 _Avoid_: per-codec Decision switch
 
 **Hook voice**:

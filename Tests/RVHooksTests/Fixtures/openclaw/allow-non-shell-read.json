@@ -1,0 +1,4 @@
+{
+  "toolName": "read",
+  "params": { "path": "/tmp/rv-hook-fixture/README.md" }
+}

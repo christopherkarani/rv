@@ -1,0 +1,1 @@
+{"type":"message","message":{"content":[{"type":"tool_call","name":"exec","params":{"command":"git status","workdir":"/tmp/nested"}}]}}

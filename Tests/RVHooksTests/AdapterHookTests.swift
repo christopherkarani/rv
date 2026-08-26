@@ -62,6 +62,19 @@ private func harnessURL() -> URL {
     #expect(source.contains("console.error") == false)
 }
 
+@Test func openClawTemplate_registersBeforeToolCallExecAndBlocks() throws {
+    let source = try adapterSource(for: .openclaw, rvPath: "/opt/rv")
+    #expect(source.contains("before_tool_call"))
+    #expect(source.contains("matcher: [\"exec\"]"))
+    #expect(source.contains("block: true"))
+    #expect(source.contains("blockReason"))
+    #expect(source.contains("hook\", \"--host\", host"))
+    #expect(source.contains("\"openclaw\""))
+    #expect(source.contains("requireApproval") == false)
+    #expect(source.contains("permission.ask") == false)
+    #expect(source.contains("RV_BYPASS") == false)
+}
+
 @Test func piAdapter_resetHardBlocksWithHostDenyText() async throws {
     let result = try await runPiAdapter(
         event: ["toolName": "bash", "input": ["command": "git reset --hard"]],

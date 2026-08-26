@@ -64,11 +64,19 @@ public func setupCeremonyFrames(
     pi: SetupSlotKind,
     openCode: SetupSlotKind,
     claude: SetupSlotKind = .pending,
+    openClaw: SetupSlotKind = .pending,
     wrote: Set<HookHost>,
     kind: SetupCeremonyKind
 ) -> [SetupCeremonyFrame]? {
     setupCeremonyFrames(
-        SetupSlotSnapshot(grok: grok, pi: pi, openCode: openCode, claude: claude, wrote: wrote),
+        SetupSlotSnapshot(
+            grok: grok,
+            pi: pi,
+            openCode: openCode,
+            claude: claude,
+            openClaw: openClaw,
+            wrote: wrote
+        ),
         kind: kind
     )
 }

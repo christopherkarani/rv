@@ -218,6 +218,7 @@ enum ScanRun {
         PiStoreAdapter(),
         GrokStoreAdapter(),
         OpenCodeStoreAdapter(),
+        OpenClawStoreAdapter(),
     ]
 
     static func run(_ request: Request) throws -> ScanReport {
@@ -389,6 +390,7 @@ private extension ScanHostID {
         case .pi: .pi
         case .grok: .grok
         case .opencode: .opencode
+        case .openclaw: .openclaw
         }
     }
 }
