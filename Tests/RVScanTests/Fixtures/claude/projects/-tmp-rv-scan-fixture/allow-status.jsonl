@@ -1,0 +1,1 @@
+{"type":"assistant","sessionId":"allow-session","timestamp":"2026-08-20T13:00:00.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_status","name":"Bash","input":{"command":"git status","description":"Status"}}]}}
