@@ -1,5 +1,9 @@
-import ArgumentParser
+#if canImport(Darwin)
 import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
+import ArgumentParser
 import Foundation
 import RVDomain
 import RVPresentation
@@ -348,15 +352,24 @@ private func scanFindingRow(from finding: ScanFinding, showCommand: Bool) -> Sca
     )
 }
 
-private func matchesIncludeGlob(fileURL: URL, scanRoot: URL, patterns: [String]) -> Bool {
+func matchesIncludeGlob(fileURL: URL, scanRoot: URL, patterns: [String]) -> Bool {
     guard patterns.isEmpty == false else { return false }
     let relative = relativePath(fileURL: fileURL, to: scanRoot)
     let name = fileURL.lastPathComponent
     for pattern in patterns {
-        if fnmatch(pattern, relative, FNM_PATHNAME) == 0 { return true }
-        if fnmatch(pattern, name, 0) == 0 { return true }
+        if posixFnmatch(pattern, relative, flags: FNM_PATHNAME) { return true }
+        if posixFnmatch(pattern, name, flags: 0) { return true }
     }
     return false
+}
+
+/// POSIX `fnmatch` via Darwin or Glibc. RVCLI is on the Linux package graph.
+private func posixFnmatch(_ pattern: String, _ name: String, flags: Int32) -> Bool {
+    pattern.withCString { patternC in
+        name.withCString { nameC in
+            fnmatch(patternC, nameC, flags) == 0
+        }
+    }
 }
 
 private func relativePath(fileURL: URL, to root: URL) -> String {

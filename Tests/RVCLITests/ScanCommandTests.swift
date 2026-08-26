@@ -108,6 +108,17 @@ private func decodedJSON(_ text: String) throws -> [String: Any] {
     }
 }
 
+@Test func includeGlob_matchesBasenameAndRelativePath() {
+    let root = URL(fileURLWithPath: "/tmp/rv-scan-glob", isDirectory: true)
+    let nested = root.appendingPathComponent("nested/notes.txt")
+    let top = root.appendingPathComponent("notes.txt")
+    #expect(matchesIncludeGlob(fileURL: top, scanRoot: root, patterns: ["*.txt"]))
+    #expect(matchesIncludeGlob(fileURL: nested, scanRoot: root, patterns: ["*.txt"]))
+    #expect(matchesIncludeGlob(fileURL: nested, scanRoot: root, patterns: ["nested/*.txt"]))
+    #expect(matchesIncludeGlob(fileURL: nested, scanRoot: root, patterns: ["*.jsonl"]) == false)
+    #expect(matchesIncludeGlob(fileURL: top, scanRoot: root, patterns: []) == false)
+}
+
 @Test func scanRun_includeGlobWithoutPath_failsClosedWithoutWalkingHome() throws {
     try withTempScanHome { home, homeURL in
         try installClaudeFixture(into: homeURL)
