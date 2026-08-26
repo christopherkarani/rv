@@ -272,9 +272,10 @@ public actor ServiceRuntime {
         case .indeterminate:
             kind = .indeterminate
         }
+        let packs = analyticsEnabledPackIDs
         Task {
             await analytics.recordDecision(kind)
-            await analytics.noteEnabledPacks(analyticsEnabledPackIDs)
+            await analytics.noteEnabledPacks(packs)
             await analytics.flushDailyIfNeeded()
         }
     }
@@ -400,9 +401,10 @@ public actor ServiceRuntime {
             rebuildGated()
             lastUncoveredWanted = []
             analyticsEnabledPackIDs = Self.analyticsEnabledPackIDs(from: catalog)
+            let packs = analyticsEnabledPackIDs
             if let analytics {
                 Task {
-                    await analytics.noteEnabledPacks(analyticsEnabledPackIDs)
+                    await analytics.noteEnabledPacks(packs)
                 }
             }
             return .setPackEnabled(
