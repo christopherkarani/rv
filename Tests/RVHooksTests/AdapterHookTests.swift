@@ -57,6 +57,8 @@ private func harnessURL() -> URL {
     #expect(source.contains("\"tool.execute.before\""))
     #expect(source.contains("showToast"))
     #expect(source.contains("RV · Blocked"))
+    #expect(source.contains("hostAsk: \"spend\""))
+    #expect(source.contains("onResolution"))
     #expect(source.contains("permission.ask") == false)
     #expect(source.contains("tool: {") == false)
     #expect(source.contains("console.log") == false)
@@ -210,6 +212,79 @@ private func harnessURL() -> URL {
     )
     #expect(result.threw == resetHardReason)
     #expect(result.toastCount == 1)
+    #expect(result.spawnCount == 1)
+}
+
+@Test func openCodeAdapter_confirmYesSpendsThenAllows() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: ["tool": "bash", "cwd": "/tmp/ws", "args": ["command": "git reset --hard"]],
+        stub: .stdout(askResetHardJSON, exit: 1),
+        confirmYes: true,
+        secondStub: .stdout("", exit: 0)
+    )
+    #expect(result.threw == nil)
+    #expect(result.spawnCount == 2)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
+    #expect(result.toastCount == 0)
+}
+
+@Test func openCodeAdapter_resolutionSpendsThenAllows() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: ["tool": "bash", "cwd": "/tmp/ws", "args": ["command": "git reset --hard"]],
+        stub: .stdout(askResetHardJSON, exit: 1),
+        resolutionAllow: true,
+        secondStub: .stdout("", exit: 0)
+    )
+    #expect(result.threw == nil)
+    #expect(result.spawnCount == 2)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
+    #expect(result.toastCount == 0)
+}
+
+@Test func openCodeAdapter_confirmYesFailedSpendDoesNotRunTool() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: ["tool": "bash", "cwd": "/tmp/ws", "args": ["command": "git reset --hard"]],
+        stub: .stdout(askResetHardJSON, exit: 1),
+        confirmYes: true,
+        secondStub: .stdout(resetHardJSON, exit: 1)
+    )
+    #expect(result.threw == resetHardReason)
+    #expect(result.spawnCount == 2)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
+}
+
+@Test func openCodeAdapter_confirmYesMissingSpendDoesNotRunTool() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: ["tool": "bash", "cwd": "/tmp/ws", "args": ["command": "git reset --hard"]],
+        stub: .stdout(askResetHardJSON, exit: 1),
+        confirmYes: true
+    )
+    #expect(result.threw == resetHardReason)
+    #expect(result.spawnCount == 2)
+}
+
+@Test func openCodeAdapter_hasUIFalseDoesNotSpend() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: ["tool": "bash", "cwd": "/tmp/ws", "args": ["command": "git reset --hard"]],
+        stub: .stdout(askResetHardJSON, exit: 1),
+        confirmYes: true,
+        hasUI: false,
+        secondStub: .stdout("", exit: 0)
+    )
+    #expect(result.threw == resetHardReason)
+    #expect(result.spawnCount == 1)
+}
+
+@Test func openCodeAdapter_unlockableDenyConfirmYesSpendsThenAllows() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: ["tool": "bash", "cwd": "/tmp/ws", "args": ["command": "git reset --hard"]],
+        stub: .stdout(resetHardJSON, exit: 1),
+        confirmYes: true,
+        secondStub: .stdout("", exit: 0)
+    )
+    #expect(result.threw == nil)
+    #expect(result.spawnCount == 2)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
 }
 
 @Test func piAdapter_nonBashDoesNotSpawn() async throws {
@@ -477,6 +552,8 @@ private struct PiAdapterRun {
 private struct OpenCodeAdapterRun {
     var threw: String?
     var spawned: Bool
+    var spawnCount: Int
+    var lastStdin: String?
     var toastCount: Int
     var toastTitle: String?
     var toastMessage: String?
@@ -545,7 +622,11 @@ private func runOpenCodeAdapter(
     toastThrows: Bool = false,
     toastHangs: Bool = false,
     toastTimeoutMs: Int? = nil,
-    legacyClient: Bool = false
+    legacyClient: Bool = false,
+    confirmYes: Bool = false,
+    hasUI: Bool = true,
+    resolutionAllow: Bool = false,
+    secondStub: StubRV? = nil
 ) async throws -> OpenCodeAdapterRun {
     let payload = try await runAdapter(
         host: .opencode,
@@ -555,13 +636,19 @@ private func runOpenCodeAdapter(
         toastThrows: toastThrows,
         toastHangs: toastHangs,
         toastTimeoutMs: toastTimeoutMs,
-        legacyClient: legacyClient
+        legacyClient: legacyClient,
+        confirmYes: confirmYes,
+        hasUI: hasUI,
+        resolutionAllow: resolutionAllow,
+        secondStub: secondStub
     )
     let object = try harnessObject(payload.text)
     let toast = firstToast(object)
     return OpenCodeAdapterRun(
         threw: object["threw"] as? String,
         spawned: payload.spawned,
+        spawnCount: payload.spawnCount,
+        lastStdin: payload.lastStdin,
         toastCount: (object["toasts"] as? [Any])?.count ?? 0,
         toastTitle: toast?["title"] as? String,
         toastMessage: toast?["message"] as? String,
@@ -600,6 +687,7 @@ private func runAdapter(
     legacyClient: Bool = false,
     confirmYes: Bool = false,
     hasUI: Bool = true,
+    resolutionAllow: Bool = false,
     secondStub: StubRV? = nil
 ) async throws -> AdapterPayload {
     let root = FileManager.default.temporaryDirectory
@@ -688,6 +776,9 @@ private func runAdapter(
     }
     if hasUI == false {
         environment["RV_HAS_UI"] = "0"
+    }
+    if resolutionAllow {
+        environment["RV_RESOLUTION_ALLOW"] = "1"
     }
     if let secondStub {
         switch secondStub {

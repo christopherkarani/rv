@@ -85,6 +85,18 @@ func claudeDecode_otherToolOrEventIsForeign(_ file: String) throws {
     #expect(request.cwd == WorkingDirectory(validating: "/tmp/ws"))
 }
 
+@Test func claudeDecode_readsHostAskSpend() {
+    let stdin = """
+    {"hook_event_name":"PreToolUse","cwd":"/tmp/ws","tool_name":"Bash","tool_input":{"command":"git reset --hard"},"hostAsk":"spend"}
+    """
+    guard case .request(let request) = codec.decode(stdin) else {
+        Issue.record("expected .request for hostAsk spend")
+        return
+    }
+    #expect(request.hostAsk == .spend)
+    #expect(request.cwd == WorkingDirectory(validating: "/tmp/ws"))
+}
+
 @Test func claudeEncodeAllow_isEmptyExitZero() throws {
     let wire = codec.encodeAllow()
     let expected = try claudeExpected("allow-git-status")

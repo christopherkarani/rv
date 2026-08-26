@@ -24,6 +24,24 @@ export const RvGuard = async (ctx) => {
             : undefined;
       const cwd = pickCwd(hostCwd);
       const mapped = await consultRv(command, cwd);
+      if (mapped.action === "ask") {
+        const allowed = await confirmAsk(ctx, input, output, mapped);
+        if (!allowed) {
+          await showBlockToast(ctx, mapped, command);
+          throw new Error(mapped.reason);
+        }
+        const spent = await consultRvSpend(command, cwd);
+        if (spent.action !== "allow") {
+          const blocked = spent.action === "block" || spent.action === "ask" ? spent : mapped;
+          await showBlockToast(ctx, blocked, command);
+          throw new Error(
+            typeof blocked.reason === "string" && blocked.reason.length > 0
+              ? blocked.reason
+              : mapped.reason,
+          );
+        }
+        return;
+      }
       if (mapped.action === "block") {
         await showBlockToast(ctx, mapped, command);
         throw new Error(mapped.reason);
@@ -31,6 +49,52 @@ export const RvGuard = async (ctx) => {
     },
   };
 };
+
+async function confirmAsk(ctx, input, output, mapped) {
+  try {
+    if (ctx?.ui?.hasUI === false) {
+      return false;
+    }
+    const prompt = {
+      message:
+        typeof mapped.reason === "string" && mapped.reason.length > 0
+          ? mapped.reason
+          : "Allow this command once?",
+    };
+    const askers = [input?.ask, output?.onResolution, ctx?.ask, ctx?.ui?.confirm];
+    for (const ask of askers) {
+      if (typeof ask !== "function") {
+        continue;
+      }
+      return isAllowOnceResolution(await ask(prompt));
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function isAllowOnceResolution(value) {
+  if (value === true) {
+    return true;
+  }
+  if (value === "once" || value === "allow-once" || value === "allowOnce") {
+    return true;
+  }
+  if (value && typeof value === "object") {
+    const status = value.status ?? value.decision ?? value.effect ?? value.action;
+    if (
+      status === true ||
+      status === "once" ||
+      status === "allow-once" ||
+      status === "allowOnce" ||
+      status === "allow"
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
 
 function pickCwd(hostCwd) {
   if (typeof hostCwd === "string" && hostCwd.length > 0) return hostCwd;
@@ -45,6 +109,12 @@ function pickCwd(hostCwd) {
 
 function consultRv(command, cwd) {
   const payload = { tool: "bash", args: { command } };
+  if (cwd) payload.cwd = cwd;
+  return spawnRvHook("opencode", JSON.stringify(payload));
+}
+
+function consultRvSpend(command, cwd) {
+  const payload = { tool: "bash", args: { command }, hostAsk: "spend" };
   if (cwd) payload.cwd = cwd;
   return spawnRvHook("opencode", JSON.stringify(payload));
 }
@@ -111,9 +181,18 @@ function mapRvHookResult(value) {
   if (trimmed.length > 0) {
     try {
       const parsed = JSON.parse(trimmed);
-      if (parsed && (parsed.decision === "deny" || parsed.decision === "ask")) {
+      if (parsed && parsed.decision === "ask") {
         return {
-          action: "block",
+          action: "ask",
+          reason: typeof parsed.reason === "string" ? parsed.reason : "",
+          rule: typeof parsed.rule === "string" ? parsed.rule : undefined,
+          next: typeof parsed.next === "string" ? parsed.next : undefined,
+        };
+      }
+      if (parsed && parsed.decision === "deny") {
+        const unlockable = typeof parsed.rule === "string" && parsed.rule.length > 0;
+        return {
+          action: unlockable ? "ask" : "block",
           reason: typeof parsed.reason === "string" ? parsed.reason : "",
           rule: typeof parsed.rule === "string" ? parsed.rule : undefined,
           next: typeof parsed.next === "string" ? parsed.next : undefined,

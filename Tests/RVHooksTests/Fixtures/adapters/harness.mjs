@@ -89,6 +89,9 @@ if (host === "pi") {
 
 if (host === "opencode") {
   const toasts = [];
+  const confirmYes = process.env.RV_CONFIRM_YES === "1";
+  const resolutionAllow = process.env.RV_RESOLUTION_ALLOW === "1";
+  const hasUI = process.env.RV_HAS_UI !== "0";
   const ctx = {
     client: {
       tui: {
@@ -118,17 +121,36 @@ if (host === "opencode") {
       },
     },
   };
+  if (confirmYes) {
+    ctx.ui = {
+      hasUI,
+      async confirm() {
+        if (!hasUI) {
+          return false;
+        }
+        return true;
+      },
+    };
+  }
   const plugin = await mod.RvGuard(ctx);
   const keys = Object.keys(plugin);
   if (keys.length !== 1 || keys[0] !== "tool.execute.before") {
     process.stdout.write(JSON.stringify({ error: "unexpected hooks", keys }));
     process.exit(2);
   }
+  const input = { tool: event.tool };
+  if (typeof event.cwd === "string") {
+    input.cwd = event.cwd;
+  }
+  if (confirmYes && hasUI) {
+    input.ask = async () => true;
+  }
+  const output = { args: event.args ?? {} };
+  if (resolutionAllow) {
+    output.onResolution = async () => ({ status: "allow-once" });
+  }
   try {
-    await plugin["tool.execute.before"](
-      { tool: event.tool },
-      { args: event.args ?? {} }
-    );
+    await plugin["tool.execute.before"](input, output);
     process.stdout.write(JSON.stringify({ threw: null, toasts }));
   } catch (error) {
     process.stdout.write(

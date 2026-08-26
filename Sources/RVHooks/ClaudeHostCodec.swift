@@ -22,7 +22,20 @@ public struct ClaudeHostCodec: HostCodec {
             return .malformed(.missingCommand)
         }
         let cwd = envelope.cwd.flatMap { WorkingDirectory(validating: $0) }
-        return .request(HookRequest(host: .claude, command: ShellCommand(rawValue: command), cwd: cwd))
+        let hostAsk = envelope.hostAsk.flatMap(HostAskHookIntent.init(rawValue:))
+        return .request(
+            HookRequest(
+                host: .claude,
+                command: ShellCommand(rawValue: command),
+                cwd: cwd,
+                hostAsk: hostAsk
+            )
+        )
+    }
+
+    /// Official `permissionDecision: "ask"` is leftover-ask-as-permit. Stay deny.
+    public func encodeAsk(reason: String, rule: String?, next: String?) -> HookWire {
+        encodeDeny(reason: reason, rule: rule, next: next)
     }
 
     public func encodeDeny(reason: String, rule: String?, next: String?) -> HookWire {
@@ -60,12 +73,14 @@ private struct ClaudeEnvelope: Decodable {
     var toolName: String?
     var toolInput: ClaudeToolInput?
     var cwd: String?
+    var hostAsk: String?
 
     enum CodingKeys: String, CodingKey {
         case hookEventName = "hook_event_name"
         case toolName = "tool_name"
         case toolInput = "tool_input"
         case cwd
+        case hostAsk
     }
 }
 
