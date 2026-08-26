@@ -53,12 +53,16 @@ public enum PendingApprovalLedger: Sendable {
         identity: ApprovalIdentity,
         now: Date
     ) throws(PendingApprovalError) -> (PendingApproval, [PendingApproval]) {
-        try mutate(records, id: id, now: now) { record in
-            try ensureBinding(record, fingerprint: fingerprint, identity: identity)
-            try ensureAwaitingHuman(record)
-            var next = record
-            next.state = .resolved(ApprovalResolution(decision: decision, resolvedAt: now))
-            return next
+        do {
+            return try mutate(records, id: id, now: now) { (record) throws(PendingApprovalError) in
+                try ensureBinding(record, fingerprint: fingerprint, identity: identity)
+                try ensureAwaitingHuman(record)
+                var next = record
+                next.state = .resolved(ApprovalResolution(decision: decision, resolvedAt: now))
+                return next
+            }
+        } catch {
+            throw error
         }
     }
 
@@ -67,11 +71,15 @@ public enum PendingApprovalLedger: Sendable {
         id: ApprovalID,
         now: Date
     ) throws(PendingApprovalError) -> (PendingApproval, [PendingApproval]) {
-        try mutate(records, id: id, now: now) { record in
-            try ensureAwaitingHuman(record)
-            var next = record
-            next.state = .expired(at: now)
-            return next
+        do {
+            return try mutate(records, id: id, now: now) { (record) throws(PendingApprovalError) in
+                try ensureAwaitingHuman(record)
+                var next = record
+                next.state = .expired(at: now)
+                return next
+            }
+        } catch {
+            throw error
         }
     }
 
@@ -80,11 +88,15 @@ public enum PendingApprovalLedger: Sendable {
         id: ApprovalID,
         now: Date
     ) throws(PendingApprovalError) -> (PendingApproval, [PendingApproval]) {
-        try mutate(records, id: id, now: now) { record in
-            try ensureAwaitingHuman(record)
-            var next = record
-            next.state = .canceled(at: now)
-            return next
+        do {
+            return try mutate(records, id: id, now: now) { (record) throws(PendingApprovalError) in
+                try ensureAwaitingHuman(record)
+                var next = record
+                next.state = .canceled(at: now)
+                return next
+            }
+        } catch {
+            throw error
         }
     }
 
@@ -95,25 +107,30 @@ public enum PendingApprovalLedger: Sendable {
         identity: ApprovalIdentity,
         now: Date
     ) throws(PendingApprovalError) -> (ApprovalConsumption, [PendingApproval]) {
-        let (record, next) = try mutate(records, id: id, now: now) { record in
-            try ensureBinding(record, fingerprint: fingerprint, identity: identity)
-            if record.consumedAt != nil {
-                throw .alreadyConsumed
+        let (record, next): (PendingApproval, [PendingApproval])
+        do {
+            (record, next) = try mutate(records, id: id, now: now) { (record) throws(PendingApprovalError) in
+                try ensureBinding(record, fingerprint: fingerprint, identity: identity)
+                if record.consumedAt != nil {
+                    throw .alreadyConsumed
+                }
+                switch record.state {
+                case .awaitingHuman:
+                    throw .notResolved
+                case .resolved:
+                    var next = record
+                    next.consumedAt = now
+                    return next
+                case .expired:
+                    throw .expired
+                case .canceled:
+                    throw .canceled
+                case .timedOut:
+                    throw .timedOut
+                }
             }
-            switch record.state {
-            case .awaitingHuman:
-                throw .notResolved
-            case .resolved:
-                var next = record
-                next.consumedAt = now
-                return next
-            case .expired:
-                throw .expired
-            case .canceled:
-                throw .canceled
-            case .timedOut:
-                throw .timedOut
-            }
+        } catch {
+            throw error
         }
         guard case .resolved(let resolution) = record.state else {
             throw .notResolved
