@@ -14,7 +14,9 @@ import RVDomain
 
         #expect(result.filesVisited == 3)
         #expect(result.fileURLs.count == 3)
-        #expect(result.warnings.contains { $0.code == "cap.files" })
+        #expect(result.warnings == [
+            ScanWarning(code: "cap.files", message: "Stopped after 3 files")
+        ])
     }
 }
 
@@ -30,7 +32,9 @@ import RVDomain
 
         #expect(result.filesVisited == 1)
         #expect(result.bytesAccounted == 40)
-        #expect(result.warnings.contains { $0.code == "cap.bytes" })
+        #expect(result.warnings == [
+            ScanWarning(code: "cap.bytes", message: "Stopped after 50 total bytes")
+        ])
     }
 }
 
@@ -46,7 +50,9 @@ import RVDomain
         ).walk(root: root)
 
         #expect(result.fileURLs.map(\.lastPathComponent) == ["top.txt"])
-        #expect(result.warnings.contains { $0.code == "cap.depth" })
+        #expect(result.warnings == [
+            ScanWarning(code: "cap.depth", message: "Stopped descending past depth 1")
+        ])
     }
 }
 
@@ -65,7 +71,9 @@ import RVDomain
         #expect(result.fileURLs.map(\.lastPathComponent) == ["ok.txt"])
         #expect(result.filesVisited == 2)
         #expect(result.skippedOversize == 1)
-        #expect(result.warnings.filter { $0.code == "cap.file-size" }.count == 1)
+        #expect(result.warnings == [
+            ScanWarning(code: "cap.file-size", message: "Skipped file over 50 bytes")
+        ])
     }
 }
 
@@ -85,8 +93,53 @@ import RVDomain
         #expect(result.fileURLs.isEmpty)
         #expect(result.filesVisited == 2)
         #expect(result.skippedOversize == 2)
-        #expect(result.warnings.contains { $0.code == "cap.file-size" })
-        #expect(result.warnings.contains { $0.code == "cap.files" })
+        #expect(result.warnings == [
+            ScanWarning(code: "cap.file-size", message: "Skipped file over 20 bytes"),
+            ScanWarning(code: "cap.files", message: "Stopped after 2 files"),
+        ])
+    }
+}
+
+@Test func walker_preservesDeterministicBreadthFirstPathOrder() throws {
+    try withTempTree { root in
+        let first = root.appendingPathComponent("a", isDirectory: true)
+        let second = root.appendingPathComponent("b", isDirectory: true)
+        try FileManager.default.createDirectory(at: first, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: second, withIntermediateDirectories: true)
+        try writeFile(root.appendingPathComponent("0-root.txt"), contents: "root")
+        try writeFile(first.appendingPathComponent("z.txt"), contents: "first")
+        try writeFile(second.appendingPathComponent("a.txt"), contents: "second")
+
+        let result = try DirectoryWalker(bounds: .default).walk(root: root)
+
+        #expect(result.fileURLs == [
+            root.appendingPathComponent("0-root.txt").standardizedFileURL,
+            first.appendingPathComponent("z.txt").standardizedFileURL,
+            second.appendingPathComponent("a.txt").standardizedFileURL,
+        ])
+    }
+}
+
+@Test func walker_skipsSymbolicLinksWithoutDescending() throws {
+    try withTempTree { root in
+        let realDirectory = root.appendingPathComponent("real", isDirectory: true)
+        let realFile = realDirectory.appendingPathComponent("real.txt")
+        try FileManager.default.createDirectory(at: realDirectory, withIntermediateDirectories: true)
+        try writeFile(realFile, contents: "real")
+
+        try FileManager.default.createSymbolicLink(
+            at: root.appendingPathComponent("linked-directory", isDirectory: true),
+            withDestinationURL: realDirectory
+        )
+        try FileManager.default.createSymbolicLink(
+            at: root.appendingPathComponent("linked-file"),
+            withDestinationURL: realFile
+        )
+
+        let result = try DirectoryWalker(bounds: .default).walk(root: root)
+
+        #expect(result.fileURLs == [realFile.standardizedFileURL])
+        #expect(result.warnings.isEmpty)
     }
 }
 
