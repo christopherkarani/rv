@@ -11,7 +11,7 @@
   <a href="https://github.com/christopherkarani/rv"><img src="https://img.shields.io/github/stars/christopherkarani/rv?style=flat" alt="Stars"></a>
   <a href="https://discord.gg/uZn9MDUYKx"><img src="https://img.shields.io/badge/discord-join-5865F2?logo=discord&logoColor=white" alt="Discord"></a>
   <img src="https://img.shields.io/badge/platform-macOS%2026%20arm64-111827" alt="macOS 26 arm64">
-  <img src="https://img.shields.io/badge/hosts-Pi%20%7C%20Grok%20%7C%20OpenCode-334155" alt="Hosts">
+  <img src="https://img.shields.io/badge/hosts-Grok%20%7C%20Pi%20%7C%20OpenCode%20%7C%20Claude%20%7C%20OpenClaw%20%7C%20Hermes%20%7C%20Codex%20%7C%20Cursor-334155" alt="Hosts">
 </p>
 
 
@@ -40,7 +40,7 @@ curl -fsSL https://rykanv.com/install | sh
 | Secret paths | `.env`, SSH keys, and other known credential files |
 | Allow once | `rv allow-once` unlocks the next matching call in this working directory |
 | Explain | `rv explain` shows which pack would fire |
-| Hosts | Pi, Grok, OpenCode — wired by `rv setup` |
+| Hosts | Grok, Pi, OpenCode, Claude, OpenClaw, Hermes, Codex, Cursor — wired by `rv setup` |
 | Platform | macOS 26, Apple Silicon |
 
 ## Supported hosts
@@ -50,6 +50,11 @@ curl -fsSL https://rykanv.com/install | sh
 | Grok | `~/.grok/hooks/rv.json` |
 | Pi | `~/.pi/agent/extensions/rv-guard.ts` |
 | OpenCode | `~/.config/opencode/plugins/rv-guard.js` |
+| Claude | settings merge |
+| OpenClaw | `~/.openclaw/extensions/rv-guard/` |
+| Hermes | `~/.hermes/plugins/rv-guard/` |
+| Codex | `~/.codex/hooks/rv-guard.py` |
+| Cursor | `~/.cursor/hooks/rv-guard.py` |
 
 
 ## Commands
