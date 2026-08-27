@@ -163,12 +163,21 @@ struct EnvelopeRoundTripTests {
 
     @Test func classifyRiskDeriveMatchesTruthTable() {
         let severities: [Severity] = [.low, .medium, .high, .critical]
-        let match = RuleMatch(
+        let deny = Deny(
             ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+            reason: "destroys uncommitted changes"
+        )
+        let match = RuleMatch(
+            ruleID: deny.ruleID,
             packID: .coreGit,
             patternName: "reset-hard",
             severity: .high,
-            reason: "destroys uncommitted changes"
+            reason: deny.reason
+        )
+        #expect(ClassifyRisk.derive(.quickRejected) == .safe)
+        #expect(ClassifyRisk.derive(.plain) == .safe)
+        #expect(
+            ClassifyRisk.derive(.safeOnly(SafeMatch(packID: .coreGit, patternName: "checkout-new-branch"))) == .safe
         )
         for severity in severities {
             let matched = RuleMatch(
@@ -178,23 +187,87 @@ struct EnvelopeRoundTripTests {
                 severity: severity,
                 reason: match.reason
             )
-            #expect(
-                ClassifyRisk.derive(decision: .allow, matched: matched) == .rated(severity)
-            )
-            #expect(
-                ClassifyRisk.derive(decision: .deny(Deny(ruleID: match.ruleID, reason: match.reason)), matched: matched)
-                    == .rated(severity)
-            )
+            #expect(ClassifyRisk.derive(.hit(matched, safe: nil)) == .rated(severity))
+            #expect(ClassifyRisk.derive(.deny(deny, matched: matched)) == .rated(severity))
         }
-        #expect(ClassifyRisk.derive(decision: .allow, matched: nil) == .safe)
-        #expect(
-            ClassifyRisk.derive(decision: .deny(Deny(ruleID: match.ruleID, reason: match.reason)), matched: nil)
-                == .rated(.high)
+        #expect(ClassifyRisk.derive(.deny(deny, matched: nil)) == .rated(.high))
+        #expect(ClassifyRisk.derive(.deny(HostNativeAsk.leftoverAskDeny, matched: nil)) == .rated(.high))
+        #expect(ClassifyRisk.derive(.indeterminate(.corePacksUnavailable)) == .rated(.high))
+        #expect(ClassifyRisk.derive(.indeterminate(.budgetExhausted)) == .rated(.high))
+    }
+
+    @Test func explainReplyDerivesIdentityFromOutcome() {
+        let leftover = leftoverDenyResult()
+        let reply = ExplainReply(
+            result: leftover,
+            normalized: "git reset --hard",
+            stages: [ExplainStage(name: "normalize", elapsedMs: 0)]
         )
-        #expect(ClassifyRisk.derive(decision: .indeterminate(.corePacksUnavailable), matched: nil) == .rated(.high))
-        #expect(
-            ClassifyRisk.derive(decision: .indeterminate(.budgetExhausted), matched: match) == .rated(.high)
+        #expect(reply.ruleID == HostNativeAsk.leftoverAskDeny.ruleID)
+        #expect(reply.packID == HostNativeAsk.leftoverAskDeny.ruleID.pack)
+        #expect(reply.ruleID != RuleID(pack: .coreGit, pattern: "reset-hard"))
+    }
+
+    @Test func explainReplyDecodeIgnoresLyingSiblingIdentity() throws {
+        let leftover = leftoverDenyResult()
+        let honest = ExplainReply(
+            result: leftover,
+            normalized: "git reset --hard",
+            suggestion: "Run it in Terminal, or rv allow-once.",
+            stages: [ExplainStage(name: "normalize", elapsedMs: 0)]
         )
+        var object = try #require(
+            JSONSerialization.jsonObject(with: try IPCJSON.encode(honest)) as? [String: Any]
+        )
+        object["ruleID"] = "core.git:reset-hard"
+        object["packID"] = "core.git"
+        let decoded = try IPCJSON.decode(
+            ExplainReply.self,
+            from: try JSONSerialization.data(withJSONObject: object)
+        )
+        #expect(decoded.ruleID == HostNativeAsk.leftoverAskDeny.ruleID)
+        #expect(decoded.packID == HostNativeAsk.leftoverAskDeny.ruleID.pack)
+        #expect(decoded.result == leftover)
+    }
+
+    @Test func classifyReplyDerivesIdentityAndRiskFromOutcome() {
+        let leftover = leftoverDenyResult()
+        let reply = ClassifyReply(result: leftover)
+        #expect(reply.decision == leftover.decision)
+        #expect(reply.risk == .rated(.high))
+        #expect(reply.ruleID == HostNativeAsk.leftoverAskDeny.ruleID)
+        #expect(reply.packID == HostNativeAsk.leftoverAskDeny.ruleID.pack)
+        #expect(reply.reasons.isEmpty)
+    }
+
+    @Test func classifyReplySafeOnlyExposesPackWithoutRule() {
+        let result = EvaluationResult(
+            outcome: .safeOnly(SafeMatch(packID: .coreGit, patternName: "checkout-new-branch"))
+        )
+        let reply = ClassifyReply(result: result)
+        #expect(reply.decision == .allow)
+        #expect(reply.risk == .safe)
+        #expect(reply.ruleID == nil)
+        #expect(reply.packID == .coreGit)
+    }
+
+    @Test func classifyReplyDecodeIgnoresLyingSiblingIdentity() throws {
+        let leftover = leftoverDenyResult()
+        let honest = ClassifyReply(result: leftover)
+        var object = try #require(
+            JSONSerialization.jsonObject(with: try IPCJSON.encode(honest)) as? [String: Any]
+        )
+        object["ruleID"] = "core.git:reset-hard"
+        object["packID"] = "core.git"
+        object["risk"] = "critical"
+        let decoded = try IPCJSON.decode(
+            ClassifyReply.self,
+            from: try JSONSerialization.data(withJSONObject: object)
+        )
+        #expect(decoded.ruleID == HostNativeAsk.leftoverAskDeny.ruleID)
+        #expect(decoded.packID == HostNativeAsk.leftoverAskDeny.ruleID.pack)
+        #expect(decoded.decision == leftover.decision)
+        #expect(decoded.risk == .rated(.critical))
     }
 
     @Test func doctorCheckIDRoundTripsLegacyWireBytes() throws {
@@ -222,6 +295,10 @@ struct EnvelopeRoundTripTests {
         #expect(try IPCJSON.decode(ExplainParams.self, from: emptied).cwd == nil)
         #expect(try IPCJSON.decode(ClassifyParams.self, from: emptied).cwd == nil)
     }
+}
+
+private func leftoverDenyResult() -> EvaluationResult {
+    EvaluationResult(outcome: .deny(HostNativeAsk.leftoverAskDeny, matched: nil))
 }
 
 struct NamedMethod: Sendable {
@@ -320,8 +397,6 @@ extension IPCResult {
                     ExplainReply(
                         result: deny,
                         normalized: "git reset --hard",
-                        ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
-                        packID: .coreGit,
                         suggestion: "Run it in Terminal, or rv allow-once.",
                         stages: [ExplainStage(name: "normalize", elapsedMs: 0.1)]
                     )
@@ -331,12 +406,7 @@ extension IPCResult {
                 key: "classify",
                 id: id,
                 result: .classify(
-                    ClassifyReply(
-                        decision: deny.decision,
-                        risk: .rated(.critical),
-                        ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
-                        packID: .coreGit
-                    )
+                    ClassifyReply(result: deny)
                 )
             ),
             NamedResult(

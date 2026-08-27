@@ -349,6 +349,52 @@ private func mediumAllow() -> EvaluationResult {
     #expect(explainViewModel(from: EvaluationResult(outcome: .plain), command: status).semantic == nil)
 }
 
+@Test func explainViewModel_leftoverAskDenyUsesDenyRuleID() {
+    let leftover = HostNativeAsk.leftoverAskDeny
+    let vm = explainViewModel(
+        from: EvaluationResult(outcome: .deny(leftover, matched: nil)),
+        command: resetHard
+    )
+    #expect(vm.ruleID == leftover.ruleID)
+    #expect(vm.packID == leftover.ruleID.pack)
+    #expect(vm.patternName == nil)
+}
+
+@Test func explainViewModel_denyIgnoresMatchedRuleID() {
+    let leftover = HostNativeAsk.leftoverAskDeny
+    let vm = explainViewModel(
+        from: EvaluationResult(
+            outcome: .deny(
+                leftover,
+                matched: RuleMatch(
+                    ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+                    packID: .coreGit,
+                    patternName: "reset-hard",
+                    severity: .critical,
+                    reason: leftover.reason
+                )
+            )
+        ),
+        command: resetHard
+    )
+    #expect(vm.ruleID == leftover.ruleID)
+    #expect(vm.packID == leftover.ruleID.pack)
+    #expect(vm.patternName == "reset-hard")
+}
+
+@Test func explainViewModel_safeOnlyExposesPackWithoutRule() {
+    let vm = explainViewModel(
+        from: EvaluationResult(
+            outcome: .safeOnly(SafeMatch(packID: .coreGit, patternName: "checkout-new-branch"))
+        ),
+        command: status
+    )
+    #expect(vm.ruleID == nil)
+    #expect(vm.packID == .coreGit)
+    #expect(vm.nextAction == nil)
+    #expect(vm.fact == "allow")
+}
+
 @Test func packsViewModel_dayOneEnabled() {
     let vm = packsViewModel(
         enabled: dayOnePackIDs,

@@ -321,27 +321,9 @@ public actor ServiceRuntime {
         case .allow:
             suggestion = nil
         }
-        let ruleID: RuleID?
-        let packID: PackID?
-        switch result.outcome {
-        case .hit(let match, _):
-            ruleID = match.ruleID
-            packID = match.packID
-        case .safeOnly(let safe):
-            ruleID = nil
-            packID = safe.packID
-        case .deny(_, let match):
-            ruleID = match?.ruleID
-            packID = match?.packID
-        case .quickRejected, .plain, .indeterminate:
-            ruleID = nil
-            packID = nil
-        }
         return ExplainReply(
             result: result,
             normalized: normalized,
-            ruleID: ruleID,
-            packID: packID,
             suggestion: suggestion,
             stages: stages
         )
@@ -361,22 +343,6 @@ public actor ServiceRuntime {
                     .loadUserSnapshot(workspacePath: cwd.map(\.rawValue), now: now)
             }
         )
-        let matched: RuleMatch?
-        switch result.outcome {
-        case .hit(let match, _):
-            matched = match
-        case .deny(_, let match):
-            matched = match
-        case .quickRejected, .plain, .safeOnly, .indeterminate:
-            matched = nil
-        }
-        let risk = ClassifyRisk.derive(decision: result.decision, matched: matched)
-        var reasons: [ClassifyReason] = []
-        if let matched {
-            reasons.append(
-                ClassifyReason(ruleID: matched.ruleID, explanation: matched.explanation ?? matched.reason)
-            )
-        }
         let suggestions: [String]
         switch result.decision {
         case .deny:
@@ -386,14 +352,7 @@ public actor ServiceRuntime {
         case .allow:
             suggestions = []
         }
-        return ClassifyReply(
-            decision: result.decision,
-            risk: risk,
-            ruleID: matched?.ruleID,
-            packID: matched?.packID,
-            reasons: reasons,
-            suggestions: suggestions
-        )
+        return ClassifyReply(result: result, suggestions: suggestions)
     }
 
     private func setPackEnabled(_ params: SetPackEnabledParams) -> IPCResult {
