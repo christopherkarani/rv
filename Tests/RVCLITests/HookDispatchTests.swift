@@ -29,6 +29,8 @@ import RVTheme
     #expect(HookDispatch.matches(["hook", "--host=openclaw"]))
     #expect(HookDispatch.matches(["hook", "--host", "hermes"]))
     #expect(HookDispatch.matches(["hook", "--host=hermes"]))
+    #expect(HookDispatch.matches(["hook", "--host", "codex"]))
+    #expect(HookDispatch.matches(["hook", "--host=codex"]))
 }
 
 @Test func hookDispatch_parsesHostTheSameAsHook() throws {
@@ -43,6 +45,8 @@ import RVTheme
     #expect(try HookDispatch.parse(["--host=openclaw"]).host == .openclaw)
     #expect(try HookDispatch.parse(["--host", "hermes"]).host == .hermes)
     #expect(try HookDispatch.parse(["--host=hermes"]).host == .hermes)
+    #expect(try HookDispatch.parse(["--host", "codex"]).host == .codex)
+    #expect(try HookDispatch.parse(["--host=codex"]).host == .codex)
 }
 
 @Test func hookDispatch_invalidHost_doesNotEvaluate() async {

@@ -2,6 +2,7 @@ import RVDomain
 
 /// Returns the host wire for `result`: allow uses `encodeAllow`; deny and indeterminate use `encodeDeny`.
 /// Claude is the only rich encoder; Grok / Pi / OpenCode stay on short `encodeDeny`.
+/// Codex live deny is official older `decision: block` + exit 2, not Claude permission deny.
 /// Product Ask (`BoundReview.mandatoryHuman`) pauses only on a spend-first host.
 /// Claude first-call official ask is leftover-ask-as-permit and is never emitted.
 public func hookWire<C: HostCodec>(
@@ -18,7 +19,7 @@ public func hookWire<C: HostCodec>(
         }
         // Official `permissionDecision: "ask"` is leftover-ask-as-permit. Stay deny.
         return ClaudeHostCodec().encodeRichDeny(from: result, command: command)
-    case .grok, .pi, .opencode, .openclaw, .hermes:
+    case .grok, .pi, .opencode, .openclaw, .hermes, .codex:
         if afterSpend {
             return encodePostSpend(from: result, command: command, using: codec)
         }

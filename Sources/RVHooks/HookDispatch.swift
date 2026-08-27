@@ -51,6 +51,13 @@ public func hookWire(
             evaluate: evaluate,
             spendHostAsk: spendHostAsk
         )
+    case .codex:
+        return await hookBody(
+            stdin: stdin,
+            codec: CodexHostCodec(),
+            evaluate: evaluate,
+            spendHostAsk: spendHostAsk
+        )
     }
 }
 

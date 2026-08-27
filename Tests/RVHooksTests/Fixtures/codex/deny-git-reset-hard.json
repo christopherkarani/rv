@@ -1,0 +1,8 @@
+{
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Bash",
+  "tool_input": { "command": "git reset --hard", "workdir": "/tmp/ws" },
+  "cwd": "/tmp/ws",
+  "session_id": "sess_deny",
+  "turn_id": "turn_deny"
+}

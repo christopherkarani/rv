@@ -144,6 +144,71 @@ private func runOpenCodePluginContract(_ source: String) async throws -> OpenCod
     #expect(source.contains("RV_BYPASS") == false)
 }
 
+@Test func codexTemplate_emitsOfficialBlockAndExitTwoNotClaudeDeny() throws {
+    let source = try adapterSource(for: .codex, rvPath: "/opt/rv")
+    #expect(source.contains("PreToolUse"))
+    #expect(source.contains("\"Bash\""))
+    #expect(source.contains("\"codex\""))
+    #expect(source.contains("RV_BINARY = \"/opt/rv\""))
+    #expect(source.contains("\"decision\":\"block\"") || source.contains("'decision': 'block'"))
+    #expect(source.contains("sys.exit(2)"))
+    #expect(source.contains("sys.stderr"))
+    #expect(source.contains("permissionDecision") == false)
+    #expect(source.contains("\"ask\"") == false)
+    #expect(source.contains("permission.ask") == false)
+    #expect(source.contains("RV_BYPASS") == false)
+}
+
+@Test func codexWrapper_resetHardWritesStderrReasonAndExitsTwo() async throws {
+    let reason = resetHardReason
+    let result = try await runCodexWrapper(
+        event: [
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": ["command": "git reset --hard"],
+        ],
+        stub: .stdout(
+            "{\"decision\":\"block\",\"reason\":\"\(reason)\"}\n",
+            exit: 2
+        )
+    )
+    let json = try #require(
+        JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any]
+    )
+    #expect(json["decision"] as? String == "block")
+    #expect(json["reason"] as? String == reason)
+    #expect(result.stdout.contains("\"permissionDecision\"") == false)
+    #expect(result.stderr.contains(reason))
+    #expect(result.stderr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+    #expect(result.exitCode == 2)
+}
+
+@Test(arguments: [
+    "{\"decision\":\"block\"}\n",
+    "{\"decision\":\"block\",\"reason\":\"\"}\n",
+    "{\"decision\":\"block\",\"reason\":\"\\n\"}\n",
+])
+func codexWrapper_missingReasonDoesNotExitTwoWithWhitespaceStderr(_ stubStdout: String) async throws {
+    let result = try await runCodexWrapper(
+        event: [
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": ["command": "git reset --hard"],
+        ],
+        stub: .stdout(stubStdout, exit: 2)
+    )
+    let json = try #require(
+        JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any]
+    )
+    #expect(json["decision"] as? String == "block")
+    #expect(result.stdout.contains("\"permissionDecision\"") == false)
+    #expect(result.stdout.contains("\"ask\"") == false)
+    let trimmed = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+    #expect(result.stderr != "\n")
+    #expect(trimmed.isEmpty == false)
+    #expect(result.exitCode == 2)
+}
+
 @Test func hermesTemplate_registersPreToolCallTerminalAndBlocks() throws {
     let source = try adapterSource(for: .hermes, rvPath: "/opt/rv")
     #expect(source.contains("pre_tool_call"))
@@ -1283,6 +1348,80 @@ private func firstToast(_ object: [String: Any]) -> [String: Any]? {
         return properties
     }
     return first
+}
+
+private struct CodexWrapperRun {
+    var stdout: String
+    var stderr: String
+    var exitCode: Int32
+}
+
+private func runCodexWrapper(
+    event: [String: Any],
+    stub: StubRV
+) async throws -> CodexWrapperRun {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-codex-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let rvPath: String
+    switch stub {
+    case .missing:
+        rvPath = root.appendingPathComponent("missing-rv").path
+    case .stdout(let stdout, let exitCode):
+        rvPath = root.appendingPathComponent("rv-stub").path
+        let script = """
+        #!/bin/sh
+        printf '%s' "$RV_STUB_STDOUT"
+        exit "${RV_STUB_EXIT:-0}"
+        """
+        try script.write(toFile: rvPath, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: rvPath)
+        _ = stdout
+        _ = exitCode
+    case .sleep:
+        rvPath = root.appendingPathComponent("rv-stub").path
+    }
+
+    let source = try adapterSource(for: .codex, rvPath: rvPath)
+    let adapter = root.appendingPathComponent("rv-guard.py")
+    try source.write(to: adapter, atomically: true, encoding: .utf8)
+
+    let eventData = try JSONSerialization.data(withJSONObject: event)
+    let eventText = try #require(String(data: eventData, encoding: .utf8))
+
+    var environment = ProcessInfo.processInfo.environment
+    environment["HOME"] = root.path
+    switch stub {
+    case .stdout(let stdout, let exitCode):
+        environment["RV_STUB_STDOUT"] = stdout
+        environment["RV_STUB_EXIT"] = String(exitCode)
+    case .missing, .sleep:
+        break
+    }
+
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    process.arguments = ["python3", adapter.path]
+    process.environment = environment
+    process.currentDirectoryURL = root
+    let stdin = Pipe()
+    let stdout = Pipe()
+    let stderr = Pipe()
+    process.standardInput = stdin
+    process.standardOutput = stdout
+    process.standardError = stderr
+    try process.run()
+    stdin.fileHandleForWriting.write(Data(eventText.utf8))
+    try stdin.fileHandleForWriting.close()
+    process.waitUntilExit()
+
+    return CodexWrapperRun(
+        stdout: String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "",
+        stderr: String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "",
+        exitCode: process.terminationStatus
+    )
 }
 
 private struct AdapterPayload {

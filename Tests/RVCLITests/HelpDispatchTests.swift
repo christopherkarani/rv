@@ -89,7 +89,7 @@ import RVTheme
     #expect(text.contains("Examples") == false)
     #expect(text.contains("event.json") == false)
     #expect(text.contains("Next") == false)
-    #expect(text.contains("openclaw, hermes"))
+    #expect(text.contains("openclaw, hermes, codex"))
 }
 
 @Test func helpText_uninstall_hasNoPasteableTeardown() {
