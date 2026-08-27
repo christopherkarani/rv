@@ -388,7 +388,7 @@ private func runOpenCodePluginContract(
     #expect(result.spawnCount == 1)
 }
 
-@Test func openCodeAdapter_sessionShellConfirmYesSpendsThenAllows() async throws {
+@Test func openCodeAdapter_sessionShellLeftoverConfirmIsNotAPermit() async throws {
     let result = try await runOpenCodeAdapter(
         event: [
             "tool": "session.shell",
@@ -399,13 +399,13 @@ private func runOpenCodePluginContract(
         confirmYes: true,
         secondStub: .stdout("", exit: 0)
     )
-    #expect(result.threw == nil)
-    #expect(result.spawnCount == 2)
-    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
-    #expect(result.toastCount == 0)
+    #expect(result.threw == resetHardReason)
+    #expect(result.permissionCreates == 0)
+    #expect(result.spawnCount == 1)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
 }
 
-@Test func openCodeAdapter_sessionShellFailedSpendDoesNotRunTool() async throws {
+@Test func openCodeAdapter_sessionShellLeftoverAskDoesNotReachSpend() async throws {
     let result = try await runOpenCodeAdapter(
         event: [
             "tool": "session.shell",
@@ -417,8 +417,9 @@ private func runOpenCodePluginContract(
         secondStub: .stdout(resetHardJSON, exit: 1)
     )
     #expect(result.threw == resetHardReason)
-    #expect(result.spawnCount == 2)
-    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
+    #expect(result.permissionCreates == 0)
+    #expect(result.spawnCount == 1)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
 }
 
 @Test func openCodeAdapter_sessionShellEnvResetHardThrows() async throws {
