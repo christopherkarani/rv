@@ -12,6 +12,33 @@ struct EvaluateWorldTests {
         #expect(coverage.compiled.ids == dayOnePackIDs)
     }
 
+    @Test func freshHomeWalksDayOne() throws {
+        let home = try isolatedHome()
+        #expect(EvaluationWorld.walkedPackIDs(home: home).ids == dayOnePackIDs)
+    }
+
+    @Test func nilHomeWalksDayOne() {
+        #expect(EvaluationWorld.walkedPackIDs(home: nil).ids == dayOnePackIDs)
+    }
+
+    @Test func enabledExtrasWalkBeyondDayOne() throws {
+        let home = try isolatedHome()
+        _ = try PacksFacade.enable(home: home, ids: ["database"])
+        let walked = EvaluationWorld.walkedPackIDs(home: home)
+        #expect(walked.ids.contains(PackID(rawValue: "database.sqlite")))
+        #expect(walked.ids.count == 10)
+    }
+
+    @Test func disabledDayOneStaysOffWalkAndOnCompile() throws {
+        let home = try isolatedHome()
+        _ = try PacksFacade.disable(home: home, ids: ["core.git"])
+        let walked = EvaluationWorld.walkedPackIDs(home: home)
+        #expect(walked.ids.contains(PackID(rawValue: "core.git")) == false)
+        let coverage = PackCoverage.unioningDayOne(walked)
+        #expect(coverage.walked.ids.contains(PackID(rawValue: "core.git")) == false)
+        #expect(coverage.compiled.ids.contains(PackID(rawValue: "core.git")))
+    }
+
     @Test func emptyCatalogFallsBackToDayOneCompileSet() throws {
         let empty = PackCatalog(records: [])
         let coverage = EvaluationWorld.coverage(

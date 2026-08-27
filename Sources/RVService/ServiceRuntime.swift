@@ -195,7 +195,7 @@ public actor ServiceRuntime {
                 stdin: params.stdin,
                 evaluate: { command, cwd in
                     // Same pack resolution as the rv-cli miss path
-                    // (`EnabledPacks.resolve`): a warm rvd must never decide on a
+                    // (`EvaluationWorld.walkedPackIDs`): a warm rvd must never decide on a
                     // narrower or wider set than a cold one.
                     let request = GatedEvaluate.makeRequest(command: command, home: self.configHome)
                     return await self.runEvaluate(request, cwd: cwd)
@@ -231,7 +231,7 @@ public actor ServiceRuntime {
     }
 
     private func runSpendHostAsk(command: ShellCommand, cwd: WorkingDirectory?) async -> EvaluationResult {
-        rebuildWhenUncovered(wanted: WalkedPackIDs(ids: EnabledPacks.resolve(home: configHome).ids))
+        rebuildWhenUncovered(wanted: EvaluationWorld.walkedPackIDs(home: configHome))
         let now = clock()
         let baseDirectory = allowOnce.baseDirectory
         let result = await gated.spendHostAsk(
