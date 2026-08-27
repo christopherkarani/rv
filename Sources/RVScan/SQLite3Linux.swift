@@ -4,6 +4,7 @@
 typealias sqlite3_destructor_type = @convention(c) (UnsafeMutableRawPointer?) -> Void
 
 let SQLITE_OK: Int32 = 0
+let SQLITE_BUSY: Int32 = 5
 let SQLITE_CORRUPT: Int32 = 11
 let SQLITE_CANTOPEN: Int32 = 14
 let SQLITE_NOTADB: Int32 = 26
@@ -33,6 +34,9 @@ func sqlite3_open_v2(
 
 @_silgen_name("sqlite3_close")
 func sqlite3_close(_ db: OpaquePointer?) -> Int32
+
+@_silgen_name("sqlite3_next_stmt")
+func sqlite3_next_stmt(_ db: OpaquePointer?, _ pStmt: OpaquePointer?) -> OpaquePointer?
 
 @_silgen_name("sqlite3_exec")
 func sqlite3_exec(

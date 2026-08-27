@@ -42,46 +42,50 @@ public struct OpenClawStoreAdapter: SessionStoreAdapter {
     private static func events(in data: Data, sourcePath: String) throws -> [ExtractedEvent] {
         let opened = try deserializedDatabase(from: data, sourcePath: sourcePath)
 
-        let sql = "SELECT session_id, event_json, created_at FROM transcript_events;"
-        var statement: OpaquePointer?
-        let prepareStatus = sqlite3_prepare_v2(opened.db, sql, -1, &statement, nil)
-        guard prepareStatus == SQLITE_OK, let statement else {
-            if statement != nil { _ = sqlite3_finalize(statement) }
-            switch prepareStatus {
-            case SQLITE_NOTADB, SQLITE_CORRUPT, SQLITE_CANTOPEN:
-                throw OpenClawStoreError.unreadable(sourcePath: sourcePath)
-            default:
-                throw OpenClawStoreError.prepareFailed(sourcePath: sourcePath)
+        // Keep SQLite statement use inside the borrow; the owner stays alive
+        // until this closure finalizes every statement and returns.
+        return try opened.withConnection { db in
+            let sql = "SELECT session_id, event_json, created_at FROM transcript_events;"
+            var statement: OpaquePointer?
+            let prepareStatus = sqlite3_prepare_v2(db, sql, -1, &statement, nil)
+            guard prepareStatus == SQLITE_OK, let statement else {
+                if statement != nil { _ = sqlite3_finalize(statement) }
+                switch prepareStatus {
+                case SQLITE_NOTADB, SQLITE_CORRUPT, SQLITE_CANTOPEN:
+                    throw OpenClawStoreError.unreadable(sourcePath: sourcePath)
+                default:
+                    throw OpenClawStoreError.prepareFailed(sourcePath: sourcePath)
+                }
             }
-        }
-        defer { _ = sqlite3_finalize(statement) }
+            defer { _ = sqlite3_finalize(statement) }
 
-        var events: [ExtractedEvent] = []
-        var stepStatus = sqlite3_step(statement)
-        while stepStatus == SQLITE_ROW {
-            let sessionID = Self.textColumn(statement, index: 0)
-            guard let eventJSON = Self.textColumn(statement, index: 1),
-                  let extracted = Self.extractCommand(from: eventJSON)
-            else {
-                stepStatus = sqlite3_step(statement)
-                continue
-            }
-            let occurredAt = Self.date(fromCreatedAt: sqlite3_column_int64(statement, 2))
-            events.append(
-                ExtractedEvent(
-                    host: .openclaw,
-                    sessionID: sessionID,
-                    sourcePath: sourcePath,
-                    occurredAt: occurredAt,
-                    command: ShellCommand(rawValue: extracted)
+            var events: [ExtractedEvent] = []
+            var stepStatus = sqlite3_step(statement)
+            while stepStatus == SQLITE_ROW {
+                let sessionID = Self.textColumn(statement, index: 0)
+                guard let eventJSON = Self.textColumn(statement, index: 1),
+                      let extracted = Self.extractCommand(from: eventJSON)
+                else {
+                    stepStatus = sqlite3_step(statement)
+                    continue
+                }
+                let occurredAt = Self.date(fromCreatedAt: sqlite3_column_int64(statement, 2))
+                events.append(
+                    ExtractedEvent(
+                        host: .openclaw,
+                        sessionID: sessionID,
+                        sourcePath: sourcePath,
+                        occurredAt: occurredAt,
+                        command: ShellCommand(rawValue: extracted)
+                    )
                 )
-            )
-            stepStatus = sqlite3_step(statement)
+                stepStatus = sqlite3_step(statement)
+            }
+            guard stepStatus == SQLITE_DONE else {
+                throw OpenClawStoreError.unreadable(sourcePath: sourcePath)
+            }
+            return events
         }
-        guard stepStatus == SQLITE_DONE else {
-            throw OpenClawStoreError.unreadable(sourcePath: sourcePath)
-        }
-        return events
     }
 
     private static func deserializedDatabase(
@@ -124,9 +128,11 @@ public struct OpenClawStoreAdapter: SessionStoreAdapter {
             header[19] = 1
         }
 
-        // OwnedSQLiteDatabase closes the handle before freeing P. Do not set
-        // FREEONCLOSE — SQLite frees P itself on deserialize failure when that
-        // bit is set, which would double-free if we also free it.
+        // `withConnection` keeps the owner alive while statements use the
+        // deserialized image. Its deinit drains BUSY statements and frees P
+        // only after close succeeds. Do not set FREEONCLOSE — SQLite frees P
+        // itself on deserialize failure when that bit is set, which would
+        // double-free if we also free it.
         let flags = UInt32(bitPattern: SQLITE_DESERIALIZE_READONLY)
         let status = sqlite3_deserialize(
             db,
