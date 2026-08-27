@@ -74,4 +74,18 @@ struct FrameCodecTests {
             )
         }
     }
+
+    @Test func bodyCountRejectsOversizedHeaderWithoutBody() {
+        var header = UInt32(FrameCodec.maxBodyBytes + 1).bigEndian
+        #expect(throws: FrameCodecError.oversized) {
+            try FrameCodec.bodyCount(fromHeader: Data(bytes: &header, count: 4))
+        }
+    }
+
+    @Test func bodyCountRejectsEmptyHeader() {
+        var header = UInt32(0).bigEndian
+        #expect(throws: FrameCodecError.empty) {
+            try FrameCodec.bodyCount(fromHeader: Data(bytes: &header, count: 4))
+        }
+    }
 }

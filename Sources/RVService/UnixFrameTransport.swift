@@ -29,10 +29,8 @@ enum UnixFrameIO {
 
     static func readFrame(fd: Int32) throws -> Data {
         let header = try recvExact(fd: fd, count: 4)
-        let length = header.withUnsafeBytes { raw in
-            raw.loadUnaligned(as: UInt32.self).bigEndian
-        }
-        let body = try recvExact(fd: fd, count: Int(length))
+        let length = try FrameCodec.bodyCount(fromHeader: header)
+        let body = try recvExact(fd: fd, count: length)
         return try FrameCodec.decode(header: header, body: body)
     }
 
