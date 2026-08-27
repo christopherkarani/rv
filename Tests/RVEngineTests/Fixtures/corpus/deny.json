@@ -561,6 +561,48 @@
       "expected": "deny",
       "rule_id": "core.filesystem:rm-rf-root-home",
       "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.rm-rf-bare-tmp-then-root",
+      "command": "rm -rf /tmp /",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.rm-rf-bare-tmp-then-var-log",
+      "command": "rm -rf /tmp /var/log",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.rm-rf-bare-private-tmp-then-root",
+      "command": "rm -rf /private/tmp /",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.rm-rf-tmp-slash-then-root",
+      "command": "rm -rf /tmp/ /",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.rm-rf-tmp-dotdot-users",
+      "command": "rm -rf /tmp/../Users",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-general",
+      "reason_contains": "rm -rf is destructive"
+    },
+    {
+      "id": "deny.cp-sensitive-then-delete-after-set",
+      "command": "set -euo pipefail && cp -al /etc /tmp/x && rm -rf /tmp/x",
+      "expected": "deny",
+      "rule_id": "core.filesystem:cp-sensitive-then-delete",
+      "reason_contains": "EXTREMELY DANGEROUS"
     }
   ]
 }
