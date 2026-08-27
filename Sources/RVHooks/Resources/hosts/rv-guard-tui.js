@@ -97,33 +97,48 @@ function bindOfficialDialogKeys(api, handlers) {
   const toggle = () => {
     active = active === "confirm" ? "cancel" : "confirm";
   };
+  const submit = () => {
+    if (active === "confirm") {
+      handlers.onConfirm();
+    }
+    if (active === "cancel") {
+      handlers.onCancel();
+    }
+  };
   return keymap.registerLayer({
     priority: 1000,
+    commands: [
+      {
+        name: "dialog.confirm.submit",
+        title: "Confirm dialog selection",
+        category: "Dialog",
+        run: submit,
+      },
+      {
+        name: "dialog.confirm.toggle",
+        title: "Toggle dialog option",
+        category: "Dialog",
+        run: toggle,
+      },
+    ],
     bindings: [
       {
         key: "return",
+        cmd: "dialog.confirm.submit",
         desc: "Confirm dialog selection",
         group: "Dialog",
-        cmd: () => {
-          if (active === "confirm") {
-            handlers.onConfirm();
-          }
-          if (active === "cancel") {
-            handlers.onCancel();
-          }
-        },
       },
       {
         key: "left",
+        cmd: "dialog.confirm.toggle",
         desc: "Previous dialog option",
         group: "Dialog",
-        cmd: toggle,
       },
       {
         key: "right",
+        cmd: "dialog.confirm.toggle",
         desc: "Next dialog option",
         group: "Dialog",
-        cmd: toggle,
       },
     ],
   });
