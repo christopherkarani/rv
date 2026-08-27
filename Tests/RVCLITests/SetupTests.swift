@@ -157,8 +157,8 @@ private func fixtureLoginHome() throws -> URL {
         #expect(tui.contains("permission.ask") == false)
         #expect(tui.contains("DialogConfirm.show") == false)
         #expect(tui.contains("createComponent") == false)
-        #expect(tui.contains("registerLayer"))
-        #expect(tui.contains("keymap"))
+        #expect(tui.contains("registerLayer") == false)
+        #expect(tui.contains("let active") == false)
         #expect(tui.contains("setSize"))
         let askTui = try String(
             contentsOfFile: layout.openCodeTuiAskPackage + "/tui.js",

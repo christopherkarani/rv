@@ -54,8 +54,8 @@ func hostAdapter_bakedRvPath_rejectsModifiedAndForeignBytes(host: HookHost) thro
     #expect(openCodeTui.contains("permission.ask") == false)
     #expect(openCodeTui.contains("DialogConfirm.show") == false)
     #expect(openCodeTui.contains("createComponent") == false)
-    #expect(openCodeTui.contains("registerLayer"))
-    #expect(openCodeTui.contains("keymap"))
+    #expect(openCodeTui.contains("registerLayer") == false)
+    #expect(openCodeTui.contains("let active") == false)
     #expect(openCodeTui.contains("setSize"))
 }
 

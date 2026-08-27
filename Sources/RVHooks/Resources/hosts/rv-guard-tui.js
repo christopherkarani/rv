@@ -55,92 +55,23 @@ async function showConfirm(api, message) {
         return;
       }
       settled = true;
-      if (typeof unbind === "function") {
-        unbind();
-      }
       if (typeof dialog.clear === "function") {
         dialog.clear();
       }
       resolve(allowed);
     };
-    const unbind = bindOfficialDialogKeys(api, {
-      onConfirm: () => finish(true),
-      onCancel: () => finish(false),
-    });
-    dialog.replace(
-      () =>
-        DialogConfirm({
-          title: "RV · Ask",
-          message,
-          get onConfirm() {
-            return () => finish(true);
-          },
-          get onCancel() {
-            return () => finish(false);
-          },
-        }),
-      () => {
-        if (typeof unbind === "function") {
-          unbind();
-        }
-      },
+    dialog.replace(() =>
+      DialogConfirm({
+        title: "RV · Ask",
+        message,
+        get onConfirm() {
+          return () => finish(true);
+        },
+        get onCancel() {
+          return () => finish(false);
+        },
+      }),
     );
-  });
-}
-
-function bindOfficialDialogKeys(api, handlers) {
-  const keymap = api && api.keymap;
-  if (!keymap || typeof keymap.registerLayer !== "function") {
-    return undefined;
-  }
-  let active = "confirm";
-  const toggle = () => {
-    active = active === "confirm" ? "cancel" : "confirm";
-  };
-  const submit = () => {
-    if (active === "confirm") {
-      handlers.onConfirm();
-    }
-    if (active === "cancel") {
-      handlers.onCancel();
-    }
-  };
-  return keymap.registerLayer({
-    priority: 1000,
-    commands: [
-      {
-        name: "dialog.confirm.submit",
-        title: "Confirm dialog selection",
-        category: "Dialog",
-        run: submit,
-      },
-      {
-        name: "dialog.confirm.toggle",
-        title: "Toggle dialog option",
-        category: "Dialog",
-        run: toggle,
-      },
-    ],
-    bindings: [
-      {
-        key: "return",
-        cmd: "dialog.confirm.submit",
-        desc: "Confirm dialog selection",
-        group: "Dialog",
-      },
-      {
-        key: "left",
-        cmd: "dialog.confirm.toggle",
-        desc: "Previous dialog option",
-        group: "Dialog",
-      },
-      {
-        key: "right",
-        cmd: "dialog.confirm.toggle",
-        desc: "Next dialog option",
-        group: "Dialog",
-      },
-    ],
   });
 }
 

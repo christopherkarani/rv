@@ -64,7 +64,8 @@ private func runOpenCodePluginContract(
         usedShow: object["usedShow"] as? Bool ?? false,
         usedCreateComponent: object["usedCreateComponent"] as? Bool ?? false,
         usedOfficialKeys: object["usedOfficialKeys"] as? Bool ?? false,
-        usedInventedCallback: object["usedInventedCallback"] as? Bool ?? false
+        usedInventedCallback: object["usedInventedCallback"] as? Bool ?? false,
+        dialogFocus: object["dialogFocus"] as? String
     )
 }
 
@@ -123,8 +124,9 @@ private func runOpenCodePluginContract(
     #expect(tui.contains("server:"))
     #expect(tui.contains("DialogConfirm.show") == false)
     #expect(tui.contains("createComponent") == false)
-    #expect(tui.contains("registerLayer"))
-    #expect(tui.contains("keymap"))
+    #expect(tui.contains("registerLayer") == false)
+    #expect(tui.contains("let active") == false)
+    #expect(tui.contains("dialog.confirm.toggle") == false)
     #expect(tui.contains("setSize"))
     #expect(source.contains("pollOfficialPermissionReply") == false)
     #expect(source.contains("RV_ASK_TIMEOUT_MS"))
@@ -146,6 +148,7 @@ private func runOpenCodePluginContract(
     #expect(probe.usedCreateComponent == false)
     #expect(probe.usedOfficialKeys == true)
     #expect(probe.usedInventedCallback == false)
+    #expect(probe.dialogFocus == "confirm")
     #expect(probe.replied == "once")
     #expect(probe.replySessionID == "ses_1")
     #expect(probe.replyRequestID == "per_live")
@@ -161,7 +164,24 @@ private func runOpenCodePluginContract(
     #expect(probe.usedOfficialKeys == true)
     #expect(probe.usedInventedCallback == false)
     #expect(probe.dialogTitle == "RV · Ask")
+    #expect(probe.dialogFocus == "confirm")
     #expect(probe.replied == "once")
+    #expect(probe.replySessionID == "ses_1")
+    #expect(probe.replyRequestID == "per_live")
+}
+
+@Test func openCodeTuiPlugin_officialDialogConfirmReturnWhileCancelHighlightedRepliesReject() async throws {
+    let probe = try await runOpenCodePluginContract(
+        try HostAdapterResources.loadOpenCodeTuiPlugin(),
+        mode: "official-cancel"
+    )
+    #expect(probe.usedShow == false)
+    #expect(probe.usedCreateComponent == false)
+    #expect(probe.usedOfficialKeys == true)
+    #expect(probe.usedInventedCallback == false)
+    #expect(probe.dialogTitle == "RV · Ask")
+    #expect(probe.dialogFocus == "cancel")
+    #expect(probe.replied == "reject")
     #expect(probe.replySessionID == "ses_1")
     #expect(probe.replyRequestID == "per_live")
 }
@@ -176,6 +196,7 @@ private func runOpenCodePluginContract(
     #expect(probe.usedOfficialKeys == true)
     #expect(probe.usedInventedCallback == false)
     #expect(probe.dialogTitle == "RV · Ask")
+    #expect(probe.dialogFocus == "cancel")
     #expect(probe.replied == "reject")
     #expect(probe.replySessionID == "ses_1")
     #expect(probe.replyRequestID == "per_live")
@@ -1304,6 +1325,7 @@ private struct OpenCodePluginContract {
     var usedCreateComponent: Bool
     var usedOfficialKeys: Bool
     var usedInventedCallback: Bool
+    var dialogFocus: String?
 }
 
 private func runPiAdapter(

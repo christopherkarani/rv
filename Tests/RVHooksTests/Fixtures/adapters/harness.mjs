@@ -213,9 +213,10 @@ function officialKeymap() {
               command.run();
             }
           }
-          return;
+          return true;
         }
       }
+      return false;
     },
   };
 }
@@ -243,9 +244,30 @@ async function loadTuiAskCompanion(ctx, pluginPath, click) {
     },
   };
   function DialogConfirm(props) {
+    const store = { active: "confirm" };
     painted = {
       title: props && props.title,
       message: props && props.message,
+      get focus() {
+        return store.active;
+      },
+      key(name) {
+        if (name === "left" || name === "right") {
+          store.active = store.active === "confirm" ? "cancel" : "confirm";
+          return;
+        }
+        if (name === "return") {
+          const stolen = keymap.handle("return");
+          if (!stolen) {
+            if (store.active === "confirm" && typeof props.onConfirm === "function") {
+              props.onConfirm();
+            }
+            if (store.active === "cancel" && typeof props.onCancel === "function") {
+              props.onCancel();
+            }
+          }
+        }
+      },
     };
     ctx.tuiDialogTitle = painted.title;
     return painted;
@@ -363,13 +385,12 @@ function installOfficialPermission(ctx, reply) {
           const clickPainted = async () => {
             for (let i = 0; i < 40; i++) {
               const painted = typeof ctx.tuiPainted === "function" ? ctx.tuiPainted() : null;
-              const keymap = ctx.tuiKeymap;
-              if (painted && keymap && typeof keymap.handle === "function") {
+              if (painted && typeof painted.key === "function") {
                 if (tuiClick === "once") {
-                  keymap.handle("return");
+                  painted.key("return");
                 } else if (tuiClick === "reject") {
-                  keymap.handle("left");
-                  keymap.handle("return");
+                  painted.key("left");
+                  painted.key("return");
                 }
                 return;
               }

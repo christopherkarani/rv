@@ -123,55 +123,55 @@ function officialKeymap() {
               command.run();
             }
           }
-          return;
+          return true;
         }
       }
+      return false;
     },
   };
 }
 
 function officialDialogConfirm(props, keymap) {
+  // Official 1.18.18 DialogConfirm: one store paints focus and decides return.
+  // left/right never update a plugin keymap `active`. That second store is leftover-ask.
   const store = { active: "confirm" };
   const toggle = () => {
     store.active = store.active === "confirm" ? "cancel" : "confirm";
   };
-  // Official 1.18.18 DialogConfirm useBindings. Live TUI: these call
-  // props.onConfirm?.() / onCancel?.(), which stay undefined. Do not invent a fire.
-  if (keymap && typeof keymap.registerLayer === "function") {
-    keymap.registerLayer({
-      bindings: [
-        {
-          key: "return",
-          desc: "Confirm dialog selection",
-          group: "Dialog",
-          cmd: () => {
-            if (store.active === "confirm") {
-              props && typeof props.onConfirm === "function" && props.onConfirm();
-            }
-            if (store.active === "cancel") {
-              props && typeof props.onCancel === "function" && props.onCancel();
-            }
-          },
-        },
-        { key: "left", desc: "Previous dialog option", group: "Dialog", cmd: toggle },
-        { key: "right", desc: "Next dialog option", group: "Dialog", cmd: toggle },
-      ],
-    });
-  }
+  const submit = () => {
+    if (store.active === "confirm") {
+      props && typeof props.onConfirm === "function" && props.onConfirm();
+    }
+    if (store.active === "cancel") {
+      props && typeof props.onCancel === "function" && props.onCancel();
+    }
+  };
   const painted = {
     title: props && props.title,
     message: props && props.message,
+    get focus() {
+      return store.active;
+    },
     key(name) {
-      keymap.handle(name);
+      if (name === "left" || name === "right") {
+        toggle();
+        return;
+      }
+      if (name === "return") {
+        const stolen = keymap && typeof keymap.handle === "function" && keymap.handle("return");
+        if (!stolen) {
+          submit();
+        }
+      }
     },
     click(which) {
       if (which === "confirm") {
-        keymap.handle("return");
+        painted.key("return");
         return;
       }
       if (which === "cancel") {
-        keymap.handle("left");
-        keymap.handle("return");
+        toggle();
+        painted.key("return");
       }
     },
   };
@@ -245,6 +245,7 @@ let usedShow = false;
 let usedCreateComponent = false;
 let usedOfficialKeys = false;
 let usedInventedCallback = false;
+let dialogFocus = null;
 
 function askedEvent() {
   return {
@@ -285,8 +286,11 @@ async function runAsked(api, click) {
       painted.key("return");
     } else if (click === "cancel") {
       usedOfficialKeys = true;
-      painted.click("cancel");
+      painted.key("left");
+      dialogFocus = painted.focus;
+      painted.key("return");
     }
+    dialogFocus = painted.focus;
   }
   if (click === "none") {
     await Promise.race([pending, new Promise((resolve) => setTimeout(resolve, 40))]);
@@ -387,6 +391,7 @@ process.stdout.write(
     usedCreateComponent,
     usedOfficialKeys,
     usedInventedCallback,
+    dialogFocus,
   }),
 );
 process.exit(0);
