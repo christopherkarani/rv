@@ -127,6 +127,7 @@ if (host === "opencode") {
     },
   };
   if (confirmYes) {
+    ctx.ask = async () => true;
     ctx.ui = {
       hasUI,
       async confirm() {

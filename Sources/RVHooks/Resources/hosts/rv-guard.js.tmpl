@@ -160,7 +160,7 @@ async function gateCommand(ctx, input, output, command, tool) {
   const cwd = pickCwd(hostCwd);
   const mapped = await consultRv(command, cwd, tool);
   if (mapped.action === "ask") {
-    const allowed = await confirmAsk(ctx, input, output, mapped, command);
+    const allowed = await confirmAsk(ctx, input, mapped, command);
     if (!allowed) {
       await failClosed(ctx, mapped, command);
     }
@@ -176,23 +176,10 @@ async function gateCommand(ctx, input, output, command, tool) {
   }
 }
 
-async function confirmAsk(ctx, input, output, mapped, command) {
+async function confirmAsk(ctx, input, mapped, command) {
   try {
     if (ctx?.ui?.hasUI === false) {
       return false;
-    }
-    const prompt = {
-      message:
-        typeof mapped.reason === "string" && mapped.reason.length > 0
-          ? mapped.reason
-          : "Allow this command once?",
-    };
-    const askers = [input?.ask, output?.onResolution, ctx?.ask, ctx?.ui?.confirm];
-    for (const ask of askers) {
-      if (typeof ask !== "function") {
-        continue;
-      }
-      return isAllowOnceResolution(await ask(prompt));
     }
     return await confirmOfficialPermission(ctx, input, mapped, command);
   } catch {
@@ -439,28 +426,6 @@ function permissionReplyFromEvent(event, requestID, sessionID) {
     return undefined;
   }
   return typeof props.reply === "string" ? props.reply : undefined;
-}
-
-function isAllowOnceResolution(value) {
-  if (value === true) {
-    return true;
-  }
-  if (value === "once" || value === "allow-once" || value === "allowOnce") {
-    return true;
-  }
-  if (value && typeof value === "object") {
-    const status = value.status ?? value.decision ?? value.effect ?? value.action;
-    if (
-      status === true ||
-      status === "once" ||
-      status === "allow-once" ||
-      status === "allowOnce" ||
-      status === "allow"
-    ) {
-      return true;
-    }
-  }
-  return false;
 }
 
 function pickCwd(hostCwd) {

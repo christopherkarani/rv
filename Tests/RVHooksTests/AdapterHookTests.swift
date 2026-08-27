@@ -115,7 +115,13 @@ private func runOpenCodePluginContract(
     #expect(source.contains("showToast"))
     #expect(source.contains("RV · Blocked"))
     #expect(source.contains("hostAsk: \"spend\""))
-    #expect(source.contains("onResolution"))
+    #expect(source.contains("onResolution") == false)
+    #expect(source.contains("isAllowOnceResolution") == false)
+    #expect(source.contains("const askers") == false)
+    #expect(source.contains("input?.ask") == false)
+    #expect(source.contains("output?.onResolution") == false)
+    #expect(source.contains("ctx?.ask") == false)
+    #expect(source.contains("ctx?.ui?.confirm") == false)
     #expect(source.contains("session.permission.create"))
     #expect(source.contains("permission.ask") == false)
     #expect(source.contains("tool: {") == false)
@@ -532,6 +538,43 @@ private func runOpenCodePluginContract(
     #expect(result.toastCount == 0)
 }
 
+@Test func openCodeAdapter_sessionShellEnvOfficialConfirmFailedSpendDoesNotRunTool() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: [
+            "hook": "shell.env",
+            "cwd": "/tmp/ws",
+            "sessionID": "ses_1",
+            "callID": "call_1",
+            "command": "git reset --hard",
+        ],
+        stub: .stdout(askResetHardJSON, exit: 1),
+        permissionReply: "once",
+        secondStub: .stdout(resetHardJSON, exit: 1)
+    )
+    #expect(result.threw == resetHardReason)
+    #expect(result.permissionCreates == 1)
+    #expect(result.spawnCount == 2)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
+}
+
+@Test func openCodeAdapter_sessionShellEnvOfficialConfirmMissingSpendDoesNotRunTool() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: [
+            "hook": "shell.env",
+            "cwd": "/tmp/ws",
+            "sessionID": "ses_1",
+            "callID": "call_1",
+            "command": "git reset --hard",
+        ],
+        stub: .stdout(askResetHardJSON, exit: 1),
+        permissionReply: "once"
+    )
+    #expect(result.threw == resetHardReason)
+    #expect(result.permissionCreates == 1)
+    #expect(result.spawnCount == 2)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
+}
+
 @Test func openCodeAdapter_sessionShellEnvOfficialConfirmRejectDoesNotAllow() async throws {
     let result = try await runOpenCodeAdapter(
         event: [
@@ -748,7 +791,7 @@ private func runOpenCodePluginContract(
     #expect(result.toastCount == 0)
 }
 
-@Test func openCodeAdapter_sessionShellEnvConfirmSpendsThenAllows() async throws {
+@Test func openCodeAdapter_sessionShellEnvLeftoverConfirmIsNotAPermit() async throws {
     let result = try await runOpenCodeAdapter(
         event: [
             "hook": "shell.env",
@@ -759,14 +802,39 @@ private func runOpenCodePluginContract(
         ],
         stub: .stdout(askResetHardJSON, exit: 1),
         confirmYes: true,
+        askTimeoutMs: 400,
+        secondStub: .stdout("", exit: 0)
+    )
+    #expect(result.threw == resetHardReason)
+    #expect(result.permissionCreates == 0)
+    #expect(result.spawnCount == 1)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
+}
+
+@Test func openCodeAdapter_sessionShellEnvLeftoverAskDoesNotSkipOfficialCreate() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: [
+            "hook": "shell.env",
+            "cwd": "/tmp/ws",
+            "sessionID": "ses_1",
+            "callID": "call_1",
+            "command": "git reset --hard",
+        ],
+        stub: .stdout(askResetHardJSON, exit: 1),
+        confirmYes: true,
+        permissionReply: "tui-click-once",
+        askTimeoutMs: 800,
         secondStub: .stdout("", exit: 0)
     )
     #expect(result.threw == nil)
+    #expect(result.permissionCreates == 1)
+    #expect(result.tuiDialogTitle == "Permission required")
+    #expect(result.permissionReply204 == "once")
     #expect(result.spawnCount == 2)
     #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
 }
 
-@Test func openCodeAdapter_sessionShellEnvFailedSpendDoesNotRunTool() async throws {
+@Test func openCodeAdapter_sessionShellEnvLeftoverAskDoesNotReachSpend() async throws {
     let result = try await runOpenCodeAdapter(
         event: [
             "hook": "shell.env",
@@ -777,10 +845,13 @@ private func runOpenCodePluginContract(
         ],
         stub: .stdout(askResetHardJSON, exit: 1),
         confirmYes: true,
+        askTimeoutMs: 400,
         secondStub: .stdout(resetHardJSON, exit: 1)
     )
     #expect(result.threw == resetHardReason)
-    #expect(result.spawnCount == 2)
+    #expect(result.permissionCreates == 0)
+    #expect(result.spawnCount == 1)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
 }
 
 @Test func openCodeAdapter_sessionShellEnvMissingCommandDoesNotAllow() async throws {
@@ -944,33 +1015,33 @@ private func runOpenCodePluginContract(
     #expect(result.spawnCount == 1)
 }
 
-@Test func openCodeAdapter_confirmYesSpendsThenAllows() async throws {
+@Test func openCodeAdapter_leftoverInputAskIsNotAPermit() async throws {
     let result = try await runOpenCodeAdapter(
         event: ["tool": "bash", "cwd": "/tmp/ws", "args": ["command": "git reset --hard"]],
         stub: .stdout(askResetHardJSON, exit: 1),
         confirmYes: true,
         secondStub: .stdout("", exit: 0)
     )
-    #expect(result.threw == nil)
-    #expect(result.spawnCount == 2)
-    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
-    #expect(result.toastCount == 0)
+    #expect(result.threw == resetHardReason)
+    #expect(result.permissionCreates == 0)
+    #expect(result.spawnCount == 1)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
 }
 
-@Test func openCodeAdapter_resolutionSpendsThenAllows() async throws {
+@Test func openCodeAdapter_leftoverOnResolutionIsNotAPermit() async throws {
     let result = try await runOpenCodeAdapter(
         event: ["tool": "bash", "cwd": "/tmp/ws", "args": ["command": "git reset --hard"]],
         stub: .stdout(askResetHardJSON, exit: 1),
         resolutionAllow: true,
         secondStub: .stdout("", exit: 0)
     )
-    #expect(result.threw == nil)
-    #expect(result.spawnCount == 2)
-    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
-    #expect(result.toastCount == 0)
+    #expect(result.threw == resetHardReason)
+    #expect(result.permissionCreates == 0)
+    #expect(result.spawnCount == 1)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
 }
 
-@Test func openCodeAdapter_confirmYesFailedSpendDoesNotRunTool() async throws {
+@Test func openCodeAdapter_leftoverAskDoesNotReachSpend() async throws {
     let result = try await runOpenCodeAdapter(
         event: ["tool": "bash", "cwd": "/tmp/ws", "args": ["command": "git reset --hard"]],
         stub: .stdout(askResetHardJSON, exit: 1),
@@ -978,18 +1049,21 @@ private func runOpenCodePluginContract(
         secondStub: .stdout(resetHardJSON, exit: 1)
     )
     #expect(result.threw == resetHardReason)
-    #expect(result.spawnCount == 2)
-    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
+    #expect(result.permissionCreates == 0)
+    #expect(result.spawnCount == 1)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
 }
 
-@Test func openCodeAdapter_confirmYesMissingSpendDoesNotRunTool() async throws {
+@Test func openCodeAdapter_leftoverAskMissingReplyDoesNotSpend() async throws {
     let result = try await runOpenCodeAdapter(
         event: ["tool": "bash", "cwd": "/tmp/ws", "args": ["command": "git reset --hard"]],
         stub: .stdout(askResetHardJSON, exit: 1),
         confirmYes: true
     )
     #expect(result.threw == resetHardReason)
-    #expect(result.spawnCount == 2)
+    #expect(result.permissionCreates == 0)
+    #expect(result.spawnCount == 1)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
 }
 
 @Test func openCodeAdapter_hasUIFalseDoesNotSpend() async throws {
@@ -1004,16 +1078,17 @@ private func runOpenCodePluginContract(
     #expect(result.spawnCount == 1)
 }
 
-@Test func openCodeAdapter_unlockableDenyConfirmYesSpendsThenAllows() async throws {
+@Test func openCodeAdapter_unlockableDenyLeftoverAskIsNotAPermit() async throws {
     let result = try await runOpenCodeAdapter(
         event: ["tool": "bash", "cwd": "/tmp/ws", "args": ["command": "git reset --hard"]],
         stub: .stdout(resetHardJSON, exit: 1),
         confirmYes: true,
         secondStub: .stdout("", exit: 0)
     )
-    #expect(result.threw == nil)
-    #expect(result.spawnCount == 2)
-    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
+    #expect(result.threw == resetHardReason)
+    #expect(result.permissionCreates == 0)
+    #expect(result.spawnCount == 1)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
 }
 
 @Test func piAdapter_nonBashDoesNotSpawn() async throws {
