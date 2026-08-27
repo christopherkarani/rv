@@ -150,7 +150,27 @@ private func fixtureLoginHome() throws -> URL {
         #expect(outcome.exitCode == 0)
         let body = try String(contentsOfFile: layout.openCodePlugin, encoding: .utf8)
         #expect(body == (try HookHost.opencode.adapterResource().rendered(rvPath: "/tmp/rv-bin/rv")))
+        let tui = try String(contentsOfFile: layout.openCodeTuiPlugin, encoding: .utf8)
+        #expect(tui.contains("DialogConfirm"))
+        #expect(tui.contains("RV · Ask"))
+        #expect(tui.contains("server:"))
+        #expect(tui.contains("permission.ask") == false)
+        let askTui = try String(
+            contentsOfFile: layout.openCodeTuiAskPackage + "/tui.js",
+            encoding: .utf8
+        )
+        #expect(askTui.contains("tui: plugin.server"))
+        #expect(askTui.contains("permission.ask") == false)
+        let config = try String(contentsOfFile: layout.openCodeConfig, encoding: .utf8)
+        #expect(config.contains("rv-guard-tui-ask"))
         #expect(FileManager.default.fileExists(atPath: layout.grokHook) == false)
+
+        let uninstall = SetupRun.uninstall(env(home: home, launchctl: launchctl))
+        #expect(uninstall.exitCode == 0)
+        #expect(FileManager.default.fileExists(atPath: layout.openCodePlugin) == false)
+        #expect(FileManager.default.fileExists(atPath: layout.openCodeTuiPlugin) == false)
+        #expect(FileManager.default.fileExists(atPath: layout.openCodeTuiAskPackage) == false)
+        #expect(FileManager.default.fileExists(atPath: layout.openCodeConfig) == false)
     }
 }
 

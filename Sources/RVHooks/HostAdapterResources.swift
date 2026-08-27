@@ -150,6 +150,11 @@ package enum HostAdapterResources {
         return try loadCompanion(PackageResources.openclaw_package_json, host: host)
     }
 
+    /// Returns the OpenCode TUI Ask companion (`rv-guard-tui.js`).
+    package static func loadOpenCodeTuiPlugin() throws(HostAdapterResourceError) -> String {
+        try loadCompanion(PackageResources.rv_guard_tui_js, host: .opencode)
+    }
+
     private static func loadCompanion(
         _ bytes: [UInt8],
         host: HookHost

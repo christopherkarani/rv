@@ -26,16 +26,18 @@ struct HostNativeAskTests {
         #expect(decoded != .allow)
     }
 
-    @Test func piMandatoryHumanPausesOnHostNative() {
+    @Test(arguments: [HookHost.pi, .opencode])
+    func spendFirstHostsPauseOnMandatoryHuman(_ host: HookHost) {
         let verdict = HostNativeAsk.verdict(
-            host: .pi,
+            host: host,
             bound: .mandatoryHuman(askDeny),
             continuation: .hostNative
         )
         #expect(verdict == .ask(.hostNative))
+        #expect(HostNativeAsk.capability(for: host) == .spendFirst)
     }
 
-    @Test(arguments: [HookHost.opencode, .claude, .grok, .openclaw, .hermes])
+    @Test(arguments: [HookHost.claude, .grok, .openclaw, .hermes])
     func denyOrTTYHostsDoNotPauseOnMandatoryHuman(_ host: HookHost) {
         let verdict = HostNativeAsk.verdict(
             host: host,
@@ -59,7 +61,7 @@ struct HostNativeAskTests {
         #expect(HostNativeAsk.verdict(host: .grok, decision: denied) == .deny)
     }
 
-    @Test func hostNativeBridgeSpendsOnlyOnPiAllowOnce() {
+    @Test func hostNativeBridgeSpendsOnPiAndOpenCodeAllowOnce() {
         let bridge = HostNativeApprovalBridge()
         #expect(
             bridge.resolve(host: .pi, continuation: .hostNative, decision: .allowOnce)
@@ -67,7 +69,7 @@ struct HostNativeAskTests {
         )
         #expect(
             bridge.resolve(host: .opencode, continuation: .hostNative, decision: .allowOnce)
-                == .denyOrTTY
+                == .spendThenAllow
         )
         #expect(
             bridge.resolve(host: .claude, continuation: .hostNative, decision: .allowOnce)
@@ -79,6 +81,9 @@ struct HostNativeAskTests {
         )
         #expect(
             bridge.resolve(host: .pi, continuation: .hostNative, decision: .deny) == .deny
+        )
+        #expect(
+            bridge.resolve(host: .opencode, continuation: .hostNative, decision: .deny) == .deny
         )
     }
 }

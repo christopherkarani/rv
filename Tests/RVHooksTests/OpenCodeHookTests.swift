@@ -36,6 +36,23 @@ func openCodeDecode_extractsBashCommand(_ file: String, expected: String) throws
     #expect(codec.decode(try openCodeFixture("allow-non-shell-read.json")) == .foreign)
 }
 
+@Test func openCodeDecode_sessionShellExtractsCommand() {
+    let stdin = """
+    {"tool":"session.shell","args":{"command":"git reset --hard"}}
+    """
+    guard case .request(let request) = codec.decode(stdin) else {
+        Issue.record("expected .request for session.shell")
+        return
+    }
+    #expect(request.host == .opencode)
+    #expect(request.command.rawValue == "git reset --hard")
+}
+
+@Test func openCodeDecode_sessionShellEmptyCommandIsMissingCommand() {
+    #expect(codec.decode(#"{"tool":"session.shell","args":{}}"#) == .malformed(.missingCommand))
+    #expect(codec.decode(#"{"tool":"session.shell","args":{"command":""}}"#) == .malformed(.missingCommand))
+}
+
 @Test func openCodeDecode_emptyCommandIsMissingCommand() {
     #expect(codec.decode(#"{"tool":"bash","args":{}}"#) == .malformed(.missingCommand))
     #expect(codec.decode(#"{"tool":"bash","args":{"command":""}}"#) == .malformed(.missingCommand))
@@ -107,4 +124,27 @@ func openCodeDecode_extractsBashCommand(_ file: String, expected: String) throws
         return
     }
     #expect(request.cwd == nil)
+}
+
+@Test func openCodeDecode_readsHostAskSpend() {
+    let stdin = """
+    {"tool":"bash","cwd":"/tmp/ws","args":{"command":"git reset --hard"},"hostAsk":"spend"}
+    """
+    guard case .request(let request) = codec.decode(stdin) else {
+        Issue.record("expected .request for hostAsk spend")
+        return
+    }
+    #expect(request.hostAsk == .spend)
+    #expect(request.cwd?.rawValue == "/tmp/ws")
+}
+
+@Test func openCodeEncodeAsk_isNotEmptyAllow() {
+    let reason =
+        "Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once."
+    let wire = codec.encodeAsk(reason: reason, rule: "core.git/reset-hard", next: hookUnlockNext)
+    #expect(wire.exitCode == 1)
+    #expect(wire.stdout.isEmpty == false)
+    #expect(wire.stdout.contains("\"decision\":\"ask\""))
+    #expect(wire.stdout.contains("\"continuation\":\"hostNative\""))
+    #expect(wire.stdout.contains(reason))
 }

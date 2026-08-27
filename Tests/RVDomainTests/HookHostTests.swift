@@ -30,3 +30,8 @@ import Testing
         _ = try JSONDecoder().decode(HookHost.self, from: Data(#""nope""#.utf8))
     }
 }
+
+@Test func hookHost_codexIsNotAHookHost() {
+    #expect(HookHost(rawValue: "codex") == nil)
+    #expect(HookHost.allCases.map(\.rawValue).contains("codex") == false)
+}

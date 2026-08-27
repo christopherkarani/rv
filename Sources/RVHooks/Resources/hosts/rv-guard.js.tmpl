@@ -5,32 +5,463 @@ const RV_HOOK_TIMEOUT_MS = 5000;
 const RV_TOAST_TIMEOUT_MS = 1500;
 const RV_TOAST_TITLE = "RV · Blocked";
 const RV_CMD_PREVIEW = 96;
+const RV_MISSING_COMMAND =
+  "rv received a shell hook with no command text and blocked the command. Run it in Terminal.";
+const RV_ASK_TIMEOUT_MS = 120000;
+
+const gatedCallIDs = new Set();
+const officialPermissionReplies = new Map();
 
 export const RvGuard = async (ctx) => {
+  listenOfficialPermissionBus(ctx);
   return {
+    event: async (input) => {
+      rememberOfficialPermissionReply(input && input.event);
+    },
     "tool.execute.before": async (input, output) => {
-      if (input.tool !== "bash") {
+      if (!isShellTool(input && input.tool)) {
         return;
       }
-      const command = output.args && output.args.command;
-      if (typeof command !== "string" || command.length === 0) {
+      const command = commandFromTool(input, output);
+      if (!command) {
+        await failClosed(ctx, { action: "block", reason: RV_MISSING_COMMAND }, "");
+      }
+      await gateCommand(ctx, input, output, command, input.tool);
+      rememberGated(input && input.callID);
+    },
+    "shell.env": async (input, output) => {
+      if (isGated(input && input.callID)) {
         return;
       }
-      const hostCwd =
-        typeof input.cwd === "string"
-          ? input.cwd
-          : typeof input.directory === "string"
-            ? input.directory
-            : undefined;
-      const cwd = pickCwd(hostCwd);
-      const mapped = await consultRv(command, cwd);
-      if (mapped.action === "block") {
-        await showBlockToast(ctx, mapped, command);
-        throw new Error(mapped.reason);
+      const command =
+        commandFromShellEnv(input, output) ?? (await commandFromSession(ctx, input));
+      if (!command) {
+        await failClosed(ctx, { action: "block", reason: RV_MISSING_COMMAND }, "");
       }
+      await gateCommand(ctx, input, output, command, "session.shell");
+      rememberGated(input && input.callID);
     },
   };
 };
+
+function isShellTool(tool) {
+  return tool === "bash" || tool === "session.shell";
+}
+
+function stringCommand(value) {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function commandFromRecord(record) {
+  if (!record || typeof record !== "object") {
+    return undefined;
+  }
+  return (
+    stringCommand(record.command) ??
+    stringCommand(record.cmd) ??
+    commandFromRecord(record.args) ??
+    commandFromRecord(record.input) ??
+    commandFromRecord(record.state && record.state.input)
+  );
+}
+
+function commandFromTool(input, output) {
+  return commandFromRecord(output && output.args) ?? commandFromRecord(input);
+}
+
+function commandFromShellEnv(input, output) {
+  return commandFromRecord(input) ?? commandFromRecord(output);
+}
+
+async function commandFromSession(ctx, input) {
+  const sessionID = stringCommand(input && input.sessionID);
+  const callID = stringCommand(input && input.callID);
+  const session = ctx && ctx.client && ctx.client.session;
+  if (!sessionID || !callID || !session || typeof session.messages !== "function") {
+    return undefined;
+  }
+  let result;
+  try {
+    result = await session.messages({
+      sessionID,
+      path: { id: sessionID },
+    });
+  } catch {
+    return undefined;
+  }
+  const matches = [];
+  collectPartCommands(result, matches, 0);
+  const exact = matches.find((row) => row.callID === callID);
+  return exact && exact.command;
+}
+
+function collectPartCommands(value, acc, depth) {
+  if (depth > 10 || value == null) {
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectPartCommands(item, acc, depth + 1);
+    }
+    return;
+  }
+  if (typeof value !== "object") {
+    return;
+  }
+  const tool = value.tool ?? value.toolName;
+  const callID = stringCommand(value.callID ?? value.callId);
+  if (isShellTool(tool) && callID) {
+    const command =
+      commandFromRecord(value.state && value.state.input) ??
+      commandFromRecord(value.input) ??
+      commandFromRecord(value.args) ??
+      stringCommand(value.command);
+    if (command) {
+      acc.push({ callID, command });
+    }
+  }
+  if (value.parts) {
+    collectPartCommands(value.parts, acc, depth + 1);
+  }
+  if (value.data) {
+    collectPartCommands(value.data, acc, depth + 1);
+  }
+  if (value.messages) {
+    collectPartCommands(value.messages, acc, depth + 1);
+  }
+}
+
+function rememberGated(callID) {
+  if (typeof callID === "string" && callID.length > 0) {
+    gatedCallIDs.add(callID);
+  }
+}
+
+function isGated(callID) {
+  return typeof callID === "string" && gatedCallIDs.has(callID);
+}
+
+async function failClosed(ctx, mapped, command) {
+  await showBlockToast(ctx, mapped, command);
+  throw new Error(
+    typeof mapped.reason === "string" && mapped.reason.length > 0
+      ? mapped.reason
+      : RV_MISSING_COMMAND,
+  );
+}
+
+async function gateCommand(ctx, input, output, command, tool) {
+  const hostCwd =
+    typeof input.cwd === "string"
+      ? input.cwd
+      : typeof input.directory === "string"
+        ? input.directory
+        : undefined;
+  const cwd = pickCwd(hostCwd);
+  const mapped = await consultRv(command, cwd, tool);
+  if (mapped.action === "ask") {
+    const allowed = await confirmAsk(ctx, input, output, mapped, command);
+    if (!allowed) {
+      await failClosed(ctx, mapped, command);
+    }
+    const spent = await consultRvSpend(command, cwd, tool);
+    if (spent.action !== "allow") {
+      const blocked = spent.action === "block" || spent.action === "ask" ? spent : mapped;
+      await failClosed(ctx, blocked.reason ? blocked : mapped, command);
+    }
+    return;
+  }
+  if (mapped.action === "block") {
+    await failClosed(ctx, mapped, command);
+  }
+}
+
+async function confirmAsk(ctx, input, output, mapped, command) {
+  try {
+    if (ctx?.ui?.hasUI === false) {
+      return false;
+    }
+    const prompt = {
+      message:
+        typeof mapped.reason === "string" && mapped.reason.length > 0
+          ? mapped.reason
+          : "Allow this command once?",
+    };
+    const askers = [input?.ask, output?.onResolution, ctx?.ask, ctx?.ui?.confirm];
+    for (const ask of askers) {
+      if (typeof ask !== "function") {
+        continue;
+      }
+      return isAllowOnceResolution(await ask(prompt));
+    }
+    return await confirmOfficialPermission(ctx, input, mapped, command);
+  } catch {
+    return false;
+  }
+}
+
+async function confirmOfficialPermission(ctx, input, mapped, command) {
+  const sessionID = stringCommand(input && input.sessionID);
+  if (!sessionID) {
+    return false;
+  }
+  // Create first. Live 1.18.18 SDK subscribe can throw or omit a stream;
+  // dying before create leaves no permission, so DialogConfirm never paints.
+  const created = await createOfficialPermission(ctx, sessionID, input, mapped, command);
+  if (!created || created.effect === "deny" || created.effect === "allow") {
+    return false;
+  }
+  if (created.effect !== "ask" || !created.id) {
+    return false;
+  }
+  return await Promise.race([
+    waitOfficialPermissionReply(ctx, created.id, sessionID),
+    new Promise((resolve) => {
+      setTimeout(() => resolve(false), RV_ASK_TIMEOUT_MS);
+    }),
+  ]);
+}
+
+async function waitOfficialPermissionReply(ctx, requestID, sessionID) {
+  const remembered = waitRememberedOfficialReply(sessionID, requestID);
+  const stream = await officialPermissionStream(ctx);
+  if (!stream) {
+    return await remembered;
+  }
+  const fromStream = readOfficialPermissionReply(stream, requestID, sessionID).then((reply) => {
+    if (reply === undefined) {
+      return remembered;
+    }
+    return reply === "once" || reply === "always";
+  });
+  return await Promise.race([remembered, fromStream]);
+}
+
+async function officialPermissionStream(ctx) {
+  const candidates = [
+    ctx && ctx.client && ctx.client.v2 && ctx.client.v2.event && ctx.client.v2.event.subscribe,
+    ctx && ctx.client && ctx.client.event && ctx.client.event.subscribe,
+  ];
+  for (const subscribe of candidates) {
+    if (typeof subscribe !== "function") {
+      continue;
+    }
+    try {
+      const stream = permissionEventStream(await subscribe());
+      if (stream) {
+        return stream;
+      }
+    } catch {
+      // Official live SSE can throw; Hooks.event still observes reply 204.
+    }
+  }
+  return undefined;
+}
+
+function listenOfficialPermissionBus(ctx) {
+  const on = ctx && ctx.event && ctx.event.on;
+  if (typeof on !== "function") {
+    return;
+  }
+  const replied = "permission.v2.replied";
+  const legacy = ["permission", "replied"].join(".");
+  on(replied, (event) => rememberOfficialPermissionReply(event));
+  on(legacy, (event) => rememberOfficialPermissionReply(event));
+}
+
+function officialReplyKey(sessionID, requestID) {
+  return `${sessionID}\0${requestID}`;
+}
+
+function rememberOfficialPermissionReply(event) {
+  if (!event || typeof event !== "object") {
+    return;
+  }
+  if (event.data && typeof event.data === "object" && event.data.type) {
+    rememberOfficialPermissionReply(event.data);
+    return;
+  }
+  const replied = "permission.v2.replied";
+  const legacy = ["permission", "replied"].join(".");
+  if (event.type !== replied && event.type !== legacy) {
+    return;
+  }
+  const props = event.properties ?? event.data ?? {};
+  const requestID = stringCommand(props.requestID ?? props.id);
+  if (!requestID) {
+    return;
+  }
+  const sessionID = stringCommand(props.sessionID) ?? "";
+  const reply = typeof props.reply === "string" ? props.reply : undefined;
+  if (!reply) {
+    return;
+  }
+  const key = officialReplyKey(sessionID, requestID);
+  const current = officialPermissionReplies.get(key);
+  if (current && typeof current.resolve === "function") {
+    current.resolve(reply);
+  }
+  officialPermissionReplies.set(key, { reply });
+}
+
+function waitRememberedOfficialReply(sessionID, requestID) {
+  const exact = officialReplyKey(sessionID, requestID);
+  const current = officialPermissionReplies.get(exact);
+  if (current && typeof current.reply === "string") {
+    return Promise.resolve(current.reply === "once" || current.reply === "always");
+  }
+  return new Promise((resolve) => {
+    officialPermissionReplies.set(exact, {
+      resolve: (reply) => {
+        resolve(reply === "once" || reply === "always");
+      },
+    });
+  });
+}
+
+async function createOfficialPermission(ctx, sessionID, input, mapped, command) {
+  const body = {
+    // Default build agent is `*: allow`. Unmatched "rv" is leftover-ask-as-permit
+    // (immediate allow). `external_directory` last-matches ask on 1.18.18.
+    action: "external_directory",
+    resources: ["/rv-ask"],
+    metadata: {
+      rv: true,
+      command,
+      reason: typeof mapped.reason === "string" ? mapped.reason : "",
+    },
+  };
+  const callID = stringCommand(input && input.callID);
+  const messageID = stringCommand(input && input.messageID);
+  if (callID && messageID) {
+    body.source = { type: "tool", messageID, callID };
+  }
+  const session = ctx && ctx.client && ctx.client.session;
+  const create =
+    (session && session.permission && session.permission.create) ??
+    (ctx && ctx.client && ctx.client.permission && ctx.client.permission.create) ??
+    (ctx &&
+      ctx.client &&
+      ctx.client.v2 &&
+      ctx.client.v2.session &&
+      ctx.client.v2.session.permission &&
+      ctx.client.v2.session.permission.create);
+  if (typeof create === "function") {
+    return unwrapPermissionCreate(
+      await create({
+        ...body,
+        sessionID,
+        path: { sessionID, id: sessionID },
+      }),
+    );
+  }
+  return createOfficialPermissionFetch(ctx, sessionID, body);
+}
+
+async function createOfficialPermissionFetch(ctx, sessionID, body) {
+  const base = ctx && ctx.serverUrl;
+  if (!base) {
+    return undefined;
+  }
+  const url = new URL(`api/session/${sessionID}/permission`, base);
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response || response.ok === false) {
+    return undefined;
+  }
+  return unwrapPermissionCreate(await response.json());
+}
+
+function unwrapPermissionCreate(value) {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const row = value.data && typeof value.data === "object" ? value.data : value;
+  const inner = row.data && typeof row.data === "object" && row.id == null ? row.data : row;
+  const id = stringCommand(inner.id);
+  const effect = typeof inner.effect === "string" ? inner.effect : undefined;
+  const reply = typeof inner.reply === "string" ? inner.reply : undefined;
+  if (!id && !effect && !reply) {
+    return undefined;
+  }
+  return { id, effect, reply };
+}
+
+function permissionEventStream(sub) {
+  if (!sub) {
+    return undefined;
+  }
+  if (typeof sub[Symbol.asyncIterator] === "function") {
+    return sub;
+  }
+  if (sub.stream && typeof sub.stream[Symbol.asyncIterator] === "function") {
+    return sub.stream;
+  }
+  if (sub.data && typeof sub.data[Symbol.asyncIterator] === "function") {
+    return sub.data;
+  }
+  return undefined;
+}
+
+async function readOfficialPermissionReply(stream, requestID, sessionID) {
+  for await (const event of stream) {
+    const reply = permissionReplyFromEvent(event, requestID, sessionID);
+    if (reply === undefined) {
+      continue;
+    }
+    return reply;
+  }
+  return undefined;
+}
+
+function permissionReplyFromEvent(event, requestID, sessionID) {
+  if (!event || typeof event !== "object") {
+    return undefined;
+  }
+  if (event.data && typeof event.data === "object" && event.data.type) {
+    return permissionReplyFromEvent(event.data, requestID, sessionID);
+  }
+  const replied = "permission.v2.replied";
+  const legacy = ["permission", "replied"].join(".");
+  if (event.type !== replied && event.type !== legacy) {
+    return undefined;
+  }
+  const props = event.properties ?? event.data ?? {};
+  const id = stringCommand(props.requestID ?? props.id);
+  if (id !== requestID) {
+    return undefined;
+  }
+  const session = stringCommand(props.sessionID);
+  if (session && session !== sessionID) {
+    return undefined;
+  }
+  return typeof props.reply === "string" ? props.reply : undefined;
+}
+
+function isAllowOnceResolution(value) {
+  if (value === true) {
+    return true;
+  }
+  if (value === "once" || value === "allow-once" || value === "allowOnce") {
+    return true;
+  }
+  if (value && typeof value === "object") {
+    const status = value.status ?? value.decision ?? value.effect ?? value.action;
+    if (
+      status === true ||
+      status === "once" ||
+      status === "allow-once" ||
+      status === "allowOnce" ||
+      status === "allow"
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
 
 function pickCwd(hostCwd) {
   if (typeof hostCwd === "string" && hostCwd.length > 0) return hostCwd;
@@ -43,10 +474,20 @@ function pickCwd(hostCwd) {
   return undefined;
 }
 
-function consultRv(command, cwd) {
-  const payload = { tool: "bash", args: { command } };
+function consultRv(command, cwd, tool) {
+  const payload = { tool: wireTool(tool), args: { command } };
   if (cwd) payload.cwd = cwd;
   return spawnRvHook("opencode", JSON.stringify(payload));
+}
+
+function consultRvSpend(command, cwd, tool) {
+  const payload = { tool: wireTool(tool), args: { command }, hostAsk: "spend" };
+  if (cwd) payload.cwd = cwd;
+  return spawnRvHook("opencode", JSON.stringify(payload));
+}
+
+function wireTool(tool) {
+  return tool === "session.shell" ? "session.shell" : "bash";
 }
 
 function spawnRvHook(host, stdin) {
@@ -111,9 +552,18 @@ function mapRvHookResult(value) {
   if (trimmed.length > 0) {
     try {
       const parsed = JSON.parse(trimmed);
-      if (parsed && (parsed.decision === "deny" || parsed.decision === "ask")) {
+      if (parsed && parsed.decision === "ask") {
         return {
-          action: "block",
+          action: "ask",
+          reason: typeof parsed.reason === "string" ? parsed.reason : "",
+          rule: typeof parsed.rule === "string" ? parsed.rule : undefined,
+          next: typeof parsed.next === "string" ? parsed.next : undefined,
+        };
+      }
+      if (parsed && parsed.decision === "deny") {
+        const unlockable = typeof parsed.rule === "string" && parsed.rule.length > 0;
+        return {
+          action: unlockable ? "ask" : "block",
           reason: typeof parsed.reason === "string" ? parsed.reason : "",
           rule: typeof parsed.rule === "string" ? parsed.rule : undefined,
           next: typeof parsed.next === "string" ? parsed.next : undefined,

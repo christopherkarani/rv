@@ -1,8 +1,9 @@
 /// Whether a host may pause for Ask because a same-turn spend callback exists.
 public enum HostAskCapability: Sendable, Equatable {
-    /// Pi this slice: `ctx.ui.confirm`, then PolicyGate spend, then allow.
+    /// Pi / OpenCode this slice: host confirm or resolution, then PolicyGate spend, then allow.
     case spendFirst
-    /// OpenCode / Claude / Grok / OpenClaw / Hermes: deny or TTY. No first-call Allow.
+    /// Claude official `permissionDecision: "ask"` is leftover-ask-as-permit.
+    /// Grok / OpenClaw / Hermes: deny or TTY. No first-call Allow.
     case denyOrTTY
 }
 
@@ -62,9 +63,9 @@ public enum HostNativeAsk {
 
     public static func capability(for host: HookHost) -> HostAskCapability {
         switch host {
-        case .pi:
+        case .pi, .opencode:
             return .spendFirst
-        case .grok, .opencode, .claude, .openclaw, .hermes:
+        case .grok, .claude, .openclaw, .hermes:
             return .denyOrTTY
         }
     }

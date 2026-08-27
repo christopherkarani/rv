@@ -264,6 +264,7 @@ enum SetupRun {
             let wroteCompanions = try writeCompanions(
                 host,
                 directory: (destination as NSString).deletingLastPathComponent,
+                layout: layout,
                 files: files
             )
             return wroteAdapter || wroteCompanions
@@ -275,6 +276,7 @@ enum SetupRun {
     private static func writeCompanions(
         _ host: HookHost,
         directory: String,
+        layout: OwnedPaths,
         files: FileOps
     ) throws -> Bool {
         switch host {
@@ -305,8 +307,77 @@ enum SetupRun {
                 existingData: files.readData(pluginPath),
                 files: files
             )
-        case .grok, .pi, .opencode, .claude:
+        case .opencode:
+            let tui = try HostAdapterResources.loadOpenCodeTuiPlugin()
+            let wroteTui = try writeOwned(
+                path: directory + "/rv-guard-tui.js",
+                contents: tui,
+                existingData: files.readData(directory + "/rv-guard-tui.js"),
+                files: files
+            )
+            let wroteAsk = try writeOpenCodeTuiAskPackage(layout: layout, files: files)
+            return wroteTui || wroteAsk
+        case .grok, .pi, .claude:
             return false
+        }
+    }
+
+    private static func writeOpenCodeTuiAskPackage(layout: OwnedPaths, files: FileOps) throws -> Bool {
+        let packageJSONPath = layout.openCodeTuiAskPackage + "/package.json"
+        let tuiPath = layout.openCodeTuiAskPackage + "/tui.js"
+        let wrotePackage = try writeOwned(
+            path: packageJSONPath,
+            contents: OpenCodeTuiAskPackage.packageJSON,
+            existingData: files.readData(packageJSONPath),
+            files: files
+        )
+        let wroteTui = try writeOwned(
+            path: tuiPath,
+            contents: OpenCodeTuiAskPackage.tuiJS,
+            existingData: files.readData(tuiPath),
+            files: files
+        )
+        var wroteConfig = false
+        do {
+            let merged = try OpenCodeConfigMerge.merge(
+                existingData: files.readData(layout.openCodeConfig),
+                pluginPath: layout.openCodeTuiAskPackage
+            )
+            if merged.wrote {
+                try files.writeData(merged.data, to: layout.openCodeConfig)
+                wroteConfig = true
+            }
+        } catch OpenCodeConfigMergeError.invalidJSON {
+            // Foreign / broken config stays; globbed server() plugin still loads.
+        }
+        return wrotePackage || wroteTui || wroteConfig
+    }
+
+    private static func stripOpenCodeAskPlugin(layout: OwnedPaths, files: FileOps) throws(SetupError) {
+        guard let existing = files.readData(layout.openCodeConfig) else {
+            return
+        }
+        let next: Data?
+        do {
+            next = try OpenCodeConfigMerge.strip(
+                existingData: existing,
+                pluginPath: layout.openCodeTuiAskPackage
+            )
+        } catch OpenCodeConfigMergeError.invalidJSON {
+            return
+        } catch {
+            throw SetupError.hostHookWriteFailed(.opencode)
+        }
+        do {
+            if let next {
+                if next != existing {
+                    try files.writeData(next, to: layout.openCodeConfig)
+                }
+            } else {
+                files.removeFile(atPath: layout.openCodeConfig)
+            }
+        } catch {
+            throw SetupError.hostHookWriteFailed(.opencode)
         }
     }
 
@@ -366,6 +437,7 @@ enum SetupRun {
         var removedHosts: Set<HookHost> = []
         var occupiedHosts: Set<HookHost> = []
         var removedPaths: [String] = []
+        var stripOpenCodeAsk = false
 
         for owned in layout.hostAdapters {
             switch installations.installation(for: owned.host).uninstallPlan {
@@ -384,6 +456,12 @@ enum SetupRun {
                     if owned.host == .hermes {
                         let directory = (owned.destination as NSString).deletingLastPathComponent
                         removedPaths.append(directory + "/plugin.yaml")
+                    }
+                    if owned.host == .opencode {
+                        removedPaths.append(layout.openCodeTuiPlugin)
+                        removedPaths.append(layout.openCodeTuiAskPackage + "/package.json")
+                        removedPaths.append(layout.openCodeTuiAskPackage + "/tui.js")
+                        stripOpenCodeAsk = true
                     }
                     removedHosts.insert(owned.host)
                 }
@@ -422,6 +500,10 @@ enum SetupRun {
 
         for path in removedPaths {
             files.removeFile(atPath: path)
+        }
+        if stripOpenCodeAsk {
+            try stripOpenCodeAskPlugin(layout: layout, files: files)
+            files.removeDirectoryIfEmpty(atPath: layout.openCodeTuiAskPackage)
         }
         files.removeDirectoryIfEmpty(
             atPath: (layout.openClawPlugin as NSString).deletingLastPathComponent

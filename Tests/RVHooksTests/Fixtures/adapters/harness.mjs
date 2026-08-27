@@ -89,6 +89,9 @@ if (host === "pi") {
 
 if (host === "opencode") {
   const toasts = [];
+  const confirmYes = process.env.RV_CONFIRM_YES === "1";
+  const resolutionAllow = process.env.RV_RESOLUTION_ALLOW === "1";
+  const hasUI = process.env.RV_HAS_UI !== "0";
   const ctx = {
     client: {
       tui: {
@@ -118,27 +121,289 @@ if (host === "opencode") {
       },
     },
   };
+  if (confirmYes) {
+    ctx.ui = {
+      hasUI,
+      async confirm() {
+        if (!hasUI) {
+          return false;
+        }
+        return true;
+      },
+    };
+  }
+  if (process.env.RV_SESSION_MESSAGES) {
+    const messages = JSON.parse(process.env.RV_SESSION_MESSAGES);
+    ctx.client.session = {
+      async messages() {
+        return messages;
+      },
+    };
+  }
+  if (process.env.RV_PERMISSION_REPLY) {
+    installOfficialPermission(ctx, process.env.RV_PERMISSION_REPLY);
+  }
   const plugin = await mod.RvGuard(ctx);
   const keys = Object.keys(plugin);
-  if (keys.length !== 1 || keys[0] !== "tool.execute.before") {
+  ctx.pluginEvent = plugin.event;
+  const unexpected = keys.filter(
+    (name) => name !== "tool.execute.before" && name !== "shell.env" && name !== "event"
+  );
+  if (!keys.includes("tool.execute.before") || unexpected.length > 0) {
     process.stdout.write(JSON.stringify({ error: "unexpected hooks", keys }));
     process.exit(2);
   }
+  const steps = Array.isArray(event.steps) ? event.steps : [event];
   try {
-    await plugin["tool.execute.before"](
-      { tool: event.tool },
-      { args: event.args ?? {} }
+    for (const step of steps) {
+      await runOpenCodeStep(plugin, step, { confirmYes, resolutionAllow, hasUI });
+    }
+    process.stdout.write(
+      JSON.stringify({
+        threw: null,
+        toasts,
+        permissionCreates: ctx.permissionCreates ?? 0,
+        permissionGets: ctx.permissionGets ?? 0,
+        permissionReply204: ctx.permissionReply204 ?? null,
+      })
     );
-    process.stdout.write(JSON.stringify({ threw: null, toasts }));
   } catch (error) {
     process.stdout.write(
       JSON.stringify({
         threw: error instanceof Error ? error.message : String(error),
         toasts,
+        permissionCreates: ctx.permissionCreates ?? 0,
+        permissionGets: ctx.permissionGets ?? 0,
+        permissionReply204: ctx.permissionReply204 ?? null,
       })
     );
   }
   process.exit(0);
+}
+
+function installOfficialPermission(ctx, reply) {
+  const fetchOnly = reply.startsWith("fetch-");
+  const effectReply = fetchOnly ? reply.slice("fetch-".length) : reply;
+  const requestID = "per_test";
+  const subscribeMode = process.env.RV_PERMISSION_SUBSCRIBE ?? "ok";
+  ctx.permissionCreates = 0;
+  ctx.permissionGets = 0;
+  ctx.permissionReply204 = null;
+  ctx.permissionStarted = Date.now();
+  const recordCreate = () => {
+    ctx.permissionCreates = (ctx.permissionCreates ?? 0) + 1;
+  };
+  const lateMs = Number(process.env.RV_PERMISSION_LATE_MS ?? 0);
+  const official204 =
+    effectReply === "once-204" ||
+    effectReply === "once-204-pending" ||
+    effectReply === "once-204-404" ||
+    effectReply === "reject-204";
+  const confirmReply =
+    effectReply === "reject-204"
+      ? "reject"
+      : official204
+        ? "once"
+        : effectReply === "once" || effectReply === "always" || effectReply === "reject"
+          ? effectReply
+          : undefined;
+  const getAfter204 = effectReply === "once-204-pending" ? "pending" : "404";
+  const pendingBody = {
+    data: {
+      id: requestID,
+      sessionID: "ses_1",
+      action: "external_directory",
+      resources: ["/rv-ask"],
+    },
+  };
+  const deliverOfficialConfirm = (replyValue) => {
+    ctx.permissionReply204 = replyValue;
+    if (typeof ctx.pluginEvent !== "function") {
+      return;
+    }
+    // Official 1.18.18 Plugin.listen: { event: { id, type, properties: event.data } }
+    void ctx.pluginEvent({
+      event: {
+        id: "evt_test",
+        type: "permission.v2.replied",
+        properties: {
+          sessionID: "ses_1",
+          requestID,
+          reply: replyValue,
+        },
+      },
+    });
+  };
+  const scheduleOfficialConfirm = (replyValue) => {
+    setTimeout(() => {
+      deliverOfficialConfirm(replyValue);
+    }, lateMs > 0 ? lateMs : 25);
+  };
+  const session = ctx.client.session ?? {};
+  if (!fetchOnly) {
+    session.permission = {
+      async create() {
+        recordCreate();
+        if (effectReply === "allow") {
+          return { data: { id: requestID, effect: "allow" } };
+        }
+        if (effectReply === "deny") {
+          return { data: { id: requestID, effect: "deny" } };
+        }
+        if (official204 && confirmReply) {
+          scheduleOfficialConfirm(confirmReply);
+        }
+        return { data: { id: requestID, effect: "ask" } };
+      },
+    };
+  }
+  ctx.client.session = session;
+  if (subscribeMode === "throw") {
+    ctx.client.event = {
+      async subscribe() {
+        throw new Error("subscribe");
+      },
+    };
+  } else if (subscribeMode !== "missing") {
+    ctx.client.event = {
+      async subscribe() {
+        return {
+          stream: (async function* () {
+            if (effectReply === "once" || effectReply === "always" || effectReply === "reject") {
+              yield {
+                type: "permission.v2.replied",
+                properties: {
+                  sessionID: "ses_1",
+                  requestID,
+                  reply: effectReply,
+                },
+              };
+            }
+          })(),
+        };
+      },
+    };
+  }
+  ctx.serverUrl = new URL("http://127.0.0.1:4096/");
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    const href = String(url);
+    const method = init && typeof init.method === "string" ? init.method.toUpperCase() : "GET";
+    if (href.includes(`/permission/${requestID}/reply`) && method === "POST") {
+      let body = {};
+      try {
+        body = init && init.body ? JSON.parse(String(init.body)) : {};
+      } catch {
+        body = {};
+      }
+      const replyValue = typeof body.reply === "string" ? body.reply : confirmReply;
+      deliverOfficialConfirm(replyValue ?? "once");
+      return { ok: true, status: 204, async json() { return undefined; } };
+    }
+    if (href.includes("/api/session/") && href.includes("/permission") && method === "POST") {
+      recordCreate();
+      if (effectReply === "allow") {
+        return {
+          ok: true,
+          async json() {
+            return { data: { id: requestID, effect: "allow" } };
+          },
+        };
+      }
+      if (effectReply === "deny") {
+        return {
+          ok: true,
+          async json() {
+            return { data: { id: requestID, effect: "deny" } };
+          },
+        };
+      }
+      if (official204 && confirmReply) {
+        scheduleOfficialConfirm(confirmReply);
+      }
+      return {
+        ok: true,
+        async json() {
+          return { data: { id: requestID, effect: "ask" } };
+        },
+      };
+    }
+    if (
+      href.includes("/api/session/") &&
+      href.includes(`/permission/${requestID}`) &&
+      method === "GET"
+    ) {
+      ctx.permissionGets = (ctx.permissionGets ?? 0) + 1;
+      if (effectReply === "absent") {
+        return { ok: false, status: 404, async json() { return { _tag: "PermissionNotFoundError" }; } };
+      }
+      if (official204) {
+        if (ctx.permissionReply204 && getAfter204 === "404") {
+          return { ok: false, status: 404, async json() { return { _tag: "PermissionNotFoundError" }; } };
+        }
+        return { ok: true, async json() { return pendingBody; } };
+      }
+      return { ok: true, async json() { return pendingBody; } };
+    }
+    if (typeof previousFetch === "function") {
+      return previousFetch(url, init);
+    }
+    throw new Error(`unexpected fetch ${href}`);
+  };
+}
+
+async function runOpenCodeStep(plugin, event, flags) {
+  const hookName = event.hook === "shell.env" ? "shell.env" : "tool.execute.before";
+  if (hookName === "shell.env") {
+    const fn = plugin["shell.env"];
+    if (typeof fn !== "function") {
+      return;
+    }
+    const input = {};
+    if (typeof event.cwd === "string") {
+      input.cwd = event.cwd;
+    }
+    if (typeof event.sessionID === "string") {
+      input.sessionID = event.sessionID;
+    }
+    if (typeof event.callID === "string") {
+      input.callID = event.callID;
+    }
+    if (typeof event.command === "string") {
+      input.command = event.command;
+    }
+    if (flags.confirmYes && flags.hasUI) {
+      input.ask = async () => true;
+    }
+    const output = { env: event.env ?? {} };
+    if (event.args) {
+      output.args = event.args;
+    }
+    if (flags.resolutionAllow) {
+      output.onResolution = async () => ({ status: "allow-once" });
+    }
+    await fn(input, output);
+    return;
+  }
+
+  const input = { tool: event.tool };
+  if (typeof event.cwd === "string") {
+    input.cwd = event.cwd;
+  }
+  if (typeof event.sessionID === "string") {
+    input.sessionID = event.sessionID;
+  }
+  if (typeof event.callID === "string") {
+    input.callID = event.callID;
+  }
+  if (flags.confirmYes && flags.hasUI) {
+    input.ask = async () => true;
+  }
+  const output = { args: event.args ?? {} };
+  if (flags.resolutionAllow) {
+    output.onResolution = async () => ({ status: "allow-once" });
+  }
+  await plugin["tool.execute.before"](input, output);
 }
 
 process.stdout.write(JSON.stringify({ error: "unknown host" }));

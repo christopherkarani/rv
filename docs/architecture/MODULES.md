@@ -15,7 +15,7 @@ Each module keeps a small public API, `package` internals later, and its own tes
 | **RVPacks** | registry, bundled JSON, enable/disable | decisions, rendering |
 | **RVScan** | session-store discovery, bounds walk, store adapters, extract, classify, dedupe | CLI, TUI, XPC, hooks codecs, Policy gate |
 | **RVPolicy** | config merge, allowlist, allow-once, `HostGrantWriter`, durable `PendingApprovalStore`, Apple Foundation Models `ActionReviewer` adapter (shadow), `ShadowReviewRunner` | rendering |
-| **RVHooks** | **Pi / Grok / OpenCode / Claude / OpenClaw / Hermes** Host adapters: shell codecs, Hook mapper/voice, Pi confirm spend-then-allow, embedded adapter resources | evaluation, setup mutations |
+| **RVHooks** | **Pi / Grok / OpenCode / Claude / OpenClaw / Hermes** Host adapters: shell codecs, Hook mapper/voice, Pi/OpenCode confirm-or-resolution spend-then-allow, OpenCode `bash` + TUI `session.shell` / `shell.env` official permission create + TUI `DialogConfirm` Ask then spend-then-allow (missing confirm still fail-closed; last-match is not a permit), Claude deny-or-TTY (no leftover `permissionDecision` ask), embedded adapter resources | evaluation, setup mutations |
 | **RVIPC** | `rv.ipc.v1` Codable | transport details |
 | **RVService** | XPC listener, EvaluationWorld (single assembly), EvaluateSession (compiled day-one packs + evaluate), GatedEvaluate (session then Policy gate), launchd | ArgumentParser, SwiftUI |
 | **RVPresentation** | deny/explain/packs/doctor view models | ANSI |

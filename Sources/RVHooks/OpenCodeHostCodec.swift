@@ -16,21 +16,35 @@ public struct OpenCodeHostCodec: HostCodec {
         else {
             return .malformed(.unreadable)
         }
-        guard envelope.tool == "bash" else {
+        guard let tool = envelope.tool, isOpenCodeShellTool(tool) else {
             return .foreign
         }
         guard let command = envelope.args?.command, command.isEmpty == false else {
             return .malformed(.missingCommand)
         }
         let cwd = envelope.cwd.flatMap { WorkingDirectory(validating: $0) }
-        return .request(HookRequest(host: .opencode, command: ShellCommand(rawValue: command), cwd: cwd))
+        let hostAsk = envelope.hostAsk.flatMap(HostAskHookIntent.init(rawValue:))
+        return .request(
+            HookRequest(
+                host: .opencode,
+                command: ShellCommand(rawValue: command),
+                cwd: cwd,
+                hostAsk: hostAsk
+            )
+        )
     }
+}
+
+/// Official agent tool id is `bash`. TUI `session.shell` is the same shell door.
+private func isOpenCodeShellTool(_ tool: String) -> Bool {
+    tool == "bash" || tool == "session.shell"
 }
 
 private struct OpenCodeEnvelope: Decodable {
     var tool: String?
     var args: OpenCodeArgs?
     var cwd: String?
+    var hostAsk: String?
 }
 
 private struct OpenCodeArgs: Decodable {
