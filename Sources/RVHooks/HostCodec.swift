@@ -45,10 +45,13 @@ public struct HookRequest: Equatable, Sendable {
 public struct HookWire: Equatable, Sendable {
     public var stdout: String
     public var exitCode: Int32
+    /// Codex honor path: exit 2 without a stderr blocking reason fail-opens the tool.
+    public var stderr: String
 
-    public init(stdout: String, exitCode: Int32) {
+    public init(stdout: String, exitCode: Int32, stderr: String = "") {
         self.stdout = stdout
         self.exitCode = exitCode
+        self.stderr = stderr
     }
 }
 

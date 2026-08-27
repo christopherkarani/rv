@@ -26,6 +26,11 @@ func hookBlockJSON(reason: String) -> String {
     "{\"decision\":\"block\",\"reason\":\(jsonQuoted(reason))}\n"
 }
 
+/// Codex TUI fail-opens exit 2 unless this blocking reason is on stderr.
+func hookBlockStderr(reason: String) -> String {
+    reason.hasSuffix("\n") ? reason : reason + "\n"
+}
+
 func jsonQuoted(_ value: String) -> String {
     var output = "\""
     for scalar in value.unicodeScalars {

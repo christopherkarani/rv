@@ -581,6 +581,27 @@ private func runHook(
     #expect(wire.exitCode == expected.exit)
     #expect(wire.exitCode == 2)
     #expect(wire.stdout.contains(text))
+    #expect(wire.stderr.isEmpty == false)
+    #expect(wire.stderr.contains(text))
+}
+
+@Test func hookRun_codexDenyWritesStderrReason() async throws {
+    try await withTempHome { _ in
+        var hook = Hook()
+        hook.host = .codex
+        let command = ShellCommand(rawValue: "git reset --hard")
+        let result = try await cliEvaluate(command.rawValue)
+        let text = try #require(hostDenyText(from: result, command: command))
+        let outcome = await hook.run(
+            stdin: try hostFixture("codex", "deny-git-reset-hard.json"),
+            evaluate: inProcessEvaluate
+        )
+        #expect(outcome.exitCode == 2)
+        #expect(outcome.stdout.contains("\"decision\":\"block\""))
+        #expect(outcome.stdout.contains("\"permissionDecision\":\"deny\"") == false)
+        #expect(outcome.stderr.isEmpty == false)
+        #expect(outcome.stderr.contains(text))
+    }
 }
 
 @Test func hookCodexAllowGitStatus_emptyStdoutExitZero() async throws {
@@ -624,6 +645,7 @@ private func runHook(
     #expect(wire.stdout.contains("\"decision\":\"block\""))
     #expect(wire.stdout.contains("\"permissionDecision\":\"deny\"") == false)
     #expect(wire.exitCode == 2)
+    #expect(wire.stderr.isEmpty == false)
 }
 
 @Test func hookHermesMalformed_deniesWithoutEvaluating() async throws {

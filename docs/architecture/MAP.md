@@ -217,8 +217,8 @@ rvd — ServiceRuntime + XPCListener (dev.rv.evaluate)
   │     deny(Deny) → codec.encodeDeny(reason: hostDenyLine(cmd, ruleID), rule: displayRuleID, next: "Run it in Terminal, or rv allow-once.")
   │     indeterminate → codec.encodeDeny(reason: "rv could not finish evaluating this command. Run it in Terminal.", rule:nil)
   │     HostCodec.encodeDeny → HookWire(stdout: hookDenyJSON(reason,rule,next)+"\n", exitCode: host.denyExitCode)
-  │   .codex overrides encodeDeny/encodeAsk → hookBlockJSON + exit 2
-  │     {"decision":"block","reason"} — Claude permissionDecision deny is not the honor path
+  │   .codex overrides encodeDeny/encodeAsk → hookBlockJSON + hookBlockStderr + exit 2
+  │     stdout {"decision":"block","reason"} + stderr reason — stdout-only block fail-opens
   │   denyExitCode: grok/claude=0 (JSON is the gate, empty+0 is allow), pi/opencode=1, codex=2
   │
   ▼ reply
@@ -230,7 +230,7 @@ rv (C) writes stdout + exitCode (or miss_replay produced same via rv-cli → Ser
 Host interprets:
   Grok: {"decision":"deny","reason":"<hostDenyText>"} exit 0 → block; empty exit 0 → allow; exit 2 fallback deny (last_resort)
   Claude: rich JSON {systemMessage, hookSpecificOutput.permissionDecision:"deny"} exit 0 → block; empty exit 0 → allow
-  Codex: {"decision":"block","reason"} + exit 2 → block; empty exit 0 → allow; Claude permissionDecision deny is not honored
+  Codex: {"decision":"block","reason"} on stdout + blocking reason on stderr + exit 2 → block; empty exit 0 → allow; stdout-only block / Claude permissionDecision deny is not honored
   Pi:    JSON hookDeny → block; empty → allow (extension throws)
   OpenCode: same JSON via plugin; rv-cli miss throws + toast attempted before throw
 ```

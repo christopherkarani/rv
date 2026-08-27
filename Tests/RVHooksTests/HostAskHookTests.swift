@@ -73,6 +73,8 @@ import RVDomain
     let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
     #expect(json["decision"] as? String == "block")
     #expect(wire.exitCode == 2)
+    #expect(wire.stderr.isEmpty == false)
+    #expect(wire.stderr.contains(deny.reason) || wire.stderr.contains("RV · Blocked"))
 }
 
 @Test(arguments: [HookHost.claude, .grok])

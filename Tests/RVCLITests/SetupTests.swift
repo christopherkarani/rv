@@ -226,6 +226,7 @@ private func fixtureLoginHome() throws -> URL {
         #expect(body == (try HookHost.codex.adapterResource().rendered(rvPath: "/tmp/rv-bin/rv")))
         #expect(body.contains("\"decision\": \"block\"") || body.contains("\"decision\":\"block\""))
         #expect(body.contains("sys.exit(2)"))
+        #expect(body.contains("sys.stderr"))
         #expect(body.contains("permissionDecision") == false)
         #expect(body.contains("\"ask\"") == false)
         #expect(body.contains("RV_BYPASS") == false)

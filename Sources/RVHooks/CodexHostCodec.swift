@@ -58,7 +58,11 @@ public struct CodexHostCodec: HostCodec {
     /// Defaults must live here: a one-argument `encodeDeny(reason:)` otherwise
     /// binds the protocol extension and emits leftover `decision: deny`.
     public func encodeDeny(reason: String, rule: String? = nil, next: String? = nil) -> HookWire {
-        HookWire(stdout: hookBlockJSON(reason: reason), exitCode: host.denyExitCode)
+        HookWire(
+            stdout: hookBlockJSON(reason: reason),
+            exitCode: host.denyExitCode,
+            stderr: hookBlockStderr(reason: reason)
+        )
     }
 
     /// Codex has no Ask. Leftover Ask continues the tool — same as deny.

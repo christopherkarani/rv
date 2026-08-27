@@ -94,14 +94,14 @@ rv owns codecs. Do not copy ryk leftover-ask-as-permit. Do not copy DCG fail-ope
 - Discover: `~/.codex/` exists or `codex` on PATH. Linux and macOS only. No Windows path.
 - Setup writes an **exclusive adapter** `$HOME/.codex/hooks/rv-guard.py` (`__RV_BINARY__` baked) and **merges** `$HOME/.codex/hooks.json` (`PreToolUse` / `Bash`, `python3 …/rv-guard.py`, timeout 5, `statusMessage: RV`). Occupancy is the exclusive adapter, not the merge file. Foreign `hooks.json` siblings stay. `--force` replaces only the rv-fingerprinted adapter.
 - Real intercept: Codex command hook `PreToolUse`, matcher `Bash`. Stdin (snake_case): `hook_event_name: "PreToolUse"`, `tool_name: "Bash"`, `tool_input.command`. cwd is `tool_input.workdir` then envelope `cwd`. session is `session_id` then `turn_id`. Non-Bash / non-PreToolUse: allow (empty). Unreadable JSON or missing/empty command: deny.
-- Honor path (QA / live TUI): official older PreToolUse shape plus process exit **2**:
+- Honor path (QA / live TUI): official older PreToolUse shape on stdout, the blocking reason on **stderr**, and process exit **2**:
 
   ```json
   {"decision":"block","reason":"<hostDenyText>"}
   ```
 
-  Claude `hookSpecificOutput.permissionDecision: deny` is **not** the Codex honor path. Do not emit `"ask"` (`permissionDecision: ask` is leftover-ask-as-permit and continues the tool). `encodeAsk` equals `encodeDeny`. Operator and wrapper both emit `block` + exit 2.
-- Missing `rv` → `{"decision":"block","reason":"rv missing"}` + exit 2. Timeout/crash / non-JSON → `{"decision":"block","reason":"rv failed"}` + exit 2. Wrapper maps leftover operator `decision: deny` onto the same official `block` + exit 2.
+  stderr: `<hostDenyText>` (Chris 271 line for reset-hard: `RV · Blocked. Destroys uncommitted changes.`). Exit 2 without a stderr reason fail-opens the tool. Claude `hookSpecificOutput.permissionDecision: deny` is **not** the Codex honor path. Do not emit `"ask"` (`permissionDecision: ask` is leftover-ask-as-permit and continues the tool). `encodeAsk` equals `encodeDeny`. Operator and wrapper both emit `block` + stderr reason + exit 2.
+- Missing `rv` → `{"decision":"block","reason":"rv missing"}` + stderr `rv missing` + exit 2. Timeout/crash / non-JSON → `{"decision":"block","reason":"rv failed"}` + stderr `rv failed` + exit 2. Wrapper maps leftover operator `decision: deny` onto the same official `block` + stderr + exit 2.
 - Session store: `$HOME/.codex/sessions/**/rollout-*.jsonl`. Surface Bash / shell / local_shell with `tool_input.command`. `extract(fileURL:data:)` uses **`data`**, never reopens the path. Empty or non-UTF-8 `data` throws. Skip non-shell / unparseable rows.
 - Occupied slot: skip + one line. No Ask UI. No AFM / ActionReviewer. Capability is deny-or-TTY (`.pi` / `.opencode` stay spendFirst).
 

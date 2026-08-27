@@ -12,12 +12,23 @@ private func codexFixture(_ name: String) throws -> String {
     return try String(contentsOf: url, encoding: .utf8)
 }
 
-private func codexExpected(_ stem: String) throws -> (stdout: String, exit: Int32) {
+private func codexExpected(_ stem: String) throws -> (stdout: String, stderr: String, exit: Int32) {
     let stdout = try codexFixture("\(stem).out")
     let exitText = try codexFixture("\(stem).exit")
         .trimmingCharacters(in: .whitespacesAndNewlines)
     let code = try #require(Int32(exitText))
-    return (stdout, code)
+    let stderr: String
+    if FileManager.default.fileExists(
+        atPath: URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/codex/\(stem).err")
+            .path
+    ) {
+        stderr = try codexFixture("\(stem).err")
+    } else {
+        stderr = ""
+    }
+    return (stdout, stderr, code)
 }
 
 private func assertCodexHonorPath(_ wire: HookWire, reason: String) throws {
@@ -32,6 +43,9 @@ private func assertCodexHonorPath(_ wire: HookWire, reason: String) throws {
     #expect(wire.stdout.contains("\"decision\":\"deny\"") == false)
     #expect(wire.exitCode == 2)
     #expect(wire.stdout.hasSuffix("\n"))
+    #expect(wire.stderr.isEmpty == false)
+    #expect(wire.stderr.contains(reason))
+    #expect(wire.stderr.trimmingCharacters(in: .whitespacesAndNewlines) == reason)
 }
 
 @Test(arguments: [
@@ -77,12 +91,30 @@ func codexDecode_extractsBashCommand(_ file: String, expected: String) throws {
     #expect(wire.stdout == expected.stdout)
     #expect(wire.exitCode == expected.exit)
     #expect(wire.stdout.isEmpty)
+    #expect(wire.stderr.isEmpty)
+}
+
+@Test func codexHonorPath_stdoutOnlyBlockWithoutStderrReasonIsNotEnough() throws {
+    let stdoutOnly = HookWire(
+        stdout: hookBlockJSON(reason: resetHardHostDeny),
+        exitCode: 2
+    )
+    #expect(stdoutOnly.stderr.isEmpty)
+    #expect(stdoutOnly.stdout.contains("\"decision\":\"block\""))
+    #expect(stdoutOnly.exitCode == 2)
+    let live = codec.encodeDeny(reason: resetHardHostDeny)
+    #expect(live.stderr.isEmpty == false)
+    #expect(live.stderr.contains(resetHardHostDeny))
+    #expect(live.stdout == stdoutOnly.stdout)
+    #expect(live.exitCode == 2)
+    #expect(live != stdoutOnly)
 }
 
 @Test func codexEncodeDeny_isOfficialBlockAndExitTwo() throws {
     let wire = codec.encodeDeny(reason: resetHardHostDeny)
     let expected = try codexExpected("deny-git-reset-hard")
     #expect(wire.stdout == expected.stdout)
+    #expect(wire.stderr == expected.stderr)
     #expect(wire.exitCode == expected.exit)
     try assertCodexHonorPath(wire, reason: resetHardHostDeny)
 }
@@ -96,6 +128,7 @@ func codexDecode_extractsBashCommand(_ file: String, expected: String) throws {
     try assertCodexHonorPath(wire, reason: resetHardHostDeny)
     #expect(HostNativeAsk.leftoverAskIsPermit("ask") == false)
     #expect(wire.stdout == codec.encodeDeny(reason: resetHardHostDeny).stdout)
+    #expect(wire.stderr == codec.encodeDeny(reason: resetHardHostDeny).stderr)
     #expect(wire.exitCode == codec.encodeDeny(reason: resetHardHostDeny).exitCode)
 }
 

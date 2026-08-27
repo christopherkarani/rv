@@ -1,9 +1,11 @@
 """RV destructive-command guard for Codex Bash.
 
 Codex PreToolUse command hook. Live deny is the older official honor path
-``{"decision":"block","reason":...}`` plus process exit 2. Do not emit Claude
-permission deny JSON as the live deny. Missing rv / timeout / crash / non-JSON
-fail closed the same way. Never emit leftover Ask JSON.
+``{"decision":"block","reason":...}`` on stdout, the blocking reason on
+stderr, and process exit 2. Exit 2 without stderr fail-opens the tool.
+Do not emit Claude permission deny JSON as the live deny. Missing rv /
+timeout / crash / non-JSON fail closed the same way. Never emit leftover
+Ask JSON.
 """
 
 import json
@@ -85,9 +87,11 @@ def _map_rv_hook_result(stdout, exit_code):
 
 
 def _emit_block(reason):
+    text = reason if isinstance(reason, str) else ""
     sys.stdout.write(
-        json.dumps({"decision":"block","reason":reason}, separators=(",", ":")) + "\n"
+        json.dumps({"decision":"block","reason":text}, separators=(",", ":")) + "\n"
     )
+    sys.stderr.write(text if text.endswith("\n") else text + "\n")
     sys.exit(2)
 
 

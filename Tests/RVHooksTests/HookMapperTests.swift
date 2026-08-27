@@ -79,6 +79,8 @@ func hookWire_samePathHosts_resetHardIsShortDeny(_ host: HookHost) throws {
         #expect(wire.stdout.contains("\"permissionDecision\":\"deny\"") == false)
         #expect(wire.stdout.contains("\"decision\":\"deny\"") == false)
         #expect(wire.exitCode == 2)
+        #expect(wire.stderr.isEmpty == false)
+        #expect(wire.stderr.contains(resetHardHostDeny))
     } else {
         let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
         #expect(json["decision"] as? String == "deny")
@@ -115,6 +117,7 @@ func hookWire_samePathHosts_resetHardIsShortDeny(_ host: HookHost) throws {
     #expect(codex.stdout.contains("\"decision\":\"block\""))
     #expect(codex.stdout.contains("\"decision\":\"deny\"") == false)
     #expect(codex.exitCode == 2)
+    #expect(codex.stderr.isEmpty == false)
 }
 
 @Test func hookWire_allowIsEmpty() {
