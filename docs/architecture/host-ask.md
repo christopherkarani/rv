@@ -73,12 +73,12 @@ Official: [hooks](https://developers.openai.com/codex/hooks) — PreToolUse docu
 
 Exit code `2` also blocks (stderr reason). `permissionDecision: "ask"` is leftover-ask-as-permit: Codex marks the hook failed and continues the tool.
 
-RV: `rv-guard-codex.py.tmpl` + `CodexHostCodec`. Matcher `PreToolUse` / `Bash`. Live deny: official older `{"decision":"block","reason"}` on stdout, the 271 blocking reason on **stderr**, and process exit **2**. Exit 2 without stderr fail-opens the tool. Tests fail Claude `permissionDecision: deny` and stdout-only `block` as the honor path. `HostNativeAsk.capability(.codex)` is `denyOrTTY`. Host-only (OPE-269). No Ask.
+RV: `rv-guard-codex.py.tmpl` + `CodexHostCodec`. Matcher `PreToolUse` / `Bash`. Live deny: official older `{"decision":"block","reason"}` on stdout, the 271 blocking reason on **stderr**, and process exit **2**. Exit 2 without a trimmed non-empty stderr reason fail-opens the tool (empty / whitespace / a bare newline is the same hole). Tests fail Claude `permissionDecision: deny`, stdout-only `block`, and missing-reason whitespace stderr as the honor path. `HostNativeAsk.capability(.codex)` is `denyOrTTY`. Host-only (OPE-269). No Ask.
 
 1. **Pause?** Not today. Official `"ask"` would fail-open the tool. RV never emits it.
 2. **User sees:** host block reason. No RV Ask UI.
 3. **Back to RV?** Block JSON + exit 2 is one-way. Allow-once is TTY → next hook consume.
-4. **No pause:** official `block` + stderr reason + exit 2, or TTY. Never silent allow.
+4. **No pause:** official `block` + trimmed non-empty stderr reason + exit 2, or TTY. Never silent allow.
 
 ## Unknowns
 

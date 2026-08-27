@@ -31,6 +31,21 @@ private func codexExpected(_ stem: String) throws -> (stdout: String, stderr: St
     return (stdout, stderr, code)
 }
 
+private func isCodexHonorPath(_ wire: HookWire, reason: String) -> Bool {
+    let trimmedReason = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+    let trimmedStderr = wire.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard trimmedReason.isEmpty == false else { return false }
+    guard trimmedStderr.isEmpty == false else { return false }
+    guard trimmedStderr == trimmedReason else { return false }
+    guard wire.exitCode == 2 else { return false }
+    guard let data = wire.stdout.data(using: .utf8),
+          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          json["decision"] as? String == "block",
+          json["reason"] as? String == trimmedReason
+    else { return false }
+    return true
+}
+
 private func assertCodexHonorPath(_ wire: HookWire, reason: String) throws {
     let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
     #expect(json["decision"] as? String == "block")
@@ -43,9 +58,14 @@ private func assertCodexHonorPath(_ wire: HookWire, reason: String) throws {
     #expect(wire.stdout.contains("\"decision\":\"deny\"") == false)
     #expect(wire.exitCode == 2)
     #expect(wire.stdout.hasSuffix("\n"))
+    let trimmedReason = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+    let trimmedStderr = wire.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+    #expect(trimmedReason.isEmpty == false)
     #expect(wire.stderr.isEmpty == false)
+    #expect(trimmedStderr.isEmpty == false)
     #expect(wire.stderr.contains(reason))
-    #expect(wire.stderr.trimmingCharacters(in: .whitespacesAndNewlines) == reason)
+    #expect(trimmedStderr == reason)
+    #expect(isCodexHonorPath(wire, reason: reason))
 }
 
 @Test(arguments: [
@@ -102,12 +122,42 @@ func codexDecode_extractsBashCommand(_ file: String, expected: String) throws {
     #expect(stdoutOnly.stderr.isEmpty)
     #expect(stdoutOnly.stdout.contains("\"decision\":\"block\""))
     #expect(stdoutOnly.exitCode == 2)
+    #expect(isCodexHonorPath(stdoutOnly, reason: resetHardHostDeny) == false)
     let live = codec.encodeDeny(reason: resetHardHostDeny)
     #expect(live.stderr.isEmpty == false)
     #expect(live.stderr.contains(resetHardHostDeny))
     #expect(live.stdout == stdoutOnly.stdout)
     #expect(live.exitCode == 2)
     #expect(live != stdoutOnly)
+}
+
+@Test(arguments: ["", "\n", " \n", "\n\n", "   ", "\t"])
+func codexHonorPath_missingReasonExitTwoWithWhitespaceStderrIsNotEnough(_ missing: String) throws {
+    let bad = HookWire(
+        stdout: "{\"decision\":\"block\"}\n",
+        exitCode: 2,
+        stderr: missing
+    )
+    #expect(bad.exitCode == 2)
+    #expect(bad.stdout.contains("\"decision\":\"block\""))
+    #expect(bad.stderr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    #expect(isCodexHonorPath(bad, reason: resetHardHostDeny) == false)
+    #expect(isCodexHonorPath(bad, reason: missing) == false)
+
+    let emitted = hookBlockStderr(reason: missing)
+    #expect(emitted != "\n")
+    #expect(emitted.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+
+    let liveMissing = codec.encodeDeny(reason: missing)
+    #expect(liveMissing.exitCode == 2)
+    #expect(liveMissing.stdout.contains("\"decision\":\"block\""))
+    #expect(liveMissing.stdout.contains("\"permissionDecision\":\"ask\"") == false)
+    #expect(liveMissing.stderr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+    #expect(liveMissing.stderr != "\n")
+    #expect(liveMissing != bad)
+
+    let live = codec.encodeDeny(reason: resetHardHostDeny)
+    try assertCodexHonorPath(live, reason: resetHardHostDeny)
 }
 
 @Test func codexEncodeDeny_isOfficialBlockAndExitTwo() throws {

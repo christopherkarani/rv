@@ -2,7 +2,8 @@
 
 Codex PreToolUse command hook. Live deny is the older official honor path
 ``{"decision":"block","reason":...}`` on stdout, the blocking reason on
-stderr, and process exit 2. Exit 2 without stderr fail-opens the tool.
+stderr, and process exit 2. Exit 2 with empty or whitespace-only stderr
+fail-opens the tool the same way as no stderr.
 Do not emit Claude permission deny JSON as the live deny. Missing rv /
 timeout / crash / non-JSON fail closed the same way. Never emit leftover
 Ask JSON.
@@ -73,10 +74,9 @@ def _map_rv_hook_result(stdout, exit_code):
         try:
             parsed = json.loads(trimmed)
             if isinstance(parsed, dict) and parsed.get("decision") in ("block", "deny"):
-                reason = parsed.get("reason")
                 return {
                     "action": "block",
-                    "reason": reason if isinstance(reason, str) else "",
+                    "reason": _blocking_reason(parsed.get("reason")),
                 }
         except (ValueError, TypeError):
             pass
@@ -86,12 +86,20 @@ def _map_rv_hook_result(stdout, exit_code):
     return {"action": "block", "reason": "rv failed"}
 
 
+def _blocking_reason(reason):
+    if isinstance(reason, str):
+        text = reason.strip()
+        if text:
+            return text
+    return "rv failed"
+
+
 def _emit_block(reason):
-    text = reason if isinstance(reason, str) else ""
+    text = _blocking_reason(reason)
     sys.stdout.write(
         json.dumps({"decision":"block","reason":text}, separators=(",", ":")) + "\n"
     )
-    sys.stderr.write(text if text.endswith("\n") else text + "\n")
+    sys.stderr.write(text + "\n")
     sys.exit(2)
 
 

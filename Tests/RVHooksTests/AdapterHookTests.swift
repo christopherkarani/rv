@@ -183,6 +183,32 @@ private func runOpenCodePluginContract(_ source: String) async throws -> OpenCod
     #expect(result.exitCode == 2)
 }
 
+@Test(arguments: [
+    "{\"decision\":\"block\"}\n",
+    "{\"decision\":\"block\",\"reason\":\"\"}\n",
+    "{\"decision\":\"block\",\"reason\":\"\\n\"}\n",
+])
+func codexWrapper_missingReasonDoesNotExitTwoWithWhitespaceStderr(_ stubStdout: String) async throws {
+    let result = try await runCodexWrapper(
+        event: [
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": ["command": "git reset --hard"],
+        ],
+        stub: .stdout(stubStdout, exit: 2)
+    )
+    let json = try #require(
+        JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any]
+    )
+    #expect(json["decision"] as? String == "block")
+    #expect(result.stdout.contains("\"permissionDecision\"") == false)
+    #expect(result.stdout.contains("\"ask\"") == false)
+    let trimmed = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+    #expect(result.stderr != "\n")
+    #expect(trimmed.isEmpty == false)
+    #expect(result.exitCode == 2)
+}
+
 @Test func hermesTemplate_registersPreToolCallTerminalAndBlocks() throws {
     let source = try adapterSource(for: .hermes, rvPath: "/opt/rv")
     #expect(source.contains("pre_tool_call"))

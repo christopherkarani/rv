@@ -74,6 +74,7 @@ import RVDomain
     #expect(json["decision"] as? String == "block")
     #expect(wire.exitCode == 2)
     #expect(wire.stderr.isEmpty == false)
+    #expect(wire.stderr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
     #expect(wire.stderr.contains(deny.reason) || wire.stderr.contains("RV · Blocked"))
 }
 

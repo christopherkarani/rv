@@ -582,6 +582,8 @@ private func runHook(
     #expect(wire.exitCode == 2)
     #expect(wire.stdout.contains(text))
     #expect(wire.stderr.isEmpty == false)
+    #expect(wire.stderr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+    #expect(wire.stderr.trimmingCharacters(in: .whitespacesAndNewlines) == text)
     #expect(wire.stderr.contains(text))
 }
 
@@ -600,6 +602,8 @@ private func runHook(
         #expect(outcome.stdout.contains("\"decision\":\"block\""))
         #expect(outcome.stdout.contains("\"permissionDecision\":\"deny\"") == false)
         #expect(outcome.stderr.isEmpty == false)
+        #expect(outcome.stderr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+        #expect(outcome.stderr.trimmingCharacters(in: .whitespacesAndNewlines) == text)
         #expect(outcome.stderr.contains(text))
     }
 }

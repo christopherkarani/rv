@@ -80,6 +80,8 @@ func hookWire_samePathHosts_resetHardIsShortDeny(_ host: HookHost) throws {
         #expect(wire.stdout.contains("\"decision\":\"deny\"") == false)
         #expect(wire.exitCode == 2)
         #expect(wire.stderr.isEmpty == false)
+        #expect(wire.stderr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+        #expect(wire.stderr.trimmingCharacters(in: .whitespacesAndNewlines) == resetHardHostDeny)
         #expect(wire.stderr.contains(resetHardHostDeny))
     } else {
         let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
