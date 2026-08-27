@@ -23,6 +23,7 @@ public actor ServiceRuntime {
     private let clock: @Sendable () -> Date
 
     package private(set) var compiledPackIDs: [PackID]
+    private var compiledPackIDSet: Set<PackID>
 
     public init(
         snapshots: [PackSnapshot]? = nil,
@@ -50,6 +51,7 @@ public actor ServiceRuntime {
             compiledPacks: coverage.compiled
         )
         self.compiledPackIDs = session.compiledPackIDs
+        self.compiledPackIDSet = Set(session.compiledPackIDs)
         let gated = GatedEvaluate(session)
         self.gated = gated
         self.corePacksReady = gated.corePacksReady
@@ -494,18 +496,20 @@ public actor ServiceRuntime {
             snapshots: sessionSnapshots,
             compiledPacks: coverage.compiled
         )
-        compiledPackIDs = session.compiledPackIDs
+        let compiledPackIDs = session.compiledPackIDs
+        self.compiledPackIDs = compiledPackIDs
+        compiledPackIDSet = Set(compiledPackIDs)
         gated = GatedEvaluate(session)
     }
 
     /// Wire request walk set. Those IDs must already be compiled, or we rebuild.
     private func rebuildWhenUncovered(wanted: WalkedPackIDs) {
-        rebuildWhenUncovered(wantedIDs: Set(wanted.ids))
+        rebuildWhenUncovered(wantedIDs: wanted.ids)
     }
 
     /// Coverage compile set after catalog refresh (`listPacks`).
     private func rebuildWhenUncovered(wanted: CompiledPackIDs) {
-        rebuildWhenUncovered(wantedIDs: Set(wanted.ids))
+        rebuildWhenUncovered(wantedIDs: wanted.ids)
     }
 
     /// Warm-runtime self-heal for behind-our-back config edits: `rv packs
@@ -514,8 +518,9 @@ public actor ServiceRuntime {
     /// toward allow, so rebuild before evaluating. Failed attempts retry at
     /// most once per second so a pack that can never compile costs one
     /// rebuild per interval, not one per evaluate.
-    private func rebuildWhenUncovered(wantedIDs: Set<PackID>) {
-        guard !wantedIDs.isSubset(of: Set(compiledPackIDs)) else { return }
+    private func rebuildWhenUncovered(wantedIDs: [PackID]) {
+        guard wantedIDs.contains(where: { !compiledPackIDSet.contains($0) }) else { return }
+        let wantedIDs = Set(wantedIDs)
         let now = DispatchTime.now().uptimeNanoseconds
         if wantedIDs == lastUncoveredWanted,
            now < lastCoverageRebuildAt &+ 1_000_000_000
