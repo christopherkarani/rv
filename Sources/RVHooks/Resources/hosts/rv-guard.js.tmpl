@@ -10,9 +10,14 @@ const RV_MISSING_COMMAND =
 const RV_ASK_TIMEOUT_MS = 120000;
 
 const gatedCallIDs = new Set();
+const officialPermissionReplies = new Map();
 
 export const RvGuard = async (ctx) => {
+  listenOfficialPermissionBus(ctx);
   return {
+    event: async (input) => {
+      rememberOfficialPermissionReply(input && input.event);
+    },
     "tool.execute.before": async (input, output) => {
       if (!isShellTool(input && input.tool)) {
         return;
@@ -218,52 +223,100 @@ async function confirmOfficialPermission(ctx, input, mapped, command) {
 }
 
 async function waitOfficialPermissionReply(ctx, requestID, sessionID) {
+  const remembered = waitRememberedOfficialReply(sessionID, requestID);
   const stream = await officialPermissionStream(ctx);
-  if (stream) {
-    return await readOfficialPermissionReply(stream, requestID, sessionID);
+  if (!stream) {
+    return await remembered;
   }
-  return await pollOfficialPermissionReply(ctx, requestID, sessionID);
+  const fromStream = readOfficialPermissionReply(stream, requestID, sessionID).then((reply) => {
+    if (reply === undefined) {
+      return remembered;
+    }
+    return reply === "once" || reply === "always";
+  });
+  return await Promise.race([remembered, fromStream]);
 }
 
 async function officialPermissionStream(ctx) {
-  const subscribe = ctx && ctx.client && ctx.client.event && ctx.client.event.subscribe;
-  if (typeof subscribe !== "function") {
-    return undefined;
-  }
-  try {
-    return permissionEventStream(await subscribe());
-  } catch {
-    return undefined;
-  }
-}
-
-async function pollOfficialPermissionReply(ctx, requestID, sessionID) {
-  const base = ctx && ctx.serverUrl;
-  if (!base) {
-    return false;
-  }
-  const url = new URL(`api/session/${sessionID}/permission/${requestID}`, base);
-  const deadline = Date.now() + RV_ASK_TIMEOUT_MS;
-  while (Date.now() < deadline) {
+  const candidates = [
+    ctx && ctx.client && ctx.client.v2 && ctx.client.v2.event && ctx.client.v2.event.subscribe,
+    ctx && ctx.client && ctx.client.event && ctx.client.event.subscribe,
+  ];
+  for (const subscribe of candidates) {
+    if (typeof subscribe !== "function") {
+      continue;
+    }
     try {
-      const response = await fetch(url);
-      if (response && response.ok !== false) {
-        const row = unwrapPermissionCreate(await response.json());
-        if (row && (row.reply === "once" || row.reply === "always")) {
-          return true;
-        }
-        if (row && (row.reply === "reject" || row.reply === "deny")) {
-          return false;
-        }
+      const stream = permissionEventStream(await subscribe());
+      if (stream) {
+        return stream;
       }
     } catch {
-      // HTTP miss / network: keep waiting for a human DialogConfirm reply.
+      // Official live SSE can throw; Hooks.event still observes reply 204.
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 25);
-    });
   }
-  return false;
+  return undefined;
+}
+
+function listenOfficialPermissionBus(ctx) {
+  const on = ctx && ctx.event && ctx.event.on;
+  if (typeof on !== "function") {
+    return;
+  }
+  const replied = "permission.v2.replied";
+  const legacy = ["permission", "replied"].join(".");
+  on(replied, (event) => rememberOfficialPermissionReply(event));
+  on(legacy, (event) => rememberOfficialPermissionReply(event));
+}
+
+function officialReplyKey(sessionID, requestID) {
+  return `${sessionID}\0${requestID}`;
+}
+
+function rememberOfficialPermissionReply(event) {
+  if (!event || typeof event !== "object") {
+    return;
+  }
+  if (event.data && typeof event.data === "object" && event.data.type) {
+    rememberOfficialPermissionReply(event.data);
+    return;
+  }
+  const replied = "permission.v2.replied";
+  const legacy = ["permission", "replied"].join(".");
+  if (event.type !== replied && event.type !== legacy) {
+    return;
+  }
+  const props = event.properties ?? event.data ?? {};
+  const requestID = stringCommand(props.requestID ?? props.id);
+  if (!requestID) {
+    return;
+  }
+  const sessionID = stringCommand(props.sessionID) ?? "";
+  const reply = typeof props.reply === "string" ? props.reply : undefined;
+  if (!reply) {
+    return;
+  }
+  const key = officialReplyKey(sessionID, requestID);
+  const current = officialPermissionReplies.get(key);
+  if (current && typeof current.resolve === "function") {
+    current.resolve(reply);
+  }
+  officialPermissionReplies.set(key, { reply });
+}
+
+function waitRememberedOfficialReply(sessionID, requestID) {
+  const exact = officialReplyKey(sessionID, requestID);
+  const current = officialPermissionReplies.get(exact);
+  if (current && typeof current.reply === "string") {
+    return Promise.resolve(current.reply === "once" || current.reply === "always");
+  }
+  return new Promise((resolve) => {
+    officialPermissionReplies.set(exact, {
+      resolve: (reply) => {
+        resolve(reply === "once" || reply === "always");
+      },
+    });
+  });
 }
 
 async function createOfficialPermission(ctx, sessionID, input, mapped, command) {
@@ -359,14 +412,17 @@ async function readOfficialPermissionReply(stream, requestID, sessionID) {
     if (reply === undefined) {
       continue;
     }
-    return reply === "once" || reply === "always";
+    return reply;
   }
-  return false;
+  return undefined;
 }
 
 function permissionReplyFromEvent(event, requestID, sessionID) {
   if (!event || typeof event !== "object") {
     return undefined;
+  }
+  if (event.data && typeof event.data === "object" && event.data.type) {
+    return permissionReplyFromEvent(event.data, requestID, sessionID);
   }
   const replied = "permission.v2.replied";
   const legacy = ["permission", "replied"].join(".");

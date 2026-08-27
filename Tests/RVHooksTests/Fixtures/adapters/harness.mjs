@@ -145,8 +145,9 @@ if (host === "opencode") {
   }
   const plugin = await mod.RvGuard(ctx);
   const keys = Object.keys(plugin);
+  ctx.pluginEvent = plugin.event;
   const unexpected = keys.filter(
-    (name) => name !== "tool.execute.before" && name !== "shell.env"
+    (name) => name !== "tool.execute.before" && name !== "shell.env" && name !== "event"
   );
   if (!keys.includes("tool.execute.before") || unexpected.length > 0) {
     process.stdout.write(JSON.stringify({ error: "unexpected hooks", keys }));
@@ -163,6 +164,7 @@ if (host === "opencode") {
         toasts,
         permissionCreates: ctx.permissionCreates ?? 0,
         permissionGets: ctx.permissionGets ?? 0,
+        permissionReply204: ctx.permissionReply204 ?? null,
       })
     );
   } catch (error) {
@@ -172,6 +174,7 @@ if (host === "opencode") {
         toasts,
         permissionCreates: ctx.permissionCreates ?? 0,
         permissionGets: ctx.permissionGets ?? 0,
+        permissionReply204: ctx.permissionReply204 ?? null,
       })
     );
   }
@@ -185,17 +188,57 @@ function installOfficialPermission(ctx, reply) {
   const subscribeMode = process.env.RV_PERMISSION_SUBSCRIBE ?? "ok";
   ctx.permissionCreates = 0;
   ctx.permissionGets = 0;
+  ctx.permissionReply204 = null;
   ctx.permissionStarted = Date.now();
   const recordCreate = () => {
     ctx.permissionCreates = (ctx.permissionCreates ?? 0) + 1;
   };
   const lateMs = Number(process.env.RV_PERMISSION_LATE_MS ?? 0);
-  const pollReply =
-    effectReply === "miss-then-once" || effectReply === "late-once"
-      ? "once"
-      : effectReply === "miss-then-reject"
-        ? "reject"
-        : effectReply;
+  const official204 =
+    effectReply === "once-204" ||
+    effectReply === "once-204-pending" ||
+    effectReply === "once-204-404" ||
+    effectReply === "reject-204";
+  const confirmReply =
+    effectReply === "reject-204"
+      ? "reject"
+      : official204
+        ? "once"
+        : effectReply === "once" || effectReply === "always" || effectReply === "reject"
+          ? effectReply
+          : undefined;
+  const getAfter204 = effectReply === "once-204-pending" ? "pending" : "404";
+  const pendingBody = {
+    data: {
+      id: requestID,
+      sessionID: "ses_1",
+      action: "external_directory",
+      resources: ["/rv-ask"],
+    },
+  };
+  const deliverOfficialConfirm = (replyValue) => {
+    ctx.permissionReply204 = replyValue;
+    if (typeof ctx.pluginEvent !== "function") {
+      return;
+    }
+    // Official 1.18.18 Plugin.listen: { event: { id, type, properties: event.data } }
+    void ctx.pluginEvent({
+      event: {
+        id: "evt_test",
+        type: "permission.v2.replied",
+        properties: {
+          sessionID: "ses_1",
+          requestID,
+          reply: replyValue,
+        },
+      },
+    });
+  };
+  const scheduleOfficialConfirm = (replyValue) => {
+    setTimeout(() => {
+      deliverOfficialConfirm(replyValue);
+    }, lateMs > 0 ? lateMs : 25);
+  };
   const session = ctx.client.session ?? {};
   if (!fetchOnly) {
     session.permission = {
@@ -206,6 +249,9 @@ function installOfficialPermission(ctx, reply) {
         }
         if (effectReply === "deny") {
           return { data: { id: requestID, effect: "deny" } };
+        }
+        if (official204 && confirmReply) {
+          scheduleOfficialConfirm(confirmReply);
         }
         return { data: { id: requestID, effect: "ask" } };
       },
@@ -243,6 +289,17 @@ function installOfficialPermission(ctx, reply) {
   globalThis.fetch = async (url, init) => {
     const href = String(url);
     const method = init && typeof init.method === "string" ? init.method.toUpperCase() : "GET";
+    if (href.includes(`/permission/${requestID}/reply`) && method === "POST") {
+      let body = {};
+      try {
+        body = init && init.body ? JSON.parse(String(init.body)) : {};
+      } catch {
+        body = {};
+      }
+      const replyValue = typeof body.reply === "string" ? body.reply : confirmReply;
+      deliverOfficialConfirm(replyValue ?? "once");
+      return { ok: true, status: 204, async json() { return undefined; } };
+    }
     if (href.includes("/api/session/") && href.includes("/permission") && method === "POST") {
       recordCreate();
       if (effectReply === "allow") {
@@ -261,6 +318,9 @@ function installOfficialPermission(ctx, reply) {
           },
         };
       }
+      if (official204 && confirmReply) {
+        scheduleOfficialConfirm(confirmReply);
+      }
       return {
         ok: true,
         async json() {
@@ -275,49 +335,15 @@ function installOfficialPermission(ctx, reply) {
     ) {
       ctx.permissionGets = (ctx.permissionGets ?? 0) + 1;
       if (effectReply === "absent") {
-        return { ok: false, status: 404, async json() { return {}; } };
+        return { ok: false, status: 404, async json() { return { _tag: "PermissionNotFoundError" }; } };
       }
-      if (effectReply === "miss-then-once" || effectReply === "miss-then-reject") {
-        if (ctx.permissionGets === 1) {
-          return { ok: false, status: 404, async json() { return {}; } };
+      if (official204) {
+        if (ctx.permissionReply204 && getAfter204 === "404") {
+          return { ok: false, status: 404, async json() { return { _tag: "PermissionNotFoundError" }; } };
         }
-        return {
-          ok: true,
-          async json() {
-            return { data: { id: requestID, reply: pollReply } };
-          },
-        };
+        return { ok: true, async json() { return pendingBody; } };
       }
-      if (effectReply === "late-once") {
-        if (Date.now() - ctx.permissionStarted < lateMs) {
-          return {
-            ok: true,
-            async json() {
-              return { data: { id: requestID, effect: "ask" } };
-            },
-          };
-        }
-        return {
-          ok: true,
-          async json() {
-            return { data: { id: requestID, reply: "once" } };
-          },
-        };
-      }
-      if (effectReply === "once" || effectReply === "always" || effectReply === "reject") {
-        return {
-          ok: true,
-          async json() {
-            return { data: { id: requestID, reply: effectReply } };
-          },
-        };
-      }
-      return {
-        ok: true,
-        async json() {
-          return { data: { id: requestID, effect: "ask" } };
-        },
-      };
+      return { ok: true, async json() { return pendingBody; } };
     }
     if (typeof previousFetch === "function") {
       return previousFetch(url, init);

@@ -111,9 +111,11 @@ private func runOpenCodePluginContract(_ source: String) async throws -> OpenCod
     #expect(tui.contains("RV · Ask"))
     #expect(tui.contains("permission.ask") == false)
     #expect(tui.contains("server:"))
-    #expect(source.contains("pollOfficialPermissionReply"))
+    #expect(source.contains("pollOfficialPermissionReply") == false)
     #expect(source.contains("RV_ASK_TIMEOUT_MS"))
     #expect(source.contains("attempt < 40") == false)
+    #expect(source.contains("event: async"))
+    #expect(source.contains("permission.v2.replied"))
 }
 
 @Test func openCodeTuiPlugin_defaultExportsServerAndLoadsOnOpenCode11818() async throws {
@@ -435,12 +437,14 @@ private func runOpenCodePluginContract(_ source: String) async throws -> OpenCod
             "command": "git reset --hard",
         ],
         stub: .stdout(askResetHardJSON, exit: 1),
-        permissionReply: "once",
+        permissionReply: "once-204",
         permissionSubscribe: "throw",
+        askTimeoutMs: 800,
         secondStub: .stdout("", exit: 0)
     )
     #expect(result.threw == nil)
     #expect(result.permissionCreates == 1)
+    #expect(result.permissionReply204 == "once")
     #expect(result.spawnCount == 2)
     #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
     #expect(result.toastCount == 0)
@@ -456,12 +460,14 @@ private func runOpenCodePluginContract(_ source: String) async throws -> OpenCod
             "command": "git reset --hard",
         ],
         stub: .stdout(askResetHardJSON, exit: 1),
-        permissionReply: "once",
+        permissionReply: "once-204",
         permissionSubscribe: "missing",
+        askTimeoutMs: 800,
         secondStub: .stdout("", exit: 0)
     )
     #expect(result.threw == nil)
     #expect(result.permissionCreates == 1)
+    #expect(result.permissionReply204 == "once")
     #expect(result.spawnCount == 2)
     #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
 }
@@ -487,7 +493,7 @@ private func runOpenCodePluginContract(_ source: String) async throws -> OpenCod
     #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
 }
 
-@Test func openCodeAdapter_sessionShellEnvOfficialPollSurvivesFirstHTTPMiss() async throws {
+@Test func openCodeAdapter_sessionShellEnvOfficialOnce204SpendsWhenGet404s() async throws {
     let result = try await runOpenCodeAdapter(
         event: [
             "hook": "shell.env",
@@ -497,42 +503,21 @@ private func runOpenCodePluginContract(_ source: String) async throws -> OpenCod
             "command": "git reset --hard",
         ],
         stub: .stdout(askResetHardJSON, exit: 1),
-        permissionReply: "miss-then-once",
+        permissionReply: "once-204-404",
         permissionSubscribe: "throw",
+        askTimeoutMs: 800,
         secondStub: .stdout("", exit: 0)
     )
     #expect(result.threw == nil)
     #expect(result.permissionCreates == 1)
-    #expect(result.permissionGets >= 2)
-    #expect(result.spawnCount == 2)
-    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
-    #expect(result.toastCount == 0)
-}
-
-@Test func openCodeAdapter_sessionShellEnvOfficialPollWaitsForLateTUIYes() async throws {
-    let result = try await runOpenCodeAdapter(
-        event: [
-            "hook": "shell.env",
-            "cwd": "/tmp/ws",
-            "sessionID": "ses_1",
-            "callID": "call_1",
-            "command": "git reset --hard",
-        ],
-        stub: .stdout(askResetHardJSON, exit: 1),
-        permissionReply: "late-once",
-        permissionSubscribe: "missing",
-        permissionLateMs: 1500,
-        secondStub: .stdout("", exit: 0)
-    )
-    #expect(result.threw == nil)
-    #expect(result.permissionCreates == 1)
+    #expect(result.permissionReply204 == "once")
     #expect(result.spawnCount == 2)
     #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
     #expect(result.lastStdin?.contains("git reset --hard") == true)
     #expect(result.toastCount == 0)
 }
 
-@Test func openCodeAdapter_sessionShellEnvOfficialPollLateRejectStillThrows() async throws {
+@Test func openCodeAdapter_sessionShellEnvOfficialOnce204SpendsWhenGetStaysPending() async throws {
     let result = try await runOpenCodeAdapter(
         event: [
             "hook": "shell.env",
@@ -542,15 +527,64 @@ private func runOpenCodePluginContract(_ source: String) async throws -> OpenCod
             "command": "git reset --hard",
         ],
         stub: .stdout(askResetHardJSON, exit: 1),
-        permissionReply: "miss-then-reject",
+        permissionReply: "once-204-pending",
+        permissionSubscribe: "missing",
+        askTimeoutMs: 800,
+        secondStub: .stdout("", exit: 0)
+    )
+    #expect(result.threw == nil)
+    #expect(result.permissionCreates == 1)
+    #expect(result.permissionReply204 == "once")
+    #expect(result.spawnCount == 2)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
+    #expect(result.toastCount == 0)
+}
+
+@Test func openCodeAdapter_sessionShellEnvOfficialReject204StillThrows() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: [
+            "hook": "shell.env",
+            "cwd": "/tmp/ws",
+            "sessionID": "ses_1",
+            "callID": "call_1",
+            "command": "git reset --hard",
+        ],
+        stub: .stdout(askResetHardJSON, exit: 1),
+        permissionReply: "reject-204",
         permissionSubscribe: "throw",
+        askTimeoutMs: 800,
         secondStub: .stdout("", exit: 0)
     )
     #expect(result.threw == resetHardReason)
     #expect(result.permissionCreates == 1)
-    #expect(result.permissionGets >= 2)
+    #expect(result.permissionReply204 == "reject")
     #expect(result.spawnCount == 1)
     #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
+}
+
+@Test func openCodeAdapter_sessionShellEnvOfficialOnce204SpendsWhenSubscribeThrows() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: [
+            "hook": "shell.env",
+            "cwd": "/tmp/ws",
+            "sessionID": "ses_1",
+            "callID": "call_1",
+            "command": "git reset --hard",
+        ],
+        stub: .stdout(askResetHardJSON, exit: 1),
+        permissionReply: "once-204",
+        permissionSubscribe: "throw",
+        permissionLateMs: 1500,
+        askTimeoutMs: 2500,
+        secondStub: .stdout("", exit: 0)
+    )
+    #expect(result.threw == nil)
+    #expect(result.permissionCreates == 1)
+    #expect(result.permissionReply204 == "once")
+    #expect(result.spawnCount == 2)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
+    #expect(result.lastStdin?.contains("git reset --hard") == true)
+    #expect(result.toastCount == 0)
 }
 
 @Test func openCodeAdapter_sessionShellEnvConfirmSpendsThenAllows() async throws {
@@ -1096,6 +1130,7 @@ private struct OpenCodeAdapterRun {
     var toastVariant: String?
     var permissionCreates: Int
     var permissionGets: Int
+    var permissionReply204: String?
 }
 
 private struct OpenCodePluginContract {
@@ -1229,7 +1264,8 @@ private func runOpenCodeAdapter(
         toastMessage: toast?["message"] as? String,
         toastVariant: toast?["variant"] as? String,
         permissionCreates: object["permissionCreates"] as? Int ?? 0,
-        permissionGets: object["permissionGets"] as? Int ?? 0
+        permissionGets: object["permissionGets"] as? Int ?? 0,
+        permissionReply204: object["permissionReply204"] as? String
     )
 }
 
