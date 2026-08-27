@@ -407,8 +407,6 @@ async function loadTuiAskCompanion(ctx, pluginPath, click) {
       pathToFileURL(join(askDir, "node_modules", "@opencode-ai", "tui", "context", "sync.js")).href
     );
     hostHooks = { useSDK, useSync };
-  } else if (process.env.RV_TUI_PAINT !== "0") {
-    installFakeTuiSdk(dirname(pluginPath), bus, ctx);
   }
   const api = {
     keymap,

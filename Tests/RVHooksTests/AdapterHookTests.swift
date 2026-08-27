@@ -123,6 +123,8 @@ private func runOpenCodePluginContract(
     #expect(source.contains("ctx?.ask") == false)
     #expect(source.contains("ctx?.ui?.confirm") == false)
     #expect(source.contains("session.permission.create"))
+    #expect(source.contains("createOfficialPermissionFetch") == false)
+    #expect(source.contains("api/session/${sessionID}/permission") == false)
     #expect(source.contains("permission.ask") == false)
     #expect(source.contains("tool: {") == false)
     #expect(source.contains("console.log") == false)
@@ -457,7 +459,7 @@ private func runOpenCodePluginContract(
     #expect(result.spawnCount == 1)
 }
 
-@Test func openCodeAdapter_sessionShellEnvOfficialTuiConfirmClickSpendsThenAllows() async throws {
+@Test func openCodeAdapter_officialTuiClickWithoutHostSdkDoesNotSpend() async throws {
     let result = try await runOpenCodeAdapter(
         event: [
             "hook": "shell.env",
@@ -471,18 +473,16 @@ private func runOpenCodePluginContract(
         askTimeoutMs: 800,
         secondStub: .stdout("", exit: 0)
     )
-    #expect(result.threw == nil)
+    #expect(result.threw == resetHardReason)
     #expect(result.permissionCreates == 1)
-    #expect(result.tuiDialogTitle == "Permission required")
-    #expect(result.tuiPaintSource == "sync.permission")
-    #expect(result.permissionReply204 == "once")
-    #expect(result.spawnCount == 2)
-    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
-    #expect(result.lastStdin?.contains("git reset --hard") == true)
-    #expect(result.toastCount == 0)
+    #expect(result.tuiDialogTitle == nil)
+    #expect(result.tuiPaintSource == nil)
+    #expect(result.permissionReply204 == nil)
+    #expect(result.spawnCount == 1)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
 }
 
-@Test func openCodeAdapter_sessionShellEnvOfficialTuiCancelClickDoesNotAllow() async throws {
+@Test func openCodeAdapter_officialTuiRejectWithoutHostSdkDoesNotSpend() async throws {
     let result = try await runOpenCodeAdapter(
         event: [
             "hook": "shell.env",
@@ -498,14 +498,14 @@ private func runOpenCodePluginContract(
     )
     #expect(result.threw == resetHardReason)
     #expect(result.permissionCreates == 1)
-    #expect(result.tuiDialogTitle == "Permission required")
-    #expect(result.tuiPaintSource == "sync.permission")
-    #expect(result.permissionReply204 == "reject")
+    #expect(result.tuiDialogTitle == nil)
+    #expect(result.tuiPaintSource == nil)
+    #expect(result.permissionReply204 == nil)
     #expect(result.spawnCount == 1)
     #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
 }
 
-@Test func openCodeAdapter_sessionShellEnvOfficialTuiMissingClickStillThrows() async throws {
+@Test func openCodeAdapter_officialTuiMissingReturnWithoutHostSdkDoesNotSpend() async throws {
     let result = try await runOpenCodeAdapter(
         event: [
             "hook": "shell.env",
@@ -521,8 +521,8 @@ private func runOpenCodePluginContract(
     )
     #expect(result.threw == resetHardReason)
     #expect(result.permissionCreates == 1)
-    #expect(result.tuiDialogTitle == "Permission required")
-    #expect(result.tuiPaintSource == "sync.permission")
+    #expect(result.tuiDialogTitle == nil)
+    #expect(result.tuiPaintSource == nil)
     #expect(result.spawnCount == 1)
     #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
 }
@@ -739,7 +739,7 @@ private func runOpenCodePluginContract(
     #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
 }
 
-@Test func openCodeAdapter_sessionShellEnvOfficialFetchConfirmSpendsThenAllows() async throws {
+@Test func openCodeAdapter_sessionShellEnvOfficialFetchConfirmIsNotAPermit() async throws {
     let result = try await runOpenCodeAdapter(
         event: [
             "hook": "shell.env",
@@ -752,11 +752,12 @@ private func runOpenCodePluginContract(
         permissionReply: "fetch-once",
         secondStub: .stdout("", exit: 0)
     )
-    #expect(result.threw == nil)
-    #expect(result.spawnCount == 2)
-    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
-    #expect(result.lastStdin?.contains("git reset --hard") == true)
-    #expect(result.toastCount == 0)
+    #expect(result.threw == resetHardReason)
+    #expect(result.permissionCreates == 0)
+    #expect(result.tuiDialogTitle == nil)
+    #expect(result.permissionReply204 == nil)
+    #expect(result.spawnCount == 1)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
 }
 
 @Test func openCodeAdapter_sessionShellEnvOfficialCreateAllowIsNotAPermit() async throws {
@@ -972,13 +973,13 @@ private func runOpenCodePluginContract(
         askTimeoutMs: 800,
         secondStub: .stdout("", exit: 0)
     )
-    #expect(result.threw == nil)
+    #expect(result.threw == resetHardReason)
     #expect(result.permissionCreates == 1)
-    #expect(result.tuiDialogTitle == "Permission required")
-    #expect(result.tuiPaintSource == "sync.permission")
-    #expect(result.permissionReply204 == "once")
-    #expect(result.spawnCount == 2)
-    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
+    #expect(result.tuiDialogTitle == nil)
+    #expect(result.tuiPaintSource == nil)
+    #expect(result.permissionReply204 == nil)
+    #expect(result.spawnCount == 1)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
 }
 
 @Test func openCodeAdapter_sessionShellEnvLeftoverAskDoesNotReachSpend() async throws {

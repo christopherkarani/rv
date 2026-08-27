@@ -333,33 +333,16 @@ async function createOfficialPermission(ctx, sessionID, input, mapped, command) 
       ctx.client.v2.session &&
       ctx.client.v2.session.permission &&
       ctx.client.v2.session.permission.create);
-  if (typeof create === "function") {
-    return unwrapPermissionCreate(
-      await create({
-        ...body,
-        sessionID,
-        path: { sessionID, id: sessionID },
-      }),
-    );
-  }
-  return createOfficialPermissionFetch(ctx, sessionID, body);
-}
-
-async function createOfficialPermissionFetch(ctx, sessionID, body) {
-  const base = ctx && ctx.serverUrl;
-  if (!base) {
+  if (typeof create !== "function") {
     return undefined;
   }
-  const url = new URL(`api/session/${sessionID}/permission`, base);
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!response || response.ok === false) {
-    return undefined;
-  }
-  return unwrapPermissionCreate(await response.json());
+  return unwrapPermissionCreate(
+    await create({
+      ...body,
+      sessionID,
+      path: { sessionID, id: sessionID },
+    }),
+  );
 }
 
 function unwrapPermissionCreate(value) {
