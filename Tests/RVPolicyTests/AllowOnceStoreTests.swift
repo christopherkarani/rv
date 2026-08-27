@@ -237,6 +237,8 @@ struct AllowOnceStoreTests {
         #expect(names.contains("allow-once.jsonl"))
         #expect(names.contains(".allow-once.lock"))
         #expect(names.contains(".allowlist.lock"))
+        #expect(names.contains("denylist.toml"))
+        #expect(names.contains(".denylist.lock"))
     }
 
     @Test func live_usesConfigDirectoryUnderHome() throws {
