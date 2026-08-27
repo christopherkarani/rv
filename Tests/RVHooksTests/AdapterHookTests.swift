@@ -18,6 +18,46 @@ private func harnessURL() -> URL {
         .appendingPathComponent("Fixtures/adapters/harness.mjs")
 }
 
+private func openCodePluginContractURL() -> URL {
+    URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .appendingPathComponent("Fixtures/adapters/opencode-11818-plugin.mjs")
+}
+
+private func runOpenCodePluginContract(_ source: String) async throws -> OpenCodePluginContract {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-tui-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let plugin = root.appendingPathComponent("rv-guard-tui.js")
+    try source.write(to: plugin, atomically: true, encoding: .utf8)
+
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    process.arguments = ["node", openCodePluginContractURL().path, plugin.path]
+    process.currentDirectoryURL = root
+    let stdout = Pipe()
+    let stderr = Pipe()
+    process.standardOutput = stdout
+    process.standardError = stderr
+    process.standardInput = FileHandle.nullDevice
+    try process.run()
+    process.waitUntilExit()
+    let text = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+    let err = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+    #expect(process.terminationStatus == 0, "node stderr: \(err) stdout: \(text)")
+    let object = try harnessObject(text)
+    return OpenCodePluginContract(
+        serverLoaded: object["serverLoaded"] as? Bool ?? false,
+        serverLoadError: object["serverLoadError"] as? String,
+        hasServer: object["hasServer"] as? Bool ?? false,
+        hasTui: object["hasTui"] as? Bool ?? false,
+        dialogTitle: object["dialogTitle"] as? String,
+        dialogMessage: object["dialogMessage"] as? String,
+        replied: object["replied"] as? String
+    )
+}
+
 @Test func grokTemplate_bakesRvPathIntoBashMatcher() throws {
     let source = try adapterSource(for: .grok, rvPath: "/opt/rv")
     let object = try JSONSerialization.jsonObject(with: Data(source.utf8))
@@ -70,6 +110,18 @@ private func harnessURL() -> URL {
     #expect(tui.contains("DialogConfirm"))
     #expect(tui.contains("RV · Ask"))
     #expect(tui.contains("permission.ask") == false)
+    #expect(tui.contains("server:"))
+}
+
+@Test func openCodeTuiPlugin_defaultExportsServerAndLoadsOnOpenCode11818() async throws {
+    let probe = try await runOpenCodePluginContract(try HostAdapterResources.loadOpenCodeTuiPlugin())
+    #expect(probe.hasServer == true)
+    #expect(probe.hasTui == false)
+    #expect(probe.serverLoaded == true)
+    #expect(probe.serverLoadError == nil)
+    #expect(probe.dialogTitle == "RV · Ask")
+    #expect(probe.dialogMessage?.contains("git reset --hard") == true)
+    #expect(probe.replied == "once")
 }
 
 @Test func openClawTemplate_registersBeforeToolCallExecAndBlocks() throws {
@@ -366,6 +418,67 @@ private func harnessURL() -> URL {
         secondStub: .stdout("", exit: 0)
     )
     #expect(result.threw == resetHardReason)
+    #expect(result.spawnCount == 1)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
+}
+
+@Test func openCodeAdapter_sessionShellEnvOfficialCreateHappensWhenSubscribeThrows() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: [
+            "hook": "shell.env",
+            "cwd": "/tmp/ws",
+            "sessionID": "ses_1",
+            "callID": "call_1",
+            "command": "git reset --hard",
+        ],
+        stub: .stdout(askResetHardJSON, exit: 1),
+        permissionReply: "once",
+        permissionSubscribe: "throw",
+        secondStub: .stdout("", exit: 0)
+    )
+    #expect(result.threw == nil)
+    #expect(result.permissionCreates == 1)
+    #expect(result.spawnCount == 2)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
+    #expect(result.toastCount == 0)
+}
+
+@Test func openCodeAdapter_sessionShellEnvOfficialCreateHappensWhenSubscribeMissing() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: [
+            "hook": "shell.env",
+            "cwd": "/tmp/ws",
+            "sessionID": "ses_1",
+            "callID": "call_1",
+            "command": "git reset --hard",
+        ],
+        stub: .stdout(askResetHardJSON, exit: 1),
+        permissionReply: "once",
+        permissionSubscribe: "missing",
+        secondStub: .stdout("", exit: 0)
+    )
+    #expect(result.threw == nil)
+    #expect(result.permissionCreates == 1)
+    #expect(result.spawnCount == 2)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
+}
+
+@Test func openCodeAdapter_sessionShellEnvOfficialMissingConfirmStillThrowsWhenSubscribeThrows() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: [
+            "hook": "shell.env",
+            "cwd": "/tmp/ws",
+            "sessionID": "ses_1",
+            "callID": "call_1",
+            "command": "git reset --hard",
+        ],
+        stub: .stdout(askResetHardJSON, exit: 1),
+        permissionReply: "absent",
+        permissionSubscribe: "throw",
+        secondStub: .stdout("", exit: 0)
+    )
+    #expect(result.threw == resetHardReason)
+    #expect(result.permissionCreates == 1)
     #expect(result.spawnCount == 1)
     #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
 }
@@ -911,6 +1024,17 @@ private struct OpenCodeAdapterRun {
     var toastTitle: String?
     var toastMessage: String?
     var toastVariant: String?
+    var permissionCreates: Int
+}
+
+private struct OpenCodePluginContract {
+    var serverLoaded: Bool
+    var serverLoadError: String?
+    var hasServer: Bool
+    var hasTui: Bool
+    var dialogTitle: String?
+    var dialogMessage: String?
+    var replied: String?
 }
 
 private func runPiAdapter(
@@ -997,6 +1121,7 @@ private func runOpenCodeAdapter(
     hasUI: Bool = true,
     resolutionAllow: Bool = false,
     permissionReply: String? = nil,
+    permissionSubscribe: String? = nil,
     secondStub: StubRV? = nil,
     sessionMessages: [String: Any]? = nil
 ) async throws -> OpenCodeAdapterRun {
@@ -1013,6 +1138,7 @@ private func runOpenCodeAdapter(
         hasUI: hasUI,
         resolutionAllow: resolutionAllow,
         permissionReply: permissionReply,
+        permissionSubscribe: permissionSubscribe,
         secondStub: secondStub,
         sessionMessages: sessionMessages
     )
@@ -1026,7 +1152,8 @@ private func runOpenCodeAdapter(
         toastCount: (object["toasts"] as? [Any])?.count ?? 0,
         toastTitle: toast?["title"] as? String,
         toastMessage: toast?["message"] as? String,
-        toastVariant: toast?["variant"] as? String
+        toastVariant: toast?["variant"] as? String,
+        permissionCreates: object["permissionCreates"] as? Int ?? 0
     )
 }
 
@@ -1063,6 +1190,7 @@ private func runAdapter(
     hasUI: Bool = true,
     resolutionAllow: Bool = false,
     permissionReply: String? = nil,
+    permissionSubscribe: String? = nil,
     secondStub: StubRV? = nil,
     sessionMessages: [String: Any]? = nil
 ) async throws -> AdapterPayload {
@@ -1158,6 +1286,9 @@ private func runAdapter(
     }
     if let permissionReply {
         environment["RV_PERMISSION_REPLY"] = permissionReply
+    }
+    if let permissionSubscribe {
+        environment["RV_PERMISSION_SUBSCRIBE"] = permissionSubscribe
     }
     if let sessionMessages {
         let data = try JSONSerialization.data(withJSONObject: sessionMessages)

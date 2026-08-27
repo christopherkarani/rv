@@ -200,15 +200,8 @@ async function confirmOfficialPermission(ctx, input, mapped, command) {
   if (!sessionID) {
     return false;
   }
-  const subscribe = ctx && ctx.client && ctx.client.event && ctx.client.event.subscribe;
-  if (typeof subscribe !== "function") {
-    return false;
-  }
-  const sub = await subscribe();
-  const stream = permissionEventStream(sub);
-  if (!stream) {
-    return false;
-  }
+  // Create first. Live 1.18.18 SDK subscribe can throw or omit a stream;
+  // dying before create leaves no permission, so DialogConfirm never paints.
   const created = await createOfficialPermission(ctx, sessionID, input, mapped, command);
   if (!created || created.effect === "deny" || created.effect === "allow") {
     return false;
@@ -217,11 +210,63 @@ async function confirmOfficialPermission(ctx, input, mapped, command) {
     return false;
   }
   return await Promise.race([
-    readOfficialPermissionReply(stream, created.id, sessionID),
+    waitOfficialPermissionReply(ctx, created.id, sessionID),
     new Promise((resolve) => {
       setTimeout(() => resolve(false), RV_ASK_TIMEOUT_MS);
     }),
   ]);
+}
+
+async function waitOfficialPermissionReply(ctx, requestID, sessionID) {
+  const stream = await officialPermissionStream(ctx);
+  if (stream) {
+    return await readOfficialPermissionReply(stream, requestID, sessionID);
+  }
+  return await pollOfficialPermissionReply(ctx, requestID, sessionID);
+}
+
+async function officialPermissionStream(ctx) {
+  const subscribe = ctx && ctx.client && ctx.client.event && ctx.client.event.subscribe;
+  if (typeof subscribe !== "function") {
+    return undefined;
+  }
+  try {
+    return permissionEventStream(await subscribe());
+  } catch {
+    return undefined;
+  }
+}
+
+async function pollOfficialPermissionReply(ctx, requestID, sessionID) {
+  const base = ctx && ctx.serverUrl;
+  if (!base) {
+    return false;
+  }
+  const url = new URL(`api/session/${sessionID}/permission/${requestID}`, base);
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    try {
+      const response = await fetch(url);
+      if (!response || response.ok === false) {
+        return false;
+      }
+      const row = unwrapPermissionCreate(await response.json());
+      if (!row) {
+        return false;
+      }
+      if (row.reply === "once" || row.reply === "always") {
+        return true;
+      }
+      if (row.reply === "reject" || row.reply === "deny") {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 25);
+    });
+  }
+  return false;
 }
 
 async function createOfficialPermission(ctx, sessionID, input, mapped, command) {
@@ -288,10 +333,11 @@ function unwrapPermissionCreate(value) {
   const inner = row.data && typeof row.data === "object" && row.id == null ? row.data : row;
   const id = stringCommand(inner.id);
   const effect = typeof inner.effect === "string" ? inner.effect : undefined;
-  if (!id && !effect) {
+  const reply = typeof inner.reply === "string" ? inner.reply : undefined;
+  if (!id && !effect && !reply) {
     return undefined;
   }
-  return { id, effect };
+  return { id, effect, reply };
 }
 
 function permissionEventStream(sub) {

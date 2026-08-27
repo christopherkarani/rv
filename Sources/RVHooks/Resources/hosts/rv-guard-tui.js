@@ -1,10 +1,11 @@
 export default {
   id: "rv-guard-tui",
-  tui: async (api) => {
+  server: async (api) => {
     const asked = "permission.v2.asked";
-    api.event.on(asked, (event) => {
-      void confirmOfficial(api, event);
-    });
+    if (api && api.event && typeof api.event.on === "function") {
+      api.event.on(asked, (event) => confirmOfficial(api, event));
+    }
+    return {};
   },
 };
 

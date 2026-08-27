@@ -157,12 +157,19 @@ if (host === "opencode") {
     for (const step of steps) {
       await runOpenCodeStep(plugin, step, { confirmYes, resolutionAllow, hasUI });
     }
-    process.stdout.write(JSON.stringify({ threw: null, toasts }));
+    process.stdout.write(
+      JSON.stringify({
+        threw: null,
+        toasts,
+        permissionCreates: ctx.permissionCreates ?? 0,
+      })
+    );
   } catch (error) {
     process.stdout.write(
       JSON.stringify({
         threw: error instanceof Error ? error.message : String(error),
         toasts,
+        permissionCreates: ctx.permissionCreates ?? 0,
       })
     );
   }
@@ -173,49 +180,63 @@ function installOfficialPermission(ctx, reply) {
   const fetchOnly = reply.startsWith("fetch-");
   const effectReply = fetchOnly ? reply.slice("fetch-".length) : reply;
   const requestID = "per_test";
+  const subscribeMode = process.env.RV_PERMISSION_SUBSCRIBE ?? "ok";
+  ctx.permissionCreates = 0;
+  const recordCreate = () => {
+    ctx.permissionCreates = (ctx.permissionCreates ?? 0) + 1;
+  };
   const session = ctx.client.session ?? {};
   if (!fetchOnly) {
     session.permission = {
       async create() {
+        recordCreate();
         if (effectReply === "allow") {
           return { data: { id: requestID, effect: "allow" } };
         }
         if (effectReply === "deny") {
           return { data: { id: requestID, effect: "deny" } };
         }
+        if (effectReply === "absent") {
+          return { data: { id: requestID, effect: "ask" } };
+        }
         return { data: { id: requestID, effect: "ask" } };
       },
     };
   }
   ctx.client.session = session;
-  ctx.client.event = {
-    async subscribe() {
-      return {
-        stream: (async function* () {
-          if (effectReply === "once" || effectReply === "always" || effectReply === "reject") {
-            yield {
-              type: "permission.v2.replied",
-              properties: {
-                sessionID: "ses_1",
-                requestID,
-                reply: effectReply,
-              },
-            };
-          }
-        })(),
-      };
-    },
-  };
+  if (subscribeMode === "throw") {
+    ctx.client.event = {
+      async subscribe() {
+        throw new Error("subscribe");
+      },
+    };
+  } else if (subscribeMode !== "missing") {
+    ctx.client.event = {
+      async subscribe() {
+        return {
+          stream: (async function* () {
+            if (effectReply === "once" || effectReply === "always" || effectReply === "reject") {
+              yield {
+                type: "permission.v2.replied",
+                properties: {
+                  sessionID: "ses_1",
+                  requestID,
+                  reply: effectReply,
+                },
+              };
+            }
+          })(),
+        };
+      },
+    };
+  }
   ctx.serverUrl = new URL("http://127.0.0.1:4096/");
   const previousFetch = globalThis.fetch;
   globalThis.fetch = async (url, init) => {
     const href = String(url);
-    if (
-      href.includes("/api/session/") &&
-      href.includes("/permission") &&
-      init &&
-      init.method === "POST"
-    ) {
+    const method = init && typeof init.method === "string" ? init.method.toUpperCase() : "GET";
+    if (href.includes("/api/session/") && href.includes("/permission") && method === "POST") {
+      recordCreate();
       if (effectReply === "allow") {
         return {
           ok: true,
@@ -229,6 +250,29 @@ function installOfficialPermission(ctx, reply) {
           ok: true,
           async json() {
             return { data: { id: requestID, effect: "deny" } };
+          },
+        };
+      }
+      return {
+        ok: true,
+        async json() {
+          return { data: { id: requestID, effect: "ask" } };
+        },
+      };
+    }
+    if (
+      href.includes("/api/session/") &&
+      href.includes(`/permission/${requestID}`) &&
+      method === "GET"
+    ) {
+      if (effectReply === "absent") {
+        return { ok: false, status: 404, async json() { return {}; } };
+      }
+      if (effectReply === "once" || effectReply === "always" || effectReply === "reject") {
+        return {
+          ok: true,
+          async json() {
+            return { data: { id: requestID, reply: effectReply } };
           },
         };
       }

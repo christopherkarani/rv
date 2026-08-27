@@ -50,6 +50,7 @@ func hostAdapter_bakedRvPath_rejectsModifiedAndForeignBytes(host: HookHost) thro
     let openCodeTui = try HostAdapterResources.loadOpenCodeTuiPlugin()
     #expect(openCodeTui.contains("id: \"rv-guard-tui\""))
     #expect(openCodeTui.contains("DialogConfirm"))
+    #expect(openCodeTui.contains("server:"))
     #expect(openCodeTui.contains("permission.ask") == false)
 }
 
