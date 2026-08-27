@@ -206,7 +206,7 @@ async function confirmOfficialPermission(ctx, input, mapped, command) {
     return false;
   }
   // Create first. Live 1.18.18 SDK subscribe can throw or omit a stream;
-  // dying before create leaves no permission, so DialogConfirm never paints.
+  // dying before create leaves no permission, so host PermissionPrompt never paints.
   const created = await createOfficialPermission(ctx, sessionID, input, mapped, command);
   if (!created || created.effect === "deny" || created.effect === "allow") {
     return false;

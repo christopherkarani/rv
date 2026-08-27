@@ -1,5 +1,9 @@
 import { pathToFileURL } from "node:url";
 import { officialDialogConfirm, resetOfficialDialogConfirm } from "./opencode-11818-dialog-confirm.mjs";
+import {
+  officialPermissionPrompt,
+  resetOfficialPermissionPrompt,
+} from "./opencode-11818-permission-prompt.mjs";
 
 const host = process.argv[2];
 const adapterPath = process.argv[3];
@@ -240,19 +244,14 @@ async function loadTuiAskCompanion(ctx, pluginPath, click) {
       const element = typeof input === "function" ? input() : input;
       this.replaced = element;
       this.onClose = onClose;
-      painted = officialDialogConfirm.last
-        ? officialDialogConfirm.last
-        : {
-            title: element && element.title,
-            message: element && element.message,
-            get focus() {
-              return (element && (element.focus ?? element.active)) || "confirm";
-            },
-            key() {
-              // Official DialogConfirm useBindings did not paint. registerLayer loses.
-            },
-          };
-      ctx.tuiDialogTitle = painted.title;
+      ctx.usedCustomDialogConfirm = officialDialogConfirm.last != null;
+      painted = {
+        title: element && element.title,
+        message: element && element.message,
+        key() {
+          // Custom DialogConfirm is not the live winner.
+        },
+      };
     },
     clear() {
       if (typeof this.onClose === "function") {
@@ -360,36 +359,39 @@ function installOfficialPermission(ctx, reply) {
         if (official204 && confirmReply) {
           scheduleOfficialConfirm(confirmReply);
         }
-        if (tuiClick && typeof ctx.tuiAsked === "function") {
+        if (tuiClick) {
+          resetOfficialPermissionPrompt();
           const sessionID =
             (input && input.sessionID) ||
             (input && input.path && input.path.sessionID) ||
             "ses_1";
-          const asked = ctx.tuiAsked({
-            type: "permission.v2.asked",
-            properties: {
-              id: requestID,
-              sessionID,
-              metadata: (input && input.metadata) || { rv: true },
-            },
-          });
-          const clickPainted = async () => {
-            for (let i = 0; i < 40; i++) {
-              const painted = typeof ctx.tuiPainted === "function" ? ctx.tuiPainted() : null;
-              if (painted && typeof painted.key === "function") {
-                if (tuiClick === "once") {
-                  painted.key("return");
-                } else if (tuiClick === "reject") {
-                  painted.key("left");
-                  painted.key("return");
-                }
-                return;
+          const prompt = officialPermissionPrompt(
+            { id: requestID, sessionID },
+            (payload) => {
+              const fn = ctx.client && ctx.client.permission && ctx.client.permission.reply;
+              if (typeof fn === "function") {
+                return fn(payload);
               }
-              await new Promise((resolve) => setTimeout(resolve, 5));
-            }
-          };
-          void clickPainted();
-          void asked;
+            },
+          );
+          ctx.tuiDialogTitle = prompt.title;
+          ctx.tuiPainted = () => prompt;
+          if (typeof ctx.tuiAsked === "function") {
+            void ctx.tuiAsked({
+              type: "permission.v2.asked",
+              properties: {
+                id: requestID,
+                sessionID,
+                metadata: (input && input.metadata) || { rv: true },
+              },
+            });
+          }
+          if (tuiClick === "once") {
+            prompt.key("return");
+          } else if (tuiClick === "reject") {
+            prompt.key("left");
+            prompt.key("return");
+          }
         }
         return { data: { id: requestID, effect: "ask" } };
       },

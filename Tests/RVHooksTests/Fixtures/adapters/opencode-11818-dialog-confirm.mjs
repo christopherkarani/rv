@@ -5,6 +5,9 @@
 // Tests must fire those keys here. Do not invent `painted.onConfirm()`.
 
 export function officialDialogConfirm(props, dialog) {
+  if (props && (typeof props.onConfirm === "function" || typeof props.onCancel === "function")) {
+    officialDialogConfirm.usedCustomCallbacks = true;
+  }
   const store = { active: "confirm" };
   const painted = {
     title: props && props.title,
@@ -38,10 +41,12 @@ export function officialDialogConfirm(props, dialog) {
 
 officialDialogConfirm.last = undefined;
 officialDialogConfirm.usedBindings = false;
+officialDialogConfirm.usedCustomCallbacks = false;
 
 export function resetOfficialDialogConfirm() {
   officialDialogConfirm.last = undefined;
   officialDialogConfirm.usedBindings = false;
+  officialDialogConfirm.usedCustomCallbacks = false;
 }
 
 export function keyThroughOfficialDialogConfirm(element) {

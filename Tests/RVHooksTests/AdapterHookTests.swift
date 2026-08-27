@@ -67,6 +67,7 @@ private func runOpenCodePluginContract(
         usedInventedCallback: object["usedInventedCallback"] as? Bool ?? false,
         usedDialogConfirmBindings: object["usedDialogConfirmBindings"] as? Bool ?? false,
         usedRegisterLayerKeys: object["usedRegisterLayerKeys"] as? Bool ?? false,
+        usedCustomDialogConfirm: object["usedCustomDialogConfirm"] as? Bool ?? false,
         registerLayerHandleCount: object["registerLayerHandleCount"] as? Int ?? 0,
         dialogFocus: object["dialogFocus"] as? String
     )
@@ -121,18 +122,16 @@ private func runOpenCodePluginContract(
     #expect(source.contains("console.log") == false)
     #expect(source.contains("console.error") == false)
     let tui = try HostAdapterResources.loadOpenCodeTuiPlugin()
-    #expect(tui.contains("RV · Ask"))
     #expect(tui.contains("permission.ask") == false)
     #expect(tui.contains("server:"))
-    #expect(tui.contains("DialogConfirm.show") == false)
-    #expect(tui.contains("createComponent") == false)
+    #expect(tui.contains("DialogConfirm") == false)
+    #expect(tui.contains("dialog.replace") == false)
+    #expect(tui.contains("onConfirm") == false)
+    #expect(tui.contains("onCancel") == false)
     #expect(tui.contains("registerLayer") == false)
+    #expect(tui.contains("createComponent") == false)
     #expect(tui.contains("paintOfficialAsk") == false)
-    #expect(tui.contains("DialogConfirm"))
-    #expect(tui.contains("onConfirm"))
-    #expect(tui.contains("onCancel"))
-    #expect(tui.contains("let active") == false)
-    #expect(tui.contains("setSize"))
+    #expect(tui.contains("RV · Ask") == false)
     #expect(source.contains("pollOfficialPermissionReply") == false)
     #expect(source.contains("RV_ASK_TIMEOUT_MS"))
     #expect(source.contains("attempt < 40") == false)
@@ -146,58 +145,28 @@ private func runOpenCodePluginContract(
     #expect(probe.hasTui == false)
     #expect(probe.serverLoaded == true)
     #expect(probe.serverLoadError == nil)
-    #expect(probe.dialogTitle == "RV · Ask")
-    #expect(probe.dialogMessage?.contains("git reset --hard") == true)
-    #expect(probe.dialogSize == "medium")
-    #expect(probe.usedShow == false)
-    #expect(probe.usedCreateComponent == false)
-    #expect(probe.usedOfficialKeys == true)
-    #expect(probe.usedInventedCallback == false)
-    #expect(probe.usedDialogConfirmBindings == true)
-    #expect(probe.usedRegisterLayerKeys == false)
-    #expect(probe.registerLayerHandleCount == 0)
-    #expect(probe.dialogFocus == "confirm")
-    #expect(probe.replied == "once")
-    #expect(probe.replySessionID == "ses_1")
-    #expect(probe.replyRequestID == "per_live")
+    #expect(probe.usedCustomDialogConfirm == false)
+    #expect(probe.usedDialogConfirmBindings == false)
+    #expect(probe.replied == nil)
 }
 
-@Test func openCodeTuiPlugin_officialDialogConfirmReturnKeyRepliesOnce() async throws {
+@Test func openCodeTuiPlugin_customDialogConfirmOnConfirmIsNotALiveReply() async throws {
     let probe = try await runOpenCodePluginContract(
         try HostAdapterResources.loadOpenCodeTuiPlugin(),
         mode: "official-confirm"
     )
-    #expect(probe.usedShow == false)
-    #expect(probe.usedCreateComponent == false)
-    #expect(probe.usedOfficialKeys == true)
-    #expect(probe.usedInventedCallback == false)
-    #expect(probe.usedDialogConfirmBindings == true)
-    #expect(probe.usedRegisterLayerKeys == false)
-    #expect(probe.registerLayerHandleCount == 0)
-    #expect(probe.dialogTitle == "RV · Ask")
-    #expect(probe.dialogFocus == "confirm")
-    #expect(probe.replied == "once")
-    #expect(probe.replySessionID == "ses_1")
-    #expect(probe.replyRequestID == "per_live")
+    #expect(probe.usedCustomDialogConfirm == false)
+    #expect(probe.usedDialogConfirmBindings == false)
+    #expect(probe.replied == nil)
 }
 
-@Test func openCodeTuiPlugin_officialDialogConfirmReturnWhileCancelHighlightedRepliesReject() async throws {
+@Test func openCodeTuiPlugin_customDialogConfirmCancelIsNotALiveReply() async throws {
     let probe = try await runOpenCodePluginContract(
         try HostAdapterResources.loadOpenCodeTuiPlugin(),
         mode: "official-cancel"
     )
-    #expect(probe.usedShow == false)
-    #expect(probe.usedCreateComponent == false)
-    #expect(probe.usedOfficialKeys == true)
-    #expect(probe.usedInventedCallback == false)
-    #expect(probe.usedDialogConfirmBindings == true)
-    #expect(probe.usedRegisterLayerKeys == false)
-    #expect(probe.registerLayerHandleCount == 0)
-    #expect(probe.dialogTitle == "RV · Ask")
-    #expect(probe.dialogFocus == "cancel")
-    #expect(probe.replied == "reject")
-    #expect(probe.replySessionID == "ses_1")
-    #expect(probe.replyRequestID == "per_live")
+    #expect(probe.usedCustomDialogConfirm == false)
+    #expect(probe.replied == nil)
 }
 
 @Test func openCodeTuiPlugin_registerLayerReturnDoesNotSpend() async throws {
@@ -219,32 +188,12 @@ private func runOpenCodePluginContract(
     #expect(probe.replied == nil)
 }
 
-@Test func openCodeTuiPlugin_officialDialogConfirmCancelClickRepliesReject() async throws {
-    let probe = try await runOpenCodePluginContract(
-        try HostAdapterResources.loadOpenCodeTuiPlugin(),
-        mode: "official-cancel"
-    )
-    #expect(probe.usedShow == false)
-    #expect(probe.usedCreateComponent == false)
-    #expect(probe.usedOfficialKeys == true)
-    #expect(probe.usedInventedCallback == false)
-    #expect(probe.usedDialogConfirmBindings == true)
-    #expect(probe.usedRegisterLayerKeys == false)
-    #expect(probe.registerLayerHandleCount == 0)
-    #expect(probe.dialogTitle == "RV · Ask")
-    #expect(probe.dialogFocus == "cancel")
-    #expect(probe.replied == "reject")
-    #expect(probe.replySessionID == "ses_1")
-    #expect(probe.replyRequestID == "per_live")
-}
-
 @Test func openCodeTuiPlugin_officialDialogConfirmMissingClickDoesNotReply() async throws {
     let probe = try await runOpenCodePluginContract(
         try HostAdapterResources.loadOpenCodeTuiPlugin(),
         mode: "official-none"
     )
-    #expect(probe.usedShow == false)
-    #expect(probe.dialogTitle == "RV · Ask")
+    #expect(probe.usedCustomDialogConfirm == false)
     #expect(probe.replied == nil)
 }
 
@@ -512,7 +461,7 @@ private func runOpenCodePluginContract(
     )
     #expect(result.threw == nil)
     #expect(result.permissionCreates == 1)
-    #expect(result.tuiDialogTitle == "RV · Ask")
+    #expect(result.tuiDialogTitle == "Permission required")
     #expect(result.permissionReply204 == "once")
     #expect(result.spawnCount == 2)
     #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
@@ -536,7 +485,7 @@ private func runOpenCodePluginContract(
     )
     #expect(result.threw == resetHardReason)
     #expect(result.permissionCreates == 1)
-    #expect(result.tuiDialogTitle == "RV · Ask")
+    #expect(result.tuiDialogTitle == "Permission required")
     #expect(result.permissionReply204 == "reject")
     #expect(result.spawnCount == 1)
     #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
@@ -558,7 +507,7 @@ private func runOpenCodePluginContract(
     )
     #expect(result.threw == resetHardReason)
     #expect(result.permissionCreates == 1)
-    #expect(result.tuiDialogTitle == "RV · Ask")
+    #expect(result.tuiDialogTitle == "Permission required")
     #expect(result.spawnCount == 1)
     #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
 }
@@ -1363,6 +1312,7 @@ private struct OpenCodePluginContract {
     var usedInventedCallback: Bool
     var usedDialogConfirmBindings: Bool
     var usedRegisterLayerKeys: Bool
+    var usedCustomDialogConfirm: Bool
     var registerLayerHandleCount: Int
     var dialogFocus: String?
 }

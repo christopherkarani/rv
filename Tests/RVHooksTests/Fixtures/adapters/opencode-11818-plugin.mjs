@@ -207,6 +207,7 @@ let usedOfficialKeys = false;
 let usedInventedCallback = false;
 let usedDialogConfirmBindings = false;
 let usedRegisterLayerKeys = false;
+let usedCustomDialogConfirm = false;
 let dialogFocus = null;
 
 function askedEvent() {
@@ -241,6 +242,15 @@ async function waitForPaint(api) {
 async function runAsked(api, click) {
   const handlers = api.handlers;
   const asked = handlers.get("permission.v2.asked");
+  if (click === "invented-confirm") {
+    usedInventedCallback = true;
+  }
+  if (click === "register-layer-return") {
+    usedRegisterLayerKeys = true;
+    if (api.keymap && typeof api.keymap.handle === "function") {
+      api.keymap.handle("return");
+    }
+  }
   if (typeof asked !== "function") {
     return;
   }
@@ -259,12 +269,6 @@ async function runAsked(api, click) {
       usedOfficialKeys = true;
       painted.key("left");
       painted.key("return");
-    } else if (click === "register-layer-return") {
-      // 391be52 catch: plugin registerLayer does not win live Return.
-      usedRegisterLayerKeys = true;
-      if (api.keymap && typeof api.keymap.handle === "function") {
-        api.keymap.handle("return");
-      }
     } else if (click === "invented-confirm") {
       // 168d4fe catch: harness-invented onConfirm is not a live reply.
       usedInventedCallback = true;
@@ -272,6 +276,8 @@ async function runAsked(api, click) {
     dialogFocus = painted.focus;
   }
   usedDialogConfirmBindings = officialDialogConfirm.usedBindings === true;
+  usedCustomDialogConfirm =
+    officialDialogConfirm.last != null || officialDialogConfirm.usedCustomCallbacks === true;
   if (click === "none" || click === "invented-confirm") {
     await Promise.race([pending, new Promise((resolve) => setTimeout(resolve, 40))]);
     return;
@@ -377,6 +383,7 @@ process.stdout.write(
     usedInventedCallback,
     usedDialogConfirmBindings,
     usedRegisterLayerKeys,
+    usedCustomDialogConfirm,
     registerLayerHandleCount: officialKeymap.handleCount ?? 0,
     dialogFocus,
   }),

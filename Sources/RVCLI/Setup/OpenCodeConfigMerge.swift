@@ -4,7 +4,8 @@ import Foundation
 /// `tui.json`. Official 1.18.18 TUI plugins load from `tui.json` only.
 /// File plugins cannot export both `server()` and `tui()`. The globbed
 /// `plugins/rv-guard-tui.js` is `{ server() }`. The Ask package exposes
-/// only `./tui` so the TUI runtime loads that server with host DialogConfirm.
+/// only `./tui` so leftover custom DialogConfirm installs are replaced.
+/// Live Ask is official `permission.create` + host PermissionPrompt Return.
 enum OpenCodeConfigMerge {
     static func merge(existingData: Data?, pluginPath: String) throws -> (data: Data, wrote: Bool) {
         var root = try parseRoot(existingData)
