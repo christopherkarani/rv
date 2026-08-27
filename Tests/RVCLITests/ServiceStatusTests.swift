@@ -41,7 +41,7 @@ struct ServiceStatusTests {
             checks: []
         )
         let transport = ScriptedTransport(
-            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", ok: true),
+            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok),
             responseResult: .doctorSnapshot(snapshot)
         )
         let client = try isolatedClient(transport: transport)
@@ -65,7 +65,7 @@ struct ServiceStatusTests {
 
     @Test func requestFailureIsDownNotFalseRunning() async throws {
         let transport = ScriptedTransport(
-            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", ok: true),
+            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok),
             sendError: .interrupted
         )
 
@@ -96,7 +96,7 @@ struct ServiceStatusTests {
             checks: []
         )
         let transport = ScriptedTransport(
-            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", ok: true),
+            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok),
             responseResult: .doctorSnapshot(snapshot)
         )
         let client = try isolatedClient(transport: transport)
@@ -162,7 +162,7 @@ struct ServiceStatusTests {
             checks: []
         )
         let transport = ScriptedTransport(
-            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", ok: true),
+            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok),
             responseResult: .doctorSnapshot(snapshot)
         )
         let client = try isolatedClient(transport: transport)

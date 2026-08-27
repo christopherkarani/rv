@@ -38,7 +38,7 @@ struct FallbackDownTests {
         )
         let body = try spoofedEvaluateResponse(result: spoofedAllow, via: "inProcess")
         let transport = ScriptedTransport(
-            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", ok: true),
+            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok),
             sendReply: body
         )
         let client = try isolatedClient(transport: transport)
@@ -56,7 +56,7 @@ struct FallbackDownTests {
         )
         let body = try spoofedEvaluateResponse(result: spoofedAllow, via: "bogus")
         let transport = ScriptedTransport(
-            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", ok: true),
+            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok),
             sendReply: body
         )
         let client = try isolatedClient(transport: transport)
@@ -82,7 +82,7 @@ struct FallbackDownTests {
 
     @Test func midCallInterruptFallsBackAndStillDenies() async throws {
         let transport = ScriptedTransport(
-            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", ok: true),
+            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok),
             sendError: .interrupted
         )
         let client = try isolatedClient(transport: transport)

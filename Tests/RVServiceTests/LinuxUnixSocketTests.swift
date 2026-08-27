@@ -49,7 +49,7 @@ struct LinuxUnixSocketTests {
         let client = try retryUnixConnect(path: socketURL.path)
         defer { client.close() }
         let ack = try IPCJSON.decode(HelloAck.self, from: client.send(body: try IPCJSON.encode(Hello())))
-        #expect(ack.ok == true)
+        #expect(ack.status == .ok)
 
         let response = try IPCJSON.decode(
             IPCResponse.self,
@@ -99,7 +99,7 @@ struct LinuxUnixSocketTests {
         let client = try retryUnixConnect(path: socketURL.path, attempts: 80)
         defer { client.close() }
         let ack = try IPCJSON.decode(HelloAck.self, from: client.send(body: try IPCJSON.encode(Hello())))
-        #expect(ack.ok == true)
+        #expect(ack.status == .ok)
         let response = try IPCJSON.decode(
             IPCResponse.self,
             from: client.send(body: try IPCJSON.encode(resetHardRequest()))

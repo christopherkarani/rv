@@ -345,17 +345,16 @@ public struct ServiceClient: Sendable {
         ) {
             return .majorVersionMismatch
         }
-        if ack.ok == false {
-            switch ack.skewReason {
-            case .corePacksUnavailable:
-                return .corePacksUnavailable
-            case .majorVersion:
-                return .majorVersionMismatch
-            case .protocolSkew, .handshakeRequired, nil:
-                return .rejected
-            }
+        switch ack.status {
+        case .ok:
+            return nil
+        case .skew(.corePacksUnavailable):
+            return .corePacksUnavailable
+        case .skew(.majorVersion):
+            return .majorVersionMismatch
+        case .skew(.protocolSkew), .skew(.handshakeRequired):
+            return .rejected
         }
-        return nil
     }
 
     private static func resolveStore(

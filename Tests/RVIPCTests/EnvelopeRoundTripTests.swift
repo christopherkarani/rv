@@ -34,7 +34,7 @@ struct EnvelopeRoundTripTests {
 
     @Test func helloRoundTrips() throws {
         let hello = Hello(protocolName: ProtocolVersion.name, clientSemver: "1.2.3")
-        let ack = HelloAck(ok: true)
+        let ack = HelloAck(status: .ok)
         #expect(try IPCJSON.decode(Hello.self, from: IPCJSON.encode(hello)) == hello)
         #expect(try IPCJSON.decode(HelloAck.self, from: IPCJSON.encode(ack)) == ack)
     }
