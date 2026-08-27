@@ -38,6 +38,7 @@ Living board for implement sessions. Do **not** re-grill. Do **not** load `docs/
 | `specs/phase-5-size-speed.md` | Implementing (T10–T14) |
 | [`spec/spec-architecture-c-hook-pipe.md`](../../spec/spec-architecture-c-hook-pipe.md) | Implemented (T1–T5). C hook pipe + Swift miss. Supersedes the T15 thin-Swift fence. |
 | [`specs/claude-host.md`](specs/claude-host.md) | Implemented (CL-T1–T5). Fenced later: CL-later-ask, CL-later-secrets, CL-later-mcp. |
+| [`specs/cli-thin.md`](specs/cli-thin.md) | Draft. Deepen CLI without a new SPM target. CL1 EvaluationRoute → CL2 Hook door ∥ CL3 EvaluationWorld → CL4 drop Engine. |
 
 ## Parallel rules (reminder)
 

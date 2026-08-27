@@ -75,3 +75,11 @@ _Avoid_: secret pack, path sandbox, realpath
 **Session forensics**:
 Offline `rv scan` / `rv scan sessions`: read known host session stores (or a path of known layouts), extract shell candidates, run the same `evaluate`, list deny-only findings. Not `RVHistory`, not repo/CI `rv scan repo`, not live hook enforcement. Fence: `docs/factory/specs/phase-4-session-scan.md`.
 _Avoid_: history scan, recon, audit log (unless meaning this CLI)
+
+**EvaluationWorld**:
+The single door that resolves the Enabled packs for one Evaluate session from a HomeDirectory. TTY test, hook miss, and warm rvd all call the same seam; a nil or unreadable HOME falls back to the Day-one packs inside the module, not at each caller.
+_Avoid_: EnabledPacks.resolve, GatedEvaluate.makeRequest as caller-facing doors, makeCatalog/compileEnabledIDs
+
+**EvaluationRoute**:
+The Decision from version and transport facts to an EvaluationPath (xpc or inProcess). It owns the major-skew check; adapters supply only transport and via enforcement.
+_Avoid_: isMajorSkew at every call site, per-adapter skew branch
