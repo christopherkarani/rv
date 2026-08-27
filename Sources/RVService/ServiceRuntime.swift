@@ -21,6 +21,7 @@ public actor ServiceRuntime {
     private let log: (any ServiceLog)?
     private let analytics: AnalyticsCoordinator?
     private let clock: @Sendable () -> Date
+    private var analyticsEnabledPackIDs: [String] = []
 
     package private(set) var compiledPackIDs: [PackID]
     private var compiledPackIDSet: Set<PackID>
@@ -68,6 +69,7 @@ public actor ServiceRuntime {
         self.log = log
         self.analytics = analytics
         self.clock = clock
+        self.analyticsEnabledPackIDs = Self.analyticsEnabledPackIDs(from: self.catalog)
     }
 
     public func acknowledge(_ hello: Hello) -> HelloAck {
@@ -272,7 +274,7 @@ public actor ServiceRuntime {
         case .indeterminate:
             kind = .indeterminate
         }
-        let packs = catalog.records.filter(\.enabled).map(\.id.rawValue)
+        let packs = analyticsEnabledPackIDs
         Task {
             await analytics.recordDecision(kind)
             await analytics.noteEnabledPacks(packs)
@@ -400,7 +402,8 @@ public actor ServiceRuntime {
             }
             rebuildGated()
             lastUncoveredWanted = []
-            let packs = catalog.records.filter(\.enabled).map(\.id.rawValue)
+            analyticsEnabledPackIDs = Self.analyticsEnabledPackIDs(from: catalog)
+            let packs = analyticsEnabledPackIDs
             if let analytics {
                 Task {
                     await analytics.noteEnabledPacks(packs)
@@ -422,6 +425,7 @@ public actor ServiceRuntime {
         if let refreshed = Self.makeCatalog(home: configHome) {
             catalog = refreshed
         }
+        analyticsEnabledPackIDs = Self.analyticsEnabledPackIDs(from: catalog)
         rebuildWhenUncovered(
             wanted: EvaluationWorld.coverage(catalog: catalog, home: configHome).compiled
         )
@@ -530,6 +534,7 @@ public actor ServiceRuntime {
         lastUncoveredWanted = wantedIDs
         lastCoverageRebuildAt = now
         catalog = Self.makeCatalog(home: configHome) ?? catalog
+        analyticsEnabledPackIDs = Self.analyticsEnabledPackIDs(from: catalog)
         rebuildGated()
     }
 
@@ -542,6 +547,10 @@ public actor ServiceRuntime {
             )
         }
         return try? PacksFacade.makeCatalog(home: home)
+    }
+
+    private static func analyticsEnabledPackIDs(from catalog: PackCatalog) -> [String] {
+        catalog.enabledIDs.map(\.rawValue)
     }
 }
 
