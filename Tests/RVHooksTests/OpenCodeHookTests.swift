@@ -124,6 +124,42 @@ func openCodeDecode_extractsBashCommand(_ file: String, expected: String) throws
         return
     }
     #expect(request.cwd == nil)
+    #expect(request.session == nil)
+}
+
+@Test(arguments: [
+    (
+        #"{"tool":"bash","sessionID":"sess_oc","args":{"command":"git status"}}"#,
+        "sess_oc"
+    ),
+    (
+        #"{"tool":"bash","sessionId":"sess_oc","args":{"command":"git status"}}"#,
+        "sess_oc"
+    ),
+    (
+        #"{"tool":"session.shell","sessionID":"sess_oc","args":{"command":"git status"}}"#,
+        "sess_oc"
+    ),
+])
+func openCodeDecode_readsSessionId(_ stdin: String, expected: String) {
+    guard case .request(let request) = codec.decode(stdin) else {
+        Issue.record("expected .request for session id")
+        return
+    }
+    #expect(request.session == expected)
+    #expect(request.command.rawValue == "git status")
+}
+
+@Test(arguments: [
+    #"{"tool":"bash","sessionID":"","args":{"command":"git status"}}"#,
+    #"{"tool":"bash","sessionId":"","args":{"command":"git status"}}"#,
+])
+func openCodeDecode_emptySessionIsNil(_ stdin: String) {
+    guard case .request(let request) = codec.decode(stdin) else {
+        Issue.record("expected .request for empty session")
+        return
+    }
+    #expect(request.session == nil)
 }
 
 @Test func openCodeDecode_readsHostAskSpend() {
