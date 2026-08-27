@@ -55,7 +55,7 @@ func piDecode_extractsBashCommand(_ file: String, expected: String) throws {
 
 @Test func piEncodeDeny_matchesResetHardFixture() throws {
     let reason =
-        "Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once."
+        resetHardHostDeny
     let wire = codec.encodeDeny(reason: reason)
     let expected = try piExpected("deny-git-reset-hard")
     #expect(wire.stdout == expected.stdout)

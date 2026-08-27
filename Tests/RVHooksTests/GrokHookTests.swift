@@ -100,7 +100,7 @@ func grokDecode_otherToolOrEventIsForeign(_ file: String) throws {
 
 @Test func grokEncodeDeny_matchesResetHardFixture() throws {
     let reason =
-        "Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once."
+        resetHardHostDeny
     let wire = codec.encodeDeny(reason: reason)
     let expected = try grokExpected("deny-git-reset-hard")
     #expect(wire.stdout == expected.stdout)
@@ -114,7 +114,7 @@ func grokDecode_otherToolOrEventIsForeign(_ file: String) throws {
 
 @Test func grokEncodeDeny_reasonIsOneLine() throws {
     let reason =
-        "Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once."
+        resetHardHostDeny
     let wire = codec.encodeDeny(reason: reason)
     let parsed = try grokDenyObject(wire.stdout)
     #expect(parsed.reason.contains("\n") == false)

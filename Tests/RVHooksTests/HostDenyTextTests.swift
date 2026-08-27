@@ -3,6 +3,16 @@ import RVDomain
 @testable import RVHooks
 
 private let resetHard = ShellCommand(rawValue: "git reset --hard")
+let resetHardHostDeny = "Blocked git reset --hard. Destroys uncommitted changes."
+
+func assertHookDenyHasNoBypassOrEssay(_ text: String?) {
+    let payload = text ?? ""
+    #expect(payload.contains("RV · Blocked") == false)
+    #expect(payload.contains("Terminal") == false)
+    #expect(payload.contains("allow-once") == false)
+    #expect(payload.contains("git stash") == false)
+    #expect(payload.contains("reset --soft") == false)
+}
 
 @Test func hostDenyText_nilOnAllowIncludingMedium() {
     let allow = EvaluationResult(outcome: .plain)
@@ -55,16 +65,30 @@ private let resetHard = ShellCommand(rawValue: "git reset --hard")
         )
     )
     let text = hostDenyText(from: result, command: resetHard)
-    #expect(
-        text
-            == "Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once."
-    )
+    #expect(text == resetHardHostDeny)
     #expect(text?.contains("\n") == false)
     #expect(text?.contains("═") == false)
     #expect(text?.contains("┌") == false)
     #expect(text?.contains("\u{001B}") == false)
     #expect(text?.contains("ALLOW-") == false)
     #expect(text?.contains("redeem") == false)
+    assertHookDenyHasNoBypassOrEssay(text)
+}
+
+@Test func hostDenyText_resetHardIsWhatAndWhy() {
+    let result = EvaluationResult(
+        outcome: .deny(
+            Deny(
+                ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+                reason: "git reset --hard destroys uncommitted changes. Use 'git stash' first."
+            ),
+            matched: nil
+        )
+    )
+    let text = hostDenyText(from: result, command: resetHard)
+    #expect(text == "Blocked git reset --hard. Destroys uncommitted changes.")
+    #expect(text?.contains("\n") == false)
+    assertHookDenyHasNoBypassOrEssay(text)
 }
 
 @Test func hostDenyText_switchesOnDecisionNotNilHeuristic() {
@@ -98,10 +122,8 @@ private let resetHard = ShellCommand(rawValue: "git reset --hard")
     )
     let text = hostDenyText(from: result, command: command)
     let preview = hookDenyCommandPreview(command)
-    #expect(
-        text
-            == "Blocked \(preview) (core.filesystem/redirect-truncate-dynamic-path). \(hookUnlockNext)"
-    )
+    #expect(text == hostDenyLine(command: command, reason: "dynamic"))
+    #expect(text == "Blocked \(preview). Dynamic.")
     #expect(preview.hasSuffix("…"))
     #expect(preview.contains("cat >>"))
     #expect(preview.contains("Observation 760") == false)

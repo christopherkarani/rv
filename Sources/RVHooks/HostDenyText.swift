@@ -44,8 +44,40 @@ public func hookDenyCommandPreview(_ command: ShellCommand) -> String {
     return clipped
 }
 
-public func hostDenyLine(command: ShellCommand, ruleID: RuleID) -> String {
+/// Ask JSON reason. Deny hook payload must not use this line.
+public func hostAskLine(command: ShellCommand, ruleID: RuleID) -> String {
     "Blocked \(hookDenyCommandPreview(command)) (\(displayRuleID(ruleID))). \(hookUnlockNext)"
+}
+
+/// First sentence of `reason`, command prefix stripped, capitalized, with a period.
+func hostDenyWhy(_ reason: String, command: ShellCommand) -> String {
+    let trimmed = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+    var sentence = trimmed
+    if let end = trimmed.firstRange(of: ". ") {
+        sentence = String(trimmed[..<end.lowerBound])
+    } else if sentence.hasSuffix(".") {
+        sentence = String(sentence.dropLast())
+    }
+    sentence = sentence.trimmingCharacters(in: .whitespacesAndNewlines)
+    let preview = hookDenyCommandPreview(command)
+    if sentence.lowercased().hasPrefix(preview.lowercased()) {
+        sentence = String(sentence.dropFirst(preview.count))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    guard let first = sentence.first else {
+        return ""
+    }
+    let capitalized = first.uppercased() + sentence.dropFirst()
+    return capitalized.hasSuffix(".") ? capitalized : capitalized + "."
+}
+
+public func hostDenyLine(command: ShellCommand, reason: String) -> String {
+    let preview = hookDenyCommandPreview(command)
+    let why = hostDenyWhy(reason, command: command)
+    if why.isEmpty {
+        return "Blocked \(preview)."
+    }
+    return "Blocked \(preview). \(why)"
 }
 
 public func hostDenyText(from result: EvaluationResult, command: ShellCommand) -> String? {
@@ -55,6 +87,6 @@ public func hostDenyText(from result: EvaluationResult, command: ShellCommand) -
     case .indeterminate:
         return incompleteEvalSentence
     case .deny(let deny):
-        return hostDenyLine(command: command, ruleID: deny.ruleID)
+        return hostDenyLine(command: command, reason: deny.reason)
     }
 }

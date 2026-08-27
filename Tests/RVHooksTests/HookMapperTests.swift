@@ -6,7 +6,10 @@ import RVDomain
 @Test func hookWire_denyAddsRuleAndNextWithoutBreakingDecisionReason() throws {
     let result = EvaluationResult(
         outcome: .deny(
-            Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "x"),
+            Deny(
+                ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+                reason: "git reset --hard destroys uncommitted changes. Use 'git stash' first."
+            ),
             matched: nil
         )
     )
@@ -18,13 +21,60 @@ import RVDomain
     let object = try JSONSerialization.jsonObject(with: Data(wire.stdout.utf8))
     let json = try #require(object as? [String: Any])
     #expect(json["decision"] as? String == "deny")
-    #expect(
-        json["reason"] as? String
-            == "Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once."
-    )
+    #expect(json["reason"] as? String == resetHardHostDeny)
     #expect(json["rule"] as? String == "core.git/reset-hard")
-    #expect(json["next"] as? String == hookUnlockNext)
+    #expect(json["next"] == nil)
     #expect(wire.exitCode == 0)
+    assertHookDenyHasNoBypassOrEssay(wire.stdout)
+}
+
+@Test(arguments: [HookHost.grok, .pi, .opencode, .openclaw, .hermes, .claude])
+func hookWire_samePathHosts_resetHardIsShortDeny(_ host: HookHost) throws {
+    let match = RuleMatch(
+        ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+        packID: .coreGit,
+        patternName: "reset-hard",
+        severity: .critical,
+        reason: "git reset --hard destroys uncommitted changes. Use 'git stash' first.",
+        explanation: "Discards every uncommitted change."
+    )
+    let result = EvaluationResult(
+        outcome: .deny(
+            Deny(ruleID: match.ruleID, reason: match.reason),
+            matched: match
+        )
+    )
+    let command = ShellCommand(rawValue: "git reset --hard")
+    let wire: HookWire
+    switch host {
+    case .grok:
+        wire = hookWire(from: result, command: command, using: GrokHostCodec())
+    case .pi:
+        wire = hookWire(from: result, command: command, using: PiHostCodec())
+    case .opencode:
+        wire = hookWire(from: result, command: command, using: OpenCodeHostCodec())
+    case .openclaw:
+        wire = hookWire(from: result, command: command, using: OpenClawHostCodec())
+    case .hermes:
+        wire = hookWire(from: result, command: command, using: HermesHostCodec())
+    case .claude:
+        wire = hookWire(from: result, command: command, using: ClaudeHostCodec())
+    }
+    #expect(wire.stdout.isEmpty == false)
+    #expect(wire.stdout.contains("\"permissionDecision\":\"ask\"") == false)
+    if host == .claude {
+        #expect(wire.stdout.contains("\"permissionDecision\":\"deny\""))
+        let parsed = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
+        let hook = try #require(parsed["hookSpecificOutput"] as? [String: Any])
+        #expect(parsed["systemMessage"] as? String == resetHardHostDeny)
+        #expect(hook["permissionDecisionReason"] as? String == resetHardHostDeny)
+    } else {
+        let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
+        #expect(json["decision"] as? String == "deny")
+        #expect(json["reason"] as? String == resetHardHostDeny)
+        #expect(json["next"] == nil)
+    }
+    assertHookDenyHasNoBypassOrEssay(wire.stdout)
 }
 
 @Test func hookWire_piAndOpenCodeStayShortDeny() throws {
@@ -136,7 +186,7 @@ import RVDomain
     #expect(denyWire.exitCode == 9)
     #expect(denyCodec.denyCalls.count == 1)
     #expect(denyCodec.denyCalls[0].rule == "core.git/reset-hard")
-    #expect(denyCodec.denyCalls[0].next == hookUnlockNext)
+    #expect(denyCodec.denyCalls[0].next == nil)
 
     let incompleteCodec = EncodeDenySpy()
     let incompleteWire = hookWire(

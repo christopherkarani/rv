@@ -40,14 +40,17 @@ private func expectResetHardMapperDeny(_ wire: HookWire, exit: Int32) throws {
     #expect(json["reason"] as? String == hostDenyText(
         from: EvaluationResult(
             outcome: .deny(
-                Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "x"),
+                Deny(
+                    ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+                    reason: "git reset --hard destroys uncommitted changes. Use 'git stash' first."
+                ),
                 matched: nil
             )
         ),
         command: ShellCommand(rawValue: "git reset --hard")
     ))
     #expect(json["rule"] as? String == "core.git/reset-hard")
-    #expect(json["next"] as? String == hookUnlockNext)
+    #expect(json["next"] == nil)
     #expect(wire.exitCode == exit)
 }
 
@@ -111,11 +114,10 @@ private func runHook(
     let json = try denyJSON(wire.stdout)
     #expect(json["reason"] as? String == text)
     #expect(json["rule"] as? String == "core.git/reset-hard")
-    #expect(json["next"] as? String == hookUnlockNext)
+    #expect(json["next"] == nil)
     #expect(wire.exitCode == expected.exit)
     #expect(wire.stdout.contains(text))
-    #expect(text.contains("core.git/reset-hard"))
-    #expect(text.contains("rv allow-once"))
+    #expect(text == "Blocked git reset --hard. Destroys uncommitted changes.")
 }
 
 @Test func hookStashDrop_isEmptyAllow() async throws {
@@ -316,9 +318,10 @@ private func runHook(
     #expect(wire.exitCode == expected.exit)
     #expect(wire.stdout.contains("\"permissionDecision\":\"deny\""))
     #expect(wire.stdout.contains("\"ruleId\":\"core.git:reset-hard\""))
-    #expect(wire.stdout.contains("\"allowOnceCommand\":\"rv allow-once\""))
-    #expect(wire.stdout.contains("RV · Blocked"))
+    #expect(wire.stdout.contains("allowOnceCommand") == false)
+    #expect(wire.stdout.contains("RV · Blocked") == false)
     #expect(wire.stdout.contains("allowOnceCode") == false)
+    #expect(wire.stdout.contains("Blocked git reset --hard. Destroys uncommitted changes."))
 }
 
 @Test func hookClaudeAllowGitStatus_emptyStdoutExitZero() async throws {
