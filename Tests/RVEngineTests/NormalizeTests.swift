@@ -33,6 +33,47 @@ import Testing
     #expect(!envEcho.rawValue.contains("reset"))
 }
 
+@Test func normalize_tokenizerPreservesBoundariesAndInlineCode() {
+    let tokens = tokenizeCommand(#""git" reset --'hard' "$(git reset --hard)" `git status`"#)
+
+    #expect(tokens.map(\.decoded) == [
+        "git",
+        "reset",
+        "--hard",
+        "$(git reset --hard)",
+        "`git status`",
+    ])
+    #expect(tokens.map(\.wasQuoted) == [true, false, true, true, false])
+}
+
+@Test func normalize_roleAwareQuotesPreservesWrappersAndSeparators() {
+    #expect(applyRoleAwareQuotes("sudo -E \"git\" reset --'hard'") == "sudo -E git reset --hard")
+    #expect(applyRoleAwareQuotes("env FOO=bar \"git\" reset --\"hard\"") == "env FOO=bar git reset --hard")
+    #expect(
+        applyRoleAwareQuotes("echo \"git reset --hard\" && \"git\" reset --'hard'")
+            == "echo " + String(repeating: " ", count: 16) + " && git reset --hard"
+    )
+    #expect(applyRoleAwareQuotes("echo \"$(git reset --hard)\" | printf `git status`")
+        == "echo $(git reset --hard) | printf `git status`")
+}
+
+@Test func normalize_roleAwareQuotesMasksOnlyDataRoles() {
+    let commit = String(repeating: " ", count: 16)
+    #expect(applyRoleAwareQuotes("git commit -m \"git reset --hard\"") == "git commit -m " + commit)
+    #expect(applyRoleAwareQuotes("git commit --message=\"git reset --hard\"") == "git commit --message=" + commit)
+    #expect(applyRoleAwareQuotes("rg -e \"git reset --hard\"") == "rg -e " + commit)
+    #expect(applyRoleAwareQuotes("git reset \"--hard\"") == "git reset --hard")
+}
+
+@Test func normalize_preservesEmptyQuotedArguments() {
+    let tokens = tokenizeCommand("git commit -m \"\" \"git push --force\"")
+    #expect(tokens.map(\.decoded) == ["git", "commit", "-m", "", "git push --force"])
+    #expect(
+        applyRoleAwareQuotes("git commit -m \"\" \"git push --force\"")
+            == "git commit -m   git push --force"
+    )
+}
+
 @Test func normalize_concatenatesAdjacentQuotes() {
     #expect(Normalize.matchingView(of: "git reset --'hard'") == "git reset --hard")
     #expect(Normalize.matchingView(of: "git reset --\"hard\"") == "git reset --hard")

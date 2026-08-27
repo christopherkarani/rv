@@ -33,7 +33,6 @@ public enum Normalize {
 }
 
 struct CommandToken {
-    var raw: String
     var decoded: String
     var wasQuoted: Bool
 }
@@ -48,7 +47,7 @@ func tokenizeCommand(_ text: String) -> [CommandToken] {
         }
         guard index < text.endIndex else { break }
 
-        var raw = ""
+        let tokenStart = index
         var decoded = ""
         var wasQuoted = false
 
@@ -66,9 +65,7 @@ func tokenizeCommand(_ text: String) -> [CommandToken] {
                     if text[index] == ")" { depth -= 1 }
                     index = text.index(after: index)
                 }
-                let piece = String(text[start..<index])
-                raw += piece
-                decoded += piece
+                decoded.append(contentsOf: text[start..<index])
                 continue
             }
             if ch == "`" {
@@ -80,50 +77,44 @@ func tokenizeCommand(_ text: String) -> [CommandToken] {
                 if index < text.endIndex {
                     index = text.index(after: index)
                 }
-                let piece = String(text[start..<index])
-                raw += piece
-                decoded += piece
+                decoded.append(contentsOf: text[start..<index])
                 continue
             }
             if ch == "\"" || ch == "'" {
                 wasQuoted = true
-                raw.append(ch)
                 index = text.index(after: index)
                 let innerStart = index
                 while index < text.endIndex, text[index] != ch {
                     index = text.index(after: index)
                 }
-                decoded += String(text[innerStart..<index])
+                decoded.append(contentsOf: text[innerStart..<index])
                 if index < text.endIndex {
-                    raw.append(ch)
                     index = text.index(after: index)
                 }
                 continue
             }
-            raw.append(ch)
             decoded.append(ch)
             index = text.index(after: index)
         }
 
-        if !raw.isEmpty {
-            tokens.append(CommandToken(raw: raw, decoded: decoded, wasQuoted: wasQuoted))
+        if index > tokenStart {
+            tokens.append(CommandToken(decoded: decoded, wasQuoted: wasQuoted))
         }
     }
     return tokens
 }
 
 func applyRoleAwareQuotes(_ text: String) -> String {
-    let tokens = tokenizeCommand(text)
+    var tokens = tokenizeCommand(text)
     guard !tokens.isEmpty else { return text }
-    var rendered: [String] = []
     var commandBase: String?
     var pendingDataFlag = false
     var wrapperSeek = WrapperSeek.none
 
-    for token in tokens {
+    for index in tokens.indices {
+        let token = tokens[index]
         let decoded = token.decoded
         if isShellSeparator(decoded) {
-            rendered.append(decoded)
             commandBase = nil
             pendingDataFlag = false
             wrapperSeek = .none
@@ -135,22 +126,19 @@ func applyRoleAwareQuotes(_ text: String) -> String {
                 if let command = next {
                     commandBase = command
                 }
-                rendered.append(decoded)
                 continue
             }
             commandBase = basename(decoded)
-            rendered.append(decoded)
             continue
         }
 
         if containsInlineCode(token) {
-            rendered.append(decoded)
             pendingDataFlag = false
             continue
         }
 
         if let masked = maskAttachedDataValue(command: commandBase, token: token) {
-            rendered.append(masked)
+            tokens[index].decoded = masked
             pendingDataFlag = false
             continue
         }
@@ -159,20 +147,18 @@ func applyRoleAwareQuotes(_ text: String) -> String {
             if isDataConsumingFlag(command: commandBase, flag: decoded) {
                 pendingDataFlag = true
             }
-            rendered.append(decoded)
             continue
         }
 
         if token.wasQuoted, shouldMaskQuotedData(command: commandBase, pendingDataFlag: pendingDataFlag) {
-            rendered.append(String(repeating: " ", count: max(decoded.count, 1)))
+            tokens[index].decoded = String(repeating: " ", count: max(decoded.count, 1))
             pendingDataFlag = false
             continue
         }
 
         pendingDataFlag = false
-        rendered.append(decoded)
     }
-    return rendered.joined(separator: " ")
+    return tokens.lazy.map(\.decoded).joined(separator: " ")
 }
 
 private enum WrapperSeek {
@@ -235,7 +221,6 @@ private func isShellSeparator(_ token: String) -> Bool {
 
 private func containsInlineCode(_ token: CommandToken) -> Bool {
     token.decoded.contains("$(") || token.decoded.contains("`")
-        || token.raw.contains("$(") || token.raw.contains("`")
 }
 
 private func isAllArgsData(_ command: String?) -> Bool {
@@ -265,12 +250,11 @@ private func maskAttachedDataValue(command: String?, token: CommandToken) -> Str
     let decoded = token.decoded
     guard let command else { return nil }
     if command == "git", decoded.hasPrefix("--message=") {
-        let value = String(decoded.dropFirst("--message=".count))
-        return "--message=" + String(repeating: " ", count: max(value.count, 1))
+        let valueCount = decoded.dropFirst("--message=".count).count
+        return "--message=" + String(repeating: " ", count: max(valueCount, 1))
     }
     if command == "git", decoded.hasPrefix("-m"), decoded.count > 2, !decoded.hasPrefix("--") {
-        let value = String(decoded.dropFirst(2))
-        return "-m" + String(repeating: " ", count: max(value.count, 1))
+        return "-m" + String(repeating: " ", count: max(decoded.count - 2, 1))
     }
     return nil
 }
