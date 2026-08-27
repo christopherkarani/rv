@@ -526,6 +526,41 @@
       "expected": "deny",
       "rule_id": "core.filesystem:rm-rf-root-home",
       "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.rm-rf-users",
+      "command": "rm -rf /Users/user",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.rm-rf-dollar-home",
+      "command": "rm -rf $HOME",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.rm-rf-root-compound-set",
+      "command": "set -euo pipefail && rm -rf /",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.rm-rf-mixed-tmp-root",
+      "command": "rm -rf /tmp/a /",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.rm-rf-mixed-tmp-var-log-compound",
+      "command": "set -euo pipefail && rm -rf /tmp/a /var/log",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
     }
   ]
 }

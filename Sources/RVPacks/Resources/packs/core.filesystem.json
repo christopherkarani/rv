@@ -44,12 +44,12 @@
   "safe_patterns": [
     {
       "name": "rm-rf-tmp",
-      "pattern": "^rm\\s+-[a-zA-Z]*[rR][a-zA-Z]*f[a-zA-Z]*\\s+(?:(?:/private)?/tmp/(?!\\.\\.(?:/|\\s|$)|[^\\s]*/\\.\\.(?:/|\\s|$))\\S*(?:\\s+|$))+$",
+      "pattern": "^(?:(?!cp\\b|ln\\b|rsync\\b)\\S+\\s+)*rm\\s+-[a-zA-Z]*[rR][a-zA-Z]*f[a-zA-Z]*\\s+(?:(?:/private)?/tmp/(?!\\.\\.(?:/|\\s|$)|[^\\s]*/\\.\\.(?:/|\\s|$))\\S*(?:\\s+|$))+(?=\\s*(?:$|&&|\\|\\||;|\\|))",
       "description": ""
     },
     {
       "name": "rm-fr-tmp",
-      "pattern": "^rm\\s+-[a-zA-Z]*f[a-zA-Z]*[rR][a-zA-Z]*\\s+(?:(?:/private)?/tmp/(?!\\.\\.(?:/|\\s|$)|[^\\s]*/\\.\\.(?:/|\\s|$))\\S*(?:\\s+|$))+$",
+      "pattern": "^(?:(?!cp\\b|ln\\b|rsync\\b)\\S+\\s+)*rm\\s+-[a-zA-Z]*f[a-zA-Z]*[rR][a-zA-Z]*\\s+(?:(?:/private)?/tmp/(?!\\.\\.(?:/|\\s|$)|[^\\s]*/\\.\\.(?:/|\\s|$))\\S*(?:\\s+|$))+(?=\\s*(?:$|&&|\\|\\||;|\\|))",
       "description": ""
     },
     {
@@ -64,12 +64,12 @@
     },
     {
       "name": "rm-r-f-tmp",
-      "pattern": "^rm\\s+(-[a-zA-Z]+\\s+)*-[rR]\\s+(-[a-zA-Z]+\\s+)*-f\\s+(?:(?:/private)?/tmp/(?!\\.\\.(?:/|\\s|$)|[^\\s]*/\\.\\.(?:/|\\s|$))\\S*(?:\\s+|$))+$",
+      "pattern": "^(?:(?!cp\\b|ln\\b|rsync\\b)\\S+\\s+)*rm\\s+(-[a-zA-Z]+\\s+)*-[rR]\\s+(-[a-zA-Z]+\\s+)*-f\\s+(?:(?:/private)?/tmp/(?!\\.\\.(?:/|\\s|$)|[^\\s]*/\\.\\.(?:/|\\s|$))\\S*(?:\\s+|$))+(?=\\s*(?:$|&&|\\|\\||;|\\|))",
       "description": ""
     },
     {
       "name": "rm-f-r-tmp",
-      "pattern": "^rm\\s+(-[a-zA-Z]+\\s+)*-f\\s+(-[a-zA-Z]+\\s+)*-[rR]\\s+(?:(?:/private)?/tmp/(?!\\.\\.(?:/|\\s|$)|[^\\s]*/\\.\\.(?:/|\\s|$))\\S*(?:\\s+|$))+$",
+      "pattern": "^(?:(?!cp\\b|ln\\b|rsync\\b)\\S+\\s+)*rm\\s+(-[a-zA-Z]+\\s+)*-f\\s+(-[a-zA-Z]+\\s+)*-[rR]\\s+(?:(?:/private)?/tmp/(?!\\.\\.(?:/|\\s|$)|[^\\s]*/\\.\\.(?:/|\\s|$))\\S*(?:\\s+|$))+(?=\\s*(?:$|&&|\\|\\||;|\\|))",
       "description": ""
     },
     {
@@ -84,12 +84,12 @@
     },
     {
       "name": "rm-recursive-force-tmp",
-      "pattern": "^rm\\s+.*--recursive.*--force\\s+(?:(?:/private)?/tmp/(?!\\.\\.(?:/|\\s|$)|[^\\s]*/\\.\\.(?:/|\\s|$))\\S*(?:\\s+|$))+$",
+      "pattern": "^(?:(?!cp\\b|ln\\b|rsync\\b)\\S+\\s+)*rm\\s+.*--recursive.*--force\\s+(?:(?:/private)?/tmp/(?!\\.\\.(?:/|\\s|$)|[^\\s]*/\\.\\.(?:/|\\s|$))\\S*(?:\\s+|$))+(?=\\s*(?:$|&&|\\|\\||;|\\|))",
       "description": ""
     },
     {
       "name": "rm-force-recursive-tmp",
-      "pattern": "^rm\\s+.*--force.*--recursive\\s+(?:(?:/private)?/tmp/(?!\\.\\.(?:/|\\s|$)|[^\\s]*/\\.\\.(?:/|\\s|$))\\S*(?:\\s+|$))+$",
+      "pattern": "^(?:(?!cp\\b|ln\\b|rsync\\b)\\S+\\s+)*rm\\s+.*--force.*--recursive\\s+(?:(?:/private)?/tmp/(?!\\.\\.(?:/|\\s|$)|[^\\s]*/\\.\\.(?:/|\\s|$))\\S*(?:\\s+|$))+(?=\\s*(?:$|&&|\\|\\||;|\\|))",
       "description": ""
     },
     {
@@ -239,21 +239,21 @@
     },
     {
       "name": "rm-rf-root-home",
-      "pattern": "rm\\s+-[a-zA-Z]*[rR][a-zA-Z]*f[a-zA-Z]*\\s+['\"\\\\]?(?:[/~]|\\$\\{?HOME\\b)|rm\\s+-[a-zA-Z]*f[a-zA-Z]*[rR][a-zA-Z]*\\s+['\"\\\\]?(?:[/~]|\\$\\{?HOME\\b)",
+      "pattern": "rm\\s+-[a-zA-Z]*[rR][a-zA-Z]*f[a-zA-Z]*\\s+(?:(?:/private)?/tmp/\\S+\\s+)*['\"\\\\]?(?:/(?!(?:private/)?tmp(?:/|\\s|$))|~|\\$\\{?HOME\\b)|rm\\s+-[a-zA-Z]*f[a-zA-Z]*[rR][a-zA-Z]*\\s+(?:(?:/private)?/tmp/\\S+\\s+)*['\"\\\\]?(?:/(?!(?:private/)?tmp(?:/|\\s|$))|~|\\$\\{?HOME\\b)",
       "severity": "critical",
       "description": "rm -rf on root or home paths is EXTREMELY DANGEROUS. This command will NOT be executed. Ask the user to run it manually if truly needed.",
       "explanation": "This command would recursively delete files starting from the root filesystem (/) \\ or home directory (~). This is catastrophic and will destroy:\n\n\\ - Your entire operating system \\ - All installed applications and libraries \\ - All user data, documents, and configurations \\ - Boot files, making the system unbootable\n\n\\ There is NO recovery without backups. Even with backups, full restoration \\ takes hours to days.\n\n\\ If you need to delete specific files, use explicit paths: \\ rm -rf /path/to/specific/directory\n\n\\ Always preview what would be deleted first: \\ find /path/to/directory -type f | head -20"
     },
     {
       "name": "rm-r-f-separate-root-home",
-      "pattern": "rm\\s+(-[a-zA-Z]+\\s+)*-[rR]\\s+(-[a-zA-Z]+\\s+)*-f\\s+['\"\\\\]?(?:[/~]|\\$\\{?HOME\\b)|rm\\s+(-[a-zA-Z]+\\s+)*-f\\s+(-[a-zA-Z]+\\s+)*-[rR]\\s+['\"\\\\]?(?:[/~]|\\$\\{?HOME\\b)",
+      "pattern": "rm\\s+(-[a-zA-Z]+\\s+)*-[rR]\\s+(-[a-zA-Z]+\\s+)*-f\\s+(?:(?:/private)?/tmp/\\S+\\s+)*['\"\\\\]?(?:/(?!(?:private/)?tmp(?:/|\\s|$))|~|\\$\\{?HOME\\b)|rm\\s+(-[a-zA-Z]+\\s+)*-f\\s+(-[a-zA-Z]+\\s+)*-[rR]\\s+(?:(?:/private)?/tmp/\\S+\\s+)*['\"\\\\]?(?:/(?!(?:private/)?tmp(?:/|\\s|$))|~|\\$\\{?HOME\\b)",
       "severity": "critical",
       "description": "rm with separate -r -f flags targeting root or home is EXTREMELY DANGEROUS.",
       "explanation": "Separate `-r -f` flags on `/` or `~` have identical effect to `rm -rf /`: \\ recursive, forced, silent deletion of the entire filesystem or home directory.\n\n\\ There is NO recovery without backups. Run only if truly intended."
     },
     {
       "name": "rm-recursive-force-root-home",
-      "pattern": "rm\\s+.*--recursive.*--force\\s+['\"\\\\]?(?:[/~]|\\$\\{?HOME\\b)|rm\\s+.*--force.*--recursive\\s+['\"\\\\]?(?:[/~]|\\$\\{?HOME\\b)",
+      "pattern": "rm\\s+.*--recursive.*--force\\s+(?:(?:/private)?/tmp/\\S+\\s+)*['\"\\\\]?(?:/(?!(?:private/)?tmp(?:/|\\s|$))|~|\\$\\{?HOME\\b)|rm\\s+.*--force.*--recursive\\s+(?:(?:/private)?/tmp/\\S+\\s+)*['\"\\\\]?(?:/(?!(?:private/)?tmp(?:/|\\s|$))|~|\\$\\{?HOME\\b)",
       "severity": "critical",
       "description": "rm --recursive --force targeting root or home is EXTREMELY DANGEROUS.",
       "explanation": "The long-flag form has identical effect to `rm -rf /`: recursive, forced, \\ silent deletion. Run only if truly intended."
