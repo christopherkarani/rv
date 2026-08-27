@@ -139,7 +139,8 @@ public actor ServiceRuntime {
             return params.clientSemver
         case .hookEvaluate(let params):
             return params.clientSemver
-        case .explain, .classify, .listPacks, .setPackEnabled, .allowOnceConsume, .doctorSnapshot:
+        case .explain, .classify, .listPacks, .setPackEnabled, .allowOnceConsume, .doctorSnapshot,
+            .pendingList, .pendingWatch, .pendingResolve, .rulePreview, .ruleSave:
             return nil
         }
     }
@@ -175,6 +176,8 @@ public actor ServiceRuntime {
             result = .error(.unknownMethod)
         case .doctorSnapshot:
             result = .doctorSnapshot(doctorSnapshot())
+        case .pendingList, .pendingWatch, .pendingResolve, .rulePreview, .ruleSave:
+            result = .error(.unknownMethod)
         }
         logIfNeeded(request: request, result: result, started: started)
         return IPCResponse(id: request.id, result: result)
@@ -466,6 +469,16 @@ public actor ServiceRuntime {
             method = "allowOnce.consume"
         case .doctorSnapshot:
             method = "doctorSnapshot"
+        case .pendingList:
+            method = "pendingList"
+        case .pendingWatch:
+            method = "pendingWatch"
+        case .pendingResolve:
+            method = "pendingResolve"
+        case .rulePreview:
+            method = "rulePreview"
+        case .ruleSave:
+            method = "ruleSave"
         }
         if case .evaluate(let reply) = result {
             switch reply.result.decision {

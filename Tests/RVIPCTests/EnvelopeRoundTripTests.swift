@@ -259,6 +259,45 @@ extension IPCMethod {
                 method: .allowOnceConsume(AllowOnceConsumeParams(command: "git reset --hard", cwd: "/tmp/ws"))
             ),
             NamedMethod(key: "doctorSnapshot", id: id, method: .doctorSnapshot),
+            NamedMethod(key: "pendingList", id: id, method: .pendingList),
+            NamedMethod(
+                key: "pendingWatch",
+                id: id,
+                method: .pendingWatch(PendingWatchParams(afterGeneration: 0))
+            ),
+            NamedMethod(
+                key: "pendingResolve",
+                id: id,
+                method: .pendingResolve(
+                    PendingResolveParams(
+                        id: ApprovalID(rawValue: "ask-1"),
+                        decision: .deny,
+                        fingerprint: ActionFingerprint(rawValue: "shell:git"),
+                        identity: ApprovalIdentity(
+                            session: SessionIdentity(rawValue: "sess"),
+                            agent: AgentIdentity(rawValue: "pi")
+                        )
+                    )
+                )
+            ),
+            NamedMethod(
+                key: "rulePreview",
+                id: id,
+                method: .rulePreview(
+                    RulePreviewParams(id: ApprovalID(rawValue: "ask-1"), polarity: .allow)
+                )
+            ),
+            NamedMethod(
+                key: "ruleSave",
+                id: id,
+                method: .ruleSave(
+                    RuleSaveParams(
+                        id: ApprovalID(rawValue: "ask-1"),
+                        polarity: .block,
+                        draft: "opaque-draft"
+                    )
+                )
+            ),
         ]
     }
 }
@@ -339,6 +378,61 @@ extension IPCResult {
                 key: "error",
                 id: id,
                 result: .error(.packNotFound(PackID(rawValue: "core.unknown")))
+            ),
+            NamedResult(
+                key: "pendingList",
+                id: id,
+                result: .pendingList(
+                    PendingListReply(
+                        generation: 1,
+                        items: [
+                            PendingListItem(
+                                id: ApprovalID(rawValue: "ask-1"),
+                                host: .pi,
+                                folder: "ws",
+                                actionKind: "git push",
+                                sessionSuffix: nil,
+                                identity: ApprovalIdentity(
+                                    session: SessionIdentity(rawValue: "sess"),
+                                    agent: AgentIdentity(rawValue: "pi")
+                                )
+                            )
+                        ]
+                    )
+                )
+            ),
+            NamedResult(
+                key: "pendingWatch",
+                id: id,
+                result: .pendingWatch(PendingWatchReply(generation: 1, items: []))
+            ),
+            NamedResult(
+                key: "pendingResolve",
+                id: id,
+                result: .pendingResolve(
+                    PendingResolveReply(id: ApprovalID(rawValue: "ask-1"), terminal: true)
+                )
+            ),
+            NamedResult(
+                key: "rulePreview",
+                id: id,
+                result: .rulePreview(
+                    RulePreviewReply(
+                        sentence: "Always allow git push in this folder.",
+                        draft: "opaque-draft",
+                        allowedToSave: true
+                    )
+                )
+            ),
+            NamedResult(
+                key: "ruleSave",
+                id: id,
+                result: .ruleSave(
+                    RuleSaveReply(
+                        ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+                        waitResolved: true
+                    )
+                )
             ),
         ]
     }
