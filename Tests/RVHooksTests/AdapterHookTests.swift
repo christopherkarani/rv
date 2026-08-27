@@ -65,6 +65,9 @@ private func runOpenCodePluginContract(
         usedCreateComponent: object["usedCreateComponent"] as? Bool ?? false,
         usedOfficialKeys: object["usedOfficialKeys"] as? Bool ?? false,
         usedInventedCallback: object["usedInventedCallback"] as? Bool ?? false,
+        usedDialogConfirmBindings: object["usedDialogConfirmBindings"] as? Bool ?? false,
+        usedRegisterLayerKeys: object["usedRegisterLayerKeys"] as? Bool ?? false,
+        registerLayerHandleCount: object["registerLayerHandleCount"] as? Int ?? 0,
         dialogFocus: object["dialogFocus"] as? String
     )
 }
@@ -123,9 +126,11 @@ private func runOpenCodePluginContract(
     #expect(tui.contains("server:"))
     #expect(tui.contains("DialogConfirm.show") == false)
     #expect(tui.contains("createComponent") == false)
-    #expect(tui.contains("onConfirm") == false)
-    #expect(tui.contains("onCancel") == false)
-    #expect(tui.contains("registerLayer"))
+    #expect(tui.contains("registerLayer") == false)
+    #expect(tui.contains("paintOfficialAsk") == false)
+    #expect(tui.contains("DialogConfirm"))
+    #expect(tui.contains("onConfirm"))
+    #expect(tui.contains("onCancel"))
     #expect(tui.contains("let active") == false)
     #expect(tui.contains("setSize"))
     #expect(source.contains("pollOfficialPermissionReply") == false)
@@ -148,6 +153,9 @@ private func runOpenCodePluginContract(
     #expect(probe.usedCreateComponent == false)
     #expect(probe.usedOfficialKeys == true)
     #expect(probe.usedInventedCallback == false)
+    #expect(probe.usedDialogConfirmBindings == true)
+    #expect(probe.usedRegisterLayerKeys == false)
+    #expect(probe.registerLayerHandleCount == 0)
     #expect(probe.dialogFocus == "confirm")
     #expect(probe.replied == "once")
     #expect(probe.replySessionID == "ses_1")
@@ -163,6 +171,9 @@ private func runOpenCodePluginContract(
     #expect(probe.usedCreateComponent == false)
     #expect(probe.usedOfficialKeys == true)
     #expect(probe.usedInventedCallback == false)
+    #expect(probe.usedDialogConfirmBindings == true)
+    #expect(probe.usedRegisterLayerKeys == false)
+    #expect(probe.registerLayerHandleCount == 0)
     #expect(probe.dialogTitle == "RV · Ask")
     #expect(probe.dialogFocus == "confirm")
     #expect(probe.replied == "once")
@@ -179,11 +190,24 @@ private func runOpenCodePluginContract(
     #expect(probe.usedCreateComponent == false)
     #expect(probe.usedOfficialKeys == true)
     #expect(probe.usedInventedCallback == false)
+    #expect(probe.usedDialogConfirmBindings == true)
+    #expect(probe.usedRegisterLayerKeys == false)
+    #expect(probe.registerLayerHandleCount == 0)
     #expect(probe.dialogTitle == "RV · Ask")
     #expect(probe.dialogFocus == "cancel")
     #expect(probe.replied == "reject")
     #expect(probe.replySessionID == "ses_1")
     #expect(probe.replyRequestID == "per_live")
+}
+
+@Test func openCodeTuiPlugin_registerLayerReturnDoesNotSpend() async throws {
+    let probe = try await runOpenCodePluginContract(
+        try HostAdapterResources.loadOpenCodeTuiPlugin(),
+        mode: "register-layer-return"
+    )
+    #expect(probe.usedRegisterLayerKeys == true)
+    #expect(probe.usedDialogConfirmBindings == false)
+    #expect(probe.replied == nil)
 }
 
 @Test func openCodeTuiPlugin_harnessInventedOnConfirmIsNotALiveReply() async throws {
@@ -204,6 +228,9 @@ private func runOpenCodePluginContract(
     #expect(probe.usedCreateComponent == false)
     #expect(probe.usedOfficialKeys == true)
     #expect(probe.usedInventedCallback == false)
+    #expect(probe.usedDialogConfirmBindings == true)
+    #expect(probe.usedRegisterLayerKeys == false)
+    #expect(probe.registerLayerHandleCount == 0)
     #expect(probe.dialogTitle == "RV · Ask")
     #expect(probe.dialogFocus == "cancel")
     #expect(probe.replied == "reject")
@@ -1334,6 +1361,9 @@ private struct OpenCodePluginContract {
     var usedCreateComponent: Bool
     var usedOfficialKeys: Bool
     var usedInventedCallback: Bool
+    var usedDialogConfirmBindings: Bool
+    var usedRegisterLayerKeys: Bool
+    var registerLayerHandleCount: Int
     var dialogFocus: String?
 }
 

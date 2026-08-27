@@ -1,4 +1,5 @@
 import { pathToFileURL } from "node:url";
+import { officialDialogConfirm, resetOfficialDialogConfirm } from "./opencode-11818-dialog-confirm.mjs";
 
 const host = process.argv[2];
 const adapterPath = process.argv[3];
@@ -199,6 +200,7 @@ function officialKeymap() {
       };
     },
     handle(key) {
+      officialKeymap.handleCount = (officialKeymap.handleCount ?? 0) + 1;
       const ordered = [...layers].sort((left, right) => (right.priority ?? 0) - (left.priority ?? 0));
       for (const layer of ordered) {
         for (const binding of layer.bindings ?? []) {
@@ -226,6 +228,8 @@ async function loadTuiAskCompanion(ctx, pluginPath, click) {
   const tuiMod = await import(toURL(pluginPath).href);
   const handlers = new Map();
   const keymap = officialKeymap();
+  officialKeymap.handleCount = 0;
+  resetOfficialDialogConfirm();
   let painted = null;
   const dialog = {
     size: "medium",
@@ -236,16 +240,18 @@ async function loadTuiAskCompanion(ctx, pluginPath, click) {
       const element = typeof input === "function" ? input() : input;
       this.replaced = element;
       this.onClose = onClose;
-      painted = {
-        title: element && element.title,
-        message: element && element.message,
-        get focus() {
-          return (element && (element.focus ?? element.active)) || "confirm";
-        },
-        key(name) {
-          keymap.handle(name);
-        },
-      };
+      painted = officialDialogConfirm.last
+        ? officialDialogConfirm.last
+        : {
+            title: element && element.title,
+            message: element && element.message,
+            get focus() {
+              return (element && (element.focus ?? element.active)) || "confirm";
+            },
+            key() {
+              // Official DialogConfirm useBindings did not paint. registerLayer loses.
+            },
+          };
       ctx.tuiDialogTitle = painted.title;
     },
     clear() {
@@ -255,10 +261,7 @@ async function loadTuiAskCompanion(ctx, pluginPath, click) {
     },
   };
   function DialogConfirm(props) {
-    return {
-      title: props && props.title,
-      message: props && props.message,
-    };
+    return officialDialogConfirm(props, dialog);
   }
   const api = {
     keymap,

@@ -1,6 +1,11 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  keyThroughOfficialDialogConfirm,
+  officialDialogConfirm,
+  resetOfficialDialogConfirm,
+} from "./opencode-11818-dialog-confirm.mjs";
 
 // Official OpenCode 1.18.18 `readV1Plugin` + `applyPlugin` (packages/opencode/src/plugin/shared.ts
 // and packages/opencode/src/plugin/index.ts). Copied so this test proves the live loader,
@@ -109,6 +114,7 @@ function officialKeymap() {
       };
     },
     handle(key) {
+      officialKeymap.handleCount = (officialKeymap.handleCount ?? 0) + 1;
       const ordered = [...layers].sort((left, right) => (right.priority ?? 0) - (left.priority ?? 0));
       for (const layer of ordered) {
         for (const binding of layer.bindings ?? []) {
@@ -131,38 +137,7 @@ function officialKeymap() {
   };
 }
 
-function officialDialogConfirm(props) {
-  // Live 1.18.18 hole: DialogConfirm useBindings read store.active and call
-  // props.onConfirm?.() / onCancel?.(). Plugin-injected props do not fire.
-  // Tests must not invent that fire. A plugin that only waits on these props
-  // cannot reply.
-  if (props && (props.onConfirm || props.onCancel)) {
-    officialDialogConfirm.sawInventedProps = true;
-  }
-  const painted = {
-    title: props && props.title,
-    message: props && props.message,
-    focus: "confirm",
-    key() {},
-  };
-  officialDialogConfirm.last = painted;
-  return painted;
-}
-
-function keyable(element, keymap) {
-  return {
-    title: element && element.title,
-    message: element && element.message,
-    get focus() {
-      return (element && (element.focus ?? element.active)) || "confirm";
-    },
-    key(name) {
-      if (keymap && typeof keymap.handle === "function") {
-        keymap.handle(name);
-      }
-    },
-  };
-}
+officialKeymap.handleCount = 0;
 
 function officialDialogStack() {
   const stack = [];
@@ -230,6 +205,8 @@ let usedShow = false;
 let usedCreateComponent = false;
 let usedOfficialKeys = false;
 let usedInventedCallback = false;
+let usedDialogConfirmBindings = false;
+let usedRegisterLayerKeys = false;
 let dialogFocus = null;
 
 function askedEvent() {
@@ -245,22 +222,20 @@ function askedEvent() {
 
 async function waitForPaint(api) {
   for (let i = 0; i < 40; i++) {
+    if (officialDialogConfirm.last) {
+      return keyThroughOfficialDialogConfirm(officialDialogConfirm.last);
+    }
     const replaced = api && api.ui && api.ui.dialog && api.ui.dialog.replaced;
     if (replaced && replaced.title) {
-      return keyable(replaced, api.keymap);
-    }
-    if (officialDialogConfirm.last) {
-      return keyable(officialDialogConfirm.last, api.keymap);
+      return keyThroughOfficialDialogConfirm(replaced);
     }
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
-  const replaced = api && api.ui && api.ui.dialog && api.ui.dialog.replaced;
-  if (replaced && replaced.title) {
-    return keyable(replaced, api.keymap);
+  if (officialDialogConfirm.last) {
+    return keyThroughOfficialDialogConfirm(officialDialogConfirm.last);
   }
-  return officialDialogConfirm.last
-    ? keyable(officialDialogConfirm.last, api.keymap)
-    : officialDialogConfirm.last;
+  const replaced = api && api.ui && api.ui.dialog && api.ui.dialog.replaced;
+  return replaced && replaced.title ? keyThroughOfficialDialogConfirm(replaced) : replaced;
 }
 
 async function runAsked(api, click) {
@@ -269,8 +244,8 @@ async function runAsked(api, click) {
   if (typeof asked !== "function") {
     return;
   }
-  officialDialogConfirm.last = undefined;
-  officialDialogConfirm.sawInventedProps = false;
+  resetOfficialDialogConfirm();
+  officialKeymap.handleCount = 0;
   const pending = asked(askedEvent());
   const painted = await waitForPaint(api);
   dialogSize = api.ui && api.ui.dialog ? api.ui.dialog.size : null;
@@ -284,12 +259,19 @@ async function runAsked(api, click) {
       usedOfficialKeys = true;
       painted.key("left");
       painted.key("return");
+    } else if (click === "register-layer-return") {
+      // 391be52 catch: plugin registerLayer does not win live Return.
+      usedRegisterLayerKeys = true;
+      if (api.keymap && typeof api.keymap.handle === "function") {
+        api.keymap.handle("return");
+      }
     } else if (click === "invented-confirm") {
       // 168d4fe catch: harness-invented onConfirm is not a live reply.
       usedInventedCallback = true;
     }
     dialogFocus = painted.focus;
   }
+  usedDialogConfirmBindings = officialDialogConfirm.usedBindings === true;
   if (click === "none" || click === "invented-confirm") {
     await Promise.race([pending, new Promise((resolve) => setTimeout(resolve, 40))]);
     return;
@@ -306,7 +288,7 @@ if (serverLoaded && mod.default && typeof mod.default.server === "function") {
   const handlers = new Map();
   const dialog = officialDialogStack();
   const keymap = officialKeymap();
-  const DialogConfirm = (props) => officialDialogConfirm(props);
+  const DialogConfirm = (props) => officialDialogConfirm(props, dialog);
   if (mode === "show-lie") {
     DialogConfirm.show = async (_dialog, title, message) => {
       usedShow = true;
@@ -359,6 +341,8 @@ if (serverLoaded && mod.default && typeof mod.default.server === "function") {
     }
   } else if (mode === "official-cancel") {
     await runAsked(api, "cancel");
+  } else if (mode === "register-layer-return") {
+    await runAsked(api, "register-layer-return");
   } else if (mode === "invented-confirm") {
     await runAsked(api, "invented-confirm");
   } else if (mode === "official-none") {
@@ -391,6 +375,9 @@ process.stdout.write(
     usedCreateComponent,
     usedOfficialKeys,
     usedInventedCallback,
+    usedDialogConfirmBindings,
+    usedRegisterLayerKeys,
+    registerLayerHandleCount: officialKeymap.handleCount ?? 0,
     dialogFocus,
   }),
 );
