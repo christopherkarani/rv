@@ -5,14 +5,12 @@ import Foundation
 /// File plugins cannot export both `server()` and `tui()`. The globbed
 /// `plugins/rv-guard-tui.js` is `{ server() }`. The Ask package exposes
 /// only `./tui` so leftover custom DialogConfirm installs are replaced.
-/// Live 1.18.18 TUI mounts host PermissionPrompt from `sync.data.permission`.
-/// Official plugin create is V2 (`permission.v2.asked`); TUI sync does not
-/// handle that event. There is no HTTP V1 create. `tui.tsx` imports host
-/// `useSDK` / `useSync` and the companion writes the V1 row through
-/// `useSync().set` only — it does not emit a synthetic V1 asked (official
-/// `--auto` would reply without Return). Return is shimmed on
-/// `useSDK().client`, the object PermissionPrompt calls. A dynamic import
-/// from `plugins/rv-guard-tui.js` cannot resolve `@opencode-ai/tui`.
+/// Live 1.18.18 TUI mounts host PermissionPrompt from `sync.data.permission`
+/// filled on V1 `permission.asked`. Official plugin create is V2
+/// (`permission.v2.asked`) only. TUI sync does not handle that event.
+/// There is no HTTP V1 create. Desktop `adaptServerEvent` is not in TUI.
+/// Plugin `useSync().set` / V1 emit is not official create — do not ship it.
+/// This package overwrites leftover DialogConfirm installs with a no-op.
 enum OpenCodeConfigMerge {
     static func merge(existingData: Data?, pluginPath: String) throws -> (data: Data, wrote: Bool) {
         var root = try parseRoot(existingData)
@@ -100,15 +98,9 @@ enum OpenCodeTuiAskPackage {
 
     static let tuiTSX = """
     /** @jsxImportSource @opentui/solid */
-    import { useSDK } from "@opencode-ai/tui/context/sdk";
-    import { useSync } from "@opencode-ai/tui/context/sync";
-    import plugin from "../plugins/rv-guard-tui.js";
-
     export default {
       id: "rv-guard-tui-ask",
-      tui: async (api, options, meta) => {
-        return plugin.server(api, options, meta, { useSDK, useSync });
-      },
+      tui: async () => ({}),
     };
     """
 }
