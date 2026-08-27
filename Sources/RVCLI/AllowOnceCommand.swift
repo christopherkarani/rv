@@ -1,8 +1,8 @@
 import ArgumentParser
 import Foundation
 import RVDomain
-import RVEngine
 import RVPolicy
+import RVService
 
 enum AllowOnceCLI {
     static func interactiveTTY(
@@ -56,14 +56,14 @@ enum AllowOnceCLI {
     }
 
     static func mint(
-        command: String,
+        command: ShellCommand,
         cwd: WorkingDirectory,
         tty: TTYCapability,
         robot: Bool,
         store: AllowOnceStore,
         now: Date
     ) async throws -> String {
-        let matchingView = Normalize.matchingView(of: command)
+        let matchingView = EvaluationWorld.matchingView(of: command)
         return try await store.mint(
             matchingView: matchingView,
             cwd: cwd,
@@ -173,7 +173,7 @@ struct AllowOnceMint: AsyncParsableCommand {
                 throw ExitCode(2)
             }
             let code = try await AllowOnceCLI.mint(
-                command: raw,
+                command: ShellCommand(rawValue: raw),
                 cwd: cwd,
                 tty: live.tty,
                 robot: live.robot,
