@@ -21,6 +21,9 @@ public actor ServiceRuntime {
     private let log: (any ServiceLog)?
     private let analytics: AnalyticsCoordinator?
     private let clock: @Sendable () -> Date
+    private let pendingApprovals: (any PendingApprovalCoordinating)?
+    private var pendingGeneration: UInt64 = 0
+    private var pendingSetFingerprint: [String] = []
     private var analyticsEnabledPackIDs: [String] = []
 
     package private(set) var compiledPackIDs: [PackID]
@@ -35,7 +38,8 @@ public actor ServiceRuntime {
         idleExitSeconds: Int = IdleWatchdog.defaultSeconds,
         log: (any ServiceLog)? = nil,
         analytics: AnalyticsCoordinator? = nil,
-        clock: @escaping @Sendable () -> Date = { Date() }
+        clock: @escaping @Sendable () -> Date = { Date() },
+        pendingApprovals: PendingApprovalsBinding = .automatic
     ) {
         let resolvedHome = home ?? HomeDirectory.process()
         self.configHome = resolvedHome
@@ -69,6 +73,10 @@ public actor ServiceRuntime {
         self.log = log
         self.analytics = analytics
         self.clock = clock
+        self.pendingApprovals = Self.resolvePendingApprovals(
+            pendingApprovals,
+            home: resolvedHome
+        )
         self.analyticsEnabledPackIDs = Self.analyticsEnabledPackIDs(from: self.catalog)
     }
 
@@ -183,7 +191,13 @@ public actor ServiceRuntime {
             result = .error(.unknownMethod)
         case .doctorSnapshot:
             result = .doctorSnapshot(doctorSnapshot())
-        case .pendingList, .pendingWatch, .pendingResolve, .rulePreview, .ruleSave:
+        case .pendingList:
+            result = await pendingListResult()
+        case .pendingWatch(let params):
+            result = await pendingWatchResult(afterGeneration: params.afterGeneration)
+        case .pendingResolve(let params):
+            result = await pendingResolveResult(params)
+        case .rulePreview, .ruleSave:
             result = .error(.unknownMethod)
         }
         logIfNeeded(request: request, result: result, started: started)
@@ -455,6 +469,77 @@ public actor ServiceRuntime {
         )
     }
 
+    private func pendingListResult() async -> IPCResult {
+        do {
+            return .pendingList(try await makePendingListReply())
+        } catch {
+            return .error(PendingListProjection.ipcError(from: error))
+        }
+    }
+
+    private func pendingWatchResult(afterGeneration: UInt64) async -> IPCResult {
+        do {
+            let reply = try await makePendingListReply()
+            if afterGeneration == reply.generation {
+                return .pendingWatch(PendingListReply(generation: reply.generation, items: []))
+            }
+            return .pendingWatch(reply)
+        } catch {
+            return .error(PendingListProjection.ipcError(from: error))
+        }
+    }
+
+    private func pendingResolveResult(_ params: PendingResolveParams) async -> IPCResult {
+        guard let pendingApprovals else {
+            return .error(PendingListProjection.coordinatorUnavailable)
+        }
+        let decision: ApprovalDecision
+        switch params.decision {
+        case .allowOnce:
+            if params.identity.session.rawValue.isEmpty {
+                return .error(.pendingIdentityMismatch)
+            }
+            decision = .allowOnce
+        case .deny:
+            decision = .deny
+        }
+        do {
+            let resolved = try await pendingApprovals.resolve(
+                id: params.id,
+                decision: decision,
+                fingerprint: params.fingerprint,
+                identity: params.identity,
+                now: clock()
+            )
+            let terminal: Bool
+            switch resolved.state {
+            case .awaitingHuman:
+                terminal = false
+            case .resolved, .expired, .canceled, .timedOut:
+                terminal = true
+            }
+            return .pendingResolve(PendingResolveReply(id: resolved.id, terminal: terminal))
+        } catch {
+            return .error(PendingListProjection.ipcError(from: error))
+        }
+    }
+
+    private func makePendingListReply() async throws -> PendingListReply {
+        guard let pendingApprovals else {
+            throw PendingListProjection.coordinatorUnavailable
+        }
+        let records = try await pendingApprovals.list(now: clock())
+        let fingerprint = PendingListProjection.fingerprint(records)
+        if fingerprint != pendingSetFingerprint {
+            pendingGeneration += 1
+            pendingSetFingerprint = fingerprint
+        }
+        return PendingListReply(
+            generation: pendingGeneration,
+            items: PendingListProjection.items(from: records)
+        )
+    }
+
     private func logIfNeeded(request: IPCRequest, result: IPCResult, started: DispatchTime) {
         let method: String
         var decision: String?
@@ -572,9 +657,31 @@ public actor ServiceRuntime {
     private static func analyticsEnabledPackIDs(from catalog: PackCatalog) -> [String] {
         catalog.enabledIDs.map(\.rawValue)
     }
+
+    private static func resolvePendingApprovals(
+        _ binding: PendingApprovalsBinding,
+        home: HomeDirectory?
+    ) -> (any PendingApprovalCoordinating)? {
+        switch binding {
+        case .automatic:
+            if let home {
+                return PendingApprovalStore.live(home: home)
+            }
+            return PendingApprovalStore(baseDirectory: uniqueEphemeralPendingDirectory())
+        case .coordinator(let coordinator):
+            return coordinator
+        case .missing:
+            return nil
+        }
+    }
 }
 
 private func uniqueEphemeralAllowOnceDirectory() -> URL {
     FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-allow-once-\(UUID().uuidString)", isDirectory: true)
+}
+
+private func uniqueEphemeralPendingDirectory() -> URL {
+    FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-pending-\(UUID().uuidString)", isDirectory: true)
 }
