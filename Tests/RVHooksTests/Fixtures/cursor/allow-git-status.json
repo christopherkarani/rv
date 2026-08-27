@@ -1,0 +1,8 @@
+{
+  "hook_event_name": "beforeShellExecution",
+  "command": "git status",
+  "cwd": "/tmp/ws",
+  "sandbox": false,
+  "conversation_id": "sess_1",
+  "generation_id": "gen_1"
+}

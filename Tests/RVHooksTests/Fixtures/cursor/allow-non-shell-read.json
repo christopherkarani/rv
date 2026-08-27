@@ -1,0 +1,6 @@
+{
+  "hook_event_name": "preToolUse",
+  "tool_name": "Read",
+  "tool_input": { "path": "/tmp/ws/README.md" },
+  "cwd": "/tmp/ws"
+}

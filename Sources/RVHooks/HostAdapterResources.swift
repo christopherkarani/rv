@@ -116,6 +116,8 @@ package enum HostAdapterResources {
             bytes = PackageResources.rv_guard_hermes_py_tmpl
         case .codex:
             bytes = PackageResources.rv_guard_codex_py_tmpl
+        case .cursor:
+            bytes = PackageResources.rv_guard_cursor_py_tmpl
         case .claude:
             throw HostAdapterResourceError.missingTemplate(host)
         }
@@ -137,7 +139,7 @@ package enum HostAdapterResources {
             return try loadCompanion(PackageResources.openclaw_plugin_json, host: host)
         case .hermes:
             return try loadCompanion(PackageResources.hermes_plugin_yaml, host: host)
-        case .grok, .pi, .opencode, .claude, .codex:
+        case .grok, .pi, .opencode, .claude, .codex, .cursor:
             throw HostAdapterResourceError.missingTemplate(host)
         }
     }

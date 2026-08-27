@@ -11,6 +11,7 @@ extension HookHost {
         case .openclaw: "OpenClaw"
         case .hermes: "Hermes"
         case .codex: "Codex"
+        case .cursor: "Cursor"
         }
     }
 }
@@ -34,6 +35,7 @@ public struct SetupSlotSnapshot: Equatable, Sendable {
     public var openClaw: SetupSlotKind
     public var hermes: SetupSlotKind
     public var codex: SetupSlotKind
+    public var cursor: SetupSlotKind
     public var wrote: Set<HookHost>
 
     public init(
@@ -44,6 +46,7 @@ public struct SetupSlotSnapshot: Equatable, Sendable {
         openClaw: SetupSlotKind = .pending,
         hermes: SetupSlotKind = .pending,
         codex: SetupSlotKind = .pending,
+        cursor: SetupSlotKind = .pending,
         wrote: Set<HookHost>
     ) {
         self.grok = grok
@@ -53,6 +56,7 @@ public struct SetupSlotSnapshot: Equatable, Sendable {
         self.openClaw = openClaw
         self.hermes = hermes
         self.codex = codex
+        self.cursor = cursor
         self.wrote = wrote
     }
 
@@ -65,6 +69,7 @@ public struct SetupSlotSnapshot: Equatable, Sendable {
         case .openclaw: openClaw
         case .hermes: hermes
         case .codex: codex
+        case .cursor: cursor
         }
     }
 
@@ -81,6 +86,7 @@ public struct SetupSlotSnapshot: Equatable, Sendable {
     public var hasWiredSlot: Bool {
         grok == .wired || pi == .wired || openCode == .wired || claude == .wired
             || openClaw == .wired || hermes == .wired || codex == .wired
+            || cursor == .wired
     }
 
     /// Second matching run: hosts already present, this run wrote nothing, none occupied.
@@ -146,7 +152,7 @@ public enum SetupCloser: Equatable, Sendable {
     }
 }
 
-public let setupRobotHostlessLine = "Run rv setup after Pi, Grok, OpenCode, Claude, OpenClaw, Hermes, or Codex exists."
+public let setupRobotHostlessLine = "Run rv setup after Pi, Grok, OpenCode, Claude, OpenClaw, Hermes, Codex, or Cursor exists."
 public let setupRobotCompleteLine = "Setup complete. Next  rv test 'git reset --hard'."
 
 extension HookHost {
@@ -160,6 +166,7 @@ extension HookHost {
         case .openclaw: "Skipped occupied openclaw hook."
         case .hermes: "Skipped occupied hermes hook."
         case .codex: "Skipped occupied codex hook."
+        case .cursor: "Skipped occupied cursor hook."
         }
     }
 }

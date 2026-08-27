@@ -65,7 +65,7 @@ public enum HostNativeAsk {
         switch host {
         case .pi, .opencode:
             return .spendFirst
-        case .grok, .claude, .openclaw, .hermes, .codex:
+        case .grok, .claude, .openclaw, .hermes, .codex, .cursor:
             return .denyOrTTY
         }
     }

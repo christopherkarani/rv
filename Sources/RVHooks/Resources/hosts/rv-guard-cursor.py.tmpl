@@ -1,0 +1,140 @@
+"""RV destructive-command guard for Cursor shell.
+
+Cursor beforeShellExecution command hook. Live deny is the official native
+honor path ``{"permission":"deny","user_message":...,"agent_message":...}``
+on stdout and process exit 0. See https://cursor.com/docs/hooks.md.
+Do not emit Claude permissionDecision JSON. Do not emit Codex
+``decision: block`` + exit 2. Do not emit leftover ``permission: ask``.
+Missing rv / timeout / crash / non-JSON fail closed the same way.
+``failClosed: true`` on hooks.json so Cursor itself blocks on hook failure.
+"""
+
+import json
+import subprocess
+import sys
+
+RV_BINARY = "__RV_BINARY__"
+RV_HOOK_TIMEOUT_S = 5
+
+
+def main():
+    try:
+        raw = sys.stdin.read()
+        mapped = _guard(raw)
+        if mapped["action"] == "block":
+            _emit_deny(mapped["reason"])
+        else:
+            _emit_allow()
+        return
+    except Exception:
+        _emit_deny("rv failed")
+
+
+def _guard(raw):
+    envelope = _parse(raw)
+    if envelope is None:
+        return {"action": "block", "reason": "rv failed"}
+    event = envelope.get("hook_event_name") or ""
+    if event == "afterShellExecution":
+        return {"action": "allow"}
+    if event == "preToolUse":
+        tool = envelope.get("tool_name") or ""
+        if tool not in ("Shell", "Bash"):
+            return {"action": "allow"}
+    elif event not in ("", "beforeShellExecution"):
+        return {"action": "allow"}
+    mapped = _spawn_rv_hook("cursor", raw)
+    if mapped["action"] == "block":
+        return mapped
+    return {"action": "allow"}
+
+
+def _parse(raw):
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+    if isinstance(parsed, dict):
+        return parsed
+    return None
+
+
+def _spawn_rv_hook(host, stdin):
+    try:
+        completed = subprocess.run(
+            [RV_BINARY, "hook", "--host", host],
+            input=stdin,
+            capture_output=True,
+            text=True,
+            timeout=RV_HOOK_TIMEOUT_S,
+        )
+    except FileNotFoundError:
+        return {"action": "block", "reason": "rv missing"}
+    except (OSError, subprocess.TimeoutExpired):
+        return {"action": "block", "reason": "rv failed"}
+    return _map_rv_hook_result(completed.stdout, completed.returncode)
+
+
+def _map_rv_hook_result(stdout, exit_code):
+    trimmed = (stdout or "").strip()
+    if trimmed:
+        try:
+            parsed = json.loads(trimmed)
+            if isinstance(parsed, dict):
+                permission = parsed.get("permission")
+                if permission == "allow":
+                    return {"action": "allow"}
+                if permission == "ask":
+                    return {"action": "block", "reason": "rv failed"}
+                if permission == "deny":
+                    return {
+                        "action": "block",
+                        "reason": _blocking_reason(
+                            parsed.get("user_message") or parsed.get("agent_message")
+                        ),
+                    }
+                decision = parsed.get("decision")
+                if decision in ("block", "deny"):
+                    return {
+                        "action": "block",
+                        "reason": _blocking_reason(parsed.get("reason")),
+                    }
+        except (ValueError, TypeError):
+            pass
+        return {"action": "block", "reason": "rv failed"}
+    if exit_code == 0:
+        return {"action": "allow"}
+    return {"action": "block", "reason": "rv failed"}
+
+
+def _blocking_reason(reason):
+    if isinstance(reason, str):
+        text = reason.strip()
+        if text:
+            return text
+    return "rv failed"
+
+
+def _emit_allow():
+    sys.stdout.write(json.dumps({"permission": "allow"}, separators=(",", ":")) + "\n")
+    sys.exit(0)
+
+
+def _emit_deny(reason):
+    text = _blocking_reason(reason)
+    sys.stdout.write(
+        json.dumps(
+            {
+                "permission": "deny",
+                "user_message": text,
+                "agent_message": text,
+            },
+            separators=(",", ":"),
+        )
+        + "\n"
+    )
+    sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()

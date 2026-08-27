@@ -10,14 +10,15 @@ import Testing
     #expect(HookHost.openclaw.rawValue == "openclaw")
     #expect(HookHost.hermes.rawValue == "hermes")
     #expect(HookHost.codex.rawValue == "codex")
+    #expect(HookHost.cursor.rawValue == "cursor")
 }
 
 @Test func hookHost_allCasesAreDeclarationOrder() {
-    #expect(HookHost.allCases.map(\.rawValue) == ["grok", "pi", "opencode", "claude", "openclaw", "hermes", "codex"])
+    #expect(HookHost.allCases.map(\.rawValue) == ["grok", "pi", "opencode", "claude", "openclaw", "hermes", "codex", "cursor"])
 }
 
-@Test func hookHost_setupSlotOrderIncludesOpenClawHermesAndCodex() {
-    #expect(HookHost.setupSlotOrder.map(\.rawValue) == ["grok", "pi", "opencode", "claude", "openclaw", "hermes", "codex"])
+@Test func hookHost_setupSlotOrderIncludesOpenClawHermesCodexAndCursor() {
+    #expect(HookHost.setupSlotOrder.map(\.rawValue) == ["grok", "pi", "opencode", "claude", "openclaw", "hermes", "codex", "cursor"])
 }
 
 @Test func hookHost_codableIsJSONString() throws {
@@ -35,4 +36,9 @@ import Testing
 @Test func hookHost_codexIsAHookHost() {
     #expect(HookHost(rawValue: "codex") == .codex)
     #expect(HookHost.allCases.map(\.rawValue).contains("codex"))
+}
+
+@Test func hookHost_cursorIsAHookHost() {
+    #expect(HookHost(rawValue: "cursor") == .cursor)
+    #expect(HookHost.allCases.map(\.rawValue).contains("cursor"))
 }

@@ -19,7 +19,7 @@ public func hookWire<C: HostCodec>(
         }
         // Official `permissionDecision: "ask"` is leftover-ask-as-permit. Stay deny.
         return ClaudeHostCodec().encodeRichDeny(from: result, command: command)
-    case .grok, .pi, .opencode, .openclaw, .hermes, .codex:
+    case .grok, .pi, .opencode, .openclaw, .hermes, .codex, .cursor:
         if afterSpend {
             return encodePostSpend(from: result, command: command, using: codec)
         }

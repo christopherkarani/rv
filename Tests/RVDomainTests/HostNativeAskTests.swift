@@ -37,7 +37,7 @@ struct HostNativeAskTests {
         #expect(HostNativeAsk.capability(for: host) == .spendFirst)
     }
 
-    @Test(arguments: [HookHost.claude, .grok, .openclaw, .hermes, .codex])
+    @Test(arguments: [HookHost.claude, .grok, .openclaw, .hermes, .codex, .cursor])
     func denyOrTTYHostsDoNotPauseOnMandatoryHuman(_ host: HookHost) {
         let verdict = HostNativeAsk.verdict(
             host: host,
@@ -48,10 +48,11 @@ struct HostNativeAskTests {
         #expect(HostNativeAsk.capability(for: host) == .denyOrTTY)
     }
 
-    @Test func capabilityTable_piAndOpenCodeStaySpendFirst_codexIsDenyOrTTY() {
+    @Test func capabilityTable_piAndOpenCodeStaySpendFirst_codexAndCursorAreDenyOrTTY() {
         #expect(HostNativeAsk.capability(for: .pi) == .spendFirst)
         #expect(HostNativeAsk.capability(for: .opencode) == .spendFirst)
         #expect(HostNativeAsk.capability(for: .codex) == .denyOrTTY)
+        #expect(HostNativeAsk.capability(for: .cursor) == .denyOrTTY)
         #expect(HostNativeAsk.capability(for: .claude) == .denyOrTTY)
     }
 
@@ -88,6 +89,10 @@ struct HostNativeAskTests {
         )
         #expect(
             bridge.resolve(host: .codex, continuation: .hostNative, decision: .allowOnce)
+                == .denyOrTTY
+        )
+        #expect(
+            bridge.resolve(host: .cursor, continuation: .hostNative, decision: .allowOnce)
                 == .denyOrTTY
         )
         #expect(
