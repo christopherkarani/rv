@@ -87,6 +87,18 @@ struct HostNativeAskTests {
         )
     }
 
+    @Test func hookBound_hardPolicyCases_projectDirectly() {
+        #expect(HostNativeAsk.hookBound(.hardAllow) == .allow)
+        #expect(HostNativeAsk.hookBound(.hardDeny(packDeny)) == .deny(packDeny))
+        #expect(
+            HostNativeAsk.hookBound(.mandatoryHuman(askDeny))
+                == .mandatoryHuman(askDeny)
+        )
+        #expect(
+            HostNativeAsk.hookBound(.reviewEligible(fallback: askDeny)) == .allow
+        )
+    }
+
     @Test func hookBound_emptyEffectsPackAllow_isAllow() {
         let action = HostNativeAskFixtures.emptyEffects(command: "git status")
         let result = EvaluationResult(
@@ -94,7 +106,13 @@ struct HostNativeAskTests {
             matchingView: MatchingView("git status")
         )
 
-        #expect(HostNativeAsk.hookBound(result: result, action: action) == .allow)
+        #expect(
+            HostNativeAsk.hookBound(
+                result: result,
+                action: action,
+                context: HostNativeAskFixtures.privateContext
+            ) == .allow
+        )
     }
 
     @Test func hookBound_emptyEffectsPackDeny_staysDeny() {
@@ -104,7 +122,13 @@ struct HostNativeAskTests {
             matchingView: MatchingView("git reset --hard")
         )
 
-        #expect(HostNativeAsk.hookBound(result: result, action: action) == .deny(packDeny))
+        #expect(
+            HostNativeAsk.hookBound(
+                result: result,
+                action: action,
+                context: HostNativeAskFixtures.privateContext
+            ) == .deny(packDeny)
+        )
     }
 
     @Test func hookBound_remoteMutationOnPrivateBranch_requiresHuman() {
@@ -115,8 +139,27 @@ struct HostNativeAskTests {
         )
 
         #expect(
-            HostNativeAsk.hookBound(result: result, action: action)
-                == .mandatoryHuman(ActionPolicyEngine.Builtin.remoteBranchAsk)
+            HostNativeAsk.hookBound(
+                result: result,
+                action: action,
+                context: HostNativeAskFixtures.privateContext
+            ) == .mandatoryHuman(ActionPolicyEngine.Builtin.remoteBranchAsk)
+        )
+    }
+
+    @Test func hookBound_remoteMutationOnSharedContext_isHardDeny() {
+        let action = HostNativeAskFixtures.remoteMutation(branchName: "topic")
+        let result = EvaluationResult(
+            outcome: .plain,
+            matchingView: MatchingView("git push --force origin topic")
+        )
+
+        #expect(
+            HostNativeAsk.hookBound(
+                result: result,
+                action: action,
+                context: HostNativeAskFixtures.sharedContext
+            ) == .deny(ActionPolicyEngine.Builtin.remoteSharedBranch)
         )
     }
 
@@ -128,13 +171,23 @@ struct HostNativeAskTests {
         )
 
         #expect(
-            HostNativeAsk.hookBound(result: result, action: action)
-                == .deny(ActionPolicyEngine.Builtin.workingTreeDiscard)
+            HostNativeAsk.hookBound(
+                result: result,
+                action: action,
+                context: HostNativeAskFixtures.privateContext
+            ) == .deny(ActionPolicyEngine.Builtin.workingTreeDiscard)
         )
     }
 }
 
 private enum HostNativeAskFixtures {
+    static let privateContext = ReviewContext(
+        repository: RepositoryReviewContext(isSharedBranch: false)
+    )
+    static let sharedContext = ReviewContext(
+        repository: RepositoryReviewContext(isSharedBranch: true)
+    )
+
     static func emptyEffects(command: String) -> ProposedAction {
         .shell(
             ShellAction(

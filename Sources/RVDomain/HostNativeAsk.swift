@@ -120,10 +120,12 @@ public enum HostNativeAsk {
     /// projects that hard decision onto the hook-live review boundary.
     public static func hookBound(
         result: EvaluationResult,
-        action: ProposedAction
+        action: ProposedAction,
+        context: ReviewContext
     ) -> BoundReview {
         let verdict = ActionPolicyEngine.evaluate(
             action: action,
+            context: context,
             policy: EffectiveActionPolicy(packFallback: PackFallback(result))
         )
         return hookBound(verdict.decision)
