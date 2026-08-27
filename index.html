@@ -173,9 +173,10 @@
 
 <p>There's an escape hatch, on Grok only for now. If rv stops something you meant to run, you can mint a one-time unlock scoped to that exact command in that exact folder, and next time it asks again. Not on Pi or OpenCode yet. Their hook payloads don't carry the working directory today, though rv could forward it, and I won't scope an unlock to less than command-plus-folder, because trust-this-command-anywhere is how you end up back where you started.</p>
 
-<p>Two disclosures, since you'd find them eventually anyway. Anonymous usage counters are wired to PostHog: install events and daily counts, never command text or paths, evaluation happens entirely on your Mac. No key ships in the binaries yet, so nothing sends today, but the code is there and now you know. And rv works at the hook layer. It is not a sandbox. A process that skips the hook entirely never meets rv. Hook-grade, that's all it claims to be.</p>
-
 <p>Install is one line:</p>
+<pre><code>curl -fsSL https://rykanv.com/install | sh</code></pre>
+<p>The code is public at <a href="https://github.com/christopherkarani/rv">github.com/christopherkarani/rv</a>. v1 is macOS 26 on Apple Silicon, wired into Pi today, with other hosts close behind.</p>
+<p>I'm not claiming this replaces sandboxes, and I'm not asking anyone to trust another model's opinion about danger. It's one narrow thing: when your agent decides to run a command, something beside the shell reads the same text the shell will execute and refuses the handful of patterns that have already deleted people's home directories. The approval gap doesn't close by hoping prompts get better. It closes where the command runs.</p>
 </article>
 </div>
 </body>
