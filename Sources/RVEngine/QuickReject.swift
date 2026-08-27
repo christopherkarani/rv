@@ -85,17 +85,8 @@ private func withUTF8Buffer<Result>(
     _ text: String,
     _ body: (UnsafeBufferPointer<UInt8>) -> Result
 ) -> Result {
-    if let result = text.utf8.withContiguousStorageIfAvailable(body) {
-        return result
-    }
-    let count = text.utf8.count
-    return text.withCString { cString in
-        let bytes = UnsafeBufferPointer(
-            start: UnsafeRawPointer(cString).assumingMemoryBound(to: UInt8.self),
-            count: count
-        )
-        return body(bytes)
-    }
+    var copy = text
+    return copy.withUTF8(body)
 }
 
 private func isASCIIWordByte(_ byte: UInt8?) -> Bool {

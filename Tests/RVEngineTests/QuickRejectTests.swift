@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 import RVDomain
 @testable import RVEngine
@@ -61,4 +62,24 @@ private let filesystemPack = PackSnapshot(
     #expect(QuickReject.containsEmptyParenPair("()"))
     #expect(!QuickReject.containsEmptyParenPair("🧪 (\u{00A0})"))
     #expect(!QuickReject.containsEmptyParenPair("( \n ]"))
+}
+
+@Test func quickReject_interiorNULKeepsUTF8ScanWithinBounds() {
+    #expect(QuickReject.keywordHits("git", in: "git\u{0000} status"))
+    #expect(QuickReject.keywordHits("git", in: "\u{0000}git"))
+    #expect(!QuickReject.keywordHits("git", in: "dig\u{0000}it"))
+}
+
+@Test func quickReject_handlesBridgedStringStorage() {
+    let foreign = NSMutableString(string: "git ( )")
+    let haystack = foreign as String
+
+    // Foundation may normalize the bridge to contiguous native storage.
+    #expect(QuickReject.keywordHits("git", in: haystack))
+    #expect(QuickReject.containsEmptyParenPair(haystack))
+
+    let foreignBoundary = NSMutableString(string: "digit ( )")
+    let boundaryMiss = foreignBoundary as String
+    #expect(!QuickReject.keywordHits("git", in: boundaryMiss))
+    #expect(QuickReject.containsEmptyParenPair(boundaryMiss))
 }
