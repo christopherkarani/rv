@@ -52,6 +52,9 @@ func hostAdapter_bakedRvPath_rejectsModifiedAndForeignBytes(host: HookHost) thro
     #expect(openCodeTui.contains("DialogConfirm"))
     #expect(openCodeTui.contains("server:"))
     #expect(openCodeTui.contains("permission.ask") == false)
+    #expect(openCodeTui.contains("DialogConfirm.show") == false)
+    #expect(openCodeTui.contains("createComponent"))
+    #expect(openCodeTui.contains("setSize"))
 }
 
 @Test func hostAdapter_piAndOpenCode_matchOnlyTheirOwnRender() throws {

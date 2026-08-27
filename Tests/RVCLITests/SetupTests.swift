@@ -155,14 +155,25 @@ private func fixtureLoginHome() throws -> URL {
         #expect(tui.contains("RV · Ask"))
         #expect(tui.contains("server:"))
         #expect(tui.contains("permission.ask") == false)
+        #expect(tui.contains("DialogConfirm.show") == false)
+        #expect(tui.contains("createComponent"))
+        #expect(tui.contains("setSize"))
         let askTui = try String(
             contentsOfFile: layout.openCodeTuiAskPackage + "/tui.js",
             encoding: .utf8
         )
-        #expect(askTui.contains("tui: plugin.server"))
+        #expect(askTui.contains("createComponent"))
+        #expect(askTui.contains("solid-js"))
+        #expect(askTui.contains("plugin.server"))
         #expect(askTui.contains("permission.ask") == false)
         let config = try String(contentsOfFile: layout.openCodeConfig, encoding: .utf8)
         #expect(config.contains("rv-guard-tui-ask"))
+        let tuiConfigPath = layout.openCodeDirectory + "/tui.json"
+        #expect(FileManager.default.fileExists(atPath: tuiConfigPath))
+        let tuiConfig = try String(contentsOfFile: tuiConfigPath, encoding: .utf8)
+        #expect(tuiConfig.contains("rv-guard-tui-ask"))
+        #expect(askTui.contains("createComponent"))
+        #expect(askTui.contains("solid-js"))
         #expect(FileManager.default.fileExists(atPath: layout.grokHook) == false)
 
         let uninstall = SetupRun.uninstall(env(home: home, launchctl: launchctl))
@@ -171,6 +182,36 @@ private func fixtureLoginHome() throws -> URL {
         #expect(FileManager.default.fileExists(atPath: layout.openCodeTuiPlugin) == false)
         #expect(FileManager.default.fileExists(atPath: layout.openCodeTuiAskPackage) == false)
         #expect(FileManager.default.fileExists(atPath: layout.openCodeConfig) == false)
+        #expect(FileManager.default.fileExists(atPath: tuiConfigPath) == false)
+    }
+}
+
+@Test func setup_openCode_mergesAskPluginIntoExistingTuiJsonAndKeepsTheme() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(atPath: layout.openCodeDirectory, withIntermediateDirectories: true)
+        let tuiConfigPath = layout.openCodeDirectory + "/tui.json"
+        try """
+        {
+          "theme": "opencode",
+          "keybinds": { "leader": "ctrl+x" }
+        }
+        """.write(toFile: tuiConfigPath, atomically: true, encoding: .utf8)
+
+        let outcome = SetupRun.setup(env(home: home, launchctl: launchctl))
+        #expect(outcome.exitCode == 0)
+        let tuiConfig = try String(contentsOfFile: tuiConfigPath, encoding: .utf8)
+        #expect(tuiConfig.contains("rv-guard-tui-ask"))
+        #expect(tuiConfig.contains("\"theme\""))
+        #expect(tuiConfig.contains("opencode"))
+        #expect(tuiConfig.contains("ctrl+x"))
+
+        let uninstall = SetupRun.uninstall(env(home: home, launchctl: launchctl))
+        #expect(uninstall.exitCode == 0)
+        #expect(FileManager.default.fileExists(atPath: tuiConfigPath))
+        let after = try String(contentsOfFile: tuiConfigPath, encoding: .utf8)
+        #expect(after.contains("rv-guard-tui-ask") == false)
+        #expect(after.contains("opencode"))
+        #expect(after.contains("ctrl+x"))
     }
 }
 

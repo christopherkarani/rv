@@ -24,7 +24,10 @@ private func openCodePluginContractURL() -> URL {
         .appendingPathComponent("Fixtures/adapters/opencode-11818-plugin.mjs")
 }
 
-private func runOpenCodePluginContract(_ source: String) async throws -> OpenCodePluginContract {
+private func runOpenCodePluginContract(
+    _ source: String,
+    mode: String = "official-confirm"
+) async throws -> OpenCodePluginContract {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-tui-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -34,7 +37,7 @@ private func runOpenCodePluginContract(_ source: String) async throws -> OpenCod
 
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-    process.arguments = ["node", openCodePluginContractURL().path, plugin.path]
+    process.arguments = ["node", openCodePluginContractURL().path, plugin.path, mode]
     process.currentDirectoryURL = root
     let stdout = Pipe()
     let stderr = Pipe()
@@ -54,7 +57,12 @@ private func runOpenCodePluginContract(_ source: String) async throws -> OpenCod
         hasTui: object["hasTui"] as? Bool ?? false,
         dialogTitle: object["dialogTitle"] as? String,
         dialogMessage: object["dialogMessage"] as? String,
-        replied: object["replied"] as? String
+        dialogSize: object["dialogSize"] as? String,
+        replied: object["replied"] as? String,
+        replySessionID: object["replySessionID"] as? String,
+        replyRequestID: object["replyRequestID"] as? String,
+        usedShow: object["usedShow"] as? Bool ?? false,
+        usedCreateComponent: object["usedCreateComponent"] as? Bool ?? false
     )
 }
 
@@ -111,6 +119,9 @@ private func runOpenCodePluginContract(_ source: String) async throws -> OpenCod
     #expect(tui.contains("RV · Ask"))
     #expect(tui.contains("permission.ask") == false)
     #expect(tui.contains("server:"))
+    #expect(tui.contains("DialogConfirm.show") == false)
+    #expect(tui.contains("createComponent"))
+    #expect(tui.contains("setSize"))
     #expect(source.contains("pollOfficialPermissionReply") == false)
     #expect(source.contains("RV_ASK_TIMEOUT_MS"))
     #expect(source.contains("attempt < 40") == false)
@@ -126,7 +137,74 @@ private func runOpenCodePluginContract(_ source: String) async throws -> OpenCod
     #expect(probe.serverLoadError == nil)
     #expect(probe.dialogTitle == "RV · Ask")
     #expect(probe.dialogMessage?.contains("git reset --hard") == true)
+    #expect(probe.dialogSize == "medium")
+    #expect(probe.usedShow == false)
+    #expect(probe.usedCreateComponent == true)
     #expect(probe.replied == "once")
+    #expect(probe.replySessionID == "ses_1")
+    #expect(probe.replyRequestID == "per_live")
+}
+
+@Test func openCodeTuiPlugin_officialDialogConfirmReturnKeyRepliesOnce() async throws {
+    let probe = try await runOpenCodePluginContract(
+        try HostAdapterResources.loadOpenCodeTuiPlugin(),
+        mode: "official-confirm"
+    )
+    #expect(probe.usedShow == false)
+    #expect(probe.usedCreateComponent == true)
+    #expect(probe.dialogTitle == "RV · Ask")
+    #expect(probe.replied == "once")
+    #expect(probe.replySessionID == "ses_1")
+    #expect(probe.replyRequestID == "per_live")
+}
+
+@Test func openCodeTuiPlugin_officialDialogConfirmCancelClickRepliesReject() async throws {
+    let probe = try await runOpenCodePluginContract(
+        try HostAdapterResources.loadOpenCodeTuiPlugin(),
+        mode: "official-cancel"
+    )
+    #expect(probe.usedShow == false)
+    #expect(probe.usedCreateComponent == true)
+    #expect(probe.dialogTitle == "RV · Ask")
+    #expect(probe.replied == "reject")
+    #expect(probe.replySessionID == "ses_1")
+    #expect(probe.replyRequestID == "per_live")
+}
+
+@Test func openCodeTuiPlugin_officialDialogConfirmMissingClickDoesNotReply() async throws {
+    let probe = try await runOpenCodePluginContract(
+        try HostAdapterResources.loadOpenCodeTuiPlugin(),
+        mode: "official-none"
+    )
+    #expect(probe.usedShow == false)
+    #expect(probe.dialogTitle == "RV · Ask")
+    #expect(probe.replied == nil)
+}
+
+@Test func openCodeTuiPlugin_showLieDoesNotAutoConfirmWithoutTuiClick() async throws {
+    let probe = try await runOpenCodePluginContract(
+        try HostAdapterResources.loadOpenCodeTuiPlugin(),
+        mode: "show-lie"
+    )
+    #expect(probe.usedShow == false)
+    #expect(probe.replied == nil)
+}
+
+@Test func openCodeTuiPlugin_hostReplaceOnCloseDoesNotReject() async throws {
+    let probe = try await runOpenCodePluginContract(
+        try HostAdapterResources.loadOpenCodeTuiPlugin(),
+        mode: "host-replace"
+    )
+    #expect(probe.replied == nil)
+}
+
+@Test func openCodeTuiPlugin_serverEventWithoutUIDoesNotReplyReject() async throws {
+    let probe = try await runOpenCodePluginContract(
+        try HostAdapterResources.loadOpenCodeTuiPlugin(),
+        mode: "no-ui"
+    )
+    #expect(probe.dialogTitle == nil)
+    #expect(probe.replied == nil)
 }
 
 @Test func openClawTemplate_registersBeforeToolCallExecAndBlocks() throws {
@@ -349,6 +427,73 @@ private func runOpenCodePluginContract(_ source: String) async throws -> OpenCod
     )
     #expect(result.threw == resetHardReason)
     #expect(result.spawnCount == 1)
+}
+
+@Test func openCodeAdapter_sessionShellEnvOfficialTuiConfirmClickSpendsThenAllows() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: [
+            "hook": "shell.env",
+            "cwd": "/tmp/ws",
+            "sessionID": "ses_1",
+            "callID": "call_1",
+            "command": "git reset --hard",
+        ],
+        stub: .stdout(askResetHardJSON, exit: 1),
+        permissionReply: "tui-click-once",
+        askTimeoutMs: 800,
+        secondStub: .stdout("", exit: 0)
+    )
+    #expect(result.threw == nil)
+    #expect(result.permissionCreates == 1)
+    #expect(result.tuiDialogTitle == "RV · Ask")
+    #expect(result.permissionReply204 == "once")
+    #expect(result.spawnCount == 2)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
+    #expect(result.lastStdin?.contains("git reset --hard") == true)
+    #expect(result.toastCount == 0)
+}
+
+@Test func openCodeAdapter_sessionShellEnvOfficialTuiCancelClickDoesNotAllow() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: [
+            "hook": "shell.env",
+            "cwd": "/tmp/ws",
+            "sessionID": "ses_1",
+            "callID": "call_1",
+            "command": "git reset --hard",
+        ],
+        stub: .stdout(askResetHardJSON, exit: 1),
+        permissionReply: "tui-click-reject",
+        askTimeoutMs: 800,
+        secondStub: .stdout("", exit: 0)
+    )
+    #expect(result.threw == resetHardReason)
+    #expect(result.permissionCreates == 1)
+    #expect(result.tuiDialogTitle == "RV · Ask")
+    #expect(result.permissionReply204 == "reject")
+    #expect(result.spawnCount == 1)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
+}
+
+@Test func openCodeAdapter_sessionShellEnvOfficialTuiMissingClickStillThrows() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: [
+            "hook": "shell.env",
+            "cwd": "/tmp/ws",
+            "sessionID": "ses_1",
+            "callID": "call_1",
+            "command": "git reset --hard",
+        ],
+        stub: .stdout(askResetHardJSON, exit: 1),
+        permissionReply: "tui-click-none",
+        askTimeoutMs: 400,
+        secondStub: .stdout("", exit: 0)
+    )
+    #expect(result.threw == resetHardReason)
+    #expect(result.permissionCreates == 1)
+    #expect(result.tuiDialogTitle == "RV · Ask")
+    #expect(result.spawnCount == 1)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
 }
 
 @Test func openCodeAdapter_sessionShellEnvOfficialConfirmSpendsThenAllows() async throws {
@@ -1131,6 +1276,7 @@ private struct OpenCodeAdapterRun {
     var permissionCreates: Int
     var permissionGets: Int
     var permissionReply204: String?
+    var tuiDialogTitle: String?
 }
 
 private struct OpenCodePluginContract {
@@ -1140,7 +1286,12 @@ private struct OpenCodePluginContract {
     var hasTui: Bool
     var dialogTitle: String?
     var dialogMessage: String?
+    var dialogSize: String?
     var replied: String?
+    var replySessionID: String?
+    var replyRequestID: String?
+    var usedShow: Bool
+    var usedCreateComponent: Bool
 }
 
 private func runPiAdapter(
@@ -1265,7 +1416,8 @@ private func runOpenCodeAdapter(
         toastVariant: toast?["variant"] as? String,
         permissionCreates: object["permissionCreates"] as? Int ?? 0,
         permissionGets: object["permissionGets"] as? Int ?? 0,
-        permissionReply204: object["permissionReply204"] as? String
+        permissionReply204: object["permissionReply204"] as? String,
+        tuiDialogTitle: object["tuiDialogTitle"] as? String
     )
 }
 
@@ -1406,6 +1558,23 @@ private func runAdapter(
     }
     if let permissionReply {
         environment["RV_PERMISSION_REPLY"] = permissionReply
+        if permissionReply.hasPrefix("tui-click-") {
+            let tuiPlugin = root.appendingPathComponent("rv-guard-tui.js")
+            try HostAdapterResources.loadOpenCodeTuiPlugin()
+                .write(to: tuiPlugin, atomically: true, encoding: .utf8)
+            environment["RV_TUI_PLUGIN"] = tuiPlugin.path
+            environment["RV_TUI_CLICK"] = String(permissionReply.dropFirst("tui-click-".count))
+            let solid = root.appendingPathComponent("node_modules/solid-js", isDirectory: true)
+            try FileManager.default.createDirectory(at: solid, withIntermediateDirectories: true)
+            try """
+            {"name":"solid-js","type":"module","exports":{".":"./index.js"}}
+            """.write(to: solid.appendingPathComponent("package.json"), atomically: true, encoding: .utf8)
+            try """
+            export function createComponent(component, props) {
+              return typeof component === "function" ? component(props) : component;
+            }
+            """.write(to: solid.appendingPathComponent("index.js"), atomically: true, encoding: .utf8)
+        }
     }
     if let permissionSubscribe {
         environment["RV_PERMISSION_SUBSCRIBE"] = permissionSubscribe

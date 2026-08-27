@@ -350,11 +350,33 @@ enum SetupRun {
         } catch OpenCodeConfigMergeError.invalidJSON {
             // Foreign / broken config stays; globbed server() plugin still loads.
         }
-        return wrotePackage || wroteTui || wroteConfig
+        var wroteTuiConfig = false
+        do {
+            let merged = try OpenCodeConfigMerge.merge(
+                existingData: files.readData(layout.openCodeTuiConfig),
+                pluginPath: layout.openCodeTuiAskPackage
+            )
+            if merged.wrote {
+                try files.writeData(merged.data, to: layout.openCodeTuiConfig)
+                wroteTuiConfig = true
+            }
+        } catch OpenCodeConfigMergeError.invalidJSON {
+            // Foreign / broken tui.json stays; theme and keybinds are not ours.
+        }
+        return wrotePackage || wroteTui || wroteConfig || wroteTuiConfig
     }
 
     private static func stripOpenCodeAskPlugin(layout: OwnedPaths, files: FileOps) throws(SetupError) {
-        guard let existing = files.readData(layout.openCodeConfig) else {
+        try stripOpenCodePluginList(at: layout.openCodeConfig, layout: layout, files: files)
+        try stripOpenCodePluginList(at: layout.openCodeTuiConfig, layout: layout, files: files)
+    }
+
+    private static func stripOpenCodePluginList(
+        at path: String,
+        layout: OwnedPaths,
+        files: FileOps
+    ) throws(SetupError) {
+        guard let existing = files.readData(path) else {
             return
         }
         let next: Data?
@@ -371,10 +393,10 @@ enum SetupRun {
         do {
             if let next {
                 if next != existing {
-                    try files.writeData(next, to: layout.openCodeConfig)
+                    try files.writeData(next, to: path)
                 }
             } else {
-                files.removeFile(atPath: layout.openCodeConfig)
+                files.removeFile(atPath: path)
             }
         } catch {
             throw SetupError.hostHookWriteFailed(.opencode)

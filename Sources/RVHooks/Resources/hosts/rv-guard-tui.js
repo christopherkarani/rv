@@ -28,6 +28,9 @@ async function confirmOfficial(api, event) {
       ? metadata.reason
       : "Allow this command once?";
   const allowed = await showConfirm(api, message);
+  if (allowed === undefined) {
+    return;
+  }
   await replyOfficial(api, sessionID, requestID, allowed ? "once" : "reject");
 }
 
@@ -37,28 +40,43 @@ function stringValue(value) {
 
 async function showConfirm(api, message) {
   const ui = api && api.ui;
-  if (!ui || !ui.dialog) {
-    return false;
+  const dialog = ui && ui.dialog;
+  const DialogConfirm = ui && ui.DialogConfirm;
+  if (!dialog || typeof dialog.replace !== "function" || typeof DialogConfirm !== "function") {
+    return undefined;
   }
-  const DialogConfirm = ui.DialogConfirm;
-  if (DialogConfirm && typeof DialogConfirm.show === "function") {
-    return (await DialogConfirm.show(ui.dialog, "RV · Ask", message)) === true;
+  const createComponent = await officialCreateComponent(ui);
+  if (typeof createComponent !== "function") {
+    return undefined;
   }
-  if (typeof DialogConfirm !== "function") {
-    return false;
+  if (typeof dialog.setSize === "function") {
+    dialog.setSize("medium");
   }
   return await new Promise((resolve) => {
-    ui.dialog.replace(
-      () =>
-        DialogConfirm({
-          title: "RV · Ask",
-          message,
-          onConfirm: () => resolve(true),
-          onCancel: () => resolve(false),
-        }),
-      () => resolve(false),
+    dialog.replace(() =>
+      createComponent(DialogConfirm, {
+        title: "RV · Ask",
+        message,
+        onConfirm: () => resolve(true),
+        onCancel: () => resolve(false),
+      }),
     );
   });
+}
+
+async function officialCreateComponent(ui) {
+  if (ui && typeof ui.createComponent === "function") {
+    return ui.createComponent;
+  }
+  try {
+    const solid = await import("solid-js");
+    if (solid && typeof solid.createComponent === "function") {
+      return solid.createComponent;
+    }
+  } catch {
+    // Server process has no Solid runtime. Leave the ask pending.
+  }
+  return undefined;
 }
 
 async function replyOfficial(api, sessionID, requestID, reply) {

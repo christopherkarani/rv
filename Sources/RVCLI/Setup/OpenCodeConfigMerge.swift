@@ -1,9 +1,10 @@
 import Foundation
 
-/// Merge / strip the owned OpenCode TUI Ask package in `opencode.json`.
-/// Official 1.18.18 file plugins cannot export both `server()` and `tui()`.
-/// The globbed `plugins/rv-guard-tui.js` is `{ server() }`. The Ask package
-/// exposes only `./tui` so the TUI runtime can paint DialogConfirm.
+/// Merge / strip the owned OpenCode TUI Ask package in `opencode.json` and
+/// `tui.json`. Official 1.18.18 TUI plugins load from `tui.json` only.
+/// File plugins cannot export both `server()` and `tui()`. The globbed
+/// `plugins/rv-guard-tui.js` is `{ server() }`. The Ask package exposes
+/// only `./tui` so the TUI runtime can paint DialogConfirm.
 enum OpenCodeConfigMerge {
     static func merge(existingData: Data?, pluginPath: String) throws -> (data: Data, wrote: Bool) {
         var root = try parseRoot(existingData)
@@ -90,11 +91,17 @@ enum OpenCodeTuiAskPackage {
     """
 
     static let tuiJS = """
+    import { createComponent } from "solid-js";
     import plugin from "../plugins/rv-guard-tui.js";
 
     export default {
       id: "rv-guard-tui-ask",
-      tui: plugin.server,
+      tui: async (api, options, meta) => {
+        if (api && api.ui) {
+          api.ui.createComponent = createComponent;
+        }
+        return plugin.server(api, options, meta);
+      },
     };
     """
 }

@@ -143,6 +143,9 @@ if (host === "opencode") {
   if (process.env.RV_PERMISSION_REPLY) {
     installOfficialPermission(ctx, process.env.RV_PERMISSION_REPLY);
   }
+  if (process.env.RV_TUI_PLUGIN) {
+    await loadTuiAskCompanion(ctx, process.env.RV_TUI_PLUGIN, process.env.RV_TUI_CLICK);
+  }
   const plugin = await mod.RvGuard(ctx);
   const keys = Object.keys(plugin);
   ctx.pluginEvent = plugin.event;
@@ -165,6 +168,7 @@ if (host === "opencode") {
         permissionCreates: ctx.permissionCreates ?? 0,
         permissionGets: ctx.permissionGets ?? 0,
         permissionReply204: ctx.permissionReply204 ?? null,
+        tuiDialogTitle: ctx.tuiDialogTitle ?? null,
       })
     );
   } catch (error) {
@@ -175,15 +179,64 @@ if (host === "opencode") {
         permissionCreates: ctx.permissionCreates ?? 0,
         permissionGets: ctx.permissionGets ?? 0,
         permissionReply204: ctx.permissionReply204 ?? null,
+        tuiDialogTitle: ctx.tuiDialogTitle ?? null,
       })
     );
   }
   process.exit(0);
 }
 
+async function loadTuiAskCompanion(ctx, pluginPath, click) {
+  const { pathToFileURL: toURL } = await import("node:url");
+  const tuiMod = await import(toURL(pluginPath).href);
+  const handlers = new Map();
+  let painted = null;
+  const dialog = {
+    size: "medium",
+    setSize(size) {
+      this.size = size;
+    },
+    replace(input) {
+      const element = typeof input === "function" ? input() : input;
+      this.replaced = element;
+    },
+  };
+  function DialogConfirm(props) {
+    painted = {
+      title: props && props.title,
+      message: props && props.message,
+      onConfirm: props && props.onConfirm,
+      onCancel: props && props.onCancel,
+    };
+    ctx.tuiDialogTitle = painted.title;
+    return painted;
+  }
+  const api = {
+    event: {
+      on(type, handler) {
+        handlers.set(type, handler);
+        return () => handlers.delete(type);
+      },
+    },
+    ui: { dialog, DialogConfirm },
+    client: ctx.client,
+  };
+  if (typeof tuiMod.default?.server === "function") {
+    await tuiMod.default.server(api);
+  }
+  ctx.tuiAsked = handlers.get("permission.v2.asked");
+  ctx.tuiClick = click;
+  ctx.tuiPainted = () => painted;
+}
+
 function installOfficialPermission(ctx, reply) {
   const fetchOnly = reply.startsWith("fetch-");
-  const effectReply = fetchOnly ? reply.slice("fetch-".length) : reply;
+  const tuiClick = reply.startsWith("tui-click-") ? reply.slice("tui-click-".length) : undefined;
+  const effectReply = fetchOnly
+    ? reply.slice("fetch-".length)
+    : tuiClick
+      ? "ask"
+      : reply;
   const requestID = "per_test";
   const subscribeMode = process.env.RV_PERMISSION_SUBSCRIBE ?? "ok";
   ctx.permissionCreates = 0;
@@ -242,7 +295,7 @@ function installOfficialPermission(ctx, reply) {
   const session = ctx.client.session ?? {};
   if (!fetchOnly) {
     session.permission = {
-      async create() {
+      async create(input) {
         recordCreate();
         if (effectReply === "allow") {
           return { data: { id: requestID, effect: "allow" } };
@@ -253,7 +306,43 @@ function installOfficialPermission(ctx, reply) {
         if (official204 && confirmReply) {
           scheduleOfficialConfirm(confirmReply);
         }
+        if (tuiClick && typeof ctx.tuiAsked === "function") {
+          const sessionID =
+            (input && input.sessionID) ||
+            (input && input.path && input.path.sessionID) ||
+            "ses_1";
+          const asked = ctx.tuiAsked({
+            type: "permission.v2.asked",
+            properties: {
+              id: requestID,
+              sessionID,
+              metadata: (input && input.metadata) || { rv: true },
+            },
+          });
+          const clickPainted = async () => {
+            for (let i = 0; i < 40; i++) {
+              const painted = typeof ctx.tuiPainted === "function" ? ctx.tuiPainted() : null;
+              if (painted) {
+                if (tuiClick === "once" && typeof painted.onConfirm === "function") {
+                  painted.onConfirm();
+                } else if (tuiClick === "reject" && typeof painted.onCancel === "function") {
+                  painted.onCancel();
+                }
+                return;
+              }
+              await new Promise((resolve) => setTimeout(resolve, 5));
+            }
+          };
+          void clickPainted();
+          void asked;
+        }
         return { data: { id: requestID, effect: "ask" } };
+      },
+      async reply(input) {
+        const replyValue = input && typeof input.reply === "string" ? input.reply : undefined;
+        if (replyValue) {
+          deliverOfficialConfirm(replyValue);
+        }
       },
     };
   }

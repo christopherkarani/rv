@@ -21,6 +21,7 @@ struct OwnedPaths: Equatable, Sendable {
     var openCodeTuiPlugin: String { home.rawValue + "/.config/opencode/plugins/rv-guard-tui.js" }
     var openCodeTuiAskPackage: String { home.rawValue + "/.config/opencode/rv-guard-tui-ask" }
     var openCodeConfig: String { home.rawValue + "/.config/opencode/opencode.json" }
+    var openCodeTuiConfig: String { home.rawValue + "/.config/opencode/tui.json" }
     var claudeDirectory: String { home.rawValue + "/.claude" }
     var claudeSettings: String { home.rawValue + "/.claude/settings.json" }
     var openClawDirectory: String { home.rawValue + "/.openclaw" }
