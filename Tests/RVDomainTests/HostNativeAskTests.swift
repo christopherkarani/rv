@@ -86,4 +86,93 @@ struct HostNativeAskTests {
             bridge.resolve(host: .opencode, continuation: .hostNative, decision: .deny) == .deny
         )
     }
+
+    @Test func hookBound_emptyEffectsPackAllow_isAllow() {
+        let action = HostNativeAskFixtures.emptyEffects(command: "git status")
+        let result = EvaluationResult(
+            outcome: .plain,
+            matchingView: MatchingView("git status")
+        )
+
+        #expect(HostNativeAsk.hookBound(result: result, action: action) == .allow)
+    }
+
+    @Test func hookBound_emptyEffectsPackDeny_staysDeny() {
+        let action = HostNativeAskFixtures.emptyEffects(command: "git reset --hard")
+        let result = EvaluationResult(
+            outcome: .deny(packDeny, matched: nil),
+            matchingView: MatchingView("git reset --hard")
+        )
+
+        #expect(HostNativeAsk.hookBound(result: result, action: action) == .deny(packDeny))
+    }
+
+    @Test func hookBound_remoteMutationOnPrivateBranch_requiresHuman() {
+        let action = HostNativeAskFixtures.remoteMutation(branchName: "topic")
+        let result = EvaluationResult(
+            outcome: .plain,
+            matchingView: MatchingView("git push --force origin topic")
+        )
+
+        #expect(
+            HostNativeAsk.hookBound(result: result, action: action)
+                == .mandatoryHuman(ActionPolicyEngine.Builtin.remoteBranchAsk)
+        )
+    }
+
+    @Test func hookBound_workingTreeDiscard_isDenied() {
+        let action = HostNativeAskFixtures.workingTreeDiscard(command: "git checkout -- file.swift")
+        let result = EvaluationResult(
+            outcome: .plain,
+            matchingView: MatchingView("git checkout -- file.swift")
+        )
+
+        #expect(
+            HostNativeAsk.hookBound(result: result, action: action)
+                == .deny(ActionPolicyEngine.Builtin.workingTreeDiscard)
+        )
+    }
+}
+
+private enum HostNativeAskFixtures {
+    static func emptyEffects(command: String) -> ProposedAction {
+        .shell(
+            ShellAction(
+                fingerprint: ActionFingerprint(rawValue: "shell:host-native-ask"),
+                scope: ActionScope(
+                    workingDirectory: WorkingDirectory(validating: "/tmp/rv")
+                ),
+                supportingCommand: ShellCommand(rawValue: command)
+            )
+        )
+    }
+
+    static func remoteMutation(branchName: String) -> ProposedAction {
+        .shell(
+            ShellAction(
+                fingerprint: ActionFingerprint(rawValue: "shell:remote-mutation:\(branchName)"),
+                effects: ActionEffects(kinds: [.remoteSharedBranchMutation]),
+                resources: ActionResources(remoteName: "origin", branchName: branchName),
+                scope: ActionScope(
+                    workingDirectory: WorkingDirectory(validating: "/tmp/rv")
+                ),
+                supportingCommand: ShellCommand(
+                    rawValue: "git push --force origin \(branchName)"
+                )
+            )
+        )
+    }
+
+    static func workingTreeDiscard(command: String) -> ProposedAction {
+        .shell(
+            ShellAction(
+                fingerprint: ActionFingerprint(rawValue: "shell:working-tree-discard"),
+                effects: ActionEffects(kinds: [.workingTreeDiscard]),
+                scope: ActionScope(
+                    workingDirectory: WorkingDirectory(validating: "/tmp/rv")
+                ),
+                supportingCommand: ShellCommand(rawValue: command)
+            )
+        )
+    }
 }

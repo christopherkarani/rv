@@ -100,6 +100,35 @@ public enum HostNativeAsk {
         }
     }
 
+    /// Projects hard policy onto the hook-live review boundary.
+    /// Uncovered actions remain quiet on the hook door until typed effects are
+    /// available; shadow review owns the separate review-eligible projection.
+    public static func hookBound(_ decision: HardPolicyDecision) -> BoundReview {
+        switch decision {
+        case .hardAllow:
+            return .allow
+        case .hardDeny(let deny):
+            return .deny(deny)
+        case .mandatoryHuman(let deny):
+            return .mandatoryHuman(deny)
+        case .reviewEligible:
+            return .allow
+        }
+    }
+
+    /// Evaluates a proposed action with the pack result as its fallback, then
+    /// projects that hard decision onto the hook-live review boundary.
+    public static func hookBound(
+        result: EvaluationResult,
+        action: ProposedAction
+    ) -> BoundReview {
+        let verdict = ActionPolicyEngine.evaluate(
+            action: action,
+            policy: EffectiveActionPolicy(packFallback: PackFallback(result))
+        )
+        return hookBound(verdict.decision)
+    }
+
     /// A leftover unused ask token is never a permit.
     public static func leftoverAskIsPermit(_ unused: String) -> Bool {
         _ = unused
