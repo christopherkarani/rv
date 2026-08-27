@@ -38,20 +38,6 @@ public struct OpenClawHostCodec: HostCodec {
         )
     }
 
-    /// Maps a decoded OpenClaw request to `ProposedAction.shell`.
-    /// Session and cwd stay on the request and in the fingerprint until IR owns construction.
-    public func proposedAction(from request: HookRequest) -> ProposedAction {
-        let fingerprint = ActionFingerprint(
-            rawValue: "openclaw:\(request.session ?? ""):\(request.cwd?.rawValue ?? ""):\(request.command.rawValue)"
-        )
-        return .shell(
-            ShellAction(
-                fingerprint: fingerprint,
-                scope: ActionScope(workingDirectory: request.cwd),
-                supportingCommand: request.command
-            )
-        )
-    }
 }
 
 private struct OpenClawEnvelope: Decodable {

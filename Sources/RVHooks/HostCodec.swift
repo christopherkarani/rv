@@ -58,12 +58,30 @@ public struct HookWire: Equatable, Sendable {
 public protocol HostCodec: Sendable {
     var host: HookHost { get }
     func decode(_ stdin: String) -> HookDecodeOutcome
+    func proposedAction(from request: HookRequest) -> ProposedAction
     func encodeAllow() -> HookWire
     func encodeDeny(reason: String, rule: String?, next: String?) -> HookWire
     func encodeAsk(reason: String, rule: String?, next: String?) -> HookWire
 }
 
 extension HostCodec {
+    /// Maps a decoded request to an empty-effect shell action.
+    ///
+    /// Command text remains supporting evidence while the request's host,
+    /// session, and working directory make up the stable fingerprint.
+    public func proposedAction(from request: HookRequest) -> ProposedAction {
+        let fingerprint = ActionFingerprint(
+            rawValue: "\(host.rawValue):\(request.session ?? ""):\(request.cwd?.rawValue ?? ""):\(request.command.rawValue)"
+        )
+        return .shell(
+            ShellAction(
+                fingerprint: fingerprint,
+                scope: ActionScope(workingDirectory: request.cwd),
+                supportingCommand: request.command
+            )
+        )
+    }
+
     /// Returns empty stdout and exit 0.
     public func encodeAllow() -> HookWire {
         HookWire(stdout: "", exitCode: 0)
