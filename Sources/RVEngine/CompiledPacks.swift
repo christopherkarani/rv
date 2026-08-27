@@ -17,12 +17,35 @@ public struct CompiledPack<Compiled: Sendable>: Sendable {
 }
 
 public struct CompiledPacks<Compiled: Sendable>: Sendable {
-    public var packs: [CompiledPack<Compiled>]
+    public var packs: [CompiledPack<Compiled>] {
+        didSet {
+            packIndices = Self.makePackIndices(for: packs)
+        }
+    }
     public var quarantined: [RuleID]
+    private var packIndices: [PackID: Int]
 
     public init(packs: [CompiledPack<Compiled>], quarantined: [RuleID] = []) {
         self.packs = packs
         self.quarantined = quarantined
+        self.packIndices = Self.makePackIndices(for: packs)
+    }
+
+    /// Returns the first compiled pack for an ID, preserving the source order
+    /// when malformed input contains duplicate pack IDs.
+    func packIndex(for id: PackID) -> Int? {
+        packIndices[id]
+    }
+
+    private static func makePackIndices(for packs: [CompiledPack<Compiled>]) -> [PackID: Int] {
+        var indices: [PackID: Int] = [:]
+        indices.reserveCapacity(packs.count)
+        for (index, pack) in packs.enumerated() {
+            if indices[pack.snapshot.id] == nil {
+                indices[pack.snapshot.id] = index
+            }
+        }
+        return indices
     }
 
     public static func compile<E: PatternEngine>(

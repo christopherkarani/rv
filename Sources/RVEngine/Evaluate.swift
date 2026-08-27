@@ -38,14 +38,14 @@ public func evaluate<E: PatternEngine>(
 
     var attempts = 0
     let budget = request.budget?.maxPatternAttempts
-    let compiledEnabled = enabledCompiled(from: compiled, enabledIDs: request.enabledPacks)
 
     let segments = splitSegments(matchingView.rawValue)
     if segments.count > 1 {
         for segment in segments {
             let result = evaluateSingle(
                 segment,
-                compiled: compiledEnabled,
+                compiled: compiled,
+                enabledIDs: request.enabledPacks,
                 patterns: patterns,
                 attempts: &attempts,
                 budget: budget
@@ -58,7 +58,8 @@ public func evaluate<E: PatternEngine>(
 
     if let result = evaluateSingle(
         matchingView.rawValue,
-        compiled: compiledEnabled,
+        compiled: compiled,
+        enabledIDs: request.enabledPacks,
         patterns: patterns,
         attempts: &attempts,
         budget: budget
@@ -150,14 +151,6 @@ private func enabledPacks(from packs: [PackSnapshot], enabledIDs: [PackID]) -> [
     return enabledIDs.compactMap { byID[$0] }
 }
 
-private func enabledCompiled<Compiled: Sendable>(
-    from compiled: CompiledPacks<Compiled>,
-    enabledIDs: [PackID]
-) -> [CompiledPack<Compiled>] {
-    let byID = Dictionary(uniqueKeysWithValues: compiled.packs.map { ($0.snapshot.id, $0) })
-    return enabledIDs.compactMap { byID[$0] }
-}
-
 private func isTerminal(_ outcome: EvaluationOutcome) -> Bool {
     switch outcome {
     case .deny, .indeterminate:
@@ -169,7 +162,8 @@ private func isTerminal(_ outcome: EvaluationOutcome) -> Bool {
 
 private func evaluateSingle<E: PatternEngine>(
     _ view: String,
-    compiled: [CompiledPack<E.Compiled>],
+    compiled: CompiledPacks<E.Compiled>,
+    enabledIDs: [PackID],
     patterns: E,
     attempts: inout Int,
     budget: Int?
@@ -177,7 +171,9 @@ private func evaluateSingle<E: PatternEngine>(
     var remembered: RuleMatch?
     var lastSafe: SafeMatch?
 
-    for pack in compiled {
+    for enabledID in enabledIDs {
+        guard let index = compiled.packIndex(for: enabledID) else { continue }
+        let pack = compiled.packs[index]
         let keywordHit = pack.snapshot.keywords.contains { QuickReject.keywordHits($0, in: view) }
         let forceFilesystem =
             pack.snapshot.id == .coreFilesystem && QuickReject.containsEmptyParenPair(view)
