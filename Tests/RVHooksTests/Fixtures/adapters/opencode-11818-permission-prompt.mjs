@@ -28,10 +28,12 @@ export function officialPermissionPrompt(request, replyFn) {
       }
       const reply = store.selected;
       if (typeof replyFn === "function") {
+        // Live PermissionPrompt Return omits sessionID. The TUI companion
+        // must recover it from the official asked row.
         void replyFn({
           reply,
           requestID: request && request.id,
-          sessionID: request && request.sessionID,
+          directory: request && request.directory,
         });
       }
     },

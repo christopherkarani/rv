@@ -5,7 +5,10 @@ import Foundation
 /// File plugins cannot export both `server()` and `tui()`. The globbed
 /// `plugins/rv-guard-tui.js` is `{ server() }`. The Ask package exposes
 /// only `./tui` so leftover custom DialogConfirm installs are replaced.
-/// Live Ask is official `permission.create` + host PermissionPrompt Return.
+/// Live 1.18.18 TUI sync only mounts host PermissionPrompt on the V1
+/// asked event. The TUI companion adapts `permission.v2.asked` onto
+/// that official bus (`@opencode-ai/tui/context/sdk` emit) so Return
+/// is host PermissionPrompt, not a custom dialog.
 enum OpenCodeConfigMerge {
     static func merge(existingData: Data?, pluginPath: String) throws -> (data: Data, wrote: Bool) {
         var root = try parseRoot(existingData)

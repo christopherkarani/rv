@@ -1,3 +1,5 @@
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { officialDialogConfirm, resetOfficialDialogConfirm } from "./opencode-11818-dialog-confirm.mjs";
 import {
@@ -175,6 +177,7 @@ if (host === "opencode") {
         permissionGets: ctx.permissionGets ?? 0,
         permissionReply204: ctx.permissionReply204 ?? null,
         tuiDialogTitle: ctx.tuiDialogTitle ?? null,
+        tuiPaintSource: ctx.tuiPaintSource ?? null,
       })
     );
   } catch (error) {
@@ -186,6 +189,7 @@ if (host === "opencode") {
         permissionGets: ctx.permissionGets ?? 0,
         permissionReply204: ctx.permissionReply204 ?? null,
         tuiDialogTitle: ctx.tuiDialogTitle ?? null,
+        tuiPaintSource: ctx.tuiPaintSource ?? null,
       })
     );
   }
@@ -228,10 +232,87 @@ function officialKeymap() {
   };
 }
 
+function createOfficialTuiEventBus() {
+  const handlers = [];
+  return {
+    on(type, handler) {
+      const wrapped = (payload) => {
+        if (payload && payload.type === type) {
+          handler(payload);
+        }
+      };
+      handlers.push(wrapped);
+      return () => {
+        const index = handlers.indexOf(wrapped);
+        if (index >= 0) {
+          handlers.splice(index, 1);
+        }
+      };
+    },
+    emit(payload) {
+      for (const handler of [...handlers]) {
+        handler(payload);
+      }
+    },
+  };
+}
+
+function installFakeTuiSdk(root, bus, client) {
+  const pkg = join(root, "node_modules", "@opencode-ai", "tui");
+  mkdirSync(join(pkg, "context"), { recursive: true });
+  writeFileSync(
+    join(pkg, "package.json"),
+    JSON.stringify({
+      name: "@opencode-ai/tui",
+      type: "module",
+      exports: { "./context/sdk": "./context/sdk.js" },
+    }),
+  );
+  writeFileSync(
+    join(pkg, "context", "sdk.js"),
+    `export function useSDK() {
+  return {
+    directory: "/tmp",
+    event: {
+      emit(_type, event) {
+        const payload = event && event.payload ? event.payload : event;
+        if (typeof globalThis.__rvEmitTuiPayload === "function") {
+          globalThis.__rvEmitTuiPayload(payload);
+        }
+      },
+    },
+    get client() {
+      return globalThis.__rvTuiClient;
+    },
+  };
+}
+`,
+  );
+  globalThis.__rvTuiClient = client;
+  globalThis.__rvEmitTuiPayload = (payload) => bus.emit(payload);
+}
+
+function installOfficialTuiSync(ctx, bus) {
+  const asked = ["permission", "asked"].join(".");
+  bus.on(asked, (payload) => {
+    const request = payload && payload.properties;
+    resetOfficialPermissionPrompt();
+    const prompt = officialPermissionPrompt(request, (input) => {
+      const fn = ctx.client && ctx.client.permission && ctx.client.permission.reply;
+      if (typeof fn === "function") {
+        return fn(input);
+      }
+    });
+    ctx.tuiDialogTitle = prompt.title;
+    ctx.tuiPainted = () => prompt;
+    ctx.tuiPaintSource = asked;
+  });
+}
+
 async function loadTuiAskCompanion(ctx, pluginPath, click) {
   const { pathToFileURL: toURL } = await import("node:url");
   const tuiMod = await import(toURL(pluginPath).href);
-  const handlers = new Map();
+  const bus = createOfficialTuiEventBus();
   const keymap = officialKeymap();
   officialKeymap.handleCount = 0;
   resetOfficialDialogConfirm();
@@ -263,23 +344,36 @@ async function loadTuiAskCompanion(ctx, pluginPath, click) {
   function DialogConfirm(props) {
     return officialDialogConfirm(props, dialog);
   }
+  installOfficialTuiSync(ctx, bus);
+  if (process.env.RV_TUI_PAINT !== "0") {
+    installFakeTuiSdk(dirname(pluginPath), bus, ctx.client);
+  }
   const api = {
     keymap,
     event: {
       on(type, handler) {
-        handlers.set(type, handler);
-        return () => handlers.delete(type);
+        return bus.on(type, handler);
       },
     },
     ui: { dialog, DialogConfirm },
     client: ctx.client,
+    slots: {
+      register(plugin) {
+        if (plugin && plugin.slots && typeof plugin.slots.app === "function") {
+          plugin.slots.app();
+        }
+        return () => {};
+      },
+    },
   };
   if (typeof tuiMod.default?.server === "function") {
     await tuiMod.default.server(api);
   }
-  ctx.tuiAsked = handlers.get("permission.v2.asked");
+  ctx.tuiEmit = (payload) => bus.emit(payload);
   ctx.tuiClick = click;
-  ctx.tuiPainted = () => painted;
+  if (typeof ctx.tuiPainted !== "function") {
+    ctx.tuiPainted = () => painted;
+  }
   ctx.tuiKeymap = keymap;
 }
 
@@ -360,38 +454,31 @@ function installOfficialPermission(ctx, reply) {
         if (official204 && confirmReply) {
           scheduleOfficialConfirm(confirmReply);
         }
-        if (tuiClick) {
-          resetOfficialPermissionPrompt();
+        if (tuiClick || process.env.RV_TUI_PAINT === "0") {
           const sessionID =
             (input && input.sessionID) ||
             (input && input.path && input.path.sessionID) ||
             "ses_1";
-          const prompt = officialPermissionPrompt(
-            { id: requestID, sessionID },
-            (payload) => {
-              const fn = ctx.client && ctx.client.permission && ctx.client.permission.reply;
-              if (typeof fn === "function") {
-                return fn(payload);
-              }
-            },
-          );
-          ctx.tuiDialogTitle = prompt.title;
-          ctx.tuiPainted = () => prompt;
-          if (typeof ctx.tuiAsked === "function") {
-            void ctx.tuiAsked({
+          if (typeof ctx.tuiEmit === "function") {
+            ctx.tuiEmit({
               type: "permission.v2.asked",
               properties: {
                 id: requestID,
                 sessionID,
+                action: (input && input.action) || "external_directory",
+                resources: (input && input.resources) || ["/rv-ask"],
                 metadata: (input && input.metadata) || { rv: true },
               },
             });
           }
-          if (tuiClick === "once") {
-            prompt.key("return");
-          } else if (tuiClick === "reject") {
-            prompt.key("left");
-            prompt.key("return");
+          const prompt = typeof ctx.tuiPainted === "function" ? ctx.tuiPainted() : undefined;
+          if (prompt && typeof prompt.key === "function") {
+            if (tuiClick === "once") {
+              prompt.key("return");
+            } else if (tuiClick === "reject") {
+              prompt.key("left");
+              prompt.key("return");
+            }
           }
         }
         return { data: { id: requestID, effect: "ask" } };
