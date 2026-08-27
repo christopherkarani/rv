@@ -111,6 +111,9 @@ private func runOpenCodePluginContract(_ source: String) async throws -> OpenCod
     #expect(tui.contains("RV · Ask"))
     #expect(tui.contains("permission.ask") == false)
     #expect(tui.contains("server:"))
+    #expect(source.contains("pollOfficialPermissionReply"))
+    #expect(source.contains("RV_ASK_TIMEOUT_MS"))
+    #expect(source.contains("attempt < 40") == false)
 }
 
 @Test func openCodeTuiPlugin_defaultExportsServerAndLoadsOnOpenCode11818() async throws {
@@ -475,10 +478,77 @@ private func runOpenCodePluginContract(_ source: String) async throws -> OpenCod
         stub: .stdout(askResetHardJSON, exit: 1),
         permissionReply: "absent",
         permissionSubscribe: "throw",
+        askTimeoutMs: 400,
         secondStub: .stdout("", exit: 0)
     )
     #expect(result.threw == resetHardReason)
     #expect(result.permissionCreates == 1)
+    #expect(result.spawnCount == 1)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
+}
+
+@Test func openCodeAdapter_sessionShellEnvOfficialPollSurvivesFirstHTTPMiss() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: [
+            "hook": "shell.env",
+            "cwd": "/tmp/ws",
+            "sessionID": "ses_1",
+            "callID": "call_1",
+            "command": "git reset --hard",
+        ],
+        stub: .stdout(askResetHardJSON, exit: 1),
+        permissionReply: "miss-then-once",
+        permissionSubscribe: "throw",
+        secondStub: .stdout("", exit: 0)
+    )
+    #expect(result.threw == nil)
+    #expect(result.permissionCreates == 1)
+    #expect(result.permissionGets >= 2)
+    #expect(result.spawnCount == 2)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
+    #expect(result.toastCount == 0)
+}
+
+@Test func openCodeAdapter_sessionShellEnvOfficialPollWaitsForLateTUIYes() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: [
+            "hook": "shell.env",
+            "cwd": "/tmp/ws",
+            "sessionID": "ses_1",
+            "callID": "call_1",
+            "command": "git reset --hard",
+        ],
+        stub: .stdout(askResetHardJSON, exit: 1),
+        permissionReply: "late-once",
+        permissionSubscribe: "missing",
+        permissionLateMs: 1500,
+        secondStub: .stdout("", exit: 0)
+    )
+    #expect(result.threw == nil)
+    #expect(result.permissionCreates == 1)
+    #expect(result.spawnCount == 2)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
+    #expect(result.lastStdin?.contains("git reset --hard") == true)
+    #expect(result.toastCount == 0)
+}
+
+@Test func openCodeAdapter_sessionShellEnvOfficialPollLateRejectStillThrows() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: [
+            "hook": "shell.env",
+            "cwd": "/tmp/ws",
+            "sessionID": "ses_1",
+            "callID": "call_1",
+            "command": "git reset --hard",
+        ],
+        stub: .stdout(askResetHardJSON, exit: 1),
+        permissionReply: "miss-then-reject",
+        permissionSubscribe: "throw",
+        secondStub: .stdout("", exit: 0)
+    )
+    #expect(result.threw == resetHardReason)
+    #expect(result.permissionCreates == 1)
+    #expect(result.permissionGets >= 2)
     #expect(result.spawnCount == 1)
     #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
 }
@@ -1025,6 +1095,7 @@ private struct OpenCodeAdapterRun {
     var toastMessage: String?
     var toastVariant: String?
     var permissionCreates: Int
+    var permissionGets: Int
 }
 
 private struct OpenCodePluginContract {
@@ -1122,6 +1193,8 @@ private func runOpenCodeAdapter(
     resolutionAllow: Bool = false,
     permissionReply: String? = nil,
     permissionSubscribe: String? = nil,
+    permissionLateMs: Int? = nil,
+    askTimeoutMs: Int? = nil,
     secondStub: StubRV? = nil,
     sessionMessages: [String: Any]? = nil
 ) async throws -> OpenCodeAdapterRun {
@@ -1139,6 +1212,8 @@ private func runOpenCodeAdapter(
         resolutionAllow: resolutionAllow,
         permissionReply: permissionReply,
         permissionSubscribe: permissionSubscribe,
+        permissionLateMs: permissionLateMs,
+        askTimeoutMs: askTimeoutMs,
         secondStub: secondStub,
         sessionMessages: sessionMessages
     )
@@ -1153,7 +1228,8 @@ private func runOpenCodeAdapter(
         toastTitle: toast?["title"] as? String,
         toastMessage: toast?["message"] as? String,
         toastVariant: toast?["variant"] as? String,
-        permissionCreates: object["permissionCreates"] as? Int ?? 0
+        permissionCreates: object["permissionCreates"] as? Int ?? 0,
+        permissionGets: object["permissionGets"] as? Int ?? 0
     )
 }
 
@@ -1191,6 +1267,8 @@ private func runAdapter(
     resolutionAllow: Bool = false,
     permissionReply: String? = nil,
     permissionSubscribe: String? = nil,
+    permissionLateMs: Int? = nil,
+    askTimeoutMs: Int? = nil,
     secondStub: StubRV? = nil,
     sessionMessages: [String: Any]? = nil
 ) async throws -> AdapterPayload {
@@ -1254,6 +1332,12 @@ private func runAdapter(
             with: "const RV_TOAST_TIMEOUT_MS = \(toastTimeoutMs);"
         )
     }
+    if let askTimeoutMs {
+        source = source.replacingOccurrences(
+            of: "const RV_ASK_TIMEOUT_MS = 120000;",
+            with: "const RV_ASK_TIMEOUT_MS = \(askTimeoutMs);"
+        )
+    }
     let adapter = root.appendingPathComponent("adapter.mjs")
     try source.write(to: adapter, atomically: true, encoding: .utf8)
 
@@ -1289,6 +1373,9 @@ private func runAdapter(
     }
     if let permissionSubscribe {
         environment["RV_PERMISSION_SUBSCRIBE"] = permissionSubscribe
+    }
+    if let permissionLateMs {
+        environment["RV_PERMISSION_LATE_MS"] = String(permissionLateMs)
     }
     if let sessionMessages {
         let data = try JSONSerialization.data(withJSONObject: sessionMessages)

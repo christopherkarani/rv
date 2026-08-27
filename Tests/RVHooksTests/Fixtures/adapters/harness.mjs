@@ -162,6 +162,7 @@ if (host === "opencode") {
         threw: null,
         toasts,
         permissionCreates: ctx.permissionCreates ?? 0,
+        permissionGets: ctx.permissionGets ?? 0,
       })
     );
   } catch (error) {
@@ -170,6 +171,7 @@ if (host === "opencode") {
         threw: error instanceof Error ? error.message : String(error),
         toasts,
         permissionCreates: ctx.permissionCreates ?? 0,
+        permissionGets: ctx.permissionGets ?? 0,
       })
     );
   }
@@ -182,9 +184,18 @@ function installOfficialPermission(ctx, reply) {
   const requestID = "per_test";
   const subscribeMode = process.env.RV_PERMISSION_SUBSCRIBE ?? "ok";
   ctx.permissionCreates = 0;
+  ctx.permissionGets = 0;
+  ctx.permissionStarted = Date.now();
   const recordCreate = () => {
     ctx.permissionCreates = (ctx.permissionCreates ?? 0) + 1;
   };
+  const lateMs = Number(process.env.RV_PERMISSION_LATE_MS ?? 0);
+  const pollReply =
+    effectReply === "miss-then-once" || effectReply === "late-once"
+      ? "once"
+      : effectReply === "miss-then-reject"
+        ? "reject"
+        : effectReply;
   const session = ctx.client.session ?? {};
   if (!fetchOnly) {
     session.permission = {
@@ -195,9 +206,6 @@ function installOfficialPermission(ctx, reply) {
         }
         if (effectReply === "deny") {
           return { data: { id: requestID, effect: "deny" } };
-        }
-        if (effectReply === "absent") {
-          return { data: { id: requestID, effect: "ask" } };
         }
         return { data: { id: requestID, effect: "ask" } };
       },
@@ -265,8 +273,36 @@ function installOfficialPermission(ctx, reply) {
       href.includes(`/permission/${requestID}`) &&
       method === "GET"
     ) {
+      ctx.permissionGets = (ctx.permissionGets ?? 0) + 1;
       if (effectReply === "absent") {
         return { ok: false, status: 404, async json() { return {}; } };
+      }
+      if (effectReply === "miss-then-once" || effectReply === "miss-then-reject") {
+        if (ctx.permissionGets === 1) {
+          return { ok: false, status: 404, async json() { return {}; } };
+        }
+        return {
+          ok: true,
+          async json() {
+            return { data: { id: requestID, reply: pollReply } };
+          },
+        };
+      }
+      if (effectReply === "late-once") {
+        if (Date.now() - ctx.permissionStarted < lateMs) {
+          return {
+            ok: true,
+            async json() {
+              return { data: { id: requestID, effect: "ask" } };
+            },
+          };
+        }
+        return {
+          ok: true,
+          async json() {
+            return { data: { id: requestID, reply: "once" } };
+          },
+        };
       }
       if (effectReply === "once" || effectReply === "always" || effectReply === "reject") {
         return {

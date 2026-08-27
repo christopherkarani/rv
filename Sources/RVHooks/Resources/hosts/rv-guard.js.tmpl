@@ -243,24 +243,21 @@ async function pollOfficialPermissionReply(ctx, requestID, sessionID) {
     return false;
   }
   const url = new URL(`api/session/${sessionID}/permission/${requestID}`, base);
-  for (let attempt = 0; attempt < 40; attempt += 1) {
+  const deadline = Date.now() + RV_ASK_TIMEOUT_MS;
+  while (Date.now() < deadline) {
     try {
       const response = await fetch(url);
-      if (!response || response.ok === false) {
-        return false;
-      }
-      const row = unwrapPermissionCreate(await response.json());
-      if (!row) {
-        return false;
-      }
-      if (row.reply === "once" || row.reply === "always") {
-        return true;
-      }
-      if (row.reply === "reject" || row.reply === "deny") {
-        return false;
+      if (response && response.ok !== false) {
+        const row = unwrapPermissionCreate(await response.json());
+        if (row && (row.reply === "once" || row.reply === "always")) {
+          return true;
+        }
+        if (row && (row.reply === "reject" || row.reply === "deny")) {
+          return false;
+        }
       }
     } catch {
-      return false;
+      // HTTP miss / network: keep waiting for a human DialogConfirm reply.
     }
     await new Promise((resolve) => {
       setTimeout(resolve, 25);
