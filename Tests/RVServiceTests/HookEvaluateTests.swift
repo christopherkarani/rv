@@ -57,7 +57,7 @@ struct HookEvaluateTests {
     }
 
     /// Warm-rvd hook evaluation must resolve packs through the same door as
-    /// the rv-cli miss path (`EnabledPacks.resolve`), never a hardcoded
+    /// the rv-cli miss path (`EvaluationWorld.walkedPackIDs`), never a hardcoded
     /// day-one set: a config that disables `core.git` must allow here, or
     /// warm and cold rvd would decide the same command differently.
     @Test func hookEvaluate_resolvesPacksFromConfig_notDayOne() async throws {
