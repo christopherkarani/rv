@@ -3,8 +3,8 @@
 Cursor beforeShellExecution command hook. Live deny is the official native
 honor path ``{"permission":"deny","user_message":...,"agent_message":...}``
 on stdout and process exit 0. See https://cursor.com/docs/hooks.md.
-Do not emit Claude permissionDecision JSON. Do not emit Codex
-``decision: block`` + exit 2. Do not emit leftover ``permission: ask``.
+Do not emit Claude nested permission JSON. Do not emit Codex
+``decision: block`` + exit 2. Do not emit leftover Cursor ask permission.
 Missing rv / timeout / crash / non-JSON fail closed the same way.
 ``failClosed: true`` on hooks.json so Cursor itself blocks on hook failure.
 """

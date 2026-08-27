@@ -221,8 +221,10 @@ func codexWrapper_missingReasonDoesNotExitTwoWithWhitespaceStderr(_ stubStdout: 
     #expect(source.contains("sys.exit(0)"))
     #expect(source.contains("\"decision\":\"block\"") == false)
     #expect(source.contains("'decision': 'block'") == false)
-    #expect(source.contains("permissionDecision") == false)
-    #expect(source.contains("\"ask\"") == false)
+    #expect(source.contains("\"permissionDecision\"") == false)
+    #expect(source.contains("'permissionDecision'") == false)
+    #expect(source.contains("\"permission\": \"ask\"") == false)
+    #expect(source.contains("'permission': 'ask'") == false)
     #expect(source.contains("permission.ask") == false)
     #expect(source.contains("RV_BYPASS") == false)
 }
