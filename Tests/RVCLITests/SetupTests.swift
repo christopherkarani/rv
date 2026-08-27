@@ -151,21 +151,23 @@ private func fixtureLoginHome() throws -> URL {
         let body = try String(contentsOfFile: layout.openCodePlugin, encoding: .utf8)
         #expect(body == (try HookHost.opencode.adapterResource().rendered(rvPath: "/tmp/rv-bin/rv")))
         let tui = try String(contentsOfFile: layout.openCodeTuiPlugin, encoding: .utf8)
-        #expect(tui.contains("DialogConfirm"))
         #expect(tui.contains("RV · Ask"))
         #expect(tui.contains("server:"))
         #expect(tui.contains("permission.ask") == false)
         #expect(tui.contains("DialogConfirm.show") == false)
         #expect(tui.contains("createComponent") == false)
-        #expect(tui.contains("registerLayer") == false)
+        #expect(tui.contains("onConfirm") == false)
+        #expect(tui.contains("registerLayer"))
         #expect(tui.contains("let active") == false)
         #expect(tui.contains("setSize"))
         let askTui = try String(
-            contentsOfFile: layout.openCodeTuiAskPackage + "/tui.js",
+            contentsOfFile: layout.openCodeTuiAskPackage + "/tui.tsx",
             encoding: .utf8
         )
         #expect(askTui.contains("createComponent") == false)
         #expect(askTui.contains("solid-js") == false)
+        #expect(askTui.contains("paintOfficialAsk"))
+        #expect(askTui.contains("OfficialAsk"))
         #expect(askTui.contains("plugin.server"))
         #expect(askTui.contains("permission.ask") == false)
         let config = try String(contentsOfFile: layout.openCodeConfig, encoding: .utf8)
@@ -176,6 +178,7 @@ private func fixtureLoginHome() throws -> URL {
         #expect(tuiConfig.contains("rv-guard-tui-ask"))
         #expect(askTui.contains("createComponent") == false)
         #expect(askTui.contains("solid-js") == false)
+        #expect(askTui.contains("paintOfficialAsk"))
         #expect(FileManager.default.fileExists(atPath: layout.grokHook) == false)
 
         let uninstall = SetupRun.uninstall(env(home: home, launchctl: launchctl))

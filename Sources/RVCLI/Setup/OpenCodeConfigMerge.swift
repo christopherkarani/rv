@@ -4,7 +4,7 @@ import Foundation
 /// `tui.json`. Official 1.18.18 TUI plugins load from `tui.json` only.
 /// File plugins cannot export both `server()` and `tui()`. The globbed
 /// `plugins/rv-guard-tui.js` is `{ server() }`. The Ask package exposes
-/// only `./tui` so the TUI runtime can paint DialogConfirm.
+/// only `./tui` so the TUI runtime can paint the official Ask.
 enum OpenCodeConfigMerge {
     static func merge(existingData: Data?, pluginPath: String) throws -> (data: Data, wrote: Bool) {
         var root = try parseRoot(existingData)
@@ -85,17 +85,45 @@ enum OpenCodeTuiAskPackage {
       "name": "rv-guard-tui-ask",
       "type": "module",
       "exports": {
-        "./tui": "./tui.js"
+        "./tui": "./tui.tsx"
       }
     }
     """
 
-    static let tuiJS = """
+    static let tuiTSX = """
+    /** @jsxImportSource @opentui/solid */
     import plugin from "../plugins/rv-guard-tui.js";
+
+    function OfficialAsk(props) {
+      const active = props.active;
+      return (
+        <box paddingLeft={2} paddingRight={2} gap={1}>
+          <text>{props.title}</text>
+          <text>{props.message}</text>
+          <box flexDirection="row" justifyContent="flex-end" gap={1}>
+            <box paddingLeft={1} paddingRight={1} onMouseUp={() => props.choose(false)}>
+              <text>{active === "cancel" ? "> cancel" : "cancel"}</text>
+            </box>
+            <box paddingLeft={1} paddingRight={1} onMouseUp={() => props.choose(true)}>
+              <text>{active === "confirm" ? "> confirm" : "confirm"}</text>
+            </box>
+          </box>
+        </box>
+      );
+    }
 
     export default {
       id: "rv-guard-tui-ask",
       tui: async (api, options, meta) => {
+        if (api && api.ui) {
+          api.ui.paintOfficialAsk = (view, finish) =>
+            OfficialAsk({
+              title: view.title,
+              message: view.message,
+              active: view.active,
+              choose: finish,
+            });
+        }
         return plugin.server(api, options, meta);
       },
     };

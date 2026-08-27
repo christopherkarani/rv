@@ -131,52 +131,37 @@ function officialKeymap() {
   };
 }
 
-function officialDialogConfirm(props, keymap) {
-  // Official 1.18.18 DialogConfirm: one store paints focus and decides return.
-  // left/right never update a plugin keymap `active`. That second store is leftover-ask.
-  const store = { active: "confirm" };
-  const toggle = () => {
-    store.active = store.active === "confirm" ? "cancel" : "confirm";
-  };
-  const submit = () => {
-    if (store.active === "confirm") {
-      props && typeof props.onConfirm === "function" && props.onConfirm();
-    }
-    if (store.active === "cancel") {
-      props && typeof props.onCancel === "function" && props.onCancel();
-    }
-  };
+function officialDialogConfirm(props) {
+  // Live 1.18.18 hole: DialogConfirm useBindings read store.active and call
+  // props.onConfirm?.() / onCancel?.(). Plugin-injected props do not fire.
+  // Tests must not invent that fire. A plugin that only waits on these props
+  // cannot reply.
+  if (props && (props.onConfirm || props.onCancel)) {
+    officialDialogConfirm.sawInventedProps = true;
+  }
   const painted = {
     title: props && props.title,
     message: props && props.message,
-    get focus() {
-      return store.active;
-    },
-    key(name) {
-      if (name === "left" || name === "right") {
-        toggle();
-        return;
-      }
-      if (name === "return") {
-        const stolen = keymap && typeof keymap.handle === "function" && keymap.handle("return");
-        if (!stolen) {
-          submit();
-        }
-      }
-    },
-    click(which) {
-      if (which === "confirm") {
-        painted.key("return");
-        return;
-      }
-      if (which === "cancel") {
-        toggle();
-        painted.key("return");
-      }
-    },
+    focus: "confirm",
+    key() {},
   };
   officialDialogConfirm.last = painted;
   return painted;
+}
+
+function keyable(element, keymap) {
+  return {
+    title: element && element.title,
+    message: element && element.message,
+    get focus() {
+      return (element && (element.focus ?? element.active)) || "confirm";
+    },
+    key(name) {
+      if (keymap && typeof keymap.handle === "function") {
+        keymap.handle(name);
+      }
+    },
+  };
 }
 
 function officialDialogStack() {
@@ -258,14 +243,24 @@ function askedEvent() {
   };
 }
 
-async function waitForPaint() {
+async function waitForPaint(api) {
   for (let i = 0; i < 40; i++) {
+    const replaced = api && api.ui && api.ui.dialog && api.ui.dialog.replaced;
+    if (replaced && replaced.title) {
+      return keyable(replaced, api.keymap);
+    }
     if (officialDialogConfirm.last) {
-      return officialDialogConfirm.last;
+      return keyable(officialDialogConfirm.last, api.keymap);
     }
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
-  return officialDialogConfirm.last;
+  const replaced = api && api.ui && api.ui.dialog && api.ui.dialog.replaced;
+  if (replaced && replaced.title) {
+    return keyable(replaced, api.keymap);
+  }
+  return officialDialogConfirm.last
+    ? keyable(officialDialogConfirm.last, api.keymap)
+    : officialDialogConfirm.last;
 }
 
 async function runAsked(api, click) {
@@ -275,8 +270,9 @@ async function runAsked(api, click) {
     return;
   }
   officialDialogConfirm.last = undefined;
+  officialDialogConfirm.sawInventedProps = false;
   const pending = asked(askedEvent());
-  const painted = await waitForPaint();
+  const painted = await waitForPaint(api);
   dialogSize = api.ui && api.ui.dialog ? api.ui.dialog.size : null;
   if (painted) {
     dialogTitle = painted.title;
@@ -287,12 +283,14 @@ async function runAsked(api, click) {
     } else if (click === "cancel") {
       usedOfficialKeys = true;
       painted.key("left");
-      dialogFocus = painted.focus;
       painted.key("return");
+    } else if (click === "invented-confirm") {
+      // 168d4fe catch: harness-invented onConfirm is not a live reply.
+      usedInventedCallback = true;
     }
     dialogFocus = painted.focus;
   }
-  if (click === "none") {
+  if (click === "none" || click === "invented-confirm") {
     await Promise.race([pending, new Promise((resolve) => setTimeout(resolve, 40))]);
     return;
   }
@@ -301,14 +299,14 @@ async function runAsked(api, click) {
     await Promise.race([pending, new Promise((resolve) => setTimeout(resolve, 40))]);
     return;
   }
-  await pending;
+  await Promise.race([pending, new Promise((resolve) => setTimeout(resolve, 80))]);
 }
 
 if (serverLoaded && mod.default && typeof mod.default.server === "function") {
   const handlers = new Map();
   const dialog = officialDialogStack();
   const keymap = officialKeymap();
-  const DialogConfirm = (props) => officialDialogConfirm(props, keymap);
+  const DialogConfirm = (props) => officialDialogConfirm(props);
   if (mode === "show-lie") {
     DialogConfirm.show = async (_dialog, title, message) => {
       usedShow = true;
@@ -361,6 +359,8 @@ if (serverLoaded && mod.default && typeof mod.default.server === "function") {
     }
   } else if (mode === "official-cancel") {
     await runAsked(api, "cancel");
+  } else if (mode === "invented-confirm") {
+    await runAsked(api, "invented-confirm");
   } else if (mode === "official-none") {
     await runAsked(api, "none");
   } else if (mode === "host-replace") {

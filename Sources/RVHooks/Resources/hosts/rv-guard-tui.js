@@ -41,8 +41,13 @@ function stringValue(value) {
 async function showConfirm(api, message) {
   const ui = api && api.ui;
   const dialog = ui && ui.dialog;
-  const DialogConfirm = ui && ui.DialogConfirm;
-  if (!dialog || typeof dialog.replace !== "function" || typeof DialogConfirm !== "function") {
+  const keymap = api && api.keymap;
+  if (
+    !dialog ||
+    typeof dialog.replace !== "function" ||
+    !keymap ||
+    typeof keymap.registerLayer !== "function"
+  ) {
     return undefined;
   }
   if (typeof dialog.setSize === "function") {
@@ -50,28 +55,98 @@ async function showConfirm(api, message) {
   }
   return await new Promise((resolve) => {
     let settled = false;
+    let painting = false;
+    // Official DialogConfirm source: one createStore-shaped active paints
+    // focus and decides Return. Do not wait on plugin DialogConfirm props.
+    const store = { active: "confirm" };
+    let unbind;
     const finish = (allowed) => {
       if (settled) {
         return;
       }
       settled = true;
+      if (typeof unbind === "function") {
+        unbind();
+      }
       if (typeof dialog.clear === "function") {
         dialog.clear();
       }
       resolve(allowed);
     };
-    dialog.replace(() =>
-      DialogConfirm({
+    const paint = () => {
+      const view = {
         title: "RV · Ask",
         message,
-        get onConfirm() {
-          return () => finish(true);
+        get focus() {
+          return store.active;
         },
-        get onCancel() {
-          return () => finish(false);
+        get active() {
+          return store.active;
         },
-      }),
-    );
+      };
+      const render = ui && typeof ui.paintOfficialAsk === "function" ? ui.paintOfficialAsk : undefined;
+      painting = true;
+      dialog.replace(
+        () => (typeof render === "function" ? render(view, finish) : view),
+        () => {
+          if (painting || settled) {
+            return;
+          }
+          if (typeof unbind === "function") {
+            unbind();
+          }
+        },
+      );
+      painting = false;
+    };
+    unbind = keymap.registerLayer({
+      priority: 1000,
+      commands: [
+        {
+          name: "dialog.confirm.submit",
+          title: "Confirm dialog selection",
+          category: "Dialog",
+          run: () => {
+            if (store.active === "confirm") {
+              finish(true);
+            }
+            if (store.active === "cancel") {
+              finish(false);
+            }
+          },
+        },
+        {
+          name: "dialog.confirm.toggle",
+          title: "Toggle dialog option",
+          category: "Dialog",
+          run: () => {
+            store.active = store.active === "confirm" ? "cancel" : "confirm";
+            paint();
+          },
+        },
+      ],
+      bindings: [
+        {
+          key: "return",
+          cmd: "dialog.confirm.submit",
+          desc: "Confirm dialog selection",
+          group: "Dialog",
+        },
+        {
+          key: "left",
+          cmd: "dialog.confirm.toggle",
+          desc: "Previous dialog option",
+          group: "Dialog",
+        },
+        {
+          key: "right",
+          cmd: "dialog.confirm.toggle",
+          desc: "Next dialog option",
+          group: "Dialog",
+        },
+      ],
+    });
+    paint();
   });
 }
 

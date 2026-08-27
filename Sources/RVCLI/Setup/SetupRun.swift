@@ -324,7 +324,7 @@ enum SetupRun {
 
     private static func writeOpenCodeTuiAskPackage(layout: OwnedPaths, files: FileOps) throws -> Bool {
         let packageJSONPath = layout.openCodeTuiAskPackage + "/package.json"
-        let tuiPath = layout.openCodeTuiAskPackage + "/tui.js"
+        let tuiPath = layout.openCodeTuiAskPackage + "/tui.tsx"
         let wrotePackage = try writeOwned(
             path: packageJSONPath,
             contents: OpenCodeTuiAskPackage.packageJSON,
@@ -333,10 +333,11 @@ enum SetupRun {
         )
         let wroteTui = try writeOwned(
             path: tuiPath,
-            contents: OpenCodeTuiAskPackage.tuiJS,
+            contents: OpenCodeTuiAskPackage.tuiTSX,
             existingData: files.readData(tuiPath),
             files: files
         )
+        files.removeFile(atPath: layout.openCodeTuiAskPackage + "/tui.js")
         var wroteConfig = false
         do {
             let merged = try OpenCodeConfigMerge.merge(
@@ -483,6 +484,7 @@ enum SetupRun {
                         removedPaths.append(layout.openCodeTuiPlugin)
                         removedPaths.append(layout.openCodeTuiAskPackage + "/package.json")
                         removedPaths.append(layout.openCodeTuiAskPackage + "/tui.js")
+                        removedPaths.append(layout.openCodeTuiAskPackage + "/tui.tsx")
                         stripOpenCodeAsk = true
                     }
                     removedHosts.insert(owned.host)

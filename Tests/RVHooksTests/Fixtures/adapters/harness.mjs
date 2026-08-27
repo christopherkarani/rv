@@ -236,6 +236,17 @@ async function loadTuiAskCompanion(ctx, pluginPath, click) {
       const element = typeof input === "function" ? input() : input;
       this.replaced = element;
       this.onClose = onClose;
+      painted = {
+        title: element && element.title,
+        message: element && element.message,
+        get focus() {
+          return (element && (element.focus ?? element.active)) || "confirm";
+        },
+        key(name) {
+          keymap.handle(name);
+        },
+      };
+      ctx.tuiDialogTitle = painted.title;
     },
     clear() {
       if (typeof this.onClose === "function") {
@@ -244,33 +255,10 @@ async function loadTuiAskCompanion(ctx, pluginPath, click) {
     },
   };
   function DialogConfirm(props) {
-    const store = { active: "confirm" };
-    painted = {
+    return {
       title: props && props.title,
       message: props && props.message,
-      get focus() {
-        return store.active;
-      },
-      key(name) {
-        if (name === "left" || name === "right") {
-          store.active = store.active === "confirm" ? "cancel" : "confirm";
-          return;
-        }
-        if (name === "return") {
-          const stolen = keymap.handle("return");
-          if (!stolen) {
-            if (store.active === "confirm" && typeof props.onConfirm === "function") {
-              props.onConfirm();
-            }
-            if (store.active === "cancel" && typeof props.onCancel === "function") {
-              props.onCancel();
-            }
-          }
-        }
-      },
     };
-    ctx.tuiDialogTitle = painted.title;
-    return painted;
   }
   const api = {
     keymap,

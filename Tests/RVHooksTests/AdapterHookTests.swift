@@ -118,15 +118,15 @@ private func runOpenCodePluginContract(
     #expect(source.contains("console.log") == false)
     #expect(source.contains("console.error") == false)
     let tui = try HostAdapterResources.loadOpenCodeTuiPlugin()
-    #expect(tui.contains("DialogConfirm"))
     #expect(tui.contains("RV · Ask"))
     #expect(tui.contains("permission.ask") == false)
     #expect(tui.contains("server:"))
     #expect(tui.contains("DialogConfirm.show") == false)
     #expect(tui.contains("createComponent") == false)
-    #expect(tui.contains("registerLayer") == false)
+    #expect(tui.contains("onConfirm") == false)
+    #expect(tui.contains("onCancel") == false)
+    #expect(tui.contains("registerLayer"))
     #expect(tui.contains("let active") == false)
-    #expect(tui.contains("dialog.confirm.toggle") == false)
     #expect(tui.contains("setSize"))
     #expect(source.contains("pollOfficialPermissionReply") == false)
     #expect(source.contains("RV_ASK_TIMEOUT_MS"))
@@ -184,6 +184,15 @@ private func runOpenCodePluginContract(
     #expect(probe.replied == "reject")
     #expect(probe.replySessionID == "ses_1")
     #expect(probe.replyRequestID == "per_live")
+}
+
+@Test func openCodeTuiPlugin_harnessInventedOnConfirmIsNotALiveReply() async throws {
+    let probe = try await runOpenCodePluginContract(
+        try HostAdapterResources.loadOpenCodeTuiPlugin(),
+        mode: "invented-confirm"
+    )
+    #expect(probe.usedInventedCallback == true)
+    #expect(probe.replied == nil)
 }
 
 @Test func openCodeTuiPlugin_officialDialogConfirmCancelClickRepliesReject() async throws {
