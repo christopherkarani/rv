@@ -58,6 +58,7 @@ enum InstallAnalyticsHosts {
             "claude": status(slots.claude),
             "openclaw": status(slots.openClaw),
             "hermes": status(slots.hermes),
+            "codex": status(slots.codex),
         ]
     }
 

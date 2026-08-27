@@ -89,6 +89,22 @@ rv owns codecs. Do not copy ryk leftover-ask-as-permit. Do not copy DCG fail-ope
 - Session store: `$HOME/.hermes/state.db`, table `messages (session_id, tool_calls, timestamp)`. `tool_calls` is JSON (OpenAI-style `function.name` / `arguments.command`, or a top-level `name`). `extract(fileURL:data:)` uses **`data`**, never reopens the path. sqlite open / prepare / unreadable bytes **throw**. Empty valid `messages` may return `[]`. Skip non-terminal / unparseable rows.
 - Occupied slot: skip + one line. No Ask UI. No AFM / ActionReviewer.
 
+## Codex (OPE-269; host only, no Ask)
+
+- Discover: `~/.codex/` exists or `codex` on PATH. Linux and macOS only. No Windows path.
+- Setup writes an **exclusive adapter** `$HOME/.codex/hooks/rv-guard.py` (`__RV_BINARY__` baked) and **merges** `$HOME/.codex/hooks.json` (`PreToolUse` / `Bash`, `python3 …/rv-guard.py`, timeout 5, `statusMessage: RV`). Occupancy is the exclusive adapter, not the merge file. Foreign `hooks.json` siblings stay. `--force` replaces only the rv-fingerprinted adapter.
+- Real intercept: Codex command hook `PreToolUse`, matcher `Bash`. Stdin (snake_case): `hook_event_name: "PreToolUse"`, `tool_name: "Bash"`, `tool_input.command`. cwd is `tool_input.workdir` then envelope `cwd`. session is `session_id` then `turn_id`. Non-Bash / non-PreToolUse: allow (empty). Unreadable JSON or missing/empty command: deny.
+- Honor path (QA / live TUI): official older PreToolUse shape plus process exit **2**:
+
+  ```json
+  {"decision":"block","reason":"<hostDenyText>"}
+  ```
+
+  Claude `hookSpecificOutput.permissionDecision: deny` is **not** the Codex honor path. Do not emit `"ask"` (`permissionDecision: ask` is leftover-ask-as-permit and continues the tool). `encodeAsk` equals `encodeDeny`. Operator and wrapper both emit `block` + exit 2.
+- Missing `rv` → `{"decision":"block","reason":"rv missing"}` + exit 2. Timeout/crash / non-JSON → `{"decision":"block","reason":"rv failed"}` + exit 2. Wrapper maps leftover operator `decision: deny` onto the same official `block` + exit 2.
+- Session store: `$HOME/.codex/sessions/**/rollout-*.jsonl`. Surface Bash / shell / local_shell with `tool_input.command`. `extract(fileURL:data:)` uses **`data`**, never reopens the path. Empty or non-UTF-8 `data` throws. Skip non-shell / unparseable rows.
+- Occupied slot: skip + one line. No Ask UI. No AFM / ActionReviewer. Capability is deny-or-TTY (`.pi` / `.opencode` stay spendFirst).
+
 ## Shared deny text
 
 `hostDenyText`: one sentence + display `rule_id` (`pack/pattern`) + next step. Never include a redeemable code. Canonical: `Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once.`

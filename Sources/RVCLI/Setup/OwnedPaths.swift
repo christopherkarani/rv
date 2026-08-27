@@ -27,6 +27,9 @@ struct OwnedPaths: Equatable, Sendable {
     var openClawPlugin: String { home.rawValue + "/.openclaw/extensions/rv-guard/index.js" }
     var hermesDirectory: String { home.rawValue + "/.hermes" }
     var hermesPlugin: String { home.rawValue + "/.hermes/plugins/rv-guard/__init__.py" }
+    var codexDirectory: String { home.rawValue + "/.codex" }
+    var codexHook: String { home.rawValue + "/.codex/hooks/rv-guard.py" }
+    var codexHooksJSON: String { home.rawValue + "/.codex/hooks.json" }
     var launchAgent: String { home.rawValue + "/Library/LaunchAgents/dev.rv.evaluate.plist" }
     var systemdUserUnit: String { home.rawValue + "/.config/systemd/user/dev.rv.evaluate.service" }
     var localRv: String { home.rawValue + "/.local/bin/rv" }
@@ -80,6 +83,13 @@ struct OwnedPaths: Equatable, Sendable {
                 detectionDirectory: hermesDirectory,
                 executableName: "hermes",
                 destination: hermesPlugin
+            )
+        case .codex:
+            OwnedHostAdapterPath(
+                host: .codex,
+                detectionDirectory: codexDirectory,
+                executableName: "codex",
+                destination: codexHook
             )
         }
     }

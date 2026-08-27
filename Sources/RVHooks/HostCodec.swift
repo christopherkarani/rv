@@ -1,13 +1,16 @@
 import RVDomain
 
 extension HookHost {
-    /// Deny process exit: Grok `0` (JSON is the gate), Pi/OpenCode/OpenClaw/Hermes `1`.
+    /// Deny process exit: Grok `0` (JSON is the gate), Pi/OpenCode/OpenClaw/Hermes `1`,
+    /// Codex official honor path `2`.
     var denyExitCode: Int32 {
         switch self {
         case .grok, .claude:
             return 0
         case .pi, .opencode, .openclaw, .hermes:
             return 1
+        case .codex:
+            return 2
         }
     }
 }

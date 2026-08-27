@@ -201,6 +201,69 @@ private func fixtureLoginHome() throws -> URL {
     }
 }
 
+@Test func setup_codexOnly_writesAdapterAndMergesHooksJSON() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(atPath: layout.codexDirectory, withIntermediateDirectories: true)
+        let foreign = """
+        {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  { "type": "command", "command": "other-guard evaluate", "timeout": 10 }
+                ]
+              }
+            ]
+          }
+        }
+        """
+        try foreign.write(toFile: layout.codexHooksJSON, atomically: true, encoding: .utf8)
+
+        let outcome = SetupRun.setup(env(home: home, launchctl: launchctl))
+        #expect(outcome.exitCode == 0)
+        let body = try String(contentsOfFile: layout.codexHook, encoding: .utf8)
+        #expect(body == (try HookHost.codex.adapterResource().rendered(rvPath: "/tmp/rv-bin/rv")))
+        #expect(body.contains("\"decision\": \"block\"") || body.contains("\"decision\":\"block\""))
+        #expect(body.contains("sys.exit(2)"))
+        #expect(body.contains("permissionDecision") == false)
+        #expect(body.contains("\"ask\"") == false)
+        #expect(body.contains("RV_BYPASS") == false)
+        #expect(FileManager.default.fileExists(atPath: layout.grokHook) == false)
+
+        let settings = try #require(
+            JSONSerialization.jsonObject(
+                with: Data(contentsOf: URL(fileURLWithPath: layout.codexHooksJSON))
+            ) as? [String: Any]
+        )
+        let hooksRoot = try #require(settings["hooks"] as? [String: Any])
+        let pre = try #require(hooksRoot["PreToolUse"] as? [[String: Any]])
+        #expect(pre.count == 2)
+        let foreignHooks = try #require(pre[0]["hooks"] as? [[String: Any]])
+        #expect(foreignHooks[0]["command"] as? String == "other-guard evaluate")
+        let rvHooks = try #require(pre[1]["hooks"] as? [[String: Any]])
+        #expect(rvHooks[0]["type"] as? String == "command")
+        #expect(rvHooks[0]["command"] as? String == "python3 \(layout.codexHook)")
+        #expect(rvHooks[0]["timeout"] as? Int == 5)
+        #expect(rvHooks[0]["statusMessage"] as? String == "RV")
+        #expect(pre[1]["matcher"] as? String == "Bash")
+
+        let uninstall = SetupRun.uninstall(env(home: home, launchctl: launchctl))
+        #expect(uninstall.exitCode == 0)
+        #expect(FileManager.default.fileExists(atPath: layout.codexHook) == false)
+        let after = try #require(
+            JSONSerialization.jsonObject(
+                with: Data(contentsOf: URL(fileURLWithPath: layout.codexHooksJSON))
+            ) as? [String: Any]
+        )
+        let afterHooks = try #require(after["hooks"] as? [String: Any])
+        let afterPre = try #require(afterHooks["PreToolUse"] as? [[String: Any]])
+        #expect(afterPre.count == 1)
+        let kept = try #require(afterPre[0]["hooks"] as? [[String: Any]])
+        #expect(kept[0]["command"] as? String == "other-guard evaluate")
+    }
+}
+
 @Test func setup_hermesOnly_writesPluginAndCompanion() throws {
     try withTempHome { home, layout, launchctl in
         try FileManager.default.createDirectory(atPath: layout.hermesDirectory, withIntermediateDirectories: true)

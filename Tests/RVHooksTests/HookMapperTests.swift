@@ -28,7 +28,7 @@ import RVDomain
     assertHookDenyHasNoBypassOrEssay(wire.stdout)
 }
 
-@Test(arguments: [HookHost.grok, .pi, .opencode, .openclaw, .hermes, .claude])
+@Test(arguments: [HookHost.grok, .pi, .opencode, .openclaw, .hermes, .claude, .codex])
 func hookWire_samePathHosts_resetHardIsShortDeny(_ host: HookHost) throws {
     let match = RuleMatch(
         ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
@@ -59,6 +59,8 @@ func hookWire_samePathHosts_resetHardIsShortDeny(_ host: HookHost) throws {
         wire = hookWire(from: result, command: command, using: HermesHostCodec())
     case .claude:
         wire = hookWire(from: result, command: command, using: ClaudeHostCodec())
+    case .codex:
+        wire = hookWire(from: result, command: command, using: CodexHostCodec())
     }
     #expect(wire.stdout.isEmpty == false)
     #expect(wire.stdout.contains("\"permissionDecision\":\"ask\"") == false)
@@ -68,6 +70,15 @@ func hookWire_samePathHosts_resetHardIsShortDeny(_ host: HookHost) throws {
         let hook = try #require(parsed["hookSpecificOutput"] as? [String: Any])
         #expect(parsed["systemMessage"] as? String == resetHardHostDeny)
         #expect(hook["permissionDecisionReason"] as? String == resetHardHostDeny)
+    } else if host == .codex {
+        let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
+        #expect(json["decision"] as? String == "block")
+        #expect(json["reason"] as? String == resetHardHostDeny)
+        #expect(json["permissionDecision"] == nil)
+        #expect(json["hookSpecificOutput"] == nil)
+        #expect(wire.stdout.contains("\"permissionDecision\":\"deny\"") == false)
+        #expect(wire.stdout.contains("\"decision\":\"deny\"") == false)
+        #expect(wire.exitCode == 2)
     } else {
         let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
         #expect(json["decision"] as? String == "deny")
@@ -99,6 +110,11 @@ func hookWire_samePathHosts_resetHardIsShortDeny(_ host: HookHost) throws {
     #expect(hermes.stdout.contains("\"permissionDecision\"") == false)
     #expect(hermes.stdout.contains("\"decision\":\"deny\""))
     #expect(hermes.exitCode == 1)
+    let codex = hookWire(from: result, command: command, using: CodexHostCodec())
+    #expect(codex.stdout.contains("\"permissionDecision\"") == false)
+    #expect(codex.stdout.contains("\"decision\":\"block\""))
+    #expect(codex.stdout.contains("\"decision\":\"deny\"") == false)
+    #expect(codex.exitCode == 2)
 }
 
 @Test func hookWire_allowIsEmpty() {

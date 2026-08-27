@@ -50,6 +50,31 @@ import RVDomain
     #expect(wire.exitCode == 1)
 }
 
+@Test func hookWire_codexMandatoryHumanIsBlockNotAsk() throws {
+    let deny = Deny(
+        ruleID: RuleID(pack: PackID(rawValue: "builtin.action"), pattern: "remote-branch-mutation"),
+        reason: "Remote branch mutation requires a human."
+    )
+    let result = EvaluationResult(
+        outcome: .deny(deny, matched: nil),
+        matchingView: "git push origin feature"
+    )
+    let wire = hookWire(
+        from: result,
+        command: ShellCommand(rawValue: "git push origin feature"),
+        using: CodexHostCodec(),
+        bound: .mandatoryHuman(deny)
+    )
+    #expect(HostNativeAsk.capability(for: .codex) == .denyOrTTY)
+    #expect(wire.stdout.isEmpty == false)
+    #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
+    #expect(wire.stdout.contains("\"permissionDecision\":\"ask\"") == false)
+    #expect(wire.stdout.contains("\"permissionDecision\":\"deny\"") == false)
+    let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
+    #expect(json["decision"] as? String == "block")
+    #expect(wire.exitCode == 2)
+}
+
 @Test(arguments: [HookHost.claude, .grok])
 func hookWire_firstCallAllowCannotSkipPolicyGate(_ host: HookHost) throws {
     let deny = Deny(

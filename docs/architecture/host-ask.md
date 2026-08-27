@@ -63,6 +63,23 @@ RV: `rv-guard-hermes.py.tmpl` + `HermesHostCodec`. `terminal` only. Live deny: `
 3. **Back to RV?** A later Hermes-gate Allow would run the tool inside Hermes — not a PolicyGate grant. Allow-once is TTY → next hook consume.
 4. **No pause:** `{"action": "block"}` or TTY. Never silent allow.
 
+## Codex
+
+Official: [hooks](https://developers.openai.com/codex/hooks) — PreToolUse documents `hookSpecificOutput.permissionDecision: deny` and this older block shape:
+
+```json
+{"decision":"block","reason":"..."}
+```
+
+Exit code `2` also blocks (stderr reason). `permissionDecision: "ask"` is leftover-ask-as-permit: Codex marks the hook failed and continues the tool.
+
+RV: `rv-guard-codex.py.tmpl` + `CodexHostCodec`. Matcher `PreToolUse` / `Bash`. Live deny: official older `{"decision":"block","reason"}` on stdout + process exit **2**. Tests fail Claude `permissionDecision: deny` as the honor path. `HostNativeAsk.capability(.codex)` is `denyOrTTY`. Host-only (OPE-269). No Ask.
+
+1. **Pause?** Not today. Official `"ask"` would fail-open the tool. RV never emits it.
+2. **User sees:** host block reason. No RV Ask UI.
+3. **Back to RV?** Block JSON + exit 2 is one-way. Allow-once is TTY → next hook consume.
+4. **No pause:** official `block` + exit 2, or TTY. Never silent allow.
+
 ## Unknowns
 
 Pi `confirm` in print/RPC; whether OpenCode `permission.ask` (or an `ask()` on `tool.execute.before`) is live; whether Claude extra `hookSpecificOutput` keys on today's deny JSON (`ruleId` / `packId` / `severity` / `remediation`) fail-open a deny; OpenClaw approval-surface availability without a connected Gateway; Hermes approve-gate UI shape and whether a post-Allow retry re-enters `pre_tool_call`.

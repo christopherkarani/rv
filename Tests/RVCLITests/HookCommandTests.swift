@@ -312,6 +312,7 @@ private func runHook(
     #expect(try Hook.parse(["--host", "claude"]).host == .claude)
     #expect(try Hook.parse(["--host", "openclaw"]).host == .openclaw)
     #expect(try Hook.parse(["--host", "hermes"]).host == .hermes)
+    #expect(try Hook.parse(["--host", "codex"]).host == .codex)
 }
 
 @Test func hookClaudeDenyResetHard_emitsRichDeny() async throws {
@@ -560,6 +561,69 @@ private func runHook(
     #expect(probe.commands.isEmpty)
     #expect(wire.stdout == expected.stdout)
     #expect(wire.exitCode == expected.exit)
+}
+
+@Test func hookCodexDenyResetHard_isOfficialBlockAndExitTwo() async throws {
+    let expected = try hostExpected("codex", "deny-git-reset-hard")
+    let command = ShellCommand(rawValue: "git reset --hard")
+    let result = try await cliEvaluate(command.rawValue)
+    let text = try #require(hostDenyText(from: result, command: command))
+    let wire = try await runHook(
+        stdin: try hostFixture("codex", "deny-git-reset-hard.json"),
+        host: .codex
+    )
+    let json = try denyJSON(wire.stdout)
+    #expect(json["decision"] as? String == "block")
+    #expect(json["reason"] as? String == text)
+    #expect(json["permissionDecision"] == nil)
+    #expect(wire.stdout.contains("\"permissionDecision\":\"deny\"") == false)
+    #expect(wire.stdout.contains("\"decision\":\"deny\"") == false)
+    #expect(wire.exitCode == expected.exit)
+    #expect(wire.exitCode == 2)
+    #expect(wire.stdout.contains(text))
+}
+
+@Test func hookCodexAllowGitStatus_emptyStdoutExitZero() async throws {
+    let expected = try hostExpected("codex", "allow-git-status")
+    let wire = try await runHook(
+        stdin: try hostFixture("codex", "allow-git-status.json"),
+        host: .codex
+    )
+    #expect(wire.stdout == expected.stdout)
+    #expect(wire.exitCode == expected.exit)
+}
+
+@Test func hookCodexNonShellRead_doesNotEvaluate() async throws {
+    let probe = EvaluateProbe()
+    let expected = try hostExpected("codex", "allow-non-shell-read")
+    let wire = try await runHook(
+        stdin: try hostFixture("codex", "allow-non-shell-read.json"),
+        host: .codex
+    ) { command, _ in
+        probe.record(command, result: EvaluationResult(
+            outcome: .deny(
+                Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "should not run"),
+                matched: nil
+            )
+        ))
+    }
+    #expect(probe.commands.isEmpty)
+    #expect(wire.stdout == expected.stdout)
+    #expect(wire.exitCode == expected.exit)
+}
+
+@Test func hookCodexMalformed_deniesWithoutEvaluating() async throws {
+    let probe = EvaluateProbe()
+    let wire = try await runHook(
+        stdin: "not-json",
+        host: .codex
+    ) { command, _ in
+        probe.record(command, result: EvaluationResult(outcome: .plain))
+    }
+    #expect(probe.commands.isEmpty)
+    #expect(wire.stdout.contains("\"decision\":\"block\""))
+    #expect(wire.stdout.contains("\"permissionDecision\":\"deny\"") == false)
+    #expect(wire.exitCode == 2)
 }
 
 @Test func hookHermesMalformed_deniesWithoutEvaluating() async throws {

@@ -1,6 +1,6 @@
 # rv
 
-Mac-native destructive-command guard for coding-agent shell hooks. Day-one hosts: Pi, Grok, OpenCode. Also: Claude (settings merge), OpenClaw (`~/.openclaw/extensions/rv-guard/`, host only, no Ask), and Hermes (`~/.hermes/plugins/rv-guard/`, host only, no Ask).
+Mac-native destructive-command guard for coding-agent shell hooks. Day-one hosts: Pi, Grok, OpenCode. Also: Claude (settings merge), OpenClaw (`~/.openclaw/extensions/rv-guard/`, host only, no Ask), Hermes (`~/.hermes/plugins/rv-guard/`, host only, no Ask), and Codex (`~/.codex/hooks/rv-guard.py`, host only, official `block` + exit 2, no Ask).
 
 ## Language
 
@@ -45,7 +45,7 @@ The read-only classification of rvd reachability: reachable, down, not-installed
 _Avoid_: mapping down/skew/request-failed separately in doctor or status
 
 **Hook mapper**:
-EvaluationResult to HookWire after the Policy gate. One Decision switch, HostCodecs (Claude uses the rich encoder; OpenClaw and Hermes are short deny). Owns hook voice.
+EvaluationResult to HookWire after the Policy gate. One Decision switch, HostCodecs (Claude uses the rich encoder; OpenClaw and Hermes are short deny; Codex uses official older `decision: block` + exit 2, not Claude permission deny). Owns hook voice.
 _Avoid_: per-codec Decision switch
 
 **Hook voice**:

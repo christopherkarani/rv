@@ -144,6 +144,20 @@ private func runOpenCodePluginContract(_ source: String) async throws -> OpenCod
     #expect(source.contains("RV_BYPASS") == false)
 }
 
+@Test func codexTemplate_emitsOfficialBlockAndExitTwoNotClaudeDeny() throws {
+    let source = try adapterSource(for: .codex, rvPath: "/opt/rv")
+    #expect(source.contains("PreToolUse"))
+    #expect(source.contains("\"Bash\""))
+    #expect(source.contains("\"codex\""))
+    #expect(source.contains("RV_BINARY = \"/opt/rv\""))
+    #expect(source.contains("\"decision\":\"block\"") || source.contains("'decision': 'block'"))
+    #expect(source.contains("sys.exit(2)"))
+    #expect(source.contains("permissionDecision") == false)
+    #expect(source.contains("\"ask\"") == false)
+    #expect(source.contains("permission.ask") == false)
+    #expect(source.contains("RV_BYPASS") == false)
+}
+
 @Test func hermesTemplate_registersPreToolCallTerminalAndBlocks() throws {
     let source = try adapterSource(for: .hermes, rvPath: "/opt/rv")
     #expect(source.contains("pre_tool_call"))

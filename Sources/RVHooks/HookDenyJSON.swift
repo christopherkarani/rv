@@ -20,6 +20,12 @@ func hookDenyJSON(reason: String, rule: String? = nil, next: String? = nil) -> S
     return "{\(body)}\n"
 }
 
+/// Official Codex older PreToolUse honor path (`decision: block` + process exit 2).
+/// Codex TUI does not honor Claude permission deny JSON. Never emit leftover Ask.
+func hookBlockJSON(reason: String) -> String {
+    "{\"decision\":\"block\",\"reason\":\(jsonQuoted(reason))}\n"
+}
+
 func jsonQuoted(_ value: String) -> String {
     var output = "\""
     for scalar in value.unicodeScalars {

@@ -66,6 +66,7 @@ public func setupCeremonyFrames(
     claude: SetupSlotKind = .pending,
     openClaw: SetupSlotKind = .pending,
     hermes: SetupSlotKind = .pending,
+    codex: SetupSlotKind = .pending,
     wrote: Set<HookHost>,
     kind: SetupCeremonyKind
 ) -> [SetupCeremonyFrame]? {
@@ -77,6 +78,7 @@ public func setupCeremonyFrames(
             claude: claude,
             openClaw: openClaw,
             hermes: hermes,
+            codex: codex,
             wrote: wrote
         ),
         kind: kind
@@ -177,6 +179,8 @@ public func setupSlotClause(host: HookHost, kind: SetupSlotKind) -> String? {
     switch kind {
     case .wired where host == .grok:
         return setupGrokReloadClause
+    case .wired where host == .codex:
+        return setupCodexTrustClause
     case .occupied:
         return setupOccupiedClause
     case .pending, .wired:

@@ -15,7 +15,7 @@ Each module keeps a small public API, `package` internals later, and its own tes
 | **RVPacks** | registry, bundled JSON, enable/disable | decisions, rendering |
 | **RVScan** | session-store discovery, bounds walk, store adapters, extract, classify, dedupe | CLI, TUI, XPC, hooks codecs, Policy gate |
 | **RVPolicy** | config merge, allowlist, allow-once, `HostGrantWriter`, durable `PendingApprovalStore`, Apple Foundation Models `ActionReviewer` adapter (shadow), `ShadowReviewRunner` | rendering |
-| **RVHooks** | **Pi / Grok / OpenCode / Claude / OpenClaw / Hermes** Host adapters: shell codecs, Hook mapper/voice, Pi/OpenCode confirm-or-resolution spend-then-allow, OpenCode `bash` + TUI `session.shell` / `shell.env` official permission create + TUI `DialogConfirm` Ask then spend-then-allow (missing confirm still fail-closed; last-match is not a permit), Claude deny-or-TTY (no leftover `permissionDecision` ask), embedded adapter resources | evaluation, setup mutations |
+| **RVHooks** | **Pi / Grok / OpenCode / Claude / OpenClaw / Hermes / Codex** Host adapters: shell codecs, Hook mapper/voice, Pi/OpenCode confirm-or-resolution spend-then-allow, OpenCode `bash` + TUI `session.shell` / `shell.env` official permission create + TUI `DialogConfirm` Ask then spend-then-allow (missing confirm still fail-closed; last-match is not a permit), Claude deny-or-TTY (no leftover `permissionDecision` ask), Codex host-only official older `decision: block` + exit 2 (Claude permission deny is not the honor path), embedded adapter resources | evaluation, setup mutations |
 | **RVIPC** | `rv.ipc.v1` Codable | transport details |
 | **RVService** | XPC listener, EvaluationWorld (single assembly), EvaluateSession (compiled day-one packs + evaluate), GatedEvaluate (session then Policy gate), launchd | ArgumentParser, SwiftUI |
 | **RVPresentation** | deny/explain/packs/doctor view models | ANSI |
@@ -35,7 +35,7 @@ Each module keeps a small public API, `package` internals later, and its own tes
 | `RVPacks` | `RVDomain` | Bundled catalog JSON (95 packs, excluding `windows.*` OS catalogs); default-on remains core only. |
 | `RVScan` | `RVDomain`, `RVEngine`, `RVPacks` | Session forensics: bounds, discovery walk, `SessionStoreAdapter`; classify later. No CLI/TUI/Service/Hooks. |
 | `RVPolicy` | `RVDomain` | Packs config merge; allowlist / allow-once; AFM shadow reviewer. Darwin: CryptoKit. Linux: `Crypto` (swift-crypto) added on that graph only. |
-| `RVHooks` | `RVDomain` | Complete Pi/Grok/OpenCode/Claude/OpenClaw/Hermes Host adapter behavior (`ClaudeHostCodec` + rich deny; OpenClaw/Hermes short deny); no setup mutations. |
+| `RVHooks` | `RVDomain` | Complete Pi/Grok/OpenCode/Claude/OpenClaw/Hermes/Codex Host adapter behavior (`ClaudeHostCodec` + rich deny; OpenClaw/Hermes short deny; Codex official `block` + exit 2); no setup mutations. |
 | `RVIPC` | `RVDomain` | `rv.ipc.v1` Codable later. |
 | `RVHistory` | `RVDomain` | **Stub.** Off by default forever until a later ticket enables it. Must not log argv. |
 | `RVAnalytics` | none | Store actor allowed. Network only in PostHog sink. |
