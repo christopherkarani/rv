@@ -82,7 +82,10 @@ struct LinuxCHookTests {
         process.waitUntilExit()
         let out = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
         #expect(out.contains("\"decision\":\"deny\""))
-        #expect(out.contains("Blocked git reset --hard. Destroys uncommitted changes."))
+        #expect(out.contains("RV · Blocked. Destroys uncommitted changes."))
+        #expect(out.contains("git reset --hard") == false)
+        #expect(out.contains("Terminal") == false)
+        #expect(out.contains("allow-once") == false)
         #expect(out.contains("\"decision\":\"allow\"") == false)
     }
 }

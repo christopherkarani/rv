@@ -3,11 +3,13 @@ import RVDomain
 @testable import RVHooks
 
 private let resetHard = ShellCommand(rawValue: "git reset --hard")
-let resetHardHostDeny = "Blocked git reset --hard. Destroys uncommitted changes."
+let resetHardHostDeny = "RV · Blocked. Destroys uncommitted changes."
 
 func assertHookDenyHasNoBypassOrEssay(_ text: String?) {
     let payload = text ?? ""
-    #expect(payload.contains("RV · Blocked") == false)
+    #expect(payload.contains("RV · Blocked"))
+    #expect(payload.contains("RV · Blocked\n") == false)
+    #expect(payload.contains("git reset --hard") == false)
     #expect(payload.contains("Terminal") == false)
     #expect(payload.contains("allow-once") == false)
     #expect(payload.contains("git stash") == false)
@@ -86,8 +88,11 @@ func assertHookDenyHasNoBypassOrEssay(_ text: String?) {
         )
     )
     let text = hostDenyText(from: result, command: resetHard)
-    #expect(text == "Blocked git reset --hard. Destroys uncommitted changes.")
+    #expect(text == "RV · Blocked. Destroys uncommitted changes.")
     #expect(text?.contains("\n") == false)
+    #expect(text?.contains("git reset --hard") == false)
+    #expect(text?.components(separatedBy: "RV · Blocked").count == 2)
+    #expect(text?.hasPrefix("Error:") == false)
     assertHookDenyHasNoBypassOrEssay(text)
 }
 
@@ -123,10 +128,11 @@ func assertHookDenyHasNoBypassOrEssay(_ text: String?) {
     let text = hostDenyText(from: result, command: command)
     let preview = hookDenyCommandPreview(command)
     #expect(text == hostDenyLine(command: command, reason: "dynamic"))
-    #expect(text == "Blocked \(preview). Dynamic.")
+    #expect(text == "RV · Blocked. Dynamic.")
     #expect(preview.hasSuffix("…"))
     #expect(preview.contains("cat >>"))
     #expect(preview.contains("Observation 760") == false)
+    #expect(text?.contains(preview) == false)
     #expect(text?.contains("Observation 760") == false)
     #expect(text?.contains("<base>") == false)
     #expect(text?.contains("\n") == false)

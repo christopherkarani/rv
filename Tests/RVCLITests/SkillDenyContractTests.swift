@@ -87,7 +87,8 @@ private func cannedDenyResult(command: String, ruleID: RuleID, reason: String) -
         #expect(text?.contains("\n") == false, Comment(rawValue: row.id))
         #expect(text?.contains("═") == false, Comment(rawValue: row.id))
         #expect(text?.contains("┌") == false, Comment(rawValue: row.id))
-        #expect(text?.hasPrefix("Blocked ") == true, Comment(rawValue: row.id))
+        #expect(text?.hasPrefix("RV · Blocked") == true, Comment(rawValue: row.id))
+        #expect(text?.contains("RV · Blocked\n") == false, Comment(rawValue: row.id))
         #expect(text?.contains("rv allow-once") == false, Comment(rawValue: row.id))
         #expect(text?.contains("Terminal") == false, Comment(rawValue: row.id))
 

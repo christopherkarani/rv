@@ -11,7 +11,7 @@ import RVIPC
 @testable import RVService
 
 private let canonicalResetHardDeny =
-    "Blocked git reset --hard. Destroys uncommitted changes."
+    "RV · Blocked. Destroys uncommitted changes."
 
 struct HookEvaluateTests {
     @Test func implicitHello_grokResetHardReturnsCanonicalDenyWire() async throws {

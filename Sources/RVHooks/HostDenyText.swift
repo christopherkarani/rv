@@ -72,12 +72,11 @@ func hostDenyWhy(_ reason: String, command: ShellCommand) -> String {
 }
 
 public func hostDenyLine(command: ShellCommand, reason: String) -> String {
-    let preview = hookDenyCommandPreview(command)
     let why = hostDenyWhy(reason, command: command)
     if why.isEmpty {
-        return "Blocked \(preview)."
+        return "RV · Blocked."
     }
-    return "Blocked \(preview). \(why)"
+    return "RV · Blocked. \(why)"
 }
 
 public func hostDenyText(from result: EvaluationResult, command: ShellCommand) -> String? {

@@ -1,1 +1,1 @@
-{"decision":"deny","reason":"Blocked git reset --hard. Destroys uncommitted changes."}
+{"decision":"deny","reason":"RV · Blocked. Destroys uncommitted changes."}
