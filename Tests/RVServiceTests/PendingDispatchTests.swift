@@ -126,6 +126,10 @@ struct PendingDispatchTests {
         #expect(resolve.result == .error(.engine("pending coordinator unavailable")))
         let listed = await runtime.dispatch(IPCRequest(method: .pendingList))
         #expect(listed.result == .error(.engine("pending coordinator unavailable")))
+        let watch = await runtime.dispatch(
+            IPCRequest(method: .pendingWatch(PendingWatchParams(afterGeneration: 0)))
+        )
+        #expect(watch.result == .error(.engine("pending coordinator unavailable")))
 
         let grants = AllowOnceStore(baseDirectory: allowOnceDirectory)
         #expect(await grants.list(now: now).isEmpty)
@@ -290,6 +294,30 @@ struct PendingDispatchTests {
         #expect(second.result == .error(.pendingAlreadyTerminal))
     }
 
+    @Test func pendingDispatchDoesNotLogCommandText() async throws {
+        let log = RecordingLog()
+        let approvals = FakePendingApprovals()
+        let wait = record(id: "log-1", host: .pi, session: "sess-pi", folder: "ws", createdAt: now)
+        await approvals.seed(wait)
+        let runtime = try makeRuntime(approvals: approvals, log: log)
+
+        let listed = try requireList(await runtime.dispatch(IPCRequest(method: .pendingList)))
+        _ = await runtime.dispatch(
+            IPCRequest(method: .pendingWatch(PendingWatchParams(afterGeneration: listed.generation)))
+        )
+        _ = await runtime.dispatch(
+            IPCRequest(method: .pendingResolve(resolveParams(wait, decision: .allowOnce)))
+        )
+
+        let events = log.snapshot
+        #expect(events.map(\.method) == ["pendingList", "pendingWatch", "pendingResolve"])
+        #expect(events.allSatisfy { $0.decision == nil && $0.ruleID == nil })
+        let blob = events.map { "\($0.method)|\($0.decision ?? "")|\($0.ruleID ?? "")" }.joined()
+        #expect(blob.contains("ghp_secret") == false)
+        #expect(blob.contains("git push") == false)
+        #expect(blob.contains(secretCommand) == false)
+    }
+
     @Test func rulePreviewAndSaveStayUnknownMethod() async throws {
         let runtime = try makeRuntime(approvals: FakePendingApprovals())
         let preview = await runtime.dispatch(
@@ -355,12 +383,16 @@ struct PendingDispatchTests {
         try assertNoCommand(await runtime.dispatch(IPCRequest(method: .pendingList)))
     }
 
-    private func makeRuntime(approvals: FakePendingApprovals) throws -> ServiceRuntime {
+    private func makeRuntime(
+        approvals: FakePendingApprovals,
+        log: (any ServiceLog)? = nil
+    ) throws -> ServiceRuntime {
         let homeURL = try isolatedHomeDirectory()
         let home = try #require(HomeDirectory(validating: homeURL.path))
         return ServiceRuntime(
             home: home,
             allowOnceDirectory: try isolatedAllowOnceDirectory(),
+            log: log,
             clock: { now },
             pendingApprovals: .coordinator(approvals)
         )
