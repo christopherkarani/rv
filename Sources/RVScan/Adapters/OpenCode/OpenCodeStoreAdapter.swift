@@ -37,71 +37,66 @@ public struct OpenCodeStoreAdapter: SessionStoreAdapter {
 
     private static let sqliteHeader = Data("SQLite format 3\u{0}".utf8)
 
-    private struct OpenedDatabase {
-        let db: OpaquePointer
-        let buffer: UnsafeMutableRawPointer
-    }
-
     private static func events(in data: Data, sourcePath: String) throws -> [ExtractedEvent] {
         let opened = try deserializedDatabase(from: data, sourcePath: sourcePath)
-        defer {
-            _ = sqlite3_close(opened.db)
-            sqlite3_free(opened.buffer)
-        }
 
-        let sql = "SELECT session_id, data FROM part;"
-        var statement: OpaquePointer?
-        let prepareStatus = sqlite3_prepare_v2(opened.db, sql, -1, &statement, nil)
-        guard prepareStatus == SQLITE_OK, let statement else {
-            if statement != nil { _ = sqlite3_finalize(statement) }
-            switch prepareStatus {
-            case SQLITE_NOTADB, SQLITE_CORRUPT, SQLITE_CANTOPEN:
-                throw OpenCodeStoreError.unreadable(sourcePath: sourcePath)
-            default:
-                throw OpenCodeStoreError.prepareFailed(sourcePath: sourcePath)
+        // Keep SQLite statement use inside the borrow; the owner stays alive
+        // until this closure finalizes every statement and returns.
+        return try opened.withConnection { db in
+            let sql = "SELECT session_id, data FROM part;"
+            var statement: OpaquePointer?
+            let prepareStatus = sqlite3_prepare_v2(db, sql, -1, &statement, nil)
+            guard prepareStatus == SQLITE_OK, let statement else {
+                if statement != nil { _ = sqlite3_finalize(statement) }
+                switch prepareStatus {
+                case SQLITE_NOTADB, SQLITE_CORRUPT, SQLITE_CANTOPEN:
+                    throw OpenCodeStoreError.unreadable(sourcePath: sourcePath)
+                default:
+                    throw OpenCodeStoreError.prepareFailed(sourcePath: sourcePath)
+                }
             }
-        }
-        defer { _ = sqlite3_finalize(statement) }
+            defer { _ = sqlite3_finalize(statement) }
 
-        var events: [ExtractedEvent] = []
-        var stepStatus = sqlite3_step(statement)
-        while stepStatus == SQLITE_ROW {
-            let sessionID = Self.textColumn(statement, index: 0)
-            guard let dataText = Self.textColumn(statement, index: 1),
-                  let payload = dataText.data(using: .utf8),
-                  let object = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
-                  (object["type"] as? String) == "tool",
-                  (object["tool"] as? String) == "bash",
-                  let state = object["state"] as? [String: Any],
-                  let input = state["input"] as? [String: Any],
-                  let command = input["command"] as? String,
-                  command.isEmpty == false
-            else {
-                stepStatus = sqlite3_step(statement)
-                continue
-            }
-            let occurredAt = Self.date(from: state["time"])
-            events.append(
-                ExtractedEvent(
-                    host: .opencode,
-                    sessionID: sessionID,
-                    sourcePath: sourcePath,
-                    occurredAt: occurredAt,
-                    command: ShellCommand(rawValue: command)
+            var events: [ExtractedEvent] = []
+            var stepStatus = sqlite3_step(statement)
+            while stepStatus == SQLITE_ROW {
+                let sessionID = Self.textColumn(statement, index: 0)
+                guard let dataText = Self.textColumn(statement, index: 1),
+                      let payload = dataText.data(using: .utf8),
+                      let object = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
+                      (object["type"] as? String) == "tool",
+                      (object["tool"] as? String) == "bash",
+                      let state = object["state"] as? [String: Any],
+                      let input = state["input"] as? [String: Any],
+                      let command = input["command"] as? String,
+                      command.isEmpty == false
+                else {
+                    stepStatus = sqlite3_step(statement)
+                    continue
+                }
+                let occurredAt = Self.date(from: state["time"])
+                events.append(
+                    ExtractedEvent(
+                        host: .opencode,
+                        sessionID: sessionID,
+                        sourcePath: sourcePath,
+                        occurredAt: occurredAt,
+                        command: ShellCommand(rawValue: command)
+                    )
                 )
-            )
-            stepStatus = sqlite3_step(statement)
+                stepStatus = sqlite3_step(statement)
+            }
+            guard stepStatus == SQLITE_DONE else {
+                throw OpenCodeStoreError.unreadable(sourcePath: sourcePath)
+            }
+            return events
         }
-        guard stepStatus == SQLITE_DONE else {
-            throw OpenCodeStoreError.unreadable(sourcePath: sourcePath)
-        }
-        return events
     }
 
     private static func deserializedDatabase(
         from data: Data,
         sourcePath: String
-    ) throws -> OpenedDatabase {
+    ) throws -> OwnedSQLiteDatabase {
         guard data.starts(with: sqliteHeader) else {
             throw OpenCodeStoreError.unreadable(sourcePath: sourcePath)
         }
@@ -138,9 +133,11 @@ public struct OpenCodeStoreAdapter: SessionStoreAdapter {
             header[19] = 1
         }
 
-        // Caller owns P: sqlite3_free after sqlite3_close. Do not set
-        // FREEONCLOSE — SQLite frees P itself on deserialize failure
-        // when that bit is set, which double-frees if we also free.
+        // `withConnection` keeps the owner alive while statements use the
+        // deserialized image. Its deinit drains BUSY statements and frees P
+        // only after close succeeds. Do not set FREEONCLOSE — SQLite frees P
+        // itself on deserialize failure when that bit is set, which would
+        // double-free if we also free it.
         let flags = UInt32(bitPattern: SQLITE_DESERIALIZE_READONLY)
         let status = sqlite3_deserialize(
             db,
@@ -155,7 +152,7 @@ public struct OpenCodeStoreAdapter: SessionStoreAdapter {
             _ = sqlite3_close(db)
             throw OpenCodeStoreError.unreadable(sourcePath: sourcePath)
         }
-        return OpenedDatabase(db: db, buffer: raw)
+        return OwnedSQLiteDatabase(db: db, buffer: raw)
     }
 
     private static func textColumn(_ statement: OpaquePointer, index: Int32) -> String? {

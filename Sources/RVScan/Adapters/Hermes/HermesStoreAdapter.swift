@@ -37,62 +37,57 @@ public struct HermesStoreAdapter: SessionStoreAdapter {
 
     private static let sqliteHeader = Data("SQLite format 3\u{0}".utf8)
 
-    private struct OpenedDatabase {
-        let db: OpaquePointer
-        let buffer: UnsafeMutableRawPointer
-    }
-
     private static func events(in data: Data, sourcePath: String) throws -> [ExtractedEvent] {
         let opened = try deserializedDatabase(from: data, sourcePath: sourcePath)
-        defer {
-            _ = sqlite3_close(opened.db)
-            sqlite3_free(opened.buffer)
-        }
 
-        let sql = "SELECT session_id, tool_calls, timestamp FROM messages;"
-        var statement: OpaquePointer?
-        let prepareStatus = sqlite3_prepare_v2(opened.db, sql, -1, &statement, nil)
-        guard prepareStatus == SQLITE_OK, let statement else {
-            if statement != nil { _ = sqlite3_finalize(statement) }
-            switch prepareStatus {
-            case SQLITE_NOTADB, SQLITE_CORRUPT, SQLITE_CANTOPEN:
-                throw HermesStoreError.unreadable(sourcePath: sourcePath)
-            default:
-                throw HermesStoreError.prepareFailed(sourcePath: sourcePath)
-            }
-        }
-        defer { _ = sqlite3_finalize(statement) }
-
-        var events: [ExtractedEvent] = []
-        var stepStatus = sqlite3_step(statement)
-        while stepStatus == SQLITE_ROW {
-            let sessionID = Self.textColumn(statement, index: 0)
-            let occurredAt = Self.date(fromTimestamp: sqlite3_column_double(statement, 2))
-            if let toolCalls = Self.textColumn(statement, index: 1) {
-                for command in Self.extractCommands(from: toolCalls) {
-                    events.append(
-                        ExtractedEvent(
-                            host: .hermes,
-                            sessionID: sessionID,
-                            sourcePath: sourcePath,
-                            occurredAt: occurredAt,
-                            command: ShellCommand(rawValue: command)
-                        )
-                    )
+        // Keep SQLite statement use inside the borrow; the owner stays alive
+        // until this closure finalizes every statement and returns.
+        return try opened.withConnection { db in
+            let sql = "SELECT session_id, tool_calls, timestamp FROM messages;"
+            var statement: OpaquePointer?
+            let prepareStatus = sqlite3_prepare_v2(db, sql, -1, &statement, nil)
+            guard prepareStatus == SQLITE_OK, let statement else {
+                if statement != nil { _ = sqlite3_finalize(statement) }
+                switch prepareStatus {
+                case SQLITE_NOTADB, SQLITE_CORRUPT, SQLITE_CANTOPEN:
+                    throw HermesStoreError.unreadable(sourcePath: sourcePath)
+                default:
+                    throw HermesStoreError.prepareFailed(sourcePath: sourcePath)
                 }
             }
-            stepStatus = sqlite3_step(statement)
+            defer { _ = sqlite3_finalize(statement) }
+
+            var events: [ExtractedEvent] = []
+            var stepStatus = sqlite3_step(statement)
+            while stepStatus == SQLITE_ROW {
+                let sessionID = Self.textColumn(statement, index: 0)
+                let occurredAt = Self.date(fromTimestamp: sqlite3_column_double(statement, 2))
+                if let toolCalls = Self.textColumn(statement, index: 1) {
+                    for command in Self.extractCommands(from: toolCalls) {
+                        events.append(
+                            ExtractedEvent(
+                                host: .hermes,
+                                sessionID: sessionID,
+                                sourcePath: sourcePath,
+                                occurredAt: occurredAt,
+                                command: ShellCommand(rawValue: command)
+                            )
+                        )
+                    }
+                }
+                stepStatus = sqlite3_step(statement)
+            }
+            guard stepStatus == SQLITE_DONE else {
+                throw HermesStoreError.unreadable(sourcePath: sourcePath)
+            }
+            return events
         }
-        guard stepStatus == SQLITE_DONE else {
-            throw HermesStoreError.unreadable(sourcePath: sourcePath)
-        }
-        return events
     }
 
     private static func deserializedDatabase(
         from data: Data,
         sourcePath: String
-    ) throws -> OpenedDatabase {
+    ) throws -> OwnedSQLiteDatabase {
         guard data.starts(with: sqliteHeader) else {
             throw HermesStoreError.unreadable(sourcePath: sourcePath)
         }
@@ -129,9 +124,11 @@ public struct HermesStoreAdapter: SessionStoreAdapter {
             header[19] = 1
         }
 
-        // Caller owns P: sqlite3_free after sqlite3_close. Do not set
-        // FREEONCLOSE — SQLite frees P itself on deserialize failure
-        // when that bit is set, which double-frees if we also free.
+        // `withConnection` keeps the owner alive while statements use the
+        // deserialized image. Its deinit drains BUSY statements and frees P
+        // only after close succeeds. Do not set FREEONCLOSE — SQLite frees P
+        // itself on deserialize failure when that bit is set, which would
+        // double-free if we also free it.
         let flags = UInt32(bitPattern: SQLITE_DESERIALIZE_READONLY)
         let status = sqlite3_deserialize(
             db,
@@ -146,7 +143,7 @@ public struct HermesStoreAdapter: SessionStoreAdapter {
             _ = sqlite3_close(db)
             throw HermesStoreError.unreadable(sourcePath: sourcePath)
         }
-        return OpenedDatabase(db: db, buffer: raw)
+        return OwnedSQLiteDatabase(db: db, buffer: raw)
     }
 
     private static func extractCommands(from toolCallsJSON: String) -> [String] {
