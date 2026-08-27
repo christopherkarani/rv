@@ -1,7 +1,6 @@
 import Foundation
 import RVAnalytics
 import RVDomain
-import RVEngine
 import RVHooks
 import RVIPC
 import RVPacks
@@ -296,9 +295,7 @@ public actor ServiceRuntime {
                     .loadUserSnapshot(workspacePath: cwd.map(\.rawValue), now: now)
             }
         )
-        let normalized = result.matchingView.isEmpty
-            ? Normalize.matchingView(of: params.request.command.rawValue).rawValue
-            : result.matchingView.rawValue
+        let normalized = result.matchingView.rawValue
         let stages = explainSteps(from: result).map {
             ExplainStage(name: $0.id.rawValue, elapsedMs: 0)
         }

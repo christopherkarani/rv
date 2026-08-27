@@ -1,5 +1,6 @@
 import Foundation
 import RVDomain
+import RVEngine
 import RVPacks
 import RVPolicy
 
@@ -99,5 +100,10 @@ package enum EvaluationWorld {
                 snapshots: snapshots
             )
         })
+    }
+
+    /// T1 matching view for grant mint, allowlist, and explain render.
+    package static func matchingView(of command: ShellCommand) -> MatchingView {
+        Normalize.matchingView(of: command.rawValue)
     }
 }
