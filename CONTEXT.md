@@ -75,3 +75,11 @@ _Avoid_: secret pack, path sandbox, realpath
 **Session forensics**:
 Offline `rv scan` / `rv scan sessions`: read known host session stores (or a path of known layouts), extract shell candidates, run the same `evaluate`, list deny-only findings. Not `RVHistory`, not repo/CI `rv scan repo`, not live hook enforcement. Fence: `docs/factory/specs/phase-4-session-scan.md`.
 _Avoid_: history scan, recon, audit log (unless meaning this CLI)
+
+**EvaluationWorld**:
+The single assembly door in RVService: snapshots, walk vs compile (`PackCoverage`), lazy `GatedEvaluate`. TTY test, hook miss, and warm rvd call `assemble` / `coverage` / `walkedPackIDs`. Nil or unreadable HOME is day-one walk inside the module. Matching view for mint/allowlist/explain render is `matchingView(of:)` on this door, not `Normalize` in CLI.
+_Avoid_: EnabledPacks.resolve as a caller-facing door, a public pack-ID bag named EvaluationWorld, makeCatalog/compileEnabledIDs, MatchingViews.t1
+
+**EvaluationRoute**:
+The client Decision from transport and advertised service semver to an EvaluationPath (xpc or inProcess). `path(for:)` owns unprovable compatibility (missing, empty, or unparseable advertised service semver → inProcess). Adapters: `ServiceClient.evaluate` and C `rv_should_miss_replay`. Server empty-client handshake stays `isMajorSkewed` (not skew).
+_Avoid_: isMajorSkew at the client evaluate call site, flipping isMajorSkew true on parse failure, transportPresent Bool
