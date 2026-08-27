@@ -138,9 +138,11 @@ private func runOpenCodePluginContract(
     #expect(tui.contains("createComponent") == false)
     #expect(tui.contains("paintOfficialAsk") == false)
     #expect(tui.contains("RV · Ask") == false)
-    #expect(tui.contains("@opencode-ai/tui/context/sdk"))
-    #expect(tui.contains("slots.register"))
-    #expect(tui.contains("permission.v2.asked"))
+        #expect(tui.contains("@opencode-ai/tui/context/sdk"))
+        #expect(tui.contains("slots.register"))
+        #expect(tui.contains("permission.v2.asked"))
+        #expect(tui.contains("event.emit") == false)
+        #expect(tui.contains("attachReplyShim(api.client") == false)
     #expect(source.contains("pollOfficialPermissionReply") == false)
     #expect(source.contains("RV_ASK_TIMEOUT_MS"))
     #expect(source.contains("attempt < 40") == false)
@@ -472,7 +474,7 @@ private func runOpenCodePluginContract(
     #expect(result.threw == nil)
     #expect(result.permissionCreates == 1)
     #expect(result.tuiDialogTitle == "Permission required")
-    #expect(result.tuiPaintSource == "permission.asked")
+    #expect(result.tuiPaintSource == "sync.permission")
     #expect(result.permissionReply204 == "once")
     #expect(result.spawnCount == 2)
     #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
@@ -497,7 +499,7 @@ private func runOpenCodePluginContract(
     #expect(result.threw == resetHardReason)
     #expect(result.permissionCreates == 1)
     #expect(result.tuiDialogTitle == "Permission required")
-    #expect(result.tuiPaintSource == "permission.asked")
+    #expect(result.tuiPaintSource == "sync.permission")
     #expect(result.permissionReply204 == "reject")
     #expect(result.spawnCount == 1)
     #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
@@ -520,7 +522,7 @@ private func runOpenCodePluginContract(
     #expect(result.threw == resetHardReason)
     #expect(result.permissionCreates == 1)
     #expect(result.tuiDialogTitle == "Permission required")
-    #expect(result.tuiPaintSource == "permission.asked")
+    #expect(result.tuiPaintSource == "sync.permission")
     #expect(result.spawnCount == 1)
     #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
 }
@@ -565,7 +567,7 @@ private func runOpenCodePluginContract(
     #expect(result.threw == nil)
     #expect(result.permissionCreates == 1)
     #expect(result.tuiDialogTitle == "Permission required")
-    #expect(result.tuiPaintSource == "permission.asked")
+    #expect(result.tuiPaintSource == "sync.permission")
     #expect(result.permissionReply204 == "once")
     #expect(result.spawnCount == 2)
     #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
@@ -589,7 +591,7 @@ private func runOpenCodePluginContract(
     #expect(result.threw == resetHardReason)
     #expect(result.permissionCreates == 1)
     #expect(result.tuiDialogTitle == "Permission required")
-    #expect(result.tuiPaintSource == "permission.asked")
+    #expect(result.tuiPaintSource == "sync.permission")
     #expect(result.permissionReply204 == "reject")
     #expect(result.spawnCount == 1)
     #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
@@ -612,10 +614,31 @@ private func runOpenCodePluginContract(
     #expect(result.threw == nil)
     #expect(result.permissionCreates == 1)
     #expect(result.tuiDialogTitle == "Permission required")
-    #expect(result.tuiPaintSource == "permission.asked")
+    #expect(result.tuiPaintSource == "sync.permission")
     #expect(result.permissionReply204 == "once")
     #expect(result.spawnCount == 2)
     #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
+}
+
+@Test func openCodeAdapter_officialTuiAutoReplyWithoutReturnDoesNotSpend() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: [
+            "hook": "shell.env",
+            "cwd": "/tmp/ws",
+            "sessionID": "ses_1",
+            "callID": "call_1",
+            "command": "git reset --hard",
+        ],
+        stub: .stdout(askResetHardJSON, exit: 1),
+        permissionReply: "tui-auto-once",
+        askTimeoutMs: 400,
+        secondStub: .stdout("", exit: 0)
+    )
+    #expect(result.threw == resetHardReason)
+    #expect(result.permissionCreates == 1)
+    #expect(result.permissionReply204 == nil)
+    #expect(result.spawnCount == 1)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
 }
 
 @Test func openCodeAdapter_sessionShellOfficialCreateAskedWithoutPaintDoesNotSpend() async throws {
@@ -952,7 +975,7 @@ private func runOpenCodePluginContract(
     #expect(result.threw == nil)
     #expect(result.permissionCreates == 1)
     #expect(result.tuiDialogTitle == "Permission required")
-    #expect(result.tuiPaintSource == "permission.asked")
+    #expect(result.tuiPaintSource == "sync.permission")
     #expect(result.permissionReply204 == "once")
     #expect(result.spawnCount == 2)
     #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
@@ -1785,6 +1808,7 @@ private func runAdapter(
         if permissionReply.hasPrefix("tui-click-")
             || permissionReply.hasPrefix("tui-inject-sdk-")
             || permissionReply == "tui-asked-unpainted"
+            || permissionReply == "tui-auto-once"
         {
             let tuiPlugin = root.appendingPathComponent("rv-guard-tui.js")
             try HostAdapterResources.loadOpenCodeTuiPlugin()
@@ -1799,6 +1823,10 @@ private func runAdapter(
             }
             if permissionReply == "tui-asked-unpainted" {
                 environment["RV_TUI_PAINT"] = "0"
+            }
+            if permissionReply == "tui-auto-once" {
+                environment["RV_TUI_INJECT_SDK"] = "1"
+                environment["RV_TUI_AUTO"] = "1"
             }
         }
     }

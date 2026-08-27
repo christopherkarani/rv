@@ -1,12 +1,7 @@
 const V2_ASKED = "permission.v2.asked";
-const V2_REPLIED = "permission.v2.replied";
 
 function v1AskedName() {
   return ["permission", "asked"].join(".");
-}
-
-function v1RepliedName() {
-  return ["permission", "replied"].join(".");
 }
 
 function text(value) {
@@ -42,25 +37,6 @@ function adaptV2Asked(event) {
   };
 }
 
-function adaptV2Replied(event) {
-  const props = event && typeof event === "object" ? (event.properties ?? event.data ?? event) : undefined;
-  if (!props || typeof props !== "object") {
-    return undefined;
-  }
-  const requestID = text(props.requestID ?? props.id);
-  if (!requestID) {
-    return undefined;
-  }
-  return {
-    type: v1RepliedName(),
-    properties: {
-      sessionID: text(props.sessionID),
-      requestID,
-      reply: typeof props.reply === "string" ? props.reply : undefined,
-    },
-  };
-}
-
 function attachReplyShim(client, v2Ids) {
   const permission = client && client.permission;
   if (!permission || typeof permission.reply !== "function") {
@@ -85,8 +61,8 @@ function attachReplyShim(client, v2Ids) {
   };
 }
 
-export function attachOfficialPermissionAskedBridge(api, emitAsked) {
-  if (!api || typeof emitAsked !== "function") {
+export function attachOfficialPermissionAskedBridge(api, writeAsked, client) {
+  if (!api || typeof writeAsked !== "function") {
     return;
   }
   const on = api.event && api.event.on;
@@ -94,21 +70,14 @@ export function attachOfficialPermissionAskedBridge(api, emitAsked) {
     return;
   }
   const v2Ids = new Map();
-  attachReplyShim(api.client, v2Ids);
+  attachReplyShim(client, v2Ids);
   on(V2_ASKED, (event) => {
     const adapted = adaptV2Asked(event);
     if (!adapted) {
       return;
     }
     v2Ids.set(adapted.properties.id, adapted.properties.sessionID);
-    emitAsked(adapted);
-  });
-  on(V2_REPLIED, (event) => {
-    const adapted = adaptV2Replied(event);
-    if (!adapted) {
-      return;
-    }
-    emitAsked(adapted);
+    writeAsked(adapted);
   });
 }
 
@@ -149,31 +118,27 @@ export default {
           if (attached) {
             return null;
           }
-          const emit =
-            sdk && sdk.event && typeof sdk.event.emit === "function"
-              ? (payload) => {
-                  sdk.event.emit("event", {
-                    directory: sdk.directory ?? "",
-                    workspace: undefined,
-                    payload,
-                  });
-                  if (
-                    sync &&
-                    typeof sync.set === "function" &&
-                    payload &&
-                    payload.type === v1AskedName() &&
-                    payload.properties &&
-                    payload.properties.sessionID
-                  ) {
-                    sync.set("permission", payload.properties.sessionID, [payload.properties]);
-                  }
-                }
-              : undefined;
-          if (typeof emit !== "function") {
+          if (!sdk || !sdk.client) {
             return null;
           }
           attached = true;
-          attachOfficialPermissionAskedBridge(api, emit);
+          attachOfficialPermissionAskedBridge(
+            api,
+            (adapted) => {
+              if (
+                !sync ||
+                typeof sync.set !== "function" ||
+                !adapted ||
+                adapted.type !== v1AskedName() ||
+                !adapted.properties ||
+                !adapted.properties.sessionID
+              ) {
+                return;
+              }
+              sync.set("permission", adapted.properties.sessionID, [adapted.properties]);
+            },
+            sdk.client,
+          );
           return null;
         },
       },

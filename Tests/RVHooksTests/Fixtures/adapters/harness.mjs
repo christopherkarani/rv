@@ -257,7 +257,21 @@ function createOfficialTuiEventBus() {
   };
 }
 
-function installFakeTuiSdk(root, bus, client) {
+function paintHostPermissionPrompt(ctx, request) {
+  resetOfficialPermissionPrompt();
+  const prompt = officialPermissionPrompt(request, (input) => {
+    const client = globalThis.__rvTuiClient;
+    const fn = client && client.permission && client.permission.reply;
+    if (typeof fn === "function") {
+      return fn(input);
+    }
+  });
+  ctx.tuiDialogTitle = prompt.title;
+  ctx.tuiPainted = () => prompt;
+  ctx.tuiPaintSource = "sync.permission";
+}
+
+function installFakeTuiSdk(root, bus, ctx) {
   const pkg = join(root, "node_modules", "@opencode-ai", "tui");
   mkdirSync(join(pkg, "context"), { recursive: true });
   writeFileSync(
@@ -295,30 +309,49 @@ function installFakeTuiSdk(root, bus, client) {
     join(pkg, "context", "sync.js"),
     `export function useSync() {
   return {
-    set() {},
+    set(key, sessionID, value) {
+      if (key === "permission" && Array.isArray(value) && value[0]) {
+        if (typeof globalThis.__rvSyncPermission === "function") {
+          globalThis.__rvSyncPermission(value[0]);
+        }
+      }
+    },
     data: { permission: {} },
   };
 }
 `,
   );
-  globalThis.__rvTuiClient = client;
+  const v2Reply = ctx.client && ctx.client.session && ctx.client.session.permission
+    && ctx.client.session.permission.reply;
+  // Live PermissionPrompt Return uses useSDK().client, not api.client.
+  // Unshimmed V1 reply does not resolve the V2 pending store.
+  globalThis.__rvTuiClient = {
+    session: ctx.client.session,
+    permission: {
+      async reply() {},
+    },
+  };
+  if (ctx.client.permission) {
+    ctx.client.permission.reply = async () => {
+      ctx.apiClientReplyHit = true;
+    };
+  }
   globalThis.__rvEmitTuiPayload = (payload) => bus.emit(payload);
+  globalThis.__rvSyncPermission = (request) => paintHostPermissionPrompt(ctx, request);
 }
 
 function installOfficialTuiSync(ctx, bus) {
   const asked = ["permission", "asked"].join(".");
   bus.on(asked, (payload) => {
     const request = payload && payload.properties;
-    resetOfficialPermissionPrompt();
-    const prompt = officialPermissionPrompt(request, (input) => {
-      const fn = ctx.client && ctx.client.permission && ctx.client.permission.reply;
-      if (typeof fn === "function") {
-        return fn(input);
+    ctx.tuiV1Asked = true;
+    if (process.env.RV_TUI_AUTO === "1") {
+      const client = globalThis.__rvTuiClient;
+      const fn = client && client.permission && client.permission.reply;
+      if (typeof fn === "function" && request && request.id) {
+        void fn({ reply: "once", requestID: request.id, directory: "/tmp" });
       }
-    });
-    ctx.tuiDialogTitle = prompt.title;
-    ctx.tuiPainted = () => prompt;
-    ctx.tuiPaintSource = asked;
+    }
   });
 }
 
@@ -366,7 +399,7 @@ async function loadTuiAskCompanion(ctx, pluginPath, click) {
     // host useSDK into plugin.server — planting a fake next to the js file
     // hides the a3a68bd asked-but-unpainted FAIL.
     const askDir = join(dirname(pluginPath), "rv-guard-tui-ask");
-    installFakeTuiSdk(askDir, bus, ctx.client);
+    installFakeTuiSdk(askDir, bus, ctx);
     const { useSDK } = await import(
       pathToFileURL(join(askDir, "node_modules", "@opencode-ai", "tui", "context", "sdk.js")).href
     );
@@ -375,7 +408,7 @@ async function loadTuiAskCompanion(ctx, pluginPath, click) {
     );
     hostHooks = { useSDK, useSync };
   } else if (process.env.RV_TUI_PAINT !== "0") {
-    installFakeTuiSdk(dirname(pluginPath), bus, ctx.client);
+    installFakeTuiSdk(dirname(pluginPath), bus, ctx);
   }
   const api = {
     keymap,
@@ -492,7 +525,7 @@ function installOfficialPermission(ctx, reply) {
         if (official204 && confirmReply) {
           scheduleOfficialConfirm(confirmReply);
         }
-        if (tuiClick || process.env.RV_TUI_PAINT === "0") {
+        if (tuiClick || process.env.RV_TUI_PAINT === "0" || process.env.RV_TUI_AUTO === "1") {
           const sessionID =
             (input && input.sessionID) ||
             (input && input.path && input.path.sessionID) ||
