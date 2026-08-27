@@ -18,16 +18,33 @@ public enum FrameCodec: Sendable {
         return frame
     }
 
+    /// Decodes a complete frame, enforcing the four-byte header, 1 MiB cap, and ordered framing errors.
     public static func decode(_ frame: Data) throws -> Data {
-        guard frame.count >= 4 else { throw FrameCodecError.truncated }
-        let declared = frame.prefix(4).withUnsafeBytes { raw -> UInt32 in
+        let header = Data(frame.prefix(4))
+        let length = try bodyCount(fromHeader: header)
+        let expected = 4 + length
+        guard frame.count >= expected else { throw FrameCodecError.truncated }
+        guard frame.count == expected else { throw FrameCodecError.lengthMismatch }
+        return frame.subdata(in: 4..<expected)
+    }
+
+    /// Validates a four-byte header and 1 MiB body cap, reporting framing errors in order before empty frames.
+    public static func bodyCount(fromHeader: Data) throws -> Int {
+        guard fromHeader.count >= 4 else { throw FrameCodecError.truncated }
+        let declared = fromHeader.withUnsafeBytes { raw -> UInt32 in
             raw.loadUnaligned(as: UInt32.self).bigEndian
         }
         guard declared <= UInt32(maxBodyBytes) else { throw FrameCodecError.oversized }
-        let expected = 4 + Int(declared)
-        guard frame.count >= expected else { throw FrameCodecError.truncated }
-        guard frame.count == expected else { throw FrameCodecError.lengthMismatch }
-        if declared == 0 { throw FrameCodecError.empty }
-        return frame.subdata(in: 4..<expected)
+        guard fromHeader.count == 4 else { throw FrameCodecError.lengthMismatch }
+        guard declared != 0 else { throw FrameCodecError.empty }
+        return Int(declared)
+    }
+
+    /// Decodes a split frame, enforcing the four-byte header, 1 MiB cap, and ordered framing errors.
+    public static func decode(header: Data, body: Data) throws -> Data {
+        let expected = try bodyCount(fromHeader: header)
+        guard body.count >= expected else { throw FrameCodecError.truncated }
+        guard body.count == expected else { throw FrameCodecError.lengthMismatch }
+        return body
     }
 }
