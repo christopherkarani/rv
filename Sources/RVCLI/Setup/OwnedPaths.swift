@@ -30,6 +30,9 @@ struct OwnedPaths: Equatable, Sendable {
     var codexDirectory: String { home.rawValue + "/.codex" }
     var codexHook: String { home.rawValue + "/.codex/hooks/rv-guard.py" }
     var codexHooksJSON: String { home.rawValue + "/.codex/hooks.json" }
+    var cursorDirectory: String { home.rawValue + "/.cursor" }
+    var cursorHook: String { home.rawValue + "/.cursor/hooks/rv-guard.py" }
+    var cursorHooksJSON: String { home.rawValue + "/.cursor/hooks.json" }
     var launchAgent: String { home.rawValue + "/Library/LaunchAgents/dev.rv.evaluate.plist" }
     var systemdUserUnit: String { home.rawValue + "/.config/systemd/user/dev.rv.evaluate.service" }
     var localRv: String { home.rawValue + "/.local/bin/rv" }
@@ -90,6 +93,13 @@ struct OwnedPaths: Equatable, Sendable {
                 detectionDirectory: codexDirectory,
                 executableName: "codex",
                 destination: codexHook
+            )
+        case .cursor:
+            OwnedHostAdapterPath(
+                host: .cursor,
+                detectionDirectory: cursorDirectory,
+                executableName: "cursor",
+                destination: cursorHook
             )
         }
     }

@@ -141,6 +141,7 @@ enum SetupRun {
             openClaw: .pending,
             hermes: .pending,
             codex: .pending,
+            cursor: .pending,
             wrote: []
         )
 
@@ -236,6 +237,7 @@ enum SetupRun {
             openClaw: slots.openClaw,
             hermes: slots.hermes,
             codex: slots.codex,
+            cursor: slots.cursor,
             wrote: slots.wrote
         )
         env.installAnalytics.captureInstall(hosts: InstallAnalyticsHosts.from(report.slots))
@@ -321,6 +323,12 @@ enum SetupRun {
             return wroteTui || wroteAsk
         case .codex:
             return try writeCodexHooksJSON(
+                adapterPath: directory + "/rv-guard.py",
+                hooksPath: (directory as NSString).deletingLastPathComponent + "/hooks.json",
+                files: files
+            )
+        case .cursor:
+            return try writeCursorHooksJSON(
                 adapterPath: directory + "/rv-guard.py",
                 hooksPath: (directory as NSString).deletingLastPathComponent + "/hooks.json",
                 files: files
@@ -468,6 +476,9 @@ enum SetupRun {
                     if owned.host == .codex {
                         _ = try removeCodexRVHooks(at: layout.codexHooksJSON, files: files)
                     }
+                    if owned.host == .cursor {
+                        _ = try removeCursorRVHooks(at: layout.cursorHooksJSON, files: files)
+                    }
                     if owned.host == .opencode {
                         removedPaths.append(layout.openCodeTuiPlugin)
                         removedPaths.append(layout.openCodeTuiAskPackage + "/package.json")
@@ -524,6 +535,9 @@ enum SetupRun {
         )
         files.removeDirectoryIfEmpty(
             atPath: (layout.codexHook as NSString).deletingLastPathComponent
+        )
+        files.removeDirectoryIfEmpty(
+            atPath: (layout.cursorHook as NSString).deletingLastPathComponent
         )
         files.removeDirectoryIfEmpty(atPath: layout.configDirectory)
 
@@ -589,6 +603,62 @@ enum SetupRun {
             try files.writeData(merged.data, to: hooksPath)
         } catch {
             throw SetupError.hostHookWriteFailed(.codex)
+        }
+        return true
+    }
+
+    /// Merges the Cursor beforeShellExecution registration for `adapterPath` into `hooks.json`.
+    private static func writeCursorHooksJSON(
+        adapterPath: String,
+        hooksPath: String,
+        files: FileOps
+    ) throws(SetupError) -> Bool {
+        if files.isSymbolicLink(hooksPath) {
+            throw SetupError.hostHookWriteFailed(.cursor)
+        }
+        let merged: (data: Data, wrote: Bool)
+        do {
+            merged = try CursorHooksMerge.merge(
+                existingData: files.readData(hooksPath),
+                adapterPath: adapterPath
+            )
+        } catch {
+            throw SetupError.hostHookWriteFailed(.cursor)
+        }
+        if merged.wrote == false {
+            return false
+        }
+        do {
+            try files.writeData(merged.data, to: hooksPath)
+        } catch {
+            throw SetupError.hostHookWriteFailed(.cursor)
+        }
+        return true
+    }
+
+    /// Removes rv-fingerprinted Cursor handlers only. Returns whether anything changed.
+    private static func removeCursorRVHooks(at path: String, files: FileOps) throws(SetupError) -> Bool {
+        if files.isSymbolicLink(path) {
+            return false
+        }
+        guard let data = files.readData(path) else { return false }
+        let next: Data?
+        do {
+            next = try CursorHooksMerge.uninstall(existingData: data)
+        } catch {
+            throw SetupError.hostHookWriteFailed(.cursor)
+        }
+        guard let next else {
+            files.removeFile(atPath: path)
+            return true
+        }
+        if next == data {
+            return false
+        }
+        do {
+            try files.writeData(next, to: path)
+        } catch {
+            throw SetupError.hostHookWriteFailed(.cursor)
         }
         return true
     }
@@ -884,6 +954,7 @@ private extension SetupSlotSnapshot {
         case .openclaw: openClaw = kind
         case .hermes: hermes = kind
         case .codex: codex = kind
+        case .cursor: cursor = kind
         }
     }
 }

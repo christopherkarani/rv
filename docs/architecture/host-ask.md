@@ -80,6 +80,23 @@ RV: `rv-guard-codex.py.tmpl` + `CodexHostCodec`. Matcher `PreToolUse` / `Bash`. 
 3. **Back to RV?** Block JSON + exit 2 is one-way. Allow-once is TTY → next hook consume.
 4. **No pause:** official `block` + trimmed non-empty stderr reason + exit 2, or TTY. Never silent allow.
 
+## Cursor
+
+Official: [hooks](https://cursor.com/docs/hooks.md) — `beforeShellExecution` documents this native stdout JSON (exit 0 = use the JSON):
+
+```json
+{"permission":"deny","user_message":"...","agent_message":"..."}
+```
+
+Allow is `{"permission":"allow"}`. Exit code `2` is Claude-compat deny, not the honor path. Nested Claude `hookSpecificOutput.permissionDecision` is third-party compat only ([third-party hooks](https://cursor.com/docs/reference/third-party-hooks)). `permission: "ask"` exists on `beforeShellExecution`. Default hook failure is fail-open; setup must set `failClosed: true`.
+
+RV: `rv-guard-cursor.py.tmpl` + `CursorHostCodec`. Event `beforeShellExecution` (also decode `preToolUse` + `Shell`/`Bash` as shell). Live deny: official native `{"permission":"deny","user_message","agent_message"}` on stdout and process exit **0**. Empty / missing / whitespace stdout — including exit 0 — is official deny (`rv failed`), never allow. Tests fail Claude `permissionDecision`, Codex `decision: block` + exit 2, leftover `permission: ask`, and empty stdout + exit 0 as the honor path. `HostNativeAsk.capability(.cursor)` is `denyOrTTY`. Host-only (OPE-270). No Ask. `encodeAsk` equals `encodeDeny`.
+
+1. **Pause?** Not today. Official `"ask"` is leftover-ask-as-permit on this ticket. RV never emits it.
+2. **User sees:** host `user_message` / `agent_message`. No RV Ask UI.
+3. **Back to RV?** Permission deny + exit 0 is one-way. Allow-once is TTY → next hook consume.
+4. **No pause:** official `permission: deny` + exit 0, or TTY. Never silent allow.
+
 ## Unknowns
 
 Pi `confirm` in print/RPC; whether OpenCode `permission.ask` (or an `ask()` on `tool.execute.before`) is live; whether Claude extra `hookSpecificOutput` keys on today's deny JSON (`ruleId` / `packId` / `severity` / `remediation`) fail-open a deny; OpenClaw approval-surface availability without a connected Gateway; Hermes approve-gate UI shape and whether a post-Allow retry re-enters `pre_tool_call`.

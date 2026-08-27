@@ -209,6 +209,154 @@ func codexWrapper_missingReasonDoesNotExitTwoWithWhitespaceStderr(_ stubStdout: 
     #expect(result.exitCode == 2)
 }
 
+@Test func cursorTemplate_emitsOfficialPermissionDenyNotClaudeOrCodex() throws {
+    let source = try adapterSource(for: .cursor, rvPath: "/opt/rv")
+    #expect(source.contains("beforeShellExecution"))
+    #expect(source.contains("\"cursor\""))
+    #expect(source.contains("RV_BINARY = \"/opt/rv\""))
+    #expect(source.contains("\"permission\"") || source.contains("'permission'"))
+    #expect(source.contains("\"deny\"") || source.contains("'deny'"))
+    #expect(source.contains("user_message"))
+    #expect(source.contains("agent_message"))
+    #expect(source.contains("sys.exit(0)"))
+    #expect(source.contains("\"decision\":\"block\"") == false)
+    #expect(source.contains("'decision': 'block'") == false)
+    #expect(source.contains("\"permissionDecision\"") == false)
+    #expect(source.contains("'permissionDecision'") == false)
+    #expect(source.contains("\"permission\": \"ask\"") == false)
+    #expect(source.contains("'permission': 'ask'") == false)
+    #expect(source.contains("permission.ask") == false)
+    #expect(source.contains("RV_BYPASS") == false)
+    #expect(source.contains("if exit_code == 0") == false)
+}
+
+@Test func cursorWrapper_resetHardWritesPermissionDenyAndExitsZero() async throws {
+    let reason = resetHardReason
+    let result = try await runCursorWrapper(
+        event: [
+            "hook_event_name": "beforeShellExecution",
+            "command": "git reset --hard",
+            "cwd": "/tmp/ws",
+        ],
+        stub: .stdout(
+            "{\"permission\":\"deny\",\"user_message\":\"\(reason)\",\"agent_message\":\"\(reason)\"}\n",
+            exit: 0
+        )
+    )
+    let json = try #require(
+        JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any]
+    )
+    #expect(json["permission"] as? String == "deny")
+    #expect(json["user_message"] as? String == reason)
+    #expect(json["agent_message"] as? String == reason)
+    #expect(json["permissionDecision"] == nil)
+    #expect(json["decision"] == nil)
+    #expect(result.stdout.contains("\"permissionDecision\"") == false)
+    #expect(result.stdout.contains("\"decision\":\"block\"") == false)
+    #expect(result.stdout.contains("\"permission\":\"ask\"") == false)
+    #expect(result.exitCode == 0)
+}
+
+@Test func cursorWrapper_leftoverAskIsDenyNotPermit() async throws {
+    let result = try await runCursorWrapper(
+        event: [
+            "hook_event_name": "beforeShellExecution",
+            "command": "git reset --hard",
+        ],
+        stub: .stdout("{\"permission\":\"ask\",\"user_message\":\"ask\"}\n", exit: 0)
+    )
+    let json = try #require(
+        JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any]
+    )
+    #expect(json["permission"] as? String == "deny")
+    #expect(json["permission"] as? String != "ask")
+    #expect(result.stdout.contains("\"permission\":\"ask\"") == false)
+    #expect(result.exitCode == 0)
+}
+
+@Test func cursorWrapper_codexBlockMapsToPermissionDeny() async throws {
+    let reason = resetHardReason
+    let result = try await runCursorWrapper(
+        event: [
+            "hook_event_name": "beforeShellExecution",
+            "command": "git reset --hard",
+        ],
+        stub: .stdout("{\"decision\":\"block\",\"reason\":\"\(reason)\"}\n", exit: 2)
+    )
+    let json = try #require(
+        JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any]
+    )
+    #expect(json["permission"] as? String == "deny")
+    #expect(json["user_message"] as? String == reason)
+    #expect(json["decision"] == nil)
+    #expect(result.exitCode == 0)
+}
+
+@Test(arguments: [
+    "",
+    "\n",
+    "   \n",
+    "\t",
+])
+func cursorWrapper_emptyOrWhitespaceStdoutExitZeroIsDenyNotAllow(_ stubStdout: String) async throws {
+    let result = try await runCursorWrapper(
+        event: [
+            "hook_event_name": "beforeShellExecution",
+            "command": "git reset --hard",
+        ],
+        stub: .stdout(stubStdout, exit: 0)
+    )
+    let json = try #require(
+        JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any]
+    )
+    #expect(json["permission"] as? String == "deny")
+    #expect(json["permission"] as? String != "allow")
+    #expect(json["user_message"] as? String == "rv failed")
+    #expect(json["agent_message"] as? String == "rv failed")
+    #expect(json["permissionDecision"] == nil)
+    #expect(json["decision"] == nil)
+    #expect(result.stdout.contains("\"permission\":\"allow\"") == false)
+    #expect(result.stdout.contains("\"permissionDecision\"") == false)
+    #expect(result.stdout.contains("\"decision\":\"block\"") == false)
+    #expect(result.stdout.contains("\"permission\":\"ask\"") == false)
+    #expect(result.exitCode == 0)
+}
+
+@Test func cursorWrapper_officialPermissionAllowStillAllows() async throws {
+    let result = try await runCursorWrapper(
+        event: [
+            "hook_event_name": "beforeShellExecution",
+            "command": "git status",
+        ],
+        stub: .stdout("{\"permission\":\"allow\"}\n", exit: 0)
+    )
+    let json = try #require(
+        JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any]
+    )
+    #expect(json["permission"] as? String == "allow")
+    #expect(json["permission"] as? String != "ask")
+    #expect(json["permissionDecision"] == nil)
+    #expect(json["decision"] == nil)
+    #expect(result.stdout.contains("\"permission\":\"ask\"") == false)
+    #expect(result.exitCode == 0)
+}
+
+@Test func cursorWrapper_missingRvDenies() async throws {
+    let result = try await runCursorWrapper(
+        event: [
+            "hook_event_name": "beforeShellExecution",
+            "command": "git reset --hard",
+        ],
+        stub: .missing
+    )
+    let json = try #require(
+        JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any]
+    )
+    #expect(json["permission"] as? String == "deny")
+    #expect(json["user_message"] as? String == "rv missing")
+    #expect(result.exitCode == 0)
+}
+
 @Test func hermesTemplate_registersPreToolCallTerminalAndBlocks() throws {
     let source = try adapterSource(for: .hermes, rvPath: "/opt/rv")
     #expect(source.contains("pre_tool_call"))
@@ -1385,6 +1533,74 @@ private func runCodexWrapper(
     }
 
     let source = try adapterSource(for: .codex, rvPath: rvPath)
+    let adapter = root.appendingPathComponent("rv-guard.py")
+    try source.write(to: adapter, atomically: true, encoding: .utf8)
+
+    let eventData = try JSONSerialization.data(withJSONObject: event)
+    let eventText = try #require(String(data: eventData, encoding: .utf8))
+
+    var environment = ProcessInfo.processInfo.environment
+    environment["HOME"] = root.path
+    switch stub {
+    case .stdout(let stdout, let exitCode):
+        environment["RV_STUB_STDOUT"] = stdout
+        environment["RV_STUB_EXIT"] = String(exitCode)
+    case .missing, .sleep:
+        break
+    }
+
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    process.arguments = ["python3", adapter.path]
+    process.environment = environment
+    process.currentDirectoryURL = root
+    let stdin = Pipe()
+    let stdout = Pipe()
+    let stderr = Pipe()
+    process.standardInput = stdin
+    process.standardOutput = stdout
+    process.standardError = stderr
+    try process.run()
+    stdin.fileHandleForWriting.write(Data(eventText.utf8))
+    try stdin.fileHandleForWriting.close()
+    process.waitUntilExit()
+
+    return CodexWrapperRun(
+        stdout: String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "",
+        stderr: String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "",
+        exitCode: process.terminationStatus
+    )
+}
+
+private func runCursorWrapper(
+    event: [String: Any],
+    stub: StubRV
+) async throws -> CodexWrapperRun {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-cursor-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let rvPath: String
+    switch stub {
+    case .missing:
+        rvPath = root.appendingPathComponent("missing-rv").path
+    case .stdout(let stdout, let exitCode):
+        rvPath = root.appendingPathComponent("rv-stub").path
+        let script = """
+        #!/bin/sh
+        printf '%s' "$RV_STUB_STDOUT"
+        exit "${RV_STUB_EXIT:-0}"
+        """
+        try script.write(toFile: rvPath, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: rvPath)
+        _ = stdout
+        _ = exitCode
+    case .sleep:
+        rvPath = root.appendingPathComponent("rv-stub").path
+    }
+
+    let source = try adapterSource(for: .cursor, rvPath: rvPath)
     let adapter = root.appendingPathComponent("rv-guard.py")
     try source.write(to: adapter, atomically: true, encoding: .utf8)
 

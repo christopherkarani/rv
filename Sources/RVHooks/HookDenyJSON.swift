@@ -22,6 +22,19 @@ func hookDenyJSON(reason: String, rule: String? = nil, next: String? = nil) -> S
     return "{\(body)}\n"
 }
 
+/// Official Cursor `beforeShellExecution` honor path
+/// (`permission: deny` + `user_message` + `agent_message`, exit 0).
+/// See https://cursor.com/docs/hooks.md. Not Claude `permissionDecision`.
+/// Not Codex `decision: block`. Never emit leftover `permission: ask`.
+func hookPermissionAllowJSON() -> String {
+    "{\"permission\":\"allow\"}\n"
+}
+
+func hookPermissionDenyJSON(reason: String) -> String {
+    let text = hookBlockReason(reason)
+    return "{\"permission\":\"deny\",\"user_message\":\(jsonQuoted(text)),\"agent_message\":\(jsonQuoted(text))}\n"
+}
+
 /// Official Codex older PreToolUse honor path (`decision: block` + process exit 2).
 /// Codex TUI does not honor Claude permission deny JSON. Never emit leftover Ask.
 func hookBlockJSON(reason: String) -> String {

@@ -28,7 +28,7 @@ import RVDomain
     assertHookDenyHasNoBypassOrEssay(wire.stdout)
 }
 
-@Test(arguments: [HookHost.grok, .pi, .opencode, .openclaw, .hermes, .claude, .codex])
+@Test(arguments: [HookHost.grok, .pi, .opencode, .openclaw, .hermes, .claude, .codex, .cursor])
 func hookWire_samePathHosts_resetHardIsShortDeny(_ host: HookHost) throws {
     let match = RuleMatch(
         ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
@@ -61,6 +61,8 @@ func hookWire_samePathHosts_resetHardIsShortDeny(_ host: HookHost) throws {
         wire = hookWire(from: result, command: command, using: ClaudeHostCodec())
     case .codex:
         wire = hookWire(from: result, command: command, using: CodexHostCodec())
+    case .cursor:
+        wire = hookWire(from: result, command: command, using: CursorHostCodec())
     }
     #expect(wire.stdout.isEmpty == false)
     #expect(wire.stdout.contains("\"permissionDecision\":\"ask\"") == false)
@@ -83,6 +85,18 @@ func hookWire_samePathHosts_resetHardIsShortDeny(_ host: HookHost) throws {
         #expect(wire.stderr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
         #expect(wire.stderr.trimmingCharacters(in: .whitespacesAndNewlines) == resetHardHostDeny)
         #expect(wire.stderr.contains(resetHardHostDeny))
+    } else if host == .cursor {
+        let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
+        #expect(json["permission"] as? String == "deny")
+        #expect(json["user_message"] as? String == resetHardHostDeny)
+        #expect(json["agent_message"] as? String == resetHardHostDeny)
+        #expect(json["permissionDecision"] == nil)
+        #expect(json["hookSpecificOutput"] == nil)
+        #expect(json["decision"] == nil)
+        #expect(wire.stdout.contains("\"permissionDecision\":\"deny\"") == false)
+        #expect(wire.stdout.contains("\"permission\":\"ask\"") == false)
+        #expect(wire.stdout.contains("\"decision\":\"block\"") == false)
+        #expect(wire.exitCode == 0)
     } else {
         let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
         #expect(json["decision"] as? String == "deny")
@@ -120,6 +134,12 @@ func hookWire_samePathHosts_resetHardIsShortDeny(_ host: HookHost) throws {
     #expect(codex.stdout.contains("\"decision\":\"deny\"") == false)
     #expect(codex.exitCode == 2)
     #expect(codex.stderr.isEmpty == false)
+    let cursor = hookWire(from: result, command: command, using: CursorHostCodec())
+    #expect(cursor.stdout.contains("\"permissionDecision\"") == false)
+    #expect(cursor.stdout.contains("\"permission\":\"deny\""))
+    #expect(cursor.stdout.contains("\"decision\":\"block\"") == false)
+    #expect(cursor.stdout.contains("\"permission\":\"ask\"") == false)
+    #expect(cursor.exitCode == 0)
 }
 
 @Test func hookWire_allowIsEmpty() {

@@ -14,6 +14,7 @@ struct SetupReport: Equatable, Sendable {
         openClaw: SetupSlotKind = .pending,
         hermes: SetupSlotKind = .pending,
         codex: SetupSlotKind = .pending,
+        cursor: SetupSlotKind = .pending,
         wrote: Set<HookHost>
     ) {
         slots = SetupSlotSnapshot(
@@ -24,6 +25,7 @@ struct SetupReport: Equatable, Sendable {
             openClaw: openClaw,
             hermes: hermes,
             codex: codex,
+            cursor: cursor,
             wrote: wrote
         )
     }
@@ -35,6 +37,7 @@ struct SetupReport: Equatable, Sendable {
     var openClaw: SetupSlotKind { slots.openClaw }
     var hermes: SetupSlotKind { slots.hermes }
     var codex: SetupSlotKind { slots.codex }
+    var cursor: SetupSlotKind { slots.cursor }
     var wrote: Set<HookHost> { slots.wrote }
 }
 

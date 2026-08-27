@@ -67,6 +67,7 @@ public func setupCeremonyFrames(
     openClaw: SetupSlotKind = .pending,
     hermes: SetupSlotKind = .pending,
     codex: SetupSlotKind = .pending,
+    cursor: SetupSlotKind = .pending,
     wrote: Set<HookHost>,
     kind: SetupCeremonyKind
 ) -> [SetupCeremonyFrame]? {
@@ -79,6 +80,7 @@ public func setupCeremonyFrames(
             openClaw: openClaw,
             hermes: hermes,
             codex: codex,
+            cursor: cursor,
             wrote: wrote
         ),
         kind: kind

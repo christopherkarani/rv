@@ -30,6 +30,7 @@ public enum ScanHostID: String, Sendable, Equatable, Hashable {
     case openclaw
     case hermes
     case codex
+    case cursor
 }
 
 /// Non-empty injectable home path for session-store discovery.
