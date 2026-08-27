@@ -1,7 +1,10 @@
 // Official OpenCode 1.18.18 `packages/tui/src/routes/session/permission.tsx`.
-// Host PermissionPrompt `useBindings` own left / right / return.
-// Return calls `sdk.client.permission.reply` → Permission.reply publishes
-// `permission.v2.replied`. That is the live winner. Not DialogConfirm.
+// Host PermissionPrompt mounts from the V1 asked store filled by
+// Tool.Context ctx.ask → Permission.ask (shell.ts / webfetch /
+// external-directory). Return calls `sdk.client.permission.reply` →
+// Permission.reply publishes `permission.replied`. Not DialogConfirm.
+// Plugin session.permission.create is V2 and does not paint. This
+// fixture is Return shape only — not live proof a plugin can call ctx.ask.
 
 export function officialPermissionPrompt(request, replyFn) {
   const keys = ["once", "always", "reject"];

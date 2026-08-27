@@ -486,7 +486,9 @@ function installOfficialPermission(ctx, reply) {
       resources: ["/rv-ask"],
     },
   };
-  const deliverOfficialConfirm = (replyValue) => {
+  const leftoverV1Replied =
+    effectReply === "v1-replied-once" || effectReply === "v1-replied-204";
+  const deliverOfficialConfirm = (replyValue, type = "permission.v2.replied") => {
     ctx.permissionReply204 = replyValue;
     if (typeof ctx.pluginEvent !== "function") {
       return;
@@ -495,7 +497,7 @@ function installOfficialPermission(ctx, reply) {
     void ctx.pluginEvent({
       event: {
         id: "evt_test",
-        type: "permission.v2.replied",
+        type,
         properties: {
           sessionID: "ses_1",
           requestID,
@@ -504,9 +506,9 @@ function installOfficialPermission(ctx, reply) {
       },
     });
   };
-  const scheduleOfficialConfirm = (replyValue) => {
+  const scheduleOfficialConfirm = (replyValue, type) => {
     setTimeout(() => {
-      deliverOfficialConfirm(replyValue);
+      deliverOfficialConfirm(replyValue, type);
     }, lateMs > 0 ? lateMs : 25);
   };
   const session = ctx.client.session ?? {};
@@ -522,6 +524,12 @@ function installOfficialPermission(ctx, reply) {
         }
         if (official204 && confirmReply) {
           scheduleOfficialConfirm(confirmReply);
+        }
+        if (effectReply === "v1-replied-204") {
+          // Leftover unused official V1 Return (`permission.replied`) on a
+          // V2 create id. Plugin cannot call ctx.ask / Permission.ask, so
+          // this is not official paint Return. Must not spend.
+          scheduleOfficialConfirm("once", "permission.replied");
         }
         if (tuiClick || process.env.RV_TUI_PAINT === "0" || process.env.RV_TUI_AUTO === "1") {
           const sessionID =
@@ -587,6 +595,16 @@ function installOfficialPermission(ctx, reply) {
                   sessionID: "ses_1",
                   requestID,
                   reply: effectReply,
+                },
+              };
+            }
+            if (leftoverV1Replied && effectReply === "v1-replied-once") {
+              yield {
+                type: "permission.replied",
+                properties: {
+                  sessionID: "ses_1",
+                  requestID,
+                  reply: "once",
                 },
               };
             }

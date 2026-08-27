@@ -6,10 +6,14 @@ import Foundation
 /// `plugins/rv-guard-tui.js` is `{ server() }`. The Ask package exposes
 /// only `./tui` so leftover custom DialogConfirm installs are replaced.
 /// Live 1.18.18 TUI mounts host PermissionPrompt from `sync.data.permission`
-/// filled on V1 `permission.asked`. Official plugin create is V2
+/// filled on V1 asked (`Permission.ask` / Tool.Context `ctx.ask` in
+/// `packages/opencode/src/tool/shell.ts`). Official plugin create is V2
 /// (`permission.v2.asked`) only. TUI sync does not handle that event.
 /// There is no HTTP V1 create. Desktop `adaptServerEvent` is not in TUI.
 /// Plugin `useSync().set` / V1 emit is not official create — do not ship it.
+/// A plugin cannot call `ctx.ask`. Smallest official hook: plugin-callable
+/// `Permission.ask`, or TUI `adaptServerEvent` for V2 asked, plus a
+/// post-Return spend hook.
 /// This package overwrites leftover DialogConfirm installs with a no-op.
 enum OpenCodeConfigMerge {
     static func merge(existingData: Data?, pluginPath: String) throws -> (data: Data, wrote: Bool) {
@@ -98,6 +102,7 @@ enum OpenCodeTuiAskPackage {
 
     static let tuiTSX = """
     /** @jsxImportSource @opentui/solid */
+    /** Official paint is Tool.Context ctx.ask (Permission.ask / shell.ts). Plugin cannot call it. */
     export default {
       id: "rv-guard-tui-ask",
       tui: async () => ({}),

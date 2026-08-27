@@ -156,6 +156,32 @@ private func runOpenCodePluginContract(
     #expect(source.contains("permission.v2.replied"))
 }
 
+@Test func openCodeTemplate_namesOfficialCtxAskPaintPathAndDoesNotCallIt() throws {
+    let source = try adapterSource(for: .opencode, rvPath: "/opt/rv")
+    #expect(source.contains("ctx.ask"))
+    #expect(source.contains("Permission.ask"))
+    #expect(source.contains("Tool.Context"))
+    #expect(source.contains("shell.ts"))
+    #expect(source.contains("ctx.ask(") == false)
+    #expect(source.contains("\"permission.ask\"") == false)
+    let tui = try HostAdapterResources.loadOpenCodeTuiPlugin()
+    #expect(tui.contains("ctx.ask"))
+    #expect(tui.contains("Permission.ask"))
+    #expect(tui.contains("Tool.Context"))
+    #expect(tui.contains("ctx.ask(") == false)
+    #expect(tui.contains("\"permission.ask\"") == false)
+    let fixture = try String(
+        contentsOf: URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/adapters/opencode-11818-permission-prompt.mjs"),
+        encoding: .utf8
+    )
+    #expect(fixture.contains("ctx.ask"))
+    #expect(fixture.contains("Permission.ask"))
+    #expect(fixture.contains("permission.replied"))
+    #expect(fixture.contains("permission.v2.replied") == false)
+}
+
 @Test func openCodeTuiPlugin_defaultExportsServerAndLoadsOnOpenCode11818() async throws {
     let probe = try await runOpenCodePluginContract(try HostAdapterResources.loadOpenCodeTuiPlugin())
     #expect(probe.hasServer == true)
@@ -520,6 +546,73 @@ private func runOpenCodePluginContract(
         ],
         stub: .stdout(askResetHardJSON, exit: 1),
         permissionReply: "tui-click-none",
+        askTimeoutMs: 400,
+        secondStub: .stdout("", exit: 0)
+    )
+    #expect(result.threw == resetHardReason)
+    #expect(result.permissionCreates == 1)
+    #expect(result.tuiDialogTitle == nil)
+    #expect(result.tuiPaintSource == nil)
+    #expect(result.spawnCount == 1)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
+}
+
+@Test func openCodeAdapter_leftoverOfficialV1RepliedOnV2CreateDoesNotSpend() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: [
+            "hook": "shell.env",
+            "cwd": "/tmp/ws",
+            "sessionID": "ses_1",
+            "callID": "call_1",
+            "command": "git reset --hard",
+        ],
+        stub: .stdout(askResetHardJSON, exit: 1),
+        permissionReply: "v1-replied-once",
+        askTimeoutMs: 400,
+        secondStub: .stdout("", exit: 0)
+    )
+    #expect(result.threw == resetHardReason)
+    #expect(result.permissionCreates == 1)
+    #expect(result.tuiDialogTitle == nil)
+    #expect(result.tuiPaintSource == nil)
+    #expect(result.spawnCount == 1)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
+}
+
+@Test func openCodeAdapter_sessionShellLeftoverOfficialV1RepliedOnV2CreateDoesNotSpend() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: [
+            "tool": "session.shell",
+            "cwd": "/tmp/ws",
+            "sessionID": "ses_1",
+            "callID": "call_1",
+            "args": ["command": "git reset --hard"],
+        ],
+        stub: .stdout(askResetHardJSON, exit: 1),
+        permissionReply: "v1-replied-once",
+        askTimeoutMs: 400,
+        secondStub: .stdout("", exit: 0)
+    )
+    #expect(result.threw == resetHardReason)
+    #expect(result.permissionCreates == 1)
+    #expect(result.tuiDialogTitle == nil)
+    #expect(result.tuiPaintSource == nil)
+    #expect(result.spawnCount == 1)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
+}
+
+@Test func openCodeAdapter_leftoverOfficialV1Replied204OnV2CreateDoesNotSpend() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: [
+            "hook": "shell.env",
+            "cwd": "/tmp/ws",
+            "sessionID": "ses_1",
+            "callID": "call_1",
+            "command": "git reset --hard",
+        ],
+        stub: .stdout(askResetHardJSON, exit: 1),
+        permissionReply: "v1-replied-204",
+        permissionSubscribe: "throw",
         askTimeoutMs: 400,
         secondStub: .stdout("", exit: 0)
     )

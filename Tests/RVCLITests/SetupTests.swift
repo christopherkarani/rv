@@ -175,6 +175,10 @@ private func fixtureLoginHome() throws -> URL {
         #expect(askTui.contains("useSync") == false)
         #expect(askTui.contains("sync.set") == false)
         #expect(askTui.contains("permission.ask") == false)
+        #expect(askTui.contains("ctx.ask"))
+        #expect(askTui.contains("Permission.ask"))
+        #expect(askTui.contains("Tool.Context"))
+        #expect(askTui.contains("ctx.ask(") == false)
         let config = try String(contentsOfFile: layout.openCodeConfig, encoding: .utf8)
         #expect(config.contains("rv-guard-tui-ask"))
         let tuiConfigPath = layout.openCodeDirectory + "/tui.json"
