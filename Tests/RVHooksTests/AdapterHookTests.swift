@@ -62,7 +62,9 @@ private func runOpenCodePluginContract(
         replySessionID: object["replySessionID"] as? String,
         replyRequestID: object["replyRequestID"] as? String,
         usedShow: object["usedShow"] as? Bool ?? false,
-        usedCreateComponent: object["usedCreateComponent"] as? Bool ?? false
+        usedCreateComponent: object["usedCreateComponent"] as? Bool ?? false,
+        usedOfficialKeys: object["usedOfficialKeys"] as? Bool ?? false,
+        usedInventedCallback: object["usedInventedCallback"] as? Bool ?? false
     )
 }
 
@@ -120,7 +122,9 @@ private func runOpenCodePluginContract(
     #expect(tui.contains("permission.ask") == false)
     #expect(tui.contains("server:"))
     #expect(tui.contains("DialogConfirm.show") == false)
-    #expect(tui.contains("createComponent"))
+    #expect(tui.contains("createComponent") == false)
+    #expect(tui.contains("registerLayer"))
+    #expect(tui.contains("keymap"))
     #expect(tui.contains("setSize"))
     #expect(source.contains("pollOfficialPermissionReply") == false)
     #expect(source.contains("RV_ASK_TIMEOUT_MS"))
@@ -139,7 +143,9 @@ private func runOpenCodePluginContract(
     #expect(probe.dialogMessage?.contains("git reset --hard") == true)
     #expect(probe.dialogSize == "medium")
     #expect(probe.usedShow == false)
-    #expect(probe.usedCreateComponent == true)
+    #expect(probe.usedCreateComponent == false)
+    #expect(probe.usedOfficialKeys == true)
+    #expect(probe.usedInventedCallback == false)
     #expect(probe.replied == "once")
     #expect(probe.replySessionID == "ses_1")
     #expect(probe.replyRequestID == "per_live")
@@ -151,7 +157,9 @@ private func runOpenCodePluginContract(
         mode: "official-confirm"
     )
     #expect(probe.usedShow == false)
-    #expect(probe.usedCreateComponent == true)
+    #expect(probe.usedCreateComponent == false)
+    #expect(probe.usedOfficialKeys == true)
+    #expect(probe.usedInventedCallback == false)
     #expect(probe.dialogTitle == "RV · Ask")
     #expect(probe.replied == "once")
     #expect(probe.replySessionID == "ses_1")
@@ -164,7 +172,9 @@ private func runOpenCodePluginContract(
         mode: "official-cancel"
     )
     #expect(probe.usedShow == false)
-    #expect(probe.usedCreateComponent == true)
+    #expect(probe.usedCreateComponent == false)
+    #expect(probe.usedOfficialKeys == true)
+    #expect(probe.usedInventedCallback == false)
     #expect(probe.dialogTitle == "RV · Ask")
     #expect(probe.replied == "reject")
     #expect(probe.replySessionID == "ses_1")
@@ -1292,6 +1302,8 @@ private struct OpenCodePluginContract {
     var replyRequestID: String?
     var usedShow: Bool
     var usedCreateComponent: Bool
+    var usedOfficialKeys: Bool
+    var usedInventedCallback: Bool
 }
 
 private func runPiAdapter(
@@ -1564,16 +1576,6 @@ private func runAdapter(
                 .write(to: tuiPlugin, atomically: true, encoding: .utf8)
             environment["RV_TUI_PLUGIN"] = tuiPlugin.path
             environment["RV_TUI_CLICK"] = String(permissionReply.dropFirst("tui-click-".count))
-            let solid = root.appendingPathComponent("node_modules/solid-js", isDirectory: true)
-            try FileManager.default.createDirectory(at: solid, withIntermediateDirectories: true)
-            try """
-            {"name":"solid-js","type":"module","exports":{".":"./index.js"}}
-            """.write(to: solid.appendingPathComponent("package.json"), atomically: true, encoding: .utf8)
-            try """
-            export function createComponent(component, props) {
-              return typeof component === "function" ? component(props) : component;
-            }
-            """.write(to: solid.appendingPathComponent("index.js"), atomically: true, encoding: .utf8)
         }
     }
     if let permissionSubscribe {

@@ -45,43 +45,95 @@ async function showConfirm(api, message) {
   if (!dialog || typeof dialog.replace !== "function" || typeof DialogConfirm !== "function") {
     return undefined;
   }
-  const createComponent = await officialCreateComponent(ui);
-  if (typeof createComponent !== "function") {
-    return undefined;
-  }
   if (typeof dialog.setSize === "function") {
     dialog.setSize("medium");
   }
   return await new Promise((resolve) => {
-    dialog.replace(() =>
-      createComponent(DialogConfirm, {
-        title: "RV · Ask",
-        message,
-        onConfirm: () => resolve(true),
-        onCancel: () => resolve(false),
-      }),
+    let settled = false;
+    const finish = (allowed) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (typeof unbind === "function") {
+        unbind();
+      }
+      if (typeof dialog.clear === "function") {
+        dialog.clear();
+      }
+      resolve(allowed);
+    };
+    const unbind = bindOfficialDialogKeys(api, {
+      onConfirm: () => finish(true),
+      onCancel: () => finish(false),
+    });
+    dialog.replace(
+      () =>
+        DialogConfirm({
+          title: "RV · Ask",
+          message,
+          get onConfirm() {
+            return () => finish(true);
+          },
+          get onCancel() {
+            return () => finish(false);
+          },
+        }),
+      () => {
+        if (typeof unbind === "function") {
+          unbind();
+        }
+      },
     );
   });
 }
 
-async function officialCreateComponent(ui) {
-  if (ui && typeof ui.createComponent === "function") {
-    return ui.createComponent;
+function bindOfficialDialogKeys(api, handlers) {
+  const keymap = api && api.keymap;
+  if (!keymap || typeof keymap.registerLayer !== "function") {
+    return undefined;
   }
-  try {
-    const solid = await import("solid-js");
-    if (solid && typeof solid.createComponent === "function") {
-      return solid.createComponent;
-    }
-  } catch {
-    // Server process has no Solid runtime. Leave the ask pending.
-  }
-  return undefined;
+  let active = "confirm";
+  const toggle = () => {
+    active = active === "confirm" ? "cancel" : "confirm";
+  };
+  return keymap.registerLayer({
+    priority: 1000,
+    bindings: [
+      {
+        key: "return",
+        desc: "Confirm dialog selection",
+        group: "Dialog",
+        cmd: () => {
+          if (active === "confirm") {
+            handlers.onConfirm();
+          }
+          if (active === "cancel") {
+            handlers.onCancel();
+          }
+        },
+      },
+      {
+        key: "left",
+        desc: "Previous dialog option",
+        group: "Dialog",
+        cmd: toggle,
+      },
+      {
+        key: "right",
+        desc: "Next dialog option",
+        group: "Dialog",
+        cmd: toggle,
+      },
+    ],
+  });
 }
 
 async function replyOfficial(api, sessionID, requestID, reply) {
   const client = api && api.client;
   const fn =
+    (client && client.permission && client.permission.reply) ||
+    (client && client.v2 && client.v2.permission && client.v2.permission.reply) ||
     (client &&
       client.session &&
       client.session.permission &&

@@ -156,14 +156,16 @@ private func fixtureLoginHome() throws -> URL {
         #expect(tui.contains("server:"))
         #expect(tui.contains("permission.ask") == false)
         #expect(tui.contains("DialogConfirm.show") == false)
-        #expect(tui.contains("createComponent"))
+        #expect(tui.contains("createComponent") == false)
+        #expect(tui.contains("registerLayer"))
+        #expect(tui.contains("keymap"))
         #expect(tui.contains("setSize"))
         let askTui = try String(
             contentsOfFile: layout.openCodeTuiAskPackage + "/tui.js",
             encoding: .utf8
         )
-        #expect(askTui.contains("createComponent"))
-        #expect(askTui.contains("solid-js"))
+        #expect(askTui.contains("createComponent") == false)
+        #expect(askTui.contains("solid-js") == false)
         #expect(askTui.contains("plugin.server"))
         #expect(askTui.contains("permission.ask") == false)
         let config = try String(contentsOfFile: layout.openCodeConfig, encoding: .utf8)
@@ -172,8 +174,8 @@ private func fixtureLoginHome() throws -> URL {
         #expect(FileManager.default.fileExists(atPath: tuiConfigPath))
         let tuiConfig = try String(contentsOfFile: tuiConfigPath, encoding: .utf8)
         #expect(tuiConfig.contains("rv-guard-tui-ask"))
-        #expect(askTui.contains("createComponent"))
-        #expect(askTui.contains("solid-js"))
+        #expect(askTui.contains("createComponent") == false)
+        #expect(askTui.contains("solid-js") == false)
         #expect(FileManager.default.fileExists(atPath: layout.grokHook) == false)
 
         let uninstall = SetupRun.uninstall(env(home: home, launchctl: launchctl))

@@ -186,32 +186,72 @@ if (host === "opencode") {
   process.exit(0);
 }
 
+function officialKeymap() {
+  const layers = [];
+  return {
+    registerLayer(layer) {
+      layers.push(layer);
+      return () => {
+        const index = layers.indexOf(layer);
+        if (index >= 0) {
+          layers.splice(index, 1);
+        }
+      };
+    },
+    handle(key) {
+      const ordered = [...layers].sort((left, right) => (right.priority ?? 0) - (left.priority ?? 0));
+      for (const layer of ordered) {
+        for (const binding of layer.bindings ?? []) {
+          if (binding.key !== key) {
+            continue;
+          }
+          if (typeof binding.cmd === "function") {
+            binding.cmd();
+          } else {
+            const command = (layer.commands ?? []).find((entry) => entry.name === binding.cmd);
+            if (command && typeof command.run === "function") {
+              command.run();
+            }
+          }
+          return;
+        }
+      }
+    },
+  };
+}
+
 async function loadTuiAskCompanion(ctx, pluginPath, click) {
   const { pathToFileURL: toURL } = await import("node:url");
   const tuiMod = await import(toURL(pluginPath).href);
   const handlers = new Map();
+  const keymap = officialKeymap();
   let painted = null;
   const dialog = {
     size: "medium",
     setSize(size) {
       this.size = size;
     },
-    replace(input) {
+    replace(input, onClose) {
       const element = typeof input === "function" ? input() : input;
       this.replaced = element;
+      this.onClose = onClose;
+    },
+    clear() {
+      if (typeof this.onClose === "function") {
+        this.onClose();
+      }
     },
   };
   function DialogConfirm(props) {
     painted = {
       title: props && props.title,
       message: props && props.message,
-      onConfirm: props && props.onConfirm,
-      onCancel: props && props.onCancel,
     };
     ctx.tuiDialogTitle = painted.title;
     return painted;
   }
   const api = {
+    keymap,
     event: {
       on(type, handler) {
         handlers.set(type, handler);
@@ -227,6 +267,7 @@ async function loadTuiAskCompanion(ctx, pluginPath, click) {
   ctx.tuiAsked = handlers.get("permission.v2.asked");
   ctx.tuiClick = click;
   ctx.tuiPainted = () => painted;
+  ctx.tuiKeymap = keymap;
 }
 
 function installOfficialPermission(ctx, reply) {
@@ -322,11 +363,13 @@ function installOfficialPermission(ctx, reply) {
           const clickPainted = async () => {
             for (let i = 0; i < 40; i++) {
               const painted = typeof ctx.tuiPainted === "function" ? ctx.tuiPainted() : null;
-              if (painted) {
-                if (tuiClick === "once" && typeof painted.onConfirm === "function") {
-                  painted.onConfirm();
-                } else if (tuiClick === "reject" && typeof painted.onCancel === "function") {
-                  painted.onCancel();
+              const keymap = ctx.tuiKeymap;
+              if (painted && keymap && typeof keymap.handle === "function") {
+                if (tuiClick === "once") {
+                  keymap.handle("return");
+                } else if (tuiClick === "reject") {
+                  keymap.handle("left");
+                  keymap.handle("return");
                 }
                 return;
               }
@@ -347,6 +390,14 @@ function installOfficialPermission(ctx, reply) {
     };
   }
   ctx.client.session = session;
+  ctx.client.permission = {
+    async reply(input) {
+      const replyValue = input && typeof input.reply === "string" ? input.reply : undefined;
+      if (replyValue) {
+        deliverOfficialConfirm(replyValue);
+      }
+    },
+  };
   if (subscribeMode === "throw") {
     ctx.client.event = {
       async subscribe() {

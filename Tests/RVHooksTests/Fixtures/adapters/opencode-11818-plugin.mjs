@@ -32,10 +32,10 @@ function readV1Plugin(mod, spec, kind, mode = "strict") {
     throw new TypeError(`Plugin ${spec} must default export either server() or tui(), not both`);
   }
   if (kind === "server" && server === undefined) {
-    throw new TypeError(`Plugin ${spec} must default export an object with server()`);
+    throw new TypeError(`Plugin ${spec} must default export an object with ${kind}()`);
   }
   if (kind === "tui" && tui === undefined) {
-    throw new TypeError(`Plugin ${spec} must default export an object with tui()`);
+    throw new TypeError(`Plugin ${spec} must default export an object with ${kind}()`);
   }
 
   return value;
@@ -80,38 +80,98 @@ function installFakeSolid(root) {
     join(dir, "package.json"),
     JSON.stringify({ name: "solid-js", type: "module", exports: { ".": "./index.js" } }),
   );
+  // Live TUI hole: plugin createComponent from a second Solid drops function props.
+  // Invented onConfirm / onCancel never fire. Official keys must still reply.
   writeFileSync(
     join(dir, "index.js"),
     `export function createComponent(component, props) {
   globalThis.__rvCreateComponentCount = (globalThis.__rvCreateComponentCount ?? 0) + 1;
-  return typeof component === "function" ? component(props) : component;
+  const safe = {};
+  for (const key of Object.keys(props ?? {})) {
+    if (typeof props[key] !== "function") safe[key] = props[key];
+  }
+  return typeof component === "function" ? component(safe) : component;
 }
 `,
   );
 }
 
-function officialDialogConfirm(props) {
+function officialKeymap() {
+  const layers = [];
+  return {
+    registerLayer(layer) {
+      layers.push(layer);
+      return () => {
+        const index = layers.indexOf(layer);
+        if (index >= 0) {
+          layers.splice(index, 1);
+        }
+      };
+    },
+    handle(key) {
+      const ordered = [...layers].sort((left, right) => (right.priority ?? 0) - (left.priority ?? 0));
+      for (const layer of ordered) {
+        for (const binding of layer.bindings ?? []) {
+          if (binding.key !== key) {
+            continue;
+          }
+          if (typeof binding.cmd === "function") {
+            binding.cmd();
+          } else {
+            const command = (layer.commands ?? []).find((entry) => entry.name === binding.cmd);
+            if (command && typeof command.run === "function") {
+              command.run();
+            }
+          }
+          return;
+        }
+      }
+    },
+  };
+}
+
+function officialDialogConfirm(props, keymap) {
+  const store = { active: "confirm" };
+  const toggle = () => {
+    store.active = store.active === "confirm" ? "cancel" : "confirm";
+  };
+  // Official 1.18.18 DialogConfirm useBindings. Live TUI: these call
+  // props.onConfirm?.() / onCancel?.(), which stay undefined. Do not invent a fire.
+  if (keymap && typeof keymap.registerLayer === "function") {
+    keymap.registerLayer({
+      bindings: [
+        {
+          key: "return",
+          desc: "Confirm dialog selection",
+          group: "Dialog",
+          cmd: () => {
+            if (store.active === "confirm") {
+              props && typeof props.onConfirm === "function" && props.onConfirm();
+            }
+            if (store.active === "cancel") {
+              props && typeof props.onCancel === "function" && props.onCancel();
+            }
+          },
+        },
+        { key: "left", desc: "Previous dialog option", group: "Dialog", cmd: toggle },
+        { key: "right", desc: "Next dialog option", group: "Dialog", cmd: toggle },
+      ],
+    });
+  }
   const painted = {
     title: props && props.title,
     message: props && props.message,
-    onConfirm: props && props.onConfirm,
-    onCancel: props && props.onCancel,
     key(name) {
-      if (name === "return" && typeof painted.onConfirm === "function") {
-        painted.onConfirm();
-        return;
-      }
-      if ((name === "escape" || name === "left") && typeof painted.onCancel === "function") {
-        painted.onCancel();
-      }
+      keymap.handle(name);
     },
     click(which) {
-      if (which === "confirm" && typeof painted.onConfirm === "function") {
-        painted.onConfirm();
+      if (which === "confirm") {
+        keymap.handle("return");
         return;
       }
-      if (which === "cancel" && typeof painted.onCancel === "function") {
-        painted.onCancel();
+      if (which === "cancel") {
+        keymap.handle("left");
+        keymap.handle("return");
       }
     },
   };
@@ -183,6 +243,8 @@ let replySessionID = null;
 let replyRequestID = null;
 let usedShow = false;
 let usedCreateComponent = false;
+let usedOfficialKeys = false;
+let usedInventedCallback = false;
 
 function askedEvent() {
   return {
@@ -219,8 +281,10 @@ async function runAsked(api, click) {
     dialogTitle = painted.title;
     dialogMessage = painted.message;
     if (click === "confirm") {
+      usedOfficialKeys = true;
       painted.key("return");
     } else if (click === "cancel") {
+      usedOfficialKeys = true;
       painted.click("cancel");
     }
   }
@@ -239,7 +303,8 @@ async function runAsked(api, click) {
 if (serverLoaded && mod.default && typeof mod.default.server === "function") {
   const handlers = new Map();
   const dialog = officialDialogStack();
-  const DialogConfirm = officialDialogConfirm;
+  const keymap = officialKeymap();
+  const DialogConfirm = (props) => officialDialogConfirm(props, keymap);
   if (mode === "show-lie") {
     DialogConfirm.show = async (_dialog, title, message) => {
       usedShow = true;
@@ -248,8 +313,14 @@ if (serverLoaded && mod.default && typeof mod.default.server === "function") {
       return true;
     };
   }
+  const recordReply = (input) => {
+    replied = input && input.reply;
+    replySessionID = input && (input.sessionID || (input.path && input.path.sessionID));
+    replyRequestID = input && (input.requestID || (input.path && input.path.requestID));
+  };
   const api = {
     handlers,
+    keymap,
     event: {
       on(type, handler) {
         handlers.set(type, (...args) => handler(...args));
@@ -264,12 +335,15 @@ if (serverLoaded && mod.default && typeof mod.default.server === "function") {
             DialogConfirm,
           },
     client: {
+      permission: {
+        async reply(input) {
+          recordReply(input);
+        },
+      },
       session: {
         permission: {
           async reply(input) {
-            replied = input && input.reply;
-            replySessionID = input && (input.sessionID || (input.path && input.path.sessionID));
-            replyRequestID = input && (input.requestID || (input.path && input.path.requestID));
+            recordReply(input);
           },
         },
       },
@@ -311,6 +385,8 @@ process.stdout.write(
     replyRequestID,
     usedShow,
     usedCreateComponent,
+    usedOfficialKeys,
+    usedInventedCallback,
   }),
 );
 process.exit(0);

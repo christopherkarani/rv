@@ -91,15 +91,11 @@ enum OpenCodeTuiAskPackage {
     """
 
     static let tuiJS = """
-    import { createComponent } from "solid-js";
     import plugin from "../plugins/rv-guard-tui.js";
 
     export default {
       id: "rv-guard-tui-ask",
       tui: async (api, options, meta) => {
-        if (api && api.ui) {
-          api.ui.createComponent = createComponent;
-        }
         return plugin.server(api, options, meta);
       },
     };
