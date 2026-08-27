@@ -1,9 +1,13 @@
 public enum EvaluationRoute: Sendable {
     public enum Facts: Sendable, Equatable {
+        /// Transport missing, send threw, or no evaluate reply was decoded.
         case transportAbsent
+        /// Decoded evaluate / hookEvaluate reply. `via == .xpc` already enforced.
         case reply(clientSemver: String, advertisedServiceSemver: String?)
     }
 
+    /// Returns the client evaluation path for these facts.
+    /// Missing, empty, or unparseable advertised service semver cannot prove compatibility.
     public static func path(for facts: Facts) -> EvaluationPath {
         switch facts {
         case .transportAbsent:
