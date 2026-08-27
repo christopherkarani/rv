@@ -63,7 +63,7 @@ func hermesDecode_extractsTerminalCommand(_ file: String, expected: String) thro
 
 @Test func hermesEncodeDeny_matchesResetHardFixture() throws {
     let reason =
-        "Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once."
+        resetHardHostDeny
     let wire = codec.encodeDeny(reason: reason)
     let expected = try hermesExpected("deny-git-reset-hard")
     #expect(wire.stdout == expected.stdout)
@@ -76,7 +76,7 @@ func hermesDecode_extractsTerminalCommand(_ file: String, expected: String) thro
 
 @Test func hermesEncodeDeny_sameReasonAsPi() {
     let reason =
-        "Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once."
+        resetHardHostDeny
     #expect(HermesHostCodec().encodeDeny(reason: reason).stdout
         == PiHostCodec().encodeDeny(reason: reason).stdout)
     #expect(HermesHostCodec().encodeDeny(reason: reason).exitCode == 1)

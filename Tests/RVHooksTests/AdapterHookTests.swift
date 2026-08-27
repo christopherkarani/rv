@@ -4,6 +4,8 @@ import RVHooks
 import Testing
 
 private let resetHardReason =
+    "Blocked git reset --hard. Destroys uncommitted changes."
+private let resetHardAskReason =
     "Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once."
 private let incompleteReason =
     "rv could not finish evaluating this command. Run it in Terminal."
@@ -177,14 +179,15 @@ private func runOpenCodePluginContract(_ source: String) async throws -> OpenCod
     #expect(joined.contains("git reset --hard"))
     #expect(joined.contains("Meta"))
     #expect(joined.contains("core.git/reset-hard"))
-    #expect(joined.contains("Next"))
-    #expect(joined.contains("Run it in Terminal, or rv allow-once."))
+    #expect(joined.contains("Next") == false)
+    #expect(joined.contains("Run it in Terminal, or rv allow-once.") == false)
+    #expect(joined.contains("rv allow-once") == false)
     #expect(joined.contains("┏") == false)
     #expect(joined.contains("│") == false)
     #expect(result.cardVariant == "block")
     #expect(result.cardRule == "core.git/reset-hard")
     #expect(result.cardPreview == "git reset --hard")
-    #expect(result.cardNext == "Run it in Terminal, or rv allow-once.")
+    #expect(result.cardNext == nil)
     #expect((result.narrowLines ?? []).count > lines.count)
 }
 
@@ -283,7 +286,7 @@ private func runOpenCodePluginContract(_ source: String) async throws -> OpenCod
         event: ["tool": "session.shell", "args": ["command": "git reset --hard"]],
         stub: .stdout(askResetHardJSON, exit: 1)
     )
-    #expect(result.threw == resetHardReason)
+    #expect(result.threw == resetHardAskReason)
     #expect(result.toastCount == 1)
     #expect(result.spawnCount == 1)
 }
@@ -347,7 +350,7 @@ private func runOpenCodePluginContract(_ source: String) async throws -> OpenCod
         ],
         stub: .stdout(askResetHardJSON, exit: 1)
     )
-    #expect(result.threw == resetHardReason)
+    #expect(result.threw == resetHardAskReason)
     #expect(result.spawnCount == 1)
 }
 
@@ -384,7 +387,7 @@ private func runOpenCodePluginContract(_ source: String) async throws -> OpenCod
         permissionReply: "reject",
         secondStub: .stdout("", exit: 0)
     )
-    #expect(result.threw == resetHardReason)
+    #expect(result.threw == resetHardAskReason)
     #expect(result.spawnCount == 1)
     #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
 }
@@ -422,7 +425,7 @@ private func runOpenCodePluginContract(_ source: String) async throws -> OpenCod
         permissionReply: "allow",
         secondStub: .stdout("", exit: 0)
     )
-    #expect(result.threw == resetHardReason)
+    #expect(result.threw == resetHardAskReason)
     #expect(result.spawnCount == 1)
     #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
 }
@@ -487,7 +490,7 @@ private func runOpenCodePluginContract(_ source: String) async throws -> OpenCod
         askTimeoutMs: 400,
         secondStub: .stdout("", exit: 0)
     )
-    #expect(result.threw == resetHardReason)
+    #expect(result.threw == resetHardAskReason)
     #expect(result.permissionCreates == 1)
     #expect(result.spawnCount == 1)
     #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
@@ -555,7 +558,7 @@ private func runOpenCodePluginContract(_ source: String) async throws -> OpenCod
         askTimeoutMs: 800,
         secondStub: .stdout("", exit: 0)
     )
-    #expect(result.threw == resetHardReason)
+    #expect(result.threw == resetHardAskReason)
     #expect(result.permissionCreates == 1)
     #expect(result.permissionReply204 == "reject")
     #expect(result.spawnCount == 1)
@@ -748,7 +751,7 @@ private func runOpenCodePluginContract(_ source: String) async throws -> OpenCod
         ],
         stub: .stdout(askResetHardJSON, exit: 1)
     )
-    #expect(result.threw == resetHardReason)
+    #expect(result.threw == resetHardAskReason)
     #expect(result.spawnCount == 1)
 }
 
@@ -778,7 +781,7 @@ private func runOpenCodePluginContract(_ source: String) async throws -> OpenCod
         event: ["tool": "bash", "args": ["command": "git reset --hard"]],
         stub: .stdout(askResetHardJSON, exit: 1)
     )
-    #expect(result.threw == resetHardReason)
+    #expect(result.threw == resetHardAskReason)
     #expect(result.toastCount == 1)
     #expect(result.spawnCount == 1)
 }
@@ -827,7 +830,7 @@ private func runOpenCodePluginContract(_ source: String) async throws -> OpenCod
         stub: .stdout(askResetHardJSON, exit: 1),
         confirmYes: true
     )
-    #expect(result.threw == resetHardReason)
+    #expect(result.threw == resetHardAskReason)
     #expect(result.spawnCount == 2)
 }
 
@@ -839,7 +842,7 @@ private func runOpenCodePluginContract(_ source: String) async throws -> OpenCod
         hasUI: false,
         secondStub: .stdout("", exit: 0)
     )
-    #expect(result.threw == resetHardReason)
+    #expect(result.threw == resetHardAskReason)
     #expect(result.spawnCount == 1)
 }
 
@@ -880,8 +883,9 @@ private func runOpenCodePluginContract(_ source: String) async throws -> OpenCod
     #expect(message.contains("git reset --hard"))
     #expect(message.contains("Meta"))
     #expect(message.contains("core.git/reset-hard"))
-    #expect(message.contains("Next"))
-    #expect(message.contains("Run it in Terminal, or rv allow-once."))
+    #expect(message.contains("Next") == false)
+    #expect(message.contains("Run it in Terminal, or rv allow-once.") == false)
+    #expect(message.contains("rv allow-once") == false)
     #expect(message != resetHardReason)
 }
 
@@ -897,8 +901,8 @@ private func runOpenCodePluginContract(_ source: String) async throws -> OpenCod
     #expect(message.contains(wrapperResetHardCommand))
     #expect(message.contains("Meta"))
     #expect(message.contains("core.git/reset-hard"))
-    #expect(message.contains("Next"))
-    #expect(message.contains("Run it in Terminal, or rv allow-once."))
+    #expect(message.contains("Next") == false)
+    #expect(message.contains("Run it in Terminal, or rv allow-once.") == false)
 }
 
 @Test func openCodeAdapter_legacyClientToastsViaWrappedBody() async throws {
@@ -1079,14 +1083,14 @@ func adapters_mapRvHookResultMatrix(host: String, kind: String) async throws {
 private let missingShellCommandReason =
     "rv received a shell hook with no command text and blocked the command. Run it in Terminal."
 private let resetHardJSON =
-    "{\"decision\":\"deny\",\"reason\":\"Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once.\",\"rule\":\"core.git/reset-hard\",\"next\":\"Run it in Terminal, or rv allow-once.\"}\n"
+    "{\"decision\":\"deny\",\"reason\":\"Blocked git reset --hard. Destroys uncommitted changes.\",\"rule\":\"core.git/reset-hard\"}\n"
 private let askResetHardJSON =
     "{\"decision\":\"ask\",\"reason\":\"Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once.\",\"continuation\":\"hostNative\",\"rule\":\"core.git/reset-hard\",\"next\":\"Run it in Terminal, or rv allow-once.\"}\n"
 private let wrapperResetHardCommand = "echo \"$(git reset --hard)\""
 private let wrapperResetHardReason =
-    "Blocked echo \"$(git reset --hard)\" (core.git/reset-hard). Run it in Terminal, or rv allow-once."
+    "Blocked echo \"$(git reset --hard)\". Destroys uncommitted changes."
 private let wrapperResetHardJSON =
-    "{\"decision\":\"deny\",\"reason\":\"Blocked echo \\\"$(git reset --hard)\\\" (core.git/reset-hard). Run it in Terminal, or rv allow-once.\",\"rule\":\"core.git/reset-hard\",\"next\":\"Run it in Terminal, or rv allow-once.\"}\n"
+    "{\"decision\":\"deny\",\"reason\":\"Blocked echo \\\"$(git reset --hard)\\\". Destroys uncommitted changes.\",\"rule\":\"core.git/reset-hard\"}\n"
 private let incompleteJSON =
     "{\"decision\":\"deny\",\"reason\":\"rv could not finish evaluating this command. Run it in Terminal.\"}\n"
 

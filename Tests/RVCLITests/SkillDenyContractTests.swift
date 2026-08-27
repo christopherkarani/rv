@@ -87,8 +87,9 @@ private func cannedDenyResult(command: String, ruleID: RuleID, reason: String) -
         #expect(text?.contains("\n") == false, Comment(rawValue: row.id))
         #expect(text?.contains("═") == false, Comment(rawValue: row.id))
         #expect(text?.contains("┌") == false, Comment(rawValue: row.id))
-        #expect(text?.contains(displayRuleID(ruleID)) == true, Comment(rawValue: row.id))
-        #expect(text?.contains("rv allow-once") == true, Comment(rawValue: row.id))
+        #expect(text?.hasPrefix("Blocked ") == true, Comment(rawValue: row.id))
+        #expect(text?.contains("rv allow-once") == false, Comment(rawValue: row.id))
+        #expect(text?.contains("Terminal") == false, Comment(rawValue: row.id))
 
         let test = testViewModel(from: result, command: shell)
         #expect(test.deny == vm, Comment(rawValue: row.id))

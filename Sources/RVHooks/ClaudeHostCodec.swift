@@ -52,15 +52,14 @@ public struct ClaudeHostCodec: HostCodec {
         case .indeterminate:
             return encodeDeny(reason: incompleteEvalSentence, rule: nil, next: nil)
         case .deny(let deny):
-            let hostDenyText = hostDenyLine(command: command, ruleID: deny.ruleID)
+            let hostDenyText = hostDenyLine(command: command, reason: deny.reason)
             guard case .deny(_, let matched?) = result.outcome else {
                 return encodeDeny(reason: hostDenyText, rule: nil, next: nil)
             }
             return HookWire(
                 stdout: claudeRichDenyJSON(
                     hostDenyText: hostDenyText,
-                    match: matched,
-                    command: command
+                    match: matched
                 ),
                 exitCode: host.denyExitCode
             )

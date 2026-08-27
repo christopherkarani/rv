@@ -70,7 +70,10 @@ import RVTheme
     #expect(json["reason"] as? String == hostDenyText(
         from: EvaluationResult(
             outcome: .deny(
-                Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "x"),
+                Deny(
+                    ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+                    reason: "git reset --hard destroys uncommitted changes. Use 'git stash' first."
+                ),
                 matched: nil
             )
         ),
@@ -126,7 +129,7 @@ import RVTheme
         )
         let json = try dispatchDenyJSON(deny.stdout)
         #expect(json["decision"] as? String == "deny")
-        #expect((json["reason"] as? String)?.contains("core.git/reset-hard") == true)
+        #expect(json["reason"] as? String == "Blocked git reset --hard. Destroys uncommitted changes.")
         #expect(deny.status == 0)
 
         let help = try runBuiltRV(

@@ -72,7 +72,7 @@ func openCodeDecode_extractsBashCommand(_ file: String, expected: String) throws
 
 @Test func openCodeEncodeDeny_matchesResetHardFixture() throws {
     let reason =
-        "Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once."
+        resetHardHostDeny
     let wire = codec.encodeDeny(reason: reason)
     let expected = try openCodeExpected("deny-git-reset-hard")
     #expect(wire.stdout == expected.stdout)
@@ -85,7 +85,7 @@ func openCodeDecode_extractsBashCommand(_ file: String, expected: String) throws
 
 @Test func openCodeEncodeDeny_sameReasonAsPi() {
     let reason =
-        "Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once."
+        resetHardHostDeny
     #expect(OpenCodeHostCodec().encodeDeny(reason: reason).stdout
         == PiHostCodec().encodeDeny(reason: reason).stdout)
     #expect(OpenCodeHostCodec().encodeDeny(reason: reason).exitCode == 1)

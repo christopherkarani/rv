@@ -36,9 +36,9 @@ private func encodePostSpend<C: HostCodec>(
         return codec.encodeAllow()
     case .deny(let deny):
         return codec.encodeDeny(
-            reason: hostDenyLine(command: command, ruleID: deny.ruleID),
+            reason: hostDenyLine(command: command, reason: deny.reason),
             rule: displayRuleID(deny.ruleID),
-            next: hookUnlockNext
+            next: nil
         )
     case .indeterminate:
         return codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: nil)
@@ -67,19 +67,19 @@ private func encodeFirstCall<C: HostCodec>(
         case .allow:
             // A deny result must never become silent allow.
             return codec.encodeDeny(
-                reason: hostDenyLine(command: command, ruleID: deny.ruleID),
+                reason: hostDenyLine(command: command, reason: deny.reason),
                 rule: displayRuleID(deny.ruleID),
-                next: hookUnlockNext
+                next: nil
             )
         case .deny:
             return codec.encodeDeny(
-                reason: hostDenyLine(command: command, ruleID: deny.ruleID),
+                reason: hostDenyLine(command: command, reason: deny.reason),
                 rule: displayRuleID(deny.ruleID),
-                next: hookUnlockNext
+                next: nil
             )
         case .ask:
             return codec.encodeAsk(
-                reason: hostDenyLine(command: command, ruleID: deny.ruleID),
+                reason: hostAskLine(command: command, ruleID: deny.ruleID),
                 rule: displayRuleID(deny.ruleID),
                 next: hookUnlockNext
             )

@@ -63,7 +63,7 @@ func openClawDecode_extractsExecCommand(_ file: String, expected: String) throws
 
 @Test func openClawEncodeDeny_matchesResetHardFixture() throws {
     let reason =
-        "Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once."
+        resetHardHostDeny
     let wire = codec.encodeDeny(reason: reason)
     let expected = try openClawExpected("deny-git-reset-hard")
     #expect(wire.stdout == expected.stdout)
@@ -76,7 +76,7 @@ func openClawDecode_extractsExecCommand(_ file: String, expected: String) throws
 
 @Test func openClawEncodeDeny_sameReasonAsPi() {
     let reason =
-        "Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once."
+        resetHardHostDeny
     #expect(OpenClawHostCodec().encodeDeny(reason: reason).stdout
         == PiHostCodec().encodeDeny(reason: reason).stdout)
     #expect(OpenClawHostCodec().encodeDeny(reason: reason).exitCode == 1)

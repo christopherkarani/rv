@@ -113,23 +113,23 @@ func claudeDecode_otherToolOrEventIsForeign(_ file: String) throws {
     #expect(wire.stdout.hasSuffix("\n"))
     #expect(wire.stdout.contains("\"permissionDecision\":\"deny\""))
     #expect(wire.stdout.contains("\"systemMessage\""))
-    #expect(wire.stdout.contains("RV · Blocked"))
     #expect(wire.stdout.contains("\"ruleId\":\"core.git:reset-hard\""))
-    #expect(wire.stdout.contains("\"allowOnceCommand\":\"rv allow-once\""))
+    #expect(wire.stdout.contains("allowOnceCommand") == false)
     #expect(wire.stdout.contains("allowOnceCode") == false)
     #expect(wire.stdout.contains("allowOnceFullHash") == false)
+    assertHookDenyHasNoBypassOrEssay(wire.stdout)
 }
 
-@Test func claudeEncodeRichDeny_reasonIsMultiLine() throws {
+@Test func claudeEncodeRichDeny_resetHardIsOneShortLine() throws {
     let wire = codec.encodeRichDeny(from: resetHardDenyResult(), command: resetHard)
     let parsed = try claudeDenyObject(wire.stdout)
-    #expect(parsed.systemMessage.hasPrefix("RV · Blocked\n"))
-    #expect(parsed.permissionDecisionReason.contains("\n"))
-    #expect(parsed.permissionDecisionReason.contains("Reason:"))
-    #expect(parsed.permissionDecisionReason.contains("Rule: core.git:reset-hard"))
-    #expect(parsed.permissionDecisionReason.contains("Command: git reset --hard"))
-    #expect(parsed.permissionDecisionReason.contains("═") == false)
-    #expect(parsed.permissionDecisionReason.contains("\u{001B}") == false)
+    #expect(wire.stdout.contains("\"permissionDecision\":\"deny\""))
+    #expect(wire.stdout.contains("\"permissionDecision\":\"ask\"") == false)
+    #expect(parsed.systemMessage == resetHardHostDeny)
+    #expect(parsed.permissionDecisionReason == resetHardHostDeny)
+    #expect(parsed.systemMessage.contains("\n") == false)
+    #expect(parsed.permissionDecisionReason.contains("\n") == false)
+    assertHookDenyHasNoBypassOrEssay(wire.stdout)
 }
 
 @Test func claudeEncodeDeny_indeterminateUsesPlanSentence() throws {
@@ -144,7 +144,7 @@ func claudeDecode_otherToolOrEventIsForeign(_ file: String) throws {
 
 @Test func claudeEncodeDeny_withRuleStillClaudeDenyEnvelope() throws {
     let wire = codec.encodeDeny(
-        reason: hostDenyLine(command: resetHard, ruleID: resetHardMatch.ruleID),
+        reason: hostDenyLine(command: resetHard, reason: resetHardMatch.reason),
         rule: displayRuleID(resetHardMatch.ruleID),
         next: hookUnlockNext
     )

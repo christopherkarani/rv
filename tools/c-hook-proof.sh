@@ -9,7 +9,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 STAGE="${RV_RELEASE_STAGE:-$ROOT/.build/release-stage}"
 FIXTURES="$ROOT/Tests/RVHooksTests/Fixtures/grok"
-CANONICAL='Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once.'
+CANONICAL='Blocked git reset --hard. Destroys uncommitted changes.'
 LABEL="dev.rv.evaluate"
 UID_NUM="$(id -u)"
 DOMAIN="gui/${UID_NUM}"
