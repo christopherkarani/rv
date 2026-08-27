@@ -55,12 +55,14 @@ public struct CodexHostCodec: HostCodec {
 
     /// Official Codex honor path: older `decision: block` JSON + exit 2.
     /// Claude permission deny JSON is not a Codex TUI honor path.
-    public func encodeDeny(reason: String, rule: String?, next: String?) -> HookWire {
+    /// Defaults must live here: a one-argument `encodeDeny(reason:)` otherwise
+    /// binds the protocol extension and emits leftover `decision: deny`.
+    public func encodeDeny(reason: String, rule: String? = nil, next: String? = nil) -> HookWire {
         HookWire(stdout: hookBlockJSON(reason: reason), exitCode: host.denyExitCode)
     }
 
     /// Codex has no Ask. Leftover Ask continues the tool — same as deny.
-    public func encodeAsk(reason: String, rule: String?, next: String?) -> HookWire {
+    public func encodeAsk(reason: String, rule: String? = nil, next: String? = nil) -> HookWire {
         encodeDeny(reason: reason, rule: rule, next: next)
     }
 }
