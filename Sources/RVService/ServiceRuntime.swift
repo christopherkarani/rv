@@ -545,7 +545,7 @@ public actor ServiceRuntime {
     }
 
     private static func analyticsEnabledPackIDs(from catalog: PackCatalog) -> [String] {
-        catalog.records.filter(\.enabled).map(\.id.rawValue)
+        catalog.enabledIDs.map(\.rawValue)
     }
 }
 

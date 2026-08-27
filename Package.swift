@@ -125,7 +125,7 @@ let serviceProducts: [Product] = [
     .executable(name: "rvd", targets: ["rvd"]),
 ]
 let serviceTestTargets: [Target] = [
-    .testTarget(name: "RVServiceTests", dependencies: ["RVService"]),
+    .testTarget(name: "RVServiceTests", dependencies: ["RVService", "RVAnalytics"]),
 ]
 
 let cliTargets: [Target] = [
