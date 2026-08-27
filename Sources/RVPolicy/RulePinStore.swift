@@ -12,7 +12,8 @@ public struct RulePinStore: Sendable {
         record: PendingApproval,
         polarity: PinnedRulePolarity,
         draft: String,
-        now: Date
+        now: Date,
+        matchingView: MatchingView? = nil
     ) throws -> RuleSaveOutcome {
         let expected = RulePinning.draft(record: record, polarity: polarity)
         if draft != expected {
@@ -21,15 +22,16 @@ public struct RulePinStore: Sendable {
         if polarity == .allow, RulePinning.hardStop(in: record.action) != nil {
             throw RulePinError.hardStop
         }
-        let ruleID = RulePinning.ruleID(record: record, polarity: polarity)
-        guard let matchingView = RulePinning.matchingView(of: record.action) else {
-            return RuleSaveOutcome(ruleID: ruleID)
+        let view = matchingView ?? RulePinning.matchingView(of: record.action)
+        guard let view, view.isEmpty == false else {
+            throw RulePinError.missingMatchingView
         }
+        let ruleID = RulePinning.ruleID(record: record, polarity: polarity)
         switch polarity {
         case .allow:
             try AllowlistStore(baseDirectory: baseDirectory).pin(
                 AllowlistEntry(
-                    selector: .exactCommand(matchingView),
+                    selector: .exactCommand(view),
                     reason: "Always-allow pin",
                     addedAt: now
                 )
@@ -37,7 +39,7 @@ public struct RulePinStore: Sendable {
         case .block:
             try DenylistStore(baseDirectory: baseDirectory).pin(
                 DenylistEntry(
-                    matchingView: matchingView,
+                    matchingView: view,
                     reason: "Always-block pin",
                     addedAt: now
                 )

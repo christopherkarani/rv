@@ -85,6 +85,51 @@ struct RulePinningTests {
         #expect(snap.entries.isEmpty)
     }
 
+    @Test func saveWithoutMatchingViewWritesNothing() throws {
+        let root = try isolatedPinDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let record = wait(
+            id: "empty",
+            command: "   ",
+            effects: [],
+            branchName: nil
+        )
+        let draft = RulePinning.draft(record: record, polarity: .allow)
+        #expect(throws: RulePinError.missingMatchingView) {
+            try RulePinStore(baseDirectory: root).save(
+                record: record,
+                polarity: .allow,
+                draft: draft,
+                now: now
+            )
+        }
+        let snap = AllowlistStore(baseDirectory: root).loadUserSnapshot(workspacePath: nil, now: now)
+        #expect(snap.entries.isEmpty)
+        #expect(snap.blocked.entries.isEmpty)
+    }
+
+    @Test func savePinsCallerMatchingView() throws {
+        let root = try isolatedPinDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let record = wait(
+            id: "wrap",
+            command: "sudo git reset --hard",
+            effects: [],
+            branchName: nil
+        )
+        let draft = RulePinning.draft(record: record, polarity: .allow)
+        _ = try RulePinStore(baseDirectory: root).save(
+            record: record,
+            polarity: .allow,
+            draft: draft,
+            now: now,
+            matchingView: MatchingView("git reset --hard")
+        )
+        let snap = AllowlistStore(baseDirectory: root).loadUserSnapshot(workspacePath: nil, now: now)
+        #expect(snap.matches(ruleID: nil, matchingView: "git reset --hard", now: now))
+        #expect(snap.matches(ruleID: nil, matchingView: "sudo git reset --hard", now: now) == false)
+    }
+
     @Test func saveAlwaysAllowPinsExactCommandIdempotently() throws {
         let root = try isolatedPinDirectory()
         defer { try? FileManager.default.removeItem(at: root) }

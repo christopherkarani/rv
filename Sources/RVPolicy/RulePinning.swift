@@ -35,6 +35,7 @@ public struct RuleSaveOutcome: Sendable, Equatable {
 public enum RulePinError: Error, Sendable, Equatable {
     case draftMismatch
     case hardStop
+    case missingMatchingView
 }
 
 public enum RulePinning: Sendable {

@@ -480,11 +480,13 @@ public actor ServiceRuntime {
         do {
             let now = clock()
             let record = try await pendingApprovals.load(id: params.id, now: now)
+            let commandText = record.action.supportingCommand?.rawValue ?? ""
             let outcome = try RulePinStore(baseDirectory: allowOnce.baseDirectory).save(
                 record: record,
                 polarity: polarity,
                 draft: params.draft,
-                now: now
+                now: now,
+                matchingView: Normalize.matchingView(of: commandText)
             )
             let decision: ApprovalDecision = polarity == .allow ? .createRule : .deny
             do {
@@ -518,6 +520,8 @@ public actor ServiceRuntime {
                 return .error(.ruleDraftMismatch)
             case .hardStop:
                 return .error(.ruleHardStop)
+            case .missingMatchingView:
+                return .error(.engine("rule pin requires a matching view"))
             }
         } catch {
             return .error(PendingListProjection.ipcError(from: error))
