@@ -73,16 +73,19 @@ public struct DirectoryWalker: Sendable {
             .fileSizeKey,
             .isSymbolicLinkKey,
         ]
+        let resourceKeys = Array(keys)
 
         var queue: [(url: URL, depth: Int)] = [(root, 0)]
+        var queueHead = 0
 
-        while queue.isEmpty == false, stopped == false {
-            let (directory, depth) = queue.removeFirst()
+        while queueHead < queue.count, stopped == false {
+            let (directory, depth) = queue[queueHead]
+            queueHead += 1
             let contents: [URL]
             do {
                 contents = try fileManager.contentsOfDirectory(
                     at: directory,
-                    includingPropertiesForKeys: Array(keys),
+                    includingPropertiesForKeys: resourceKeys,
                     options: []
                 )
             } catch {
