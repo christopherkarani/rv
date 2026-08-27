@@ -52,11 +52,11 @@ enum SecretPathGuard {
         case .nonPath:
             return []
         case .grep:
-            return grepCandidates(Array(tokens.dropFirst()))
+            return grepCandidates(tokens.dropFirst())
         case .find:
-            return findCandidates(Array(tokens.dropFirst()))
+            return findCandidates(tokens.dropFirst())
         case .other:
-            return otherCandidates(Array(tokens.dropFirst()))
+            return otherCandidates(tokens.dropFirst())
         }
     }
 }
@@ -146,7 +146,7 @@ private func operandCandidate(_ decoded: String) -> String? {
     return decoded
 }
 
-private func grepCandidates(_ tokens: [CommandToken]) -> [String] {
+private func grepCandidates<C: Collection>(_ tokens: C) -> [String] where C.Element == CommandToken {
     var collected: [String] = []
     var skipFirstPositional = true
     var expectRegexp = false
@@ -215,7 +215,7 @@ private func grepCandidates(_ tokens: [CommandToken]) -> [String] {
     return collected
 }
 
-private func findCandidates(_ tokens: [CommandToken]) -> [String] {
+private func findCandidates<C: Collection>(_ tokens: C) -> [String] where C.Element == CommandToken {
     var collected: [String] = []
     var beforePredicate = true
     var skipValue = false
@@ -247,7 +247,7 @@ private func findCandidates(_ tokens: [CommandToken]) -> [String] {
     return collected
 }
 
-private func otherCandidates(_ tokens: [CommandToken]) -> [String] {
+private func otherCandidates<C: Collection>(_ tokens: C) -> [String] where C.Element == CommandToken {
     var collected: [String] = []
     for token in tokens {
         if collected.count >= SecretPathGuard.candidateCap { break }
