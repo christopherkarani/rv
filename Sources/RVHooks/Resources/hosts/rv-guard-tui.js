@@ -114,27 +114,38 @@ export function attachOfficialPermissionAskedBridge(api, emitAsked) {
 
 export default {
   id: "rv-guard-tui",
-  server: async (api) => {
+  server: async (api, _options, _meta, hooks) => {
     if (!api || !api.event || typeof api.event.on !== "function") {
       return {};
     }
     if (!api.slots || typeof api.slots.register !== "function") {
       return {};
     }
-    let useSDK;
-    try {
-      ({ useSDK } = await import("@opencode-ai/tui/context/sdk"));
-    } catch {
-      return {};
+    let useSDK = hooks && typeof hooks.useSDK === "function" ? hooks.useSDK : undefined;
+    let useSync = hooks && typeof hooks.useSync === "function" ? hooks.useSync : undefined;
+    if (typeof useSDK !== "function") {
+      try {
+        ({ useSDK } = await import("@opencode-ai/tui/context/sdk"));
+      } catch {
+        return {};
+      }
     }
     if (typeof useSDK !== "function") {
       return {};
+    }
+    if (typeof useSync !== "function") {
+      try {
+        ({ useSync } = await import("@opencode-ai/tui/context/sync"));
+      } catch {
+        useSync = undefined;
+      }
     }
     let attached = false;
     api.slots.register({
       slots: {
         app() {
           const sdk = useSDK();
+          const sync = typeof useSync === "function" ? useSync() : undefined;
           if (attached) {
             return null;
           }
@@ -146,6 +157,16 @@ export default {
                     workspace: undefined,
                     payload,
                   });
+                  if (
+                    sync &&
+                    typeof sync.set === "function" &&
+                    payload &&
+                    payload.type === v1AskedName() &&
+                    payload.properties &&
+                    payload.properties.sessionID
+                  ) {
+                    sync.set("permission", payload.properties.sessionID, [payload.properties]);
+                  }
                 }
               : undefined;
           if (typeof emit !== "function") {

@@ -548,6 +548,76 @@ private func runOpenCodePluginContract(
     #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
 }
 
+@Test func openCodeAdapter_officialTuiHostSdkInjectConfirmSpendsThenAllows() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: [
+            "hook": "shell.env",
+            "cwd": "/tmp/ws",
+            "sessionID": "ses_1",
+            "callID": "call_1",
+            "command": "git reset --hard",
+        ],
+        stub: .stdout(askResetHardJSON, exit: 1),
+        permissionReply: "tui-inject-sdk-once",
+        askTimeoutMs: 800,
+        secondStub: .stdout("", exit: 0)
+    )
+    #expect(result.threw == nil)
+    #expect(result.permissionCreates == 1)
+    #expect(result.tuiDialogTitle == "Permission required")
+    #expect(result.tuiPaintSource == "permission.asked")
+    #expect(result.permissionReply204 == "once")
+    #expect(result.spawnCount == 2)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
+    #expect(result.lastStdin?.contains("git reset --hard") == true)
+}
+
+@Test func openCodeAdapter_officialTuiHostSdkInjectRejectHolds() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: [
+            "hook": "shell.env",
+            "cwd": "/tmp/ws",
+            "sessionID": "ses_1",
+            "callID": "call_1",
+            "command": "git reset --hard",
+        ],
+        stub: .stdout(askResetHardJSON, exit: 1),
+        permissionReply: "tui-inject-sdk-reject",
+        askTimeoutMs: 800,
+        secondStub: .stdout("", exit: 0)
+    )
+    #expect(result.threw == resetHardReason)
+    #expect(result.permissionCreates == 1)
+    #expect(result.tuiDialogTitle == "Permission required")
+    #expect(result.tuiPaintSource == "permission.asked")
+    #expect(result.permissionReply204 == "reject")
+    #expect(result.spawnCount == 1)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
+}
+
+@Test func openCodeAdapter_sessionShellOfficialTuiHostSdkInjectConfirmSpendsThenAllows() async throws {
+    let result = try await runOpenCodeAdapter(
+        event: [
+            "tool": "session.shell",
+            "cwd": "/tmp/ws",
+            "sessionID": "ses_1",
+            "callID": "call_1",
+            "args": ["command": "git reset --hard"],
+        ],
+        stub: .stdout(askResetHardJSON, exit: 1),
+        permissionReply: "tui-inject-sdk-once",
+        askTimeoutMs: 800,
+        secondStub: .stdout("", exit: 0)
+    )
+    #expect(result.threw == nil)
+    #expect(result.permissionCreates == 1)
+    #expect(result.tuiDialogTitle == "Permission required")
+    #expect(result.tuiPaintSource == "permission.asked")
+    #expect(result.permissionReply204 == "once")
+    #expect(result.spawnCount == 2)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
+}
+
 @Test func openCodeAdapter_sessionShellOfficialCreateAskedWithoutPaintDoesNotSpend() async throws {
     let result = try await runOpenCodeAdapter(
         event: [
@@ -1712,13 +1782,20 @@ private func runAdapter(
     }
     if let permissionReply {
         environment["RV_PERMISSION_REPLY"] = permissionReply
-        if permissionReply.hasPrefix("tui-click-") || permissionReply == "tui-asked-unpainted" {
+        if permissionReply.hasPrefix("tui-click-")
+            || permissionReply.hasPrefix("tui-inject-sdk-")
+            || permissionReply == "tui-asked-unpainted"
+        {
             let tuiPlugin = root.appendingPathComponent("rv-guard-tui.js")
             try HostAdapterResources.loadOpenCodeTuiPlugin()
                 .write(to: tuiPlugin, atomically: true, encoding: .utf8)
             environment["RV_TUI_PLUGIN"] = tuiPlugin.path
             if permissionReply.hasPrefix("tui-click-") {
                 environment["RV_TUI_CLICK"] = String(permissionReply.dropFirst("tui-click-".count))
+            }
+            if permissionReply.hasPrefix("tui-inject-sdk-") {
+                environment["RV_TUI_INJECT_SDK"] = "1"
+                environment["RV_TUI_CLICK"] = String(permissionReply.dropFirst("tui-inject-sdk-".count))
             }
             if permissionReply == "tui-asked-unpainted" {
                 environment["RV_TUI_PAINT"] = "0"

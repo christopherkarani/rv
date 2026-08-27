@@ -265,7 +265,10 @@ function installFakeTuiSdk(root, bus, client) {
     JSON.stringify({
       name: "@opencode-ai/tui",
       type: "module",
-      exports: { "./context/sdk": "./context/sdk.js" },
+      exports: {
+        "./context/sdk": "./context/sdk.js",
+        "./context/sync": "./context/sync.js",
+      },
     }),
   );
   writeFileSync(
@@ -284,6 +287,16 @@ function installFakeTuiSdk(root, bus, client) {
     get client() {
       return globalThis.__rvTuiClient;
     },
+  };
+}
+`,
+  );
+  writeFileSync(
+    join(pkg, "context", "sync.js"),
+    `export function useSync() {
+  return {
+    set() {},
+    data: { permission: {} },
   };
 }
 `,
@@ -345,7 +358,23 @@ async function loadTuiAskCompanion(ctx, pluginPath, click) {
     return officialDialogConfirm(props, dialog);
   }
   installOfficialTuiSync(ctx, bus);
-  if (process.env.RV_TUI_PAINT !== "0") {
+  const injectHostSdk = process.env.RV_TUI_INJECT_SDK === "1";
+  let hostHooks;
+  if (injectHostSdk) {
+    // Live 1.18.18 layout: tui.tsx resolves @opencode-ai/tui next to the
+    // Ask package. plugins/rv-guard-tui.js cannot. The TUI entry must pass
+    // host useSDK into plugin.server — planting a fake next to the js file
+    // hides the a3a68bd asked-but-unpainted FAIL.
+    const askDir = join(dirname(pluginPath), "rv-guard-tui-ask");
+    installFakeTuiSdk(askDir, bus, ctx.client);
+    const { useSDK } = await import(
+      pathToFileURL(join(askDir, "node_modules", "@opencode-ai", "tui", "context", "sdk.js")).href
+    );
+    const { useSync } = await import(
+      pathToFileURL(join(askDir, "node_modules", "@opencode-ai", "tui", "context", "sync.js")).href
+    );
+    hostHooks = { useSDK, useSync };
+  } else if (process.env.RV_TUI_PAINT !== "0") {
     installFakeTuiSdk(dirname(pluginPath), bus, ctx.client);
   }
   const api = {
@@ -367,7 +396,11 @@ async function loadTuiAskCompanion(ctx, pluginPath, click) {
     },
   };
   if (typeof tuiMod.default?.server === "function") {
-    await tuiMod.default.server(api);
+    if (hostHooks) {
+      await tuiMod.default.server(api, {}, { client: { name: "opencode-tui" } }, hostHooks);
+    } else {
+      await tuiMod.default.server(api);
+    }
   }
   ctx.tuiEmit = (payload) => bus.emit(payload);
   ctx.tuiClick = click;
@@ -379,7 +412,12 @@ async function loadTuiAskCompanion(ctx, pluginPath, click) {
 
 function installOfficialPermission(ctx, reply) {
   const fetchOnly = reply.startsWith("fetch-");
-  const tuiClick = reply.startsWith("tui-click-") ? reply.slice("tui-click-".length) : undefined;
+  const injectClick = reply.startsWith("tui-inject-sdk-")
+    ? reply.slice("tui-inject-sdk-".length)
+    : undefined;
+  const tuiClick = reply.startsWith("tui-click-")
+    ? reply.slice("tui-click-".length)
+    : injectClick;
   const effectReply = fetchOnly
     ? reply.slice("fetch-".length)
     : tuiClick

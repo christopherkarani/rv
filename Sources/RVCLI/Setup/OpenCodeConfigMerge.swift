@@ -6,9 +6,12 @@ import Foundation
 /// `plugins/rv-guard-tui.js` is `{ server() }`. The Ask package exposes
 /// only `./tui` so leftover custom DialogConfirm installs are replaced.
 /// Live 1.18.18 TUI sync only mounts host PermissionPrompt on the V1
-/// asked event. The TUI companion adapts `permission.v2.asked` onto
-/// that official bus (`@opencode-ai/tui/context/sdk` emit) so Return
-/// is host PermissionPrompt, not a custom dialog.
+/// asked event. `tui.tsx` is compiled by the host TUI plugin loader, so
+/// it imports `useSDK` / `useSync` from `@opencode-ai/tui` and passes
+/// those hooks into the companion. The companion adapts
+/// `permission.v2.asked` onto that official bus. A dynamic import from
+/// `plugins/rv-guard-tui.js` cannot resolve `@opencode-ai/tui` (the
+/// `a3a68bd` asked-but-unpainted FAIL).
 enum OpenCodeConfigMerge {
     static func merge(existingData: Data?, pluginPath: String) throws -> (data: Data, wrote: Bool) {
         var root = try parseRoot(existingData)
@@ -96,12 +99,14 @@ enum OpenCodeTuiAskPackage {
 
     static let tuiTSX = """
     /** @jsxImportSource @opentui/solid */
+    import { useSDK } from "@opencode-ai/tui/context/sdk";
+    import { useSync } from "@opencode-ai/tui/context/sync";
     import plugin from "../plugins/rv-guard-tui.js";
 
     export default {
       id: "rv-guard-tui-ask",
       tui: async (api, options, meta) => {
-        return plugin.server(api, options, meta);
+        return plugin.server(api, options, meta, { useSDK, useSync });
       },
     };
     """
