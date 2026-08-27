@@ -233,7 +233,7 @@ Host interprets:
   Grok: {"decision":"deny","reason":"<hostDenyText>"} exit 0 → block; empty exit 0 → allow; exit 2 fallback deny (last_resort)
   Claude: rich JSON {systemMessage, hookSpecificOutput.permissionDecision:"deny"} exit 0 → block; empty exit 0 → allow
   Codex: {"decision":"block","reason"} on stdout + trimmed non-empty blocking reason on stderr + exit 2 → block; empty exit 0 → allow; stdout-only / whitespace-only stderr / Claude permissionDecision deny is not honored
-  Cursor: {"permission":"deny","user_message","agent_message"} on stdout + exit 0 → block; {"permission":"allow"} exit 0 → allow; Claude permissionDecision / Codex decision:block+exit 2 / leftover permission:ask are not honored
+  Cursor: {"permission":"deny","user_message","agent_message"} on stdout + exit 0 → block; {"permission":"allow"} exit 0 → allow; empty/whitespace stdout (including exit 0) → official deny; Claude permissionDecision / Codex decision:block+exit 2 / leftover permission:ask are not honored
   Pi:    JSON hookDeny → block; empty → allow (extension throws)
   OpenCode: same JSON via plugin; rv-cli miss throws + toast attempted before throw
 ```

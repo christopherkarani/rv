@@ -227,6 +227,7 @@ func codexWrapper_missingReasonDoesNotExitTwoWithWhitespaceStderr(_ stubStdout: 
     #expect(source.contains("'permission': 'ask'") == false)
     #expect(source.contains("permission.ask") == false)
     #expect(source.contains("RV_BYPASS") == false)
+    #expect(source.contains("if exit_code == 0") == false)
 }
 
 @Test func cursorWrapper_resetHardWritesPermissionDenyAndExitsZero() async throws {
@@ -288,6 +289,55 @@ func codexWrapper_missingReasonDoesNotExitTwoWithWhitespaceStderr(_ stubStdout: 
     #expect(json["permission"] as? String == "deny")
     #expect(json["user_message"] as? String == reason)
     #expect(json["decision"] == nil)
+    #expect(result.exitCode == 0)
+}
+
+@Test(arguments: [
+    "",
+    "\n",
+    "   \n",
+    "\t",
+])
+func cursorWrapper_emptyOrWhitespaceStdoutExitZeroIsDenyNotAllow(_ stubStdout: String) async throws {
+    let result = try await runCursorWrapper(
+        event: [
+            "hook_event_name": "beforeShellExecution",
+            "command": "git reset --hard",
+        ],
+        stub: .stdout(stubStdout, exit: 0)
+    )
+    let json = try #require(
+        JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any]
+    )
+    #expect(json["permission"] as? String == "deny")
+    #expect(json["permission"] as? String != "allow")
+    #expect(json["user_message"] as? String == "rv failed")
+    #expect(json["agent_message"] as? String == "rv failed")
+    #expect(json["permissionDecision"] == nil)
+    #expect(json["decision"] == nil)
+    #expect(result.stdout.contains("\"permission\":\"allow\"") == false)
+    #expect(result.stdout.contains("\"permissionDecision\"") == false)
+    #expect(result.stdout.contains("\"decision\":\"block\"") == false)
+    #expect(result.stdout.contains("\"permission\":\"ask\"") == false)
+    #expect(result.exitCode == 0)
+}
+
+@Test func cursorWrapper_officialPermissionAllowStillAllows() async throws {
+    let result = try await runCursorWrapper(
+        event: [
+            "hook_event_name": "beforeShellExecution",
+            "command": "git status",
+        ],
+        stub: .stdout("{\"permission\":\"allow\"}\n", exit: 0)
+    )
+    let json = try #require(
+        JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any]
+    )
+    #expect(json["permission"] as? String == "allow")
+    #expect(json["permission"] as? String != "ask")
+    #expect(json["permissionDecision"] == nil)
+    #expect(json["decision"] == nil)
+    #expect(result.stdout.contains("\"permission\":\"ask\"") == false)
     #expect(result.exitCode == 0)
 }
 
