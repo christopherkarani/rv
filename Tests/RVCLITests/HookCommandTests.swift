@@ -117,7 +117,12 @@ private func runHook(
     #expect(json["next"] == nil)
     #expect(wire.exitCode == expected.exit)
     #expect(wire.stdout.contains(text))
-    #expect(text == "Blocked git reset --hard. Destroys uncommitted changes.")
+    #expect(wire.stdout.contains("git reset --hard") == false)
+    #expect(text == "RV · Blocked. Destroys uncommitted changes.")
+    #expect(text.contains("git reset --hard") == false)
+    #expect(text.contains("Terminal") == false)
+    #expect(text.contains("allow-once") == false)
+    #expect(text.components(separatedBy: "RV · Blocked").count == 2)
 }
 
 @Test func hookStashDrop_isEmptyAllow() async throws {
@@ -319,9 +324,12 @@ private func runHook(
     #expect(wire.stdout.contains("\"permissionDecision\":\"deny\""))
     #expect(wire.stdout.contains("\"ruleId\":\"core.git:reset-hard\""))
     #expect(wire.stdout.contains("allowOnceCommand") == false)
-    #expect(wire.stdout.contains("RV · Blocked") == false)
+    #expect(wire.stdout.contains("RV · Blocked"))
+    #expect(wire.stdout.contains("RV · Blocked\n") == false)
     #expect(wire.stdout.contains("allowOnceCode") == false)
-    #expect(wire.stdout.contains("Blocked git reset --hard. Destroys uncommitted changes."))
+    #expect(wire.stdout.contains("RV · Blocked. Destroys uncommitted changes."))
+    #expect(wire.stdout.contains("git reset --hard") == false)
+    #expect(wire.stdout.contains("Error:") == false)
 }
 
 @Test func hookClaudeAllowGitStatus_emptyStdoutExitZero() async throws {

@@ -4,7 +4,7 @@ import RVHooks
 import Testing
 
 private let resetHardReason =
-    "Blocked git reset --hard. Destroys uncommitted changes."
+    "RV · Blocked. Destroys uncommitted changes."
 private let resetHardAskReason =
     "Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once."
 private let incompleteReason =
@@ -174,7 +174,7 @@ private func runOpenCodePluginContract(_ source: String) async throws -> OpenCod
     let joined = lines.joined(separator: "\n")
     #expect(joined.contains("RV · Blocked"))
     #expect(joined.contains("Why"))
-    #expect(joined.contains("Blocked git reset --hard"))
+    #expect(joined.contains(resetHardReason))
     #expect(joined.contains("Cmd"))
     #expect(joined.contains("git reset --hard"))
     #expect(joined.contains("Meta"))
@@ -878,7 +878,7 @@ private func runOpenCodePluginContract(_ source: String) async throws -> OpenCod
     #expect(result.toastVariant == "error")
     let message = result.toastMessage ?? ""
     #expect(message.contains("Why"))
-    #expect(message.contains("Blocked git reset --hard"))
+    #expect(message.contains(resetHardReason))
     #expect(message.contains("Cmd"))
     #expect(message.contains("git reset --hard"))
     #expect(message.contains("Meta"))
@@ -916,7 +916,7 @@ private func runOpenCodePluginContract(_ source: String) async throws -> OpenCod
     #expect(result.toastTitle == "RV · Blocked")
     #expect(result.toastVariant == "error")
     let message = result.toastMessage ?? ""
-    #expect(message.contains("Blocked git reset --hard"))
+    #expect(message.contains(resetHardReason))
 }
 
 @Test func openCodeAdapter_toastThrowStillBlocks() async throws {
@@ -1083,14 +1083,14 @@ func adapters_mapRvHookResultMatrix(host: String, kind: String) async throws {
 private let missingShellCommandReason =
     "rv received a shell hook with no command text and blocked the command. Run it in Terminal."
 private let resetHardJSON =
-    "{\"decision\":\"deny\",\"reason\":\"Blocked git reset --hard. Destroys uncommitted changes.\",\"rule\":\"core.git/reset-hard\"}\n"
+    "{\"decision\":\"deny\",\"reason\":\"RV · Blocked. Destroys uncommitted changes.\",\"rule\":\"core.git/reset-hard\"}\n"
 private let askResetHardJSON =
     "{\"decision\":\"ask\",\"reason\":\"Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once.\",\"continuation\":\"hostNative\",\"rule\":\"core.git/reset-hard\",\"next\":\"Run it in Terminal, or rv allow-once.\"}\n"
 private let wrapperResetHardCommand = "echo \"$(git reset --hard)\""
 private let wrapperResetHardReason =
-    "Blocked echo \"$(git reset --hard)\". Destroys uncommitted changes."
+    "RV · Blocked. Destroys uncommitted changes."
 private let wrapperResetHardJSON =
-    "{\"decision\":\"deny\",\"reason\":\"Blocked echo \\\"$(git reset --hard)\\\". Destroys uncommitted changes.\",\"rule\":\"core.git/reset-hard\"}\n"
+    "{\"decision\":\"deny\",\"reason\":\"RV · Blocked. Destroys uncommitted changes.\",\"rule\":\"core.git/reset-hard\"}\n"
 private let incompleteJSON =
     "{\"decision\":\"deny\",\"reason\":\"rv could not finish evaluating this command. Run it in Terminal.\"}\n"
 
