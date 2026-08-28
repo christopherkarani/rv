@@ -14,6 +14,12 @@ public enum HostAskVerdict: Sendable, Equatable {
     case ask(ApprovalContinuation)
 }
 
+/// Pack-door verdict. Ask is uninhabited; product Ask is `BoundReview`.
+public enum PackDoorVerdict: Sendable, Equatable {
+    case allow
+    case deny
+}
+
 /// Resolution after a human Allow once / Deny on a host-native continuation.
 public enum HostAskBridgeResolution: Sendable, Equatable {
     /// Caller must plant+spend via PolicyGate, then allow only if that spend succeeds.
@@ -70,12 +76,9 @@ public enum HostNativeAsk {
         }
     }
 
-    /// Pack / evaluate `Decision` on the hook door. Pack deny stays deny here;
-    /// product Ask is `BoundReview.mandatoryHuman`.
-    public static func verdict(
-        host _: HookHost,
-        decision: Decision
-    ) -> HostAskVerdict {
+    /// Pack / evaluate `Decision` on the hook door. Cannot Ask.
+    /// Product Ask is `verdict(host:bound:continuation:)`.
+    public static func verdict(_ decision: Decision) -> PackDoorVerdict {
         switch decision {
         case .allow:
             return .allow

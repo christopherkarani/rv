@@ -63,10 +63,18 @@ struct HostNativeAskTests {
 
     @Test func packDecisionDenyStaysDeny() {
         let denied = Decision.deny(packDeny)
-        #expect(HostNativeAsk.verdict(host: .pi, decision: denied) == .deny)
-        #expect(HostNativeAsk.verdict(host: .opencode, decision: denied) == .deny)
-        #expect(HostNativeAsk.verdict(host: .claude, decision: denied) == .deny)
-        #expect(HostNativeAsk.verdict(host: .grok, decision: denied) == .deny)
+        let verdict: PackDoorVerdict = HostNativeAsk.verdict(denied)
+        #expect(verdict == .deny)
+    }
+
+    @Test func packDecisionAllowIsAllow() {
+        let verdict: PackDoorVerdict = HostNativeAsk.verdict(.allow)
+        #expect(verdict == .allow)
+    }
+
+    @Test func packDecisionIndeterminateIsDeny() {
+        let verdict: PackDoorVerdict = HostNativeAsk.verdict(.indeterminate(.commandTooLarge))
+        #expect(verdict == .deny)
     }
 
     @Test func hostNativeBridgeSpendsOnPiAndOpenCodeAllowOnce() {
