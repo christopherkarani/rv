@@ -16,7 +16,7 @@ public enum WrapperKind: String, Sendable, Equatable, Codable {
 public enum SemanticAnalysis: Sendable, Equatable, Codable {
     case git(GitAction)
     case filesystem(FilesystemAction)
-    case wrapper(WrapperKind, inner: SemanticAnalysis)
+    indirect case wrapper(WrapperKind, inner: SemanticAnalysis)
     case unwrapLimited
     case unknown
 

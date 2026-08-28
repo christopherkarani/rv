@@ -87,8 +87,8 @@ private func unwrapText(
                 workingDirectory: workingDirectory
             )
         )
-    case .limited:
-        return .limited(layers: layers)
+    case .limited(let kind):
+        return .limited(layers: layers + [kind])
     case .next(let inner, let kind, let nextCwd):
         if inner.utf8.count > maxBytes {
             return .limited(layers: layers + [kind])
@@ -109,7 +109,7 @@ private func unwrapText(
 
 private enum Peel: Equatable {
     case notWrapper
-    case limited
+    case limited(WrapperKind)
     case next(String, WrapperKind, WorkingDirectory?)
 }
 
@@ -206,7 +206,7 @@ private func peelSudo(_ tokens: [CommandToken], workingDirectory: WorkingDirecto
                 continue
             }
             if sudoLongArgFlags.contains(token) {
-                guard index + 1 < tokens.count else { return .limited }
+                guard index + 1 < tokens.count else { return .limited(.sudo) }
                 if token == "--chdir" {
                     cwd = resolveWorkingDirectory(tokens[index + 1].decoded, current: cwd)
                 }
@@ -217,17 +217,17 @@ private func peelSudo(_ tokens: [CommandToken], workingDirectory: WorkingDirecto
                 index += 1
                 continue
             }
-            return .limited
+            return .limited(.sudo)
         }
         if token.hasPrefix("-") {
             if token == "-D" {
-                guard index + 1 < tokens.count else { return .limited }
+                guard index + 1 < tokens.count else { return .limited(.sudo) }
                 cwd = resolveWorkingDirectory(tokens[index + 1].decoded, current: cwd)
                 index += 2
                 continue
             }
             if sudoShortArgFlags.contains(token) {
-                guard index + 1 < tokens.count else { return .limited }
+                guard index + 1 < tokens.count else { return .limited(.sudo) }
                 index += 2
                 continue
             }
@@ -262,10 +262,10 @@ private func peelEnv(_ tokens: [CommandToken], workingDirectory: WorkingDirector
             continue
         }
         if token == "-S" || token == "--split-string" {
-            return .limited
+            return .limited(.env)
         }
         if token == "-C" || token == "--chdir" {
-            guard index + 1 < tokens.count else { return .limited }
+            guard index + 1 < tokens.count else { return .limited(.env) }
             cwd = resolveWorkingDirectory(tokens[index + 1].decoded, current: cwd)
             index += 2
             continue
@@ -276,7 +276,7 @@ private func peelEnv(_ tokens: [CommandToken], workingDirectory: WorkingDirector
             continue
         }
         if token == "-u" || token == "--unset" {
-            guard index + 1 < tokens.count else { return .limited }
+            guard index + 1 < tokens.count else { return .limited(.env) }
             index += 2
             continue
         }
@@ -332,14 +332,14 @@ private func peelShell(
             return .notWrapper
         }
         if token == "-c" || token == "--command" {
-            guard index + 1 < tokens.count else { return .limited }
+            guard index + 1 < tokens.count else { return .limited(kind) }
             return .next(tokens[index + 1].decoded, kind, workingDirectory)
         }
         if let value = attachedValue(token, long: "--command") {
             return .next(value, kind, workingDirectory)
         }
         if token == "-o" || token == "-O" {
-            guard index + 1 < tokens.count else { return .limited }
+            guard index + 1 < tokens.count else { return .limited(kind) }
             index += 2
             continue
         }
@@ -348,7 +348,7 @@ private func peelShell(
             continue
         }
         if token.hasPrefix("-"), token.contains("c") {
-            guard index + 1 < tokens.count else { return .limited }
+            guard index + 1 < tokens.count else { return .limited(kind) }
             return .next(tokens[index + 1].decoded, kind, workingDirectory)
         }
         if token.hasPrefix("-") {
@@ -371,7 +371,7 @@ private func peelInterpreter(
     while index < tokens.count {
         let token = tokens[index].decoded
         if flags.contains(token) {
-            guard index + 1 < tokens.count else { return .limited }
+            guard index + 1 < tokens.count else { return .limited(kind) }
             return interpreterPeel(extract(tokens[index + 1].decoded), kind: kind, cwd: workingDirectory)
         }
         if kind == .ruby, token.hasPrefix("-e"), token.count > 2 {
@@ -384,7 +384,7 @@ private func peelInterpreter(
         if token == "-W" || token == "-X" || token == "--check-hash-based-pycs"
             || token == "-r" || token == "-I" || token == "-C" || token == "--title"
         {
-            guard index + 1 < tokens.count else { return .limited }
+            guard index + 1 < tokens.count else { return .limited(kind) }
             index += 2
             continue
         }
@@ -408,7 +408,7 @@ private func interpreterPeel(
     case .dataOnly:
         return .notWrapper
     case .limited:
-        return .limited
+        return .limited(kind)
     }
 }
 
@@ -450,10 +450,10 @@ private func pythonShellCommand(_ code: String) -> String? {
         return command
     }
     if let path = callStringArgument(code, names: ["os.remove", "os.unlink"]) {
-        return "rm \(path)"
+        return reconstructedRm(path)
     }
     if let path = callStringArgument(code, names: ["shutil.rmtree"]) {
-        return "rm -rf \(path)"
+        return reconstructedRm(path, recursive: true)
     }
     return nil
 }
@@ -517,13 +517,10 @@ private func nodeShellCommand(_ code: String) -> String? {
         return command
     }
     if let path = callStringArgument(code, names: ["fs.unlinkSync", "fs.rmdirSync"]) {
-        return "rm \(path)"
+        return reconstructedRm(path)
     }
     if let path = callStringArgument(code, names: ["fs.rmSync", "fs.rm"]) {
-        if code.contains("recursive") {
-            return "rm -rf \(path)"
-        }
-        return "rm \(path)"
+        return reconstructedRm(path, recursive: code.contains("recursive"))
     }
     return nil
 }
@@ -558,10 +555,10 @@ private func rubyShellCommand(_ code: String) -> String? {
         return command
     }
     if let path = callStringArgument(code, names: ["File.delete", "File.unlink"]) {
-        return "rm \(path)"
+        return reconstructedRm(path)
     }
     if let path = callStringArgument(code, names: ["FileUtils.rm_rf", "FileUtils.remove_entry_secure"]) {
-        return "rm -rf \(path)"
+        return reconstructedRm(path, recursive: true)
     }
     if let command = rubyBacktickCommand(code) {
         return command
@@ -715,6 +712,19 @@ private func resolveWorkingDirectory(
         homeDirectory: nil
     )
     return WorkingDirectory(validating: path)
+}
+
+private func reconstructedRm(_ path: String, recursive: Bool = false) -> String {
+    let flags = recursive ? "-rf " : ""
+    return "rm \(flags)\(quoteIfNeeded(path))"
+}
+
+private func quoteIfNeeded(_ value: String) -> String {
+    if value.isEmpty { return "''" }
+    if value.contains(where: { $0.isWhitespace || $0 == "'" }) {
+        return "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+    return value
 }
 
 private func renderCommand(_ tokens: [CommandToken]) -> String {

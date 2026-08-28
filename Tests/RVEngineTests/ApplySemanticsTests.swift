@@ -95,13 +95,27 @@ struct ApplySemanticsTests {
     }
 
     @Test func pythonRemoveProtected_isDeniedBySemantics() throws {
-        let command = #"python -c "os.remove('/isolated-home/.ssh/id_rsa')""#
+        // Bare `link` is not a secret-path token, so packs allow. The fact
+        // maps it to a protected destination — wrappers must not lift that floor.
+        let command = #"python -c "os.remove('link')""#
         let pack = try runSemanticsPack(command)
         #expect(pack.decision == .allow)
+        let context = FilesystemAnalysisContext(
+            workingDirectory: WorkingDirectory(validating: "/repo"),
+            repositoryRoot: RepositoryRoot(validating: "/repo"),
+            facts: [
+                FilesystemPathFact(
+                    apparent: "link",
+                    canonical: "/isolated-home/.ssh/id_rsa",
+                    followedSymlink: true,
+                    resolution: .resolved
+                ),
+            ]
+        )
         let composed = applySemantics(
             pack: pack,
             command: ShellCommand(rawValue: command),
-            filesystemContext: repo
+            filesystemContext: context
         )
         guard case .deny(let deny) = composed.decision else {
             Issue.record("protected path via python must deny")
@@ -109,6 +123,7 @@ struct ApplySemanticsTests {
         }
         #expect(deny.ruleID == ActionPolicyEngine.Builtin.protectedPath.ruleID)
         #expect(composed.analysis.wrappers == [.python])
+        #expect(composed.analysis.filesystemAction?.primaryTarget?.scope == .protectedPath)
     }
 
     @Test func packIndeterminate_isNotLiftedByLimit() {

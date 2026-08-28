@@ -41,6 +41,26 @@ struct UnwrapTests {
         #expect(unwrapped.workingDirectory?.rawValue == "/tmp")
     }
 
+    @Test func zshDashC_extractsInnerCommand() {
+        let outcome = unwrapCommand(ShellCommand(rawValue: "zsh -c 'git reset --hard'"))
+        guard case .complete(let unwrapped) = outcome else {
+            Issue.record("expected complete unwrap")
+            return
+        }
+        #expect(unwrapped.command.rawValue == "git reset --hard")
+        #expect(unwrapped.layers == [.zsh])
+    }
+
+    @Test func commandWrapper_peelsToInner() {
+        let outcome = unwrapCommand(ShellCommand(rawValue: "command git reset --hard"))
+        guard case .complete(let unwrapped) = outcome else {
+            Issue.record("expected complete unwrap")
+            return
+        }
+        #expect(unwrapped.command.rawValue == "git reset --hard")
+        #expect(unwrapped.layers == [.command])
+    }
+
     @Test func echoQuotedRm_isNotUnwrapped() {
         let outcome = unwrapCommand(ShellCommand(rawValue: "echo 'rm -rf /'"))
         guard case .complete(let unwrapped) = outcome else {

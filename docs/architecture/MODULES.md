@@ -11,7 +11,7 @@ Each module keeps a small public API, `package` internals later, and its own tes
 | Module | Owns | Must not |
 |---|---|---|
 | **RVDomain** | `Decision`, `Severity`, `PackID`, `RuleID`, `SecretPathCatalog`, `EvaluationRequest/Result`, Explain pipeline (`ExplainStep`), `ProposedAction`, `HardPolicyDecision`, `ActionPolicyEngine`, `ActionReviewer`, `PendingApproval`, `HostNativeAsk`, `ApprovalBridge`, `SemanticAnalysis`, `GitAction`, `FilesystemAction` | I/O, TTY, XPC |
-| **RVEngine** | normalize, quick-reject, safe then destructive, secret-path on allow, deadline, `PatternEngine`, `analyzeGit`, `applyGitSemantics`, `analyzeFilesystem`, `applyFilesystemSemantics`, `unwrapCommand`, `analyzeSemantics` | pack files, hooks |
+| **RVEngine** | normalize, quick-reject, safe then destructive, secret-path on allow, deadline, `PatternEngine`, `analyzeGit`, `applyGitSemantics`, `analyzeFilesystem`, `applyFilesystemSemantics`, `unwrapCommand`, `analyzeSemantics`, `applySemantics` | pack files, hooks |
 | **RVPacks** | registry, bundled JSON, enable/disable | decisions, rendering |
 | **RVScan** | session-store discovery, bounds walk, store adapters, extract, classify, dedupe | CLI, TUI, XPC, hooks codecs, Policy gate |
 | **RVPolicy** | config merge, allowlist, allow-once, `HostGrantWriter`, durable `PendingApprovalStore`, Apple Foundation Models `ActionReviewer` adapter (shadow), `ShadowReviewRunner` | rendering |
