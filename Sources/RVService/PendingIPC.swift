@@ -83,6 +83,16 @@ enum PendingListProjection {
                 return "create local branch"
             case .workingTreeDiscard:
                 return "discard working tree"
+            case .filesystemDelete:
+                return "delete file"
+            case .filesystemMove:
+                return "move file"
+            case .filesystemOverwrite:
+                return "overwrite file"
+            case .filesystemModeChange:
+                return "change file mode"
+            case .protectedPathMutation:
+                return "protected path mutation"
             }
         }
         let base = labels.isEmpty ? "shell" : labels.joined(separator: ", ")
