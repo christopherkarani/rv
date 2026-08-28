@@ -1,5 +1,6 @@
 import Foundation
 import RVDomain
+import RVEngine
 import RVPolicy
 
 /// Peek shows a matching grant without consuming it. Apply spends it.
@@ -121,7 +122,7 @@ public struct GatedEvaluate: Sendable {
         now: Date,
         allowlist: @escaping @Sendable () -> AllowlistSnapshot
     ) async -> EvaluationResult {
-        let result = resolvedSession().evaluate(request)
+        let result = evaluateWithSemantics(request, cwd: cwd)
         switch result.decision {
         case .allow, .indeterminate:
             return result
@@ -167,7 +168,7 @@ public struct GatedEvaluate: Sendable {
         now: Date,
         allowlist: @escaping @Sendable () -> AllowlistSnapshot
     ) async -> EvaluationResult {
-        let result = resolvedSession().evaluate(request)
+        let result = evaluateWithSemantics(request, cwd: cwd)
         // Fast path: allow/indeterminate never touch PolicyGate or the
         // allowlist loader; PolicyGate returns them unchanged anyway.
         switch result.decision {
@@ -194,5 +195,16 @@ public struct GatedEvaluate: Sendable {
                 ).result
             }
         }
+    }
+
+    private func evaluateWithSemantics(
+        _ request: EvaluationRequest,
+        cwd: WorkingDirectory?
+    ) -> EvaluationResult {
+        applyGitSemantics(
+            pack: resolvedSession().evaluate(request),
+            command: request.command,
+            context: GitAnalysisContext(workingDirectory: cwd)
+        )
     }
 }

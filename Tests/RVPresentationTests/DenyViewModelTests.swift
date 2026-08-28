@@ -324,6 +324,31 @@ private func mediumAllow() -> EvaluationResult {
     #expect(vm.ruleID?.rawValue == "core.git:stash-drop")
 }
 
+@Test func explainViewModel_attachesGitSemanticWhenPresent() {
+    let create = explainViewModel(
+        from: EvaluationResult(
+            outcome: .plain,
+            analysis: .git(.createBranch(name: "feature", startPoint: nil, force: false))
+        ),
+        command: ShellCommand(rawValue: "git checkout -b feature")
+    )
+    #expect(create.semantic?.action == "branch creation")
+    #expect(create.semantic?.effect == "local branch create")
+    #expect(create.semantic?.ref == "feature")
+
+    let discard = explainViewModel(
+        from: EvaluationResult(
+            outcome: .plain,
+            analysis: .git(.discardWorktree(pathspecs: ["file.swift"], source: nil))
+        ),
+        command: ShellCommand(rawValue: "git checkout -- file.swift")
+    )
+    #expect(discard.semantic?.action == "working-tree overwrite/discard")
+    #expect(discard.semantic?.pathspec == "file.swift")
+
+    #expect(explainViewModel(from: EvaluationResult(outcome: .plain), command: status).semantic == nil)
+}
+
 @Test func packsViewModel_dayOneEnabled() {
     let vm = packsViewModel(
         enabled: dayOnePackIDs,
