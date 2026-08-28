@@ -175,7 +175,8 @@ let action = ProposedAction.shell(
     )
 )
 let allow = EvaluationResult(outcome: .plain, matchingView: MatchingView("git status"))
-HostNativeAsk.hookBound(result: allow, action: action) // .allow — not Ask
+let context = ReviewContext(repository: RepositoryReviewContext())
+HostNativeAsk.hookBound(result: allow, action: action, context: context) // .allow — not Ask
 ```
 
 Pack deny of `git reset --hard` with empty effects: `.deny(reset-hard)`, mapper encodes deny.
