@@ -126,6 +126,56 @@ struct ApplySemanticsTests {
         #expect(composed.analysis.filesystemAction?.primaryTarget?.scope == .protectedPath)
     }
 
+    @Test func unquotedBashDashC_keepsPackDenyAndUnwrapLimited() throws {
+        let command = "bash -c git reset --hard"
+        let pack = try runSemanticsPack(command)
+        guard case .deny(let packDeny) = pack.decision else {
+            Issue.record("unquoted -c still has pack-visible git reset --hard")
+            return
+        }
+        let composed = applySemantics(
+            pack: pack,
+            command: ShellCommand(rawValue: command)
+        )
+        guard case .deny(let deny) = composed.decision else {
+            Issue.record("unquoted -c must not silent-allow, got \(composed.decision)")
+            return
+        }
+        #expect(deny.ruleID == packDeny.ruleID)
+        #expect(composed.analysis.innermost == .unwrapLimited)
+    }
+
+    @Test func dollarPayloadDashC_neverAutoAllows() throws {
+        let command = "bash -c $CMD"
+        let pack = try runSemanticsPack(command)
+        #expect(pack.decision == .allow)
+        let composed = applySemantics(
+            pack: pack,
+            command: ShellCommand(rawValue: command)
+        )
+        guard case .deny(let deny) = composed.decision else {
+            Issue.record("$ -c must fail-closed, got \(composed.decision)")
+            return
+        }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.unwrapLimited.ruleID)
+        #expect(composed.analysis.innermost == .unwrapLimited)
+    }
+
+    @Test func pythonPrintOsSystem_neverAutoAllows() throws {
+        let command = #"python -c "print(os.system('git reset --hard'))""#
+        let pack = try runSemanticsPack(command)
+        let composed = applySemantics(
+            pack: pack,
+            command: ShellCommand(rawValue: command)
+        )
+        guard case .deny = composed.decision else {
+            Issue.record("print(os.system) must not silent-allow, got \(composed.decision)")
+            return
+        }
+        #expect(composed.analysis.innermost == .git(.reset(mode: .hard, target: nil)))
+        #expect(composed.analysis.wrappers == [.python])
+    }
+
     @Test func packIndeterminate_isNotLiftedByLimit() {
         let pack = EvaluationResult(
             outcome: .indeterminate(.corePacksUnavailable),

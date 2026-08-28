@@ -153,4 +153,43 @@ struct UnwrapTests {
         }
         #expect(layers == [.python])
     }
+
+    @Test func unquotedBashDashC_isLimited() {
+        let outcome = unwrapCommand(ShellCommand(rawValue: "bash -c git reset --hard"))
+        guard case .limited(let layers) = outcome else {
+            Issue.record("unquoted -c must be limited, got \(outcome)")
+            return
+        }
+        #expect(layers == [.bash])
+    }
+
+    @Test func dollarPayloadDashC_isLimited() {
+        let outcome = unwrapCommand(ShellCommand(rawValue: "bash -c $CMD"))
+        guard case .limited(let layers) = outcome else {
+            Issue.record("$ -c payload must be limited, got \(outcome)")
+            return
+        }
+        #expect(layers == [.bash])
+    }
+
+    @Test func ansiCQuotedDashC_isLimited() {
+        let outcome = unwrapCommand(ShellCommand(rawValue: "sh -c $'git reset --hard'"))
+        guard case .limited(let layers) = outcome else {
+            Issue.record("$'…' -c must be limited, got \(outcome)")
+            return
+        }
+        #expect(layers == [.sh])
+    }
+
+    @Test func pythonPrintOsSystem_extractsShell() {
+        let outcome = unwrapCommand(
+            ShellCommand(rawValue: #"python -c "print(os.system('git reset --hard'))""#)
+        )
+        guard case .complete(let unwrapped) = outcome else {
+            Issue.record("print(os.system) must extract or limit, got \(outcome)")
+            return
+        }
+        #expect(unwrapped.command.rawValue == "git reset --hard")
+        #expect(unwrapped.layers == [.python])
+    }
 }

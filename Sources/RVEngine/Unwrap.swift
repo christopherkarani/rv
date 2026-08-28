@@ -333,10 +333,14 @@ private func peelShell(
         }
         if token == "-c" || token == "--command" {
             guard index + 1 < tokens.count else { return .limited(kind) }
-            return .next(tokens[index + 1].decoded, kind, workingDirectory)
+            return peelShellPayload(tokens[index + 1], kind: kind, cwd: workingDirectory)
         }
         if let value = attachedValue(token, long: "--command") {
-            return .next(value, kind, workingDirectory)
+            return peelShellPayload(
+                CommandToken(decoded: value, wasQuoted: tokens[index].wasQuoted),
+                kind: kind,
+                cwd: workingDirectory
+            )
         }
         if token == "-o" || token == "-O" {
             guard index + 1 < tokens.count else { return .limited(kind) }
@@ -349,7 +353,7 @@ private func peelShell(
         }
         if token.hasPrefix("-"), token.contains("c") {
             guard index + 1 < tokens.count else { return .limited(kind) }
-            return .next(tokens[index + 1].decoded, kind, workingDirectory)
+            return peelShellPayload(tokens[index + 1], kind: kind, cwd: workingDirectory)
         }
         if token.hasPrefix("-") {
             index += 1
@@ -358,6 +362,21 @@ private func peelShell(
         return .notWrapper
     }
     return .notWrapper
+}
+
+/// Unquoted, `$`, and `$'…'` `-c` payloads are uncertain. Fail-closed.
+private func peelShellPayload(
+    _ token: CommandToken,
+    kind: WrapperKind,
+    cwd: WorkingDirectory?
+) -> Peel {
+    if token.wasQuoted == false {
+        return .limited(kind)
+    }
+    if token.decoded.contains("$") || token.decoded.contains("`") {
+        return .limited(kind)
+    }
+    return .next(token.decoded, kind, cwd)
 }
 
 private func peelInterpreter(
@@ -420,11 +439,11 @@ private enum InterpreterExtract: Equatable {
 
 private func extractPython(_ code: String) -> InterpreterExtract {
     let folded = code.trimmingCharacters(in: .whitespacesAndNewlines)
-    if looksLikePythonDataOnly(folded) {
-        return .dataOnly
-    }
     if let command = pythonShellCommand(folded) {
         return .command(command)
+    }
+    if looksLikePythonDataOnly(folded) {
+        return .dataOnly
     }
     return .limited
 }
@@ -481,11 +500,11 @@ private func subprocessCommand(_ code: String) -> String? {
 
 private func extractNode(_ code: String) -> InterpreterExtract {
     let folded = code.trimmingCharacters(in: .whitespacesAndNewlines)
-    if looksLikeNodeDataOnly(folded) {
-        return .dataOnly
-    }
     if let command = nodeShellCommand(folded) {
         return .command(command)
+    }
+    if looksLikeNodeDataOnly(folded) {
+        return .dataOnly
     }
     return .limited
 }
@@ -527,11 +546,11 @@ private func nodeShellCommand(_ code: String) -> String? {
 
 private func extractRuby(_ code: String) -> InterpreterExtract {
     let folded = code.trimmingCharacters(in: .whitespacesAndNewlines)
-    if looksLikeRubyDataOnly(folded) {
-        return .dataOnly
-    }
     if let command = rubyShellCommand(folded) {
         return .command(command)
+    }
+    if looksLikeRubyDataOnly(folded) {
+        return .dataOnly
     }
     return .limited
 }

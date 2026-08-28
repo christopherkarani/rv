@@ -47,6 +47,33 @@ struct GatedEvaluateWrapperSemanticsTests {
         #expect(result.analysis.wrappers == [.python])
     }
 
+    @Test func unquotedAndDollarDashC_neverSilentAllow() async throws {
+        let unquoted = try await peek("bash -c git reset --hard")
+        guard case .deny = unquoted.decision else {
+            Issue.record("unquoted -c must deny, got \(unquoted.decision)")
+            return
+        }
+        #expect(unquoted.analysis.innermost == .unwrapLimited)
+
+        let dollar = try await peek("bash -c $CMD")
+        guard case .deny(let deny) = dollar.decision else {
+            Issue.record("$ -c must deny, got \(dollar.decision)")
+            return
+        }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.unwrapLimited.ruleID)
+        #expect(dollar.analysis.innermost == .unwrapLimited)
+    }
+
+    @Test func pythonPrintOsSystem_isSurfacedOrDenied() async throws {
+        let result = try await peek(#"python -c "print(os.system('git reset --hard'))""#)
+        guard case .deny = result.decision else {
+            Issue.record("print(os.system) must not silent-allow")
+            return
+        }
+        #expect(result.analysis.gitAction == .reset(mode: .hard, target: nil))
+        #expect(result.analysis.wrappers == [.python])
+    }
+
     @Test func deepWrapperChain_asksOrDenies() async throws {
         let command = "sudo env command sudo env command sudo env command bash -c 'echo hello'"
         let result = try await peek(command)

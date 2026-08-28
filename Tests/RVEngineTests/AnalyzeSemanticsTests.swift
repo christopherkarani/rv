@@ -98,4 +98,30 @@ struct AnalyzeSemanticsTests {
         #expect(analysis.innermost == .unwrapLimited)
         #expect(analysis != .unknown)
     }
+
+    @Test func unquotedBashDashC_isUnwrapLimited() {
+        let analysis = analyzeSemantics(ShellCommand(rawValue: "bash -c git reset --hard"))
+        #expect(analysis.innermost == .unwrapLimited)
+        #expect(analysis != .unknown)
+    }
+
+    @Test func dollarPayloadDashC_isUnwrapLimited() {
+        let analysis = analyzeSemantics(ShellCommand(rawValue: "zsh -c $CMD"))
+        #expect(analysis.innermost == .unwrapLimited)
+        #expect(analysis != .unknown)
+    }
+
+    @Test func ansiCQuotedDashC_isUnwrapLimited() {
+        let analysis = analyzeSemantics(ShellCommand(rawValue: "bash -c $'git reset --hard'"))
+        #expect(analysis.innermost == .unwrapLimited)
+        #expect(analysis != .unknown)
+    }
+
+    @Test func pythonPrintOsSystem_surfacesGitReset() {
+        let analysis = analyzeSemantics(
+            ShellCommand(rawValue: #"python -c "print(os.system('git reset --hard'))""#)
+        )
+        #expect(analysis.wrappers == [.python])
+        #expect(analysis.innermost == .git(.reset(mode: .hard, target: nil)))
+    }
 }
