@@ -49,6 +49,45 @@ struct ExplainFilesystemSemanticsTests {
         #expect(result.stdout.contains("out-of-repo-write"))
     }
 
+    @Test func explain_protectedHomePath_showsCategoryAndRule() async throws {
+        let repo = try makeExplainRepo()
+        let home = try isolatedHome()
+        let ssh = URL(fileURLWithPath: home.rawValue, isDirectory: true)
+            .appendingPathComponent(".ssh", isDirectory: true)
+        try FileManager.default.createDirectory(at: ssh, withIntermediateDirectories: true)
+        try "key".write(
+            to: ssh.appendingPathComponent("config"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let result = await CommandRun.run(
+            kind: .explain,
+            command: "echo leaked > ~/.ssh/config",
+            probe: ThemeProbe(
+                stdinIsTTY: true,
+                stdoutIsTTY: true,
+                jsonFlag: false,
+                robotFlag: false,
+                plainFlag: true,
+                noColorFlag: false,
+                ci: false,
+                noColorEnv: false,
+                termDumb: false
+            ),
+            requested: .automatic,
+            cwd: repo.path,
+            allowOnceDirectory: try isolatedAllowOnceDirectory(),
+            home: home
+        )
+        #expect(result.stdout.contains("Decision: DENY"))
+        #expect(result.stdout.contains("protected path"))
+        #expect(result.stdout.contains("Category"))
+        #expect(result.stdout.contains("ssh"))
+        #expect(result.stdout.contains("core.secrets/home-ssh") || result.stdout.contains("protected-path-mutation"))
+        #expect(result.stdout.contains("Catalog") || result.stdout.contains("protected-path-mutation"))
+        #expect(result.stdout.contains("inside repo") == false)
+    }
+
     @Test func explain_inRepoCreate_isAllowed() async throws {
         let repo = try makeExplainRepo()
         let result = try await explain("touch new.swift", cwd: repo)

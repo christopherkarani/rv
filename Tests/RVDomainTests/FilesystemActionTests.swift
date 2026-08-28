@@ -47,6 +47,24 @@ struct FilesystemActionTests {
         let action = FilesystemAction.delete(targets: [target], recursive: false, force: false)
         #expect(action.effects.kinds.contains(.protectedPathMutation))
         #expect(action.explainScope == "protected path")
+        #expect(action.explainCategory == nil)
+        let labelled = FilesystemTarget(
+            apparent: "link",
+            canonical: "/home/.ssh/id_rsa",
+            scope: .protectedPath,
+            kind: .unknown,
+            followedSymlink: true,
+            resolution: .resolved,
+            protectedMatch: SecretPathMatch(pattern: "home-ssh", category: .ssh)
+        )
+        let labelledAction = FilesystemAction.delete(
+            targets: [labelled],
+            recursive: false,
+            force: false
+        )
+        #expect(labelledAction.explainCategory == "ssh")
+        #expect(labelledAction.explainCatalogRule == "core.secrets/home-ssh")
+        #expect(labelledAction.resources.protectedMatch?.pattern == "home-ssh")
         let proposed = action.proposedAction(
             command: ShellCommand(rawValue: "rm link"),
             workingDirectory: WorkingDirectory(validating: "/repo")

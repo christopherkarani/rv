@@ -800,7 +800,7 @@ public func lexicalFilesystemPath(
     workingDirectory: String?,
     homeDirectory: String?
 ) -> String {
-    let expanded = expandTilde(apparent, homeDirectory: homeDirectory)
+    let expanded = expandHomeAlias(apparent, homeDirectory: homeDirectory)
     let absolute: String
     if expanded.hasPrefix("/") {
         absolute = expanded
@@ -864,16 +864,44 @@ private func classifiedTarget(
         ),
         kind: classifyFilesystemKind(canonical),
         followedSymlink: followedSymlink,
-        resolution: resolution
+        resolution: resolution,
+        protectedMatch: protectedMatch(
+            canonical: canonical,
+            resolution: resolution,
+            catalog: context.catalog
+        )
     )
 }
 
-private func expandTilde(_ path: String, homeDirectory: String?) -> String {
-    guard let homeDirectory, path == "~" || path.hasPrefix("~/") else {
+private func protectedMatch(
+    canonical: String,
+    resolution: FilesystemResolution,
+    catalog: SecretPathCatalog
+) -> SecretPathMatch? {
+    guard resolution != .uncertain else { return nil }
+    return catalog.firstMatch(of: canonical).map(SecretPathMatch.init)
+}
+
+func isHomeAliasPath(_ path: String) -> Bool {
+    path == "~" || path.hasPrefix("~/")
+        || path == "$HOME" || path.hasPrefix("$HOME/")
+        || path == "${HOME}" || path.hasPrefix("${HOME}/")
+}
+
+private func expandHomeAlias(_ path: String, homeDirectory: String?) -> String {
+    guard let homeDirectory, isHomeAliasPath(path) else {
         return path
     }
-    if path == "~" { return homeDirectory }
-    return joinFilesystemPath(homeDirectory, String(path.dropFirst(2)))
+    if path == "~" || path == "$HOME" || path == "${HOME}" {
+        return homeDirectory
+    }
+    if path.hasPrefix("~/") {
+        return joinFilesystemPath(homeDirectory, String(path.dropFirst(2)))
+    }
+    if path.hasPrefix("$HOME/") {
+        return joinFilesystemPath(homeDirectory, String(path.dropFirst(6)))
+    }
+    return joinFilesystemPath(homeDirectory, String(path.dropFirst(8)))
 }
 
 private func joinFilesystemPath(_ left: String, _ right: String) -> String {
@@ -933,5 +961,6 @@ private func clusteredShorts(_ token: String) -> [Character]? {
 }
 
 private func isDynamicToken(_ token: String) -> Bool {
-    token.contains("$") || token.contains("`")
+    if isHomeAliasPath(token) { return false }
+    return token.contains("$") || token.contains("`")
 }

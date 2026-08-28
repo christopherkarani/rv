@@ -48,19 +48,22 @@ public struct ActionResources: Sendable, Equatable, Codable {
     public var path: String?
     public var filesystemScope: FilesystemScope?
     public var resourceKind: FilesystemResourceKind?
+    public var protectedMatch: SecretPathMatch?
 
     public init(
         remoteName: String? = nil,
         branchName: String? = nil,
         path: String? = nil,
         filesystemScope: FilesystemScope? = nil,
-        resourceKind: FilesystemResourceKind? = nil
+        resourceKind: FilesystemResourceKind? = nil,
+        protectedMatch: SecretPathMatch? = nil
     ) {
         self.remoteName = remoteName
         self.branchName = branchName
         self.path = path
         self.filesystemScope = filesystemScope
         self.resourceKind = resourceKind
+        self.protectedMatch = protectedMatch
     }
 }
 

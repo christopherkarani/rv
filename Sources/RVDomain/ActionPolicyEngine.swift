@@ -247,6 +247,16 @@ public enum ActionPolicyEngine: Sendable {
                 semanticallyCovered: true
             )
         }
+        // Scope alone is enough: a write that omitted `.protectedPathMutation`
+        // must not fall through to reviewEligible / overlay allow.
+        if kinds.contains(.protectedPathMutation) || scope == .protectedPath {
+            return CoreHit(
+                decision: .hardDeny(Builtin.protectedPath),
+                ruleID: Builtin.protectedPath.ruleID,
+                reason: Builtin.protectedPath.reason,
+                semanticallyCovered: true
+            )
+        }
         if kinds.contains(.outsideRepositoryMutation)
             || (isWriteLike(kinds) && scope == .outsideRepository)
         {

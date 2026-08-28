@@ -8,6 +8,7 @@ public enum PinnedRulePolarity: String, Sendable, Equatable {
 
 public enum RuleHardStopKind: Sendable, Equatable {
     case secretPath
+    case protectedPath
     case protectedSharedBranch
     case workingTreeDiscard
     case outsideRepository
@@ -86,6 +87,9 @@ public enum RulePinning: Sendable {
             if deny.ruleID == ActionPolicyEngine.Builtin.unresolvedFilesystem.ruleID {
                 return .unresolvedPath
             }
+            if deny.ruleID == ActionPolicyEngine.Builtin.protectedPath.ruleID {
+                return .protectedPath
+            }
             return .protectedSharedBranch
         }
         if secretPathHit(action.supportingCommand) {
@@ -141,6 +145,8 @@ public enum RulePinning: Sendable {
             switch stop {
             case .secretPath:
                 return "This action reads a secret path. Always-allow cannot override that hard stop."
+            case .protectedPath:
+                return "This action mutates a protected host path. Always-allow cannot override that hard stop."
             case .workingTreeDiscard:
                 return "This action discards the working tree. Always-allow cannot override that hard stop."
             case .outsideRepository:

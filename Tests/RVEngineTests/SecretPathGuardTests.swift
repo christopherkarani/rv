@@ -96,6 +96,9 @@ struct SecretPathGuardTests {
         .init(command: "echo hello && cat .env", ruleID: "core.secrets:env"),
         .init(command: "git stash drop .env", ruleID: "core.secrets:env"),
         .init(command: "rm -rf /tmp/.env", ruleID: "core.secrets:env"),
+        .init(command: "cat ~/.gnupg/secring.gpg", ruleID: "core.secrets:home-gnupg"),
+        .init(command: "cat ~/Library/Keychains/login.keychain-db", ruleID: "core.secrets:home-keychains"),
+        .init(command: "cat $HOME/.local/share/keyrings/login.keyring", ruleID: "core.secrets:home-keyrings"),
     ]
 
     static let allowRows: [AllowRow] = [

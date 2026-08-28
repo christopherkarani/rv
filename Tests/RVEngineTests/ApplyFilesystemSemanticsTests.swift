@@ -231,6 +231,31 @@ struct ApplyFilesystemSemanticsTests {
             return
         }
         #expect(action.primaryTarget?.scope == .protectedPath)
+        #expect(action.primaryTarget?.protectedMatch?.pattern == "id-rsa")
+    }
+
+    @Test func dollarHomeWrite_isDeniedAsProtectedPath() throws {
+        let command = "echo leaked > $HOME/.ssh/authorized_keys"
+        let pack = try runFilesystemPack(command, secrets: .empty)
+        #expect(pack.decision == .allow)
+        let context = FilesystemAnalysisContext(
+            workingDirectory: WorkingDirectory(validating: "/repo"),
+            repositoryRoot: RepositoryRoot(validating: "/repo"),
+            homeDirectory: "/isolated-home"
+        )
+        let composed = applyFilesystemSemantics(
+            pack: pack,
+            command: ShellCommand(rawValue: command),
+            context: context
+        )
+        guard case .deny(let deny) = composed.decision else {
+            Issue.record("HOME-aliased write must deny, got \(composed.decision)")
+            return
+        }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.protectedPath.ruleID)
+        #expect(composed.analysis.filesystemAction?.primaryTarget?.scope == .protectedPath)
+        #expect(composed.analysis.filesystemAction?.explainCategory == "ssh")
+        #expect(composed.analysis.filesystemAction?.explainCatalogRule == "core.secrets/home-ssh")
     }
 
     @Test func coreFilesystemDisabled_doesNotAddSemanticDeny() {
@@ -296,7 +321,10 @@ struct ApplyFilesystemSemanticsTests {
     }
 }
 
-private func runFilesystemPack(_ command: String) throws -> EvaluationResult {
+private func runFilesystemPack(
+    _ command: String,
+    secrets: SecretPathCatalog = .dayOne
+) throws -> EvaluationResult {
     let packs = [
         PackSnapshot(
             id: .coreFilesystem,
@@ -334,6 +362,7 @@ private func runFilesystemPack(_ command: String) throws -> EvaluationResult {
     return evaluate(
         EvaluationRequest(command: ShellCommand(rawValue: command), enabledPacks: dayOnePackIDs),
         packs: packs,
+        secrets: secrets,
         patterns: engine,
         compiled: compiled
     )

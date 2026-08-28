@@ -8,6 +8,7 @@ struct RulePinningTests {
 
     @Test(arguments: [
         RuleHardStopKind.secretPath,
+        .protectedPath,
         .protectedSharedBranch,
         .workingTreeDiscard,
         .outsideRepository,
@@ -192,6 +193,42 @@ struct RulePinningTests {
         }
     }
 
+    @Test func policyGateDoesNotHonorAllowlistOnProtectedPathDeny() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let deny = EvaluationResult(
+            outcome: .deny(
+                ActionPolicyEngine.Builtin.protectedPath,
+                matched: nil
+            ),
+            matchingView: "rm ~/.ssh/config"
+        )
+        let allowlist = AllowlistSnapshot(entries: [
+            AllowlistEntry(
+                selector: .exactCommand("rm ~/.ssh/config"),
+                reason: "nope",
+                addedAt: now
+            ),
+            AllowlistEntry(
+                selector: .rule(ActionPolicyEngine.Builtin.protectedPath.ruleID),
+                reason: "nope-rule",
+                addedAt: now
+            ),
+        ])
+        let gated = PolicyGate.decide(
+            deny,
+            cwd: wd("/tmp/ws"),
+            allowlist: allowlist,
+            grant: .none,
+            now: now
+        )
+        #expect(gated.override == .none)
+        guard case .deny(let kept) = gated.result.decision else {
+            Issue.record("protected-path deny must stay a hard stop")
+            return
+        }
+        #expect(kept.ruleID == ActionPolicyEngine.Builtin.protectedPath.ruleID)
+    }
+
     @Test func policyGateDoesNotHonorAllowlistOnSecretDeny() {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let deny = EvaluationResult(
@@ -238,6 +275,15 @@ struct RulePinningTests {
                 command: "cat .env",
                 effects: [],
                 branchName: nil
+            )
+        case .protectedPath:
+            return wait(
+                id: "protected",
+                command: "rm ~/.ssh/config",
+                effects: [.filesystemDelete, .protectedPathMutation],
+                branchName: nil,
+                path: "/home/.ssh/config",
+                scope: .protectedPath
             )
         case .protectedSharedBranch:
             return wait(

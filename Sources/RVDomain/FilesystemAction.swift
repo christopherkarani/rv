@@ -57,6 +57,7 @@ public struct FilesystemTarget: Sendable, Equatable, Codable {
     public var kind: FilesystemResourceKind
     public var followedSymlink: Bool
     public var resolution: FilesystemResolution
+    public var protectedMatch: SecretPathMatch?
 
     public init(
         apparent: String,
@@ -64,7 +65,8 @@ public struct FilesystemTarget: Sendable, Equatable, Codable {
         scope: FilesystemScope,
         kind: FilesystemResourceKind,
         followedSymlink: Bool = false,
-        resolution: FilesystemResolution = .lexical
+        resolution: FilesystemResolution = .lexical,
+        protectedMatch: SecretPathMatch? = nil
     ) {
         self.apparent = apparent
         self.canonical = canonical
@@ -72,6 +74,7 @@ public struct FilesystemTarget: Sendable, Equatable, Codable {
         self.kind = kind
         self.followedSymlink = followedSymlink
         self.resolution = resolution
+        self.protectedMatch = protectedMatch
     }
 }
 
@@ -125,7 +128,8 @@ public enum FilesystemAction: Sendable, Equatable, Codable {
         return ActionResources(
             path: target?.canonical,
             filesystemScope: target?.scope,
-            resourceKind: target?.kind
+            resourceKind: target?.kind,
+            protectedMatch: target?.protectedMatch
         )
     }
 
@@ -176,6 +180,14 @@ public enum FilesystemAction: Sendable, Equatable, Codable {
         case .unknown, nil:
             return nil
         }
+    }
+
+    public var explainCategory: String? {
+        primaryTarget?.protectedMatch?.category.rawValue
+    }
+
+    public var explainCatalogRule: String? {
+        primaryTarget?.protectedMatch.map { displayRuleID($0.ruleID) }
     }
 
     public func proposedAction(
