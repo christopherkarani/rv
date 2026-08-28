@@ -1,5 +1,30 @@
 import RVDomain
 
+public struct ExplainSemanticView: Equatable, Sendable {
+    public var action: String
+    public var scope: String
+    public var effect: String?
+    public var remote: String?
+    public var ref: String?
+    public var pathspec: String?
+
+    public init(
+        action: String,
+        scope: String,
+        effect: String? = nil,
+        remote: String? = nil,
+        ref: String? = nil,
+        pathspec: String? = nil
+    ) {
+        self.action = action
+        self.scope = scope
+        self.effect = effect
+        self.remote = remote
+        self.ref = ref
+        self.pathspec = pathspec
+    }
+}
+
 public struct ExplainViewModel: Equatable, Sendable {
     public var command: ShellCommand
     public var normalized: String
@@ -14,6 +39,7 @@ public struct ExplainViewModel: Equatable, Sendable {
     public var nextAction: String?
     public var steps: [ExplainStep]
     public var suggestions: [ExplainSuggestion]
+    public var semantic: ExplainSemanticView?
 
     public var heading: String { explainHeading }
     public var decisionWord: String { RVPresentation.decisionWord(decision) }
@@ -36,7 +62,8 @@ public struct ExplainViewModel: Equatable, Sendable {
         regex: String? = nil,
         nextAction: String?,
         steps: [ExplainStep],
-        suggestions: [ExplainSuggestion] = []
+        suggestions: [ExplainSuggestion] = [],
+        semantic: ExplainSemanticView? = nil
     ) {
         self.command = command
         self.normalized = normalized
@@ -51,6 +78,7 @@ public struct ExplainViewModel: Equatable, Sendable {
         self.nextAction = nextAction
         self.steps = steps
         self.suggestions = suggestions
+        self.semantic = semantic
     }
 }
 
@@ -104,6 +132,19 @@ public func explainViewModel(
         regex: match?.regex,
         nextAction: next,
         steps: explainSteps(from: result),
-        suggestions: ruleID.map { suggestions(for: $0) } ?? []
+        suggestions: ruleID.map { suggestions(for: $0) } ?? [],
+        semantic: explainSemantic(from: result.analysis)
+    )
+}
+
+public func explainSemantic(from analysis: SemanticAnalysis) -> ExplainSemanticView? {
+    guard case .git(let action) = analysis else { return nil }
+    return ExplainSemanticView(
+        action: action.explainAction,
+        scope: action.explainScope,
+        effect: action.explainEffect,
+        remote: action.explainRemote,
+        ref: action.explainRef,
+        pathspec: action.explainPathspec
     )
 }
