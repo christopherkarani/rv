@@ -195,6 +195,28 @@ struct ActionPolicyEngineTests {
         #expect(verdict.explanation.zone == .reviewEligible)
     }
 
+    @Test func overlayAllow_cannotLiftProtectedPathMutation() {
+        let action = ActionPolicyFixtures.filesystem(
+            effects: [.filesystemDelete, .protectedPathMutation],
+            path: "/home/.ssh/id_rsa",
+            scope: .protectedPath
+        )
+        let denied = ActionPolicyEngine.evaluate(action: action, context: shared)
+        #expect(denied.decision == .hardDeny(ActionPolicyEngine.Builtin.protectedPath))
+        let overlay = ActionPolicyEngine.evaluate(
+            action: action,
+            context: shared,
+            policy: EffectiveActionPolicy(overlay: .allow)
+        )
+        #expect(overlay.decision == .hardDeny(ActionPolicyEngine.Builtin.protectedPath))
+        let bound = ActionPolicyEngine.bind(
+            action: action,
+            context: shared,
+            review: .success(allowReview)
+        )
+        #expect(bound == .deny(ActionPolicyEngine.Builtin.protectedPath))
+    }
+
     @Test func overlayDeny_canTightenHardAllow() {
         let action = ActionPolicyFixtures.checkout(
             effects: [.localBranchCreate],
@@ -263,6 +285,26 @@ private enum ActionPolicyFixtures {
                 resources: ActionResources(branchName: branchName),
                 scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/rv")),
                 supportingCommand: ShellCommand(rawValue: supportingCommand)
+            )
+        )
+    }
+
+    static func filesystem(
+        effects: [ActionEffectKind],
+        path: String,
+        scope: FilesystemScope
+    ) -> ProposedAction {
+        .shell(
+            ShellAction(
+                fingerprint: ActionFingerprint(rawValue: "shell:fs.delete"),
+                effects: ActionEffects(kinds: effects),
+                resources: ActionResources(
+                    path: path,
+                    filesystemScope: scope,
+                    resourceKind: .unknown
+                ),
+                scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/rv")),
+                supportingCommand: ShellCommand(rawValue: "rm link")
             )
         )
     }

@@ -91,6 +91,11 @@ public enum ActionPolicyEngine: Sendable {
         public static let localBranchCreateReason =
             "Creating a local branch is a built-in hard allow."
 
+        public static let protectedPath = Deny(
+            ruleID: RuleID(pack: pack, pattern: "protected-path-mutation"),
+            reason: "Mutating a protected host path is a built-in hard deny."
+        )
+
         public static let uncovered = Deny(
             ruleID: RuleID(pack: pack, pattern: "uncovered"),
             reason: "No semantic rule covered this action."
@@ -155,6 +160,14 @@ public enum ActionPolicyEngine: Sendable {
 
     private static func builtinHit(shell: ShellAction, context: ReviewContext) -> CoreHit {
         let kinds = shell.effects.kinds
+        if kinds.contains(.protectedPathMutation) {
+            return CoreHit(
+                decision: .hardDeny(Builtin.protectedPath),
+                ruleID: Builtin.protectedPath.ruleID,
+                reason: Builtin.protectedPath.reason,
+                semanticallyCovered: true
+            )
+        }
         if kinds.contains(.workingTreeDiscard) {
             return CoreHit(
                 decision: .hardDeny(Builtin.workingTreeDiscard),

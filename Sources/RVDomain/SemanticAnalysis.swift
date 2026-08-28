@@ -1,6 +1,7 @@
-/// Closed analyzer family. Filesystem and wrapper cases stay off this slice.
+/// Closed analyzer family. Wrapper recursion stays off this slice.
 public enum SemanticAnalysis: Sendable, Equatable, Codable {
     case git(GitAction)
+    case filesystem(FilesystemAction)
     case unknown
 }
 
@@ -29,5 +30,34 @@ public struct GitAnalysisContext: Sendable, Equatable {
                 isSharedBranch: isSharedBranch
             )
         )
+    }
+}
+
+/// Caller-supplied path facts. Live canonicalize stays at the evaluate door.
+public struct FilesystemAnalysisContext: Sendable, Equatable {
+    public var workingDirectory: WorkingDirectory?
+    public var repositoryRoot: RepositoryRoot?
+    public var homeDirectory: String?
+    public var catalog: SecretPathCatalog
+    public var facts: [FilesystemPathFact]
+
+    public init(
+        workingDirectory: WorkingDirectory? = nil,
+        repositoryRoot: RepositoryRoot? = nil,
+        homeDirectory: String? = nil,
+        catalog: SecretPathCatalog = .dayOne,
+        facts: [FilesystemPathFact] = []
+    ) {
+        self.workingDirectory = workingDirectory
+        self.repositoryRoot = repositoryRoot
+        self.homeDirectory = homeDirectory
+        self.catalog = catalog
+        self.facts = facts
+    }
+
+    public static let empty = FilesystemAnalysisContext()
+
+    public func fact(for apparent: String) -> FilesystemPathFact? {
+        facts.first { $0.apparent == apparent }
     }
 }

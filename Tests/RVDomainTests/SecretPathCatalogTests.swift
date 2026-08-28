@@ -50,6 +50,12 @@ import Testing
     #expect(SecretPathCatalog.dayOne.rules[16].kind == .hostAuth([".pi", "agent", "auth.json"]))
 }
 
+@Test func secretPathCatalog_matchesCanonicalHostPaths() {
+    #expect(SecretPathCatalog.dayOne.firstMatch(of: "/isolated-home/.ssh/config")?.pattern == "home-ssh")
+    #expect(SecretPathCatalog.dayOne.firstMatch(of: "/repo/.env")?.pattern == "env")
+    #expect(SecretPathCatalog.dayOne.firstMatch(of: "/repo/Sources/Foo.swift") == nil)
+}
+
 @Test func secretPathDeny_projectsAsExistingDestructive() {
     let rule = RuleID(pack: .coreSecrets, pattern: "env")
     let steps = explainSteps(

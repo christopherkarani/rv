@@ -84,6 +84,12 @@ private func semanticItems(_ model: ExplainViewModel) -> [OutlineItem]? {
     if let pathspec = semantic.pathspec {
         items.append(.leaf(label: "Pathspec", value: pathspec, emphasis: .plain))
     }
+    if let path = semantic.path {
+        items.append(.leaf(label: "Path", value: path, emphasis: .plain))
+    }
+    if let kind = semantic.kind {
+        items.append(.leaf(label: "Kind", value: kind, emphasis: .fact))
+    }
     return items
 }
 

@@ -23,6 +23,11 @@ public enum ActionEffectKind: String, Sendable, Equatable, Codable {
     case remoteSharedBranchMutation
     case localBranchCreate
     case workingTreeDiscard
+    case filesystemDelete
+    case filesystemMove
+    case filesystemOverwrite
+    case filesystemModeChange
+    case protectedPathMutation
 }
 
 public struct ActionEffects: Sendable, Equatable, Codable {
@@ -36,10 +41,22 @@ public struct ActionEffects: Sendable, Equatable, Codable {
 public struct ActionResources: Sendable, Equatable, Codable {
     public var remoteName: String?
     public var branchName: String?
+    public var path: String?
+    public var filesystemScope: FilesystemScope?
+    public var resourceKind: FilesystemResourceKind?
 
-    public init(remoteName: String? = nil, branchName: String? = nil) {
+    public init(
+        remoteName: String? = nil,
+        branchName: String? = nil,
+        path: String? = nil,
+        filesystemScope: FilesystemScope? = nil,
+        resourceKind: FilesystemResourceKind? = nil
+    ) {
         self.remoteName = remoteName
         self.branchName = branchName
+        self.path = path
+        self.filesystemScope = filesystemScope
+        self.resourceKind = resourceKind
     }
 }
 
