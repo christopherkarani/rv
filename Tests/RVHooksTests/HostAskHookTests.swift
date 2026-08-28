@@ -258,3 +258,35 @@ func hookWire_firstCallAllowCannotSkipPolicyGate(_ host: HookHost) throws {
     #expect(wire.stdout.contains("\"permissionDecision\":\"ask\"") == false)
     #expect(wire.stdout.contains("\"permissionDecision\":\"deny\""))
 }
+
+@Test func hookWire_piFirstCallPackDenyBindsDeny() async throws {
+    let stdin = """
+    {"toolName":"bash","cwd":"/tmp/ws","input":{"command":"git reset --hard"}}
+    """
+    let deny = Deny(
+        ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+        reason: "git reset --hard destroys uncommitted changes"
+    )
+    let wire = await hookWire(host: .pi, stdin: stdin) { _, _ in
+        EvaluationResult(outcome: .deny(deny, matched: nil))
+    }
+    let json = try #require(
+        JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any]
+    )
+    #expect(json["decision"] as? String == "deny")
+    #expect(json["decision"] as? String != "ask")
+    #expect(json["rule"] as? String == "core.git/reset-hard")
+    #expect(wire.exitCode == 1)
+}
+
+@Test func hookWire_piFirstCallPackAllowBindsAllow() async throws {
+    let stdin = """
+    {"toolName":"bash","cwd":"/tmp/ws","input":{"command":"git status"}}
+    """
+    let wire = await hookWire(host: .pi, stdin: stdin) { _, _ in
+        EvaluationResult(outcome: .plain, matchingView: MatchingView("git status"))
+    }
+    #expect(wire.stdout.isEmpty)
+    #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
+    #expect(wire.exitCode == 0)
+}
