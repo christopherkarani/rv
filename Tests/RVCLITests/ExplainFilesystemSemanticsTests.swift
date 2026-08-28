@@ -27,8 +27,10 @@ struct ExplainFilesystemSemanticsTests {
     @Test func explain_parentTraversal_isOutsideRepo() async throws {
         let repo = try makeExplainRepo()
         let result = try await explain("rm ../outside-file", cwd: repo)
+        #expect(result.stdout.contains("Decision: DENY"))
         #expect(result.stdout.contains("outside repo"))
         #expect(result.stdout.contains("Action       delete"))
+        #expect(result.stdout.contains("out-of-repo-write"))
     }
 
     @Test func explain_symlinkEscape_usesResolvedTarget() async throws {
@@ -40,9 +42,19 @@ struct ExplainFilesystemSemanticsTests {
             withDestinationPath: outside.path
         )
         let result = try await explain("rm escape-link", cwd: repo)
+        #expect(result.stdout.contains("Decision: DENY"))
         #expect(result.stdout.contains("outside repo"))
         #expect(result.stdout.contains(outside.path))
         #expect(result.stdout.contains("inside repo") == false)
+        #expect(result.stdout.contains("out-of-repo-write"))
+    }
+
+    @Test func explain_inRepoCreate_isAllowed() async throws {
+        let repo = try makeExplainRepo()
+        let result = try await explain("touch new.swift", cwd: repo)
+        #expect(result.stdout.contains("Decision: ALLOW"))
+        #expect(result.stdout.contains("inside repo"))
+        #expect(result.stdout.contains("Action       create"))
     }
 
     @Test func explain_bashDashC_showsWrapperAndDelete() async throws {

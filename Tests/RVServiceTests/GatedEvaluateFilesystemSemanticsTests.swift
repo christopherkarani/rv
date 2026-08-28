@@ -28,6 +28,11 @@ struct GatedEvaluateFilesystemSemanticsTests {
     @Test func parentTraversal_isOutsideRepository() async throws {
         let repo = try makeFilesystemRepo()
         let result = try await peek("rm ../outside-file", cwd: repo)
+        guard case .deny(let deny) = result.decision else {
+            Issue.record("out-of-repo write must deny, got \(result.decision)")
+            return
+        }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.outsideRepository.ruleID)
         guard case .filesystem(let action) = result.analysis else {
             Issue.record("expected filesystem analysis")
             return
@@ -46,6 +51,11 @@ struct GatedEvaluateFilesystemSemanticsTests {
             withDestinationPath: outside.path
         )
         let result = try await peek("rm escape-link", cwd: repo)
+        guard case .deny(let deny) = result.decision else {
+            Issue.record("symlink escape must deny, got \(result.decision)")
+            return
+        }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.outsideRepository.ruleID)
         guard case .filesystem(let action) = result.analysis else {
             Issue.record("expected filesystem analysis, got \(result.analysis)")
             return
@@ -83,6 +93,18 @@ struct GatedEvaluateFilesystemSemanticsTests {
         }
         #expect(action.primaryTarget?.scope == .protectedPath)
         #expect(action.primaryTarget?.followedSymlink == true)
+    }
+
+    @Test func inRepoWrite_isAllowed() async throws {
+        let repo = try makeFilesystemRepo()
+        let result = try await peek("echo hi > Sources/Foo.swift", cwd: repo)
+        #expect(result.decision == .allow)
+        guard case .filesystem(let action) = result.analysis else {
+            Issue.record("expected filesystem analysis")
+            return
+        }
+        #expect(action.operationKind == .write)
+        #expect(action.resources.filesystemScope == .insideRepository)
     }
 
     @Test func bashDashC_deniesRmRfWithFilesystemAnalysis() async throws {

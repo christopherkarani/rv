@@ -97,6 +97,89 @@ struct AnalyzeFilesystemTests {
         #expect(action.effects.kinds.contains(.protectedPathMutation))
     }
 
+    @Test func relativeTraversalChains_resolveOutsideBeforePolicy() {
+        let chains = [
+            "rm ../../outside-file",
+            "rm foo/../../outside-file",
+            "rm ././../outside-file",
+            "rm foo/bar/../../../outside-file",
+        ]
+        for command in chains {
+            let analysis = analyzeFilesystem(ShellCommand(rawValue: command), context: repo)
+            guard case .filesystem(.delete(let targets, _, _)) = analysis else {
+                Issue.record("expected delete for \(command), got \(analysis)")
+                continue
+            }
+            #expect(targets[0].canonical == "/outside-file")
+            #expect(targets[0].scope == .outsideRepository)
+            #expect(targets[0].apparent.contains(".."))
+        }
+    }
+
+    @Test func uncertainResolution_isUnknownNotInside() {
+        let context = FilesystemAnalysisContext(
+            workingDirectory: WorkingDirectory(validating: "/repo"),
+            repositoryRoot: RepositoryRoot(validating: "/repo"),
+            facts: [
+                FilesystemPathFact(
+                    apparent: "file",
+                    canonical: "/repo/file",
+                    resolution: .uncertain
+                ),
+            ]
+        )
+        let analysis = analyzeFilesystem(ShellCommand(rawValue: "rm file"), context: context)
+        guard case .filesystem(.delete(let targets, _, _)) = analysis else {
+            Issue.record("expected delete, got \(analysis)")
+            return
+        }
+        #expect(targets[0].canonical == "/repo/file")
+        #expect(targets[0].scope == .unknown)
+        #expect(targets[0].resolution == .uncertain)
+    }
+
+    @Test func operations_areDistinguished() {
+        guard case .filesystem(let created) =
+            analyzeFilesystem(ShellCommand(rawValue: "touch new.swift"), context: repo)
+        else {
+            Issue.record("expected create")
+            return
+        }
+        guard case .filesystem(let written) =
+            analyzeFilesystem(ShellCommand(rawValue: "echo hi > Sources/Foo.swift"), context: repo)
+        else {
+            Issue.record("expected write")
+            return
+        }
+        guard case .filesystem(let read) =
+            analyzeFilesystem(ShellCommand(rawValue: "cat Sources/Foo.swift"), context: repo)
+        else {
+            Issue.record("expected read")
+            return
+        }
+        #expect(created.operationKind == .create)
+        #expect(written.operationKind == .write)
+        #expect(read.operationKind == .read)
+        #expect(created.resources.filesystemScope == .insideRepository)
+        #expect(written.resources.filesystemScope == .insideRepository)
+        #expect(read.resources.filesystemScope == .insideRepository)
+    }
+
+    @Test func caseSensitiveRoot_doesNotMatchDifferentCaseOnLinux() {
+        #if os(Linux)
+        let analysis = analyzeFilesystem(
+            ShellCommand(rawValue: "rm /REPO/file"),
+            context: repo
+        )
+        guard case .filesystem(.delete(let targets, _, _)) = analysis else {
+            Issue.record("expected delete, got \(analysis)")
+            return
+        }
+        #expect(targets[0].canonical == "/REPO/file")
+        #expect(targets[0].scope == .outsideRepository)
+        #endif
+    }
+
     @Test func unsupportedSyntax_isUnknown() {
         #expect(analyzeFilesystem(ShellCommand(rawValue: "echo hello")) == .unknown)
         #expect(analyzeFilesystem(ShellCommand(rawValue: "rm --weird-flag file")) == .unknown)

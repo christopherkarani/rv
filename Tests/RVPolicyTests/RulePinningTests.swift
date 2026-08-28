@@ -10,6 +10,8 @@ struct RulePinningTests {
         RuleHardStopKind.secretPath,
         .protectedSharedBranch,
         .workingTreeDiscard,
+        .outsideRepository,
+        .unresolvedPath,
     ])
     func alwaysAllowPreview_hardStopForbidsSave(kind: RuleHardStopKind) {
         let preview = RulePinning.preview(record: wait(kind: kind), polarity: .allow)
@@ -251,6 +253,24 @@ struct RulePinningTests {
                 effects: [.workingTreeDiscard],
                 branchName: nil
             )
+        case .outsideRepository:
+            return wait(
+                id: "outside",
+                command: "rm ../outside-file",
+                effects: [.filesystemDelete, .outsideRepositoryMutation],
+                branchName: nil,
+                path: "/tmp/outside-file",
+                scope: .outsideRepository
+            )
+        case .unresolvedPath:
+            return wait(
+                id: "unresolved",
+                command: "rm gone",
+                effects: [.filesystemDelete, .unresolvedFilesystem],
+                branchName: nil,
+                path: "/gone/file",
+                scope: .unknown
+            )
         }
     }
 
@@ -258,7 +278,9 @@ struct RulePinningTests {
         id: String,
         command: String,
         effects: [ActionEffectKind],
-        branchName: String?
+        branchName: String?,
+        path: String? = nil,
+        scope: FilesystemScope? = nil
     ) -> PendingApproval {
         PendingApproval(
             id: ApprovalID(rawValue: id),
@@ -270,7 +292,12 @@ struct RulePinningTests {
                 ShellAction(
                     fingerprint: ActionFingerprint(rawValue: "fp-\(id)"),
                     effects: ActionEffects(kinds: effects),
-                    resources: ActionResources(remoteName: "origin", branchName: branchName),
+                    resources: ActionResources(
+                        remoteName: "origin",
+                        branchName: branchName,
+                        path: path,
+                        filesystemScope: scope
+                    ),
                     scope: ActionScope(workingDirectory: wd("/tmp/ws")),
                     supportingCommand: ShellCommand(rawValue: command)
                 )

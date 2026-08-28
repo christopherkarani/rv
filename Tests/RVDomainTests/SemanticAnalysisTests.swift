@@ -22,6 +22,24 @@ struct SemanticAnalysisTests {
         #expect(ActionPolicyEngine.Builtin.unwrapLimited.ruleID.rawValue == "builtin.action:unwrap-limited")
     }
 
+    @Test func builtinRepositoryBoundary_isStableRule() {
+        #expect(
+            ActionPolicyEngine.Builtin.inRepository.rawValue == "builtin.action:in-repo-write"
+        )
+        #expect(
+            ActionPolicyEngine.Builtin.outsideRepository.ruleID.rawValue
+                == "builtin.action:out-of-repo-write"
+        )
+        #expect(
+            ActionPolicyEngine.Builtin.unresolvedFilesystem.ruleID.rawValue
+                == "builtin.action:unresolved-path"
+        )
+        #expect(
+            ActionPolicyEngine.Builtin.outsideRepositoryRead.rawValue
+                == "builtin.action:out-of-repo-read"
+        )
+    }
+
     @Test func wrapper_codableRoundTrip() throws {
         let analysis = SemanticAnalysis.filesystem(
             .delete(

@@ -6,6 +6,15 @@ public enum FilesystemScope: String, Sendable, Equatable, Codable {
     case unknown
 }
 
+/// Closed filesystem mutation family used by policy. Write covers overwrite and mode change.
+public enum FilesystemOperationKind: String, Sendable, Equatable, Codable {
+    case read
+    case write
+    case create
+    case move
+    case delete
+}
+
 /// File kind when path evidence exists. Generated and source stay distinct.
 public enum FilesystemResourceKind: String, Sendable, Equatable, Codable {
     case generatedOutput
@@ -72,10 +81,31 @@ public enum FilesystemAction: Sendable, Equatable, Codable {
     case move(sources: [FilesystemTarget], destination: FilesystemTarget)
     case overwrite(targets: [FilesystemTarget])
     case chmod(targets: [FilesystemTarget], mode: String?, recursive: Bool)
+    case create(targets: [FilesystemTarget])
+    case read(targets: [FilesystemTarget])
+
+    public var operationKind: FilesystemOperationKind {
+        switch self {
+        case .read:
+            return .read
+        case .overwrite, .chmod:
+            return .write
+        case .create:
+            return .create
+        case .move:
+            return .move
+        case .delete:
+            return .delete
+        }
+    }
 
     public var targets: [FilesystemTarget] {
         switch self {
-        case .delete(let targets, _, _), .overwrite(let targets), .chmod(let targets, _, _):
+        case .delete(let targets, _, _),
+            .overwrite(let targets),
+            .chmod(let targets, _, _),
+            .create(let targets),
+            .read(let targets):
             return targets
         case .move(let sources, let destination):
             return sources + [destination]
@@ -109,6 +139,10 @@ public enum FilesystemAction: Sendable, Equatable, Codable {
             return "overwrite"
         case .chmod:
             return "chmod"
+        case .create:
+            return "create"
+        case .read:
+            return "read"
         }
     }
 
@@ -170,6 +204,18 @@ public enum FilesystemAction: Sendable, Equatable, Codable {
             kinds.append(.filesystemOverwrite)
         case .chmod:
             kinds.append(.filesystemModeChange)
+        case .create:
+            kinds.append(.filesystemCreate)
+        case .read:
+            kinds.append(.filesystemRead)
+        }
+        if targets.contains(where: { $0.resolution == .uncertain || $0.scope == .unknown }) {
+            kinds.append(.unresolvedFilesystem)
+        }
+        if operationKind != .read,
+            targets.contains(where: { $0.scope == .outsideRepository && $0.resolution != .uncertain })
+        {
+            kinds.append(.outsideRepositoryMutation)
         }
         if targets.contains(where: { $0.scope == .protectedPath && $0.resolution != .uncertain }) {
             kinds.append(.protectedPathMutation)
@@ -188,6 +234,10 @@ public enum FilesystemAction: Sendable, Equatable, Codable {
             return "shell:fs.overwrite:\(paths)"
         case .chmod(_, let mode, let recursive):
             return "shell:fs.chmod:\(recursive):\(mode ?? ""):\(paths)"
+        case .create:
+            return "shell:fs.create:\(paths)"
+        case .read:
+            return "shell:fs.read:\(paths)"
         }
     }
 
@@ -200,14 +250,14 @@ public enum FilesystemAction: Sendable, Equatable, Codable {
 
     private static func scopeRank(_ scope: FilesystemScope) -> Int {
         switch scope {
-        case .unknown:
-            return 0
         case .insideRepository:
             return 1
         case .outsideRepository:
             return 2
-        case .protectedPath:
+        case .unknown:
             return 3
+        case .protectedPath:
+            return 4
         }
     }
 

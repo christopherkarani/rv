@@ -10,6 +10,8 @@ public enum RuleHardStopKind: Sendable, Equatable {
     case secretPath
     case protectedSharedBranch
     case workingTreeDiscard
+    case outsideRepository
+    case unresolvedPath
 }
 
 public struct RulePreview: Sendable, Equatable {
@@ -78,6 +80,12 @@ public enum RulePinning: Sendable {
             if deny.ruleID == ActionPolicyEngine.Builtin.workingTreeDiscard.ruleID {
                 return .workingTreeDiscard
             }
+            if deny.ruleID == ActionPolicyEngine.Builtin.outsideRepository.ruleID {
+                return .outsideRepository
+            }
+            if deny.ruleID == ActionPolicyEngine.Builtin.unresolvedFilesystem.ruleID {
+                return .unresolvedPath
+            }
             return .protectedSharedBranch
         }
         if secretPathHit(action.supportingCommand) {
@@ -94,6 +102,15 @@ public enum RulePinning: Sendable {
             return true
         }
         if deny.ruleID == ActionPolicyEngine.Builtin.workingTreeDiscard.ruleID {
+            return true
+        }
+        if deny.ruleID == ActionPolicyEngine.Builtin.outsideRepository.ruleID {
+            return true
+        }
+        if deny.ruleID == ActionPolicyEngine.Builtin.unresolvedFilesystem.ruleID {
+            return true
+        }
+        if deny.ruleID == ActionPolicyEngine.Builtin.protectedPath.ruleID {
             return true
         }
         return false
@@ -126,6 +143,10 @@ public enum RulePinning: Sendable {
                 return "This action reads a secret path. Always-allow cannot override that hard stop."
             case .workingTreeDiscard:
                 return "This action discards the working tree. Always-allow cannot override that hard stop."
+            case .outsideRepository:
+                return "This action writes outside the repository. Always-allow cannot override that hard stop."
+            case .unresolvedPath:
+                return "This action has an unresolved path. Always-allow cannot override that hard stop."
             case .protectedSharedBranch, nil:
                 return "This action mutates a protected shared branch. Always-allow cannot override that hard stop."
             }

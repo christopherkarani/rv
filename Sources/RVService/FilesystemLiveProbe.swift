@@ -16,24 +16,47 @@ enum FilesystemLiveProbe {
         cwd: WorkingDirectory?,
         homeDirectory: String?
     ) -> FilesystemAnalysisContext {
-        let working = cwd?.rawValue
         let paths = filesystemApparentPaths(command)
-        guard paths.isEmpty == false else {
+        guard let working = cwd?.rawValue else {
             return FilesystemAnalysisContext(
                 workingDirectory: cwd,
-                homeDirectory: homeDirectory
+                homeDirectory: homeDirectory,
+                facts: paths.map { apparent in
+                    resolve(
+                        apparent: apparent,
+                        workingDirectory: nil,
+                        homeDirectory: homeDirectory
+                    )
+                }
+            )
+        }
+        guard let resolvedCwd = resolveExistingDirectory(working) else {
+            return FilesystemAnalysisContext(
+                workingDirectory: cwd,
+                homeDirectory: homeDirectory,
+                facts: paths.map { apparent in
+                    FilesystemPathFact(
+                        apparent: apparent,
+                        canonical: lexicalFilesystemPath(
+                            apparent,
+                            workingDirectory: working,
+                            homeDirectory: homeDirectory
+                        ),
+                        resolution: .uncertain
+                    )
+                }
             )
         }
         let facts = paths.map { apparent in
             resolve(
                 apparent: apparent,
-                workingDirectory: working,
+                workingDirectory: resolvedCwd,
                 homeDirectory: homeDirectory
             )
         }
         return FilesystemAnalysisContext(
-            workingDirectory: cwd,
-            repositoryRoot: working.flatMap(discoverRepositoryRoot(from:)),
+            workingDirectory: WorkingDirectory(validating: resolvedCwd) ?? cwd,
+            repositoryRoot: discoverRepositoryRoot(from: resolvedCwd),
             homeDirectory: homeDirectory,
             catalog: .dayOne,
             facts: facts
@@ -41,10 +64,8 @@ enum FilesystemLiveProbe {
     }
 
     static func discoverRepositoryRoot(from cwd: String) -> RepositoryRoot? {
-        var path = cwd
-        if path.count > 1, path.hasSuffix("/") {
-            path.removeLast()
-        }
+        guard let start = resolveExistingDirectory(cwd) else { return nil }
+        var path = start
         var seen = Set<String>()
         while seen.insert(path).inserted {
             let git = path == "/" ? "/.git" : path + "/.git"
@@ -190,9 +211,18 @@ private func follow(
             }
         }
     }
+    let finished = resolved.isEmpty ? (path.hasPrefix("/") ? "/" : "") : resolved
+    if let canonical = canonicalExistingPath(finished) {
+        return FilesystemPathFact(
+            apparent: apparent,
+            canonical: canonical,
+            followedSymlink: followed,
+            resolution: followed ? .resolved : .lexical
+        )
+    }
     return FilesystemPathFact(
         apparent: apparent,
-        canonical: resolved.isEmpty ? (path.hasPrefix("/") ? "/" : "") : resolved,
+        canonical: finished,
         followedSymlink: followed,
         resolution: followed ? .resolved : .lexical
     )
@@ -229,4 +259,20 @@ private func joinLive(_ left: String, _ right: String) -> String {
 
 private func collapseMissing(_ path: String) -> String {
     lexicalFilesystemPath(path, workingDirectory: nil, homeDirectory: nil)
+}
+
+func resolveExistingDirectory(_ path: String) -> String? {
+    var isDirectory: ObjCBool = false
+    guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory),
+        isDirectory.boolValue
+    else {
+        return nil
+    }
+    return canonicalExistingPath(path)
+}
+
+func canonicalExistingPath(_ path: String) -> String? {
+    guard FileManager.default.fileExists(atPath: path) else { return nil }
+    let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+    return resolved.isEmpty ? nil : resolved
 }

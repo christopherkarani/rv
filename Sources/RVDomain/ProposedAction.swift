@@ -27,7 +27,11 @@ public enum ActionEffectKind: String, Sendable, Equatable, Codable {
     case filesystemMove
     case filesystemOverwrite
     case filesystemModeChange
+    case filesystemCreate
+    case filesystemRead
     case protectedPathMutation
+    case outsideRepositoryMutation
+    case unresolvedFilesystem
 }
 
 public struct ActionEffects: Sendable, Equatable, Codable {

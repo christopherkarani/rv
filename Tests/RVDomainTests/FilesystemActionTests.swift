@@ -65,5 +65,67 @@ struct FilesystemActionTests {
         )
         let action = FilesystemAction.delete(targets: [target], recursive: false, force: false)
         #expect(action.effects.kinds.contains(.protectedPathMutation) == false)
+        #expect(action.effects.kinds.contains(.unresolvedFilesystem))
+    }
+
+    @Test func operations_areDistinguished() {
+        let inside = FilesystemTarget(
+            apparent: "file",
+            canonical: "/repo/file",
+            scope: .insideRepository,
+            kind: .unknown
+        )
+        #expect(FilesystemAction.read(targets: [inside]).operationKind == .read)
+        #expect(FilesystemAction.overwrite(targets: [inside]).operationKind == .write)
+        #expect(FilesystemAction.create(targets: [inside]).operationKind == .create)
+        #expect(
+            FilesystemAction.move(sources: [inside], destination: inside).operationKind == .move
+        )
+        #expect(
+            FilesystemAction.delete(targets: [inside], recursive: false, force: false).operationKind
+                == .delete
+        )
+        #expect(FilesystemAction.create(targets: [inside]).effects.kinds == [.filesystemCreate])
+        #expect(FilesystemAction.read(targets: [inside]).effects.kinds == [.filesystemRead])
+    }
+
+    @Test func unknownTarget_outranksInsideForFailClosed() {
+        let inside = FilesystemTarget(
+            apparent: "ok",
+            canonical: "/repo/ok",
+            scope: .insideRepository,
+            kind: .unknown
+        )
+        let unknown = FilesystemTarget(
+            apparent: "gone",
+            canonical: "/gone",
+            scope: .unknown,
+            kind: .unknown,
+            resolution: .uncertain
+        )
+        let action = FilesystemAction.delete(
+            targets: [inside, unknown],
+            recursive: false,
+            force: false
+        )
+        #expect(action.primaryTarget?.scope == .unknown)
+        #expect(action.effects.kinds.contains(.unresolvedFilesystem))
+        #expect(action.resources.filesystemScope == .unknown)
+    }
+
+    @Test func outsideWrite_addsIndependentEffect() {
+        let target = FilesystemTarget(
+            apparent: "../outside-file",
+            canonical: "/tmp/outside-file",
+            scope: .outsideRepository,
+            kind: .unknown
+        )
+        let action = FilesystemAction.overwrite(targets: [target])
+        #expect(action.effects.kinds.contains(.outsideRepositoryMutation))
+        #expect(action.effects.kinds.contains(.filesystemOverwrite))
+        #expect(
+            FilesystemAction.read(targets: [target]).effects.kinds
+                .contains(.outsideRepositoryMutation) == false
+        )
     }
 }
