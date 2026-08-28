@@ -882,7 +882,9 @@ private func protectedMatch(
     return catalog.firstMatch(of: canonical).map(SecretPathMatch.init)
 }
 
-func isHomeAliasPath(_ path: String) -> Bool {
+private func isHomeAliasPath(_ path: String) -> Bool {
+    // Mirrors RVDomain.isHomeAliasPath — keep private; see SecretPathMatching.swift
+    // for the single matcher used by catalog/policy.
     path == "~" || path.hasPrefix("~/")
         || path == "$HOME" || path.hasPrefix("$HOME/")
         || path == "${HOME}" || path.hasPrefix("${HOME}/")
@@ -961,6 +963,8 @@ private func clusteredShorts(_ token: String) -> [Character]? {
 }
 
 private func isDynamicToken(_ token: String) -> Bool {
+    // Home aliases contain `$` but are expanded lexically, not dynamically.
+    // Exempt them so `echo hi > $HOME/.ssh/config` is not treated as unknown.
     if isHomeAliasPath(token) { return false }
     return token.contains("$") || token.contains("`")
 }

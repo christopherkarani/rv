@@ -208,42 +208,7 @@ private func pathCandidates(in command: String) -> [String] {
 }
 
 private func secretPathMatches(_ candidate: String, _ kind: SecretPathKind) -> Bool {
-    switch kind {
-    case .basename(let name):
-        return lastPathComponent(candidate) == name
-    case .envVariant:
-        return lastPathComponent(candidate).hasPrefix(".env.")
-    case .homeSuffix(let parts), .hostAuth(let parts):
-        return matchesHomeSuffix(candidate, parts: parts)
-    }
+    secretPathKindMatches(candidate, kind)
 }
 
-private func lastPathComponent(_ path: String) -> String {
-    path.split(separator: "/", omittingEmptySubsequences: true).last.map(String.init) ?? path
-}
-
-private func matchesHomeSuffix(_ candidate: String, parts: [String]) -> Bool {
-    let joined = parts.joined(separator: "/")
-    if hasPathPrefix(candidate, prefix: "~/" + joined) { return true }
-    if hasPathPrefix(candidate, prefix: "$HOME/" + joined) { return true }
-    if hasPathPrefix(candidate, prefix: "${HOME}/" + joined) { return true }
-    let components = candidate.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
-    return containsContiguous(components, parts)
-}
-
-private func hasPathPrefix(_ candidate: String, prefix: String) -> Bool {
-    candidate == prefix || candidate.hasPrefix(prefix + "/")
-}
-
-private func containsContiguous(_ haystack: [String], _ needle: [String]) -> Bool {
-    guard needle.isEmpty == false, haystack.count >= needle.count else { return false }
-    let lastStart = haystack.count - needle.count
-    var start = 0
-    while start <= lastStart {
-        if haystack[start..<(start + needle.count)].elementsEqual(needle) {
-            return true
-        }
-        start += 1
-    }
-    return false
-}
+// Matching helpers now live in RVDomain/SecretPathMatching.swift — single matcher.

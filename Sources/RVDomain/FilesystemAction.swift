@@ -182,6 +182,9 @@ public enum FilesystemAction: Sendable, Equatable, Codable {
         }
     }
 
+    /// Display string for the protected category (e.g. "ssh", "keychain").
+    /// Kept as `String?` not `SecretPathCategory` to keep `RVPresentation`/`RVTUI`
+    /// decoupled from the domain enum and to avoid leaking the enum via Codable.
     public var explainCategory: String? {
         primaryTarget?.protectedMatch?.category.rawValue
     }
@@ -229,7 +232,12 @@ public enum FilesystemAction: Sendable, Equatable, Codable {
         {
             kinds.append(.outsideRepositoryMutation)
         }
-        if targets.contains(where: { $0.scope == .protectedPath && $0.resolution != .uncertain }) {
+        // Guard reads like `outsideRepositoryMutation`: `cat ~/.ssh/config` is
+        // still denied via `SecretPathGuard` (core.secrets), but the filesystem
+        // effect is conservative and only marks mutating operations.
+        if operationKind != .read,
+            targets.contains(where: { $0.scope == .protectedPath && $0.resolution != .uncertain })
+        {
             kinds.append(.protectedPathMutation)
         }
         return kinds
