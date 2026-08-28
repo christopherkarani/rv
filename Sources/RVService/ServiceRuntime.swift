@@ -74,25 +74,30 @@ public actor ServiceRuntime {
 
     public func acknowledge(_ hello: Hello) -> HelloAck {
         if hello.protocolName != ProtocolVersion.name {
-            return HelloAck(ok: false, skewReason: .protocolSkew)
+            return HelloAck(status: .skew(.protocolSkew))
         }
         if ProtocolVersion.isMajorSkew(
             clientSemver: hello.clientSemver,
             serviceSemver: ProtocolVersion.serviceSemver
         ) {
-            return HelloAck(ok: false, skewReason: .majorVersion)
+            return HelloAck(status: .skew(.majorVersion))
         }
         if !corePacksReady {
-            return HelloAck(ok: false, skewReason: .corePacksUnavailable)
+            return HelloAck(status: .skew(.corePacksUnavailable))
         }
-        return HelloAck(ok: true)
+        return HelloAck(status: .ok)
     }
 
     public func handleIncoming(_ body: Data, handshakeOK: Bool) async -> (Data, Bool) {
         if let hello = try? IPCJSON.decode(Hello.self, from: body), hello.clientSemver.isEmpty == false {
             let ack = acknowledge(hello)
             let data = (try? IPCJSON.encode(ack)) ?? Data()
-            return (data, ack.ok)
+            switch ack.status {
+            case .ok:
+                return (data, true)
+            case .skew:
+                return (data, false)
+            }
         }
         if handshakeOK == false {
             return await handleUnreadyIncoming(body)
@@ -115,15 +120,17 @@ public actor ServiceRuntime {
         {
             let hello = Hello(protocolName: request.protocolName, clientSemver: clientSemver)
             let ack = acknowledge(hello)
-            if ack.ok == false {
+            switch ack.status {
+            case .ok:
+                let response = await dispatch(request)
+                return ((try? IPCJSON.encode(response)) ?? Data(), true)
+            case .skew(let reason):
                 let response = IPCResponse(
                     id: request.id,
-                    result: .error(.protocolSkew(ack.skewReason ?? .protocolSkew))
+                    result: .error(.protocolSkew(reason))
                 )
                 return ((try? IPCJSON.encode(response)) ?? Data(), false)
             }
-            let response = await dispatch(request)
-            return ((try? IPCJSON.encode(response)) ?? Data(), true)
         }
         let response = IPCResponse(
             id: UUID(),

@@ -11,8 +11,7 @@ struct FallbackSkewTests {
             ack: HelloAckView(
                 protocolName: "rv.ipc.v0",
                 serviceSemver: "1.0.0",
-                ok: false,
-                skewReason: .protocolSkew
+                status: .skew(.protocolSkew)
             )
         )
         let client = try isolatedClient(transport: transport)
@@ -46,7 +45,7 @@ struct FallbackSkewTests {
     @Test func unprovableServiceSemverReplyFallsBackInProcessAndInvalidates() async throws {
         let allowed = EvaluationResult(outcome: .plain, matchingView: "git reset --hard")
         let transport = ScriptedTransport(
-            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", ok: true),
+            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok),
             responseResult: .evaluate(EvaluateReply(result: allowed, serviceSemver: nil))
         )
         let client = try isolatedClient(transport: transport)
@@ -61,7 +60,7 @@ struct FallbackSkewTests {
     @Test func majorSemverMismatchIsSkew() async throws {
         let allowed = EvaluationResult(outcome: .plain, matchingView: "git reset --hard")
         let transport = ScriptedTransport(
-            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "2.0.0", ok: true),
+            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "2.0.0", status: .ok),
             responseResult: .evaluate(EvaluateReply(result: allowed, serviceSemver: "2.0.0"))
         )
         let client = try isolatedClient(transport: transport)
@@ -77,7 +76,7 @@ struct FallbackSkewTests {
     @Test func mismatchedEvaluateResponseIDFallsBackInProcess() async throws {
         let allowed = EvaluationResult(outcome: .plain, matchingView: "git status")
         let transport = ScriptedTransport(
-            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", ok: true),
+            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok),
             responseResult: .evaluate(EvaluateReply(result: allowed)),
             responseID: UUID()
         )
@@ -92,7 +91,7 @@ struct FallbackSkewTests {
     @Test func mismatchedEvaluateResponseProtocolFallsBackInProcess() async throws {
         let allowed = EvaluationResult(outcome: .plain, matchingView: "git status")
         let transport = ScriptedTransport(
-            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", ok: true),
+            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok),
             responseResult: .evaluate(EvaluateReply(result: allowed)),
             responseProtocolName: "rv.ipc.v0"
         )

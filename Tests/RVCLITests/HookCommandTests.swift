@@ -209,8 +209,7 @@ private func runHook(
         ack: HelloAckView(
             protocolName: "rv.ipc.v0",
             serviceSemver: "1.0.0",
-            ok: false,
-            skewReason: .protocolSkew
+            status: .skew(.protocolSkew)
         )
     )
     let client = try isolatedClient(transport: transport)

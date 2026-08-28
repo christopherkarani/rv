@@ -18,7 +18,7 @@ struct OneShotEvaluateClientTests {
             matchingView: "git reset --hard"
         )
         let transport = ScriptedTransport(
-            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", ok: true),
+            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok),
             responseResult: .evaluate(EvaluateReply(result: denied))
         )
         let client = try isolatedClient(transport: transport)
@@ -50,7 +50,7 @@ struct OneShotEvaluateClientTests {
             ack: HelloAckView(
                 protocolName: "rv.ipc.v1",
                 serviceSemver: "1.0.0",
-                ok: true
+                status: .ok
             ),
             responseResult: .error(.protocolSkew(.protocolSkew))
         )
@@ -78,7 +78,7 @@ struct OneShotEvaluateClientTests {
             matchingView: "git stash drop"
         )
         let transport = ScriptedTransport(
-            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", ok: true),
+            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok),
             responseResult: .evaluate(EvaluateReply(result: allowed))
         )
         let client = try isolatedClient(transport: transport)
@@ -105,7 +105,7 @@ struct OneShotEvaluateClientTests {
             checks: [DoctorCheck(id: .xpc, status: .ok, message: "listener")]
         )
         let transport = ScriptedTransport(
-            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", ok: true),
+            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok),
             responseResult: .doctorSnapshot(snapshot)
         )
         let client = try isolatedClient(transport: transport)

@@ -76,8 +76,7 @@ struct ServiceDiagnosticRoutingTests {
             ack: HelloAckView(
                 protocolName: "rv.ipc.v0",
                 serviceSemver: "1.0.0",
-                ok: true,
-                skewReason: .protocolSkew
+                status: .ok
             )
         )
 
@@ -114,7 +113,7 @@ struct ServiceDiagnosticRoutingTests {
             ack: HelloAckView(
                 protocolName: "rv.ipc.v1",
                 serviceSemver: "2.0.0",
-                ok: true
+                status: .ok
             )
         )
 
@@ -138,8 +137,7 @@ struct ServiceDiagnosticRoutingTests {
             ack: HelloAckView(
                 protocolName: "rv.ipc.v1",
                 serviceSemver: "1.0.0",
-                ok: false,
-                skewReason: .corePacksUnavailable
+                status: .skew(.corePacksUnavailable)
             )
         )
 
@@ -163,8 +161,7 @@ struct ServiceDiagnosticRoutingTests {
             ack: HelloAckView(
                 protocolName: "rv.ipc.v1",
                 serviceSemver: "1.0.0",
-                ok: false,
-                skewReason: .protocolSkew
+                status: .skew(.protocolSkew)
             )
         )
         let client = try isolatedClient(transport: transport)
@@ -240,7 +237,7 @@ struct ServiceDiagnosticRoutingTests {
 private let validAck = HelloAckView(
     protocolName: "rv.ipc.v1",
     serviceSemver: "1.0.0",
-    ok: true
+    status: .ok
 )
 
 private func serviceSnapshot() -> DoctorSnapshotReply {
