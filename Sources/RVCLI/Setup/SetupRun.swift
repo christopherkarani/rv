@@ -47,6 +47,7 @@ struct SetupEnvironment {
     var installAnalytics: any InstallAnalyticsCapturing
     /// Injected so launchd domains are provable without the real uid.
     var uid: () -> uid_t = { getuid() }
+    var companionPresence: any CompanionPresenceDetecting = FixedCompanionPresence(value: .absent)
 
     /// Curl install copies `rv` (C hook), `rv-cli`, and `rvd`.
     /// Adapters bake `$HOME/.local/bin/rv`, not `rv-cli`. Do not walk PATH.
@@ -158,7 +159,12 @@ enum SetupRun {
             case .writeLaunchAgent:
                 switch env.supervisor {
                 case .launchd:
-                    try writeLaunchAgent(env: env, layout: layout, files: files)
+                    try writeLaunchAgent(
+                        env: env,
+                        layout: layout,
+                        files: files,
+                        keepAlive: env.companionPresence.presence().keepAlive
+                    )
                 case .systemdUser:
                     try writeSystemdUserUnit(env: env, layout: layout, files: files)
                 }
@@ -690,12 +696,29 @@ enum SetupRun {
         return true
     }
 
+    /// Companion uninstall entry. AC-013: the companion app's uninstaller calls this
+    /// library entry to clear KeepAlive in-place without removing CLI/rvd. Not wired
+    /// to `rv uninstall` (which removes owned files) to avoid accidental user use.
+    /// Probe is performed by the caller via `env.companionPresence`; this helper
+    /// just enforces the post-uninstall invariant (KeepAlive == false) when a
+    /// plist already exists. Linux is a no-op (systemd `Restart=no` is static).
+    static func restoreKeepAliveAfterCompanionUninstall(
+        _ env: SetupEnvironment
+    ) throws(SetupError) {
+        guard env.supervisor == .launchd else { return }
+        let files = FileOps(fileManager: env.fileManager)
+        let layout = OwnedPaths(home: env.home)
+        guard files.fileExists(layout.launchAgent) else { return }
+        try writeLaunchAgent(env: env, layout: layout, files: files, keepAlive: false)
+    }
+
     private static func writeLaunchAgent(
         env: SetupEnvironment,
         layout: OwnedPaths,
-        files: FileOps
+        files: FileOps,
+        keepAlive: Bool
     ) throws(SetupError) {
-        let body = try LaunchAgentTemplate.rendered(rvdPath: env.rvdPath)
+        let body = try LaunchAgentTemplate.rendered(rvdPath: env.rvdPath, keepAlive: keepAlive)
         do {
             try files.write(body, to: layout.launchAgent)
         } catch {
