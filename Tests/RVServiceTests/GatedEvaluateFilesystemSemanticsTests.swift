@@ -85,15 +85,16 @@ struct GatedEvaluateFilesystemSemanticsTests {
         #expect(action.primaryTarget?.followedSymlink == true)
     }
 
-    @Test func unsupportedWrapper_stillDeniesRmRf() async throws {
+    @Test func bashDashC_deniesRmRfWithFilesystemAnalysis() async throws {
         let repo = try makeFilesystemRepo()
         let result = try await peek("bash -c 'rm -rf /'", cwd: repo)
-        #expect(result.analysis == .unknown)
         guard case .deny(let deny) = result.decision else {
             Issue.record("wrapper must not auto-allow rm -rf")
             return
         }
         #expect(deny.ruleID.pack == .coreFilesystem)
+        #expect(result.analysis.wrappers == [.bash])
+        #expect(result.analysis.filesystemAction != nil)
     }
 }
 

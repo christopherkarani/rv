@@ -445,6 +445,26 @@ private func mediumAllow() -> EvaluationResult {
     #expect(source.semantic?.kind != generated.semantic?.kind)
 }
 
+@Test func explainViewModel_attachesWrapperLayers() {
+    let wrapped = explainViewModel(
+        from: EvaluationResult(
+            outcome: .plain,
+            analysis: .git(.reset(mode: .hard, target: nil)).wrapping([.sudo, .env, .sh])
+        ),
+        command: ShellCommand(rawValue: "sudo env FOO=bar sh -c 'git reset --hard'")
+    )
+    #expect(wrapped.semantic?.action == "reset --hard")
+    #expect(wrapped.semantic?.wrappers == ["sudo", "env", "sh"])
+
+    let limited = explainViewModel(
+        from: EvaluationResult(outcome: .plain, analysis: .unwrapLimited.wrapping([.bash])),
+        command: ShellCommand(rawValue: "bash -c 'bash -c …'")
+    )
+    #expect(limited.semantic?.action == "unwrap limit exceeded")
+    #expect(limited.semantic?.scope == "fail-closed")
+    #expect(limited.semantic?.wrappers == ["bash"])
+}
+
 @Test func packsViewModel_dayOneEnabled() {
     let vm = packsViewModel(
         enabled: dayOnePackIDs,

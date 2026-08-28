@@ -105,6 +105,11 @@ public enum ActionPolicyEngine: Sendable {
             ruleID: RuleID(pack: pack, pattern: "pack-incomplete"),
             reason: "Pack evaluation did not finish."
         )
+
+        public static let unwrapLimited = Deny(
+            ruleID: RuleID(pack: pack, pattern: "unwrap-limited"),
+            reason: "Wrapper or interpreter nesting could not be analyzed safely."
+        )
     }
 
     public static func evaluate(
