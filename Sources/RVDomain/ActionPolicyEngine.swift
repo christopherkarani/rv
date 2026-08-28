@@ -96,6 +96,26 @@ public enum ActionPolicyEngine: Sendable {
             reason: "Mutating a protected host path is a built-in hard deny."
         )
 
+        public static let inRepository = RuleID(pack: pack, pattern: "in-repo-write")
+
+        public static let inRepositoryReason =
+            "In-repository filesystem writes are allowed by built-in policy."
+
+        public static let outsideRepository = Deny(
+            ruleID: RuleID(pack: pack, pattern: "out-of-repo-write"),
+            reason: "Writing outside the repository is a built-in hard deny."
+        )
+
+        public static let outsideRepositoryRead = RuleID(pack: pack, pattern: "out-of-repo-read")
+
+        public static let outsideRepositoryReadReason =
+            "Reading outside the repository is independently governable."
+
+        public static let unresolvedFilesystem = Deny(
+            ruleID: RuleID(pack: pack, pattern: "unresolved-path"),
+            reason: "An unresolved repository or path cannot be treated as in-repo."
+        )
+
         public static let uncovered = Deny(
             ruleID: RuleID(pack: pack, pattern: "uncovered"),
             reason: "No semantic rule covered this action."
@@ -205,12 +225,87 @@ public enum ActionPolicyEngine: Sendable {
                 semanticallyCovered: true
             )
         }
+        if isFilesystemAction(kinds) {
+            return filesystemHit(shell)
+        }
         return CoreHit(
             decision: .reviewEligible(fallback: Builtin.uncovered),
             ruleID: Builtin.uncovered.ruleID,
             reason: Builtin.uncovered.reason,
             semanticallyCovered: false
         )
+    }
+
+    private static func filesystemHit(_ shell: ShellAction) -> CoreHit {
+        let kinds = shell.effects.kinds
+        let scope = shell.resources.filesystemScope
+        if kinds.contains(.unresolvedFilesystem) || scope == .unknown || scope == nil {
+            return CoreHit(
+                decision: .hardDeny(Builtin.unresolvedFilesystem),
+                ruleID: Builtin.unresolvedFilesystem.ruleID,
+                reason: Builtin.unresolvedFilesystem.reason,
+                semanticallyCovered: true
+            )
+        }
+        if kinds.contains(.outsideRepositoryMutation)
+            || (isWriteLike(kinds) && scope == .outsideRepository)
+        {
+            return CoreHit(
+                decision: .hardDeny(Builtin.outsideRepository),
+                ruleID: Builtin.outsideRepository.ruleID,
+                reason: Builtin.outsideRepository.reason,
+                semanticallyCovered: true
+            )
+        }
+        if scope == .insideRepository {
+            return CoreHit(
+                decision: .hardAllow,
+                ruleID: Builtin.inRepository,
+                reason: Builtin.inRepositoryReason,
+                semanticallyCovered: true
+            )
+        }
+        if kinds.contains(.filesystemRead) {
+            return CoreHit(
+                decision: .hardAllow,
+                ruleID: Builtin.outsideRepositoryRead,
+                reason: Builtin.outsideRepositoryReadReason,
+                semanticallyCovered: true
+            )
+        }
+        return CoreHit(
+            decision: .reviewEligible(fallback: Builtin.uncovered),
+            ruleID: Builtin.uncovered.ruleID,
+            reason: Builtin.uncovered.reason,
+            semanticallyCovered: false
+        )
+    }
+
+    private static func isFilesystemAction(_ kinds: [ActionEffectKind]) -> Bool {
+        kinds.contains(where: {
+            switch $0 {
+            case .filesystemDelete, .filesystemMove, .filesystemOverwrite,
+                .filesystemModeChange, .filesystemCreate, .filesystemRead,
+                .outsideRepositoryMutation, .unresolvedFilesystem:
+                return true
+            case .remoteSharedBranchMutation, .localBranchCreate, .workingTreeDiscard,
+                .protectedPathMutation:
+                return false
+            }
+        })
+    }
+
+    private static func isWriteLike(_ kinds: [ActionEffectKind]) -> Bool {
+        kinds.contains(where: {
+            switch $0 {
+            case .filesystemDelete, .filesystemMove, .filesystemOverwrite, .filesystemModeChange,
+                .filesystemCreate, .outsideRepositoryMutation:
+                return true
+            case .filesystemRead, .remoteSharedBranchMutation, .localBranchCreate,
+                .workingTreeDiscard, .protectedPathMutation, .unresolvedFilesystem:
+                return false
+            }
+        })
     }
 
     private static func isSharedTarget(resources: ActionResources, context: ReviewContext) -> Bool {

@@ -34,6 +34,10 @@ public func analyzeFilesystem(
         return .filesystem(
             .chmod(targets: targets, mode: parsed.mode, recursive: parsed.recursive)
         )
+    case .create:
+        return .filesystem(.create(targets: targets))
+    case .read:
+        return .filesystem(.read(targets: targets))
     }
 }
 
@@ -60,6 +64,8 @@ private enum FilesystemOperation {
     case move
     case overwrite
     case chmod
+    case create
+    case read
 }
 
 private func parseFilesystemCommand(_ tokens: [String]) -> ParsedFilesystemCommand? {
@@ -80,6 +86,15 @@ private func parseFilesystemCommand(_ tokens: [String]) -> ParsedFilesystemComma
         return parseTruncate(Array(tokens.dropFirst()))
     case "shred":
         return parseShred(Array(tokens.dropFirst()))
+    case "touch":
+        return parseTouch(Array(tokens.dropFirst()))
+    case "mkdir":
+        return parseMkdir(Array(tokens.dropFirst()))
+    case "cat":
+        if let redirect = parseRedirectOnly(tokens), redirect.paths.isEmpty == false {
+            return redirect
+        }
+        return parseCat(Array(tokens.dropFirst()))
     default:
         return parseRedirectOnly(tokens)
     }
@@ -493,6 +508,172 @@ private let shredValueLong: Set<String> = [
     "--iterations", "--size",
 ]
 
+private func parseTouch(_ args: [String]) -> ParsedFilesystemCommand? {
+    var paths: [String] = []
+    var seenDash = false
+    var expectValue = false
+    for token in args {
+        if expectValue {
+            expectValue = false
+            continue
+        }
+        if seenDash {
+            paths.append(token)
+            continue
+        }
+        if token == "--" {
+            seenDash = true
+            continue
+        }
+        if token == "-t" || token == "-d" || token == "--date" || token == "--time" {
+            expectValue = true
+            continue
+        }
+        if token.hasPrefix("--date=") || token.hasPrefix("--time=") {
+            continue
+        }
+        if touchSkipLong.contains(token) {
+            continue
+        }
+        if let letters = clusteredShorts(token) {
+            var valid = true
+            for letter in letters {
+                switch letter {
+                case "a", "c", "f", "h", "m":
+                    continue
+                case "t", "d":
+                    expectValue = true
+                default:
+                    valid = false
+                }
+            }
+            if valid == false { return nil }
+            continue
+        }
+        if token.hasPrefix("-") { return nil }
+        paths.append(token)
+    }
+    if expectValue { return nil }
+    guard paths.isEmpty == false else { return nil }
+    return ParsedFilesystemCommand(
+        operation: .create,
+        paths: paths,
+        recursive: false,
+        force: false,
+        mode: nil
+    )
+}
+
+private let touchSkipLong: Set<String> = [
+    "--no-create", "--no-dereference", "--help", "--version",
+]
+
+private func parseMkdir(_ args: [String]) -> ParsedFilesystemCommand? {
+    var paths: [String] = []
+    var seenDash = false
+    var expectMode = false
+    for token in args {
+        if expectMode {
+            expectMode = false
+            continue
+        }
+        if seenDash {
+            paths.append(token)
+            continue
+        }
+        if token == "--" {
+            seenDash = true
+            continue
+        }
+        if token == "-m" || token == "--mode" {
+            expectMode = true
+            continue
+        }
+        if token.hasPrefix("--mode=") {
+            continue
+        }
+        if mkdirSkipLong.contains(token) {
+            continue
+        }
+        if let letters = clusteredShorts(token) {
+            var valid = true
+            for letter in letters {
+                switch letter {
+                case "p", "v":
+                    continue
+                case "m":
+                    expectMode = true
+                default:
+                    valid = false
+                }
+            }
+            if valid == false { return nil }
+            continue
+        }
+        if token.hasPrefix("-") { return nil }
+        paths.append(token)
+    }
+    if expectMode { return nil }
+    guard paths.isEmpty == false else { return nil }
+    return ParsedFilesystemCommand(
+        operation: .create,
+        paths: paths,
+        recursive: false,
+        force: false,
+        mode: nil
+    )
+}
+
+private let mkdirSkipLong: Set<String> = [
+    "--parents", "--verbose", "--help", "--version",
+]
+
+private func parseCat(_ args: [String]) -> ParsedFilesystemCommand? {
+    var paths: [String] = []
+    var seenDash = false
+    for token in args {
+        if seenDash {
+            paths.append(token)
+            continue
+        }
+        if token == "--" {
+            seenDash = true
+            continue
+        }
+        if catSkipLong.contains(token) {
+            continue
+        }
+        if let letters = clusteredShorts(token) {
+            var valid = true
+            for letter in letters {
+                switch letter {
+                case "A", "b", "E", "e", "n", "s", "T", "t", "u", "v":
+                    continue
+                default:
+                    valid = false
+                }
+            }
+            if valid == false { return nil }
+            continue
+        }
+        if token.hasPrefix("-") { return nil }
+        paths.append(token)
+    }
+    guard paths.isEmpty == false else { return nil }
+    return ParsedFilesystemCommand(
+        operation: .read,
+        paths: paths,
+        recursive: false,
+        force: false,
+        mode: nil
+    )
+}
+
+private let catSkipLong: Set<String> = [
+    "--show-all", "--number-nonblank", "--show-ends", "--number",
+    "--squeeze-blank", "--show-tabs", "--show-nonprinting", "--help", "--version",
+]
+
 private func parseRedirectOnly(_ tokens: [String]) -> ParsedFilesystemCommand? {
     guard let targets = redirectTargets(tokens), targets.isEmpty == false else {
         return nil
@@ -597,6 +778,23 @@ func classifyFilesystemTarget(
     )
 }
 
+/// Uncertain resolution never claims inside/outside. Fail-closed as unknown.
+func filesystemScopeForResolution(
+    _ resolution: FilesystemResolution,
+    canonical: String,
+    repositoryRoot: RepositoryRoot?,
+    catalog: SecretPathCatalog
+) -> FilesystemScope {
+    if resolution == .uncertain {
+        return .unknown
+    }
+    return classifyFilesystemScope(
+        canonical: canonical,
+        repositoryRoot: repositoryRoot,
+        catalog: catalog
+    )
+}
+
 public func lexicalFilesystemPath(
     _ apparent: String,
     workingDirectory: String?,
@@ -658,7 +856,8 @@ private func classifiedTarget(
     FilesystemTarget(
         apparent: apparent,
         canonical: canonical,
-        scope: classifyFilesystemScope(
+        scope: filesystemScopeForResolution(
+            resolution,
             canonical: canonical,
             repositoryRoot: context.repositoryRoot,
             catalog: context.catalog

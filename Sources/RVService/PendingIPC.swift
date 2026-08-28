@@ -91,8 +91,16 @@ enum PendingListProjection {
                 return "overwrite file"
             case .filesystemModeChange:
                 return "change file mode"
+            case .filesystemCreate:
+                return "create file"
+            case .filesystemRead:
+                return "read file"
             case .protectedPathMutation:
                 return "protected path mutation"
+            case .outsideRepositoryMutation:
+                return "outside repository mutation"
+            case .unresolvedFilesystem:
+                return "unresolved filesystem path"
             }
         }
         let base = labels.isEmpty ? "shell" : labels.joined(separator: ", ")

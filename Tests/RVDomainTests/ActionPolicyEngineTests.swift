@@ -217,6 +217,114 @@ struct ActionPolicyEngineTests {
         #expect(bound == .deny(ActionPolicyEngine.Builtin.protectedPath))
     }
 
+    @Test func inRepoWrite_isHardAllowAndOverlayCanTighten() {
+        let write = ActionPolicyFixtures.filesystem(
+            effects: [.filesystemOverwrite],
+            path: "/repo/Sources/Foo.swift",
+            scope: .insideRepository
+        )
+        let create = ActionPolicyFixtures.filesystem(
+            effects: [.filesystemCreate],
+            path: "/repo/new.swift",
+            scope: .insideRepository
+        )
+        #expect(ActionPolicyEngine.evaluate(action: write, context: shared).decision == .hardAllow)
+        #expect(ActionPolicyEngine.evaluate(action: create, context: shared).decision == .hardAllow)
+        #expect(
+            ActionPolicyEngine.evaluate(action: write, context: shared).explanation.ruleID
+                == ActionPolicyEngine.Builtin.inRepository
+        )
+        let overlayDeny = Deny(
+            ruleID: RuleID(pack: PackID(rawValue: "repo.policy"), pattern: "no-source-writes"),
+            reason: "Repository policy forbids source writes."
+        )
+        let tightened = ActionPolicyEngine.evaluate(
+            action: write,
+            context: shared,
+            policy: EffectiveActionPolicy(overlay: .deny(overlayDeny))
+        )
+        #expect(tightened.decision == .hardDeny(overlayDeny))
+    }
+
+    @Test func outOfRepoWrite_isIndependentHardDeny() {
+        let write = ActionPolicyFixtures.filesystem(
+            effects: [.filesystemOverwrite, .outsideRepositoryMutation],
+            path: "/tmp/outside-file",
+            scope: .outsideRepository
+        )
+        let delete = ActionPolicyFixtures.filesystem(
+            effects: [.filesystemDelete, .outsideRepositoryMutation],
+            path: "/tmp/outside-file",
+            scope: .outsideRepository
+        )
+        let denied = ActionPolicyEngine.evaluate(action: write, context: shared)
+        #expect(denied.decision == .hardDeny(ActionPolicyEngine.Builtin.outsideRepository))
+        #expect(
+            ActionPolicyEngine.evaluate(action: delete, context: shared).decision
+                == .hardDeny(ActionPolicyEngine.Builtin.outsideRepository)
+        )
+        let overlay = ActionPolicyEngine.evaluate(
+            action: write,
+            context: shared,
+            policy: EffectiveActionPolicy(overlay: .allow)
+        )
+        #expect(overlay.decision == .hardDeny(ActionPolicyEngine.Builtin.outsideRepository))
+        let bound = ActionPolicyEngine.bind(
+            action: write,
+            context: shared,
+            review: .success(allowReview)
+        )
+        #expect(bound == .deny(ActionPolicyEngine.Builtin.outsideRepository))
+    }
+
+    @Test func outOfRepoRead_isIndependentlyGovernable() {
+        let read = ActionPolicyFixtures.filesystem(
+            effects: [.filesystemRead],
+            path: "/tmp/outside-file",
+            scope: .outsideRepository
+        )
+        let allowed = ActionPolicyEngine.evaluate(action: read, context: shared)
+        #expect(allowed.decision == .hardAllow)
+        #expect(allowed.explanation.ruleID == ActionPolicyEngine.Builtin.outsideRepositoryRead)
+        let overlayDeny = Deny(
+            ruleID: RuleID(pack: PackID(rawValue: "repo.policy"), pattern: "no-outside-reads"),
+            reason: "Repository policy forbids outside reads."
+        )
+        let tightened = ActionPolicyEngine.evaluate(
+            action: read,
+            context: shared,
+            policy: EffectiveActionPolicy(overlay: .deny(overlayDeny))
+        )
+        #expect(tightened.decision == .hardDeny(overlayDeny))
+        #expect(
+            ActionPolicyEngine.evaluate(
+                action: ActionPolicyFixtures.filesystem(
+                    effects: [.filesystemOverwrite, .outsideRepositoryMutation],
+                    path: "/tmp/outside-file",
+                    scope: .outsideRepository
+                ),
+                context: shared,
+                policy: EffectiveActionPolicy(overlay: .deny(overlayDeny))
+            ).decision == .hardDeny(ActionPolicyEngine.Builtin.outsideRepository)
+        )
+    }
+
+    @Test func unresolvedFilesystem_isFailClosed() {
+        let unknown = ActionPolicyFixtures.filesystem(
+            effects: [.filesystemOverwrite, .unresolvedFilesystem],
+            path: "/gone/file",
+            scope: .unknown
+        )
+        let denied = ActionPolicyEngine.evaluate(action: unknown, context: shared)
+        #expect(denied.decision == .hardDeny(ActionPolicyEngine.Builtin.unresolvedFilesystem))
+        let overlay = ActionPolicyEngine.evaluate(
+            action: unknown,
+            context: shared,
+            policy: EffectiveActionPolicy(overlay: .allow)
+        )
+        #expect(overlay.decision == .hardDeny(ActionPolicyEngine.Builtin.unresolvedFilesystem))
+    }
+
     @Test func overlayDeny_canTightenHardAllow() {
         let action = ActionPolicyFixtures.checkout(
             effects: [.localBranchCreate],

@@ -9,6 +9,129 @@ struct ApplyFilesystemSemanticsTests {
         repositoryRoot: RepositoryRoot(validating: "/repo")
     )
 
+    @Test func inRepoWriteAndCreate_stayAllowUnderDefaultPolicy() throws {
+        let write = try runFilesystemPack("echo hi > Sources/Foo.swift")
+        #expect(write.decision == .allow)
+        let writeComposed = applyFilesystemSemantics(
+            pack: write,
+            command: ShellCommand(rawValue: "echo hi > Sources/Foo.swift"),
+            context: repo
+        )
+        #expect(writeComposed.decision == .allow)
+        guard case .filesystem(let writeAction) = writeComposed.analysis else {
+            Issue.record("expected overwrite analysis")
+            return
+        }
+        #expect(writeAction.operationKind == .write)
+        #expect(writeAction.resources.filesystemScope == .insideRepository)
+
+        let create = try runFilesystemPack("touch new.swift")
+        #expect(create.decision == .allow)
+        let createComposed = applyFilesystemSemantics(
+            pack: create,
+            command: ShellCommand(rawValue: "touch new.swift"),
+            context: repo
+        )
+        #expect(createComposed.decision == .allow)
+        guard case .filesystem(let createAction) = createComposed.analysis else {
+            Issue.record("expected create analysis")
+            return
+        }
+        #expect(createAction.operationKind == .create)
+        #expect(createAction.resources.filesystemScope == .insideRepository)
+    }
+
+    @Test func outOfRepoWrite_isDeniedByBoundary() throws {
+        let pack = try runFilesystemPack("echo hi > ../outside-file")
+        #expect(pack.decision == .allow)
+        let composed = applyFilesystemSemantics(
+            pack: pack,
+            command: ShellCommand(rawValue: "echo hi > ../outside-file"),
+            context: repo
+        )
+        guard case .deny(let deny) = composed.decision else {
+            Issue.record("out-of-repo write must deny, got \(composed.decision)")
+            return
+        }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.outsideRepository.ruleID)
+        guard case .filesystem(let action) = composed.analysis else {
+            Issue.record("expected filesystem analysis")
+            return
+        }
+        #expect(action.resources.filesystemScope == .outsideRepository)
+        #expect(action.primaryTarget?.canonical == "/outside-file")
+    }
+
+    @Test func symlinkEscape_usesCanonicalScopeForPolicy() throws {
+        let pack = try runFilesystemPack("rm link")
+        #expect(pack.decision == .allow)
+        let context = FilesystemAnalysisContext(
+            workingDirectory: WorkingDirectory(validating: "/repo"),
+            repositoryRoot: RepositoryRoot(validating: "/repo"),
+            facts: [
+                FilesystemPathFact(
+                    apparent: "link",
+                    canonical: "/tmp/outside-file",
+                    followedSymlink: true,
+                    resolution: .resolved
+                ),
+            ]
+        )
+        let composed = applyFilesystemSemantics(
+            pack: pack,
+            command: ShellCommand(rawValue: "rm link"),
+            context: context
+        )
+        guard case .deny(let deny) = composed.decision else {
+            Issue.record("symlink escape must deny as outside, got \(composed.decision)")
+            return
+        }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.outsideRepository.ruleID)
+        #expect(composed.analysis.filesystemAction?.primaryTarget?.canonical == "/tmp/outside-file")
+        #expect(composed.analysis.filesystemAction?.primaryTarget?.scope == .outsideRepository)
+    }
+
+    @Test func unresolvedPath_isFailClosed() throws {
+        let pack = try runFilesystemPack("rm file")
+        #expect(pack.decision == .allow)
+        let context = FilesystemAnalysisContext(
+            workingDirectory: WorkingDirectory(validating: "/repo"),
+            repositoryRoot: RepositoryRoot(validating: "/repo"),
+            facts: [
+                FilesystemPathFact(
+                    apparent: "file",
+                    canonical: "/repo/file",
+                    resolution: .uncertain
+                ),
+            ]
+        )
+        let composed = applyFilesystemSemantics(
+            pack: pack,
+            command: ShellCommand(rawValue: "rm file"),
+            context: context
+        )
+        guard case .deny(let deny) = composed.decision else {
+            Issue.record("uncertain path must fail-closed, got \(composed.decision)")
+            return
+        }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.unresolvedFilesystem.ruleID)
+        #expect(composed.analysis.filesystemAction?.primaryTarget?.scope == .unknown)
+    }
+
+    @Test func missingRepositoryRoot_isFailClosed() throws {
+        let pack = try runFilesystemPack("echo hi > file")
+        #expect(pack.decision == .allow)
+        let composed = applyFilesystemSemantics(
+            pack: pack,
+            command: ShellCommand(rawValue: "echo hi > file")
+        )
+        guard case .deny(let deny) = composed.decision else {
+            Issue.record("no repo root must fail-closed, got \(composed.decision)")
+            return
+        }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.unresolvedFilesystem.ruleID)
+    }
+
     @Test func generatedDelete_staysAllowUnderDefaultPolicy() throws {
         let pack = try runFilesystemPack("rm .build/artifact")
         #expect(pack.decision == .allow)

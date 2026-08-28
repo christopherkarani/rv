@@ -94,6 +94,24 @@ struct ApplySemanticsTests {
         #expect(composed.analysis.gitAction != nil)
     }
 
+    @Test func wrappedOutOfRepoWrite_isDeniedByBoundary() throws {
+        let command = "bash -c 'echo hi > ../outside-file'"
+        let pack = try runSemanticsPack(command)
+        #expect(pack.decision == .allow)
+        let composed = applySemantics(
+            pack: pack,
+            command: ShellCommand(rawValue: command),
+            filesystemContext: repo
+        )
+        guard case .deny(let deny) = composed.decision else {
+            Issue.record("wrapped out-of-repo write must deny, got \(composed.decision)")
+            return
+        }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.outsideRepository.ruleID)
+        #expect(composed.analysis.wrappers == [.bash])
+        #expect(composed.analysis.filesystemAction?.resources.filesystemScope == .outsideRepository)
+    }
+
     @Test func pythonRemoveProtected_isDeniedBySemantics() throws {
         // Bare `link` is not a secret-path token, so packs allow. The fact
         // maps it to a protected destination — wrappers must not lift that floor.
