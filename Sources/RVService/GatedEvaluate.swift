@@ -204,7 +204,8 @@ public struct GatedEvaluate: Sendable {
         applyGitSemantics(
             pack: resolvedSession().evaluate(request),
             command: request.command,
-            context: GitAnalysisContext(workingDirectory: cwd)
+            context: GitAnalysisContext(workingDirectory: cwd),
+            enabledPacks: request.enabledPacks
         )
     }
 }

@@ -86,6 +86,26 @@ struct ApplyGitSemanticsTests {
         #expect(composed.analysis != .unknown)
     }
 
+    @Test func coreGitDisabled_doesNotAddSemanticDeny() throws {
+        let pack = try runPack("echo hello")
+        #expect(pack.decision == .allow)
+        let composed = applyGitSemantics(
+            pack: EvaluationResult(
+                outcome: .plain,
+                matchingView: MatchingView("git reset --hard")
+            ),
+            command: ShellCommand(rawValue: "git reset --hard"),
+            enabledPacks: []
+        )
+        #expect(composed.decision == .allow)
+        guard case .git(.reset(let mode, _)) = composed.analysis else {
+            Issue.record("analysis still attaches when packs are off")
+            return
+        }
+        #expect(mode == .hard)
+        #expect(pack.decision == .allow)
+    }
+
     @Test func packIndeterminate_isNotLifted() {
         let pack = EvaluationResult(
             outcome: .indeterminate(.corePacksUnavailable),
