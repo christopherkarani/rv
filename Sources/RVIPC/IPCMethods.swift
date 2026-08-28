@@ -468,6 +468,7 @@ public struct PendingListItem: Sendable, Equatable, Codable {
     public var host: HookHost
     public var folder: String
     public var actionKind: String
+    public var fingerprint: ActionFingerprint
     public var sessionSuffix: String?
     public var identity: ApprovalIdentity
 
@@ -476,6 +477,7 @@ public struct PendingListItem: Sendable, Equatable, Codable {
         host: HookHost,
         folder: String,
         actionKind: String,
+        fingerprint: ActionFingerprint,
         sessionSuffix: String? = nil,
         identity: ApprovalIdentity
     ) {
@@ -483,6 +485,7 @@ public struct PendingListItem: Sendable, Equatable, Codable {
         self.host = host
         self.folder = folder
         self.actionKind = actionKind
+        self.fingerprint = fingerprint
         self.sessionSuffix = sessionSuffix
         self.identity = identity
     }
@@ -493,6 +496,7 @@ public struct PendingListItem: Sendable, Equatable, Codable {
         host = try container.decode(HookHost.self, forKey: .host)
         folder = try container.decode(String.self, forKey: .folder)
         actionKind = try container.decode(String.self, forKey: .actionKind)
+        fingerprint = try container.decode(ActionFingerprint.self, forKey: .fingerprint)
         sessionSuffix = try container.decodeIfPresent(String.self, forKey: .sessionSuffix)
         identity = try container.decode(ApprovalIdentity.self, forKey: .identity)
     }
@@ -503,6 +507,7 @@ public struct PendingListItem: Sendable, Equatable, Codable {
         try container.encode(host, forKey: .host)
         try container.encode(folder, forKey: .folder)
         try container.encode(actionKind, forKey: .actionKind)
+        try container.encode(fingerprint, forKey: .fingerprint)
         try container.encodeIfPresent(sessionSuffix, forKey: .sessionSuffix)
         try container.encode(identity, forKey: .identity)
     }
@@ -512,6 +517,7 @@ public struct PendingListItem: Sendable, Equatable, Codable {
         case host
         case folder
         case actionKind
+        case fingerprint
         case sessionSuffix
         case identity
     }

@@ -19,6 +19,7 @@ struct PendingAndRuleRoundTripTests {
             host: .pi,
             folder: "ws",
             actionKind: "git push",
+            fingerprint: ActionFingerprint(rawValue: "shell:git"),
             sessionSuffix: "ab12",
             identity: identity
         )
@@ -38,7 +39,7 @@ struct PendingAndRuleRoundTripTests {
         let response = IPCResponse(id: id, result: .pendingList(reply))
         let data = try IPCJSON.encode(response)
         let golden =
-            #"{"id":"AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE","protocol":"rv.ipc.v1","result":{"pendingList":{"generation":3,"items":[{"actionKind":"git push","folder":"ws","host":"pi","id":"ask-1","identity":{"agent":"pi","session":"sess"},"sessionSuffix":"ab12"}]}}}"#
+            #"{"id":"AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE","protocol":"rv.ipc.v1","result":{"pendingList":{"generation":3,"items":[{"actionKind":"git push","fingerprint":"shell:git","folder":"ws","host":"pi","id":"ask-1","identity":{"agent":"pi","session":"sess"},"sessionSuffix":"ab12"}]}}}"#
         #expect(String(data: data, encoding: .utf8) == golden)
         #expect(try IPCJSON.decode(IPCResponse.self, from: data) == response)
 
@@ -63,6 +64,7 @@ struct PendingAndRuleRoundTripTests {
             host: .grok,
             folder: "ws",
             actionKind: "shell",
+            fingerprint: ActionFingerprint(rawValue: "shell:git"),
             sessionSuffix: nil,
             identity: identity
         )

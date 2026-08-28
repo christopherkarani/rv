@@ -391,6 +391,7 @@ extension IPCResult {
                                 host: .pi,
                                 folder: "ws",
                                 actionKind: "git push",
+                                fingerprint: ActionFingerprint(rawValue: "shell:git"),
                                 sessionSuffix: nil,
                                 identity: ApprovalIdentity(
                                     session: SessionIdentity(rawValue: "sess"),
