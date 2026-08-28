@@ -25,9 +25,12 @@ struct ProtectedPathProbeTests {
                 Issue.record("\(command) must deny, got \(result.decision)")
                 continue
             }
+            // Echo redirects can hit core.filesystem first (pack-deny floor).
+            // Classification must still be protectedPath.
             #expect(
                 deny.ruleID == ActionPolicyEngine.Builtin.protectedPath.ruleID
                     || deny.ruleID.pack == .coreSecrets
+                    || deny.ruleID.pack == .coreFilesystem
             )
             #expect(result.analysis.filesystemAction?.primaryTarget?.scope == .protectedPath)
             #expect(result.analysis.filesystemAction?.explainCategory == "ssh")
