@@ -7,6 +7,8 @@ public struct ExplainSemanticView: Equatable, Sendable {
     public var remote: String?
     public var ref: String?
     public var pathspec: String?
+    public var path: String?
+    public var kind: String?
 
     public init(
         action: String,
@@ -14,7 +16,9 @@ public struct ExplainSemanticView: Equatable, Sendable {
         effect: String? = nil,
         remote: String? = nil,
         ref: String? = nil,
-        pathspec: String? = nil
+        pathspec: String? = nil,
+        path: String? = nil,
+        kind: String? = nil
     ) {
         self.action = action
         self.scope = scope
@@ -22,6 +26,8 @@ public struct ExplainSemanticView: Equatable, Sendable {
         self.remote = remote
         self.ref = ref
         self.pathspec = pathspec
+        self.path = path
+        self.kind = kind
     }
 }
 
@@ -123,13 +129,25 @@ public func explainViewModel(
 }
 
 public func explainSemantic(from analysis: SemanticAnalysis) -> ExplainSemanticView? {
-    guard case .git(let action) = analysis else { return nil }
-    return ExplainSemanticView(
-        action: action.explainAction,
-        scope: action.explainScope,
-        effect: action.explainEffect,
-        remote: action.explainRemote,
-        ref: action.explainRef,
-        pathspec: action.explainPathspec
-    )
+    switch analysis {
+    case .git(let action):
+        return ExplainSemanticView(
+            action: action.explainAction,
+            scope: action.explainScope,
+            effect: action.explainEffect,
+            remote: action.explainRemote,
+            ref: action.explainRef,
+            pathspec: action.explainPathspec
+        )
+    case .filesystem(let action):
+        return ExplainSemanticView(
+            action: action.explainAction,
+            scope: action.explainScope,
+            effect: action.explainEffect,
+            path: action.explainPath,
+            kind: action.explainKind
+        )
+    case .unknown:
+        return nil
+    }
 }

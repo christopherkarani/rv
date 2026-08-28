@@ -395,6 +395,56 @@ private func mediumAllow() -> EvaluationResult {
     #expect(vm.fact == "allow")
 }
 
+@Test func explainViewModel_attachesFilesystemSemanticWhenPresent() {
+    let generated = explainViewModel(
+        from: EvaluationResult(
+            outcome: .plain,
+            analysis: .filesystem(
+                .delete(
+                    targets: [
+                        FilesystemTarget(
+                            apparent: ".build/foo",
+                            canonical: "/repo/.build/foo",
+                            scope: .insideRepository,
+                            kind: .generatedOutput
+                        ),
+                    ],
+                    recursive: false,
+                    force: false
+                )
+            )
+        ),
+        command: ShellCommand(rawValue: "rm .build/foo")
+    )
+    #expect(generated.semantic?.action == "delete")
+    #expect(generated.semantic?.scope == "inside repo")
+    #expect(generated.semantic?.kind == "generated output")
+    #expect(generated.semantic?.path == "/repo/.build/foo")
+
+    let source = explainViewModel(
+        from: EvaluationResult(
+            outcome: .plain,
+            analysis: .filesystem(
+                .delete(
+                    targets: [
+                        FilesystemTarget(
+                            apparent: "Sources/Foo.swift",
+                            canonical: "/repo/Sources/Foo.swift",
+                            scope: .insideRepository,
+                            kind: .sourceCode
+                        ),
+                    ],
+                    recursive: false,
+                    force: false
+                )
+            )
+        ),
+        command: ShellCommand(rawValue: "rm Sources/Foo.swift")
+    )
+    #expect(source.semantic?.kind == "source code")
+    #expect(source.semantic?.kind != generated.semantic?.kind)
+}
+
 @Test func packsViewModel_dayOneEnabled() {
     let vm = packsViewModel(
         enabled: dayOnePackIDs,

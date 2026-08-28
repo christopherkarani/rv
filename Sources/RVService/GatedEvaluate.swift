@@ -68,6 +68,7 @@ public struct GatedEvaluate: Sendable {
             intent,
             Self.makeRequest(command: command, home: home),
             cwd: cwd,
+            home: home,
             store: store,
             now: now,
             allowlist: allowlist
@@ -90,11 +91,20 @@ public struct GatedEvaluate: Sendable {
     func peek(
         _ request: EvaluationRequest,
         cwd: WorkingDirectory?,
+        home: HomeDirectory? = nil,
         store: AllowOnceStore,
         now: Date,
         allowlist: @escaping @Sendable () -> AllowlistSnapshot
     ) async -> EvaluationResult {
-        await gated(.peek, request, cwd: cwd, store: store, now: now, allowlist: allowlist)
+        await gated(
+            .peek,
+            request,
+            cwd: cwd,
+            home: home,
+            store: store,
+            now: now,
+            allowlist: allowlist
+        )
     }
 
     /// Host Ask spend: honor an existing grant, else plant+spend this turn. Fail-closed.
@@ -109,6 +119,7 @@ public struct GatedEvaluate: Sendable {
         await spendHostAsk(
             Self.makeRequest(command: command, home: home),
             cwd: cwd,
+            home: home,
             store: store,
             now: now,
             allowlist: allowlist
@@ -118,11 +129,12 @@ public struct GatedEvaluate: Sendable {
     func spendHostAsk(
         _ request: EvaluationRequest,
         cwd: WorkingDirectory?,
+        home: HomeDirectory? = nil,
         store: AllowOnceStore,
         now: Date,
         allowlist: @escaping @Sendable () -> AllowlistSnapshot
     ) async -> EvaluationResult {
-        let result = evaluateWithSemantics(request, cwd: cwd)
+        let result = evaluateWithSemantics(request, cwd: cwd, home: home)
         switch result.decision {
         case .allow, .indeterminate:
             return result
@@ -153,22 +165,32 @@ public struct GatedEvaluate: Sendable {
     func apply(
         _ request: EvaluationRequest,
         cwd: WorkingDirectory?,
+        home: HomeDirectory? = nil,
         store: AllowOnceStore,
         now: Date,
         allowlist: @escaping @Sendable () -> AllowlistSnapshot
     ) async -> EvaluationResult {
-        await gated(.apply, request, cwd: cwd, store: store, now: now, allowlist: allowlist)
+        await gated(
+            .apply,
+            request,
+            cwd: cwd,
+            home: home,
+            store: store,
+            now: now,
+            allowlist: allowlist
+        )
     }
 
     private func gated(
         _ intent: EvaluationIntent,
         _ request: EvaluationRequest,
         cwd: WorkingDirectory?,
+        home: HomeDirectory?,
         store: AllowOnceStore,
         now: Date,
         allowlist: @escaping @Sendable () -> AllowlistSnapshot
     ) async -> EvaluationResult {
-        let result = evaluateWithSemantics(request, cwd: cwd)
+        let result = evaluateWithSemantics(request, cwd: cwd, home: home)
         // Fast path: allow/indeterminate never touch PolicyGate or the
         // allowlist loader; PolicyGate returns them unchanged anyway.
         switch result.decision {
@@ -199,12 +221,23 @@ public struct GatedEvaluate: Sendable {
 
     private func evaluateWithSemantics(
         _ request: EvaluationRequest,
-        cwd: WorkingDirectory?
+        cwd: WorkingDirectory?,
+        home: HomeDirectory? = nil
     ) -> EvaluationResult {
-        applyGitSemantics(
+        let pack = applyGitSemantics(
             pack: resolvedSession().evaluate(request),
             command: request.command,
             context: GitAnalysisContext(workingDirectory: cwd),
+            enabledPacks: request.enabledPacks
+        )
+        return applyFilesystemSemantics(
+            pack: pack,
+            command: request.command,
+            context: FilesystemLiveProbe.context(
+                command: request.command,
+                cwd: cwd,
+                homeDirectory: home?.rawValue
+            ),
             enabledPacks: request.enabledPacks
         )
     }

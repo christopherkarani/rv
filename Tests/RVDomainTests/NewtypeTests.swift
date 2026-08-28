@@ -95,6 +95,13 @@ import Testing
     #expect(WorkingDirectory(rawValue: "/tmp/ws") != nil)
 }
 
+@Test func repositoryRoot_rejectsEmptyAndAcceptsNonempty() throws {
+    #expect(RepositoryRoot(validating: "") == nil)
+    let root = try #require(RepositoryRoot(validating: "/tmp/repo"))
+    #expect(root.rawValue == "/tmp/repo")
+    #expect(RepositoryRoot(rawValue: "") == nil)
+}
+
 @Test func workingDirectory_codableIsJSONString() throws {
     let cwd = try #require(WorkingDirectory(validating: "/tmp/ws"))
     let encoder = JSONEncoder()

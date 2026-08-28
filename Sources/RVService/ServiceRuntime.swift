@@ -245,6 +245,7 @@ public actor ServiceRuntime {
         let result = await gated.apply(
             request,
             cwd: cwd,
+            home: configHome,
             store: allowOnce,
             now: now,
             allowlist: {
@@ -315,6 +316,7 @@ public actor ServiceRuntime {
         let result = await gated.peek(
             params.request,
             cwd: cwd,
+            home: configHome,
             store: allowOnce,
             now: now,
             allowlist: {
@@ -352,6 +354,7 @@ public actor ServiceRuntime {
         let result = await gated.peek(
             params.request,
             cwd: cwd,
+            home: configHome,
             store: allowOnce,
             now: now,
             allowlist: {
