@@ -197,8 +197,10 @@ public actor ServiceRuntime {
             result = await pendingWatchResult(afterGeneration: params.afterGeneration)
         case .pendingResolve(let params):
             result = await pendingResolveResult(params)
-        case .rulePreview, .ruleSave:
-            result = .error(.unknownMethod)
+        case .rulePreview(let params):
+            result = await rulePreviewResult(params)
+        case .ruleSave(let params):
+            result = await ruleSaveResult(params)
         }
         logIfNeeded(request: request, result: result, started: started)
         return IPCResponse(id: request.id, result: result)
@@ -445,6 +447,93 @@ public actor ServiceRuntime {
             return .pendingWatch(reply)
         } catch {
             return .error(PendingListProjection.ipcError(from: error))
+        }
+    }
+
+    private func rulePreviewResult(_ params: RulePreviewParams) async -> IPCResult {
+        guard let pendingApprovals else {
+            return .error(PendingListProjection.coordinatorUnavailable)
+        }
+        do {
+            let record = try await pendingApprovals.load(id: params.id, now: clock())
+            let preview = RulePinning.preview(
+                record: record,
+                polarity: pinnedPolarity(params.polarity)
+            )
+            return .rulePreview(
+                RulePreviewReply(
+                    sentence: preview.sentence,
+                    draft: preview.draft,
+                    allowedToSave: preview.allowedToSave
+                )
+            )
+        } catch {
+            return .error(PendingListProjection.ipcError(from: error))
+        }
+    }
+
+    private func ruleSaveResult(_ params: RuleSaveParams) async -> IPCResult {
+        guard let pendingApprovals else {
+            return .error(PendingListProjection.coordinatorUnavailable)
+        }
+        let polarity = pinnedPolarity(params.polarity)
+        do {
+            let now = clock()
+            let record = try await pendingApprovals.load(id: params.id, now: now)
+            let commandText = record.action.supportingCommand?.rawValue ?? ""
+            let outcome = try RulePinStore(baseDirectory: allowOnce.baseDirectory).save(
+                record: record,
+                polarity: polarity,
+                draft: params.draft,
+                now: now,
+                matchingView: Normalize.matchingView(of: commandText)
+            )
+            let decision: ApprovalDecision = polarity == .allow ? .createRule : .deny
+            do {
+                let resolved = try await pendingApprovals.resolve(
+                    id: record.id,
+                    decision: decision,
+                    fingerprint: record.fingerprint,
+                    identity: record.identity,
+                    now: now
+                )
+                let terminal: Bool
+                switch resolved.state {
+                case .awaitingHuman:
+                    terminal = false
+                case .resolved, .expired, .canceled, .timedOut:
+                    terminal = true
+                }
+                return .ruleSave(RuleSaveReply(ruleID: outcome.ruleID, waitResolved: terminal))
+            } catch let error as PendingApprovalError {
+                switch error {
+                case .alreadyResolved, .alreadyConsumed, .expired, .canceled, .timedOut:
+                    return .ruleSave(RuleSaveReply(ruleID: outcome.ruleID, waitResolved: true))
+                case .notFound, .invalidRequest, .duplicateID, .fingerprintMismatch, .identityMismatch,
+                    .continuationMismatch, .notResolved, .encodeFailed, .lockFailed:
+                    return .error(PendingListProjection.ipcError(from: error))
+                }
+            }
+        } catch let error as RulePinError {
+            switch error {
+            case .draftMismatch:
+                return .error(.ruleDraftMismatch)
+            case .hardStop:
+                return .error(.ruleHardStop)
+            case .missingMatchingView:
+                return .error(.engine("rule pin requires a matching view"))
+            }
+        } catch {
+            return .error(PendingListProjection.ipcError(from: error))
+        }
+    }
+
+    private func pinnedPolarity(_ wire: RulePolarity) -> PinnedRulePolarity {
+        switch wire {
+        case .allow:
+            return .allow
+        case .block:
+            return .block
         }
     }
 

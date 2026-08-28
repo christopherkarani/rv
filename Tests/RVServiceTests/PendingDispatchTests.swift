@@ -318,24 +318,287 @@ struct PendingDispatchTests {
         #expect(blob.contains(secretCommand) == false)
     }
 
-    @Test func rulePreviewAndSaveStayUnknownMethod() async throws {
-        let runtime = try makeRuntime(approvals: FakePendingApprovals())
+    @Test func alwaysAllowHardStopPreviewForbidsSaveAndWritesNothing() async throws {
+        let allowOnceDirectory = try isolatedAllowOnceDirectory()
+        let homeURL = try isolatedHomeDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: homeURL)
+            try? FileManager.default.removeItem(at: allowOnceDirectory)
+        }
+        let approvals = FakePendingApprovals()
+        let wait = record(id: "ask-1", host: .pi, session: "sess-pi", folder: "ws", createdAt: now)
+        await approvals.seed(wait)
+        let runtime = try makeRuntime(approvals: approvals, homeURL: homeURL, allowOnceDirectory: allowOnceDirectory)
         let preview = await runtime.dispatch(
-            IPCRequest(
-                method: .rulePreview(
-                    RulePreviewParams(id: ApprovalID(rawValue: "ask-1"), polarity: .allow)
-                )
-            )
+            IPCRequest(method: .rulePreview(RulePreviewParams(id: wait.id, polarity: .allow)))
         )
+        guard case .rulePreview(let reply) = preview.result else {
+            Issue.record("hard-stop Always-allow must preview")
+            return
+        }
+        #expect(reply.allowedToSave == false)
+        #expect(reply.sentence.contains("hard stop"))
+        try assertNoCommand(preview)
+
         let save = await runtime.dispatch(
             IPCRequest(
                 method: .ruleSave(
-                    RuleSaveParams(id: ApprovalID(rawValue: "ask-1"), polarity: .allow, draft: "draft")
+                    RuleSaveParams(id: wait.id, polarity: .allow, draft: reply.draft)
                 )
             )
         )
-        #expect(preview.result == .error(.unknownMethod))
-        #expect(save.result == .error(.unknownMethod))
+        #expect(save.result == .error(.ruleHardStop))
+        #expect(await approvals.resolveCalls.isEmpty)
+        let snap = AllowlistStore(baseDirectory: allowOnceDirectory)
+            .loadUserSnapshot(workspacePath: nil, now: now)
+        #expect(snap.entries.isEmpty)
+        let listed = try requireList(await runtime.dispatch(IPCRequest(method: .pendingList)))
+        #expect(listed.items.map(\.id) == [wait.id])
+    }
+
+    @Test func previewWithoutSaveLeavesWaitAwaitingHuman() async throws {
+        let allowOnceDirectory = try isolatedAllowOnceDirectory()
+        let homeURL = try isolatedHomeDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: homeURL)
+            try? FileManager.default.removeItem(at: allowOnceDirectory)
+        }
+        let approvals = FakePendingApprovals()
+        let wait = pinOkRecord(id: "pin-ok", createdAt: now)
+        await approvals.seed(wait)
+        let runtime = try makeRuntime(approvals: approvals, homeURL: homeURL, allowOnceDirectory: allowOnceDirectory)
+
+        let preview = await runtime.dispatch(
+            IPCRequest(method: .rulePreview(RulePreviewParams(id: wait.id, polarity: .allow)))
+        )
+        guard case .rulePreview(let reply) = preview.result else {
+            Issue.record("pin-ok Always-allow must preview")
+            return
+        }
+        #expect(reply.allowedToSave == true)
+        #expect(await approvals.resolveCalls.isEmpty)
+        let snap = AllowlistStore(baseDirectory: allowOnceDirectory)
+            .loadUserSnapshot(workspacePath: nil, now: now)
+        #expect(snap.entries.isEmpty)
+        let listed = try requireList(await runtime.dispatch(IPCRequest(method: .pendingList)))
+        #expect(listed.items.map(\.id) == [wait.id])
+    }
+
+    @Test func alwaysAllowSaveAuthorizesFutureEvaluateWithoutExtraClick() async throws {
+        let allowOnceDirectory = try isolatedAllowOnceDirectory()
+        let homeURL = try isolatedHomeDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: homeURL)
+            try? FileManager.default.removeItem(at: allowOnceDirectory)
+        }
+        let approvals = FakePendingApprovals()
+        let wait = pinOkRecord(id: "pin-ok", createdAt: now)
+        await approvals.seed(wait)
+        let runtime = try makeRuntime(approvals: approvals, homeURL: homeURL, allowOnceDirectory: allowOnceDirectory)
+
+        let preview = await runtime.dispatch(
+            IPCRequest(method: .rulePreview(RulePreviewParams(id: wait.id, polarity: .allow)))
+        )
+        guard case .rulePreview(let reply) = preview.result else {
+            Issue.record("pin-ok Always-allow must preview")
+            return
+        }
+        let save = await runtime.dispatch(
+            IPCRequest(
+                method: .ruleSave(
+                    RuleSaveParams(id: wait.id, polarity: .allow, draft: reply.draft)
+                )
+            )
+        )
+        guard case .ruleSave(let saved) = save.result else {
+            Issue.record("pin-ok Always-allow must save, got \(save.result)")
+            return
+        }
+        #expect(saved.waitResolved == true)
+        #expect(saved.ruleID.pack.rawValue == "pin.allow")
+        #expect(await approvals.resolveCalls.map(\.decision) == [.createRule])
+        let listed = try requireList(await runtime.dispatch(IPCRequest(method: .pendingList)))
+        #expect(listed.items.isEmpty)
+
+        let request = EvaluationRequest(
+            command: ShellCommand(rawValue: "git reset --hard"),
+            enabledPacks: dayOnePackIDs
+        )
+        let first = await runtime.dispatch(
+            IPCRequest(method: .evaluate(EvaluateParams(request: request, cwd: wd("/tmp/ws"))))
+        )
+        guard case .evaluate(let allowed) = first.result else {
+            Issue.record("expected evaluate after Always-allow")
+            return
+        }
+        #expect(allowed.result.decision == .allow)
+        let second = await runtime.dispatch(
+            IPCRequest(method: .evaluate(EvaluateParams(request: request, cwd: wd("/tmp/ws"))))
+        )
+        guard case .evaluate(let still) = second.result else {
+            Issue.record("expected second evaluate after Always-allow")
+            return
+        }
+        #expect(still.result.decision == .allow)
+    }
+
+    @Test func alwaysAllowSaveAuthorizesNormalizedWrapperRetry() async throws {
+        let allowOnceDirectory = try isolatedAllowOnceDirectory()
+        let homeURL = try isolatedHomeDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: homeURL)
+            try? FileManager.default.removeItem(at: allowOnceDirectory)
+        }
+        let approvals = FakePendingApprovals()
+        let wait = pinOkRecord(
+            id: "pin-sudo",
+            createdAt: now,
+            command: "sudo git reset --hard"
+        )
+        await approvals.seed(wait)
+        let runtime = try makeRuntime(approvals: approvals, homeURL: homeURL, allowOnceDirectory: allowOnceDirectory)
+
+        let preview = await runtime.dispatch(
+            IPCRequest(method: .rulePreview(RulePreviewParams(id: wait.id, polarity: .allow)))
+        )
+        guard case .rulePreview(let reply) = preview.result else {
+            Issue.record("wrapper Always-allow must preview")
+            return
+        }
+        let save = await runtime.dispatch(
+            IPCRequest(
+                method: .ruleSave(
+                    RuleSaveParams(id: wait.id, polarity: .allow, draft: reply.draft)
+                )
+            )
+        )
+        guard case .ruleSave = save.result else {
+            Issue.record("wrapper Always-allow must save, got \(save.result)")
+            return
+        }
+
+        let request = EvaluationRequest(
+            command: ShellCommand(rawValue: "sudo git reset --hard"),
+            enabledPacks: dayOnePackIDs
+        )
+        let first = await runtime.dispatch(
+            IPCRequest(method: .evaluate(EvaluateParams(request: request, cwd: wd("/tmp/ws"))))
+        )
+        guard case .evaluate(let allowed) = first.result else {
+            Issue.record("expected evaluate after wrapper Always-allow")
+            return
+        }
+        #expect(allowed.result.decision == .allow)
+        let unwrapped = EvaluationRequest(
+            command: ShellCommand(rawValue: "git reset --hard"),
+            enabledPacks: dayOnePackIDs
+        )
+        let second = await runtime.dispatch(
+            IPCRequest(method: .evaluate(EvaluateParams(request: unwrapped, cwd: wd("/tmp/ws"))))
+        )
+        guard case .evaluate(let still) = second.result else {
+            Issue.record("expected unwrapped evaluate after wrapper Always-allow")
+            return
+        }
+        #expect(still.result.decision == .allow)
+    }
+
+    @Test func ruleSaveDraftMismatchWritesNothing() async throws {
+        let allowOnceDirectory = try isolatedAllowOnceDirectory()
+        let homeURL = try isolatedHomeDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: homeURL)
+            try? FileManager.default.removeItem(at: allowOnceDirectory)
+        }
+        let approvals = FakePendingApprovals()
+        let wait = pinOkRecord(id: "pin-ok", createdAt: now)
+        await approvals.seed(wait)
+        let runtime = try makeRuntime(approvals: approvals, homeURL: homeURL, allowOnceDirectory: allowOnceDirectory)
+
+        let save = await runtime.dispatch(
+            IPCRequest(
+                method: .ruleSave(
+                    RuleSaveParams(id: wait.id, polarity: .allow, draft: "forged")
+                )
+            )
+        )
+        #expect(save.result == .error(.ruleDraftMismatch))
+        #expect(await approvals.resolveCalls.isEmpty)
+        let snap = AllowlistStore(baseDirectory: allowOnceDirectory)
+            .loadUserSnapshot(workspacePath: nil, now: now)
+        #expect(snap.entries.isEmpty)
+        let listed = try requireList(await runtime.dispatch(IPCRequest(method: .pendingList)))
+        #expect(listed.items.map(\.id) == [wait.id])
+    }
+
+    @Test func alwaysBlockSaveDeniesThisWait() async throws {
+        let allowOnceDirectory = try isolatedAllowOnceDirectory()
+        let homeURL = try isolatedHomeDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: homeURL)
+            try? FileManager.default.removeItem(at: allowOnceDirectory)
+        }
+        let approvals = FakePendingApprovals()
+        let wait = pinOkRecord(id: "block-ok", createdAt: now)
+        await approvals.seed(wait)
+        let runtime = try makeRuntime(approvals: approvals, homeURL: homeURL, allowOnceDirectory: allowOnceDirectory)
+
+        let preview = await runtime.dispatch(
+            IPCRequest(method: .rulePreview(RulePreviewParams(id: wait.id, polarity: .block)))
+        )
+        guard case .rulePreview(let reply) = preview.result else {
+            Issue.record("Always-block must preview")
+            return
+        }
+        let save = await runtime.dispatch(
+            IPCRequest(
+                method: .ruleSave(
+                    RuleSaveParams(id: wait.id, polarity: .block, draft: reply.draft)
+                )
+            )
+        )
+        guard case .ruleSave(let saved) = save.result else {
+            Issue.record("Always-block must save, got \(save.result)")
+            return
+        }
+        #expect(saved.waitResolved == true)
+        #expect(await approvals.resolveCalls.map(\.decision) == [.deny])
+        let listed = try requireList(await runtime.dispatch(IPCRequest(method: .pendingList)))
+        #expect(listed.items.isEmpty)
+
+        let request = EvaluationRequest(
+            command: ShellCommand(rawValue: "git reset --hard"),
+            enabledPacks: dayOnePackIDs
+        )
+        let again = await runtime.dispatch(
+            IPCRequest(method: .evaluate(EvaluateParams(request: request, cwd: wd("/tmp/ws"))))
+        )
+        guard case .evaluate(let denied) = again.result else {
+            Issue.record("expected evaluate after Always-block")
+            return
+        }
+        guard case .deny = denied.result.decision else {
+            Issue.record("Always-block must keep future evaluates denied")
+            return
+        }
+    }
+
+    @Test func extraAllowOnceStillWorksWithoutATypedRule() async throws {
+        let approvals = FakePendingApprovals()
+        let wait = pinOkRecord(id: "once-1", createdAt: now)
+        await approvals.seed(wait)
+        let runtime = try makeRuntime(approvals: approvals)
+        let resolved = await runtime.dispatch(
+            IPCRequest(method: .pendingResolve(resolveParams(wait, decision: .allowOnce)))
+        )
+        guard case .pendingResolve(let reply) = resolved.result else {
+            Issue.record("extra Allow once must still resolve")
+            return
+        }
+        #expect(reply.terminal)
+        #expect(await approvals.resolveCalls.map(\.decision) == [.allowOnce])
+        let remaining = try requireList(await runtime.dispatch(IPCRequest(method: .pendingList)))
+        #expect(remaining.items.isEmpty)
     }
 
     @Test func automaticStoreListsCreatedWaits() async throws {
@@ -385,13 +648,15 @@ struct PendingDispatchTests {
 
     private func makeRuntime(
         approvals: FakePendingApprovals,
-        log: (any ServiceLog)? = nil
+        log: (any ServiceLog)? = nil,
+        homeURL: URL? = nil,
+        allowOnceDirectory: URL? = nil
     ) throws -> ServiceRuntime {
-        let homeURL = try isolatedHomeDirectory()
+        let homeURL = try homeURL ?? isolatedHomeDirectory()
         let home = try #require(HomeDirectory(validating: homeURL.path))
         return ServiceRuntime(
             home: home,
-            allowOnceDirectory: try isolatedAllowOnceDirectory(),
+            allowOnceDirectory: try allowOnceDirectory ?? isolatedAllowOnceDirectory(),
             log: log,
             clock: { now },
             pendingApprovals: .coordinator(approvals)
@@ -420,12 +685,32 @@ struct PendingDispatchTests {
         )
     }
 
+    private func pinOkRecord(
+        id: String,
+        createdAt: Date,
+        command: String = "git reset --hard"
+    ) -> PendingApproval {
+        record(
+            id: id,
+            host: .pi,
+            session: "sess-pi",
+            folder: "ws",
+            createdAt: createdAt,
+            effects: [],
+            branchName: nil,
+            command: command
+        )
+    }
+
     private func record(
         id: String,
         host: HookHost,
         session: String,
         folder: String?,
-        createdAt: Date
+        createdAt: Date,
+        effects: [ActionEffectKind] = [.remoteSharedBranchMutation],
+        branchName: String? = "main",
+        command: String? = nil
     ) -> PendingApproval {
         PendingApproval(
             id: ApprovalID(rawValue: id),
@@ -436,10 +721,10 @@ struct PendingDispatchTests {
             action: .shell(
                 ShellAction(
                     fingerprint: ActionFingerprint(rawValue: "shell:\(id)"),
-                    effects: ActionEffects(kinds: [.remoteSharedBranchMutation]),
-                    resources: ActionResources(remoteName: "origin", branchName: "main"),
+                    effects: ActionEffects(kinds: effects),
+                    resources: ActionResources(remoteName: "origin", branchName: branchName),
                     scope: ActionScope(workingDirectory: folder.map { wd("/tmp/\($0)") }),
-                    supportingCommand: ShellCommand(rawValue: secretCommand)
+                    supportingCommand: ShellCommand(rawValue: command ?? secretCommand)
                 )
             ),
             reason: .hostAsk,
