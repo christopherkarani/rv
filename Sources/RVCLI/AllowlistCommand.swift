@@ -1,8 +1,8 @@
 import ArgumentParser
 import Foundation
 import RVDomain
-import RVEngine
 import RVPolicy
+import RVService
 
 enum AllowlistCLI {
     static func interactiveTTY(
@@ -170,7 +170,7 @@ struct AllowlistAddCommand: AsyncParsableCommand {
             plain: format.plain,
             noColor: format.noColor
         )
-        let matchingView = Normalize.matchingView(of: command)
+        let matchingView = EvaluationWorld.matchingView(of: ShellCommand(rawValue: command))
         let entry = AllowlistEntry(
             selector: .exactCommand(matchingView),
             reason: trimmed,
@@ -225,7 +225,7 @@ struct AllowlistRemove: AsyncParsableCommand {
         )
         do {
             let trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
-            let normalized = Normalize.matchingView(of: trimmed).rawValue
+            let normalized = EvaluationWorld.matchingView(of: ShellCommand(rawValue: trimmed)).rawValue
             let removed = try AllowlistCLI.store(home: try AllowlistCLI.requireHome()).remove(
                 matching: trimmed,
                 tty: tty,

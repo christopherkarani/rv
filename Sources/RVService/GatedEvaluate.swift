@@ -81,7 +81,7 @@ public struct GatedEvaluate: Sendable {
     ) -> EvaluationRequest {
         EvaluationRequest(
             command: command,
-            enabledPacks: EnabledPacks.resolve(home: home).ids
+            enabledPacks: EvaluationWorld.walkedPackIDs(home: home).ids
         )
     }
 

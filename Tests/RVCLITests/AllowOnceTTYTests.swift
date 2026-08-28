@@ -12,7 +12,7 @@ struct AllowOnceTTYTests {
         let tty = TTYCapability(stdinIsTTY: false, stdoutIsTTY: false, ci: false)
         await #expect(throws: AllowOnceError.ttyRequired) {
             try await AllowOnceCLI.mint(
-                command: "git reset --hard",
+                command: ShellCommand(rawValue: "git reset --hard"),
                 cwd: wd("/tmp/a"),
                 tty: tty,
                 robot: false,
@@ -55,7 +55,7 @@ struct AllowOnceTTYTests {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
         let code = try await AllowOnceCLI.mint(
-            command: "git reset --hard",
+            command: ShellCommand(rawValue: "git reset --hard"),
             cwd: wd("/tmp/a"),
             tty: tty,
             robot: false,
@@ -96,7 +96,7 @@ struct AllowOnceTTYTests {
         let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
         await #expect(throws: AllowOnceError.robotRefused) {
             try await AllowOnceCLI.mint(
-                command: "git reset --hard",
+                command: ShellCommand(rawValue: "git reset --hard"),
                 cwd: wd("/tmp/a"),
                 tty: tty,
                 robot: true,
