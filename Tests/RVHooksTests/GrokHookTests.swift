@@ -167,4 +167,24 @@ private func grokDenyObject(_ stdout: String) throws -> GrokDenyObject {
         return
     }
     #expect(request.cwd == nil)
+    #expect(request.session == nil)
+}
+
+@Test func grokDecode_readsSessionId() throws {
+    guard case .request(let request) = codec.decode(try grokFixture("allow-git-status.json")) else {
+        Issue.record("expected .request for sessionId")
+        return
+    }
+    #expect(request.session == "abc-123")
+}
+
+@Test func grokDecode_emptySessionIsNil() {
+    let stdin = """
+    {"hookEventName":"pre_tool_use","sessionId":"","toolName":"run_terminal_command","toolInput":{"command":"git status"}}
+    """
+    guard case .request(let request) = codec.decode(stdin) else {
+        Issue.record("expected .request for empty sessionId")
+        return
+    }
+    #expect(request.session == nil)
 }

@@ -23,12 +23,14 @@ public struct OpenCodeHostCodec: HostCodec {
             return .malformed(.missingCommand)
         }
         let cwd = envelope.cwd.flatMap { WorkingDirectory(validating: $0) }
+        let session = firstNonEmpty(envelope.sessionID, envelope.sessionId)
         let hostAsk = envelope.hostAsk.flatMap(HostAskHookIntent.init(rawValue:))
         return .request(
             HookRequest(
                 host: .opencode,
                 command: ShellCommand(rawValue: command),
                 cwd: cwd,
+                session: session,
                 hostAsk: hostAsk
             )
         )
@@ -45,8 +47,19 @@ private struct OpenCodeEnvelope: Decodable {
     var args: OpenCodeArgs?
     var cwd: String?
     var hostAsk: String?
+    var sessionID: String?
+    var sessionId: String?
 }
 
 private struct OpenCodeArgs: Decodable {
     var command: String?
+}
+
+private func firstNonEmpty(_ values: String?...) -> String? {
+    for value in values {
+        if let value, value.isEmpty == false {
+            return value
+        }
+    }
+    return nil
 }

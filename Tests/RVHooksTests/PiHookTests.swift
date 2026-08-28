@@ -129,4 +129,27 @@ func piDecode_extractsBashCommand(_ file: String, expected: String) throws {
         return
     }
     #expect(request.cwd == nil)
+    #expect(request.session == nil)
+}
+
+@Test func piDecode_readsSessionId() {
+    let stdin = """
+    {"toolName":"bash","sessionId":"sess_pi","input":{"command":"git status"}}
+    """
+    guard case .request(let request) = codec.decode(stdin) else {
+        Issue.record("expected .request for sessionId")
+        return
+    }
+    #expect(request.session == "sess_pi")
+}
+
+@Test func piDecode_emptySessionIsNil() {
+    let stdin = """
+    {"toolName":"bash","sessionId":"","input":{"command":"git status"}}
+    """
+    guard case .request(let request) = codec.decode(stdin) else {
+        Issue.record("expected .request for empty sessionId")
+        return
+    }
+    #expect(request.session == nil)
 }

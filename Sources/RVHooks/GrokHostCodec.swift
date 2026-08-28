@@ -22,7 +22,15 @@ public struct GrokHostCodec: HostCodec {
             return .malformed(.missingCommand)
         }
         let cwd = envelope.cwd.flatMap { WorkingDirectory(validating: $0) }
-        return .request(HookRequest(host: .grok, command: ShellCommand(rawValue: command), cwd: cwd))
+        let session = firstNonEmpty(envelope.sessionId)
+        return .request(
+            HookRequest(
+                host: .grok,
+                command: ShellCommand(rawValue: command),
+                cwd: cwd,
+                session: session
+            )
+        )
     }
 
     private static let shellTools: Set<String> = [
@@ -37,9 +45,19 @@ private struct GrokEnvelope: Decodable {
     var toolName: String?
     var toolInput: GrokToolInput?
     var cwd: String?
+    var sessionId: String?
 }
 
 private struct GrokToolInput: Decodable {
     var command: String?
+}
+
+private func firstNonEmpty(_ values: String?...) -> String? {
+    for value in values {
+        if let value, value.isEmpty == false {
+            return value
+        }
+    }
+    return nil
 }
 
