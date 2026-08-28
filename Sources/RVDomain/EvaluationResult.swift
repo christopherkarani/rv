@@ -89,6 +89,32 @@ extension EvaluationOutcome {
         }
     }
 
+    /// Explain/classify rule identity. Deny uses `Deny.ruleID`, never `matched?.ruleID`.
+    public var explainRuleID: RuleID? {
+        switch self {
+        case .hit(let match, _):
+            return match.ruleID
+        case .deny(let deny, _):
+            return deny.ruleID
+        case .quickRejected, .plain, .safeOnly, .indeterminate:
+            return nil
+        }
+    }
+
+    /// Explain/classify pack identity. Deny uses `Deny.ruleID.pack`.
+    public var explainPackID: PackID? {
+        switch self {
+        case .hit(let match, _):
+            return match.packID
+        case .safeOnly(let safe):
+            return safe.packID
+        case .deny(let deny, _):
+            return deny.ruleID.pack
+        case .quickRejected, .plain, .indeterminate:
+            return nil
+        }
+    }
+
     var matched: RuleMatch? {
         switch self {
         case .hit(let match, _):

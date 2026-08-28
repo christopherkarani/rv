@@ -18,6 +18,7 @@ import RVDomain
     #expect(findings.count == 1)
     let finding = try #require(findings.first)
     #expect(finding.ruleID.rawValue == "core.git:reset-hard")
+    #expect(finding.packID == finding.ruleID.pack)
     #expect(finding.packID == .coreGit)
     #expect(finding.host == .claude)
     #expect(finding.sessionID == "s1")
