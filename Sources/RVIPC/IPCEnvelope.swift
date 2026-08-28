@@ -122,6 +122,12 @@ public enum IPCError: Error, Sendable, Equatable, Codable {
     case allowOnceNotFound
     case allowOnceAlreadyConsumed
     case allowOnceExpired
+    case pendingNotFound
+    case pendingAlreadyTerminal
+    case pendingIdentityMismatch
+    case pendingFingerprintMismatch
+    case ruleDraftMismatch
+    case ruleHardStop
 
     private enum CodingKeys: String, CodingKey {
         case unknownMethod
@@ -132,6 +138,12 @@ public enum IPCError: Error, Sendable, Equatable, Codable {
         case allowOnceNotFound
         case allowOnceAlreadyConsumed
         case allowOnceExpired
+        case pendingNotFound
+        case pendingAlreadyTerminal
+        case pendingIdentityMismatch
+        case pendingFingerprintMismatch
+        case ruleDraftMismatch
+        case ruleHardStop
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -153,6 +165,18 @@ public enum IPCError: Error, Sendable, Equatable, Codable {
             try container.encode(true, forKey: .allowOnceAlreadyConsumed)
         case .allowOnceExpired:
             try container.encode(true, forKey: .allowOnceExpired)
+        case .pendingNotFound:
+            try container.encode(true, forKey: .pendingNotFound)
+        case .pendingAlreadyTerminal:
+            try container.encode(true, forKey: .pendingAlreadyTerminal)
+        case .pendingIdentityMismatch:
+            try container.encode(true, forKey: .pendingIdentityMismatch)
+        case .pendingFingerprintMismatch:
+            try container.encode(true, forKey: .pendingFingerprintMismatch)
+        case .ruleDraftMismatch:
+            try container.encode(true, forKey: .ruleDraftMismatch)
+        case .ruleHardStop:
+            try container.encode(true, forKey: .ruleHardStop)
         }
     }
 
@@ -174,6 +198,18 @@ public enum IPCError: Error, Sendable, Equatable, Codable {
             self = .allowOnceAlreadyConsumed
         } else if container.contains(.allowOnceExpired) {
             self = .allowOnceExpired
+        } else if container.contains(.pendingNotFound) {
+            self = .pendingNotFound
+        } else if container.contains(.pendingAlreadyTerminal) {
+            self = .pendingAlreadyTerminal
+        } else if container.contains(.pendingIdentityMismatch) {
+            self = .pendingIdentityMismatch
+        } else if container.contains(.pendingFingerprintMismatch) {
+            self = .pendingFingerprintMismatch
+        } else if container.contains(.ruleDraftMismatch) {
+            self = .ruleDraftMismatch
+        } else if container.contains(.ruleHardStop) {
+            self = .ruleHardStop
         } else {
             throw DecodingError.dataCorrupted(
                 .init(codingPath: decoder.codingPath, debugDescription: "unknown IPCError")
