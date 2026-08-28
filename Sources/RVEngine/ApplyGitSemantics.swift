@@ -42,7 +42,7 @@ public func applyGitSemantics(
         return result
     }
 
-    guard case .git(let action) = analysis else {
+    guard let action = analysis.gitAction else {
         return result
     }
 

@@ -224,21 +224,37 @@ public struct GatedEvaluate: Sendable {
         cwd: WorkingDirectory?,
         home: HomeDirectory? = nil
     ) -> EvaluationResult {
-        let pack = applyGitSemantics(
-            pack: resolvedSession().evaluate(request),
-            command: request.command,
-            context: GitAnalysisContext(workingDirectory: cwd),
-            enabledPacks: request.enabledPacks
-        )
-        return applyFilesystemSemantics(
+        let pack = resolvedSession().evaluate(request)
+        let probe = wrapperProbe(command: request.command, cwd: cwd, home: home)
+        return applySemantics(
             pack: pack,
             command: request.command,
-            context: FilesystemLiveProbe.context(
-                command: request.command,
-                cwd: cwd,
-                homeDirectory: home?.rawValue
-            ),
+            gitContext: GitAnalysisContext(workingDirectory: cwd),
+            filesystemContext: probe,
             enabledPacks: request.enabledPacks
+        )
+    }
+
+    private func wrapperProbe(
+        command: ShellCommand,
+        cwd: WorkingDirectory?,
+        home: HomeDirectory?
+    ) -> FilesystemAnalysisContext {
+        let unwrapped = unwrapCommand(command, workingDirectory: cwd)
+        let probeCommand: ShellCommand
+        let probeCwd: WorkingDirectory?
+        switch unwrapped {
+        case .complete(let extracted):
+            probeCommand = extracted.command
+            probeCwd = extracted.workingDirectory ?? cwd
+        case .limited:
+            probeCommand = command
+            probeCwd = cwd
+        }
+        return FilesystemLiveProbe.context(
+            command: probeCommand,
+            cwd: probeCwd,
+            homeDirectory: home?.rawValue
         )
     }
 }

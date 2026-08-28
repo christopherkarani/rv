@@ -28,7 +28,7 @@ public func applyFilesystemSemantics(
     context: FilesystemAnalysisContext = .empty,
     enabledPacks: [PackID] = dayOnePackIDs
 ) -> EvaluationResult {
-    if case .git = pack.analysis {
+    if pack.analysis.gitAction != nil {
         return pack
     }
 
@@ -46,7 +46,7 @@ public func applyFilesystemSemantics(
         return result
     }
 
-    guard case .filesystem(let action) = analysis else {
+    guard let action = analysis.filesystemAction else {
         return result
     }
 

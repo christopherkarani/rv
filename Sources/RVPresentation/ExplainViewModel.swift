@@ -9,6 +9,7 @@ public struct ExplainSemanticView: Equatable, Sendable {
     public var pathspec: String?
     public var path: String?
     public var kind: String?
+    public var wrappers: [String]?
 
     public init(
         action: String,
@@ -18,7 +19,8 @@ public struct ExplainSemanticView: Equatable, Sendable {
         ref: String? = nil,
         pathspec: String? = nil,
         path: String? = nil,
-        kind: String? = nil
+        kind: String? = nil,
+        wrappers: [String]? = nil
     ) {
         self.action = action
         self.scope = scope
@@ -28,6 +30,7 @@ public struct ExplainSemanticView: Equatable, Sendable {
         self.pathspec = pathspec
         self.path = path
         self.kind = kind
+        self.wrappers = wrappers
     }
 }
 
@@ -129,7 +132,9 @@ public func explainViewModel(
 }
 
 public func explainSemantic(from analysis: SemanticAnalysis) -> ExplainSemanticView? {
-    switch analysis {
+    let layers = analysis.wrappers.map(\.rawValue)
+    let wrapperLabels = layers.isEmpty ? nil : layers
+    switch analysis.innermost {
     case .git(let action):
         return ExplainSemanticView(
             action: action.explainAction,
@@ -137,7 +142,8 @@ public func explainSemantic(from analysis: SemanticAnalysis) -> ExplainSemanticV
             effect: action.explainEffect,
             remote: action.explainRemote,
             ref: action.explainRef,
-            pathspec: action.explainPathspec
+            pathspec: action.explainPathspec,
+            wrappers: wrapperLabels
         )
     case .filesystem(let action):
         return ExplainSemanticView(
@@ -145,9 +151,25 @@ public func explainSemantic(from analysis: SemanticAnalysis) -> ExplainSemanticV
             scope: action.explainScope,
             effect: action.explainEffect,
             path: action.explainPath,
-            kind: action.explainKind
+            kind: action.explainKind,
+            wrappers: wrapperLabels
         )
+    case .unwrapLimited:
+        return ExplainSemanticView(
+            action: "unwrap limit exceeded",
+            scope: "fail-closed",
+            wrappers: wrapperLabels
+        )
+    case .wrapper:
+        return nil
     case .unknown:
+        if let wrapperLabels {
+            return ExplainSemanticView(
+                action: "unknown",
+                scope: "wrapper",
+                wrappers: wrapperLabels
+            )
+        }
         return nil
     }
 }

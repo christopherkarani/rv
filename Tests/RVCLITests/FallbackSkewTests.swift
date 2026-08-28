@@ -76,7 +76,7 @@ struct FallbackSkewTests {
     @Test func emptyServiceSemverReplyFallsBackInProcessAndInvalidates() async throws {
         let allowed = EvaluationResult(outcome: .plain, matchingView: "git reset --hard")
         let transport = ScriptedTransport(
-            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", ok: true),
+            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok),
             responseResult: .evaluate(EvaluateReply(result: allowed, serviceSemver: ""))
         )
         let client = try isolatedClient(transport: transport)
@@ -91,7 +91,7 @@ struct FallbackSkewTests {
     @Test func unparseableServiceSemverReplyFallsBackInProcessAndInvalidates() async throws {
         let allowed = EvaluationResult(outcome: .plain, matchingView: "git reset --hard")
         let transport = ScriptedTransport(
-            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", ok: true),
+            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok),
             responseResult: .evaluate(EvaluateReply(result: allowed, serviceSemver: "not-a-version"))
         )
         let client = try isolatedClient(transport: transport)

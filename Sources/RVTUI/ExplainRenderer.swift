@@ -90,6 +90,11 @@ private func semanticItems(_ model: ExplainViewModel) -> [OutlineItem]? {
     if let kind = semantic.kind {
         items.append(.leaf(label: "Kind", value: kind, emphasis: .fact))
     }
+    if let wrappers = semantic.wrappers, wrappers.isEmpty == false {
+        items.append(
+            .leaf(label: "Wrappers", value: wrappers.joined(separator: " → "), emphasis: .plain)
+        )
+    }
     return items
 }
 

@@ -45,12 +45,15 @@ struct ExplainFilesystemSemanticsTests {
         #expect(result.stdout.contains("inside repo") == false)
     }
 
-    @Test func explain_unsupportedWrapper_fallsBackInsteadOfAllowing() async throws {
+    @Test func explain_bashDashC_showsWrapperAndDelete() async throws {
         let repo = try makeExplainRepo()
         let result = try await explain("bash -c 'rm -rf /'", cwd: repo)
         #expect(result.stdout.contains("Decision: DENY"))
         #expect(result.stdout.contains("core.filesystem"))
-        #expect(result.stdout.contains("Semantic") == false)
+        #expect(result.stdout.contains("Semantic"))
+        #expect(result.stdout.contains("delete"))
+        #expect(result.stdout.contains("Wrappers"))
+        #expect(result.stdout.contains("bash"))
     }
 }
 
