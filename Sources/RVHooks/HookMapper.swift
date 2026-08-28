@@ -43,7 +43,7 @@ private func encodeClaudeFirstCall<C: HostCodec>(
             return codec.encodeAllow()
         case .deny(let deny), .mandatoryHuman(let deny):
             return codec.encodeDeny(
-                reason: hostDenyLine(command: command, ruleID: deny.ruleID),
+                reason: hostDenyLine(command: command, reason: deny.reason),
                 rule: displayRuleID(deny.ruleID),
                 next: hookUnlockNext
             )
@@ -97,7 +97,7 @@ private func encodeFirstCall<C: HostCodec>(
                 return codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: nil)
             }
             return codec.encodeDeny(
-                reason: hostDenyLine(command: command, ruleID: deny.ruleID),
+                reason: hostDenyLine(command: command, reason: deny.reason),
                 rule: displayRuleID(deny.ruleID),
                 next: hookUnlockNext
             )
@@ -106,7 +106,7 @@ private func encodeFirstCall<C: HostCodec>(
                 return codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: nil)
             }
             return codec.encodeAsk(
-                reason: hostDenyLine(command: command, ruleID: deny.ruleID),
+                reason: hostAskLine(command: command, ruleID: deny.ruleID),
                 rule: displayRuleID(deny.ruleID),
                 next: hookUnlockNext
             )
