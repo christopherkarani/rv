@@ -61,6 +61,7 @@ enum PendingListProjection {
             host: host,
             folder: folder(of: record.action),
             actionKind: actionKind(of: record.action),
+            fingerprint: record.fingerprint,
             identity: record.identity
         )
     }
