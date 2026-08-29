@@ -211,6 +211,8 @@ public struct EvaluationResult: Sendable, Equatable {
     public var matchingView: MatchingView
     /// Typed analyzer hit. `.unknown` is omitted from the evaluate wire.
     public var analysis: SemanticAnalysis
+    /// In-process hard-policy bind for the hook door. Not on the Codable wire.
+    public var boundReview: BoundReview?
 
     public var decision: Decision { outcome.decision }
 
@@ -219,9 +221,24 @@ public struct EvaluationResult: Sendable, Equatable {
         matchingView: MatchingView = MatchingView(""),
         analysis: SemanticAnalysis = .unknown
     ) {
+        self.init(
+            outcome: outcome,
+            matchingView: matchingView,
+            analysis: analysis,
+            boundReview: nil
+        )
+    }
+
+    public init(
+        outcome: EvaluationOutcome,
+        matchingView: MatchingView,
+        analysis: SemanticAnalysis,
+        boundReview: BoundReview?
+    ) {
         self.outcome = outcome
         self.matchingView = matchingView
         self.analysis = analysis
+        self.boundReview = boundReview
     }
 }
 
@@ -250,6 +267,7 @@ extension EvaluationResult: Codable {
         matchingView = try container.decodeIfPresent(MatchingView.self, forKey: .matchingView)
             ?? MatchingView("")
         analysis = try container.decodeIfPresent(SemanticAnalysis.self, forKey: .analysis) ?? .unknown
+        boundReview = nil
     }
 
     public func encode(to encoder: Encoder) throws {

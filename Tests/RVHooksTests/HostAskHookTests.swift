@@ -346,3 +346,66 @@ func hookWire_firstCallAllowCannotSkipPolicyGate(_ host: HookHost) throws {
     #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
     #expect(wire.exitCode == 0)
 }
+
+@Test func hookWire_piCarriedMandatoryHumanAsksOnSpendFirstHost() async throws {
+    let deny = ActionPolicyEngine.Builtin.remoteBranchAsk
+    let stdin = """
+    {"toolName":"bash","cwd":"/tmp/ws","input":{"command":"git push --force origin feature"}}
+    """
+    let wire = await hookWire(host: .pi, stdin: stdin) { _, _ in
+        EvaluationResult(
+            outcome: .deny(deny, matched: nil),
+            matchingView: MatchingView("git push --force origin feature"),
+            analysis: .unknown,
+            boundReview: .mandatoryHuman(deny)
+        )
+    }
+    let json = try #require(
+        JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any]
+    )
+    #expect(json["decision"] as? String == "ask")
+    #expect(json["continuation"] as? String == "hostNative")
+    #expect(wire.stdout.contains("\"decision\":\"allow\"") == false)
+    #expect(wire.exitCode == 1)
+}
+
+@Test func hookWire_openCodeCarriedMandatoryHumanAsksOnSpendFirstHost() async throws {
+    let deny = ActionPolicyEngine.Builtin.remoteBranchAsk
+    let stdin = """
+    {"tool":"bash","cwd":"/tmp/ws","args":{"command":"git push --force origin feature"}}
+    """
+    let wire = await hookWire(host: .opencode, stdin: stdin) { _, _ in
+        EvaluationResult(
+            outcome: .deny(deny, matched: nil),
+            matchingView: MatchingView("git push --force origin feature"),
+            analysis: .unknown,
+            boundReview: .mandatoryHuman(deny)
+        )
+    }
+    let json = try #require(
+        JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any]
+    )
+    #expect(json["decision"] as? String == "ask")
+    #expect(json["continuation"] as? String == "hostNative")
+    #expect(wire.stdout.contains("\"decision\":\"allow\"") == false)
+    #expect(wire.exitCode == 1)
+}
+
+@Test func hookWire_piBuiltinDenyWithoutBoundReviewStaysDeny() async throws {
+    let deny = ActionPolicyEngine.Builtin.remoteBranchAsk
+    let stdin = """
+    {"toolName":"bash","cwd":"/tmp/ws","input":{"command":"git push --force origin feature"}}
+    """
+    let wire = await hookWire(host: .pi, stdin: stdin) { _, _ in
+        EvaluationResult(
+            outcome: .deny(deny, matched: nil),
+            matchingView: MatchingView("git push --force origin feature")
+        )
+    }
+    let json = try #require(
+        JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any]
+    )
+    #expect(json["decision"] as? String == "deny")
+    #expect(json["decision"] as? String != "ask")
+    #expect(wire.exitCode == 1)
+}

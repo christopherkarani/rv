@@ -16,6 +16,7 @@ struct ApplyGitSemanticsTests {
             composed.analysis
                 == .git(.createBranch(name: "feature", startPoint: nil, force: false))
         )
+        #expect(composed.boundReview == nil)
     }
 
     @Test func checkoutDiscard_keepsPackDeny() throws {
@@ -83,7 +84,34 @@ struct ApplyGitSemanticsTests {
             return
         }
         #expect(deny.ruleID == ActionPolicyEngine.Builtin.remoteSharedBranch.ruleID)
+        #expect(composed.boundReview == .deny(ActionPolicyEngine.Builtin.remoteSharedBranch))
         #expect(composed.analysis != .unknown)
+    }
+
+    @Test func forcePushPrivateBranch_carriesMandatoryHumanBoundReview() throws {
+        let command = "git push --force-with-lease origin feature"
+        let pack = try runPack(command)
+        #expect(pack.decision == .allow)
+        #expect(pack.boundReview == nil)
+        let composed = applyGitSemantics(
+            pack: pack,
+            command: ShellCommand(rawValue: command)
+        )
+        let deny = ActionPolicyEngine.Builtin.remoteBranchAsk
+        #expect(composed.decision == .deny(deny))
+        #expect(composed.boundReview == .mandatoryHuman(deny))
+    }
+
+    @Test func unforcedPush_leavesBoundReviewNil() throws {
+        let command = "git push origin feature"
+        let pack = try runPack(command)
+        #expect(pack.decision == .allow)
+        let composed = applyGitSemantics(
+            pack: pack,
+            command: ShellCommand(rawValue: command)
+        )
+        #expect(composed.decision == .allow)
+        #expect(composed.boundReview == nil)
     }
 
     @Test func coreGitDisabled_doesNotAddSemanticDeny() throws {
