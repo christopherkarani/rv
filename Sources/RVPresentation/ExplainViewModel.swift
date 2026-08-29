@@ -1,5 +1,45 @@
 import RVDomain
 
+public struct ExplainSemanticView: Equatable, Sendable {
+    public var action: String
+    public var scope: String
+    public var effect: String?
+    public var remote: String?
+    public var ref: String?
+    public var pathspec: String?
+    public var path: String?
+    public var kind: String?
+    public var category: String?
+    public var catalogRule: String?
+    public var wrappers: [String]?
+
+    public init(
+        action: String,
+        scope: String,
+        effect: String? = nil,
+        remote: String? = nil,
+        ref: String? = nil,
+        pathspec: String? = nil,
+        path: String? = nil,
+        kind: String? = nil,
+        category: String? = nil,
+        catalogRule: String? = nil,
+        wrappers: [String]? = nil
+    ) {
+        self.action = action
+        self.scope = scope
+        self.effect = effect
+        self.remote = remote
+        self.ref = ref
+        self.pathspec = pathspec
+        self.path = path
+        self.kind = kind
+        self.category = category
+        self.catalogRule = catalogRule
+        self.wrappers = wrappers
+    }
+}
+
 public struct ExplainViewModel: Equatable, Sendable {
     public var command: ShellCommand
     public var normalized: String
@@ -14,6 +54,7 @@ public struct ExplainViewModel: Equatable, Sendable {
     public var nextAction: String?
     public var steps: [ExplainStep]
     public var suggestions: [ExplainSuggestion]
+    public var semantic: ExplainSemanticView?
 
     public var heading: String { explainHeading }
     public var decisionWord: String { RVPresentation.decisionWord(decision) }
@@ -36,7 +77,8 @@ public struct ExplainViewModel: Equatable, Sendable {
         regex: String? = nil,
         nextAction: String?,
         steps: [ExplainStep],
-        suggestions: [ExplainSuggestion] = []
+        suggestions: [ExplainSuggestion] = [],
+        semantic: ExplainSemanticView? = nil
     ) {
         self.command = command
         self.normalized = normalized
@@ -51,6 +93,7 @@ public struct ExplainViewModel: Equatable, Sendable {
         self.nextAction = nextAction
         self.steps = steps
         self.suggestions = suggestions
+        self.semantic = semantic
     }
 }
 
@@ -61,35 +104,20 @@ public func explainViewModel(
 ) -> ExplainViewModel {
     let fact: String
     let next: String?
-    let packID: PackID?
-    let ruleID: RuleID?
-    let match: RuleMatch?
     switch result.outcome {
-    case .quickRejected, .plain, .safeOnly:
+    case .quickRejected, .plain, .safeOnly, .hit:
         fact = "allow"
         next = nil
-        packID = nil
-        ruleID = nil
-        match = nil
-    case .hit(let hit, _):
-        fact = "allow"
-        next = nil
-        packID = hit.packID
-        ruleID = hit.ruleID
-        match = hit
-    case .deny(let deny, let matched):
+    case .deny(let deny, _):
         fact = factSentence(from: deny.reason)
         next = denyNextAction
-        packID = deny.ruleID.pack
-        ruleID = deny.ruleID
-        match = matched
     case .indeterminate:
         fact = incompleteEvalSentence
         next = nil
-        packID = nil
-        ruleID = nil
-        match = nil
     }
+    let packID = result.outcome.explainPackID
+    let ruleID = result.outcome.explainRuleID
+    let match = result.matched
 
     return ExplainViewModel(
         command: command,
@@ -104,6 +132,52 @@ public func explainViewModel(
         regex: match?.regex,
         nextAction: next,
         steps: explainSteps(from: result),
-        suggestions: ruleID.map { suggestions(for: $0) } ?? []
+        suggestions: ruleID.map { suggestions(for: $0) } ?? [],
+        semantic: explainSemantic(from: result.analysis)
     )
+}
+
+public func explainSemantic(from analysis: SemanticAnalysis) -> ExplainSemanticView? {
+    let layers = analysis.wrappers.map(\.rawValue)
+    let wrapperLabels = layers.isEmpty ? nil : layers
+    switch analysis.innermost {
+    case .git(let action):
+        return ExplainSemanticView(
+            action: action.explainAction,
+            scope: action.explainScope,
+            effect: action.explainEffect,
+            remote: action.explainRemote,
+            ref: action.explainRef,
+            pathspec: action.explainPathspec,
+            wrappers: wrapperLabels
+        )
+    case .filesystem(let action):
+        return ExplainSemanticView(
+            action: action.explainAction,
+            scope: action.explainScope,
+            effect: action.explainEffect,
+            path: action.explainPath,
+            kind: action.explainKind,
+            category: action.explainCategory,
+            catalogRule: action.explainCatalogRule,
+            wrappers: wrapperLabels
+        )
+    case .unwrapLimited:
+        return ExplainSemanticView(
+            action: "unwrap limit exceeded",
+            scope: "fail-closed",
+            wrappers: wrapperLabels
+        )
+    case .wrapper:
+        return nil
+    case .unknown:
+        if let wrapperLabels {
+            return ExplainSemanticView(
+                action: "unknown",
+                scope: "wrapper",
+                wrappers: wrapperLabels
+            )
+        }
+        return nil
+    }
 }

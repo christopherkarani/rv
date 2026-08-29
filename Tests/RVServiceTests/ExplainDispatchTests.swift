@@ -35,6 +35,10 @@ struct ExplainDispatchTests {
             return
         }
         #expect(deny.ruleID.rawValue == "core.git:reset-hard")
+        #expect(reply.ruleID == deny.ruleID)
+        #expect(reply.packID == deny.ruleID.pack)
+        #expect(reply.ruleID == reply.result.outcome.explainRuleID)
+        #expect(reply.packID == reply.result.outcome.explainPackID)
     }
 
     @Test func quickRejectAllowEmitsSkipWalkWithZeroElapsed() async throws {
@@ -145,11 +149,13 @@ struct ExplainDispatchTests {
             Issue.record("classify must reply")
             return
         }
-        guard case .deny = denyReply.decision else {
+        guard case .deny(let deny) = denyReply.decision else {
             Issue.record("day-one classify must deny git reset --hard")
             return
         }
         #expect(denyReply.risk == .rated(.critical))
+        #expect(denyReply.ruleID == deny.ruleID)
+        #expect(denyReply.packID == deny.ruleID.pack)
     }
 
     @Test func classifyPeeksGrantWithoutSpending() async throws {

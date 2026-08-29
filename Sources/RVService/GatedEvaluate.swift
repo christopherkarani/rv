@@ -1,5 +1,6 @@
 import Foundation
 import RVDomain
+import RVEngine
 import RVPolicy
 
 /// Peek shows a matching grant without consuming it. Apply spends it.
@@ -67,6 +68,7 @@ public struct GatedEvaluate: Sendable {
             intent,
             Self.makeRequest(command: command, home: home),
             cwd: cwd,
+            home: home,
             store: store,
             now: now,
             allowlist: allowlist
@@ -80,7 +82,7 @@ public struct GatedEvaluate: Sendable {
     ) -> EvaluationRequest {
         EvaluationRequest(
             command: command,
-            enabledPacks: EnabledPacks.resolve(home: home).ids
+            enabledPacks: EvaluationWorld.walkedPackIDs(home: home).ids
         )
     }
 
@@ -89,11 +91,20 @@ public struct GatedEvaluate: Sendable {
     func peek(
         _ request: EvaluationRequest,
         cwd: WorkingDirectory?,
+        home: HomeDirectory? = nil,
         store: AllowOnceStore,
         now: Date,
         allowlist: @escaping @Sendable () -> AllowlistSnapshot
     ) async -> EvaluationResult {
-        await gated(.peek, request, cwd: cwd, store: store, now: now, allowlist: allowlist)
+        await gated(
+            .peek,
+            request,
+            cwd: cwd,
+            home: home,
+            store: store,
+            now: now,
+            allowlist: allowlist
+        )
     }
 
     /// Host Ask spend: honor an existing grant, else plant+spend this turn. Fail-closed.
@@ -108,6 +119,7 @@ public struct GatedEvaluate: Sendable {
         await spendHostAsk(
             Self.makeRequest(command: command, home: home),
             cwd: cwd,
+            home: home,
             store: store,
             now: now,
             allowlist: allowlist
@@ -117,11 +129,12 @@ public struct GatedEvaluate: Sendable {
     func spendHostAsk(
         _ request: EvaluationRequest,
         cwd: WorkingDirectory?,
+        home: HomeDirectory? = nil,
         store: AllowOnceStore,
         now: Date,
         allowlist: @escaping @Sendable () -> AllowlistSnapshot
     ) async -> EvaluationResult {
-        let result = resolvedSession().evaluate(request)
+        let result = evaluateWithSemantics(request, cwd: cwd, home: home)
         switch result.decision {
         case .allow, .indeterminate:
             return result
@@ -152,22 +165,32 @@ public struct GatedEvaluate: Sendable {
     func apply(
         _ request: EvaluationRequest,
         cwd: WorkingDirectory?,
+        home: HomeDirectory? = nil,
         store: AllowOnceStore,
         now: Date,
         allowlist: @escaping @Sendable () -> AllowlistSnapshot
     ) async -> EvaluationResult {
-        await gated(.apply, request, cwd: cwd, store: store, now: now, allowlist: allowlist)
+        await gated(
+            .apply,
+            request,
+            cwd: cwd,
+            home: home,
+            store: store,
+            now: now,
+            allowlist: allowlist
+        )
     }
 
     private func gated(
         _ intent: EvaluationIntent,
         _ request: EvaluationRequest,
         cwd: WorkingDirectory?,
+        home: HomeDirectory?,
         store: AllowOnceStore,
         now: Date,
         allowlist: @escaping @Sendable () -> AllowlistSnapshot
     ) async -> EvaluationResult {
-        let result = resolvedSession().evaluate(request)
+        let result = evaluateWithSemantics(request, cwd: cwd, home: home)
         // Fast path: allow/indeterminate never touch PolicyGate or the
         // allowlist loader; PolicyGate returns them unchanged anyway.
         switch result.decision {
@@ -194,5 +217,44 @@ public struct GatedEvaluate: Sendable {
                 ).result
             }
         }
+    }
+
+    private func evaluateWithSemantics(
+        _ request: EvaluationRequest,
+        cwd: WorkingDirectory?,
+        home: HomeDirectory? = nil
+    ) -> EvaluationResult {
+        let pack = resolvedSession().evaluate(request)
+        let probe = wrapperProbe(command: request.command, cwd: cwd, home: home)
+        return applySemantics(
+            pack: pack,
+            command: request.command,
+            gitContext: GitAnalysisContext(workingDirectory: cwd),
+            filesystemContext: probe,
+            enabledPacks: request.enabledPacks
+        )
+    }
+
+    private func wrapperProbe(
+        command: ShellCommand,
+        cwd: WorkingDirectory?,
+        home: HomeDirectory?
+    ) -> FilesystemAnalysisContext {
+        let unwrapped = unwrapCommand(command, workingDirectory: cwd)
+        let probeCommand: ShellCommand
+        let probeCwd: WorkingDirectory?
+        switch unwrapped {
+        case .complete(let extracted):
+            probeCommand = extracted.command
+            probeCwd = extracted.workingDirectory ?? cwd
+        case .limited:
+            probeCommand = command
+            probeCwd = cwd
+        }
+        return FilesystemLiveProbe.context(
+            command: probeCommand,
+            cwd: probeCwd,
+            homeDirectory: home?.rawValue
+        )
     }
 }

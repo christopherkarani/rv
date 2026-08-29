@@ -25,8 +25,10 @@ final class RecordingInstallAnalytics: InstallAnalyticsCapturing, @unchecked Sen
         "opencode": "pending",
         "claude": "pending",
         "openclaw": "pending",
-        "hermes": "pending",
-    ])
+            "hermes": "pending",
+            "codex": "pending",
+            "cursor": "pending",
+        ])
 }
 
 @Test func blockingInstallAnalytics_nilCoordinatorReturnsImmediately() {
@@ -49,6 +51,8 @@ final class RecordingInstallAnalytics: InstallAnalyticsCapturing, @unchecked Sen
             "claude": "pending",
             "openclaw": "pending",
             "hermes": "pending",
+            "codex": "pending",
+            "cursor": "pending",
         ]])
         let paths = AnalyticsPaths(
             configDirectory: URL(fileURLWithPath: layout.configDirectory, isDirectory: true)

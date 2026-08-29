@@ -144,7 +144,8 @@ git reset --hard discards ALL uncommitted changes in your working directory \\ A
                     explanation: resetHardPackExplanation,
                     regex: #"(?:^|[^[:alnum:]_-])git\s+(?:\S+\s+)*reset\s+--hard"#
                 )
-            )
+            ),
+            analysis: .git(.reset(mode: .hard, target: nil))
         ),
         command: ShellCommand(rawValue: "git reset --hard")
     )

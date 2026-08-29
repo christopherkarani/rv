@@ -1,0 +1,159 @@
+import Foundation
+import Testing
+import RVDomain
+import RVTheme
+@testable import RVCLI
+
+@Suite("Explain filesystem semantics")
+struct ExplainFilesystemSemanticsTests {
+    @Test func explain_generatedBuild_marksInsideRepoGenerated() async throws {
+        let repo = try makeExplainRepo()
+        let result = try await explain("rm .build/artifact", cwd: repo)
+        #expect(result.stdout.contains("Decision: ALLOW"))
+        #expect(result.stdout.contains("inside repo"))
+        #expect(result.stdout.contains("generated output"))
+        #expect(result.stdout.contains("source code") == false)
+    }
+
+    @Test func explain_sourceFile_marksSourceCode() async throws {
+        let repo = try makeExplainRepo()
+        let result = try await explain("rm Sources/Foo.swift", cwd: repo)
+        #expect(result.stdout.contains("Decision: ALLOW"))
+        #expect(result.stdout.contains("inside repo"))
+        #expect(result.stdout.contains("source code"))
+        #expect(result.stdout.contains("generated output") == false)
+    }
+
+    @Test func explain_parentTraversal_isOutsideRepo() async throws {
+        let repo = try makeExplainRepo()
+        let result = try await explain("rm ../outside-file", cwd: repo)
+        #expect(result.stdout.contains("Decision: DENY"))
+        #expect(result.stdout.contains("outside repo"))
+        #expect(result.stdout.contains("Action       delete"))
+        #expect(result.stdout.contains("out-of-repo-write"))
+    }
+
+    @Test func explain_symlinkEscape_usesResolvedTarget() async throws {
+        let repo = try makeExplainRepo()
+        let outside = repo.deletingLastPathComponent().appendingPathComponent("outside-target")
+        try "secret".write(to: outside, atomically: true, encoding: .utf8)
+        try FileManager.default.createSymbolicLink(
+            atPath: repo.appendingPathComponent("escape-link").path,
+            withDestinationPath: outside.path
+        )
+        let result = try await explain("rm escape-link", cwd: repo)
+        #expect(result.stdout.contains("Decision: DENY"))
+        #expect(result.stdout.contains("outside repo"))
+        #expect(result.stdout.contains(outside.path))
+        #expect(result.stdout.contains("inside repo") == false)
+        #expect(result.stdout.contains("out-of-repo-write"))
+    }
+
+    @Test func explain_protectedHomePath_showsCategoryAndRule() async throws {
+        let repo = try makeExplainRepo()
+        let home = try isolatedHome()
+        let ssh = URL(fileURLWithPath: home.rawValue, isDirectory: true)
+            .appendingPathComponent(".ssh", isDirectory: true)
+        try FileManager.default.createDirectory(at: ssh, withIntermediateDirectories: true)
+        try "key".write(
+            to: ssh.appendingPathComponent("config"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let result = await CommandRun.run(
+            kind: .explain,
+            command: "echo leaked > ~/.ssh/config",
+            probe: ThemeProbe(
+                stdinIsTTY: true,
+                stdoutIsTTY: true,
+                jsonFlag: false,
+                robotFlag: false,
+                plainFlag: true,
+                noColorFlag: false,
+                ci: false,
+                noColorEnv: false,
+                termDumb: false
+            ),
+            requested: .automatic,
+            cwd: repo.path,
+            allowOnceDirectory: try isolatedAllowOnceDirectory(),
+            home: home
+        )
+        #expect(result.stdout.contains("Decision: DENY"))
+        #expect(result.stdout.contains("protected path"))
+        #expect(result.stdout.contains("Category"))
+        #expect(result.stdout.contains("ssh"))
+        #expect(result.stdout.contains("core.secrets/home-ssh") || result.stdout.contains("protected-path-mutation"))
+        #expect(result.stdout.contains("Catalog") || result.stdout.contains("protected-path-mutation"))
+        #expect(result.stdout.contains("inside repo") == false)
+    }
+
+    @Test func explain_inRepoCreate_isAllowed() async throws {
+        let repo = try makeExplainRepo()
+        let result = try await explain("touch new.swift", cwd: repo)
+        #expect(result.stdout.contains("Decision: ALLOW"))
+        #expect(result.stdout.contains("inside repo"))
+        #expect(result.stdout.contains("Action       create"))
+    }
+
+    @Test func explain_bashDashC_showsWrapperAndDelete() async throws {
+        let repo = try makeExplainRepo()
+        let result = try await explain("bash -c 'rm -rf /'", cwd: repo)
+        #expect(result.stdout.contains("Decision: DENY"))
+        #expect(result.stdout.contains("core.filesystem"))
+        #expect(result.stdout.contains("Semantic"))
+        #expect(result.stdout.contains("delete"))
+        #expect(result.stdout.contains("Wrappers"))
+        #expect(result.stdout.contains("bash"))
+    }
+}
+
+private func explain(_ command: String, cwd: URL) async throws -> CLIResult {
+    await CommandRun.run(
+        kind: .explain,
+        command: command,
+        probe: ThemeProbe(
+            stdinIsTTY: true,
+            stdoutIsTTY: true,
+            jsonFlag: false,
+            robotFlag: false,
+            plainFlag: true,
+            noColorFlag: false,
+            ci: false,
+            noColorEnv: false,
+            termDumb: false
+        ),
+        requested: .automatic,
+        cwd: cwd.path,
+        allowOnceDirectory: try isolatedAllowOnceDirectory(),
+        home: try isolatedHome()
+    )
+}
+
+private func makeExplainRepo() throws -> URL {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-fs-explain-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(
+        at: root.appendingPathComponent(".git", isDirectory: true),
+        withIntermediateDirectories: true
+    )
+    try FileManager.default.createDirectory(
+        at: root.appendingPathComponent(".build", isDirectory: true),
+        withIntermediateDirectories: true
+    )
+    try FileManager.default.createDirectory(
+        at: root.appendingPathComponent("Sources", isDirectory: true),
+        withIntermediateDirectories: true
+    )
+    try "artifact".write(
+        to: root.appendingPathComponent(".build/artifact"),
+        atomically: true,
+        encoding: .utf8
+    )
+    try "enum Foo {}".write(
+        to: root.appendingPathComponent("Sources/Foo.swift"),
+        atomically: true,
+        encoding: .utf8
+    )
+    return root
+}

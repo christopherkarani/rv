@@ -18,7 +18,10 @@ public enum ReviewSanitizer: Sendable {
             effects: shell.effects,
             resources: ActionResources(
                 remoteName: sanitizeField(shell.resources.remoteName),
-                branchName: sanitizeField(shell.resources.branchName)
+                branchName: sanitizeField(shell.resources.branchName),
+                path: sanitizeField(shell.resources.path),
+                filesystemScope: shell.resources.filesystemScope,
+                resourceKind: shell.resources.resourceKind
             ),
             scope: ActionScope(
                 workingDirectory: shell.scope.workingDirectory.flatMap { directory in

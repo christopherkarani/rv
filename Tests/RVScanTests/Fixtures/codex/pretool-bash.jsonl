@@ -1,0 +1,1 @@
+{"session_id":"sess_hook","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git status","workdir":"/tmp/ws"},"cwd":"/tmp/ws"}

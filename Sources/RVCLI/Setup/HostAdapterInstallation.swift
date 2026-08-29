@@ -75,6 +75,8 @@ struct HostAdapterInstallationSnapshot: Equatable, Sendable {
     private var claude: HostAdapterInstallation
     private var openClaw: HostAdapterInstallation
     private var hermes: HostAdapterInstallation
+    private var codex: HostAdapterInstallation
+    private var cursor: HostAdapterInstallation
 
     init(
         grok: HostAdapterInstallation,
@@ -82,7 +84,9 @@ struct HostAdapterInstallationSnapshot: Equatable, Sendable {
         openCode: HostAdapterInstallation,
         claude: HostAdapterInstallation,
         openClaw: HostAdapterInstallation,
-        hermes: HostAdapterInstallation
+        hermes: HostAdapterInstallation,
+        codex: HostAdapterInstallation,
+        cursor: HostAdapterInstallation
     ) {
         self.grok = grok
         self.pi = pi
@@ -90,6 +94,8 @@ struct HostAdapterInstallationSnapshot: Equatable, Sendable {
         self.claude = claude
         self.openClaw = openClaw
         self.hermes = hermes
+        self.codex = codex
+        self.cursor = cursor
     }
 
     /// Returns the doctor-facing state for `host`.
@@ -112,6 +118,10 @@ struct HostAdapterInstallationSnapshot: Equatable, Sendable {
             openClaw
         case .hermes:
             hermes
+        case .codex:
+            codex
+        case .cursor:
+            cursor
         }
     }
 }
@@ -151,6 +161,16 @@ extension HostAdapterInstallation {
             ),
             hermes: try inspect(
                 path: paths.hostAdapter(for: .hermes),
+                pathEntries: pathEntries,
+                fileManager: fileManager
+            ),
+            codex: try inspect(
+                path: paths.hostAdapter(for: .codex),
+                pathEntries: pathEntries,
+                fileManager: fileManager
+            ),
+            cursor: try inspect(
+                path: paths.hostAdapter(for: .cursor),
                 pathEntries: pathEntries,
                 fileManager: fileManager
             )

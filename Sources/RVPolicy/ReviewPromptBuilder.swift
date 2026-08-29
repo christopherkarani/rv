@@ -42,6 +42,15 @@ public enum ReviewPromptBuilder: Sendable {
             if let branch = shell.resources.branchName {
                 lines.append("resources.branchName: \(branch)")
             }
+            if let path = shell.resources.path {
+                lines.append("resources.path: \(path)")
+            }
+            if let scope = shell.resources.filesystemScope {
+                lines.append("resources.filesystemScope: \(scope.rawValue)")
+            }
+            if let kind = shell.resources.resourceKind {
+                lines.append("resources.resourceKind: \(kind.rawValue)")
+            }
             if let cwd = shell.scope.workingDirectory {
                 lines.append("scope.workingDirectory: \(cwd.rawValue)")
             }

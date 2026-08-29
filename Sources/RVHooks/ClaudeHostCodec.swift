@@ -22,12 +22,14 @@ public struct ClaudeHostCodec: HostCodec {
             return .malformed(.missingCommand)
         }
         let cwd = envelope.cwd.flatMap { WorkingDirectory(validating: $0) }
+        let session = firstNonEmpty(envelope.sessionId)
         let hostAsk = envelope.hostAsk.flatMap(HostAskHookIntent.init(rawValue:))
         return .request(
             HookRequest(
                 host: .claude,
                 command: ShellCommand(rawValue: command),
                 cwd: cwd,
+                session: session,
                 hostAsk: hostAsk
             )
         )
@@ -72,6 +74,7 @@ private struct ClaudeEnvelope: Decodable {
     var toolName: String?
     var toolInput: ClaudeToolInput?
     var cwd: String?
+    var sessionId: String?
     var hostAsk: String?
 
     enum CodingKeys: String, CodingKey {
@@ -79,10 +82,20 @@ private struct ClaudeEnvelope: Decodable {
         case toolName = "tool_name"
         case toolInput = "tool_input"
         case cwd
+        case sessionId = "session_id"
         case hostAsk
     }
 }
 
 private struct ClaudeToolInput: Decodable {
     var command: String?
+}
+
+private func firstNonEmpty(_ values: String?...) -> String? {
+    for value in values {
+        if let value, value.isEmpty == false {
+            return value
+        }
+    }
+    return nil
 }

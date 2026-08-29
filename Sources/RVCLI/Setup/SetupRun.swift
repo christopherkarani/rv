@@ -47,6 +47,7 @@ struct SetupEnvironment {
     var installAnalytics: any InstallAnalyticsCapturing
     /// Injected so launchd domains are provable without the real uid.
     var uid: () -> uid_t = { getuid() }
+    var companionPresence: any CompanionPresenceDetecting = FixedCompanionPresence(value: .absent)
 
     /// Curl install copies `rv` (C hook), `rv-cli`, and `rvd`.
     /// Adapters bake `$HOME/.local/bin/rv`, not `rv-cli`. Do not walk PATH.
@@ -140,6 +141,8 @@ enum SetupRun {
             claude: .pending,
             openClaw: .pending,
             hermes: .pending,
+            codex: .pending,
+            cursor: .pending,
             wrote: []
         )
 
@@ -156,7 +159,12 @@ enum SetupRun {
             case .writeLaunchAgent:
                 switch env.supervisor {
                 case .launchd:
-                    try writeLaunchAgent(env: env, layout: layout, files: files)
+                    try writeLaunchAgent(
+                        env: env,
+                        layout: layout,
+                        files: files,
+                        keepAlive: env.companionPresence.presence().keepAlive
+                    )
                 case .systemdUser:
                     try writeSystemdUserUnit(env: env, layout: layout, files: files)
                 }
@@ -234,6 +242,8 @@ enum SetupRun {
             claude: slots.claude,
             openClaw: slots.openClaw,
             hermes: slots.hermes,
+            codex: slots.codex,
+            cursor: slots.cursor,
             wrote: slots.wrote
         )
         env.installAnalytics.captureInstall(hosts: InstallAnalyticsHosts.from(report.slots))
@@ -317,6 +327,18 @@ enum SetupRun {
             )
             let wroteAsk = try writeOpenCodeTuiAskPackage(layout: layout, files: files)
             return wroteTui || wroteAsk
+        case .codex:
+            return try writeCodexHooksJSON(
+                adapterPath: directory + "/rv-guard.py",
+                hooksPath: (directory as NSString).deletingLastPathComponent + "/hooks.json",
+                files: files
+            )
+        case .cursor:
+            return try writeCursorHooksJSON(
+                adapterPath: directory + "/rv-guard.py",
+                hooksPath: (directory as NSString).deletingLastPathComponent + "/hooks.json",
+                files: files
+            )
         case .grok, .pi, .claude:
             return false
         }
@@ -457,6 +479,12 @@ enum SetupRun {
                         let directory = (owned.destination as NSString).deletingLastPathComponent
                         removedPaths.append(directory + "/plugin.yaml")
                     }
+                    if owned.host == .codex {
+                        _ = try removeCodexRVHooks(at: layout.codexHooksJSON, files: files)
+                    }
+                    if owned.host == .cursor {
+                        _ = try removeCursorRVHooks(at: layout.cursorHooksJSON, files: files)
+                    }
                     if owned.host == .opencode {
                         removedPaths.append(layout.openCodeTuiPlugin)
                         removedPaths.append(layout.openCodeTuiAskPackage + "/package.json")
@@ -511,6 +539,12 @@ enum SetupRun {
         files.removeDirectoryIfEmpty(
             atPath: (layout.hermesPlugin as NSString).deletingLastPathComponent
         )
+        files.removeDirectoryIfEmpty(
+            atPath: (layout.codexHook as NSString).deletingLastPathComponent
+        )
+        files.removeDirectoryIfEmpty(
+            atPath: (layout.cursorHook as NSString).deletingLastPathComponent
+        )
         files.removeDirectoryIfEmpty(atPath: layout.configDirectory)
 
         if env.supervisor == .launchd, env.touchLaunchd {
@@ -550,12 +584,141 @@ enum SetupRun {
         )
     }
 
+    /// Merges the Codex PreToolUse registration for `adapterPath` into `hooks.json`.
+    private static func writeCodexHooksJSON(
+        adapterPath: String,
+        hooksPath: String,
+        files: FileOps
+    ) throws(SetupError) -> Bool {
+        if files.isSymbolicLink(hooksPath) {
+            throw SetupError.hostHookWriteFailed(.codex)
+        }
+        let merged: (data: Data, wrote: Bool)
+        do {
+            merged = try CodexHooksMerge.merge(
+                existingData: files.readData(hooksPath),
+                adapterPath: adapterPath
+            )
+        } catch {
+            throw SetupError.hostHookWriteFailed(.codex)
+        }
+        if merged.wrote == false {
+            return false
+        }
+        do {
+            try files.writeData(merged.data, to: hooksPath)
+        } catch {
+            throw SetupError.hostHookWriteFailed(.codex)
+        }
+        return true
+    }
+
+    /// Merges the Cursor beforeShellExecution registration for `adapterPath` into `hooks.json`.
+    private static func writeCursorHooksJSON(
+        adapterPath: String,
+        hooksPath: String,
+        files: FileOps
+    ) throws(SetupError) -> Bool {
+        if files.isSymbolicLink(hooksPath) {
+            throw SetupError.hostHookWriteFailed(.cursor)
+        }
+        let merged: (data: Data, wrote: Bool)
+        do {
+            merged = try CursorHooksMerge.merge(
+                existingData: files.readData(hooksPath),
+                adapterPath: adapterPath
+            )
+        } catch {
+            throw SetupError.hostHookWriteFailed(.cursor)
+        }
+        if merged.wrote == false {
+            return false
+        }
+        do {
+            try files.writeData(merged.data, to: hooksPath)
+        } catch {
+            throw SetupError.hostHookWriteFailed(.cursor)
+        }
+        return true
+    }
+
+    /// Removes rv-fingerprinted Cursor handlers only. Returns whether anything changed.
+    private static func removeCursorRVHooks(at path: String, files: FileOps) throws(SetupError) -> Bool {
+        if files.isSymbolicLink(path) {
+            return false
+        }
+        guard let data = files.readData(path) else { return false }
+        let next: Data?
+        do {
+            next = try CursorHooksMerge.uninstall(existingData: data)
+        } catch {
+            throw SetupError.hostHookWriteFailed(.cursor)
+        }
+        guard let next else {
+            files.removeFile(atPath: path)
+            return true
+        }
+        if next == data {
+            return false
+        }
+        do {
+            try files.writeData(next, to: path)
+        } catch {
+            throw SetupError.hostHookWriteFailed(.cursor)
+        }
+        return true
+    }
+
+    /// Removes rv-fingerprinted Codex handlers only. Returns whether anything changed.
+    private static func removeCodexRVHooks(at path: String, files: FileOps) throws(SetupError) -> Bool {
+        if files.isSymbolicLink(path) {
+            return false
+        }
+        guard let data = files.readData(path) else { return false }
+        let next: Data?
+        do {
+            next = try CodexHooksMerge.uninstall(existingData: data)
+        } catch {
+            throw SetupError.hostHookWriteFailed(.codex)
+        }
+        guard let next else {
+            files.removeFile(atPath: path)
+            return true
+        }
+        if next == data {
+            return false
+        }
+        do {
+            try files.writeData(next, to: path)
+        } catch {
+            throw SetupError.hostHookWriteFailed(.codex)
+        }
+        return true
+    }
+
+    /// Companion uninstall entry. AC-013: the companion app's uninstaller calls this
+    /// library entry to clear KeepAlive in-place without removing CLI/rvd. Not wired
+    /// to `rv uninstall` (which removes owned files) to avoid accidental user use.
+    /// Probe is performed by the caller via `env.companionPresence`; this helper
+    /// just enforces the post-uninstall invariant (KeepAlive == false) when a
+    /// plist already exists. Linux is a no-op (systemd `Restart=no` is static).
+    static func restoreKeepAliveAfterCompanionUninstall(
+        _ env: SetupEnvironment
+    ) throws(SetupError) {
+        guard env.supervisor == .launchd else { return }
+        let files = FileOps(fileManager: env.fileManager)
+        let layout = OwnedPaths(home: env.home)
+        guard files.fileExists(layout.launchAgent) else { return }
+        try writeLaunchAgent(env: env, layout: layout, files: files, keepAlive: false)
+    }
+
     private static func writeLaunchAgent(
         env: SetupEnvironment,
         layout: OwnedPaths,
-        files: FileOps
+        files: FileOps,
+        keepAlive: Bool
     ) throws(SetupError) {
-        let body = try LaunchAgentTemplate.rendered(rvdPath: env.rvdPath)
+        let body = try LaunchAgentTemplate.rendered(rvdPath: env.rvdPath, keepAlive: keepAlive)
         do {
             try files.write(body, to: layout.launchAgent)
         } catch {
@@ -813,6 +976,8 @@ private extension SetupSlotSnapshot {
         case .claude: claude = kind
         case .openclaw: openClaw = kind
         case .hermes: hermes = kind
+        case .codex: codex = kind
+        case .cursor: cursor = kind
         }
     }
 }

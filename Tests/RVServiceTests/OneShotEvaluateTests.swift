@@ -212,7 +212,7 @@ struct OneShotEvaluateTests {
         let (ackData, helloOK) = await runtime.handleIncoming(try IPCJSON.encode(hello), handshakeOK: false)
         let ack = try IPCJSON.decode(HelloAck.self, from: ackData)
         #expect(helloOK == true)
-        #expect(ack.ok == true)
+        #expect(ack.status == .ok)
 
         let (data, ok) = await runtime.handleIncoming(
             try evaluateBody(command: "git reset --hard"),

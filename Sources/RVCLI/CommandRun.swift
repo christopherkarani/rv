@@ -1,6 +1,5 @@
 import Foundation
 import RVDomain
-import RVEngine
 import RVPolicy
 import RVPresentation
 import RVService
@@ -202,9 +201,7 @@ public enum CommandRun {
                 explainViewModel(
                     from: result,
                     command: command,
-                    normalized: result.matchingView.isEmpty
-                        ? Normalize.matchingView(of: command.rawValue).rawValue
-                        : result.matchingView.rawValue
+                    normalized: result.matchingView.rawValue
                 ),
                 palette: palette
             )
@@ -232,9 +229,7 @@ public enum CommandRun {
                 from: explainViewModel(
                     from: result,
                     command: command,
-                    normalized: result.matchingView.isEmpty
-                        ? Normalize.matchingView(of: command.rawValue).rawValue
-                        : result.matchingView.rawValue
+                    normalized: result.matchingView.rawValue
                 )
             )
             text = RobotDocument.explain(payload).render()

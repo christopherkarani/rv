@@ -706,6 +706,125 @@ printf 'AC-003 ok\n'
 
 bootout_label
 
+# AC-003 unparseable: echo the request id so miss is from advertised
+# serviceSemver, not id mismatch. Empty allow must still deny.
+cat > "$PROOF_ROOT/unparseable-rvd.c" <<'EOF'
+#include <dispatch/dispatch.h>
+#include <stdio.h>
+#include <string.h>
+#include <xpc/xpc.h>
+
+#define RV_IPC_KEY "rv.ipc"
+
+static const char kIdKey[] = "\"id\":\"";
+static const char kFmt[] =
+    "{\"id\":\"%s\","
+    "\"protocol\":\"rv.ipc.v1\","
+    "\"result\":{\"hookEvaluate\":{"
+    "\"exitCode\":0,\"serviceSemver\":\"not-a-version\",\"stdout\":\"\",\"via\":\"xpc\"}}}";
+
+static int extract_id(const char *json, size_t n, char out[37]) {
+    size_t i;
+    if (n < sizeof kIdKey - 1 + 36) {
+        return -1;
+    }
+    for (i = 0; i + sizeof kIdKey - 1 + 36 <= n; i++) {
+        if (memcmp(json + i, kIdKey, sizeof kIdKey - 1) == 0) {
+            memcpy(out, json + i + sizeof kIdKey - 1, 36);
+            out[36] = '\0';
+            return 0;
+        }
+    }
+    return -1;
+}
+
+int main(void) {
+    xpc_connection_t listener = xpc_connection_create_mach_service(
+        "dev.rv.evaluate",
+        NULL,
+        XPC_CONNECTION_MACH_SERVICE_LISTENER
+    );
+    if (listener == NULL) {
+        return 1;
+    }
+    xpc_connection_set_event_handler(listener, ^(xpc_object_t event) {
+        if (xpc_get_type(event) != XPC_TYPE_CONNECTION) {
+            return;
+        }
+        xpc_connection_t peer = event;
+        xpc_connection_set_event_handler(peer, ^(xpc_object_t msg) {
+            xpc_object_t reply;
+            xpc_connection_t remote;
+            size_t n = 0;
+            const void *data;
+            char request_id[37];
+            char payload[256];
+            int wrote;
+            if (xpc_get_type(msg) != XPC_TYPE_DICTIONARY) {
+                return;
+            }
+            data = xpc_dictionary_get_data(msg, RV_IPC_KEY, &n);
+            if (data == NULL || extract_id(data, n, request_id) != 0) {
+                return;
+            }
+            wrote = snprintf(payload, sizeof payload, kFmt, request_id);
+            if (wrote < 0 || wrote >= (int)sizeof payload) {
+                return;
+            }
+            reply = xpc_dictionary_create_reply(msg);
+            if (reply == NULL) {
+                return;
+            }
+            xpc_dictionary_set_data(reply, RV_IPC_KEY, payload, (size_t)wrote);
+            remote = xpc_dictionary_get_remote_connection(msg);
+            if (remote != NULL) {
+                xpc_connection_send_message(remote, reply);
+            }
+            xpc_release(reply);
+        });
+        xpc_connection_resume(peer);
+    });
+    xpc_connection_resume(listener);
+    dispatch_main();
+    return 0;
+}
+EOF
+clang -Os -arch arm64 -mmacosx-version-min=26.0 -std=c11 -Wall \
+  -o "$PROOF_ROOT/unparseable-rvd" "$PROOF_ROOT/unparseable-rvd.c"
+chmod 755 "$PROOF_ROOT/unparseable-rvd"
+write_plist "$PROOF_ROOT/unparseable-rvd" "$PROOF_ROOT/unparseable.plist"
+bootstrap_plist "$PROOF_ROOT/unparseable.plist"
+unparseable_warm=0
+for _i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+  clear_cli
+  set +e
+  run_hook "$FIXTURES/deny-git-reset-hard.json" >"$PROOF_ROOT/ac003-unparseable.out" 2>"$PROOF_ROOT/ac003-unparseable.err"
+  ac003u=$?
+  set -e
+  if [[ "$ac003u" -eq 0 ]]; then
+    if python3 - "$PROOF_ROOT/ac003-unparseable.out" "$CANONICAL" <<'PY'
+import json
+import sys
+text = open(sys.argv[1], encoding="utf-8").read().strip()
+if not text:
+    raise SystemExit(2)
+obj = json.loads(text)
+if obj.get("decision") != "deny" or obj.get("reason") != sys.argv[2]:
+    raise SystemExit(3)
+PY
+    then
+      if cli_invoked; then
+        unparseable_warm=1
+        break
+      fi
+    fi
+  fi
+  sleep 0.25
+done
+[[ "$unparseable_warm" -eq 1 ]] || fail "AC-003 unparseable did not miss-and-deny (exit $ac003u out=$(cat "$PROOF_ROOT/ac003-unparseable.out" 2>/dev/null || true))"
+printf 'AC-003-unparseable ok\n'
+bootout_label
+
 # AC-013: with the rv-cli sibling missing, operator argv (doctor) must say
 # why on stderr instead of dying silently — doctor stays reachable in
 # exactly the broken state it diagnoses.

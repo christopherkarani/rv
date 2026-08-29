@@ -83,6 +83,26 @@ func claudeDecode_otherToolOrEventIsForeign(_ file: String) throws {
     }
     #expect(request.command.rawValue == "git status")
     #expect(request.cwd == WorkingDirectory(validating: "/tmp/ws"))
+    #expect(request.session == nil)
+}
+
+@Test func claudeDecode_readsSessionId() throws {
+    guard case .request(let request) = codec.decode(try claudeFixture("allow-git-status.json")) else {
+        Issue.record("expected .request for session_id")
+        return
+    }
+    #expect(request.session == "abc-123")
+}
+
+@Test func claudeDecode_emptySessionIsNil() {
+    let stdin = """
+    {"hook_event_name":"PreToolUse","session_id":"","tool_name":"Bash","tool_input":{"command":"git status"}}
+    """
+    guard case .request(let request) = codec.decode(stdin) else {
+        Issue.record("expected .request for empty session_id")
+        return
+    }
+    #expect(request.session == nil)
 }
 
 @Test func claudeDecode_readsHostAskSpend() {

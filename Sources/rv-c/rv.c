@@ -4,6 +4,7 @@
 
 #include "json_escape.h"
 #include "json_reply.h"
+#include "evaluation_route.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -192,7 +193,8 @@ static int is_valid_host(const char *s) {
         || strcmp(s, "opencode") == 0
         || strcmp(s, "claude") == 0
         || strcmp(s, "openclaw") == 0
-        || strcmp(s, "hermes") == 0;
+        || strcmp(s, "hermes") == 0
+        || strcmp(s, "codex") == 0;
 }
 
 /* 0 = pipe, 1 = exec rv-cli with the same argv. */
@@ -375,44 +377,6 @@ static void miss_replay(
     size_t stdin_len
 ) {
     miss_replay_with_tail(argv, host, stdin_bytes, stdin_len, -1);
-}
-
-static int major_of(const char *semver) {
-    const char *dot;
-    size_t n;
-    size_t i;
-    unsigned long v;
-    char buf[16];
-    char *ep;
-    if (semver == NULL || semver[0] == '\0') {
-        return -1;
-    }
-    dot = strchr(semver, '.');
-    n = dot == NULL ? strlen(semver) : (size_t)(dot - semver);
-    if (n == 0 || n >= sizeof buf) {
-        return -1;
-    }
-    for (i = 0; i < n; i++) {
-        if (semver[i] < '0' || semver[i] > '9') {
-            return -1;
-        }
-    }
-    memcpy(buf, semver, n);
-    buf[n] = '\0';
-    v = strtoul(buf, &ep, 10);
-    if (ep == buf || *ep != '\0' || v > (unsigned long)INT_MAX) {
-        return -1;
-    }
-    return (int)v;
-}
-
-static int is_major_skew(const char *client, const char *service) {
-    int c = major_of(client);
-    int s = major_of(service);
-    if (c < 0 || s < 0) {
-        return 0;
-    }
-    return c != s;
 }
 
 /* RFC 4122 UUID v4 from /dev/urandom. Not Apple-only; not libuuid. */
@@ -843,13 +807,9 @@ int main(int argc, char **argv) {
         miss_replay(argv, host, stdin_buf.p, stdin_buf.len);
     }
 
-    /*
-     * Same semver law as the Swift CLI client: an unprovable reply (no
-     * serviceSemver at all) or a major-skewed one must not be trusted —
-     * replay through rv-cli's in-process evaluation instead.
-     */
-    if (!reply.has_service_semver
-        || is_major_skew(RV_CLIENT_SEMVER, reply.service_semver))
+    if (rv_should_miss_replay(
+            RV_CLIENT_SEMVER,
+            reply.has_service_semver ? reply.service_semver : NULL))
     {
         rv_hook_reply_free(&reply);
         miss_replay(argv, host, stdin_buf.p, stdin_buf.len);

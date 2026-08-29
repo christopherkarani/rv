@@ -46,7 +46,8 @@ func env(
     systemctl: any SystemctlApplying = SilentSystemctl(),
     touchSystemd: Bool = false,
     supervisor: EvaluateSupervisor = .launchd,
-    installAnalytics: any InstallAnalyticsCapturing = SilentInstallAnalytics()
+    installAnalytics: any InstallAnalyticsCapturing = SilentInstallAnalytics(),
+    companionPresence: any CompanionPresenceDetecting = FixedCompanionPresence(value: .absent)
 ) -> SetupEnvironment {
     SetupEnvironment(
         home: testHomeDirectory(home.path),
@@ -59,7 +60,8 @@ func env(
         touchLaunchd: touchLaunchd,
         touchSystemd: touchSystemd,
         supervisor: supervisor,
-        installAnalytics: installAnalytics
+        installAnalytics: installAnalytics,
+        companionPresence: companionPresence
     )
 }
 
@@ -101,8 +103,7 @@ private func fixtureLoginHome() throws -> URL {
         #expect(FileManager.default.fileExists(atPath: layout.launchAgent))
         let plist = try String(contentsOfFile: layout.launchAgent, encoding: .utf8)
         #expect(plist.contains(home.appendingPathComponent("rvd").path))
-        #expect(plist.contains("<key>KeepAlive</key>"))
-        #expect(plist.contains("<false/>"))
+        try expectLaunchAgentKeepAlive(layout.launchAgent, false)
         #expect(launchctl.bootstraps.count == 1)
         let analytics = AnalyticsPaths(
             configDirectory: URL(fileURLWithPath: layout.configDirectory, isDirectory: true)
@@ -198,6 +199,134 @@ private func fixtureLoginHome() throws -> URL {
         #expect(FileManager.default.fileExists(atPath: layout.openClawPlugin) == false)
         #expect(FileManager.default.fileExists(atPath: directory + "/openclaw.plugin.json") == false)
         #expect(FileManager.default.fileExists(atPath: directory + "/package.json") == false)
+    }
+}
+
+@Test func setup_codexOnly_writesAdapterAndMergesHooksJSON() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(atPath: layout.codexDirectory, withIntermediateDirectories: true)
+        let foreign = """
+        {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  { "type": "command", "command": "other-guard evaluate", "timeout": 10 }
+                ]
+              }
+            ]
+          }
+        }
+        """
+        try foreign.write(toFile: layout.codexHooksJSON, atomically: true, encoding: .utf8)
+
+        let outcome = SetupRun.setup(env(home: home, launchctl: launchctl))
+        #expect(outcome.exitCode == 0)
+        let body = try String(contentsOfFile: layout.codexHook, encoding: .utf8)
+        #expect(body == (try HookHost.codex.adapterResource().rendered(rvPath: "/tmp/rv-bin/rv")))
+        #expect(body.contains("\"decision\": \"block\"") || body.contains("\"decision\":\"block\""))
+        #expect(body.contains("sys.exit(2)"))
+        #expect(body.contains("sys.stderr"))
+        #expect(body.contains("permissionDecision") == false)
+        #expect(body.contains("\"ask\"") == false)
+        #expect(body.contains("RV_BYPASS") == false)
+        #expect(FileManager.default.fileExists(atPath: layout.grokHook) == false)
+
+        let settings = try #require(
+            JSONSerialization.jsonObject(
+                with: Data(contentsOf: URL(fileURLWithPath: layout.codexHooksJSON))
+            ) as? [String: Any]
+        )
+        let hooksRoot = try #require(settings["hooks"] as? [String: Any])
+        let pre = try #require(hooksRoot["PreToolUse"] as? [[String: Any]])
+        #expect(pre.count == 2)
+        let foreignHooks = try #require(pre[0]["hooks"] as? [[String: Any]])
+        #expect(foreignHooks[0]["command"] as? String == "other-guard evaluate")
+        let rvHooks = try #require(pre[1]["hooks"] as? [[String: Any]])
+        #expect(rvHooks[0]["type"] as? String == "command")
+        #expect(rvHooks[0]["command"] as? String == "python3 \(layout.codexHook)")
+        #expect(rvHooks[0]["timeout"] as? Int == 5)
+        #expect(rvHooks[0]["statusMessage"] as? String == "RV")
+        #expect(pre[1]["matcher"] as? String == "Bash")
+
+        let uninstall = SetupRun.uninstall(env(home: home, launchctl: launchctl))
+        #expect(uninstall.exitCode == 0)
+        #expect(FileManager.default.fileExists(atPath: layout.codexHook) == false)
+        let after = try #require(
+            JSONSerialization.jsonObject(
+                with: Data(contentsOf: URL(fileURLWithPath: layout.codexHooksJSON))
+            ) as? [String: Any]
+        )
+        let afterHooks = try #require(after["hooks"] as? [String: Any])
+        let afterPre = try #require(afterHooks["PreToolUse"] as? [[String: Any]])
+        #expect(afterPre.count == 1)
+        let kept = try #require(afterPre[0]["hooks"] as? [[String: Any]])
+        #expect(kept[0]["command"] as? String == "other-guard evaluate")
+    }
+}
+
+@Test func setup_cursorOnly_writesAdapterAndMergesHooksJSON() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(atPath: layout.cursorDirectory, withIntermediateDirectories: true)
+        let foreign = """
+        {
+          "version": 1,
+          "hooks": {
+            "beforeShellExecution": [
+              { "command": "other-guard evaluate", "timeout": 10 }
+            ]
+          }
+        }
+        """
+        try foreign.write(toFile: layout.cursorHooksJSON, atomically: true, encoding: .utf8)
+
+        let outcome = SetupRun.setup(env(home: home, launchctl: launchctl))
+        #expect(outcome.exitCode == 0)
+        let body = try String(contentsOfFile: layout.cursorHook, encoding: .utf8)
+        #expect(body == (try HookHost.cursor.adapterResource().rendered(rvPath: "/tmp/rv-bin/rv")))
+        #expect(body.contains("\"permission\"") || body.contains("'permission'"))
+        #expect(body.contains("\"deny\"") || body.contains("'deny'"))
+        #expect(body.contains("user_message"))
+        #expect(body.contains("agent_message"))
+        #expect(body.contains("sys.exit(0)"))
+        #expect(body.contains("\"decision\": \"block\"") == false)
+        #expect(body.contains("\"decision\":\"block\"") == false)
+        #expect(body.contains("\"permissionDecision\"") == false)
+        #expect(body.contains("'permissionDecision'") == false)
+        #expect(body.contains("\"permission\": \"ask\"") == false)
+        #expect(body.contains("'permission': 'ask'") == false)
+        #expect(body.contains("RV_BYPASS") == false)
+        #expect(FileManager.default.fileExists(atPath: layout.grokHook) == false)
+        #expect(FileManager.default.fileExists(atPath: layout.codexHook) == false)
+
+        let settings = try #require(
+            JSONSerialization.jsonObject(
+                with: Data(contentsOf: URL(fileURLWithPath: layout.cursorHooksJSON))
+            ) as? [String: Any]
+        )
+        #expect(settings["version"] as? Int == 1)
+        let hooksRoot = try #require(settings["hooks"] as? [String: Any])
+        let before = try #require(hooksRoot["beforeShellExecution"] as? [[String: Any]])
+        #expect(before.count == 2)
+        #expect(before[0]["command"] as? String == "other-guard evaluate")
+        #expect(before[1]["command"] as? String == "python3 \(layout.cursorHook)")
+        #expect(before[1]["timeout"] as? Int == 5)
+        #expect(before[1]["failClosed"] as? Bool == true)
+        #expect(hooksRoot["PreToolUse"] == nil)
+
+        let uninstall = SetupRun.uninstall(env(home: home, launchctl: launchctl))
+        #expect(uninstall.exitCode == 0)
+        #expect(FileManager.default.fileExists(atPath: layout.cursorHook) == false)
+        let after = try #require(
+            JSONSerialization.jsonObject(
+                with: Data(contentsOf: URL(fileURLWithPath: layout.cursorHooksJSON))
+            ) as? [String: Any]
+        )
+        let afterHooks = try #require(after["hooks"] as? [String: Any])
+        let afterBefore = try #require(afterHooks["beforeShellExecution"] as? [[String: Any]])
+        #expect(afterBefore.count == 1)
+        #expect(afterBefore[0]["command"] as? String == "other-guard evaluate")
     }
 }
 
@@ -523,7 +652,9 @@ private func fixtureLoginHome() throws -> URL {
     let plist = try LaunchAgentTemplate.rendered(rvdPath: "/opt/rvd")
     #expect(plist.contains("/opt/rvd"))
     #expect(plist.contains("@RVD_PATH@") == false)
-    #expect(plist.contains("<false/>"))
+    let keys = try launchdPlist(plist)
+    #expect(keys["KeepAlive"] as? Bool == false)
+    #expect(keys["RunAtLoad"] as? Bool == false)
     #expect(plist.contains("<key>LimitLoadToSessionType</key>"))
     #expect(plist.contains("<string>Aqua</string>"))
     #expect(plist.contains("<string>Background</string>"))

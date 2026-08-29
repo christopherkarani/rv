@@ -61,6 +61,7 @@ struct HostAskSpendTests {
             await client.evaluateResult(command: command, cwd: cwd)
         }
         #expect(firstWire.stdout.isEmpty == false)
+        #expect(firstWire.stdout.contains("\"decision\":\"ask\""))
         #expect(firstWire.stdout.contains("\"decision\":\"allow\"") == false)
 
         let wire = await hookWire(

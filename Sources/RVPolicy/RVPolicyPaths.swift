@@ -17,6 +17,14 @@ public enum RVPolicyPaths: Sendable {
         configDir.appendingPathComponent(".allowlist.lock", isDirectory: false)
     }
 
+    public static func denylistFile(inConfigDir configDir: URL) -> URL {
+        configDir.appendingPathComponent("denylist.toml", isDirectory: false)
+    }
+
+    public static func denylistLockFile(inConfigDir configDir: URL) -> URL {
+        configDir.appendingPathComponent(".denylist.lock", isDirectory: false)
+    }
+
     public static func pendingApprovalsFile(inConfigDir configDir: URL) -> URL {
         configDir.appendingPathComponent("pending-approvals.jsonl", isDirectory: false)
     }
@@ -32,6 +40,8 @@ public enum RVPolicyPaths: Sendable {
             allowOnceFile(inConfigDir: configDir),
             allowOnceLockFile(inConfigDir: configDir),
             allowlistLockFile(inConfigDir: configDir),
+            denylistFile(inConfigDir: configDir),
+            denylistLockFile(inConfigDir: configDir),
             pendingApprovalsFile(inConfigDir: configDir),
             pendingApprovalsLockFile(inConfigDir: configDir),
         ]

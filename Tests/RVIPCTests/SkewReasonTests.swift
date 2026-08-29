@@ -7,7 +7,7 @@ struct SkewReasonTests {
     @Test func goldenFramesEncodeByteIdenticalToLegacyStringWire() throws {
         let skewed = try #require(
             String(
-                data: IPCJSON.encode(HelloAck(ok: false, skewReason: .corePacksUnavailable)),
+                data: IPCJSON.encode(HelloAck(status: .skew(.corePacksUnavailable))),
                 encoding: .utf8
             )
         )
@@ -16,9 +16,10 @@ struct SkewReasonTests {
         )
 
         let healthy = try #require(
-            String(data: IPCJSON.encode(HelloAck(ok: true)), encoding: .utf8)
+            String(data: IPCJSON.encode(HelloAck(status: .ok)), encoding: .utf8)
         )
         #expect(healthy == #"{"ok":true,"protocol":"rv.ipc.v1","serviceSemver":"1.0.0"}"#)
+        #expect(healthy.contains("skewReason") == false)
     }
 
     @Test func rawValuesAreTheLegacyWireStrings() {
@@ -35,9 +36,11 @@ struct SkewReasonTests {
             .corePacksUnavailable,
             .handshakeRequired,
         ] {
-            let ack = HelloAck(ok: false, skewReason: reason)
+            let ack = HelloAck(status: .skew(reason))
             #expect(try IPCJSON.decode(HelloAck.self, from: IPCJSON.encode(ack)) == ack)
         }
+        let healthy = HelloAck(status: .ok)
+        #expect(try IPCJSON.decode(HelloAck.self, from: IPCJSON.encode(healthy)) == healthy)
     }
 
     @Test func unknownReasonStringFailsDecodeInsteadOfYieldingNil() throws {
@@ -49,12 +52,23 @@ struct SkewReasonTests {
         }
     }
 
-    @Test func missingReasonDecodesAsNil() throws {
-        let data = Data(
-            #"{"ok":false,"protocol":"rv.ipc.v1","serviceSemver":"1.0.0"}"#.utf8
-        )
-        let decoded = try IPCJSON.decode(HelloAck.self, from: data)
-        #expect(decoded.skewReason == nil)
-        #expect(decoded.ok == false)
+    @Test(arguments: [
+        #"{"ok":false,"protocol":"rv.ipc.v1","serviceSemver":"1.0.0"}"#,
+        #"{"ok":false,"protocol":"rv.ipc.v1","serviceSemver":"1.0.0","skewReason":null}"#,
+    ])
+    func missingReasonThrows(json: String) {
+        #expect(throws: DecodingError.self) {
+            try IPCJSON.decode(HelloAck.self, from: Data(json.utf8))
+        }
+    }
+
+    @Test(arguments: [
+        #"{"ok":true,"protocol":"rv.ipc.v1","serviceSemver":"1.0.0","skewReason":"protocol"}"#,
+        #"{"ok":true,"protocol":"rv.ipc.v1","serviceSemver":"1.0.0","skewReason":null}"#,
+    ])
+    func okTrueWithSkewReasonThrows(json: String) {
+        #expect(throws: DecodingError.self) {
+            try IPCJSON.decode(HelloAck.self, from: Data(json.utf8))
+        }
     }
 }

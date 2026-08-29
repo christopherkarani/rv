@@ -206,17 +206,44 @@ public struct ExplainReply: Sendable, Equatable, Codable {
     public init(
         result: EvaluationResult,
         normalized: String,
-        ruleID: RuleID? = nil,
-        packID: PackID? = nil,
         suggestion: String? = nil,
         stages: [ExplainStage]
     ) {
         self.result = result
         self.normalized = normalized
-        self.ruleID = ruleID
-        self.packID = packID
+        self.ruleID = result.outcome.explainRuleID
+        self.packID = result.outcome.explainPackID
         self.suggestion = suggestion
         self.stages = stages
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case result
+        case normalized
+        case ruleID
+        case packID
+        case suggestion
+        case stages
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        result = try container.decode(EvaluationResult.self, forKey: .result)
+        normalized = try container.decode(String.self, forKey: .normalized)
+        suggestion = try container.decodeIfPresent(String.self, forKey: .suggestion)
+        stages = try container.decode([ExplainStage].self, forKey: .stages)
+        ruleID = result.outcome.explainRuleID
+        packID = result.outcome.explainPackID
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(result, forKey: .result)
+        try container.encode(normalized, forKey: .normalized)
+        try container.encodeIfPresent(ruleID, forKey: .ruleID)
+        try container.encodeIfPresent(packID, forKey: .packID)
+        try container.encodeIfPresent(suggestion, forKey: .suggestion)
+        try container.encode(stages, forKey: .stages)
     }
 }
 
@@ -256,16 +283,17 @@ extension ClassifyRisk: Codable {
 }
 
 extension ClassifyRisk {
-    /// Total derivation from Decision × matched rule; no default clause.
-    public static func derive(decision: Decision, matched: RuleMatch?) -> ClassifyRisk {
-        switch decision {
-        case .allow:
-            if let severity = matched?.severity {
-                return .rated(severity)
-            }
+    /// Total derivation from `EvaluationOutcome`; unmatched deny is `.rated(.high)`.
+    public static func derive(_ outcome: EvaluationOutcome) -> ClassifyRisk {
+        switch outcome {
+        case .quickRejected, .plain, .safeOnly:
             return .safe
-        case .deny:
-            return .rated(matched?.severity ?? .high)
+        case .hit(let match, _):
+            return .rated(match.severity)
+        case .deny(_, .some(let match)):
+            return .rated(match.severity)
+        case .deny(_, .none):
+            return .rated(.high)
         case .indeterminate:
             return .rated(.high)
         }
@@ -308,20 +336,63 @@ public struct ClassifyReply: Sendable, Equatable, Codable {
     public var reasons: [ClassifyReason]
     public var suggestions: [String]
 
-    public init(
-        decision: Decision,
-        risk: ClassifyRisk,
-        ruleID: RuleID? = nil,
-        packID: PackID? = nil,
-        reasons: [ClassifyReason] = [],
-        suggestions: [String] = []
-    ) {
-        self.decision = decision
-        self.risk = risk
-        self.ruleID = ruleID
-        self.packID = packID
-        self.reasons = reasons
+    public init(result: EvaluationResult, suggestions: [String] = []) {
+        self.decision = result.decision
+        self.risk = ClassifyRisk.derive(result.outcome)
+        self.ruleID = result.outcome.explainRuleID
+        self.packID = result.outcome.explainPackID
         self.suggestions = suggestions
+        switch result.outcome {
+        case .hit(let match, _), .deny(_, .some(let match)):
+            reasons = [
+                ClassifyReason(
+                    ruleID: match.ruleID,
+                    explanation: match.explanation ?? match.reason
+                )
+            ]
+        case .quickRejected, .plain, .safeOnly, .deny(_, .none), .indeterminate:
+            reasons = []
+        }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case decision
+        case risk
+        case ruleID
+        case packID
+        case reasons
+        case suggestions
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        decision = try container.decode(Decision.self, forKey: .decision)
+        risk = try container.decode(ClassifyRisk.self, forKey: .risk)
+        reasons = try container.decodeIfPresent([ClassifyReason].self, forKey: .reasons) ?? []
+        suggestions = try container.decodeIfPresent([String].self, forKey: .suggestions) ?? []
+        let siblingRuleID = try container.decodeIfPresent(RuleID.self, forKey: .ruleID)
+        let siblingPackID = try container.decodeIfPresent(PackID.self, forKey: .packID)
+        switch decision {
+        case .allow:
+            ruleID = siblingRuleID
+            packID = siblingPackID
+        case .deny(let deny):
+            ruleID = deny.ruleID
+            packID = deny.ruleID.pack
+        case .indeterminate:
+            ruleID = nil
+            packID = nil
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(decision, forKey: .decision)
+        try container.encode(risk, forKey: .risk)
+        try container.encodeIfPresent(ruleID, forKey: .ruleID)
+        try container.encodeIfPresent(packID, forKey: .packID)
+        try container.encode(reasons, forKey: .reasons)
+        try container.encode(suggestions, forKey: .suggestions)
     }
 }
 
@@ -463,6 +534,221 @@ public struct DoctorSnapshotReply: Sendable, Equatable, Codable {
     }
 }
 
+public struct PendingListItem: Sendable, Equatable, Codable {
+    public var id: ApprovalID
+    public var host: HookHost
+    public var folder: String
+    public var actionKind: String
+    public var fingerprint: ActionFingerprint
+    public var sessionSuffix: String?
+    public var identity: ApprovalIdentity
+
+    public init(
+        id: ApprovalID,
+        host: HookHost,
+        folder: String,
+        actionKind: String,
+        fingerprint: ActionFingerprint,
+        sessionSuffix: String? = nil,
+        identity: ApprovalIdentity
+    ) {
+        self.id = id
+        self.host = host
+        self.folder = folder
+        self.actionKind = actionKind
+        self.fingerprint = fingerprint
+        self.sessionSuffix = sessionSuffix
+        self.identity = identity
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(ApprovalID.self, forKey: .id)
+        host = try container.decode(HookHost.self, forKey: .host)
+        folder = try container.decode(String.self, forKey: .folder)
+        actionKind = try container.decode(String.self, forKey: .actionKind)
+        fingerprint = try container.decode(ActionFingerprint.self, forKey: .fingerprint)
+        sessionSuffix = try container.decodeIfPresent(String.self, forKey: .sessionSuffix)
+        identity = try container.decode(ApprovalIdentity.self, forKey: .identity)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(host, forKey: .host)
+        try container.encode(folder, forKey: .folder)
+        try container.encode(actionKind, forKey: .actionKind)
+        try container.encode(fingerprint, forKey: .fingerprint)
+        try container.encodeIfPresent(sessionSuffix, forKey: .sessionSuffix)
+        try container.encode(identity, forKey: .identity)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case host
+        case folder
+        case actionKind
+        case fingerprint
+        case sessionSuffix
+        case identity
+    }
+}
+
+public struct PendingListReply: Sendable, Equatable, Codable {
+    public var generation: UInt64
+    public var items: [PendingListItem]
+
+    public init(generation: UInt64, items: [PendingListItem]) {
+        self.generation = generation
+        self.items = items
+    }
+}
+
+public typealias PendingWatchReply = PendingListReply
+
+public struct PendingWatchParams: Sendable, Equatable, Codable {
+    public var afterGeneration: UInt64
+
+    public init(afterGeneration: UInt64) {
+        self.afterGeneration = afterGeneration
+    }
+}
+
+public enum PendingResolveDecision: String, Sendable, Equatable {
+    case allowOnce
+    case deny
+}
+
+extension PendingResolveDecision: Codable {
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let raw = try container.decode(String.self)
+        switch raw {
+        case "allowOnce":
+            self = .allowOnce
+        case "deny":
+            self = .deny
+        default:
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: decoder.codingPath,
+                    debugDescription:
+                        "Cannot initialize PendingResolveDecision from invalid String value \(raw)"
+                )
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+}
+
+public struct PendingResolveParams: Sendable, Equatable, Codable {
+    public var id: ApprovalID
+    public var decision: PendingResolveDecision
+    public var fingerprint: ActionFingerprint
+    public var identity: ApprovalIdentity
+
+    public init(
+        id: ApprovalID,
+        decision: PendingResolveDecision,
+        fingerprint: ActionFingerprint,
+        identity: ApprovalIdentity
+    ) {
+        self.id = id
+        self.decision = decision
+        self.fingerprint = fingerprint
+        self.identity = identity
+    }
+}
+
+public struct PendingResolveReply: Sendable, Equatable, Codable {
+    public var id: ApprovalID
+    public var terminal: Bool
+
+    public init(id: ApprovalID, terminal: Bool) {
+        self.id = id
+        self.terminal = terminal
+    }
+}
+
+public enum RulePolarity: String, Sendable, Equatable {
+    case allow
+    case block
+}
+
+extension RulePolarity: Codable {
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let raw = try container.decode(String.self)
+        switch raw {
+        case "allow":
+            self = .allow
+        case "block":
+            self = .block
+        default:
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: decoder.codingPath,
+                    debugDescription:
+                        "Cannot initialize RulePolarity from invalid String value \(raw)"
+                )
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+}
+
+public struct RulePreviewParams: Sendable, Equatable, Codable {
+    public var id: ApprovalID
+    public var polarity: RulePolarity
+
+    public init(id: ApprovalID, polarity: RulePolarity) {
+        self.id = id
+        self.polarity = polarity
+    }
+}
+
+public struct RulePreviewReply: Sendable, Equatable, Codable {
+    public var sentence: String
+    public var draft: String
+    public var allowedToSave: Bool
+
+    public init(sentence: String, draft: String, allowedToSave: Bool) {
+        self.sentence = sentence
+        self.draft = draft
+        self.allowedToSave = allowedToSave
+    }
+}
+
+public struct RuleSaveParams: Sendable, Equatable, Codable {
+    public var id: ApprovalID
+    public var polarity: RulePolarity
+    public var draft: String
+
+    public init(id: ApprovalID, polarity: RulePolarity, draft: String) {
+        self.id = id
+        self.polarity = polarity
+        self.draft = draft
+    }
+}
+
+public struct RuleSaveReply: Sendable, Equatable, Codable {
+    public var ruleID: RuleID
+    public var waitResolved: Bool
+
+    public init(ruleID: RuleID, waitResolved: Bool) {
+        self.ruleID = ruleID
+        self.waitResolved = waitResolved
+    }
+}
+
 public enum IPCMethod: Sendable, Equatable {
     case evaluate(EvaluateParams)
     case hookEvaluate(HookEvaluateParams)
@@ -472,6 +758,11 @@ public enum IPCMethod: Sendable, Equatable {
     case setPackEnabled(SetPackEnabledParams)
     case allowOnceConsume(AllowOnceConsumeParams)
     case doctorSnapshot
+    case pendingList
+    case pendingWatch(PendingWatchParams)
+    case pendingResolve(PendingResolveParams)
+    case rulePreview(RulePreviewParams)
+    case ruleSave(RuleSaveParams)
 }
 
 public enum IPCResult: Sendable, Equatable {
@@ -483,6 +774,11 @@ public enum IPCResult: Sendable, Equatable {
     case setPackEnabled(SetPackEnabledReply)
     case allowOnceConsume(AllowOnceConsumeReply)
     case doctorSnapshot(DoctorSnapshotReply)
+    case pendingList(PendingListReply)
+    case pendingWatch(PendingWatchReply)
+    case pendingResolve(PendingResolveReply)
+    case rulePreview(RulePreviewReply)
+    case ruleSave(RuleSaveReply)
     case error(IPCError)
 }
 
@@ -496,6 +792,11 @@ extension IPCMethod: Codable {
         case setPackEnabled
         case allowOnceConsume
         case doctorSnapshot
+        case pendingList
+        case pendingWatch
+        case pendingResolve
+        case rulePreview
+        case ruleSave
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -517,6 +818,16 @@ extension IPCMethod: Codable {
             try container.encode(params, forKey: .allowOnceConsume)
         case .doctorSnapshot:
             try container.encode(EmptyPayload(), forKey: .doctorSnapshot)
+        case .pendingList:
+            try container.encode(EmptyPayload(), forKey: .pendingList)
+        case .pendingWatch(let params):
+            try container.encode(params, forKey: .pendingWatch)
+        case .pendingResolve(let params):
+            try container.encode(params, forKey: .pendingResolve)
+        case .rulePreview(let params):
+            try container.encode(params, forKey: .rulePreview)
+        case .ruleSave(let params):
+            try container.encode(params, forKey: .ruleSave)
         }
     }
 
@@ -538,6 +849,16 @@ extension IPCMethod: Codable {
             self = .allowOnceConsume(params)
         } else if container.contains(.doctorSnapshot) {
             self = .doctorSnapshot
+        } else if container.contains(.pendingList) {
+            self = .pendingList
+        } else if let params = try container.decodeIfPresent(PendingWatchParams.self, forKey: .pendingWatch) {
+            self = .pendingWatch(params)
+        } else if let params = try container.decodeIfPresent(PendingResolveParams.self, forKey: .pendingResolve) {
+            self = .pendingResolve(params)
+        } else if let params = try container.decodeIfPresent(RulePreviewParams.self, forKey: .rulePreview) {
+            self = .rulePreview(params)
+        } else if let params = try container.decodeIfPresent(RuleSaveParams.self, forKey: .ruleSave) {
+            self = .ruleSave(params)
         } else {
             throw DecodingError.dataCorrupted(
                 .init(codingPath: decoder.codingPath, debugDescription: "unknown IPCMethod")
@@ -556,6 +877,11 @@ extension IPCResult: Codable {
         case setPackEnabled
         case allowOnceConsume
         case doctorSnapshot
+        case pendingList
+        case pendingWatch
+        case pendingResolve
+        case rulePreview
+        case ruleSave
         case error
     }
 
@@ -578,6 +904,16 @@ extension IPCResult: Codable {
             try container.encode(reply, forKey: .allowOnceConsume)
         case .doctorSnapshot(let reply):
             try container.encode(reply, forKey: .doctorSnapshot)
+        case .pendingList(let reply):
+            try container.encode(reply, forKey: .pendingList)
+        case .pendingWatch(let reply):
+            try container.encode(reply, forKey: .pendingWatch)
+        case .pendingResolve(let reply):
+            try container.encode(reply, forKey: .pendingResolve)
+        case .rulePreview(let reply):
+            try container.encode(reply, forKey: .rulePreview)
+        case .ruleSave(let reply):
+            try container.encode(reply, forKey: .ruleSave)
         case .error(let error):
             try container.encode(error, forKey: .error)
         }
@@ -601,6 +937,16 @@ extension IPCResult: Codable {
             self = .allowOnceConsume(reply)
         } else if let reply = try container.decodeIfPresent(DoctorSnapshotReply.self, forKey: .doctorSnapshot) {
             self = .doctorSnapshot(reply)
+        } else if let reply = try container.decodeIfPresent(PendingListReply.self, forKey: .pendingList) {
+            self = .pendingList(reply)
+        } else if let reply = try container.decodeIfPresent(PendingWatchReply.self, forKey: .pendingWatch) {
+            self = .pendingWatch(reply)
+        } else if let reply = try container.decodeIfPresent(PendingResolveReply.self, forKey: .pendingResolve) {
+            self = .pendingResolve(reply)
+        } else if let reply = try container.decodeIfPresent(RulePreviewReply.self, forKey: .rulePreview) {
+            self = .rulePreview(reply)
+        } else if let reply = try container.decodeIfPresent(RuleSaveReply.self, forKey: .ruleSave) {
+            self = .ruleSave(reply)
         } else if let error = try container.decodeIfPresent(IPCError.self, forKey: .error) {
             self = .error(error)
         } else {

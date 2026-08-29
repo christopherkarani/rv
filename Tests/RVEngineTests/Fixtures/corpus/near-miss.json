@@ -156,6 +156,21 @@
       "id": "near.grep-pattern-env-readme",
       "command": "grep .env README.md",
       "expected": "allow"
+    },
+    {
+      "id": "near.rm-rf-tmp-compound-waxmcp",
+      "command": "set -euo pipefail && rm -rf /tmp/waxmcp-0.1.33 /tmp/waxmcp-0.1.33.tar && mkdir -p /tmp/waxmcp-0.1.33",
+      "expected": "allow"
+    },
+    {
+      "id": "near.rm-rf-private-tmp-compound-waxmcp",
+      "command": "set -euo pipefail && rm -rf /private/tmp/waxmcp-0.1.33 /private/tmp/waxmcp-0.1.33.tar && mkdir -p /private/tmp/waxmcp-0.1.33",
+      "expected": "allow"
+    },
+    {
+      "id": "near.rm-rf-tmp-newline-waxmcp",
+      "command": "set -euo pipefail\nrm -rf /tmp/waxmcp-0.1.33 /tmp/waxmcp-0.1.33.tar",
+      "expected": "allow"
     }
   ]
 }

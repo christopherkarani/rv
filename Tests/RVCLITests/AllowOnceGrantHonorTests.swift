@@ -102,7 +102,7 @@ struct AllowOnceGrantHonorTests {
             matchingView: "git reset --hard"
         )
         let transport = ScriptedTransport(
-            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", ok: true),
+            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok),
             responseResult: .evaluate(EvaluateReply(result: denied))
         )
         let client = try isolatedClient(transport: transport, allowOnceDirectory: directory)

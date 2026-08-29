@@ -1,0 +1,107 @@
+"""RV destructive-command guard for Codex Bash.
+
+Codex PreToolUse command hook. Live deny is the older official honor path
+``{"decision":"block","reason":...}`` on stdout, the blocking reason on
+stderr, and process exit 2. Exit 2 with empty or whitespace-only stderr
+fail-opens the tool the same way as no stderr.
+Do not emit Claude permission deny JSON as the live deny. Missing rv /
+timeout / crash / non-JSON fail closed the same way. Never emit leftover
+Ask JSON.
+"""
+
+import json
+import subprocess
+import sys
+
+RV_BINARY = "__RV_BINARY__"
+RV_HOOK_TIMEOUT_S = 5
+
+
+def main():
+    try:
+        raw = sys.stdin.read()
+        mapped = _guard(raw)
+        if mapped["action"] == "block":
+            _emit_block(mapped["reason"])
+        return
+    except Exception:
+        _emit_block("rv failed")
+
+
+def _guard(raw):
+    envelope = _parse(raw)
+    if envelope is None:
+        return {"action": "block", "reason": "rv failed"}
+    if envelope.get("hook_event_name") != "PreToolUse":
+        return {"action": "allow"}
+    if envelope.get("tool_name") != "Bash":
+        return {"action": "allow"}
+    mapped = _spawn_rv_hook("codex", raw)
+    if mapped["action"] == "block":
+        return mapped
+    return {"action": "allow"}
+
+
+def _parse(raw):
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+    if isinstance(parsed, dict):
+        return parsed
+    return None
+
+
+def _spawn_rv_hook(host, stdin):
+    try:
+        completed = subprocess.run(
+            [RV_BINARY, "hook", "--host", host],
+            input=stdin,
+            capture_output=True,
+            text=True,
+            timeout=RV_HOOK_TIMEOUT_S,
+        )
+    except FileNotFoundError:
+        return {"action": "block", "reason": "rv missing"}
+    except (OSError, subprocess.TimeoutExpired):
+        return {"action": "block", "reason": "rv failed"}
+    return _map_rv_hook_result(completed.stdout, completed.returncode)
+
+
+def _map_rv_hook_result(stdout, exit_code):
+    trimmed = (stdout or "").strip()
+    if trimmed:
+        try:
+            parsed = json.loads(trimmed)
+            if isinstance(parsed, dict) and parsed.get("decision") in ("block", "deny"):
+                return {
+                    "action": "block",
+                    "reason": _blocking_reason(parsed.get("reason")),
+                }
+        except (ValueError, TypeError):
+            pass
+        return {"action": "block", "reason": "rv failed"}
+    if exit_code == 0:
+        return {"action": "allow"}
+    return {"action": "block", "reason": "rv failed"}
+
+
+def _blocking_reason(reason):
+    if isinstance(reason, str):
+        text = reason.strip()
+        if text:
+            return text
+    return "rv failed"
+
+
+def _emit_block(reason):
+    text = _blocking_reason(reason)
+    sys.stdout.write(
+        json.dumps({"decision":"block","reason":text}, separators=(",", ":")) + "\n"
+    )
+    sys.stderr.write(text + "\n")
+    sys.exit(2)
+
+
+if __name__ == "__main__":
+    main()

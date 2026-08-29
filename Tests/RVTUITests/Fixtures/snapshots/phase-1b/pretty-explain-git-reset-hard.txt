@@ -2,6 +2,10 @@ RV EXPLAIN
 ├── Decision: DENY
 ├── Command
 │   └── Input        git reset --hard
+├── Semantic
+│   ├── Action       reset --hard
+│   ├── Scope        local working tree and index
+│   └── Effect       working-tree discard
 ├── Match
 │   ├── Rule         core.git/reset-hard
 │   ├── Pack         core.git

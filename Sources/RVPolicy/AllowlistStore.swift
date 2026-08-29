@@ -18,11 +18,15 @@ public struct AllowlistStore: Sendable {
 
     /// Fail-open load for evaluate. Symlink into `workspacePath` → empty. Invalid TOML → empty.
     public func loadUserSnapshot(workspacePath: String?, now: Date) -> AllowlistSnapshot {
+        let blocked = DenylistStore(baseDirectory: baseDirectory).loadSnapshot()
         switch loadForValidate(workspacePath: workspacePath) {
         case .missing, .symlinkIntoWorkspace, .invalid:
-            return .empty
+            return AllowlistSnapshot(entries: [], blocked: blocked)
         case .ok(let entries):
-            return AllowlistSnapshot(entries: entries.filter { $0.isActive(at: now) })
+            return AllowlistSnapshot(
+                entries: entries.filter { $0.isActive(at: now) },
+                blocked: blocked
+            )
         }
     }
 
@@ -62,6 +66,16 @@ public struct AllowlistStore: Sendable {
     ) throws {
         guard allowsInteractiveAllowOnce(tty) else { throw AllowOnceError.ttyRequired }
         try mutate { entries in
+            entries.append(entry)
+        }
+    }
+
+    /// Dashboard Always-allow. No TTY. The preview confirm is the human.
+    package func pin(_ entry: AllowlistEntry) throws {
+        try mutate { entries in
+            if entries.contains(where: { $0.selector == entry.selector }) {
+                return
+            }
             entries.append(entry)
         }
     }

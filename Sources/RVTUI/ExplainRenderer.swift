@@ -19,6 +19,10 @@ public struct ExplainRenderer: FrameRenderer {
             ),
         ]
 
+        if let semantic = semanticItems(model) {
+            children.append(.group(label: "Semantic", emphasis: .heading, children: semantic))
+        }
+
         if let match = matchItems(model) {
             children.append(.group(label: "Match", emphasis: .mark, children: match))
         }
@@ -60,6 +64,44 @@ public struct ExplainRenderer: FrameRenderer {
             palette: palette
         )
     }
+}
+
+private func semanticItems(_ model: ExplainViewModel) -> [OutlineItem]? {
+    guard let semantic = model.semantic else { return nil }
+    var items: [OutlineItem] = [
+        .leaf(label: "Action", value: semantic.action, emphasis: .fact),
+        .leaf(label: "Scope", value: semantic.scope, emphasis: .plain),
+    ]
+    if let effect = semantic.effect {
+        items.append(.leaf(label: "Effect", value: effect, emphasis: .fact))
+    }
+    if let remote = semantic.remote {
+        items.append(.leaf(label: "Remote", value: remote, emphasis: .plain))
+    }
+    if let ref = semantic.ref {
+        items.append(.leaf(label: "Ref", value: ref, emphasis: .plain))
+    }
+    if let pathspec = semantic.pathspec {
+        items.append(.leaf(label: "Pathspec", value: pathspec, emphasis: .plain))
+    }
+    if let path = semantic.path {
+        items.append(.leaf(label: "Path", value: path, emphasis: .plain))
+    }
+    if let kind = semantic.kind {
+        items.append(.leaf(label: "Kind", value: kind, emphasis: .fact))
+    }
+    if let category = semantic.category {
+        items.append(.leaf(label: "Category", value: category, emphasis: .fact))
+    }
+    if let catalogRule = semantic.catalogRule {
+        items.append(.leaf(label: "Catalog", value: catalogRule, emphasis: .plain))
+    }
+    if let wrappers = semantic.wrappers, wrappers.isEmpty == false {
+        items.append(
+            .leaf(label: "Wrappers", value: wrappers.joined(separator: " → "), emphasis: .plain)
+        )
+    }
+    return items
 }
 
 private func matchItems(_ model: ExplainViewModel) -> [OutlineItem]? {

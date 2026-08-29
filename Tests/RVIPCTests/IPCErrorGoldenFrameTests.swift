@@ -28,4 +28,33 @@ struct IPCErrorGoldenFrameTests {
             try IPCJSON.decode(IPCError.self, from: data)
         }
     }
+
+    @Test(arguments: [
+        (IPCError.pendingNotFound, "pendingNotFound"),
+        (IPCError.pendingAlreadyTerminal, "pendingAlreadyTerminal"),
+        (IPCError.pendingIdentityMismatch, "pendingIdentityMismatch"),
+        (IPCError.pendingFingerprintMismatch, "pendingFingerprintMismatch"),
+        (IPCError.ruleDraftMismatch, "ruleDraftMismatch"),
+        (IPCError.ruleHardStop, "ruleHardStop"),
+    ])
+    func pendingAndRuleUnitErrorsEncodeTrue(_ error: IPCError, _ key: String) throws {
+        let encoded = try IPCJSON.encode(error)
+        #expect(String(data: encoded, encoding: .utf8) == #"{"\#(key)":true}"#)
+        #expect(try IPCJSON.decode(IPCError.self, from: encoded) == error)
+    }
+
+    @Test func existingUnitErrorsStayByteCompatible() throws {
+        let cases: [(IPCError, String)] = [
+            (.unknownMethod, "unknownMethod"),
+            (.decodeFailed, "decodeFailed"),
+            (.allowOnceNotFound, "allowOnceNotFound"),
+            (.allowOnceAlreadyConsumed, "allowOnceAlreadyConsumed"),
+            (.allowOnceExpired, "allowOnceExpired"),
+        ]
+        for (error, key) in cases {
+            let encoded = try IPCJSON.encode(error)
+            #expect(String(data: encoded, encoding: .utf8) == #"{"\#(key)":true}"#)
+            #expect(try IPCJSON.decode(IPCError.self, from: encoded) == error)
+        }
+    }
 }

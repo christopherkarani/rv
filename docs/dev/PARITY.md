@@ -31,6 +31,7 @@ Bundled pack documents: **95** IDs / **26** categories from the pin. The `window
 | `git stash drop` is blocked | match `core.git:stash-drop`, severity medium | allow + match |
 | “34 safe / 16 destructive” | full core packs are larger | ignore counts; extract full packs |
 | `rm -rf /var/log` as `rm-rf-general` | extracted `rm-rf-root-home` regex matches any `/` prefix | source-first: `rm-rf-root-home` |
+| compound `set && rm -rf /tmp/...` as `rm-rf-root-home` | 0.11.0 tmp-safes are whole-command `^rm…$`; full-string pass then hits root-home on any `/` | rv: `/tmp` and `/private/tmp` are not root-home; the six `/tmp` safes may match after a prefix that is not `cp` / `ln` / `rsync`. Mixed `/tmp` then `/` or `/var/log` stays root-home. `$TMPDIR`, `/var/tmp` compounds, `~`, `/` unchanged. |
 | `git restore --worktree` / `-W` as `restore-worktree-explicit` | first blocking match is `restore-worktree` (listed first; only excludes staged flags) | `restore-worktree`. Explicit name is `git restore -S -W` |
 | `redirect-truncate-dynamic-path` final backtick | 0.11.0 treats a last-character `` ` `` as expansion | `$`/`\` anywhere; backtick at start **or interior**, including whitespace after an opener (not a final markdown closer). Allow: `near.quoted-heredoc-angle-placeholder`. |
 

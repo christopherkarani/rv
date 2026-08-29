@@ -38,6 +38,7 @@ Living board for implement sessions. Do **not** re-grill. Do **not** load `docs/
 | `specs/phase-5-size-speed.md` | Implementing (T10–T14) |
 | [`spec/spec-architecture-c-hook-pipe.md`](../../spec/spec-architecture-c-hook-pipe.md) | Implemented (T1–T5). C hook pipe + Swift miss. Supersedes the T15 thin-Swift fence. |
 | [`specs/claude-host.md`](specs/claude-host.md) | Implemented (CL-T1–T5). Fenced later: CL-later-ask, CL-later-secrets, CL-later-mcp. |
+| [`specs/cli-thin.md`](specs/cli-thin.md) | Implemented (CL1, CL3, CL4) on `feat/cli-thin` (#150). CL2 withdrawn (`HookRun` gone; do not fold miss into `HookDoor`). |
 
 ## Parallel rules (reminder)
 

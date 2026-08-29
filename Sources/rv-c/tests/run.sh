@@ -50,6 +50,12 @@ clang -Os "${CLANG_OS_FLAGS[@]}" -std=c11 -Wall \
 
 clang -Os "${CLANG_OS_FLAGS[@]}" -std=c11 -Wall \
   -I "$SRC" \
+  -o "$OUT/evaluation_route_test" \
+  "$SRC/tests/evaluation_route_test.c"
+"$OUT/evaluation_route_test"
+
+clang -Os "${CLANG_OS_FLAGS[@]}" -std=c11 -Wall \
+  -I "$SRC" \
   -o "$OUT/rv" \
   "$SRC/json_escape.c" \
   "$SRC/json_reply.c" \
