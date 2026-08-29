@@ -28,6 +28,7 @@ public struct OpenClawHostCodec: HostCodec {
         let cwdText = firstNonEmpty(envelope.params?.workdir, envelope.cwd)
         let cwd = cwdText.flatMap { WorkingDirectory(validating: $0) }
         let session = firstNonEmpty(envelope.sessionId, envelope.sessionKey)
+            .flatMap { SessionID(validating: $0) }
         return .request(
             HookRequest(
                 host: .openclaw,

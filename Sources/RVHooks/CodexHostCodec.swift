@@ -28,27 +28,13 @@ public struct CodexHostCodec: HostCodec {
         let cwdText = firstNonEmpty(envelope.toolInput?.workdir, envelope.cwd)
         let cwd = cwdText.flatMap { WorkingDirectory(validating: $0) }
         let session = firstNonEmpty(envelope.sessionId, envelope.turnId)
+            .flatMap { SessionID(validating: $0) }
         return .request(
             HookRequest(
                 host: .codex,
                 command: ShellCommand(rawValue: command),
                 cwd: cwd,
                 session: session
-            )
-        )
-    }
-
-    /// Maps a decoded Codex request to `ProposedAction.shell`.
-    /// Session and cwd stay on the request and in the fingerprint until IR owns construction.
-    public func proposedAction(from request: HookRequest) -> ProposedAction {
-        let fingerprint = ActionFingerprint(
-            rawValue: "codex:\(request.session ?? ""):\(request.cwd?.rawValue ?? ""):\(request.command.rawValue)"
-        )
-        return .shell(
-            ShellAction(
-                fingerprint: fingerprint,
-                scope: ActionScope(workingDirectory: request.cwd),
-                supportingCommand: request.command
             )
         )
     }

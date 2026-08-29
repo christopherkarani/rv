@@ -24,14 +24,14 @@ public struct HookRequest: Equatable, Sendable {
     public var host: HookHost
     public var command: ShellCommand
     public var cwd: WorkingDirectory?
-    public var session: String?
+    public var session: SessionID?
     public var hostAsk: HostAskHookIntent?
 
     public init(
         host: HookHost,
         command: ShellCommand,
         cwd: WorkingDirectory? = nil,
-        session: String? = nil,
+        session: SessionID? = nil,
         hostAsk: HostAskHookIntent? = nil
     ) {
         self.host = host
@@ -67,15 +67,17 @@ public protocol HostCodec: Sendable {
 extension HostCodec {
     /// Maps a decoded request to an empty-effect shell action.
     ///
-    /// Command text remains supporting evidence while the request's host,
-    /// session, and working directory make up the stable fingerprint.
+    /// Fingerprint spelling is `ActionFingerprint.make`. Command text remains
+    /// supporting evidence; nil session and cwd occupy empty field slots.
     public func proposedAction(from request: HookRequest) -> ProposedAction {
-        let fingerprint = ActionFingerprint(
-            rawValue: "\(host.rawValue):\(request.session ?? ""):\(request.cwd?.rawValue ?? ""):\(request.command.rawValue)"
-        )
-        return .shell(
+        .shell(
             ShellAction(
-                fingerprint: fingerprint,
+                fingerprint: ActionFingerprint.make(
+                    host: host,
+                    session: request.session,
+                    cwd: request.cwd,
+                    command: request.command
+                ),
                 scope: ActionScope(workingDirectory: request.cwd),
                 supportingCommand: request.command
             )

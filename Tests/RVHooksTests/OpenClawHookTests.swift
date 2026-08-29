@@ -89,7 +89,7 @@ func openClawDecode_extractsExecCommand(_ file: String, expected: String) throws
         return
     }
     #expect(request.cwd?.rawValue == "/tmp/ws")
-    #expect(request.session == "sess_1")
+    #expect(request.session == SessionID(validating: "sess_1"))
     let action = codec.proposedAction(from: request)
     guard case .shell(let shell) = action else {
         Issue.record("expected ProposedAction.shell")
@@ -131,5 +131,5 @@ func openClawDecode_extractsExecCommand(_ file: String, expected: String) throws
         Issue.record("expected .request for sessionKey")
         return
     }
-    #expect(request.session == "agent:main")
+    #expect(request.session == SessionID(validating: "agent:main"))
 }

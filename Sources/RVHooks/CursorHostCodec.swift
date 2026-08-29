@@ -35,28 +35,13 @@ public struct CursorHostCodec: HostCodec {
             envelope.conversationId,
             envelope.sessionId,
             envelope.generationId
-        )
+        ).flatMap { SessionID(validating: $0) }
         return .request(
             HookRequest(
                 host: .cursor,
                 command: ShellCommand(rawValue: command),
                 cwd: cwd,
                 session: session
-            )
-        )
-    }
-
-    /// Maps a decoded Cursor request to `ProposedAction.shell`.
-    /// Session and cwd stay on the request and in the fingerprint until IR owns construction.
-    public func proposedAction(from request: HookRequest) -> ProposedAction {
-        let fingerprint = ActionFingerprint(
-            rawValue: "cursor:\(request.session ?? ""):\(request.cwd?.rawValue ?? ""):\(request.command.rawValue)"
-        )
-        return .shell(
-            ShellAction(
-                fingerprint: fingerprint,
-                scope: ActionScope(workingDirectory: request.cwd),
-                supportingCommand: request.command
             )
         )
     }

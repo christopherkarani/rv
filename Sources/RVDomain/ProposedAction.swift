@@ -1,10 +1,25 @@
-/// Stable identity for grants, audit, and replay. Caller-supplied until a later
-/// IR ticket owns fingerprint construction.
+/// Stable identity for grants, audit, and replay.
+///
+/// IR owns host-door fingerprint construction via `make(host:session:cwd:command:)`.
+/// Semantic `GitAction` / `FilesystemAction` fingerprints remain distinct until a
+/// later IR composition ticket.
 public struct ActionFingerprint: RawRepresentable, Hashable, Sendable, Equatable, Codable {
     public var rawValue: String
 
     public init(rawValue: String) {
         self.rawValue = rawValue
+    }
+
+    /// Host-door fingerprint. Nil session and cwd occupy empty field slots.
+    public static func make(
+        host: HookHost,
+        session: SessionID?,
+        cwd: WorkingDirectory?,
+        command: ShellCommand
+    ) -> ActionFingerprint {
+        ActionFingerprint(
+            rawValue: "\(host.rawValue):\(session?.rawValue ?? ""):\(cwd?.rawValue ?? ""):\(command.rawValue)"
+        )
     }
 
     public init(from decoder: Decoder) throws {

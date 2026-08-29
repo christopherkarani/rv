@@ -89,7 +89,7 @@ func hermesDecode_extractsTerminalCommand(_ file: String, expected: String) thro
         return
     }
     #expect(request.cwd?.rawValue == "/tmp/ws")
-    #expect(request.session == "sess_1")
+    #expect(request.session == SessionID(validating: "sess_1"))
     let action = codec.proposedAction(from: request)
     guard case .shell(let shell) = action else {
         Issue.record("expected ProposedAction.shell")
@@ -131,5 +131,5 @@ func hermesDecode_extractsTerminalCommand(_ file: String, expected: String) thro
         Issue.record("expected .request for taskId")
         return
     }
-    #expect(request.session == "task_main")
+    #expect(request.session == SessionID(validating: "task_main"))
 }

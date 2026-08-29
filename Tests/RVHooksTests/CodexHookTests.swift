@@ -245,7 +245,7 @@ func codexHonorPath_missingReasonExitTwoWithWhitespaceStderrIsNotEnough(_ missin
         return
     }
     #expect(request.cwd?.rawValue == "/tmp/ws")
-    #expect(request.session == "sess_1")
+    #expect(request.session == SessionID(validating: "sess_1"))
     let action = codec.proposedAction(from: request)
     guard case .shell(let shell) = action else {
         Issue.record("expected ProposedAction.shell")
@@ -287,7 +287,7 @@ func codexHonorPath_missingReasonExitTwoWithWhitespaceStderrIsNotEnough(_ missin
         Issue.record("expected .request for turn_id")
         return
     }
-    #expect(request.session == "turn_main")
+    #expect(request.session == SessionID(validating: "turn_main"))
 }
 
 private final class CodexEvaluateProbe: @unchecked Sendable {
