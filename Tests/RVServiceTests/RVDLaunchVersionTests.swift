@@ -3,6 +3,6 @@ import Testing
 
 struct RVDLaunchVersionTests {
     @Test func RVDLaunch_versionLine() {
-        #expect(RVDLaunch.versionLine == "0.1.1")
+        #expect(RVDLaunch.versionLine == "0.1.2")
     }
 }
