@@ -148,6 +148,72 @@ import RVDomain
     }
 }
 
+@Test func sessionScan_includeGlob_extractsUnrecognizedLayout() throws {
+    try withTempTree { root in
+        try FileManager.default.copyItem(
+            at: try fixtureURL("grok/chat_history.jsonl"),
+            to: root.appendingPathComponent("notes.txt")
+        )
+        let home = try #require(ScanHome(validating: "/tmp/rv-scan-unused-home"))
+        let now = Date(timeIntervalSince1970: 1_777_000_000)
+        let skipped = try SessionScan().run(
+            SessionScanRequest(home: home, now: now, rootPath: root.path, scanAll: true)
+        )
+        #expect(skipped.report.findings.isEmpty)
+        #expect(skipped.report.eventsExtracted == 0)
+
+        let result = try SessionScan().run(
+            SessionScanRequest(
+                home: home,
+                now: now,
+                rootPath: root.path,
+                includeGlobs: ["*.txt"],
+                scanAll: true
+            )
+        )
+        #expect(result.report.findings.contains { $0.ruleID.rawValue == "core.git:reset-hard" })
+        #expect(result.eventHosts.contains(.grok))
+    }
+}
+
+@Test func sessionScan_recognizedUnreadableOpenCodeStore_failsClosed() throws {
+    try withTempTree { root in
+        let db = root.appendingPathComponent("opencode.db")
+        try Data().write(to: db, options: .atomic)
+        let home = try #require(ScanHome(validating: "/tmp/rv-scan-unused-home"))
+        let now = Date(timeIntervalSince1970: 1_777_000_000)
+        let expected = db.standardizedFileURL.path
+        #expect(throws: OpenCodeStoreError.unreadable(sourcePath: expected)) {
+            try SessionScan().run(
+                SessionScanRequest(home: home, now: now, rootPath: root.path, scanAll: true)
+            )
+        }
+    }
+}
+
+@Test func sessionScan_defaultTimeWindow_keepsRecentClaudeDeny() throws {
+    try withTempTree { homeURL in
+        try installClaudeResetHard(into: homeURL)
+        let home = try #require(ScanHome(validating: homeURL.path))
+        let now = Date(timeIntervalSince1970: 1_787_313_601)
+        let result = try SessionScan().run(SessionScanRequest(home: home, now: now))
+        #expect(result.report.findings.count == 1)
+        #expect(result.report.findings.first?.ruleID.rawValue == "core.git:reset-hard")
+    }
+}
+
+@Test func sessionScan_defaultTimeWindow_dropsOldClaudeDeny() throws {
+    try withTempTree { homeURL in
+        try installClaudeResetHard(into: homeURL)
+        let home = try #require(ScanHome(validating: homeURL.path))
+        let now = Date(timeIntervalSince1970: 1_787_918_402)
+        let result = try SessionScan().run(SessionScanRequest(home: home, now: now))
+        #expect(result.report.findings.isEmpty)
+        #expect(result.report.eventsExtracted == 1)
+        #expect(result.eventHosts == [.claude])
+    }
+}
+
 @Test func sessionScan_runWalksPathWithoutCallingWallClock() throws {
     try withTempTree { root in
         try writeFile(root.appendingPathComponent("a.txt"), contents: "a")

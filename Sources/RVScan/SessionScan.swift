@@ -81,7 +81,7 @@ public struct SessionScanRequest: Sendable, Equatable {
         rootPath: String? = nil,
         includeGlobs: [String] = [],
         hostFilter: ScanHostID? = nil,
-        days: UInt = 7,
+        days: UInt = ScanTimeWindow.defaultDayCount,
         scanAll: Bool = false,
         packIDs: [PackID] = dayOnePackIDs,
         allEvents: Bool = false,
@@ -100,8 +100,8 @@ public struct SessionScanRequest: Sendable, Equatable {
     }
 }
 
+/// Failures from `SessionScan.run`. Nil `rootPath` is known-host-roots mode, not an error.
 public enum SessionScanError: Error, Sendable, Equatable {
-    case missingRoot
     case pathNotFound(String)
     case listingFailed(String)
     case includeGlobRequiresPath
@@ -123,7 +123,7 @@ public struct SessionScan: Sendable {
         let selected = SessionScanAdapters.selected(hostFilter: request.hostFilter)
         let walker = DirectoryWalker(bounds: request.bounds)
         var warnings: [ScanWarning] = []
-        var candidates: [(url: URL, adapter: any SessionStoreAdapter)] = []
+        var candidates: [ExtractCandidate] = []
         var filesScanned = 0
 
         if let rootPath = request.rootPath {
@@ -146,13 +146,21 @@ public struct SessionScan: Sendable {
                         patterns: request.includeGlobs
                     ) {
                         for adapter in selected {
-                            candidates.append((fileURL, adapter))
+                            candidates.append(
+                                ExtractCandidate(
+                                    url: fileURL,
+                                    adapter: adapter,
+                                    includeGlobOnly: true
+                                )
+                            )
                         }
                     }
                     continue
                 }
                 for adapter in recognized {
-                    candidates.append((fileURL, adapter))
+                    candidates.append(
+                        ExtractCandidate(url: fileURL, adapter: adapter, includeGlobOnly: false)
+                    )
                 }
             }
         } else {
@@ -169,7 +177,9 @@ public struct SessionScan: Sendable {
                     filesScanned += walk.filesVisited
                     for fileURL in walk.fileURLs {
                         guard adapter.recognizes(fileURL: fileURL) else { continue }
-                        candidates.append((fileURL, adapter))
+                        candidates.append(
+                            ExtractCandidate(url: fileURL, adapter: adapter, includeGlobOnly: false)
+                        )
                     }
                 }
             }
@@ -178,10 +188,17 @@ public struct SessionScan: Sendable {
         var events: [ExtractedEvent] = []
         events.reserveCapacity(candidates.count)
         for candidate in candidates {
-            let data = (try? Data(contentsOf: candidate.url)) ?? Data()
-            events.append(
-                contentsOf: try candidate.adapter.extract(fileURL: candidate.url, data: data)
-            )
+            let data = fileManager.contents(atPath: candidate.url.path) ?? Data()
+            do {
+                events.append(
+                    contentsOf: try candidate.adapter.extract(fileURL: candidate.url, data: data)
+                )
+            } catch {
+                // Glob-only files are unknown layouts: a fail-closed SQLite adapter
+                // must not abort the scan when another adapter can still extract.
+                if candidate.includeGlobOnly { continue }
+                throw error
+            }
         }
 
         let classify: ScanClassify
@@ -217,6 +234,12 @@ private func walkMapped(
     } catch DirectoryWalkError.listingFailed(let path) {
         throw SessionScanError.listingFailed(path)
     }
+}
+
+private struct ExtractCandidate {
+    var url: URL
+    var adapter: any SessionStoreAdapter
+    var includeGlobOnly: Bool
 }
 
 private func fileInstantResolver() -> ScanFindingInstantResolver {
