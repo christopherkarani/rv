@@ -56,11 +56,12 @@ public struct ScanReport: Sendable, Equatable {
     }
 }
 
-/// Injected clock and scan inputs. The scan core must not call `Date()`.
+/// Injected clock and scan inputs. The scan core must not read the wall clock.
 public struct SessionScanRequest: Sendable, Equatable {
     public var home: ScanHome
     public var now: Date
     public var rootPath: String?
+    public var includeGlobs: [String]
     public var hostFilter: ScanHostID?
     /// Inclusive lookback in days relative to `now`. Ignored when `scanAll` is true.
     public var days: UInt
@@ -70,12 +71,17 @@ public struct SessionScanRequest: Sendable, Equatable {
     public var allEvents: Bool
     public var bounds: ScanBounds
 
+    public var timeWindow: ScanTimeWindow {
+        scanAll ? .all : ScanTimeWindow(dayCount: days)
+    }
+
     public init(
         home: ScanHome,
         now: Date,
         rootPath: String? = nil,
+        includeGlobs: [String] = [],
         hostFilter: ScanHostID? = nil,
-        days: UInt = 7,
+        days: UInt = ScanTimeWindow.defaultDayCount,
         scanAll: Bool = false,
         packIDs: [PackID] = dayOnePackIDs,
         allEvents: Bool = false,
@@ -84,6 +90,7 @@ public struct SessionScanRequest: Sendable, Equatable {
         self.home = home
         self.now = now
         self.rootPath = rootPath
+        self.includeGlobs = includeGlobs
         self.hostFilter = hostFilter
         self.days = days
         self.scanAll = scanAll
@@ -93,43 +100,153 @@ public struct SessionScanRequest: Sendable, Equatable {
     }
 }
 
+/// Failures from `SessionScan.run`. Nil `rootPath` is known-host-roots mode, not an error.
 public enum SessionScanError: Error, Sendable, Equatable {
-    case missingRoot
     case pathNotFound(String)
     case listingFailed(String)
+    case includeGlobRequiresPath
+    case packsUnavailable
 }
 
-/// Session-forensics entry. Extract/classify/dedupe land in later tickets.
+/// Session-forensics entry: walk, extract, classify, time-window, dedupe.
 public struct SessionScan: Sendable {
     public init() {}
 
     public func run(
         _ request: SessionScanRequest,
         fileManager: FileManager = .default
-    ) throws -> ScanReport {
-        guard let rootPath = request.rootPath else {
-            throw SessionScanError.missingRoot
+    ) throws -> SessionScanResult {
+        if request.includeGlobs.isEmpty == false, request.rootPath == nil {
+            throw SessionScanError.includeGlobRequiresPath
         }
 
-        let root = URL(fileURLWithPath: rootPath, isDirectory: true).standardizedFileURL
-        var isDirectory: ObjCBool = false
-        guard fileManager.fileExists(atPath: root.path, isDirectory: &isDirectory),
-              isDirectory.boolValue
-        else {
-            throw SessionScanError.pathNotFound(rootPath)
+        let selected = SessionScanAdapters.selected(hostFilter: request.hostFilter)
+        let walker = DirectoryWalker(bounds: request.bounds)
+        var warnings: [ScanWarning] = []
+        var candidates: [ExtractCandidate] = []
+        var filesScanned = 0
+
+        if let rootPath = request.rootPath {
+            let root = URL(fileURLWithPath: rootPath, isDirectory: true).standardizedFileURL
+            var isDirectory: ObjCBool = false
+            guard fileManager.fileExists(atPath: root.path, isDirectory: &isDirectory),
+                  isDirectory.boolValue
+            else {
+                throw SessionScanError.pathNotFound(rootPath)
+            }
+            let walk = try walkMapped(walker: walker, root: root, fileManager: fileManager)
+            warnings.append(contentsOf: walk.warnings)
+            filesScanned = walk.filesVisited
+            for fileURL in walk.fileURLs {
+                let recognized = selected.filter { $0.recognizes(fileURL: fileURL) }
+                if recognized.isEmpty {
+                    if matchesIncludeGlob(
+                        fileURL: fileURL,
+                        scanRoot: root,
+                        patterns: request.includeGlobs
+                    ) {
+                        for adapter in selected {
+                            candidates.append(
+                                ExtractCandidate(
+                                    url: fileURL,
+                                    adapter: adapter,
+                                    includeGlobOnly: true
+                                )
+                            )
+                        }
+                    }
+                    continue
+                }
+                for adapter in recognized {
+                    candidates.append(
+                        ExtractCandidate(url: fileURL, adapter: adapter, includeGlobOnly: false)
+                    )
+                }
+            }
+        } else {
+            for adapter in selected {
+                for root in adapter.roots(home: request.home) {
+                    var isDirectory: ObjCBool = false
+                    guard fileManager.fileExists(atPath: root.path, isDirectory: &isDirectory),
+                          isDirectory.boolValue
+                    else {
+                        continue
+                    }
+                    let walk = try walkMapped(walker: walker, root: root, fileManager: fileManager)
+                    warnings.append(contentsOf: walk.warnings)
+                    filesScanned += walk.filesVisited
+                    for fileURL in walk.fileURLs {
+                        guard adapter.recognizes(fileURL: fileURL) else { continue }
+                        candidates.append(
+                            ExtractCandidate(url: fileURL, adapter: adapter, includeGlobOnly: false)
+                        )
+                    }
+                }
+            }
         }
 
-        let walk: DirectoryWalkResult
+        var events: [ExtractedEvent] = []
+        events.reserveCapacity(candidates.count)
+        for candidate in candidates {
+            let data = fileManager.contents(atPath: candidate.url.path) ?? Data()
+            do {
+                events.append(
+                    contentsOf: try candidate.adapter.extract(fileURL: candidate.url, data: data)
+                )
+            } catch {
+                // Glob-only files are unknown layouts: a fail-closed adapter
+                // (SQLite or JSONL) must not abort the scan when another adapter
+                // can still extract.
+                if candidate.includeGlobOnly { continue }
+                throw error
+            }
+        }
+
+        let classify: ScanClassify
         do {
-            walk = try DirectoryWalker(bounds: request.bounds).walk(root: root, fileManager: fileManager)
-        } catch DirectoryWalkError.listingFailed(let path) {
-            throw SessionScanError.listingFailed(path)
+            classify = try ScanClassify(enabledPacks: request.packIDs)
+        } catch ScanClassifyError.packsUnavailable {
+            throw SessionScanError.packsUnavailable
         }
-        return ScanReport(
-            findings: [],
-            warnings: walk.warnings,
-            filesScanned: walk.filesVisited,
-            eventsExtracted: 0
+        let resolver = fileInstantResolver()
+        let rawFindings = classify.classify(events)
+        let inWindow = request.timeWindow.filter(rawFindings, now: request.now, resolver: resolver)
+        let findings = ScanDedupe.apply(inWindow, allEvents: request.allEvents, resolver: resolver)
+
+        return SessionScanResult(
+            report: ScanReport(
+                findings: findings,
+                warnings: warnings,
+                filesScanned: filesScanned,
+                eventsExtracted: events.count
+            ),
+            eventHosts: Set(events.map(\.host))
         )
+    }
+}
+
+private func walkMapped(
+    walker: DirectoryWalker,
+    root: URL,
+    fileManager: FileManager
+) throws -> DirectoryWalkResult {
+    do {
+        return try walker.walk(root: root, fileManager: fileManager)
+    } catch DirectoryWalkError.listingFailed(let path) {
+        throw SessionScanError.listingFailed(path)
+    }
+}
+
+private struct ExtractCandidate {
+    var url: URL
+    var adapter: any SessionStoreAdapter
+    var includeGlobOnly: Bool
+}
+
+private func fileInstantResolver() -> ScanFindingInstantResolver {
+    ScanFindingInstantResolver { path in
+        let url = URL(fileURLWithPath: path)
+        let values = try? url.resourceValues(forKeys: [.contentModificationDateKey])
+        return values?.contentModificationDate
     }
 }
