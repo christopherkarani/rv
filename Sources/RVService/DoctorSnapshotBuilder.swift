@@ -7,8 +7,14 @@ public enum DoctorSnapshotBuilder {
         catalog: PackCatalog,
         corePacksReady: Bool,
         idleExitSeconds: Int,
-        lastError: String? = nil
+        lastError: String? = nil,
+        keepAlive: Bool = false
     ) -> DoctorSnapshotReply {
+#if os(Linux)
+        let reportedKeepAlive = false
+#else
+        let reportedKeepAlive = keepAlive
+#endif
         var checks: [DoctorCheck] = [
             DoctorCheck(id: .xpc, status: .ok, message: "mach service \(RVService.machServiceName)"),
             DoctorCheck(id: .protocol, status: .ok, message: ProtocolVersion.name),
@@ -20,7 +26,10 @@ public enum DoctorSnapshotBuilder {
             DoctorCheck(
                 id: .launchd,
                 status: .ok,
-                message: "template \(RVService.machServiceName) KeepAlive false idle-exit \(idleExitSeconds)s"
+                message: launchdCheckMessage(
+                    keepAlive: reportedKeepAlive,
+                    idleExitSeconds: idleExitSeconds
+                )
             ),
             DoctorCheck(id: .pi, status: .skipped, message: "T7"),
             DoctorCheck(id: .grok, status: .skipped, message: "T7"),
@@ -31,11 +40,26 @@ public enum DoctorSnapshotBuilder {
         }
         return DoctorSnapshotReply(
             state: .running,
-            keepAlive: false,
+            keepAlive: reportedKeepAlive,
             idleExitSeconds: idleExitSeconds,
             packsEnabled: catalog.enabledIDs,
             lastError: lastError,
             checks: checks
         )
+    }
+
+    private static func launchdCheckMessage(
+        keepAlive: Bool,
+        idleExitSeconds: Int
+    ) -> String {
+        let label = RVService.machServiceName
+        if keepAlive {
+            return "template \(label) KeepAlive true"
+        }
+#if os(Linux)
+        return "template \(label) Restart=no idle-exit \(idleExitSeconds)s"
+#else
+        return "template \(label) KeepAlive false idle-exit \(idleExitSeconds)s"
+#endif
     }
 }
