@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import RVDomain
 @testable import RVHooks
 
 private let codec = OpenCodeHostCodec()
@@ -146,7 +147,7 @@ func openCodeDecode_readsSessionId(_ stdin: String, expected: String) {
         Issue.record("expected .request for session id")
         return
     }
-    #expect(request.session == expected)
+    #expect(request.session == SessionID(validating: expected))
     #expect(request.command.rawValue == "git status")
 }
 

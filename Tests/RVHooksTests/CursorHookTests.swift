@@ -84,7 +84,7 @@ func cursorDecode_extractsBeforeShellCommand(_ file: String, expected: String) t
     #expect(request.host == .cursor)
     #expect(request.command.rawValue == "git status")
     #expect(request.cwd?.rawValue == "/tmp/from-input")
-    #expect(request.session == "conv_shell")
+    #expect(request.session == SessionID(validating: "conv_shell"))
 }
 
 @Test func cursorDecode_nonShellPreToolUseIsForeign() throws {
@@ -256,7 +256,7 @@ func cursorDecode_extractsBeforeShellCommand(_ file: String, expected: String) t
         return
     }
     #expect(request.cwd?.rawValue == "/tmp/ws")
-    #expect(request.session == "sess_1")
+    #expect(request.session == SessionID(validating: "sess_1"))
     let action = codec.proposedAction(from: request)
     guard case .shell(let shell) = action else {
         Issue.record("expected ProposedAction.shell")
@@ -309,7 +309,7 @@ func cursorDecode_extractsBeforeShellCommand(_ file: String, expected: String) t
         Issue.record("expected .request for generation_id")
         return
     }
-    #expect(request.session == "gen_main")
+    #expect(request.session == SessionID(validating: "gen_main"))
 }
 
 @Test func cursorCapability_isDenyOrTTYOnly() {
