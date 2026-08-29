@@ -63,7 +63,7 @@ public struct HostNativeApprovalBridge: ApprovalBridge {
 /// Host-native Ask mapping. Leftover unused ask is never a permit.
 public enum HostNativeAsk {
     public static let leftoverAskDeny = Deny(
-        ruleID: RuleID(pack: PackID(rawValue: "builtin.action"), pattern: "leftover-ask"),
+        ruleID: RuleID(pack: ActionPolicyEngine.Builtin.pack, pattern: "leftover-ask"),
         reason: "Ask is not a permit."
     )
 
@@ -84,23 +84,6 @@ public enum HostNativeAsk {
             return .allow
         case .indeterminate, .deny:
             return .deny
-        }
-    }
-
-    /// Host capability table for a bound review. Does not apply spend keys
-    /// (cwd / matching view); the live door uses `verdict(host:result:cwd:bound:)`.
-    public static func verdict(
-        host: HookHost,
-        bound: BoundReview,
-        continuation: ApprovalContinuation = .hostNative
-    ) -> HostAskVerdict {
-        switch bound {
-        case .allow:
-            return .allow
-        case .deny:
-            return .deny
-        case .mandatoryHuman:
-            return pauseIfPossible(host: host, continuation: continuation)
         }
     }
 
@@ -180,7 +163,7 @@ public enum HostNativeAsk {
 
     private static func isUnlockablePackDeny(_ deny: Deny) -> Bool {
         deny.ruleID.pack != .coreSecrets
-            && deny.ruleID.pack != PackID(rawValue: "builtin.action")
+            && deny.ruleID.pack != ActionPolicyEngine.Builtin.pack
     }
 
     private static func pauseIfSpendable(

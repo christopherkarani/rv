@@ -133,11 +133,7 @@ private func encodeFirstCall<C: HostCodec>(
                 next: nil
             )
         case .ask:
-            return codec.encodeAsk(
-                reason: hostAskLine(command: command, ruleID: deny.ruleID),
-                rule: displayRuleID(deny.ruleID),
-                next: hookUnlockNext
-            )
+            return encodeAsked(from: bound, command: command, using: codec)
         }
     }
 }

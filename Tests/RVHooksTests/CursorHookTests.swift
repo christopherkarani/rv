@@ -225,14 +225,20 @@ func cursorDecode_extractsBeforeShellCommand(_ file: String, expected: String) t
         from: result,
         command: ShellCommand(rawValue: "git push origin feature"),
         using: CursorHostCodec(),
-        bound: .mandatoryHuman(deny)
+        bound: .mandatoryHuman(deny),
+        cwd: wd("/tmp/ws")
     )
     #expect(HostNativeAsk.capability(for: .cursor) == .denyOrTTY)
     #expect(HostNativeAsk.capability(for: .pi) == .spendFirst)
     #expect(HostNativeAsk.capability(for: .opencode) == .spendFirst)
     #expect(HostNativeAsk.capability(for: .codex) == .denyOrTTY)
     #expect(
-        HostNativeAsk.verdict(host: .cursor, bound: .mandatoryHuman(deny)) == .deny
+        HostNativeAsk.verdict(
+            host: .cursor,
+            result: result,
+            cwd: wd("/tmp/ws"),
+            bound: .mandatoryHuman(deny)
+        ) == .deny
     )
     #expect(wire.stdout.isEmpty == false)
     try assertCursorHonorPath(

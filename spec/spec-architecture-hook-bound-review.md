@@ -134,7 +134,7 @@ Wire JSON for Pi/OpenCode Ask is unchanged:
 - **AC-104**: Given `effects: [.workingTreeDiscard]`, pack-allow, returns `.deny` builtin working-tree-discard (hard deny wins).
 - **AC-201**: Given Pi stdin `git reset --hard` with cwd, evaluate callback returning pack deny and a nonempty matching view, first-call `hookWire(host:stdin:)` encodes `decision: ask`. Missing cwd or empty matching view stays `decision: deny`. Deny-or-TTY hosts stay deny.
 - **AC-202**: Given Pi stdin `git status` and evaluate callback returning pack allow, first-call encodes allow / empty stdout, not `decision: ask`.
-- **AC-203**: Given `hookWire(from:result, bound: .mandatoryHuman)` Pi/OpenCode still encode Ask JSON; Claude/Grok still deny.
+- **AC-203**: Given `hookWire(from:result, bound: .mandatoryHuman)` with cwd and a nonempty matching view, Pi/OpenCode still encode Ask JSON; Claude/Grok still deny. Missing cwd stays deny.
 - **AC-204**: `tools/gate.sh --quiet RVDomainTests RVHooksTests` exits 0.
 
 # 5b. Tickets (task graph)

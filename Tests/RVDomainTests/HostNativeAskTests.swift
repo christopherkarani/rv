@@ -27,9 +27,16 @@ struct HostNativeAskTests {
     }
 
     @Test(arguments: [HookHost.pi, .opencode])
-    func spendFirstHostsPauseOnMandatoryHuman(_ host: HookHost) {
+    func spendFirstHostsPauseOnMandatoryHuman(_ host: HookHost) throws {
+        let cwd = try #require(WorkingDirectory(validating: "/tmp/ws"))
+        let result = EvaluationResult(
+            outcome: .plain,
+            matchingView: MatchingView("git push --force origin topic")
+        )
         let verdict = HostNativeAsk.verdict(
             host: host,
+            result: result,
+            cwd: cwd,
             bound: .mandatoryHuman(askDeny),
             continuation: .hostNative
         )
@@ -38,9 +45,16 @@ struct HostNativeAskTests {
     }
 
     @Test(arguments: [HookHost.claude, .grok, .openclaw, .hermes, .codex, .cursor])
-    func denyOrTTYHostsDoNotPauseOnMandatoryHuman(_ host: HookHost) {
+    func denyOrTTYHostsDoNotPauseOnMandatoryHuman(_ host: HookHost) throws {
+        let cwd = try #require(WorkingDirectory(validating: "/tmp/ws"))
+        let result = EvaluationResult(
+            outcome: .plain,
+            matchingView: MatchingView("git push --force origin topic")
+        )
         let verdict = HostNativeAsk.verdict(
             host: host,
+            result: result,
+            cwd: cwd,
             bound: .mandatoryHuman(askDeny),
             continuation: .hostNative
         )
@@ -54,11 +68,6 @@ struct HostNativeAskTests {
         #expect(HostNativeAsk.capability(for: .codex) == .denyOrTTY)
         #expect(HostNativeAsk.capability(for: .cursor) == .denyOrTTY)
         #expect(HostNativeAsk.capability(for: .claude) == .denyOrTTY)
-    }
-
-    @Test func boundHardDenyNeverPauses() {
-        #expect(HostNativeAsk.verdict(host: .pi, bound: .deny(packDeny)) == .deny)
-        #expect(HostNativeAsk.verdict(host: .opencode, bound: .deny(packDeny)) == .deny)
     }
 
     @Test func packDecisionDenyStaysDeny() {
@@ -149,6 +158,22 @@ struct HostNativeAskTests {
                 bound: .deny(packDeny)
             ) == .deny
         )
+        #expect(
+            HostNativeAsk.verdict(
+                host: .cursor,
+                result: result,
+                cwd: cwd,
+                bound: .deny(packDeny)
+            ) == .deny
+        )
+        #expect(
+            HostNativeAsk.verdict(
+                host: .claude,
+                result: result,
+                cwd: cwd,
+                bound: .deny(packDeny)
+            ) == .deny
+        )
     }
 
     @Test func doorVerdict_missingCwdNeverAsks() {
@@ -176,13 +201,22 @@ struct HostNativeAskTests {
 
     @Test func doorVerdict_emptyMatchingViewNeverAsks() throws {
         let cwd = try #require(WorkingDirectory(validating: "/tmp/ws"))
-        let result = EvaluationResult(outcome: .deny(packDeny, matched: nil))
+        let packResult = EvaluationResult(outcome: .deny(packDeny, matched: nil))
         #expect(
             HostNativeAsk.verdict(
                 host: .pi,
-                result: result,
+                result: packResult,
                 cwd: cwd,
                 bound: .deny(packDeny)
+            ) == .deny
+        )
+        let humanResult = EvaluationResult(outcome: .plain)
+        #expect(
+            HostNativeAsk.verdict(
+                host: .pi,
+                result: humanResult,
+                cwd: cwd,
+                bound: .mandatoryHuman(askDeny)
             ) == .deny
         )
     }
