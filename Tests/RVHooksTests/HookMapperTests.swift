@@ -256,6 +256,80 @@ private final class EncodeDenySpy: HostCodec, @unchecked Sendable {
     }
 }
 
+private final class EncodeDoorSpy: HostCodec, @unchecked Sendable {
+    let host: HookHost
+    private(set) var allowCalls = 0
+    private(set) var denyCalls = 0
+    private(set) var askCalls = 0
+
+    init(host: HookHost) {
+        self.host = host
+    }
+
+    func decode(_ stdin: String) -> HookDecodeOutcome {
+        .malformed(.missingCommand)
+    }
+
+    func encodeAllow() -> HookWire {
+        allowCalls += 1
+        return HookWire(stdout: "allow\n", exitCode: 0)
+    }
+
+    func encodeDeny(reason: String, rule: String?, next: String?) -> HookWire {
+        denyCalls += 1
+        return HookWire(stdout: "deny\n", exitCode: 9)
+    }
+
+    func encodeAsk(reason: String, rule: String?, next: String?) -> HookWire {
+        askCalls += 1
+        return HookWire(stdout: "ask\n", exitCode: 9)
+    }
+}
+
+@Test func hookWire_packDoorPiDenyDoesNotEncodeAsk() {
+    let deny = Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "x")
+    let spy = EncodeDoorSpy(host: .pi)
+    _ = hookWire(
+        from: EvaluationResult(outcome: .deny(deny, matched: nil)),
+        command: ShellCommand(rawValue: "git reset --hard"),
+        using: spy
+    )
+    #expect(spy.allowCalls == 0)
+    #expect(spy.denyCalls == 1)
+    #expect(spy.askCalls == 0)
+}
+
+@Test func hookWire_boundAllowOnDenyResultDoesNotSilentAllow() {
+    let deny = Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "x")
+    let spy = EncodeDoorSpy(host: .pi)
+    _ = hookWire(
+        from: EvaluationResult(outcome: .deny(deny, matched: nil)),
+        command: ShellCommand(rawValue: "git reset --hard"),
+        using: spy,
+        bound: .allow
+    )
+    #expect(spy.allowCalls == 0)
+    #expect(spy.denyCalls == 1)
+    #expect(spy.askCalls == 0)
+}
+
+@Test func hookWire_boundMandatoryHumanPiEncodesAsk() {
+    let deny = Deny(
+        ruleID: RuleID(pack: PackID(rawValue: "builtin.action"), pattern: "remote-branch-mutation"),
+        reason: "Remote branch mutation requires a human."
+    )
+    let spy = EncodeDoorSpy(host: .pi)
+    _ = hookWire(
+        from: EvaluationResult(outcome: .deny(deny, matched: nil)),
+        command: ShellCommand(rawValue: "git push origin feature"),
+        using: spy,
+        bound: .mandatoryHuman(deny)
+    )
+    #expect(spy.allowCalls == 0)
+    #expect(spy.denyCalls == 0)
+    #expect(spy.askCalls == 1)
+}
+
 @Test func grokDecode_readsCwdWhenPresent() throws {
     let stdin = """
     {"hookEventName":"pre_tool_use","cwd":"/tmp/ws","toolName":"run_terminal_command","toolInput":{"command":"git status"}}

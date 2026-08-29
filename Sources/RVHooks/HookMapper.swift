@@ -83,7 +83,12 @@ private func encodeFirstCall<C: HostCodec>(
     switch result.decision {
     case .allow:
         guard let bound else {
-            return codec.encodeAllow()
+            switch HostNativeAsk.verdict(result.decision) {
+            case .allow:
+                return codec.encodeAllow()
+            case .deny:
+                return codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: nil)
+            }
         }
         switch HostNativeAsk.verdict(host: codec.host, bound: bound) {
         case .allow:
@@ -112,33 +117,47 @@ private func encodeFirstCall<C: HostCodec>(
             )
         }
     case .indeterminate:
+        if bound == nil {
+            switch HostNativeAsk.verdict(result.decision) {
+            case .allow:
+                return codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: nil)
+            case .deny:
+                return codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: nil)
+            }
+        }
         return codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: nil)
     case .deny(let deny):
-        let verdict: HostAskVerdict
         if let bound {
-            verdict = HostNativeAsk.verdict(host: codec.host, bound: bound)
-        } else {
-            verdict = HostNativeAsk.verdict(host: codec.host, decision: result.decision)
+            switch HostNativeAsk.verdict(host: codec.host, bound: bound) {
+            case .allow:
+                // A deny result must never become silent allow.
+                return codec.encodeDeny(
+                    reason: hostDenyLine(command: command, reason: deny.reason),
+                    rule: displayRuleID(deny.ruleID),
+                    next: nil
+                )
+            case .deny:
+                return codec.encodeDeny(
+                    reason: hostDenyLine(command: command, reason: deny.reason),
+                    rule: displayRuleID(deny.ruleID),
+                    next: nil
+                )
+            case .ask:
+                return codec.encodeAsk(
+                    reason: hostAskLine(command: command, ruleID: deny.ruleID),
+                    rule: displayRuleID(deny.ruleID),
+                    next: hookUnlockNext
+                )
+            }
         }
-        switch verdict {
+        switch HostNativeAsk.verdict(result.decision) {
         case .allow:
-            // A deny result must never become silent allow.
-            return codec.encodeDeny(
-                reason: hostDenyLine(command: command, reason: deny.reason),
-                rule: displayRuleID(deny.ruleID),
-                next: nil
-            )
+            return codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: nil)
         case .deny:
             return codec.encodeDeny(
                 reason: hostDenyLine(command: command, reason: deny.reason),
                 rule: displayRuleID(deny.ruleID),
                 next: nil
-            )
-        case .ask:
-            return codec.encodeAsk(
-                reason: hostAskLine(command: command, ruleID: deny.ruleID),
-                rule: displayRuleID(deny.ruleID),
-                next: hookUnlockNext
             )
         }
     }
