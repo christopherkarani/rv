@@ -61,11 +61,19 @@ public func applyFilesystemSemantics(
     switch verdict.decision {
     case .hardAllow, .reviewEligible:
         return result
-    case .hardDeny(let deny), .mandatoryHuman(let deny):
+    case .hardDeny(let deny):
         return EvaluationResult(
             outcome: .deny(deny, matched: nil),
             matchingView: pack.matchingView,
-            analysis: analysis
+            analysis: analysis,
+            boundReview: .deny(deny)
+        )
+    case .mandatoryHuman(let deny):
+        return EvaluationResult(
+            outcome: .deny(deny, matched: nil),
+            matchingView: pack.matchingView,
+            analysis: analysis,
+            boundReview: .mandatoryHuman(deny)
         )
     }
 }

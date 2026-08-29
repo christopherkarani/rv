@@ -24,6 +24,7 @@ struct ApplyFilesystemSemanticsTests {
         }
         #expect(writeAction.operationKind == .write)
         #expect(writeAction.resources.filesystemScope == .insideRepository)
+        #expect(writeComposed.boundReview == nil)
 
         let create = try runFilesystemPack("touch new.swift")
         #expect(create.decision == .allow)
@@ -54,6 +55,7 @@ struct ApplyFilesystemSemanticsTests {
             return
         }
         #expect(deny.ruleID == ActionPolicyEngine.Builtin.outsideRepository.ruleID)
+        #expect(composed.boundReview == .deny(ActionPolicyEngine.Builtin.outsideRepository))
         guard case .filesystem(let action) = composed.analysis else {
             Issue.record("expected filesystem analysis")
             return
