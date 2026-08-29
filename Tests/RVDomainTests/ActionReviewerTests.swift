@@ -105,35 +105,25 @@ struct ActionReviewerTests {
         #expect(shell.scope.workingDirectory?.rawValue == ReviewSanitizer.redactedPlaceholder)
     }
 
-    @Test func unsupportedReviewer_fallsBackToAskNotAllow() async {
-        let reviewer = StubActionReviewer(
-            providerID: ReviewerProviderID(rawValue: "stub.unsupported"),
-            result: .failure(.unsupported)
-        )
-        let bound = await ReviewBind.apply(
+    @Test func unsupportedReviewer_fallsBackToAskNotAllow() {
+        let bound = ReviewBind.apply(
             hardDecision: eligible,
-            request: request,
-            reviewer: reviewer
+            review: .failure(.unsupported)
         )
         #expect(bound == .mandatoryHuman(ActionReviewerFixtures.fallbackDeny))
         #expect(bound.decision == .deny(ActionReviewerFixtures.fallbackDeny))
     }
 
-    @Test func timeoutReviewer_fallsBackToAskNotAllow() async {
-        let reviewer = StubActionReviewer(
-            providerID: ReviewerProviderID(rawValue: "stub.timeout"),
-            result: .failure(.timeout)
-        )
-        let bound = await ReviewBind.apply(
+    @Test func timeoutReviewer_fallsBackToAskNotAllow() {
+        let bound = ReviewBind.apply(
             hardDecision: eligible,
-            request: request,
-            reviewer: reviewer
+            review: .failure(.timeout)
         )
         #expect(bound == .mandatoryHuman(ActionReviewerFixtures.fallbackDeny))
         #expect(bound.decision != .allow)
     }
 
-    @Test func lowConfidenceAllow_doesNotAuthorize() async {
+    @Test func lowConfidenceAllow_doesNotAuthorize() async throws {
         let reviewer = StubActionReviewer(
             providerID: ReviewerProviderID(rawValue: "stub.low-confidence"),
             result: .success(
@@ -144,16 +134,13 @@ struct ActionReviewerTests {
                 )
             )
         )
-        let bound = await ReviewBind.apply(
-            hardDecision: eligible,
-            request: request,
-            reviewer: reviewer
-        )
+        let review = try await reviewer.review(request)
+        let bound = ReviewBind.apply(hardDecision: eligible, review: .success(review))
         #expect(bound == .mandatoryHuman(ActionReviewerFixtures.fallbackDeny))
         #expect(bound.decision != .allow)
     }
 
-    @Test func conflictingRationale_doesNotAuthorize() async {
+    @Test func conflictingRationale_doesNotAuthorize() async throws {
         let reviewer = StubActionReviewer(
             providerID: ReviewerProviderID(rawValue: "stub.conflict"),
             result: .success(
@@ -165,16 +152,24 @@ struct ActionReviewerTests {
                 )
             )
         )
-        let bound = await ReviewBind.apply(
-            hardDecision: eligible,
-            request: request,
-            reviewer: reviewer
-        )
+        let review = try await reviewer.review(request)
+        let bound = ReviewBind.apply(hardDecision: eligible, review: .success(review))
         #expect(bound == .mandatoryHuman(ActionReviewerFixtures.fallbackDeny))
         #expect(bound.decision != .allow)
     }
 
-    @Test func hardDeny_isNotLiftedByStubAllow() async {
+    @Test func abstain_doesNotAuthorize() {
+        let abstain = ActionReviewerFixtures.review(
+            decision: .abstain,
+            confidence: .high,
+            rationaleCategory: .abstain
+        )
+        let bound = ReviewBind.apply(hardDecision: eligible, review: .success(abstain))
+        #expect(bound == .mandatoryHuman(ActionReviewerFixtures.fallbackDeny))
+        #expect(bound.decision != .allow)
+    }
+
+    @Test func hardDeny_isNotLiftedByStubAllow() async throws {
         let reviewer = StubActionReviewer(
             providerID: ReviewerProviderID(rawValue: "stub.allow"),
             result: .success(
@@ -185,16 +180,16 @@ struct ActionReviewerTests {
                 )
             )
         )
-        let bound = await ReviewBind.apply(
+        let review = try await reviewer.review(request)
+        let bound = ReviewBind.apply(
             hardDecision: .hardDeny(ActionReviewerFixtures.hardDeny),
-            request: request,
-            reviewer: reviewer
+            review: .success(review)
         )
         #expect(bound == .deny(ActionReviewerFixtures.hardDeny))
         #expect(bound.decision == .deny(ActionReviewerFixtures.hardDeny))
     }
 
-    @Test func mandatoryHuman_isNotLiftedByStubAllow() async {
+    @Test func mandatoryHuman_isNotLiftedByStubAllow() async throws {
         let ask = Deny(
             ruleID: RuleID(pack: PackID(rawValue: "core.git"), pattern: "force-push"),
             reason: "Shared-branch mutation needs a human."
@@ -209,16 +204,16 @@ struct ActionReviewerTests {
                 )
             )
         )
-        let bound = await ReviewBind.apply(
+        let review = try await reviewer.review(request)
+        let bound = ReviewBind.apply(
             hardDecision: .mandatoryHuman(ask),
-            request: request,
-            reviewer: reviewer
+            review: .success(review)
         )
         #expect(bound == .mandatoryHuman(ask))
         #expect(bound.decision == .deny(ask))
     }
 
-    @Test func swappingStubReviewers_usesDomainBindOnly() async {
+    @Test func swappingStubReviewers_usesDomainBindOnly() async throws {
         let allowStub = StubActionReviewer(
             providerID: ReviewerProviderID(rawValue: "stub.allow"),
             result: .success(
@@ -242,13 +237,8 @@ struct ActionReviewerTests {
         let reviewers: [any ActionReviewer] = [allowStub, denyStub]
         var bounds: [BoundReview] = []
         for reviewer in reviewers {
-            bounds.append(
-                await ReviewBind.apply(
-                    hardDecision: eligible,
-                    request: request,
-                    reviewer: reviewer
-                )
-            )
+            let review = try await reviewer.review(request)
+            bounds.append(ReviewBind.apply(hardDecision: eligible, review: .success(review)))
         }
         #expect(allowStub.providerID != denyStub.providerID)
         #expect(bounds.count == 2)
