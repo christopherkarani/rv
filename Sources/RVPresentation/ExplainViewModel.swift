@@ -9,6 +9,8 @@ public struct ExplainSemanticView: Equatable, Sendable {
     public var pathspec: String?
     public var path: String?
     public var kind: String?
+    public var category: String?
+    public var catalogRule: String?
     public var wrappers: [String]?
 
     public init(
@@ -20,6 +22,8 @@ public struct ExplainSemanticView: Equatable, Sendable {
         pathspec: String? = nil,
         path: String? = nil,
         kind: String? = nil,
+        category: String? = nil,
+        catalogRule: String? = nil,
         wrappers: [String]? = nil
     ) {
         self.action = action
@@ -30,6 +34,8 @@ public struct ExplainSemanticView: Equatable, Sendable {
         self.pathspec = pathspec
         self.path = path
         self.kind = kind
+        self.category = category
+        self.catalogRule = catalogRule
         self.wrappers = wrappers
     }
 }
@@ -152,6 +158,8 @@ public func explainSemantic(from analysis: SemanticAnalysis) -> ExplainSemanticV
             effect: action.explainEffect,
             path: action.explainPath,
             kind: action.explainKind,
+            category: action.explainCategory,
+            catalogRule: action.explainCatalogRule,
             wrappers: wrapperLabels
         )
     case .unwrapLimited:

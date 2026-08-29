@@ -161,7 +161,12 @@ private func follow(
             resolved = candidate
             index += 1
         case .symlink:
-            if visitedPaths.contains(candidate) {
+            // System root symlinks (/var -> private/var, /tmp -> private/tmp) are
+            // not user-controlled loops. Revisiting them via different absolute
+            // paths (e.g. outer /var/folders/.../ssh-link -> dest /var/folders/...)
+            // must not be treated as a loop. Skip visited check for them.
+            let isSystemRoot = candidate == "/var" || candidate == "/tmp"
+            if !isSystemRoot, visitedPaths.contains(candidate) {
                 return FilesystemPathFact(
                     apparent: apparent,
                     canonical: candidate,
@@ -178,7 +183,9 @@ private func follow(
                     resolution: .uncertain
                 )
             }
-            visitedPaths.insert(candidate)
+            if !isSystemRoot {
+                visitedPaths.insert(candidate)
+            }
             guard let dest = try? FileManager.default.destinationOfSymbolicLink(atPath: candidate)
             else {
                 return FilesystemPathFact(

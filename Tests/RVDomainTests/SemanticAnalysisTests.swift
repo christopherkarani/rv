@@ -38,6 +38,10 @@ struct SemanticAnalysisTests {
             ActionPolicyEngine.Builtin.outsideRepositoryRead.rawValue
                 == "builtin.action:out-of-repo-read"
         )
+        #expect(
+            ActionPolicyEngine.Builtin.protectedPath.ruleID.rawValue
+                == "builtin.action:protected-path-mutation"
+        )
     }
 
     @Test func wrapper_codableRoundTrip() throws {

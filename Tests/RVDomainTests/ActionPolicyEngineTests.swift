@@ -195,6 +195,22 @@ struct ActionPolicyEngineTests {
         #expect(verdict.explanation.zone == .reviewEligible)
     }
 
+    @Test func protectedScopeWrite_withoutMutationEffect_isStillHardDeny() {
+        let action = ActionPolicyFixtures.filesystem(
+            effects: [.filesystemOverwrite],
+            path: "/home/.ssh/id_rsa",
+            scope: .protectedPath
+        )
+        let denied = ActionPolicyEngine.evaluate(action: action, context: shared)
+        #expect(denied.decision == .hardDeny(ActionPolicyEngine.Builtin.protectedPath))
+        let overlay = ActionPolicyEngine.evaluate(
+            action: action,
+            context: shared,
+            policy: EffectiveActionPolicy(overlay: .allow)
+        )
+        #expect(overlay.decision == .hardDeny(ActionPolicyEngine.Builtin.protectedPath))
+    }
+
     @Test func overlayAllow_cannotLiftProtectedPathMutation() {
         let action = ActionPolicyFixtures.filesystem(
             effects: [.filesystemDelete, .protectedPathMutation],

@@ -75,6 +75,72 @@ struct AnalyzeFilesystemTests {
         #expect(targets[0].apparent == "link")
     }
 
+    @Test func homeAliases_resolveToProtectedScope() {
+        let context = FilesystemAnalysisContext(
+            workingDirectory: WorkingDirectory(validating: "/isolated-home/project"),
+            repositoryRoot: RepositoryRoot(validating: "/isolated-home/project"),
+            homeDirectory: "/isolated-home"
+        )
+        let commands = [
+            "rm ~/.ssh/config",
+            "rm $HOME/.ssh/config",
+            "rm ${HOME}/.ssh/config",
+            "rm ../.ssh/config",
+        ]
+        for command in commands {
+            let analysis = analyzeFilesystem(ShellCommand(rawValue: command), context: context)
+            guard case .filesystem(let action) = analysis else {
+                Issue.record("expected filesystem analysis for \(command)")
+                continue
+            }
+            #expect(action.primaryTarget?.scope == .protectedPath)
+            #expect(action.primaryTarget?.canonical == "/isolated-home/.ssh/config")
+            #expect(action.primaryTarget?.protectedMatch?.pattern == "home-ssh")
+            #expect(action.primaryTarget?.protectedMatch?.category == .ssh)
+            #expect(action.effects.kinds.contains(.protectedPathMutation))
+            #expect(action.explainCategory == "ssh")
+            #expect(action.explainCatalogRule == "core.secrets/home-ssh")
+        }
+    }
+
+    @Test func inRepoOrdinaryFile_isNotProtectedByDefault() {
+        let analysis = analyzeFilesystem(
+            ShellCommand(rawValue: "rm Sources/Foo.swift"),
+            context: repo
+        )
+        guard case .filesystem(let action) = analysis else {
+            Issue.record("expected filesystem analysis")
+            return
+        }
+        #expect(action.primaryTarget?.scope == .insideRepository)
+        #expect(action.primaryTarget?.protectedMatch == nil)
+        #expect(action.effects.kinds.contains(.protectedPathMutation) == false)
+    }
+
+    @Test func keychainAndCloudHomes_areProtectedCategories() {
+        let context = FilesystemAnalysisContext(
+            workingDirectory: WorkingDirectory(validating: "/repo"),
+            repositoryRoot: RepositoryRoot(validating: "/repo"),
+            homeDirectory: "/isolated-home"
+        )
+        let rows: [(String, String, SecretPathCategory)] = [
+            ("rm ~/.aws/config", "home-aws", .cloud),
+            ("rm ~/Library/Keychains/login.keychain-db", "home-keychains", .keychain),
+            ("rm $HOME/.gnupg/trustdb.gpg", "home-gnupg", .keychain),
+            ("rm ${HOME}/.local/share/keyrings/login.keyring", "home-keyrings", .keychain),
+        ]
+        for (command, pattern, category) in rows {
+            let analysis = analyzeFilesystem(ShellCommand(rawValue: command), context: context)
+            guard case .filesystem(let action) = analysis else {
+                Issue.record("expected filesystem analysis for \(command)")
+                continue
+            }
+            #expect(action.primaryTarget?.scope == .protectedPath)
+            #expect(action.primaryTarget?.protectedMatch?.pattern == pattern)
+            #expect(action.primaryTarget?.protectedMatch?.category == category)
+        }
+    }
+
     @Test func symlinkToProtected_isProtectedScope() {
         let context = FilesystemAnalysisContext(
             workingDirectory: WorkingDirectory(validating: "/repo"),
@@ -95,6 +161,8 @@ struct AnalyzeFilesystemTests {
         }
         #expect(action.primaryTarget?.scope == .protectedPath)
         #expect(action.effects.kinds.contains(.protectedPathMutation))
+        #expect(action.primaryTarget?.protectedMatch?.pattern == "id-rsa")
+        #expect(action.primaryTarget?.protectedMatch?.category == .ssh)
     }
 
     @Test func relativeTraversalChains_resolveOutsideBeforePolicy() {

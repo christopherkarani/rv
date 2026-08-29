@@ -57,6 +57,7 @@ public struct FilesystemTarget: Sendable, Equatable, Codable {
     public var kind: FilesystemResourceKind
     public var followedSymlink: Bool
     public var resolution: FilesystemResolution
+    public var protectedMatch: SecretPathMatch?
 
     public init(
         apparent: String,
@@ -64,7 +65,8 @@ public struct FilesystemTarget: Sendable, Equatable, Codable {
         scope: FilesystemScope,
         kind: FilesystemResourceKind,
         followedSymlink: Bool = false,
-        resolution: FilesystemResolution = .lexical
+        resolution: FilesystemResolution = .lexical,
+        protectedMatch: SecretPathMatch? = nil
     ) {
         self.apparent = apparent
         self.canonical = canonical
@@ -72,6 +74,7 @@ public struct FilesystemTarget: Sendable, Equatable, Codable {
         self.kind = kind
         self.followedSymlink = followedSymlink
         self.resolution = resolution
+        self.protectedMatch = protectedMatch
     }
 }
 
@@ -125,7 +128,8 @@ public enum FilesystemAction: Sendable, Equatable, Codable {
         return ActionResources(
             path: target?.canonical,
             filesystemScope: target?.scope,
-            resourceKind: target?.kind
+            resourceKind: target?.kind,
+            protectedMatch: target?.protectedMatch
         )
     }
 
@@ -178,6 +182,17 @@ public enum FilesystemAction: Sendable, Equatable, Codable {
         }
     }
 
+    /// Display string for the protected category (e.g. "ssh", "keychain").
+    /// Kept as `String?` not `SecretPathCategory` to keep `RVPresentation`/`RVTUI`
+    /// decoupled from the domain enum and to avoid leaking the enum via Codable.
+    public var explainCategory: String? {
+        primaryTarget?.protectedMatch?.category.rawValue
+    }
+
+    public var explainCatalogRule: String? {
+        primaryTarget?.protectedMatch.map { displayRuleID($0.ruleID) }
+    }
+
     public func proposedAction(
         command: ShellCommand,
         workingDirectory: WorkingDirectory?
@@ -217,7 +232,12 @@ public enum FilesystemAction: Sendable, Equatable, Codable {
         {
             kinds.append(.outsideRepositoryMutation)
         }
-        if targets.contains(where: { $0.scope == .protectedPath && $0.resolution != .uncertain }) {
+        // Guard reads like `outsideRepositoryMutation`: `cat ~/.ssh/config` is
+        // still denied via `SecretPathGuard` (core.secrets), but the filesystem
+        // effect is conservative and only marks mutating operations.
+        if operationKind != .read,
+            targets.contains(where: { $0.scope == .protectedPath && $0.resolution != .uncertain })
+        {
             kinds.append(.protectedPathMutation)
         }
         return kinds

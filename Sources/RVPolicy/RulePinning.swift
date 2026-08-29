@@ -8,10 +8,12 @@ public enum PinnedRulePolarity: String, Sendable, Equatable {
 
 public enum RuleHardStopKind: Sendable, Equatable {
     case secretPath
+    case protectedPath
     case protectedSharedBranch
     case workingTreeDiscard
     case outsideRepository
     case unresolvedPath
+    case unwrapLimited
 }
 
 public struct RulePreview: Sendable, Equatable {
@@ -86,12 +88,31 @@ public enum RulePinning: Sendable {
             if deny.ruleID == ActionPolicyEngine.Builtin.unresolvedFilesystem.ruleID {
                 return .unresolvedPath
             }
+            if deny.ruleID == ActionPolicyEngine.Builtin.protectedPath.ruleID {
+                return .protectedPath
+            }
             return .protectedSharedBranch
+        }
+        if unwrapLimitedCommand(action.supportingCommand) {
+            return .unwrapLimited
         }
         if secretPathHit(action.supportingCommand) {
             return .secretPath
         }
         return nil
+    }
+
+    public static func blocksAllowOverride(_ result: EvaluationResult) -> Bool {
+        if case .deny(let deny) = result.decision, blocksAllowOverride(deny) {
+            return true
+        }
+        if result.analysis.innermost == .unwrapLimited {
+            return true
+        }
+        if result.analysis.filesystemAction?.primaryTarget?.scope == .protectedPath {
+            return true
+        }
+        return false
     }
 
     public static func blocksAllowOverride(_ deny: Deny) -> Bool {
@@ -111,6 +132,9 @@ public enum RulePinning: Sendable {
             return true
         }
         if deny.ruleID == ActionPolicyEngine.Builtin.protectedPath.ruleID {
+            return true
+        }
+        if deny.ruleID == ActionPolicyEngine.Builtin.unwrapLimited.ruleID {
             return true
         }
         return false
@@ -141,12 +165,16 @@ public enum RulePinning: Sendable {
             switch stop {
             case .secretPath:
                 return "This action reads a secret path. Always-allow cannot override that hard stop."
+            case .protectedPath:
+                return "This action mutates a protected host path. Always-allow cannot override that hard stop."
             case .workingTreeDiscard:
                 return "This action discards the working tree. Always-allow cannot override that hard stop."
             case .outsideRepository:
                 return "This action writes outside the repository. Always-allow cannot override that hard stop."
             case .unresolvedPath:
                 return "This action has an unresolved path. Always-allow cannot override that hard stop."
+            case .unwrapLimited:
+                return "This action exceeded unwrap limits. Always-allow cannot override that hard stop."
             case .protectedSharedBranch, nil:
                 return "This action mutates a protected shared branch. Always-allow cannot override that hard stop."
             }
@@ -165,6 +193,37 @@ private struct DraftBody: Codable, Equatable {
     var id: String
     var polarity: String
     var v: Int
+}
+
+private func unwrapLimitedCommand(_ command: ShellCommand?) -> Bool {
+    guard let raw = command?.rawValue.trimmingCharacters(in: .whitespacesAndNewlines),
+          raw.isEmpty == false
+    else {
+        return false
+    }
+    let tokens = raw.split(whereSeparator: \.isWhitespace).map(String.init)
+    guard let headIndex = tokens.firstIndex(where: { ["bash", "sh", "zsh"].contains($0.lowercased()) })
+    else {
+        return false
+    }
+    var index = headIndex + 1
+    while index < tokens.count {
+        let token = tokens[index]
+        if token == "-c" || token == "--command" {
+            guard index + 1 < tokens.count else { return true }
+            let payload = tokens[index + 1]
+            if payload.hasPrefix("'") || payload.hasPrefix("\"") {
+                return false
+            }
+            return true
+        }
+        if token.hasPrefix("-") {
+            index += 1
+            continue
+        }
+        return false
+    }
+    return false
 }
 
 private func secretPathHit(_ command: ShellCommand?) -> Bool {
@@ -202,42 +261,7 @@ private func pathCandidates(in command: String) -> [String] {
 }
 
 private func secretPathMatches(_ candidate: String, _ kind: SecretPathKind) -> Bool {
-    switch kind {
-    case .basename(let name):
-        return lastPathComponent(candidate) == name
-    case .envVariant:
-        return lastPathComponent(candidate).hasPrefix(".env.")
-    case .homeSuffix(let parts), .hostAuth(let parts):
-        return matchesHomeSuffix(candidate, parts: parts)
-    }
+    secretPathKindMatches(candidate, kind)
 }
 
-private func lastPathComponent(_ path: String) -> String {
-    path.split(separator: "/", omittingEmptySubsequences: true).last.map(String.init) ?? path
-}
-
-private func matchesHomeSuffix(_ candidate: String, parts: [String]) -> Bool {
-    let joined = parts.joined(separator: "/")
-    if hasPathPrefix(candidate, prefix: "~/" + joined) { return true }
-    if hasPathPrefix(candidate, prefix: "$HOME/" + joined) { return true }
-    if hasPathPrefix(candidate, prefix: "${HOME}/" + joined) { return true }
-    let components = candidate.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
-    return containsContiguous(components, parts)
-}
-
-private func hasPathPrefix(_ candidate: String, prefix: String) -> Bool {
-    candidate == prefix || candidate.hasPrefix(prefix + "/")
-}
-
-private func containsContiguous(_ haystack: [String], _ needle: [String]) -> Bool {
-    guard needle.isEmpty == false, haystack.count >= needle.count else { return false }
-    let lastStart = haystack.count - needle.count
-    var start = 0
-    while start <= lastStart {
-        if haystack[start..<(start + needle.count)].elementsEqual(needle) {
-            return true
-        }
-        start += 1
-    }
-    return false
-}
+// Matching helpers now live in RVDomain/SecretPathMatching.swift — single matcher.

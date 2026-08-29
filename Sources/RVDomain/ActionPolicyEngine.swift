@@ -247,6 +247,21 @@ public enum ActionPolicyEngine: Sendable {
                 semanticallyCovered: true
             )
         }
+        // Scope alone is enough: a write that omitted `.protectedPathMutation`
+        // must not fall through to reviewEligible / overlay allow.
+        // Reads (`cat ~/.ssh/config`) are intentionally not filesystem-deny;
+        // they are still covered by `SecretPathGuard` (core.secrets) when
+        // evaluated via `Evaluate`. Guard like `outsideRepository`.
+        if kinds.contains(.protectedPathMutation)
+            || (isWriteLike(kinds) && scope == .protectedPath)
+        {
+            return CoreHit(
+                decision: .hardDeny(Builtin.protectedPath),
+                ruleID: Builtin.protectedPath.ruleID,
+                reason: Builtin.protectedPath.reason,
+                semanticallyCovered: true
+            )
+        }
         if kinds.contains(.outsideRepositoryMutation)
             || (isWriteLike(kinds) && scope == .outsideRepository)
         {
