@@ -65,6 +65,8 @@ actor FakePendingApprovals: PendingApprovalCoordinating {
             record.state = .resolved(ApprovalResolution(decision: decision, resolvedAt: now))
             records[index] = record
             return record
+        case .consumed:
+            throw PendingApprovalError.alreadyConsumed
         case .resolved, .expired, .canceled, .timedOut:
             throw PendingApprovalError.alreadyResolved
         }

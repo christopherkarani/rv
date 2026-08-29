@@ -168,7 +168,7 @@ public enum ApprovalTimeoutPolicy: String, Sendable, Equatable, Codable {
     case failTask
 }
 
-/// Recorded human decision. Consumption is tracked on `PendingApproval`.
+/// Recorded human decision. Consumption is a `PendingApprovalState.consumed` transition.
 public struct ApprovalResolution: Sendable, Equatable, Codable {
     public var decision: ApprovalDecision
     public var resolvedAt: Date
@@ -194,6 +194,7 @@ public struct ApprovalTimeoutEnding: Sendable, Equatable, Codable {
 public enum PendingApprovalState: Sendable, Equatable, Codable {
     case awaitingHuman
     case resolved(ApprovalResolution)
+    case consumed(ApprovalResolution, at: Date)
     case expired(at: Date)
     case canceled(at: Date)
     case timedOut(ApprovalTimeoutEnding)
@@ -213,6 +214,10 @@ public enum PendingApprovalState: Sendable, Equatable, Codable {
         case .resolved(let resolution):
             try container.encode("resolved", forKey: .kind)
             try container.encode(resolution, forKey: .resolution)
+        case .consumed(let resolution, let at):
+            try container.encode("consumed", forKey: .kind)
+            try container.encode(resolution, forKey: .resolution)
+            try container.encode(at, forKey: .at)
         case .expired(let at):
             try container.encode("expired", forKey: .kind)
             try container.encode(at, forKey: .at)
@@ -233,6 +238,11 @@ public enum PendingApprovalState: Sendable, Equatable, Codable {
             self = .awaitingHuman
         case "resolved":
             self = .resolved(try container.decode(ApprovalResolution.self, forKey: .resolution))
+        case "consumed":
+            self = .consumed(
+                try container.decode(ApprovalResolution.self, forKey: .resolution),
+                at: try container.decode(Date.self, forKey: .at)
+            )
         case "expired":
             self = .expired(at: try container.decode(Date.self, forKey: .at))
         case "canceled":
@@ -291,7 +301,6 @@ public struct PendingApproval: Sendable, Equatable, Codable {
     public var createdAt: Date
     public var expiresAt: Date
     public var state: PendingApprovalState
-    public var consumedAt: Date?
 
     public init(
         id: ApprovalID,
@@ -302,8 +311,7 @@ public struct PendingApproval: Sendable, Equatable, Codable {
         timeoutPolicy: ApprovalTimeoutPolicy,
         createdAt: Date,
         expiresAt: Date,
-        state: PendingApprovalState,
-        consumedAt: Date? = nil
+        state: PendingApprovalState
     ) {
         self.id = id
         self.identity = identity
@@ -314,22 +322,70 @@ public struct PendingApproval: Sendable, Equatable, Codable {
         self.createdAt = createdAt
         self.expiresAt = expiresAt
         self.state = state
-        self.consumedAt = consumedAt
     }
 
     public var fingerprint: ActionFingerprint {
         action.fingerprint
     }
 
+    /// Instant this record was consumed. `nil` unless `state` is `.consumed`.
+    public var consumedAt: Date? {
+        guard case .consumed(_, let at) = state else { return nil }
+        return at
+    }
+
     /// True only for an unconsumed authorizing resolution of this exact bind.
     public func authorizes(_ fingerprint: ActionFingerprint, identity: ApprovalIdentity) -> Bool {
-        guard consumedAt == nil else { return false }
         guard self.identity == identity, self.fingerprint == fingerprint else { return false }
         if case .retry(let retryFingerprint) = continuation, retryFingerprint != fingerprint {
             return false
         }
         guard case .resolved(let resolution) = state else { return false }
         return resolution.decision.authorizesExactAction
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case identity
+        case action
+        case reason
+        case continuation
+        case timeoutPolicy
+        case createdAt
+        case expiresAt
+        case state
+        case consumedAt
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(identity, forKey: .identity)
+        try container.encode(action, forKey: .action)
+        try container.encode(reason, forKey: .reason)
+        try container.encode(continuation, forKey: .continuation)
+        try container.encode(timeoutPolicy, forKey: .timeoutPolicy)
+        try container.encode(createdAt, forKey: .createdAt)
+        try container.encode(expiresAt, forKey: .expiresAt)
+        try container.encode(state, forKey: .state)
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(ApprovalID.self, forKey: .id)
+        identity = try container.decode(ApprovalIdentity.self, forKey: .identity)
+        action = try container.decode(ProposedAction.self, forKey: .action)
+        reason = try container.decode(ApprovalReason.self, forKey: .reason)
+        continuation = try container.decode(ApprovalContinuation.self, forKey: .continuation)
+        timeoutPolicy = try container.decode(ApprovalTimeoutPolicy.self, forKey: .timeoutPolicy)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        expiresAt = try container.decode(Date.self, forKey: .expiresAt)
+        var state = try container.decode(PendingApprovalState.self, forKey: .state)
+        let legacyConsumedAt = try container.decodeIfPresent(Date.self, forKey: .consumedAt)
+        if case .resolved(let resolution) = state, let consumedAt = legacyConsumedAt {
+            state = .consumed(resolution, at: consumedAt)
+        }
+        self.state = state
     }
 }
 

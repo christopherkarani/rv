@@ -68,7 +68,13 @@ struct PendingApprovalLedgerTests {
             now: Self.now
         )
         #expect(first.decision == .allowOnce)
-        #expect(first.approval.consumedAt == Self.now)
+        guard case .consumed(let resolution, let at) = first.approval.state else {
+            Issue.record("consume must fold into PendingApprovalState.consumed")
+            return
+        }
+        #expect(resolution.decision == .allowOnce)
+        #expect(at == Self.now)
+        #expect(first.approval.consumedAt == at)
         #expect(first.approval.authorizes(Self.fingerprint, identity: Self.identity) == false)
         #expect(throws: PendingApprovalError.alreadyConsumed) {
             _ = try PendingApprovalLedger.consume(
@@ -111,6 +117,12 @@ struct PendingApprovalLedgerTests {
         )
         #expect(consumption.decision == .deny)
         #expect(consumption.decision.authorizesExactAction == false)
+        guard case .consumed(let resolution, _) = consumption.approval.state else {
+            Issue.record("deny consume must still be .consumed")
+            return
+        }
+        #expect(resolution.decision == .deny)
+        #expect(consumption.approval.authorizes(Self.fingerprint, identity: Self.identity) == false)
         #expect(throws: PendingApprovalError.alreadyConsumed) {
             _ = try PendingApprovalLedger.consume(
                 records: after,
@@ -443,6 +455,169 @@ struct PendingApprovalLedgerTests {
         #expect(retry.continuation == .retry(Self.fingerprint))
     }
 
+    @Test func awaitingHumanCannotCarryAParallelConsumedAt() throws {
+        let created = try Self.created()
+        #expect(created.record.state == .awaitingHuman)
+        #expect(created.record.consumedAt == nil)
+        #expect(created.record.authorizes(Self.fingerprint, identity: Self.identity) == false)
+        #expect(throws: PendingApprovalError.notResolved) {
+            _ = try PendingApprovalLedger.consume(
+                records: created.records,
+                id: created.record.id,
+                fingerprint: Self.fingerprint,
+                identity: Self.identity,
+                now: Self.now
+            )
+        }
+    }
+
+    @Test(arguments: [ApprovalDecision.allowOnce, .createRule, .deny])
+    func consumeFoldsEachDecisionIntoConsumedState(decision: ApprovalDecision) throws {
+        let created = try Self.created()
+        let (resolved, afterResolve) = try PendingApprovalLedger.resolve(
+            records: created.records,
+            id: created.record.id,
+            decision: decision,
+            fingerprint: Self.fingerprint,
+            identity: Self.identity,
+            now: Self.now
+        )
+        guard case .resolved = resolved.state else {
+            Issue.record("resolve must leave an unconsumed authorizing-or-deny resolution")
+            return
+        }
+        #expect(resolved.consumedAt == nil)
+        let (consumption, afterConsume) = try PendingApprovalLedger.consume(
+            records: afterResolve,
+            id: created.record.id,
+            fingerprint: Self.fingerprint,
+            identity: Self.identity,
+            now: Self.now
+        )
+        guard case .consumed(let resolution, let at) = consumption.approval.state else {
+            Issue.record("consume must transition .resolved → .consumed")
+            return
+        }
+        #expect(resolution.decision == decision)
+        #expect(at == Self.now)
+        #expect(consumption.approval.consumedAt == at)
+        #expect(consumption.approval.authorizes(Self.fingerprint, identity: Self.identity) == false)
+        #expect(throws: PendingApprovalError.alreadyConsumed) {
+            _ = try PendingApprovalLedger.consume(
+                records: afterConsume,
+                id: created.record.id,
+                fingerprint: Self.fingerprint,
+                identity: Self.identity,
+                now: Self.now
+            )
+        }
+        #expect(throws: PendingApprovalError.alreadyConsumed) {
+            _ = try PendingApprovalLedger.resolve(
+                records: afterConsume,
+                id: created.record.id,
+                decision: .allowOnce,
+                fingerprint: Self.fingerprint,
+                identity: Self.identity,
+                now: Self.now
+            )
+        }
+    }
+
+    @Test func consumedStateRoundTripsThroughCodable() throws {
+        let created = try Self.created()
+        let (_, resolved) = try PendingApprovalLedger.resolve(
+            records: created.records,
+            id: created.record.id,
+            decision: .allowOnce,
+            fingerprint: Self.fingerprint,
+            identity: Self.identity,
+            now: Self.now
+        )
+        let (consumption, _) = try PendingApprovalLedger.consume(
+            records: resolved,
+            id: created.record.id,
+            fingerprint: Self.fingerprint,
+            identity: Self.identity,
+            now: Self.now
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let data = try encoder.encode(consumption.approval)
+        let decoded = try decoder.decode(PendingApproval.self, from: data)
+        #expect(decoded == consumption.approval)
+        guard case .consumed = decoded.state else {
+            Issue.record("new encodes must use PendingApprovalState.consumed")
+            return
+        }
+        let object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let state = try #require(object["state"] as? [String: Any])
+        #expect(state["kind"] as? String == "consumed")
+        #expect(object["consumedAt"] == nil)
+    }
+
+    @Test func decodeMigratesResolvedPlusParentConsumedAt() throws {
+        let created = try Self.created()
+        let (resolved, _) = try PendingApprovalLedger.resolve(
+            records: created.records,
+            id: created.record.id,
+            decision: .createRule,
+            fingerprint: Self.fingerprint,
+            identity: Self.identity,
+            now: Self.now
+        )
+        guard case .resolved(let resolution) = resolved.state else {
+            Issue.record("fixture must start as unconsumed .resolved")
+            return
+        }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let encoded = try encoder.encode(resolved)
+        var object = try #require(try JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        let stamp = try encoder.encode(LegacyConsumedAtStamp(consumedAt: Self.now))
+        let stampObject = try #require(try JSONSerialization.jsonObject(with: stamp) as? [String: Any])
+        object["consumedAt"] = stampObject["consumedAt"]
+        let state = try #require(object["state"] as? [String: Any])
+        #expect(state["kind"] as? String == "resolved")
+        let legacy = try JSONSerialization.data(withJSONObject: object)
+        let decoded = try decoder.decode(PendingApproval.self, from: legacy)
+        guard case .consumed(let migrated, let at) = decoded.state else {
+            Issue.record("resolved + parent consumedAt must decode as .consumed")
+            return
+        }
+        #expect(migrated == resolution)
+        #expect(at == Self.now)
+        #expect(decoded.consumedAt == at)
+        #expect(decoded.authorizes(Self.fingerprint, identity: Self.identity) == false)
+    }
+
+    @Test func resolvedWithoutParentConsumedAtStaysResolved() throws {
+        let created = try Self.created()
+        let (resolved, _) = try PendingApprovalLedger.resolve(
+            records: created.records,
+            id: created.record.id,
+            decision: .allowOnce,
+            fingerprint: Self.fingerprint,
+            identity: Self.identity,
+            now: Self.now
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = try decoder.decode(PendingApproval.self, from: encoder.encode(resolved))
+        guard case .resolved = decoded.state else {
+            Issue.record("unconsumed resolved JSON must stay .resolved")
+            return
+        }
+        #expect(decoded.consumedAt == nil)
+        #expect(decoded.authorizes(Self.fingerprint, identity: Self.identity))
+        #expect(decoded == resolved)
+    }
+
     @Test func emptyIdentityOrTTLIsRejected() {
         let emptyIdentity = PendingApprovalRequest(
             id: ApprovalID(rawValue: "ask"),
@@ -537,4 +712,8 @@ private extension PendingApprovalLedgerTests {
             now: now
         )
     }
+}
+
+private struct LegacyConsumedAtStamp: Encodable {
+    var consumedAt: Date
 }

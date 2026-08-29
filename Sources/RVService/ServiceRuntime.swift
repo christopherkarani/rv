@@ -502,7 +502,7 @@ public actor ServiceRuntime {
                 switch resolved.state {
                 case .awaitingHuman:
                     terminal = false
-                case .resolved, .expired, .canceled, .timedOut:
+                case .resolved, .consumed, .expired, .canceled, .timedOut:
                     terminal = true
                 }
                 return .ruleSave(RuleSaveReply(ruleID: outcome.ruleID, waitResolved: terminal))
@@ -564,7 +564,7 @@ public actor ServiceRuntime {
             switch resolved.state {
             case .awaitingHuman:
                 terminal = false
-            case .resolved, .expired, .canceled, .timedOut:
+            case .resolved, .consumed, .expired, .canceled, .timedOut:
                 terminal = true
             }
             return .pendingResolve(PendingResolveReply(id: resolved.id, terminal: terminal))
