@@ -206,7 +206,6 @@ enum ScanRun {
         case pathNotFound(String)
         case packsUnavailable
         case includeGlobRequiresPath
-        case missingRoot
         case listingFailed(String)
     }
 
@@ -242,7 +241,6 @@ enum ScanRun {
         case .pathNotFound(let path): .pathNotFound(path)
         case .packsUnavailable: .packsUnavailable
         case .includeGlobRequiresPath: .includeGlobRequiresPath
-        case .missingRoot: .missingRoot
         case .listingFailed(let path): .listingFailed(path)
         }
     }
