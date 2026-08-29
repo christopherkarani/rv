@@ -83,6 +83,7 @@ private func runOpenCodePluginContract(_ source: String) async throws -> OpenCod
     #expect(source.contains("Next"))
     #expect(source.contains("ui?.confirm"))
     #expect(source.contains("hostAsk: \"spend\""))
+    #expect(source.contains("unlockable ? \"ask\"") == false)
     #expect(source.contains("terminate: true") == false)
     #expect(source.contains("user_bash") == false)
     #expect(source.contains("permission.ask") == false)
@@ -102,6 +103,7 @@ private func runOpenCodePluginContract(_ source: String) async throws -> OpenCod
     #expect(source.contains("showToast"))
     #expect(source.contains("RV · Blocked"))
     #expect(source.contains("hostAsk: \"spend\""))
+    #expect(source.contains("unlockable ? \"ask\"") == false)
     #expect(source.contains("onResolution"))
     #expect(source.contains("session.permission.create"))
     #expect(source.contains("permission.ask") == false)
@@ -473,16 +475,15 @@ func cursorWrapper_emptyOrWhitespaceStdoutExitZeroIsDenyNotAllow(_ stubStdout: S
     #expect(result.spawnCount == 1)
 }
 
-@Test func piAdapter_unlockableDenyConfirmYesSpendsThenAllows() async throws {
+@Test func piAdapter_denyJSONDoesNotPause() async throws {
     let result = try await runPiAdapter(
         event: ["toolName": "bash", "input": ["command": "git reset --hard"], "cwd": "/tmp/ws"],
         stub: .stdout(resetHardJSON, exit: 1),
         confirmYes: true,
         secondStub: .stdout("", exit: 0)
     )
-    #expect(result.block == nil)
-    #expect(result.spawnCount == 2)
-    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
+    #expect(result.block == true)
+    #expect(result.spawnCount == 1)
 }
 
 @Test func openCodeAdapter_sessionShellResetHardThrowsHostDenyText() async throws {
@@ -1059,16 +1060,15 @@ func cursorWrapper_emptyOrWhitespaceStdoutExitZeroIsDenyNotAllow(_ stubStdout: S
     #expect(result.spawnCount == 1)
 }
 
-@Test func openCodeAdapter_unlockableDenyConfirmYesSpendsThenAllows() async throws {
+@Test func openCodeAdapter_denyJSONDoesNotPause() async throws {
     let result = try await runOpenCodeAdapter(
         event: ["tool": "bash", "cwd": "/tmp/ws", "args": ["command": "git reset --hard"]],
         stub: .stdout(resetHardJSON, exit: 1),
         confirmYes: true,
         secondStub: .stdout("", exit: 0)
     )
-    #expect(result.threw == nil)
-    #expect(result.spawnCount == 2)
-    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
+    #expect(result.threw == resetHardReason)
+    #expect(result.spawnCount == 1)
 }
 
 @Test func piAdapter_nonBashDoesNotSpawn() async throws {

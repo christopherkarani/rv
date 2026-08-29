@@ -111,6 +111,159 @@ struct HostNativeAskTests {
         )
     }
 
+    @Test func doorVerdict_unlockablePackDenyAsksOnSpendFirst() throws {
+        let cwd = try #require(WorkingDirectory(validating: "/tmp/ws"))
+        let result = EvaluationResult(
+            outcome: .deny(packDeny, matched: nil),
+            matchingView: MatchingView("git reset --hard")
+        )
+        #expect(
+            HostNativeAsk.verdict(
+                host: .pi,
+                result: result,
+                cwd: cwd,
+                bound: .deny(packDeny)
+            ) == .ask(.hostNative)
+        )
+        #expect(
+            HostNativeAsk.verdict(
+                host: .opencode,
+                result: result,
+                cwd: cwd,
+                bound: .deny(packDeny)
+            ) == .ask(.hostNative)
+        )
+        #expect(
+            HostNativeAsk.verdict(
+                host: .grok,
+                result: result,
+                cwd: cwd,
+                bound: .deny(packDeny)
+            ) == .deny
+        )
+        #expect(
+            HostNativeAsk.verdict(
+                host: .codex,
+                result: result,
+                cwd: cwd,
+                bound: .deny(packDeny)
+            ) == .deny
+        )
+    }
+
+    @Test func doorVerdict_missingCwdNeverAsks() {
+        let result = EvaluationResult(
+            outcome: .deny(packDeny, matched: nil),
+            matchingView: MatchingView("git reset --hard")
+        )
+        #expect(
+            HostNativeAsk.verdict(
+                host: .pi,
+                result: result,
+                cwd: nil,
+                bound: .deny(packDeny)
+            ) == .deny
+        )
+        #expect(
+            HostNativeAsk.verdict(
+                host: .pi,
+                result: result,
+                cwd: nil,
+                bound: .mandatoryHuman(askDeny)
+            ) == .deny
+        )
+    }
+
+    @Test func doorVerdict_emptyMatchingViewNeverAsks() throws {
+        let cwd = try #require(WorkingDirectory(validating: "/tmp/ws"))
+        let result = EvaluationResult(outcome: .deny(packDeny, matched: nil))
+        #expect(
+            HostNativeAsk.verdict(
+                host: .pi,
+                result: result,
+                cwd: cwd,
+                bound: .deny(packDeny)
+            ) == .deny
+        )
+    }
+
+    @Test func doorVerdict_secretPathNeverAsks() throws {
+        let cwd = try #require(WorkingDirectory(validating: "/tmp/ws"))
+        let secret = Deny(
+            ruleID: RuleID(pack: .coreSecrets, pattern: "aws-credentials"),
+            reason: "secret path"
+        )
+        let result = EvaluationResult(
+            outcome: .deny(secret, matched: nil),
+            matchingView: MatchingView("cat ~/.aws/credentials")
+        )
+        #expect(
+            HostNativeAsk.verdict(
+                host: .pi,
+                result: result,
+                cwd: cwd,
+                bound: .deny(secret)
+            ) == .deny
+        )
+    }
+
+    @Test func doorVerdict_builtinHardDenyNeverAsks() throws {
+        let cwd = try #require(WorkingDirectory(validating: "/tmp/ws"))
+        let leftover = HostNativeAsk.leftoverAskDeny
+        let result = EvaluationResult(
+            outcome: .deny(leftover, matched: nil),
+            matchingView: MatchingView("git reset --hard")
+        )
+        #expect(
+            HostNativeAsk.verdict(
+                host: .pi,
+                result: result,
+                cwd: cwd,
+                bound: .deny(leftover)
+            ) == .deny
+        )
+    }
+
+    @Test func doorVerdict_mandatoryHumanAsksWhenSpendable() throws {
+        let cwd = try #require(WorkingDirectory(validating: "/tmp/ws"))
+        let result = EvaluationResult(
+            outcome: .plain,
+            matchingView: MatchingView("git push --force origin topic")
+        )
+        #expect(
+            HostNativeAsk.verdict(
+                host: .pi,
+                result: result,
+                cwd: cwd,
+                bound: .mandatoryHuman(askDeny)
+            ) == .ask(.hostNative)
+        )
+        #expect(
+            HostNativeAsk.verdict(
+                host: .claude,
+                result: result,
+                cwd: cwd,
+                bound: .mandatoryHuman(askDeny)
+            ) == .deny
+        )
+    }
+
+    @Test func doorVerdict_boundAllowOnPackDenyNeverAsks() throws {
+        let cwd = try #require(WorkingDirectory(validating: "/tmp/ws"))
+        let result = EvaluationResult(
+            outcome: .deny(packDeny, matched: nil),
+            matchingView: MatchingView("git reset --hard")
+        )
+        #expect(
+            HostNativeAsk.verdict(
+                host: .pi,
+                result: result,
+                cwd: cwd,
+                bound: .allow
+            ) == .deny
+        )
+    }
+
     @Test func hookBound_hardPolicyCases_projectDirectly() {
         #expect(HostNativeAsk.hookBound(.hardAllow) == .allow)
         #expect(HostNativeAsk.hookBound(.hardDeny(packDeny)) == .deny(packDeny))

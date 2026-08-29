@@ -320,10 +320,32 @@ private final class EncodeDoorSpy: HostCodec, @unchecked Sendable {
     )
     let spy = EncodeDoorSpy(host: .pi)
     _ = hookWire(
-        from: EvaluationResult(outcome: .deny(deny, matched: nil)),
+        from: EvaluationResult(
+            outcome: .deny(deny, matched: nil),
+            matchingView: MatchingView("git push origin feature")
+        ),
         command: ShellCommand(rawValue: "git push origin feature"),
         using: spy,
-        bound: .mandatoryHuman(deny)
+        bound: .mandatoryHuman(deny),
+        cwd: wd("/tmp/ws")
+    )
+    #expect(spy.allowCalls == 0)
+    #expect(spy.denyCalls == 0)
+    #expect(spy.askCalls == 1)
+}
+
+@Test func hookWire_unlockablePackDenyWithCwdEncodesAsk() {
+    let deny = Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "x")
+    let spy = EncodeDoorSpy(host: .pi)
+    _ = hookWire(
+        from: EvaluationResult(
+            outcome: .deny(deny, matched: nil),
+            matchingView: MatchingView("git reset --hard")
+        ),
+        command: ShellCommand(rawValue: "git reset --hard"),
+        using: spy,
+        bound: .deny(deny),
+        cwd: wd("/tmp/ws")
     )
     #expect(spy.allowCalls == 0)
     #expect(spy.denyCalls == 0)

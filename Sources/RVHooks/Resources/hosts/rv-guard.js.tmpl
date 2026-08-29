@@ -561,9 +561,8 @@ function mapRvHookResult(value) {
         };
       }
       if (parsed && parsed.decision === "deny") {
-        const unlockable = typeof parsed.rule === "string" && parsed.rule.length > 0;
         return {
-          action: unlockable ? "ask" : "block",
+          action: "block",
           reason: typeof parsed.reason === "string" ? parsed.reason : "",
           rule: typeof parsed.rule === "string" ? parsed.rule : undefined,
           next: typeof parsed.next === "string" ? parsed.next : undefined,
