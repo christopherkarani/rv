@@ -108,15 +108,32 @@ private func decodedJSON(_ text: String) throws -> [String: Any] {
     }
 }
 
-@Test func includeGlob_matchesBasenameAndRelativePath() {
-    let root = URL(fileURLWithPath: "/tmp/rv-scan-glob", isDirectory: true)
-    let nested = root.appendingPathComponent("nested/notes.txt")
-    let top = root.appendingPathComponent("notes.txt")
-    #expect(matchesIncludeGlob(fileURL: top, scanRoot: root, patterns: ["*.txt"]))
-    #expect(matchesIncludeGlob(fileURL: nested, scanRoot: root, patterns: ["*.txt"]))
-    #expect(matchesIncludeGlob(fileURL: nested, scanRoot: root, patterns: ["nested/*.txt"]))
-    #expect(matchesIncludeGlob(fileURL: nested, scanRoot: root, patterns: ["*.jsonl"]) == false)
-    #expect(matchesIncludeGlob(fileURL: top, scanRoot: root, patterns: []) == false)
+@Test func scanRun_includeGlob_withExplicitPath_forwardsGlobsAndFindsUnrecognizedGrokDeny() throws {
+    try withTempScanHome { home, homeURL in
+        let tree = homeURL.appendingPathComponent("explicit-tree", isDirectory: true)
+        try FileManager.default.createDirectory(at: tree, withIntermediateDirectories: true)
+        try FileManager.default.copyItem(
+            at: try scanFixtureURL("grok/chat_history.jsonl"),
+            to: tree.appendingPathComponent("notes.txt")
+        )
+
+        let skipped = try ScanRun.run(
+            .fixture(rootPath: tree.path, home: home)
+        )
+        #expect(skipped.findings.isEmpty)
+        #expect(skipped.eventsExtracted == 0)
+
+        let report = try ScanRun.run(
+            .fixture(
+                rootPath: tree.path,
+                home: home,
+                includeGlobs: ["*.txt"]
+            )
+        )
+        #expect(report.findings.contains { $0.ruleID.rawValue == "core.git:reset-hard" })
+        #expect(report.findings.first?.host == .grok)
+        #expect(report.findings.first?.sourcePath.contains("notes.txt") == true)
+    }
 }
 
 @Test func scanRun_includeGlobWithoutPath_failsClosedWithoutWalkingHome() throws {
@@ -146,6 +163,55 @@ private func decodedJSON(_ text: String) throws -> [String: Any] {
     } catch ScanRun.Error.pathNotFound(let path) {
         #expect(path == missing)
     }
+}
+
+@Test func scanRun_unknownPacks_mapsPacksUnavailable() throws {
+    try withTempScanHome { home, homeURL in
+        do {
+            _ = try ScanRun.run(
+                .fixture(
+                    rootPath: homeURL.path,
+                    home: home,
+                    packIDs: [PackID(rawValue: "no.such.pack")]
+                )
+            )
+            Issue.record("expected packsUnavailable")
+        } catch ScanRun.Error.packsUnavailable {
+            // mapped from SessionScanError.packsUnavailable
+        }
+    }
+}
+
+@Test func scanRun_listingFailure_mapsListingFailed() throws {
+    try withTempScanHome { home, homeURL in
+        try FileManager.default.setAttributes([.posixPermissions: 0o111], ofItemAtPath: homeURL.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: homeURL.path)
+        }
+        let expected = URL(fileURLWithPath: homeURL.path, isDirectory: true).standardizedFileURL.path
+        do {
+            _ = try ScanRun.run(
+                .fixture(rootPath: homeURL.path, home: home)
+            )
+            Issue.record("expected listingFailed")
+        } catch ScanRun.Error.listingFailed(let path) {
+            #expect(path == expected)
+        }
+    }
+}
+
+@Test func scanRun_executeDoesNotContainPipelineLoops() throws {
+    let url = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .appendingPathComponent("Sources/RVCLI/Commands/ScanCommand.swift")
+    let text = try String(contentsOf: url, encoding: .utf8)
+    #expect(text.contains("SessionScan()"))
+    #expect(text.contains("DirectoryWalker") == false)
+    #expect(text.contains("ScanClassify") == false)
+    #expect(text.contains("ScanDedupe") == false)
+    #expect(text.contains(".extract(") == false)
 }
 
 @Test func scanRobot_defaultRedaction_usesSchemaAndEllipsis() throws {

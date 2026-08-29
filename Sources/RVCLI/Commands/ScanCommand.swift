@@ -1,8 +1,3 @@
-#if canImport(Darwin)
-import Darwin
-#elseif canImport(Glibc)
-import Glibc
-#endif
 import ArgumentParser
 import Foundation
 import RVDomain
@@ -127,6 +122,9 @@ struct ScanSessions: AsyncParsableCommand {
         } catch ScanRun.Error.pathNotFound(let missing) {
             FileHandle.standardError.write(Data("rv scan: path not found: \(missing)\n".utf8))
             throw ExitCode(1)
+        } catch ScanRun.Error.listingFailed(let path) {
+            FileHandle.standardError.write(Data("rv scan: listing failed: \(path)\n".utf8))
+            throw ExitCode(1)
         } catch ScanRun.Error.packsUnavailable {
             FileHandle.standardError.write(Data("rv scan: packs unavailable\n".utf8))
             throw ExitCode(1)
@@ -211,111 +209,43 @@ enum ScanRun {
         case pathNotFound(String)
         case packsUnavailable
         case includeGlobRequiresPath
+        case listingFailed(String)
     }
-
-    private static let adapters: [any SessionStoreAdapter] = [
-        ClaudeSessionStoreAdapter(),
-        PiStoreAdapter(),
-        GrokStoreAdapter(),
-        OpenCodeStoreAdapter(),
-        OpenClawStoreAdapter(),
-        HermesStoreAdapter(),
-        CodexStoreAdapter(),
-        CursorStoreAdapter(),
-    ]
 
     static func run(_ request: Request) throws -> ScanReport {
         try execute(request).report
     }
 
     static func execute(_ request: Request) throws -> ScanRunResult {
-        if request.includeGlobs.isEmpty == false, request.rootPath == nil {
-            throw Error.includeGlobRequiresPath
-        }
-        let selected = selectedAdapters(hostFilter: request.hostFilter)
-        let walker = DirectoryWalker(bounds: request.bounds)
-        var warnings: [ScanWarning] = []
-        var candidates: [(url: URL, adapter: any SessionStoreAdapter)] = []
-        var filesScanned = 0
-
-        if let rootPath = request.rootPath {
-            let root = URL(fileURLWithPath: rootPath, isDirectory: true).standardizedFileURL
-            var isDirectory: ObjCBool = false
-            guard request.fileManager.fileExists(atPath: root.path, isDirectory: &isDirectory),
-                  isDirectory.boolValue
-            else {
-                throw Error.pathNotFound(rootPath)
-            }
-            let walk = try walker.walk(root: root, fileManager: request.fileManager)
-            warnings.append(contentsOf: walk.warnings)
-            filesScanned = walk.filesVisited
-            for fileURL in walk.fileURLs {
-                let recognized = selected.filter { $0.recognizes(fileURL: fileURL) }
-                if recognized.isEmpty {
-                    if matchesIncludeGlob(
-                        fileURL: fileURL,
-                        scanRoot: root,
-                        patterns: request.includeGlobs
-                    ) {
-                        for adapter in selected {
-                            candidates.append((fileURL, adapter))
-                        }
-                    }
-                    continue
-                }
-                for adapter in recognized {
-                    candidates.append((fileURL, adapter))
-                }
-            }
-        } else {
-            for adapter in selected {
-                for root in adapter.roots(home: request.home) {
-                    var isDirectory: ObjCBool = false
-                    guard request.fileManager.fileExists(atPath: root.path, isDirectory: &isDirectory),
-                          isDirectory.boolValue
-                    else {
-                        continue
-                    }
-                    let walk = try walker.walk(root: root, fileManager: request.fileManager)
-                    warnings.append(contentsOf: walk.warnings)
-                    filesScanned += walk.filesVisited
-                    for fileURL in walk.fileURLs {
-                        guard adapter.recognizes(fileURL: fileURL) else { continue }
-                        candidates.append((fileURL, adapter))
-                    }
-                }
-            }
-        }
-
-        var events: [ExtractedEvent] = []
-        events.reserveCapacity(candidates.count)
-        for candidate in candidates {
-            let data = (try? Data(contentsOf: candidate.url)) ?? Data()
-            events.append(
-                contentsOf: try candidate.adapter.extract(fileURL: candidate.url, data: data)
-            )
-        }
-
-        let classify: ScanClassify
         do {
-            classify = try ScanClassify(enabledPacks: request.packIDs)
-        } catch ScanClassifyError.packsUnavailable {
-            throw Error.packsUnavailable
+            let result = try SessionScan().run(
+                SessionScanRequest(
+                    home: request.home,
+                    now: request.now,
+                    rootPath: request.rootPath,
+                    includeGlobs: request.includeGlobs,
+                    hostFilter: request.hostFilter,
+                    days: request.timeWindow.dayCount,
+                    scanAll: request.timeWindow.isDisabled,
+                    packIDs: request.packIDs,
+                    allEvents: request.allEvents,
+                    bounds: request.bounds
+                ),
+                fileManager: request.fileManager
+            )
+            return ScanRunResult(report: result.report, eventHosts: result.eventHosts)
+        } catch let error as SessionScanError {
+            throw mapped(error)
         }
-        let resolver = fileInstantResolver(fileManager: request.fileManager)
-        let rawFindings = classify.classify(events)
-        let inWindow = request.timeWindow.filter(rawFindings, now: request.now, resolver: resolver)
-        let findings = ScanDedupe.apply(inWindow, allEvents: request.allEvents, resolver: resolver)
+    }
 
-        return ScanRunResult(
-            report: ScanReport(
-                findings: findings,
-                warnings: warnings,
-                filesScanned: filesScanned,
-                eventsExtracted: events.count
-            ),
-            eventHosts: Set(events.map(\.host))
-        )
+    private static func mapped(_ error: SessionScanError) -> Error {
+        switch error {
+        case .pathNotFound(let path): .pathNotFound(path)
+        case .packsUnavailable: .packsUnavailable
+        case .includeGlobRequiresPath: .includeGlobRequiresPath
+        case .listingFailed(let path): .listingFailed(path)
+        }
     }
 
     static func render(
@@ -350,19 +280,6 @@ enum ScanRun {
                 lines = ScanPrettyRenderer().render(model, palette: palette)
             }
             return ScanOutcome(stdout: PrettyWriter.join(lines), exitCode: exitCode)
-        }
-    }
-
-    private static func selectedAdapters(hostFilter: ScanHostID?) -> [any SessionStoreAdapter] {
-        guard let hostFilter else { return adapters }
-        return adapters.filter { $0.host == hostFilter }
-    }
-
-    private static func fileInstantResolver(fileManager: FileManager) -> ScanFindingInstantResolver {
-        ScanFindingInstantResolver { path in
-            let url = URL(fileURLWithPath: path)
-            let values = try? url.resourceValues(forKeys: [.contentModificationDateKey])
-            return values?.contentModificationDate
         }
     }
 }
@@ -429,35 +346,4 @@ private func scanFindingRow(from finding: ScanFinding, showCommand: Bool) -> Sca
         lastSeen: finding.lastSeen,
         showCommand: showCommand
     )
-}
-
-func matchesIncludeGlob(fileURL: URL, scanRoot: URL, patterns: [String]) -> Bool {
-    guard patterns.isEmpty == false else { return false }
-    let relative = relativePath(fileURL: fileURL, to: scanRoot)
-    let name = fileURL.lastPathComponent
-    for pattern in patterns {
-        if posixFnmatch(pattern, relative, flags: FNM_PATHNAME) { return true }
-        if posixFnmatch(pattern, name, flags: 0) { return true }
-    }
-    return false
-}
-
-/// POSIX `fnmatch` via Darwin or Glibc. RVCLI is on the Linux package graph.
-private func posixFnmatch(_ pattern: String, _ name: String, flags: Int32) -> Bool {
-    pattern.withCString { patternC in
-        name.withCString { nameC in
-            fnmatch(patternC, nameC, flags) == 0
-        }
-    }
-}
-
-private func relativePath(fileURL: URL, to root: URL) -> String {
-    let rootPath = root.standardizedFileURL.path
-    let filePath = fileURL.standardizedFileURL.path
-    guard filePath.hasPrefix(rootPath) else { return fileURL.lastPathComponent }
-    var suffix = String(filePath.dropFirst(rootPath.count))
-    if suffix.hasPrefix("/") {
-        suffix.removeFirst()
-    }
-    return suffix.isEmpty ? fileURL.lastPathComponent : suffix
 }
