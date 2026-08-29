@@ -882,14 +882,6 @@ private func protectedMatch(
     return catalog.firstMatch(of: canonical).map(SecretPathMatch.init)
 }
 
-private func isHomeAliasPath(_ path: String) -> Bool {
-    // Mirrors RVDomain.isHomeAliasPath — keep private; see SecretPathMatching.swift
-    // for the single matcher used by catalog/policy.
-    path == "~" || path.hasPrefix("~/")
-        || path == "$HOME" || path.hasPrefix("$HOME/")
-        || path == "${HOME}" || path.hasPrefix("${HOME}/")
-}
-
 private func expandHomeAlias(_ path: String, homeDirectory: String?) -> String {
     guard let homeDirectory, isHomeAliasPath(path) else {
         return path
