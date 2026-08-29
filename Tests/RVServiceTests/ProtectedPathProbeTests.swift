@@ -83,6 +83,51 @@ struct ProtectedPathProbeTests {
         #expect(result.analysis.filesystemAction?.explainCatalogRule == "core.secrets/home-ssh")
     }
 
+    @Test func allowlistCannotWhitelistEchoRedirectToSSH() async throws {
+        let repo = try makeProtectedRepo()
+        let home = try isolatedHomeDirectory()
+        try seedSSH(in: home)
+        let command = "echo leaked > ~/.ssh/config"
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let denied = try await peek(command, cwd: repo, home: HomeDirectory(validating: home.path))
+        guard case .deny(let deny) = denied.decision else {
+            Issue.record("echo redirect to ~/.ssh must deny, got \(denied.decision)")
+            return
+        }
+        #expect(deny.ruleID.pack == .coreFilesystem)
+        #expect(denied.analysis.filesystemAction?.primaryTarget?.scope == .protectedPath)
+
+        let allowlist = AllowlistSnapshot(entries: [
+            AllowlistEntry(
+                selector: .exactCommand(denied.matchingView),
+                reason: "repo overlay",
+                addedAt: now
+            ),
+            AllowlistEntry(
+                selector: .rule(deny.ruleID),
+                reason: "repo overlay rule",
+                addedAt: now
+            ),
+        ])
+        let store = AllowOnceStore(baseDirectory: try isolatedAllowOnceDirectory())
+        let lifted = await GatedEvaluate().peek(
+            EvaluationRequest(
+                command: ShellCommand(rawValue: command),
+                enabledPacks: dayOnePackIDs
+            ),
+            cwd: WorkingDirectory(validating: repo.path),
+            home: HomeDirectory(validating: home.path),
+            store: store,
+            now: now,
+            allowlist: { allowlist }
+        )
+        guard case .deny(let kept) = lifted.decision else {
+            Issue.record("allowlist must not lift pack-floor protected-path write")
+            return
+        }
+        #expect(kept.ruleID == deny.ruleID)
+    }
+
     @Test func allowlistCannotWhitelistProtectedSSH() async throws {
         let repo = try makeProtectedRepo()
         let home = try isolatedHomeDirectory()

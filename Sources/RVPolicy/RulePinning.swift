@@ -13,6 +13,7 @@ public enum RuleHardStopKind: Sendable, Equatable {
     case workingTreeDiscard
     case outsideRepository
     case unresolvedPath
+    case unwrapLimited
 }
 
 public struct RulePreview: Sendable, Equatable {
@@ -92,10 +93,26 @@ public enum RulePinning: Sendable {
             }
             return .protectedSharedBranch
         }
+        if unwrapLimitedCommand(action.supportingCommand) {
+            return .unwrapLimited
+        }
         if secretPathHit(action.supportingCommand) {
             return .secretPath
         }
         return nil
+    }
+
+    public static func blocksAllowOverride(_ result: EvaluationResult) -> Bool {
+        if case .deny(let deny) = result.decision, blocksAllowOverride(deny) {
+            return true
+        }
+        if result.analysis.innermost == .unwrapLimited {
+            return true
+        }
+        if result.analysis.filesystemAction?.primaryTarget?.scope == .protectedPath {
+            return true
+        }
+        return false
     }
 
     public static func blocksAllowOverride(_ deny: Deny) -> Bool {
@@ -115,6 +132,9 @@ public enum RulePinning: Sendable {
             return true
         }
         if deny.ruleID == ActionPolicyEngine.Builtin.protectedPath.ruleID {
+            return true
+        }
+        if deny.ruleID == ActionPolicyEngine.Builtin.unwrapLimited.ruleID {
             return true
         }
         return false
@@ -153,6 +173,8 @@ public enum RulePinning: Sendable {
                 return "This action writes outside the repository. Always-allow cannot override that hard stop."
             case .unresolvedPath:
                 return "This action has an unresolved path. Always-allow cannot override that hard stop."
+            case .unwrapLimited:
+                return "This action exceeded unwrap limits. Always-allow cannot override that hard stop."
             case .protectedSharedBranch, nil:
                 return "This action mutates a protected shared branch. Always-allow cannot override that hard stop."
             }
@@ -171,6 +193,37 @@ private struct DraftBody: Codable, Equatable {
     var id: String
     var polarity: String
     var v: Int
+}
+
+private func unwrapLimitedCommand(_ command: ShellCommand?) -> Bool {
+    guard let raw = command?.rawValue.trimmingCharacters(in: .whitespacesAndNewlines),
+          raw.isEmpty == false
+    else {
+        return false
+    }
+    let tokens = raw.split(whereSeparator: \.isWhitespace).map(String.init)
+    guard let headIndex = tokens.firstIndex(where: { ["bash", "sh", "zsh"].contains($0.lowercased()) })
+    else {
+        return false
+    }
+    var index = headIndex + 1
+    while index < tokens.count {
+        let token = tokens[index]
+        if token == "-c" || token == "--command" {
+            guard index + 1 < tokens.count else { return true }
+            let payload = tokens[index + 1]
+            if payload.hasPrefix("'") || payload.hasPrefix("\"") {
+                return false
+            }
+            return true
+        }
+        if token.hasPrefix("-") {
+            index += 1
+            continue
+        }
+        return false
+    }
+    return false
 }
 
 private func secretPathHit(_ command: ShellCommand?) -> Bool {

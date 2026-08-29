@@ -13,6 +13,7 @@ struct RulePinningTests {
         .workingTreeDiscard,
         .outsideRepository,
         .unresolvedPath,
+        .unwrapLimited,
     ])
     func alwaysAllowPreview_hardStopForbidsSave(kind: RuleHardStopKind) {
         let preview = RulePinning.preview(record: wait(kind: kind), polarity: .allow)
@@ -229,6 +230,116 @@ struct RulePinningTests {
         #expect(kept.ruleID == ActionPolicyEngine.Builtin.protectedPath.ruleID)
     }
 
+    @Test func policyGateDoesNotHonorAllowlistOnUnwrapLimitedDeny() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let deny = EvaluationResult(
+            outcome: .deny(
+                ActionPolicyEngine.Builtin.unwrapLimited,
+                matched: nil
+            ),
+            matchingView: "bash -c git reset --hard",
+            analysis: .unwrapLimited.wrapping([.bash])
+        )
+        let allowlist = AllowlistSnapshot(entries: [
+            AllowlistEntry(
+                selector: .exactCommand("bash -c git reset --hard"),
+                reason: "nope",
+                addedAt: now
+            ),
+            AllowlistEntry(
+                selector: .rule(ActionPolicyEngine.Builtin.unwrapLimited.ruleID),
+                reason: "nope-rule",
+                addedAt: now
+            ),
+        ])
+        let gated = PolicyGate.decide(
+            deny,
+            cwd: wd("/tmp/ws"),
+            allowlist: allowlist,
+            grant: .none,
+            now: now
+        )
+        #expect(gated.override == .none)
+        guard case .deny(let kept) = gated.result.decision else {
+            Issue.record("unwrap-limited deny must stay a hard stop")
+            return
+        }
+        #expect(kept.ruleID == ActionPolicyEngine.Builtin.unwrapLimited.ruleID)
+    }
+
+    @Test func policyGateDoesNotHonorAllowOnceOnUnwrapLimitedDeny() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let deny = EvaluationResult(
+            outcome: .deny(
+                ActionPolicyEngine.Builtin.unwrapLimited,
+                matched: nil
+            ),
+            matchingView: "bash -c git reset --hard",
+            analysis: .unwrapLimited.wrapping([.bash])
+        )
+        let gated = PolicyGate.decide(
+            deny,
+            cwd: wd("/tmp/ws"),
+            allowlist: .empty,
+            grant: .pending,
+            now: now
+        )
+        #expect(gated.override == .none)
+        guard case .deny = gated.result.decision else {
+            Issue.record("unwrap-limited deny must stay a hard stop")
+            return
+        }
+    }
+
+    @Test func policyGateDoesNotHonorAllowlistOnPackFloorProtectedPathDeny() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let packDeny = Deny(
+            ruleID: RuleID(pack: .coreFilesystem, pattern: "redirect-truncate-root-home"),
+            reason: "Redirect truncate to home path"
+        )
+        let deny = EvaluationResult(
+            outcome: .deny(packDeny, matched: nil),
+            matchingView: "echo leaked > ~/.ssh/config",
+            analysis: .filesystem(
+                .overwrite(
+                    targets: [
+                        FilesystemTarget(
+                            apparent: "~/.ssh/config",
+                            canonical: "/home/.ssh/config",
+                            scope: .protectedPath,
+                            kind: .unknown
+                        ),
+                    ]
+                )
+            )
+        )
+        let allowlist = AllowlistSnapshot(entries: [
+            AllowlistEntry(
+                selector: .exactCommand("echo leaked > ~/.ssh/config"),
+                reason: "nope",
+                addedAt: now
+            ),
+            AllowlistEntry(
+                selector: .rule(packDeny.ruleID),
+                reason: "nope-rule",
+                addedAt: now
+            ),
+        ])
+        let gated = PolicyGate.decide(
+            deny,
+            cwd: wd("/tmp/ws"),
+            allowlist: allowlist,
+            grant: .none,
+            now: now
+        )
+        #expect(gated.override == .none)
+        guard case .deny(let kept) = gated.result.decision else {
+            Issue.record("pack-floor protected-path deny must stay a hard stop")
+            return
+        }
+        #expect(kept.ruleID == packDeny.ruleID)
+    }
+
     @Test func policyGateDoesNotHonorAllowlistOnSecretDeny() {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let deny = EvaluationResult(
@@ -316,6 +427,13 @@ struct RulePinningTests {
                 branchName: nil,
                 path: "/gone/file",
                 scope: .unknown
+            )
+        case .unwrapLimited:
+            return wait(
+                id: "unwrap",
+                command: "bash -c git reset --hard",
+                effects: [],
+                branchName: nil
             )
         }
     }
