@@ -5,22 +5,19 @@ import RVService
 public struct HelloAckView: Sendable, Equatable {
     public var protocolName: String
     public var serviceSemver: String
-    public var ok: Bool
-    public var skewReason: SkewReason?
+    public var status: HandshakeStatus
 
-    public init(protocolName: String, serviceSemver: String, ok: Bool, skewReason: SkewReason? = nil) {
+    public init(protocolName: String, serviceSemver: String, status: HandshakeStatus) {
         self.protocolName = protocolName
         self.serviceSemver = serviceSemver
-        self.ok = ok
-        self.skewReason = skewReason
+        self.status = status
     }
 
     public init(_ ack: HelloAck) {
         self.init(
             protocolName: ack.protocolName,
             serviceSemver: ack.serviceSemver,
-            ok: ack.ok,
-            skewReason: ack.skewReason
+            status: ack.status
         )
     }
 }

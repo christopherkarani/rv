@@ -1,13 +1,16 @@
 import RVDomain
 
 extension HookHost {
-    /// Deny process exit: Grok `0` (JSON is the gate), Pi/OpenCode/OpenClaw/Hermes `1`.
+    /// Deny process exit: Grok/Claude/Cursor `0` (JSON is the gate),
+    /// Pi/OpenCode/OpenClaw/Hermes `1`, Codex official honor path `2`.
     var denyExitCode: Int32 {
         switch self {
-        case .grok, .claude:
+        case .grok, .claude, .cursor:
             return 0
         case .pi, .opencode, .openclaw, .hermes:
             return 1
+        case .codex:
+            return 2
         }
     }
 }
@@ -42,22 +45,43 @@ public struct HookRequest: Equatable, Sendable {
 public struct HookWire: Equatable, Sendable {
     public var stdout: String
     public var exitCode: Int32
+    /// Codex honor path: exit 2 without a stderr blocking reason fail-opens the tool.
+    public var stderr: String
 
-    public init(stdout: String, exitCode: Int32) {
+    public init(stdout: String, exitCode: Int32, stderr: String = "") {
         self.stdout = stdout
         self.exitCode = exitCode
+        self.stderr = stderr
     }
 }
 
 public protocol HostCodec: Sendable {
     var host: HookHost { get }
     func decode(_ stdin: String) -> HookDecodeOutcome
+    func proposedAction(from request: HookRequest) -> ProposedAction
     func encodeAllow() -> HookWire
     func encodeDeny(reason: String, rule: String?, next: String?) -> HookWire
     func encodeAsk(reason: String, rule: String?, next: String?) -> HookWire
 }
 
 extension HostCodec {
+    /// Maps a decoded request to an empty-effect shell action.
+    ///
+    /// Command text remains supporting evidence while the request's host,
+    /// session, and working directory make up the stable fingerprint.
+    public func proposedAction(from request: HookRequest) -> ProposedAction {
+        let fingerprint = ActionFingerprint(
+            rawValue: "\(host.rawValue):\(request.session ?? ""):\(request.cwd?.rawValue ?? ""):\(request.command.rawValue)"
+        )
+        return .shell(
+            ShellAction(
+                fingerprint: fingerprint,
+                scope: ActionScope(workingDirectory: request.cwd),
+                supportingCommand: request.command
+            )
+        )
+    }
+
     /// Returns empty stdout and exit 0.
     public func encodeAllow() -> HookWire {
         HookWire(stdout: "", exitCode: 0)

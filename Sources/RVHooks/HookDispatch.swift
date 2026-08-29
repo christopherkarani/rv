@@ -51,6 +51,20 @@ public func hookWire(
             evaluate: evaluate,
             spendHostAsk: spendHostAsk
         )
+    case .codex:
+        return await hookBody(
+            stdin: stdin,
+            codec: CodexHostCodec(),
+            evaluate: evaluate,
+            spendHostAsk: spendHostAsk
+        )
+    case .cursor:
+        return await hookBody(
+            stdin: stdin,
+            codec: CursorHostCodec(),
+            evaluate: evaluate,
+            spendHostAsk: spendHostAsk
+        )
     }
 }
 
@@ -70,7 +84,19 @@ private func hookBody<C: HostCodec>(
             return hookWire(from: result, command: request.command, using: codec, afterSpend: true)
         }
         let result = await evaluate(request.command, request.cwd)
-        return hookWire(from: result, command: request.command, using: codec)
+        let action = codec.proposedAction(from: request)
+        let bound = HostNativeAsk.hookBound(
+            result: result,
+            action: action,
+            context: ReviewContext(repository: RepositoryReviewContext())
+        )
+        return hookWire(
+            from: result,
+            command: request.command,
+            using: codec,
+            bound: bound,
+            cwd: request.cwd
+        )
     case .foreign:
         return codec.encodeAllow()
     case .malformed(let malformation):

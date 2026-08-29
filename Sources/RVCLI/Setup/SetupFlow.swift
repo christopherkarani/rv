@@ -81,28 +81,36 @@ extension SetupEnvironment {
         let pathEntries = (environment["PATH"] ?? "").split(separator: ":").map(String.init)
         let executable = Bundle.main.executableURL
         let loginHome = LoginHome.matchesProcessHome(home.rawValue)
+        let fileManager = FileManager.default
 #if os(Linux)
         let supervisor = EvaluateSupervisor.systemdUser
         let touchLaunchd = false
         let touchSystemd = loginHome
+        let companionPresence: any CompanionPresenceDetecting = FixedCompanionPresence(value: .absent)
 #else
         let supervisor = EvaluateSupervisor.launchd
         let touchLaunchd = loginHome
         let touchSystemd = false
+        // P2-1: inject fileManager via SetupEnvironment consistently.
+        let companionPresence: any CompanionPresenceDetecting = FilesystemCompanionPresence(
+            home: home.rawValue,
+            fileManager: fileManager
+        )
 #endif
         return SetupEnvironment(
             home: home,
             pathEntries: pathEntries,
             rvPath: resolveRv(home: home.rawValue),
-            rvdPath: resolveRvd(nextTo: executable?.path, home: home.rawValue)
+            rvdPath: resolveRvd(nextTo: executable?.path, home: home.rawValue, fileManager: fileManager)
                 ?? (home.rawValue + "/.local/bin/rvd"),
-            fileManager: .default,
+            fileManager: fileManager,
             launchctl: ProcessLaunchctl(),
             systemctl: ProcessSystemctl(),
             touchLaunchd: touchLaunchd,
             touchSystemd: touchSystemd,
             supervisor: supervisor,
-            installAnalytics: BlockingInstallAnalytics.live(home: home, environment: environment)
+            installAnalytics: BlockingInstallAnalytics.live(home: home, environment: environment),
+            companionPresence: companionPresence
         )
     }
 }

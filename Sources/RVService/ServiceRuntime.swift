@@ -21,6 +21,9 @@ public actor ServiceRuntime {
     private let log: (any ServiceLog)?
     private let analytics: AnalyticsCoordinator?
     private let clock: @Sendable () -> Date
+    private let pendingApprovals: (any PendingApprovalCoordinating)?
+    private var pendingGeneration: UInt64 = 0
+    private var pendingSetFingerprint: [String] = []
     private var analyticsEnabledPackIDs: [String] = []
 
     package private(set) var compiledPackIDs: [PackID]
@@ -35,7 +38,8 @@ public actor ServiceRuntime {
         idleExitSeconds: Int = IdleWatchdog.defaultSeconds,
         log: (any ServiceLog)? = nil,
         analytics: AnalyticsCoordinator? = nil,
-        clock: @escaping @Sendable () -> Date = { Date() }
+        clock: @escaping @Sendable () -> Date = { Date() },
+        pendingApprovals: PendingApprovalsBinding = .automatic
     ) {
         let resolvedHome = home ?? HomeDirectory.process()
         self.configHome = resolvedHome
@@ -69,30 +73,39 @@ public actor ServiceRuntime {
         self.log = log
         self.analytics = analytics
         self.clock = clock
+        self.pendingApprovals = Self.resolvePendingApprovals(
+            pendingApprovals,
+            home: resolvedHome
+        )
         self.analyticsEnabledPackIDs = Self.analyticsEnabledPackIDs(from: self.catalog)
     }
 
     public func acknowledge(_ hello: Hello) -> HelloAck {
         if hello.protocolName != ProtocolVersion.name {
-            return HelloAck(ok: false, skewReason: .protocolSkew)
+            return HelloAck(status: .skew(.protocolSkew))
         }
         if ProtocolVersion.isMajorSkew(
             clientSemver: hello.clientSemver,
             serviceSemver: ProtocolVersion.serviceSemver
         ) {
-            return HelloAck(ok: false, skewReason: .majorVersion)
+            return HelloAck(status: .skew(.majorVersion))
         }
         if !corePacksReady {
-            return HelloAck(ok: false, skewReason: .corePacksUnavailable)
+            return HelloAck(status: .skew(.corePacksUnavailable))
         }
-        return HelloAck(ok: true)
+        return HelloAck(status: .ok)
     }
 
     public func handleIncoming(_ body: Data, handshakeOK: Bool) async -> (Data, Bool) {
         if let hello = try? IPCJSON.decode(Hello.self, from: body), hello.clientSemver.isEmpty == false {
             let ack = acknowledge(hello)
             let data = (try? IPCJSON.encode(ack)) ?? Data()
-            return (data, ack.ok)
+            switch ack.status {
+            case .ok:
+                return (data, true)
+            case .skew:
+                return (data, false)
+            }
         }
         if handshakeOK == false {
             return await handleUnreadyIncoming(body)
@@ -115,15 +128,17 @@ public actor ServiceRuntime {
         {
             let hello = Hello(protocolName: request.protocolName, clientSemver: clientSemver)
             let ack = acknowledge(hello)
-            if ack.ok == false {
+            switch ack.status {
+            case .ok:
+                let response = await dispatch(request)
+                return ((try? IPCJSON.encode(response)) ?? Data(), true)
+            case .skew(let reason):
                 let response = IPCResponse(
                     id: request.id,
-                    result: .error(.protocolSkew(ack.skewReason ?? .protocolSkew))
+                    result: .error(.protocolSkew(reason))
                 )
                 return ((try? IPCJSON.encode(response)) ?? Data(), false)
             }
-            let response = await dispatch(request)
-            return ((try? IPCJSON.encode(response)) ?? Data(), true)
         }
         let response = IPCResponse(
             id: UUID(),
@@ -139,7 +154,8 @@ public actor ServiceRuntime {
             return params.clientSemver
         case .hookEvaluate(let params):
             return params.clientSemver
-        case .explain, .classify, .listPacks, .setPackEnabled, .allowOnceConsume, .doctorSnapshot:
+        case .explain, .classify, .listPacks, .setPackEnabled, .allowOnceConsume, .doctorSnapshot,
+            .pendingList, .pendingWatch, .pendingResolve, .rulePreview, .ruleSave:
             return nil
         }
     }
@@ -175,6 +191,16 @@ public actor ServiceRuntime {
             result = .error(.unknownMethod)
         case .doctorSnapshot:
             result = .doctorSnapshot(doctorSnapshot())
+        case .pendingList:
+            result = await pendingListResult()
+        case .pendingWatch(let params):
+            result = await pendingWatchResult(afterGeneration: params.afterGeneration)
+        case .pendingResolve(let params):
+            result = await pendingResolveResult(params)
+        case .rulePreview(let params):
+            result = await rulePreviewResult(params)
+        case .ruleSave(let params):
+            result = await ruleSaveResult(params)
         }
         logIfNeeded(request: request, result: result, started: started)
         return IPCResponse(id: request.id, result: result)
@@ -195,7 +221,7 @@ public actor ServiceRuntime {
                 stdin: params.stdin,
                 evaluate: { command, cwd in
                     // Same pack resolution as the rv-cli miss path
-                    // (`EnabledPacks.resolve`): a warm rvd must never decide on a
+                    // (`EvaluationWorld.walkedPackIDs`): a warm rvd must never decide on a
                     // narrower or wider set than a cold one.
                     let request = GatedEvaluate.makeRequest(command: command, home: self.configHome)
                     return await self.runEvaluate(request, cwd: cwd)
@@ -219,6 +245,7 @@ public actor ServiceRuntime {
         let result = await gated.apply(
             request,
             cwd: cwd,
+            home: configHome,
             store: allowOnce,
             now: now,
             allowlist: {
@@ -231,7 +258,7 @@ public actor ServiceRuntime {
     }
 
     private func runSpendHostAsk(command: ShellCommand, cwd: WorkingDirectory?) async -> EvaluationResult {
-        rebuildWhenUncovered(wanted: WalkedPackIDs(ids: EnabledPacks.resolve(home: configHome).ids))
+        rebuildWhenUncovered(wanted: EvaluationWorld.walkedPackIDs(home: configHome))
         let now = clock()
         let baseDirectory = allowOnce.baseDirectory
         let result = await gated.spendHostAsk(
@@ -289,6 +316,7 @@ public actor ServiceRuntime {
         let result = await gated.peek(
             params.request,
             cwd: cwd,
+            home: configHome,
             store: allowOnce,
             now: now,
             allowlist: {
@@ -296,9 +324,7 @@ public actor ServiceRuntime {
                     .loadUserSnapshot(workspacePath: cwd.map(\.rawValue), now: now)
             }
         )
-        let normalized = result.matchingView.isEmpty
-            ? Normalize.matchingView(of: params.request.command.rawValue).rawValue
-            : result.matchingView.rawValue
+        let normalized = result.matchingView.rawValue
         let stages = explainSteps(from: result).map {
             ExplainStage(name: $0.id.rawValue, elapsedMs: 0)
         }
@@ -311,27 +337,9 @@ public actor ServiceRuntime {
         case .allow:
             suggestion = nil
         }
-        let ruleID: RuleID?
-        let packID: PackID?
-        switch result.outcome {
-        case .hit(let match, _):
-            ruleID = match.ruleID
-            packID = match.packID
-        case .safeOnly(let safe):
-            ruleID = nil
-            packID = safe.packID
-        case .deny(_, let match):
-            ruleID = match?.ruleID
-            packID = match?.packID
-        case .quickRejected, .plain, .indeterminate:
-            ruleID = nil
-            packID = nil
-        }
         return ExplainReply(
             result: result,
             normalized: normalized,
-            ruleID: ruleID,
-            packID: packID,
             suggestion: suggestion,
             stages: stages
         )
@@ -344,6 +352,7 @@ public actor ServiceRuntime {
         let result = await gated.peek(
             params.request,
             cwd: cwd,
+            home: configHome,
             store: allowOnce,
             now: now,
             allowlist: {
@@ -351,22 +360,6 @@ public actor ServiceRuntime {
                     .loadUserSnapshot(workspacePath: cwd.map(\.rawValue), now: now)
             }
         )
-        let matched: RuleMatch?
-        switch result.outcome {
-        case .hit(let match, _):
-            matched = match
-        case .deny(_, let match):
-            matched = match
-        case .quickRejected, .plain, .safeOnly, .indeterminate:
-            matched = nil
-        }
-        let risk = ClassifyRisk.derive(decision: result.decision, matched: matched)
-        var reasons: [ClassifyReason] = []
-        if let matched {
-            reasons.append(
-                ClassifyReason(ruleID: matched.ruleID, explanation: matched.explanation ?? matched.reason)
-            )
-        }
         let suggestions: [String]
         switch result.decision {
         case .deny:
@@ -376,14 +369,7 @@ public actor ServiceRuntime {
         case .allow:
             suggestions = []
         }
-        return ClassifyReply(
-            decision: result.decision,
-            risk: risk,
-            ruleID: matched?.ruleID,
-            packID: matched?.packID,
-            reasons: reasons,
-            suggestions: suggestions
-        )
+        return ClassifyReply(result: result, suggestions: suggestions)
     }
 
     private func setPackEnabled(_ params: SetPackEnabledParams) -> IPCResult {
@@ -445,6 +431,164 @@ public actor ServiceRuntime {
         )
     }
 
+    private func pendingListResult() async -> IPCResult {
+        do {
+            return .pendingList(try await makePendingListReply())
+        } catch {
+            return .error(PendingListProjection.ipcError(from: error))
+        }
+    }
+
+    private func pendingWatchResult(afterGeneration: UInt64) async -> IPCResult {
+        do {
+            let reply = try await makePendingListReply()
+            if afterGeneration == reply.generation {
+                return .pendingWatch(PendingListReply(generation: reply.generation, items: []))
+            }
+            return .pendingWatch(reply)
+        } catch {
+            return .error(PendingListProjection.ipcError(from: error))
+        }
+    }
+
+    private func rulePreviewResult(_ params: RulePreviewParams) async -> IPCResult {
+        guard let pendingApprovals else {
+            return .error(PendingListProjection.coordinatorUnavailable)
+        }
+        do {
+            let record = try await pendingApprovals.load(id: params.id, now: clock())
+            let preview = RulePinning.preview(
+                record: record,
+                polarity: pinnedPolarity(params.polarity)
+            )
+            return .rulePreview(
+                RulePreviewReply(
+                    sentence: preview.sentence,
+                    draft: preview.draft,
+                    allowedToSave: preview.allowedToSave
+                )
+            )
+        } catch {
+            return .error(PendingListProjection.ipcError(from: error))
+        }
+    }
+
+    private func ruleSaveResult(_ params: RuleSaveParams) async -> IPCResult {
+        guard let pendingApprovals else {
+            return .error(PendingListProjection.coordinatorUnavailable)
+        }
+        let polarity = pinnedPolarity(params.polarity)
+        do {
+            let now = clock()
+            let record = try await pendingApprovals.load(id: params.id, now: now)
+            let commandText = record.action.supportingCommand?.rawValue ?? ""
+            let outcome = try RulePinStore(baseDirectory: allowOnce.baseDirectory).save(
+                record: record,
+                polarity: polarity,
+                draft: params.draft,
+                now: now,
+                matchingView: Normalize.matchingView(of: commandText)
+            )
+            let decision: ApprovalDecision = polarity == .allow ? .createRule : .deny
+            do {
+                let resolved = try await pendingApprovals.resolve(
+                    id: record.id,
+                    decision: decision,
+                    fingerprint: record.fingerprint,
+                    identity: record.identity,
+                    now: now
+                )
+                let terminal: Bool
+                switch resolved.state {
+                case .awaitingHuman:
+                    terminal = false
+                case .resolved, .consumed, .expired, .canceled, .timedOut:
+                    terminal = true
+                }
+                return .ruleSave(RuleSaveReply(ruleID: outcome.ruleID, waitResolved: terminal))
+            } catch let error as PendingApprovalError {
+                switch error {
+                case .alreadyResolved, .alreadyConsumed, .expired, .canceled, .timedOut:
+                    return .ruleSave(RuleSaveReply(ruleID: outcome.ruleID, waitResolved: true))
+                case .notFound, .invalidRequest, .duplicateID, .fingerprintMismatch, .identityMismatch,
+                    .continuationMismatch, .notResolved, .encodeFailed, .lockFailed:
+                    return .error(PendingListProjection.ipcError(from: error))
+                }
+            }
+        } catch let error as RulePinError {
+            switch error {
+            case .draftMismatch:
+                return .error(.ruleDraftMismatch)
+            case .hardStop:
+                return .error(.ruleHardStop)
+            case .missingMatchingView:
+                return .error(.engine("rule pin requires a matching view"))
+            }
+        } catch {
+            return .error(PendingListProjection.ipcError(from: error))
+        }
+    }
+
+    private func pinnedPolarity(_ wire: RulePolarity) -> PinnedRulePolarity {
+        switch wire {
+        case .allow:
+            return .allow
+        case .block:
+            return .block
+        }
+    }
+
+    private func pendingResolveResult(_ params: PendingResolveParams) async -> IPCResult {
+        guard let pendingApprovals else {
+            return .error(PendingListProjection.coordinatorUnavailable)
+        }
+        let decision: ApprovalDecision
+        switch params.decision {
+        case .allowOnce:
+            if params.identity.session.rawValue.isEmpty {
+                return .error(.pendingIdentityMismatch)
+            }
+            decision = .allowOnce
+        case .deny:
+            decision = .deny
+        }
+        do {
+            let resolved = try await pendingApprovals.resolve(
+                id: params.id,
+                decision: decision,
+                fingerprint: params.fingerprint,
+                identity: params.identity,
+                now: clock()
+            )
+            let terminal: Bool
+            switch resolved.state {
+            case .awaitingHuman:
+                terminal = false
+            case .resolved, .consumed, .expired, .canceled, .timedOut:
+                terminal = true
+            }
+            return .pendingResolve(PendingResolveReply(id: resolved.id, terminal: terminal))
+        } catch {
+            return .error(PendingListProjection.ipcError(from: error))
+        }
+    }
+
+    private func makePendingListReply() async throws -> PendingListReply {
+        guard let pendingApprovals else {
+            throw PendingListProjection.coordinatorUnavailable
+        }
+        let records = try await pendingApprovals.list(now: clock())
+        let fingerprint = PendingListProjection.fingerprint(records)
+        if fingerprint != pendingSetFingerprint {
+            pendingGeneration += 1
+            pendingSetFingerprint = fingerprint
+        }
+        return PendingListReply(
+            generation: pendingGeneration,
+            items: PendingListProjection.items(from: records)
+        )
+    }
+
     private func logIfNeeded(request: IPCRequest, result: IPCResult, started: DispatchTime) {
         let method: String
         var decision: String?
@@ -466,6 +610,16 @@ public actor ServiceRuntime {
             method = "allowOnce.consume"
         case .doctorSnapshot:
             method = "doctorSnapshot"
+        case .pendingList:
+            method = "pendingList"
+        case .pendingWatch:
+            method = "pendingWatch"
+        case .pendingResolve:
+            method = "pendingResolve"
+        case .rulePreview:
+            method = "rulePreview"
+        case .ruleSave:
+            method = "ruleSave"
         }
         if case .evaluate(let reply) = result {
             switch reply.result.decision {
@@ -552,9 +706,31 @@ public actor ServiceRuntime {
     private static func analyticsEnabledPackIDs(from catalog: PackCatalog) -> [String] {
         catalog.enabledIDs.map(\.rawValue)
     }
+
+    private static func resolvePendingApprovals(
+        _ binding: PendingApprovalsBinding,
+        home: HomeDirectory?
+    ) -> (any PendingApprovalCoordinating)? {
+        switch binding {
+        case .automatic:
+            if let home {
+                return PendingApprovalStore.live(home: home)
+            }
+            return PendingApprovalStore(baseDirectory: uniqueEphemeralPendingDirectory())
+        case .coordinator(let coordinator):
+            return coordinator
+        case .missing:
+            return nil
+        }
+    }
 }
 
 private func uniqueEphemeralAllowOnceDirectory() -> URL {
     FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-allow-once-\(UUID().uuidString)", isDirectory: true)
+}
+
+private func uniqueEphemeralPendingDirectory() -> URL {
+    FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-pending-\(UUID().uuidString)", isDirectory: true)
 }

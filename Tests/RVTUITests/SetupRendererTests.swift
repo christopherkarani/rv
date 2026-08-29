@@ -31,6 +31,7 @@ private func grokWiredFrame() -> SetupCeremonyFrame {
     #expect(lines.contains(SetupRenderer.leadingPad + "◦  Pi"))
     #expect(lines.contains(SetupRenderer.leadingPad + "◦  OpenCode"))
     #expect(lines.contains(SetupRenderer.leadingPad + "◦  Claude"))
+    #expect(lines.contains(SetupRenderer.leadingPad + "◦  Cursor"))
     #expect(lines.contains(SetupRenderer.leadingPad + setupCeremonySearchActivity))
     #expect(lines.contains(SetupRenderer.leadingPad + setupCeremonyHostlessTitle))
     #expect(lines.contains(SetupRenderer.leadingPad + setupCeremonyHostlessNext))

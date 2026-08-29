@@ -45,6 +45,6 @@ struct Hook: AsyncParsableCommand {
             evaluate: evaluate,
             spendHostAsk: spendHostAsk
         )
-        return (wire.stdout, "", wire.exitCode)
+        return (wire.stdout, wire.stderr, wire.exitCode)
     }
 }

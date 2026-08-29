@@ -23,12 +23,14 @@ public struct PiHostCodec: HostCodec {
             return .malformed(.missingCommand)
         }
         let cwd = envelope.cwd.flatMap { WorkingDirectory(validating: $0) }
+        let session = firstNonEmpty(envelope.sessionId)
         let hostAsk = envelope.hostAsk.flatMap(HostAskHookIntent.init(rawValue:))
         return .request(
             HookRequest(
                 host: .pi,
                 command: ShellCommand(rawValue: command),
                 cwd: cwd,
+                session: session,
                 hostAsk: hostAsk
             )
         )
@@ -39,9 +41,19 @@ private struct PiEnvelope: Decodable {
     var toolName: String?
     var input: PiInput?
     var cwd: String?
+    var sessionId: String?
     var hostAsk: String?
 }
 
 private struct PiInput: Decodable {
     var command: String?
+}
+
+private func firstNonEmpty(_ values: String?...) -> String? {
+    for value in values {
+        if let value, value.isEmpty == false {
+            return value
+        }
+    }
+    return nil
 }

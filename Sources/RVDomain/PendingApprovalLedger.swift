@@ -111,16 +111,15 @@ public enum PendingApprovalLedger: Sendable {
         do {
             (record, next) = try mutate(records, id: id, now: now) { (record) throws(PendingApprovalError) in
                 try ensureBinding(record, fingerprint: fingerprint, identity: identity)
-                if record.consumedAt != nil {
-                    throw .alreadyConsumed
-                }
                 switch record.state {
                 case .awaitingHuman:
                     throw .notResolved
-                case .resolved:
+                case .resolved(let resolution):
                     var next = record
-                    next.consumedAt = now
+                    next.state = .consumed(resolution, at: now)
                     return next
+                case .consumed:
+                    throw .alreadyConsumed
                 case .expired:
                     throw .expired
                 case .canceled:
@@ -132,7 +131,7 @@ public enum PendingApprovalLedger: Sendable {
         } catch {
             throw error
         }
-        guard case .resolved(let resolution) = record.state else {
+        guard case .consumed(let resolution, _) = record.state else {
             throw .notResolved
         }
         return (ApprovalConsumption(approval: record, decision: resolution.decision), next)
@@ -210,14 +209,13 @@ public enum PendingApprovalLedger: Sendable {
     }
 
     private static func ensureAwaitingHuman(_ record: PendingApproval) throws(PendingApprovalError) {
-        if record.consumedAt != nil {
-            throw .alreadyConsumed
-        }
         switch record.state {
         case .awaitingHuman:
             return
         case .resolved:
             throw .alreadyResolved
+        case .consumed:
+            throw .alreadyConsumed
         case .expired:
             throw .expired
         case .canceled:

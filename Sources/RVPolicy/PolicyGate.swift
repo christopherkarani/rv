@@ -33,6 +33,9 @@ public enum PolicyGate {
             // Miss policy: never allow because evaluation did not finish.
             return PolicyDecision(result: result, override: .none)
         case .deny(let deny):
+            if RulePinning.blocksAllowOverride(result) {
+                return PolicyDecision(result: result, override: .none)
+            }
             if allowlist.matches(
                 ruleID: deny.ruleID,
                 matchingView: result.matchingView,

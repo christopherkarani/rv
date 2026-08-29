@@ -26,20 +26,18 @@ enum SecretPathGuard {
         searchText: String
     ) -> RuleMatch? {
         for candidate in candidates(in: haystack) {
-            for rule in catalog.rules {
-                if matches(candidate, rule.kind) {
-                    let ruleID = RuleID(pack: .coreSecrets, pattern: rule.pattern)
-                    return RuleMatch(
-                        ruleID: ruleID,
-                        packID: .coreSecrets,
-                        patternName: rule.pattern,
-                        severity: .high,
-                        reason: rule.reason,
-                        regex: nil,
-                        matchedText: candidate,
-                        searchText: searchText
-                    )
-                }
+            if let rule = catalog.firstMatch(of: candidate) {
+                let ruleID = RuleID(pack: .coreSecrets, pattern: rule.pattern)
+                return RuleMatch(
+                    ruleID: ruleID,
+                    packID: .coreSecrets,
+                    patternName: rule.pattern,
+                    severity: .high,
+                    reason: rule.reason,
+                    regex: nil,
+                    matchedText: candidate,
+                    searchText: searchText
+                )
             }
         }
         return nil
@@ -259,65 +257,3 @@ private func otherCandidates<C: Collection>(_ tokens: C) -> [String] where C.Ele
     return collected
 }
 
-private func lastComponent(_ path: String) -> String {
-    path.split(separator: "/", omittingEmptySubsequences: true).last.map(String.init) ?? path
-}
-
-private let envVariantExemptions: Set<String> = [
-    ".env.example",
-    ".env.sample",
-    ".env.template",
-    ".env.defaults",
-]
-
-private func isEnvVariant(_ name: String) -> Bool {
-    guard name.hasPrefix(".env.") else { return false }
-    if envVariantExemptions.contains(name) { return false }
-    if name.hasPrefix(".env.example.") { return false }
-    if name.hasPrefix(".env.sample.") { return false }
-    return true
-}
-
-private func hasPathPrefix(_ candidate: String, prefix: String) -> Bool {
-    candidate == prefix || candidate.hasPrefix(prefix + "/")
-}
-
-private func containsContiguous(_ haystack: [String], _ needle: [String]) -> Bool {
-    guard !needle.isEmpty, haystack.count >= needle.count else { return false }
-    let lastStart = haystack.count - needle.count
-    var start = 0
-    while start <= lastStart {
-        var matched = true
-        var offset = 0
-        while offset < needle.count {
-            if haystack[start + offset] != needle[offset] {
-                matched = false
-                break
-            }
-            offset += 1
-        }
-        if matched { return true }
-        start += 1
-    }
-    return false
-}
-
-private func matchesSuffix(_ candidate: String, parts: [String]) -> Bool {
-    let joined = parts.joined(separator: "/")
-    if hasPathPrefix(candidate, prefix: "~/" + joined) { return true }
-    if hasPathPrefix(candidate, prefix: "$HOME/" + joined) { return true }
-    if hasPathPrefix(candidate, prefix: "${HOME}/" + joined) { return true }
-    let components = candidate.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
-    return containsContiguous(components, parts)
-}
-
-private func matches(_ candidate: String, _ kind: SecretPathKind) -> Bool {
-    switch kind {
-    case .basename(let name):
-        return lastComponent(candidate) == name
-    case .envVariant:
-        return isEnvVariant(lastComponent(candidate))
-    case .homeSuffix(let parts), .hostAuth(let parts):
-        return matchesSuffix(candidate, parts: parts)
-    }
-}

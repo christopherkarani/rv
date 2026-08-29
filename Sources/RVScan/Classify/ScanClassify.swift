@@ -65,7 +65,7 @@ public struct ScanClassify: Sendable {
                 patterns: engine,
                 compiled: compiled
             )
-            guard case .deny(let deny, let matched) = result.outcome else {
+            guard case .deny(let deny, _) = result.outcome else {
                 continue
             }
             findings.append(
@@ -75,7 +75,7 @@ public struct ScanClassify: Sendable {
                     sourcePath: event.sourcePath,
                     occurredAt: event.occurredAt,
                     ruleID: deny.ruleID,
-                    packID: matched?.packID ?? deny.ruleID.pack,
+                    packID: deny.ruleID.pack,
                     matchingView: result.matchingView,
                     count: 1,
                     lastSeen: event.occurredAt

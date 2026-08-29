@@ -1,5 +1,6 @@
 import Foundation
 import RVDomain
+import RVEngine
 import RVPacks
 import RVPolicy
 
@@ -47,6 +48,12 @@ public struct PackCoverage: Sendable, Equatable {
 /// The one assembly site for an evaluation world: snapshot fallback chain,
 /// enabled-ID rule, and the door around the resulting session.
 package enum EvaluationWorld {
+    /// Walk set from config. Nil or unreadable HOME is day-one. Empty config is empty.
+    package static func walkedPackIDs(home: HomeDirectory?) -> WalkedPackIDs {
+        guard let home else { return WalkedPackIDs(ids: dayOnePackIDs) }
+        return WalkedPackIDs(ids: (try? PacksFacade.effectiveIDs(home: home)) ?? dayOnePackIDs)
+    }
+
     /// Full catalog first; day-one when the index is missing; none when both fail.
     package static func resolveSnapshots(_ provided: [PackSnapshot]?) -> [PackSnapshot] {
         provided ?? ((try? PackRegistry.loadAll()) ?? ((try? PackRegistry.loadDayOne()) ?? []))
@@ -65,7 +72,7 @@ package enum EvaluationWorld {
                 : catalog.records.filter(\.enabled).map(\.id)
             walked = WalkedPackIDs(ids: ids)
         } else {
-            walked = EnabledPacks.resolve(home: home)
+            walked = walkedPackIDs(home: home)
         }
         return PackCoverage.unioningDayOne(walked)
     }
@@ -93,5 +100,10 @@ package enum EvaluationWorld {
                 snapshots: snapshots
             )
         })
+    }
+
+    /// T1 matching view for grant mint, allowlist, and explain render.
+    package static func matchingView(of command: ShellCommand) -> MatchingView {
+        Normalize.matchingView(of: command.rawValue)
     }
 }

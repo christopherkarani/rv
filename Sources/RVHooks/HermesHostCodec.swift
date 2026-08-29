@@ -35,20 +35,6 @@ public struct HermesHostCodec: HostCodec {
         )
     }
 
-    /// Maps a decoded Hermes request to `ProposedAction.shell`.
-    /// Session and cwd stay on the request and in the fingerprint until IR owns construction.
-    public func proposedAction(from request: HookRequest) -> ProposedAction {
-        let fingerprint = ActionFingerprint(
-            rawValue: "hermes:\(request.session ?? ""):\(request.cwd?.rawValue ?? ""):\(request.command.rawValue)"
-        )
-        return .shell(
-            ShellAction(
-                fingerprint: fingerprint,
-                scope: ActionScope(workingDirectory: request.cwd),
-                supportingCommand: request.command
-            )
-        )
-    }
 }
 
 private struct HermesEnvelope: Decodable {

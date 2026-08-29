@@ -169,21 +169,16 @@ public struct ServiceClient: Sendable {
             }
             // Decode already requires EvaluateReply.via == .xpc; anything else falls back.
             if case .evaluate(let reply) = response.result {
-                // A reply without serviceSemver cannot prove major
-                // compatibility, so it is treated like skew: invalidate and
-                // re-route through the always-safe in-process evaluate.
-                guard let advertised = reply.serviceSemver else {
-                    transport.invalidate()
-                    return await inProcessRoute()
-                }
-                if ProtocolVersion.isMajorSkew(
+                switch EvaluationRoute.path(for: .reply(
                     clientSemver: ProtocolVersion.serviceSemver,
-                    serviceSemver: advertised
-                ) {
+                    advertisedServiceSemver: reply.serviceSemver
+                )) {
+                case .xpc:
+                    return RoutedEvaluation(result: reply.result, path: .xpc)
+                case .inProcess:
                     transport.invalidate()
                     return await inProcessRoute()
                 }
-                return RoutedEvaluation(result: reply.result, path: .xpc)
             }
             transport.invalidate()
             return await inProcessRoute()
@@ -345,17 +340,16 @@ public struct ServiceClient: Sendable {
         ) {
             return .majorVersionMismatch
         }
-        if ack.ok == false {
-            switch ack.skewReason {
-            case .corePacksUnavailable:
-                return .corePacksUnavailable
-            case .majorVersion:
-                return .majorVersionMismatch
-            case .protocolSkew, .handshakeRequired, nil:
-                return .rejected
-            }
+        switch ack.status {
+        case .ok:
+            return nil
+        case .skew(.corePacksUnavailable):
+            return .corePacksUnavailable
+        case .skew(.majorVersion):
+            return .majorVersionMismatch
+        case .skew(.protocolSkew), .skew(.handshakeRequired):
+            return .rejected
         }
-        return nil
     }
 
     private static func resolveStore(

@@ -41,7 +41,9 @@ import Testing
         openCode: .missing(layout.hostAdapter(for: .opencode)),
         claude: .missing(layout.hostAdapter(for: .claude)),
         openClaw: .missing(layout.hostAdapter(for: .openclaw)),
-        hermes: .missing(layout.hostAdapter(for: .hermes))
+        hermes: .missing(layout.hostAdapter(for: .hermes)),
+        codex: .missing(layout.hostAdapter(for: .codex)),
+        cursor: .missing(layout.hostAdapter(for: .cursor))
     )
 
     let plan = SetupWorkPlanBuilder.make(
@@ -59,6 +61,8 @@ import Testing
         .skipUndetected(.claude),
         .skipUndetected(.openclaw),
         .skipUndetected(.hermes),
+        .skipUndetected(.codex),
+        .skipUndetected(.cursor),
         .writeLaunchAgent,
     ])
     #expect(
@@ -76,7 +80,9 @@ import Testing
         openCode: .missing(layout.hostAdapter(for: .opencode)),
         claude: .missing(layout.hostAdapter(for: .claude)),
         openClaw: .missing(layout.hostAdapter(for: .openclaw)),
-        hermes: .missing(layout.hostAdapter(for: .hermes))
+        hermes: .missing(layout.hostAdapter(for: .hermes)),
+        codex: .missing(layout.hostAdapter(for: .codex)),
+        cursor: .missing(layout.hostAdapter(for: .cursor))
     )
 
     let plan = SetupWorkPlanBuilder.make(
@@ -96,6 +102,8 @@ import Testing
         .skipUndetected(.claude),
         .skipUndetected(.openclaw),
         .skipUndetected(.hermes),
+        .skipUndetected(.codex),
+        .skipUndetected(.cursor),
         .skipLaunchAgent,
     ])
     #expect(
@@ -112,7 +120,9 @@ import Testing
         openCode: .missing(layout.hostAdapter(for: .opencode)),
         claude: .missing(layout.hostAdapter(for: .claude)),
         openClaw: .missing(layout.hostAdapter(for: .openclaw)),
-        hermes: .missing(layout.hostAdapter(for: .hermes))
+        hermes: .missing(layout.hostAdapter(for: .hermes)),
+        codex: .missing(layout.hostAdapter(for: .codex)),
+        cursor: .missing(layout.hostAdapter(for: .cursor))
     )
 
     let plan = SetupWorkPlanBuilder.make(
@@ -132,6 +142,8 @@ import Testing
         .skipUndetected(.claude),
         .skipUndetected(.openclaw),
         .skipUndetected(.hermes),
+        .skipUndetected(.codex),
+        .skipUndetected(.cursor),
         .writeLaunchAgent,
     ])
 }

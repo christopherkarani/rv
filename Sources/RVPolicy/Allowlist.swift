@@ -32,9 +32,11 @@ public struct AllowlistEntry: Equatable, Sendable {
 
 public struct AllowlistSnapshot: Equatable, Sendable {
     public var entries: [AllowlistEntry]
+    public var blocked: DenylistSnapshot
 
-    public init(entries: [AllowlistEntry]) {
+    public init(entries: [AllowlistEntry], blocked: DenylistSnapshot = .empty) {
         self.entries = entries
+        self.blocked = blocked
     }
 
     public static let empty = AllowlistSnapshot(entries: [])
@@ -44,7 +46,10 @@ public struct AllowlistSnapshot: Equatable, Sendable {
         matchingView: MatchingView,
         now: Date
     ) -> Bool {
-        entries.contains { entry in
+        if blocked.matches(matchingView) {
+            return false
+        }
+        return entries.contains { entry in
             guard entry.isActive(at: now) else { return false }
             switch entry.selector {
             case .rule(let allowed):
@@ -204,7 +209,7 @@ public enum AllowlistTOML {
     }
 }
 
-private func parseTOMLString(_ raw: String) -> String {
+func parseTOMLString(_ raw: String) -> String {
     var text = raw.trimmingCharacters(in: .whitespaces)
     if text.hasPrefix("\""), text.hasSuffix("\""), text.count >= 2 {
         text.removeFirst()
@@ -216,13 +221,13 @@ private func parseTOMLString(_ raw: String) -> String {
     return text
 }
 
-private func escapeTOMLString(_ text: String) -> String {
+func escapeTOMLString(_ text: String) -> String {
     text
         .replacingOccurrences(of: "\\", with: "\\\\")
         .replacingOccurrences(of: "\"", with: "\\\"")
 }
 
-private func parseISO8601(_ text: String) -> Date? {
+func parseISO8601(_ text: String) -> Date? {
     let formatter = ISO8601DateFormatter()
     formatter.formatOptions = [.withInternetDateTime]
     if let date = formatter.date(from: text) { return date }

@@ -89,6 +89,32 @@ extension EvaluationOutcome {
         }
     }
 
+    /// Explain/classify rule identity. Deny uses `Deny.ruleID`, never `matched?.ruleID`.
+    public var explainRuleID: RuleID? {
+        switch self {
+        case .hit(let match, _):
+            return match.ruleID
+        case .deny(let deny, _):
+            return deny.ruleID
+        case .quickRejected, .plain, .safeOnly, .indeterminate:
+            return nil
+        }
+    }
+
+    /// Explain/classify pack identity. Deny uses `Deny.ruleID.pack`.
+    public var explainPackID: PackID? {
+        switch self {
+        case .hit(let match, _):
+            return match.packID
+        case .safeOnly(let safe):
+            return safe.packID
+        case .deny(let deny, _):
+            return deny.ruleID.pack
+        case .quickRejected, .plain, .indeterminate:
+            return nil
+        }
+    }
+
     var matched: RuleMatch? {
         switch self {
         case .hit(let match, _):
@@ -183,12 +209,19 @@ public struct EvaluationResult: Sendable, Equatable {
     public var outcome: EvaluationOutcome
     /// T1-normalized command text this result was decided on.
     public var matchingView: MatchingView
+    /// Typed analyzer hit. `.unknown` is omitted from the evaluate wire.
+    public var analysis: SemanticAnalysis
 
     public var decision: Decision { outcome.decision }
 
-    public init(outcome: EvaluationOutcome, matchingView: MatchingView = MatchingView("")) {
+    public init(
+        outcome: EvaluationOutcome,
+        matchingView: MatchingView = MatchingView(""),
+        analysis: SemanticAnalysis = .unknown
+    ) {
         self.outcome = outcome
         self.matchingView = matchingView
+        self.analysis = analysis
     }
 }
 
@@ -199,6 +232,7 @@ extension EvaluationResult: Codable {
         case matchedSafe
         case quickRejected
         case matchingView
+        case analysis
     }
 
     public init(from decoder: Decoder) throws {
@@ -215,6 +249,7 @@ extension EvaluationResult: Codable {
         )
         matchingView = try container.decodeIfPresent(MatchingView.self, forKey: .matchingView)
             ?? MatchingView("")
+        analysis = try container.decodeIfPresent(SemanticAnalysis.self, forKey: .analysis) ?? .unknown
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -228,5 +263,8 @@ extension EvaluationResult: Codable {
         }
         try container.encode(outcome.quickRejected, forKey: .quickRejected)
         try container.encode(matchingView, forKey: .matchingView)
+        if analysis != .unknown {
+            try container.encode(analysis, forKey: .analysis)
+        }
     }
 }
