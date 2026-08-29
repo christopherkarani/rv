@@ -122,6 +122,9 @@ struct ScanSessions: AsyncParsableCommand {
         } catch ScanRun.Error.pathNotFound(let missing) {
             FileHandle.standardError.write(Data("rv scan: path not found: \(missing)\n".utf8))
             throw ExitCode(1)
+        } catch ScanRun.Error.listingFailed(let path) {
+            FileHandle.standardError.write(Data("rv scan: listing failed: \(path)\n".utf8))
+            throw ExitCode(1)
         } catch ScanRun.Error.packsUnavailable {
             FileHandle.standardError.write(Data("rv scan: packs unavailable\n".utf8))
             throw ExitCode(1)

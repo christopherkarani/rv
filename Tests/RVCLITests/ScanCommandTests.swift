@@ -108,27 +108,31 @@ private func decodedJSON(_ text: String) throws -> [String: Any] {
     }
 }
 
-@Test func scanRun_includeGlob_withExplicitPath_forwardsGlobsAndFindsClaudeDeny() throws {
+@Test func scanRun_includeGlob_withExplicitPath_forwardsGlobsAndFindsUnrecognizedGrokDeny() throws {
     try withTempScanHome { home, homeURL in
         let tree = homeURL.appendingPathComponent("explicit-tree", isDirectory: true)
-        let nested = tree.appendingPathComponent("nested", isDirectory: true)
-        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: tree, withIntermediateDirectories: true)
         try FileManager.default.copyItem(
-            at: try scanFixtureURL("claude/projects/-tmp-rv-scan-fixture/ac001-reset-hard.jsonl"),
-            to: nested.appendingPathComponent("notes.jsonl")
+            at: try scanFixtureURL("grok/chat_history.jsonl"),
+            to: tree.appendingPathComponent("notes.txt")
         )
+
+        let skipped = try ScanRun.run(
+            .fixture(rootPath: tree.path, home: home)
+        )
+        #expect(skipped.findings.isEmpty)
+        #expect(skipped.eventsExtracted == 0)
 
         let report = try ScanRun.run(
             .fixture(
                 rootPath: tree.path,
                 home: home,
-                includeGlobs: ["*.txt", "nested/*.txt", "nested/*.jsonl"]
+                includeGlobs: ["*.txt"]
             )
         )
-        #expect(report.findings.count == 1)
-        #expect(report.findings.first?.ruleID.rawValue == "core.git:reset-hard")
-        #expect(report.findings.first?.sourcePath.contains("nested/notes.jsonl") == true)
-        #expect(report.findings.first?.sourcePath.contains("notes.txt") == false)
+        #expect(report.findings.contains { $0.ruleID.rawValue == "core.git:reset-hard" })
+        #expect(report.findings.first?.host == .grok)
+        #expect(report.findings.first?.sourcePath.contains("notes.txt") == true)
     }
 }
 
