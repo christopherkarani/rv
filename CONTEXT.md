@@ -32,6 +32,10 @@ _Avoid_: honor wrapper, consume-on-evaluate
 A single-use unlock for one matching view plus cwd. Spent by the Policy gate after an engine deny. The hook wire never carries a code.
 _Avoid_: bypass, pending code, exception, consume-then-evaluate
 
+**Unlockable deny**:
+A pack deny the Policy gate could spend (matching view + cwd present). Not `core.secrets`, not `builtin.action`, not incomplete evaluate. Spend-first hosts (Pi, OpenCode) pause on the hook door; deny-or-TTY hosts stay deny.
+_Avoid_: inferring Ask from deny JSON that happens to carry a rule id
+
 **Host adapter**:
 The rv-owned integration for one supported host that turns a host shell event into a Hook request and carries the Hook mapper's result back as the host-native block plus optional display-only chrome. Setup installs a Host adapter; it does not define its behavior.
 _Avoid_: host hook, HostCodec (only one part)
@@ -45,8 +49,8 @@ The read-only classification of rvd reachability: reachable, down, not-installed
 _Avoid_: mapping down/skew/request-failed separately in doctor or status
 
 **Hook mapper**:
-EvaluationResult to HookWire after the Policy gate. One Decision switch, HostCodecs (Claude uses the rich encoder; OpenClaw and Hermes are short deny; Codex uses official older `decision: block` on stdout + blocking reason on stderr + exit 2, not Claude permission deny; Cursor uses official native `permission: deny` + `user_message`/`agent_message` + exit 0, not Claude permissionDecision and not Codex block). Owns hook voice.
-_Avoid_: per-codec Decision switch
+EvaluationResult to HookWire after the Policy gate. One Decision switch, HostCodecs (Claude uses the rich encoder; OpenClaw and Hermes are short deny; Codex uses official older `decision: block` on stdout + blocking reason on stderr + exit 2, not Claude permission deny; Cursor uses official native `permission: deny` + `user_message`/`agent_message` + exit 0, not Claude permissionDecision and not Codex block). Owns hook voice. Product Ask is `HostNativeAsk.verdict(host:result:cwd:bound:)`; adapters honor `decision:ask` only.
+_Avoid_: per-codec Decision switch, inferring Ask from deny JSON
 
 **Hook voice**:
 The native host deny sentence the hook mapper produces. TTY panels do not own it.

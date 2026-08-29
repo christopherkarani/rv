@@ -63,7 +63,7 @@ public struct HostNativeApprovalBridge: ApprovalBridge {
 /// Host-native Ask mapping. Leftover unused ask is never a permit.
 public enum HostNativeAsk {
     public static let leftoverAskDeny = Deny(
-        ruleID: RuleID(pack: PackID(rawValue: "builtin.action"), pattern: "leftover-ask"),
+        ruleID: RuleID(pack: ActionPolicyEngine.Builtin.pack, pattern: "leftover-ask"),
         reason: "Ask is not a permit."
     )
 
@@ -77,7 +77,7 @@ public enum HostNativeAsk {
     }
 
     /// Pack / evaluate `Decision` on the hook door. Cannot Ask.
-    /// Product Ask is `verdict(host:bound:continuation:)`.
+    /// Product Ask is `verdict(host:result:cwd:bound:)`.
     public static func verdict(_ decision: Decision) -> PackDoorVerdict {
         switch decision {
         case .allow:
@@ -87,19 +87,40 @@ public enum HostNativeAsk {
         }
     }
 
-    /// Stop collapsing `mandatoryHuman` to deny before a spend-first host.
+    /// Product Ask on the live hook door. Pause only when a spend-first host
+    /// could spend: unlockable pack deny or `mandatoryHuman`, with cwd and a
+    /// nonempty matching view. Secret-path, builtin hard deny, incomplete
+    /// evaluate, deny-or-TTY, missing cwd, and empty matching view stay deny.
     public static func verdict(
         host: HookHost,
+        result: EvaluationResult,
+        cwd: WorkingDirectory?,
         bound: BoundReview,
         continuation: ApprovalContinuation = .hostNative
     ) -> HostAskVerdict {
         switch bound {
         case .allow:
-            return .allow
-        case .deny:
-            return .deny
+            switch result.decision {
+            case .allow:
+                return .allow
+            case .indeterminate, .deny:
+                return .deny
+            }
+        case .deny(let deny):
+            guard isUnlockablePackDeny(deny) else { return .deny }
+            return pauseIfSpendable(
+                host: host,
+                continuation: continuation,
+                cwd: cwd,
+                matchingView: result.matchingView
+            )
         case .mandatoryHuman:
-            return pauseIfPossible(host: host, continuation: continuation)
+            return pauseIfSpendable(
+                host: host,
+                continuation: continuation,
+                cwd: cwd,
+                matchingView: result.matchingView
+            )
         }
     }
 
@@ -138,6 +159,21 @@ public enum HostNativeAsk {
     public static func leftoverAskIsPermit(_ unused: String) -> Bool {
         _ = unused
         return false
+    }
+
+    private static func isUnlockablePackDeny(_ deny: Deny) -> Bool {
+        deny.ruleID.pack != .coreSecrets
+            && deny.ruleID.pack != ActionPolicyEngine.Builtin.pack
+    }
+
+    private static func pauseIfSpendable(
+        host: HookHost,
+        continuation: ApprovalContinuation,
+        cwd: WorkingDirectory?,
+        matchingView: MatchingView
+    ) -> HostAskVerdict {
+        guard cwd != nil, matchingView.isEmpty == false else { return .deny }
+        return pauseIfPossible(host: host, continuation: continuation)
     }
 
     private static func pauseIfPossible(

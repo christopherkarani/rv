@@ -94,7 +94,8 @@ private func hookBody<C: HostCodec>(
             from: result,
             command: request.command,
             using: codec,
-            bound: bound
+            bound: bound,
+            cwd: request.cwd
         )
     case .foreign:
         return codec.encodeAllow()

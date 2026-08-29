@@ -223,11 +223,17 @@ func codexHonorPath_missingReasonExitTwoWithWhitespaceStderrIsNotEnough(_ missin
         from: result,
         command: ShellCommand(rawValue: "git push origin feature"),
         using: CodexHostCodec(),
-        bound: .mandatoryHuman(deny)
+        bound: .mandatoryHuman(deny),
+        cwd: wd("/tmp/ws")
     )
     #expect(HostNativeAsk.capability(for: .codex) == .denyOrTTY)
     #expect(
-        HostNativeAsk.verdict(host: .codex, bound: .mandatoryHuman(deny)) == .deny
+        HostNativeAsk.verdict(
+            host: .codex,
+            result: result,
+            cwd: wd("/tmp/ws"),
+            bound: .mandatoryHuman(deny)
+        ) == .deny
     )
     #expect(wire.stdout.isEmpty == false)
     try assertCodexHonorPath(wire, reason: hostDenyLine(command: ShellCommand(rawValue: "git push origin feature"), reason: deny.reason))

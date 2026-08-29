@@ -119,8 +119,8 @@ Make three illegal programs unrepresentable:
 
 - **REQ-301**: Add `public enum PackDoorVerdict: Sendable, Equatable { case allow, case deny }`.
 - **REQ-302**: Replace `HostNativeAsk.verdict(host:decision:)` with `HostNativeAsk.verdict(_ decision: Decision) -> PackDoorVerdict`. No `HookHost` parameter. `.allow` → `.allow`; `.deny` and `.indeterminate` → `.deny`. Cannot return Ask.
-- **REQ-303**: Keep `verdict(host:bound:continuation:) -> HostAskVerdict` as the only pause door. Default `continuation: .hostNative` may stay.
-- **REQ-304**: `encodeFirstCall` in `HookMapper.swift`: `bound == nil` uses `PackDoorVerdict` then `encodeAllow` / `encodeDeny`. `bound != nil` uses `HostAskVerdict` then allow / deny / ask. The existing “deny result must never become silent allow” guard stays on the bound `.allow` arm.
+- **REQ-303**: Product Ask is `verdict(host:result:cwd:bound:continuation:) -> HostAskVerdict`. Pause only with spend keys (cwd + nonempty matching view) on a spend-first host. `continuation` defaults to `.hostNative`. Do not keep a second `verdict(host:bound:)` that can Ask without those keys.
+- **REQ-304**: `encodeFirstCall` in `HookMapper.swift` calls that door. Indeterminate is always incomplete-eval deny. A deny result must never become silent allow.
 - **CON-301**: Do not add `Decision.ask`. Do not change `HostAskCapability`, Claude leftover-ask-as-permit, or `ApprovalBridge`.
 - **CON-302**: Do not rename `HostAskVerdict`.
 
@@ -275,7 +275,7 @@ EvaluationOutcome.deny(HostNativeAsk.leftoverAskDeny, matched: nil)
 
 // T3
 HostNativeAsk.verdict(.deny(packDeny))            // PackDoorVerdict.deny
-HostNativeAsk.verdict(host: .pi, bound: .mandatoryHuman(askDeny))  // .ask(.hostNative)
+HostNativeAsk.verdict(host: .pi, result: spendable, cwd: cwd, bound: .mandatoryHuman(askDeny))  // .ask(.hostNative)
 ```
 
 - Healthy HelloAck JSON must not contain `"skewReason":null`.
