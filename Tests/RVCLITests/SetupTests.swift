@@ -46,7 +46,8 @@ func env(
     systemctl: any SystemctlApplying = SilentSystemctl(),
     touchSystemd: Bool = false,
     supervisor: EvaluateSupervisor = .launchd,
-    installAnalytics: any InstallAnalyticsCapturing = SilentInstallAnalytics()
+    installAnalytics: any InstallAnalyticsCapturing = SilentInstallAnalytics(),
+    companionPresence: any CompanionPresenceDetecting = FixedCompanionPresence(value: .absent)
 ) -> SetupEnvironment {
     SetupEnvironment(
         home: testHomeDirectory(home.path),
@@ -59,7 +60,8 @@ func env(
         touchLaunchd: touchLaunchd,
         touchSystemd: touchSystemd,
         supervisor: supervisor,
-        installAnalytics: installAnalytics
+        installAnalytics: installAnalytics,
+        companionPresence: companionPresence
     )
 }
 
@@ -101,8 +103,7 @@ private func fixtureLoginHome() throws -> URL {
         #expect(FileManager.default.fileExists(atPath: layout.launchAgent))
         let plist = try String(contentsOfFile: layout.launchAgent, encoding: .utf8)
         #expect(plist.contains(home.appendingPathComponent("rvd").path))
-        #expect(plist.contains("<key>KeepAlive</key>"))
-        #expect(plist.contains("<false/>"))
+        try expectLaunchAgentKeepAlive(layout.launchAgent, false)
         #expect(launchctl.bootstraps.count == 1)
         let analytics = AnalyticsPaths(
             configDirectory: URL(fileURLWithPath: layout.configDirectory, isDirectory: true)
@@ -651,7 +652,9 @@ private func fixtureLoginHome() throws -> URL {
     let plist = try LaunchAgentTemplate.rendered(rvdPath: "/opt/rvd")
     #expect(plist.contains("/opt/rvd"))
     #expect(plist.contains("@RVD_PATH@") == false)
-    #expect(plist.contains("<false/>"))
+    let keys = try launchdPlist(plist)
+    #expect(keys["KeepAlive"] as? Bool == false)
+    #expect(keys["RunAtLoad"] as? Bool == false)
     #expect(plist.contains("<key>LimitLoadToSessionType</key>"))
     #expect(plist.contains("<string>Aqua</string>"))
     #expect(plist.contains("<string>Background</string>"))
