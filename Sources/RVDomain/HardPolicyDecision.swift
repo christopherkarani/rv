@@ -47,8 +47,8 @@ public enum BoundReview: Sendable, Equatable {
     }
 }
 
-/// Pure bind. Reviewer identity is generic so RVPolicy / RVEngine stay untouched
-/// when a provider is swapped.
+/// Pure bind of hard policy to a review `Result`. Callers await the reviewer
+/// outside Domain; provider identity never enters this type.
 public enum ReviewBind: Sendable {
     public static func apply(
         hardDecision: HardPolicyDecision,
