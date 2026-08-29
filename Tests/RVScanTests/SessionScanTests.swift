@@ -79,11 +79,13 @@ import RVDomain
     _ = boxed
 }
 
-@Test func sessionScanAdapters_areTheSixKnownHosts() {
+@Test func sessionScanAdapters_matchScanRunHostOrder() {
     #expect(SessionScanAdapters.all.map(\.host) == [
-        .claude, .pi, .grok, .opencode, .openclaw, .hermes,
+        .claude, .pi, .grok, .opencode, .openclaw, .hermes, .codex, .cursor,
     ])
     #expect(SessionScanAdapters.selected(hostFilter: .pi).map(\.host) == [.pi])
+    #expect(SessionScanAdapters.selected(hostFilter: .codex).map(\.host) == [.codex])
+    #expect(SessionScanAdapters.selected(hostFilter: .cursor).map(\.host) == [.cursor])
 }
 
 @Test func sessionScan_runNilRootPath_usesKnownHostRootsWithoutMissingRoot() throws {
@@ -172,7 +174,7 @@ import RVDomain
             )
         )
         #expect(result.report.findings.contains { $0.ruleID.rawValue == "core.git:reset-hard" })
-        #expect(result.eventHosts.contains(.grok))
+        #expect(result.eventHosts == [.grok])
     }
 }
 
@@ -263,6 +265,50 @@ import RVDomain
         #expect(result.report.findings.count == 1)
         #expect(result.report.findings.first?.sourcePath.contains("outside-reset-hard.jsonl") == false)
         #expect(result.report.findings.first?.sourcePath.contains(".claude/projects") == true)
+    }
+}
+
+@Test func sessionScan_knownHostRoots_findsCodexDenyInTempHome() throws {
+    try withTempTree { homeURL in
+        try installCodexResetHard(into: homeURL)
+        let home = try #require(ScanHome(validating: homeURL.path))
+        let now = Date(timeIntervalSince1970: 1_777_000_000)
+        let result = try SessionScan().run(
+            SessionScanRequest(home: home, now: now, scanAll: true)
+        )
+        #expect(result.report.findings.count == 1)
+        #expect(result.report.findings.first?.ruleID.rawValue == "core.git:reset-hard")
+        #expect(result.eventHosts == [.codex])
+    }
+}
+
+@Test func sessionScan_knownHostRoots_findsCursorDenyInTempHome() throws {
+    try withTempTree { homeURL in
+        try installCursorResetHard(into: homeURL)
+        let home = try #require(ScanHome(validating: homeURL.path))
+        let now = Date(timeIntervalSince1970: 1_777_000_000)
+        let result = try SessionScan().run(
+            SessionScanRequest(home: home, now: now, scanAll: true)
+        )
+        #expect(result.report.findings.count == 1)
+        #expect(result.report.findings.first?.ruleID.rawValue == "core.git:reset-hard")
+        #expect(result.eventHosts == [.cursor])
+    }
+}
+
+@Test func sessionScan_hostFilterCodex_ignoresClaudeFixture() throws {
+    try withTempTree { homeURL in
+        try installClaudeResetHard(into: homeURL)
+        try installCodexResetHard(into: homeURL)
+        let home = try #require(ScanHome(validating: homeURL.path))
+        let now = Date(timeIntervalSince1970: 1_777_000_000)
+        let result = try SessionScan().run(
+            SessionScanRequest(home: home, now: now, hostFilter: .codex, scanAll: true)
+        )
+        #expect(result.report.findings.allSatisfy { $0.host == .codex })
+        #expect(result.report.findings.contains { $0.ruleID.rawValue == "core.git:reset-hard" })
+        #expect(result.report.findings.contains { $0.host == .claude } == false)
+        #expect(result.eventHosts == [.codex])
     }
 }
 
@@ -448,5 +494,25 @@ private func installPiSession(into homeURL: URL) throws {
     try FileManager.default.copyItem(
         at: try fixtureURL("pi/session.jsonl"),
         to: sessions.appendingPathComponent("session.jsonl")
+    )
+}
+
+private func installCodexResetHard(into homeURL: URL) throws {
+    let sessions = homeURL
+        .appendingPathComponent(".codex/sessions/fixture", isDirectory: true)
+    try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+    try FileManager.default.copyItem(
+        at: try fixtureURL("codex/bash-function-call.jsonl"),
+        to: sessions.appendingPathComponent("rollout-bash.jsonl")
+    )
+}
+
+private func installCursorResetHard(into homeURL: URL) throws {
+    let transcripts = homeURL
+        .appendingPathComponent(".cursor/projects/ws/agent-transcripts", isDirectory: true)
+    try FileManager.default.createDirectory(at: transcripts, withIntermediateDirectories: true)
+    try FileManager.default.copyItem(
+        at: try fixtureURL("cursor/before-shell.jsonl"),
+        to: transcripts.appendingPathComponent("sess.jsonl")
     )
 }

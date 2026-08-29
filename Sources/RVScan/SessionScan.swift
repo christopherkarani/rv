@@ -194,8 +194,9 @@ public struct SessionScan: Sendable {
                     contentsOf: try candidate.adapter.extract(fileURL: candidate.url, data: data)
                 )
             } catch {
-                // Glob-only files are unknown layouts: a fail-closed SQLite adapter
-                // must not abort the scan when another adapter can still extract.
+                // Glob-only files are unknown layouts: a fail-closed adapter
+                // (SQLite or JSONL) must not abort the scan when another adapter
+                // can still extract.
                 if candidate.includeGlobOnly { continue }
                 throw error
             }

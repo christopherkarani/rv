@@ -1,6 +1,6 @@
 import RVDomain
 
-/// Registered session-store adapters. Order matches the former CLI list.
+/// Registered session-store adapters. Order matches `ScanRun`'s list.
 public enum SessionScanAdapters {
     public static let all: [any SessionStoreAdapter] = [
         ClaudeSessionStoreAdapter(),
@@ -9,6 +9,8 @@ public enum SessionScanAdapters {
         OpenCodeStoreAdapter(),
         OpenClawStoreAdapter(),
         HermesStoreAdapter(),
+        CodexStoreAdapter(),
+        CursorStoreAdapter(),
     ]
 
     public static func selected(hostFilter: ScanHostID?) -> [any SessionStoreAdapter] {

@@ -14,7 +14,7 @@ tags:
 
 # Introduction
 
-This specification implements three Strong candidates from the 2026-08-29 functional-evolution + type-system review (HTML: `/var/folders/ns/xmz0zmpj7p148vdgr4bwzp8h0000gn/T/swift-functional-evolution-rv-20260829-044828.html`).
+This specification implements three Strong candidates from the 2026-08-29 functional-evolution + type-system review (HTML artifact: `swift-functional-evolution-rv-20260829-044828.html`).
 
 1. **FE-T3 / FE-T4:** `SessionScan` becomes the deep scan module; CLI stops owning extract/classify/dedupe.
 2. **FE-T2:** `PendingApprovalState` absorbs consumption so `consumedAt` is not a parallel optional.
@@ -85,7 +85,7 @@ Implementers of rv (Swift 6.3.3, language mode 6, macOS 26, Apple Silicon) using
 - **REQ-002**: When `SessionScanRequest.rootPath` is `nil`, run **known-host-roots mode** (REQ-002 of the session-scan spec): each selected adapter’s `roots(home:)`, then walk those directories. Do not throw `SessionScanError.missingRoot` for nil path. Missing individual roots are skipped (current CLI behavior).
 - **REQ-003**: When `rootPath` is set, run **explicit-tree mode**. Missing path fails closed (`SessionScanError.pathNotFound` / equivalent). `--include-glob` / `includeGlobs` apply only in this mode. Empty `includeGlobs` with a path still scans known layouts under that path.
 - **REQ-004**: `includeGlobs` non-empty with `rootPath == nil` is a caller error. SessionScan shall throw a typed error (map to today’s `ScanRun.Error.includeGlobRequiresPath`). CLI validation may remain as a second check.
-- **REQ-005**: Adapter list lives in RVScan, not RVCLI. Same six adapters as today: Claude, Pi, Grok, OpenCode, OpenClaw, Hermes.
+- **REQ-005**: Adapter list lives in RVScan, not RVCLI. Same adapters as `ScanRun` today: Claude, Pi, Grok, OpenCode, OpenClaw, Hermes, Codex, Cursor.
 - **REQ-006**: Classify uses `ScanClassify(enabledPacks:)` / snapshots via PackRegistry as today. Never `EvaluateSession`, `GatedEvaluate`, or Policy gate. Packs unavailable → typed error (`ScanClassifyError.packsUnavailable` or SessionScan wrapper).
 - **REQ-007**: Clock stays injected: `SessionScanRequest.now`. Do not call `Date()` in RVScan core.
 - **REQ-008**: Return type shall carry `ScanReport` plus `eventHosts: Set<ScanHostID>` (hosts that produced extracted events, including allows that never become findings). Do not add setup-nudge fields to `ScanReport`.
