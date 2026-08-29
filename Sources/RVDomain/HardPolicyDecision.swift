@@ -66,22 +66,6 @@ public enum ReviewBind: Sendable {
         }
     }
 
-    public static func apply(
-        hardDecision: HardPolicyDecision,
-        request: ReviewRequest,
-        reviewer: some ActionReviewer
-    ) async -> BoundReview {
-        let review: Result<ActionReview, ActionReviewerError>
-        do {
-            review = .success(try await reviewer.review(request))
-        } catch let error as ActionReviewerError {
-            review = .failure(error)
-        } catch {
-            review = .failure(.unsupported)
-        }
-        return apply(hardDecision: hardDecision, review: review)
-    }
-
     private static func bindEligible(
         fallback: Deny,
         review: Result<ActionReview, ActionReviewerError>
