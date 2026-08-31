@@ -122,6 +122,24 @@ struct OneShotEvaluateClientTests {
         #expect(transport.helloCount == 0)
     }
 
+    @Test func hookEvaluateMismatchedResponseProtocol_fallsBackInProcessAndDeniesResetHard() async throws {
+        let transport = ScriptedTransport(
+            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok),
+            responseResult: .hookEvaluate(HookEvaluateReply(stdout: "", exitCode: 0)),
+            responseProtocolName: "rv.ipc.v0"
+        )
+        let client = try isolatedClient(transport: transport)
+        var hook = Hook()
+        hook.host = .grok
+        let outcome = await hook.run(stdin: try grokHookFixture("deny-git-reset-hard.json"), client: client)
+        let json = try #require(
+            JSONSerialization.jsonObject(with: Data(outcome.stdout.utf8)) as? [String: Any]
+        )
+        #expect(json["decision"] as? String == "deny")
+        #expect(transport.invalidationCount == 1)
+        #expect(transport.helloCount == 0)
+    }
+
     @Test func hookEvaluateEvaluateReply_isNotFirstPath_fallsBackAndDenies() async throws {
         let spoofedAllow = EvaluationResult(outcome: .plain, matchingView: "git reset --hard")
         let transport = ScriptedTransport(
@@ -295,26 +313,26 @@ struct OneShotEvaluateClientTests {
     }
 
     @Test func oneShotXPCStashDrop_isEmptyAllowOnHookCodec() async throws {
-        let allowed = EvaluationResult(
-            outcome: .plain,
-            matchingView: "git stash drop"
-        )
         let transport = ScriptedTransport(
             ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok),
-            responseResult: .evaluate(EvaluateReply(result: allowed))
+            responseResult: .hookEvaluate(HookEvaluateReply(stdout: "", exitCode: 0))
         )
         let client = try isolatedClient(transport: transport)
-        let stdinURL = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("RVHooksTests/Fixtures/grok/allow-medium-stash-drop.json")
-        let stdin = try String(contentsOf: stdinURL, encoding: .utf8)
-        let wire = await hookWire(host: .grok, stdin: stdin) { command, cwd in
-            await client.evaluateResult(command: command, cwd: cwd)
+        var hook = Hook()
+        hook.host = .grok
+        let outcome = await hook.run(
+            stdin: try grokHookFixture("allow-medium-stash-drop.json"),
+            client: client
+        )
+        #expect(outcome.stdout.isEmpty)
+        #expect(outcome.exitCode == 0)
+        #expect(outcome.stdout.contains("deny") == false)
+        let sent = try #require(transport.sends.first)
+        let request = try IPCJSON.decode(IPCRequest.self, from: sent)
+        guard case .hookEvaluate = request.method else {
+            Issue.record("production stash-drop path must send hookEvaluate, not evaluate")
+            return
         }
-        #expect(wire.stdout.isEmpty)
-        #expect(wire.exitCode == 0)
-        #expect(wire.stdout.contains("deny") == false)
         #expect(transport.sendCount == 1)
         #expect(transport.helloCount == 0)
     }
