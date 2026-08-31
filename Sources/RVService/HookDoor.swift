@@ -14,6 +14,6 @@ public struct HookDoor: Sendable {
     }
 
     private static func reply(_ wire: HookWire) -> HookEvaluateReply {
-        HookEvaluateReply(stdout: wire.stdout, exitCode: wire.exitCode)
+        HookEvaluateReply(stdout: wire.stdout, exitCode: wire.exitCode, stderr: wire.stderr)
     }
 }

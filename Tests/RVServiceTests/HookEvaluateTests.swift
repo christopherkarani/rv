@@ -222,6 +222,19 @@ struct HookEvaluateTests {
         #expect(blob.contains("/tmp/rv-hook-fixture") == false)
     }
 
+    @Test func hookDoor_replyCopiesWireStderr() async throws {
+        let probe = EvaluateCallProbe()
+        let reply = try await HookDoor.run(host: .codex, stdin: "") { command, cwd in
+            await probe.evaluate(command, cwd: cwd)
+        }
+        let wire = CodexHostCodec().encodeDeny(reason: malformedHookSentence(.unreadable))
+        #expect(reply.stderr == wire.stderr)
+        #expect(reply.stdout == wire.stdout)
+        #expect(reply.exitCode == wire.exitCode)
+        #expect(reply.stderr.isEmpty == false)
+        #expect(probe.calls == 0)
+    }
+
     @Test func emptyStdin_failsClosedWithDenyJSON() async throws {
         let probe = EvaluateCallProbe()
         let reply = try await HookDoor.run(host: .grok, stdin: "") { command, cwd in
