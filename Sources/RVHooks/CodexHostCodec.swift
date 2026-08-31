@@ -38,21 +38,6 @@ public struct CodexHostCodec: HostCodec {
         )
     }
 
-    /// Maps a decoded Codex request to `ProposedAction.shell`.
-    /// Session and cwd stay on the request and in the fingerprint until IR owns construction.
-    public func proposedAction(from request: HookRequest) -> ProposedAction {
-        let fingerprint = ActionFingerprint(
-            rawValue: "codex:\(request.session ?? ""):\(request.cwd?.rawValue ?? ""):\(request.command.rawValue)"
-        )
-        return .shell(
-            ShellAction(
-                fingerprint: fingerprint,
-                scope: ActionScope(workingDirectory: request.cwd),
-                supportingCommand: request.command
-            )
-        )
-    }
-
     /// Official Codex honor path: older `decision: block` JSON + exit 2.
     /// Claude permission deny JSON is not a Codex TUI honor path.
     /// Defaults must live here: a one-argument `encodeDeny(reason:)` otherwise

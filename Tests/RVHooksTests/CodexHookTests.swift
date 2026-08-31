@@ -245,8 +245,17 @@ func codexHonorPath_missingReasonExitTwoWithWhitespaceStderrIsNotEnough(_ missin
         return
     }
     #expect(request.cwd?.rawValue == "/tmp/ws")
-    #expect(request.session == "sess_1")
+    #expect(request.session == SessionID(validating: "sess_1"))
     let action = codec.proposedAction(from: request)
+    #expect(
+        action.fingerprint
+            == ActionFingerprint.make(
+                host: .codex,
+                session: request.session,
+                cwd: request.cwd,
+                command: request.command
+            )
+    )
     guard case .shell(let shell) = action else {
         Issue.record("expected ProposedAction.shell")
         return
@@ -287,7 +296,25 @@ func codexHonorPath_missingReasonExitTwoWithWhitespaceStderrIsNotEnough(_ missin
         Issue.record("expected .request for turn_id")
         return
     }
-    #expect(request.session == "turn_main")
+    #expect(request.session == SessionID(validating: "turn_main"))
+}
+
+@Test func codexHookRequest_emptySessionStringIsNil() {
+    let request = HookRequest(
+        host: .codex,
+        command: ShellCommand(rawValue: "git status"),
+        session: ""
+    )
+    #expect(request.session == nil)
+    #expect(
+        codec.proposedAction(from: request).fingerprint
+            == ActionFingerprint.make(
+                host: .codex,
+                session: nil,
+                cwd: nil,
+                command: ShellCommand(rawValue: "git status")
+            )
+    )
 }
 
 private final class CodexEvaluateProbe: @unchecked Sendable {
