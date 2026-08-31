@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import RVDomain
 @testable import RVHooks
 
 private let codec = PiHostCodec()
@@ -140,7 +141,7 @@ func piDecode_extractsBashCommand(_ file: String, expected: String) throws {
         Issue.record("expected .request for sessionId")
         return
     }
-    #expect(request.session == "sess_pi")
+    #expect(request.session == SessionID(validating: "sess_pi"))
 }
 
 @Test func piDecode_emptySessionIsNil() {

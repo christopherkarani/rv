@@ -46,21 +46,6 @@ public struct CursorHostCodec: HostCodec {
         )
     }
 
-    /// Maps a decoded Cursor request to `ProposedAction.shell`.
-    /// Session and cwd stay on the request and in the fingerprint until IR owns construction.
-    public func proposedAction(from request: HookRequest) -> ProposedAction {
-        let fingerprint = ActionFingerprint(
-            rawValue: "cursor:\(request.session ?? ""):\(request.cwd?.rawValue ?? ""):\(request.command.rawValue)"
-        )
-        return .shell(
-            ShellAction(
-                fingerprint: fingerprint,
-                scope: ActionScope(workingDirectory: request.cwd),
-                supportingCommand: request.command
-            )
-        )
-    }
-
     /// Official Cursor honor path: `permission: allow` JSON + exit 0.
     /// Empty stdout + `failClosed: true` would block a harmless command.
     public func encodeAllow() -> HookWire {
