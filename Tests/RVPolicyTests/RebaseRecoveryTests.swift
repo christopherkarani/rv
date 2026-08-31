@@ -60,6 +60,55 @@ struct RebaseRecoveryTests {
         }
     }
 
+    @Test func unwrapLimitedIsNeverEligibleEvenWithCheckoutDiscardRule() {
+        let result = EvaluationResult(
+            outcome: .deny(
+                Deny(ruleID: RuleID(pack: .coreGit, pattern: "checkout-discard"), reason: "checkout"),
+                matched: nil
+            ),
+            matchingView: "bash -c git checkout -- file",
+            analysis: .unwrapLimited.wrapping([.bash])
+        )
+        #expect(RebaseRecovery.isEligible(result: result) == false)
+    }
+
+    @Test func secretsDenyIsNeverEligibleEvenWithDiscardWorktree() {
+        let result = EvaluationResult(
+            outcome: .deny(
+                Deny(ruleID: RuleID(pack: .coreSecrets, pattern: "ssh-private-key"), reason: "secret"),
+                matched: nil
+            ),
+            matchingView: "git checkout -- id_rsa",
+            analysis: .git(.discardWorktree(pathspecs: ["id_rsa"], source: nil))
+        )
+        #expect(RebaseRecovery.isEligible(result: result) == false)
+    }
+
+    @Test func protectedPathDenyIsNeverEligible() {
+        let target = FilesystemTarget(
+            apparent: ".ssh/id_rsa",
+            canonical: "/isolated-home/.ssh/id_rsa",
+            scope: .protectedPath,
+            kind: .unknown,
+            resolution: .resolved
+        )
+        let result = EvaluationResult(
+            outcome: .deny(ActionPolicyEngine.Builtin.protectedPath, matched: nil),
+            matchingView: "rm -f .ssh/id_rsa",
+            analysis: .filesystem(.delete(targets: [target], recursive: false, force: true))
+        )
+        #expect(RebaseRecovery.isEligible(result: result) == false)
+    }
+
+    @Test func otherPackCheckoutDiscardPatternIsNotEligible() {
+        let result = deny(
+            pack: .systemDisk,
+            pattern: "checkout-discard",
+            analysis: .unknown
+        )
+        #expect(RebaseRecovery.isEligible(result: result) == false)
+    }
+
     @Test func forcePushIsNeverEligible() {
         let result = deny(
             pack: .coreGit,
@@ -99,6 +148,31 @@ struct RebaseRecoveryTests {
         )
         #expect(withRebase.override == .rebaseRecovery)
         #expect(withRebase.result.decision == .allow)
+    }
+
+    @Test func decideKeepsUnwrapLimitedDeniedDuringRebase() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let denied = EvaluationResult(
+            outcome: .deny(
+                Deny(ruleID: RuleID(pack: .coreGit, pattern: "checkout-discard"), reason: "checkout"),
+                matched: nil
+            ),
+            matchingView: "bash -c git checkout -- file",
+            analysis: .unwrapLimited.wrapping([.bash])
+        )
+        let gated = PolicyGate.decide(
+            denied,
+            cwd: wd("/tmp/ws"),
+            allowlist: .empty,
+            grant: .none,
+            now: now,
+            rebaseInProgress: true
+        )
+        #expect(gated.override == .none)
+        guard case .deny = gated.result.decision else {
+            Issue.record("unwrap-limited checkout must stay deny during rebase")
+            return
+        }
     }
 
     @Test func decideKeepsResetHardDeniedDuringRebase() {

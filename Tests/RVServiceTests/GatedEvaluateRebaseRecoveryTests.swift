@@ -50,9 +50,39 @@ struct GatedEvaluateRebaseRecoveryTests {
             result.analysis.gitAction
                 == .restore(pathspecs: ["."], staged: true, worktree: false, source: nil)
         )
-        if case .deny = result.decision {
+        #expect(result.decision == .allow)
+    }
+
+    @Test func quotedBashCheckoutDiscardIsRecoveredDuringRebase() async throws {
+        let repo = try tempRepo(rebase: .merge)
+        let result = try await apply("bash -c 'git checkout -- file.swift'", cwd: repo)
+        #expect(result.decision == .allow)
+        #expect(result.analysis.gitAction == .discardWorktree(pathspecs: ["file.swift"], source: nil))
+    }
+
+    @Test func unquotedBashCheckoutStaysDeniedDuringRebase() async throws {
+        let repo = try tempRepo(rebase: .merge)
+        let result = try await apply("bash -c git checkout -- file.swift", cwd: repo)
+        guard case .deny = result.decision else {
+            Issue.record("unwrap-limited checkout must stay deny during rebase")
             return
         }
+        #expect(result.analysis.innermost == .unwrapLimited)
+    }
+
+    @Test func relativeGitdirFileAllowsCheckoutDiscard() async throws {
+        let fm = FileManager.default
+        let root = try isolatedRepoRoot()
+        let gitdir = root.appendingPathComponent("gitdir", isDirectory: true)
+        let worktree = root.appendingPathComponent("worktree", isDirectory: true)
+        try fm.createDirectory(
+            at: gitdir.appendingPathComponent("rebase-merge", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        try fm.createDirectory(at: worktree, withIntermediateDirectories: true)
+        let gitFile = worktree.appendingPathComponent(".git")
+        try "gitdir: ../gitdir\n".write(to: gitFile, atomically: true, encoding: .utf8)
+        let result = try await apply("git checkout -- file.swift", cwd: worktree.path)
         #expect(result.decision == .allow)
     }
 

@@ -16,7 +16,7 @@ rv owns codecs. Do not copy ryk leftover-ask-as-permit. Do not copy DCG fail-ope
 
 - Discover: `~/.pi/agent/extensions/*.ts` or project `.pi/extensions/*.ts`.
 - Event: `pi.on("tool_call", …)`. Shell tool name is typically `bash`. Input: `event.input.command`.
-- Deny: return `{ block: true, reason }`. Reason is `hostDenyText` (one sentence + rule_id + next step). That return is the block path.
+- Deny: return `{ block: true, reason }`. Reason is `hostDenyText` (one-line blocked string; codecs copy it). That return is the block path.
 - Display-only: `registerMessageRenderer` for `rv-decision` must return `{ render(width) => string[] }`, never a string. `sendMessage` on deny only (`triggerTurn: false`). Allow stays silent. Not the deny path. No confirm / Allow UI.
 - DCG’s published recipe fails open if `dcg` is missing. **rv adapter (PLAN #6):** missing `rv` binary → Pi `{ block: true, reason: "rv missing" }`. A started `rv` that times out or crashes → `{ block: true, reason: "rv failed" }`. **`rvd` down/skew** still evaluates in-process and must deny. Doctor reports a missing/non-exec baked path as `broken`.
 - Occupied slot: skip + one line. No ryk special-case.
@@ -129,7 +129,7 @@ rv owns codecs. Do not copy ryk leftover-ask-as-permit. Do not copy DCG fail-ope
 
 ## Shared deny text
 
-`hostDenyText`: one sentence + display `rule_id` (`pack/pattern`) + next step. Never include a redeemable code. Canonical: `Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once.`
+`hostDenyText`: one line. Pack deny is `RV · Blocked. ` plus sentence 1 of the pack reason, and sentence 2 when it is a safe tip. Never include a redeemable code, `allow-once`, or the command echo. Canonical reset-hard: `RV · Blocked. Destroys uncommitted changes. Use 'git stash' first.`
 Allow (`Decision.allow`, including medium/low match): empty stdout, host-success exit. No banner.
 Indeterminate (`Decision.indeterminate`): same wire as deny, reason `rv could not finish evaluating this command. Run it in Terminal.` — not empty allow. No pack `rule_id`. Switch on `Decision`; do not treat nil `hostDenyText` as allow.
 

@@ -9,10 +9,31 @@ public enum RebaseRecovery: Sendable {
         if isNeverEligibleRule(deny.ruleID) {
             return false
         }
+        if isUnoverridableHardStop(result, deny: deny) {
+            return false
+        }
         if let action = result.analysis.gitAction {
             return isEligibleGitAction(action)
         }
         return isEligiblePackRule(deny.ruleID)
+    }
+
+    /// Rebase recovery may lift the working-tree-discard pin. Secrets,
+    /// protected-path, unwrap-limited, and other hard stops stay denied.
+    private static func isUnoverridableHardStop(
+        _ result: EvaluationResult,
+        deny: Deny
+    ) -> Bool {
+        if result.analysis.innermost == .unwrapLimited {
+            return true
+        }
+        if result.analysis.filesystemAction?.primaryTarget?.scope == .protectedPath {
+            return true
+        }
+        if deny.ruleID == ActionPolicyEngine.Builtin.workingTreeDiscard.ruleID {
+            return false
+        }
+        return RulePinning.blocksAllowOverride(deny)
     }
 
     private static func isNeverEligibleRule(_ ruleID: RuleID) -> Bool {
@@ -38,6 +59,9 @@ public enum RebaseRecovery: Sendable {
     }
 
     private static func isEligiblePackRule(_ ruleID: RuleID) -> Bool {
+        guard ruleID.pack == .coreGit else {
+            return false
+        }
         switch ruleID.pattern {
         case "checkout-discard", "checkout-ref-discard",
             "restore-worktree", "restore-worktree-explicit":

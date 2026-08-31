@@ -376,7 +376,7 @@ Build: `clang -Os` + `strip -x`, `otool -L` must not list Foundation/CFNetwork/S
 **Safety laws (from `docs/factory/PLAN.md`):**
 
 - Down/skew never becomes allow (in-process evaluate). Indeterminate → host deny sentence without rule_id.
-- `hostDenyText` canonical: `Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once.`; incomplete: `rv could not finish evaluating this command. Run it in Terminal.`
+- `hostDenyText` canonical reset-hard: `RV · Blocked. Destroys uncommitted changes. Use 'git stash' first.`; incomplete: `rv could not finish evaluating this command. Run it in Terminal.` Never a redeemable code.
 - No `RV_BYPASS`, no host Allow UI, no foreign hook writes, no live-HOME tests, no `os_log` command text, no Seatbelt/OS-enforced claim, no Homebrew in v1.
 
 **Performance / Toolchain:** `tools/swift-6.3.3` wrapper; `tools/gate.sh` infers `*Tests` from git diff; `tools/preflight.sh` checks hygiene (no forbidden tokens outside `docs/factory/`, Swift 6 mode). `.build` warm ~80 MB ModuleCache; `swift package clean` wipes it (slow cold ~12 s). Slowest body `tokenizeCommand` ~22 ms.
