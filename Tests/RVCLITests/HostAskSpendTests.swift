@@ -5,6 +5,26 @@ import RVHooks
 @testable import RVCLI
 
 struct HostAskSpendTests {
+    @Test func piSpendThroughHookEvaluateAllowsOnceThenReplayDenies() async throws {
+        let directory = try isolatedAllowOnceDirectory()
+        let client = try isolatedClient(transport: nil, allowOnceDirectory: directory)
+        let stdin = """
+        {"toolName":"bash","cwd":"/tmp/ws","input":{"command":"git reset --hard"},"hostAsk":"spend"}
+        """
+        let wire = await client.hookEvaluate(host: .pi, stdin: stdin)
+        #expect(wire.stdout.isEmpty)
+        #expect(wire.exitCode == 0)
+
+        let replay = await client.evaluateResult(
+            command: ShellCommand(rawValue: "git reset --hard"),
+            cwd: wd("/tmp/ws")
+        )
+        guard case .deny = replay.decision else {
+            Issue.record("replay after production hookEvaluate spend must deny")
+            return
+        }
+    }
+
     @Test func piSpendCallbackAllowsOnceThenReplayDenies() async throws {
         let directory = try isolatedAllowOnceDirectory()
         let client = try isolatedClient(transport: nil, allowOnceDirectory: directory)

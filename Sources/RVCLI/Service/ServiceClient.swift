@@ -1,5 +1,6 @@
 import Foundation
 import RVDomain
+import RVHooks
 import RVIPC
 import RVPolicy
 import RVService
@@ -124,25 +125,26 @@ public struct ServiceClient: Sendable {
         try await store.insertGranted(matchingView: matchingView, cwd: cwd, now: now)
     }
 
+    private func inProcessApply(command: ShellCommand, cwd: WorkingDirectory?) async -> EvaluationResult {
+        let now = clock()
+        let baseDirectory = store.baseDirectory
+        return await door.run(
+            .apply,
+            command: command,
+            cwd: cwd,
+            home: home,
+            store: store,
+            now: now,
+            allowlist: {
+                AllowlistStore(baseDirectory: baseDirectory)
+                    .loadUserSnapshot(workspacePath: cwd.map(\.rawValue), now: now)
+            }
+        )
+    }
+
     public func evaluate(command: ShellCommand, cwd: WorkingDirectory? = nil) async -> RoutedEvaluation {
         func inProcessRoute() async -> RoutedEvaluation {
-            let now = clock()
-            let baseDirectory = store.baseDirectory
-            return RoutedEvaluation(
-                result: await door.run(
-                    .apply,
-                    command: command,
-                    cwd: cwd,
-                    home: home,
-                    store: store,
-                    now: now,
-                    allowlist: {
-                        AllowlistStore(baseDirectory: baseDirectory)
-                            .loadUserSnapshot(workspacePath: cwd.map(\.rawValue), now: now)
-                    }
-                ),
-                path: .inProcess
-            )
+            RoutedEvaluation(result: await inProcessApply(command: command, cwd: cwd), path: .inProcess)
         }
         guard let transport else {
             return await inProcessRoute()
@@ -189,6 +191,61 @@ public struct ServiceClient: Sendable {
 
     public func evaluateResult(command: ShellCommand, cwd: WorkingDirectory? = nil) async -> EvaluationResult {
         await evaluate(command: command, cwd: cwd).result
+    }
+
+    /// Maps host stdin through IPC `hookEvaluate`, or in-process `hookWire` on miss.
+    public func hookEvaluate(host: HookHost, stdin: String) async -> HookWire {
+        func inProcessWire() async -> HookWire {
+            await hookWire(
+                host: host,
+                stdin: stdin,
+                evaluate: { command, cwd in
+                    await self.inProcessApply(command: command, cwd: cwd)
+                },
+                spendHostAsk: { command, cwd in
+                    await self.spendHostAsk(command: command, cwd: cwd)
+                }
+            )
+        }
+        guard let transport else {
+            return await inProcessWire()
+        }
+        do {
+            let request = IPCRequest(
+                method: .hookEvaluate(
+                    HookEvaluateParams(
+                        host: host,
+                        stdin: stdin,
+                        clientSemver: ProtocolVersion.serviceSemver
+                    )
+                )
+            )
+            let body = try IPCJSON.encode(request)
+            let data = try await transport.send(body, timeoutMs: transport.oneShotEvaluateTimeoutMs)
+            let response = try IPCJSON.decode(IPCResponse.self, from: data)
+            guard response.id == request.id,
+                  response.protocolName == request.protocolName
+            else {
+                transport.invalidate()
+                return await inProcessWire()
+            }
+            if case .hookEvaluate(let reply) = response.result {
+                switch EvaluationRoute.path(for: .reply(
+                    clientSemver: ProtocolVersion.serviceSemver,
+                    advertisedServiceSemver: reply.serviceSemver
+                )) {
+                case .xpc:
+                    return HookWire(stdout: reply.stdout, exitCode: reply.exitCode, stderr: reply.stderr)
+                case .inProcess:
+                    transport.invalidate()
+                    return await inProcessWire()
+                }
+            }
+            transport.invalidate()
+            return await inProcessWire()
+        } catch {
+            return await inProcessWire()
+        }
     }
 
     /// Plant+spend a host Allow once on the same grant file evaluate uses.
