@@ -53,10 +53,10 @@ struct RebaseRecoveryTests {
         #expect(RebaseRecovery.isEligible(result: result))
     }
 
-    @Test func packRuleWithoutGitActionIsEligible() {
+    @Test func packRuleWithoutGitActionIsNotEligible() {
         for pattern in ["checkout-discard", "checkout-ref-discard", "restore-worktree", "restore-worktree-explicit"] {
             let result = deny(pack: .coreGit, pattern: pattern, analysis: .unknown)
-            #expect(RebaseRecovery.isEligible(result: result), Comment(rawValue: pattern))
+            #expect(RebaseRecovery.isEligible(result: result) == false, Comment(rawValue: pattern))
         }
     }
 
@@ -107,6 +107,29 @@ struct RebaseRecoveryTests {
             analysis: .unknown
         )
         #expect(RebaseRecovery.isEligible(result: result) == false)
+    }
+
+    @Test func unknownAnalysisDoesNotLiftCompoundCommand() {
+        let result = deny(
+            pack: .coreGit,
+            pattern: "checkout-discard",
+            analysis: .unknown
+        )
+        #expect(RebaseRecovery.isEligible(result: result) == false)
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let gated = PolicyGate.decide(
+            result,
+            cwd: wd("/tmp/ws"),
+            allowlist: .empty,
+            grant: .none,
+            now: now,
+            rebaseInProgress: true
+        )
+        #expect(gated.override == .none)
+        guard case .deny = gated.result.decision else {
+            Issue.record("unknown analysis must not rebase-recover")
+            return
+        }
     }
 
     @Test func forcePushIsNeverEligible() {

@@ -53,6 +53,23 @@ struct GatedEvaluateRebaseRecoveryTests {
         #expect(result.decision == .allow)
     }
 
+    @Test func compoundCheckoutThenResetHardStaysDeniedDuringRebase() async throws {
+        let repo = try tempRepo(rebase: .merge)
+        let result = try await apply("git checkout -- file.swift; git reset --hard", cwd: repo)
+        guard case .deny = result.decision else {
+            Issue.record("compound checkout + reset --hard must stay deny during rebase")
+            return
+        }
+        #expect(result.analysis.gitAction == nil)
+    }
+
+    @Test func checkoutTheirsDuringRebaseIsRecovered() async throws {
+        let repo = try tempRepo(rebase: .merge)
+        let result = try await apply("git checkout --theirs -- file.swift", cwd: repo)
+        #expect(result.decision == .allow)
+        #expect(result.analysis.gitAction == .discardWorktree(pathspecs: ["file.swift"], source: nil))
+    }
+
     @Test func quotedBashCheckoutDiscardIsRecoveredDuringRebase() async throws {
         let repo = try tempRepo(rebase: .merge)
         let result = try await apply("bash -c 'git checkout -- file.swift'", cwd: repo)

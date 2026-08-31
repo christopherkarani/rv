@@ -12,10 +12,10 @@ public enum RebaseRecovery: Sendable {
         if isUnoverridableHardStop(result, deny: deny) {
             return false
         }
-        if let action = result.analysis.gitAction {
-            return isEligibleGitAction(action)
+        guard let action = result.analysis.gitAction else {
+            return false
         }
-        return isEligiblePackRule(deny.ruleID)
+        return isEligibleGitAction(action)
     }
 
     /// Rebase recovery may lift the working-tree-discard pin. Secrets,
@@ -54,19 +54,6 @@ public enum RebaseRecovery: Sendable {
         case .reset, .clean, .push, .switchBranch, .stash,
             .createBranch, .deleteBranch, .deleteTag, .rebase,
             .restore(_, _, false, _):
-            return false
-        }
-    }
-
-    private static func isEligiblePackRule(_ ruleID: RuleID) -> Bool {
-        guard ruleID.pack == .coreGit else {
-            return false
-        }
-        switch ruleID.pattern {
-        case "checkout-discard", "checkout-ref-discard",
-            "restore-worktree", "restore-worktree-explicit":
-            return true
-        default:
             return false
         }
     }
