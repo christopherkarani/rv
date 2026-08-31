@@ -499,7 +499,13 @@ private func proveLinuxInstall(arch: String) throws {
     #expect(text.contains("https://github.com/christopherkarani/rv/releases/latest/download"))
     #expect(text.contains("rv_RVPacks.bundle.tar.gz"))
     #expect(text.contains("tar -xzf"))
-    #expect(text.contains("curl -fSL"))
+    #expect(text.contains("curl -fsSL"))
+    #expect(text.contains("Downloading"))
+    #expect(text.contains("━"))
+    #expect(text.contains("─"))
+    #expect(text.contains("progress_width=24"))
+    #expect(text.contains("RV_INSTALL_FORCE_PROGRESS") || text.contains("progress_fd"))
+    #expect(text.contains("Download complete"))
     #expect(text.contains("run rv-cli") == false)
     #expect(text.contains("$release_base/rv_RVPacks.bundle") == false)
 }
@@ -550,11 +556,16 @@ private func writeCurlShim(
         fi
         out=""
         url=""
+        head=0
         while [ $# -gt 0 ]; do
           case "$1" in
             -o)
               out="$2"
               shift 2
+              ;;
+            -I|--head)
+              head=1
+              shift
               ;;
             -*)
               shift
@@ -567,7 +578,16 @@ private func writeCurlShim(
         done
         name="${url##*/}"
         src="\(assets.path)/$name"
-        if [ -z "$out" ] || [ ! -f "$src" ]; then
+        if [ ! -f "$src" ]; then
+          echo "curl: (22) The requested URL returned error: 404" >&2
+          exit 22
+        fi
+        if [ "$head" = "1" ]; then
+          size="$(wc -c < "$src" | tr -d ' \\n')"
+          printf 'HTTP/1.1 200 OK\\r\\nContent-Length: %s\\r\\n\\r\\n' "$size"
+          exit 0
+        fi
+        if [ -z "$out" ]; then
           echo "curl: (22) The requested URL returned error: 404" >&2
           exit 22
         fi

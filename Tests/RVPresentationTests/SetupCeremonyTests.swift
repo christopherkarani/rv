@@ -31,7 +31,7 @@ import Testing
     #expect(frames.last?.slots[0].kind == .wired)
 }
 
-@Test func setupCeremony_install_includesDownloadAndExplainCloser() {
+@Test func setupCeremony_install_skipsDownloadUsesExplainCloser() {
     let frames = setupCeremonyFrames(
         grok: .wired,
         pi: .wired,
@@ -43,9 +43,10 @@ import Testing
         Issue.record("expected frames")
         return
     }
-    #expect(frames.contains { $0.progress == 0 })
-    #expect(frames.contains { $0.progress == 1 })
-    #expect(frames.contains { $0.statusLine == setupCeremonyDownloadComplete })
+    // Download bar is owned by install.sh (real bytes); ceremony starts at search.
+    #expect(frames.contains { $0.progress != nil } == false)
+    #expect(frames.contains { $0.title == setupCeremonyDownloadTitle } == false)
+    #expect(frames.contains { $0.statusLine == setupCeremonyDownloadComplete } == false)
     #expect(frames.contains { $0.statusLine == setupCeremonyAllHostsWired })
     #expect(frames.last?.closerLines == [setupCeremonyInstallCloser])
 }

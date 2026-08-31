@@ -1,8 +1,9 @@
 import RVDomain
 
-/// Whether the paced TTY show includes the theatrical download beat.
+/// Whether the paced TTY show uses the install closer (download UI lives in `install.sh`).
 public enum SetupCeremonyKind: Equatable, Sendable {
-    /// `install.sh` → `RV_FROM_INSTALL=1`. Download bar, then hosts, then install closer.
+    /// `install.sh` → `RV_FROM_INSTALL=1`. Hosts, then install closer.
+    /// Real download progress is painted by `install.sh` before `exec rv setup`.
     case install
     /// Plain `rv setup`. Search + wire only.
     case setup
@@ -97,25 +98,6 @@ public func setupCeremonyFrames(
 
     let finalSlots = slots.slotViews
     var frames: [SetupCeremonyFrame] = []
-
-    if kind == .install {
-        for step in 0...4 {
-            let progress = Double(step) / 4.0
-            frames.append(
-                SetupCeremonyFrame(
-                    title: setupCeremonyDownloadTitle,
-                    progress: progress,
-                    pauseNanoseconds: setupCeremonyProgressTickNs
-                )
-            )
-        }
-        frames.append(
-            SetupCeremonyFrame(
-                statusLine: setupCeremonyDownloadComplete,
-                pauseNanoseconds: setupCeremonyPhaseGapNs
-            )
-        )
-    }
 
     let emptySlots = HookHost.setupSlotOrder.map {
         SetupSlotView(host: $0, kind: .pending)
