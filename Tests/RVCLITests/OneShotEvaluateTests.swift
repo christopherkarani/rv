@@ -6,6 +6,164 @@ import RVIPC
 @testable import RVCLI
 
 struct OneShotEvaluateClientTests {
+    @Test func productionHookRun_sendsHookEvaluateNotEvaluate() async throws {
+        let transport = ScriptedTransport(
+            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok),
+            responseResult: .hookEvaluate(HookEvaluateReply(stdout: "", exitCode: 0))
+        )
+        let client = try isolatedClient(transport: transport)
+        var hook = Hook()
+        hook.host = .grok
+        let stdin = try grokHookFixture("allow-git-status.json")
+        _ = await hook.run(stdin: stdin, client: client)
+
+        let sent = try #require(transport.sends.first)
+        let request = try IPCJSON.decode(IPCRequest.self, from: sent)
+        guard case .hookEvaluate(let params) = request.method else {
+            Issue.record("production hook path must send hookEvaluate, not evaluate")
+            return
+        }
+        #expect(params.host == .grok)
+        #expect(params.stdin == stdin)
+        #expect(params.clientSemver == ProtocolVersion.serviceSemver)
+        #expect(transport.sendCount == 1)
+        #expect(transport.helloCount == 0)
+        #expect(transport.lastSendTimeoutMs == 700)
+    }
+
+    @Test func hookEvaluateNilTransport_resetHardDeniesAndStashDropAllows() async throws {
+        let client = try isolatedClient(transport: nil)
+        var hook = Hook()
+        hook.host = .grok
+        let denyOutcome = await hook.run(stdin: try grokHookFixture("deny-git-reset-hard.json"), client: client)
+        let denyJSON = try #require(
+            JSONSerialization.jsonObject(with: Data(denyOutcome.stdout.utf8)) as? [String: Any]
+        )
+        #expect(denyJSON["decision"] as? String == "deny")
+        #expect(denyOutcome.exitCode == 0)
+
+        let allowOutcome = await hook.run(
+            stdin: try grokHookFixture("allow-medium-stash-drop.json"),
+            client: client
+        )
+        #expect(allowOutcome.stdout.isEmpty)
+        #expect(allowOutcome.exitCode == 0)
+        #expect(allowOutcome.stdout.contains("deny") == false)
+    }
+
+    @Test func hookEvaluateReplyAskJSON_isForwardedNotSilentAllow() async throws {
+        let askStdout = "{\"decision\":\"ask\",\"continuation\":\"hostNative\"}\n"
+        let transport = ScriptedTransport(
+            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok),
+            responseResult: .hookEvaluate(HookEvaluateReply(stdout: askStdout, exitCode: 1))
+        )
+        let client = try isolatedClient(transport: transport)
+        var hook = Hook()
+        hook.host = .pi
+        let stdin = """
+        {"toolName":"bash","cwd":"/tmp/ws","input":{"command":"git reset --hard"}}
+        """
+        let outcome = await hook.run(stdin: stdin, client: client)
+        let json = try #require(
+            JSONSerialization.jsonObject(with: Data(outcome.stdout.utf8)) as? [String: Any]
+        )
+        #expect(json["decision"] as? String == "ask")
+        #expect(outcome.stdout.contains("\"decision\":\"allow\"") == false)
+        #expect(outcome.exitCode == 1)
+
+        let sent = try #require(transport.sends.first)
+        let request = try IPCJSON.decode(IPCRequest.self, from: sent)
+        guard case .hookEvaluate = request.method else {
+            Issue.record("Ask reply must arrive via hookEvaluate, not evaluate")
+            return
+        }
+        #expect(transport.helloCount == 0)
+    }
+
+    @Test func hookEvaluateReplyStderr_isForwardedOnWire() async throws {
+        let reason = "RV · Blocked. Destroys uncommitted changes."
+        let transport = ScriptedTransport(
+            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok),
+            responseResult: .hookEvaluate(
+                HookEvaluateReply(
+                    stdout: "{\"decision\":\"block\",\"reason\":\"\(reason)\"}\n",
+                    exitCode: 2,
+                    stderr: reason
+                )
+            )
+        )
+        let client = try isolatedClient(transport: transport)
+        var hook = Hook()
+        hook.host = .codex
+        let outcome = await hook.run(
+            stdin: try grokHookFixture("deny-git-reset-hard.json"),
+            client: client
+        )
+        #expect(outcome.stderr == reason)
+        #expect(outcome.exitCode == 2)
+        #expect(outcome.stdout.contains("\"decision\":\"block\""))
+    }
+
+    @Test func hookEvaluateMismatchedResponseID_fallsBackInProcessAndDeniesResetHard() async throws {
+        let transport = ScriptedTransport(
+            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok),
+            responseResult: .hookEvaluate(HookEvaluateReply(stdout: "", exitCode: 0)),
+            responseID: UUID()
+        )
+        let client = try isolatedClient(transport: transport)
+        var hook = Hook()
+        hook.host = .grok
+        let outcome = await hook.run(stdin: try grokHookFixture("deny-git-reset-hard.json"), client: client)
+        let json = try #require(
+            JSONSerialization.jsonObject(with: Data(outcome.stdout.utf8)) as? [String: Any]
+        )
+        #expect(json["decision"] as? String == "deny")
+        #expect(transport.invalidationCount == 1)
+        #expect(transport.helloCount == 0)
+    }
+
+    @Test func hookEvaluateEvaluateReply_isNotFirstPath_fallsBackAndDenies() async throws {
+        let spoofedAllow = EvaluationResult(outcome: .plain, matchingView: "git reset --hard")
+        let transport = ScriptedTransport(
+            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok),
+            responseResult: .evaluate(EvaluateReply(result: spoofedAllow))
+        )
+        let client = try isolatedClient(transport: transport)
+        var hook = Hook()
+        hook.host = .grok
+        let outcome = await hook.run(stdin: try grokHookFixture("deny-git-reset-hard.json"), client: client)
+        let sent = try #require(transport.sends.first)
+        let request = try IPCJSON.decode(IPCRequest.self, from: sent)
+        guard case .hookEvaluate = request.method else {
+            Issue.record("must not use evaluate as the Swift hook first-call path")
+            return
+        }
+        let json = try #require(
+            JSONSerialization.jsonObject(with: Data(outcome.stdout.utf8)) as? [String: Any]
+        )
+        #expect(json["decision"] as? String == "deny")
+        #expect(transport.invalidationCount == 1)
+    }
+
+    @Test func hookEvaluateUnprovableSemver_fallsBackInProcessAndDeniesResetHard() async throws {
+        let transport = ScriptedTransport(
+            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok),
+            responseResult: .hookEvaluate(
+                HookEvaluateReply(stdout: "", exitCode: 0, serviceSemver: nil)
+            )
+        )
+        let client = try isolatedClient(transport: transport)
+        var hook = Hook()
+        hook.host = .grok
+        let outcome = await hook.run(stdin: try grokHookFixture("deny-git-reset-hard.json"), client: client)
+        let json = try #require(
+            JSONSerialization.jsonObject(with: Data(outcome.stdout.utf8)) as? [String: Any]
+        )
+        #expect(json["decision"] as? String == "deny")
+        #expect(transport.invalidationCount == 1)
+        #expect(transport.helloCount == 0)
+    }
+
     @Test func hookEvaluateIsOneSendWhenClientSemverIsSet_budgetIsConnect200PlusRequest500Equals700Ms() async throws {
         let denied = EvaluationResult(
             outcome: .deny(
@@ -112,5 +270,13 @@ struct OneShotEvaluateClientTests {
         _ = await client.status()
         #expect(transport.helloCount == 1)
         #expect(transport.sendCount == 1)
+    }
+
+    private func grokHookFixture(_ name: String) throws -> String {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("RVHooksTests/Fixtures/grok/\(name)")
+        return try String(contentsOf: url, encoding: .utf8)
     }
 }

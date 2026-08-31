@@ -17,21 +17,17 @@ struct Hook: AsyncParsableCommand {
     func run() async throws {
         let data = FileHandle.standardInput.readDataToEndOfFile()
         let stdin = String(data: data, encoding: .utf8) ?? ""
-        let client = ServiceClient()
-        let outcome = await run(
-            stdin: stdin,
-            evaluate: { (command: ShellCommand, cwd: WorkingDirectory?) in
-                await client.evaluateResult(command: command, cwd: cwd)
-            },
-            spendHostAsk: { (command: ShellCommand, cwd: WorkingDirectory?) in
-                await client.spendHostAsk(command: command, cwd: cwd)
-            }
-        )
+        let outcome = await run(stdin: stdin, client: ServiceClient())
         FileHandle.standardOutput.write(Data(outcome.stdout.utf8))
         if !outcome.stderr.isEmpty {
             FileHandle.standardError.write(Data(outcome.stderr.utf8))
         }
         throw ExitCode(outcome.exitCode)
+    }
+
+    func run(stdin: String, client: ServiceClient) async -> (stdout: String, stderr: String, exitCode: Int32) {
+        let wire = await client.hookEvaluate(host: host, stdin: stdin)
+        return (wire.stdout, wire.stderr, wire.exitCode)
     }
 
     func run(
