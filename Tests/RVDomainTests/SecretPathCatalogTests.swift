@@ -5,7 +5,7 @@ import Testing
     #expect(PackID.coreSecrets.rawValue == "core.secrets")
     #expect(PackID(validating: "core.secrets") == PackID.coreSecrets)
     #expect(dayOnePackIDs.contains(.coreSecrets) == false)
-    #expect(dayOnePackIDs.map(\.rawValue) == ["core.filesystem", "core.git"])
+    #expect(dayOnePackIDs.map(\.rawValue) == ["core.filesystem", "core.git", "system.disk"])
 }
 
 @Test func ruleID_coreSecrets_usesColonPattern() {

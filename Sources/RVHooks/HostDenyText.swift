@@ -49,26 +49,77 @@ public func hostAskLine(command: ShellCommand, ruleID: RuleID) -> String {
     "Blocked \(hookDenyCommandPreview(command)) (\(displayRuleID(ruleID))). \(hookUnlockNext)"
 }
 
-/// First sentence of `reason`, command prefix stripped, capitalized, with a period.
+/// Sentence 1 of `reason`, plus sentence 2 when it is a safe one-line tip.
+/// Command prefix stripped, sentence 1 capitalized, both clauses end with `.`.
 func hostDenyWhy(_ reason: String, command: ShellCommand) -> String {
-    let trimmed = reason.trimmingCharacters(in: .whitespacesAndNewlines)
-    var sentence = trimmed
-    if let end = trimmed.firstRange(of: ". ") {
-        sentence = String(trimmed[..<end.lowerBound])
-    } else if sentence.hasSuffix(".") {
-        sentence = String(sentence.dropLast())
-    }
-    sentence = sentence.trimmingCharacters(in: .whitespacesAndNewlines)
+    var text = reason.trimmingCharacters(in: .whitespacesAndNewlines)
     let preview = hookDenyCommandPreview(command)
-    if sentence.lowercased().hasPrefix(preview.lowercased()) {
-        sentence = String(sentence.dropFirst(preview.count))
+    if !preview.isEmpty, text.lowercased().hasPrefix(preview.lowercased()) {
+        text = String(text.dropFirst(preview.count))
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
-    guard let first = sentence.first else {
+
+    let sentence1Raw: String
+    let rest: String
+    if let end = text.firstRange(of: ". ") {
+        sentence1Raw = String(text[..<end.lowerBound])
+        rest = String(text[end.upperBound...])
+    } else if text.hasSuffix(".") {
+        sentence1Raw = String(text.dropLast())
+        rest = ""
+    } else {
+        sentence1Raw = text
+        rest = ""
+    }
+
+    var sentence1 = sentence1Raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let first = sentence1.first else {
         return ""
     }
-    let capitalized = first.uppercased() + sentence.dropFirst()
-    return capitalized.hasSuffix(".") ? capitalized : capitalized + "."
+    sentence1 = first.uppercased() + sentence1.dropFirst()
+    if !sentence1.hasSuffix(".") {
+        sentence1 += "."
+    }
+
+    var sentence2 = ""
+    if !rest.isEmpty {
+        let secondRaw: String
+        if let next = rest.firstRange(of: ". ") {
+            secondRaw = String(rest[..<next.lowerBound])
+        } else {
+            secondRaw = rest
+        }
+        sentence2 = secondRaw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !sentence2.isEmpty, !sentence2.hasSuffix(".") {
+            sentence2 += "."
+        }
+    }
+
+    if shouldOmitDenySentence2(sentence2, sentence1: sentence1) {
+        return sentence1
+    }
+    return "\(sentence1) \(sentence2)"
+}
+
+private func shouldOmitDenySentence2(_ sentence2: String, sentence1: String) -> Bool {
+    if sentence2.isEmpty { return true }
+    if sentence2.contains("allow-once") { return true }
+    if sentence2.contains("ALLOW-") { return true }
+    if sentence2.contains("redeem") { return true }
+    if sentence2.contains("RV_" + "BYPASS") { return true }
+    if sentence2.contains("Terminal") { return true }
+    if sentence2.contains("reset --soft") { return true }
+    if sentence2.contains("\n") { return true }
+
+    let why = "\(sentence1) \(sentence2)"
+    if why.unicodeScalars.count > 180 { return true }
+
+    let line = "RV · Blocked. \(why)"
+    if line.contains("\u{001B}") { return true }
+    if line.contains("═") { return true }
+    if line.contains("┌") { return true }
+    if line.contains("\n") { return true }
+    return false
 }
 
 public func hostDenyLine(command: ShellCommand, reason: String) -> String {

@@ -41,7 +41,7 @@ private let doctorRendererFixture = DoctorViewModel(
         "  ◦  Claude    missing",
         "",
         "  Packs",
-        "    core.filesystem · core.git",
+        "    core.filesystem · core.git · system.disk",
         "    extras off",
         "",
         "  Config",
@@ -106,7 +106,7 @@ private let doctorRendererFixture = DoctorViewModel(
         enabled: dayOnePackIDs + [
             PackID(rawValue: "core.network"),
             PackID(rawValue: "strict_git"),
-            PackID(rawValue: "system.disk"),
+            PackID(rawValue: "database.sqlite"),
         ],
         registry: .ready
     )

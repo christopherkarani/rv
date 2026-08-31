@@ -2,11 +2,12 @@ import Testing
 import RVDomain
 @testable import RVPacks
 
-@Test func enablement_defaultsAreCoreOnly() throws {
+@Test func enablement_defaultsAreDayOnePacks() throws {
     let index = try PackRegistry.loadIndex()
     let ids = try PackSet.effectiveOrdered(enabled: [], disabled: [], index: index)
-    #expect(Set(ids.map(\.rawValue)) == Set(["core.filesystem", "core.git"]))
-    #expect(!ids.map(\.rawValue).contains("system.disk"))
+    #expect(PackSet.defaultIDs == dayOnePackIDs)
+    #expect(Set(ids) == Set(dayOnePackIDs))
+    #expect(ids.contains(.systemDisk))
     #expect(!ids.map(\.rawValue).contains("database.postgresql"))
     #expect(!ids.map(\.rawValue).contains("containers.docker"))
 }
@@ -19,7 +20,7 @@ import RVDomain
     #expect(raw.contains("kubernetes.kubectl"))
     #expect(raw.contains("kubernetes.helm"))
     #expect(raw.contains("kubernetes.kustomize"))
-    #expect(raw.count == 5)
+    #expect(raw.count == 6)
 }
 
 @Test func enablement_databaseMinusRedis() throws {
@@ -48,8 +49,8 @@ import RVDomain
     #expect(!raw.contains("windows.system"))
     #expect(!raw.contains("windows.filesystem"))
     #expect(!raw.contains("remote.rsync"))
-    // 2 core + 6 leaves + 26 members - 1 disabled = 33
-    #expect(ids.count == 33)
+    // 3 day-one + 6 leaves + 26 members - 1 disabled = 34
+    #expect(ids.count == 34)
 }
 
 @Test func enablement_windowsOSPackIsRejected() throws {

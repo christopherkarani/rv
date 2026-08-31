@@ -69,7 +69,8 @@ import Testing
 }
 
 @Test func dayOnePackIDs_areNonFailableConstants() {
-    #expect(dayOnePackIDs.map(\.rawValue) == ["core.filesystem", "core.git"])
+    #expect(dayOnePackIDs.map(\.rawValue) == ["core.filesystem", "core.git", "system.disk"])
+    #expect(dayOnePackIDs.contains(.systemDisk))
 }
 
 @Test func evaluationRequest_makeDayOne_usesDayOnePacksAndNoBudget() {

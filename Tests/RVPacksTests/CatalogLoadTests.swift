@@ -44,7 +44,7 @@ let frozenPackIDs: Set<String> = [
     #expect(index.categories["careful_company_running_windows"]?.count == 6)
     #expect(index.presets["careful_company_running_windows"]?.contains("windows.filesystem") == false)
     #expect(index.presets["careful_company_running_windows"]?.count == 26)
-    #expect(Set(index.defaultEnabled) == Set(["core.filesystem", "core.git"]))
+    #expect(Set(index.defaultEnabled) == Set(dayOnePackIDs.map(\.rawValue)))
     #expect(Set(index.packIDs) == frozenPackIDs)
 
     let documents = try PackRegistry.loadAllDocuments()

@@ -7,7 +7,7 @@ public enum PackSetError: Error, Equatable, Sendable {
 
 /// Defaults ∪ expand(enabled) − expand(disabled), with pin tier ordering.
 public enum PackSet {
-    public static let defaultIDs: [PackID] = [.coreFilesystem, .coreGit]
+    public static let defaultIDs: [PackID] = dayOnePackIDs
 
     public static func expand(
         _ tokens: [SelectionToken],

@@ -101,7 +101,8 @@ let coreTestTargets: [Target] = [
     .testTarget(name: "RVAnalyticsTests", dependencies: ["RVAnalytics"]),
     .testTarget(
         name: "RVCorpusTests",
-        dependencies: ["RVDomain", "RVEngine", "RVPacks"]
+        dependencies: ["RVDomain", "RVEngine", "RVPacks"],
+        exclude: ["disk-rule-coverage.json"]
     ),
 ]
 

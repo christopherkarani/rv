@@ -22,7 +22,7 @@ These are later. They are not v1 gates, not T0–T9 acceptance, and not implied 
 
 | Later item | What it is | What v1 does instead |
 |---|---|---|
-| Remaining packs enabled-by-default | Policy decision to turn the rest of the catalog on for new installs | T9 imports remaining pack JSON **disabled**. Day-one packs stay `core.git` + `core.filesystem` only |
+| Remaining packs enabled-by-default | Policy decision to turn the rest of the catalog on for new installs | T9 imported remaining pack JSON **disabled**. `system.disk` is now day-one (product-takes spec); remaining catalog stays off |
 | Claude / Codex / etc. | Additional host codecs and setup writers (Claude Code, Codex, Gemini, Copilot, Cursor, Hermes, Antigravity, and any other DCG-shaped host) | Hosts are **Pi, Grok, OpenCode** shell/command tools only |
 | Scan | **Session forensics** (default `rv scan` / `rv scan sessions`): offline host-session stores → extract → `evaluate` → deny findings — fence [`phase-4-session-scan.md`](phase-4-session-scan.md). **Repo/CI** later as `rv scan repo` (files, staged, git-diff, pre-commit) | No scan command. Hook evaluates the command the agent proposed, not past sessions or the repo |
 | MCP | Hooking MCP / Read / Edit tools, **or** shipping an rv MCP server | Shell events only. No Read / Edit / MCP |

@@ -9,7 +9,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 STAGE="${RV_RELEASE_STAGE:-$ROOT/.build/release-stage}"
 FIXTURES="$ROOT/Tests/RVHooksTests/Fixtures/grok"
-CANONICAL='RV · Blocked. Destroys uncommitted changes.'
+CANONICAL='RV · Blocked. Destroys uncommitted changes. Use '\''git stash'\'' first.'
 LABEL="dev.rv.evaluate"
 UID_NUM="$(id -u)"
 DOMAIN="gui/${UID_NUM}"

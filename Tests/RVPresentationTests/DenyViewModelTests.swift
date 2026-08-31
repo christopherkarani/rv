@@ -471,9 +471,10 @@ private func mediumAllow() -> EvaluationResult {
         catalog: [
             (.coreFilesystem, "filesystem"),
             (.coreGit, "git"),
+            (.systemDisk, "disk"),
         ]
     )
-    #expect(vm.rows.count == 2)
+    #expect(vm.rows.count == 3)
     #expect(vm.rows.allSatisfy { $0.enabled })
-    #expect(vm.rows.map(\.id.rawValue) == ["core.filesystem", "core.git"])
+    #expect(vm.rows.map(\.id) == dayOnePackIDs)
 }

@@ -113,11 +113,12 @@ struct FakeXPCUnixSocketTests {
         _ = try client.hello()
         let reply = try client.sendJSON(methodJSON("listPacks", [:] as [String: Any]))
         let list = try #require(nested(reply, ["result", "listPacks"]))
-        #expect(list["enabledCount"] as? Int == 2)
+        #expect(list["enabledCount"] as? Int == dayOnePackIDs.count)
         let packs = try #require(list["packs"] as? [[String: Any]])
         let ids = Set(packs.compactMap { $0["id"] as? String })
         #expect(ids.contains("core.git"))
         #expect(ids.contains("core.filesystem"))
+        #expect(ids.contains("system.disk"))
     }
 
     @Test func unknownPackIsPackNotFound() async throws {

@@ -26,7 +26,7 @@ struct EvaluateWorldTests {
         _ = try PacksFacade.enable(home: home, ids: ["database"])
         let walked = EvaluationWorld.walkedPackIDs(home: home)
         #expect(walked.ids.contains(PackID(rawValue: "database.sqlite")))
-        #expect(walked.ids.count == 10)
+        #expect(walked.ids.count == dayOnePackIDs.count + 8)
     }
 
     @Test func disabledDayOneStaysOffWalkAndOnCompile() throws {

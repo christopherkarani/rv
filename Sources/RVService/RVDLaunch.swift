@@ -16,7 +16,7 @@ public enum RVDLaunch {
     public static func parse(arguments: [String]) throws -> RVDConfiguration {
         if arguments.contains(where: { $0 == "--socket" || $0.hasPrefix("--socket=") }) {
             #if os(Linux)
-            // Linux production transport is AF_UNIX under $XDG_RUNTIME_DIR.
+            // Linux production transport is a pathname socket under $XDG_RUNTIME_DIR.
             // The path after `--socket=` is ignored; there is no /tmp fallback.
             #else
             throw RVDLaunchError.socketUnsupported

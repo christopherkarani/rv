@@ -21,7 +21,7 @@ public enum DoctorSnapshotBuilder {
             DoctorCheck(
                 id: .packs,
                 status: corePacksReady ? .ok : .error,
-                message: corePacksReady ? "core.git and core.filesystem loaded" : "core packs unavailable"
+                message: corePacksReady ? dayOnePacksLoadedMessage : "core packs unavailable"
             ),
             DoctorCheck(
                 id: .launchd,
@@ -46,6 +46,18 @@ public enum DoctorSnapshotBuilder {
             lastError: lastError,
             checks: checks
         )
+    }
+
+    private static var dayOnePacksLoadedMessage: String {
+        let names = dayOnePackIDs.map(\.rawValue)
+        guard let last = names.last else {
+            return "core packs unavailable"
+        }
+        if names.count == 1 {
+            return "\(last) loaded"
+        }
+        let head = names.dropLast().joined(separator: ", ")
+        return "\(head), and \(last) loaded"
     }
 
     private static func launchdCheckMessage(

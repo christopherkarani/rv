@@ -4,7 +4,7 @@ import RVHooks
 import Testing
 
 private let resetHardReason =
-    "RV · Blocked. Destroys uncommitted changes."
+    "RV · Blocked. Destroys uncommitted changes. Use 'git stash' first."
 private let resetHardAskReason =
     "Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once."
 private let incompleteReason =
@@ -1296,14 +1296,14 @@ func adapters_mapRvHookResultMatrix(host: String, kind: String) async throws {
 private let missingShellCommandReason =
     "rv received a shell hook with no command text and blocked the command. Run it in Terminal."
 private let resetHardJSON =
-    "{\"decision\":\"deny\",\"reason\":\"RV · Blocked. Destroys uncommitted changes.\",\"rule\":\"core.git/reset-hard\"}\n"
+    "{\"decision\":\"deny\",\"reason\":\"RV · Blocked. Destroys uncommitted changes. Use 'git stash' first.\",\"rule\":\"core.git/reset-hard\"}\n"
 private let askResetHardJSON =
     "{\"decision\":\"ask\",\"reason\":\"Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once.\",\"continuation\":\"hostNative\",\"rule\":\"core.git/reset-hard\",\"next\":\"Run it in Terminal, or rv allow-once.\"}\n"
 private let wrapperResetHardCommand = "echo \"$(git reset --hard)\""
 private let wrapperResetHardReason =
-    "RV · Blocked. Destroys uncommitted changes."
+    "RV · Blocked. Destroys uncommitted changes. Use 'git stash' first."
 private let wrapperResetHardJSON =
-    "{\"decision\":\"deny\",\"reason\":\"RV · Blocked. Destroys uncommitted changes.\",\"rule\":\"core.git/reset-hard\"}\n"
+    "{\"decision\":\"deny\",\"reason\":\"RV · Blocked. Destroys uncommitted changes. Use 'git stash' first.\",\"rule\":\"core.git/reset-hard\"}\n"
 private let incompleteJSON =
     "{\"decision\":\"deny\",\"reason\":\"rv could not finish evaluating this command. Run it in Terminal.\"}\n"
 
