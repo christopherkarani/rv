@@ -84,7 +84,7 @@ func cursorDecode_extractsBeforeShellCommand(_ file: String, expected: String) t
     #expect(request.host == .cursor)
     #expect(request.command.rawValue == "git status")
     #expect(request.cwd?.rawValue == "/tmp/from-input")
-    #expect(request.session == "conv_shell")
+    #expect(request.session == SessionID(validating: "conv_shell"))
 }
 
 @Test func cursorDecode_nonShellPreToolUseIsForeign() throws {
@@ -256,8 +256,17 @@ func cursorDecode_extractsBeforeShellCommand(_ file: String, expected: String) t
         return
     }
     #expect(request.cwd?.rawValue == "/tmp/ws")
-    #expect(request.session == "sess_1")
+    #expect(request.session == SessionID(validating: "sess_1"))
     let action = codec.proposedAction(from: request)
+    #expect(
+        action.fingerprint
+            == ActionFingerprint.make(
+                host: .cursor,
+                session: request.session,
+                cwd: request.cwd,
+                command: request.command
+            )
+    )
     guard case .shell(let shell) = action else {
         Issue.record("expected ProposedAction.shell")
         return
@@ -309,7 +318,25 @@ func cursorDecode_extractsBeforeShellCommand(_ file: String, expected: String) t
         Issue.record("expected .request for generation_id")
         return
     }
-    #expect(request.session == "gen_main")
+    #expect(request.session == SessionID(validating: "gen_main"))
+}
+
+@Test func cursorHookRequest_emptySessionStringIsNil() {
+    let request = HookRequest(
+        host: .cursor,
+        command: ShellCommand(rawValue: "git status"),
+        session: ""
+    )
+    #expect(request.session == nil)
+    #expect(
+        codec.proposedAction(from: request).fingerprint
+            == ActionFingerprint.make(
+                host: .cursor,
+                session: nil,
+                cwd: nil,
+                command: ShellCommand(rawValue: "git status")
+            )
+    )
 }
 
 @Test func cursorCapability_isDenyOrTTYOnly() {

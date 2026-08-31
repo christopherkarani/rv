@@ -175,7 +175,7 @@ private func grokDenyObject(_ stdout: String) throws -> GrokDenyObject {
         Issue.record("expected .request for sessionId")
         return
     }
-    #expect(request.session == "abc-123")
+    #expect(request.session == SessionID(validating: "abc-123"))
 }
 
 @Test func grokDecode_emptySessionIsNil() {

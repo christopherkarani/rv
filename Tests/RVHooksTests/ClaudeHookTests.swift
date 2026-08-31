@@ -91,7 +91,7 @@ func claudeDecode_otherToolOrEventIsForeign(_ file: String) throws {
         Issue.record("expected .request for session_id")
         return
     }
-    #expect(request.session == "abc-123")
+    #expect(request.session == SessionID(validating: "abc-123"))
 }
 
 @Test func claudeDecode_emptySessionIsNil() {
