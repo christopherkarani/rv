@@ -3,7 +3,7 @@ import RVDomain
 @testable import RVHooks
 
 private let resetHard = ShellCommand(rawValue: "git reset --hard")
-let resetHardHostDeny = "RV · Blocked. Destroys uncommitted changes."
+let resetHardHostDeny = "RV · Blocked. Destroys uncommitted changes. Use 'git stash' first."
 
 func assertHookDenyHasNoBypassOrEssay(_ text: String?) {
     let payload = text ?? ""
@@ -12,7 +12,6 @@ func assertHookDenyHasNoBypassOrEssay(_ text: String?) {
     #expect(payload.contains("git reset --hard") == false)
     #expect(payload.contains("Terminal") == false)
     #expect(payload.contains("allow-once") == false)
-    #expect(payload.contains("git stash") == false)
     #expect(payload.contains("reset --soft") == false)
 }
 
@@ -88,12 +87,59 @@ func assertHookDenyHasNoBypassOrEssay(_ text: String?) {
         )
     )
     let text = hostDenyText(from: result, command: resetHard)
-    #expect(text == "RV · Blocked. Destroys uncommitted changes.")
+    #expect(text == resetHardHostDeny)
     #expect(text?.contains("\n") == false)
     #expect(text?.contains("git reset --hard") == false)
+    #expect(text?.contains("git stash") == true)
     #expect(text?.components(separatedBy: "RV · Blocked").count == 2)
     #expect(text?.hasPrefix("Error:") == false)
     assertHookDenyHasNoBypassOrEssay(text)
+}
+
+@Test func hostDenyText_dropsThirdSentence() {
+    let text = hostDenyLine(command: ShellCommand(rawValue: "echo"), reason: "A. B. C. D.")
+    #expect(text == "RV · Blocked. A. B.")
+}
+
+@Test func hostDenyText_omitsSentence2WhenBypassish() {
+    let command = ShellCommand(rawValue: "echo")
+    #expect(
+        hostDenyLine(command: command, reason: "Nope. Run rv allow-once next.")
+            == "RV · Blocked. Nope."
+    )
+    #expect(
+        hostDenyLine(command: command, reason: "Nope. Code ALLOW-123456.")
+            == "RV · Blocked. Nope."
+    )
+    #expect(
+        hostDenyLine(command: command, reason: "Nope. Then redeem it.")
+            == "RV · Blocked. Nope."
+    )
+    #expect(
+        hostDenyLine(command: command, reason: "Nope. Env RV_BYPASS is not a skip.")
+            == "RV · Blocked. Nope."
+    )
+    #expect(
+        hostDenyLine(command: command, reason: "Nope. Run it in Terminal.")
+            == "RV · Blocked. Nope."
+    )
+}
+
+@Test func hostDenyText_omitsSentence2WhenWhyExceeds180Scalars() {
+    let second = String(repeating: "a", count: 180)
+    let text = hostDenyLine(
+        command: ShellCommand(rawValue: "echo"),
+        reason: "Short. \(second)."
+    )
+    #expect(text == "RV · Blocked. Short.")
+}
+
+@Test func hostDenyText_oneSentenceBuiltinStaysOneClause() {
+    let text = hostDenyLine(
+        command: ShellCommand(rawValue: "git checkout -- file"),
+        reason: "Discarding working-tree files is a built-in hard deny."
+    )
+    #expect(text == "RV · Blocked. Discarding working-tree files is a built-in hard deny.")
 }
 
 @Test func hostDenyText_switchesOnDecisionNotNilHeuristic() {

@@ -19,7 +19,7 @@ Evaluation order: normalize → quick-reject → safe patterns first → destruc
 
 ## Catalog (T9)
 
-Bundled pack documents: **95** IDs / **26** categories from the pin. The `windows.*` OS packs are excluded. The `careful_company_running_windows` egress category and preset remain; preset members omit `windows.*`. Default-on remains `{core.filesystem, core.git}` only. Enabling the rest of the catalog by default is Phase 4+, not v1.
+Bundled pack documents: **95** IDs / **26** categories from the pin. The `windows.*` OS packs are excluded. The `careful_company_running_windows` egress category and preset remain; preset members omit `windows.*`. Default-on is `{core.filesystem, core.git, system.disk}`. Remaining catalog stays default-off. Enabling the rest of the catalog by default is Phase 4+, not v1.
 
 `rv packs` lists / enable / disable under `$HOME/.config/rv/config.toml` `[packs]`. Agree-rate vs an upstream CLI is still **not** a gate.
 

@@ -140,12 +140,14 @@ public struct GatedEvaluate: Sendable {
             return result
         case .deny:
             let snapshot = allowlist()
+            let rebasing = GitRebaseProbe.rebaseInProgress(cwd: cwd)
             let applied = await PolicyGate.apply(
                 result,
                 cwd: cwd,
                 allowlist: snapshot,
                 store: store,
-                now: now
+                now: now,
+                rebaseInProgress: rebasing
             )
             if case .allow = applied.result.decision {
                 return applied.result
@@ -155,7 +157,8 @@ public struct GatedEvaluate: Sendable {
                 cwd: cwd,
                 allowlist: snapshot,
                 store: store,
-                now: now
+                now: now,
+                rebaseInProgress: rebasing
             ).result
         }
     }
@@ -198,6 +201,7 @@ public struct GatedEvaluate: Sendable {
             return result
         case .deny:
             let snapshot = allowlist()
+            let rebasing = GitRebaseProbe.rebaseInProgress(cwd: cwd)
             switch intent {
             case .peek:
                 return await PolicyGate.peek(
@@ -205,7 +209,8 @@ public struct GatedEvaluate: Sendable {
                     cwd: cwd,
                     allowlist: snapshot,
                     store: store,
-                    now: now
+                    now: now,
+                    rebaseInProgress: rebasing
                 ).result
             case .apply:
                 return await PolicyGate.apply(
@@ -213,7 +218,8 @@ public struct GatedEvaluate: Sendable {
                     cwd: cwd,
                     allowlist: snapshot,
                     store: store,
-                    now: now
+                    now: now,
+                    rebaseInProgress: rebasing
                 ).result
             }
         }

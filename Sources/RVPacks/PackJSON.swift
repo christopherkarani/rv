@@ -164,7 +164,7 @@ public enum PackJSON {
         }
         let enabledByDefault =
             file.enabledByDefault
-            ?? (packID == .coreGit || packID == .coreFilesystem)
+            ?? dayOnePackIDs.contains(packID)
         return PackDocument(
             id: packID,
             name: file.name,

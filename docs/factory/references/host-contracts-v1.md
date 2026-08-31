@@ -16,7 +16,7 @@ rv owns codecs. Do not copy ryk leftover-ask-as-permit. Do not copy DCG fail-ope
 
 - Discover: `~/.pi/agent/extensions/*.ts` or project `.pi/extensions/*.ts`.
 - Event: `pi.on("tool_call", …)`. Shell tool name is typically `bash`. Input: `event.input.command`.
-- Deny: return `{ block: true, reason }`. Reason is `hostDenyText` (one sentence + rule_id + next step). That return is the block path.
+- Deny: return `{ block: true, reason }`. Reason is `hostDenyText` (one-line blocked string; codecs copy it). That return is the block path.
 - Display-only: `registerMessageRenderer` for `rv-decision` must return `{ render(width) => string[] }`, never a string. `sendMessage` on deny only (`triggerTurn: false`). Allow stays silent. Not the deny path. No confirm / Allow UI.
 - DCG’s published recipe fails open if `dcg` is missing. **rv adapter (PLAN #6):** missing `rv` binary → Pi `{ block: true, reason: "rv missing" }`. A started `rv` that times out or crashes → `{ block: true, reason: "rv failed" }`. **`rvd` down/skew** still evaluates in-process and must deny. Doctor reports a missing/non-exec baked path as `broken`.
 - Occupied slot: skip + one line. No ryk special-case.
@@ -100,7 +100,7 @@ rv owns codecs. Do not copy ryk leftover-ask-as-permit. Do not copy DCG fail-ope
   {"decision":"block","reason":"<hostDenyText>"}
   ```
 
-  stderr: `<hostDenyText>` (Chris 271 line for reset-hard: `RV · Blocked. Destroys uncommitted changes.`). Exit 2 without a stderr reason — including empty or whitespace-only / a bare newline — fail-opens the tool. Claude `hookSpecificOutput.permissionDecision: deny` is **not** the Codex honor path. Do not emit `"ask"` (`permissionDecision: ask` is leftover-ask-as-permit and continues the tool). `encodeAsk` equals `encodeDeny`. Operator and wrapper both emit `block` + a trimmed non-empty stderr reason + exit 2. Missing reason becomes `rv failed`, never a bare newline.
+  stderr: `<hostDenyText>` (Chris 271 line for reset-hard: `RV · Blocked. Destroys uncommitted changes. Use 'git stash' first.`). Exit 2 without a stderr reason — including empty or whitespace-only / a bare newline — fail-opens the tool. Claude `hookSpecificOutput.permissionDecision: deny` is **not** the Codex honor path. Do not emit `"ask"` (`permissionDecision: ask` is leftover-ask-as-permit and continues the tool). `encodeAsk` equals `encodeDeny`. Operator and wrapper both emit `block` + a trimmed non-empty stderr reason + exit 2. Missing reason becomes `rv failed`, never a bare newline.
 - Missing `rv` → `{"decision":"block","reason":"rv missing"}` + stderr `rv missing` + exit 2. Timeout/crash / non-JSON → `{"decision":"block","reason":"rv failed"}` + stderr `rv failed` + exit 2. Wrapper maps leftover operator `decision: deny` onto the same official `block` + stderr + exit 2.
 - Session store: `$HOME/.codex/sessions/**/rollout-*.jsonl`. Surface Bash / shell / local_shell with `tool_input.command`. `extract(fileURL:data:)` uses **`data`**, never reopens the path. Empty or non-UTF-8 `data` throws. Skip non-shell / unparseable rows.
 - Occupied slot: skip + one line. No Ask UI. No AFM / ActionReviewer. Capability is deny-or-TTY (`.pi` / `.opencode` stay spendFirst).
@@ -122,14 +122,14 @@ rv owns codecs. Do not copy ryk leftover-ask-as-permit. Do not copy DCG fail-ope
   {"permission":"allow"}
   ```
 
-  Chris 271 line when we own the reason: `RV · Blocked. Destroys uncommitted changes.` Claude `hookSpecificOutput.permissionDecision: deny` is **not** the Cursor honor path (third-party compat only; [third-party hooks](https://cursor.com/docs/reference/third-party-hooks)). Codex `{"decision":"block"}` + exit 2 is **not** the Cursor honor path. Exit 2 ≡ `permission: deny` is documented Claude-compat; RV still emits exit 0 + native JSON. Do not emit `"permission":"ask"` (leftover-ask-as-permit). `encodeAsk` equals `encodeDeny`. Missing `rv` / timeout / crash / non-JSON / empty or whitespace-only stdout (including exit 0) → official deny with `rv missing` / `rv failed`. Empty stdout + exit 0 is **not** allow. Default Cursor hook failure is fail-open; `failClosed: true` is required so a miss is not silent allow.
+  Chris 271 line when we own the reason: `RV · Blocked. Destroys uncommitted changes. Use 'git stash' first.` Claude `hookSpecificOutput.permissionDecision: deny` is **not** the Cursor honor path (third-party compat only; [third-party hooks](https://cursor.com/docs/reference/third-party-hooks)). Codex `{"decision":"block"}` + exit 2 is **not** the Cursor honor path. Exit 2 ≡ `permission: deny` is documented Claude-compat; RV still emits exit 0 + native JSON. Do not emit `"permission":"ask"` (leftover-ask-as-permit). `encodeAsk` equals `encodeDeny`. Missing `rv` / timeout / crash / non-JSON / empty or whitespace-only stdout (including exit 0) → official deny with `rv missing` / `rv failed`. Empty stdout + exit 0 is **not** allow. Default Cursor hook failure is fail-open; `failClosed: true` is required so a miss is not silent allow.
 - Session store: `$HOME/.cursor/projects/**/agent-transcripts/*.jsonl`. Surface `beforeShellExecution.command` and `preToolUse` Shell/Bash `tool_input.command`. `extract(fileURL:data:)` uses **`data`**, never reopens the path. Empty or non-UTF-8 `data` throws. Skip non-shell / unparseable rows.
 - Occupied slot: skip + one line. No Ask UI. No AFM / ActionReviewer. Capability is deny-or-TTY (`.pi` / `.opencode` stay spendFirst; `.codex` stays denyOrTTY).
 - Honest hole: cloud agents do not load user-level `~/.cursor/hooks.json` ([hooks](https://cursor.com/docs/hooks.md) — “User-level hooks (`~/.cursor/hooks.json`) are not available in cloud agents”).
 
 ## Shared deny text
 
-`hostDenyText`: one sentence + display `rule_id` (`pack/pattern`) + next step. Never include a redeemable code. Canonical: `Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once.`
+`hostDenyText`: one line. Pack deny is `RV · Blocked. ` plus sentence 1 of the pack reason, and sentence 2 when it is a safe tip. Never include a redeemable code, `allow-once`, or the command echo. Canonical reset-hard: `RV · Blocked. Destroys uncommitted changes. Use 'git stash' first.`
 Allow (`Decision.allow`, including medium/low match): empty stdout, host-success exit. No banner.
 Indeterminate (`Decision.indeterminate`): same wire as deny, reason `rv could not finish evaluating this command. Run it in Terminal.` — not empty allow. No pack `rule_id`. Switch on `Decision`; do not treat nil `hostDenyText` as allow.
 

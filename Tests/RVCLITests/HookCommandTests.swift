@@ -118,7 +118,7 @@ private func runHook(
     #expect(wire.exitCode == expected.exit)
     #expect(wire.stdout.contains(text))
     #expect(wire.stdout.contains("git reset --hard") == false)
-    #expect(text == "RV · Blocked. Destroys uncommitted changes.")
+    #expect(text == "RV · Blocked. Destroys uncommitted changes. Use 'git stash' first.")
     #expect(text.contains("git reset --hard") == false)
     #expect(text.contains("Terminal") == false)
     #expect(text.contains("allow-once") == false)
@@ -328,7 +328,7 @@ private func runHook(
     #expect(wire.stdout.contains("RV · Blocked"))
     #expect(wire.stdout.contains("RV · Blocked\n") == false)
     #expect(wire.stdout.contains("allowOnceCode") == false)
-    #expect(wire.stdout.contains("RV · Blocked. Destroys uncommitted changes."))
+    #expect(wire.stdout.contains("RV · Blocked. Destroys uncommitted changes. Use 'git stash' first."))
     #expect(wire.stdout.contains("git reset --hard") == false)
     #expect(wire.stdout.contains("Error:") == false)
 }

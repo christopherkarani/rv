@@ -6,7 +6,8 @@
   "pack_count": 95,
   "default_enabled": [
     "core.filesystem",
-    "core.git"
+    "core.git",
+    "system.disk"
   ],
   "categories": {
     "apigateway": [

@@ -61,7 +61,7 @@ The pack IDs on an evaluate request. Empty means none — not the catalog, not a
 _Avoid_: refill, default packs
 
 **Day-one packs**:
-core.git and core.filesystem. v1 evaluate always uses these two; the catalog does not change a Decision.
+core.filesystem, core.git, and system.disk. v1 evaluate always uses these; the catalog does not change a Decision.
 _Avoid_: live catalog, enabled catalog
 
 **Explain pipeline**:

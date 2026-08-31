@@ -17,6 +17,18 @@ struct AnalyzeGitTests {
         #expect(action.resources.branchName == "feature")
     }
 
+    @Test func checkoutOursTheirsDoubleDash_isWorkingTreeDiscard() {
+        for command in ["git checkout --ours -- file.swift", "git checkout --theirs -- file.swift"] {
+            let analysis = analyzeGit(ShellCommand(rawValue: command))
+            guard case .git(.discardWorktree(let pathspecs, let source)) = analysis else {
+                Issue.record("expected discard for \(command), got \(analysis)")
+                return
+            }
+            #expect(pathspecs == ["file.swift"], Comment(rawValue: command))
+            #expect(source == nil, Comment(rawValue: command))
+        }
+    }
+
     @Test func checkoutDoubleDash_isWorkingTreeDiscard() {
         let analysis = analyzeGit(ShellCommand(rawValue: "git checkout -- file.swift"))
         guard case .git(.discardWorktree(let pathspecs, let source)) = analysis else {

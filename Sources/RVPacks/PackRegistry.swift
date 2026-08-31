@@ -16,7 +16,7 @@ public enum PackRegistry {
     }
 
     public static func loadDayOne(from bundle: Bundle) throws -> [PackSnapshot] {
-        let names = ["core.filesystem", "core.git"]
+        let names = dayOnePackIDs.map(\.rawValue)
         var snapshots: [PackSnapshot] = []
         for name in names {
             let document = try loadDocument(id: name, from: bundle)

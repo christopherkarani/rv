@@ -224,6 +224,7 @@ private let checkoutSkipFlags: Set<String> = [
     "--recurse-submodules", "--no-recurse-submodules",
     "--overlay", "--no-overlay", "--overwrite-ignore", "--no-overwrite-ignore",
     "--ignore-skip-worktree-bits", "-m", "--merge",
+    "--ours", "--theirs",
 ]
 
 private func parseSwitch(_ args: [String]) -> GitAction? {

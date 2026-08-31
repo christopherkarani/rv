@@ -12,6 +12,8 @@ struct DoctorSnapshotBuilderTests {
         )
         #expect(snapshot.keepAlive == false)
         #expect(snapshot.idleExitSeconds == 300)
+        let packs = try #require(snapshot.checks.first { $0.id == .packs })
+        #expect(packs.message == "core.filesystem, core.git, and system.disk loaded")
         let message = try launchdMessage(snapshot)
 #if os(Linux)
         #expect(message == "template dev.rv.evaluate Restart=no idle-exit 300s")

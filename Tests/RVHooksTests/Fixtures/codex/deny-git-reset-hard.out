@@ -1,1 +1,1 @@
-{"decision":"block","reason":"RV · Blocked. Destroys uncommitted changes."}
+{"decision":"block","reason":"RV · Blocked. Destroys uncommitted changes. Use 'git stash' first."}

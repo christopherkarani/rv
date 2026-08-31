@@ -38,9 +38,10 @@ let expectedFilesystemDestructive = [
 
 @Test func packLoad_decodesDayOneNameSets() throws {
     let packs = try PackRegistry.loadDayOne()
-    #expect(packs.map(\.id.rawValue) == ["core.filesystem", "core.git"])
+    #expect(packs.map(\.id.rawValue) == dayOnePackIDs.map(\.rawValue))
     let git = try #require(packs.first(where: { $0.id == .coreGit }))
     let filesystem = try #require(packs.first(where: { $0.id == .coreFilesystem }))
+    #expect(packs.contains { $0.id == .systemDisk })
     #expect(git.safe.map(\.name) == expectedGitSafe)
     #expect(git.destructive.map(\.name) == expectedGitDestructive)
     #expect(filesystem.safe.map(\.name) == expectedFilesystemSafe)
@@ -55,5 +56,5 @@ let expectedFilesystemDestructive = [
     #expect(git.enabledByDefault)
     #expect(filesystem.enabledByDefault)
     let disk = try PackRegistry.loadDocument(id: "system.disk")
-    #expect(!disk.enabledByDefault)
+    #expect(disk.enabledByDefault)
 }

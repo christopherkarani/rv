@@ -5,6 +5,7 @@ public enum PolicyOverride: Equatable, Sendable {
     case none
     case allowlist
     case allowOnce
+    case rebaseRecovery
 }
 
 public struct PolicyDecision: Equatable, Sendable {
@@ -24,7 +25,8 @@ public enum PolicyGate {
         cwd: WorkingDirectory?,
         allowlist: AllowlistSnapshot,
         grant: GrantPresence,
-        now: Date
+        now: Date,
+        rebaseInProgress: Bool = false
     ) -> PolicyDecision {
         switch result.decision {
         case .allow:
@@ -33,6 +35,9 @@ public enum PolicyGate {
             // Miss policy: never allow because evaluation did not finish.
             return PolicyDecision(result: result, override: .none)
         case .deny(let deny):
+            if rebaseInProgress, RebaseRecovery.isEligible(result: result) {
+                return allowDecision(result, override: .rebaseRecovery)
+            }
             if RulePinning.blocksAllowOverride(result) {
                 return PolicyDecision(result: result, override: .none)
             }
@@ -61,14 +66,16 @@ public enum PolicyGate {
         cwd: WorkingDirectory?,
         allowlist: AllowlistSnapshot = .empty,
         store: AllowOnceStore,
-        now: Date
+        now: Date,
+        rebaseInProgress: Bool = false
     ) async -> PolicyDecision {
         let withoutGrant = decide(
             result,
             cwd: cwd,
             allowlist: allowlist,
             grant: .none,
-            now: now
+            now: now,
+            rebaseInProgress: rebaseInProgress
         )
         guard let cwd = honorCwd(result, cwd: cwd, withoutGrant: withoutGrant) else {
             return withoutGrant
@@ -84,7 +91,8 @@ public enum PolicyGate {
                 cwd: cwd,
                 allowlist: allowlist,
                 grant: .pending,
-                now: now
+                now: now,
+                rebaseInProgress: rebaseInProgress
             )
         case .notFound, .alreadyConsumed, .expired, .unavailable:
             return withoutGrant
@@ -97,7 +105,8 @@ public enum PolicyGate {
         cwd: WorkingDirectory?,
         allowlist: AllowlistSnapshot = .empty,
         store: AllowOnceStore,
-        now: Date
+        now: Date,
+        rebaseInProgress: Bool = false
     ) async -> PolicyDecision {
         switch result.decision {
         case .allow:
@@ -110,9 +119,10 @@ public enum PolicyGate {
                 cwd: cwd,
                 allowlist: allowlist,
                 grant: .none,
-                now: now
+                now: now,
+                rebaseInProgress: rebaseInProgress
             )
-            if withoutGrant.override == .allowlist {
+            if withoutGrant.override == .allowlist || withoutGrant.override == .rebaseRecovery {
                 return withoutGrant
             }
             switch await HostGrantWriter.plantAndSpend(
@@ -127,7 +137,8 @@ public enum PolicyGate {
                     cwd: cwd,
                     allowlist: allowlist,
                     grant: .pending,
-                    now: now
+                    now: now,
+                    rebaseInProgress: rebaseInProgress
                 )
             case .rejected:
                 return withoutGrant
@@ -141,14 +152,16 @@ public enum PolicyGate {
         cwd: WorkingDirectory?,
         allowlist: AllowlistSnapshot = .empty,
         store: AllowOnceStore,
-        now: Date
+        now: Date,
+        rebaseInProgress: Bool = false
     ) async -> PolicyDecision {
         let withoutGrant = decide(
             result,
             cwd: cwd,
             allowlist: allowlist,
             grant: .none,
-            now: now
+            now: now,
+            rebaseInProgress: rebaseInProgress
         )
         guard let cwd = honorCwd(result, cwd: cwd, withoutGrant: withoutGrant) else {
             return withoutGrant
@@ -163,7 +176,8 @@ public enum PolicyGate {
             cwd: cwd,
             allowlist: allowlist,
             grant: grant,
-            now: now
+            now: now,
+            rebaseInProgress: rebaseInProgress
         )
     }
 
@@ -191,7 +205,8 @@ public enum PolicyGate {
         PolicyDecision(
             result: EvaluationResult(
                 outcome: allowedOutcome(result.outcome),
-                matchingView: result.matchingView
+                matchingView: result.matchingView,
+                analysis: result.analysis
             ),
             override: override
         )

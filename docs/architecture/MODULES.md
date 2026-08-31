@@ -32,7 +32,7 @@ Each module keeps a small public API, `package` internals later, and its own tes
 | `RVDomain` | none | Types in T1. |
 | `RVTheme` | none | Palettes in T2. No business rules. |
 | `RVEngine` | `RVDomain` | Must not depend on Packs, Hooks, CLI, TUI, Service. |
-| `RVPacks` | `RVDomain` | Bundled catalog JSON (95 packs, excluding `windows.*` OS catalogs); default-on remains core only. |
+| `RVPacks` | `RVDomain` | Bundled catalog JSON (95 packs, excluding `windows.*` OS catalogs); default-on is day-one (`core.filesystem`, `core.git`, `system.disk`). |
 | `RVScan` | `RVDomain`, `RVEngine`, `RVPacks` | Session forensics: bounds, discovery walk, `SessionStoreAdapter`; classify later. No CLI/TUI/Service/Hooks. |
 | `RVPolicy` | `RVDomain` | Packs config merge; allowlist / allow-once; AFM shadow reviewer. Darwin: CryptoKit. Linux: `Crypto` (swift-crypto) added on that graph only. |
 | `RVHooks` | `RVDomain` | Complete Pi/Grok/OpenCode/Claude/OpenClaw/Hermes/Codex/Cursor Host adapter behavior (`ClaudeHostCodec` + rich deny; OpenClaw/Hermes short deny; Codex official `block` + exit 2; Cursor official native `permission: deny` + exit 0); no setup mutations. |

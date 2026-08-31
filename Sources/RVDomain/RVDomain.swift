@@ -7,4 +7,5 @@ public enum RVDomain {}
 public let dayOnePackIDs: [PackID] = [
     PackID(rawValue: "core.filesystem"),
     PackID(rawValue: "core.git"),
+    PackID(rawValue: "system.disk"),
 ]

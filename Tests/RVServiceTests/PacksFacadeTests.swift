@@ -6,15 +6,13 @@ import RVPolicy
 import RVService
 
 @Suite struct PacksFacadeTests {
-    @Test func packsJSON_freshHomeHasTwoEnabledOfNinetyFive() throws {
+    @Test func packsJSON_freshHomeHasDayOneEnabledOfNinetyFive() throws {
         let home = try temporaryHome()
         defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
         let snapshot = try PacksFacade.list(home: home)
         #expect(snapshot.totalCount == 95)
-        #expect(snapshot.enabledCount == 2)
-        #expect(Set(snapshot.packs.filter(\.enabled).map(\.id.rawValue)) == [
-            "core.filesystem", "core.git",
-        ])
+        #expect(snapshot.enabledCount == dayOnePackIDs.count)
+        #expect(Set(snapshot.packs.filter(\.enabled).map(\.id)) == Set(dayOnePackIDs))
     }
 
     @Test func enableDatabaseThenDisableRedis() throws {
@@ -22,10 +20,10 @@ import RVService
         defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
 
         let enabled = try PacksFacade.enable(home: home, ids: ["database"])
-        #expect(enabled.enabledCount == 10)
+        #expect(enabled.enabledCount == dayOnePackIDs.count + 8)
 
         let afterRedis = try PacksFacade.disable(home: home, ids: ["database.redis"])
-        #expect(afterRedis.enabledCount == 9)
+        #expect(afterRedis.enabledCount == dayOnePackIDs.count + 7)
         let snapshot = try PacksFacade.list(home: home, enabledOnly: true)
         let ids = Set(snapshot.packs.map(\.id.rawValue))
         #expect(ids.contains("database.sqlite"))
@@ -37,7 +35,7 @@ import RVService
         defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
 
         let preset = try PacksFacade.enable(home: home, ids: ["careful_company_running_windows"])
-        #expect(preset.enabledCount == 34)
+        #expect(preset.enabledCount == 35)
         #expect(!Set(try PacksFacade.effectiveIDs(home: home).map(\.rawValue)).contains("windows.filesystem"))
 
         let before = try PacksConfigStore.load(home: home)
@@ -57,7 +55,7 @@ import RVService
         defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
         let result = try PacksFacade.disable(home: home, ids: ["database.sqlite"])
         #expect(result.changed.isEmpty)
-        #expect(result.enabledCount == 2)
+        #expect(result.enabledCount == dayOnePackIDs.count)
     }
 
     @Test func secondEnableIsIdempotent() throws {
@@ -66,7 +64,7 @@ import RVService
         _ = try PacksFacade.enable(home: home, ids: ["database.sqlite"])
         let second = try PacksFacade.enable(home: home, ids: ["database.sqlite"])
         #expect(second.changed.isEmpty)
-        #expect(second.enabledCount == 3)
+        #expect(second.enabledCount == dayOnePackIDs.count + 1)
     }
 
     @Test func enablePreservesNonPacksTomlSections() throws {
@@ -140,8 +138,8 @@ import RVService
         #expect(enabled.contains("strict_git"))
         #expect(!enabled.contains("core.git"))
         #expect(!enabled.contains("windows.filesystem"))
-        // core.filesystem + kubernetes×3 + ccw category∪preset×32 + strict_git − core.git
-        #expect(snapshot.enabledCount == 37)
+        // day-one without core.git + kubernetes×3 + ccw category∪preset×32 + strict_git
+        #expect(snapshot.enabledCount == dayOnePackIDs.count - 1 + 3 + 32 + 1)
         #expect(snapshot.totalCount == 95)
     }
 

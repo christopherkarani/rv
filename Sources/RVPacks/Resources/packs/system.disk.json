@@ -6,7 +6,7 @@
   "version": "0.11.0",
   "description": "Protects against destructive disk operations like dd to devices, \\ mkfs, partition table modifications, RAID management, \\ btrfs/LVM/device-mapper operations, network block devices, \\ and macOS diskutil erase/partition/APFS deletion",
   "category": "system",
-  "enabled_by_default": false,
+  "enabled_by_default": true,
   "keywords": [
     "dd",
     "diskutil",

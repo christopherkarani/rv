@@ -79,7 +79,7 @@ import Testing
     )
 
     #expect(filtered.packs.count == 2)
-    #expect(filtered.enabledCount == 2)
+    #expect(filtered.enabledCount == dayOnePackIDs.count)
     #expect(filtered.totalCount == 95)
 
     let rows = filtered.packs.map {
@@ -100,7 +100,7 @@ import Testing
             totalCount: filtered.totalCount
         )
     ).render()
-    #expect(json.contains("\"enabled_count\":2"))
+    #expect(json.contains("\"enabled_count\":\(dayOnePackIDs.count)"))
     #expect(json.contains("\"total_count\":95"))
 }
 
@@ -139,7 +139,7 @@ import Testing
     let object = try #require(
         JSONSerialization.jsonObject(with: Data(filtered.stdout.utf8)) as? [String: Any]
     )
-    #expect(object["enabled_count"] as? Int == 2)
+    #expect(object["enabled_count"] as? Int == dayOnePackIDs.count)
     #expect(object["total_count"] as? Int == 95)
     #expect((object["packs"] as? [[String: Any]])?.count == 2)
 

@@ -43,6 +43,14 @@ private func loadCases(_ name: String) throws -> [CorpusCase] {
     return try JSONDecoder().decode(CorpusFile.self, from: data).cases
 }
 
+private func loadDiskCoverage() throws -> [CorpusCase] {
+    let url = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .appendingPathComponent("disk-rule-coverage.json")
+    let data = try Data(contentsOf: url)
+    return try JSONDecoder().decode(CorpusFile.self, from: data).cases
+}
+
 private func evaluateCommand(_ command: String) throws -> EvaluationResult {
     let packs = try PackRegistry.loadDayOne()
     let engine = ICUPatternEngine()
@@ -141,6 +149,11 @@ private func assertCase(_ row: CorpusCase) throws {
             if let ruleID = row.ruleID, let parsed = RuleID(rawValue: ruleID) {
                 covered.insert(parsed.pattern)
             }
+        }
+    }
+    for row in try loadDiskCoverage() where row.ruleID != nil {
+        if let ruleID = row.ruleID, let parsed = RuleID(rawValue: ruleID) {
+            covered.insert(parsed.pattern)
         }
     }
     for pack in packs {
