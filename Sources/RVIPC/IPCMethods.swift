@@ -122,15 +122,24 @@ public struct HookEvaluateParams: Sendable, Equatable, Codable {
 public struct HookEvaluateReply: Sendable, Equatable, Codable {
     public var stdout: String
     public var exitCode: Int32
+    /// Additive `rv.ipc.v1` field. Empty is omitted on encode so existing
+    /// golden frames stay byte-identical.
+    public var stderr: String
     public let via: EvaluationPath
     /// Additive `rv.ipc.v1` field. Replies without it cannot prove major
     /// compatibility; both the Swift CLI and the C hook replay through a
     /// real in-process evaluation instead of trusting them.
     public var serviceSemver: String?
 
-    public init(stdout: String, exitCode: Int32, serviceSemver: String? = ProtocolVersion.serviceSemver) {
+    public init(
+        stdout: String,
+        exitCode: Int32,
+        stderr: String = "",
+        serviceSemver: String? = ProtocolVersion.serviceSemver
+    ) {
         self.stdout = stdout
         self.exitCode = exitCode
+        self.stderr = stderr
         self.via = .xpc
         self.serviceSemver = serviceSemver
     }
@@ -149,12 +158,14 @@ public struct HookEvaluateReply: Sendable, Equatable, Codable {
         }
         via = decodedVia
         serviceSemver = try container.decodeIfPresent(String.self, forKey: .serviceSemver)
+        stderr = try container.decodeIfPresent(String.self, forKey: .stderr) ?? ""
     }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(stdout, forKey: .stdout)
         try container.encode(exitCode, forKey: .exitCode)
+        try container.encodeIfPresent(stderr.isEmpty ? nil : stderr, forKey: .stderr)
         try container.encode(via, forKey: .via)
         try container.encodeIfPresent(serviceSemver, forKey: .serviceSemver)
     }
@@ -162,6 +173,7 @@ public struct HookEvaluateReply: Sendable, Equatable, Codable {
     private enum CodingKeys: String, CodingKey {
         case stdout
         case exitCode
+        case stderr
         case via
         case serviceSemver
     }

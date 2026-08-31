@@ -126,6 +126,41 @@ struct HookEvaluateRoundTripTests {
         #expect(decoded.serviceSemver == nil)
         #expect(decoded.exitCode == 0)
         #expect(decoded.stdout == "")
+        #expect(decoded.stderr == "")
+    }
+
+    @Test func hookEvaluateReply_omitsEmptyStderrOnEncode() throws {
+        let data = try IPCJSON.encode(HookEvaluateReply(stdout: "", exitCode: 1))
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(object["stderr"] == nil)
+    }
+
+    @Test func hookEvaluateReply_roundTripsNonemptyStderr() throws {
+        let reply = HookEvaluateReply(stdout: "", exitCode: 1, stderr: "blocked")
+        let data = try IPCJSON.encode(reply)
+        let golden = #"{"exitCode":1,"serviceSemver":"1.0.0","stderr":"blocked","stdout":"","via":"xpc"}"#
+        #expect(String(data: data, encoding: .utf8) == golden)
+        #expect(try IPCJSON.decode(HookEvaluateReply.self, from: data) == reply)
+    }
+
+    @Test(arguments: [
+        #"{"exitCode":1,"stdout":"","via":"xpc"}"#,
+        #"{"exitCode":1,"stderr":null,"stdout":"","via":"xpc"}"#,
+    ])
+    func hookEvaluateReply_missingOrNullStderrDecodesAsEmpty(_ json: String) throws {
+        let decoded = try IPCJSON.decode(HookEvaluateReply.self, from: Data(json.utf8))
+        #expect(decoded.stderr == "")
+        #expect(decoded.exitCode == 1)
+        #expect(decoded.via == .xpc)
+    }
+
+    @Test func hookEvaluateReply_decodesNonemptyStderr() throws {
+        let json = Data(#"{"exitCode":1,"stderr":"blocked","stdout":"","via":"xpc"}"#.utf8)
+        let decoded = try IPCJSON.decode(HookEvaluateReply.self, from: json)
+        #expect(decoded.stderr == "blocked")
+        #expect(decoded.exitCode == 1)
+        #expect(decoded.stdout == "")
+        #expect(decoded.via == .xpc)
     }
 
     @Test func oldEvaluateEnvelopes_stillDecodeOnV1() throws {
