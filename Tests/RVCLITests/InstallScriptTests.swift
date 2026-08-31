@@ -507,7 +507,12 @@ private func proveLinuxInstall(arch: String) throws {
     #expect(text.contains("RV_INSTALL_FORCE_PROGRESS") || text.contains("progress_fd"))
     #expect(text.contains("Download complete"))
     #expect(text.contains("run rv-cli") == false)
-    #expect(text.contains("$release_base/rv_RVPacks.bundle") == false)
+    // Tarball URL contains this prefix; strip it so a directory-asset fetch still fails.
+    let withoutTarball = text.replacingOccurrences(
+        of: "$release_base/rv_RVPacks.bundle.tar.gz",
+        with: ""
+    )
+    #expect(withoutTarball.contains("$release_base/rv_RVPacks.bundle") == false)
 }
 
 private func writePackBundleTarball(in assets: URL) throws {
