@@ -164,6 +164,70 @@ struct OneShotEvaluateClientTests {
         #expect(transport.helloCount == 0)
     }
 
+    @Test func hookEvaluateSendFailure_resetHardDeniesAndStashDropAllows() async throws {
+        let transport = ScriptedTransport(
+            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok),
+            sendError: .interrupted
+        )
+        let client = try isolatedClient(transport: transport)
+        var hook = Hook()
+        hook.host = .grok
+        let denyOutcome = await hook.run(
+            stdin: try grokHookFixture("deny-git-reset-hard.json"),
+            client: client
+        )
+        let denyJSON = try #require(
+            JSONSerialization.jsonObject(with: Data(denyOutcome.stdout.utf8)) as? [String: Any]
+        )
+        #expect(denyJSON["decision"] as? String == "deny")
+        #expect(transport.sendCount == 1)
+        #expect(transport.helloCount == 0)
+
+        let allowOutcome = await hook.run(
+            stdin: try grokHookFixture("allow-medium-stash-drop.json"),
+            client: client
+        )
+        #expect(allowOutcome.stdout.isEmpty)
+        #expect(allowOutcome.exitCode == 0)
+        #expect(allowOutcome.stdout.contains("deny") == false)
+        #expect(transport.sendCount == 2)
+        #expect(transport.helloCount == 0)
+    }
+
+    @Test func hookEvaluateUnexpectedVia_fallsBackInProcessAndDeniesResetHard() async throws {
+        let body = try spoofedHookEvaluateResponse(via: "inProcess", stdout: "", exitCode: 0)
+        let transport = ScriptedTransport(
+            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok),
+            sendReply: body
+        )
+        let client = try isolatedClient(transport: transport)
+        var hook = Hook()
+        hook.host = .grok
+        let outcome = await hook.run(stdin: try grokHookFixture("deny-git-reset-hard.json"), client: client)
+        let json = try #require(
+            JSONSerialization.jsonObject(with: Data(outcome.stdout.utf8)) as? [String: Any]
+        )
+        #expect(json["decision"] as? String == "deny")
+        #expect(transport.sendCount == 1)
+        #expect(transport.helloCount == 0)
+    }
+
+    @Test func hookEvaluateNilTransport_codexDenyForwardsStderr() async throws {
+        let client = try isolatedClient(transport: nil)
+        var hook = Hook()
+        hook.host = .codex
+        let outcome = await hook.run(
+            stdin: try hookFixture("codex", "deny-git-reset-hard.json"),
+            client: client
+        )
+        let expectedStderr = try hookFixture("codex", "deny-git-reset-hard.err")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(outcome.exitCode == 2)
+        #expect(outcome.stdout.contains("\"decision\":\"block\""))
+        #expect(outcome.stderr.trimmingCharacters(in: .whitespacesAndNewlines) == expectedStderr)
+        #expect(expectedStderr.isEmpty == false)
+    }
+
     @Test func hookEvaluateIsOneSendWhenClientSemverIsSet_budgetIsConnect200PlusRequest500Equals700Ms() async throws {
         let denied = EvaluationResult(
             outcome: .deny(
@@ -273,10 +337,30 @@ struct OneShotEvaluateClientTests {
     }
 
     private func grokHookFixture(_ name: String) throws -> String {
+        try hookFixture("grok", name)
+    }
+
+    private func hookFixture(_ host: String, _ name: String) throws -> String {
         let url = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-            .appendingPathComponent("RVHooksTests/Fixtures/grok/\(name)")
+            .appendingPathComponent("RVHooksTests/Fixtures/\(host)/\(name)")
         return try String(contentsOf: url, encoding: .utf8)
+    }
+
+    private func spoofedHookEvaluateResponse(via: String, stdout: String, exitCode: Int32) throws -> Data {
+        let valid = try IPCJSON.encode(
+            IPCResponse(
+                id: UUID(),
+                result: .hookEvaluate(HookEvaluateReply(stdout: stdout, exitCode: exitCode))
+            )
+        )
+        var object = try #require(JSONSerialization.jsonObject(with: valid) as? [String: Any])
+        var resultObject = try #require(object["result"] as? [String: Any])
+        var hookEvaluate = try #require(resultObject["hookEvaluate"] as? [String: Any])
+        hookEvaluate["via"] = via
+        resultObject["hookEvaluate"] = hookEvaluate
+        object["result"] = resultObject
+        return try JSONSerialization.data(withJSONObject: object)
     }
 }
