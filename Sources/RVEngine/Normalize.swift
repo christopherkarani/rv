@@ -39,62 +39,84 @@ struct CommandToken {
 
 func tokenizeCommand(_ text: String) -> [CommandToken] {
     var tokens: [CommandToken] = []
-    var index = text.startIndex
+    let utf8 = text.utf8
+    var index = utf8.startIndex
 
-    while index < text.endIndex {
-        while index < text.endIndex, text[index].isWhitespace {
-            index = text.index(after: index)
+    while index < utf8.endIndex {
+        while index < utf8.endIndex {
+            let width = whitespaceLength(utf8, at: index)
+            if width == 0 { break }
+            index = utf8.index(index, offsetBy: width)
         }
-        guard index < text.endIndex else { break }
+        guard index < utf8.endIndex else { break }
 
         let tokenStart = index
         var decoded = ""
         var wasQuoted = false
 
-        while index < text.endIndex, !text[index].isWhitespace {
-            let ch = text[index]
-            if ch == "$",
-               text.index(after: index) < text.endIndex,
-               text[text.index(after: index)] == "("
+        while index < utf8.endIndex, whitespaceLength(utf8, at: index) == 0 {
+            let byte = utf8[index]
+            if byte == UInt8(ascii: "$"),
+               utf8.index(after: index) < utf8.endIndex,
+               utf8[utf8.index(after: index)] == UInt8(ascii: "(")
             {
                 let start = index
-                index = text.index(after: text.index(after: index))
+                index = utf8.index(after: utf8.index(after: index))
                 var depth = 1
-                while index < text.endIndex, depth > 0 {
-                    if text[index] == "(" { depth += 1 }
-                    if text[index] == ")" { depth -= 1 }
-                    index = text.index(after: index)
+                while index < utf8.endIndex, depth > 0 {
+                    let current = utf8[index]
+                    if current == UInt8(ascii: "(") { depth += 1 }
+                    else if current == UInt8(ascii: ")") { depth -= 1 }
+                    utf8.formIndex(after: &index)
                 }
                 decoded.append(contentsOf: text[start..<index])
                 continue
             }
-            if ch == "`" {
+            if byte == UInt8(ascii: "`") {
                 let start = index
-                index = text.index(after: index)
-                while index < text.endIndex, text[index] != "`" {
-                    index = text.index(after: index)
+                utf8.formIndex(after: &index)
+                while index < utf8.endIndex, utf8[index] != UInt8(ascii: "`") {
+                    utf8.formIndex(after: &index)
                 }
-                if index < text.endIndex {
-                    index = text.index(after: index)
+                if index < utf8.endIndex {
+                    utf8.formIndex(after: &index)
                 }
                 decoded.append(contentsOf: text[start..<index])
                 continue
             }
-            if ch == "\"" || ch == "'" {
+            if byte == UInt8(ascii: "\"") || byte == UInt8(ascii: "'") {
                 wasQuoted = true
-                index = text.index(after: index)
+                utf8.formIndex(after: &index)
                 let innerStart = index
-                while index < text.endIndex, text[index] != ch {
-                    index = text.index(after: index)
+                while index < utf8.endIndex, utf8[index] != byte {
+                    utf8.formIndex(after: &index)
                 }
                 decoded.append(contentsOf: text[innerStart..<index])
-                if index < text.endIndex {
-                    index = text.index(after: index)
+                if index < utf8.endIndex {
+                    utf8.formIndex(after: &index)
                 }
                 continue
             }
-            decoded.append(ch)
-            index = text.index(after: index)
+            let runStart = index
+            while index < utf8.endIndex, whitespaceLength(utf8, at: index) == 0 {
+                let current = utf8[index]
+                if current == UInt8(ascii: "`")
+                    || current == UInt8(ascii: "\"")
+                    || current == UInt8(ascii: "'")
+                {
+                    break
+                }
+                if current == UInt8(ascii: "$"),
+                   utf8.index(after: index) < utf8.endIndex,
+                   utf8[utf8.index(after: index)] == UInt8(ascii: "(")
+                {
+                    break
+                }
+                index = nextScalarIndex(utf8, index)
+            }
+            if index > runStart {
+                decoded.append(contentsOf: text[runStart..<index])
+            }
         }
 
         if index > tokenStart {
@@ -110,10 +132,43 @@ func applyRoleAwareQuotes(_ text: String) -> String {
     var commandBase: String?
     var pendingDataFlag = false
     var wrapperSeek = WrapperSeek.none
+    var heredocTerminator: String?
+    var awaitingHeredocDelimiter = false
+    var pendingInterpreterPayload = false
 
     for index in tokens.indices {
         let token = tokens[index]
         let decoded = token.decoded
+
+        if let terminator = heredocTerminator {
+            if decoded == terminator {
+                heredocTerminator = nil
+            } else {
+                tokens[index].decoded = " "
+            }
+            pendingDataFlag = false
+            pendingInterpreterPayload = false
+            continue
+        }
+
+        if awaitingHeredocDelimiter {
+            if token.wasQuoted {
+                heredocTerminator = decoded
+            }
+            awaitingHeredocDelimiter = false
+            pendingDataFlag = false
+            continue
+        }
+
+        if pendingInterpreterPayload {
+            if containsInlineCode(token) == false {
+                tokens[index].decoded = " "
+            }
+            pendingInterpreterPayload = false
+            pendingDataFlag = false
+            continue
+        }
+
         if isShellSeparator(decoded) {
             commandBase = nil
             pendingDataFlag = false
@@ -130,6 +185,27 @@ func applyRoleAwareQuotes(_ text: String) -> String {
             }
             commandBase = basename(decoded)
             continue
+        }
+
+        if let commandBase, isInterpreterExecutable(commandBase) {
+            if let delimiter = attachedHeredocDelimiter(decoded) {
+                if token.wasQuoted {
+                    heredocTerminator = delimiter
+                }
+                continue
+            }
+            if decoded == "<<" || decoded == "<<-" {
+                awaitingHeredocDelimiter = true
+                continue
+            }
+            if isInterpreterProgramFlag(command: commandBase, flag: decoded) {
+                pendingInterpreterPayload = true
+                continue
+            }
+            if let masked = maskAttachedInterpreterProgram(command: commandBase, decoded: decoded) {
+                tokens[index].decoded = masked
+                continue
+            }
         }
 
         if containsInlineCode(token) {
@@ -263,6 +339,67 @@ private func shouldMaskQuotedData(command: String?, pendingDataFlag: Bool) -> Bo
     isAllArgsData(command) || isSearchCommand(command) || pendingDataFlag
 }
 
+func isInterpreterExecutable(_ head: String) -> Bool {
+    let folded = head.lowercased()
+    return isPythonExecutable(folded) || isNodeExecutable(folded) || isRubyExecutable(folded)
+}
+
+func isPythonExecutable(_ head: String) -> Bool {
+    if head == "python" || head == "python2" || head == "python3" {
+        return true
+    }
+    guard head.hasPrefix("python") else { return false }
+    return head.dropFirst("python".count).allSatisfy { $0.isNumber || $0 == "." }
+}
+
+func isNodeExecutable(_ head: String) -> Bool {
+    head == "node" || head == "nodejs"
+}
+
+func isRubyExecutable(_ head: String) -> Bool {
+    if head == "ruby" { return true }
+    guard head.hasPrefix("ruby") else { return false }
+    return head.dropFirst("ruby".count).allSatisfy { $0.isNumber || $0 == "." }
+}
+
+private func isInterpreterProgramFlag(command: String?, flag: String) -> Bool {
+    guard let command else { return false }
+    let folded = command.lowercased()
+    if isPythonExecutable(folded) {
+        return flag == "-c"
+    }
+    if isNodeExecutable(folded) {
+        return flag == "-e" || flag == "--eval" || flag == "-p" || flag == "--print"
+    }
+    if isRubyExecutable(folded) {
+        return flag == "-e"
+    }
+    return false
+}
+
+private func maskAttachedInterpreterProgram(command: String?, decoded: String) -> String? {
+    guard let command else { return nil }
+    let folded = command.lowercased()
+    if isRubyExecutable(folded), decoded.hasPrefix("-e"), decoded.count > 2, decoded.hasPrefix("--") == false {
+        return "-e "
+    }
+    if isNodeExecutable(folded) {
+        if decoded.hasPrefix("--eval=") { return "--eval=" }
+        if decoded.hasPrefix("--print=") { return "--print=" }
+    }
+    return nil
+}
+
+private func attachedHeredocDelimiter(_ decoded: String) -> String? {
+    guard decoded.hasPrefix("<<") else { return nil }
+    var rest = decoded.dropFirst(2)
+    if rest.first == "-" {
+        rest = rest.dropFirst()
+    }
+    let name = String(rest)
+    return name.isEmpty ? nil : name
+}
+
 func firstWord(_ text: String) -> (word: String, rest: String) {
     let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
     guard let split = trimmed.firstIndex(where: { $0.isWhitespace }) else {
@@ -375,56 +512,107 @@ private func isRedirectToken(_ word: String) -> Bool {
 
 func splitSegments(_ text: String) -> [String] {
     var segments: [String] = []
-    var current = ""
-    var index = text.startIndex
-    var quote: Character?
+    let utf8 = text.utf8
+    var index = utf8.startIndex
+    var segmentStart = index
+    var quote: UInt8?
 
-    func flush() {
-        let trimmed = current.trimmingCharacters(in: .whitespaces)
+    func flush(upTo end: String.Index) {
+        let trimmed = text[segmentStart..<end].trimmingCharacters(in: .whitespaces)
         if !trimmed.isEmpty {
-            segments.append(trimmed)
+            segments.append(String(trimmed))
         }
-        current = ""
     }
 
-    while index < text.endIndex {
-        let ch = text[index]
+    while index < utf8.endIndex {
+        let byte = utf8[index]
         if let currentQuote = quote {
-            current.append(ch)
-            if ch == currentQuote { quote = nil }
-            index = text.index(after: index)
+            if byte == currentQuote { quote = nil }
+            utf8.formIndex(after: &index)
             continue
         }
-        if ch == "'" || ch == "\"" {
-            quote = ch
-            current.append(ch)
-            index = text.index(after: index)
+        if byte == UInt8(ascii: "'") || byte == UInt8(ascii: "\"") {
+            quote = byte
+            utf8.formIndex(after: &index)
             continue
         }
-        if ch == "&",
-           text.index(after: index) < text.endIndex,
-           text[text.index(after: index)] == "&"
+        if byte == UInt8(ascii: "&"),
+           utf8.index(after: index) < utf8.endIndex,
+           utf8[utf8.index(after: index)] == UInt8(ascii: "&")
         {
-            flush()
-            index = text.index(after: text.index(after: index))
+            flush(upTo: index)
+            index = utf8.index(after: utf8.index(after: index))
+            segmentStart = index
             continue
         }
-        if ch == "|",
-           text.index(after: index) < text.endIndex,
-           text[text.index(after: index)] == "|"
+        if byte == UInt8(ascii: "|"),
+           utf8.index(after: index) < utf8.endIndex,
+           utf8[utf8.index(after: index)] == UInt8(ascii: "|")
         {
-            flush()
-            index = text.index(after: text.index(after: index))
+            flush(upTo: index)
+            index = utf8.index(after: utf8.index(after: index))
+            segmentStart = index
             continue
         }
-        if ch == ";" || ch == "|" {
-            flush()
-            index = text.index(after: index)
+        if byte == UInt8(ascii: ";") || byte == UInt8(ascii: "|") {
+            flush(upTo: index)
+            utf8.formIndex(after: &index)
+            segmentStart = index
             continue
         }
-        current.append(ch)
-        index = text.index(after: index)
+        index = nextScalarIndex(utf8, index)
     }
-    flush()
+    flush(upTo: utf8.endIndex)
     return segments
+}
+
+private func whitespaceLength(_ utf8: String.UTF8View, at index: String.Index) -> Int {
+    let byte = utf8[index]
+    if byte < 0x80 {
+        switch byte {
+        case 9, 10, 11, 12, 13, 32:
+            return 1
+        default:
+            return 0
+        }
+    }
+    guard let (scalar, width) = decodeScalar(utf8, at: index) else { return 0 }
+    return Character(scalar).isWhitespace ? width : 0
+}
+
+private func nextScalarIndex(_ utf8: String.UTF8View, _ index: String.Index) -> String.Index {
+    if utf8[index] < 0x80 {
+        return utf8.index(after: index)
+    }
+    guard let (_, width) = decodeScalar(utf8, at: index) else {
+        return utf8.index(after: index)
+    }
+    return utf8.index(index, offsetBy: width, limitedBy: utf8.endIndex) ?? utf8.endIndex
+}
+
+private func decodeScalar(
+    _ utf8: String.UTF8View,
+    at index: String.Index
+) -> (Unicode.Scalar, Int)? {
+    var iterator = utf8[index...].makeIterator()
+    var decoder = UTF8()
+    switch decoder.decode(&iterator) {
+    case .scalarValue(let scalar):
+        return (scalar, utf8Width(scalar))
+    case .emptyInput, .error:
+        return nil
+    }
+}
+
+private func utf8Width(_ scalar: Unicode.Scalar) -> Int {
+    switch scalar.value {
+    case 0..<0x80:
+        return 1
+    case 0x80..<0x800:
+        return 2
+    case 0x800..<0x1_0000:
+        return 3
+    default:
+        return 4
+    }
 }

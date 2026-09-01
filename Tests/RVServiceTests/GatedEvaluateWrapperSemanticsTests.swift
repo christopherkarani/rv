@@ -47,6 +47,12 @@ struct GatedEvaluateWrapperSemanticsTests {
         #expect(result.analysis.wrappers == [.python])
     }
 
+    @Test func pythonPrintReset_isAllowed() async throws {
+        let result = try await peek(#"python -c "print('git reset --hard')""#)
+        #expect(result.decision == .allow)
+        #expect(result.analysis.wrappers.isEmpty)
+    }
+
     @Test func unquotedAndDollarDashC_neverSilentAllow() async throws {
         let unquoted = try await peek("bash -c git reset --hard")
         guard case .deny = unquoted.decision else {

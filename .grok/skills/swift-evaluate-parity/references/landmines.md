@@ -44,6 +44,11 @@ Do not mask `` `…` `` or `$(…)`. Do not expand `$TMPDIR`.
 Redirect keywords (`>/`, `> /`, `>~`, …) must keep `core.filesystem` a
 candidate. `>/etc/passwd` is not an argv0 path — do not strip it as one.
 
+Quoted python/node/ruby `-c`/`-e` program text and quoted interpreter
+heredoc bodies are data. Do not mask `bash`/`sh`/`zsh` heredocs. Do not
+mask a payload that contains `$(` or backticks. Unquoted interpreter
+heredocs stay visible (fail-closed).
+
 ## Quick-reject and per-pack safe
 
 Keywords come from enabled snapshots. `core.filesystem` must still be a

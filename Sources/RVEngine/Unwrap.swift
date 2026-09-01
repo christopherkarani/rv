@@ -172,24 +172,6 @@ private func shellKind(_ head: String) -> WrapperKind? {
     }
 }
 
-private func isPythonExecutable(_ head: String) -> Bool {
-    if head == "python" || head == "python2" || head == "python3" {
-        return true
-    }
-    guard head.hasPrefix("python") else { return false }
-    return head.dropFirst("python".count).allSatisfy { $0.isNumber || $0 == "." }
-}
-
-private func isNodeExecutable(_ head: String) -> Bool {
-    head == "node" || head == "nodejs"
-}
-
-private func isRubyExecutable(_ head: String) -> Bool {
-    if head == "ruby" { return true }
-    guard head.hasPrefix("ruby") else { return false }
-    return head.dropFirst("ruby".count).allSatisfy { $0.isNumber || $0 == "." }
-}
-
 private func peelSudo(_ tokens: [CommandToken], workingDirectory: WorkingDirectory?) -> Peel {
     var index = 1
     var cwd = workingDirectory

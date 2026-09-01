@@ -171,6 +171,21 @@
       "id": "near.rm-rf-tmp-newline-waxmcp",
       "command": "set -euo pipefail\nrm -rf /tmp/waxmcp-0.1.33 /tmp/waxmcp-0.1.33.tar",
       "expected": "allow"
+    },
+    {
+      "id": "near.python-c-print-reset",
+      "command": "python3 -c \"print('git reset --hard')\"",
+      "expected": "allow"
+    },
+    {
+      "id": "near.python-heredoc-mentions-reset",
+      "command": "python3 <<'PY'\nprint('git reset --hard')\nPY",
+      "expected": "allow"
+    },
+    {
+      "id": "near.node-e-console-reset",
+      "command": "node -e \"console.log('git reset --hard')\"",
+      "expected": "allow"
     }
   ]
 }
