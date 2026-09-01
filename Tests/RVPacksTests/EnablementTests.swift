@@ -121,7 +121,7 @@ import RVDomain
         pinCommit: "commit",
         packCount: 1,
         defaultEnabled: [],
-        categories: ["core": ["core.git"]],
+        categories: ["core": [PackID(rawValue: "core.git")]],
         presets: [:],
         tiers: ["core": 1]
     )

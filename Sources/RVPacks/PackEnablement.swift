@@ -18,7 +18,7 @@ public enum PackSet {
         for token in tokens {
             switch token {
             case .id(let id):
-                guard index.packIDs.contains(id.rawValue) else {
+                guard index.packIDs.contains(id) else {
                     if rejectUnknown {
                         throw PackSetError.unknownID(token)
                     }
@@ -32,7 +32,7 @@ public enum PackSet {
                     }
                     continue
                 }
-                expanded.formUnion(members.compactMap(PackID.init(validating:)))
+                expanded.formUnion(members)
             case .preset(let name):
                 guard let members = index.presets[name] else {
                     if rejectUnknown {
@@ -40,7 +40,7 @@ public enum PackSet {
                     }
                     continue
                 }
-                expanded.formUnion(members.compactMap(PackID.init(validating:)))
+                expanded.formUnion(members)
             }
         }
         return expanded
@@ -61,7 +61,7 @@ public enum PackSet {
     public static func order(_ ids: Set<PackID>, index: PackIndex) -> [PackID] {
         let known = Set(index.packIDs)
         return ids
-            .filter { known.contains($0.rawValue) }
+            .filter { known.contains($0) }
             .sorted { lhs, rhs in
                 let tierL = tier(for: lhs, index: index)
                 let tierR = tier(for: rhs, index: index)

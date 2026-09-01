@@ -29,7 +29,7 @@ public enum SelectionToken: Hashable, Sendable {
         if index.presets[raw] != nil {
             tokens.append(.preset(raw))
         }
-        if tokens.isEmpty || index.packIDs.contains(raw) {
+        if tokens.isEmpty || index.packIDs.contains(PackID(rawValue: raw)) {
             tokens.append(.id(PackID(rawValue: raw)))
         }
         return tokens

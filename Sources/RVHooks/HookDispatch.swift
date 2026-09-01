@@ -84,7 +84,16 @@ private func hookBody<C: HostCodec>(
             return hookWire(from: result, command: request.command, using: codec, afterSpend: true)
         }
         let result = await evaluate(request.command, request.cwd)
-        let bound = result.boundReview ?? HostNativeAsk.hookBound(
+        if let live = LiveEvaluation(result) {
+            return hookWire(
+                from: live.wire,
+                command: request.command,
+                using: codec,
+                bound: live.bound,
+                cwd: request.cwd
+            )
+        }
+        let bound = HostNativeAsk.hookBound(
             result: result,
             action: codec.proposedAction(from: request),
             context: ReviewContext(repository: RepositoryReviewContext())

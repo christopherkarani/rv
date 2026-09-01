@@ -42,14 +42,59 @@ let frozenPackIDs: Set<String> = [
     #expect(index.categories.count == 26)
     #expect(index.categories["windows"] == nil)
     #expect(index.categories["careful_company_running_windows"]?.count == 6)
-    #expect(index.presets["careful_company_running_windows"]?.contains("windows.filesystem") == false)
+    #expect(
+        index.presets["careful_company_running_windows"]?
+            .contains(PackID(rawValue: "windows.filesystem")) == false
+    )
     #expect(index.presets["careful_company_running_windows"]?.count == 26)
-    #expect(Set(index.defaultEnabled) == Set(dayOnePackIDs.map(\.rawValue)))
-    #expect(Set(index.packIDs) == frozenPackIDs)
+    #expect(Set(index.defaultEnabled) == Set(dayOnePackIDs))
+    #expect(Set(index.packIDs.map(\.rawValue)) == frozenPackIDs)
 
     let documents = try PackRegistry.loadAllDocuments()
     #expect(documents.count == 95)
     #expect(Set(documents.map(\.id.rawValue)) == frozenPackIDs)
+}
+
+@Test func packIndexJSON_invalidPackIDThrowsAtDecode() throws {
+    let data = Data(
+        """
+        {
+          "schema_version": 1,
+          "pin_version": "0",
+          "pin_tag": "t",
+          "pin_commit": "c",
+          "pack_count": 1,
+          "default_enabled": ["core.git"],
+          "categories": {"core": ["core.git"], "bad": ["Bad Pack"]},
+          "presets": {},
+          "tiers": {"core": 1}
+        }
+        """.utf8
+    )
+    #expect(throws: PackLoadError.invalidPackID("Bad Pack")) {
+        try PackIndexJSON.decode(data)
+    }
+}
+
+@Test func packIndexJSON_wrongCountWithValidIDsThrowsInvalidIndex() throws {
+    let data = Data(
+        """
+        {
+          "schema_version": 1,
+          "pin_version": "0",
+          "pin_tag": "t",
+          "pin_commit": "c",
+          "pack_count": 1,
+          "default_enabled": ["core.git"],
+          "categories": {"core": ["core.git"]},
+          "presets": {},
+          "tiers": {"core": 1}
+        }
+        """.utf8
+    )
+    #expect(throws: PackLoadError.invalidIndex) {
+        try PackIndexJSON.decode(data)
+    }
 }
 
 @Test func catalogLoad_resourcesAreIndexPlusNinetyFive() throws {

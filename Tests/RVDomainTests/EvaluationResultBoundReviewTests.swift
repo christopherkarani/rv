@@ -41,4 +41,36 @@ struct EvaluationResultBoundReviewTests {
         #expect(decoded.decision == .deny(deny))
         #expect(decoded.matchingView == MatchingView("git push --force origin feature"))
     }
+
+    @Test func liveEvaluation_requiresBound() {
+        #expect(LiveEvaluation(EvaluationResult(outcome: .plain)) == nil)
+        let live = LiveEvaluation(
+            EvaluationResult(
+                outcome: .deny(deny, matched: nil),
+                matchingView: MatchingView("git push --force origin feature"),
+                analysis: .unknown,
+                boundReview: .mandatoryHuman(deny)
+            )
+        )
+        #expect(live?.bound == .mandatoryHuman(deny))
+        #expect(live?.result.boundReview == .mandatoryHuman(deny))
+        #expect(live?.wire.boundReview == nil)
+    }
+
+    @Test func evaluationResult_wireDropsBound() throws {
+        let result = EvaluationResult(
+            outcome: .deny(deny, matched: nil),
+            matchingView: MatchingView("git push --force origin feature"),
+            analysis: .unknown,
+            boundReview: .mandatoryHuman(deny)
+        )
+        #expect(result.wire.boundReview == nil)
+        let live = try #require(LiveEvaluation(result))
+        let data = try JSONEncoder().encode(live.wire)
+        let json = String(decoding: data, as: UTF8.self)
+        #expect(json.contains("boundReview") == false)
+        let decoded = try JSONDecoder().decode(EvaluationResult.self, from: data)
+        #expect(decoded.boundReview == nil)
+        #expect(LiveEvaluation(decoded) == nil)
+    }
 }
