@@ -107,16 +107,31 @@ private func unwrapText(
     }
 }
 
-private enum Peel: Equatable {
+enum Peel: Equatable {
     case notWrapper
     case limited(WrapperKind)
     case next(String, WrapperKind, WorkingDirectory?)
 }
 
 private func peel(_ text: String, workingDirectory: WorkingDirectory?) -> Peel {
+    if let sink = peelExecutingSink(text, workingDirectory: workingDirectory) {
+        return sink
+    }
     let tokens = tokenizeCommand(text)
     guard let first = tokens.first else { return .notWrapper }
     let head = basename(first.decoded).lowercased()
+    if head == "timeout" {
+        return peelTimeout(tokens, workingDirectory: workingDirectory)
+    }
+    if head == "nice" {
+        return peelNice(tokens, workingDirectory: workingDirectory)
+    }
+    if head == "mise" {
+        return peelMise(tokens, workingDirectory: workingDirectory)
+    }
+    if head == "ssh" {
+        return peelSSH(tokens, workingDirectory: workingDirectory)
+    }
     if head == "sudo" {
         return peelSudo(tokens, workingDirectory: workingDirectory)
     }
@@ -347,7 +362,7 @@ private func peelShell(
 }
 
 /// Unquoted, `$`, and `$'…'` `-c` payloads are uncertain. Fail-closed.
-private func peelShellPayload(
+func peelShellPayload(
     _ token: CommandToken,
     kind: WrapperKind,
     cwd: WorkingDirectory?
@@ -728,11 +743,11 @@ private func quoteIfNeeded(_ value: String) -> String {
     return value
 }
 
-private func renderCommand(_ tokens: [CommandToken]) -> String {
+func renderCommand(_ tokens: [CommandToken]) -> String {
     tokens.map(renderToken).joined(separator: " ")
 }
 
-private func renderToken(_ token: CommandToken) -> String {
+func renderToken(_ token: CommandToken) -> String {
     if token.wasQuoted || token.decoded.contains(where: { $0.isWhitespace }) {
         return "'" + token.decoded.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }

@@ -9,6 +9,10 @@ public enum WrapperKind: String, Sendable, Equatable, Codable {
     case python
     case node
     case ruby
+    case timeout
+    case nice
+    case mise
+    case ssh
 }
 
 /// Closed analyzer family. Wrapper layers wrap an inner Git / filesystem hit,
