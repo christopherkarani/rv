@@ -199,4 +199,83 @@ struct HookEvaluateRoundTripTests {
             try IPCJSON.decode(IPCRequest.self, from: data)
         }
     }
+
+    @Test func hookEvaluateRequest_cAppleHeaderWithoutStdinFieldDecodes() throws {
+        let json = Data(
+            #"{"id":"AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE","method":{"hookEvaluate":{"clientSemver":"1.0.0","host":"grok"}},"protocol":"rv.ipc.v1"}"#.utf8
+        )
+        let decoded = try IPCJSON.decode(IPCRequest.self, from: json)
+        guard case .hookEvaluate(let params) = decoded.method else {
+            Issue.record("C Apple header must decode as hookEvaluate")
+            return
+        }
+        #expect(params.host == .grok)
+        #expect(params.stdin == "")
+        #expect(params.clientSemver == ProtocolVersion.serviceSemver)
+        #expect(String(data: json, encoding: .utf8)?.contains("stdin") == false)
+    }
+
+    @Test func hookEvaluateParams_omittedStdinDecodesAsEmpty() throws {
+        let omitted = try JSONSerialization.data(withJSONObject: [
+            "host": "grok",
+            "clientSemver": "1.0.0",
+        ])
+        let decoded = try IPCJSON.decode(HookEvaluateParams.self, from: omitted)
+        #expect(decoded.host == .grok)
+        #expect(decoded.stdin == "")
+        #expect(decoded.clientSemver == ProtocolVersion.serviceSemver)
+    }
+
+    @Test func hookEvaluateRequest_applyingStdinOverlayReplacesJSONStdin() throws {
+        let id = try #require(UUID(uuidString: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"))
+        let request = IPCRequest(
+            id: id,
+            method: .hookEvaluate(
+                HookEvaluateParams(host: .grok, stdin: "json-stdin", clientSemver: "1.0.0")
+            )
+        )
+        let overlay = Data(#"{"tool":"Bash","command":"git status"}"#.utf8)
+        let applied = try request.applyingHookStdinOverlay(overlay)
+        guard case .hookEvaluate(let params) = applied.method else {
+            Issue.record("overlay must keep hookEvaluate")
+            return
+        }
+        #expect(applied.id == request.id)
+        #expect(params.host == .grok)
+        #expect(params.clientSemver == "1.0.0")
+        #expect(params.stdin == #"{"tool":"Bash","command":"git status"}"#)
+        #expect(params.stdin.contains("json-stdin") == false)
+    }
+
+    @Test func hookEvaluateRequest_applyingStdinOverlayKeepsQuotesAndNewlines() throws {
+        let request = IPCRequest(
+            method: .hookEvaluate(HookEvaluateParams(host: .grok, stdin: ""))
+        )
+        let raw = "line 1\n\"quoted\"\nbackslash \\ end"
+        let applied = try request.applyingHookStdinOverlay(Data(raw.utf8))
+        guard case .hookEvaluate(let params) = applied.method else {
+            Issue.record("overlay must keep hookEvaluate")
+            return
+        }
+        #expect(params.stdin == raw)
+    }
+
+    @Test func hookEvaluateRequest_invalidUTF8OverlayThrows() throws {
+        let request = IPCRequest(
+            method: .hookEvaluate(HookEvaluateParams(host: .grok, stdin: "keep"))
+        )
+        #expect(throws: DecodingError.self) {
+            _ = try request.applyingHookStdinOverlay(Data([0xFF, 0xFE]))
+        }
+    }
+
+    @Test func evaluateRequest_stdinOverlayIsIgnored() throws {
+        let request = EvaluationRequest(
+            command: ShellCommand(rawValue: "git status"),
+            enabledPacks: dayOnePackIDs
+        )
+        let original = IPCRequest(method: .evaluate(EvaluateParams(request: request)))
+        let applied = try original.applyingHookStdinOverlay(Data("ignored".utf8))
+        #expect(applied == original)
+    }
 }

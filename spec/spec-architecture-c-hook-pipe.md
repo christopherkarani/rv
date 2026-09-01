@@ -176,7 +176,8 @@ Request body is existing `IPCRequest` with `method.hookEvaluate`:
 | Field | Type | Rules |
 |---|---|---|
 | `host` | string | `grok` \| `pi` \| `opencode`. Unknown host → `IPCError` (do not evaluate). |
-| `stdin` | string | Full host stdin. Required. May be empty. |
+| `stdin` | string | Full host stdin. Optional on decode (missing → empty). May be empty. |
+| XPC `rv.stdin` | `xpc_data` | Additive sibling of `rv.ipc`. When present (including empty), `rvd` uses these bytes as host stdin and ignores JSON `stdin`. Production C on Apple sends this and omits JSON `stdin`. JSON-only clients stay valid. |
 | `clientSemver` | string? | Required for implicit hello (same as T14 evaluate). Omit → handshake-required error if `handshakeOK` is false. |
 
 Success reply:

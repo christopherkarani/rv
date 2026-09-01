@@ -101,7 +101,7 @@ public struct HookEvaluateParams: Sendable, Equatable, Codable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         host = try container.decode(HookHost.self, forKey: .host)
-        stdin = try container.decode(String.self, forKey: .stdin)
+        stdin = try container.decodeIfPresent(String.self, forKey: .stdin) ?? ""
         clientSemver = try container.decodeIfPresent(String.self, forKey: .clientSemver)
     }
 

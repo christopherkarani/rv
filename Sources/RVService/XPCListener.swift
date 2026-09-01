@@ -16,6 +16,26 @@ enum XPCIPCWire {
     }
 
     static func set(_ data: Data, on message: xpc_object_t) {
+        set(data, key: key, on: message)
+    }
+
+    /// Sibling of `rv.ipc`. Present (including empty) means use these bytes as
+    /// `hookEvaluate` stdin instead of the JSON `stdin` field.
+    static let stdinKey = "rv.stdin"
+
+    static func stdin(from message: xpc_object_t) -> Data? {
+        var length = 0
+        guard let bytes = xpc_dictionary_get_data(message, stdinKey, &length) else {
+            return nil
+        }
+        return Data(bytes: bytes, count: length)
+    }
+
+    static func setStdin(_ data: Data, on message: xpc_object_t) {
+        set(data, key: stdinKey, on: message)
+    }
+
+    private static func set(_ data: Data, key: String, on message: xpc_object_t) {
         data.withUnsafeBytes { buffer in
             if let base = buffer.baseAddress {
                 xpc_dictionary_set_data(message, key, base, buffer.count)
@@ -123,10 +143,15 @@ final class XPCPeerSession: @unchecked Sendable {
             await self.watchdog.ping()
             let message = held.object
             let incoming = XPCIPCWire.body(from: message)
+            let stdinOverlay = XPCIPCWire.stdin(from: message)
             let accepted = self.lock.withLock { self.handshakeOK }
             let (data, ok): (Data, Bool)
             if let incoming {
-                (data, ok) = await self.runtime.handleIncoming(incoming, handshakeOK: accepted)
+                (data, ok) = await self.runtime.handleIncoming(
+                    incoming,
+                    handshakeOK: accepted,
+                    stdinOverlay: stdinOverlay
+                )
             } else {
                 let response = IPCResponse(id: UUID(), result: .error(.decodeFailed))
                 data = (try? IPCJSON.encode(response)) ?? Data()
