@@ -10,9 +10,35 @@ func assertHookDenyHasNoBypassOrEssay(_ text: String?) {
     #expect(payload.contains("RV · Blocked"))
     #expect(payload.contains("RV · Blocked\n") == false)
     #expect(payload.contains("git reset --hard") == false)
+    #expect(payload.contains("reset --soft") == false)
+    #expect(payload.contains("RV_" + "BYPASS") == false)
+    if allowOnceUnlockCode(in: payload) != nil {
+        return
+    }
     #expect(payload.contains("Terminal") == false)
     #expect(payload.contains("allow-once") == false)
-    #expect(payload.contains("reset --soft") == false)
+}
+
+func mintedResetHardHostDeny(_ code: String) -> String {
+    "RV · Blocked. \(hookUnlockNext(code: code)) Destroys uncommitted changes. Use 'git stash' first."
+}
+
+func assertMintedHookUnlock(_ text: String, why: String = resetHardHostDeny) throws -> String {
+    let minted = try #require(allowOnceUnlockCode(in: text))
+    #expect(text.contains("Paste in Terminal to allow once: rv allow-once \(minted)."))
+    #expect(text.hasPrefix("RV · Blocked."))
+    let whyRest = why.hasPrefix("RV · Blocked. ")
+        ? String(why.dropFirst("RV · Blocked. ".count))
+        : why
+    if whyRest.isEmpty == false {
+        #expect(text.contains(whyRest))
+    }
+    #expect(text.contains("git reset --hard") == false)
+    #expect(text.contains("RV_" + "BYPASS") == false)
+    #expect(text.contains("\u{001B}") == false)
+    #expect(text.contains("═") == false)
+    #expect(text.contains("┌") == false)
+    return minted
 }
 
 @Test func hostDenyText_nilOnAllowIncludingMedium() {
@@ -188,6 +214,25 @@ func assertHookDenyHasNoBypassOrEssay(_ text: String?) {
 @Test func hookDenyCommandPreview_shortCommandUnchanged() {
     #expect(hookDenyCommandPreview(resetHard) == "git reset --hard")
     #expect(hookDenyCommandPreview(ShellCommand(rawValue: "git reset --hard\n")) == "git reset --hard")
+}
+
+@Test func hookUnlockNext_codeAppendsSixHex() {
+    #expect(hookUnlockNext(code: nil) == hookUnlockNext)
+    #expect(hookUnlockNext(code: "abc") == hookUnlockNext)
+    #expect(hookUnlockNext(code: "ABCDEF") == hookUnlockNext)
+    #expect(hookUnlockNext(code: "a1b2c3") == "Paste in Terminal to allow once: rv allow-once a1b2c3.")
+    #expect(allowOnceUnlockCode(in: hookUnlockNext) == nil)
+    #expect(allowOnceUnlockCode(in: hookUnlockNext(code: "a1b2c3")) == "a1b2c3")
+}
+
+@Test func hostDenyLine_appendsUnlockWhenCodeIsMinted() throws {
+    let command = resetHard
+    let reason = "git reset --hard destroys uncommitted changes. Use 'git stash' first."
+    #expect(hostDenyLine(command: command, reason: reason) == resetHardHostDeny)
+    let minted = hostDenyLine(command: command, reason: reason, unlockCode: "a1b2c3")
+    #expect(minted == mintedResetHardHostDeny("a1b2c3"))
+    #expect(minted.contains("\n") == false)
+    _ = try assertMintedHookUnlock(minted)
 }
 
 @Test func hookDenyCommandPreview_clipsOverlongFirstLine() {

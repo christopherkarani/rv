@@ -27,6 +27,8 @@ import RVTheme
     #expect(HelpDispatch.topic(arguments: ["uninstall", "-h"]) == .uninstall)
     #expect(HelpDispatch.topic(arguments: ["uninstall", "--robot", "--help"]) == .uninstall)
     #expect(HelpDispatch.topic(arguments: ["doctor", "--help"]) == .doctor)
+    #expect(HelpDispatch.topic(arguments: ["allow-once", "--help"]) == .allowOnce)
+    #expect(HelpDispatch.topic(arguments: ["help", "allow-once"]) == .allowOnce)
 }
 
 @Test func helpTopic_doesNotStealCommandArgs() {
@@ -56,9 +58,17 @@ import RVTheme
     #expect(text.contains("Next"))
     #expect(text.contains("rv setup"))
     #expect(text.contains("rv help setup"))
+    #expect(text.contains("allow-once"))
     #expect(text.contains("rv help test") == false)
     #expect(text.contains("OVERVIEW:") == false)
     #expect(text.contains("SUBCOMMANDS:") == false)
+}
+
+@Test func helpText_allowOnce_namesRedeemNotCommandMint() {
+    let text = HelpDispatch.text(.allowOnce, palette: colorOffPalette)
+    #expect(text.contains("rv allow-once a1b2c3"))
+    #expect(text.contains("six-character"))
+    #expect(text.contains("rv allow-once 'git reset --hard'") == false)
 }
 
 @Test func helpText_setup_keepsOneLineCopy() {

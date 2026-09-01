@@ -352,6 +352,106 @@ private final class EncodeDoorSpy: HostCodec, @unchecked Sendable {
     #expect(spy.askCalls == 1)
 }
 
+@Test func hookWire_mintedUnlockCodeOnGrokDeny() throws {
+    let result = EvaluationResult(
+        outcome: .deny(
+            Deny(
+                ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+                reason: "git reset --hard destroys uncommitted changes. Use 'git stash' first."
+            ),
+            matched: nil
+        ),
+        matchingView: "git reset --hard"
+    )
+    let wire = hookWire(
+        from: result,
+        command: ShellCommand(rawValue: "git reset --hard"),
+        using: GrokHostCodec(),
+        cwd: wd("/tmp/ws"),
+        unlockCode: "a1b2c3"
+    )
+    let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
+    #expect(json["decision"] as? String == "deny")
+    let reason = try #require(json["reason"] as? String)
+    #expect(reason == mintedResetHardHostDeny("a1b2c3"))
+    #expect(json["next"] as? String == hookUnlockNext(code: "a1b2c3"))
+    #expect(json["rule"] as? String == "core.git/reset-hard")
+    _ = try assertMintedHookUnlock(reason)
+}
+
+@Test func hookWire_mintedUnlockCodeOnClaudeCodexCursorDeny() throws {
+    let match = RuleMatch(
+        ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+        packID: .coreGit,
+        patternName: "reset-hard",
+        severity: .critical,
+        reason: "git reset --hard destroys uncommitted changes. Use 'git stash' first.",
+        explanation: "Discards every uncommitted change."
+    )
+    let result = EvaluationResult(
+        outcome: .deny(
+            Deny(ruleID: match.ruleID, reason: match.reason),
+            matched: match
+        ),
+        matchingView: "git reset --hard"
+    )
+    let command = ShellCommand(rawValue: "git reset --hard")
+    let unlock = "a1b2c3"
+    let expected = mintedResetHardHostDeny(unlock)
+
+    let claude = hookWire(
+        from: result,
+        command: command,
+        using: ClaudeHostCodec(),
+        unlockCode: unlock
+    )
+    #expect(claude.stdout.contains("\"permissionDecision\":\"deny\""))
+    #expect(claude.stdout.contains(expected))
+    #expect(claude.stdout.contains("\"permissionDecision\":\"ask\"") == false)
+
+    let codex = hookWire(
+        from: result,
+        command: command,
+        using: CodexHostCodec(),
+        unlockCode: unlock
+    )
+    let codexJSON = try #require(JSONSerialization.jsonObject(with: Data(codex.stdout.utf8)) as? [String: Any])
+    #expect(codexJSON["decision"] as? String == "block")
+    #expect(codexJSON["reason"] as? String == expected)
+    #expect(codex.stderr.trimmingCharacters(in: .whitespacesAndNewlines) == expected)
+    #expect(codex.exitCode == 2)
+
+    let cursor = hookWire(
+        from: result,
+        command: command,
+        using: CursorHostCodec(),
+        unlockCode: unlock
+    )
+    let cursorJSON = try #require(JSONSerialization.jsonObject(with: Data(cursor.stdout.utf8)) as? [String: Any])
+    #expect(cursorJSON["permission"] as? String == "deny")
+    #expect(cursorJSON["user_message"] as? String == expected)
+    #expect(cursorJSON["agent_message"] as? String == expected)
+    #expect(cursor.exitCode == 0)
+}
+
+@Test func hookWire_askDoesNotCarryMintedCode() throws {
+    let deny = Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "x")
+    let wire = hookWire(
+        from: EvaluationResult(
+            outcome: .deny(deny, matched: nil),
+            matchingView: MatchingView("git reset --hard")
+        ),
+        command: ShellCommand(rawValue: "git reset --hard"),
+        using: PiHostCodec(),
+        bound: .deny(deny),
+        cwd: wd("/tmp/ws"),
+        unlockCode: "a1b2c3"
+    )
+    let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
+    #expect(json["decision"] as? String == "ask")
+    #expect(allowOnceUnlockCode(in: wire.stdout) == nil)
+}
+
 @Test func grokDecode_readsCwdWhenPresent() throws {
     let stdin = """
     {"hookEventName":"pre_tool_use","cwd":"/tmp/ws","toolName":"run_terminal_command","toolInput":{"command":"git status"}}

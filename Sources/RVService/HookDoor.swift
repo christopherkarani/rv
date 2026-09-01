@@ -8,9 +8,18 @@ public struct HookDoor: Sendable {
         host: HookHost,
         stdin: String,
         evaluate: @Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult,
-        spendHostAsk: (@Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult)? = nil
+        spendHostAsk: (@Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult)? = nil,
+        mintOnDeny: (@Sendable (EvaluationResult, WorkingDirectory?) async -> String?)? = nil
     ) async throws -> HookEvaluateReply {
-        reply(await hookWire(host: host, stdin: stdin, evaluate: evaluate, spendHostAsk: spendHostAsk))
+        reply(
+            await hookWire(
+                host: host,
+                stdin: stdin,
+                evaluate: evaluate,
+                spendHostAsk: spendHostAsk,
+                mintOnDeny: mintOnDeny
+            )
+        )
     }
 
     private static func reply(_ wire: HookWire) -> HookEvaluateReply {

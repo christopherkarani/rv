@@ -13,15 +13,23 @@ public func hookWire<C: HostCodec>(
     using codec: C,
     bound: BoundReview? = nil,
     cwd: WorkingDirectory? = nil,
-    afterSpend: Bool = false
+    afterSpend: Bool = false,
+    unlockCode: String? = nil
 ) -> HookWire {
+    let code = afterSpend ? nil : unlockCode
     switch codec.host {
     case .claude:
         if afterSpend {
             return encodePostSpend(from: result, command: command, using: codec)
         }
         // Official `permissionDecision: "ask"` is leftover-ask-as-permit. Stay deny.
-        return encodeClaudeFirstCall(from: result, command: command, using: codec, bound: bound)
+        return encodeClaudeFirstCall(
+            from: result,
+            command: command,
+            using: codec,
+            bound: bound,
+            unlockCode: code
+        )
     case .grok, .pi, .opencode, .openclaw, .hermes, .codex, .cursor:
         if afterSpend {
             return encodePostSpend(from: result, command: command, using: codec)
@@ -31,7 +39,8 @@ public func hookWire<C: HostCodec>(
             command: command,
             using: codec,
             bound: bound,
-            cwd: cwd
+            cwd: cwd,
+            unlockCode: code
         )
     }
 }
@@ -40,27 +49,36 @@ private func encodeClaudeFirstCall<C: HostCodec>(
     from result: EvaluationResult,
     command: ShellCommand,
     using codec: C,
-    bound: BoundReview?
+    bound: BoundReview?,
+    unlockCode: String?
 ) -> HookWire {
     switch result.decision {
     case .allow:
         guard let bound else {
-            return ClaudeHostCodec().encodeRichDeny(from: result, command: command)
+            return ClaudeHostCodec().encodeRichDeny(
+                from: result,
+                command: command,
+                unlockCode: unlockCode
+            )
         }
         switch bound {
         case .allow:
             return codec.encodeAllow()
         case .deny(let deny), .mandatoryHuman(let deny):
             return codec.encodeDeny(
-                reason: hostDenyLine(command: command, reason: deny.reason),
+                reason: hostDenyLine(command: command, reason: deny.reason, unlockCode: unlockCode),
                 rule: displayRuleID(deny.ruleID),
-                next: hookUnlockNext
+                next: mintedUnlockNext(unlockCode) ?? hookUnlockNext
             )
         }
     case .indeterminate:
         return codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: nil)
     case .deny:
-        return ClaudeHostCodec().encodeRichDeny(from: result, command: command)
+        return ClaudeHostCodec().encodeRichDeny(
+            from: result,
+            command: command,
+            unlockCode: unlockCode
+        )
     }
 }
 
@@ -88,7 +106,8 @@ private func encodeFirstCall<C: HostCodec>(
     command: ShellCommand,
     using codec: C,
     bound: BoundReview?,
-    cwd: WorkingDirectory?
+    cwd: WorkingDirectory?,
+    unlockCode: String?
 ) -> HookWire {
     switch result.decision {
     case .allow:
@@ -105,9 +124,9 @@ private func encodeFirstCall<C: HostCodec>(
             switch bound {
             case .deny(let deny), .mandatoryHuman(let deny):
                 return codec.encodeDeny(
-                    reason: hostDenyLine(command: command, reason: deny.reason),
+                    reason: hostDenyLine(command: command, reason: deny.reason, unlockCode: unlockCode),
                     rule: displayRuleID(deny.ruleID),
-                    next: hookUnlockNext
+                    next: mintedUnlockNext(unlockCode) ?? hookUnlockNext
                 )
             case .allow:
                 return codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: nil)
@@ -128,9 +147,9 @@ private func encodeFirstCall<C: HostCodec>(
         case .allow, .deny:
             // A deny result must never become silent allow.
             return codec.encodeDeny(
-                reason: hostDenyLine(command: command, reason: deny.reason),
+                reason: hostDenyLine(command: command, reason: deny.reason, unlockCode: unlockCode),
                 rule: displayRuleID(deny.ruleID),
-                next: nil
+                next: mintedUnlockNext(unlockCode)
             )
         case .ask:
             return encodeAsked(from: bound, command: command, using: codec)

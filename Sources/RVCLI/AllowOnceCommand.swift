@@ -78,9 +78,9 @@ enum AllowOnceCLI {
 struct AllowOnceCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "allow-once",
-        abstract: "Mint and redeem single-use unlock codes.",
+        abstract: "Redeem the six-character code from a hook deny.",
         discussion: """
-            Unlock a deny by running the command in Terminal, or redeem a code on a TTY.
+            Redeem the six-character code printed on a hook deny. mint is optional pre-arm.
             """,
         subcommands: [AllowOnceMint.self, AllowOnceList.self, AllowOnceClear.self]
     )

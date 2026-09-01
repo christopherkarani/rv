@@ -10,6 +10,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 STAGE="${RV_RELEASE_STAGE:-$ROOT/.build/release-stage}"
 FIXTURES="$ROOT/Tests/RVHooksTests/Fixtures/grok"
 CANONICAL='RV · Blocked. Destroys uncommitted changes. Use '\''git stash'\'' first.'
+# Mint-on-deny leads with a paste so truncated host cards still show the code.
 LABEL="dev.rv.evaluate"
 UID_NUM="$(id -u)"
 DOMAIN="gui/${UID_NUM}"
@@ -290,23 +291,42 @@ run_argv() {
   HOME="$PROOF_HOME" PATH="/usr/bin:/bin" TERM="dumb" "$@"
 }
 
-expect_json() {
-  local stdout_file="$1"
-  local expect_decision="$2"
-  python3 - "$stdout_file" "$expect_decision" "$CANONICAL" <<'PY'
+minted_reset_hard_deny_ok() {
+  python3 - "$1" "$CANONICAL" <<'PY'
 import json
+import re
 import sys
 
-path, decision, canonical = sys.argv[1], sys.argv[2], sys.argv[3]
-text = open(path, "r", encoding="utf-8").read()
+path, canonical = sys.argv[1], sys.argv[2]
+text = open(path, encoding="utf-8").read().strip()
+if not text:
+    raise SystemExit(2)
 obj = json.loads(text)
-if obj.get("decision") != decision:
+if obj.get("decision") != "deny":
     raise SystemExit("decision=%r" % (obj.get("decision"),))
-if decision == "deny" and obj.get("reason") != canonical:
-    raise SystemExit("reason=%r" % (obj.get("reason"),))
+reason = obj.get("reason")
+why = canonical[len("RV · Blocked. "):] if canonical.startswith("RV · Blocked. ") else canonical
+minted = re.compile(
+    r"^RV · Blocked\. Paste in Terminal to allow once: rv allow-once [0-9a-f]{6}\. "
+    + re.escape(why)
+    + r"$"
+)
+if minted.match(reason or "") is None:
+    raise SystemExit("reason=%r" % (reason,))
+if "git reset --hard" in (reason or ""):
+    raise SystemExit("reason echoes command")
 if "hookSpecificOutput" in obj or "updatedInput" in obj or "block" in obj:
     raise SystemExit("extra host keys present")
 PY
+}
+
+expect_json() {
+  local stdout_file="$1"
+  local expect_decision="$2"
+  if [[ "$expect_decision" != "deny" ]]; then
+    fail "expect_json only covers minted pack deny (got $expect_decision)"
+  fi
+  minted_reset_hard_deny_ok "$stdout_file"
 }
 
 expect_robot_deny() {
@@ -681,17 +701,7 @@ for _i in 1 2 3 4 5 6 7 8 9 10 11 12; do
   ac003s=$?
   set -e
   if [[ "$ac003s" -eq 0 ]]; then
-    if python3 - "$PROOF_ROOT/ac003-skew.out" "$CANONICAL" <<'PY'
-import json
-import sys
-text = open(sys.argv[1], encoding="utf-8").read().strip()
-if not text:
-    raise SystemExit(2)
-obj = json.loads(text)
-if obj.get("decision") != "deny" or obj.get("reason") != sys.argv[2]:
-    raise SystemExit(3)
-PY
-    then
+    if minted_reset_hard_deny_ok "$PROOF_ROOT/ac003-skew.out"; then
       if cli_invoked; then
         skew_warm=1
         break
@@ -802,17 +812,7 @@ for _i in 1 2 3 4 5 6 7 8 9 10 11 12; do
   ac003u=$?
   set -e
   if [[ "$ac003u" -eq 0 ]]; then
-    if python3 - "$PROOF_ROOT/ac003-unparseable.out" "$CANONICAL" <<'PY'
-import json
-import sys
-text = open(sys.argv[1], encoding="utf-8").read().strip()
-if not text:
-    raise SystemExit(2)
-obj = json.loads(text)
-if obj.get("decision") != "deny" or obj.get("reason") != sys.argv[2]:
-    raise SystemExit(3)
-PY
-    then
+    if minted_reset_hard_deny_ok "$PROOF_ROOT/ac003-unparseable.out"; then
       if cli_invoked; then
         unparseable_warm=1
         break
