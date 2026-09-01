@@ -1,4 +1,5 @@
 import Testing
+import RVDomain
 @testable import RVEngine
 
 @Test func normalize_stripsWrappersAndPath() {
@@ -77,6 +78,15 @@ import Testing
 @Test func normalize_concatenatesAdjacentQuotes() {
     #expect(Normalize.matchingView(of: "git reset --'hard'") == "git reset --hard")
     #expect(Normalize.matchingView(of: "git reset --\"hard\"") == "git reset --hard")
+}
+
+@Test func normalize_concatenatesGluedQuotedRmFlags() {
+    #expect(tokenizeCommand("rm -r'f' /").map(\.decoded) == ["rm", "-rf", "/"])
+    #expect(tokenizeCommand("rm -'r'f /").map(\.decoded) == ["rm", "-rf", "/"])
+    #expect(Normalize.matchingView(of: "rm -r'f' /") == "rm -rf /")
+    #expect(Normalize.matchingView(of: "rm -'r'f /") == "rm -rf /")
+    #expect(applyRoleAwareQuotes("rm -r'f' /") == "rm -rf /")
+    #expect(applyRoleAwareQuotes("rm -'r'f /") == "rm -rf /")
 }
 
 @Test func normalize_doesNotStripRedirectAsArgv0() {
@@ -158,4 +168,124 @@ import Testing
         #"python3 -c "print(1)""#,
         "git status",
     ])
+}
+
+@Test func evaluate_gluedQuotedRmFlags_denyAsRmRf() throws {
+    for command in ["rm -r'f' /", "rm -'r'f /"] {
+        let result = try evaluateNormalized(command)
+        guard case .deny(let deny) = result.decision else {
+            Issue.record("\(command) must deny, got \(result.decision)")
+            continue
+        }
+        #expect(deny.ruleID.rawValue == "core.filesystem:rm-rf-root-home")
+        #expect(result.matchingView == "rm -rf /")
+    }
+}
+
+@Test func normalize_tokenizerKeepsDollarOnAnsiCQuotes() {
+    let tokens = tokenizeCommand("rm $'-rf' /")
+    #expect(tokens.map(\.decoded) == ["rm", "$-rf", "/"])
+    #expect(tokens.map(\.wasQuoted) == [false, true, false])
+    #expect(tokens[1].wasAnsiC)
+
+    let payload = tokenizeCommand("bash -c $'git reset --hard'")
+    #expect(payload.map(\.decoded) == ["bash", "-c", "$git reset --hard"])
+    #expect(payload[2].wasQuoted)
+    #expect(payload[2].wasAnsiC)
+    #expect(payload[2].decoded.contains("$"))
+}
+
+@Test func normalize_optionPositionAnsiC_decodesFlags() {
+    #expect(Normalize.matchingView(of: "rm $'-rf' /") == "rm -rf /")
+    #expect(Normalize.matchingView(of: #"rm $'\x2d\x72\x66' /"#) == "rm -rf /")
+    #expect(Normalize.matchingView(of: #"rm $'-\x72\x66' /"#) == "rm -rf /")
+    #expect(applyRoleAwareQuotes("rm $'-rf' /") == "rm -rf /")
+    #expect(applyRoleAwareQuotes(#"rm $'\x2d\x72\x66' /"#) == "rm -rf /")
+}
+
+@Test func normalize_wholeCommandAnsiC_decodesRmRf() {
+    #expect(Normalize.matchingView(of: #"$'\x72m -rf /'"#) == "rm -rf /")
+}
+
+@Test func normalize_dataRoleAnsiC_staysMasked() {
+    let echoed = Normalize.matchingView(of: "echo $'git reset --hard'")
+    #expect(!echoed.rawValue.contains("reset"))
+    let printed = Normalize.matchingView(of: "printf $'git reset --hard'")
+    #expect(!printed.rawValue.contains("reset"))
+    let commit = Normalize.matchingView(of: "git commit -m $'git reset --hard'")
+    #expect(!commit.rawValue.contains("reset"))
+    let search = Normalize.matchingView(of: "rg -e $'git reset --hard'")
+    #expect(!search.rawValue.contains("reset"))
+}
+
+@Test func normalize_bashDashCAnsiC_staysUnwrapLimited() {
+    let view = Normalize.matchingView(of: "bash -c $'git reset --hard'")
+    #expect(view.rawValue.contains("bash"))
+    #expect(view.rawValue.contains("$"))
+    let outcome = unwrapCommand(ShellCommand(rawValue: "bash -c $'git reset --hard'"))
+    guard case .limited = outcome else {
+        Issue.record("ANSI-C -c payload must stay unwrapLimited, got \(outcome)")
+        return
+    }
+}
+
+@Test func evaluate_optionPositionAnsiCRmFlags_denyAsRmRf() throws {
+    for command in ["rm $'-rf' /", #"rm $'\x2d\x72\x66' /"#, #"rm $'-\x72\x66' /"#] {
+        let result = try evaluateNormalized(command)
+        guard case .deny(let deny) = result.decision else {
+            Issue.record("\(command) must deny, got \(result.decision)")
+            continue
+        }
+        #expect(deny.ruleID.rawValue == "core.filesystem:rm-rf-root-home")
+        #expect(result.matchingView == "rm -rf /")
+    }
+}
+
+@Test func evaluate_dataRoleAnsiCEcho_allows() throws {
+    let result = try evaluateNormalized("echo $'git reset --hard'")
+    #expect(result.decision == .allow)
+    #expect(!result.matchingView.rawValue.contains("reset"))
+}
+
+private func evaluateNormalized(_ command: String) throws -> EvaluationResult {
+    let packs = [
+        PackSnapshot(
+            id: .coreFilesystem,
+            name: "fs",
+            description: "fs",
+            keywords: ["rm"],
+            safe: [],
+            destructive: [
+                DestructiveRule(
+                    name: "rm-rf-root-home",
+                    pattern: #"rm\s+-rf\s+/"#,
+                    severity: .critical,
+                    reason: "EXTREMELY DANGEROUS"
+                ),
+            ]
+        ),
+        PackSnapshot(
+            id: .coreGit,
+            name: "git",
+            description: "git",
+            keywords: ["git"],
+            safe: [],
+            destructive: [
+                DestructiveRule(
+                    name: "reset-hard",
+                    pattern: #"git\s+reset\s+--hard"#,
+                    severity: .critical,
+                    reason: "destroys uncommitted changes"
+                ),
+            ]
+        ),
+    ]
+    let engine = ICUPatternEngine()
+    let compiled = try CompiledPacks<ICUCompiledPattern>.compile(packs: packs, using: engine)
+    return evaluate(
+        EvaluationRequest(command: ShellCommand(rawValue: command), enabledPacks: dayOnePackIDs),
+        packs: packs,
+        patterns: engine,
+        compiled: compiled
+    )
 }

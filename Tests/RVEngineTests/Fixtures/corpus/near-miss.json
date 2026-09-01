@@ -8,6 +8,11 @@
       "expected": "allow"
     },
     {
+      "id": "near.lift-014-echo-ansic-reset",
+      "command": "echo $'git reset --hard'",
+      "expected": "allow"
+    },
+    {
       "id": "near.rg-quoted-rm",
       "command": "rg -n \"rm -rf\" README.md",
       "expected": "allow"
