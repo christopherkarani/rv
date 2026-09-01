@@ -125,7 +125,7 @@ public enum PacksFacade {
     public static func makeCatalog(home: HomeDirectory) throws -> PackCatalog {
         let index = try PackRegistry.loadIndex()
         let enabled = Set(try effectiveIDs(home: home))
-        return try PackCatalog.bundlingAll(enabled: enabled, index: index)
+        return PackCatalog.bundlingAll(enabled: enabled, index: index)
     }
 
     private static func mutate(home: HomeDirectory, ids: [String], enabling: Bool) throws -> PacksMutationResult {

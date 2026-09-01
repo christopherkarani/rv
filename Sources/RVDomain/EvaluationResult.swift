@@ -265,6 +265,9 @@ public struct LiveEvaluation: Sendable, Equatable {
         )
     }
 
+    /// Codable / IPC projection. Never carries `bound`.
+    public var wire: EvaluationResult { result.wire }
+
     public init(
         outcome: EvaluationOutcome,
         matchingView: MatchingView,

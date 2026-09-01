@@ -54,6 +54,7 @@ struct EvaluationResultBoundReviewTests {
         )
         #expect(live?.bound == .mandatoryHuman(deny))
         #expect(live?.result.boundReview == .mandatoryHuman(deny))
+        #expect(live?.wire.boundReview == nil)
     }
 
     @Test func evaluationResult_wireDropsBound() throws {
@@ -64,10 +65,11 @@ struct EvaluationResultBoundReviewTests {
             boundReview: .mandatoryHuman(deny)
         )
         #expect(result.wire.boundReview == nil)
-        let decoded = try JSONDecoder().decode(
-            EvaluationResult.self,
-            from: try JSONEncoder().encode(result.wire)
-        )
+        let live = try #require(LiveEvaluation(result))
+        let data = try JSONEncoder().encode(live.wire)
+        let json = String(decoding: data, as: UTF8.self)
+        #expect(json.contains("boundReview") == false)
+        let decoded = try JSONDecoder().decode(EvaluationResult.self, from: data)
         #expect(decoded.boundReview == nil)
         #expect(LiveEvaluation(decoded) == nil)
     }

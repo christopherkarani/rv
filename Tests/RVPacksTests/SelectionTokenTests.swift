@@ -56,6 +56,6 @@ import RVDomain
     let index = try PackRegistry.loadIndex()
     #expect(index.packIDs.contains(.coreGit))
     #expect(index.packIDs.contains(.coreFilesystem))
-    let catalog = try PackCatalog.bundlingAll(enabled: [.coreGit], index: index)
+    let catalog = PackCatalog.bundlingAll(enabled: [.coreGit], index: index)
     #expect(catalog.enabledIDs.contains(.coreGit))
 }

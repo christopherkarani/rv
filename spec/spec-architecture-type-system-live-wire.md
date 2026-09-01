@@ -11,8 +11,6 @@ tags: [architecture, type-system, evaluation, packs]
 
 Encode two invariants the compiler does not currently prove: (1) the live hook door always has a `BoundReview`, while the IPC wire never does; (2) in-memory pack index membership is `PackID`, not `String`.
 
-HTML: `/var/folders/ns/xmz0zmpj7p148vdgr4bwzp8h0000gn/T/swift-type-system-review-rv-20260901-120000.html`
-
 Strong candidates executed: 01 (live/wire), 02 (pack index). Not executed: 03 HostID unify, 04 ProposedAction IR (blocked on OPE-156).
 
 ## 1. Purpose & Scope
@@ -59,7 +57,7 @@ public struct LiveEvaluation: Sendable, Equatable {
 // Wire remains EvaluationResult Codable without boundReview in CodingKeys.
 ```
 
-Conversion: `LiveEvaluation.wire` → `EvaluationResult` (bound omitted). In-process hook maps `EvaluationResult` with non-nil `boundReview` to `LiveEvaluation` without calling `hookBound`. Nil bind + allow still may call `hookBound` for uncovered pack-fallback Ask (REQ-103 uncovered).
+Conversion: `LiveEvaluation.wire` → `EvaluationResult` (bound omitted). `LiveEvaluation.result` keeps the in-process bind. In-process hook maps `EvaluationResult` with non-nil `boundReview` to `LiveEvaluation` without calling `hookBound`, and encodes from `live.wire` plus `bound: live.bound`. Nil bind + allow still may call `hookBound` for uncovered pack-fallback Ask (REQ-103 uncovered).
 
 ## 5. Acceptance Criteria
 

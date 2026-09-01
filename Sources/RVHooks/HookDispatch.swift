@@ -86,7 +86,7 @@ private func hookBody<C: HostCodec>(
         let result = await evaluate(request.command, request.cwd)
         if let live = LiveEvaluation(result) {
             return hookWire(
-                from: live.result,
+                from: live.wire,
                 command: request.command,
                 using: codec,
                 bound: live.bound,
