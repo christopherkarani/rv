@@ -2,7 +2,7 @@
 title: Mint allow-once on hook deny; TTY redeem is the daily unlock
 version: 1.0
 date_created: 2026-09-01
-last_updated: 2026-09-01
+last_updated: 2026-09-02
 owner: rv
 tags: [architecture, policy, hooks, allow-once, ux]
 ---
@@ -55,7 +55,7 @@ Audience: fresh-context implementer/reviewer subagents. Toolchain: swift-tools 6
 | Pending row | `AllowOnceRecord.kind == .pending`. Hook consume does not spend this. |
 | Granted row | After TTY `rv allow-once <code>`. Next matching apply may consume. |
 | Mint-on-deny | Hook apply stayed deny and the store wrote a pending row, returning the plaintext 6-hex code. |
-| Unlock line | `Run it in Terminal, or rv allow-once <code>.` When mint failed or was skipped: `Run it in Terminal, or rv allow-once.` |
+| Unlock line | With a code: `Paste in Terminal to allow once: rv allow-once <code>.` It sits after `RV · Blocked.` and before why so truncated host cards still show the paste. When mint failed or was skipped: `Run it in Terminal, or rv allow-once.` |
 | Daily unlock | Human TTY redeem of the code printed on the deny. Not the Mac extra. Not `mint` first. |
 | Spend-first | Pi, OpenCode. Pause on `decision: ask`; no code on that Ask. |
 
@@ -83,14 +83,14 @@ Audience: fresh-context implementer/reviewer subagents. Toolchain: swift-tools 6
 
 ## Deny copy
 
-- **REQ-201**: When a code was minted, first-call pack deny `next` is `Run it in Terminal, or rv allow-once <code>.` Code is the 6 lowercase hex characters from mint. No other punctuation inside the code.
-- **REQ-202**: The same unlock line is appended to the host-visible deny **reason** (after the existing `RV · Blocked. ` + why) so hosts that only surface `reason` still show the paste. Why (pack sentence 1 ± tip) stays the product-takes rules (stash tip, no boxes, no ANSI, no command echo of `git reset --hard`).
-- **REQ-203**: `shouldOmitDenySentence2` still omits pack sentence 2 if that sentence contains `allow-once` / `ALLOW-` / `redeem` / `RV_BYPASS`. The **unlock line is not sentence 2**. It is a separate suffix and is required when a code exists.
-- **REQ-204**: One line. No U+001B, no `═`, no `┌`, no newline in the full reason. If why + unlock suffix would contain those, keep why and put the unlock line only in `next`.
+- **REQ-201**: When a code was minted, first-call pack deny `next` is `Paste in Terminal to allow once: rv allow-once <code>.` Code is the 6 lowercase hex characters from mint. No other punctuation inside the code.
+- **REQ-202**: The same unlock line is inserted in the host-visible deny **reason** immediately after `RV · Blocked.` and **before** why, so hosts that truncate `reason` still show the paste. Why (pack sentence 1 ± tip) stays the product-takes rules (stash tip, no boxes, no ANSI, no command echo of `git reset --hard`).
+- **REQ-203**: `shouldOmitDenySentence2` still omits pack sentence 2 if that sentence contains `allow-once` / `ALLOW-` / `redeem` / `RV_BYPASS`. The **unlock line is not sentence 2**. It is a separate clause after the brand and is required when a code exists.
+- **REQ-204**: One line. No U+001B, no `═`, no `┌`, no newline in the full reason. If brand + unlock + why would contain those, keep why and put the unlock line only in `next`.
 - **REQ-205**: When mint was skipped or failed, `next` on first-call pack deny may stay nil (today) **or** use `hookUnlockNext` without a code. Do not invent a fake code. Canonical reset-hard why without a code remains `RV · Blocked. Destroys uncommitted changes. Use 'git stash' first.`
 - **REQ-206**: Ask JSON (`encodeAsk`) must not include a 6-hex code. `hostAskLine` is unchanged.
 - **REQ-207**: Post-spend deny (`afterSpend: true`) must not mint and must not print a new code.
-- **REQ-208**: Codex stderr honor reason and Cursor `user_message` / `agent_message` receive the same reason string as other hosts (why + unlock suffix when a code exists). Do not add extra JSON keys Codex/Cursor will drop or fail-open on.
+- **REQ-208**: Codex stderr honor reason and Cursor `user_message` / `agent_message` receive the same reason string as other hosts (brand + unlock + why when a code exists). Do not add extra JSON keys Codex/Cursor will drop or fail-open on.
 - **REQ-209**: `assertHookDenyHasNoBypassOrEssay` (and copies) must **stop** forbidding `allow-once` and `Terminal` on deny **when a code was minted**. They must still forbid `RV_BYPASS`, boxes, ANSI, newlines, and echoing the command `git reset --hard`. Add a dedicated assertion that a minted deny contains `rv allow-once ` followed by exactly six hex digits.
 
 ## CLI and docs
@@ -154,15 +154,15 @@ func hookWire<C: HostCodec>(
 
 `encodeDeny(..., next:)` on first-call unlockable pack deny:
 
-- `unlockCode == "a1b2c3"` → `next` = `Run it in Terminal, or rv allow-once a1b2c3.`
-- reason = `hostDenyLine` + `" " + unlockSuffix` when REQ-204 allows combining.
+- `unlockCode == "a1b2c3"` → `next` = `Paste in Terminal to allow once: rv allow-once a1b2c3.`
+- reason = `RV · Blocked. ` + unlock + `" "` + why when REQ-204 allows combining.
 
 Helper (name may vary):
 
 ```swift
 public func hookUnlockNext(code: String?) -> String {
     if let code, code.count == 6, code.allSatisfy(\.isHexDigit) {
-        return "Run it in Terminal, or rv allow-once \(code)."
+        return "Paste in Terminal to allow once: rv allow-once \(code)."
     }
     return hookUnlockNext
 }
@@ -190,9 +190,9 @@ Pass `code` into `hookWire`. Spend-first Ask branch must not call `mintFromDeny`
 ```json
 {
   "decision": "deny",
-  "reason": "RV · Blocked. Destroys uncommitted changes. Use 'git stash' first. Run it in Terminal, or rv allow-once a1b2c3.",
+  "reason": "RV · Blocked. Paste in Terminal to allow once: rv allow-once a1b2c3. Destroys uncommitted changes. Use 'git stash' first.",
   "rule": "core.git/reset-hard",
-  "next": "Run it in Terminal, or rv allow-once a1b2c3."
+  "next": "Paste in Terminal to allow once: rv allow-once a1b2c3."
 }
 ```
 
@@ -211,7 +211,7 @@ Ask JSON must not contain `a1b2c3` or `rv allow-once a1b2c3` as a minted code (t
 
 # 5. Acceptance Criteria
 
-- **AC-001**: Given unlockable `git reset --hard` with cwd `/tmp/ws` and an isolated store, when hook apply runs for Grok (or Pi) first-call **deny**, then the store has a `.pending` row for that matching view + cwd, stdout JSON `next` matches `Run it in Terminal, or rv allow-once [0-9a-f]{6}.`, and `decision` is `deny`.
+- **AC-001**: Given unlockable `git reset --hard` with cwd `/tmp/ws` and an isolated store, when hook apply runs for Grok (or Pi) first-call **deny**, then the store has a `.pending` row for that matching view + cwd, stdout JSON `next` matches `Paste in Terminal to allow once: rv allow-once [0-9a-f]{6}.`, `reason` starts with `RV · Blocked. Paste in Terminal to allow once:`, and `decision` is `deny`.
 - **AC-002**: Given that pending code, when `AllowOnceCLI.redeem` runs with an interactive TTYCapability, then the row is `.granted`. A following `PolicyGate.apply` allows once; a second apply denies.
 - **AC-003**: Given the same pending code, when redeem is invoked with `stdinIsTTY: false` or `robot: true`, then redeem throws `ttyRequired` / `robotRefused` and the row stays `.pending`. A following hook apply still denies.
 - **AC-004**: Given missing cwd on the hook JSON, when apply denies, then no pending row is written and JSON contains no six-hex `rv allow-once` code.

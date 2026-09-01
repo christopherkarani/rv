@@ -373,8 +373,8 @@ private final class EncodeDoorSpy: HostCodec, @unchecked Sendable {
     let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
     #expect(json["decision"] as? String == "deny")
     let reason = try #require(json["reason"] as? String)
-    #expect(reason == "\(resetHardHostDeny) Run it in Terminal, or rv allow-once a1b2c3.")
-    #expect(json["next"] as? String == "Run it in Terminal, or rv allow-once a1b2c3.")
+    #expect(reason == mintedResetHardHostDeny("a1b2c3"))
+    #expect(json["next"] as? String == hookUnlockNext(code: "a1b2c3"))
     #expect(json["rule"] as? String == "core.git/reset-hard")
     _ = try assertMintedHookUnlock(reason)
 }
@@ -397,7 +397,7 @@ private final class EncodeDoorSpy: HostCodec, @unchecked Sendable {
     )
     let command = ShellCommand(rawValue: "git reset --hard")
     let unlock = "a1b2c3"
-    let expected = "\(resetHardHostDeny) Run it in Terminal, or rv allow-once \(unlock)."
+    let expected = mintedResetHardHostDeny(unlock)
 
     let claude = hookWire(
         from: result,

@@ -420,11 +420,11 @@ private func grokDenyJSON(_ stdout: String) throws -> [String: Any] {
 private func assertGrokMintedResetHard(_ json: [String: Any]) throws {
     #expect(json["decision"] as? String == "deny")
     let reason = try #require(json["reason"] as? String)
-    #expect(reason.hasPrefix(canonicalResetHardDeny))
     let code = try #require(allowOnceUnlockCode(in: reason))
-    let unlock = "Run it in Terminal, or rv allow-once \(code)."
-    #expect(reason == "\(canonicalResetHardDeny) \(unlock)")
+    let unlock = hookUnlockNext(code: code)
+    #expect(reason == "RV · Blocked. \(unlock) Destroys uncommitted changes. Use 'git stash' first.")
     #expect(json["next"] as? String == unlock)
+    #expect(reason.hasPrefix("RV · Blocked. Paste in Terminal to allow once:"))
     #expect(json["rule"] as? String == "core.git/reset-hard")
     #expect(reason.contains("git reset --hard") == false)
 }

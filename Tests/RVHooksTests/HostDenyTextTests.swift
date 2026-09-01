@@ -19,9 +19,20 @@ func assertHookDenyHasNoBypassOrEssay(_ text: String?) {
     #expect(payload.contains("allow-once") == false)
 }
 
+func mintedResetHardHostDeny(_ code: String) -> String {
+    "RV · Blocked. \(hookUnlockNext(code: code)) Destroys uncommitted changes. Use 'git stash' first."
+}
+
 func assertMintedHookUnlock(_ text: String, why: String = resetHardHostDeny) throws -> String {
     let minted = try #require(allowOnceUnlockCode(in: text))
-    #expect(text.contains("\(why) Run it in Terminal, or rv allow-once \(minted)."))
+    #expect(text.contains("Paste in Terminal to allow once: rv allow-once \(minted)."))
+    #expect(text.hasPrefix("RV · Blocked."))
+    let whyRest = why.hasPrefix("RV · Blocked. ")
+        ? String(why.dropFirst("RV · Blocked. ".count))
+        : why
+    if whyRest.isEmpty == false {
+        #expect(text.contains(whyRest))
+    }
     #expect(text.contains("git reset --hard") == false)
     #expect(text.contains("RV_" + "BYPASS") == false)
     #expect(text.contains("\u{001B}") == false)
@@ -209,7 +220,7 @@ func assertMintedHookUnlock(_ text: String, why: String = resetHardHostDeny) thr
     #expect(hookUnlockNext(code: nil) == hookUnlockNext)
     #expect(hookUnlockNext(code: "abc") == hookUnlockNext)
     #expect(hookUnlockNext(code: "ABCDEF") == hookUnlockNext)
-    #expect(hookUnlockNext(code: "a1b2c3") == "Run it in Terminal, or rv allow-once a1b2c3.")
+    #expect(hookUnlockNext(code: "a1b2c3") == "Paste in Terminal to allow once: rv allow-once a1b2c3.")
     #expect(allowOnceUnlockCode(in: hookUnlockNext) == nil)
     #expect(allowOnceUnlockCode(in: hookUnlockNext(code: "a1b2c3")) == "a1b2c3")
 }
@@ -219,7 +230,7 @@ func assertMintedHookUnlock(_ text: String, why: String = resetHardHostDeny) thr
     let reason = "git reset --hard destroys uncommitted changes. Use 'git stash' first."
     #expect(hostDenyLine(command: command, reason: reason) == resetHardHostDeny)
     let minted = hostDenyLine(command: command, reason: reason, unlockCode: "a1b2c3")
-    #expect(minted == "\(resetHardHostDeny) Run it in Terminal, or rv allow-once a1b2c3.")
+    #expect(minted == mintedResetHardHostDeny("a1b2c3"))
     #expect(minted.contains("\n") == false)
     _ = try assertMintedHookUnlock(minted)
 }

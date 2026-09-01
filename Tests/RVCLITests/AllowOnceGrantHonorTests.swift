@@ -139,7 +139,7 @@ struct AllowOnceGrantHonorTests {
         #expect(json["decision"] as? String == "deny")
         let reason = try #require(json["reason"] as? String)
         let code = try #require(allowOnceUnlockCode(in: reason))
-        #expect(json["next"] as? String == "Run it in Terminal, or rv allow-once \(code).")
+        #expect(json["next"] as? String == hookUnlockNext(code: code))
         let store = AllowOnceStore(baseDirectory: directory)
         #expect((await store.list(now: now)).contains { $0.kind == .pending })
 

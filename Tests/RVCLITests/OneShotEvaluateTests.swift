@@ -242,7 +242,10 @@ struct OneShotEvaluateClientTests {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let stderr = outcome.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
         let code = try #require(allowOnceUnlockCode(in: stderr))
-        let expected = "\(why) Run it in Terminal, or rv allow-once \(code)."
+        let whyRest = why.hasPrefix("RV · Blocked. ")
+            ? String(why.dropFirst("RV · Blocked. ".count))
+            : why
+        let expected = "RV · Blocked. \(hookUnlockNext(code: code)) \(whyRest)"
         #expect(outcome.exitCode == 2)
         #expect(outcome.stdout.contains("\"decision\":\"block\""))
         #expect(stderr == expected)

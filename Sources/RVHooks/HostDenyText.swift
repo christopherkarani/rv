@@ -12,9 +12,10 @@ public func isAllowOnceUnlockCode(_ code: String) -> Bool {
 }
 
 /// Unlock line with a minted code, or the no-code `hookUnlockNext` constant.
+/// Code goes first so truncated host cards still show the paste.
 public func hookUnlockNext(code: String?) -> String {
     if let code, isAllowOnceUnlockCode(code) {
-        return "Run it in Terminal, or rv allow-once \(code)."
+        return "Paste in Terminal to allow once: rv allow-once \(code)."
     }
     return hookUnlockNext
 }
@@ -154,18 +155,14 @@ private func shouldOmitDenySentence2(_ sentence2: String, sentence1: String) -> 
 
 public func hostDenyLine(command: ShellCommand, reason: String, unlockCode: String? = nil) -> String {
     let why = hostDenyWhy(reason, command: command)
-    let line: String
-    if why.isEmpty {
-        line = "RV · Blocked."
-    } else {
-        line = "RV · Blocked. \(why)"
+    let blocked = "RV · Blocked."
+    let withoutCode = why.isEmpty ? blocked : "\(blocked) \(why)"
+    guard let unlock = mintedUnlockNext(unlockCode) else {
+        return withoutCode
     }
-    guard let suffix = mintedUnlockNext(unlockCode) else {
-        return line
-    }
-    let combined = "\(line) \(suffix)"
+    let combined = why.isEmpty ? "\(blocked) \(unlock)" : "\(blocked) \(unlock) \(why)"
     if combined.contains("\u{001B}") || combined.contains("═") || combined.contains("┌") || combined.contains("\n") {
-        return line
+        return withoutCode
     }
     return combined
 }
