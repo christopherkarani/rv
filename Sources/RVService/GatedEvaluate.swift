@@ -241,6 +241,24 @@ public struct GatedEvaluate: Sendable {
         )
     }
 
+    /// After apply stayed deny. Not peek. Not Ask. Nil when the deny is not unlockable.
+    public static func mintUnlockCode(
+        for result: EvaluationResult,
+        cwd: WorkingDirectory?,
+        store: AllowOnceStore,
+        now: Date
+    ) async -> String? {
+        guard case .deny(let deny) = result.decision else { return nil }
+        guard RulePinning.blocksAllowOverride(result) == false else { return nil }
+        guard let cwd else { return nil }
+        return await store.mintFromDeny(
+            matchingView: result.matchingView,
+            cwd: cwd,
+            ruleID: deny.ruleID,
+            now: now
+        )
+    }
+
     private func wrapperProbe(
         command: ShellCommand,
         cwd: WorkingDirectory?,

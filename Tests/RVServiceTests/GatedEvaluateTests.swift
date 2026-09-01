@@ -190,6 +190,108 @@ struct GatedEvaluateTests {
             return
         }
     }
+
+    @Test func mintUnlockCode_afterApplyDenyWritesPending() async throws {
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let gated = GatedEvaluate()
+        let applied = await gated.apply(
+            resetHardRequest(),
+            cwd: wd("/tmp/ws"),
+            store: store,
+            now: now,
+            allowlist: { .empty }
+        )
+        guard case .deny(let deny) = applied.decision else {
+            Issue.record("apply without grant must deny")
+            return
+        }
+        #expect(deny.ruleID.rawValue == "core.git:reset-hard")
+        let code = try #require(
+            await GatedEvaluate.mintUnlockCode(
+                for: applied,
+                cwd: wd("/tmp/ws"),
+                store: store,
+                now: now
+            )
+        )
+        #expect(code.count == 6)
+        let rows = await store.list(now: now)
+        #expect(rows.contains { $0.kind == .pending && $0.cwd == wd("/tmp/ws") })
+    }
+
+    @Test func mintUnlockCode_skipsMissingCwdAndPeek() async throws {
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let gated = GatedEvaluate()
+        let peeked = await gated.peek(
+            resetHardRequest(),
+            cwd: wd("/tmp/ws"),
+            store: store,
+            now: now,
+            allowlist: { .empty }
+        )
+        guard case .deny = peeked.decision else {
+            Issue.record("peek without grant must deny")
+            return
+        }
+        #expect((await store.list(now: now)).isEmpty)
+        let applied = await gated.apply(
+            resetHardRequest(),
+            cwd: nil,
+            store: store,
+            now: now,
+            allowlist: { .empty }
+        )
+        let missing = await GatedEvaluate.mintUnlockCode(
+            for: applied,
+            cwd: nil,
+            store: store,
+            now: now
+        )
+        #expect(missing == nil)
+        #expect((await store.list(now: now)).isEmpty)
+    }
+
+    @Test func mintUnlockCode_skipsPinnedDenies() async throws {
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let secrets = EvaluationResult(
+            outcome: .deny(
+                Deny(
+                    ruleID: RuleID(pack: .coreSecrets, pattern: "id-rsa"),
+                    reason: "secret path"
+                ),
+                matched: nil
+            ),
+            matchingView: "cat ~/.ssh/id_rsa"
+        )
+        let secretCode = await GatedEvaluate.mintUnlockCode(
+            for: secrets,
+            cwd: wd("/tmp/ws"),
+            store: store,
+            now: now
+        )
+        #expect(secretCode == nil)
+        let pin = EvaluationResult(
+            outcome: .deny(
+                Deny(
+                    ruleID: ActionPolicyEngine.Builtin.workingTreeDiscard.ruleID,
+                    reason: "Discarding working-tree files is a built-in hard deny."
+                ),
+                matched: nil
+            ),
+            matchingView: "git checkout -- file.swift"
+        )
+        let pinCode = await GatedEvaluate.mintUnlockCode(
+            for: pin,
+            cwd: wd("/tmp/ws"),
+            store: store,
+            now: now
+        )
+        #expect(pinCode == nil)
+        #expect((await store.list(now: now)).isEmpty)
+    }
 }
 
 private func resetHardRequest() -> EvaluationRequest {

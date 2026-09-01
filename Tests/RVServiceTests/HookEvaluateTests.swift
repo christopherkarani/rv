@@ -31,8 +31,7 @@ struct HookEvaluateTests {
         #expect(reply.serviceSemver == ProtocolVersion.serviceSemver)
         #expect(reply.exitCode == 0)
         let json = try grokDenyJSON(reply.stdout)
-        #expect(json["decision"] as? String == "deny")
-        #expect(json["reason"] as? String == canonicalResetHardDeny)
+        try assertGrokMintedResetHard(json)
     }
 
     @Test func implicitHello_claudeResetHardReturnsRichDenyWire() async throws {
@@ -141,8 +140,7 @@ struct HookEvaluateTests {
         }
         #expect(reply.exitCode == 0)
         let json = try grokDenyJSON(reply.stdout)
-        #expect(json["decision"] as? String == "deny")
-        #expect(json["reason"] as? String == canonicalResetHardDeny)
+        try assertGrokMintedResetHard(json)
     }
 
     @Test func emptyStdinOverlay_overridesJSONStdin() async throws {
@@ -417,6 +415,18 @@ private func claudeFixture(_ name: String) throws -> String {
 private func grokDenyJSON(_ stdout: String) throws -> [String: Any] {
     let object = try JSONSerialization.jsonObject(with: Data(stdout.utf8))
     return try #require(object as? [String: Any])
+}
+
+private func assertGrokMintedResetHard(_ json: [String: Any]) throws {
+    #expect(json["decision"] as? String == "deny")
+    let reason = try #require(json["reason"] as? String)
+    #expect(reason.hasPrefix(canonicalResetHardDeny))
+    let code = try #require(allowOnceUnlockCode(in: reason))
+    let unlock = "Run it in Terminal, or rv allow-once \(code)."
+    #expect(reason == "\(canonicalResetHardDeny) \(unlock)")
+    #expect(json["next"] as? String == unlock)
+    #expect(json["rule"] as? String == "core.git/reset-hard")
+    #expect(reason.contains("git reset --hard") == false)
 }
 
 private func hookEvaluateBody(

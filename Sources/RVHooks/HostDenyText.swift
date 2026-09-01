@@ -3,6 +3,36 @@ import RVDomain
 /// Unlock next-step on hook voice. TTY deny next-action keeps its own casing.
 public let hookUnlockNext = "Run it in Terminal, or rv allow-once."
 
+/// Six lowercase hex characters minted for TTY redeem.
+public func isAllowOnceUnlockCode(_ code: String) -> Bool {
+    guard code.count == 6 else { return false }
+    return code.unicodeScalars.allSatisfy { scalar in
+        (scalar >= "0" && scalar <= "9") || (scalar >= "a" && scalar <= "f")
+    }
+}
+
+/// Unlock line with a minted code, or the no-code `hookUnlockNext` constant.
+public func hookUnlockNext(code: String?) -> String {
+    if let code, isAllowOnceUnlockCode(code) {
+        return "Run it in Terminal, or rv allow-once \(code)."
+    }
+    return hookUnlockNext
+}
+
+/// First `rv allow-once <6hex>` in `text`, if present.
+public func allowOnceUnlockCode(in text: String) -> String? {
+    let marker = "rv allow-once "
+    guard let range = text.range(of: marker) else { return nil }
+    let code = String(text[range.upperBound...].prefix(6))
+    guard isAllowOnceUnlockCode(code) else { return nil }
+    return code
+}
+
+func mintedUnlockNext(_ code: String?) -> String? {
+    guard let code, isAllowOnceUnlockCode(code) else { return nil }
+    return hookUnlockNext(code: code)
+}
+
 /// Hook-voice deny sentence for a payload addressed to this host that could not
 /// be decoded. Fail-closed twin of `incompleteEvalSentence`.
 public func malformedHookSentence(_ malformation: HookMalformation) -> String {
@@ -122,12 +152,22 @@ private func shouldOmitDenySentence2(_ sentence2: String, sentence1: String) -> 
     return false
 }
 
-public func hostDenyLine(command: ShellCommand, reason: String) -> String {
+public func hostDenyLine(command: ShellCommand, reason: String, unlockCode: String? = nil) -> String {
     let why = hostDenyWhy(reason, command: command)
+    let line: String
     if why.isEmpty {
-        return "RV · Blocked."
+        line = "RV · Blocked."
+    } else {
+        line = "RV · Blocked. \(why)"
     }
-    return "RV · Blocked. \(why)"
+    guard let suffix = mintedUnlockNext(unlockCode) else {
+        return line
+    }
+    let combined = "\(line) \(suffix)"
+    if combined.contains("\u{001B}") || combined.contains("═") || combined.contains("┌") || combined.contains("\n") {
+        return line
+    }
+    return combined
 }
 
 public func hostDenyText(from result: EvaluationResult, command: ShellCommand) -> String? {

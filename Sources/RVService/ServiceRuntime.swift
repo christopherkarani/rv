@@ -261,6 +261,14 @@ public actor ServiceRuntime {
                 },
                 spendHostAsk: { command, cwd in
                     await self.runSpendHostAsk(command: command, cwd: cwd)
+                },
+                mintOnDeny: { result, cwd in
+                    await GatedEvaluate.mintUnlockCode(
+                        for: result,
+                        cwd: cwd,
+                        store: self.allowOnce,
+                        now: self.clock()
+                    )
                 }
             )
             return .hookEvaluate(reply)

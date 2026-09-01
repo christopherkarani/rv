@@ -125,6 +125,29 @@ private func runHook(
     #expect(text.components(separatedBy: "RV · Blocked").count == 2)
 }
 
+@Test func hookRun_grokDenyThroughClientMintsCode() async throws {
+    let directory = try isolatedAllowOnceDirectory()
+    let now = Date(timeIntervalSince1970: 1_700_000_000)
+    let client = ServiceClient(
+        transport: nil,
+        allowOnceDirectory: directory,
+        home: try isolatedHome(),
+        clock: { now }
+    )
+    var hook = Hook()
+    hook.host = .grok
+    let outcome = await hook.run(
+        stdin: try grokFixture("deny-git-reset-hard.json"),
+        client: client
+    )
+    let json = try denyJSON(outcome.stdout)
+    #expect(json["decision"] as? String == "deny")
+    let reason = try #require(json["reason"] as? String)
+    let code = try #require(allowOnceUnlockCode(in: reason))
+    #expect(json["next"] as? String == "Run it in Terminal, or rv allow-once \(code).")
+    #expect(outcome.exitCode == 0)
+}
+
 @Test func hookStashDrop_isEmptyAllow() async throws {
     let expected = try grokExpected("allow-medium-stash-drop")
     let wire = try await runHook(stdin: try grokFixture("allow-medium-stash-drop.json"))

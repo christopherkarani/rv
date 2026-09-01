@@ -17,6 +17,7 @@ enum HelpCatalog {
         case .setup: setup
         case .uninstall: uninstall
         case .doctor: doctor
+        case .allowOnce: allowOnce
         }
     }
 
@@ -35,6 +36,7 @@ enum HelpCatalog {
             ),
             HelpSection(heading: "Everyday", rows: [
                 HelpRow(name: "explain", description: "Why something was allowed or blocked"),
+                HelpRow(name: "allow-once", description: "Redeem the six-character code from a hook deny"),
                 HelpRow(name: "service", description: "Is rvd running, down, or skewed"),
             ]),
             HelpSection(heading: "Advanced", rows: [
@@ -218,6 +220,33 @@ enum HelpCatalog {
         examples: [
             "rv doctor",
             "rv doctor --json",
+        ]
+    )
+
+    static let allowOnce = HelpViewModel(
+        title: "",
+        blurb: "",
+        sections: [
+            HelpSection(heading: "Usage", rows: [
+                HelpRow(name: "rv allow-once <code>"),
+                HelpRow(name: "rv allow-once mint -- <command>"),
+                HelpRow(name: "rv allow-once list"),
+                HelpRow(name: "rv allow-once clear"),
+            ]),
+            HelpSection(heading: "Notes", rows: [
+                HelpRow(
+                    name: "redeem",
+                    description: "Paste the six-character code from a hook deny on a TTY"
+                ),
+                HelpRow(
+                    name: "mint",
+                    description: "Optional pre-arm; daily unlock is the code already on the deny"
+                ),
+            ]),
+        ],
+        examples: [
+            "rv allow-once a1b2c3",
+            "rv allow-once mint -- git reset --hard",
         ]
     )
 }

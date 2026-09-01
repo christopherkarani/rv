@@ -38,7 +38,7 @@ curl -fsSL https://rykanv.com/install | sh
 | Destructive git | `reset --hard`, `checkout --`, `clean -fd`, `push --force`, `stash clear` |
 | Destructive fs | `rm -rf`, `find -delete`, and similar |
 | Secret paths | `.env`, SSH keys, and other known credential files |
-| Allow once | `rv allow-once` unlocks the next matching call in this working directory |
+| Allow once | Redeem the code from a block; the next matching call in this working directory runs once |
 | Explain | `rv explain` shows which pack would fire |
 | Hosts | Grok, Pi, OpenCode, Claude, OpenClaw, Hermes, Codex, Cursor — wired by `rv setup` |
 | Platform | macOS 26, Apple Silicon |
@@ -64,7 +64,7 @@ rv setup                         # wire hosts
 rv scn                           # scan repo for destructive actions in the past
 rv test 'git reset --hard'       # evaluate, do not run
 rv explain 'git reset --hard'    # which pack would fire
-rv allow-once 'git reset --hard' # next matching call in this cwd
+rv allow-once a1b2c3             # redeem the code from a hook deny
 rv packs                         # catalog
 rv packs enable <pack>           # Enable a pack
 rv doctor                        # health

@@ -3,6 +3,7 @@ import Testing
 import RVDomain
 import RVHooks
 import RVIPC
+import RVPolicy
 @testable import RVCLI
 
 struct AllowOnceGrantHonorTests {
@@ -119,5 +120,73 @@ struct AllowOnceGrantHonorTests {
             cwd: wd("/tmp/ws")
         )
         #expect(honored.decision == .allow)
+    }
+
+    @Test func grokHookEvaluateMintsPendingThenTTYRedeemSpendsOnce() async throws {
+        let directory = try isolatedAllowOnceDirectory()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let client = ServiceClient(
+            transport: nil,
+            allowOnceDirectory: directory,
+            home: try isolatedHome(),
+            clock: { now }
+        )
+        let stdin = """
+        {"hookEventName":"pre_tool_use","cwd":"/tmp/ws","toolName":"run_terminal_command","toolInput":{"command":"git reset --hard"}}
+        """
+        let wire = await client.hookEvaluate(host: .grok, stdin: stdin)
+        let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
+        #expect(json["decision"] as? String == "deny")
+        let reason = try #require(json["reason"] as? String)
+        let code = try #require(allowOnceUnlockCode(in: reason))
+        #expect(json["next"] as? String == "Run it in Terminal, or rv allow-once \(code).")
+        let store = AllowOnceStore(baseDirectory: directory)
+        #expect((await store.list(now: now)).contains { $0.kind == .pending })
+
+        let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+        _ = try await store.redeem(code: code, tty: tty, now: now)
+        let first = await client.evaluateResult(
+            command: ShellCommand(rawValue: "git reset --hard"),
+            cwd: wd("/tmp/ws")
+        )
+        #expect(first.decision == .allow)
+        let second = await client.evaluateResult(
+            command: ShellCommand(rawValue: "git reset --hard"),
+            cwd: wd("/tmp/ws")
+        )
+        guard case .deny = second.decision else {
+            Issue.record("second apply after consume must deny")
+            return
+        }
+    }
+
+    @Test func grokHookEvaluateMissingCwdDoesNotMint() async throws {
+        let directory = try isolatedAllowOnceDirectory()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let client = ServiceClient(
+            transport: nil,
+            allowOnceDirectory: directory,
+            home: try isolatedHome(),
+            clock: { now }
+        )
+        let stdin = """
+        {"hookEventName":"pre_tool_use","toolName":"run_terminal_command","toolInput":{"command":"git reset --hard"}}
+        """
+        let wire = await client.hookEvaluate(host: .grok, stdin: stdin)
+        let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
+        #expect(json["decision"] as? String == "deny")
+        #expect(allowOnceUnlockCode(in: wire.stdout) == nil)
+        #expect(json["next"] == nil)
+        #expect((await AllowOnceStore(baseDirectory: directory).list(now: now)).isEmpty)
+    }
+
+    @Test func peekDoesNotMintPending() async throws {
+        let directory = try isolatedAllowOnceDirectory()
+        let peeked = try await cliEvaluate("git reset --hard", allowOnceDirectory: directory)
+        guard case .deny = peeked.decision else {
+            Issue.record("peek without grant must deny")
+            return
+        }
+        #expect((await AllowOnceStore(baseDirectory: directory).list(now: Date())).isEmpty)
     }
 }

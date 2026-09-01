@@ -15,6 +15,17 @@ func assertHookDenyHasNoBypassOrEssay(_ text: String?) {
     #expect(payload.contains("reset --soft") == false)
 }
 
+func assertMintedHookUnlock(_ text: String, why: String = resetHardHostDeny) throws -> String {
+    let minted = try #require(allowOnceUnlockCode(in: text))
+    #expect(text.contains("\(why) Run it in Terminal, or rv allow-once \(minted)."))
+    #expect(text.contains("git reset --hard") == false)
+    #expect(text.contains("RV_" + "BYPASS") == false)
+    #expect(text.contains("\u{001B}") == false)
+    #expect(text.contains("═") == false)
+    #expect(text.contains("┌") == false)
+    return minted
+}
+
 @Test func hostDenyText_nilOnAllowIncludingMedium() {
     let allow = EvaluationResult(outcome: .plain)
     #expect(hostDenyText(from: allow, command: ShellCommand(rawValue: "git status")) == nil)
@@ -188,6 +199,25 @@ func assertHookDenyHasNoBypassOrEssay(_ text: String?) {
 @Test func hookDenyCommandPreview_shortCommandUnchanged() {
     #expect(hookDenyCommandPreview(resetHard) == "git reset --hard")
     #expect(hookDenyCommandPreview(ShellCommand(rawValue: "git reset --hard\n")) == "git reset --hard")
+}
+
+@Test func hookUnlockNext_codeAppendsSixHex() {
+    #expect(hookUnlockNext(code: nil) == hookUnlockNext)
+    #expect(hookUnlockNext(code: "abc") == hookUnlockNext)
+    #expect(hookUnlockNext(code: "ABCDEF") == hookUnlockNext)
+    #expect(hookUnlockNext(code: "a1b2c3") == "Run it in Terminal, or rv allow-once a1b2c3.")
+    #expect(allowOnceUnlockCode(in: hookUnlockNext) == nil)
+    #expect(allowOnceUnlockCode(in: hookUnlockNext(code: "a1b2c3")) == "a1b2c3")
+}
+
+@Test func hostDenyLine_appendsUnlockWhenCodeIsMinted() throws {
+    let command = resetHard
+    let reason = "git reset --hard destroys uncommitted changes. Use 'git stash' first."
+    #expect(hostDenyLine(command: command, reason: reason) == resetHardHostDeny)
+    let minted = hostDenyLine(command: command, reason: reason, unlockCode: "a1b2c3")
+    #expect(minted == "\(resetHardHostDeny) Run it in Terminal, or rv allow-once a1b2c3.")
+    #expect(minted.contains("\n") == false)
+    _ = try assertMintedHookUnlock(minted)
 }
 
 @Test func hookDenyCommandPreview_clipsOverlongFirstLine() {
