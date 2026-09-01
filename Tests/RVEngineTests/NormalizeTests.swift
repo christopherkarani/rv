@@ -113,17 +113,29 @@ import Testing
     #expect(view.rawValue.contains("git reset --hard"))
 }
 
-@Test func normalize_masksQuotedInterpreterHeredocBodyOnly() {
+@Test func normalize_doesNotMaskUnquotedTokenAfterInterpreterFlag() {
+    let view = Normalize.matchingView(of: "python3 -c git reset --hard")
+    #expect(view.rawValue.contains("git reset --hard"))
+}
+
+@Test func normalize_doesNotMaskQuotedInterpreterHeredocBody() {
     let quoted = Normalize.matchingView(
         of: "python3 <<'PY'\nprint('git reset --hard')\nPY"
     )
-    #expect(!quoted.rawValue.contains("reset"))
+    #expect(quoted.rawValue.contains("git reset --hard"))
     #expect(quoted.rawValue.contains("python3"))
 
     let after = Normalize.matchingView(
         of: "python3 <<'PY'\nprint(1)\nPY\ngit reset --hard"
     )
     #expect(after.rawValue.contains("git reset --hard"))
+}
+
+@Test func normalize_doesNotMaskNodeAttachedEval() {
+    let view = Normalize.matchingView(
+        of: #"node --eval=require('child_process').execSync('git reset --hard')"#
+    )
+    #expect(view.rawValue.contains("git reset --hard"))
 }
 
 @Test func normalize_doesNotMaskBashOrUnquotedInterpreterHeredoc() {

@@ -178,11 +178,6 @@
       "expected": "allow"
     },
     {
-      "id": "near.python-heredoc-mentions-reset",
-      "command": "python3 <<'PY'\nprint('git reset --hard')\nPY",
-      "expected": "allow"
-    },
-    {
       "id": "near.node-e-console-reset",
       "command": "node -e \"console.log('git reset --hard')\"",
       "expected": "allow"

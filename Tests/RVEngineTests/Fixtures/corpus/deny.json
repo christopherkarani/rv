@@ -624,6 +624,27 @@
       "expected": "deny",
       "rule_id": "core.git:reset-hard",
       "reason_contains": "destroys uncommitted changes"
+    },
+    {
+      "id": "deny.python-heredoc-os-system-reset",
+      "command": "python3 <<'PY'\nimport os\nos.system('git reset --hard')\nPY",
+      "expected": "deny",
+      "rule_id": "core.git:reset-hard",
+      "reason_contains": "destroys uncommitted changes"
+    },
+    {
+      "id": "deny.python-heredoc-print-reset",
+      "command": "python3 <<'PY'\nprint('git reset --hard')\nPY",
+      "expected": "deny",
+      "rule_id": "core.git:reset-hard",
+      "reason_contains": "destroys uncommitted changes"
+    },
+    {
+      "id": "deny.node-eval-attached-execsync-reset",
+      "command": "node --eval=require('child_process').execSync('git reset --hard')",
+      "expected": "deny",
+      "rule_id": "core.git:reset-hard",
+      "reason_contains": "destroys uncommitted changes"
     }
   ]
 }

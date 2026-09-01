@@ -132,36 +132,14 @@ func applyRoleAwareQuotes(_ text: String) -> String {
     var commandBase: String?
     var pendingDataFlag = false
     var wrapperSeek = WrapperSeek.none
-    var heredocTerminator: String?
-    var awaitingHeredocDelimiter = false
     var pendingInterpreterPayload = false
 
     for index in tokens.indices {
         let token = tokens[index]
         let decoded = token.decoded
 
-        if let terminator = heredocTerminator {
-            if decoded == terminator {
-                heredocTerminator = nil
-            } else {
-                tokens[index].decoded = " "
-            }
-            pendingDataFlag = false
-            pendingInterpreterPayload = false
-            continue
-        }
-
-        if awaitingHeredocDelimiter {
-            if token.wasQuoted {
-                heredocTerminator = decoded
-            }
-            awaitingHeredocDelimiter = false
-            pendingDataFlag = false
-            continue
-        }
-
         if pendingInterpreterPayload {
-            if containsInlineCode(token) == false {
+            if token.wasQuoted, containsInlineCode(token) == false {
                 tokens[index].decoded = " "
             }
             pendingInterpreterPayload = false
@@ -188,21 +166,13 @@ func applyRoleAwareQuotes(_ text: String) -> String {
         }
 
         if let commandBase, isInterpreterExecutable(commandBase) {
-            if let delimiter = attachedHeredocDelimiter(decoded) {
-                if token.wasQuoted {
-                    heredocTerminator = delimiter
-                }
-                continue
-            }
-            if decoded == "<<" || decoded == "<<-" {
-                awaitingHeredocDelimiter = true
-                continue
-            }
             if isInterpreterProgramFlag(command: commandBase, flag: decoded) {
                 pendingInterpreterPayload = true
                 continue
             }
-            if let masked = maskAttachedInterpreterProgram(command: commandBase, decoded: decoded) {
+            if let masked = maskAttachedInterpreterProgram(command: commandBase, decoded: decoded),
+               containsInlineCode(token) == false
+            {
                 tokens[index].decoded = masked
                 continue
             }
@@ -383,21 +353,7 @@ private func maskAttachedInterpreterProgram(command: String?, decoded: String) -
     if isRubyExecutable(folded), decoded.hasPrefix("-e"), decoded.count > 2, decoded.hasPrefix("--") == false {
         return "-e "
     }
-    if isNodeExecutable(folded) {
-        if decoded.hasPrefix("--eval=") { return "--eval=" }
-        if decoded.hasPrefix("--print=") { return "--print=" }
-    }
     return nil
-}
-
-private func attachedHeredocDelimiter(_ decoded: String) -> String? {
-    guard decoded.hasPrefix("<<") else { return nil }
-    var rest = decoded.dropFirst(2)
-    if rest.first == "-" {
-        rest = rest.dropFirst()
-    }
-    let name = String(rest)
-    return name.isEmpty ? nil : name
 }
 
 func firstWord(_ text: String) -> (word: String, rest: String) {

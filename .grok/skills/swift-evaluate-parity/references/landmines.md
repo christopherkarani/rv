@@ -44,10 +44,12 @@ Do not mask `` `…` `` or `$(…)`. Do not expand `$TMPDIR`.
 Redirect keywords (`>/`, `> /`, `>~`, …) must keep `core.filesystem` a
 candidate. `>/etc/passwd` is not an argv0 path — do not strip it as one.
 
-Quoted python/node/ruby `-c`/`-e` program text and quoted interpreter
-heredoc bodies are data. Do not mask `bash`/`sh`/`zsh` heredocs. Do not
-mask a payload that contains `$(` or backticks. Unquoted interpreter
-heredocs stay visible (fail-closed).
+Quoted python/node/ruby `-c`/`-e` program text (the token after the flag)
+is data. Do not mask interpreter heredocs — unwrap does not peel them, so
+`os.system('git reset --hard')` inside `python3 <<'PY'` must stay visible.
+Do not mask attached `node --eval=` / `--print=` (unwrap does not peel
+those). Do not mask `bash`/`sh`/`zsh` heredocs. Do not mask a payload that
+contains `$(` or backticks. Ruby attached `-e` is data because unwrap peels it.
 
 ## Quick-reject and per-pack safe
 
