@@ -645,6 +645,48 @@
       "expected": "deny",
       "rule_id": "core.git:reset-hard",
       "reason_contains": "destroys uncommitted changes"
+    },
+    {
+      "id": "deny.lift-014-glued-rm-rf",
+      "command": "rm -r'f' /",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.lift-014-glued-rm-r-f",
+      "command": "rm -'r'f /",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.lift-014-ansic-rm-rf",
+      "command": "rm $'-rf' /",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.lift-014-ansic-hex-rm-rf",
+      "command": "rm $'\\x2d\\x72\\x66' /",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.lift-014-ansic-hex-letters-rm-rf",
+      "command": "rm $'-\\x72\\x66' /",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.lift-014-ansic-whole-rm-rf",
+      "command": "$'\\x72m -rf /'",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home",
+      "reason_contains": "EXTREMELY DANGEROUS"
     }
   ]
 }

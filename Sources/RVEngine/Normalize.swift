@@ -35,6 +35,7 @@ public enum Normalize {
 struct CommandToken {
     var decoded: String
     var wasQuoted: Bool
+    var wasAnsiC: Bool = false
 }
 
 func tokenizeCommand(_ text: String) -> [CommandToken] {
@@ -53,6 +54,7 @@ func tokenizeCommand(_ text: String) -> [CommandToken] {
         let tokenStart = index
         var decoded = ""
         var wasQuoted = false
+        var wasAnsiC = false
 
         while index < utf8.endIndex, whitespaceLength(utf8, at: index) == 0 {
             let byte = utf8[index]
@@ -70,6 +72,25 @@ func tokenizeCommand(_ text: String) -> [CommandToken] {
                     utf8.formIndex(after: &index)
                 }
                 decoded.append(contentsOf: text[start..<index])
+                continue
+            }
+            if byte == UInt8(ascii: "$"),
+               utf8.index(after: index) < utf8.endIndex,
+               utf8[utf8.index(after: index)] == UInt8(ascii: "'")
+            {
+                wasQuoted = true
+                wasAnsiC = true
+                utf8.formIndex(after: &index)
+                utf8.formIndex(after: &index)
+                let innerStart = index
+                while index < utf8.endIndex, utf8[index] != UInt8(ascii: "'") {
+                    utf8.formIndex(after: &index)
+                }
+                decoded.append("$")
+                decoded.append(contentsOf: text[innerStart..<index])
+                if index < utf8.endIndex {
+                    utf8.formIndex(after: &index)
+                }
                 continue
             }
             if byte == UInt8(ascii: "`") {
@@ -107,10 +128,12 @@ func tokenizeCommand(_ text: String) -> [CommandToken] {
                     break
                 }
                 if current == UInt8(ascii: "$"),
-                   utf8.index(after: index) < utf8.endIndex,
-                   utf8[utf8.index(after: index)] == UInt8(ascii: "(")
+                   utf8.index(after: index) < utf8.endIndex
                 {
-                    break
+                    let next = utf8[utf8.index(after: index)]
+                    if next == UInt8(ascii: "(") || next == UInt8(ascii: "'") {
+                        break
+                    }
                 }
                 index = nextScalarIndex(utf8, index)
             }
@@ -120,7 +143,7 @@ func tokenizeCommand(_ text: String) -> [CommandToken] {
         }
 
         if index > tokenStart {
-            tokens.append(CommandToken(decoded: decoded, wasQuoted: wasQuoted))
+            tokens.append(CommandToken(decoded: decoded, wasQuoted: wasQuoted, wasAnsiC: wasAnsiC))
         }
     }
     return tokens
@@ -135,6 +158,17 @@ func applyRoleAwareQuotes(_ text: String) -> String {
     var pendingInterpreterPayload = false
 
     for index in tokens.indices {
+        if tokens[index].wasAnsiC,
+           let surfaced = surfacedAnsiC(
+               tokens[index],
+               commandBase: commandBase,
+               pendingDataFlag: pendingDataFlag,
+               pendingInterpreterPayload: pendingInterpreterPayload,
+               isOnlyToken: tokens.count == 1
+           )
+        {
+            tokens[index].decoded = surfaced
+        }
         let token = tokens[index]
         let decoded = token.decoded
 
@@ -267,6 +301,115 @@ private func isShellSeparator(_ token: String) -> Bool {
 
 private func containsInlineCode(_ token: CommandToken) -> Bool {
     token.decoded.contains("$(") || token.decoded.contains("`")
+}
+
+/// Matching-view surface for `$''` tokens. Tokenizer keeps `$` in `decoded` so
+/// unwrap of `bash -c $'…'` stays limited.
+private func surfacedAnsiC(
+    _ token: CommandToken,
+    commandBase: String?,
+    pendingDataFlag: Bool,
+    pendingInterpreterPayload: Bool,
+    isOnlyToken: Bool
+) -> String? {
+    guard token.wasAnsiC, let dollar = token.decoded.lastIndex(of: "$") else { return nil }
+    let prefix = String(token.decoded[..<dollar])
+    let inner = String(token.decoded[token.decoded.index(after: dollar)...])
+    let candidate = prefix + decodeAnsiCEscapes(inner)
+    if pendingInterpreterPayload { return nil }
+    if shouldMaskQuotedData(command: commandBase, pendingDataFlag: pendingDataFlag) {
+        return nil
+    }
+    if commandBase == nil {
+        if isOnlyToken { return candidate }
+        if candidate.contains(where: { $0.isWhitespace }) { return nil }
+        return candidate
+    }
+    if candidate.hasPrefix("-"), candidate.contains(where: { $0.isWhitespace }) == false {
+        return candidate
+    }
+    return nil
+}
+
+private func decodeAnsiCEscapes(_ inner: String) -> String {
+    var result = ""
+    var index = inner.startIndex
+    while index < inner.endIndex {
+        let character = inner[index]
+        if character != "\\" {
+            result.append(character)
+            index = inner.index(after: index)
+            continue
+        }
+        let next = inner.index(after: index)
+        guard next < inner.endIndex else {
+            result.append("\\")
+            break
+        }
+        let escape = inner[next]
+        switch escape {
+        case "a":
+            result.append("\u{7}")
+            index = inner.index(after: next)
+        case "b":
+            result.append("\u{8}")
+            index = inner.index(after: next)
+        case "e", "E":
+            result.append("\u{1B}")
+            index = inner.index(after: next)
+        case "f":
+            result.append("\u{C}")
+            index = inner.index(after: next)
+        case "n":
+            result.append("\n")
+            index = inner.index(after: next)
+        case "r":
+            result.append("\r")
+            index = inner.index(after: next)
+        case "t":
+            result.append("\t")
+            index = inner.index(after: next)
+        case "v":
+            result.append("\u{B}")
+            index = inner.index(after: next)
+        case "\\", "'", "\"", "?":
+            result.append(escape)
+            index = inner.index(after: next)
+        case "x":
+            var hex = ""
+            var cursor = inner.index(after: next)
+            while hex.count < 2, cursor < inner.endIndex, inner[cursor].isHexDigit {
+                hex.append(inner[cursor])
+                cursor = inner.index(after: cursor)
+            }
+            if hex.isEmpty {
+                result.append("x")
+                index = inner.index(after: next)
+            } else if let value = UInt32(hex, radix: 16), let scalar = Unicode.Scalar(value) {
+                result.append(Character(scalar))
+                index = cursor
+            } else {
+                index = cursor
+            }
+        case "0"..."7":
+            var octal = String(escape)
+            var cursor = inner.index(after: next)
+            while octal.count < 3, cursor < inner.endIndex {
+                let digit = inner[cursor]
+                guard digit >= "0", digit <= "7" else { break }
+                octal.append(digit)
+                cursor = inner.index(after: cursor)
+            }
+            if let value = UInt32(octal, radix: 8), let scalar = Unicode.Scalar(value) {
+                result.append(Character(scalar))
+            }
+            index = cursor
+        default:
+            result.append(escape)
+            index = inner.index(after: next)
+        }
+    }
+    return result
 }
 
 private func isAllArgsData(_ command: String?) -> Bool {
