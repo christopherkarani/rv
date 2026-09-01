@@ -33,10 +33,7 @@ public struct PackCatalog: Sendable, Equatable {
     public static func bundlingAll(enabled: Set<PackID>, index: PackIndex) throws -> PackCatalog {
         var records: [PackEnablement] = []
         records.reserveCapacity(index.packIDs.count)
-        for raw in index.packIDs {
-            guard let id = PackID(validating: raw) else {
-                throw PackLoadError.invalidPackID(raw)
-            }
+        for id in index.packIDs {
             records.append(PackEnablement(id: id, enabled: enabled.contains(id), bundled: true))
         }
         return PackCatalog(records: records)

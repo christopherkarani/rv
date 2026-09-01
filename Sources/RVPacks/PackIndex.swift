@@ -1,17 +1,18 @@
 import Foundation
+import RVDomain
 
 public struct PackIndex: Equatable, Sendable {
     public var pinVersion: String
     public var pinTag: String
     public var pinCommit: String
     public var packCount: Int
-    public var defaultEnabled: [String]
-    public var categories: [String: [String]]
-    public var presets: [String: [String]]
+    public var defaultEnabled: [PackID]
+    public var categories: [String: [PackID]]
+    public var presets: [String: [PackID]]
     public var tiers: [String: Int]
 
-    public var packIDs: [String] {
-        categories.values.flatMap { $0 }.sorted()
+    public var packIDs: [PackID] {
+        categories.values.flatMap { $0 }.sorted { $0.rawValue < $1.rawValue }
     }
 }
 
@@ -51,11 +52,29 @@ public enum PackIndexJSON {
             pinTag: file.pinTag,
             pinCommit: file.pinCommit,
             packCount: file.packCount,
-            defaultEnabled: file.defaultEnabled,
-            categories: file.categories,
-            presets: file.presets,
+            defaultEnabled: try packIDs(file.defaultEnabled),
+            categories: try packMap(file.categories),
+            presets: try packMap(file.presets),
             tiers: file.tiers
         )
+    }
+
+    private static func packIDs(_ raw: [String]) throws -> [PackID] {
+        try raw.map { token in
+            guard let id = PackID(validating: token) else {
+                throw PackLoadError.invalidPackID(token)
+            }
+            return id
+        }
+    }
+
+    private static func packMap(_ raw: [String: [String]]) throws -> [String: [PackID]] {
+        var mapped: [String: [PackID]] = [:]
+        mapped.reserveCapacity(raw.count)
+        for (key, values) in raw {
+            mapped[key] = try packIDs(values)
+        }
+        return mapped
     }
 
     private static func validatePackReferences(_ file: PackIndexFile) throws {

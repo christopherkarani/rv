@@ -41,4 +41,34 @@ struct EvaluationResultBoundReviewTests {
         #expect(decoded.decision == .deny(deny))
         #expect(decoded.matchingView == MatchingView("git push --force origin feature"))
     }
+
+    @Test func liveEvaluation_requiresBound() {
+        #expect(LiveEvaluation(EvaluationResult(outcome: .plain)) == nil)
+        let live = LiveEvaluation(
+            EvaluationResult(
+                outcome: .deny(deny, matched: nil),
+                matchingView: MatchingView("git push --force origin feature"),
+                analysis: .unknown,
+                boundReview: .mandatoryHuman(deny)
+            )
+        )
+        #expect(live?.bound == .mandatoryHuman(deny))
+        #expect(live?.result.boundReview == .mandatoryHuman(deny))
+    }
+
+    @Test func evaluationResult_wireDropsBound() throws {
+        let result = EvaluationResult(
+            outcome: .deny(deny, matched: nil),
+            matchingView: MatchingView("git push --force origin feature"),
+            analysis: .unknown,
+            boundReview: .mandatoryHuman(deny)
+        )
+        #expect(result.wire.boundReview == nil)
+        let decoded = try JSONDecoder().decode(
+            EvaluationResult.self,
+            from: try JSONEncoder().encode(result.wire)
+        )
+        #expect(decoded.boundReview == nil)
+        #expect(LiveEvaluation(decoded) == nil)
+    }
 }

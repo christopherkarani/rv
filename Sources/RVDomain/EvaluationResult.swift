@@ -240,6 +240,52 @@ public struct EvaluationResult: Sendable, Equatable {
         self.analysis = analysis
         self.boundReview = boundReview
     }
+
+    /// Codable / IPC projection. Never carries `boundReview`.
+    public var wire: EvaluationResult {
+        EvaluationResult(outcome: outcome, matchingView: matchingView, analysis: analysis)
+    }
+}
+
+/// In-process hook-door evaluation. `bound` is required; IPC decode cannot produce this type.
+public struct LiveEvaluation: Sendable, Equatable {
+    public var outcome: EvaluationOutcome
+    public var matchingView: MatchingView
+    public var analysis: SemanticAnalysis
+    public var bound: BoundReview
+
+    public var decision: Decision { outcome.decision }
+
+    public var result: EvaluationResult {
+        EvaluationResult(
+            outcome: outcome,
+            matchingView: matchingView,
+            analysis: analysis,
+            boundReview: bound
+        )
+    }
+
+    public init(
+        outcome: EvaluationOutcome,
+        matchingView: MatchingView,
+        analysis: SemanticAnalysis,
+        bound: BoundReview
+    ) {
+        self.outcome = outcome
+        self.matchingView = matchingView
+        self.analysis = analysis
+        self.bound = bound
+    }
+
+    public init?(_ result: EvaluationResult) {
+        guard let bound = result.boundReview else { return nil }
+        self.init(
+            outcome: result.outcome,
+            matchingView: result.matchingView,
+            analysis: result.analysis,
+            bound: bound
+        )
+    }
 }
 
 extension EvaluationResult: Codable {

@@ -41,7 +41,7 @@ public enum PackRegistry {
         var documents: [PackDocument] = []
         documents.reserveCapacity(index.packCount)
         for id in index.packIDs {
-            documents.append(try loadDocument(id: id, from: bundle))
+            documents.append(try loadDocument(id: id.rawValue, from: bundle))
         }
         return documents
     }

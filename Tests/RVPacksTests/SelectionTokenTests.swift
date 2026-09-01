@@ -52,18 +52,10 @@ import RVDomain
     #expect(SelectionToken.preset("solo").rawValue == "solo")
 }
 
-@Test func selectionToken_indexRejectsInvalidPackReferences() throws {
-    let bad = PackIndex(
-        pinVersion: "0.0.0",
-        pinTag: "t",
-        pinCommit: "c",
-        packCount: 1,
-        defaultEnabled: ["core.git"],
-        categories: ["core": ["core.git"], "bad": ["Bad Pack"]],
-        presets: [:],
-        tiers: ["core": 1]
-    )
-    #expect(throws: PackLoadError.invalidPackID("Bad Pack")) {
-        try PackCatalog.bundlingAll(enabled: [PackID(rawValue: "core.git")], index: bad)
-    }
+@Test func packIndex_packIDsArePackID() throws {
+    let index = try PackRegistry.loadIndex()
+    #expect(index.packIDs.contains(.coreGit))
+    #expect(index.packIDs.contains(.coreFilesystem))
+    let catalog = try PackCatalog.bundlingAll(enabled: [.coreGit], index: index)
+    #expect(catalog.enabledIDs.contains(.coreGit))
 }
