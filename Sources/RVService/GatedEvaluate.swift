@@ -242,12 +242,15 @@ public struct GatedEvaluate: Sendable {
     }
 
     /// After apply stayed deny. Not peek. Not Ask. Nil when the deny is not unlockable.
+    /// Missing HOME has no durable store `rv allow-once` can redeem, so skip the code.
     public static func mintUnlockCode(
         for result: EvaluationResult,
         cwd: WorkingDirectory?,
         store: AllowOnceStore,
-        now: Date
+        now: Date,
+        home: HomeDirectory?
     ) async -> String? {
+        guard home != nil else { return nil }
         guard case .deny(let deny) = result.decision else { return nil }
         guard RulePinning.blocksAllowOverride(result) == false else { return nil }
         guard let cwd else { return nil }

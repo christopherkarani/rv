@@ -267,7 +267,8 @@ public actor ServiceRuntime {
                         for: result,
                         cwd: cwd,
                         store: self.allowOnce,
-                        now: self.clock()
+                        now: self.clock(),
+                        home: self.configHome
                     )
                 }
             )

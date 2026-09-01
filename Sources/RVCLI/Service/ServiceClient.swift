@@ -210,7 +210,8 @@ public struct ServiceClient: Sendable {
                         for: result,
                         cwd: cwd,
                         store: self.store,
-                        now: self.clock()
+                        now: self.clock(),
+                        home: self.home
                     )
                 }
             )

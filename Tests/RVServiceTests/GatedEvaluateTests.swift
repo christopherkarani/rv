@@ -212,7 +212,8 @@ struct GatedEvaluateTests {
                 for: applied,
                 cwd: wd("/tmp/ws"),
                 store: store,
-                now: now
+                now: now,
+                home: mintHome()
             )
         )
         #expect(code.count == 6)
@@ -247,9 +248,32 @@ struct GatedEvaluateTests {
             for: applied,
             cwd: nil,
             store: store,
-            now: now
+            now: now,
+            home: mintHome()
         )
         #expect(missing == nil)
+        #expect((await store.list(now: now)).isEmpty)
+    }
+
+    @Test func mintUnlockCode_skipsMissingHome() async throws {
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let gated = GatedEvaluate()
+        let applied = await gated.apply(
+            resetHardRequest(),
+            cwd: wd("/tmp/ws"),
+            store: store,
+            now: now,
+            allowlist: { .empty }
+        )
+        let code = await GatedEvaluate.mintUnlockCode(
+            for: applied,
+            cwd: wd("/tmp/ws"),
+            store: store,
+            now: now,
+            home: nil
+        )
+        #expect(code == nil)
         #expect((await store.list(now: now)).isEmpty)
     }
 
@@ -270,7 +294,8 @@ struct GatedEvaluateTests {
             for: secrets,
             cwd: wd("/tmp/ws"),
             store: store,
-            now: now
+            now: now,
+            home: mintHome()
         )
         #expect(secretCode == nil)
         let pin = EvaluationResult(
@@ -287,7 +312,8 @@ struct GatedEvaluateTests {
             for: pin,
             cwd: wd("/tmp/ws"),
             store: store,
-            now: now
+            now: now,
+            home: mintHome()
         )
         #expect(pinCode == nil)
         #expect((await store.list(now: now)).isEmpty)
@@ -310,4 +336,8 @@ private func stashDropRequest() -> EvaluationRequest {
 
 private func isolatedStore() throws -> AllowOnceStore {
     AllowOnceStore(baseDirectory: try isolatedAllowOnceDirectory())
+}
+
+private func mintHome() -> HomeDirectory {
+    HomeDirectory(validating: "/tmp/rv-mint-home")!
 }

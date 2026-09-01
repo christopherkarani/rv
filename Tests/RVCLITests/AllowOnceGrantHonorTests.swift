@@ -180,6 +180,26 @@ struct AllowOnceGrantHonorTests {
         #expect((await AllowOnceStore(baseDirectory: directory).list(now: now)).isEmpty)
     }
 
+    @Test func grokHookEvaluateWithoutHomeDoesNotMint() async throws {
+        let directory = try isolatedAllowOnceDirectory()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let client = ServiceClient(
+            transport: nil,
+            allowOnceDirectory: directory,
+            home: nil,
+            clock: { now }
+        )
+        let stdin = """
+        {"hookEventName":"pre_tool_use","cwd":"/tmp/ws","toolName":"run_terminal_command","toolInput":{"command":"git reset --hard"}}
+        """
+        let wire = await client.hookEvaluate(host: .grok, stdin: stdin)
+        let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
+        #expect(json["decision"] as? String == "deny")
+        #expect(allowOnceUnlockCode(in: wire.stdout) == nil)
+        #expect(json["next"] == nil)
+        #expect((await AllowOnceStore(baseDirectory: directory).list(now: now)).isEmpty)
+    }
+
     @Test func peekDoesNotMintPending() async throws {
         let directory = try isolatedAllowOnceDirectory()
         let peeked = try await cliEvaluate("git reset --hard", allowOnceDirectory: directory)

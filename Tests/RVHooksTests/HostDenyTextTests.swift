@@ -10,9 +10,13 @@ func assertHookDenyHasNoBypassOrEssay(_ text: String?) {
     #expect(payload.contains("RV · Blocked"))
     #expect(payload.contains("RV · Blocked\n") == false)
     #expect(payload.contains("git reset --hard") == false)
+    #expect(payload.contains("reset --soft") == false)
+    #expect(payload.contains("RV_" + "BYPASS") == false)
+    if allowOnceUnlockCode(in: payload) != nil {
+        return
+    }
     #expect(payload.contains("Terminal") == false)
     #expect(payload.contains("allow-once") == false)
-    #expect(payload.contains("reset --soft") == false)
 }
 
 func assertMintedHookUnlock(_ text: String, why: String = resetHardHostDeny) throws -> String {
