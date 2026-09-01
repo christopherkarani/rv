@@ -603,6 +603,48 @@
       "expected": "deny",
       "rule_id": "core.filesystem:cp-sensitive-then-delete",
       "reason_contains": "EXTREMELY DANGEROUS"
+    },
+    {
+      "id": "deny.bash-heredoc-reset",
+      "command": "bash <<'EOF'\ngit reset --hard\nEOF",
+      "expected": "deny",
+      "rule_id": "core.git:reset-hard",
+      "reason_contains": "destroys uncommitted changes"
+    },
+    {
+      "id": "deny.python-heredoc-then-reset",
+      "command": "python3 <<'PY'\nprint(1)\nPY\ngit reset --hard",
+      "expected": "deny",
+      "rule_id": "core.git:reset-hard",
+      "reason_contains": "destroys uncommitted changes"
+    },
+    {
+      "id": "deny.python-c-print-then-reset",
+      "command": "python3 -c \"print('ok')\" && git reset --hard",
+      "expected": "deny",
+      "rule_id": "core.git:reset-hard",
+      "reason_contains": "destroys uncommitted changes"
+    },
+    {
+      "id": "deny.python-heredoc-os-system-reset",
+      "command": "python3 <<'PY'\nimport os\nos.system('git reset --hard')\nPY",
+      "expected": "deny",
+      "rule_id": "core.git:reset-hard",
+      "reason_contains": "destroys uncommitted changes"
+    },
+    {
+      "id": "deny.python-heredoc-print-reset",
+      "command": "python3 <<'PY'\nprint('git reset --hard')\nPY",
+      "expected": "deny",
+      "rule_id": "core.git:reset-hard",
+      "reason_contains": "destroys uncommitted changes"
+    },
+    {
+      "id": "deny.node-eval-attached-execsync-reset",
+      "command": "node --eval=require('child_process').execSync('git reset --hard')",
+      "expected": "deny",
+      "rule_id": "core.git:reset-hard",
+      "reason_contains": "destroys uncommitted changes"
     }
   ]
 }

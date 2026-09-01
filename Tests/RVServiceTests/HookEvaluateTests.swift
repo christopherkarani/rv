@@ -125,6 +125,113 @@ struct HookEvaluateTests {
         }
     }
 
+    @Test func stdinOverlay_replacesJSONStdinOnImplicitHello() async throws {
+        let runtime = try isolatedRuntime()
+        let overlay = Data(try grokFixture("deny-git-reset-hard.json").utf8)
+        let (data, ok) = await runtime.handleIncoming(
+            try hookEvaluateBody(host: .grok, stdin: "", clientSemver: ProtocolVersion.serviceSemver),
+            handshakeOK: false,
+            stdinOverlay: overlay
+        )
+        #expect(ok == true)
+        let response = try IPCJSON.decode(IPCResponse.self, from: data)
+        guard case .hookEvaluate(let reply) = response.result else {
+            Issue.record("overlay hookEvaluate must dispatch")
+            return
+        }
+        #expect(reply.exitCode == 0)
+        let json = try grokDenyJSON(reply.stdout)
+        #expect(json["decision"] as? String == "deny")
+        #expect(json["reason"] as? String == canonicalResetHardDeny)
+    }
+
+    @Test func emptyStdinOverlay_overridesJSONStdin() async throws {
+        let runtime = try isolatedRuntime()
+        let (data, ok) = await runtime.handleIncoming(
+            try hookEvaluateBody(
+                host: .grok,
+                stdin: try grokFixture("deny-git-reset-hard.json"),
+                clientSemver: ProtocolVersion.serviceSemver
+            ),
+            handshakeOK: false,
+            stdinOverlay: Data()
+        )
+        #expect(ok == true)
+        let response = try IPCJSON.decode(IPCResponse.self, from: data)
+        guard case .hookEvaluate(let reply) = response.result else {
+            Issue.record("empty overlay must still dispatch")
+            return
+        }
+        let json = try grokDenyJSON(reply.stdout)
+        #expect(json["decision"] as? String == "deny")
+        #expect(json["reason"] as? String != canonicalResetHardDeny)
+    }
+
+    @Test func stdinOverlay_winsOverJSONAllowStdin() async throws {
+        let runtime = try isolatedRuntime()
+        let overlay = Data(try grokFixture("deny-git-reset-hard.json").utf8)
+        let (data, ok) = await runtime.handleIncoming(
+            try hookEvaluateBody(
+                host: .grok,
+                stdin: try grokFixture("allow-git-status.json"),
+                clientSemver: ProtocolVersion.serviceSemver
+            ),
+            handshakeOK: false,
+            stdinOverlay: overlay
+        )
+        #expect(ok == true)
+        let response = try IPCJSON.decode(IPCResponse.self, from: data)
+        guard case .hookEvaluate(let reply) = response.result else {
+            Issue.record("overlay must dispatch hookEvaluate")
+            return
+        }
+        let json = try grokDenyJSON(reply.stdout)
+        #expect(json["decision"] as? String == "deny")
+    }
+
+    @Test func invalidUTF8StdinOverlay_isDecodeFailedAndDoesNotEvaluate() async throws {
+        let runtime = try isolatedRuntime()
+        let (data, ok) = await runtime.handleIncoming(
+            try hookEvaluateBody(
+                host: .grok,
+                stdin: try grokFixture("deny-git-reset-hard.json"),
+                clientSemver: ProtocolVersion.serviceSemver
+            ),
+            handshakeOK: false,
+            stdinOverlay: Data([0xFF, 0xFE])
+        )
+        #expect(ok == false)
+        let response = try IPCJSON.decode(IPCResponse.self, from: data)
+        guard case .error(.decodeFailed) = response.result else {
+            Issue.record("invalid UTF-8 overlay must be decodeFailed, not evaluate")
+            return
+        }
+        if case .hookEvaluate = response.result {
+            Issue.record("invalid overlay must not return hookEvaluate")
+        }
+    }
+
+    @Test func missingStdinOverlay_keepsJSONStdin() async throws {
+        let runtime = try isolatedRuntime()
+        let (data, ok) = await runtime.handleIncoming(
+            try hookEvaluateBody(
+                host: .grok,
+                stdin: try grokFixture("allow-medium-stash-drop.json"),
+                clientSemver: ProtocolVersion.serviceSemver
+            ),
+            handshakeOK: false,
+            stdinOverlay: nil
+        )
+        #expect(ok == true)
+        let response = try IPCJSON.decode(IPCResponse.self, from: data)
+        guard case .hookEvaluate(let reply) = response.result else {
+            Issue.record("JSON stdin must still dispatch")
+            return
+        }
+        #expect(reply.stdout.isEmpty)
+        #expect(reply.exitCode == 0)
+    }
+
     @Test func grokStashDrop_emptyStdout() async throws {
         let runtime = try isolatedRuntime()
         let stdin = try grokFixture("allow-medium-stash-drop.json")

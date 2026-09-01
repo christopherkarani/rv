@@ -47,6 +47,21 @@ struct GatedEvaluateWrapperSemanticsTests {
         #expect(result.analysis.wrappers == [.python])
     }
 
+    @Test func pythonPrintReset_isAllowed() async throws {
+        let result = try await peek(#"python -c "print('git reset --hard')""#)
+        #expect(result.decision == .allow)
+        #expect(result.analysis.wrappers.isEmpty)
+    }
+
+    @Test func pythonQuotedHeredocOsSystem_isDenied() async throws {
+        let result = try await peek("python3 <<'PY'\nimport os\nos.system('git reset --hard')\nPY")
+        guard case .deny(let deny) = result.decision else {
+            Issue.record("python heredoc os.system reset must deny, got \(result.decision)")
+            return
+        }
+        #expect(deny.ruleID.pack == .coreGit)
+    }
+
     @Test func unquotedAndDollarDashC_neverSilentAllow() async throws {
         let unquoted = try await peek("bash -c git reset --hard")
         guard case .deny = unquoted.decision else {

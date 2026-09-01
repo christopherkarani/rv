@@ -95,3 +95,67 @@ import Testing
 @Test func normalize_doesNotExpandTmpdir() {
     #expect(Normalize.matchingView(of: "rm -rf ${TMPDIR}/build") == "rm -rf ${TMPDIR}/build")
 }
+
+@Test func normalize_masksQuotedInterpreterProgramText() {
+    let python = Normalize.matchingView(of: #"python3 -c "print('git reset --hard')""#)
+    #expect(!python.rawValue.contains("reset"))
+    #expect(python.rawValue.contains("python3"))
+
+    let node = Normalize.matchingView(of: #"node -e "console.log('git reset --hard')""#)
+    #expect(!node.rawValue.contains("reset"))
+
+    let ruby = Normalize.matchingView(of: #"ruby -e "puts 'git reset --hard'""#)
+    #expect(!ruby.rawValue.contains("reset"))
+}
+
+@Test func normalize_doesNotMaskSubstitutionInInterpreterDashC() {
+    let view = Normalize.matchingView(of: #"python3 -c "$(git reset --hard)""#)
+    #expect(view.rawValue.contains("git reset --hard"))
+}
+
+@Test func normalize_doesNotMaskUnquotedTokenAfterInterpreterFlag() {
+    let view = Normalize.matchingView(of: "python3 -c git reset --hard")
+    #expect(view.rawValue.contains("git reset --hard"))
+}
+
+@Test func normalize_doesNotMaskQuotedInterpreterHeredocBody() {
+    let quoted = Normalize.matchingView(
+        of: "python3 <<'PY'\nprint('git reset --hard')\nPY"
+    )
+    #expect(quoted.rawValue.contains("git reset --hard"))
+    #expect(quoted.rawValue.contains("python3"))
+
+    let after = Normalize.matchingView(
+        of: "python3 <<'PY'\nprint(1)\nPY\ngit reset --hard"
+    )
+    #expect(after.rawValue.contains("git reset --hard"))
+}
+
+@Test func normalize_doesNotMaskNodeAttachedEval() {
+    let view = Normalize.matchingView(
+        of: #"node --eval=require('child_process').execSync('git reset --hard')"#
+    )
+    #expect(view.rawValue.contains("git reset --hard"))
+}
+
+@Test func normalize_doesNotMaskBashOrUnquotedInterpreterHeredoc() {
+    let bash = Normalize.matchingView(of: "bash <<'EOF'\ngit reset --hard\nEOF")
+    #expect(bash.rawValue.contains("git reset --hard"))
+
+    let sh = Normalize.matchingView(of: "sh <<'EOF'\ngit reset --hard\nEOF")
+    #expect(sh.rawValue.contains("git reset --hard"))
+
+    let unquoted = Normalize.matchingView(
+        of: "python3 <<PY\nprint('git reset --hard')\nPY"
+    )
+    #expect(unquoted.rawValue.contains("git reset --hard"))
+}
+
+@Test func splitSegments_respectsQuotesAndByteOperators() {
+    #expect(splitSegments("echo a && git reset --hard") == ["echo a", "git reset --hard"])
+    #expect(splitSegments("echo 'a && b' | cat") == ["echo 'a && b'", "cat"])
+    #expect(splitSegments(#"python3 -c "print(1)"; git status"#) == [
+        #"python3 -c "print(1)""#,
+        "git status",
+    ])
+}

@@ -64,6 +64,15 @@ struct PeerSessionPingOnHandleTests {
         #expect(probe.endCount == 0)
     }
 
+    @Test func stdinOverlayKeyRoundTripsMissingAndBytes() {
+        let message = xpc_dictionary_create_empty()
+        #expect(XPCIPCWire.stdin(from: message) == nil)
+
+        let payload = Data(#"{"tool":"Bash"}"#.utf8)
+        XPCIPCWire.setStdin(payload, on: message)
+        #expect(XPCIPCWire.stdin(from: message) == payload)
+    }
+
     @Test func twoDictionaryHandlesPingTheSameWatchdog() async throws {
         let watchdog = IdleWatchdog(seconds: 300)
         let probe = TransactionProbe()

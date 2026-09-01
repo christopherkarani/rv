@@ -30,6 +30,7 @@ extern char **environ;
 
 #define RV_MACH_SERVICE "dev.rv.evaluate"
 #define RV_IPC_KEY "rv.ipc"
+#define RV_STDIN_KEY "rv.stdin"
 #define RV_CLIENT_SEMVER "1.0.0"
 #define RV_STDIN_XPC_MAX 1048576
 #define RV_XPC_TIMEOUT_MS 700
@@ -432,8 +433,13 @@ static int rv_uuid_v4(char out[37]) {
 static const char kIdPrefix[] = "{\"id\":\"";
 static const char kAfterId[] =
     "\",\"method\":{\"hookEvaluate\":{\"clientSemver\":\"1.0.0\",\"host\":\"";
+#ifdef __APPLE__
+/* stdin travels as xpc_data `rv.stdin`, not a JSON string. */
+static const char kAfterHost[] = "\"}},\"protocol\":\"rv.ipc.v1\"}";
+#else
 static const char kAfterHost[] = "\",\"stdin\":\"";
 static const char kSuffix[] = "\"}},\"protocol\":\"rv.ipc.v1\"}";
+#endif
 
 static char *build_request(
     const char *host,
@@ -443,23 +449,33 @@ static char *build_request(
     char request_id[37]
 ) {
     char uuid[37];
-    size_t esc_len = 0;
     size_t host_len;
     size_t total;
     char *json;
     char *w;
+#ifndef __APPLE__
+    size_t esc_len = 0;
     size_t wrote = 0;
 
     if (rv_json_escape(stdin_bytes, stdin_len, NULL, 0, &esc_len) != 0) {
         return NULL;
     }
+#else
+    (void)stdin_bytes;
+    (void)stdin_len;
+#endif
     if (rv_uuid_v4(uuid) != 0) {
         return NULL;
     }
     memcpy(request_id, uuid, sizeof uuid);
     host_len = strlen(host);
+#ifdef __APPLE__
+    total = (sizeof kIdPrefix - 1) + 36 + (sizeof kAfterId - 1) + host_len
+        + (sizeof kAfterHost - 1);
+#else
     total = (sizeof kIdPrefix - 1) + 36 + (sizeof kAfterId - 1) + host_len
         + (sizeof kAfterHost - 1) + esc_len + (sizeof kSuffix - 1);
+#endif
     json = (char *)malloc(total + 1);
     if (json == NULL) {
         return NULL;
@@ -475,6 +491,7 @@ static char *build_request(
     w += host_len;
     memcpy(w, kAfterHost, sizeof kAfterHost - 1);
     w += sizeof kAfterHost - 1;
+#ifndef __APPLE__
     if (rv_json_escape(stdin_bytes, stdin_len, w, esc_len + 1, &wrote) != 0) {
         free(json);
         return NULL;
@@ -482,6 +499,7 @@ static char *build_request(
     w += wrote;
     memcpy(w, kSuffix, sizeof kSuffix - 1);
     w += sizeof kSuffix - 1;
+#endif
     *w = '\0';
     *out_len = (size_t)(w - json);
     return json;
@@ -496,6 +514,8 @@ struct XpcWait {
 static int xpc_hook_evaluate(
     const void *json,
     size_t json_len,
+    const void *stdin_bytes,
+    size_t stdin_len,
     char **reply_json,
     size_t *reply_len
 ) {
@@ -531,6 +551,12 @@ static int xpc_hook_evaluate(
 
     msg = xpc_dictionary_create(NULL, NULL, 0);
     xpc_dictionary_set_data(msg, RV_IPC_KEY, json, json_len);
+    xpc_dictionary_set_data(
+        msg,
+        RV_STDIN_KEY,
+        stdin_bytes != NULL ? stdin_bytes : "",
+        stdin_len
+    );
     xpc_connection_send_message_with_reply(
         conn,
         msg,
@@ -783,7 +809,13 @@ int main(int argc, char **argv) {
     }
 
 #ifdef __APPLE__
-    if (xpc_hook_evaluate(request, request_len, &reply_json, &reply_len) != 0) {
+    if (xpc_hook_evaluate(
+            request,
+            request_len,
+            stdin_buf.p,
+            stdin_buf.len,
+            &reply_json,
+            &reply_len) != 0) {
         free(request);
         miss_replay(argv, host, stdin_buf.p, stdin_buf.len);
     }

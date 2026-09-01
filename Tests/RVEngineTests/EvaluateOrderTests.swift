@@ -147,6 +147,49 @@ private func run(
     #expect(result.decision == .allow)
 }
 
+@Test func evaluate_allowsQuotedPythonPrintOfReset() throws {
+    let result = try run(#"python3 -c "print('git reset --hard')""#)
+    #expect(result.decision == .allow)
+}
+
+@Test func evaluate_deniesBashHeredocReset() throws {
+    let result = try run("bash <<'EOF'\ngit reset --hard\nEOF")
+    guard case .deny(let deny) = result.decision else {
+        Issue.record("bash heredoc reset must deny, got \(result.decision)")
+        return
+    }
+    #expect(deny.ruleID.rawValue == "core.git:reset-hard")
+}
+
+@Test func evaluate_deniesGitAfterQuotedPythonHeredoc() throws {
+    let result = try run("python3 <<'PY'\nprint(1)\nPY\ngit reset --hard")
+    guard case .deny(let deny) = result.decision else {
+        Issue.record("git after python heredoc must deny, got \(result.decision)")
+        return
+    }
+    #expect(deny.ruleID.rawValue == "core.git:reset-hard")
+}
+
+@Test func evaluate_deniesQuotedPythonHeredocOsSystemReset() throws {
+    let result = try run("python3 <<'PY'\nimport os\nos.system('git reset --hard')\nPY")
+    guard case .deny(let deny) = result.decision else {
+        Issue.record("python heredoc os.system reset must deny, got \(result.decision)")
+        return
+    }
+    #expect(deny.ruleID.rawValue == "core.git:reset-hard")
+}
+
+@Test func evaluate_deniesNodeAttachedEvalExecSync() throws {
+    let result = try run(
+        #"node --eval=require('child_process').execSync('git reset --hard')"#
+    )
+    guard case .deny(let deny) = result.decision else {
+        Issue.record("node --eval= execSync reset must deny, got \(result.decision)")
+        return
+    }
+    #expect(deny.ruleID.rawValue == "core.git:reset-hard")
+}
+
 @Test func evaluate_budgetExhaustedIsIndeterminate() throws {
     let result = try run("git reset --hard", budget: EvaluationBudget(maxPatternAttempts: 1))
     #expect(result.decision == .indeterminate(.budgetExhausted))

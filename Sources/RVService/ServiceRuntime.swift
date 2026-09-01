@@ -96,7 +96,11 @@ public actor ServiceRuntime {
         return HelloAck(status: .ok)
     }
 
-    public func handleIncoming(_ body: Data, handshakeOK: Bool) async -> (Data, Bool) {
+    public func handleIncoming(
+        _ body: Data,
+        handshakeOK: Bool,
+        stdinOverlay: Data? = nil
+    ) async -> (Data, Bool) {
         if let hello = try? IPCJSON.decode(Hello.self, from: body), hello.clientSemver.isEmpty == false {
             let ack = acknowledge(hello)
             let data = (try? IPCJSON.encode(ack)) ?? Data()
@@ -108,10 +112,10 @@ public actor ServiceRuntime {
             }
         }
         if handshakeOK == false {
-            return await handleUnreadyIncoming(body)
+            return await handleUnreadyIncoming(body, stdinOverlay: stdinOverlay)
         }
         do {
-            let request = try IPCJSON.decode(IPCRequest.self, from: body)
+            let request = try decodeRequest(body, stdinOverlay: stdinOverlay)
             let response = await dispatch(request)
             return ((try? IPCJSON.encode(response)) ?? Data(), true)
         } catch {
@@ -121,20 +125,34 @@ public actor ServiceRuntime {
     }
 
     /// Implicit hello on first evaluate when `clientSemver` is set. Old clients Hello first.
-    private func handleUnreadyIncoming(_ body: Data) async -> (Data, Bool) {
-        if let request = try? IPCJSON.decode(IPCRequest.self, from: body),
-           let clientSemver = implicitHelloSemver(request.method),
+    private func handleUnreadyIncoming(_ body: Data, stdinOverlay: Data?) async -> (Data, Bool) {
+        guard let request = try? IPCJSON.decode(IPCRequest.self, from: body) else {
+            let response = IPCResponse(
+                id: UUID(),
+                result: .error(.protocolSkew(.handshakeRequired))
+            )
+            let data = (try? IPCJSON.encode(response)) ?? Data()
+            return (data, false)
+        }
+        let overlaid: IPCRequest
+        do {
+            overlaid = try Self.applyStdinOverlay(request, stdinOverlay)
+        } catch {
+            let response = IPCResponse(id: request.id, result: .error(.decodeFailed))
+            return ((try? IPCJSON.encode(response)) ?? Data(), false)
+        }
+        if let clientSemver = implicitHelloSemver(overlaid.method),
            clientSemver.isEmpty == false
         {
-            let hello = Hello(protocolName: request.protocolName, clientSemver: clientSemver)
+            let hello = Hello(protocolName: overlaid.protocolName, clientSemver: clientSemver)
             let ack = acknowledge(hello)
             switch ack.status {
             case .ok:
-                let response = await dispatch(request)
+                let response = await dispatch(overlaid)
                 return ((try? IPCJSON.encode(response)) ?? Data(), true)
             case .skew(let reason):
                 let response = IPCResponse(
-                    id: request.id,
+                    id: overlaid.id,
                     result: .error(.protocolSkew(reason))
                 )
                 return ((try? IPCJSON.encode(response)) ?? Data(), false)
@@ -146,6 +164,21 @@ public actor ServiceRuntime {
         )
         let data = (try? IPCJSON.encode(response)) ?? Data()
         return (data, false)
+    }
+
+    private func decodeRequest(_ body: Data, stdinOverlay: Data?) throws -> IPCRequest {
+        try Self.applyStdinOverlay(
+            try IPCJSON.decode(IPCRequest.self, from: body),
+            stdinOverlay
+        )
+    }
+
+    private static func applyStdinOverlay(
+        _ request: IPCRequest,
+        _ stdinOverlay: Data?
+    ) throws -> IPCRequest {
+        guard let stdinOverlay else { return request }
+        return try request.applyingHookStdinOverlay(stdinOverlay)
     }
 
     private func implicitHelloSemver(_ method: IPCMethod) -> String? {

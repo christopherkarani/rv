@@ -93,6 +93,24 @@ public struct IPCRequest: Sendable, Equatable, Codable {
         case protocolName = "protocol"
         case method
     }
+
+    /// Replaces `hookEvaluate` stdin with overlay bytes. Other methods are unchanged.
+    /// Invalid UTF-8 is `DecodingError` so the service maps it to `decodeFailed`.
+    public func applyingHookStdinOverlay(_ overlay: Data) throws -> IPCRequest {
+        guard case .hookEvaluate(var params) = method else {
+            return self
+        }
+        guard let stdin = String(data: overlay, encoding: .utf8) else {
+            throw DecodingError.dataCorrupted(
+                DecodingError.Context(
+                    codingPath: [],
+                    debugDescription: "hookEvaluate stdin overlay is not UTF-8"
+                )
+            )
+        }
+        params.stdin = stdin
+        return IPCRequest(id: id, protocolName: protocolName, method: .hookEvaluate(params))
+    }
 }
 
 public struct IPCResponse: Sendable, Equatable, Codable {
