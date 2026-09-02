@@ -338,7 +338,7 @@ private func fixtureLoginHome() throws -> URL {
         let body = try String(contentsOfFile: layout.hermesPlugin, encoding: .utf8)
         #expect(body == (try HookHost.hermes.adapterResource().rendered(rvPath: "/tmp/rv-bin/rv")))
         #expect(body.contains("pre_tool_call"))
-        #expect(body.contains("\"action\": \"approve\"") == false)
+        #expect(body.contains("\"action\": \"approve\""))
         let directory = (layout.hermesPlugin as NSString).deletingLastPathComponent
         let pluginYAML = try String(contentsOfFile: directory + "/plugin.yaml", encoding: .utf8)
         #expect(pluginYAML.contains("provides_hooks:"))
@@ -1179,6 +1179,11 @@ private func claudePreToolUseEntries(_ settings: [String: Any]) throws -> [[Stri
     return try #require(hooks["PreToolUse"] as? [[String: Any]])
 }
 
+private func claudePermissionRequestEntries(_ settings: [String: Any]) throws -> [[String: Any]] {
+    let hooks = try #require(settings["hooks"] as? [String: Any])
+    return try #require(hooks["PermissionRequest"] as? [[String: Any]])
+}
+
 private func posixMode(_ url: URL) throws -> Int {
     let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
     let raw = attrs[.posixPermissions] as? NSNumber
@@ -1210,6 +1215,11 @@ private func posixMode(_ url: URL) throws -> Int {
         #expect(command == "/tmp/rv-bin/rv hook --host claude")
         #expect(command.hasPrefix("/"))
         #expect(rvHooks[0]["timeout"] as? Int == 5)
+        let permissionEntries = try claudePermissionRequestEntries(settings)
+        #expect(permissionEntries.count == 1)
+        let permissionHooks = try #require(permissionEntries[0]["hooks"] as? [[String: Any]])
+        #expect(permissionHooks[0]["command"] as? String == command)
+        #expect(permissionHooks[0]["timeout"] as? Int == 5)
     }
 }
 

@@ -1,6 +1,8 @@
 # Host Ask build map (OPE-268)
 
-Plan only. No Ask code. Investigation: [host-ask.md](host-ask.md) (OPE-267, accepted). Linux + macOS. No Windows.
+> **Stale investigation.** Do not treat “Plan only. No Ask code.” as current. Pi / OpenCode / Claude / Hermes spend-then-allow is in `MODULES.md`. Living map: `docs/factory/STATUS.md`. Remaining Ask work: human TUI click-through; `docs/architecture/02.md` § Order step 6.
+
+Investigation: [host-ask.md](host-ask.md) (OPE-267, accepted). Linux + macOS. No Windows.
 
 OPE-264 pulls shared pieces plus Pi / OpenCode / Claude. Then OpenClaw. Then Hermes. Do not start OPE-253.
 

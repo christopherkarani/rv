@@ -5,6 +5,7 @@ enum ClaudeSettingsMerge {
     static let settingsFileName = "settings.json"
     static let hooksRootKey = "hooks"
     static let preToolUseKey = "PreToolUse"
+    static let permissionRequestKey = "PermissionRequest"
     static let fingerprint = "hook --host claude"
     static let matcher = "Bash"
     static let hookType = "command"
@@ -124,16 +125,17 @@ enum ClaudeSettingsMerge {
     }
 
     private static func locateFingerprintedHooks(in root: [String: Any]) -> [LocatedHook] {
-        guard let hooksRoot = root[hooksRootKey] as? [String: Any],
-              let preToolUse = hooksRoot[preToolUseKey] as? [[String: Any]]
-        else {
+        guard let hooksRoot = root[hooksRootKey] as? [String: Any] else {
             return []
         }
         var located: [LocatedHook] = []
-        for entry in preToolUse {
-            guard let hooks = entry["hooks"] as? [[String: Any]] else { continue }
-            for hook in hooks where isFingerprintedHook(hook) {
-                located.append(LocatedHook(entry: entry, hook: hook))
+        for key in [preToolUseKey, permissionRequestKey] {
+            guard let entries = hooksRoot[key] as? [[String: Any]] else { continue }
+            for entry in entries {
+                guard let hooks = entry["hooks"] as? [[String: Any]] else { continue }
+                for hook in hooks where isFingerprintedHook(hook) {
+                    located.append(LocatedHook(entry: entry, hook: hook))
+                }
             }
         }
         return located
@@ -148,28 +150,27 @@ enum ClaudeSettingsMerge {
     }
 
     private static func stripFingerprinted(from root: [String: Any]) -> [String: Any] {
-        guard var hooksRoot = root[hooksRootKey] as? [String: Any],
-              var preToolUse = hooksRoot[preToolUseKey] as? [[String: Any]]
-        else {
+        guard var hooksRoot = root[hooksRootKey] as? [String: Any] else {
             return root
         }
-
-        var nextEntries: [[String: Any]] = []
-        for var entry in preToolUse {
-            guard var hooks = entry["hooks"] as? [[String: Any]] else {
+        for key in [preToolUseKey, permissionRequestKey] {
+            guard let entries = hooksRoot[key] as? [[String: Any]] else { continue }
+            var nextEntries: [[String: Any]] = []
+            for var entry in entries {
+                guard var hooks = entry["hooks"] as? [[String: Any]] else {
+                    nextEntries.append(entry)
+                    continue
+                }
+                hooks.removeAll(where: isFingerprintedHook)
+                guard hooks.isEmpty == false else { continue }
+                entry["hooks"] = hooks
                 nextEntries.append(entry)
-                continue
             }
-            hooks.removeAll(where: isFingerprintedHook)
-            guard hooks.isEmpty == false else { continue }
-            entry["hooks"] = hooks
-            nextEntries.append(entry)
-        }
-
-        if nextEntries.isEmpty {
-            hooksRoot.removeValue(forKey: preToolUseKey)
-        } else {
-            hooksRoot[preToolUseKey] = nextEntries
+            if nextEntries.isEmpty {
+                hooksRoot.removeValue(forKey: key)
+            } else {
+                hooksRoot[key] = nextEntries
+            }
         }
 
         var next = root
@@ -184,9 +185,11 @@ enum ClaudeSettingsMerge {
     private static func insertRVEntry(into root: [String: Any], rvPath: String) -> [String: Any] {
         var next = root
         var hooksRoot = next[hooksRootKey] as? [String: Any] ?? [:]
-        var preToolUse = hooksRoot[preToolUseKey] as? [[String: Any]] ?? []
-        preToolUse.append(rvEntry(rvPath: rvPath))
-        hooksRoot[preToolUseKey] = preToolUse
+        for key in [preToolUseKey, permissionRequestKey] {
+            var entries = hooksRoot[key] as? [[String: Any]] ?? []
+            entries.append(rvEntry(rvPath: rvPath))
+            hooksRoot[key] = entries
+        }
         next[hooksRootKey] = hooksRoot
         return next
     }

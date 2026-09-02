@@ -49,7 +49,7 @@ The read-only classification of rvd reachability: reachable, down, not-installed
 _Avoid_: mapping down/skew/request-failed separately in doctor or status
 
 **Hook mapper**:
-EvaluationResult to HookWire after the Policy gate. One Decision switch, HostCodecs (Claude uses the rich encoder; OpenClaw and Hermes are short deny; Codex uses official older `decision: block` on stdout + blocking reason on stderr + exit 2, not Claude permission deny; Cursor uses official native `permission: deny` + `user_message`/`agent_message` + exit 0, not Claude permissionDecision and not Codex block). Owns hook voice. Product Ask is `HostNativeAsk.verdict(host:result:cwd:bound:)`; adapters honor `decision:ask` only.
+EvaluationResult to HookWire after the Policy gate. One Decision switch, HostCodecs (Claude uses the rich encoder plus official `permissionDecision: ask`; OpenClaw is short deny; Hermes is short deny/ask JSON; Codex uses official older `decision: block` on stdout + blocking reason on stderr + exit 2, not Claude permission deny; Cursor uses official native `permission: deny` + `user_message`/`agent_message` + exit 0, not Claude permissionDecision and not Codex block). Owns hook voice. Product Ask is `HostNativeAsk.verdict(host:result:cwd:bound:)`; adapters honor `decision:ask` only. Spend-first hosts: Pi, OpenCode, Claude, Hermes.
 _Avoid_: per-codec Decision switch, inferring Ask from deny JSON
 
 **Hook voice**:

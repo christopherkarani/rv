@@ -6,69 +6,51 @@ import RVDomain
 /// Product Ask pauses only when `HostNativeAsk.verdict(host:result:cwd:bound:)`
 /// returns `.ask` (spend-first host, unlockable pack deny or `mandatoryHuman`,
 /// cwd + nonempty matching view). Adapters honor `decision:ask` only.
-/// Claude first-call official ask is leftover-ask-as-permit and is never emitted.
+/// Claude first-call pause is official `permissionDecision: "ask"`; PermissionRequest spends.
 public func hookWire<C: HostCodec>(
     from result: EvaluationResult,
     command: ShellCommand,
     using codec: C,
     bound: BoundReview? = nil,
     cwd: WorkingDirectory? = nil,
-    afterSpend: Bool = false
+    afterSpend: Bool = false,
+    hookEvent: String? = nil
 ) -> HookWire {
-    switch codec.host {
-    case .claude:
-        if afterSpend {
-            return encodePostSpend(from: result, command: command, using: codec)
-        }
-        // Official `permissionDecision: "ask"` is leftover-ask-as-permit. Stay deny.
-        return encodeClaudeFirstCall(from: result, command: command, using: codec, bound: bound)
-    case .grok, .pi, .opencode, .openclaw, .hermes, .codex, .cursor:
-        if afterSpend {
-            return encodePostSpend(from: result, command: command, using: codec)
-        }
-        return encodeFirstCall(
+    if afterSpend {
+        return encodePostSpend(
             from: result,
             command: command,
             using: codec,
-            bound: bound,
-            cwd: cwd
+            hookEvent: hookEvent
         )
     }
-}
-
-private func encodeClaudeFirstCall<C: HostCodec>(
-    from result: EvaluationResult,
-    command: ShellCommand,
-    using codec: C,
-    bound: BoundReview?
-) -> HookWire {
-    switch result.decision {
-    case .allow:
-        guard let bound else {
-            return ClaudeHostCodec().encodeRichDeny(from: result, command: command)
-        }
-        switch bound {
-        case .allow:
-            return codec.encodeAllow()
-        case .deny(let deny), .mandatoryHuman(let deny):
-            return codec.encodeDeny(
-                reason: hostDenyLine(command: command, reason: deny.reason),
-                rule: displayRuleID(deny.ruleID),
-                next: hookUnlockNext
-            )
-        }
-    case .indeterminate:
-        return codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: nil)
-    case .deny:
-        return ClaudeHostCodec().encodeRichDeny(from: result, command: command)
-    }
+    return encodeFirstCall(
+        from: result,
+        command: command,
+        using: codec,
+        bound: bound,
+        cwd: cwd
+    )
 }
 
 private func encodePostSpend<C: HostCodec>(
     from result: EvaluationResult,
     command: ShellCommand,
-    using codec: C
+    using codec: C,
+    hookEvent: String?
 ) -> HookWire {
+    if codec.host == .claude, hookEvent == "PermissionRequest" {
+        switch result.decision {
+        case .allow:
+            return codec.encodeAllow()
+        case .deny(let deny):
+            return claudePermissionRequestDeny(
+                reason: hostDenyLine(command: command, reason: deny.reason)
+            )
+        case .indeterminate:
+            return claudePermissionRequestDeny(reason: incompleteEvalSentence)
+        }
+    }
     switch result.decision {
     case .allow:
         return codec.encodeAllow()
@@ -127,6 +109,9 @@ private func encodeFirstCall<C: HostCodec>(
         ) {
         case .allow, .deny:
             // A deny result must never become silent allow.
+            if codec.host == .claude {
+                return ClaudeHostCodec().encodeRichDeny(from: result, command: command)
+            }
             return codec.encodeDeny(
                 reason: hostDenyLine(command: command, reason: deny.reason),
                 rule: displayRuleID(deny.ruleID),

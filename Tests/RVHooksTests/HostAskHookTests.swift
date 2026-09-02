@@ -109,7 +109,7 @@ import RVDomain
     #expect(wire.exitCode == 0)
 }
 
-@Test(arguments: [HookHost.claude, .grok])
+@Test(arguments: [HookHost.grok])
 func hookWire_firstCallAllowCannotSkipPolicyGate(_ host: HookHost) throws {
     let deny = Deny(
         ruleID: RuleID(pack: PackID(rawValue: "builtin.action"), pattern: "remote-branch-mutation"),
@@ -122,13 +122,6 @@ func hookWire_firstCallAllowCannotSkipPolicyGate(_ host: HookHost) throws {
     let command = ShellCommand(rawValue: "git push origin feature")
     let wire: HookWire
     switch host {
-    case .claude:
-        wire = hookWire(
-            from: result,
-            command: command,
-            using: ClaudeHostCodec(),
-            bound: .mandatoryHuman(deny)
-        )
     case .grok:
         wire = hookWire(
             from: result,
@@ -142,14 +135,10 @@ func hookWire_firstCallAllowCannotSkipPolicyGate(_ host: HookHost) throws {
     }
     #expect(wire.stdout.isEmpty == false, Comment(rawValue: "\(host) must not encodeAllow"))
     #expect(wire.stdout.contains("\"permissionDecision\":\"ask\"") == false)
-    if host == .claude {
-        #expect(wire.stdout.contains("\"permissionDecision\":\"deny\""))
-    } else {
-        let json = try #require(
-            JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any]
-        )
-        #expect(json["decision"] as? String == "deny")
-    }
+    let json = try #require(
+        JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any]
+    )
+    #expect(json["decision"] as? String == "deny")
 }
 
 @Test func hookWire_leftoverAskBoundDoesNotPermit() throws {
@@ -257,15 +246,107 @@ func hookWire_firstCallAllowCannotSkipPolicyGate(_ host: HookHost) throws {
     #expect(wire.stdout.contains("\"permissionDecision\":\"deny\""))
 }
 
-@Test func hookWire_claudeEncodeAskIsNotPermissionAsk() throws {
+@Test func hookWire_claudeEncodeAskIsPermissionAskWithoutExtraKeys() throws {
     let wire = ClaudeHostCodec().encodeAsk(
         reason: "Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once.",
         rule: "core.git/reset-hard",
         next: hookUnlockNext
     )
     #expect(wire.stdout.isEmpty == false)
+    #expect(wire.stdout.contains("\"permissionDecision\":\"ask\""))
+    #expect(wire.stdout.contains("\"permissionDecision\":\"deny\"") == false)
+    #expect(wire.stdout.contains("\"ruleId\"") == false)
+    #expect(wire.stdout.contains("\"packId\"") == false)
+    #expect(wire.stdout.contains("\"severity\"") == false)
+    let parsed = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
+    let hook = try #require(parsed["hookSpecificOutput"] as? [String: Any])
+    #expect(hook.keys.sorted() == ["hookEventName", "permissionDecision", "permissionDecisionReason"])
+}
+
+@Test func hookWire_claudeFirstCallPackDenyAsksWhenSpendable() async throws {
+    let stdin = """
+    {"hook_event_name":"PreToolUse","cwd":"/tmp/ws","tool_name":"Bash","tool_input":{"command":"git reset --hard"}}
+    """
+    let deny = Deny(
+        ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+        reason: "git reset --hard destroys uncommitted changes"
+    )
+    let wire = await hookWire(host: .claude, stdin: stdin) { _, _ in
+        EvaluationResult(
+            outcome: .deny(deny, matched: nil),
+            matchingView: MatchingView("git reset --hard")
+        )
+    }
+    #expect(wire.stdout.contains("\"permissionDecision\":\"ask\""))
+    #expect(wire.stdout.contains("\"permissionDecision\":\"deny\"") == false)
+    #expect(wire.stdout.contains("\"ruleId\"") == false)
+    #expect(wire.exitCode == 0)
+}
+
+@Test func hookWire_hermesFirstCallPackDenyAsksWhenSpendable() async throws {
+    let stdin = """
+    {"toolName":"terminal","cwd":"/tmp/ws","args":{"command":"git reset --hard"}}
+    """
+    let deny = Deny(
+        ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+        reason: "git reset --hard destroys uncommitted changes"
+    )
+    let wire = await hookWire(host: .hermes, stdin: stdin) { _, _ in
+        EvaluationResult(
+            outcome: .deny(deny, matched: nil),
+            matchingView: MatchingView("git reset --hard")
+        )
+    }
+    let json = try #require(
+        JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any]
+    )
+    #expect(json["decision"] as? String == "ask")
+    #expect(json["continuation"] as? String == "hostNative")
+    #expect(wire.stdout.contains("\"decision\":\"allow\"") == false)
+    #expect(wire.exitCode == 1)
+}
+
+@Test func hookWire_claudePermissionRequestSpendsThenAllows() async throws {
+    let stdin = """
+    {"hook_event_name":"PermissionRequest","cwd":"/tmp/ws","tool_name":"Bash","tool_input":{"command":"git reset --hard"}}
+    """
+    let wire = await hookWire(
+        host: .claude,
+        stdin: stdin,
+        evaluate: { _, _ in
+            EvaluationResult(outcome: .plain)
+        },
+        spendHostAsk: { _, _ in
+            EvaluationResult(outcome: .plain)
+        }
+    )
+    #expect(wire.stdout.isEmpty)
+    #expect(wire.exitCode == 0)
     #expect(wire.stdout.contains("\"permissionDecision\":\"ask\"") == false)
-    #expect(wire.stdout.contains("\"permissionDecision\":\"deny\""))
+}
+
+@Test func hookWire_claudePermissionRequestFailedSpendDeniesOnPermissionRequestWire() async throws {
+    let stdin = """
+    {"hook_event_name":"PermissionRequest","cwd":"/tmp/ws","tool_name":"Bash","tool_input":{"command":"git reset --hard"}}
+    """
+    let deny = Deny(
+        ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+        reason: "git reset --hard destroys uncommitted changes"
+    )
+    let wire = await hookWire(
+        host: .claude,
+        stdin: stdin,
+        evaluate: { _, _ in
+            EvaluationResult(outcome: .plain)
+        },
+        spendHostAsk: { _, _ in
+            EvaluationResult(outcome: .deny(deny, matched: nil))
+        }
+    )
+    #expect(wire.stdout.contains("\"hookEventName\":\"PermissionRequest\""))
+    #expect(wire.stdout.contains("\"behavior\":\"deny\""))
+    #expect(wire.stdout.contains("\"permissionDecision\":\"ask\"") == false)
+    #expect(wire.exitCode == 0)
 }
 
 @Test func hookWire_piFirstCallPackDenyAsksWhenSpendable() async throws {

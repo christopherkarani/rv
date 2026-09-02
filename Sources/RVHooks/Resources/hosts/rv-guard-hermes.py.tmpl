@@ -1,13 +1,16 @@
 """RV destructive-command guard for Hermes terminal.
 
 Registers ``pre_tool_call`` only. Deny is ``{"action": "block", "message"}``.
-Missing rv / timeout / crash / non-JSON deny. Exceptions never escape — Hermes
-isolates hook errors and would otherwise fail open.
+Ask spends the PolicyGate grant, then returns ``{"action": "approve"}`` so
+Hermes pauses at the human gate. Unique ``rule_key`` so ``[a]lways`` is not
+a leftover permit. Missing rv / timeout / crash / non-JSON deny. Exceptions
+never escape — Hermes isolates hook errors and would otherwise fail open.
 """
 
 import json
 import os
 import subprocess
+import uuid
 
 RV_BINARY = "__RV_BINARY__"
 RV_HOOK_TIMEOUT_S = 5
@@ -27,7 +30,18 @@ def _on_pre_tool_call(tool_name="", args=None, **kwargs):
 def _guard(tool_name, args, kwargs):
     if tool_name != "terminal":
         return None
-    mapped = _consult_rv(_envelope(tool_name, args, kwargs))
+    payload = _envelope(tool_name, args, kwargs)
+    mapped = _consult_rv(payload)
+    if mapped["action"] == "ask":
+        spent = _consult_rv(_spend_payload(payload))
+        if spent["action"] != "allow":
+            reason = spent.get("reason") or mapped.get("reason") or "rv failed"
+            return {"action": "block", "message": reason}
+        return {
+            "action": "approve",
+            "message": mapped.get("reason") or "Allow this command once?",
+            "rule_key": "rv-guard:" + uuid.uuid4().hex,
+        }
     if mapped["action"] == "block":
         return {"action": "block", "message": mapped["reason"]}
     return None
@@ -66,6 +80,12 @@ def _pick_cwd(host_cwd):
     return None
 
 
+def _spend_payload(payload):
+    spent = dict(payload)
+    spent["hostAsk"] = "spend"
+    return spent
+
+
 def _consult_rv(payload):
     return _spawn_rv_hook("hermes", json.dumps(payload))
 
@@ -91,6 +111,12 @@ def _map_rv_hook_result(stdout, exit_code):
     if trimmed:
         try:
             parsed = json.loads(trimmed)
+            if isinstance(parsed, dict) and parsed.get("decision") == "ask":
+                reason = parsed.get("reason")
+                return {
+                    "action": "ask",
+                    "reason": reason if isinstance(reason, str) else "",
+                }
             if isinstance(parsed, dict) and parsed.get("decision") == "deny":
                 reason = parsed.get("reason")
                 return {

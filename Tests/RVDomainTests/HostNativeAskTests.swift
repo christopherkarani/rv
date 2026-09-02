@@ -26,7 +26,7 @@ struct HostNativeAskTests {
         #expect(decoded != .allow)
     }
 
-    @Test(arguments: [HookHost.pi, .opencode])
+    @Test(arguments: [HookHost.pi, .opencode, .claude, .hermes])
     func spendFirstHostsPauseOnMandatoryHuman(_ host: HookHost) throws {
         let cwd = try #require(WorkingDirectory(validating: "/tmp/ws"))
         let result = EvaluationResult(
@@ -44,7 +44,7 @@ struct HostNativeAskTests {
         #expect(HostNativeAsk.capability(for: host) == .spendFirst)
     }
 
-    @Test(arguments: [HookHost.claude, .grok, .openclaw, .hermes, .codex, .cursor])
+    @Test(arguments: [HookHost.grok, .openclaw, .codex, .cursor])
     func denyOrTTYHostsDoNotPauseOnMandatoryHuman(_ host: HookHost) throws {
         let cwd = try #require(WorkingDirectory(validating: "/tmp/ws"))
         let result = EvaluationResult(
@@ -62,12 +62,14 @@ struct HostNativeAskTests {
         #expect(HostNativeAsk.capability(for: host) == .denyOrTTY)
     }
 
-    @Test func capabilityTable_piAndOpenCodeStaySpendFirst_codexAndCursorAreDenyOrTTY() {
+    @Test func capabilityTable_spendFirstAndDenyOrTTYHosts() {
         #expect(HostNativeAsk.capability(for: .pi) == .spendFirst)
         #expect(HostNativeAsk.capability(for: .opencode) == .spendFirst)
+        #expect(HostNativeAsk.capability(for: .claude) == .spendFirst)
+        #expect(HostNativeAsk.capability(for: .hermes) == .spendFirst)
         #expect(HostNativeAsk.capability(for: .codex) == .denyOrTTY)
         #expect(HostNativeAsk.capability(for: .cursor) == .denyOrTTY)
-        #expect(HostNativeAsk.capability(for: .claude) == .denyOrTTY)
+        #expect(HostNativeAsk.capability(for: .grok) == .denyOrTTY)
     }
 
     @Test func packDecisionDenyStaysDeny() {
@@ -98,7 +100,11 @@ struct HostNativeAskTests {
         )
         #expect(
             bridge.resolve(host: .claude, continuation: .hostNative, decision: .allowOnce)
-                == .denyOrTTY
+                == .spendThenAllow
+        )
+        #expect(
+            bridge.resolve(host: .hermes, continuation: .hostNative, decision: .allowOnce)
+                == .spendThenAllow
         )
         #expect(
             bridge.resolve(host: .grok, continuation: .hostNative, decision: .allowOnce)
@@ -144,6 +150,22 @@ struct HostNativeAskTests {
         )
         #expect(
             HostNativeAsk.verdict(
+                host: .claude,
+                result: result,
+                cwd: cwd,
+                bound: .deny(packDeny)
+            ) == .ask(.hostNative)
+        )
+        #expect(
+            HostNativeAsk.verdict(
+                host: .hermes,
+                result: result,
+                cwd: cwd,
+                bound: .deny(packDeny)
+            ) == .ask(.hostNative)
+        )
+        #expect(
+            HostNativeAsk.verdict(
                 host: .grok,
                 result: result,
                 cwd: cwd,
@@ -161,14 +183,6 @@ struct HostNativeAskTests {
         #expect(
             HostNativeAsk.verdict(
                 host: .cursor,
-                result: result,
-                cwd: cwd,
-                bound: .deny(packDeny)
-            ) == .deny
-        )
-        #expect(
-            HostNativeAsk.verdict(
-                host: .claude,
                 result: result,
                 cwd: cwd,
                 bound: .deny(packDeny)
@@ -278,7 +292,15 @@ struct HostNativeAskTests {
                 result: result,
                 cwd: cwd,
                 bound: .mandatoryHuman(askDeny)
-            ) == .deny
+            ) == .ask(.hostNative)
+        )
+        #expect(
+            HostNativeAsk.verdict(
+                host: .hermes,
+                result: result,
+                cwd: cwd,
+                bound: .mandatoryHuman(askDeny)
+            ) == .ask(.hostNative)
         )
     }
 

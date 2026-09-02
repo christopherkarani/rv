@@ -12,7 +12,9 @@ public struct ClaudeHostCodec: HostCodec {
         else {
             return .malformed(.unreadable)
         }
-        guard envelope.hookEventName == "PreToolUse" else {
+        guard let event = envelope.hookEventName,
+              event == "PreToolUse" || event == "PermissionRequest"
+        else {
             return .foreign
         }
         guard envelope.toolName == "Bash" else {
@@ -24,20 +26,24 @@ public struct ClaudeHostCodec: HostCodec {
         let cwd = envelope.cwd.flatMap { WorkingDirectory(validating: $0) }
         let session = firstNonEmpty(envelope.sessionId)
         let hostAsk = envelope.hostAsk.flatMap(HostAskHookIntent.init(rawValue:))
+            ?? (event == "PermissionRequest" ? .spend : nil)
         return .request(
             HookRequest(
                 host: .claude,
                 command: ShellCommand(rawValue: command),
                 cwd: cwd,
                 session: session,
-                hostAsk: hostAsk
+                hostAsk: hostAsk,
+                hookEvent: event
             )
         )
     }
 
-    /// Official `permissionDecision: "ask"` is leftover-ask-as-permit. Stay deny.
+    /// Official pause. PermissionRequest then spends before the tool runs.
     public func encodeAsk(reason: String, rule: String?, next: String?) -> HookWire {
-        encodeDeny(reason: reason, rule: rule, next: next)
+        _ = rule
+        _ = next
+        return HookWire(stdout: claudeAskJSON(reason: reason), exitCode: host.denyExitCode)
     }
 
     public func encodeDeny(reason: String, rule: String?, next: String?) -> HookWire {

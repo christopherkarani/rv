@@ -365,11 +365,57 @@ func cursorWrapper_emptyOrWhitespaceStdoutExitZeroIsDenyNotAllow(_ stubStdout: S
     #expect(source.contains("**kwargs"))
     #expect(source.contains("tool_name != \"terminal\""))
     #expect(source.contains("\"action\": \"block\""))
+    #expect(source.contains("\"action\": \"approve\""))
+    #expect(source.contains("hostAsk"))
     #expect(source.contains("\"hermes\""))
     #expect(source.contains("RV_BINARY = \"/opt/rv\""))
-    #expect(source.contains("\"action\": \"approve\"") == false)
     #expect(source.contains("permission.ask") == false)
     #expect(source.contains("RV_BYPASS") == false)
+}
+
+@Test func hermesAdapter_askJSONSpendsThenApproves() async throws {
+    let result = try await runHermesAdapter(
+        event: [
+            "tool_name": "terminal",
+            "args": ["command": "git reset --hard", "workdir": "/tmp/ws"],
+        ],
+        stub: .stdout(askResetHardJSON, exit: 1),
+        secondStub: .stdout("", exit: 0)
+    )
+    #expect(result.action == "approve")
+    #expect(result.spawnCount == 2)
+    #expect(result.lastStdin?.contains("\"hostAsk\": \"spend\"") == true
+        || result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
+    #expect(result.ruleKey?.hasPrefix("rv-guard:") == true)
+    #expect(result.message == resetHardAskReason)
+}
+
+@Test func hermesAdapter_askJSONFailedSpendBlocks() async throws {
+    let result = try await runHermesAdapter(
+        event: [
+            "tool_name": "terminal",
+            "args": ["command": "git reset --hard", "workdir": "/tmp/ws"],
+        ],
+        stub: .stdout(askResetHardJSON, exit: 1),
+        secondStub: .stdout(resetHardJSON, exit: 1)
+    )
+    #expect(result.action == "block")
+    #expect(result.spawnCount == 2)
+    #expect(result.message == resetHardReason)
+}
+
+@Test func hermesAdapter_denyJSONDoesNotApprove() async throws {
+    let result = try await runHermesAdapter(
+        event: [
+            "tool_name": "terminal",
+            "args": ["command": "git reset --hard", "workdir": "/tmp/ws"],
+        ],
+        stub: .stdout(resetHardJSON, exit: 1),
+        secondStub: .stdout("", exit: 0)
+    )
+    #expect(result.action == "block")
+    #expect(result.spawnCount == 1)
+    #expect(result.message == resetHardReason)
 }
 
 @Test func piAdapter_resetHardBlocksWithHostDenyText() async throws {
@@ -1502,6 +1548,132 @@ private struct CodexWrapperRun {
     var stdout: String
     var stderr: String
     var exitCode: Int32
+}
+
+private struct HermesAdapterRun {
+    var action: String?
+    var message: String?
+    var ruleKey: String?
+    var spawnCount: Int
+    var lastStdin: String?
+}
+
+private func runHermesAdapter(
+    event: [String: Any],
+    stub: StubRV,
+    secondStub: StubRV? = nil
+) async throws -> HermesAdapterRun {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-hermes-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let rvPath = root.appendingPathComponent("rv-stub").path
+    let firstStdout: String
+    let firstExit: Int32
+    switch stub {
+    case .missing:
+        try "#!/bin/sh\nexit 127\n".write(toFile: rvPath, atomically: true, encoding: .utf8)
+        firstStdout = ""
+        firstExit = 127
+    case .stdout(let stdout, let exitCode):
+        firstStdout = stdout
+        firstExit = exitCode
+        let spendStdout: String
+        let spendExit: Int32
+        switch secondStub {
+        case .stdout(let stdout, let exitCode):
+            spendStdout = stdout
+            spendExit = exitCode
+        default:
+            spendStdout = firstStdout
+            spendExit = firstExit
+        }
+        let script = """
+        #!/bin/sh
+        stdin=$(cat)
+        echo "$stdin" >> "$RV_STUB_LOG"
+        case "$stdin" in
+        *hostAsk*)
+          printf '%s' "$RV_STUB_SPEND_STDOUT"
+          exit "${RV_STUB_SPEND_EXIT:-0}"
+          ;;
+        esac
+        printf '%s' "$RV_STUB_STDOUT"
+        exit "${RV_STUB_EXIT:-0}"
+        """
+        try script.write(toFile: rvPath, atomically: true, encoding: .utf8)
+        _ = spendStdout
+        _ = spendExit
+    case .sleep:
+        firstStdout = ""
+        firstExit = 1
+    }
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: rvPath)
+
+    let source = try adapterSource(for: .hermes, rvPath: rvPath)
+    let adapter = root.appendingPathComponent("rv_guard.py")
+    try source.write(to: adapter, atomically: true, encoding: .utf8)
+
+    let driver = root.appendingPathComponent("driver.py")
+    let driverSource = """
+    import importlib.util, json, sys
+    spec = importlib.util.spec_from_file_location("rv_guard", sys.argv[1])
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    event = json.load(sys.stdin)
+    result = mod._on_pre_tool_call(**event)
+    print(json.dumps(result))
+    """
+    try driverSource.write(to: driver, atomically: true, encoding: .utf8)
+
+    let eventData = try JSONSerialization.data(withJSONObject: event)
+    let eventText = try #require(String(data: eventData, encoding: .utf8))
+    let logPath = root.appendingPathComponent("stub.log").path
+
+    var environment = ProcessInfo.processInfo.environment
+    environment["HOME"] = root.path
+    environment["RV_STUB_LOG"] = logPath
+    environment["RV_STUB_STDOUT"] = firstStdout
+    environment["RV_STUB_EXIT"] = String(firstExit)
+    switch secondStub {
+    case .stdout(let stdout, let exitCode):
+        environment["RV_STUB_SPEND_STDOUT"] = stdout
+        environment["RV_STUB_SPEND_EXIT"] = String(exitCode)
+    default:
+        environment["RV_STUB_SPEND_STDOUT"] = firstStdout
+        environment["RV_STUB_SPEND_EXIT"] = String(firstExit)
+    }
+
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    process.arguments = ["python3", driver.path, adapter.path]
+    process.environment = environment
+    process.currentDirectoryURL = root
+    let stdin = Pipe()
+    let stdout = Pipe()
+    let stderr = Pipe()
+    process.standardInput = stdin
+    process.standardOutput = stdout
+    process.standardError = stderr
+    try process.run()
+    stdin.fileHandleForWriting.write(Data(eventText.utf8))
+    try stdin.fileHandleForWriting.close()
+    process.waitUntilExit()
+    let out = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+    let err = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+    #expect(process.terminationStatus == 0, "hermes driver stderr: \(err) stdout: \(out)")
+    let object = try JSONSerialization.jsonObject(with: Data(out.trimmingCharacters(in: .whitespacesAndNewlines).utf8))
+    let json = try #require(object as? [String: Any])
+    let log = (try? String(contentsOfFile: logPath, encoding: .utf8)) ?? ""
+    let spawns = log.split(whereSeparator: \.isNewline).filter { $0.isEmpty == false }
+    return HermesAdapterRun(
+        action: json["action"] as? String,
+        message: json["message"] as? String,
+        ruleKey: json["rule_key"] as? String,
+        spawnCount: spawns.count,
+        lastStdin: spawns.last.map(String.init)
+    )
 }
 
 private func runCodexWrapper(

@@ -78,10 +78,16 @@ private func hookBody<C: HostCodec>(
     case .request(let request):
         if request.hostAsk == .spend {
             guard let spendHostAsk else {
-                return codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: nil)
+                return encodeSpendUnavailable(using: codec, hookEvent: request.hookEvent)
             }
             let result = await spendHostAsk(request.command, request.cwd)
-            return hookWire(from: result, command: request.command, using: codec, afterSpend: true)
+            return hookWire(
+                from: result,
+                command: request.command,
+                using: codec,
+                afterSpend: true,
+                hookEvent: request.hookEvent
+            )
         }
         let result = await evaluate(request.command, request.cwd)
         if let live = LiveEvaluation(result) {
@@ -110,4 +116,11 @@ private func hookBody<C: HostCodec>(
     case .malformed(let malformation):
         return codec.encodeDeny(reason: malformedHookSentence(malformation), rule: nil, next: nil)
     }
+}
+
+private func encodeSpendUnavailable<C: HostCodec>(using codec: C, hookEvent: String?) -> HookWire {
+    if codec.host == .claude, hookEvent == "PermissionRequest" {
+        return claudePermissionRequestDeny(reason: incompleteEvalSentence)
+    }
+    return codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: nil)
 }

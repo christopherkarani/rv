@@ -117,6 +117,19 @@ func claudeDecode_otherToolOrEventIsForeign(_ file: String) throws {
     #expect(request.cwd == WorkingDirectory(validating: "/tmp/ws"))
 }
 
+@Test func claudeDecode_permissionRequestIsSpend() {
+    let stdin = """
+    {"hook_event_name":"PermissionRequest","cwd":"/tmp/ws","tool_name":"Bash","tool_input":{"command":"git reset --hard"}}
+    """
+    guard case .request(let request) = codec.decode(stdin) else {
+        Issue.record("expected .request for PermissionRequest")
+        return
+    }
+    #expect(request.hostAsk == .spend)
+    #expect(request.hookEvent == "PermissionRequest")
+    #expect(request.command.rawValue == "git reset --hard")
+}
+
 @Test func claudeEncodeAllow_isEmptyExitZero() throws {
     let wire = codec.encodeAllow()
     let expected = try claudeExpected("allow-git-status")
