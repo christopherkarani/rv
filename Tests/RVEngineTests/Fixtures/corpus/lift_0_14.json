@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "source": "lift_0_14",
+  "cases": [
+    {
+      "id": "lift.echo-pipe-bash-norc-reset",
+      "command": "echo 'git reset --hard' | bash --norc",
+      "expected": "deny"
+    },
+    {
+      "id": "lift.echo-pipe-bash-rm-home",
+      "command": "echo 'rm -rf ~' | bash",
+      "expected": "deny"
+    },
+    {
+      "id": "lift.cat-heredoc-pipe-bash-reset",
+      "command": "cat <<'EOF' | bash\ngit reset --hard\nEOF",
+      "expected": "deny"
+    },
+    {
+      "id": "lift.bash-dev-stdin-heredoc-reset",
+      "command": "bash /dev/stdin <<'EOF'\ngit reset --hard\nEOF",
+      "expected": "deny"
+    },
+    {
+      "id": "lift.bash-init-file-process-sub-reset",
+      "command": "bash --init-file <(echo 'git reset --hard')",
+      "expected": "deny"
+    },
+    {
+      "id": "lift.bash-unknown-flag-stdin-consumer",
+      "command": "echo 'git reset --hard' | bash --unknown-flag",
+      "expected": "deny"
+    },
+    {
+      "id": "lift.cat-file-pipe-bash-limited",
+      "command": "cat somefile | bash",
+      "expected": "deny"
+    },
+    {
+      "id": "lift.echo-pipe-bash-then-tee",
+      "command": "echo 'git reset --hard' | bash | tee",
+      "expected": "deny"
+    },
+    {
+      "id": "lift.bash-init-file-process-sub-cat-limited",
+      "command": "bash --init-file <(cat somefile)",
+      "expected": "deny"
+    },
+    {
+      "id": "lift.echo-ansic-pipe-bash-limited",
+      "command": "echo $'git reset --hard' | bash",
+      "expected": "deny"
+    },
+    {
+      "id": "lift.echo-quoted-reset-no-pipe",
+      "command": "echo 'git reset --hard'",
+      "expected": "allow"
+    },
+    {
+      "id": "lift.git-status",
+      "command": "git status",
+      "expected": "allow"
+    },
+    {
+      "id": "lift.cat-heredoc-pipe-grep",
+      "command": "cat <<'EOF' | grep -c reset\ngit reset --hard\nEOF",
+      "expected": "allow"
+    },
+    {
+      "id": "lift.echo-pipe-tee",
+      "command": "echo 'git reset --hard' | tee",
+      "expected": "allow"
+    },
+    {
+      "id": "lift.echo-pipe-wc",
+      "command": "echo 'git reset --hard' | wc",
+      "expected": "allow"
+    }
+  ]
+}
