@@ -29,8 +29,8 @@ The step after the Evaluate session. On engine deny, hook miss and rvd may spend
 _Avoid_: honor wrapper, consume-on-evaluate
 
 **Allow-once grant**:
-A single-use unlock for one matching view plus cwd. Spent by the Policy gate after an engine deny. The hook wire never carries a code.
-_Avoid_: bypass, pending code, exception, consume-then-evaluate
+A single-use unlock for one matching view plus cwd. Hook deny of an unlockable pack deny mints a pending row; TTY `rv allow-once <code>` grants; the Policy gate spends. The hook wire may carry the pending code on deny `reason` / `next`. It must not carry a granted row. Evaluate session still does not honor grants.
+_Avoid_: bypass, exception, consume-then-evaluate
 
 **Unlockable deny**:
 A pack deny the Policy gate could spend (matching view + cwd present). Not `core.secrets`, not `builtin.action`, not incomplete evaluate. Spend-first hosts (Pi, OpenCode) pause on the hook door; deny-or-TTY hosts stay deny.

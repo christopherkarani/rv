@@ -204,6 +204,15 @@ public struct ServiceClient: Sendable {
                 },
                 spendHostAsk: { command, cwd in
                     await self.spendHostAsk(command: command, cwd: cwd)
+                },
+                mintOnDeny: { result, cwd in
+                    await GatedEvaluate.mintUnlockCode(
+                        for: result,
+                        cwd: cwd,
+                        store: self.store,
+                        now: self.clock(),
+                        home: self.home
+                    )
                 }
             )
         }

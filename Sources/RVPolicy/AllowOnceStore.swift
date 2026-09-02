@@ -68,6 +68,50 @@ public actor AllowOnceStore {
         throw lastError
     }
 
+    /// Hook deny mint. Not TTY-gated. Returns plaintext 6-hex or nil.
+    /// Writes `kind: .pending` only. Never plants a granted row.
+    package func mintFromDeny(
+        matchingView: MatchingView,
+        cwd: WorkingDirectory,
+        ruleID: RuleID?,
+        now: Date,
+        ttl: TimeInterval = 24 * 60 * 60
+    ) async -> String? {
+        let trimmed = matchingView.rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else { return nil }
+        let view = MatchingView(trimmed)
+        for _ in 0..<8 {
+            let code: String
+            do {
+                code = try generateAllowOnceCode()
+            } catch {
+                return nil
+            }
+            let hash = sha256Hex(code)
+            do {
+                try withFileLock(nonBlocking: true) {
+                    let fresh = try AllowOnceLedger.mint(
+                        records: loadRecords(),
+                        codeHash: hash,
+                        fingerprint: commandFingerprint(view),
+                        redacted: redactCommand(view),
+                        cwd: cwd,
+                        ruleID: ruleID,
+                        now: now,
+                        ttl: ttl
+                    )
+                    try writeRecords(fresh)
+                }
+                return code
+            } catch let error as AllowOnceError where error == .collision {
+                continue
+            } catch {
+                return nil
+            }
+        }
+        return nil
+    }
+
     public func redeem(
         code: String,
         tty: TTYCapability,
@@ -272,11 +316,12 @@ public actor AllowOnceStore {
         try setOwnerOnlyFile(fileURL)
     }
 
-    private func withFileLock<T>(_ body: () throws -> T) throws -> T {
+    private func withFileLock<T>(nonBlocking: Bool = false, _ body: () throws -> T) throws -> T {
         try prepareStoreDirectory()
         do {
             return try ExclusiveFileLock.withLock(
                 at: RVPolicyPaths.allowOnceLockFile(inConfigDir: baseDirectory),
+                nonBlocking: nonBlocking,
                 body
             )
         } catch let error as ExclusiveFileLock.LockError {

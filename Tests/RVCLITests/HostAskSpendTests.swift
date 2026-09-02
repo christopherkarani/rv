@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import RVDomain
 import RVHooks
+import RVPolicy
 @testable import RVCLI
 
 struct HostAskSpendTests {
@@ -227,5 +228,49 @@ struct HostAskSpendTests {
             JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any]
         )
         #expect(json["decision"] as? String == "deny")
+    }
+
+    @Test func piFirstCallAskDoesNotMintCode() async throws {
+        let directory = try isolatedAllowOnceDirectory()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let client = ServiceClient(
+            transport: nil,
+            allowOnceDirectory: directory,
+            home: try isolatedHome(),
+            clock: { now }
+        )
+        let stdin = """
+        {"toolName":"bash","cwd":"/tmp/ws","input":{"command":"git reset --hard"}}
+        """
+        let wire = await client.hookEvaluate(host: .pi, stdin: stdin)
+        let json = try #require(
+            JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any]
+        )
+        #expect(json["decision"] as? String == "ask")
+        #expect(allowOnceUnlockCode(in: wire.stdout) == nil)
+        #expect((await AllowOnceStore(baseDirectory: directory).list(now: now)).isEmpty)
+    }
+
+    @Test func grokHookEvaluateLockFailureStaysDenyWithoutCode() async throws {
+        let directory = try isolatedAllowOnceDirectory()
+        let lock = RVPolicyPaths.allowOnceLockFile(inConfigDir: directory)
+        try FileManager.default.createDirectory(at: lock, withIntermediateDirectories: false)
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let client = ServiceClient(
+            transport: nil,
+            allowOnceDirectory: directory,
+            home: try isolatedHome(),
+            clock: { now }
+        )
+        let stdin = """
+        {"hookEventName":"pre_tool_use","cwd":"/tmp/ws","toolName":"run_terminal_command","toolInput":{"command":"git reset --hard"}}
+        """
+        let wire = await client.hookEvaluate(host: .grok, stdin: stdin)
+        let json = try #require(
+            JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any]
+        )
+        #expect(json["decision"] as? String == "deny")
+        #expect(allowOnceUnlockCode(in: wire.stdout) == nil)
+        #expect(json["next"] == nil)
     }
 }

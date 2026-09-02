@@ -5,6 +5,7 @@ import Glibc
 #endif
 import Foundation
 import Testing
+import RVDomain
 @testable import RVPolicy
 
 struct AllowOnceStoreTests {
@@ -247,6 +248,88 @@ struct AllowOnceStoreTests {
         #expect(store.baseDirectory == RVPolicyPaths.configDirectory(home: home))
         #expect(store.baseDirectory.path.contains("rv-allow-once-nohome") == false)
     }
+
+    @Test func mintFromDeny_nonTTYStillWritesPending() async throws {
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let code = await store.mintFromDeny(
+            matchingView: "git reset --hard",
+            cwd: wd("/tmp/ws"),
+            ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+            now: now
+        )
+        let minted = try #require(code)
+        #expect(minted.count == 6)
+        #expect(isAllowOnceStoreHex(minted))
+        #expect(minted == minted.lowercased())
+        let rows = await store.list(now: now)
+        #expect(rows.count == 1)
+        #expect(rows[0].kind == .pending)
+        #expect(rows[0].cwd == wd("/tmp/ws"))
+        let disk = try String(contentsOf: jsonl(store), encoding: .utf8)
+        #expect(disk.contains(minted) == false)
+        #expect(disk.contains("\"kind\":\"pending\""))
+    }
+
+    @Test func mintFromDeny_emptyMatchingViewIsNil() async throws {
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let code = await store.mintFromDeny(
+            matchingView: "   ",
+            cwd: wd("/tmp/ws"),
+            ruleID: nil,
+            now: now
+        )
+        #expect(code == nil)
+        #expect(FileManager.default.fileExists(atPath: jsonl(store).path) == false)
+    }
+
+    @Test func mintFromDeny_lockFailureIsNil() async throws {
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        try sabotageLock(in: store.baseDirectory)
+        let code = await store.mintFromDeny(
+            matchingView: "git reset --hard",
+            cwd: wd("/tmp/ws"),
+            ruleID: nil,
+            now: now
+        )
+        #expect(code == nil)
+        #expect(FileManager.default.fileExists(atPath: jsonl(store).path) == false)
+    }
+
+    @Test func mintFromDeny_redeemThenConsumeAllowsOnce() async throws {
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+        let minted = try #require(
+            await store.mintFromDeny(
+                matchingView: "git reset --hard",
+                cwd: wd("/tmp/ws"),
+                ruleID: nil,
+                now: now
+            )
+        )
+        await #expect(throws: AllowOnceError.ttyRequired) {
+            try await store.redeem(
+                code: minted,
+                tty: TTYCapability(stdinIsTTY: false, stdoutIsTTY: false, ci: false),
+                now: now
+            )
+        }
+        await #expect(throws: AllowOnceError.robotRefused) {
+            try await store.redeem(code: minted, tty: tty, now: now, robot: true)
+        }
+        #expect((await store.list(now: now)).contains { $0.kind == .pending })
+        _ = try await store.redeem(code: minted, tty: tty, now: now)
+        let first = await store.consume(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
+        let second = await store.consume(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
+        guard case .consumed = first else {
+            Issue.record("first consume should succeed after TTY redeem")
+            return
+        }
+        #expect(second == .alreadyConsumed)
+    }
 }
 
 private enum AllowOnceConsumeProbe {
@@ -369,6 +452,12 @@ private func readProbeStatus(directory: URL, outputName: String, process: Proces
     try #require(FileManager.default.fileExists(atPath: url.path))
     return try String(contentsOf: url, encoding: .utf8)
         .trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+private func isAllowOnceStoreHex(_ code: String) -> Bool {
+    code.count == 6 && code.unicodeScalars.allSatisfy { scalar in
+        (scalar >= "0" && scalar <= "9") || (scalar >= "a" && scalar <= "f")
+    }
 }
 
 private func isolatedStore() throws -> AllowOnceStore {

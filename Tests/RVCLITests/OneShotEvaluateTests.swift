@@ -238,12 +238,19 @@ struct OneShotEvaluateClientTests {
             stdin: try hookFixture("codex", "deny-git-reset-hard.json"),
             client: client
         )
-        let expectedStderr = try hookFixture("codex", "deny-git-reset-hard.err")
+        let why = try hookFixture("codex", "deny-git-reset-hard.err")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        let stderr = outcome.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+        let code = try #require(allowOnceUnlockCode(in: stderr))
+        let whyRest = why.hasPrefix("RV · Blocked. ")
+            ? String(why.dropFirst("RV · Blocked. ".count))
+            : why
+        let expected = "RV · Blocked. \(hookUnlockNext(code: code)) \(whyRest)"
         #expect(outcome.exitCode == 2)
         #expect(outcome.stdout.contains("\"decision\":\"block\""))
-        #expect(outcome.stderr.trimmingCharacters(in: .whitespacesAndNewlines) == expectedStderr)
-        #expect(expectedStderr.isEmpty == false)
+        #expect(stderr == expected)
+        #expect(outcome.stdout.contains(expected))
+        #expect(why.isEmpty == false)
     }
 
     @Test func hookEvaluateIsOneSendWhenClientSemverIsSet_budgetIsConnect200PlusRequest500Equals700Ms() async throws {
