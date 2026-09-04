@@ -10,6 +10,7 @@ public struct RV: AsyncParsableCommand {
             Test.self,
             Explain.self,
             Packs.self,
+            Policy.self,
             Scan.self,
             Service.self,
             Hook.self,

@@ -8,6 +8,8 @@ xcuserdata/
 .grok/*
 !.grok/skills/
 !.grok/skills/**
+!.grok/workflows/
+!.grok/workflows/**
 # Global specialist skills (symlinks to ~/.grok/skills) — not repo content
 .grok/skills/swift-functional-architecture
 .grok/skills/swift-type-system-architecture
