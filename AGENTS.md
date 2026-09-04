@@ -9,7 +9,7 @@ Hexagonal modules; dependency arrows down; a test that needs a TTY to prove a **
 v1 factory: T0→T9, `docs/factory/STATUS.md`, arbiter `docs/factory/PLAN.md`.
 0.2 execute queue: `docs/architecture/02.md` § Order — next unfinished ticket, start OPE-156. Not Linear In Progress / Backlog. Host Ask (OPE-264/265) before Auto-review. HTML drawing is not law.
 
-Pointers: `CONTEXT.md` (vocabulary), `docs/factory/STATUS.md` (v1 board), `docs/architecture/MODULES.md`, `docs/architecture/02.md` (0.2 overlay), `docs/dev/SWIFT.md`, `docs/dev/PARITY.md`, `docs/factory/PLAN.md` (v1 arbiter).
+Pointers: `CONTEXT.md` (vocabulary), `docs/factory/STATUS.md` (v1 board), `docs/architecture/MODULES.md`, `docs/architecture/02.md` (0.2 overlay), `docs/architecture/english-compile.md` (typed rules / English compile; not 02 queue), `docs/dev/SWIFT.md`, `docs/dev/PARITY.md`, `docs/factory/PLAN.md` (v1 arbiter).
 
 Skills (project wins on conflict; fixtures/fakes stay in `Tests/`; do not load `thermo-nuclear-code-quality-review`):
 

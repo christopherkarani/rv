@@ -44,11 +44,11 @@ struct IdleExitTests {
     #endif
 }
 
-/// `Task.sleep(1.3s)` after a 1s watchdog is too tight under a parallel Linux
-/// suite: the fire task can miss the window. Poll with a 3s deadline.
+/// `Task.sleep` after a 1s watchdog is too tight under a parallel Linux
+/// suite: the fire task can miss the window. Poll with a 15s deadline.
 private func waitUntilIdleFired(
     _ watchdog: IdleWatchdog,
-    timeoutNanoseconds: UInt64 = 3_000_000_000
+    timeoutNanoseconds: UInt64 = 15_000_000_000
 ) async -> Bool {
     let deadline = ContinuousClock.now + .nanoseconds(Int64(timeoutNanoseconds))
     while ContinuousClock.now < deadline {

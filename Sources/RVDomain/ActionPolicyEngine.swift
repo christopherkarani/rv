@@ -26,16 +26,20 @@ public enum PackFallback: Sendable, Equatable, Codable {
 }
 
 /// Effective policy fed to `ActionPolicyEngine`. No I/O; no pack files.
+/// `rules` are restrict-only: typed allow cannot weaken a built-in hard deny.
 public struct EffectiveActionPolicy: Sendable, Equatable, Codable {
     public var overlay: ActionPolicyOverlay
     public var packFallback: PackFallback
+    public var rules: [TypedRule]
 
     public init(
         overlay: ActionPolicyOverlay = .none,
-        packFallback: PackFallback = .none
+        packFallback: PackFallback = .none,
+        rules: [TypedRule] = []
     ) {
         self.overlay = overlay
         self.packFallback = packFallback
+        self.rules = rules
     }
 
     public static let empty = EffectiveActionPolicy()
@@ -65,8 +69,8 @@ public struct ActionPolicyVerdict: Sendable, Equatable, Codable {
 }
 
 /// Pure semantic evaluator. Same typed action + policy → same verdict.
-/// Predicates read typed effects, resources, and context. Scope travels on
-/// the action. `supportingCommand` is never consulted.
+/// Typed gitPush rules match `gitAction` when present; missing git analysis
+/// fails closed. `supportingCommand` is never consulted.
 public enum ActionPolicyEngine: Sendable {
     public enum Builtin {
         public static let pack = PackID(rawValue: "builtin.action")
@@ -135,11 +139,12 @@ public enum ActionPolicyEngine: Sendable {
     public static func evaluate(
         action: ProposedAction,
         context: ReviewContext = ReviewContext(repository: RepositoryReviewContext()),
-        policy: EffectiveActionPolicy = .empty
+        policy: EffectiveActionPolicy = .empty,
+        gitAction: GitAction? = nil
     ) -> ActionPolicyVerdict {
         switch action {
         case .shell(let shell):
-            return evaluateShell(shell, context: context, policy: policy)
+            return evaluateShell(shell, context: context, policy: policy, gitAction: gitAction)
         }
     }
 
@@ -166,9 +171,11 @@ public enum ActionPolicyEngine: Sendable {
     private static func evaluateShell(
         _ shell: ShellAction,
         context: ReviewContext,
-        policy: EffectiveActionPolicy
+        policy: EffectiveActionPolicy,
+        gitAction: GitAction?
     ) -> ActionPolicyVerdict {
         var hit = builtinHit(shell: shell, context: context)
+        hit = applyTypedRules(hit, policy.rules, gitAction: gitAction)
         if hit.semanticallyCovered == false {
             hit = applyPackFallback(hit, policy.packFallback)
         }
@@ -334,6 +341,56 @@ public enum ActionPolicyEngine: Sendable {
     }
 
     private static let sharedBranchNames: Set<String> = ["main", "master"]
+
+    /// Restrict-only. Deny wins over ask; ask wins over allow; allow is a no-op.
+    /// A typed ask cannot weaken an existing `hardDeny`.
+    private static func applyTypedRules(
+        _ hit: CoreHit,
+        _ rules: [TypedRule],
+        gitAction: GitAction?
+    ) -> CoreHit {
+        var matchedDeny: TypedRule?
+        var matchedAsk: TypedRule?
+        for rule in rules {
+            guard let gitAction, PolicyMatch.matches(rule.predicate, action: gitAction) else {
+                continue
+            }
+            switch rule.verdict {
+            case .deny:
+                if matchedDeny == nil {
+                    matchedDeny = rule
+                }
+            case .ask:
+                if matchedAsk == nil {
+                    matchedAsk = rule
+                }
+            case .allow:
+                break
+            }
+        }
+        if let rule = matchedDeny {
+            let deny = Deny(ruleID: rule.id, reason: "A typed rule denied this action.")
+            return CoreHit(
+                decision: .hardDeny(deny),
+                ruleID: rule.id,
+                reason: deny.reason,
+                semanticallyCovered: true
+            )
+        }
+        if let rule = matchedAsk {
+            if case .hardDeny = hit.decision {
+                return hit
+            }
+            let deny = Deny(ruleID: rule.id, reason: "A typed rule requires a human.")
+            return CoreHit(
+                decision: .mandatoryHuman(deny),
+                ruleID: rule.id,
+                reason: deny.reason,
+                semanticallyCovered: true
+            )
+        }
+        return hit
+    }
 
     private static func applyPackFallback(_ hit: CoreHit, _ fallback: PackFallback) -> CoreHit {
         switch fallback {

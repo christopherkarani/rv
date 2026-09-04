@@ -87,3 +87,7 @@ _Avoid_: EnabledPacks.resolve as a caller-facing door, a public pack-ID bag name
 **EvaluationRoute**:
 The client Decision from transport and advertised service semver to an EvaluationPath (xpc or inProcess). `path(for:)` owns unprovable compatibility (missing, empty, or unparseable advertised service semver → inProcess). Adapters: `ServiceClient.evaluate` and C `rv_should_miss_replay`. Server empty-client handshake stays `isMajorSkewed` (not skew).
 _Avoid_: isMajorSkew at the client evaluate call site, flipping isMajorSkew true on parse failure, transportPresent Bool
+
+**English compile**:
+You type English, rv shows a typed rule, you save it, the hook matches that form with no model. Law: `docs/architecture/english-compile.md`. Not 02.md § Order.
+_Avoid_: saving English as the matcher, importing `scratch/english-review`, live Auto-review on the hook

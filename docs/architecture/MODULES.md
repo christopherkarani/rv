@@ -10,11 +10,11 @@ Each module keeps a small public API, `package` internals later, and its own tes
 
 | Module | Owns | Must not |
 |---|---|---|
-| **RVDomain** | `Decision`, `Severity`, `PackID`, `RuleID`, `SecretPathCatalog`, `EvaluationRequest/Result`, Explain pipeline (`ExplainStep`), `ProposedAction`, `HardPolicyDecision`, `ActionPolicyEngine`, `ActionReviewer`, `PendingApproval`, `HostNativeAsk`, `ApprovalBridge`, `SemanticAnalysis`, `GitAction`, `FilesystemAction` | I/O, TTY, XPC |
+| **RVDomain** | `Decision`, `Severity`, `PackID`, `RuleID`, `SecretPathCatalog`, `EvaluationRequest/Result`, Explain pipeline (`ExplainStep`), `ProposedAction`, `HardPolicyDecision`, `ActionPolicyEngine`, `ActionReviewer`, `PendingApproval`, `HostNativeAsk`, `ApprovalBridge`, `SemanticAnalysis`, `GitAction`, `FilesystemAction`, `PolicyPredicate`, `TypedRule` (shapes) | I/O, TTY, XPC |
 | **RVEngine** | normalize, quick-reject, safe then destructive, secret-path on allow, deadline, `PatternEngine`, `analyzeGit`, `applyGitSemantics`, `analyzeFilesystem`, `applyFilesystemSemantics`, `unwrapCommand`, `analyzeSemantics`, `applySemantics` | pack files, hooks |
 | **RVPacks** | registry, bundled JSON, enable/disable | decisions, rendering |
 | **RVScan** | session-store discovery, bounds walk, store adapters, extract, classify, dedupe | CLI, TUI, XPC, hooks codecs, Policy gate |
-| **RVPolicy** | config merge, allowlist, allow-once, `HostGrantWriter`, durable `PendingApprovalStore`, Apple Foundation Models `ActionReviewer` adapter (shadow), `ShadowReviewRunner` | rendering |
+| **RVPolicy** | config merge, allowlist, allow-once, `HostGrantWriter`, durable `PendingApprovalStore`, Apple Foundation Models `ActionReviewer` adapter (shadow), `ShadowReviewRunner`, `TypedRule` store (load/save/merge) | rendering |
 | **RVHooks** | **Pi / Grok / OpenCode / Claude / OpenClaw / Hermes / Codex / Cursor** Host adapters: shell codecs, Hook mapper/voice, Pi/OpenCode confirm-or-resolution spend-then-allow, OpenCode `bash` + TUI `session.shell` / `shell.env` official permission create + TUI `DialogConfirm` Ask then spend-then-allow (missing confirm still fail-closed; last-match is not a permit), Claude deny-or-TTY (no leftover `permissionDecision` ask), Codex host-only official older `decision: block` + stderr reason + exit 2 (stdout-only block and Claude permission deny are not the honor path), Cursor host-only official native `permission: deny` + exit 0 (Claude permissionDecision and Codex `decision: block` + exit 2 are not the honor path), embedded adapter resources | evaluation, setup mutations |
 | **RVIPC** | `rv.ipc.v1` Codable | transport details |
 | **RVService** | XPC listener, EvaluationWorld (single assembly), EvaluateSession (compiled day-one packs + evaluate), GatedEvaluate (session then Policy gate), launchd | ArgumentParser, SwiftUI |
@@ -49,6 +49,8 @@ Each module has a matching `*Tests` target that depends only on that module.
 On Linux (OPE-261–262), `RVService`, `rvd`, `RVCLI`, `rv`, and their tests are on the graph. XPC types stay behind `#if canImport(XPC)`; Linux `rvd` listens on AF_UNIX under `$XDG_RUNTIME_DIR`. The C `rv` hook talks that socket; miss still execs `rv-cli`. Darwin `RVPolicy` stays `RVDomain` + CryptoKit; Linux `RVPolicy` adds `Crypto` (swift-crypto).
 
 **Semantic policy (OPE-157).** `ActionPolicyEngine` is the pure evaluator: `ProposedAction` + context + `EffectiveActionPolicy` → `HardPolicyDecision`. Built-in `hardDeny` / `mandatoryHuman` cannot be weakened by repo/user overlay or `ReviewBind` (including a stub `.allow`). Legacy pack verdicts apply only when no semantic rule covers the action. `supportingCommand` is evidence, not the primary input.
+
+**English compile / typed rules.** Product law: `docs/architecture/english-compile.md`. `PolicyPredicate` and `TypedRule` shapes live in RVDomain so `ActionPolicyEngine` stays pure. Persistence (load/save/merge) is RVPolicy. Not the 0.2 execute queue.
 
 **Git analyzer (OPE-254).** `analyzeGit` (RVEngine) parses global options and high-value Git operations into `GitAction`. `applyGitSemantics` attaches that analysis and may add a semantic deny when packs allow. Pack deny / indeterminate is a floor: unknown or unsupported Git syntax never becomes more permissive than the pack verdict.
 
