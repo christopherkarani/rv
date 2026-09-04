@@ -316,6 +316,26 @@ struct GatedEvaluateTests {
             home: mintHome()
         )
         #expect(pinCode == nil)
+        let unwrapLimited = EvaluationResult(
+            outcome: .deny(
+                Deny(
+                    ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+                    reason: "git reset --hard destroys uncommitted changes"
+                ),
+                matched: nil
+            ),
+            matchingView: "bash -c git reset --hard",
+            analysis: .unwrapLimited.wrapping([.bash])
+        )
+        #expect(UnlockableDeny.matches(result: unwrapLimited, cwd: wd("/tmp/ws")) == false)
+        let unwrapCode = await GatedEvaluate.mintUnlockCode(
+            for: unwrapLimited,
+            cwd: wd("/tmp/ws"),
+            store: store,
+            now: now,
+            home: mintHome()
+        )
+        #expect(unwrapCode == nil)
         #expect((await store.list(now: now)).isEmpty)
     }
 }

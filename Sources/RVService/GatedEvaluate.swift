@@ -251,9 +251,8 @@ public struct GatedEvaluate: Sendable {
         home: HomeDirectory?
     ) async -> String? {
         guard home != nil else { return nil }
+        guard let cwd, UnlockableDeny.matches(result: result, cwd: cwd) else { return nil }
         guard case .deny(let deny) = result.decision else { return nil }
-        guard RulePinning.blocksAllowOverride(result) == false else { return nil }
-        guard let cwd else { return nil }
         return await store.mintFromDeny(
             matchingView: result.matchingView,
             cwd: cwd,

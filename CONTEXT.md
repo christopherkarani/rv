@@ -33,8 +33,8 @@ A single-use unlock for one matching view plus cwd. Hook deny of an unlockable p
 _Avoid_: bypass, exception, consume-then-evaluate
 
 **Unlockable deny**:
-A pack deny the Policy gate could spend (matching view + cwd present). Not `core.secrets`, not `builtin.action`, not incomplete evaluate. Spend-first hosts (Pi, OpenCode) pause on the hook door; deny-or-TTY hosts stay deny.
-_Avoid_: inferring Ask from deny JSON that happens to carry a rule id
+A pack deny the Policy gate could spend: cwd and matching view present, not pinned (`core.secrets`, `builtin.action`, unwrap-limited analysis, protected-path). Decided from EvaluationResult plus cwd, never from a Deny pack id alone. Spend-first hosts pause; deny-or-TTY hosts stay deny.
+_Avoid_: Deny-only overload; gating BoundReview.mandatoryHuman; rebase recovery (that override runs first and can lift working-tree-discard); inferring Ask from deny JSON that happens to carry a rule id
 
 **Host adapter**:
 The rv-owned integration for one supported host that turns a host shell event into a Hook request and carries the Hook mapper's result back as the host-native block plus optional display-only chrome. Setup installs a Host adapter; it does not define its behavior.

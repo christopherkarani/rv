@@ -221,6 +221,24 @@ struct HostNativeAskTests {
         )
     }
 
+    @Test func doorVerdict_unwrapLimitedPackDenyNeverAsks() throws {
+        let cwd = try #require(WorkingDirectory(validating: "/tmp/ws"))
+        let result = EvaluationResult(
+            outcome: .deny(packDeny, matched: nil),
+            matchingView: MatchingView("bash -c git reset --hard"),
+            analysis: .unwrapLimited.wrapping([.bash])
+        )
+        #expect(UnlockableDeny.matches(result: result, cwd: cwd) == false)
+        #expect(
+            HostNativeAsk.verdict(
+                host: .pi,
+                result: result,
+                cwd: cwd,
+                bound: .deny(packDeny)
+            ) == .deny
+        )
+    }
+
     @Test func doorVerdict_secretPathNeverAsks() throws {
         let cwd = try #require(WorkingDirectory(validating: "/tmp/ws"))
         let secret = Deny(
