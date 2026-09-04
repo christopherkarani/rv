@@ -316,7 +316,75 @@ struct GatedEvaluateTests {
             home: mintHome()
         )
         #expect(pinCode == nil)
+        let unwrapLimited = EvaluationResult(
+            outcome: .deny(
+                Deny(
+                    ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+                    reason: "git reset --hard destroys uncommitted changes"
+                ),
+                matched: nil
+            ),
+            matchingView: "bash -c git reset --hard",
+            analysis: .unwrapLimited.wrapping([.bash])
+        )
+        let unwrapCode = await GatedEvaluate.mintUnlockCode(
+            for: unwrapLimited,
+            cwd: wd("/tmp/ws"),
+            store: store,
+            now: now,
+            home: mintHome()
+        )
+        #expect(unwrapCode == nil)
         #expect((await store.list(now: now)).isEmpty)
+    }
+
+    @Test func mintUnlockCode_mandatoryHumanRemoteBranchAskWritesPending() async throws {
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let denied = EvaluationResult(
+            outcome: .deny(ActionPolicyEngine.Builtin.remoteBranchAsk, matched: nil),
+            matchingView: "git push --force-with-lease origin feature",
+            analysis: .unknown,
+            boundReview: .mandatoryHuman(ActionPolicyEngine.Builtin.remoteBranchAsk)
+        )
+        let code = await GatedEvaluate.mintUnlockCode(
+            for: denied,
+            cwd: wd("/tmp/ws"),
+            store: store,
+            now: now,
+            home: mintHome()
+        )
+        #expect(code != nil)
+        #expect((await store.list(now: now)).isEmpty == false)
+    }
+
+    @Test func spendHostAsk_mandatoryHumanForcePushPrivateBranchAllowsOnce() async throws {
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let gated = GatedEvaluate()
+        let request = EvaluationRequest(
+            command: ShellCommand(rawValue: "git push --force-with-lease origin feature"),
+            enabledPacks: dayOnePackIDs
+        )
+        let first = await gated.spendHostAsk(
+            request,
+            cwd: wd("/tmp/ws"),
+            store: store,
+            now: now,
+            allowlist: { .empty }
+        )
+        #expect(first.decision == .allow)
+        let second = await gated.apply(
+            request,
+            cwd: wd("/tmp/ws"),
+            store: store,
+            now: now,
+            allowlist: { .empty }
+        )
+        guard case .deny = second.decision else {
+            Issue.record("replay after mandatoryHuman host spend must deny")
+            return
+        }
     }
 }
 

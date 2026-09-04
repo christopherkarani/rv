@@ -88,9 +88,9 @@ public enum HostNativeAsk {
     }
 
     /// Product Ask on the live hook door. Pause only when a spend-first host
-    /// could spend: unlockable pack deny or `mandatoryHuman`, with cwd and a
-    /// nonempty matching view. Secret-path, builtin hard deny, incomplete
-    /// evaluate, deny-or-TTY, missing cwd, and empty matching view stay deny.
+    /// could spend: Unlockable deny or `mandatoryHuman`. Secret-path, builtin
+    /// hard deny, unwrap-limited, protected-path, incomplete evaluate,
+    /// deny-or-TTY, missing cwd, and empty matching view stay deny.
     public static func verdict(
         host: HookHost,
         result: EvaluationResult,
@@ -106,14 +106,9 @@ public enum HostNativeAsk {
             case .indeterminate, .deny:
                 return .deny
             }
-        case .deny(let deny):
-            guard isUnlockablePackDeny(deny) else { return .deny }
-            return pauseIfSpendable(
-                host: host,
-                continuation: continuation,
-                cwd: cwd,
-                matchingView: result.matchingView
-            )
+        case .deny:
+            guard UnlockableDeny.matches(result: result, cwd: cwd) else { return .deny }
+            return pauseIfPossible(host: host, continuation: continuation)
         case .mandatoryHuman:
             return pauseIfSpendable(
                 host: host,
@@ -159,11 +154,6 @@ public enum HostNativeAsk {
     public static func leftoverAskIsPermit(_ unused: String) -> Bool {
         _ = unused
         return false
-    }
-
-    private static func isUnlockablePackDeny(_ deny: Deny) -> Bool {
-        deny.ruleID.pack != .coreSecrets
-            && deny.ruleID.pack != ActionPolicyEngine.Builtin.pack
     }
 
     private static func pauseIfSpendable(

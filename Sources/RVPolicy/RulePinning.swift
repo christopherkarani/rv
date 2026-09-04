@@ -103,16 +103,7 @@ public enum RulePinning: Sendable {
     }
 
     public static func blocksAllowOverride(_ result: EvaluationResult) -> Bool {
-        if case .deny(let deny) = result.decision, blocksAllowOverride(deny) {
-            return true
-        }
-        if result.analysis.innermost == .unwrapLimited {
-            return true
-        }
-        if result.analysis.filesystemAction?.primaryTarget?.scope == .protectedPath {
-            return true
-        }
-        return false
+        UnlockableDeny.isPinned(result)
     }
 
     public static func blocksAllowOverride(_ deny: Deny) -> Bool {

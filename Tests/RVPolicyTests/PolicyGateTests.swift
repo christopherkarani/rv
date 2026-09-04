@@ -22,6 +22,19 @@ struct PolicyGateTests {
         #expect(gated.result.decision == .allow)
     }
 
+    @Test func decidePendingGrantHonorsMandatoryHuman() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let gated = PolicyGate.decide(
+            mandatoryHumanRemoteBranchAsk(),
+            cwd: wd("/tmp/ws"),
+            allowlist: .empty,
+            grant: .pending,
+            now: now
+        )
+        #expect(gated.override == .allowOnce)
+        #expect(gated.result.decision == .allow)
+    }
+
     @Test func decideEmptyCwdSkipsPendingGrant() {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let gated = PolicyGate.decide(
@@ -238,6 +251,15 @@ struct PolicyGateTests {
             return
         }
     }
+}
+
+private func mandatoryHumanRemoteBranchAsk() -> EvaluationResult {
+    EvaluationResult(
+        outcome: .deny(ActionPolicyEngine.Builtin.remoteBranchAsk, matched: nil),
+        matchingView: "git push --force-with-lease origin feature",
+        analysis: .unknown,
+        boundReview: .mandatoryHuman(ActionPolicyEngine.Builtin.remoteBranchAsk)
+    )
 }
 
 private func resetHardDeny() -> EvaluationResult {

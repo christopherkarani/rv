@@ -98,6 +98,55 @@ struct HostGrantWriterTests {
         #expect(later == .notFound)
     }
 
+    @Test func mandatoryHumanRemoteBranchAskSpendsOnce() async throws {
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let denied = mandatoryHumanRemoteBranchAsk()
+        let first = await PolicyGate.spendHostAllowOnce(
+            denied,
+            cwd: wd("/tmp/ws"),
+            store: store,
+            now: now
+        )
+        #expect(first.override == .allowOnce)
+        #expect(first.result.decision == .allow)
+
+        let replay = await PolicyGate.apply(denied, cwd: wd("/tmp/ws"), store: store, now: now)
+        #expect(replay.override == .none)
+        guard case .deny = replay.result.decision else {
+            Issue.record("replay without a live grant must deny")
+            return
+        }
+    }
+
+    @Test func unwrapLimitedPackDenyDoesNotPlant() async throws {
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let denied = EvaluationResult(
+            outcome: .deny(
+                Deny(
+                    ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+                    reason: "git reset --hard destroys uncommitted changes"
+                ),
+                matched: nil
+            ),
+            matchingView: "bash -c git reset --hard",
+            analysis: .unwrapLimited.wrapping([.bash])
+        )
+        let gated = await PolicyGate.spendHostAllowOnce(
+            denied,
+            cwd: wd("/tmp/ws"),
+            store: store,
+            now: now
+        )
+        #expect(gated.override == .none)
+        guard case .deny = gated.result.decision else {
+            Issue.record("unwrap-limited pack deny must not spend")
+            return
+        }
+        #expect((await store.list(now: now)).isEmpty)
+    }
+
     @Test func failedStoreDoesNotAllow() async throws {
         let store = try isolatedStore()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
@@ -114,6 +163,15 @@ struct HostGrantWriterTests {
             return
         }
     }
+}
+
+private func mandatoryHumanRemoteBranchAsk() -> EvaluationResult {
+    EvaluationResult(
+        outcome: .deny(ActionPolicyEngine.Builtin.remoteBranchAsk, matched: nil),
+        matchingView: "git push --force-with-lease origin feature",
+        analysis: .unknown,
+        boundReview: .mandatoryHuman(ActionPolicyEngine.Builtin.remoteBranchAsk)
+    )
 }
 
 private func resetHardDeny() -> EvaluationResult {
