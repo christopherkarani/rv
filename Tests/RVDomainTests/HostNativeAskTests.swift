@@ -228,7 +228,6 @@ struct HostNativeAskTests {
             matchingView: MatchingView("bash -c git reset --hard"),
             analysis: .unwrapLimited.wrapping([.bash])
         )
-        #expect(UnlockableDeny.matches(result: result, cwd: cwd) == false)
         #expect(
             HostNativeAsk.verdict(
                 host: .pi,

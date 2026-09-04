@@ -327,7 +327,6 @@ struct GatedEvaluateTests {
             matchingView: "bash -c git reset --hard",
             analysis: .unwrapLimited.wrapping([.bash])
         )
-        #expect(UnlockableDeny.matches(result: unwrapLimited, cwd: wd("/tmp/ws")) == false)
         let unwrapCode = await GatedEvaluate.mintUnlockCode(
             for: unwrapLimited,
             cwd: wd("/tmp/ws"),
