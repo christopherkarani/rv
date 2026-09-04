@@ -103,6 +103,48 @@ enum UnlockableDenyTable {
                 expected: false
             ),
             Row(
+                label: "mandatoryHuman remote-branch-ask with cwd",
+                result: EvaluationResult(
+                    outcome: .deny(ActionPolicyEngine.Builtin.remoteBranchAsk, matched: nil),
+                    matchingView: MatchingView("git push --force-with-lease origin feature"),
+                    analysis: .unknown,
+                    boundReview: .mandatoryHuman(ActionPolicyEngine.Builtin.remoteBranchAsk)
+                ),
+                cwd: workspace,
+                expected: true
+            ),
+            Row(
+                label: "mandatoryHuman remote-branch-ask missing cwd",
+                result: EvaluationResult(
+                    outcome: .deny(ActionPolicyEngine.Builtin.remoteBranchAsk, matched: nil),
+                    matchingView: MatchingView("git push --force-with-lease origin feature"),
+                    analysis: .unknown,
+                    boundReview: .mandatoryHuman(ActionPolicyEngine.Builtin.remoteBranchAsk)
+                ),
+                cwd: nil,
+                expected: false
+            ),
+            Row(
+                label: "mandatoryHuman plus unwrapLimited",
+                result: EvaluationResult(
+                    outcome: .deny(ActionPolicyEngine.Builtin.remoteBranchAsk, matched: nil),
+                    matchingView: MatchingView("bash -c git push --force-with-lease origin feature"),
+                    analysis: .unwrapLimited.wrapping([.bash]),
+                    boundReview: .mandatoryHuman(ActionPolicyEngine.Builtin.remoteBranchAsk)
+                ),
+                cwd: workspace,
+                expected: false
+            ),
+            Row(
+                label: "builtin.action deny without boundReview",
+                result: EvaluationResult(
+                    outcome: .deny(ActionPolicyEngine.Builtin.remoteBranchAsk, matched: nil),
+                    matchingView: MatchingView("git push --force-with-lease origin feature")
+                ),
+                cwd: workspace,
+                expected: false
+            ),
+            Row(
                 label: "missing cwd",
                 result: EvaluationResult(
                     outcome: .deny(packDeny, matched: nil),
