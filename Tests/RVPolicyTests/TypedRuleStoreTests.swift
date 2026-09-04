@@ -119,6 +119,7 @@ struct TypedRuleStoreTests {
         #expect(json.contains("git push") == false)
         #expect(json.contains("--force") == false)
         #expect(json.contains("english") == false)
+        #expect(json.contains("\"schemaVersion\":1"))
         #expect(json.contains("\"branch\":\"main\""))
         #expect(json.contains("\"gitPush\""))
     }
@@ -135,6 +136,48 @@ struct TypedRuleStoreTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let store = TypedRuleStore(baseDirectory: root)
         try "not-json".write(to: store.machineFileURL, atomically: true, encoding: .utf8)
+        #expect(throws: TypedRuleStoreError.invalidFile) {
+            _ = try store.loadMachine()
+        }
+    }
+
+    @Test func machineFileUsesPolicyPaths() throws {
+        let root = try isolatedTypedRuleDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = TypedRuleStore(baseDirectory: root)
+        #expect(store.machineFileURL == RVPolicyPaths.typedRulesFile(inConfigDir: root))
+    }
+
+    @Test func schemaVersionRoundTripsAndRejectsOtherVersions() throws {
+        let root = try isolatedTypedRuleDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = TypedRuleStore(baseDirectory: root)
+        let rule = TypedRule(
+            id: RuleID(pack: .coreGit, pattern: "force-push-main"),
+            predicate: .gitPush(force: .force, branch: "main"),
+            verdict: .deny,
+            origin: .machine
+        )
+
+        try store.saveMachine([rule])
+        let json = try String(contentsOf: store.machineFileURL, encoding: .utf8)
+        #expect(json.contains("\"schemaVersion\":1"))
+        #expect(try store.loadMachine() == [rule])
+
+        try #"{"schemaVersion":2,"rules":[]}"#.write(
+            to: store.machineFileURL,
+            atomically: true,
+            encoding: .utf8
+        )
+        #expect(throws: TypedRuleStoreError.invalidFile) {
+            _ = try store.loadMachine()
+        }
+
+        try #"{"rules":[]}"#.write(
+            to: store.machineFileURL,
+            atomically: true,
+            encoding: .utf8
+        )
         #expect(throws: TypedRuleStoreError.invalidFile) {
             _ = try store.loadMachine()
         }

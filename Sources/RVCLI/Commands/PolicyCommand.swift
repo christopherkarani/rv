@@ -56,7 +56,7 @@ struct Policy: AsyncParsableCommand {
     }
 }
 
-struct PolicyShowSnapshot: Equatable, Sendable {
+struct PolicyShowSnapshot: Equatable, Sendable, Codable {
     var builtin: [TypedRule]
     var machine: [TypedRule]
     var repo: [TypedRule]
@@ -87,14 +87,9 @@ enum PolicyShowRun {
     }
 
     static func robot(_ snapshot: PolicyShowSnapshot) throws -> String {
-        let document = PolicyShowRobotDocument(
-            builtin: snapshot.builtin.map(PolicyShowRobotRow.init),
-            machine: snapshot.machine.map(PolicyShowRobotRow.init),
-            repo: snapshot.repo.map(PolicyShowRobotRow.init)
-        )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        let data = try encoder.encode(document)
+        let data = try encoder.encode(snapshot)
         return String(decoding: data, as: UTF8.self)
     }
 }
@@ -119,23 +114,5 @@ private func predicateText(_ predicate: PolicyPredicate) -> String {
         let forceText = force?.rawValue ?? "-"
         let branchText = branch ?? "-"
         return "gitPush force=\(forceText) branch=\(branchText)"
-    }
-}
-
-private struct PolicyShowRobotDocument: Encodable {
-    var builtin: [PolicyShowRobotRow]
-    var machine: [PolicyShowRobotRow]
-    var repo: [PolicyShowRobotRow]
-}
-
-private struct PolicyShowRobotRow: Encodable {
-    var id: String
-    var verdict: String
-    var predicate: String
-
-    init(_ rule: TypedRule) {
-        id = rule.id.rawValue
-        verdict = rule.verdict.rawValue
-        predicate = predicateText(rule.predicate)
     }
 }

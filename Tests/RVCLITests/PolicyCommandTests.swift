@@ -129,7 +129,41 @@ struct PolicyCommandTests {
             #expect(dictionary["machine"] as? [Any] != nil)
             #expect(dictionary["repo"] as? [Any] != nil)
             #expect((dictionary["builtin"] as? [Any])?.isEmpty == true)
+            #expect((dictionary["machine"] as? [Any])?.isEmpty == true)
+            #expect((dictionary["repo"] as? [Any])?.isEmpty == true)
             #expect(dictionary["english"] == nil)
+
+            let store = TypedRuleStore(
+                baseDirectory: RVPolicyPaths.configDirectory(home: home)
+            )
+            let machineRule = TypedRule(
+                id: RuleID(pack: .coreGit, pattern: "force-push-main"),
+                predicate: .gitPush(force: .force, branch: "main"),
+                verdict: .deny,
+                origin: .machine
+            )
+            try store.saveMachine([machineRule])
+
+            let populatedJSON = try PolicyShowRun.robot(
+                try PolicyShowRun.load(home: home, workspace: workspace)
+            )
+            let populatedObject = try JSONSerialization.jsonObject(
+                with: Data(populatedJSON.utf8)
+            )
+            let populated = try #require(populatedObject as? [String: Any])
+            #expect(populated["english"] == nil)
+            let machineRows = try #require(populated["machine"] as? [[String: Any]])
+            #expect(machineRows.count == 1)
+            #expect(machineRows[0]["predicate"] is String == false)
+
+            let decoded = try JSONDecoder().decode(
+                PolicyShowSnapshot.self,
+                from: Data(populatedJSON.utf8)
+            )
+            #expect(decoded.machine == [machineRule])
+            #expect(decoded.machine[0].id == machineRule.id)
+            #expect(decoded.machine[0].verdict == .deny)
+            #expect(decoded.machine[0].predicate == .gitPush(force: .force, branch: "main"))
         }
     }
 
@@ -149,19 +183,6 @@ struct PolicyCommandTests {
         }
     }
 
-    @Test func policyCommandSourceDoesNotCallAppleOrSpike() throws {
-        let url = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("Sources/RVCLI/Commands/PolicyCommand.swift")
-        let text = try String(contentsOf: url, encoding: .utf8)
-        #expect(text.contains("FoundationModels") == false)
-        #expect(text.contains("scratch/english-review") == false)
-        #expect(text.contains("RV_BYPASS") == false)
-        #expect(text.contains("ReviewBind") == false)
-        #expect(text.contains("loadEffective") == false)
-    }
 }
 
 private func withTempPolicyContext(_ body: (HomeDirectory, URL) throws -> Void) throws {

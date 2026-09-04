@@ -64,7 +64,7 @@ No new SPM target.
 | Load / save / merge | RVPolicy — invariants ⊳ machine ⊳ repo, restrict-only |
 | `rv policy show` | RVCLI |
 
-Merge cannot let a repo allow drop a machine deny. Overlay cannot weaken builtin hard deny.
+Merge cannot let a repo allow drop a machine deny. Overlay cannot weaken builtin hard deny. v1 on-disk form is `{ schemaVersion: 1, rules: [...] }`.
 
 ## Locked
 

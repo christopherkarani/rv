@@ -20,7 +20,7 @@ public struct TypedRuleStore: Sendable {
     }
 
     public var machineFileURL: URL {
-        baseDirectory.appendingPathComponent("typed-rules.json", isDirectory: false)
+        RVPolicyPaths.typedRulesFile(inConfigDir: baseDirectory)
     }
 
     public func loadMachine() throws -> [TypedRule] {
@@ -106,7 +106,7 @@ public struct TypedRuleStore: Sendable {
     }
 
     private var machineLockURL: URL {
-        baseDirectory.appendingPathComponent(".typed-rules.lock", isDirectory: false)
+        RVPolicyPaths.typedRulesLockFile(inConfigDir: baseDirectory)
     }
 
     private func load(from url: URL, origin: TypedRuleOrigin) throws -> [TypedRule] {
@@ -120,6 +120,9 @@ public struct TypedRuleStore: Sendable {
         do {
             document = try JSONDecoder().decode(TypedRulesDocument.self, from: data)
         } catch {
+            throw TypedRuleStoreError.invalidFile
+        }
+        guard document.schemaVersion == TypedRulesDocument.currentSchemaVersion else {
             throw TypedRuleStoreError.invalidFile
         }
         return document.rules.map { rule in
@@ -152,7 +155,12 @@ public struct TypedRuleStore: Sendable {
             encoder.outputFormatting = [.sortedKeys]
             let data: Data
             do {
-                data = try encoder.encode(TypedRulesDocument(rules: stamped))
+                data = try encoder.encode(
+                    TypedRulesDocument(
+                        schemaVersion: TypedRulesDocument.currentSchemaVersion,
+                        rules: stamped
+                    )
+                )
             } catch {
                 throw TypedRuleStoreError.invalidFile
             }
@@ -208,5 +216,8 @@ public struct TypedRuleStore: Sendable {
 }
 
 private struct TypedRulesDocument: Codable, Sendable, Equatable {
+    static let currentSchemaVersion = 1
+
+    var schemaVersion: Int
     var rules: [TypedRule]
 }

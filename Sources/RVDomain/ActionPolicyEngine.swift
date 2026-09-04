@@ -69,8 +69,8 @@ public struct ActionPolicyVerdict: Sendable, Equatable, Codable {
 }
 
 /// Pure semantic evaluator. Same typed action + policy → same verdict.
-/// Predicates read typed effects, resources, and context. Scope travels on
-/// the action. `supportingCommand` is never consulted.
+/// Typed gitPush rules match `gitAction` when present; missing git analysis
+/// fails closed. `supportingCommand` is never consulted.
 public enum ActionPolicyEngine: Sendable {
     public enum Builtin {
         public static let pack = PackID(rawValue: "builtin.action")
@@ -139,11 +139,12 @@ public enum ActionPolicyEngine: Sendable {
     public static func evaluate(
         action: ProposedAction,
         context: ReviewContext = ReviewContext(repository: RepositoryReviewContext()),
-        policy: EffectiveActionPolicy = .empty
+        policy: EffectiveActionPolicy = .empty,
+        gitAction: GitAction? = nil
     ) -> ActionPolicyVerdict {
         switch action {
         case .shell(let shell):
-            return evaluateShell(shell, context: context, policy: policy)
+            return evaluateShell(shell, context: context, policy: policy, gitAction: gitAction)
         }
     }
 
@@ -170,10 +171,11 @@ public enum ActionPolicyEngine: Sendable {
     private static func evaluateShell(
         _ shell: ShellAction,
         context: ReviewContext,
-        policy: EffectiveActionPolicy
+        policy: EffectiveActionPolicy,
+        gitAction: GitAction?
     ) -> ActionPolicyVerdict {
         var hit = builtinHit(shell: shell, context: context)
-        hit = applyTypedRules(hit, policy.rules, action: .shell(shell))
+        hit = applyTypedRules(hit, policy.rules, gitAction: gitAction)
         if hit.semanticallyCovered == false {
             hit = applyPackFallback(hit, policy.packFallback)
         }
@@ -345,12 +347,12 @@ public enum ActionPolicyEngine: Sendable {
     private static func applyTypedRules(
         _ hit: CoreHit,
         _ rules: [TypedRule],
-        action: ProposedAction
+        gitAction: GitAction?
     ) -> CoreHit {
         var matchedDeny: TypedRule?
         var matchedAsk: TypedRule?
         for rule in rules {
-            guard PolicyMatch.matches(rule.predicate, action: action) else {
+            guard let gitAction, PolicyMatch.matches(rule.predicate, action: gitAction) else {
                 continue
             }
             switch rule.verdict {

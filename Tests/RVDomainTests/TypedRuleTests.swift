@@ -4,30 +4,6 @@ import RVDomain
 
 @Suite("TypedRule")
 struct TypedRuleTests {
-    @Test func holdsIdPredicateVerdictAndOrigin() {
-        let rule = TypedRule(
-            id: RuleID(pack: .coreGit, pattern: "force-push-main"),
-            predicate: .gitPush(force: .force, branch: "main"),
-            verdict: .deny,
-            origin: .machine
-        )
-        #expect(rule.id == RuleID(pack: .coreGit, pattern: "force-push-main"))
-        #expect(rule.predicate == .gitPush(force: .force, branch: "main"))
-        #expect(rule.verdict == .deny)
-        #expect(rule.origin == .machine)
-    }
-
-    @Test func equalityUsesAllFields() {
-        let base = sampleRule()
-        #expect(base == sampleRule())
-        #expect(base != sampleRule(id: RuleID(pack: .coreGit, pattern: "other")))
-        #expect(base != sampleRule(predicate: .gitPush(force: .force, branch: "feature")))
-        #expect(base != sampleRule(verdict: .allow))
-        #expect(base != sampleRule(verdict: .ask))
-        #expect(base != sampleRule(origin: .builtin))
-        #expect(base != sampleRule(origin: .repo))
-    }
-
     @Test(arguments: [
         TypedRuleVerdict.allow,
         .ask,

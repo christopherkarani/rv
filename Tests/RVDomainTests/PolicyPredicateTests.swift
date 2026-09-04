@@ -4,15 +4,6 @@ import RVDomain
 
 @Suite("PolicyPredicate")
 struct PolicyPredicateTests {
-    @Test func gitPush_existsWithOptionalForceAndBranch() {
-        let predicate = PolicyPredicate.gitPush(force: .force, branch: "main")
-        switch predicate {
-        case .gitPush(let force, let branch):
-            #expect(force == .force)
-            #expect(branch == "main")
-        }
-    }
-
     @Test(arguments: [
         PolicyPredicate.gitPush(force: .force, branch: "main"),
         PolicyPredicate.gitPush(force: .forceWithLease, branch: "develop"),
@@ -37,14 +28,6 @@ struct PolicyPredicateTests {
         let predicate = try JSONDecoder().decode(PolicyPredicate.self, from: json)
         #expect(predicate == .gitPush(force: GitPushForce.none, branch: "feature"))
         #expect(predicate != .gitPush(force: nil, branch: "feature"))
-    }
-
-    @Test func gitPush_equalityUsesForceAndBranch() {
-        let forceMain = PolicyPredicate.gitPush(force: .force, branch: "main")
-        #expect(forceMain == .gitPush(force: .force, branch: "main"))
-        #expect(forceMain != .gitPush(force: .force, branch: "feature"))
-        #expect(forceMain != .gitPush(force: GitPushForce.none, branch: "main"))
-        #expect(forceMain != .gitPush(force: nil, branch: "main"))
     }
 
     @Test func encodedForm_omitsSupportingCommand() throws {

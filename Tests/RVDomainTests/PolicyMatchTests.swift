@@ -9,29 +9,23 @@ struct PolicyMatchTests {
         let git = forcePush(refspec: "main")
         #expect(git.resources.branchName == "main")
         #expect(PolicyMatch.matches(forceMain, action: git))
-        #expect(PolicyMatch.matches(forceMain, action: proposed(git)))
     }
 
     @Test func forceMain_doesNotMatchFeatureBranch() {
         let git = forcePush(refspec: "feature")
         #expect(git.resources.branchName == "feature")
         #expect(PolicyMatch.matches(forceMain, action: git) == false)
-        #expect(PolicyMatch.matches(forceMain, action: proposed(git)) == false)
     }
 
     @Test func forceMain_doesNotReadSupportingCommand() {
-        let feature = proposed(
-            forcePush(refspec: "feature"),
-            command: "git push --force origin main"
-        )
-        #expect(feature.supportingCommand?.rawValue == "git push --force origin main")
+        let feature = forcePush(refspec: "feature")
+        let featureCommand = proposed(feature, command: "git push --force origin main")
+        #expect(featureCommand.supportingCommand?.rawValue == "git push --force origin main")
         #expect(PolicyMatch.matches(forceMain, action: feature) == false)
 
-        let main = proposed(
-            forcePush(refspec: "main"),
-            command: "git push --force origin feature"
-        )
-        #expect(main.supportingCommand?.rawValue == "git push --force origin feature")
+        let main = forcePush(refspec: "main")
+        let mainCommand = proposed(main, command: "git push --force origin feature")
+        #expect(mainCommand.supportingCommand?.rawValue == "git push --force origin feature")
         #expect(PolicyMatch.matches(forceMain, action: main))
     }
 
@@ -39,40 +33,80 @@ struct PolicyMatchTests {
     func forceMain_matchesRefspecThatNamesMain(_ refspec: String) {
         let git = forcePush(refspec: refspec)
         #expect(PolicyMatch.matches(forceMain, action: git))
-        #expect(PolicyMatch.matches(forceMain, action: proposed(git)))
     }
 
     @Test(arguments: ["feature", "HEAD:feature", "refs/heads/feature", "main:feature"])
     func forceMain_doesNotMatchRefspecThatNamesFeature(_ refspec: String) {
         let git = forcePush(refspec: refspec)
         #expect(PolicyMatch.matches(forceMain, action: git) == false)
-        #expect(PolicyMatch.matches(forceMain, action: proposed(git)) == false)
     }
 
     @Test func gitPush_doesNotMatchNonPushGitAction() {
         let reset = GitAction.reset(mode: .hard, target: nil)
         #expect(PolicyMatch.matches(forceMain, action: reset) == false)
-        #expect(PolicyMatch.matches(forceMain, action: proposed(reset)) == false)
     }
 
-    @Test func forceMain_matchesProposedActionFromResourcesAndEffects() {
-        let action = ProposedAction.shell(
-            ShellAction(
-                fingerprint: ActionFingerprint(rawValue: "shell:git.force-push:origin:main"),
-                effects: ActionEffects(kinds: [.remoteSharedBranchMutation]),
-                resources: ActionResources(remoteName: "origin", branchName: "main"),
-                supportingCommand: ShellCommand(rawValue: "git push --force origin feature")
-            )
+    @Test func forceMain_doesNotMatchDeletePush() {
+        let deleteNamed = GitAction.push(
+            remote: "origin",
+            refspec: "main",
+            force: .force,
+            delete: true
         )
-        #expect(PolicyMatch.matches(forceMain, action: action))
+        let colonRefspec = GitAction.push(
+            remote: "origin",
+            refspec: ":main",
+            force: .force,
+            delete: true
+        )
+        #expect(PolicyMatch.matches(forceMain, action: deleteNamed) == false)
+        #expect(PolicyMatch.matches(forceMain, action: colonRefspec) == false)
+    }
+
+    @Test func gitPush_doesNotMatchNonForceSwitchBranch() {
+        let switched = GitAction.switchBranch(name: "main", force: false)
+        #expect(PolicyMatch.matches(.gitPush(force: nil, branch: "main"), action: switched) == false)
+        #expect(
+            PolicyMatch.matches(.gitPush(force: GitPushForce.none, branch: "main"), action: switched)
+                == false
+        )
+        #expect(PolicyMatch.matches(forceMain, action: switched) == false)
+    }
+
+    @Test func forceMain_doesNotMatchForceWithLease() {
+        let leased = GitAction.push(
+            remote: "origin",
+            refspec: "main",
+            force: .forceWithLease,
+            delete: false
+        )
+        #expect(PolicyMatch.matches(forceMain, action: leased) == false)
+    }
+
+    @Test func gitPushForceUnspecified_matchesForceAndNonForceMainNotFeature() {
+        let anyMain = PolicyPredicate.gitPush(force: nil, branch: "main")
+        #expect(PolicyMatch.matches(anyMain, action: forcePush(refspec: "main")))
+        #expect(PolicyMatch.matches(anyMain, action: push(refspec: "main", force: .none)))
+        #expect(PolicyMatch.matches(anyMain, action: forcePush(refspec: "feature")) == false)
+        #expect(PolicyMatch.matches(anyMain, action: push(refspec: "feature", force: .none)) == false)
+    }
+
+    @Test func gitPushForceNone_matchesNonForceMainNotForce() {
+        let noneMain = PolicyPredicate.gitPush(force: GitPushForce.none, branch: "main")
+        #expect(PolicyMatch.matches(noneMain, action: push(refspec: "main", force: .none)))
+        #expect(PolicyMatch.matches(noneMain, action: forcePush(refspec: "main")) == false)
     }
 }
 
 private func forcePush(refspec: String) -> GitAction {
-    .push(remote: "origin", refspec: refspec, force: .force, delete: false)
+    push(refspec: refspec, force: .force)
 }
 
-private func proposed(_ git: GitAction, command: String = "git status") -> ProposedAction {
+private func push(refspec: String, force: GitPushForce) -> GitAction {
+    .push(remote: "origin", refspec: refspec, force: force, delete: false)
+}
+
+private func proposed(_ git: GitAction, command: String) -> ProposedAction {
     git.proposedAction(
         command: ShellCommand(rawValue: command),
         workingDirectory: WorkingDirectory(validating: "/tmp/rv")

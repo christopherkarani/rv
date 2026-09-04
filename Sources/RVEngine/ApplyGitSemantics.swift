@@ -52,7 +52,8 @@ public func applyGitSemantics(
             workingDirectory: context.workingDirectory
         ),
         context: context.reviewContext,
-        policy: .empty
+        policy: .empty,
+        gitAction: action
     )
     switch verdict.decision {
     case .hardAllow, .reviewEligible:
