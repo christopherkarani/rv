@@ -57,6 +57,16 @@ struct FoundationModelsEnglishCompilerTests {
         #expect(result == .refuse(.empty))
     }
 
+    @Test func injectedCompiler_propagatesCancellation() async {
+        let compiler = FoundationModelsEnglishCompiler(
+            usesSystemModel: true,
+            compiler: CancelledEnglishCompiler()
+        )
+        await #expect(throws: CancellationError.self) {
+            _ = try await compiler.compile("never allow force-push to main")
+        }
+    }
+
     @Test func mapping_forceMainDeny_matchesKnownFakeForm() throws {
         let result = FoundationModelsEnglishCompileMapping.preview(
             force: .force,
@@ -117,6 +127,12 @@ struct FoundationModelsEnglishCompilerTests {
         }
     }
     #endif
+}
+
+private struct CancelledEnglishCompiler: EnglishCompiler {
+    func compile(_: String) async throws -> EnglishCompileResult {
+        throw CancellationError()
+    }
 }
 
 private func repoRoot() -> URL {

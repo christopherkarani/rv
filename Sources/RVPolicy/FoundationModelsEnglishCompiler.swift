@@ -48,6 +48,8 @@ public struct FoundationModelsEnglishCompiler: EnglishCompiler {
                 return try await ReviewTimeout.run(timeout: timeout) {
                     try await FoundationModelsEnglishCompileClient.compile(english)
                 }
+            } catch let error as CancellationError {
+                throw error
             } catch let error as EnglishCompilerError {
                 throw error
             } catch {
@@ -70,15 +72,17 @@ package enum FoundationModelsEnglishCompileMapping: Sendable {
         let text = sentence.isEmpty
             ? defaultSentence(force: force, branch: branch, verdict: verdict)
             : sentence
-        return EnglishCompileResult.makePreview(
-            sentence: text,
-            draft: TypedRule(
-                id: ruleID(force: force, branch: branch, verdict: verdict),
-                predicate: .gitPush(force: force, branch: branch),
-                verdict: verdict,
-                origin: .machine
-            ),
-            allowedToSave: true
+        return .preview(
+            TypedRulePreview(
+                sentence: text,
+                draft: TypedRule(
+                    id: ruleID(force: force, branch: branch, verdict: verdict),
+                    predicate: .gitPush(force: force, branch: branch),
+                    verdict: verdict,
+                    origin: .machine
+                ),
+                allowedToSave: true
+            )
         )
     }
 
@@ -185,8 +189,8 @@ enum FoundationModelsEnglishCompileClient: Sendable {
                 generating: FoundationModelsEnglishCompileOutput.self
             )
             return map(response.content)
-        } catch is CancellationError {
-            throw EnglishCompilerError.unavailable
+        } catch let error as CancellationError {
+            throw error
         } catch let error as EnglishCompilerError {
             throw error
         } catch {

@@ -5,10 +5,11 @@ public protocol EnglishCompiler: Sendable {
 }
 
 /// Human preview of a typed rule. Draft is the matcher; English is not a field.
-public struct RulePreview: Sendable, Equatable, Codable {
-    public var sentence: String
-    public var draft: TypedRule
-    public var allowedToSave: Bool
+/// Named apart from `RVPolicy.RulePreview`, whose draft is a pin string.
+public struct TypedRulePreview: Sendable, Equatable, Codable {
+    public let sentence: String
+    public let draft: TypedRule
+    public let allowedToSave: Bool
 
     public init(sentence: String, draft: TypedRule, allowedToSave: Bool) {
         self.sentence = sentence
@@ -18,7 +19,7 @@ public struct RulePreview: Sendable, Equatable, Codable {
 }
 
 public enum EnglishCompileResult: Sendable, Equatable, Codable {
-    case preview(RulePreview)
+    case preview(TypedRulePreview)
     case refuse(EnglishCompileRefusal)
 }
 
@@ -30,17 +31,4 @@ public enum EnglishCompileRefusal: String, Sendable, Equatable, Codable {
 
 public enum EnglishCompilerError: Error, Sendable, Equatable {
     case unavailable
-}
-
-extension EnglishCompileResult {
-    /// RVPolicy defines its own `RulePreview` (pin draft string), which shadows
-    /// this module's preview type. Callers there must build a result without
-    /// naming `RulePreview`.
-    public static func makePreview(
-        sentence: String,
-        draft: TypedRule,
-        allowedToSave: Bool
-    ) -> EnglishCompileResult {
-        .preview(RulePreview(sentence: sentence, draft: draft, allowedToSave: allowedToSave))
-    }
 }

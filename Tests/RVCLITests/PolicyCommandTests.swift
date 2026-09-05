@@ -12,12 +12,14 @@ struct PolicyCommandTests {
         #expect(Policy.configuration.commandName == "policy")
         let children = Policy.configuration.subcommands.map { $0.configuration.commandName }
         #expect(children.contains("show"))
+        #expect(children.contains("draft"))
         #expect(Policy.Show.configuration.commandName == "show")
     }
 
     @Test func helpListsPolicy() {
         #expect(RV.helpMessage().contains("policy"))
         #expect(Policy.helpMessage().contains("show"))
+        #expect(Policy.helpMessage().contains("draft"))
     }
 
     @Test func emptyTempHomeNamesOriginsWithoutMinting() throws {

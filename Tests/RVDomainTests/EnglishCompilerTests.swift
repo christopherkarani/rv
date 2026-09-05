@@ -32,7 +32,7 @@ struct EnglishCompilerTests {
     }
 
     @Test func previewDraft_isTypedRuleNotEnglish() throws {
-        let preview = RulePreview(
+        let preview = TypedRulePreview(
             sentence: "Always block force-push to main.",
             draft: TypedRule(
                 id: RuleID(pack: .coreGit, pattern: "force-push-main"),
@@ -48,7 +48,7 @@ struct EnglishCompilerTests {
         #expect(json.contains("never allow") == false)
         #expect(json.contains("gitPush") == true)
         #expect(json.contains("\"verdict\":\"deny\"") == true)
-        let decoded = try JSONDecoder().decode(RulePreview.self, from: data)
+        let decoded = try JSONDecoder().decode(TypedRulePreview.self, from: data)
         #expect(decoded == preview)
     }
 
@@ -76,7 +76,7 @@ private struct StubEnglishCompiler: EnglishCompiler {
         }
         if english == "never allow force-push to main" {
             return .preview(
-                RulePreview(
+                TypedRulePreview(
                     sentence: "Always block force-push to main.",
                     draft: TypedRule(
                         id: RuleID(pack: .coreGit, pattern: "force-push-main"),

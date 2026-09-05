@@ -17,7 +17,7 @@ public struct FakeEnglishCompiler: EnglishCompiler {
         }
     }
 
-    private static let forcePushMainDeny = RulePreview(
+    private static let forcePushMainDeny = TypedRulePreview(
         sentence: "Always block force-push to main.",
         draft: TypedRule(
             id: RuleID(pack: .coreGit, pattern: "force-push-main"),
