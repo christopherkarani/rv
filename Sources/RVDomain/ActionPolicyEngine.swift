@@ -342,33 +342,31 @@ public enum ActionPolicyEngine: Sendable {
 
     private static let sharedBranchNames: Set<String> = ["main", "master"]
 
-    /// Restrict-only. Deny wins over ask; ask wins over allow; allow is a no-op.
-    /// A typed ask cannot weaken an existing `hardDeny`.
+    /// Restrict-only. Rank is deny > ask > allow, independent of list order.
+    /// Ask beats allow when both match. Typed allow cannot loosen a built-in hit.
     private static func applyTypedRules(
         _ hit: CoreHit,
         _ rules: [TypedRule],
         gitAction: GitAction?
     ) -> CoreHit {
-        var matchedDeny: TypedRule?
-        var matchedAsk: TypedRule?
+        var strongest: TypedRule?
         for rule in rules {
             guard let gitAction, PolicyMatch.matches(rule.predicate, action: gitAction) else {
                 continue
             }
-            switch rule.verdict {
-            case .deny:
-                if matchedDeny == nil {
-                    matchedDeny = rule
+            if let current = strongest {
+                if typedRestrictionRank(rule.verdict) > typedRestrictionRank(current.verdict) {
+                    strongest = rule
                 }
-            case .ask:
-                if matchedAsk == nil {
-                    matchedAsk = rule
-                }
-            case .allow:
-                break
+            } else {
+                strongest = rule
             }
         }
-        if let rule = matchedDeny {
+        guard let rule = strongest else {
+            return hit
+        }
+        switch rule.verdict {
+        case .deny:
             let deny = Deny(ruleID: rule.id, reason: "A typed rule denied this action.")
             return CoreHit(
                 decision: .hardDeny(deny),
@@ -376,8 +374,7 @@ public enum ActionPolicyEngine: Sendable {
                 reason: deny.reason,
                 semanticallyCovered: true
             )
-        }
-        if let rule = matchedAsk {
+        case .ask:
             if case .hardDeny = hit.decision {
                 return hit
             }
@@ -388,8 +385,20 @@ public enum ActionPolicyEngine: Sendable {
                 reason: deny.reason,
                 semanticallyCovered: true
             )
+        case .allow:
+            return hit
         }
-        return hit
+    }
+
+    private static func typedRestrictionRank(_ verdict: TypedRuleVerdict) -> Int {
+        switch verdict {
+        case .allow:
+            return 0
+        case .ask:
+            return 1
+        case .deny:
+            return 2
+        }
     }
 
     private static func applyPackFallback(_ hit: CoreHit, _ fallback: PackFallback) -> CoreHit {
