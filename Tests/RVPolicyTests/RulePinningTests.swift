@@ -30,13 +30,67 @@ struct RulePinningTests {
         #expect(preview.sentence.contains("git reset") == false)
     }
 
-    @Test func alwaysBlockPreview_hardStopMaySave() {
+    @Test func alwaysBlockPreview_hardStopMaySave() throws {
         let preview = RulePinning.preview(
             record: wait(kind: .protectedSharedBranch),
             polarity: .block
         )
         #expect(preview.allowedToSave == true)
-        #expect(preview.sentence.contains("Always block"))
+        #expect(preview.sentence.contains("Always block force-push to main"))
+        let draft = try decodePinDraft(preview.draft)
+        #expect(draft.polarity == "block")
+        #expect(draft.predicate == .gitPush(force: .force, branch: "main"))
+    }
+
+    @Test func forcePushMainPreview_allowHardStopIncludesGitPushAndBlocksSave() throws {
+        let preview = RulePinning.preview(
+            record: wait(kind: .protectedSharedBranch),
+            polarity: .allow
+        )
+        #expect(preview.allowedToSave == false)
+        #expect(preview.sentence.contains("hard stop"))
+        #expect(preview.sentence.contains("cannot override"))
+        let draft = try decodePinDraft(preview.draft)
+        #expect(draft.polarity == "allow")
+        #expect(draft.predicate == .gitPush(force: .force, branch: "main"))
+    }
+
+    @Test func nonGitPreview_keepsFingerprintDraftWithoutGitPush() throws {
+        let preview = RulePinning.preview(record: pinOkWait(), polarity: .allow)
+        let draft = try decodePinDraft(preview.draft)
+        #expect(draft.predicate == nil)
+        #expect(draft.fingerprint?.isEmpty == false)
+        #expect(preview.draft.contains("gitPush") == false)
+    }
+
+    @Test func emptyEffectsWithBranchName_keepsFingerprintDraftWithoutGitPush() throws {
+        let preview = RulePinning.preview(
+            record: wait(
+                id: "empty-branch",
+                command: "git push --force origin main",
+                effects: [],
+                branchName: "main"
+            ),
+            polarity: .block
+        )
+        let draft = try decodePinDraft(preview.draft)
+        #expect(draft.predicate == nil)
+        #expect(preview.draft.contains("gitPush") == false)
+    }
+
+    @Test func discardWithBranchName_keepsFingerprintDraftWithoutGitPush() throws {
+        let preview = RulePinning.preview(
+            record: wait(
+                id: "switch",
+                command: "git checkout main",
+                effects: [.workingTreeDiscard],
+                branchName: "main"
+            ),
+            polarity: .block
+        )
+        let draft = try decodePinDraft(preview.draft)
+        #expect(draft.predicate == nil)
+        #expect(preview.draft.contains("gitPush") == false)
     }
 
     @Test func draftBindsIdPolarityAndFingerprint() {
@@ -487,6 +541,19 @@ private func resetHardDeny() -> EvaluationResult {
         ),
         matchingView: "git reset --hard"
     )
+}
+
+private struct PinDraftBody: Decodable {
+    var polarity: String
+    var predicate: PolicyPredicate?
+    var fingerprint: String?
+    var id: String?
+    var v: Int
+}
+
+private func decodePinDraft(_ draft: String) throws -> PinDraftBody {
+    let data = try #require(draft.data(using: .utf8))
+    return try JSONDecoder().decode(PinDraftBody.self, from: data)
 }
 
 private func isolatedPinDirectory() throws -> URL {
