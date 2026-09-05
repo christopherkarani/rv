@@ -66,6 +66,8 @@ No new SPM target.
 
 Merge cannot let a repo allow drop a machine deny. Overlay cannot weaken builtin hard deny. v1 on-disk form is `{ schemaVersion: 1, rules: [...] }`.
 
+**Hook evaluate.** `GatedEvaluate.evaluateWithSemantics` loads that saved form (machine `$HOME/.config/rv/typed-rules.json`, repo `<cwd>/.rv/typed-rules.json`) and passes `EffectiveActionPolicy` into `applySemantics`. Invalid JSON fail-closes (`builtin.action:typed-rules-invalid`). Missing file is empty. Typed hard-bind deny (`boundReview == .deny`) skips PolicyGate on peek/apply (`gated()`) and Host Ask (`spendHostAsk`) and does not mint an unlock code, so a matchingView grant or plant+spend cannot override a typed deny that retagged the shared-branch wall. Pack denials and `mandatoryHuman` still reach PolicyGate. There is still no live Auto-review. `FakeEnglishCompiler` still emits `GitPushForce.force`, which does not match `--force-with-lease`.
+
 ## Locked
 
 1. Three products stay separate.
