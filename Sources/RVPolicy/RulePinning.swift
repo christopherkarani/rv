@@ -49,8 +49,14 @@ public enum RulePinning: Sendable {
     ) -> RulePreview {
         let stop = hardStop(in: record.action)
         let allowedToSave = !(polarity == .allow && stop != nil)
+        let predicate = gitPushPredicate(from: record.action)
         return RulePreview(
-            sentence: sentence(polarity: polarity, stop: stop, allowedToSave: allowedToSave),
+            sentence: sentence(
+                polarity: polarity,
+                stop: stop,
+                allowedToSave: allowedToSave,
+                predicate: predicate
+            ),
             draft: draft(record: record, polarity: polarity),
             allowedToSave: allowedToSave
         )
@@ -60,17 +66,24 @@ public enum RulePinning: Sendable {
         record: PendingApproval,
         polarity: PinnedRulePolarity
     ) -> String {
-        let body = DraftBody(
-            fingerprint: record.fingerprint.rawValue,
-            id: record.id.rawValue,
-            polarity: polarity.rawValue,
-            v: 1
-        )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
-        guard let data = try? encoder.encode(body),
-              let text = String(data: data, encoding: .utf8)
-        else {
+        let data: Data?
+        if let predicate = gitPushPredicate(from: record.action) {
+            data = try? encoder.encode(
+                TypedPinDraft(polarity: polarity.rawValue, predicate: predicate, v: 2)
+            )
+        } else {
+            data = try? encoder.encode(
+                DraftBody(
+                    fingerprint: record.fingerprint.rawValue,
+                    id: record.id.rawValue,
+                    polarity: polarity.rawValue,
+                    v: 1
+                )
+            )
+        }
+        guard let data, let text = String(data: data, encoding: .utf8) else {
             return "v1.\(polarity.rawValue).\(record.id.rawValue).\(record.fingerprint.rawValue)"
         }
         return text
@@ -150,7 +163,8 @@ public enum RulePinning: Sendable {
     private static func sentence(
         polarity: PinnedRulePolarity,
         stop: RuleHardStopKind?,
-        allowedToSave: Bool
+        allowedToSave: Bool,
+        predicate: PolicyPredicate?
     ) -> String {
         if polarity == .allow, allowedToSave == false {
             switch stop {
@@ -170,6 +184,9 @@ public enum RulePinning: Sendable {
                 return "This action mutates a protected shared branch. Always-allow cannot override that hard stop."
             }
         }
+        if let predicate {
+            return gitPushSentence(polarity: polarity, predicate: predicate)
+        }
         switch polarity {
         case .allow:
             return "Always allow this action. Future matches in this scope will not wait."
@@ -177,12 +194,100 @@ public enum RulePinning: Sendable {
             return "Always block this action. This wait and future matches will be denied."
         }
     }
+
+    /// Typed form for git push pins. Matcher is `GitAction.push`, not argv.
+    /// Pending records have no analyzer `GitAction`; emit a push only for a
+    /// named-branch remote shared-branch mutation — never empty effects,
+    /// switch, discard, or delete.
+    private static func gitPushPredicate(from action: ProposedAction) -> PolicyPredicate? {
+        guard let git = gitPushAction(from: action) else {
+            return nil
+        }
+        let predicate = PolicyPredicate.gitPush(
+            force: GitPushForce.force,
+            branch: git.resources.branchName
+        )
+        guard PolicyMatch.matches(predicate, action: git) else {
+            return nil
+        }
+        return predicate
+    }
+
+    private static func gitPushAction(from action: ProposedAction) -> GitAction? {
+        guard case .shell(let shell) = action else {
+            return nil
+        }
+        let kinds = shell.effects.kinds
+        guard kinds.contains(.remoteSharedBranchMutation) else {
+            return nil
+        }
+        if kinds.contains(where: isNonPushEffect) {
+            return nil
+        }
+        guard let branch = shell.resources.branchName, branch.isEmpty == false else {
+            return nil
+        }
+        return .push(
+            remote: shell.resources.remoteName,
+            refspec: branch,
+            force: GitPushForce.force,
+            delete: false
+        )
+    }
+
+    private static func isNonPushEffect(_ kind: ActionEffectKind) -> Bool {
+        switch kind {
+        case .remoteSharedBranchMutation:
+            return false
+        case .localBranchCreate, .workingTreeDiscard, .filesystemDelete, .filesystemMove,
+            .filesystemOverwrite, .filesystemModeChange, .filesystemCreate, .filesystemRead,
+            .protectedPathMutation, .outsideRepositoryMutation, .unresolvedFilesystem:
+            return true
+        }
+    }
+
+    private static func gitPushSentence(
+        polarity: PinnedRulePolarity,
+        predicate: PolicyPredicate
+    ) -> String {
+        switch predicate {
+        case .gitPush(let force, let branch):
+            let target = gitPushTarget(force: force, branch: branch)
+            switch polarity {
+            case .allow:
+                return "Always allow \(target). Future matches in this scope will not wait."
+            case .block:
+                return "Always block \(target)."
+            }
+        }
+    }
+
+    private static func gitPushTarget(force: GitPushForce?, branch: String?) -> String {
+        let named = branch.flatMap { $0.isEmpty ? nil : $0 }
+        let isForce = force == GitPushForce.force || force == .forceWithLease
+        if isForce {
+            if let named {
+                return "force-push to \(named)"
+            }
+            return "force-push"
+        }
+        if let named {
+            return "push to \(named)"
+        }
+        return "git push"
+    }
 }
 
 private struct DraftBody: Codable, Equatable {
     var fingerprint: String
     var id: String
     var polarity: String
+    var v: Int
+}
+
+private struct TypedPinDraft: Codable, Equatable {
+    var polarity: String
+    var predicate: PolicyPredicate
     var v: Int
 }
 

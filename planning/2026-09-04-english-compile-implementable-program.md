@@ -415,7 +415,7 @@ Unresolved forks: **none**.
 - **Parallel-safe with:** w2-service-preview
 - **Code paths (exclusive):** none unless gate red
 - **Test paths (exclusive):** none unless gap-fill
-- **Gates:** `tools/gate.sh RVDomainTests --filter ActionPolicyEngine`
+- **Gates:** `tools/gate.sh RVDomainTests --filter ActionPolicyEngineTests`
 - **Reject (local):** new features
 - **Residuals allowed:** none
 - **Fat?:** no

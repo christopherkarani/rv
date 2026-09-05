@@ -247,7 +247,7 @@ if wave == "W1" {
         #{ id: "w2-preview", title: "Preview is a typed form", goal: "RulePinning draft is PolicyPredicate", acceptance: ["force-push main preview includes gitPush", "hard-stop sentence still blocks allow", "IPC sentence tests updated not deleted"], depends_on: [], code_paths: ["Sources/RVPolicy/RulePinning.swift"], test_paths: ["Tests/RVPolicyTests/RulePinningTests.swift"], fat: false, composition: "", gate: "tools/gate.sh RVPolicyTests --filter RulePinning" },
         #{ id: "w2-save", title: "Save writes TypedRule", goal: "RulePinStore -> TypedRuleStore", acceptance: ["block pin loads as machine deny", "allow+hardStop throws", "draftMismatch still throws"], depends_on: ["w2-preview"], code_paths: ["Sources/RVPolicy/RulePinStore.swift"], test_paths: ["Tests/RVPolicyTests/RulePinStoreTests.swift"], fat: false, composition: "", gate: "tools/gate.sh RVPolicyTests --filter RulePin" },
         #{ id: "w2-service-preview", title: "Service uses typed preview", goal: "IPC rulePreview still round-trips", acceptance: ["allowedToSave false on hard stop", "cancel writes nothing"], depends_on: ["w2-save"], code_paths: ["Sources/RVService/ServiceRuntime.swift"], test_paths: ["Tests/RVIPCTests/PendingAndRuleRoundTripTests.swift"], fat: false, composition: "", gate: "tools/gate.sh RVServiceTests RVIPCTests" },
-        #{ id: "w2-verify-wall", title: "Wall still holds", goal: "verify_only builtins", acceptance: ["reset-hard still deny", "blocksAllowOverride tests pass"], depends_on: ["w2-save"], code_paths: [], test_paths: [], fat: false, composition: "", gate: "tools/gate.sh RVDomainTests --filter ActionPolicyEngine" },
+        #{ id: "w2-verify-wall", title: "Wall still holds", goal: "verify_only builtins", acceptance: ["reset-hard still deny", "blocksAllowOverride tests pass"], depends_on: ["w2-save"], code_paths: [], test_paths: [], fat: false, composition: "", gate: "tools/gate.sh RVDomainTests --filter ActionPolicyEngineTests" },
     ];
 } else {
     units = [
@@ -527,7 +527,10 @@ if wave == "W1" {
     ora_p += "Expect exit 0, stdout headings builtin/machine/repo, empty TMP tree. Full RVCLITests is not W1 proof.\n";
     ora_p += "Fail if rg scratch/english-review Sources Package.swift hits.\n";
 } else if wave == "W2" {
-    ora_p += "Run tools/gate.sh RVPolicyTests RVDomainTests and RulePinning filters.\n";
+    ora_p += "Run: tools/gate.sh RVPolicyTests ; tools/gate.sh RVDomainTests ; tools/gate.sh RVPolicyTests --filter RulePinning ; tools/gate.sh RVPolicyTests --filter RulePinStore.\n";
+    ora_p += "Do NOT wrap tools/swift-6.3.3 in HOME=$(mktemp -d). Darwin pin is $HOME/Library/Developer/Toolchains.\n";
+    ora_p += "Do not use --filter ActionPolicyEngine (substring hits shadow suites / SIGSEGV). Unique wall proof is --filter ActionPolicyEngineTests. Full RVCLITests is not W2 proof.\n";
+    ora_p += "Fail if rg scratch/english-review Sources Package.swift hits.\n";
 } else {
     ora_p += "Run Domain/Policy/CLI gates plus rv policy draft --english if the binary has it.\n";
 }

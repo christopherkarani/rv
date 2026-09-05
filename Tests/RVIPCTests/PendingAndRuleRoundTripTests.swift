@@ -178,18 +178,63 @@ struct PendingAndRuleRoundTripTests {
             #"{"id":"AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE","method":{"rulePreview":{"id":"ask-1","polarity":"allow"}},"protocol":"rv.ipc.v1"}"#
         #expect(String(data: requestData, encoding: .utf8) == requestGolden)
         #expect(try IPCJSON.decode(IPCRequest.self, from: requestData) == request)
+        let requestObject = try #require(JSONSerialization.jsonObject(with: requestData) as? [String: Any])
+        let method = try #require(requestObject["method"] as? [String: Any])
+        let previewParams = try #require(method["rulePreview"] as? [String: Any])
+        #expect(previewParams["draft"] == nil)
+        #expect(previewParams["command"] == nil)
+        #expect(previewParams["supportingCommand"] == nil)
 
+        let typedAllowDraft =
+            #"{"polarity":"allow","predicate":{"gitPush":{"branch":"feature","force":"force"}},"v":2}"#
         let reply = RulePreviewReply(
-            sentence: "Always allow git push in this folder.",
-            draft: "opaque-draft",
+            sentence: "Always allow force-push to feature. Future matches in this scope will not wait.",
+            draft: typedAllowDraft,
             allowedToSave: true
         )
         let response = IPCResponse(id: id, result: .rulePreview(reply))
         let responseData = try IPCJSON.encode(response)
         let responseGolden =
-            #"{"id":"AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE","protocol":"rv.ipc.v1","result":{"rulePreview":{"allowedToSave":true,"draft":"opaque-draft","sentence":"Always allow git push in this folder."}}}"#
+            #"{"id":"AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE","protocol":"rv.ipc.v1","result":{"rulePreview":{"allowedToSave":true,"draft":"{\"polarity\":\"allow\",\"predicate\":{\"gitPush\":{\"branch\":\"feature\",\"force\":\"force\"}},\"v\":2}","sentence":"Always allow force-push to feature. Future matches in this scope will not wait."}}}"#
         #expect(String(data: responseData, encoding: .utf8) == responseGolden)
-        #expect(try IPCJSON.decode(IPCResponse.self, from: responseData) == response)
+        let decoded = try IPCJSON.decode(IPCResponse.self, from: responseData)
+        #expect(decoded == response)
+        guard case .rulePreview(let decodedReply) = decoded.result else {
+            Issue.record("rulePreview reply must decode as rulePreview")
+            return
+        }
+        try assertTypedGitPushDraft(decodedReply.draft, polarity: "allow", branch: "feature")
+        #expect(decodedReply.allowedToSave == true)
+        try assertRulePreviewWireOmitsCommand(responseData)
+    }
+
+    @Test func rulePreviewReply_hardStopAllowedToSaveFalse_roundTrip() throws {
+        let typedAllowDraft =
+            #"{"polarity":"allow","predicate":{"gitPush":{"branch":"main","force":"force"}},"v":2}"#
+        let reply = RulePreviewReply(
+            sentence:
+                "This action mutates a protected shared branch. Always-allow cannot override that hard stop.",
+            draft: typedAllowDraft,
+            allowedToSave: false
+        )
+        let response = IPCResponse(id: id, result: .rulePreview(reply))
+        let responseData = try IPCJSON.encode(response)
+        let responseGolden =
+            #"{"id":"AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE","protocol":"rv.ipc.v1","result":{"rulePreview":{"allowedToSave":false,"draft":"{\"polarity\":\"allow\",\"predicate\":{\"gitPush\":{\"branch\":\"main\",\"force\":\"force\"}},\"v\":2}","sentence":"This action mutates a protected shared branch. Always-allow cannot override that hard stop."}}}"#
+        #expect(String(data: responseData, encoding: .utf8) == responseGolden)
+        let decoded = try IPCJSON.decode(IPCResponse.self, from: responseData)
+        #expect(decoded == response)
+        guard case .rulePreview(let decodedReply) = decoded.result else {
+            Issue.record("hard-stop rulePreview must decode as rulePreview")
+            return
+        }
+        #expect(decodedReply.allowedToSave == false)
+        try assertTypedGitPushDraft(decodedReply.draft, polarity: "allow", branch: "main")
+        try assertRulePreviewWireOmitsCommand(responseData)
+        let object = try #require(JSONSerialization.jsonObject(with: responseData) as? [String: Any])
+        let result = try #require(object["result"] as? [String: Any])
+        let body = try #require(result["rulePreview"] as? [String: Any])
+        #expect(body["allowedToSave"] as? Bool == false)
     }
 
     @Test(arguments: ["deny", "allowOnce", "", "Always"])
@@ -278,5 +323,69 @@ struct PendingAndRuleRoundTripTests {
 
     @Test func protocolNameStaysRvIpcV1() {
         #expect(ProtocolVersion.name == "rv.ipc.v1")
+    }
+
+    private func assertTypedGitPushDraft(
+        _ draft: String,
+        polarity: String,
+        branch: String,
+        sourceLocation: SourceLocation = #_sourceLocation
+    ) throws {
+        #expect(draft.contains("gitPush"), sourceLocation: sourceLocation)
+        let data = try #require(draft.data(using: .utf8), sourceLocation: sourceLocation)
+        let object = try #require(
+            JSONSerialization.jsonObject(with: data) as? [String: Any],
+            sourceLocation: sourceLocation
+        )
+        #expect(object["v"] as? Int == 2, sourceLocation: sourceLocation)
+        #expect(object["polarity"] as? String == polarity, sourceLocation: sourceLocation)
+        #expect(object["fingerprint"] == nil, sourceLocation: sourceLocation)
+        #expect(object["id"] == nil, sourceLocation: sourceLocation)
+        #expect(object["command"] == nil, sourceLocation: sourceLocation)
+        #expect(object["supportingCommand"] == nil, sourceLocation: sourceLocation)
+        let predicate = try #require(
+            object["predicate"] as? [String: Any],
+            sourceLocation: sourceLocation
+        )
+        let gitPush = try #require(
+            predicate["gitPush"] as? [String: Any],
+            sourceLocation: sourceLocation
+        )
+        #expect(gitPush["branch"] as? String == branch, sourceLocation: sourceLocation)
+        #expect(gitPush["force"] as? String == "force", sourceLocation: sourceLocation)
+    }
+
+    private func assertRulePreviewWireOmitsCommand(
+        _ data: Data,
+        sourceLocation: SourceLocation = #_sourceLocation
+    ) throws {
+        let text = try #require(String(data: data, encoding: .utf8), sourceLocation: sourceLocation)
+        #expect(text.contains("supportingCommand") == false, sourceLocation: sourceLocation)
+        #expect(text.contains("ghp_secret") == false, sourceLocation: sourceLocation)
+        let object = try #require(
+            JSONSerialization.jsonObject(with: data) as? [String: Any],
+            sourceLocation: sourceLocation
+        )
+        assertNoCommandKeys(object, sourceLocation: sourceLocation)
+    }
+
+    private func assertNoCommandKeys(
+        _ object: Any,
+        sourceLocation: SourceLocation = #_sourceLocation
+    ) {
+        switch object {
+        case let dict as [String: Any]:
+            #expect(dict["command"] == nil, sourceLocation: sourceLocation)
+            #expect(dict["supportingCommand"] == nil, sourceLocation: sourceLocation)
+            for value in dict.values {
+                assertNoCommandKeys(value, sourceLocation: sourceLocation)
+            }
+        case let array as [Any]:
+            for value in array {
+                assertNoCommandKeys(value, sourceLocation: sourceLocation)
+            }
+        default:
+            break
+        }
     }
 }
