@@ -10,14 +10,16 @@ public func applyFilesystemSemantics(
     pack: EvaluationResult,
     command: ShellCommand,
     context: FilesystemAnalysisContext = .empty,
-    enabledPacks: [PackID] = dayOnePackIDs
+    enabledPacks: [PackID] = dayOnePackIDs,
+    policy: EffectiveActionPolicy = .empty
 ) -> EvaluationResult {
     applyFilesystemSemantics(
         pack: pack,
         analysis: analyzeFilesystem(command, context: context),
         command: command,
         context: context,
-        enabledPacks: enabledPacks
+        enabledPacks: enabledPacks,
+        policy: policy
     )
 }
 
@@ -26,7 +28,8 @@ public func applyFilesystemSemantics(
     analysis: SemanticAnalysis,
     command: ShellCommand,
     context: FilesystemAnalysisContext = .empty,
-    enabledPacks: [PackID] = dayOnePackIDs
+    enabledPacks: [PackID] = dayOnePackIDs,
+    policy: EffectiveActionPolicy = .empty
 ) -> EvaluationResult {
     if pack.analysis.gitAction != nil {
         return pack
@@ -56,7 +59,7 @@ public func applyFilesystemSemantics(
             workingDirectory: context.workingDirectory
         ),
         context: ReviewContext(repository: RepositoryReviewContext()),
-        policy: .empty
+        policy: policy
     )
     switch verdict.decision {
     case .hardAllow, .reviewEligible:

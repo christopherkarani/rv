@@ -11,7 +11,8 @@ public func applySemantics(
     filesystemContext: FilesystemAnalysisContext = .empty,
     enabledPacks: [PackID] = dayOnePackIDs,
     maxDepth: Int = UnwrapLimits.maxDepth,
-    maxBytes: Int = UnwrapLimits.maxBytes
+    maxBytes: Int = UnwrapLimits.maxBytes,
+    policy: EffectiveActionPolicy = .empty
 ) -> EvaluationResult {
     let analysis = analyzeSemantics(
         command,
@@ -26,7 +27,8 @@ public func applySemantics(
         command: command,
         gitContext: gitContext,
         filesystemContext: filesystemContext,
-        enabledPacks: enabledPacks
+        enabledPacks: enabledPacks,
+        policy: policy
     )
 }
 
@@ -36,7 +38,8 @@ public func applySemantics(
     command: ShellCommand,
     gitContext: GitAnalysisContext = .empty,
     filesystemContext: FilesystemAnalysisContext = .empty,
-    enabledPacks: [PackID] = dayOnePackIDs
+    enabledPacks: [PackID] = dayOnePackIDs,
+    policy: EffectiveActionPolicy = .empty
 ) -> EvaluationResult {
     let limited = applyUnwrapLimit(pack: pack, analysis: analysis)
     let afterGit = applyGitSemantics(
@@ -44,14 +47,16 @@ public func applySemantics(
         analysis: analysis,
         command: command,
         context: gitContext,
-        enabledPacks: enabledPacks
+        enabledPacks: enabledPacks,
+        policy: policy
     )
     return applyFilesystemSemantics(
         pack: afterGit,
         analysis: analysis,
         command: command,
         context: filesystemContext,
-        enabledPacks: enabledPacks
+        enabledPacks: enabledPacks,
+        policy: policy
     )
 }
 
