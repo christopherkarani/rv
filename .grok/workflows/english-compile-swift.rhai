@@ -174,6 +174,9 @@ fn swift_pack_block() {
     s += "Do NOT load Zig skills or run Zig implementor.\n";
     s += "SEAM OVERRIDE: unit seams are pre-confirmed. Do not re-grill.\n";
     s += "Gate: tools/gate.sh via tools/swift-6.3.3. Warm .build. No swift package clean.\n";
+    s += "Do NOT wrap tools/swift-6.3.3 in HOME=$(mktemp -d). Darwin pin is $HOME/Library/Developer/Toolchains.\n";
+    s += "CLI proof: build with real HOME, then run the binary under TMP HOME. Full RVCLITests is not wave proof.\n";
+    s += "--filter is substring: use unique names (EnglishCompilerTests, FakeEnglishCompilerTests, PolicyDraftCommand, ActionPolicyEngineTests). Never --filter ActionPolicyEngine or --filter TypedRule or --filter EnglishCompiler alone.\n";
     s
 }
 
@@ -251,10 +254,10 @@ if wave == "W1" {
     ];
 } else {
     units = [
-        #{ id: "w3-protocol", title: "EnglishCompiler protocol", goal: "english -> RulePreview or refuse", acceptance: ["protocol in RVDomain", "no AFM import in Domain"], depends_on: [], code_paths: ["Sources/RVDomain/EnglishCompiler.swift"], test_paths: ["Tests/RVDomainTests/EnglishCompilerTests.swift"], fat: false, composition: "", gate: "tools/gate.sh RVDomainTests --filter EnglishCompiler" },
-        #{ id: "w3-fake", title: "Fake compiler", goal: "known sentences to gitPush", acceptance: ["never force-push main -> gitPush force main deny", "unknown sentence refuses"], depends_on: ["w3-protocol"], code_paths: ["Sources/RVDomain/FakeEnglishCompiler.swift"], test_paths: ["Tests/RVDomainTests/FakeEnglishCompilerTests.swift"], fat: false, composition: "", gate: "tools/gate.sh RVDomainTests --filter FakeEnglishCompiler" },
+        #{ id: "w3-protocol", title: "EnglishCompiler protocol", goal: "english -> RulePreview or refuse", acceptance: ["protocol in RVDomain", "no AFM import in Domain"], depends_on: [], code_paths: ["Sources/RVDomain/EnglishCompiler.swift"], test_paths: ["Tests/RVDomainTests/EnglishCompilerTests.swift"], fat: false, composition: "", gate: "tools/gate.sh RVDomainTests --filter EnglishCompilerTests" },
+        #{ id: "w3-fake", title: "Fake compiler", goal: "known sentences to gitPush", acceptance: ["never force-push main -> gitPush force main deny", "unknown sentence refuses"], depends_on: ["w3-protocol"], code_paths: ["Sources/RVDomain/FakeEnglishCompiler.swift"], test_paths: ["Tests/RVDomainTests/FakeEnglishCompilerTests.swift"], fat: false, composition: "", gate: "tools/gate.sh RVDomainTests --filter FakeEnglishCompilerTests" },
         #{ id: "w3-ask-wins", title: "Ask beats allow", goal: "same predicate ask+allow", acceptance: ["engine verdict mandatoryHuman when both match"], depends_on: ["w3-fake"], code_paths: ["Sources/RVDomain/ActionPolicyEngine.swift"], test_paths: ["Tests/RVDomainTests/TypedRuleAskWinsTests.swift"], fat: false, composition: "", gate: "tools/gate.sh RVDomainTests --filter TypedRuleAskWins" },
-        #{ id: "w3-cli", title: "rv policy draft", goal: "CLI english preview save", acceptance: ["draft --english prints preview writes nothing", "--save persists", "refuse writes nothing"], depends_on: ["w3-fake"], code_paths: ["Sources/RVCLI/Commands/PolicyDraftCommand.swift", "Sources/RVCLI/RV.swift"], test_paths: ["Tests/RVCLITests/PolicyDraftCommandTests.swift"], fat: false, composition: "help lists policy draft", gate: "tools/gate.sh RVCLITests --filter PolicyDraft" },
+        #{ id: "w3-cli", title: "rv policy draft", goal: "CLI english preview save", acceptance: ["draft --english prints preview writes nothing", "--save persists", "refuse writes nothing"], depends_on: ["w3-fake"], code_paths: ["Sources/RVCLI/Commands/PolicyDraftCommand.swift", "Sources/RVCLI/RV.swift"], test_paths: ["Tests/RVCLITests/PolicyDraftCommandTests.swift"], fat: false, composition: "help lists policy draft", gate: "tools/gate.sh RVCLITests --filter PolicyDraftCommand" },
         #{ id: "w3-afm", title: "Optional AFM compiler", goal: "RVPolicy #if canImport", acceptance: ["tests inject fake not live Apple", "Domain still has no FoundationModels"], depends_on: ["w3-protocol"], code_paths: ["Sources/RVPolicy/FoundationModelsEnglishCompiler.swift"], test_paths: ["Tests/RVPolicyTests/FoundationModelsEnglishCompilerTests.swift"], fat: false, composition: "", gate: "tools/gate.sh RVPolicyTests --filter FoundationModelsEnglishCompiler" },
         #{ id: "w3-refuse", title: "Refuse uncompilable English", goal: "npm/mcp/empty", acceptance: ["npm publish refuses", "mcp__linear__save_issue refuses", "store unchanged"], depends_on: ["w3-cli"], code_paths: ["Sources/RVDomain/FakeEnglishCompiler.swift"], test_paths: ["Tests/RVDomainTests/EnglishRefuseTests.swift"], fat: false, composition: "", gate: "tools/gate.sh RVDomainTests --filter EnglishRefuse" },
     ];
@@ -532,7 +535,20 @@ if wave == "W1" {
     ora_p += "Do not use --filter ActionPolicyEngine (substring hits shadow suites / SIGSEGV). Unique wall proof is --filter ActionPolicyEngineTests. Full RVCLITests is not W2 proof.\n";
     ora_p += "Fail if rg scratch/english-review Sources Package.swift hits.\n";
 } else {
-    ora_p += "Run Domain/Policy/CLI gates plus rv policy draft --english if the binary has it.\n";
+    ora_p += "Run unique filters only:\n";
+    ora_p += "  tools/gate.sh RVDomainTests --filter EnglishCompilerTests\n";
+    ora_p += "  tools/gate.sh RVDomainTests --filter FakeEnglishCompilerTests\n";
+    ora_p += "  tools/gate.sh RVDomainTests --filter TypedRuleAskWins\n";
+    ora_p += "  tools/gate.sh RVDomainTests --filter EnglishRefuse\n";
+    ora_p += "  tools/gate.sh RVPolicyTests --filter FoundationModelsEnglishCompiler\n";
+    ora_p += "  tools/gate.sh RVCLITests --filter PolicyDraftCommand\n";
+    ora_p += "  tools/gate.sh RVDomainTests --filter ActionPolicyEngineTests\n";
+    ora_p += "Do NOT wrap tools/swift-6.3.3 in HOME=$(mktemp -d). Darwin pin is $HOME/Library/Developer/Toolchains.\n";
+    ora_p += "Do not use --filter ActionPolicyEngine, --filter TypedRule, or --filter EnglishCompiler (substring hits FakeEnglishCompiler / SIGSEGV).\n";
+    ora_p += "Full RVCLITests is not W3 proof.\n";
+    ora_p += "Build with real HOME, then: TMP=$(mktemp -d /tmp/rv-policy-draft.XXXXXX); HOME=$TMP .build/arm64-apple-macosx/debug/rv policy draft --english \"never allow force-push to main\" --robot\n";
+    ora_p += "Expect exit 0, JSON gitPush force main, allowedToSave true, no files written under TMP. Then HOME=$TMP same binary --save, then HOME=$TMP rv policy show lists a machine deny. Refuse: HOME=$TMP rv policy draft --english \"be careful in prod\" writes nothing.\n";
+    ora_p += "Fail if rg scratch/english-review Sources Package.swift hits.\n";
 }
 ora_p += "Return ok=true only if commands you ran exited 0. List commands in commands[].\n";
 
