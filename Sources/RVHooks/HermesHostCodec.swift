@@ -25,12 +25,14 @@ public struct HermesHostCodec: HostCodec {
         let cwdText = firstNonEmpty(envelope.args?.workdir, envelope.cwd)
         let cwd = cwdText.flatMap { WorkingDirectory(validating: $0) }
         let session = firstNonEmpty(envelope.sessionId, envelope.taskId)
+        let hostAsk = envelope.hostAsk.flatMap(HostAskHookIntent.init(rawValue:))
         return .request(
             HookRequest(
                 host: .hermes,
                 command: ShellCommand(rawValue: command),
                 cwd: cwd,
-                session: session
+                session: session,
+                hostAsk: hostAsk
             )
         )
     }
@@ -43,6 +45,7 @@ private struct HermesEnvelope: Decodable {
     var cwd: String?
     var sessionId: String?
     var taskId: String?
+    var hostAsk: String?
 }
 
 private struct HermesArgs: Decodable {

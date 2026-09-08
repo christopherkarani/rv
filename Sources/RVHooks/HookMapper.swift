@@ -6,7 +6,8 @@ import RVDomain
 /// Product Ask pauses only when `HostNativeAsk.verdict(host:result:cwd:bound:)`
 /// returns `.ask` (spend-first host, unlockable pack deny or `mandatoryHuman`,
 /// cwd + nonempty matching view). Adapters honor `decision:ask` only.
-/// Claude first-call official ask is leftover-ask-as-permit and is never emitted.
+/// Claude first-call Ask is short `{decision:ask}` for the wrapper. Official
+/// `permissionDecision: "ask"` is leftover-ask-as-permit and is never emitted.
 public func hookWire<C: HostCodec>(
     from result: EvaluationResult,
     command: ShellCommand,
@@ -22,12 +23,12 @@ public func hookWire<C: HostCodec>(
         if afterSpend {
             return encodePostSpend(from: result, command: command, using: codec)
         }
-        // Official `permissionDecision: "ask"` is leftover-ask-as-permit. Stay deny.
         return encodeClaudeFirstCall(
             from: result,
             command: command,
             using: codec,
             bound: bound,
+            cwd: cwd,
             unlockCode: code
         )
     case .grok, .pi, .opencode, .openclaw, .hermes, .codex, .cursor:
@@ -50,6 +51,7 @@ private func encodeClaudeFirstCall<C: HostCodec>(
     command: ShellCommand,
     using codec: C,
     bound: BoundReview?,
+    cwd: WorkingDirectory?,
     unlockCode: String?
 ) -> HookWire {
     switch result.decision {
@@ -61,24 +63,47 @@ private func encodeClaudeFirstCall<C: HostCodec>(
                 unlockCode: unlockCode
             )
         }
-        switch bound {
+        switch HostNativeAsk.verdict(
+            host: codec.host,
+            result: result,
+            cwd: cwd,
+            bound: bound
+        ) {
         case .allow:
             return codec.encodeAllow()
-        case .deny(let deny), .mandatoryHuman(let deny):
-            return codec.encodeDeny(
-                reason: hostDenyLine(command: command, reason: deny.reason, unlockCode: unlockCode),
-                rule: displayRuleID(deny.ruleID),
-                next: mintedUnlockNext(unlockCode) ?? hookUnlockNext
-            )
+        case .deny:
+            switch bound {
+            case .deny(let deny), .mandatoryHuman(let deny):
+                return codec.encodeDeny(
+                    reason: hostDenyLine(command: command, reason: deny.reason, unlockCode: unlockCode),
+                    rule: displayRuleID(deny.ruleID),
+                    next: mintedUnlockNext(unlockCode) ?? hookUnlockNext
+                )
+            case .allow:
+                return codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: nil)
+            }
+        case .ask:
+            return encodeAsked(from: bound, command: command, using: codec)
         }
     case .indeterminate:
         return codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: nil)
-    case .deny:
-        return ClaudeHostCodec().encodeRichDeny(
-            from: result,
-            command: command,
-            unlockCode: unlockCode
-        )
+    case .deny(let deny):
+        let bound = bound ?? .deny(deny)
+        switch HostNativeAsk.verdict(
+            host: codec.host,
+            result: result,
+            cwd: cwd,
+            bound: bound
+        ) {
+        case .ask:
+            return encodeAsked(from: bound, command: command, using: codec)
+        case .allow, .deny:
+            return ClaudeHostCodec().encodeRichDeny(
+                from: result,
+                command: command,
+                unlockCode: unlockCode
+            )
+        }
     }
 }
 

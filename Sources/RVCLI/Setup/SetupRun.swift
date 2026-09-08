@@ -787,7 +787,7 @@ enum SetupRun {
         }
     }
 
-    /// Writes Claude settings merge when missing or different. Returns whether a write occurred.
+    /// Writes the exclusive Claude adapter and settings merge. Returns whether a write occurred.
     private static func writeClaudeSettings(
         path: String,
         rvPath: String,
@@ -798,18 +798,40 @@ enum SetupRun {
         if files.isSymbolicLink(path) {
             return false
         }
+        let adapterPath = ClaudeSettingsMerge.adapterPath(settingsPath: path)
+        if files.isSymbolicLink(adapterPath) {
+            throw SetupError.hostHookWriteFailed(.claude)
+        }
+        let adapter: HostAdapterResource
+        do {
+            adapter = try HostAdapterResources.load(for: .claude)
+        } catch {
+            throw SetupError(adapterResourceFailure: error)
+        }
+        let wroteAdapter: Bool
+        do {
+            wroteAdapter = try writeOwned(
+                path: adapterPath,
+                contents: adapter.rendered(rvPath: rvPath),
+                existingData: files.readData(adapterPath),
+                files: files
+            )
+        } catch {
+            throw SetupError.hostHookWriteFailed(.claude)
+        }
         let merged: (data: Data, wrote: Bool)
         do {
             merged = try ClaudeSettingsMerge.merge(
                 existingData: existingData,
                 rvPath: rvPath,
+                adapterPath: adapterPath,
                 force: force
             )
         } catch {
             throw SetupError.hostHookWriteFailed(.claude)
         }
         if merged.wrote == false {
-            return false
+            return wroteAdapter
         }
         do {
             try files.writeData(merged.data, to: path)
@@ -824,7 +846,7 @@ enum SetupRun {
         try applyClaudeUninstall(at: path, files: files, unreadable: .fail)
     }
 
-    /// Stale rv fingerprints are occupied for setup, but uninstall still strips them.
+    /// Occupied foreign/tampered `rv-guard.py` still strips on uninstall.
     private static func stripClaudeFingerprintLeavingOccupied(
         at path: String,
         files: FileOps
@@ -845,7 +867,9 @@ enum SetupRun {
         if files.isSymbolicLink(path) {
             return false
         }
-        guard let data = files.readData(path) else { return false }
+        guard let data = files.readData(path) else {
+            return removeClaudeAdapterIfCurrent(settingsPath: path, files: files)
+        }
         let next: Data?
         do {
             next = try ClaudeSettingsMerge.uninstall(existingData: data)
@@ -857,18 +881,38 @@ enum SetupRun {
                 return false
             }
         }
-        guard let next else {
+        var wroteSettings = false
+        if let next {
+            if next != data {
+                do {
+                    try files.writeData(next, to: path)
+                } catch {
+                    throw SetupError.hostHookWriteFailed(.claude)
+                }
+                wroteSettings = true
+            }
+        } else {
             files.removeFile(atPath: path)
-            return true
+            wroteSettings = true
         }
-        if next == data {
+        let removedAdapter = removeClaudeAdapterIfCurrent(settingsPath: path, files: files)
+        return wroteSettings || removedAdapter
+    }
+
+    /// Removes `~/.claude/hooks/rv-guard.py` when it is the current rv adapter.
+    private static func removeClaudeAdapterIfCurrent(settingsPath: String, files: FileOps) -> Bool {
+        let adapterPath = ClaudeSettingsMerge.adapterPath(settingsPath: settingsPath)
+        if files.isSymbolicLink(adapterPath) {
             return false
         }
-        do {
-            try files.writeData(next, to: path)
-        } catch {
-            throw SetupError.hostHookWriteFailed(.claude)
+        guard let data = files.readData(adapterPath),
+              let text = String(data: data, encoding: .utf8),
+              let adapter = try? HostAdapterResources.load(for: .claude),
+              adapter.matchesCurrent(text)
+        else {
+            return false
         }
+        files.removeFile(atPath: adapterPath)
         return true
     }
 

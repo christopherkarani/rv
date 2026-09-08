@@ -133,3 +133,15 @@ func hermesDecode_extractsTerminalCommand(_ file: String, expected: String) thro
     }
     #expect(request.session == SessionID(validating: "task_main"))
 }
+
+@Test func hermesDecode_readsHostAskSpend() {
+    let stdin = """
+    {"toolName":"terminal","cwd":"/tmp/ws","args":{"command":"git reset --hard"},"hostAsk":"spend"}
+    """
+    guard case .request(let request) = codec.decode(stdin) else {
+        Issue.record("expected .request for hostAsk spend")
+        return
+    }
+    #expect(request.hostAsk == .spend)
+    #expect(request.cwd?.rawValue == "/tmp/ws")
+}

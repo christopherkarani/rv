@@ -16,7 +16,7 @@ If this file conflicts with `docs/factory/PLAN.md`, PLAN wins except where this 
 
 - **Chrome:** rich `permissionDecisionReason` plus `systemMessage` (not Grok `{decision,reason}`).
 - **Settings merge:** destination is the shared `$HOME/.claude/settings.json`. PLAN exclusive owned-file occupancy (#11: occupied = owned filename is not the current template) does **not** apply to that file.
-- **Occupied fingerprint:** occupied = an rv-fingerprinted PreToolUse handler (`command` contains `hook --host claude`) whose shape is not the current template (modulo absolute path rewrite). Presence of `settings.json` with model, MCP, permissions, or foreign hooks is not occupied.
+- **Occupied fingerprint:** occupied = a fingerprinted PreToolUse handler that is a foreign/tampered `rv-guard.py` (not `matchesCurrentHook`). Stale v1 `…/rv hook --host claude` is **outdated rv**, not occupied: setup without `--force` rewrites to the current python3 wrapper. Presence of `settings.json` with model, MCP, permissions, or foreign hooks is not occupied.
 - **`--force`:** replace **only** rv-fingerprinted handlers. PLAN #20 `*.bak` whole-file rewrite does **not** apply to `settings.json`.
 
 These occupancy / merge / `--force` rules are product amendments, not optional chrome. Shared unlock law (no redeemable code on the host wire) is not amended.
@@ -35,7 +35,7 @@ These occupancy / merge / `--force` rules are product amendments, not optional c
 
 | Ticket | Fence |
 |---|---|
-| **CL-later-ask** | Emit `permissionDecision: "ask"`. Never treat Claude ask-approve as allow-once. |
+| **CL-later-ask** | Never emit official `permissionDecision: "ask"` (leftover-ask-as-permit). Host Ask is wrapper confirm-then-spend on `{decision:ask}` (exit 2). Never treat Claude ask-approve as allow-once. |
 | **CL-later-secrets** | Read / Edit / Write secret-path guards (cc-safety-net competitive). |
 | **CL-later-mcp** | MCP tool-name / args policy. |
 | — | Claude plugin marketplace install; PowerShell matcher; Codex / Gemini codecs; `MessageDisplay`; `RV_BYPASS` / `DCG_BYPASS`; live HOME tests |
@@ -46,7 +46,7 @@ Audience: implementer and reviewer subagents. Base: current `worktree/lucky-rive
 
 - **Claude Host adapter:** rv-owned integration that turns a Claude `PreToolUse` Bash event into a `HookRequest` and returns Claude-native deny/allow wire plus optional `systemMessage` chrome.
 - **Settings merge:** additive edit of `$HOME/.claude/settings.json` hooks; not an exclusive owned filename like `rv.json`.
-- **rv fingerprint:** a PreToolUse command hook whose `command` string contains `hook --host claude`.
+- **rv fingerprint:** a PreToolUse command hook whose `command` string contains `hook --host claude` (v1, stale) or `rv-guard.py` (current wrapper).
 - **Rich deny:** Claude-only stdout object with `systemMessage` and `hookSpecificOutput` containing **only** the documented Claude Code fields (`hookEventName`, `permissionDecision`, `permissionDecisionReason`). Pack / rule / severity / remediation live inside the reason text (no redeemable code).
 - **Short hostDenyText:** existing one-sentence voice (`Blocked … (pack/pattern). Run it in Terminal, or rv allow-once.`). Still the Pi/Grok/OpenCode reason; also the one-line spine inside Claude’s rich reason and `systemMessage`.
 
@@ -86,7 +86,7 @@ Do not emit `ruleId`, `packId`, `severity`, `remediation`, `updatedInput`, `addi
 - **REQ-006**: Never emit `allowOnceCode`, `allowOnceFullHash`, or any redeemable code. Never emit `remediation` or `allowOnceCommand` as JSON keys. The closing line of REQ-005 is the only allow-once teaching copy; the verb name is exactly `rv allow-once`.
 - **REQ-007**: `safeAlternative` may be derived from match `reason` when no better Domain field exists; do **not** import `RVPresentation` into `RVHooks` for suggestion catalogs.
 - **REQ-008**: Indeterminate → same Claude deny envelope; `permissionDecisionReason` and `systemMessage` use the incomplete-eval sentence only; omit Reason / Explanation / Rule / Pack / Severity / Safer / Command sections.
-- **REQ-009**: Do not emit `"permissionDecision": "ask"` or `"allow"` in this ship. Do not use exit `2` as the primary gate (JSON deny + exit 0). Do not write stderr panels on the success path.
+- **REQ-009**: Do not emit `"permissionDecision": "ask"` or `"allow"` in this ship (CL-later-ask). Deny is JSON + exit 0. First-call Ask for the wrapper is `{decision:ask}` at exit **2** so leftover `rv hook --host claude` blocks instead of fail-opening. Do not write stderr panels on the success path.
 - **REQ-010**: No command text in `os_log`. No `RV_BYPASS` or any env the hook child honors to skip evaluate.
 - **REQ-011**: Grok / Pi / OpenCode codecs and adapters unchanged (still short deny). Claude is the only rich encoder.
 
@@ -101,8 +101,8 @@ Do not emit `ruleId`, `packId`, `severity`, `remediation`, `updatedInput`, `addi
   "hooks": [
     {
       "type": "command",
-      "command": "<absolute-rv> hook --host claude",
-      "timeout": 5
+      "command": "RV_BINARY=<absolute-rv> python3 <home>/.claude/hooks/rv-guard.py",
+      "timeout": 90
     }
   ]
 }
@@ -110,9 +110,9 @@ Do not emit `ruleId`, `packId`, `severity`, `remediation`, `updatedInput`, `addi
 
 Absolute path = baked install `rv` (same resolution as other hosts). Never register bare `rv` on PATH. Matcher is **`Bash` only** (macOS product; no PowerShell).
 
-- **REQ-014**: Merge rules: preserve foreign hooks (including `dcg`), plus model / MCP / permissions keys. If an rv-fingerprinted handler already matches the current template (modulo absolute path rewrite), treat as wired / path-fix only. If fingerprint present but shape is not current rv and `--force` is unset → **occupied** → skip. With `--force`, replace the rv-fingerprinted handler(s) only. Do not skip, `*.bak`, or rewrite the whole `settings.json` (PLAN #20 does not apply).
+- **REQ-014**: Merge rules: preserve foreign hooks (including `dcg`), plus model / MCP / permissions keys. If an rv-fingerprinted handler already matches the current template (modulo absolute path rewrite), treat as wired / path-fix only. Stale v1 `hook --host claude` is outdated: setup without `--force` rewrites it. Foreign/tampered `rv-guard.py` that is not current and `--force` is unset → **occupied** → skip. With `--force`, replace the rv-fingerprinted handler(s) only. Do not skip, `*.bak`, or rewrite the whole `settings.json` (PLAN #20 does not apply).
 - **REQ-015**: Uninstall removes only rv-fingerprinted Claude handlers; leave the rest of `settings.json` (and the file itself if non-empty of foreign content).
-- **REQ-016**: Doctor uses the same installation states as other hosts: missing / absent-file / occupied / broken / wired, interpreted for the shared settings file + fingerprint (broken = fingerprint present, baked `rv` missing or non-exec).
+- **REQ-016**: Doctor uses the same installation states as other hosts: missing / absent-file / occupied / broken / wired, interpreted for the shared settings file + fingerprint (broken = stale v1 `hook --host claude`, or current fingerprint with baked `rv` missing or non-exec). Occupied is not a quiet skip for that stale command.
 
 ### Module graph
 
@@ -135,7 +135,7 @@ Absolute path = baked install `rv` (same resolution as other hosts). Never regis
 - **AC-002**: Fixture: allow path (non-destructive or medium/low) → empty stdout, exit 0.
 - **AC-003**: Fixture: indeterminate → Claude deny envelope, incomplete-eval sentence, no pack / rule / severity / remediation sections in the reason.
 - **AC-004**: Fixture: `tool_name` Read/Edit/Write/MCP → empty allow (foreign).
-- **AC-005**: Temp HOME setup: detected `.claude` → settings contain rv fingerprint + absolute `hook --host claude`; foreign PreToolUse entry and non-hook keys unchanged; occupied fingerprint skipped without `--force`; `--force` replaces only rv-fingerprinted handlers and does not `*.bak` `settings.json`.
+- **AC-005**: Temp HOME setup: detected `.claude` → settings contain current `RV_BINARY=… python3 …/hooks/rv-guard.py` timeout 90; foreign PreToolUse entry and non-hook keys unchanged; stale v1 `hook --host claude` upgrades without `--force`; occupied foreign `rv-guard.py` skipped without `--force`; `--force` replaces only rv-fingerprinted handlers and does not `*.bak` `settings.json`.
 - **AC-006**: Uninstall removes only rv fingerprint; foreign hooks remain.
 - **AC-007**: `tools/gate.sh` green for touched targets (`RVDomainTests`, `RVHooksTests`, `RVCLITests`, and any dispatch/service hook host enum tests).
 - **AC-008**: Fresh-context review (subagent loads `swift-pr-review` + project `swift-hook-xpc`) returns no blocking issues before merge.

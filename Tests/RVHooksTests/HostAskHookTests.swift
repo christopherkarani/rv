@@ -52,6 +52,31 @@ import RVDomain
     #expect(wire.exitCode == 1)
 }
 
+@Test func hookWire_claudeFirstCallMandatoryHumanEncodesAsk() throws {
+    let deny = Deny(
+        ruleID: RuleID(pack: PackID(rawValue: "builtin.action"), pattern: "remote-branch-mutation"),
+        reason: "Remote branch mutation requires a human."
+    )
+    let result = EvaluationResult(
+        outcome: .deny(deny, matched: nil),
+        matchingView: "git push origin feature"
+    )
+    let wire = hookWire(
+        from: result,
+        command: ShellCommand(rawValue: "git push origin feature"),
+        using: ClaudeHostCodec(),
+        bound: .mandatoryHuman(deny),
+        cwd: wd("/tmp/ws")
+    )
+    let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
+    #expect(json["decision"] as? String == "ask")
+    #expect(json["continuation"] as? String == "hostNative")
+    #expect(wire.stdout.contains("\"permissionDecision\":\"ask\"") == false)
+    #expect(wire.stdout.contains("\"permissionDecision\":\"deny\"") == false)
+    #expect(wire.stdout.isEmpty == false)
+    #expect(wire.exitCode == 2)
+}
+
 @Test func hookWire_codexMandatoryHumanIsBlockNotAsk() throws {
     let deny = Deny(
         ruleID: RuleID(pack: PackID(rawValue: "builtin.action"), pattern: "remote-branch-mutation"),
@@ -258,14 +283,29 @@ func hookWire_firstCallAllowCannotSkipPolicyGate(_ host: HookHost) throws {
 }
 
 @Test func hookWire_claudeEncodeAskIsNotPermissionAsk() throws {
-    let wire = ClaudeHostCodec().encodeAsk(
-        reason: "Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once.",
+    let reason =
+        "Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once."
+    let codec = ClaudeHostCodec()
+    let wire = codec.encodeAsk(
+        reason: reason,
         rule: "core.git/reset-hard",
         next: hookUnlockNext
     )
-    #expect(wire.stdout.isEmpty == false)
+    let deny = codec.encodeDeny(
+        reason: reason,
+        rule: "core.git/reset-hard",
+        next: hookUnlockNext
+    )
+    let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
+    #expect(json["decision"] as? String == "ask")
+    #expect(json["continuation"] as? String == "hostNative")
+    #expect(json["rule"] as? String == "core.git/reset-hard")
     #expect(wire.stdout.contains("\"permissionDecision\":\"ask\"") == false)
-    #expect(wire.stdout.contains("\"permissionDecision\":\"deny\""))
+    #expect(wire.stdout.contains("\"permissionDecision\":\"deny\"") == false)
+    #expect(wire.stdout.isEmpty == false)
+    #expect(wire.exitCode == 2)
+    #expect(deny.stdout.contains("\"permissionDecision\":\"deny\""))
+    #expect(deny.exitCode == 0)
 }
 
 @Test func hookWire_piFirstCallPackDenyAsksWhenSpendable() async throws {
@@ -408,4 +448,120 @@ func hookWire_firstCallAllowCannotSkipPolicyGate(_ host: HookHost) throws {
     #expect(json["decision"] as? String == "deny")
     #expect(json["decision"] as? String != "ask")
     #expect(wire.exitCode == 1)
+}
+
+@Test func hookWire_claudeFirstCallPackDenyAsksWhenSpendable() async throws {
+    let stdin = """
+    {"hook_event_name":"PreToolUse","cwd":"/tmp/ws","tool_name":"Bash","tool_input":{"command":"git reset --hard"}}
+    """
+    let deny = Deny(
+        ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+        reason: "git reset --hard destroys uncommitted changes"
+    )
+    let wire = await hookWire(host: .claude, stdin: stdin) { _, _ in
+        EvaluationResult(
+            outcome: .deny(deny, matched: nil),
+            matchingView: MatchingView("git reset --hard")
+        )
+    }
+    let json = try #require(
+        JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any]
+    )
+    #expect(json["decision"] as? String == "ask")
+    #expect(json["continuation"] as? String == "hostNative")
+    #expect(json["rule"] as? String == "core.git/reset-hard")
+    #expect(wire.stdout.contains("\"permissionDecision\":\"ask\"") == false)
+    #expect(wire.stdout.contains("\"permissionDecision\":\"deny\"") == false)
+    #expect(wire.stdout.isEmpty == false)
+    #expect(wire.exitCode == 2)
+}
+
+@Test func hookWire_claudeFirstCallSecretPathStaysDeny() throws {
+    let secret = Deny(
+        ruleID: RuleID(pack: .coreSecrets, pattern: "aws-credentials"),
+        reason: "secret path"
+    )
+    let wire = hookWire(
+        from: EvaluationResult(
+            outcome: .deny(secret, matched: nil),
+            matchingView: MatchingView("cat ~/.aws/credentials")
+        ),
+        command: ShellCommand(rawValue: "cat ~/.aws/credentials"),
+        using: ClaudeHostCodec(),
+        bound: .deny(secret),
+        cwd: wd("/tmp/ws")
+    )
+    #expect(wire.stdout.isEmpty == false)
+    #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
+    #expect(wire.stdout.contains("\"permissionDecision\":\"ask\"") == false)
+    #expect(wire.stdout.contains("\"permissionDecision\":\"deny\""))
+}
+
+@Test func hookWire_claudeFirstCallLeftoverAskStaysDeny() throws {
+    let leftover = HostNativeAsk.leftoverAskDeny
+    let wire = hookWire(
+        from: EvaluationResult(
+            outcome: .deny(leftover, matched: nil),
+            matchingView: MatchingView("git reset --hard")
+        ),
+        command: ShellCommand(rawValue: "git reset --hard"),
+        using: ClaudeHostCodec(),
+        bound: .deny(leftover),
+        cwd: wd("/tmp/ws")
+    )
+    #expect(wire.stdout.isEmpty == false)
+    #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
+    #expect(wire.stdout.contains("\"permissionDecision\":\"ask\"") == false)
+    #expect(wire.stdout.contains("\"permissionDecision\":\"deny\""))
+}
+
+@Test func hookWire_claudeFirstCallMissingCwdStaysDeny() throws {
+    let deny = Deny(
+        ruleID: RuleID(pack: PackID(rawValue: "builtin.action"), pattern: "remote-branch-mutation"),
+        reason: "Remote branch mutation requires a human."
+    )
+    let wire = hookWire(
+        from: EvaluationResult(
+            outcome: .deny(deny, matched: nil),
+            matchingView: "git push origin feature"
+        ),
+        command: ShellCommand(rawValue: "git push origin feature"),
+        using: ClaudeHostCodec(),
+        bound: .mandatoryHuman(deny)
+    )
+    #expect(wire.stdout.isEmpty == false)
+    #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
+    #expect(wire.stdout.contains("\"permissionDecision\":\"ask\"") == false)
+    #expect(wire.stdout.contains("\"permissionDecision\":\"deny\""))
+}
+
+@Test func hookWire_claudeFirstCallEmptyMatchingViewStaysDeny() throws {
+    let deny = Deny(
+        ruleID: RuleID(pack: PackID(rawValue: "builtin.action"), pattern: "remote-branch-mutation"),
+        reason: "Remote branch mutation requires a human."
+    )
+    let wire = hookWire(
+        from: EvaluationResult(outcome: .deny(deny, matched: nil)),
+        command: ShellCommand(rawValue: "git push origin feature"),
+        using: ClaudeHostCodec(),
+        bound: .mandatoryHuman(deny),
+        cwd: wd("/tmp/ws")
+    )
+    #expect(wire.stdout.isEmpty == false)
+    #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
+    #expect(wire.stdout.contains("\"permissionDecision\":\"ask\"") == false)
+    #expect(wire.stdout.contains("\"permissionDecision\":\"deny\""))
+}
+
+@Test func hookWire_claudeAfterSpendAllowIsEmpty() {
+    let wire = hookWire(
+        from: EvaluationResult(outcome: .plain),
+        command: ShellCommand(rawValue: "git reset --hard"),
+        using: ClaudeHostCodec(),
+        afterSpend: true
+    )
+    #expect(wire.stdout.isEmpty)
+    #expect(wire.exitCode == 0)
+    #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
+    #expect(wire.stdout.contains("\"permissionDecision\":\"ask\"") == false)
 }

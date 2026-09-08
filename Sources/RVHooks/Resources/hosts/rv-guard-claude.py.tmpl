@@ -1,0 +1,191 @@
+"""RV destructive-command guard for Claude Bash.
+
+Claude PreToolUse command hook. Confirm then spend. Never emit
+permissionDecision ask (leftover-ask-as-permit: host Allow would run the
+tool with no spend). Extra hookSpecificOutput keys can fail-open a deny —
+wrapper-owned deny JSON uses documented fields only. Allow is empty stdout
+exit 0. Deny is always a documented Claude permissionDecision deny JSON
+exit 0 (never passthrough rv stdout).
+"""
+
+import json
+import os
+import subprocess
+import sys
+
+RV_BINARY = "__RV_BINARY__"
+RV_HOOK_TIMEOUT_S = 5
+RV_ASK_DIALOG_TIMEOUT_S = 60
+
+
+def main():
+    try:
+        raw = sys.stdin.read()
+        mapped = _guard(raw)
+        if mapped["action"] == "allow":
+            return
+        _emit_deny(mapped)
+        return
+    except Exception:
+        _emit_deny({"action": "block", "reason": "rv failed"})
+
+
+def _guard(raw):
+    envelope = _parse(raw)
+    if envelope is None:
+        return {"action": "block", "reason": "rv failed"}
+    if envelope.get("hook_event_name") != "PreToolUse":
+        return {"action": "allow"}
+    if envelope.get("tool_name") != "Bash":
+        return {"action": "allow"}
+    mapped = _spawn_rv_hook("claude", raw)
+    if mapped["action"] == "allow":
+        return mapped
+    if mapped["action"] == "ask":
+        if not _confirm_ask(mapped.get("reason")):
+            return {
+                "action": "block",
+                "reason": _blocking_reason(mapped.get("reason")),
+            }
+        spent = _spawn_rv_hook("claude", _spend_stdin(envelope))
+        if spent["action"] == "allow":
+            return spent
+        if spent["action"] == "ask":
+            return {
+                "action": "block",
+                "reason": _blocking_reason(spent.get("reason") or mapped.get("reason")),
+            }
+        return spent
+    return mapped
+
+
+def _spend_stdin(envelope):
+    payload = dict(envelope)
+    payload["hostAsk"] = "spend"
+    return json.dumps(payload, separators=(",", ":"))
+
+
+def _confirm_ask(reason):
+    injected = os.environ.get("RV_ASK_CONFIRM")
+    if injected is not None:
+        return injected.strip() == "yes"
+    return _darwin_dialog(reason)
+
+
+def _darwin_dialog(reason):
+    if sys.platform != "darwin":
+        return False
+    prompt = _blocking_reason(reason)
+    if prompt == "rv failed":
+        prompt = "Allow this command once?"
+    script = (
+        "display dialog %s buttons {\"Deny\",\"Allow\"} "
+        "default button \"Deny\" cancel button \"Deny\" "
+        "giving up after %d"
+    ) % (_applescript_quote(prompt[:500]), RV_ASK_DIALOG_TIMEOUT_S)
+    try:
+        completed = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=RV_ASK_DIALOG_TIMEOUT_S + 10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    if completed.returncode != 0:
+        return False
+    out = completed.stdout or ""
+    if "gave up" in out.lower():
+        return False
+    return "Allow" in out
+
+
+def _applescript_quote(text):
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _parse(raw):
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+    if isinstance(parsed, dict):
+        return parsed
+    return None
+
+
+def _spawn_rv_hook(host, stdin):
+    try:
+        completed = subprocess.run(
+            [RV_BINARY, "hook", "--host", host],
+            input=stdin,
+            capture_output=True,
+            text=True,
+            timeout=RV_HOOK_TIMEOUT_S,
+        )
+    except FileNotFoundError:
+        return {"action": "block", "reason": "rv missing"}
+    except (OSError, subprocess.TimeoutExpired):
+        return {"action": "block", "reason": "rv failed"}
+    return _map_rv_hook_result(completed.stdout, completed.returncode)
+
+
+def _map_rv_hook_result(stdout, exit_code):
+    trimmed = (stdout or "").strip()
+    if trimmed:
+        try:
+            parsed = json.loads(trimmed)
+        except (ValueError, TypeError):
+            return {"action": "block", "reason": "rv failed"}
+        if not isinstance(parsed, dict):
+            return {"action": "block", "reason": "rv failed"}
+        if parsed.get("decision") == "ask":
+            return {
+                "action": "ask",
+                "reason": parsed.get("reason") if isinstance(parsed.get("reason"), str) else "",
+            }
+        hook = parsed.get("hookSpecificOutput")
+        if isinstance(hook, dict) and hook.get("permissionDecision") == "ask":
+            return {"action": "block", "reason": "rv failed"}
+        if isinstance(hook, dict) and hook.get("permissionDecision") == "deny":
+            return {
+                "action": "block",
+                "reason": _blocking_reason(
+                    hook.get("permissionDecisionReason") or parsed.get("systemMessage")
+                ),
+            }
+        if parsed.get("decision") in ("block", "deny"):
+            return {
+                "action": "block",
+                "reason": _blocking_reason(parsed.get("reason")),
+            }
+        return {"action": "block", "reason": "rv failed"}
+    if exit_code == 0:
+        return {"action": "allow"}
+    return {"action": "block", "reason": "rv failed"}
+
+
+def _blocking_reason(reason):
+    if isinstance(reason, str):
+        text = reason.strip()
+        if text:
+            return text
+    return "rv failed"
+
+
+def _emit_deny(mapped):
+    text = _blocking_reason(mapped.get("reason") if isinstance(mapped, dict) else None)
+    payload = {
+        "systemMessage": text,
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": text,
+        },
+    }
+    sys.stdout.write(json.dumps(payload, separators=(",", ":"), ensure_ascii=False) + "\n")
+    sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()

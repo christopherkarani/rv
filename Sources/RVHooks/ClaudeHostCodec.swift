@@ -35,9 +35,16 @@ public struct ClaudeHostCodec: HostCodec {
         )
     }
 
-    /// Official `permissionDecision: "ask"` is leftover-ask-as-permit. Stay deny.
+    /// Short `{decision:ask,continuation:hostNative}` for the PreToolUse wrapper.
+    /// Official `permissionDecision: "ask"` is leftover-ask-as-permit. Never emit it.
+    /// Exit 2 (not Claude's deny-honor 0): leftover `rv hook --host claude` must
+    /// block instead of fail-opening schema-invalid JSON. The wrapper maps
+    /// nonempty `decision:ask` regardless of exit.
     public func encodeAsk(reason: String, rule: String?, next: String?) -> HookWire {
-        encodeDeny(reason: reason, rule: rule, next: next)
+        HookWire(
+            stdout: hookAskJSON(reason: reason, rule: rule, next: next),
+            exitCode: 2
+        )
     }
 
     public func encodeDeny(reason: String, rule: String?, next: String?) -> HookWire {

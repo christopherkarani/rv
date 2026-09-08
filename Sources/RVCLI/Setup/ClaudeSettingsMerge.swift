@@ -1,29 +1,60 @@
 import Foundation
 
 /// Merge / inspect / uninstall for `$HOME/.claude/settings.json` (REQ-012..015).
+/// Command is `python3` on the exclusive adapter; baked rv stays in `RV_BINARY=`
+/// so doctor/inspect still check sibling `rv-cli` without changing HostAdapterInstallation.
+/// Occupied is a foreign/tampered `rv-guard.py` that is not current. Stale
+/// `hook --host claude` is outdated rv: setup rewrites without `--force`.
 enum ClaudeSettingsMerge {
     static let settingsFileName = "settings.json"
     static let hooksRootKey = "hooks"
     static let preToolUseKey = "PreToolUse"
-    static let fingerprint = "hook --host claude"
+    static let fingerprintLegacy = "hook --host claude"
+    static let fingerprint = "rv-guard.py"
     static let matcher = "Bash"
     static let hookType = "command"
-    static let timeout = 5
+    /// Claude waits this long for the wrapper, including the human confirm dialog.
+    static let timeout = 90
 
-    static func hookCommand(rvPath: String) -> String {
-        "\(rvPath) \(fingerprint)"
+    static func adapterPath(settingsPath: String) -> String {
+        (settingsPath as NSString).deletingLastPathComponent + "/hooks/rv-guard.py"
+    }
+
+    static func hookCommand(rvPath: String, adapterPath: String) -> String {
+        "RV_BINARY=\(rvPath) python3 \(adapterPath)"
     }
 
     static func isFingerprinted(command: String) -> Bool {
-        command.contains(fingerprint)
+        command.contains(fingerprintLegacy) || command.contains(fingerprint)
+    }
+
+    static func adapterPath(in command: String) -> String? {
+        let marker = " python3 "
+        if let range = command.range(of: marker) {
+            let path = String(command[range.upperBound...])
+            return path.hasPrefix("/") ? path : nil
+        }
+        let prefix = "python3 "
+        guard command.hasPrefix(prefix) else { return nil }
+        let path = String(command.dropFirst(prefix.count))
+        return path.hasPrefix("/") ? path : nil
     }
 
     static func bakedRvPath(in command: String) -> String? {
-        guard isFingerprinted(command: command) else { return nil }
-        let suffix = " \(fingerprint)"
+        let envPrefix = "RV_BINARY="
+        if command.hasPrefix(envPrefix) {
+            let rest = command.dropFirst(envPrefix.count)
+            guard let space = rest.firstIndex(of: " ") else { return nil }
+            let path = String(rest[..<space])
+            return path.hasPrefix("/") && path.isEmpty == false ? path : nil
+        }
+        let suffix = " \(fingerprintLegacy)"
         guard command.hasSuffix(suffix) else { return nil }
         let path = String(command.dropLast(suffix.count))
-        return path.isEmpty ? nil : path
+        guard path.hasPrefix("python3 ") == false, path.contains(" python3 ") == false else {
+            return nil
+        }
+        return path.hasPrefix("/") && path.isEmpty == false ? path : nil
     }
 
     static func matchesCurrentHook(_ hook: [String: Any]) -> Bool {
@@ -31,11 +62,14 @@ enum ClaudeSettingsMerge {
               let command = hook["command"] as? String,
               let path = bakedRvPath(in: command),
               path.hasPrefix("/"),
+              let adapter = adapterPath(in: command),
+              adapter.hasPrefix("/"),
+              adapter.hasSuffix("/hooks/rv-guard.py"),
               hook["timeout"] as? Int == timeout
         else {
             return false
         }
-        return command == hookCommand(rvPath: path)
+        return command == hookCommand(rvPath: path, adapterPath: adapter)
     }
 
     static func isFingerprintedHook(_ hook: [String: Any]) -> Bool {
@@ -47,13 +81,23 @@ enum ClaudeSettingsMerge {
         return isFingerprinted(command: command)
     }
 
-    static func rvEntry(rvPath: String) -> [String: Any] {
+    /// v1 `…/rv hook --host claude` is our stale command, not a foreign guard.
+    static func isStaleLegacyHook(_ hook: [String: Any]) -> Bool {
+        guard let type = hook["type"] as? String, type == hookType,
+              let command = hook["command"] as? String
+        else {
+            return false
+        }
+        return command.contains(fingerprintLegacy) && command.contains(fingerprint) == false
+    }
+
+    static func rvEntry(rvPath: String, adapterPath: String) -> [String: Any] {
         [
             "matcher": matcher,
             "hooks": [
                 [
                     "type": hookType,
-                    "command": hookCommand(rvPath: rvPath),
+                    "command": hookCommand(rvPath: rvPath, adapterPath: adapterPath),
                     "timeout": timeout,
                 ] as [String: Any],
             ],
@@ -64,6 +108,7 @@ enum ClaudeSettingsMerge {
     static func merge(
         existingData: Data?,
         rvPath: String,
+        adapterPath: String,
         force: Bool
     ) throws -> (data: Data, wrote: Bool) {
         let root = try parseRoot(existingData)
@@ -71,7 +116,7 @@ enum ClaudeSettingsMerge {
             preconditionFailure("merge called on occupied settings without --force")
         }
         var next = stripFingerprinted(from: root)
-        next = insertRVEntry(into: next, rvPath: rvPath)
+        next = insertRVEntry(into: next, rvPath: rvPath, adapterPath: adapterPath)
         let data = try encode(next)
         let wrote = existingData != data
         return (data, wrote)
@@ -90,6 +135,8 @@ enum ClaudeSettingsMerge {
     enum InspectionState: Equatable {
         case absentFile
         case occupied
+        /// Our v1 `hook --host claude` command. Setup rewrites without `--force`.
+        case outdated
         case wired(bakedPath: String)
     }
 
@@ -103,19 +150,37 @@ enum ClaudeSettingsMerge {
         let located = locateFingerprintedHooks(in: root)
         guard located.isEmpty == false else { return .absentFile }
 
+        var allCurrent = true
+        var hasStaleLegacy = false
+        var hasNonCurrentGuard = false
         for item in located {
-            guard item.entry["matcher"] as? String == matcher,
-                  matchesCurrentHook(item.hook)
-            else {
-                return .occupied
+            if item.entry["matcher"] as? String == matcher, matchesCurrentHook(item.hook) {
+                continue
+            }
+            allCurrent = false
+            if isStaleLegacyHook(item.hook) {
+                hasStaleLegacy = true
+            } else {
+                hasNonCurrentGuard = true
             }
         }
 
-        guard let bakedPath = located.compactMap({ bakedRvPath(in: ($0.hook["command"] as? String) ?? "") }).first
-        else {
+        if allCurrent {
+            guard let bakedPath = located.compactMap({
+                bakedRvPath(in: ($0.hook["command"] as? String) ?? "")
+            }).first
+            else {
+                return .occupied
+            }
+            return .wired(bakedPath: bakedPath)
+        }
+        if hasNonCurrentGuard {
             return .occupied
         }
-        return .wired(bakedPath: bakedPath)
+        if hasStaleLegacy {
+            return .outdated
+        }
+        return .occupied
     }
 
     private struct LocatedHook {
@@ -149,7 +214,7 @@ enum ClaudeSettingsMerge {
 
     private static func stripFingerprinted(from root: [String: Any]) -> [String: Any] {
         guard var hooksRoot = root[hooksRootKey] as? [String: Any],
-              var preToolUse = hooksRoot[preToolUseKey] as? [[String: Any]]
+              let preToolUse = hooksRoot[preToolUseKey] as? [[String: Any]]
         else {
             return root
         }
@@ -181,11 +246,15 @@ enum ClaudeSettingsMerge {
         return next
     }
 
-    private static func insertRVEntry(into root: [String: Any], rvPath: String) -> [String: Any] {
+    private static func insertRVEntry(
+        into root: [String: Any],
+        rvPath: String,
+        adapterPath: String
+    ) -> [String: Any] {
         var next = root
         var hooksRoot = next[hooksRootKey] as? [String: Any] ?? [:]
         var preToolUse = hooksRoot[preToolUseKey] as? [[String: Any]] ?? []
-        preToolUse.append(rvEntry(rvPath: rvPath))
+        preToolUse.append(rvEntry(rvPath: rvPath, adapterPath: adapterPath))
         hooksRoot[preToolUseKey] = preToolUse
         next[hooksRootKey] = hooksRoot
         return next
