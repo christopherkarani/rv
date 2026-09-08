@@ -96,6 +96,75 @@ func hostInstallation_foreignOwnedBytesAreOccupiedAndUnchanged(_ host: HookHost)
     }
 }
 
+@Test func hostInstallation_claudeStaleLegacyCommandIsBrokenNotOccupied() throws {
+    try withInstallationHome { _, paths in
+        let owned = paths.hostAdapter(for: .claude)
+        let stale = """
+        {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  { "type": "command", "command": "/old/rv hook --host claude", "timeout": 10 }
+                ]
+              }
+            ]
+          }
+        }
+        """
+        try FileManager.default.createDirectory(
+            atPath: owned.detectionDirectory,
+            withIntermediateDirectories: true
+        )
+        try stale.write(toFile: owned.destination, atomically: true, encoding: .utf8)
+
+        let snapshot = try HostAdapterInstallation.inspect(
+            paths: paths,
+            pathEntries: [],
+            fileManager: .default
+        )
+
+        #expect(snapshot.state(for: .claude) == .broken)
+        #expect(snapshot.state(for: .claude) != .occupied)
+        #expect(try String(contentsOfFile: owned.destination, encoding: .utf8) == stale)
+    }
+}
+
+@Test func hostInstallation_claudeForeignGuardIsOccupied() throws {
+    try withInstallationHome { _, paths in
+        let owned = paths.hostAdapter(for: .claude)
+        let occupied = """
+        {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  { "type": "command", "command": "python3 /opt/other/rv-guard.py", "timeout": 10 }
+                ]
+              }
+            ]
+          }
+        }
+        """
+        try FileManager.default.createDirectory(
+            atPath: owned.detectionDirectory,
+            withIntermediateDirectories: true
+        )
+        try occupied.write(toFile: owned.destination, atomically: true, encoding: .utf8)
+
+        let snapshot = try HostAdapterInstallation.inspect(
+            paths: paths,
+            pathEntries: [],
+            fileManager: .default
+        )
+
+        #expect(snapshot.state(for: .claude) == .occupied)
+        #expect(try String(contentsOfFile: owned.destination, encoding: .utf8) == occupied)
+    }
+}
+
 @Test func hostInstallation_claudeForeignJSONWithoutFingerprintIsAbsentFile() throws {
     try withInstallationHome { _, paths in
         let owned = paths.hostAdapter(for: .claude)

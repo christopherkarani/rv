@@ -34,12 +34,12 @@ RV: `rv-guard.js.tmpl` + `OpenCodeHostCodec`. `bash` only. Live deny: toast `RV 
 
 Official: [hooks](https://code.claude.com/docs/en/hooks-guide) — `PreToolUse` `permissionDecision` is `allow` | `deny` | `ask` | `defer`. `"ask"` shows the native permission prompt. `PermissionRequest` fires when Claude is about to ask.
 
-RV: `ClaudeHostCodec` + settings-merge `PreToolUse` / `Bash`. Live deny: exit 0 + JSON `permissionDecision: "deny"` (never `"ask"`; `claude-host.md` CL-later-ask). Allow is empty stdout. Rich `systemMessage` / `permissionDecisionReason`.
+RV: `ClaudeHostCodec` + settings-merge `PreToolUse` / `Bash` + exclusive `~/.claude/hooks/rv-guard.py`. Live deny: exit 0 + JSON `permissionDecision: "deny"`. First-call Ask is short `{decision:ask}` at **exit 2** for that wrapper (confirm, then `hostAsk=spend`). Never emit official `permissionDecision: "ask"` (leftover-ask-as-permit; CL-later-ask). Allow is empty stdout.
 
-1. **Pause?** Not today. The host can pause if RV emitted `"ask"`. RV emits `"deny"`.
-2. **User sees:** branded rich deny (`RV · Blocked` + reason). No Ask prompt from RV.
-3. **Back to RV?** Deny JSON is one-way. A later Claude Allow would run the tool inside Claude — not a PolicyGate grant (`claude-host.md`: never treat ask-approve as allow-once). Allow-once is TTY → next hook consume.
-4. **No pause:** deny or TTY. Never silent allow.
+1. **Pause?** Wrapper `osascript` confirm (or `RV_ASK_CONFIRM`). Official Claude `permissionDecision: "ask"` is not the honor path.
+2. **User sees:** confirm dialog, then the tool runs only after spend allow. Deny is branded rich `RV · Blocked`.
+3. **Back to RV?** Confirm-yes spends through PolicyGate. Official Claude Allow is not a grant. Allow-once remains TTY → next hook consume.
+4. **No pause / leftover v1 command:** encodeAsk exit 2 blocks. Never silent allow. Stale `hook --host claude` is outdated rv: `rv setup` rewrites without `--force`.
 
 ## OpenClaw
 

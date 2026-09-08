@@ -128,7 +128,42 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
     }
 }
 
-@Test func doctor_claudeOccupiedFingerprint_reportsOccupied() throws {
+@Test func doctor_claudeStaleLegacyFingerprint_reportsBrokenNotOccupied() throws {
+    try withDoctorHome { _, paths, environment in
+        try FileManager.default.createDirectory(
+            atPath: paths.claudeDirectory,
+            withIntermediateDirectories: true
+        )
+        let stale = """
+        {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  { "type": "command", "command": "/old/rv hook --host claude", "timeout": 10 }
+                ]
+              }
+            ]
+          }
+        }
+        """
+        try stale.write(toFile: paths.claudeSettings, atomically: true, encoding: .utf8)
+
+        let outcome = DoctorRun.run(
+            environment: environment,
+            diagnostics: localReady,
+            appearance: .pretty(colorOffPalette)
+        )
+
+        #expect(outcome.exitCode == 0)
+        #expect(outcome.stdout.contains("Claude") && outcome.stdout.contains("broken"))
+        #expect(outcome.stdout.contains("Replace occupied") == false)
+        #expect(try String(contentsOfFile: paths.claudeSettings, encoding: .utf8) == stale)
+    }
+}
+
+@Test func doctor_claudeOccupiedForeignGuard_reportsOccupied() throws {
     try withDoctorHome { _, paths, environment in
         try FileManager.default.createDirectory(
             atPath: paths.claudeDirectory,
@@ -141,7 +176,7 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
               {
                 "matcher": "Bash",
                 "hooks": [
-                  { "type": "command", "command": "/old/rv hook --host claude", "timeout": 10 }
+                  { "type": "command", "command": "python3 /opt/other/rv-guard.py", "timeout": 10 }
                 ]
               }
             ]

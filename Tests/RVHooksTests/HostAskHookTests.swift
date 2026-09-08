@@ -74,7 +74,7 @@ import RVDomain
     #expect(wire.stdout.contains("\"permissionDecision\":\"ask\"") == false)
     #expect(wire.stdout.contains("\"permissionDecision\":\"deny\"") == false)
     #expect(wire.stdout.isEmpty == false)
-    #expect(wire.exitCode == 0)
+    #expect(wire.exitCode == 2)
 }
 
 @Test func hookWire_codexMandatoryHumanIsBlockNotAsk() throws {
@@ -303,8 +303,9 @@ func hookWire_firstCallAllowCannotSkipPolicyGate(_ host: HookHost) throws {
     #expect(wire.stdout.contains("\"permissionDecision\":\"ask\"") == false)
     #expect(wire.stdout.contains("\"permissionDecision\":\"deny\"") == false)
     #expect(wire.stdout.isEmpty == false)
-    #expect(wire.exitCode == 0)
+    #expect(wire.exitCode == 2)
     #expect(deny.stdout.contains("\"permissionDecision\":\"deny\""))
+    #expect(deny.exitCode == 0)
 }
 
 @Test func hookWire_piFirstCallPackDenyAsksWhenSpendable() async throws {
@@ -472,7 +473,7 @@ func hookWire_firstCallAllowCannotSkipPolicyGate(_ host: HookHost) throws {
     #expect(wire.stdout.contains("\"permissionDecision\":\"ask\"") == false)
     #expect(wire.stdout.contains("\"permissionDecision\":\"deny\"") == false)
     #expect(wire.stdout.isEmpty == false)
-    #expect(wire.exitCode == 0)
+    #expect(wire.exitCode == 2)
 }
 
 @Test func hookWire_claudeFirstCallSecretPathStaysDeny() throws {

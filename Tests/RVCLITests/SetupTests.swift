@@ -1262,13 +1262,13 @@ private func expectedClaudeHookCommand(
     }
 }
 
-@Test func setup_claudeOccupiedFingerprint_skipsWithoutForce() throws {
+@Test func setup_claudeStaleLegacyFingerprint_upgradesWithoutForce() throws {
     try withTempHome { home, layout, launchctl in
         try FileManager.default.createDirectory(
             atPath: layout.claudeDirectory,
             withIntermediateDirectories: true
         )
-        let occupied = """
+        let stale = """
         {
           "hooks": {
             "PreToolUse": [
@@ -1282,6 +1282,47 @@ private func expectedClaudeHookCommand(
           }
         }
         """
+        try stale.write(toFile: layout.claudeSettings, atomically: true, encoding: .utf8)
+
+        let outcome = SetupRun.setup(env(home: home, launchctl: launchctl))
+
+        #expect(outcome.exitCode == 0)
+        #expect(outcome.stdout.contains("Skipped occupied claude hook.") == false)
+        let command = try #require(
+            (try claudePreToolUseEntries(try claudeSettingsObject(at: layout.claudeSettings))
+                .last?["hooks"] as? [[String: Any]])?.first?["command"] as? String
+        )
+        #expect(command == expectedClaudeHookCommand(layout: layout))
+        #expect(command.contains("hook --host claude") == false)
+        let timeout = try #require(
+            (try claudePreToolUseEntries(try claudeSettingsObject(at: layout.claudeSettings))
+                .last?["hooks"] as? [[String: Any]])?.first?["timeout"] as? Int
+        )
+        #expect(timeout == 90)
+        #expect(FileManager.default.fileExists(atPath: claudeAdapterPath(layout)))
+    }
+}
+
+@Test func setup_claudeOccupiedForeignGuard_skipsWithoutForce() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(
+            atPath: layout.claudeDirectory,
+            withIntermediateDirectories: true
+        )
+        let occupied = """
+        {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "matcher": "Bash",
+                "hooks": [
+                  { "type": "command", "command": "python3 /opt/other/rv-guard.py", "timeout": 10 }
+                ]
+              }
+            ]
+          }
+        }
+        """
         try occupied.write(toFile: layout.claudeSettings, atomically: true, encoding: .utf8)
 
         let outcome = SetupRun.setup(env(home: home, launchctl: launchctl))
@@ -1289,6 +1330,7 @@ private func expectedClaudeHookCommand(
         #expect(outcome.exitCode == 0)
         #expect(outcome.stdout.contains("Skipped occupied claude hook."))
         #expect(try String(contentsOfFile: layout.claudeSettings, encoding: .utf8) == occupied)
+        #expect(FileManager.default.fileExists(atPath: claudeAdapterPath(layout)) == false)
     }
 }
 

@@ -211,6 +211,8 @@ extension HostAdapterInstallation {
             return .absentFile(path)
         case .occupied:
             return .occupied(path)
+        case .outdated:
+            return .broken(path: path, existingData: data)
         case .wired(let bakedPath):
             let executable = bakedPath.isEmpty == false
                 && bakedPath.hasPrefix("/")

@@ -3,6 +3,8 @@ import Foundation
 /// Merge / inspect / uninstall for `$HOME/.claude/settings.json` (REQ-012..015).
 /// Command is `python3` on the exclusive adapter; baked rv stays in `RV_BINARY=`
 /// so doctor/inspect still check sibling `rv-cli` without changing HostAdapterInstallation.
+/// Occupied is a foreign/tampered `rv-guard.py` that is not current. Stale
+/// `hook --host claude` is outdated rv: setup rewrites without `--force`.
 enum ClaudeSettingsMerge {
     static let settingsFileName = "settings.json"
     static let hooksRootKey = "hooks"
@@ -79,6 +81,16 @@ enum ClaudeSettingsMerge {
         return isFingerprinted(command: command)
     }
 
+    /// v1 `…/rv hook --host claude` is our stale command, not a foreign guard.
+    static func isStaleLegacyHook(_ hook: [String: Any]) -> Bool {
+        guard let type = hook["type"] as? String, type == hookType,
+              let command = hook["command"] as? String
+        else {
+            return false
+        }
+        return command.contains(fingerprintLegacy) && command.contains(fingerprint) == false
+    }
+
     static func rvEntry(rvPath: String, adapterPath: String) -> [String: Any] {
         [
             "matcher": matcher,
@@ -123,6 +135,8 @@ enum ClaudeSettingsMerge {
     enum InspectionState: Equatable {
         case absentFile
         case occupied
+        /// Our v1 `hook --host claude` command. Setup rewrites without `--force`.
+        case outdated
         case wired(bakedPath: String)
     }
 
@@ -136,19 +150,37 @@ enum ClaudeSettingsMerge {
         let located = locateFingerprintedHooks(in: root)
         guard located.isEmpty == false else { return .absentFile }
 
+        var allCurrent = true
+        var hasStaleLegacy = false
+        var hasNonCurrentGuard = false
         for item in located {
-            guard item.entry["matcher"] as? String == matcher,
-                  matchesCurrentHook(item.hook)
-            else {
-                return .occupied
+            if item.entry["matcher"] as? String == matcher, matchesCurrentHook(item.hook) {
+                continue
+            }
+            allCurrent = false
+            if isStaleLegacyHook(item.hook) {
+                hasStaleLegacy = true
+            } else {
+                hasNonCurrentGuard = true
             }
         }
 
-        guard let bakedPath = located.compactMap({ bakedRvPath(in: ($0.hook["command"] as? String) ?? "") }).first
-        else {
+        if allCurrent {
+            guard let bakedPath = located.compactMap({
+                bakedRvPath(in: ($0.hook["command"] as? String) ?? "")
+            }).first
+            else {
+                return .occupied
+            }
+            return .wired(bakedPath: bakedPath)
+        }
+        if hasNonCurrentGuard {
             return .occupied
         }
-        return .wired(bakedPath: bakedPath)
+        if hasStaleLegacy {
+            return .outdated
+        }
+        return .occupied
     }
 
     private struct LocatedHook {

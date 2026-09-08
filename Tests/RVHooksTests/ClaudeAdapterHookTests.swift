@@ -38,6 +38,21 @@ struct ClaudeAdapterHookTests {
         #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
     }
 
+    @Test func confirmYesSpendEmptyAllow_askExitTwoStillConfirmsThenSpends() async throws {
+        let result = try await runClaudeWrapper(
+            event: resetHardEvent(),
+            first: (askJSON, 2),
+            spend: ("", 0),
+            confirm: "yes"
+        )
+        #expect(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        #expect(result.exitCode == 0)
+        #expect(result.stdout.contains("permissionDecision") == false)
+        #expect(result.stdout.contains("\"ask\"") == false)
+        #expect(result.spawnCount == 2)
+        #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
+    }
+
     @Test func confirmNo_deniesWithoutSpend() async throws {
         let result = try await runClaudeWrapper(
             event: resetHardEvent(),

@@ -846,7 +846,7 @@ enum SetupRun {
         try applyClaudeUninstall(at: path, files: files, unreadable: .fail)
     }
 
-    /// Stale rv fingerprints are occupied for setup, but uninstall still strips them.
+    /// Occupied foreign/tampered `rv-guard.py` still strips on uninstall.
     private static func stripClaudeFingerprintLeavingOccupied(
         at path: String,
         files: FileOps
