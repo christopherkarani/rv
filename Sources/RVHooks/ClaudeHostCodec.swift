@@ -35,9 +35,13 @@ public struct ClaudeHostCodec: HostCodec {
         )
     }
 
-    /// Official `permissionDecision: "ask"` is leftover-ask-as-permit. Stay deny.
+    /// Short `{decision:ask,continuation:hostNative}` for the PreToolUse wrapper.
+    /// Official `permissionDecision: "ask"` is leftover-ask-as-permit. Never emit it.
     public func encodeAsk(reason: String, rule: String?, next: String?) -> HookWire {
-        encodeDeny(reason: reason, rule: rule, next: next)
+        HookWire(
+            stdout: hookAskJSON(reason: reason, rule: rule, next: next),
+            exitCode: host.denyExitCode
+        )
     }
 
     public func encodeDeny(reason: String, rule: String?, next: String?) -> HookWire {

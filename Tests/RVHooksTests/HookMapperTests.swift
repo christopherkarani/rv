@@ -334,6 +334,27 @@ private final class EncodeDoorSpy: HostCodec, @unchecked Sendable {
     #expect(spy.askCalls == 1)
 }
 
+@Test func hookWire_boundMandatoryHumanClaudeEncodesAsk() {
+    let deny = Deny(
+        ruleID: RuleID(pack: PackID(rawValue: "builtin.action"), pattern: "remote-branch-mutation"),
+        reason: "Remote branch mutation requires a human."
+    )
+    let spy = EncodeDoorSpy(host: .claude)
+    _ = hookWire(
+        from: EvaluationResult(
+            outcome: .deny(deny, matched: nil),
+            matchingView: MatchingView("git push origin feature")
+        ),
+        command: ShellCommand(rawValue: "git push origin feature"),
+        using: spy,
+        bound: .mandatoryHuman(deny),
+        cwd: wd("/tmp/ws")
+    )
+    #expect(spy.allowCalls == 0)
+    #expect(spy.denyCalls == 0)
+    #expect(spy.askCalls == 1)
+}
+
 @Test func hookWire_unlockablePackDenyWithCwdEncodesAsk() {
     let deny = Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "x")
     let spy = EncodeDoorSpy(host: .pi)
