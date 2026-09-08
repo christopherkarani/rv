@@ -112,7 +112,7 @@ Implementers of rv (Swift 6.3.3, language mode 6, macOS 26, Apple Silicon) using
 - **REQ-019**: `ensureAwaitingHuman` treats `.consumed` as `.alreadyConsumed` (same as today’s `consumedAt != nil`).
 - **REQ-020**: Codable: encode the new case. Decode must accept previously written JSON that had `state.kind == resolved` plus a non-nil `consumedAt` on the parent `PendingApproval` and treat it as `.consumed`. Do not bump a global schema if a compatible decode works. Store actor in RVPolicy needs no behavior change if Domain decode is compatible.
 - **CON-003**: Do not change `AllowOnceRecord`.
-- **CON-004**: Do not wire PendingApproval onto the hook door (OPE-246 remaining work).
+- **CON-004**: Hook door is wired: `HostAskVerdict.ask` creates a pending row (session required, `.keepWaiting` 15m); same-turn spend cancels matching awaiting; IPC `allowOnce` plants via `insertGranted` then consume so only `AllowOnceStore` unlocks the next hook.
 
 ## ReviewBind purity (FE-T1)
 

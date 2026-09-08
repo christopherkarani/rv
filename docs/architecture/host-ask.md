@@ -6,6 +6,8 @@ Investigation: OPE-267. Build map: [host-ask-plan.md](host-ask-plan.md) (OPE-268
 
 **Allow-once is a PolicyGate grant.** TTY `rv allow-once` still mints into `AllowOnceStore`. Host Allow once is plant+spend this turn on that same store. Replay without a live grant asks or denies again.
 
+Walking away from the in-host confirm leaves a wait in `pending-approvals.jsonl` (that file is always-on, not KeepAlive). Later IPC Allow once plants a grant the next hook spends; see [02.md](02.md) § Order step 7.
+
 ## Pi
 
 Official: [extensions](https://pi.dev/docs/latest/extensions) — `tool_call` returns `{ block: true, reason }` and may `await ctx.ui.confirm(...)` first.

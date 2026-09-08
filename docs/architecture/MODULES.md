@@ -17,11 +17,11 @@ Each module keeps a small public API, `package` internals later, and its own tes
 | **RVPolicy** | config merge, allowlist, allow-once, `HostGrantWriter`, durable `PendingApprovalStore`, Apple Foundation Models `ActionReviewer` adapter (shadow), `ShadowReviewRunner`, `TypedRule` store (load/save/merge) | rendering |
 | **RVHooks** | **Pi / Grok / OpenCode / Claude / OpenClaw / Hermes / Codex / Cursor** Host adapters: shell codecs, Hook mapper/voice, Pi/OpenCode confirm-or-resolution spend-then-allow, OpenCode `bash` + TUI `session.shell` / `shell.env` official permission create + TUI `DialogConfirm` Ask then spend-then-allow (missing confirm still fail-closed; last-match is not a permit), Claude spend-first Ask via wrapper confirm-then-spend (never leftover `permissionDecision` ask; leftover `hook --host claude` fail-closes at encodeAsk exit 2), Codex host-only official older `decision: block` + stderr reason + exit 2 (stdout-only block and Claude permission deny are not the honor path), Cursor host-only official native `permission: deny` + exit 0 (Claude permissionDecision and Codex `decision: block` + exit 2 are not the honor path), embedded adapter resources | evaluation, setup mutations |
 | **RVIPC** | `rv.ipc.v1` Codable | transport details |
-| **RVService** | XPC listener, EvaluationWorld (single assembly), EvaluateSession (compiled day-one packs + evaluate), GatedEvaluate (session then Policy gate), launchd | ArgumentParser, SwiftUI |
+| **RVService** | XPC listener, EvaluationWorld (single assembly), EvaluateSession (compiled day-one packs + evaluate), GatedEvaluate (session then Policy gate), launchd; hook-door pending create/cancel; IPC `pendingResolve allowOnce` plants `AllowOnceStore` | ArgumentParser, SwiftUI |
 | **RVPresentation** | deny/explain/packs/doctor view models | ANSI |
 | **RVTheme** | palettes, pure capability detect | business rules |
 | **RVTUI** | `FrameRenderer` `render` → `[String]` | opening a TTY |
-| **RVCLI** | ArgumentParser, output mode, thin XPC client, typed service diagnostics, service health facts, GatedEvaluate for TTY test/explain and hook XPC miss, Host adapter installation state + setup mutations | regex, pack parse |
+| **RVCLI** | ArgumentParser, output mode, thin XPC client, typed service diagnostics, service health facts, GatedEvaluate for TTY test/explain and hook XPC miss (same pending create/cancel as `rvd`), Host adapter installation state + setup mutations | regex, pack parse |
 | **RVHistory** | stub; later; off by default | logging full argv |
 | **RVAnalytics** | anonymous install / DAU / product counters; PostHog sink; opt-out preferences; `AnalyticsNotice` seam | command text, paths, secrets; hook-process I/O |
 

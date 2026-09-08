@@ -29,6 +29,13 @@ public enum PendingApprovalLedger: Sendable {
         if swept.contains(where: { $0.id == request.id }) {
             throw .duplicateID
         }
+        if let existing = swept.first(where: { record in
+            guard case .awaitingHuman = record.state else { return false }
+            return record.identity == request.identity
+                && record.fingerprint == request.action.fingerprint
+        }) {
+            return (existing, swept)
+        }
         let record = PendingApproval(
             id: request.id,
             identity: request.identity,

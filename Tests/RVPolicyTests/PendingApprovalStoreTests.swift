@@ -114,12 +114,19 @@ struct PendingApprovalStoreTests {
         let listed = try await writer.list(now: later)
         #expect(listed.isEmpty)
         let timedOut = try await writer.load(id: created.id, now: later)
-        guard case .timedOut = timedOut.state else {
+        guard case .timedOut(let ending) = timedOut.state else {
             Issue.record("autoDeny must persist timedOut")
             return
         }
+        #expect(ending.policy == .autoDeny)
 
         let restarted = PendingApprovalStore(baseDirectory: root)
+        let afterRestart = try await restarted.load(id: created.id, now: later)
+        guard case .timedOut(let restartedEnding) = afterRestart.state else {
+            Issue.record("autoDeny timedOut must survive a new store process")
+            return
+        }
+        #expect(restartedEnding.policy == .autoDeny)
         await #expect(throws: PendingApprovalError.timedOut) {
             _ = try await restarted.resolve(
                 id: created.id,
@@ -132,6 +139,41 @@ struct PendingApprovalStoreTests {
         await #expect(throws: PendingApprovalError.timedOut) {
             _ = try await restarted.consume(
                 id: created.id,
+                fingerprint: Self.fingerprint,
+                identity: Self.identity,
+                now: later
+            )
+        }
+    }
+
+    @Test func failTaskTimeoutPersistsTimedOutAfterRestart() async throws {
+        let root = try isolatedDirectory()
+        let writer = PendingApprovalStore(baseDirectory: root)
+        let created = try await writer.create(
+            Self.request(id: "timeout-fail-task", timeoutPolicy: .failTask, ttl: 1),
+            now: Self.now
+        )
+        let later = Self.now.addingTimeInterval(2)
+        #expect(try await writer.list(now: later).isEmpty)
+        let timedOut = try await writer.load(id: created.id, now: later)
+        guard case .timedOut(let ending) = timedOut.state else {
+            Issue.record("failTask must persist timedOut")
+            return
+        }
+        #expect(ending.policy == .failTask)
+
+        let restarted = PendingApprovalStore(baseDirectory: root)
+        let afterRestart = try await restarted.load(id: created.id, now: later)
+        guard case .timedOut(let restartedEnding) = afterRestart.state else {
+            Issue.record("failTask timedOut must survive a new store process")
+            return
+        }
+        #expect(restartedEnding.policy == .failTask)
+        #expect(try await restarted.list(now: later).isEmpty)
+        await #expect(throws: PendingApprovalError.timedOut) {
+            _ = try await restarted.resolve(
+                id: created.id,
+                decision: .allowOnce,
                 fingerprint: Self.fingerprint,
                 identity: Self.identity,
                 now: later

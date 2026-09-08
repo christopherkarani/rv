@@ -34,7 +34,7 @@ struct HookEvaluateTests {
         try assertGrokMintedResetHard(json)
     }
 
-    @Test func implicitHello_claudeResetHardReturnsRichDenyWire() async throws {
+    @Test func implicitHello_claudeResetHardReturnsAskWire() async throws {
         let runtime = try isolatedRuntime()
         let stdin = try claudeFixture("deny-git-reset-hard.json")
         let (data, ok) = await runtime.handleIncoming(
@@ -48,10 +48,16 @@ struct HookEvaluateTests {
             return
         }
         #expect(reply.via == .xpc)
-        #expect(reply.exitCode == 0)
-        #expect(reply.stdout.contains("\"permissionDecision\":\"deny\""))
-        #expect(reply.stdout.contains("\"ruleId\":\"core.git:reset-hard\""))
-        #expect(reply.stdout.contains("\"decision\":\"deny\"") == false)
+        #expect(reply.exitCode == 2)
+        let json = try #require(
+            JSONSerialization.jsonObject(with: Data(reply.stdout.utf8)) as? [String: Any]
+        )
+        #expect(json["decision"] as? String == "ask")
+        #expect(json["continuation"] as? String == "hostNative")
+        #expect(json["rule"] as? String == "core.git/reset-hard")
+        #expect(reply.stdout.contains("\"permissionDecision\":\"ask\"") == false)
+        #expect(reply.stdout.contains("\"permissionDecision\":\"deny\"") == false)
+        #expect(reply.stdout.contains("\"decision\":\"allow\"") == false)
         #expect(reply.stdout.contains("allowOnceCode") == false)
     }
 

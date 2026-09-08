@@ -19,6 +19,7 @@ public struct ServiceClient: Sendable {
     private let transport: (any ServiceTransport)?
     private let door: GatedEvaluate
     private let store: AllowOnceStore
+    private let pendingApprovals: (any PendingApprovalCoordinating)?
     private let home: HomeDirectory?
     private let clock: @Sendable () -> Date
 
@@ -75,6 +76,7 @@ public struct ServiceClient: Sendable {
             self.door = EvaluationWorld.assemble(home: home, snapshots: nil, catalog: nil)
         }
         self.store = Self.resolveStore(store: store, allowOnceDirectory: allowOnceDirectory, home: home)
+        self.pendingApprovals = Self.resolvePending(home: home)
         self.home = home
         self.clock = clock
     }
@@ -91,6 +93,7 @@ public struct ServiceClient: Sendable {
         self.transport = transport
         self.door = GatedEvaluate(lazySession: lazySession)
         self.store = Self.resolveStore(store: nil, allowOnceDirectory: allowOnceDirectory, home: home)
+        self.pendingApprovals = Self.resolvePending(home: home)
         self.home = home
         self.clock = clock
     }
@@ -212,6 +215,22 @@ public struct ServiceClient: Sendable {
                         store: self.store,
                         now: self.clock(),
                         home: self.home
+                    )
+                },
+                recordHostAsk: { request, action in
+                    try await HookDoor.recordPending(
+                        request: request,
+                        action: action,
+                        store: self.pendingApprovals,
+                        now: self.clock()
+                    )
+                },
+                clearHostAsk: { request, action in
+                    try await HookDoor.clearPending(
+                        request: request,
+                        action: action,
+                        store: self.pendingApprovals,
+                        now: self.clock()
                     )
                 }
             )
@@ -433,6 +452,13 @@ public struct ServiceClient: Sendable {
             return AllowOnceStore.live(home: home)
         }
         return AllowOnceStore(baseDirectory: isolatedFactoryDirectory())
+    }
+
+    private static func resolvePending(home: HomeDirectory?) -> (any PendingApprovalCoordinating)? {
+        if let home {
+            return PendingApprovalStore.live(home: home)
+        }
+        return PendingApprovalStore(baseDirectory: isolatedFactoryDirectory())
     }
 
     private static func isolatedFactoryDirectory() -> URL {

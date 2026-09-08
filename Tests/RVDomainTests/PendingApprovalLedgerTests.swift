@@ -657,6 +657,18 @@ struct PendingApprovalLedgerTests {
             )
         }
     }
+
+    @Test func secondCreateSameIdentityAndFingerprintKeepsOneAwaiting() throws {
+        let first = try Self.created(id: "ask-1")
+        let (second, records) = try PendingApprovalLedger.create(
+            records: first.records,
+            request: Self.request(id: "ask-2"),
+            now: Self.now
+        )
+        #expect(records.map(\.id) == [first.record.id])
+        #expect(second.id == first.record.id)
+        #expect(second.state == .awaitingHuman)
+    }
 }
 
 private extension PendingApprovalLedgerTests {

@@ -76,17 +76,61 @@ actor FakePendingApprovals: PendingApprovalCoordinating {
         throw PendingApprovalError.notFound
     }
 
-    func cancel(id _: ApprovalID, now _: Date) async throws -> PendingApproval {
-        throw PendingApprovalError.notFound
+    func cancel(id: ApprovalID, now: Date) async throws -> PendingApproval {
+        guard let index = records.firstIndex(where: { $0.id == id }) else {
+            throw PendingApprovalError.notFound
+        }
+        var record = records[index]
+        switch record.state {
+        case .awaitingHuman:
+            record.state = .canceled(at: now)
+            records[index] = record
+            return record
+        case .resolved:
+            throw PendingApprovalError.alreadyResolved
+        case .consumed:
+            throw PendingApprovalError.alreadyConsumed
+        case .expired:
+            throw PendingApprovalError.expired
+        case .canceled:
+            throw PendingApprovalError.canceled
+        case .timedOut:
+            throw PendingApprovalError.timedOut
+        }
     }
 
     func consume(
-        id _: ApprovalID,
-        fingerprint _: ActionFingerprint,
-        identity _: ApprovalIdentity,
-        now _: Date
+        id: ApprovalID,
+        fingerprint: ActionFingerprint,
+        identity: ApprovalIdentity,
+        now: Date
     ) async throws -> ApprovalConsumption {
-        throw PendingApprovalError.notResolved
+        guard let index = records.firstIndex(where: { $0.id == id }) else {
+            throw PendingApprovalError.notFound
+        }
+        var record = records[index]
+        if record.identity != identity {
+            throw PendingApprovalError.identityMismatch
+        }
+        if record.fingerprint != fingerprint {
+            throw PendingApprovalError.fingerprintMismatch
+        }
+        switch record.state {
+        case .resolved(let resolution):
+            record.state = .consumed(resolution, at: now)
+            records[index] = record
+            return ApprovalConsumption(approval: record, decision: resolution.decision)
+        case .consumed:
+            throw PendingApprovalError.alreadyConsumed
+        case .awaitingHuman:
+            throw PendingApprovalError.notResolved
+        case .expired:
+            throw PendingApprovalError.expired
+        case .canceled:
+            throw PendingApprovalError.canceled
+        case .timedOut:
+            throw PendingApprovalError.timedOut
+        }
     }
 
     func events() -> AsyncStream<PendingApprovalEvent> {

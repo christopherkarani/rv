@@ -7,7 +7,9 @@ public func hookWire(
     stdin: String,
     evaluate: @Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult,
     spendHostAsk: (@Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult)? = nil,
-    mintOnDeny: (@Sendable (EvaluationResult, WorkingDirectory?) async -> String?)? = nil
+    mintOnDeny: (@Sendable (EvaluationResult, WorkingDirectory?) async -> String?)? = nil,
+    recordHostAsk: (@Sendable (HookRequest, ProposedAction) async throws -> Void)? = nil,
+    clearHostAsk: (@Sendable (HookRequest, ProposedAction) async throws -> Void)? = nil
 ) async -> HookWire {
     switch host {
     case .grok:
@@ -16,7 +18,9 @@ public func hookWire(
             codec: GrokHostCodec(),
             evaluate: evaluate,
             spendHostAsk: spendHostAsk,
-            mintOnDeny: mintOnDeny
+            mintOnDeny: mintOnDeny,
+            recordHostAsk: recordHostAsk,
+            clearHostAsk: clearHostAsk
         )
     case .pi:
         return await hookBody(
@@ -24,7 +28,9 @@ public func hookWire(
             codec: PiHostCodec(),
             evaluate: evaluate,
             spendHostAsk: spendHostAsk,
-            mintOnDeny: mintOnDeny
+            mintOnDeny: mintOnDeny,
+            recordHostAsk: recordHostAsk,
+            clearHostAsk: clearHostAsk
         )
     case .opencode:
         return await hookBody(
@@ -32,7 +38,9 @@ public func hookWire(
             codec: OpenCodeHostCodec(),
             evaluate: evaluate,
             spendHostAsk: spendHostAsk,
-            mintOnDeny: mintOnDeny
+            mintOnDeny: mintOnDeny,
+            recordHostAsk: recordHostAsk,
+            clearHostAsk: clearHostAsk
         )
     case .claude:
         return await hookBody(
@@ -40,7 +48,9 @@ public func hookWire(
             codec: ClaudeHostCodec(),
             evaluate: evaluate,
             spendHostAsk: spendHostAsk,
-            mintOnDeny: mintOnDeny
+            mintOnDeny: mintOnDeny,
+            recordHostAsk: recordHostAsk,
+            clearHostAsk: clearHostAsk
         )
     case .openclaw:
         return await hookBody(
@@ -48,7 +58,9 @@ public func hookWire(
             codec: OpenClawHostCodec(),
             evaluate: evaluate,
             spendHostAsk: spendHostAsk,
-            mintOnDeny: mintOnDeny
+            mintOnDeny: mintOnDeny,
+            recordHostAsk: recordHostAsk,
+            clearHostAsk: clearHostAsk
         )
     case .hermes:
         return await hookBody(
@@ -56,7 +68,9 @@ public func hookWire(
             codec: HermesHostCodec(),
             evaluate: evaluate,
             spendHostAsk: spendHostAsk,
-            mintOnDeny: mintOnDeny
+            mintOnDeny: mintOnDeny,
+            recordHostAsk: recordHostAsk,
+            clearHostAsk: clearHostAsk
         )
     case .codex:
         return await hookBody(
@@ -64,7 +78,9 @@ public func hookWire(
             codec: CodexHostCodec(),
             evaluate: evaluate,
             spendHostAsk: spendHostAsk,
-            mintOnDeny: mintOnDeny
+            mintOnDeny: mintOnDeny,
+            recordHostAsk: recordHostAsk,
+            clearHostAsk: clearHostAsk
         )
     case .cursor:
         return await hookBody(
@@ -72,7 +88,9 @@ public func hookWire(
             codec: CursorHostCodec(),
             evaluate: evaluate,
             spendHostAsk: spendHostAsk,
-            mintOnDeny: mintOnDeny
+            mintOnDeny: mintOnDeny,
+            recordHostAsk: recordHostAsk,
+            clearHostAsk: clearHostAsk
         )
     }
 }
@@ -82,16 +100,25 @@ private func hookBody<C: HostCodec>(
     codec: C,
     evaluate: @Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult,
     spendHostAsk: (@Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult)?,
-    mintOnDeny: (@Sendable (EvaluationResult, WorkingDirectory?) async -> String?)?
+    mintOnDeny: (@Sendable (EvaluationResult, WorkingDirectory?) async -> String?)?,
+    recordHostAsk: (@Sendable (HookRequest, ProposedAction) async throws -> Void)?,
+    clearHostAsk: (@Sendable (HookRequest, ProposedAction) async throws -> Void)?
 ) async -> HookWire {
     switch codec.decode(stdin) {
     case .request(let request):
+        let action = codec.proposedAction(from: request)
         if request.hostAsk == .spend {
             guard let spendHostAsk else {
                 return codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: nil)
             }
             let result = await spendHostAsk(request.command, request.cwd)
-            return hookWire(from: result, command: request.command, using: codec, afterSpend: true)
+            let wire = hookWire(from: result, command: request.command, using: codec, afterSpend: true)
+            if let clearHostAsk {
+                await ignoreHostAskFailure {
+                    try await clearHostAsk(request, action)
+                }
+            }
+            return wire
         }
         let result = await evaluate(request.command, request.cwd)
         let bound: BoundReview
@@ -102,7 +129,7 @@ private func hookBody<C: HostCodec>(
         } else {
             bound = HostNativeAsk.hookBound(
                 result: result,
-                action: codec.proposedAction(from: request),
+                action: action,
                 context: ReviewContext(repository: RepositoryReviewContext())
             )
             wireResult = result
@@ -114,6 +141,13 @@ private func hookBody<C: HostCodec>(
             cwd: request.cwd,
             mintOnDeny: mintOnDeny
         )
+        if let recordHostAsk,
+           encodesHostAsk(host: codec.host, result: wireResult, bound: bound, cwd: request.cwd)
+        {
+            await ignoreHostAskFailure {
+                try await recordHostAsk(request, action)
+            }
+        }
         return hookWire(
             from: wireResult,
             command: request.command,
@@ -126,6 +160,35 @@ private func hookBody<C: HostCodec>(
         return codec.encodeAllow()
     case .malformed(let malformation):
         return codec.encodeDeny(reason: malformedHookSentence(malformation), rule: nil, next: nil)
+    }
+}
+
+/// Matches `encodeAsked`: Ask JSON only for allow/deny results whose product
+/// verdict is `.ask`. Indeterminate stays deny and must not create a wait.
+private func encodesHostAsk(
+    host: HookHost,
+    result: EvaluationResult,
+    bound: BoundReview,
+    cwd: WorkingDirectory?
+) -> Bool {
+    switch result.decision {
+    case .indeterminate:
+        return false
+    case .allow, .deny:
+        switch HostNativeAsk.verdict(host: host, result: result, cwd: cwd, bound: bound) {
+        case .ask:
+            return true
+        case .allow, .deny:
+            return false
+        }
+    }
+}
+
+private func ignoreHostAskFailure(_ body: () async throws -> Void) async {
+    do {
+        try await body()
+    } catch {
+        return
     }
 }
 
