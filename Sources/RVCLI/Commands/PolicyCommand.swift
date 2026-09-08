@@ -6,8 +6,8 @@ import RVPolicy
 struct Policy: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "policy",
-        abstract: "Show or draft compiled typed rules.",
-        subcommands: [Show.self, PolicyDraftCommand.self],
+        abstract: "Show, draft, or share compiled typed rules.",
+        subcommands: [Show.self, PolicyDraftCommand.self, Validate.self, Export.self, Apply.self],
         defaultSubcommand: Show.self
     )
 
@@ -34,7 +34,7 @@ struct Policy: AsyncParsableCommand {
                 snapshot = try PolicyShowRun.load(home: home, workspace: workspace)
             } catch {
                 FileHandle.standardError.write(
-                    Data("rv policy show: invalid typed-rules file\n".utf8)
+                    Data("rv policy show: invalid policy file\n".utf8)
                 )
                 throw ExitCode(1)
             }
@@ -52,6 +52,150 @@ struct Policy: AsyncParsableCommand {
                 text = PolicyShowRun.pretty(snapshot)
             }
             FileHandle.standardOutput.write(Data((text + "\n").utf8))
+        }
+    }
+
+    struct Validate: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "validate",
+            abstract: "Validate a policy document."
+        )
+
+        @Argument(help: "Path to policy.toml. Defaults to the machine file.")
+        var path: String?
+
+        func run() throws {
+            let url: URL
+            if let path {
+                url = URL(fileURLWithPath: path)
+            } else {
+                guard let home = HomeDirectory.process() else {
+                    FileHandle.standardError.write(Data("rv policy validate: HOME is not set\n".utf8))
+                    throw ExitCode(1)
+                }
+                url = RVPolicyPaths.policyFile(inConfigDir: RVPolicyPaths.configDirectory(home: home))
+            }
+            if FileManager.default.fileExists(atPath: url.path) == false {
+                return
+            }
+            do {
+                _ = try PolicyDocumentRun.load(url)
+            } catch {
+                FileHandle.standardError.write(Data("rv policy validate: invalid policy file\n".utf8))
+                throw ExitCode(2)
+            }
+        }
+    }
+
+    struct Export: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "export",
+            abstract: "Write one origin as policy.toml."
+        )
+
+        @Flag(name: .customLong("repo"), help: "Export the repo layer.")
+        var repo = false
+
+        @Option(name: .customLong("output"), help: "Write to this path instead of stdout.")
+        var output: String?
+
+        func run() throws {
+            guard let home = HomeDirectory.process() else {
+                FileHandle.standardError.write(Data("rv policy export: HOME is not set\n".utf8))
+                throw ExitCode(1)
+            }
+            let workspace = URL(
+                fileURLWithPath: FileManager.default.currentDirectoryPath,
+                isDirectory: true
+            )
+            let store = TypedRuleStore(
+                baseDirectory: RVPolicyPaths.configDirectory(home: home)
+            )
+            let document: PolicyDocument
+            do {
+                document = repo
+                    ? try store.loadRepoDocument(workspace: workspace)
+                    : try store.loadMachineDocument()
+            } catch {
+                FileHandle.standardError.write(Data("rv policy export: invalid policy file\n".utf8))
+                throw ExitCode(1)
+            }
+            let text = PolicyDocumentTOML.render(document)
+            if let output {
+                let url = URL(fileURLWithPath: output)
+                do {
+                    try text.write(to: url, atomically: true, encoding: .utf8)
+                } catch {
+                    FileHandle.standardError.write(Data("rv policy export: write failed\n".utf8))
+                    throw ExitCode(1)
+                }
+            } else {
+                FileHandle.standardOutput.write(Data(text.utf8))
+            }
+        }
+    }
+
+    struct Apply: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "apply",
+            abstract: "Preview or merge a shared policy document."
+        )
+
+        @Argument(help: "Path to a policy.toml file.")
+        var path: String
+
+        @Flag(name: .customLong("save"), help: "Write the merged layer.")
+        var save = false
+
+        @Flag(name: .customLong("repo"), help: "Write the repo layer.")
+        var repo = false
+
+        func run() throws {
+            guard let home = HomeDirectory.process() else {
+                FileHandle.standardError.write(Data("rv policy apply: HOME is not set\n".utf8))
+                throw ExitCode(1)
+            }
+            let workspace = URL(
+                fileURLWithPath: FileManager.default.currentDirectoryPath,
+                isDirectory: true
+            )
+            let incoming: PolicyDocument
+            do {
+                incoming = try PolicyDocumentRun.load(URL(fileURLWithPath: path))
+            } catch {
+                FileHandle.standardError.write(Data("rv policy apply: invalid policy file\n".utf8))
+                throw ExitCode(1)
+            }
+            let store = TypedRuleStore(
+                baseDirectory: RVPolicyPaths.configDirectory(home: home)
+            )
+            let existing: PolicyDocument
+            do {
+                existing = repo
+                    ? try store.loadRepoDocument(workspace: workspace)
+                    : try store.loadMachineDocument()
+            } catch {
+                FileHandle.standardError.write(Data("rv policy apply: invalid policy file\n".utf8))
+                throw ExitCode(1)
+            }
+            let merged = PolicyDocument(
+                rules: PolicyDocumentTOML.mergeLayer(existing: existing.rules, incoming: incoming.rules)
+            )
+            let preview = merged.rules.map { "  \(formatDocumentRule($0))" }.joined(separator: "\n")
+            let body = preview.isEmpty ? "  (none)" : preview
+            FileHandle.standardOutput.write(Data(("apply\n\(body)\n").utf8))
+            if save {
+                do {
+                    if repo {
+                        try store.saveRepo(merged, workspace: workspace)
+                    } else {
+                        try store.saveMachine(merged)
+                    }
+                } catch {
+                    FileHandle.standardError.write(Data("rv policy apply: write failed\n".utf8))
+                    throw ExitCode(1)
+                }
+            }
         }
     }
 }
@@ -94,6 +238,18 @@ enum PolicyShowRun {
     }
 }
 
+enum PolicyDocumentRun {
+    static func load(_ url: URL) throws -> PolicyDocument {
+        let text: String
+        do {
+            text = try String(contentsOf: url, encoding: .utf8)
+        } catch {
+            throw PolicyDocumentError.invalidFile
+        }
+        return try PolicyDocumentTOML.parse(text)
+    }
+}
+
 private func prettyOrigin(_ origin: TypedRuleOrigin, _ rules: [TypedRule]) -> String {
     let body: String
     if rules.isEmpty {
@@ -106,13 +262,4 @@ private func prettyOrigin(_ origin: TypedRuleOrigin, _ rules: [TypedRule]) -> St
 
 private func formatRule(_ rule: TypedRule) -> String {
     "\(rule.id.rawValue) \(rule.verdict.rawValue) \(predicateText(rule.predicate))"
-}
-
-private func predicateText(_ predicate: PolicyPredicate) -> String {
-    switch predicate {
-    case .gitPush(let force, let branch):
-        let forceText = force?.rawValue ?? "-"
-        let branchText = branch ?? "-"
-        return "gitPush force=\(forceText) branch=\(branchText)"
-    }
 }

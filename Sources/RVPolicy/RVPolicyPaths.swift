@@ -41,6 +41,14 @@ public enum RVPolicyPaths: Sendable {
         configDir.appendingPathComponent(".typed-rules.lock", isDirectory: false)
     }
 
+    public static func policyFile(inConfigDir configDir: URL) -> URL {
+        configDir.appendingPathComponent("policy.toml", isDirectory: false)
+    }
+
+    public static func policyLockFile(inConfigDir configDir: URL) -> URL {
+        configDir.appendingPathComponent(".policy.lock", isDirectory: false)
+    }
+
     /// Files T6 / `rv uninstall` must delete when present (policy artifacts + locks).
     public static func uninstallArtifacts(inConfigDir configDir: URL) -> [URL] {
         [
@@ -54,6 +62,8 @@ public enum RVPolicyPaths: Sendable {
             pendingApprovalsLockFile(inConfigDir: configDir),
             typedRulesFile(inConfigDir: configDir),
             typedRulesLockFile(inConfigDir: configDir),
+            policyFile(inConfigDir: configDir),
+            policyLockFile(inConfigDir: configDir),
         ]
     }
 

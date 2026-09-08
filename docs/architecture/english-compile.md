@@ -62,9 +62,10 @@ No new SPM target.
 |---|---|
 | `PolicyPredicate`, `TypedRule` (value types) | RVDomain — `ActionPolicyEngine` is Domain and stays pure |
 | Load / save / merge | RVPolicy — invariants ⊳ machine ⊳ repo, restrict-only |
-| `rv policy show` | RVCLI |
+| `PolicyDocument` / `EnglishCompiler` | RVDomain (shapes); AFM adapter in RVPolicy |
+| `rv policy show` / `draft` / `validate` / `export` / `apply` | RVCLI |
 
-Merge cannot let a repo allow drop a machine deny. Overlay cannot weaken builtin hard deny. v1 on-disk form is `{ schemaVersion: 1, rules: [...] }`.
+Merge cannot let a repo allow drop a machine deny. Overlay cannot weaken builtin hard deny. Shareable on-disk form is `policy.toml` (see `spec/spec-architecture-policy-document.md`). Legacy `typed-rules.json` is read-compat only.
 
 **Hook evaluate.** `GatedEvaluate.evaluateWithSemantics` loads that saved form (machine `$HOME/.config/rv/typed-rules.json`, repo `<cwd>/.rv/typed-rules.json`) and passes `EffectiveActionPolicy` into `applySemantics`. Invalid JSON fail-closes (`builtin.action:typed-rules-invalid`). Missing file is empty. Typed hard-bind deny (`boundReview == .deny`) skips PolicyGate on peek/apply (`gated()`) and Host Ask (`spendHostAsk`) and does not mint an unlock code, so a matchingView grant or plant+spend cannot override a typed deny that retagged the shared-branch wall. Pack denials and `mandatoryHuman` still reach PolicyGate. There is still no live Auto-review. `FakeEnglishCompiler` still emits `GitPushForce.force`, which does not match `--force-with-lease`.
 

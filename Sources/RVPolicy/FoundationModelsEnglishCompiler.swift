@@ -7,15 +7,10 @@ import FoundationModels
 /// Apple Foundation Models `EnglishCompiler`. Constructs on every host.
 /// Tests inject `FakeEnglishCompiler` and set `usesSystemModel` false so
 /// compile never requires a live on-device model.
-///
-/// Model output fills a closed `PolicyPredicate` form. English is not saved
-/// as the matcher. Domain stays free of Foundation Models.
 public struct FoundationModelsEnglishCompiler: EnglishCompiler {
     public static let defaultTimeout: Duration = .seconds(3)
 
     public var timeout: Duration
-    /// Production is `true`. Tests set `false` so compile cannot invoke Apple.
-    /// False still refuses empty English, then throws `.unavailable`.
     package let usesSystemModel: Bool
     private let injected: (any EnglishCompiler)?
 
@@ -36,7 +31,7 @@ public struct FoundationModelsEnglishCompiler: EnglishCompiler {
     }
 
     public func compile(_ english: String) async throws -> EnglishCompileResult {
-        if english.isEmpty {
+        if english.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return .refuse(.empty)
         }
         if let injected {
@@ -48,8 +43,6 @@ public struct FoundationModelsEnglishCompiler: EnglishCompiler {
                 return try await ReviewTimeout.run(timeout: timeout) {
                     try await FoundationModelsEnglishCompileClient.compile(english)
                 }
-            } catch let error as CancellationError {
-                throw error
             } catch let error as EnglishCompilerError {
                 throw error
             } catch {
@@ -61,13 +54,13 @@ public struct FoundationModelsEnglishCompiler: EnglishCompiler {
     }
 }
 
-/// Closed-form preview used by the AFM client and by tests. Never stores English.
 package enum FoundationModelsEnglishCompileMapping: Sendable {
     package static func preview(
         force: GitPushForce?,
         branch: String?,
         verdict: TypedRuleVerdict,
-        sentence: String
+        sentence: String,
+        english: String? = nil
     ) -> EnglishCompileResult {
         let text = sentence.isEmpty
             ? defaultSentence(force: force, branch: branch, verdict: verdict)
@@ -75,11 +68,11 @@ package enum FoundationModelsEnglishCompileMapping: Sendable {
         return .preview(
             TypedRulePreview(
                 sentence: text,
-                draft: TypedRule(
+                rule: PolicyDocumentRule(
                     id: ruleID(force: force, branch: branch, verdict: verdict),
-                    predicate: .gitPush(force: force, branch: branch),
                     verdict: verdict,
-                    origin: .machine
+                    predicate: .gitPush(force: force, branch: branch),
+                    english: english
                 ),
                 allowedToSave: true
             )
@@ -92,7 +85,7 @@ package enum FoundationModelsEnglishCompileMapping: Sendable {
         verdict: TypedRuleVerdict
     ) -> RuleID {
         if force == .force, branch == "main", verdict == .deny {
-            return RuleID(pack: .coreGit, pattern: "force-push-main")
+            return RuleID(pack: .typedGit, pattern: "force-push-main")
         }
         var parts = ["git-push"]
         if let force {
@@ -102,7 +95,7 @@ package enum FoundationModelsEnglishCompileMapping: Sendable {
             parts.append(branch)
         }
         parts.append(verdict.rawValue)
-        return RuleID(pack: .coreGit, pattern: parts.joined(separator: "-"))
+        return RuleID(pack: .typedGit, pattern: parts.joined(separator: "-"))
     }
 
     private static func defaultSentence(
@@ -113,17 +106,17 @@ package enum FoundationModelsEnglishCompileMapping: Sendable {
         let branchText = branch ?? "any branch"
         switch (force, verdict) {
         case (.force, .deny):
-            return "Always block force-push to \(branchText)."
+            return "Always block force-push to \(branchText)"
         case (.force, .allow):
-            return "Always allow force-push to \(branchText)."
+            return "Always allow force-push to \(branchText)"
         case (.force, .ask):
-            return "Ask before force-push to \(branchText)."
+            return "Ask before force-push to \(branchText)"
         case (_, .deny):
-            return "Always block git push to \(branchText)."
+            return "Always block git push to \(branchText)"
         case (_, .allow):
-            return "Always allow git push to \(branchText)."
+            return "Always allow git push to \(branchText)"
         case (_, .ask):
-            return "Ask before git push to \(branchText)."
+            return "Ask before git push to \(branchText)"
         }
     }
 }
@@ -188,9 +181,9 @@ enum FoundationModelsEnglishCompileClient: Sendable {
                 to: Prompt(prompt(for: english)),
                 generating: FoundationModelsEnglishCompileOutput.self
             )
-            return map(response.content)
-        } catch let error as CancellationError {
-            throw error
+            return map(response.content, english: english)
+        } catch is CancellationError {
+            throw EnglishCompilerError.unavailable
         } catch let error as EnglishCompilerError {
             throw error
         } catch {
@@ -213,7 +206,10 @@ enum FoundationModelsEnglishCompileClient: Sendable {
         """
     }
 
-    private static func map(_ output: FoundationModelsEnglishCompileOutput) -> EnglishCompileResult {
+    private static func map(
+        _ output: FoundationModelsEnglishCompileOutput,
+        english: String
+    ) -> EnglishCompileResult {
         switch output.outcome {
         case .refuse:
             return .refuse(refusal(output.refusal))
@@ -222,7 +218,8 @@ enum FoundationModelsEnglishCompileClient: Sendable {
                 force: gitForce(output.force),
                 branch: output.branch.isEmpty ? nil : output.branch,
                 verdict: verdict(output.verdict),
-                sentence: output.sentence
+                sentence: output.sentence,
+                english: english
             )
         }
     }
@@ -234,7 +231,7 @@ enum FoundationModelsEnglishCompileClient: Sendable {
         case .uncompilable:
             return .uncompilable
         case .unsupported:
-            return .unsupported
+            return .unsupportedPredicate
         }
     }
 

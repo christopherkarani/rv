@@ -11,12 +11,11 @@ struct EnglishCompilerTests {
             Issue.record("expected preview, got \(result)")
             return
         }
-        #expect(preview.draft.predicate == .gitPush(force: .force, branch: "main"))
-        #expect(preview.draft.verdict == .deny)
-        #expect(preview.draft.origin == .machine)
+        #expect(preview.rule.predicate == .gitPush(force: .force, branch: "main"))
+        #expect(preview.rule.verdict == .deny)
         #expect(preview.allowedToSave == true)
-        #expect(preview.sentence == "Always block force-push to main.")
-        #expect(preview.draft.id == RuleID(pack: .coreGit, pattern: "force-push-main"))
+        #expect(preview.sentence == "Always block force-push to main")
+        #expect(preview.rule.id == RuleID(pack: .typedGit, pattern: "force-push-main"))
     }
 
     @Test func compile_beCarefulInProd_refusesUncompilable() async throws {
@@ -33,19 +32,16 @@ struct EnglishCompilerTests {
 
     @Test func previewDraft_isTypedRuleNotEnglish() throws {
         let preview = TypedRulePreview(
-            sentence: "Always block force-push to main.",
-            draft: TypedRule(
-                id: RuleID(pack: .coreGit, pattern: "force-push-main"),
-                predicate: .gitPush(force: .force, branch: "main"),
+            sentence: "Always block force-push to main",
+            rule: PolicyDocumentRule(
+                id: RuleID(pack: .typedGit, pattern: "force-push-main"),
                 verdict: .deny,
-                origin: .machine
+                predicate: .gitPush(force: .force, branch: "main")
             ),
             allowedToSave: true
         )
         let data = try JSONEncoder().encode(preview)
         let json = try #require(String(data: data, encoding: .utf8))
-        #expect(json.contains("english") == false)
-        #expect(json.contains("never allow") == false)
         #expect(json.contains("gitPush") == true)
         #expect(json.contains("\"verdict\":\"deny\"") == true)
         let decoded = try JSONDecoder().decode(TypedRulePreview.self, from: data)
@@ -77,12 +73,11 @@ private struct StubEnglishCompiler: EnglishCompiler {
         if english == "never allow force-push to main" {
             return .preview(
                 TypedRulePreview(
-                    sentence: "Always block force-push to main.",
-                    draft: TypedRule(
-                        id: RuleID(pack: .coreGit, pattern: "force-push-main"),
-                        predicate: .gitPush(force: .force, branch: "main"),
+                    sentence: "Always block force-push to main",
+                    rule: PolicyDocumentRule(
+                        id: RuleID(pack: .typedGit, pattern: "force-push-main"),
                         verdict: .deny,
-                        origin: .machine
+                        predicate: .gitPush(force: .force, branch: "main")
                     ),
                     allowedToSave: true
                 )

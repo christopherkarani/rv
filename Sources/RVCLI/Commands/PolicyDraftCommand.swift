@@ -12,13 +12,20 @@ struct PolicyDraftCommand: AsyncParsableCommand {
     @Option(name: .customLong("english"), help: "English to compile into a typed rule.")
     var english: String
 
-    @Flag(name: .customLong("save"), help: "Write the compiled typed rule to machine policy.")
+    @Flag(name: .customLong("save"), help: "Write the compiled typed rule.")
     var save = false
+
+    @Flag(name: .customLong("repo"), help: "Save to the repo policy file.")
+    var repo = false
 
     @OptionGroup
     var format: FormatFlags
 
     func run() async throws {
+        guard save == false || english.isEmpty == false else {
+            FileHandle.standardError.write(Data("rv policy draft: --save requires --english\n".utf8))
+            throw ExitCode(1)
+        }
         guard let home = HomeDirectory.process() else {
             FileHandle.standardError.write(Data("rv policy draft: HOME is not set\n".utf8))
             throw ExitCode(1)
@@ -32,6 +39,7 @@ struct PolicyDraftCommand: AsyncParsableCommand {
             result = try await PolicyDraftRun.execute(
                 english: english,
                 save: save,
+                repo: repo,
                 robot: format.json || format.robot,
                 home: home,
                 workspace: workspace,
@@ -67,9 +75,10 @@ enum PolicyDraftRun {
     static func execute(
         english: String,
         save: Bool,
+        repo: Bool = false,
         robot: Bool,
         home: HomeDirectory,
-        workspace _: URL,
+        workspace: URL,
         compiler: some EnglishCompiler
     ) async throws -> PolicyDraftResult {
         let compiled = try await compiler.compile(english)
@@ -85,7 +94,7 @@ enum PolicyDraftRun {
                 let store = TypedRuleStore(
                     baseDirectory: RVPolicyPaths.configDirectory(home: home)
                 )
-                try upsert(preview.draft, into: store)
+                try upsert(preview.rule, into: store, repo: repo, workspace: workspace)
                 saved = true
             }
             return PolicyDraftResult(
@@ -95,20 +104,21 @@ enum PolicyDraftRun {
         }
     }
 
-    private static func upsert(_ rule: TypedRule, into store: TypedRuleStore) throws {
-        let stamped = TypedRule(
-            id: rule.id,
-            predicate: rule.predicate,
-            verdict: rule.verdict,
-            origin: .machine
-        )
-        var machine = try store.loadMachine()
-        if let index = machine.firstIndex(where: { $0.predicate == stamped.predicate }) {
-            machine[index] = stamped
+    private static func upsert(
+        _ rule: PolicyDocumentRule,
+        into store: TypedRuleStore,
+        repo: Bool,
+        workspace: URL
+    ) throws {
+        var document = repo
+            ? try store.loadRepoDocument(workspace: workspace)
+            : try store.loadMachineDocument()
+        document.rules = PolicyDocumentTOML.mergeLayer(existing: document.rules, incoming: [rule])
+        if repo {
+            try store.saveRepo(document, workspace: workspace)
         } else {
-            machine.append(stamped)
+            try store.saveMachine(document)
         }
-        try store.saveMachine(machine)
     }
 
     private static func render(_ result: EnglishCompileResult, robot: Bool) throws -> String {
@@ -126,7 +136,7 @@ enum PolicyDraftRun {
         }
         switch result {
         case .preview(let preview):
-            return "\(preview.sentence)\n\(formatRule(preview.draft))"
+            return "\(preview.sentence)\n\(formatDocumentRule(preview.rule))"
         case .refuse(let reason):
             return "refused: \(reason.rawValue)"
         }
@@ -137,11 +147,11 @@ struct PolicyDraftRobotRefuse: Equatable, Sendable, Codable {
     var refuse: EnglishCompileRefusal
 }
 
-private func formatRule(_ rule: TypedRule) -> String {
+func formatDocumentRule(_ rule: PolicyDocumentRule) -> String {
     "\(rule.id.rawValue) \(rule.verdict.rawValue) \(predicateText(rule.predicate))"
 }
 
-private func predicateText(_ predicate: PolicyPredicate) -> String {
+func predicateText(_ predicate: PolicyPredicate) -> String {
     switch predicate {
     case .gitPush(let force, let branch):
         let forceText = force?.rawValue ?? "-"
