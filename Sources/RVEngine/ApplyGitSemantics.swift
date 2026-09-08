@@ -10,14 +10,16 @@ public func applyGitSemantics(
     pack: EvaluationResult,
     command: ShellCommand,
     context: GitAnalysisContext = .empty,
-    enabledPacks: [PackID] = dayOnePackIDs
+    enabledPacks: [PackID] = dayOnePackIDs,
+    policy: EffectiveActionPolicy = .empty
 ) -> EvaluationResult {
     applyGitSemantics(
         pack: pack,
         analysis: analyzeGit(command, context: context),
         command: command,
         context: context,
-        enabledPacks: enabledPacks
+        enabledPacks: enabledPacks,
+        policy: policy
     )
 }
 
@@ -26,7 +28,8 @@ public func applyGitSemantics(
     analysis: SemanticAnalysis,
     command: ShellCommand,
     context: GitAnalysisContext = .empty,
-    enabledPacks: [PackID] = dayOnePackIDs
+    enabledPacks: [PackID] = dayOnePackIDs,
+    policy: EffectiveActionPolicy = .empty
 ) -> EvaluationResult {
     var result = pack
     result.analysis = analysis
@@ -52,7 +55,7 @@ public func applyGitSemantics(
             workingDirectory: context.workingDirectory
         ),
         context: context.reviewContext,
-        policy: .empty,
+        policy: policy,
         gitAction: action
     )
     switch verdict.decision {

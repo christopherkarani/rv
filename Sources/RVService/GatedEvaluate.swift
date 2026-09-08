@@ -139,6 +139,9 @@ public struct GatedEvaluate: Sendable {
         case .allow, .indeterminate:
             return result
         case .deny:
+            if Self.skipsPolicyGate(result) {
+                return result
+            }
             let snapshot = allowlist()
             let rebasing = GitRebaseProbe.rebaseInProgress(cwd: cwd)
             let applied = await PolicyGate.apply(
@@ -200,6 +203,9 @@ public struct GatedEvaluate: Sendable {
         case .allow, .indeterminate:
             return result
         case .deny:
+            if Self.skipsPolicyGate(result) {
+                return result
+            }
             let snapshot = allowlist()
             let rebasing = GitRebaseProbe.rebaseInProgress(cwd: cwd)
             switch intent {
@@ -232,13 +238,60 @@ public struct GatedEvaluate: Sendable {
     ) -> EvaluationResult {
         let pack = resolvedSession().evaluate(request)
         let probe = wrapperProbe(command: request.command, cwd: cwd, home: home)
+        let policy: EffectiveActionPolicy
+        do {
+            policy = EffectiveActionPolicy(rules: try Self.loadTypedRules(cwd: cwd, home: home))
+        } catch {
+            return EvaluationResult(
+                outcome: .deny(
+                    Deny(
+                        ruleID: RuleID(
+                            pack: ActionPolicyEngine.Builtin.pack,
+                            pattern: "typed-rules-invalid"
+                        ),
+                        reason: "Typed rules could not be loaded."
+                    ),
+                    matched: nil
+                ),
+                matchingView: pack.matchingView
+            )
+        }
         return applySemantics(
             pack: pack,
             command: request.command,
             gitContext: GitAnalysisContext(workingDirectory: cwd),
             filesystemContext: probe,
-            enabledPacks: request.enabledPacks
+            enabledPacks: request.enabledPacks,
+            policy: policy
         )
+    }
+
+    /// Machine from `$HOME/.config/rv`; repo from `<cwd>/.rv`. Missing file is empty.
+    /// Missing HOME skips machine and still loads repo when cwd is present.
+    private static func loadTypedRules(
+        cwd: WorkingDirectory?,
+        home: HomeDirectory?
+    ) throws -> [TypedRule] {
+        let workspace = cwd.map { URL(fileURLWithPath: $0.rawValue, isDirectory: true) }
+        if let home {
+            return try TypedRuleStore(
+                baseDirectory: RVPolicyPaths.configDirectory(home: home)
+            ).loadEffective(builtin: [], workspace: workspace)
+        }
+        guard let workspace else {
+            return []
+        }
+        let repo = try TypedRuleStore(baseDirectory: workspace).loadRepo(workspace: workspace)
+        return TypedRuleStore.merge(builtin: [], machine: [], repo: repo)
+    }
+
+    /// Semantic hard bind. Pack denials (`boundReview == nil`) and
+    /// `mandatoryHuman` still reach PolicyGate (peek/apply and Host Ask).
+    private static func skipsPolicyGate(_ result: EvaluationResult) -> Bool {
+        if case .deny = result.boundReview {
+            return true
+        }
+        return false
     }
 
     /// After apply stayed deny. Not peek. Not Ask. Nil when the deny is not unlockable.
@@ -251,6 +304,7 @@ public struct GatedEvaluate: Sendable {
         home: HomeDirectory?
     ) async -> String? {
         guard home != nil else { return nil }
+        if case .deny = result.boundReview { return nil }
         guard let cwd, UnlockableDeny.matches(result: result, cwd: cwd) else { return nil }
         guard case .deny(let deny) = result.decision else { return nil }
         return await store.mintFromDeny(
