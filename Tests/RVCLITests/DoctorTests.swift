@@ -112,6 +112,7 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
         let merged = try ClaudeSettingsMerge.merge(
             existingData: nil,
             rvPath: executable.path,
+            adapterPath: ClaudeSettingsMerge.adapterPath(settingsPath: paths.claudeSettings),
             force: false
         )
         try merged.data.write(to: URL(fileURLWithPath: paths.claudeSettings))
@@ -170,6 +171,7 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
         let merged = try ClaudeSettingsMerge.merge(
             existingData: nil,
             rvPath: "/nonexistent/rv",
+            adapterPath: ClaudeSettingsMerge.adapterPath(settingsPath: paths.claudeSettings),
             force: false
         )
         try merged.data.write(to: URL(fileURLWithPath: paths.claudeSettings))

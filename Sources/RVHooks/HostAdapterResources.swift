@@ -119,7 +119,7 @@ package enum HostAdapterResources {
         case .cursor:
             bytes = PackageResources.rv_guard_cursor_py_tmpl
         case .claude:
-            throw HostAdapterResourceError.missingTemplate(host)
+            bytes = PackageResources.rv_guard_claude_py_tmpl
         }
         guard let text = String(bytes: bytes, encoding: .utf8),
               text.isEmpty == false,

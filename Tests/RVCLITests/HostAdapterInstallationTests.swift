@@ -25,7 +25,12 @@ private func writeWiredAdapter(
         withIntermediateDirectories: true
     )
     if host == .claude {
-        let merged = try ClaudeSettingsMerge.merge(existingData: nil, rvPath: rvPath, force: false)
+        let merged = try ClaudeSettingsMerge.merge(
+            existingData: nil,
+            rvPath: rvPath,
+            adapterPath: ClaudeSettingsMerge.adapterPath(settingsPath: destination),
+            force: false
+        )
         try merged.data.write(to: URL(fileURLWithPath: destination))
     } else {
         let body = try host.adapterResource().rendered(rvPath: rvPath)

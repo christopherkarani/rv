@@ -1185,6 +1185,17 @@ private func posixMode(_ url: URL) throws -> Int {
     return (raw?.intValue ?? 0) & 0o777
 }
 
+private func claudeAdapterPath(_ layout: OwnedPaths) -> String {
+    layout.claudeDirectory + "/hooks/rv-guard.py"
+}
+
+private func expectedClaudeHookCommand(
+    rvPath: String = "/tmp/rv-bin/rv",
+    layout: OwnedPaths
+) -> String {
+    "RV_BINARY=\(rvPath) python3 \(claudeAdapterPath(layout))"
+}
+
 @Test func setup_claudeOnly_mergesFingerprintAndPreservesForeignEntry() throws {
     try withTempHome { home, layout, launchctl in
         try FileManager.default.createDirectory(
@@ -1207,9 +1218,47 @@ private func posixMode(_ url: URL) throws -> Int {
         let rvHooks = try #require(entries[1]["hooks"] as? [[String: Any]])
         #expect(rvHooks.count == 1)
         let command = try #require(rvHooks[0]["command"] as? String)
-        #expect(command == "/tmp/rv-bin/rv hook --host claude")
-        #expect(command.hasPrefix("/"))
-        #expect(rvHooks[0]["timeout"] as? Int == 5)
+        #expect(command == expectedClaudeHookCommand(layout: layout))
+        #expect(command.contains("python3 "))
+        #expect(command.contains(claudeAdapterPath(layout)))
+        #expect(rvHooks[0]["timeout"] as? Int == 90)
+        #expect(rvHooks[0]["timeout"] as? Int != 5)
+    }
+}
+
+@Test func setup_claudeWritesExclusiveAdapterAndPython3Hook() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(
+            atPath: layout.claudeDirectory,
+            withIntermediateDirectories: true
+        )
+
+        let outcome = SetupRun.setup(env(home: home, launchctl: launchctl))
+
+        #expect(outcome.exitCode == 0)
+        let adapter = claudeAdapterPath(layout)
+        #expect(FileManager.default.fileExists(atPath: adapter))
+        let body = try String(contentsOfFile: adapter, encoding: .utf8)
+        #expect(body == (try HostAdapterResources.load(for: .claude).rendered(rvPath: "/tmp/rv-bin/rv")))
+        #expect(body.contains("RV_ASK_CONFIRM"))
+        #expect(body.contains("osascript"))
+        #expect(body.contains("hostAsk"))
+        #expect(body.contains("permissionDecision\":\"ask\"") == false)
+        let command = try #require(
+            (try claudePreToolUseEntries(try claudeSettingsObject(at: layout.claudeSettings))
+                .last?["hooks"] as? [[String: Any]])?.first?["command"] as? String
+        )
+        #expect(command == "RV_BINARY=/tmp/rv-bin/rv python3 \(adapter)")
+        let timeout = try #require(
+            (try claudePreToolUseEntries(try claudeSettingsObject(at: layout.claudeSettings))
+                .last?["hooks"] as? [[String: Any]])?.first?["timeout"] as? Int
+        )
+        #expect(timeout == 90)
+        #expect(timeout >= 60)
+
+        let uninstall = SetupRun.uninstall(env(home: home, launchctl: launchctl))
+        #expect(uninstall.exitCode == 0)
+        #expect(FileManager.default.fileExists(atPath: adapter) == false)
     }
 }
 
@@ -1276,7 +1325,8 @@ private func posixMode(_ url: URL) throws -> Int {
         let shared = try #require(entries[0]["hooks"] as? [[String: Any]])
         #expect(shared.map { $0["command"] as? String } == ["other-guard evaluate"])
         let command = try #require((entries[1]["hooks"] as? [[String: Any]])?.first?["command"] as? String)
-        #expect(command == "/tmp/rv-bin/rv hook --host claude")
+        #expect(command == expectedClaudeHookCommand(layout: layout))
+        #expect((entries[1]["hooks"] as? [[String: Any]])?.first?["timeout"] as? Int == 90)
     }
 }
 
@@ -1304,6 +1354,12 @@ private func posixMode(_ url: URL) throws -> Int {
                 (hook["command"] as? String)?.contains("hook --host claude") == true
             } == false
         )
+        #expect(
+            foreignHooks.contains { hook in
+                (hook["command"] as? String)?.contains("rv-guard.py") == true
+            } == false
+        )
+        #expect(FileManager.default.fileExists(atPath: claudeAdapterPath(layout)) == false)
     }
 }
 
@@ -1427,7 +1483,11 @@ private func posixMode(_ url: URL) throws -> Int {
             (try claudePreToolUseEntries(try claudeSettingsObject(at: layout.claudeSettings))
                 .last?["hooks"] as? [[String: Any]])?.first?["command"] as? String
         )
-        #expect(command == "/tmp/rv-bin/rv hook --host claude")
+        #expect(command == expectedClaudeHookCommand(layout: layout))
+        #expect(
+            (try claudePreToolUseEntries(try claudeSettingsObject(at: layout.claudeSettings))
+                .last?["hooks"] as? [[String: Any]])?.first?["timeout"] as? Int == 90
+        )
     }
 }
 
