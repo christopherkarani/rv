@@ -270,6 +270,22 @@ public actor ServiceRuntime {
                         now: self.clock(),
                         home: self.configHome
                     )
+                },
+                recordHostAsk: { request, action in
+                    try await HookDoor.recordPending(
+                        request: request,
+                        action: action,
+                        store: self.pendingApprovals,
+                        now: self.clock()
+                    )
+                },
+                clearHostAsk: { request, action in
+                    try await HookDoor.clearPending(
+                        request: request,
+                        action: action,
+                        store: self.pendingApprovals,
+                        now: self.clock()
+                    )
                 }
             )
             return .hookEvaluate(reply)
@@ -584,34 +600,149 @@ public actor ServiceRuntime {
         guard let pendingApprovals else {
             return .error(PendingListProjection.coordinatorUnavailable)
         }
-        let decision: ApprovalDecision
         switch params.decision {
         case .allowOnce:
             if params.identity.session.rawValue.isEmpty {
                 return .error(.pendingIdentityMismatch)
             }
-            decision = .allowOnce
+            return await resolveAllowOnce(params, store: pendingApprovals)
         case .deny:
-            decision = .deny
+            return await resolvePendingDecision(
+                params,
+                decision: .deny,
+                store: pendingApprovals
+            )
         }
+    }
+
+    private func resolveAllowOnce(
+        _ params: PendingResolveParams,
+        store: any PendingApprovalCoordinating
+    ) async -> IPCResult {
+        let now = clock()
+        let record: PendingApproval
         do {
-            let resolved = try await pendingApprovals.resolve(
+            record = try await store.load(id: params.id, now: now)
+        } catch {
+            return .error(PendingListProjection.ipcError(from: error))
+        }
+        switch record.state {
+        case .awaitingHuman:
+            break
+        case .resolved, .consumed, .expired, .canceled, .timedOut:
+            return .error(.pendingAlreadyTerminal)
+        }
+        guard record.fingerprint == params.fingerprint, record.identity == params.identity else {
+            return .error(
+                PendingListProjection.ipcError(
+                    from: record.fingerprint == params.fingerprint
+                        ? PendingApprovalError.identityMismatch
+                        : PendingApprovalError.fingerprintMismatch
+                )
+            )
+        }
+        let cwd = record.action.scope.workingDirectory
+        guard let command = record.action.supportingCommand else {
+            return .error(.engine("pending allowOnce is not unlockable"))
+        }
+        let peeked = await peekPendingCommand(command, cwd: cwd, now: now)
+        switch PendingAllowOncePlanner.plan(peek: peeked, cwd: cwd) {
+        case .refuse:
+            return .error(.engine("pending allowOnce is not unlockable"))
+        case .resolveWithoutGrant:
+            return await resolvePendingDecision(
+                params,
+                decision: .allowOnce,
+                store: store,
+                now: now
+            )
+        case .plant(let matchingView, let grantCwd):
+            let resolved = await resolvePendingDecision(
+                params,
+                decision: .allowOnce,
+                store: store,
+                now: now
+            )
+            guard case .pendingResolve = resolved else {
+                return resolved
+            }
+            do {
+                try await allowOnce.insertGranted(
+                    matchingView: matchingView,
+                    cwd: grantCwd,
+                    now: now
+                )
+            } catch {
+                _ = try? await store.consume(
+                    id: params.id,
+                    fingerprint: params.fingerprint,
+                    identity: params.identity,
+                    now: now
+                )
+                return .error(.engine("pending allowOnce is not unlockable"))
+            }
+            do {
+                _ = try await store.consume(
+                    id: params.id,
+                    fingerprint: params.fingerprint,
+                    identity: params.identity,
+                    now: now
+                )
+            } catch {
+                return .error(PendingListProjection.ipcError(from: error))
+            }
+            return resolved
+        }
+    }
+
+    private func resolvePendingDecision(
+        _ params: PendingResolveParams,
+        decision: ApprovalDecision,
+        store: any PendingApprovalCoordinating,
+        now: Date? = nil
+    ) async -> IPCResult {
+        do {
+            let resolved = try await store.resolve(
                 id: params.id,
                 decision: decision,
                 fingerprint: params.fingerprint,
                 identity: params.identity,
-                now: clock()
+                now: now ?? clock()
             )
-            let terminal: Bool
-            switch resolved.state {
-            case .awaitingHuman:
-                terminal = false
-            case .resolved, .consumed, .expired, .canceled, .timedOut:
-                terminal = true
-            }
-            return .pendingResolve(PendingResolveReply(id: resolved.id, terminal: terminal))
+            return .pendingResolve(
+                PendingResolveReply(id: resolved.id, terminal: isTerminal(resolved.state))
+            )
         } catch {
             return .error(PendingListProjection.ipcError(from: error))
+        }
+    }
+
+    private func peekPendingCommand(
+        _ command: ShellCommand,
+        cwd: WorkingDirectory?,
+        now: Date
+    ) async -> EvaluationResult {
+        let request = GatedEvaluate.makeRequest(command: command, home: configHome)
+        let baseDirectory = allowOnce.baseDirectory
+        return await gated.peek(
+            request,
+            cwd: cwd,
+            home: configHome,
+            store: allowOnce,
+            now: now,
+            allowlist: {
+                AllowlistStore(baseDirectory: baseDirectory)
+                    .loadUserSnapshot(workspacePath: cwd.map(\.rawValue), now: now)
+            }
+        )
+    }
+
+    private func isTerminal(_ state: PendingApprovalState) -> Bool {
+        switch state {
+        case .awaitingHuman:
+            return false
+        case .resolved, .consumed, .expired, .canceled, .timedOut:
+            return true
         }
     }
 
