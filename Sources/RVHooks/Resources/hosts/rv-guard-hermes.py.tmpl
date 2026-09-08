@@ -1,6 +1,8 @@
 """RV destructive-command guard for Hermes terminal.
 
 Registers ``pre_tool_call`` only. Deny is ``{"action": "block", "message"}``.
+Ask is host confirm then PolicyGate spend; allow is None (the tool runs).
+Never leftover host-gate approve as the allow path.
 Missing rv / timeout / crash / non-JSON deny. Exceptions never escape — Hermes
 isolates hook errors and would otherwise fail open.
 """
@@ -8,6 +10,7 @@ isolates hook errors and would otherwise fail open.
 import json
 import os
 import subprocess
+import uuid
 
 RV_BINARY = "__RV_BINARY__"
 RV_HOOK_TIMEOUT_S = 5
@@ -27,10 +30,43 @@ def _on_pre_tool_call(tool_name="", args=None, **kwargs):
 def _guard(tool_name, args, kwargs):
     if tool_name != "terminal":
         return None
-    mapped = _consult_rv(_envelope(tool_name, args, kwargs))
+    payload = _envelope(tool_name, args, kwargs)
+    mapped = _consult_rv(payload)
+    if mapped["action"] == "ask":
+        if not _confirm_ask(mapped):
+            return {"action": "block", "message": mapped["reason"]}
+        spent = _consult_rv_spend(payload)
+        if spent["action"] != "allow":
+            reason = spent.get("reason")
+            if not isinstance(reason, str) or not reason:
+                reason = mapped["reason"] if isinstance(mapped.get("reason"), str) else "rv failed"
+            return {"action": "block", "message": reason}
+        return None
     if mapped["action"] == "block":
         return {"action": "block", "message": mapped["reason"]}
     return None
+
+
+def _confirm_ask(mapped):
+    env = (os.environ.get("RV_ASK_CONFIRM") or "").strip().lower()
+    if env == "yes":
+        return True
+    if env == "no":
+        return False
+    try:
+        from tools.approval import request_tool_approval
+
+        reason = mapped.get("reason")
+        if not isinstance(reason, str) or not reason:
+            reason = "Allow this command once?"
+        result = request_tool_approval(
+            "terminal",
+            reason,
+            rule_key="rv-ask:" + str(uuid.uuid4()),
+        )
+        return isinstance(result, dict) and result.get("approved") is True
+    except Exception:
+        return False
 
 
 def _envelope(tool_name, args, kwargs):
@@ -66,8 +102,18 @@ def _pick_cwd(host_cwd):
     return None
 
 
+def _dumps(payload):
+    return json.dumps(payload, separators=(",", ":"))
+
+
 def _consult_rv(payload):
-    return _spawn_rv_hook("hermes", json.dumps(payload))
+    return _spawn_rv_hook("hermes", _dumps(payload))
+
+
+def _consult_rv_spend(payload):
+    spend = dict(payload)
+    spend["hostAsk"] = "spend"
+    return _spawn_rv_hook("hermes", _dumps(spend))
 
 
 def _spawn_rv_hook(host, stdin):
@@ -91,6 +137,12 @@ def _map_rv_hook_result(stdout, exit_code):
     if trimmed:
         try:
             parsed = json.loads(trimmed)
+            if isinstance(parsed, dict) and parsed.get("decision") == "ask":
+                reason = parsed.get("reason")
+                return {
+                    "action": "ask",
+                    "reason": reason if isinstance(reason, str) else "",
+                }
             if isinstance(parsed, dict) and parsed.get("decision") == "deny":
                 reason = parsed.get("reason")
                 return {
