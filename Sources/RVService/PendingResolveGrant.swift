@@ -2,7 +2,7 @@ import RVDomain
 
 /// Pure plan for deferred IPC `allowOnce`. Effects stay in `ServiceRuntime`.
 enum PendingAllowOncePlan: Equatable, Sendable {
-    /// Plant a PolicyGate grant, then resolve + consume the wait.
+    /// CAS-resolve first, then plant a PolicyGate grant and consume the wait.
     case plant(matchingView: MatchingView, cwd: WorkingDirectory)
     /// Peek already allows; resolve the wait and do not plant a second grant.
     case resolveWithoutGrant

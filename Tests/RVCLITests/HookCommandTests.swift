@@ -338,22 +338,12 @@ private func runHook(
     #expect(try Hook.parse(["--host", "cursor"]).host == .cursor)
 }
 
-@Test func hookClaudeDenyResetHard_emitsRichDeny() async throws {
-    let expected = try hostExpected("claude", "deny-git-reset-hard")
+@Test func hookClaudeResetHard_encodesAskNotPermissionDeny() async throws {
     let wire = try await runHook(
         stdin: try hostFixture("claude", "deny-git-reset-hard.json"),
         host: .claude
     )
-    #expect(wire.exitCode == expected.exit)
-    #expect(wire.stdout.contains("\"permissionDecision\":\"deny\""))
-    #expect(wire.stdout.contains("\"ruleId\":\"core.git:reset-hard\""))
-    #expect(wire.stdout.contains("allowOnceCommand") == false)
-    #expect(wire.stdout.contains("RV · Blocked"))
-    #expect(wire.stdout.contains("RV · Blocked\n") == false)
-    #expect(wire.stdout.contains("allowOnceCode") == false)
-    #expect(wire.stdout.contains("RV · Blocked. Destroys uncommitted changes. Use 'git stash' first."))
-    #expect(wire.stdout.contains("git reset --hard") == false)
-    #expect(wire.stdout.contains("Error:") == false)
+    try assertClaudeAskWire(wire)
 }
 
 @Test func hookClaudeAllowGitStatus_emptyStdoutExitZero() async throws {
@@ -385,32 +375,26 @@ private func runHook(
     #expect(wire.exitCode == expected.exit)
 }
 
-@Test func hookClaudeXPCDown_stillDeniesResetHard() async throws {
+@Test func hookClaudeXPCDown_stillAsksResetHard() async throws {
     let client = try isolatedClient(transport: nil)
-    let expected = try hostExpected("claude", "deny-git-reset-hard")
     let wire = try await runHook(
         stdin: try hostFixture("claude", "deny-git-reset-hard.json"),
         host: .claude
     ) { command, _ in
         await client.evaluateResult(command: command)
     }
-    #expect(wire.exitCode == expected.exit)
-    #expect(wire.stdout.contains("\"permissionDecision\":\"deny\""))
-    #expect(wire.stdout.contains("\"ruleId\":\"core.git:reset-hard\""))
+    try assertClaudeAskWire(wire)
 }
 
-@Test func hookRun_claudeDenyWithTempHome() async throws {
+@Test func hookRun_claudeAskWithTempHome() async throws {
     try await withTempHome { home in
         var hook = Hook()
         hook.host = .claude
-        let expected = try hostExpected("claude", "deny-git-reset-hard")
         let outcome = await hook.run(
             stdin: try hostFixture("claude", "deny-git-reset-hard.json"),
             evaluate: inProcessEvaluate
         )
-        #expect(outcome.exitCode == expected.exit)
-        #expect(outcome.stdout.contains("\"permissionDecision\":\"deny\""))
-        #expect(outcome.stdout.contains("\"ruleId\":\"core.git:reset-hard\""))
+        try assertClaudeAskWire(stdout: outcome.stdout, exitCode: outcome.exitCode)
         #expect(outcome.stderr.isEmpty)
         #expect(FileManager.default.fileExists(atPath: home.appendingPathComponent(".claude").path) == false)
     }
@@ -540,21 +524,21 @@ private func runHook(
     #expect(wire.exitCode == expected.exit)
 }
 
-@Test func hookHermesDenyResetHard_reasonEqualsHostDenyText() async throws {
-    let expected = try hostExpected("hermes", "deny-git-reset-hard")
+@Test func hookHermesResetHard_encodesAsk() async throws {
     let command = ShellCommand(rawValue: "git reset --hard")
-    let result = try await cliEvaluate(command.rawValue)
-    let text = try #require(hostDenyText(from: result, command: command))
     let wire = try await runHook(
         stdin: try hostFixture("hermes", "deny-git-reset-hard.json"),
         host: .hermes
     )
-    let json = try denyJSON(wire.stdout)
-    #expect(json["reason"] as? String == text)
+    let json = try #require(
+        JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any]
+    )
+    #expect(json["decision"] as? String == "ask")
+    #expect(json["continuation"] as? String == "hostNative")
     #expect(json["rule"] as? String == "core.git/reset-hard")
-    #expect(wire.exitCode == expected.exit)
+    #expect(json["reason"] as? String == hostAskLine(command: command, ruleID: RuleID(pack: .coreGit, pattern: "reset-hard")))
     #expect(wire.exitCode == 1)
-    #expect(wire.stdout.contains(text))
+    #expect(wire.stdout.contains("\"decision\":\"allow\"") == false)
 }
 
 @Test func hookHermesAllowGitStatus_emptyStdoutExitZero() async throws {
@@ -835,6 +819,23 @@ private func runHook(
             ) == false
         )
     }
+}
+
+private func assertClaudeAskWire(stdout: String, exitCode: Int32) throws {
+    let json = try #require(
+        JSONSerialization.jsonObject(with: Data(stdout.utf8)) as? [String: Any]
+    )
+    #expect(json["decision"] as? String == "ask")
+    #expect(json["continuation"] as? String == "hostNative")
+    #expect(json["rule"] as? String == "core.git/reset-hard")
+    #expect(exitCode == 2)
+    #expect(stdout.contains("\"permissionDecision\":\"ask\"") == false)
+    #expect(stdout.contains("\"permissionDecision\":\"deny\"") == false)
+    #expect(stdout.contains("\"decision\":\"allow\"") == false)
+}
+
+private func assertClaudeAskWire(_ wire: HookWire) throws {
+    try assertClaudeAskWire(stdout: wire.stdout, exitCode: wire.exitCode)
 }
 
 private func hostFixture(_ host: String, _ name: String) throws -> String {

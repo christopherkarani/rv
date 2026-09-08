@@ -117,6 +117,21 @@ struct PendingHostAskServiceTests {
         #expect(reply.items.isEmpty)
     }
 
+    @Test func PendingHostAsk_secondAskSameIdentityKeepsOneAwaiting() async throws {
+        let env = try IsolatedPendingHostAsk()
+        defer { env.tearDown() }
+
+        _ = await env.runtime.dispatch(
+            IPCRequest(method: .hookEvaluate(HookEvaluateParams(host: .pi, stdin: env.askStdin)))
+        )
+        _ = await env.runtime.dispatch(
+            IPCRequest(method: .hookEvaluate(HookEvaluateParams(host: .pi, stdin: env.askStdin)))
+        )
+        let listed = try await env.store.list(now: now)
+        #expect(listed.count == 1)
+        #expect(listed.first?.state == .awaitingHuman)
+    }
+
     @Test func PendingHostAsk_grokCreatesNoRows() async throws {
         let env = try IsolatedPendingHostAsk()
         defer { env.tearDown() }
