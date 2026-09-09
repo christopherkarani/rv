@@ -4,27 +4,32 @@ public struct FakeEnglishCompiler: EnglishCompiler {
     public init() {}
 
     public func compile(_ english: String) async throws -> EnglishCompileResult {
-        if english.isEmpty {
+        let trimmed = english.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
             return .refuse(.empty)
         }
-        switch english {
+        switch trimmed {
         case "never force-push main", "never allow force-push to main":
-            return .preview(Self.forcePushMainDeny)
+            return .preview(Self.forcePushMainDeny(english: trimmed))
         case "npm publish", "mcp__linear__save_issue":
             return .refuse(.unsupported)
+        case "git status":
+            return .refuse(.unsupportedPredicate)
         default:
             return .refuse(.uncompilable)
         }
     }
 
-    private static let forcePushMainDeny = TypedRulePreview(
-        sentence: "Always block force-push to main.",
-        draft: TypedRule(
-            id: RuleID(pack: .coreGit, pattern: "force-push-main"),
-            predicate: .gitPush(force: .force, branch: "main"),
-            verdict: .deny,
-            origin: .machine
-        ),
-        allowedToSave: true
-    )
+    private static func forcePushMainDeny(english: String) -> TypedRulePreview {
+        TypedRulePreview(
+            sentence: "Always block force-push to main",
+            rule: PolicyDocumentRule(
+                id: RuleID(pack: .typedGit, pattern: "force-push-main"),
+                verdict: .deny,
+                predicate: .gitPush(force: .force, branch: "main"),
+                english: english
+            ),
+            allowedToSave: true
+        )
+    }
 }

@@ -13,6 +13,9 @@ struct PolicyCommandTests {
         let children = Policy.configuration.subcommands.map { $0.configuration.commandName }
         #expect(children.contains("show"))
         #expect(children.contains("draft"))
+        #expect(children.contains("validate"))
+        #expect(children.contains("export"))
+        #expect(children.contains("apply"))
         #expect(Policy.Show.configuration.commandName == "show")
     }
 

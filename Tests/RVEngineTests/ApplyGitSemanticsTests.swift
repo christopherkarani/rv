@@ -134,6 +134,52 @@ struct ApplyGitSemanticsTests {
         #expect(pack.decision == .allow)
     }
 
+    @Test func typedDeny_forcePushMain_deniesWhenPacksAllow() throws {
+        let command = "git push --force origin main"
+        let pack = try runPack(command)
+        #expect(pack.decision == .allow)
+        let rule = TypedRule(
+            id: RuleID(pack: .typedGit, pattern: "force-push-main"),
+            predicate: .gitPush(force: .force, branch: "main"),
+            verdict: .deny,
+            origin: .machine
+        )
+        let composed = applyGitSemantics(
+            pack: pack,
+            command: ShellCommand(rawValue: command),
+            policy: EffectiveActionPolicy(rules: [rule])
+        )
+        guard case .deny(let deny) = composed.decision else {
+            Issue.record("typed deny must deny force-push main, got \(composed.decision)")
+            return
+        }
+        #expect(deny.ruleID == rule.id)
+        #expect(composed.boundReview == .deny(deny))
+    }
+
+    @Test func typedAllow_cannotBeatSharedBranchHardDeny() throws {
+        let command = "git push --force origin main"
+        let pack = try runPack(command)
+        #expect(pack.decision == .allow)
+        let rule = TypedRule(
+            id: RuleID(pack: .typedGit, pattern: "force-push-main-allow"),
+            predicate: .gitPush(force: .force, branch: "main"),
+            verdict: .allow,
+            origin: .machine
+        )
+        let composed = applyGitSemantics(
+            pack: pack,
+            command: ShellCommand(rawValue: command),
+            context: GitAnalysisContext(isSharedBranch: true),
+            policy: EffectiveActionPolicy(rules: [rule])
+        )
+        guard case .deny(let deny) = composed.decision else {
+            Issue.record("wall must hold, got \(composed.decision)")
+            return
+        }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.remoteSharedBranch.ruleID)
+    }
+
     @Test func packIndeterminate_isNotLifted() {
         let pack = EvaluationResult(
             outcome: .indeterminate(.corePacksUnavailable),

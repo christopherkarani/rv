@@ -4,16 +4,15 @@ public protocol EnglishCompiler: Sendable {
     func compile(_ english: String) async throws -> EnglishCompileResult
 }
 
-/// Human preview of a typed rule. Draft is the matcher; English is not a field.
-/// Named apart from `RVPolicy.RulePreview`, whose draft is a pin string.
+/// Human preview of a compiled form. English on `rule` is provenance only.
 public struct TypedRulePreview: Sendable, Equatable, Codable {
     public let sentence: String
-    public let draft: TypedRule
+    public let rule: PolicyDocumentRule
     public let allowedToSave: Bool
 
-    public init(sentence: String, draft: TypedRule, allowedToSave: Bool) {
+    public init(sentence: String, rule: PolicyDocumentRule, allowedToSave: Bool) {
         self.sentence = sentence
-        self.draft = draft
+        self.rule = rule
         self.allowedToSave = allowedToSave
     }
 }
@@ -27,6 +26,8 @@ public enum EnglishCompileRefusal: String, Sendable, Equatable, Codable {
     case empty
     case uncompilable
     case unsupported
+    case unsupportedPredicate
+    case hardStop
 }
 
 public enum EnglishCompilerError: Error, Sendable, Equatable {

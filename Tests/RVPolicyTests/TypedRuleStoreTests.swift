@@ -20,6 +20,12 @@ struct TypedRuleStoreTests {
         let loaded = try store.loadMachine()
 
         #expect(loaded == [rule])
+        let toml = try String(contentsOf: store.machineFileURL, encoding: .utf8)
+        #expect(toml.contains("schema_version = 1"))
+        #expect(toml.contains("predicate = \"gitPush\""))
+        #expect(
+            FileManager.default.fileExists(atPath: store.machineLegacyJSONURL.path) == false
+        )
     }
 
     @Test func repoAllowCannotDropMachineDeny() {
@@ -119,9 +125,9 @@ struct TypedRuleStoreTests {
         #expect(json.contains("git push") == false)
         #expect(json.contains("--force") == false)
         #expect(json.contains("english") == false)
-        #expect(json.contains("\"schemaVersion\":1"))
-        #expect(json.contains("\"branch\":\"main\""))
-        #expect(json.contains("\"gitPush\""))
+        #expect(json.contains("schema_version = 1"))
+        #expect(json.contains("branch = \"main\""))
+        #expect(json.contains("predicate = \"gitPush\""))
     }
 
     @Test func missingMachineFileLoadsEmpty() throws {
@@ -145,7 +151,45 @@ struct TypedRuleStoreTests {
         let root = try isolatedTypedRuleDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = TypedRuleStore(baseDirectory: root)
-        #expect(store.machineFileURL == RVPolicyPaths.typedRulesFile(inConfigDir: root))
+        #expect(store.machineFileURL == RVPolicyPaths.policyFile(inConfigDir: root))
+    }
+
+    @Test func tomlWinsOverLegacyJSON() throws {
+        let root = try isolatedTypedRuleDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = TypedRuleStore(baseDirectory: root)
+        let tomlRule = TypedRule(
+            id: RuleID(pack: .typedGit, pattern: "from-toml"),
+            predicate: .gitPush(force: .force, branch: "main"),
+            verdict: .deny,
+            origin: .machine
+        )
+        let jsonRule = TypedRule(
+            id: RuleID(pack: .coreGit, pattern: "from-json"),
+            predicate: .gitPush(force: .force, branch: "develop"),
+            verdict: .deny,
+            origin: .machine
+        )
+        try store.saveMachine([tomlRule])
+        try """
+        {"schemaVersion":1,"rules":[{"id":"core.git:from-json","origin":"machine","predicate":{"gitPush":{"branch":"develop","force":"force"}},"verdict":"deny"}]}
+        """.write(to: store.machineLegacyJSONURL, atomically: true, encoding: .utf8)
+        let loaded = try store.loadMachine()
+        #expect(loaded == [tomlRule])
+        #expect(loaded.contains(jsonRule) == false)
+    }
+
+    @Test func legacyJSONLoadsWhenTOMLMissing() throws {
+        let root = try isolatedTypedRuleDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = TypedRuleStore(baseDirectory: root)
+        try """
+        {"schemaVersion":1,"rules":[{"id":"core.git:force-push-main","origin":"machine","predicate":{"gitPush":{"branch":"main","force":"force"}},"verdict":"deny"}]}
+        """.write(to: store.machineLegacyJSONURL, atomically: true, encoding: .utf8)
+        let loaded = try store.loadMachine()
+        #expect(loaded.count == 1)
+        #expect(loaded[0].id == RuleID(pack: .coreGit, pattern: "force-push-main"))
+        #expect(loaded[0].predicate == .gitPush(force: .force, branch: "main"))
     }
 
     @Test func schemaVersionRoundTripsAndRejectsOtherVersions() throws {
@@ -160,11 +204,11 @@ struct TypedRuleStoreTests {
         )
 
         try store.saveMachine([rule])
-        let json = try String(contentsOf: store.machineFileURL, encoding: .utf8)
-        #expect(json.contains("\"schemaVersion\":1"))
+        let toml = try String(contentsOf: store.machineFileURL, encoding: .utf8)
+        #expect(toml.contains("schema_version = 1"))
         #expect(try store.loadMachine() == [rule])
 
-        try #"{"schemaVersion":2,"rules":[]}"#.write(
+        try "schema_version = 2\n".write(
             to: store.machineFileURL,
             atomically: true,
             encoding: .utf8
@@ -173,7 +217,7 @@ struct TypedRuleStoreTests {
             _ = try store.loadMachine()
         }
 
-        try #"{"rules":[]}"#.write(
+        try "rules = []\n".write(
             to: store.machineFileURL,
             atomically: true,
             encoding: .utf8
@@ -181,6 +225,25 @@ struct TypedRuleStoreTests {
         #expect(throws: TypedRuleStoreError.invalidFile) {
             _ = try store.loadMachine()
         }
+    }
+
+    @Test func saveMachineDocument_keepsEnglish() throws {
+        let root = try isolatedTypedRuleDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = TypedRuleStore(baseDirectory: root)
+        let document = PolicyDocument(
+            rules: [
+                PolicyDocumentRule(
+                    id: RuleID(pack: .typedGit, pattern: "force-push-main"),
+                    verdict: .deny,
+                    predicate: .gitPush(force: .force, branch: "main"),
+                    english: "Never allow force-push to main"
+                ),
+            ]
+        )
+        try store.saveMachine(document)
+        let loaded = try store.loadMachineDocument()
+        #expect(loaded.rules[0].english == "Never allow force-push to main")
     }
 }
 

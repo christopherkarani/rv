@@ -35,7 +35,7 @@ struct EnglishRefuseTests {
         if case .preview(let preview) = result {
             Issue.record("refuse English must not yield a preview")
             if preview.allowedToSave {
-                store.append(preview.draft)
+                store.append(preview.rule.typedRule(origin: .machine))
             }
         }
         #expect(store == [existing])

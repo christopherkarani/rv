@@ -20,32 +20,79 @@ public struct TypedRuleStore: Sendable {
     }
 
     public var machineFileURL: URL {
+        RVPolicyPaths.policyFile(inConfigDir: baseDirectory)
+    }
+
+    public var machineLegacyJSONURL: URL {
         RVPolicyPaths.typedRulesFile(inConfigDir: baseDirectory)
     }
 
     public func loadMachine() throws -> [TypedRule] {
-        try load(from: machineFileURL, origin: .machine)
+        try loadDocument(toml: machineFileURL, json: machineLegacyJSONURL)
+            .typedRules(origin: .machine)
+    }
+
+    public func loadMachineDocument() throws -> PolicyDocument {
+        try loadDocument(toml: machineFileURL, json: machineLegacyJSONURL)
     }
 
     public func saveMachine(_ rules: [TypedRule]) throws {
-        try save(rules, to: machineFileURL, origin: .machine, lockURL: machineLockURL)
+        try saveMachine(
+            PolicyDocument(rules: rules.map { rule in
+                PolicyDocumentRule(
+                    id: rule.id,
+                    verdict: rule.verdict,
+                    predicate: rule.predicate
+                )
+            })
+        )
+    }
+
+    public func saveMachine(_ document: PolicyDocument) throws {
+        try save(document, to: machineFileURL, lockURL: machineLockURL)
     }
 
     public static func repoFileURL(workspace: URL) -> URL {
+        workspace
+            .appendingPathComponent(".rv", isDirectory: true)
+            .appendingPathComponent("policy.toml", isDirectory: false)
+    }
+
+    public static func repoLegacyJSONURL(workspace: URL) -> URL {
         workspace
             .appendingPathComponent(".rv", isDirectory: true)
             .appendingPathComponent("typed-rules.json", isDirectory: false)
     }
 
     public func loadRepo(workspace: URL) throws -> [TypedRule] {
-        try load(from: Self.repoFileURL(workspace: workspace), origin: .repo)
+        try loadRepoDocument(workspace: workspace).typedRules(origin: .repo)
+    }
+
+    public func loadRepoDocument(workspace: URL) throws -> PolicyDocument {
+        try loadDocument(
+            toml: Self.repoFileURL(workspace: workspace),
+            json: Self.repoLegacyJSONURL(workspace: workspace)
+        )
     }
 
     public func saveRepo(_ rules: [TypedRule], workspace: URL) throws {
+        try saveRepo(
+            PolicyDocument(rules: rules.map { rule in
+                PolicyDocumentRule(
+                    id: rule.id,
+                    verdict: rule.verdict,
+                    predicate: rule.predicate
+                )
+            }),
+            workspace: workspace
+        )
+    }
+
+    public func saveRepo(_ document: PolicyDocument, workspace: URL) throws {
         let file = Self.repoFileURL(workspace: workspace)
         let lock = file.deletingLastPathComponent()
-            .appendingPathComponent(".typed-rules.lock", isDirectory: false)
-        try save(rules, to: file, origin: .repo, lockURL: lock)
+            .appendingPathComponent(".policy.lock", isDirectory: false)
+        try save(document, to: file, lockURL: lock)
     }
 
     public func loadEffective(builtin: [TypedRule], workspace: URL?) throws -> [TypedRule] {
@@ -106,12 +153,29 @@ public struct TypedRuleStore: Sendable {
     }
 
     private var machineLockURL: URL {
-        RVPolicyPaths.typedRulesLockFile(inConfigDir: baseDirectory)
+        RVPolicyPaths.policyLockFile(inConfigDir: baseDirectory)
     }
 
-    private func load(from url: URL, origin: TypedRuleOrigin) throws -> [TypedRule] {
+    private func loadDocument(
+        toml: URL,
+        json: URL
+    ) throws -> PolicyDocument {
+        if FileManager.default.fileExists(atPath: toml.path) {
+            guard let text = try? String(contentsOf: toml, encoding: .utf8) else {
+                throw TypedRuleStoreError.invalidFile
+            }
+            do {
+                return try PolicyDocumentTOML.parse(text)
+            } catch {
+                throw TypedRuleStoreError.invalidFile
+            }
+        }
+        return try loadLegacyJSON(from: json)
+    }
+
+    private func loadLegacyJSON(from url: URL) throws -> PolicyDocument {
         guard FileManager.default.fileExists(atPath: url.path) else {
-            return []
+            return PolicyDocument()
         }
         guard let data = try? Data(contentsOf: url) else {
             throw TypedRuleStoreError.invalidFile
@@ -125,43 +189,26 @@ public struct TypedRuleStore: Sendable {
         guard document.schemaVersion == TypedRulesDocument.currentSchemaVersion else {
             throw TypedRuleStoreError.invalidFile
         }
-        return document.rules.map { rule in
-            TypedRule(
-                id: rule.id,
-                predicate: rule.predicate,
-                verdict: rule.verdict,
-                origin: origin
-            )
-        }
+        return PolicyDocument(
+            rules: document.rules.map { rule in
+                PolicyDocumentRule(
+                    id: rule.id,
+                    verdict: rule.verdict,
+                    predicate: rule.predicate
+                )
+            }
+        )
     }
 
     private func save(
-        _ rules: [TypedRule],
+        _ document: PolicyDocument,
         to url: URL,
-        origin: TypedRuleOrigin,
         lockURL: URL
     ) throws {
-        let stamped = rules.map { rule in
-            TypedRule(
-                id: rule.id,
-                predicate: rule.predicate,
-                verdict: rule.verdict,
-                origin: origin
-            )
-        }
         try withFileLock(at: lockURL) {
             try prepareDirectory(url.deletingLastPathComponent())
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.sortedKeys]
-            let data: Data
-            do {
-                data = try encoder.encode(
-                    TypedRulesDocument(
-                        schemaVersion: TypedRulesDocument.currentSchemaVersion,
-                        rules: stamped
-                    )
-                )
-            } catch {
+            let text = PolicyDocumentTOML.render(document)
+            guard let data = text.data(using: .utf8) else {
                 throw TypedRuleStoreError.invalidFile
             }
             let temp = url.appendingPathExtension("tmp")
