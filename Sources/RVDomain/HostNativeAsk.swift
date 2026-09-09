@@ -121,6 +121,23 @@ public enum HostNativeAsk {
         }
     }
 
+    /// Extra / desktop wait. Same eligibility as spend-first Ask, including
+    /// Grok and Codex, which still encode deny on the host wire.
+    public static func recordsPending(
+        result: EvaluationResult,
+        cwd: WorkingDirectory?,
+        bound: BoundReview
+    ) -> Bool {
+        switch bound {
+        case .allow:
+            return false
+        case .deny:
+            return UnlockableDeny.matches(result: result, cwd: cwd)
+        case .mandatoryHuman:
+            return cwd != nil && result.matchingView.isEmpty == false
+        }
+    }
+
     /// Projects hard policy onto the hook-live review boundary.
     /// Uncovered actions remain quiet on the hook door until typed effects are
     /// available; shadow review owns the separate review-eligible projection.

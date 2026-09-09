@@ -601,6 +601,52 @@ struct PendingDispatchTests {
         #expect(remaining.items.isEmpty)
     }
 
+    @Test func hookEvaluateAskOnPiPersistsWaitWithoutCommandOnList() async throws {
+        let approvals = FakePendingApprovals()
+        let runtime = try makeRuntime(approvals: approvals)
+        let stdin =
+            #"{"toolName":"bash","cwd":"/tmp/ws","sessionId":"sess-pi","input":{"command":"git reset --hard"}}"#
+        let asked = await runtime.dispatch(
+            IPCRequest(method: .hookEvaluate(HookEvaluateParams(host: .pi, stdin: stdin)))
+        )
+        guard case .hookEvaluate(let reply) = asked.result else {
+            Issue.record("Pi reset-hard hookEvaluate must dispatch")
+            return
+        }
+        let object = try JSONSerialization.jsonObject(with: Data(reply.stdout.utf8))
+        let json = try #require(object as? [String: Any])
+        #expect(json["decision"] as? String == "ask")
+        #expect(await approvals.createCalls.count == 1)
+        let listed = try requireList(await runtime.dispatch(IPCRequest(method: .pendingList)))
+        #expect(listed.items.count == 1)
+        let item = try #require(listed.items.first)
+        #expect(item.host == .pi)
+        #expect(item.folder == "ws")
+        #expect(item.identity.session.rawValue == "sess-pi")
+        try assertNoCommand(asked)
+        try assertNoCommand(await runtime.dispatch(IPCRequest(method: .pendingList)))
+    }
+
+    @Test func hookEvaluateAskWithoutSessionDoesNotPersist() async throws {
+        let approvals = FakePendingApprovals()
+        let runtime = try makeRuntime(approvals: approvals)
+        let stdin =
+            #"{"toolName":"bash","cwd":"/tmp/ws","input":{"command":"git reset --hard"}}"#
+        let asked = await runtime.dispatch(
+            IPCRequest(method: .hookEvaluate(HookEvaluateParams(host: .pi, stdin: stdin)))
+        )
+        guard case .hookEvaluate(let reply) = asked.result else {
+            Issue.record("Pi reset-hard without session must still dispatch")
+            return
+        }
+        let object = try JSONSerialization.jsonObject(with: Data(reply.stdout.utf8))
+        let json = try #require(object as? [String: Any])
+        #expect(json["decision"] as? String == "ask")
+        #expect(await approvals.createCalls.isEmpty)
+        let listed = try requireList(await runtime.dispatch(IPCRequest(method: .pendingList)))
+        #expect(listed.items.isEmpty)
+    }
+
     @Test func automaticStoreListsCreatedWaits() async throws {
         let homeURL = try isolatedHomeDirectory()
         let allowOnceDirectory = try isolatedAllowOnceDirectory()

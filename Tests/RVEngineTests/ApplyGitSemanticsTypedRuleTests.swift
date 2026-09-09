@@ -61,6 +61,53 @@ struct ApplyGitSemanticsTypedRuleTests {
         #expect(composed.boundReview == .deny(ActionPolicyEngine.Builtin.remoteSharedBranch))
     }
 
+    @Test func coreGitDisabled_typedAskOnPushMainStillApplies() throws {
+        let command = "git push origin main"
+        let pack = try runPack(command)
+        #expect(pack.decision == .allow)
+        let rule = TypedRule(
+            id: RuleID(pack: .coreGit, pattern: "git-push-none-main-ask"),
+            predicate: .gitPush(force: GitPushForce.none, branch: "main"),
+            verdict: .ask,
+            origin: .machine
+        )
+        let composed = applyGitSemantics(
+            pack: pack,
+            command: ShellCommand(rawValue: command),
+            enabledPacks: [],
+            policy: EffectiveActionPolicy(rules: [rule])
+        )
+        guard case .deny(let deny) = composed.decision else {
+            Issue.record("typed ask must still apply when core.git is off, got \(composed.decision)")
+            return
+        }
+        #expect(deny.ruleID == rule.id)
+        #expect(deny.reason == "A typed rule requires a human.")
+        #expect(composed.boundReview == .mandatoryHuman(deny))
+    }
+
+    @Test func coreGitDisabled_typedRulesDoNotTurnOnBuiltinResetDeny() throws {
+        let command = "git reset --hard"
+        let pack = EvaluationResult(
+            outcome: .plain,
+            matchingView: MatchingView(command)
+        )
+        let rule = TypedRule(
+            id: RuleID(pack: .coreGit, pattern: "git-push-none-main-ask"),
+            predicate: .gitPush(force: GitPushForce.none, branch: "main"),
+            verdict: .ask,
+            origin: .machine
+        )
+        let composed = applyGitSemantics(
+            pack: pack,
+            command: ShellCommand(rawValue: command),
+            enabledPacks: [],
+            policy: EffectiveActionPolicy(rules: [rule])
+        )
+        #expect(composed.decision == .allow)
+        #expect(composed.boundReview == nil)
+    }
+
     @Test func applySemantics_forwardsTypedDenyForForceWithLeaseFeature() throws {
         let command = "git push --force-with-lease origin feature"
         let pack = try runPack(command)

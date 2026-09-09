@@ -166,6 +166,35 @@ struct ActionPolicyEngineTypedRuleTests {
         #expect(denied.explanation.ruleID == packDeny.ruleID)
         #expect(denied.explanation.zone == .hardDeny)
     }
+
+    @Test func typedRestriction_askMatchesPushMainWithoutBuiltinWall() {
+        let rule = TypedRule(
+            id: RuleID(pack: .coreGit, pattern: "git-push-none-main-ask"),
+            predicate: .gitPush(force: GitPushForce.none, branch: "main"),
+            verdict: .ask,
+            origin: .machine
+        )
+        let git = GitAction.push(
+            remote: "origin",
+            refspec: "main",
+            force: .none,
+            delete: false
+        )
+        let matched = ActionPolicyEngine.typedRestriction(gitAction: git, rules: [rule])
+        guard let matched else {
+            Issue.record("typed ask must match a non-force push to main")
+            return
+        }
+        guard case .mandatoryHuman(let deny) = matched.decision else {
+            Issue.record("expected mandatoryHuman, got \(matched.decision)")
+            return
+        }
+        #expect(deny.ruleID == rule.id)
+        #expect(deny.reason == "A typed rule requires a human.")
+
+        let reset = GitAction.reset(mode: .hard, target: nil)
+        #expect(ActionPolicyEngine.typedRestriction(gitAction: reset, rules: [rule]) == nil)
+    }
 }
 
 private func typedRule(
