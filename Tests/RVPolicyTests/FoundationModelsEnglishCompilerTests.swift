@@ -38,6 +38,16 @@ struct FoundationModelsEnglishCompilerTests {
         #expect(result == .refuse(.empty))
     }
 
+    @Test func injectedCompiler_propagatesCancellation() async {
+        let compiler = FoundationModelsEnglishCompiler(
+            usesSystemModel: true,
+            compiler: CancelledEnglishCompiler()
+        )
+        await #expect(throws: CancellationError.self) {
+            _ = try await compiler.compile("never allow force-push to main")
+        }
+    }
+
     @Test func domainSourcesDoNotImportFoundationModels() throws {
         let domain = repoRoot().appendingPathComponent("Sources/RVDomain", isDirectory: true)
         let files = try FileManager.default.contentsOfDirectory(
@@ -54,7 +64,7 @@ struct FoundationModelsEnglishCompilerTests {
         }
     }
 
-    #if !canImport(FoundationModels)
+#if !canImport(FoundationModels)
     @Test func linuxHost_compilerDegradesToUnavailable() async {
         let compiler = FoundationModelsEnglishCompiler()
         await #expect(throws: EnglishCompilerError.unavailable) {
@@ -62,6 +72,12 @@ struct FoundationModelsEnglishCompilerTests {
         }
     }
     #endif
+}
+
+private struct CancelledEnglishCompiler: EnglishCompiler {
+    func compile(_: String) async throws -> EnglishCompileResult {
+        throw CancellationError()
+    }
 }
 
 private func repoRoot() -> URL {

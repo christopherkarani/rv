@@ -95,6 +95,46 @@ struct PolicyDraftCommandTests {
         }
     }
 
+    @Test func save_upsertsSamePredicate_keepsOtherMachineRules() async throws {
+        try await withTempPolicyContext { home, workspace in
+            let store = TypedRuleStore(
+                baseDirectory: RVPolicyPaths.configDirectory(home: home)
+            )
+            let other = PolicyDocumentRule(
+                id: RuleID(pack: .typedGit, pattern: "force-push-develop"),
+                verdict: .deny,
+                predicate: .gitPush(force: .force, branch: "develop")
+            )
+            try store.saveMachine(PolicyDocument(rules: [other]))
+
+            let first = try await PolicyDraftRun.execute(
+                english: "never allow force-push to main",
+                save: true,
+                robot: false,
+                home: home,
+                workspace: workspace,
+                compiler: FakeEnglishCompiler()
+            )
+            #expect(first.outcome == .preview(saved: true))
+            let second = try await PolicyDraftRun.execute(
+                english: "never force-push main",
+                save: true,
+                robot: false,
+                home: home,
+                workspace: workspace,
+                compiler: FakeEnglishCompiler()
+            )
+            #expect(second.outcome == .preview(saved: true))
+
+            let machine = try store.loadMachine()
+            #expect(machine.count == 2)
+            #expect(machine.contains(where: { $0.predicate == other.predicate && $0.verdict == .deny }))
+            #expect(
+                machine.filter { $0.predicate == .gitPush(force: .force, branch: "main") }.count == 1
+            )
+        }
+    }
+
     @Test func refuse_writesNothing() async throws {
         try await withTempPolicyContext { home, workspace in
             let result = try await PolicyDraftRun.execute(
@@ -166,9 +206,42 @@ struct PolicyDocumentCommandTests {
         #expect(loaded[0].verdict == .deny)
     }
 
-    @Test func validate_missingFile_isOK() {
+    @Test func validate_missingFile_isOK() throws {
         let missing = URL(fileURLWithPath: "/tmp/rv-missing-policy-\(UUID().uuidString).toml")
         #expect(FileManager.default.fileExists(atPath: missing.path) == false)
+        try PolicyValidateRun.validate(.file(missing))
+    }
+
+    @Test func validate_defaultPath_invalidLegacyJSON_failsClosed() throws {
+        let home = try isolatedHome()
+        let homeURL = URL(fileURLWithPath: home.rawValue, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: homeURL) }
+        let config = RVPolicyPaths.configDirectory(home: home)
+        try FileManager.default.createDirectory(at: config, withIntermediateDirectories: true)
+        try "not-json".write(
+            to: RVPolicyPaths.typedRulesFile(inConfigDir: config),
+            atomically: true,
+            encoding: .utf8
+        )
+        #expect(throws: TypedRuleStoreError.invalidFile) {
+            try PolicyValidateRun.validate(.machine(home))
+        }
+    }
+
+    @Test func validate_defaultPath_invalidTOML_failsClosed() throws {
+        let home = try isolatedHome()
+        let homeURL = URL(fileURLWithPath: home.rawValue, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: homeURL) }
+        let config = RVPolicyPaths.configDirectory(home: home)
+        try FileManager.default.createDirectory(at: config, withIntermediateDirectories: true)
+        try "not-toml".write(
+            to: RVPolicyPaths.policyFile(inConfigDir: config),
+            atomically: true,
+            encoding: .utf8
+        )
+        #expect(throws: TypedRuleStoreError.invalidFile) {
+            try PolicyValidateRun.validate(.machine(home))
+        }
     }
 }
 

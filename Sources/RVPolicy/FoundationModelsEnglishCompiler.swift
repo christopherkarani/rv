@@ -43,6 +43,8 @@ public struct FoundationModelsEnglishCompiler: EnglishCompiler {
                 return try await ReviewTimeout.run(timeout: timeout) {
                     try await FoundationModelsEnglishCompileClient.compile(english)
                 }
+            } catch let error as CancellationError {
+                throw error
             } catch let error as EnglishCompilerError {
                 throw error
             } catch {
@@ -182,8 +184,8 @@ enum FoundationModelsEnglishCompileClient: Sendable {
                 generating: FoundationModelsEnglishCompileOutput.self
             )
             return map(response.content, english: english)
-        } catch is CancellationError {
-            throw EnglishCompilerError.unavailable
+        } catch let error as CancellationError {
+            throw error
         } catch let error as EnglishCompilerError {
             throw error
         } catch {

@@ -83,6 +83,44 @@ struct PolicyDocumentTOMLTests {
         }
     }
 
+    @Test func duplicateId_refuses() {
+        let source = """
+        schema_version = 1
+        [[rule]]
+        id = "typed.git:same"
+        verdict = "deny"
+        predicate = "gitPush"
+        force = "force"
+        branch = "main"
+        [[rule]]
+        id = "typed.git:same"
+        verdict = "ask"
+        predicate = "gitPush"
+        force = "force"
+        branch = "develop"
+        """
+        #expect(throws: PolicyDocumentError.invalidFile) {
+            _ = try PolicyDocumentTOML.parse(source)
+        }
+    }
+
+    @Test func newlineEnglish_roundTripsAsSingleLine() throws {
+        let document = PolicyDocument(
+            rules: [
+                PolicyDocumentRule(
+                    id: RuleID(pack: .typedGit, pattern: "force-push-main"),
+                    verdict: .deny,
+                    predicate: .gitPush(force: .force, branch: "main"),
+                    english: "Never allow\nforce-push to main"
+                ),
+            ]
+        )
+        let rendered = PolicyDocumentTOML.render(document)
+        #expect(rendered.contains("\nforce-push") == false)
+        let again = try PolicyDocumentTOML.parse(rendered)
+        #expect(again.rules[0].english == "Never allow force-push to main")
+    }
+
     @Test func duplicatePredicate_refuses() {
         let source = """
         schema_version = 1

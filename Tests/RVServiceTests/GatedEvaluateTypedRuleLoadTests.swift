@@ -54,6 +54,27 @@ struct GatedEvaluateTypedRuleLoadTests {
         #expect(deny.reason == "Typed rules could not be loaded.")
     }
 
+    @Test func invalidPolicyTOML_failClosedNotAllow() async throws {
+        let homeURL = try isolatedHomeDirectory()
+        let home = try #require(HomeDirectory(validating: homeURL.path))
+        let workspace = try isolatedWorkspace()
+        let config = RVPolicyPaths.configDirectory(home: home)
+        try FileManager.default.createDirectory(at: config, withIntermediateDirectories: true)
+        try "not-toml".write(
+            to: RVPolicyPaths.policyFile(inConfigDir: config),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let result = try await peek("git stash drop", cwd: workspace, home: home)
+        guard case .deny(let deny) = result.decision else {
+            Issue.record("invalid policy.toml must fail closed, got \(result.decision)")
+            return
+        }
+        #expect(deny.ruleID == RuleID(pack: ActionPolicyEngine.Builtin.pack, pattern: "typed-rules-invalid"))
+        #expect(deny.reason == "Typed rules could not be loaded.")
+    }
+
     @Test func typedAllow_cannotBeatSharedBranchHardDeny() async throws {
         let homeURL = try isolatedHomeDirectory()
         let home = try #require(HomeDirectory(validating: homeURL.path))

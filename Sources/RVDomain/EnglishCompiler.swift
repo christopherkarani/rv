@@ -6,9 +6,9 @@ public protocol EnglishCompiler: Sendable {
 
 /// Human preview of a compiled form. English on `rule` is provenance only.
 public struct TypedRulePreview: Sendable, Equatable, Codable {
-    public var sentence: String
-    public var rule: PolicyDocumentRule
-    public var allowedToSave: Bool
+    public let sentence: String
+    public let rule: PolicyDocumentRule
+    public let allowedToSave: Bool
 
     public init(sentence: String, rule: PolicyDocumentRule, allowedToSave: Bool) {
         self.sentence = sentence

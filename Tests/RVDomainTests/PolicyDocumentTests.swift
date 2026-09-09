@@ -27,6 +27,16 @@ struct PolicyDocumentTests {
         #expect(row.english == nil)
     }
 
+    @Test func newlineEnglish_collapsesToSingleLine() {
+        let row = PolicyDocumentRule(
+            id: RuleID(pack: .typedGit, pattern: "force-push-main"),
+            verdict: .deny,
+            predicate: .gitPush(force: .force, branch: "main"),
+            english: "Never allow\nforce-push to main"
+        )
+        #expect(row.english == "Never allow force-push to main")
+    }
+
     @Test func document_mapsRulesWithOrigin() {
         let document = PolicyDocument(
             rules: [

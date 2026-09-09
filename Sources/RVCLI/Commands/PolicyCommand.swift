@@ -65,21 +65,18 @@ struct Policy: AsyncParsableCommand {
         var path: String?
 
         func run() throws {
-            let url: URL
+            let target: PolicyValidateRun.Target
             if let path {
-                url = URL(fileURLWithPath: path)
+                target = .file(URL(fileURLWithPath: path))
             } else {
                 guard let home = HomeDirectory.process() else {
                     FileHandle.standardError.write(Data("rv policy validate: HOME is not set\n".utf8))
                     throw ExitCode(1)
                 }
-                url = RVPolicyPaths.policyFile(inConfigDir: RVPolicyPaths.configDirectory(home: home))
-            }
-            if FileManager.default.fileExists(atPath: url.path) == false {
-                return
+                target = .machine(home)
             }
             do {
-                _ = try PolicyDocumentRun.load(url)
+                try PolicyValidateRun.validate(target)
             } catch {
                 FileHandle.standardError.write(Data("rv policy validate: invalid policy file\n".utf8))
                 throw ExitCode(2)
@@ -247,6 +244,31 @@ enum PolicyDocumentRun {
             throw PolicyDocumentError.invalidFile
         }
         return try PolicyDocumentTOML.parse(text)
+    }
+}
+
+enum PolicyValidateRun {
+    enum Target: Equatable, Sendable {
+        case machine(HomeDirectory)
+        case file(URL)
+    }
+
+    /// Default (no path) uses the same machine load as `policy show` / evaluate:
+    /// `policy.toml` if present, else legacy `typed-rules.json`. An explicit path
+    /// is a share file: missing is valid; present must parse as TOML.
+    static func validate(_ target: Target) throws {
+        switch target {
+        case .machine(let home):
+            let store = TypedRuleStore(
+                baseDirectory: RVPolicyPaths.configDirectory(home: home)
+            )
+            _ = try store.loadMachineDocument()
+        case .file(let url):
+            guard FileManager.default.fileExists(atPath: url.path) else {
+                return
+            }
+            _ = try PolicyDocumentRun.load(url)
+        }
     }
 }
 

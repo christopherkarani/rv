@@ -26,7 +26,7 @@ Not regex. Not saved English. Not Wax.
 
 1. A model fills a **closed form** (`PolicyPredicate` + verdict). Uncompilable English is refused and writes nothing. “Be careful in prod” is not a rule.
 2. The human previews the form in plain language (Always block force-push to main / cannot-override).
-3. Save writes the **form** (`TypedRule`). Cancel writes nothing.
+3. Save writes the **form** into `policy.toml`. Cancel writes nothing.
 4. The hook matches the saved form. The second call does not run a model.
 
 English in is W3 (`rv policy draft`). W1 has no English UI: `rv policy show` only.
@@ -67,7 +67,7 @@ No new SPM target.
 
 Merge cannot let a repo allow drop a machine deny. Overlay cannot weaken builtin hard deny. Shareable on-disk form is `policy.toml` (see `spec/spec-architecture-policy-document.md`). Legacy `typed-rules.json` is read-compat only.
 
-**Hook evaluate.** `GatedEvaluate.evaluateWithSemantics` loads that saved form (machine `$HOME/.config/rv/typed-rules.json`, repo `<cwd>/.rv/typed-rules.json`) and passes `EffectiveActionPolicy` into `applySemantics`. Invalid JSON fail-closes (`builtin.action:typed-rules-invalid`). Missing file is empty. Typed hard-bind deny (`boundReview == .deny`) skips PolicyGate on peek/apply (`gated()`) and Host Ask (`spendHostAsk`) and does not mint an unlock code, so a matchingView grant or plant+spend cannot override a typed deny that retagged the shared-branch wall. Pack denials and `mandatoryHuman` still reach PolicyGate. There is still no live Auto-review. `FakeEnglishCompiler` still emits `GitPushForce.force`, which does not match `--force-with-lease`.
+**Hook evaluate.** `GatedEvaluate.evaluateWithSemantics` loads that saved form (machine `$HOME/.config/rv/policy.toml`, repo `<cwd>/.rv/policy.toml`; legacy `typed-rules.json` if TOML is missing) and passes `EffectiveActionPolicy` into `applySemantics`. Invalid policy file fail-closes (`builtin.action:typed-rules-invalid`). Missing file is empty. Typed hard-bind deny (`boundReview == .deny`) skips PolicyGate on peek/apply (`gated()`) and Host Ask (`spendHostAsk`) and does not mint an unlock code, so a matchingView grant or plant+spend cannot override a typed deny that retagged the shared-branch wall. Pack denials and `mandatoryHuman` still reach PolicyGate. There is still no live Auto-review. `FakeEnglishCompiler` still emits `GitPushForce.force`, which does not match `--force-with-lease`.
 
 ## Locked
 
