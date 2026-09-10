@@ -45,6 +45,21 @@ public enum BoundReview: Sendable, Equatable {
             return .deny(deny)
         }
     }
+
+    /// BoundReview for hook mapping when the Evaluate session did not bind.
+    /// Pack allow / indeterminate → `.allow`. Pack deny → `.deny`.
+    /// Never runs `ActionPolicyEngine`.
+    public static func packProjected(from result: EvaluationResult) -> BoundReview {
+        if let bound = result.boundReview {
+            return bound
+        }
+        switch result.decision {
+        case .allow, .indeterminate:
+            return .allow
+        case .deny(let deny):
+            return .deny(deny)
+        }
+    }
 }
 
 /// Pure bind of hard policy to a review `Result`. Callers await the reviewer

@@ -375,6 +375,21 @@ func hookWire_firstCallAllowCannotSkipPolicyGate(_ host: HookHost) throws {
     #expect(json["decision"] as? String != "ask")
 }
 
+@Test func hookWire_packAllowGitPushForceDoesNotAsk() async throws {
+    let stdin = """
+    {"toolName":"bash","cwd":"/tmp/ws","input":{"command":"git push --force origin feature"}}
+    """
+    let wire = await hookWire(host: .pi, stdin: stdin) { _, _ in
+        EvaluationResult(
+            outcome: .plain,
+            matchingView: MatchingView("git push --force origin feature")
+        )
+    }
+    #expect(wire.stdout.isEmpty)
+    #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
+    #expect(wire.exitCode == 0)
+}
+
 @Test func hookWire_piFirstCallPackAllowBindsAllow() async throws {
     let stdin = """
     {"toolName":"bash","cwd":"/tmp/ws","input":{"command":"git status"}}

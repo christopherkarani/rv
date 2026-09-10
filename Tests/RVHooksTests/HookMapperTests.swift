@@ -473,6 +473,67 @@ private final class EncodeDoorSpy: HostCodec, @unchecked Sendable {
     #expect(allowOnceUnlockCode(in: wire.stdout) == nil)
 }
 
+@Test func hookWire_firstCallIntentAskEncodesAskOnPackDeny() {
+    let deny = Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "x")
+    let spy = EncodeDoorSpy(host: .pi)
+    _ = hookWire(
+        from: EvaluationResult(
+            outcome: .deny(deny, matched: nil),
+            matchingView: MatchingView("git reset --hard")
+        ),
+        command: ShellCommand(rawValue: "git reset --hard"),
+        using: spy,
+        intent: .firstCall(verdict: .ask(.hostNative), unlockCode: nil)
+    )
+    #expect(spy.allowCalls == 0)
+    #expect(spy.denyCalls == 0)
+    #expect(spy.askCalls == 1)
+}
+
+@Test func hookWire_firstCallIntentDenyDoesNotAskOnSpendablePackDeny() {
+    let deny = Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "x")
+    let spy = EncodeDoorSpy(host: .pi)
+    _ = hookWire(
+        from: EvaluationResult(
+            outcome: .deny(deny, matched: nil),
+            matchingView: MatchingView("git reset --hard")
+        ),
+        command: ShellCommand(rawValue: "git reset --hard"),
+        using: spy,
+        intent: .firstCall(verdict: .deny, unlockCode: nil)
+    )
+    #expect(spy.allowCalls == 0)
+    #expect(spy.denyCalls == 1)
+    #expect(spy.askCalls == 0)
+}
+
+@Test func hookWire_firstCallIntentAllowOnPackDenyDoesNotSilentAllow() {
+    let deny = Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "x")
+    let spy = EncodeDoorSpy(host: .pi)
+    _ = hookWire(
+        from: EvaluationResult(outcome: .deny(deny, matched: nil)),
+        command: ShellCommand(rawValue: "git reset --hard"),
+        using: spy,
+        intent: .firstCall(verdict: .allow, unlockCode: nil)
+    )
+    #expect(spy.allowCalls == 0)
+    #expect(spy.denyCalls == 1)
+    #expect(spy.askCalls == 0)
+}
+
+@Test func hookWire_firstCallIntentAllowEncodesAllow() {
+    let spy = EncodeDoorSpy(host: .claude)
+    _ = hookWire(
+        from: EvaluationResult(outcome: .plain, matchingView: MatchingView("git status")),
+        command: ShellCommand(rawValue: "git status"),
+        using: spy,
+        intent: .firstCall(verdict: .allow, unlockCode: nil)
+    )
+    #expect(spy.allowCalls == 1)
+    #expect(spy.denyCalls == 0)
+    #expect(spy.askCalls == 0)
+}
+
 @Test func grokDecode_readsCwdWhenPresent() throws {
     let stdin = """
     {"hookEventName":"pre_tool_use","cwd":"/tmp/ws","toolName":"run_terminal_command","toolInput":{"command":"git status"}}
