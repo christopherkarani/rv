@@ -63,17 +63,10 @@ public struct SessionScanRequest: Sendable, Equatable {
     public var rootPath: String?
     public var includeGlobs: [String]
     public var hostFilter: ScanHostID?
-    /// Inclusive lookback in days relative to `now`. Ignored when `scanAll` is true.
-    public var days: UInt
-    /// `--all`: skip the time window. Bounds still apply.
-    public var scanAll: Bool
+    public var timeWindow: ScanTimeWindow
     public var packIDs: [PackID]
     public var allEvents: Bool
     public var bounds: ScanBounds
-
-    public var timeWindow: ScanTimeWindow {
-        scanAll ? .all : ScanTimeWindow(dayCount: days)
-    }
 
     public init(
         home: ScanHome,
@@ -81,8 +74,7 @@ public struct SessionScanRequest: Sendable, Equatable {
         rootPath: String? = nil,
         includeGlobs: [String] = [],
         hostFilter: ScanHostID? = nil,
-        days: UInt = ScanTimeWindow.defaultDayCount,
-        scanAll: Bool = false,
+        timeWindow: ScanTimeWindow = .default,
         packIDs: [PackID] = dayOnePackIDs,
         allEvents: Bool = false,
         bounds: ScanBounds = .default
@@ -92,8 +84,7 @@ public struct SessionScanRequest: Sendable, Equatable {
         self.rootPath = rootPath
         self.includeGlobs = includeGlobs
         self.hostFilter = hostFilter
-        self.days = days
-        self.scanAll = scanAll
+        self.timeWindow = timeWindow
         self.packIDs = packIDs
         self.allEvents = allEvents
         self.bounds = bounds
