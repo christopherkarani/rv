@@ -288,13 +288,13 @@ func hookWire_firstCallAllowCannotSkipPolicyGate(_ host: HookHost) throws {
     let codec = ClaudeHostCodec()
     let wire = codec.encodeAsk(
         reason: reason,
-        rule: "core.git/reset-hard",
-        next: hookUnlockNext
+        rule: RuleID(pack: .coreGit, pattern: "reset-hard"),
+        next: .ttyHint
     )
     let deny = codec.encodeDeny(
         reason: reason,
-        rule: "core.git/reset-hard",
-        next: hookUnlockNext
+        rule: RuleID(pack: .coreGit, pattern: "reset-hard"),
+        next: .ttyHint
     )
     let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
     #expect(json["decision"] as? String == "ask")

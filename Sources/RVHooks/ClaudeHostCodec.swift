@@ -40,14 +40,30 @@ public struct ClaudeHostCodec: HostCodec {
     /// Exit 2 (not Claude's deny-honor 0): leftover `rv hook --host claude` must
     /// block instead of fail-opening schema-invalid JSON. The wrapper maps
     /// nonempty `decision:ask` regardless of exit.
-    public func encodeAsk(reason: String, rule: String?, next: String?) -> HookWire {
+    /// Defaults must live here so one-argument `encodeAsk(reason:)` does not
+    /// bind the protocol-extension leftover `decision: ask` at exit `denyExitCode`.
+    public func encodeAsk(
+        reason: String,
+        rule: RuleID? = nil,
+        next: HookVoiceNext = .none
+    ) -> HookWire {
         HookWire(
-            stdout: hookAskJSON(reason: reason, rule: rule, next: next),
+            stdout: hookAskJSON(
+                reason: reason,
+                rule: rule.map(displayRuleID),
+                next: hookVoiceNextSentence(next)
+            ),
             exitCode: 2
         )
     }
 
-    public func encodeDeny(reason: String, rule: String?, next: String?) -> HookWire {
+    /// Defaults must live here so one-argument `encodeDeny(reason:)` does not
+    /// bind the protocol-extension leftover `decision: deny`.
+    public func encodeDeny(
+        reason: String,
+        rule: RuleID? = nil,
+        next: HookVoiceNext = .none
+    ) -> HookWire {
         HookWire(
             stdout: claudeIndeterminateDenyJSON(reason: reason),
             exitCode: host.denyExitCode
@@ -63,7 +79,7 @@ public struct ClaudeHostCodec: HostCodec {
         case .allow:
             return encodeAllow()
         case .indeterminate:
-            return encodeDeny(reason: incompleteEvalSentence, rule: nil, next: nil)
+            return encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
         case .deny(let deny):
             let hostDenyText = hostDenyLine(
                 command: command,
@@ -73,8 +89,8 @@ public struct ClaudeHostCodec: HostCodec {
             guard case .deny(_, let matched?) = result.outcome else {
                 return encodeDeny(
                     reason: hostDenyText,
-                    rule: displayRuleID(deny.ruleID),
-                    next: mintedUnlockNext(unlockCode)
+                    rule: deny.ruleID,
+                    next: unlockHookVoiceNext(unlockCode)
                 )
             }
             return HookWire(

@@ -225,6 +225,26 @@ func assertMintedHookUnlock(_ text: String, why: String = resetHardHostDeny) thr
     #expect(allowOnceUnlockCode(in: hookUnlockNext(code: "a1b2c3")) == "a1b2c3")
 }
 
+@Test func allowOnceUnlockCode_isSixLowercaseHex() {
+    #expect(AllowOnceUnlockCode(validating: "abc") == nil)
+    #expect(AllowOnceUnlockCode(validating: "abcde") == nil)
+    #expect(AllowOnceUnlockCode(validating: "ABCDEF") == nil)
+    #expect(AllowOnceUnlockCode(validating: "a1b2c3")?.rawValue == "a1b2c3")
+    #expect(AllowOnceUnlockCode(validating: "000000")?.rawValue == "000000")
+    #expect(isAllowOnceUnlockCode("a1b2c3"))
+    #expect(isAllowOnceUnlockCode("abcde") == false)
+}
+
+@Test func hookVoiceNext_sentencesMatchExistingCopy() throws {
+    #expect(hookVoiceNextSentence(.none) == nil)
+    #expect(hookVoiceNextSentence(.ttyHint) == hookUnlockNext)
+    let code = try #require(AllowOnceUnlockCode(validating: "a1b2c3"))
+    #expect(hookVoiceNextSentence(.minted(code)) == hookUnlockNext(code: "a1b2c3"))
+    #expect(unlockHookVoiceNext("abcde") == .none)
+    #expect(unlockHookVoiceNext("abcde", fallback: .ttyHint) == .ttyHint)
+    #expect(unlockHookVoiceNext("a1b2c3") == .minted(code))
+}
+
 @Test func hostDenyLine_appendsUnlockWhenCodeIsMinted() throws {
     let command = resetHard
     let reason = "git reset --hard destroys uncommitted changes. Use 'git stash' first."

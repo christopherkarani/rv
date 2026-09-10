@@ -1,5 +1,7 @@
 import Foundation
 
+/// Last-inch host JSON. `rule` is slash display; `next` is a voice sentence.
+/// Callers format `RuleID` / `HookVoiceNext` before this door.
 func hookAskJSON(reason: String, rule: String? = nil, next: String? = nil) -> String {
     var body = "\"decision\":\"ask\",\"reason\":\(jsonQuoted(reason)),\"continuation\":\"hostNative\""
     if let rule, rule.isEmpty == false {
@@ -11,6 +13,7 @@ func hookAskJSON(reason: String, rule: String? = nil, next: String? = nil) -> St
     return "{\(body)}\n"
 }
 
+/// Last-inch host JSON. Keys stay `decision` / `reason` / `rule` / `next`.
 func hookDenyJSON(reason: String, rule: String? = nil, next: String? = nil) -> String {
     var body = "\"decision\":\"deny\",\"reason\":\(jsonQuoted(reason))"
     if let rule, rule.isEmpty == false {

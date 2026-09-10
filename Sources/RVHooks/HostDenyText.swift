@@ -11,6 +11,23 @@ public func isAllowOnceUnlockCode(_ code: String) -> Bool {
     }
 }
 
+/// Six lowercase hex characters minted for `rv allow-once`.
+public struct AllowOnceUnlockCode: Hashable, Sendable, Equatable {
+    public let rawValue: String
+
+    public init?(validating rawValue: String) {
+        guard isAllowOnceUnlockCode(rawValue) else { return nil }
+        self.rawValue = rawValue
+    }
+}
+
+/// Next-step on host deny/ask JSON. Prefer `.none` over `HookVoiceNext?`.
+public enum HookVoiceNext: Sendable, Equatable {
+    case none
+    case ttyHint
+    case minted(AllowOnceUnlockCode)
+}
+
 /// Unlock line with a minted code, or the no-code `hookUnlockNext` constant.
 /// Code goes first so truncated host cards still show the paste.
 public func hookUnlockNext(code: String?) -> String {
@@ -18,6 +35,24 @@ public func hookUnlockNext(code: String?) -> String {
         return "Paste in Terminal to allow once: rv allow-once \(code)."
     }
     return hookUnlockNext
+}
+
+func hookVoiceNextSentence(_ next: HookVoiceNext) -> String? {
+    switch next {
+    case .none:
+        return nil
+    case .ttyHint:
+        return hookUnlockNext
+    case .minted(let code):
+        return hookUnlockNext(code: code.rawValue)
+    }
+}
+
+func unlockHookVoiceNext(_ code: String?, fallback: HookVoiceNext = .none) -> HookVoiceNext {
+    if let code, let unlock = AllowOnceUnlockCode(validating: code) {
+        return .minted(unlock)
+    }
+    return fallback
 }
 
 /// First `rv allow-once <6hex>` in `text`, if present.
@@ -30,8 +65,7 @@ public func allowOnceUnlockCode(in text: String) -> String? {
 }
 
 func mintedUnlockNext(_ code: String?) -> String? {
-    guard let code, isAllowOnceUnlockCode(code) else { return nil }
-    return hookUnlockNext(code: code)
+    hookVoiceNextSentence(unlockHookVoiceNext(code))
 }
 
 /// Hook-voice deny sentence for a payload addressed to this host that could not

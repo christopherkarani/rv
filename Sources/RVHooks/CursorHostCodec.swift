@@ -56,7 +56,11 @@ public struct CursorHostCodec: HostCodec {
     /// Claude permission deny and Codex `decision: block` are not this wire.
     /// Defaults must live here so one-argument `encodeDeny(reason:)` does not
     /// bind the protocol-extension leftover `decision: deny`.
-    public func encodeDeny(reason: String, rule: String? = nil, next: String? = nil) -> HookWire {
+    public func encodeDeny(
+        reason: String,
+        rule: RuleID? = nil,
+        next: HookVoiceNext = .none
+    ) -> HookWire {
         HookWire(
             stdout: hookPermissionDenyJSON(reason: reason),
             exitCode: host.denyExitCode
@@ -64,7 +68,11 @@ public struct CursorHostCodec: HostCodec {
     }
 
     /// Cursor has no Ask. Leftover `permission: ask` is leftover-ask-as-permit.
-    public func encodeAsk(reason: String, rule: String? = nil, next: String? = nil) -> HookWire {
+    public func encodeAsk(
+        reason: String,
+        rule: RuleID? = nil,
+        next: HookVoiceNext = .none
+    ) -> HookWire {
         encodeDeny(reason: reason, rule: rule, next: next)
     }
 }
