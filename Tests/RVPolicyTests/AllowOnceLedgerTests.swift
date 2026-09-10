@@ -285,6 +285,32 @@ struct AllowOnceLedgerTests {
         #expect(AllowOnceLedger.keepConsumed(records: [consumed], now: Self.epoch).map(\.codeHash) == ["c"])
     }
 
+    @Test func plantAndConsumeAppendsGrantedThenSpends() {
+        let existing = Self.record(kind: .pending, hash: "p", expiresAt: Self.epoch.addingTimeInterval(60))
+        switch AllowOnceLedger.plantAndConsume(
+            records: [existing],
+            fingerprint: "fp",
+            redacted: "git …",
+            cwd: wd("/tmp/ws"),
+            now: Self.epoch,
+            ttl: 3600,
+            codeHash: "planted"
+        ) {
+        case let .consumed(tokenID, records):
+            #expect(tokenID == "planted")
+            #expect(records.map(\.codeHash) == ["p", "planted"])
+            #expect(records.last?.kind == .consumed)
+            #expect(records.last?.consumedAt == Self.epoch)
+            guard case .consumed(let at)? = records.last?.lifecycle else {
+                Issue.record("plant must finish consumed")
+                return
+            }
+            #expect(at == Self.epoch)
+        case .expired, .alreadyConsumed, .notFound:
+            Issue.record("plantAndConsume must spend the planted grant")
+        }
+    }
+
     @Test func keepConsumedRetainsOnlyFreshConsumedForClear() {
         let freshConsumed = Self.record(kind: .consumed, hash: "keep", expiresAt: Self.epoch.addingTimeInterval(30))
         let staleConsumed = Self.record(kind: .consumed, hash: "drop-old", expiresAt: Self.epoch.addingTimeInterval(-1))
@@ -305,17 +331,25 @@ private extension AllowOnceLedgerTests {
         expiresAt: Date,
         consumedAt: Date? = nil
     ) -> AllowOnceRecord {
-        AllowOnceRecord(
+        let lifecycle: AllowOnceLifecycle
+        switch kind {
+        case .pending:
+            lifecycle = .pending
+        case .granted:
+            lifecycle = .granted
+        case .consumed:
+            lifecycle = .consumed(at: consumedAt ?? createdAt)
+        }
+        return AllowOnceRecord(
             schemaVersion: 1,
-            kind: kind,
+            lifecycle: lifecycle,
             codeHash: hash,
             commandFingerprint: fingerprint,
             commandRedacted: "git …",
             cwd: wd("/tmp/ws"),
             ruleID: nil,
             createdAt: createdAt,
-            expiresAt: expiresAt,
-            consumedAt: consumedAt
+            expiresAt: expiresAt
         )
     }
 }

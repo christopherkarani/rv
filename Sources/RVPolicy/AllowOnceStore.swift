@@ -147,15 +147,14 @@ public actor AllowOnceStore {
     ) async throws {
         let record = AllowOnceRecord(
             schemaVersion: 1,
-            kind: .granted,
+            lifecycle: .granted,
             codeHash: sha256Hex(UUID().uuidString),
             commandFingerprint: commandFingerprint(matchingView),
             commandRedacted: redactCommand(matchingView),
             cwd: cwd,
             ruleID: nil,
             createdAt: now,
-            expiresAt: now.addingTimeInterval(ttl),
-            consumedAt: nil
+            expiresAt: now.addingTimeInterval(ttl)
         )
         try withFileLock {
             var records = loadRecords()
@@ -170,11 +169,11 @@ public actor AllowOnceStore {
         }
         let fingerprint = commandFingerprint(matchingView)
         let records = loadRecords()
-        return records.contains {
-            $0.kind == .granted
-                && $0.commandFingerprint == fingerprint
-                && $0.cwd == cwd
-                && $0.expiresAt >= now
+        return records.contains { record in
+            guard case .granted = record.lifecycle else { return false }
+            return record.commandFingerprint == fingerprint
+                && record.cwd == cwd
+                && record.expiresAt >= now
         }
     }
 
