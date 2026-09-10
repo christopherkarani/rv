@@ -39,7 +39,7 @@ struct ScanSessionsFlags: ParsableArguments {
     var includeGlobs: [String] = []
 
     var timeWindow: ScanTimeWindow {
-        scanAll ? .all : ScanTimeWindow(dayCount: days)
+        scanAll ? .all : .lastDays(days)
     }
 
     func resolvedPackIDs() throws -> [PackID] {
@@ -225,8 +225,7 @@ enum ScanRun {
                     rootPath: request.rootPath,
                     includeGlobs: request.includeGlobs,
                     hostFilter: request.hostFilter,
-                    days: request.timeWindow.dayCount,
-                    scanAll: request.timeWindow.isDisabled,
+                    timeWindow: request.timeWindow,
                     packIDs: request.packIDs,
                     allEvents: request.allEvents,
                     bounds: request.bounds

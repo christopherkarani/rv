@@ -51,6 +51,12 @@ private func resetHardFindings(
     #expect(rows.allSatisfy { $0.count == 1 })
 }
 
+@Test func timeWindow_defaultIsLastDaysSeven() {
+    #expect(ScanTimeWindow.defaultDayCount == 7)
+    #expect(ScanTimeWindow.default == .lastDays(7))
+    #expect(ScanTimeWindow.all != .lastDays(ScanTimeWindow.defaultDayCount))
+}
+
 @Test func timeWindow_defaultSevenDays_keepsOnlyRecentDeny() throws {
     let classify = try ScanClassify()
     let now = Date(timeIntervalSince1970: 1_800_000_000)
@@ -106,6 +112,11 @@ private func resetHardFindings(
 
     #expect(deduped.count == 1)
     #expect(deduped.first?.count == 2)
+
+    let droppedByDefault = ScanDedupe.apply(ScanTimeWindow.default.filter(raw, now: now))
+    #expect(droppedByDefault.count == 1)
+    #expect(droppedByDefault.first?.count == 1)
+    #expect(droppedByDefault.first?.sourcePath == "/tmp/recent.jsonl")
 }
 
 @Test func timeWindow_nilOccurredAt_usesInjectableFileMtime() throws {

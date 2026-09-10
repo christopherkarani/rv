@@ -68,15 +68,39 @@ import RVDomain
 @Test func sessionScanRequest_nowIsInjectedDate() throws {
     let home = try #require(ScanHome(validating: "/tmp/rv-scan-home"))
     let now = Date(timeIntervalSince1970: 1_777_000_000)
-    let request = SessionScanRequest(home: home, now: now, days: 7)
+    let request = SessionScanRequest(home: home, now: now, timeWindow: .lastDays(7))
     #expect(request.now == now)
-    #expect(request.days == 7)
-    #expect(request.scanAll == false)
+    #expect(request.timeWindow == .lastDays(7))
+    #expect(request.timeWindow == .default)
     #expect(request.includeGlobs.isEmpty)
     #expect(request.packIDs == dayOnePackIDs)
-    #expect(request.timeWindow == ScanTimeWindow(dayCount: 7))
     let boxed: any Sendable = request
     _ = boxed
+}
+
+@Test func sessionScanRequest_storesTimeWindowOnly() throws {
+    let home = try #require(ScanHome(validating: "/tmp/rv-scan-home"))
+    let request = SessionScanRequest(
+        home: home,
+        now: Date(timeIntervalSince1970: 1),
+        timeWindow: .all
+    )
+    let labels = Set(Mirror(reflecting: request).children.compactMap(\.label))
+    #expect(labels.contains("days") == false)
+    #expect(labels.contains("scanAll") == false)
+    #expect(labels.contains("timeWindow"))
+    #expect(request.timeWindow == .all)
+    #expect(labels == [
+        "home",
+        "now",
+        "rootPath",
+        "includeGlobs",
+        "hostFilter",
+        "timeWindow",
+        "packIDs",
+        "allEvents",
+        "bounds",
+    ])
 }
 
 @Test func sessionScanAdapters_matchScanRunHostOrder() {
@@ -143,7 +167,7 @@ import RVDomain
                     home: home,
                     now: now,
                     includeGlobs: ["**/*.jsonl"],
-                    scanAll: true
+                    timeWindow: .all
                 )
             )
         }
@@ -159,7 +183,7 @@ import RVDomain
         let home = try #require(ScanHome(validating: "/tmp/rv-scan-unused-home"))
         let now = Date(timeIntervalSince1970: 1_777_000_000)
         let skipped = try SessionScan().run(
-            SessionScanRequest(home: home, now: now, rootPath: root.path, scanAll: true)
+            SessionScanRequest(home: home, now: now, rootPath: root.path, timeWindow: .all)
         )
         #expect(skipped.report.findings.isEmpty)
         #expect(skipped.report.eventsExtracted == 0)
@@ -170,7 +194,7 @@ import RVDomain
                 now: now,
                 rootPath: root.path,
                 includeGlobs: ["*.txt"],
-                scanAll: true
+                timeWindow: .all
             )
         )
         #expect(result.report.findings.contains { $0.ruleID.rawValue == "core.git:reset-hard" })
@@ -187,7 +211,7 @@ import RVDomain
         let expected = db.standardizedFileURL.path
         #expect(throws: OpenCodeStoreError.unreadable(sourcePath: expected)) {
             try SessionScan().run(
-                SessionScanRequest(home: home, now: now, rootPath: root.path, scanAll: true)
+                SessionScanRequest(home: home, now: now, rootPath: root.path, timeWindow: .all)
             )
         }
     }
@@ -238,7 +262,7 @@ import RVDomain
         let home = try #require(ScanHome(validating: homeURL.path))
         let now = Date(timeIntervalSince1970: 1_777_000_000)
         let result = try SessionScan().run(
-            SessionScanRequest(home: home, now: now, scanAll: true)
+            SessionScanRequest(home: home, now: now, timeWindow: .all)
         )
         #expect(result.report.findings.count == 1)
         #expect(result.report.findings.first?.ruleID.rawValue == "core.git:reset-hard")
@@ -259,7 +283,7 @@ import RVDomain
         let home = try #require(ScanHome(validating: homeURL.path))
         let now = Date(timeIntervalSince1970: 1_777_000_000)
         let result = try SessionScan().run(
-            SessionScanRequest(home: home, now: now, scanAll: true)
+            SessionScanRequest(home: home, now: now, timeWindow: .all)
         )
 
         #expect(result.report.findings.count == 1)
@@ -274,7 +298,7 @@ import RVDomain
         let home = try #require(ScanHome(validating: homeURL.path))
         let now = Date(timeIntervalSince1970: 1_777_000_000)
         let result = try SessionScan().run(
-            SessionScanRequest(home: home, now: now, scanAll: true)
+            SessionScanRequest(home: home, now: now, timeWindow: .all)
         )
         #expect(result.report.findings.count == 1)
         #expect(result.report.findings.first?.ruleID.rawValue == "core.git:reset-hard")
@@ -288,7 +312,7 @@ import RVDomain
         let home = try #require(ScanHome(validating: homeURL.path))
         let now = Date(timeIntervalSince1970: 1_777_000_000)
         let result = try SessionScan().run(
-            SessionScanRequest(home: home, now: now, scanAll: true)
+            SessionScanRequest(home: home, now: now, timeWindow: .all)
         )
         #expect(result.report.findings.count == 1)
         #expect(result.report.findings.first?.ruleID.rawValue == "core.git:reset-hard")
@@ -303,7 +327,7 @@ import RVDomain
         let home = try #require(ScanHome(validating: homeURL.path))
         let now = Date(timeIntervalSince1970: 1_777_000_000)
         let result = try SessionScan().run(
-            SessionScanRequest(home: home, now: now, hostFilter: .codex, scanAll: true)
+            SessionScanRequest(home: home, now: now, hostFilter: .codex, timeWindow: .all)
         )
         #expect(result.report.findings.allSatisfy { $0.host == .codex })
         #expect(result.report.findings.contains { $0.ruleID.rawValue == "core.git:reset-hard" })
@@ -319,7 +343,7 @@ import RVDomain
         let home = try #require(ScanHome(validating: homeURL.path))
         let now = Date(timeIntervalSince1970: 1_777_000_000)
         let result = try SessionScan().run(
-            SessionScanRequest(home: home, now: now, hostFilter: .pi, scanAll: true)
+            SessionScanRequest(home: home, now: now, hostFilter: .pi, timeWindow: .all)
         )
 
         #expect(result.report.findings.allSatisfy { $0.host == .pi })
@@ -335,7 +359,7 @@ import RVDomain
         let home = try #require(ScanHome(validating: homeURL.path))
         let now = Date(timeIntervalSince1970: 1_777_000_000)
         let result = try SessionScan().run(
-            SessionScanRequest(home: home, now: now, scanAll: true)
+            SessionScanRequest(home: home, now: now, timeWindow: .all)
         )
         #expect(result.report.findings.isEmpty)
         #expect(result.report.eventsExtracted == 1)
@@ -353,7 +377,7 @@ import RVDomain
         let home = try #require(ScanHome(validating: "/tmp/rv-scan-unused-home"))
         let now = Date(timeIntervalSince1970: 1_777_000_000)
         let result = try SessionScan().run(
-            SessionScanRequest(home: home, now: now, rootPath: root.path, scanAll: true)
+            SessionScanRequest(home: home, now: now, rootPath: root.path, timeWindow: .all)
         )
         #expect(result.report.findings.count == 1)
         #expect(result.report.findings.first?.ruleID.rawValue == "core.git:reset-hard")
@@ -372,7 +396,7 @@ import RVDomain
         let home = try #require(ScanHome(validating: homeURL.path))
         let now = Date(timeIntervalSince1970: 1_777_000_000)
         let result = try SessionScan().run(
-            SessionScanRequest(home: home, now: now, scanAll: true)
+            SessionScanRequest(home: home, now: now, timeWindow: .all)
         )
         #expect(result.report.findings.count == 1)
         #expect(result.report.findings.first?.count == 2)
