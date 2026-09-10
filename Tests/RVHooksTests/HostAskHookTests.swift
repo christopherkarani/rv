@@ -201,13 +201,15 @@ func hookWire_firstCallAllowCannotSkipPolicyGate(_ host: HookHost) throws {
         ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
         reason: "x"
     )
-    let result = EvaluationResult(outcome: .deny(deny, matched: nil))
+    let result = EvaluationResult(
+        outcome: .deny(deny, matched: nil),
+        matchingView: MatchingView("git reset --hard")
+    )
     let wire = hookWire(
         from: result,
         command: ShellCommand(rawValue: "git reset --hard"),
         using: PiHostCodec(),
-        bound: .mandatoryHuman(deny),
-        afterSpend: true
+        phase: .postSpend
     )
     let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
     #expect(json["decision"] as? String == "deny")
@@ -584,7 +586,7 @@ func hookWire_firstCallAllowCannotSkipPolicyGate(_ host: HookHost) throws {
         from: EvaluationResult(outcome: .plain),
         command: ShellCommand(rawValue: "git reset --hard"),
         using: ClaudeHostCodec(),
-        afterSpend: true
+        phase: .postSpend
     )
     #expect(wire.stdout.isEmpty)
     #expect(wire.exitCode == 0)

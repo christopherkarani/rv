@@ -112,7 +112,12 @@ private func hookBody<C: HostCodec>(
                 return codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: nil)
             }
             let result = await spendHostAsk(request.command, request.cwd)
-            let wire = hookWire(from: result, command: request.command, using: codec, afterSpend: true)
+            let wire = hookWire(
+                from: result,
+                command: request.command,
+                using: codec,
+                phase: .postSpend
+            )
             if let clearHostAsk {
                 await ignoreHostAskFailure {
                     try await clearHostAsk(request, action)
@@ -140,9 +145,7 @@ private func hookBody<C: HostCodec>(
             from: result,
             command: request.command,
             using: codec,
-            bound: bound,
-            cwd: request.cwd,
-            unlockCode: unlockCode
+            phase: .firstCall(bound: bound, cwd: request.cwd, unlockCode: unlockCode)
         )
     case .foreign:
         return codec.encodeAllow()
