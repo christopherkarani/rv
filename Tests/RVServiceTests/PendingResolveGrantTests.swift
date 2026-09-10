@@ -132,7 +132,7 @@ struct PendingResolveGrantTests {
         let resolved = await env.runtime.dispatch(
             IPCRequest(method: .pendingResolve(env.resolveParams(created, decision: .allowOnce)))
         )
-        #expect(resolved.result == .error(.engine("pending allowOnce is not unlockable")))
+        #expect(resolved.result == .error(.pendingAllowOnceNotUnlockable))
         #expect(try await env.pending.list(now: now).map(\.id) == [created.id])
         #expect(try await env.grantedCount() == 0)
         let loaded = try await env.pending.load(id: created.id, now: now)
@@ -185,7 +185,7 @@ struct PendingResolveGrantTests {
                 )
             )
         )
-        #expect(resolve.result == .error(.engine("pending coordinator unavailable")))
+        #expect(resolve.result == .error(.pendingCoordinatorUnavailable))
         let grants = AllowOnceStore(baseDirectory: allowOnceDirectory)
         #expect(await grants.list(now: now).isEmpty)
     }

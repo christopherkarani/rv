@@ -123,13 +123,13 @@ struct PendingDispatchTests {
         let resolve = await runtime.dispatch(
             IPCRequest(method: .pendingResolve(resolveParams(wait, decision: .allowOnce)))
         )
-        #expect(resolve.result == .error(.engine("pending coordinator unavailable")))
+        #expect(resolve.result == .error(.pendingCoordinatorUnavailable))
         let listed = await runtime.dispatch(IPCRequest(method: .pendingList))
-        #expect(listed.result == .error(.engine("pending coordinator unavailable")))
+        #expect(listed.result == .error(.pendingCoordinatorUnavailable))
         let watch = await runtime.dispatch(
             IPCRequest(method: .pendingWatch(PendingWatchParams(afterGeneration: 0)))
         )
-        #expect(watch.result == .error(.engine("pending coordinator unavailable")))
+        #expect(watch.result == .error(.pendingCoordinatorUnavailable))
 
         let grants = AllowOnceStore(baseDirectory: allowOnceDirectory)
         #expect(await grants.list(now: now).isEmpty)

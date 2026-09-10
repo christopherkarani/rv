@@ -68,7 +68,7 @@ struct FakeXPCUnixSocketTests {
         #expect(decision?["decision"] as? String == "allow")
     }
 
-    @Test func allSevenMethodsRoundTripOnSocket() async throws {
+    @Test func remainingMethodsRoundTripOnSocket() async throws {
         let runtime = try isolatedRuntime()
         let path = "/tmp/rv-t3-\(UUID().uuidString).sock"
         let server = FakeXPCServer(runtime: runtime, path: path)
@@ -84,21 +84,16 @@ struct FakeXPCUnixSocketTests {
             methodJSON("classify", ["request": requestObject("git reset --hard")]),
             methodJSON("listPacks", [:] as [String: Any]),
             methodJSON("setPackEnabled", ["id": "core.git", "enabled": true]),
-            methodJSON("allowOnceConsume", ["command": "git status", "cwd": "/tmp/ws"]),
             methodJSON("doctorSnapshot", [:] as [String: Any]),
         ]
         let keys = [
             "evaluate", "explain", "classify", "listPacks",
-            "setPackEnabled", "allowOnceConsume", "doctorSnapshot",
+            "setPackEnabled", "doctorSnapshot",
         ]
         for (request, key) in zip(requests, keys) {
             let reply = try client.sendJSON(request)
             let result = try #require(reply["result"] as? [String: Any])
-            if key == "allowOnceConsume" {
-                #expect(result["error"] != nil || result["allowOnceConsume"] != nil)
-            } else {
-                #expect(result[key] != nil, "missing result key \(key)")
-            }
+            #expect(result[key] != nil, "missing result key \(key)")
         }
     }
 
@@ -151,13 +146,14 @@ struct FakeXPCUnixSocketTests {
         let first = try client.sendJSON(
             methodJSON("allowOnceConsume", ["command": "git reset --hard", "cwd": "/tmp/ws"])
         )
-        #expect(nested(first, ["result", "error"])?["unknownMethod"] as? Bool == true)
+        #expect(nested(first, ["result", "error"])?["decodeFailed"] as? Bool == true)
         #expect(nested(first, ["result", "allowOnceConsume"]) == nil)
 
         let second = try client.sendJSON(
             methodJSON("allowOnceConsume", ["command": "git reset --hard", "cwd": "/tmp/ws"])
         )
-        #expect(nested(second, ["result", "error"])?["unknownMethod"] as? Bool == true)
+        #expect(nested(second, ["result", "error"])?["decodeFailed"] as? Bool == true)
+        #expect(nested(second, ["result", "allowOnceConsume"]) == nil)
 
         let honored = try client.sendJSON(evaluateJSON("git reset --hard", cwd: wd("/tmp/ws")))
         let firstDecision = nested(honored, ["result", "evaluate", "result", "decision"])
