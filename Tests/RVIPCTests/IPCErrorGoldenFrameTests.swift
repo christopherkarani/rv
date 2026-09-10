@@ -57,4 +57,25 @@ struct IPCErrorGoldenFrameTests {
             #expect(try IPCJSON.decode(IPCError.self, from: encoded) == error)
         }
     }
+
+    @Test(arguments: [
+        (IPCError.hookEvaluateFailed, "hook evaluate failed"),
+        (IPCError.packEnableFailed, "pack enable failed"),
+        (IPCError.rulePinRequiresMatchingView, "rule pin requires a matching view"),
+        (IPCError.pendingAllowOnceNotUnlockable, "pending allowOnce is not unlockable"),
+        (IPCError.pendingCoordinatorUnavailable, "pending coordinator unavailable"),
+    ])
+    func namedEngineErrorsEncodeFrozenSentences(_ error: IPCError, _ sentence: String) throws {
+        let encoded = try IPCJSON.encode(error)
+        #expect(String(data: encoded, encoding: .utf8) == #"{"engine":"\#(sentence)"}"#)
+        #expect(try IPCJSON.decode(IPCError.self, from: encoded) == error)
+        #expect(try IPCJSON.decode(IPCError.self, from: Data("{\"engine\":\"\(sentence)\"}".utf8)) == error)
+    }
+
+    @Test func unknownEngineStringRemainsLeftoverEngine() throws {
+        let data = Data(#"{"engine":"something the service never owned"}"#.utf8)
+        #expect(try IPCJSON.decode(IPCError.self, from: data) == .engine("something the service never owned"))
+        let encoded = try IPCJSON.encode(IPCError.engine("something the service never owned"))
+        #expect(String(data: encoded, encoding: .utf8) == #"{"engine":"something the service never owned"}"#)
+    }
 }

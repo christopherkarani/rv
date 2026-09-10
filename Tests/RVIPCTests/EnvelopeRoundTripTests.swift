@@ -201,7 +201,7 @@ struct EnvelopeRoundTripTests {
         let reply = ExplainReply(
             result: leftover,
             normalized: "git reset --hard",
-            stages: [ExplainStage(name: "normalize", elapsedMs: 0)]
+            stages: [ExplainStage(name: .normalize, elapsedMs: 0)]
         )
         #expect(reply.ruleID == HostNativeAsk.leftoverAskDeny.ruleID)
         #expect(reply.packID == HostNativeAsk.leftoverAskDeny.ruleID.pack)
@@ -214,7 +214,7 @@ struct EnvelopeRoundTripTests {
             result: leftover,
             normalized: "git reset --hard",
             suggestion: "Run it in Terminal, or rv allow-once.",
-            stages: [ExplainStage(name: "normalize", elapsedMs: 0)]
+            stages: [ExplainStage(name: .normalize, elapsedMs: 0)]
         )
         var object = try #require(
             JSONSerialization.jsonObject(with: try IPCJSON.encode(honest)) as? [String: Any]
@@ -295,6 +295,51 @@ struct EnvelopeRoundTripTests {
         #expect(try IPCJSON.decode(ExplainParams.self, from: emptied).cwd == nil)
         #expect(try IPCJSON.decode(ClassifyParams.self, from: emptied).cwd == nil)
     }
+
+    @Test func explainStageNameEncodesKebabRawValue() throws {
+        let cases: [(ExplainStep.ID, String)] = [
+            (.normalize, "normalize"),
+            (.quickReject, "quick-reject"),
+            (.safe, "safe"),
+            (.destructive, "destructive"),
+            (.default, "default"),
+        ]
+        for (id, wire) in cases {
+            let stage = ExplainStage(name: id, elapsedMs: 0)
+            let encoded = try IPCJSON.encode(stage)
+            #expect(String(data: encoded, encoding: .utf8) == #"{"elapsedMs":0,"name":"\#(wire)"}"#)
+            #expect(try IPCJSON.decode(ExplainStage.self, from: encoded) == stage)
+        }
+    }
+
+    @Test func explainStageUnknownNameThrows() throws {
+        let data = Data(#"{"elapsedMs":0,"name":"quickReject"}"#.utf8)
+        #expect(throws: DecodingError.self) {
+            try IPCJSON.decode(ExplainStage.self, from: data)
+        }
+    }
+
+    @Test func allowOnceConsumeMethodKeyFailsDecode() throws {
+        let data = try JSONSerialization.data(withJSONObject: [
+            "id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            "protocol": ProtocolVersion.name,
+            "method": ["allowOnceConsume": ["command": "git reset --hard", "cwd": "/tmp/ws"]],
+        ])
+        #expect(throws: DecodingError.self) {
+            try IPCJSON.decode(IPCRequest.self, from: data)
+        }
+    }
+
+    @Test func allowOnceConsumeResultKeyFailsDecode() throws {
+        let data = try JSONSerialization.data(withJSONObject: [
+            "id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            "protocol": ProtocolVersion.name,
+            "result": ["allowOnceConsume": ["consumed": true, "tokenID": "tok-1"]],
+        ])
+        #expect(throws: DecodingError.self) {
+            try IPCJSON.decode(IPCResponse.self, from: data)
+        }
+    }
 }
 
 private func leftoverDenyResult() -> EvaluationResult {
@@ -329,11 +374,6 @@ extension IPCMethod {
                 key: "setPackEnabled",
                 id: id,
                 method: .setPackEnabled(SetPackEnabledParams(id: .coreGit, enabled: true))
-            ),
-            NamedMethod(
-                key: "allowOnceConsume",
-                id: id,
-                method: .allowOnceConsume(AllowOnceConsumeParams(command: "git reset --hard", cwd: "/tmp/ws"))
             ),
             NamedMethod(key: "doctorSnapshot", id: id, method: .doctorSnapshot),
             NamedMethod(key: "pendingList", id: id, method: .pendingList),
@@ -398,7 +438,7 @@ extension IPCResult {
                         result: deny,
                         normalized: "git reset --hard",
                         suggestion: "Run it in Terminal, or rv allow-once.",
-                        stages: [ExplainStage(name: "normalize", elapsedMs: 0.1)]
+                        stages: [ExplainStage(name: .normalize, elapsedMs: 0.1)]
                     )
                 )
             ),
@@ -426,11 +466,6 @@ extension IPCResult {
                 result: .setPackEnabled(
                     SetPackEnabledReply(pack: PackRecord(id: .coreGit, enabled: false, bundled: true))
                 )
-            ),
-            NamedResult(
-                key: "allowOnceConsume",
-                id: id,
-                result: .allowOnceConsume(AllowOnceConsumeReply(consumed: true, tokenID: "tok-1"))
             ),
             NamedResult(
                 key: "doctorSnapshot",

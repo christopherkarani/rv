@@ -198,12 +198,37 @@ public struct ExplainParams: Sendable, Equatable, Codable {
 }
 
 public struct ExplainStage: Sendable, Equatable, Codable {
-    public var name: String
+    public var name: ExplainStep.ID
     public var elapsedMs: Double
 
-    public init(name: String, elapsedMs: Double) {
+    public init(name: ExplainStep.ID, elapsedMs: Double) {
         self.name = name
         self.elapsedMs = elapsedMs
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case elapsedMs
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let raw = try container.decode(String.self, forKey: .name)
+        guard let name = ExplainStep.ID(rawValue: raw) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .name,
+                in: container,
+                debugDescription: "unknown ExplainStage name \(raw)"
+            )
+        }
+        self.name = name
+        elapsedMs = try container.decode(Double.self, forKey: .elapsedMs)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(name.rawValue, forKey: .name)
+        try container.encode(elapsedMs, forKey: .elapsedMs)
     }
 }
 
@@ -447,26 +472,6 @@ public struct SetPackEnabledReply: Sendable, Equatable, Codable {
 
     public init(pack: PackRecord) {
         self.pack = pack
-    }
-}
-
-public struct AllowOnceConsumeParams: Sendable, Equatable, Codable {
-    public var command: String
-    public var cwd: String
-
-    public init(command: String, cwd: String) {
-        self.command = command
-        self.cwd = cwd
-    }
-}
-
-public struct AllowOnceConsumeReply: Sendable, Equatable, Codable {
-    public var consumed: Bool
-    public var tokenID: String?
-
-    public init(consumed: Bool, tokenID: String? = nil) {
-        self.consumed = consumed
-        self.tokenID = tokenID
     }
 }
 
@@ -768,7 +773,6 @@ public enum IPCMethod: Sendable, Equatable {
     case classify(ClassifyParams)
     case listPacks
     case setPackEnabled(SetPackEnabledParams)
-    case allowOnceConsume(AllowOnceConsumeParams)
     case doctorSnapshot
     case pendingList
     case pendingWatch(PendingWatchParams)
@@ -784,7 +788,6 @@ public enum IPCResult: Sendable, Equatable {
     case classify(ClassifyReply)
     case listPacks(ListPacksReply)
     case setPackEnabled(SetPackEnabledReply)
-    case allowOnceConsume(AllowOnceConsumeReply)
     case doctorSnapshot(DoctorSnapshotReply)
     case pendingList(PendingListReply)
     case pendingWatch(PendingWatchReply)
@@ -802,7 +805,6 @@ extension IPCMethod: Codable {
         case classify
         case listPacks
         case setPackEnabled
-        case allowOnceConsume
         case doctorSnapshot
         case pendingList
         case pendingWatch
@@ -826,8 +828,6 @@ extension IPCMethod: Codable {
             try container.encode(EmptyPayload(), forKey: .listPacks)
         case .setPackEnabled(let params):
             try container.encode(params, forKey: .setPackEnabled)
-        case .allowOnceConsume(let params):
-            try container.encode(params, forKey: .allowOnceConsume)
         case .doctorSnapshot:
             try container.encode(EmptyPayload(), forKey: .doctorSnapshot)
         case .pendingList:
@@ -857,8 +857,6 @@ extension IPCMethod: Codable {
             self = .listPacks
         } else if let params = try container.decodeIfPresent(SetPackEnabledParams.self, forKey: .setPackEnabled) {
             self = .setPackEnabled(params)
-        } else if let params = try container.decodeIfPresent(AllowOnceConsumeParams.self, forKey: .allowOnceConsume) {
-            self = .allowOnceConsume(params)
         } else if container.contains(.doctorSnapshot) {
             self = .doctorSnapshot
         } else if container.contains(.pendingList) {
@@ -887,7 +885,6 @@ extension IPCResult: Codable {
         case classify
         case listPacks
         case setPackEnabled
-        case allowOnceConsume
         case doctorSnapshot
         case pendingList
         case pendingWatch
@@ -912,8 +909,6 @@ extension IPCResult: Codable {
             try container.encode(reply, forKey: .listPacks)
         case .setPackEnabled(let reply):
             try container.encode(reply, forKey: .setPackEnabled)
-        case .allowOnceConsume(let reply):
-            try container.encode(reply, forKey: .allowOnceConsume)
         case .doctorSnapshot(let reply):
             try container.encode(reply, forKey: .doctorSnapshot)
         case .pendingList(let reply):
@@ -945,8 +940,6 @@ extension IPCResult: Codable {
             self = .listPacks(reply)
         } else if let reply = try container.decodeIfPresent(SetPackEnabledReply.self, forKey: .setPackEnabled) {
             self = .setPackEnabled(reply)
-        } else if let reply = try container.decodeIfPresent(AllowOnceConsumeReply.self, forKey: .allowOnceConsume) {
-            self = .allowOnceConsume(reply)
         } else if let reply = try container.decodeIfPresent(DoctorSnapshotReply.self, forKey: .doctorSnapshot) {
             self = .doctorSnapshot(reply)
         } else if let reply = try container.decodeIfPresent(PendingListReply.self, forKey: .pendingList) {

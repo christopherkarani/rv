@@ -135,7 +135,13 @@ public enum IPCError: Error, Sendable, Equatable, Codable {
     case unknownMethod
     case decodeFailed
     case protocolSkew(SkewReason)
+    /// Leftover unknown engine sentence from old frames. Production never constructs this.
     case engine(String)
+    case hookEvaluateFailed
+    case packEnableFailed
+    case rulePinRequiresMatchingView
+    case pendingAllowOnceNotUnlockable
+    case pendingCoordinatorUnavailable
     case packNotFound(PackID)
     case allowOnceNotFound
     case allowOnceAlreadyConsumed
@@ -164,6 +170,14 @@ public enum IPCError: Error, Sendable, Equatable, Codable {
         case ruleHardStop
     }
 
+    private enum EngineSentence: String {
+        case hookEvaluateFailed = "hook evaluate failed"
+        case packEnableFailed = "pack enable failed"
+        case rulePinRequiresMatchingView = "rule pin requires a matching view"
+        case pendingAllowOnceNotUnlockable = "pending allowOnce is not unlockable"
+        case pendingCoordinatorUnavailable = "pending coordinator unavailable"
+    }
+
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
@@ -175,6 +189,16 @@ public enum IPCError: Error, Sendable, Equatable, Codable {
             try container.encode(reason, forKey: .protocolSkew)
         case .engine(let message):
             try container.encode(message, forKey: .engine)
+        case .hookEvaluateFailed:
+            try container.encode(EngineSentence.hookEvaluateFailed.rawValue, forKey: .engine)
+        case .packEnableFailed:
+            try container.encode(EngineSentence.packEnableFailed.rawValue, forKey: .engine)
+        case .rulePinRequiresMatchingView:
+            try container.encode(EngineSentence.rulePinRequiresMatchingView.rawValue, forKey: .engine)
+        case .pendingAllowOnceNotUnlockable:
+            try container.encode(EngineSentence.pendingAllowOnceNotUnlockable.rawValue, forKey: .engine)
+        case .pendingCoordinatorUnavailable:
+            try container.encode(EngineSentence.pendingCoordinatorUnavailable.rawValue, forKey: .engine)
         case .packNotFound(let id):
             try container.encode(id, forKey: .packNotFound)
         case .allowOnceNotFound:
@@ -207,7 +231,7 @@ public enum IPCError: Error, Sendable, Equatable, Codable {
         } else if let reason = try container.decodeIfPresent(SkewReason.self, forKey: .protocolSkew) {
             self = .protocolSkew(reason)
         } else if let message = try container.decodeIfPresent(String.self, forKey: .engine) {
-            self = .engine(message)
+            self = Self.fromEngineMessage(message)
         } else if let id = try container.decodeIfPresent(PackID.self, forKey: .packNotFound) {
             self = .packNotFound(id)
         } else if container.contains(.allowOnceNotFound) {
@@ -232,6 +256,23 @@ public enum IPCError: Error, Sendable, Equatable, Codable {
             throw DecodingError.dataCorrupted(
                 .init(codingPath: decoder.codingPath, debugDescription: "unknown IPCError")
             )
+        }
+    }
+
+    private static func fromEngineMessage(_ message: String) -> IPCError {
+        switch EngineSentence(rawValue: message) {
+        case .hookEvaluateFailed:
+            return .hookEvaluateFailed
+        case .packEnableFailed:
+            return .packEnableFailed
+        case .rulePinRequiresMatchingView:
+            return .rulePinRequiresMatchingView
+        case .pendingAllowOnceNotUnlockable:
+            return .pendingAllowOnceNotUnlockable
+        case .pendingCoordinatorUnavailable:
+            return .pendingCoordinatorUnavailable
+        case nil:
+            return .engine(message)
         }
     }
 }

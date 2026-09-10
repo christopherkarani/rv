@@ -10,7 +10,7 @@ public enum PendingApprovalsBinding: Sendable {
 
 enum PendingListProjection {
     static let missingFolder = "."
-    static let coordinatorUnavailable = IPCError.engine("pending coordinator unavailable")
+    static let coordinatorUnavailable = IPCError.pendingCoordinatorUnavailable
 
     static func items(from records: [PendingApproval]) -> [PendingListItem] {
         let ordered = records.sorted { lhs, rhs in

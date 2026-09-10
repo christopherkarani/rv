@@ -26,7 +26,7 @@ struct ExplainDispatchTests {
             Issue.record("explain must reply")
             return
         }
-        #expect(reply.stages.map(\.name) == [
+        #expect(reply.stages.map(\.name.rawValue) == [
             "normalize", "quick-reject", "safe", "destructive",
         ])
         #expect(reply.stages.allSatisfy { $0.elapsedMs == 0 })
@@ -62,7 +62,7 @@ struct ExplainDispatchTests {
             Issue.record("explain must reply")
             return
         }
-        #expect(reply.stages.map(\.name) == [
+        #expect(reply.stages.map(\.name.rawValue) == [
             "normalize", "quick-reject", "default",
         ])
         #expect(reply.stages.allSatisfy { $0.elapsedMs == 0 })

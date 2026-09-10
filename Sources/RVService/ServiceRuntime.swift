@@ -187,7 +187,7 @@ public actor ServiceRuntime {
             return params.clientSemver
         case .hookEvaluate(let params):
             return params.clientSemver
-        case .explain, .classify, .listPacks, .setPackEnabled, .allowOnceConsume, .doctorSnapshot,
+        case .explain, .classify, .listPacks, .setPackEnabled, .doctorSnapshot,
             .pendingList, .pendingWatch, .pendingResolve, .rulePreview, .ruleSave:
             return nil
         }
@@ -220,8 +220,6 @@ public actor ServiceRuntime {
             result = .listPacks(listPacks())
         case .setPackEnabled(let params):
             result = setPackEnabled(params)
-        case .allowOnceConsume:
-            result = .error(.unknownMethod)
         case .doctorSnapshot:
             result = .doctorSnapshot(doctorSnapshot())
         case .pendingList:
@@ -292,7 +290,7 @@ public actor ServiceRuntime {
         } catch let error as IPCError {
             return .error(error)
         } catch {
-            return .error(.engine("hook evaluate failed"))
+            return .error(.hookEvaluateFailed)
         }
     }
 
@@ -384,7 +382,7 @@ public actor ServiceRuntime {
         )
         let normalized = result.matchingView.rawValue
         let stages = explainSteps(from: result).map {
-            ExplainStage(name: $0.id.rawValue, elapsedMs: 0)
+            ExplainStage(name: $0.id, elapsedMs: 0)
         }
         let suggestion: String?
         switch result.decision {
@@ -432,7 +430,7 @@ public actor ServiceRuntime {
 
     private func setPackEnabled(_ params: SetPackEnabledParams) -> IPCResult {
         guard let configHome else {
-            return .error(.engine("pack enable failed"))
+            return .error(.packEnableFailed)
         }
         do {
             if params.enabled {
@@ -461,7 +459,7 @@ public actor ServiceRuntime {
         } catch PacksCommandError.unknownID {
             return .error(.packNotFound(params.id))
         } catch {
-            return .error(.engine("pack enable failed"))
+            return .error(.packEnableFailed)
         }
     }
 
@@ -580,7 +578,7 @@ public actor ServiceRuntime {
             case .hardStop:
                 return .error(.ruleHardStop)
             case .missingMatchingView:
-                return .error(.engine("rule pin requires a matching view"))
+                return .error(.rulePinRequiresMatchingView)
             }
         } catch {
             return .error(PendingListProjection.ipcError(from: error))
@@ -643,12 +641,12 @@ public actor ServiceRuntime {
         }
         let cwd = record.action.scope.workingDirectory
         guard let command = record.action.supportingCommand else {
-            return .error(.engine("pending allowOnce is not unlockable"))
+            return .error(.pendingAllowOnceNotUnlockable)
         }
         let peeked = await peekPendingCommand(command, cwd: cwd, now: now)
         switch PendingAllowOncePlanner.plan(peek: peeked, cwd: cwd) {
         case .refuse:
-            return .error(.engine("pending allowOnce is not unlockable"))
+            return .error(.pendingAllowOnceNotUnlockable)
         case .resolveWithoutGrant:
             return await resolvePendingDecision(
                 params,
@@ -679,7 +677,7 @@ public actor ServiceRuntime {
                     identity: params.identity,
                     now: now
                 )
-                return .error(.engine("pending allowOnce is not unlockable"))
+                return .error(.pendingAllowOnceNotUnlockable)
             }
             do {
                 _ = try await store.consume(
@@ -779,8 +777,6 @@ public actor ServiceRuntime {
             method = "listPacks"
         case .setPackEnabled:
             method = "setPackEnabled"
-        case .allowOnceConsume:
-            method = "allowOnce.consume"
         case .doctorSnapshot:
             method = "doctorSnapshot"
         case .pendingList:
