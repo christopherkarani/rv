@@ -253,6 +253,28 @@ struct AllowOnceStoreTests {
         #expect(store.baseDirectory.path.contains("rv-allow-once-nohome") == false)
     }
 
+    @Test func plantAndConsumeSpendsThisTurnAndListsConsumed() async throws {
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let first = await store.plantAndConsume(
+            matchingView: "git reset --hard",
+            cwd: wd("/tmp/ws"),
+            now: now
+        )
+        guard case .consumed = first else {
+            Issue.record("plantAndConsume should spend this turn")
+            return
+        }
+        let second = await store.consume(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
+        #expect(second == .alreadyConsumed)
+        let rows = await store.list(now: now)
+        #expect(rows.contains { $0.kind == .consumed })
+        let disk = try String(contentsOf: jsonl(store), encoding: .utf8)
+        #expect(disk.contains("\"kind\":\"consumed\""))
+        #expect(disk.contains("consumed_at"))
+        #expect(disk.contains("git reset --hard") == false)
+    }
+
     @Test func mintFromDeny_nonTTYStillWritesPending() async throws {
         let store = try isolatedStore()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
@@ -273,6 +295,7 @@ struct AllowOnceStoreTests {
         let disk = try String(contentsOf: jsonl(store), encoding: .utf8)
         #expect(disk.contains(minted) == false)
         #expect(disk.contains("\"kind\":\"pending\""))
+        #expect(disk.contains("consumed_at") == false)
     }
 
     @Test func mintFromDeny_emptyMatchingViewIsNil() async throws {

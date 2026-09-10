@@ -24,24 +24,31 @@ enum AllowOnceLedger {
         now: Date,
         ttl: TimeInterval
     ) throws(AllowOnceError) -> [AllowOnceRecord] {
-        var updated = records.filter { $0.expiresAt >= now || $0.kind == .consumed }
-        if updated.contains(where: {
-            $0.kind == .pending && $0.codeHash == codeHash && $0.expiresAt >= now
+        var updated = records.filter { record in
+            switch record.lifecycle {
+            case .consumed:
+                return true
+            case .pending, .granted:
+                return record.expiresAt >= now
+            }
+        }
+        if updated.contains(where: { record in
+            guard case .pending = record.lifecycle else { return false }
+            return record.codeHash == codeHash && record.expiresAt >= now
         }) {
             throw AllowOnceError.collision
         }
         updated.append(
             AllowOnceRecord(
                 schemaVersion: 1,
-                kind: .pending,
+                lifecycle: .pending,
                 codeHash: codeHash,
                 commandFingerprint: fingerprint,
                 commandRedacted: redacted,
                 cwd: cwd,
                 ruleID: ruleID,
                 createdAt: now,
-                expiresAt: now.addingTimeInterval(ttl),
-                consumedAt: nil
+                expiresAt: now.addingTimeInterval(ttl)
             )
         )
         return updated
@@ -52,11 +59,17 @@ enum AllowOnceLedger {
         codeHash: String,
         now: Date
     ) throws(AllowOnceError) -> RedeemOutcome {
-        guard let index = records.firstIndex(where: {
-            $0.kind == .pending && $0.codeHash == codeHash
+        guard let index = records.firstIndex(where: { record in
+            guard case .pending = record.lifecycle else { return false }
+            return record.codeHash == codeHash
         }) else {
-            if records.contains(where: {
-                ($0.kind == .granted || $0.kind == .consumed) && $0.codeHash == codeHash
+            if records.contains(where: { record in
+                switch record.lifecycle {
+                case .granted, .consumed:
+                    return record.codeHash == codeHash
+                case .pending:
+                    return false
+                }
             }) {
                 throw AllowOnceError.alreadySpent
             }
@@ -68,11 +81,16 @@ enum AllowOnceLedger {
             updated.remove(at: index)
             return .expired(records: updated)
         }
-        pending.kind = .granted
+        pending.lifecycle = .granted
         var updated = records
         updated[index] = pending
-        updated.removeAll {
-            ($0.kind == .pending || $0.kind == .granted) && $0.expiresAt < now
+        updated.removeAll { record in
+            switch record.lifecycle {
+            case .pending, .granted:
+                return record.expiresAt < now
+            case .consumed:
+                return false
+            }
         }
         return .granted(records: updated, row: row(pending))
     }
@@ -86,26 +104,36 @@ enum AllowOnceLedger {
         let related = records.indices.filter {
             records[$0].commandFingerprint == fingerprint && records[$0].cwd == cwd
         }
-        if let index = related.first(where: {
-            records[$0].kind == .granted && records[$0].expiresAt >= now
+        if let index = related.first(where: { i in
+            guard case .granted = records[i].lifecycle else { return false }
+            return records[i].expiresAt >= now
         }) {
             var granted = records[index]
-            granted.kind = .consumed
-            granted.consumedAt = now
+            granted.lifecycle = .consumed(at: now)
             var updated = records
             updated[index] = granted
-            updated.removeAll { $0.kind == .granted && $0.expiresAt < now }
+            updated.removeAll { record in
+                guard case .granted = record.lifecycle else { return false }
+                return record.expiresAt < now
+            }
             return .consumed(tokenID: granted.codeHash, records: updated)
         }
-        let hadExpiredGrant = related.contains {
-            records[$0].kind == .granted && records[$0].expiresAt < now
+        let hadExpiredGrant = related.contains { i in
+            guard case .granted = records[i].lifecycle else { return false }
+            return records[i].expiresAt < now
         }
         if hadExpiredGrant {
             var updated = records
-            updated.removeAll { $0.kind == .granted && $0.expiresAt < now }
+            updated.removeAll { record in
+                guard case .granted = record.lifecycle else { return false }
+                return record.expiresAt < now
+            }
             return .expired(updated)
         }
-        if related.contains(where: { records[$0].kind == .consumed }) {
+        if related.contains(where: { i in
+            if case .consumed = records[i].lifecycle { return true }
+            return false
+        }) {
             return .alreadyConsumed
         }
         return .notFound
@@ -125,15 +153,14 @@ enum AllowOnceLedger {
         updated.append(
             AllowOnceRecord(
                 schemaVersion: 1,
-                kind: .granted,
+                lifecycle: .granted,
                 codeHash: codeHash,
                 commandFingerprint: fingerprint,
                 commandRedacted: redacted,
                 cwd: cwd,
                 ruleID: nil,
                 createdAt: now,
-                expiresAt: now.addingTimeInterval(ttl),
-                consumedAt: nil
+                expiresAt: now.addingTimeInterval(ttl)
             )
         )
         return consume(records: updated, fingerprint: fingerprint, cwd: cwd, now: now)
@@ -141,14 +168,20 @@ enum AllowOnceLedger {
 
     static func rows(records: [AllowOnceRecord], now: Date) -> [AllowOnceListRow] {
         records.compactMap { record in
-            guard record.expiresAt >= now || record.kind == .consumed else { return nil }
+            switch record.lifecycle {
+            case .consumed:
+                break
+            case .pending, .granted:
+                guard record.expiresAt >= now else { return nil }
+            }
             return row(record)
         }
     }
 
     static func keepConsumed(records: [AllowOnceRecord], now: Date) -> [AllowOnceRecord] {
         records.filter { record in
-            record.kind == .consumed && record.expiresAt >= now
+            guard case .consumed = record.lifecycle else { return false }
+            return record.expiresAt >= now
         }
     }
 
