@@ -112,7 +112,12 @@ private func hookBody<C: HostCodec>(
                 return codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: nil)
             }
             let result = await spendHostAsk(request.command, request.cwd)
-            let wire = hookWire(from: result, command: request.command, using: codec, afterSpend: true)
+            let wire = hookWire(
+                from: result,
+                command: request.command,
+                using: codec,
+                intent: .afterSpend
+            )
             if let clearHostAsk {
                 await ignoreHostAskFailure {
                     try await clearHostAsk(request, action)
@@ -121,40 +126,29 @@ private func hookBody<C: HostCodec>(
             return wire
         }
         let result = await evaluate(request.command, request.cwd)
-        let bound: BoundReview
-        let wireResult: EvaluationResult
-        if let live = LiveEvaluation(result) {
-            bound = live.bound
-            wireResult = live.wire
-        } else {
-            bound = HostNativeAsk.hookBound(
-                result: result,
-                action: action,
-                context: ReviewContext(repository: RepositoryReviewContext())
-            )
-            wireResult = result
-        }
-        let unlockCode = await mintUnlockCodeIfNeeded(
+        let bound = BoundReview.packProjected(from: result)
+        let verdict = HostNativeAsk.verdict(
             host: codec.host,
             result: result,
-            bound: bound,
+            cwd: request.cwd,
+            bound: bound
+        )
+        let unlockCode = await mintUnlockCodeIfNeeded(
+            result: result,
+            verdict: verdict,
             cwd: request.cwd,
             mintOnDeny: mintOnDeny
         )
-        if let recordHostAsk,
-           encodesHostAsk(host: codec.host, result: wireResult, bound: bound, cwd: request.cwd)
-        {
+        if let recordHostAsk, encodesHostAsk(result: result, verdict: verdict) {
             await ignoreHostAskFailure {
                 try await recordHostAsk(request, action)
             }
         }
         return hookWire(
-            from: wireResult,
+            from: result,
             command: request.command,
             using: codec,
-            bound: bound,
-            cwd: request.cwd,
-            unlockCode: unlockCode
+            intent: .firstCall(verdict: verdict, unlockCode: unlockCode)
         )
     case .foreign:
         return codec.encodeAllow()
@@ -165,17 +159,12 @@ private func hookBody<C: HostCodec>(
 
 /// Matches `encodeAsked`: Ask JSON only for allow/deny results whose product
 /// verdict is `.ask`. Indeterminate stays deny and must not create a wait.
-private func encodesHostAsk(
-    host: HookHost,
-    result: EvaluationResult,
-    bound: BoundReview,
-    cwd: WorkingDirectory?
-) -> Bool {
+private func encodesHostAsk(result: EvaluationResult, verdict: HostAskVerdict) -> Bool {
     switch result.decision {
     case .indeterminate:
         return false
     case .allow, .deny:
-        switch HostNativeAsk.verdict(host: host, result: result, cwd: cwd, bound: bound) {
+        switch verdict {
         case .ask:
             return true
         case .allow, .deny:
@@ -193,15 +182,14 @@ private func ignoreHostAskFailure(_ body: () async throws -> Void) async {
 }
 
 private func mintUnlockCodeIfNeeded(
-    host: HookHost,
     result: EvaluationResult,
-    bound: BoundReview,
+    verdict: HostAskVerdict,
     cwd: WorkingDirectory?,
     mintOnDeny: (@Sendable (EvaluationResult, WorkingDirectory?) async -> String?)?
 ) async -> String? {
     guard let mintOnDeny else { return nil }
     guard case .deny = result.decision else { return nil }
-    switch HostNativeAsk.verdict(host: host, result: result, cwd: cwd, bound: bound) {
+    switch verdict {
     case .ask:
         return nil
     case .allow, .deny:

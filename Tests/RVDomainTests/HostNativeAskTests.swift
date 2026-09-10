@@ -347,6 +347,41 @@ struct HostNativeAskTests {
         )
     }
 
+    @Test func packProjected_usesBoundReviewWhenPresent() {
+        #expect(
+            BoundReview.packProjected(
+                from: EvaluationResult(
+                    outcome: .plain,
+                    matchingView: MatchingView("git push --force origin topic"),
+                    analysis: .unknown,
+                    boundReview: .mandatoryHuman(askDeny)
+                )
+            ) == .mandatoryHuman(askDeny)
+        )
+    }
+
+    @Test func packProjected_packDenyWithoutBindStaysDeny() {
+        #expect(
+            BoundReview.packProjected(
+                from: EvaluationResult(
+                    outcome: .deny(packDeny, matched: nil),
+                    matchingView: MatchingView("git reset --hard")
+                )
+            ) == .deny(packDeny)
+        )
+    }
+
+    @Test func packProjected_packAllowWithoutBindStaysAllow() {
+        #expect(
+            BoundReview.packProjected(
+                from: EvaluationResult(
+                    outcome: .plain,
+                    matchingView: MatchingView("git status")
+                )
+            ) == .allow
+        )
+    }
+
     @Test func hookBound_hardPolicyCases_projectDirectly() {
         #expect(HostNativeAsk.hookBound(.hardAllow) == .allow)
         #expect(HostNativeAsk.hookBound(.hardDeny(packDeny)) == .deny(packDeny))

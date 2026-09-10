@@ -49,8 +49,8 @@ The read-only classification of rvd reachability: reachable, down, not-installed
 _Avoid_: mapping down/skew/request-failed separately in doctor or status
 
 **Hook mapper**:
-EvaluationResult to HookWire after the Policy gate. One Decision switch, HostCodecs (Claude uses the rich encoder; OpenClaw and Hermes are short deny; Codex uses official older `decision: block` on stdout + blocking reason on stderr + exit 2, not Claude permission deny; Cursor uses official native `permission: deny` + `user_message`/`agent_message` + exit 0, not Claude permissionDecision and not Codex block). Owns hook voice. Product Ask is `HostNativeAsk.verdict(host:result:cwd:bound:)`; adapters honor `decision:ask` only.
-_Avoid_: per-codec Decision switch, inferring Ask from deny JSON
+EvaluationResult to HookWire after the Policy gate. One `HostAskVerdict` switch (`HookWireIntent.firstCall` / `afterSpend`). HostCodecs encode only (Claude uses the rich encoder; OpenClaw and Hermes are short deny; Codex uses official older `decision: block` on stdout + blocking reason on stderr + exit 2, not Claude permission deny; Cursor uses official native `permission: deny` + `user_message`/`agent_message` + exit 0, not Claude permissionDecision and not Codex block). Owns hook voice. Product Ask is `HostNativeAsk.verdict(host:result:cwd:bound:)`; missing `boundReview` is pack-projected, never a second `ActionPolicyEngine` bind. Adapters honor `decision:ask` only.
+_Avoid_: per-codec Decision switch, inferring Ask from deny JSON, re-binding in RVHooks
 
 **Hook voice**:
 The native host deny sentence the hook mapper produces. TTY panels do not own it.
