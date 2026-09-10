@@ -121,6 +121,20 @@ public enum HostNativeAsk {
         }
     }
 
+    /// Live-door bind from the in-process result. Stamped semantic bind wins;
+    /// otherwise map pack `Decision`. Does not re-run `ActionPolicyEngine`.
+    public static func bound(from result: EvaluationResult) -> BoundReview {
+        if let stamped = result.boundReview { return stamped }
+        switch result.decision {
+        case .allow:
+            return .allow
+        case .deny(let deny):
+            return .deny(deny)
+        case .indeterminate:
+            return .deny(ActionPolicyEngine.Builtin.packIncomplete)
+        }
+    }
+
     /// Projects hard policy onto the hook-live review boundary.
     /// Uncovered actions remain quiet on the hook door until typed effects are
     /// available; shadow review owns the separate review-eligible projection.

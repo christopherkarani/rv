@@ -347,6 +347,54 @@ struct HostNativeAskTests {
         )
     }
 
+    @Test func boundFrom_packAllowNilStamp_isAllow() {
+        let result = EvaluationResult(
+            outcome: .plain,
+            matchingView: MatchingView("git status")
+        )
+        #expect(result.boundReview == nil)
+        #expect(HostNativeAsk.bound(from: result) == .allow)
+    }
+
+    @Test func boundFrom_packDenyNilStamp_isThatDeny() {
+        let result = EvaluationResult(
+            outcome: .deny(packDeny, matched: nil),
+            matchingView: MatchingView("git reset --hard")
+        )
+        #expect(result.boundReview == nil)
+        #expect(HostNativeAsk.bound(from: result) == .deny(packDeny))
+    }
+
+    @Test func boundFrom_indeterminateNilStamp_isPackIncomplete() {
+        let result = EvaluationResult(outcome: .indeterminate(.commandTooLarge))
+        #expect(result.boundReview == nil)
+        #expect(
+            HostNativeAsk.bound(from: result)
+                == .deny(ActionPolicyEngine.Builtin.packIncomplete)
+        )
+    }
+
+    @Test func boundFrom_stampedMandatoryHumanWinsOverPackAllow() {
+        let result = EvaluationResult(
+            outcome: .plain,
+            matchingView: MatchingView("git push --force origin topic"),
+            analysis: .unknown,
+            boundReview: .mandatoryHuman(askDeny)
+        )
+        #expect(HostNativeAsk.bound(from: result) == .mandatoryHuman(askDeny))
+    }
+
+    @Test func boundFrom_stampedDenyWinsOverPackAllow() {
+        let stamped = ActionPolicyEngine.Builtin.remoteSharedBranch
+        let result = EvaluationResult(
+            outcome: .plain,
+            matchingView: MatchingView("git status"),
+            analysis: .unknown,
+            boundReview: .deny(stamped)
+        )
+        #expect(HostNativeAsk.bound(from: result) == .deny(stamped))
+    }
+
     @Test func hookBound_hardPolicyCases_projectDirectly() {
         #expect(HostNativeAsk.hookBound(.hardAllow) == .allow)
         #expect(HostNativeAsk.hookBound(.hardDeny(packDeny)) == .deny(packDeny))

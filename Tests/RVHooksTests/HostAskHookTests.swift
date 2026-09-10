@@ -317,10 +317,12 @@ func hookWire_firstCallAllowCannotSkipPolicyGate(_ host: HookHost) throws {
         reason: "git reset --hard destroys uncommitted changes"
     )
     let wire = await hookWire(host: .pi, stdin: stdin) { _, _ in
-        EvaluationResult(
+        let result = EvaluationResult(
             outcome: .deny(deny, matched: nil),
             matchingView: MatchingView("git reset --hard")
         )
+        #expect(result.boundReview == nil)
+        return result
     }
     let json = try #require(
         JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any]
@@ -380,7 +382,9 @@ func hookWire_firstCallAllowCannotSkipPolicyGate(_ host: HookHost) throws {
     {"toolName":"bash","cwd":"/tmp/ws","input":{"command":"git status"}}
     """
     let wire = await hookWire(host: .pi, stdin: stdin) { _, _ in
-        EvaluationResult(outcome: .plain, matchingView: MatchingView("git status"))
+        let result = EvaluationResult(outcome: .plain, matchingView: MatchingView("git status"))
+        #expect(result.boundReview == nil)
+        return result
     }
     #expect(wire.stdout.isEmpty)
     #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
@@ -551,6 +555,28 @@ func hookWire_firstCallAllowCannotSkipPolicyGate(_ host: HookHost) throws {
     #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
     #expect(wire.stdout.contains("\"permissionDecision\":\"ask\"") == false)
     #expect(wire.stdout.contains("\"permissionDecision\":\"deny\""))
+}
+
+@Test func hookWire_piFirstCallStampedMandatoryHumanOnPackAllowAsks() async throws {
+    let deny = ActionPolicyEngine.Builtin.remoteBranchAsk
+    let stdin = """
+    {"toolName":"bash","cwd":"/tmp/ws","input":{"command":"git push --force origin topic"}}
+    """
+    let wire = await hookWire(host: .pi, stdin: stdin) { _, _ in
+        EvaluationResult(
+            outcome: .plain,
+            matchingView: MatchingView("git push --force origin topic"),
+            analysis: .unknown,
+            boundReview: .mandatoryHuman(deny)
+        )
+    }
+    let json = try #require(
+        JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any]
+    )
+    #expect(json["decision"] as? String == "ask")
+    #expect(json["continuation"] as? String == "hostNative")
+    #expect(wire.stdout.contains("\"decision\":\"allow\"") == false)
+    #expect(wire.exitCode == 1)
 }
 
 @Test func hookWire_claudeAfterSpendAllowIsEmpty() {

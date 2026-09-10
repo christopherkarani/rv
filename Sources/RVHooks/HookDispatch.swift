@@ -121,19 +121,7 @@ private func hookBody<C: HostCodec>(
             return wire
         }
         let result = await evaluate(request.command, request.cwd)
-        let bound: BoundReview
-        let wireResult: EvaluationResult
-        if let live = LiveEvaluation(result) {
-            bound = live.bound
-            wireResult = live.wire
-        } else {
-            bound = HostNativeAsk.hookBound(
-                result: result,
-                action: action,
-                context: ReviewContext(repository: RepositoryReviewContext())
-            )
-            wireResult = result
-        }
+        let bound = HostNativeAsk.bound(from: result)
         let unlockCode = await mintUnlockCodeIfNeeded(
             host: codec.host,
             result: result,
@@ -142,14 +130,14 @@ private func hookBody<C: HostCodec>(
             mintOnDeny: mintOnDeny
         )
         if let recordHostAsk,
-           encodesHostAsk(host: codec.host, result: wireResult, bound: bound, cwd: request.cwd)
+           encodesHostAsk(host: codec.host, result: result, bound: bound, cwd: request.cwd)
         {
             await ignoreHostAskFailure {
                 try await recordHostAsk(request, action)
             }
         }
         return hookWire(
-            from: wireResult,
+            from: result,
             command: request.command,
             using: codec,
             bound: bound,
