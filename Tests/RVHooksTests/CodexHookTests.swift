@@ -172,8 +172,8 @@ func codexHonorPath_missingReasonExitTwoWithWhitespaceStderrIsNotEnough(_ missin
 @Test func codexEncodeAsk_isNotAskOrLeftoverAskAsPermit() throws {
     let wire = codec.encodeAsk(
         reason: resetHardHostDeny,
-        rule: "core.git/reset-hard",
-        next: hookUnlockNext
+        rule: RuleID(pack: .coreGit, pattern: "reset-hard"),
+        next: .ttyHint
     )
     try assertCodexHonorPath(wire, reason: resetHardHostDeny)
     #expect(HostNativeAsk.leftoverAskIsPermit("ask") == false)

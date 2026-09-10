@@ -60,8 +60,8 @@ public protocol HostCodec: Sendable {
     func decode(_ stdin: String) -> HookDecodeOutcome
     func proposedAction(from request: HookRequest) -> ProposedAction
     func encodeAllow() -> HookWire
-    func encodeDeny(reason: String, rule: String?, next: String?) -> HookWire
-    func encodeAsk(reason: String, rule: String?, next: String?) -> HookWire
+    func encodeDeny(reason: String, rule: RuleID?, next: HookVoiceNext) -> HookWire
+    func encodeAsk(reason: String, rule: RuleID?, next: HookVoiceNext) -> HookWire
 }
 
 extension HostCodec {
@@ -90,18 +90,35 @@ extension HostCodec {
     }
 
     /// Returns deny JSON plus a trailing newline, with this host's deny exit code.
-    /// `rule` and `next` are omitted from JSON when nil or empty.
-    public func encodeDeny(reason: String, rule: String? = nil, next: String? = nil) -> HookWire {
+    /// `rule` is slash display; `next` uses the existing unlock sentences.
+    /// Both JSON keys are omitted when the value is empty.
+    public func encodeDeny(
+        reason: String,
+        rule: RuleID? = nil,
+        next: HookVoiceNext = .none
+    ) -> HookWire {
         HookWire(
-            stdout: hookDenyJSON(reason: reason, rule: rule, next: next),
+            stdout: hookDenyJSON(
+                reason: reason,
+                rule: rule.map(displayRuleID),
+                next: hookVoiceNextSentence(next)
+            ),
             exitCode: host.denyExitCode
         )
     }
 
     /// Short Ask JSON. Not empty allow. Not a `Decision.ask` case.
-    public func encodeAsk(reason: String, rule: String? = nil, next: String? = nil) -> HookWire {
+    public func encodeAsk(
+        reason: String,
+        rule: RuleID? = nil,
+        next: HookVoiceNext = .none
+    ) -> HookWire {
         HookWire(
-            stdout: hookAskJSON(reason: reason, rule: rule, next: next),
+            stdout: hookAskJSON(
+                reason: reason,
+                rule: rule.map(displayRuleID),
+                next: hookVoiceNextSentence(next)
+            ),
             exitCode: host.denyExitCode
         )
     }

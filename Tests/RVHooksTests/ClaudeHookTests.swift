@@ -156,7 +156,7 @@ func claudeDecode_otherToolOrEventIsForeign(_ file: String) throws {
 }
 
 @Test func claudeEncodeDeny_indeterminateUsesPlanSentence() throws {
-    let wire = codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: nil)
+    let wire = codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
     let expected = try claudeExpected("deny-indeterminate-oversize")
     #expect(wire.stdout == expected.stdout)
     #expect(wire.exitCode == expected.exit)
@@ -168,8 +168,8 @@ func claudeDecode_otherToolOrEventIsForeign(_ file: String) throws {
 @Test func claudeEncodeDeny_withRuleStillClaudeDenyEnvelope() throws {
     let wire = codec.encodeDeny(
         reason: hostDenyLine(command: resetHard, reason: resetHardMatch.reason),
-        rule: displayRuleID(resetHardMatch.ruleID),
-        next: hookUnlockNext
+        rule: resetHardMatch.ruleID,
+        next: .ttyHint
     )
     #expect(wire.exitCode == 0)
     #expect(wire.stdout.contains("\"permissionDecision\":\"deny\""))

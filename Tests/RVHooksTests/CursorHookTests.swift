@@ -173,8 +173,8 @@ func cursorDecode_extractsBeforeShellCommand(_ file: String, expected: String) t
 @Test func cursorEncodeAsk_isNotAskOrLeftoverAskAsPermit() throws {
     let wire = codec.encodeAsk(
         reason: resetHardHostDeny,
-        rule: "core.git/reset-hard",
-        next: hookUnlockNext
+        rule: RuleID(pack: .coreGit, pattern: "reset-hard"),
+        next: .ttyHint
     )
     try assertCursorHonorPath(wire, reason: resetHardHostDeny)
     #expect(HostNativeAsk.leftoverAskIsPermit("ask") == false)

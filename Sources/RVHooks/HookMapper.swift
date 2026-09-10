@@ -104,11 +104,11 @@ private func encodePostSpend<C: HostCodec>(
     case .deny(let deny):
         return codec.encodeDeny(
             reason: hostDenyLine(command: command, reason: deny.reason),
-            rule: displayRuleID(deny.ruleID),
-            next: nil
+            rule: deny.ruleID,
+            next: .none
         )
     case .indeterminate:
-        return codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: nil)
+        return codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
     }
 }
 
@@ -120,9 +120,9 @@ private func encodeLiveDeny<C: HostCodec>(
 ) -> HookWire {
     switch result.decision {
     case .allow:
-        return codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: nil)
+        return codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
     case .indeterminate:
-        return codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: nil)
+        return codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
     case .deny(let deny):
         if codec.host == .claude {
             return ClaudeHostCodec().encodeRichDeny(
@@ -133,8 +133,8 @@ private func encodeLiveDeny<C: HostCodec>(
         }
         return codec.encodeDeny(
             reason: hostDenyLine(command: command, reason: deny.reason, unlockCode: unlockCode),
-            rule: displayRuleID(deny.ruleID),
-            next: mintedUnlockNext(unlockCode)
+            rule: deny.ruleID,
+            next: unlockHookVoiceNext(unlockCode)
         )
     }
 }
@@ -148,10 +148,10 @@ private func encodeAsked<C: HostCodec>(
     case .deny(let deny), .mandatoryHuman(let deny):
         return codec.encodeAsk(
             reason: hostAskLine(command: command, ruleID: deny.ruleID),
-            rule: displayRuleID(deny.ruleID),
-            next: hookUnlockNext
+            rule: deny.ruleID,
+            next: .ttyHint
         )
     case .allow:
-        return codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: nil)
+        return codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
     }
 }

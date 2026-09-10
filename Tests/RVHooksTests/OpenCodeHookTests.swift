@@ -178,7 +178,11 @@ func openCodeDecode_emptySessionIsNil(_ stdin: String) {
 @Test func openCodeEncodeAsk_isNotEmptyAllow() {
     let reason =
         "Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once."
-    let wire = codec.encodeAsk(reason: reason, rule: "core.git/reset-hard", next: hookUnlockNext)
+    let wire = codec.encodeAsk(
+        reason: reason,
+        rule: RuleID(pack: .coreGit, pattern: "reset-hard"),
+        next: .ttyHint
+    )
     #expect(wire.exitCode == 1)
     #expect(wire.stdout.isEmpty == false)
     #expect(wire.stdout.contains("\"decision\":\"ask\""))

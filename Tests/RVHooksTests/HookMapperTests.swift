@@ -28,6 +28,53 @@ import RVDomain
     assertHookDenyHasNoBypassOrEssay(wire.stdout)
 }
 
+@Test func grokEncodeDeny_typedRuleAndNextStaySlashAndExistingSentences() throws {
+    let rule = RuleID(pack: .coreGit, pattern: "reset-hard")
+    let codec = GrokHostCodec()
+    let short = codec.encodeDeny(reason: resetHardHostDeny, rule: nil, next: .none)
+    #expect(
+        short.stdout
+            == "{\"decision\":\"deny\",\"reason\":\"RV · Blocked. Destroys uncommitted changes. Use 'git stash' first.\"}\n"
+    )
+
+    let withVoice = codec.encodeDeny(
+        reason: resetHardHostDeny,
+        rule: rule,
+        next: .ttyHint
+    )
+    let json = try #require(JSONSerialization.jsonObject(with: Data(withVoice.stdout.utf8)) as? [String: Any])
+    #expect(json["rule"] as? String == "core.git/reset-hard")
+    #expect(json["next"] as? String == hookUnlockNext)
+    #expect(withVoice.stdout.contains("core.git:reset-hard") == false)
+
+    let code = try #require(AllowOnceUnlockCode(validating: "a1b2c3"))
+    let minted = codec.encodeDeny(reason: resetHardHostDeny, rule: rule, next: .minted(code))
+    let mintedJSON = try #require(JSONSerialization.jsonObject(with: Data(minted.stdout.utf8)) as? [String: Any])
+    #expect(mintedJSON["next"] as? String == hookUnlockNext(code: "a1b2c3"))
+}
+
+@Test func hookWire_invalidUnlockCodeOmitsNext() throws {
+    let result = EvaluationResult(
+        outcome: .deny(
+            Deny(
+                ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+                reason: "git reset --hard destroys uncommitted changes. Use 'git stash' first."
+            ),
+            matched: nil
+        )
+    )
+    let wire = hookWire(
+        from: result,
+        command: ShellCommand(rawValue: "git reset --hard"),
+        using: GrokHostCodec(),
+        unlockCode: "abcde"
+    )
+    let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
+    #expect(json["next"] == nil)
+    #expect(json["reason"] as? String == resetHardHostDeny)
+    #expect(allowOnceUnlockCode(in: wire.stdout) == nil)
+}
+
 @Test(arguments: [HookHost.grok, .pi, .opencode, .openclaw, .hermes, .claude, .codex, .cursor])
 func hookWire_samePathHosts_resetHardIsShortDeny(_ host: HookHost) throws {
     let match = RuleMatch(
@@ -226,8 +273,8 @@ func hookWire_samePathHosts_resetHardIsShortDeny(_ host: HookHost) throws {
     #expect(denyWire.stdout == "spy\n")
     #expect(denyWire.exitCode == 9)
     #expect(denyCodec.denyCalls.count == 1)
-    #expect(denyCodec.denyCalls[0].rule == "core.git/reset-hard")
-    #expect(denyCodec.denyCalls[0].next == nil)
+    #expect(denyCodec.denyCalls[0].rule == RuleID(pack: .coreGit, pattern: "reset-hard"))
+    #expect(denyCodec.denyCalls[0].next == .none)
 
     let incompleteCodec = EncodeDenySpy()
     let incompleteWire = hookWire(
@@ -239,18 +286,54 @@ func hookWire_samePathHosts_resetHardIsShortDeny(_ host: HookHost) throws {
     #expect(incompleteCodec.denyCalls.count == 1)
     #expect(incompleteCodec.denyCalls[0].reason == incompleteEvalSentence)
     #expect(incompleteCodec.denyCalls[0].rule == nil)
-    #expect(incompleteCodec.denyCalls[0].next == nil)
+    #expect(incompleteCodec.denyCalls[0].next == .none)
+}
+
+@Test func hookWire_mintedUnlockCodePassesTypedNext() throws {
+    let denyCodec = EncodeDenySpy()
+    _ = hookWire(
+        from: EvaluationResult(
+            outcome: .deny(
+                Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "x"),
+                matched: nil
+            )
+        ),
+        command: ShellCommand(rawValue: "git reset --hard"),
+        using: denyCodec,
+        unlockCode: "a1b2c3"
+    )
+    let code = try #require(AllowOnceUnlockCode(validating: "a1b2c3"))
+    #expect(denyCodec.denyCalls.count == 1)
+    #expect(denyCodec.denyCalls[0].rule == RuleID(pack: .coreGit, pattern: "reset-hard"))
+    #expect(denyCodec.denyCalls[0].next == .minted(code))
+}
+
+@Test func hookWire_invalidUnlockCodePassesNone() {
+    let denyCodec = EncodeDenySpy()
+    _ = hookWire(
+        from: EvaluationResult(
+            outcome: .deny(
+                Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "x"),
+                matched: nil
+            )
+        ),
+        command: ShellCommand(rawValue: "git reset --hard"),
+        using: denyCodec,
+        unlockCode: "abcde"
+    )
+    #expect(denyCodec.denyCalls.count == 1)
+    #expect(denyCodec.denyCalls[0].next == .none)
 }
 
 private final class EncodeDenySpy: HostCodec, @unchecked Sendable {
     var host: HookHost { .grok }
-    private(set) var denyCalls: [(reason: String, rule: String?, next: String?)] = []
+    private(set) var denyCalls: [(reason: String, rule: RuleID?, next: HookVoiceNext)] = []
 
     func decode(_ stdin: String) -> HookDecodeOutcome {
         .malformed(.missingCommand)
     }
 
-    func encodeDeny(reason: String, rule: String?, next: String?) -> HookWire {
+    func encodeDeny(reason: String, rule: RuleID?, next: HookVoiceNext) -> HookWire {
         denyCalls.append((reason, rule, next))
         return HookWire(stdout: "spy\n", exitCode: 9)
     }
@@ -275,12 +358,12 @@ private final class EncodeDoorSpy: HostCodec, @unchecked Sendable {
         return HookWire(stdout: "allow\n", exitCode: 0)
     }
 
-    func encodeDeny(reason: String, rule: String?, next: String?) -> HookWire {
+    func encodeDeny(reason: String, rule: RuleID?, next: HookVoiceNext) -> HookWire {
         denyCalls += 1
         return HookWire(stdout: "deny\n", exitCode: 9)
     }
 
-    func encodeAsk(reason: String, rule: String?, next: String?) -> HookWire {
+    func encodeAsk(reason: String, rule: RuleID?, next: HookVoiceNext) -> HookWire {
         askCalls += 1
         return HookWire(stdout: "ask\n", exitCode: 9)
     }

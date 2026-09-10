@@ -109,7 +109,7 @@ private func hookBody<C: HostCodec>(
         let action = codec.proposedAction(from: request)
         if request.hostAsk == .spend {
             guard let spendHostAsk else {
-                return codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: nil)
+                return codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
             }
             let result = await spendHostAsk(request.command, request.cwd)
             let wire = hookWire(
@@ -153,7 +153,7 @@ private func hookBody<C: HostCodec>(
     case .foreign:
         return codec.encodeAllow()
     case .malformed(let malformation):
-        return codec.encodeDeny(reason: malformedHookSentence(malformation), rule: nil, next: nil)
+        return codec.encodeDeny(reason: malformedHookSentence(malformation), rule: nil, next: .none)
     }
 }
 
