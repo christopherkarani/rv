@@ -60,6 +60,9 @@ struct HostNativeAskTests {
         )
         #expect(verdict == .deny)
         #expect(HostNativeAsk.capability(for: host) == .denyOrTTY)
+        #expect(
+            HostNativeAsk.recordsPending(result: result, cwd: cwd, bound: .mandatoryHuman(askDeny))
+        )
     }
 
     /// Claude leftover-ask-as-permit is official `permissionDecision:ask` JSON,

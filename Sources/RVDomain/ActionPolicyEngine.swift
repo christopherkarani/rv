@@ -148,6 +148,34 @@ public enum ActionPolicyEngine: Sendable {
         }
     }
 
+    /// Saved typed rules only. No builtin wall. Nil when nothing matches.
+    public static func typedRestriction(
+        gitAction: GitAction,
+        rules: [TypedRule]
+    ) -> ActionPolicyVerdict? {
+        guard rules.isEmpty == false else { return nil }
+        let uncovered = CoreHit(
+            decision: .reviewEligible(fallback: Builtin.uncovered),
+            ruleID: Builtin.uncovered.ruleID,
+            reason: Builtin.uncovered.reason,
+            semanticallyCovered: false
+        )
+        let hit = applyTypedRules(uncovered, rules, gitAction: gitAction)
+        switch hit.decision {
+        case .hardDeny, .mandatoryHuman:
+            return ActionPolicyVerdict(
+                decision: hit.decision,
+                explanation: ActionPolicyExplanation(
+                    zone: hit.decision.zone,
+                    ruleID: hit.ruleID,
+                    reason: hit.reason
+                )
+            )
+        case .hardAllow, .reviewEligible:
+            return nil
+        }
+    }
+
     public static func evaluate(
         _ request: ReviewRequest,
         policy: EffectiveActionPolicy = .empty

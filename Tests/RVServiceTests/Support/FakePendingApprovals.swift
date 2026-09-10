@@ -11,6 +11,7 @@ actor FakePendingApprovals: PendingApprovalCoordinating {
 
     private var records: [PendingApproval] = []
     private(set) var resolveCalls: [ResolveCall] = []
+    private(set) var createCalls: [PendingApprovalRequest] = []
     var listError: PendingApprovalError?
 
     func seed(_ record: PendingApproval) {
@@ -18,7 +19,14 @@ actor FakePendingApprovals: PendingApprovalCoordinating {
     }
 
     func create(_ request: PendingApprovalRequest, now: Date) async throws -> PendingApproval {
-        throw PendingApprovalError.invalidRequest
+        createCalls.append(request)
+        let (record, next) = try PendingApprovalLedger.create(
+            records: records,
+            request: request,
+            now: now
+        )
+        records = next
+        return record
     }
 
     func list(now _: Date) async throws -> [PendingApproval] {
