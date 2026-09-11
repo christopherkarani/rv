@@ -18,6 +18,10 @@ enum HelpCatalog {
         case .uninstall: uninstall
         case .doctor: doctor
         case .allowOnce: allowOnce
+        case .packs: packs
+        case .scan: scan
+        case .policy: policy
+        case .allowlist: allowlist
         }
     }
 
@@ -37,10 +41,14 @@ enum HelpCatalog {
             HelpSection(heading: "Everyday", rows: [
                 HelpRow(name: "explain", description: "Why something was allowed or blocked"),
                 HelpRow(name: "allow-once", description: "Redeem the six-character code from a hook deny"),
+                HelpRow(name: "scan", description: "Session forensics for deny-only findings"),
                 HelpRow(name: "service", description: "Is rvd running, down, or skewed"),
             ]),
             HelpSection(heading: "Advanced", rows: [
-                HelpRow(name: "hook", description: "Host stdin adapter (Pi / Grok / OpenCode / Claude / OpenClaw / Hermes / Codex)"),
+                HelpRow(name: "packs", description: "List and enable or disable packs"),
+                HelpRow(name: "policy", description: "Show, draft, or share typed rules"),
+                HelpRow(name: "allowlist", description: "Permanent user-layer exceptions"),
+                HelpRow(name: "hook", description: "Host stdin adapter (Pi / Grok / OpenCode / Claude / OpenClaw / Hermes / Codex / Cursor)"),
                 HelpRow(name: "uninstall", description: "Remove rv-owned hooks, config, and LaunchAgent"),
             ]),
         ],
@@ -155,7 +163,7 @@ enum HelpCatalog {
                 HelpRow(name: "rv hook [--host <host>]"),
             ]),
             HelpSection(heading: "Flags", rows: [
-                HelpRow(name: "--host <host>", description: "Host codec: grok (default), pi, opencode, claude, openclaw, hermes, codex"),
+                HelpRow(name: "--host <host>", description: "Host codec: grok (default), pi, opencode, claude, openclaw, hermes, codex, cursor"),
             ]),
         ]
     )
@@ -247,6 +255,84 @@ enum HelpCatalog {
         examples: [
             "rv allow-once a1b2c3",
             "rv allow-once mint -- git reset --hard",
+        ]
+    )
+
+    static let packs = HelpViewModel(
+        title: "",
+        blurb: "",
+        sections: [
+            HelpSection(heading: "Usage", rows: [
+                HelpRow(name: "rv packs [--enabled] [--verbose] [--json]"),
+                HelpRow(name: "rv packs enable <pack>"),
+                HelpRow(name: "rv packs disable <pack>"),
+                HelpRow(name: "rv packs info <pack>"),
+            ]),
+        ],
+        examples: [
+            "rv packs",
+            "rv packs enable core.git",
+        ]
+    )
+
+    static let scan = HelpViewModel(
+        title: "",
+        blurb: "",
+        sections: [
+            HelpSection(heading: "Usage", rows: [
+                HelpRow(name: "rv scan [sessions] [path] [--host <host>] [--days N] [--all]"),
+            ]),
+            HelpSection(heading: "Notes", rows: [
+                HelpRow(
+                    name: "sessions",
+                    description: "Offline host session stores; deny-only findings. Not a repo scanner."
+                ),
+            ]),
+        ],
+        examples: [
+            "rv scan",
+            "rv scan sessions ~/.pi",
+        ]
+    )
+
+    static let policy = HelpViewModel(
+        title: "",
+        blurb: "",
+        sections: [
+            HelpSection(heading: "Usage", rows: [
+                HelpRow(name: "rv policy show"),
+                HelpRow(name: "rv policy draft --english <text> [--save]"),
+                HelpRow(name: "rv policy validate"),
+                HelpRow(name: "rv policy export"),
+                HelpRow(name: "rv policy apply"),
+            ]),
+            HelpSection(heading: "Notes", rows: [
+                HelpRow(
+                    name: "draft",
+                    description: "Typed gitPush preview. Apple Intelligence when available; otherwise a canned gitPush fixture."
+                ),
+            ]),
+        ],
+        examples: [
+            "rv policy show",
+            "rv policy draft --english 'never allow force-push to main'",
+        ]
+    )
+
+    static let allowlist = HelpViewModel(
+        title: "",
+        blurb: "",
+        sections: [
+            HelpSection(heading: "Usage", rows: [
+                HelpRow(name: "rv allowlist list"),
+                HelpRow(name: "rv allowlist add <rule>"),
+                HelpRow(name: "rv allowlist add-command <command>"),
+                HelpRow(name: "rv allowlist remove <rule>"),
+                HelpRow(name: "rv allowlist validate"),
+            ]),
+        ],
+        examples: [
+            "rv allowlist list",
         ]
     )
 }

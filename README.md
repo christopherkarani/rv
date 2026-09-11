@@ -41,7 +41,7 @@ curl -fsSL https://rykanv.com/install | sh
 | Allow once | Redeem the code from a block; the next matching call in this working directory runs once |
 | Explain | `rv explain` shows which pack would fire |
 | Hosts | Grok, Pi, OpenCode, Claude, OpenClaw, Hermes, Codex, Cursor — wired by `rv setup` |
-| Platform | macOS 26, Apple Silicon |
+| Platform | macOS 26, Apple Silicon. CI also runs the Swift tests on Linux. |
 
 ## Supported hosts
 
@@ -61,14 +61,16 @@ curl -fsSL https://rykanv.com/install | sh
 
 ```sh
 rv setup                         # wire hosts
-rv scn                           # scan repo for destructive actions in the past
 rv test 'git reset --hard'       # evaluate, do not run
 rv explain 'git reset --hard'    # which pack would fire
+rv scan                          # session forensics (deny-only findings)
 rv allow-once a1b2c3             # redeem the code from a hook deny
 rv packs                         # catalog
-rv packs enable <pack>           # Enable a pack
+rv packs enable <pack>           # enable an extra pack (day-one always compiled)
+rv policy show                   # typed rules
+rv allowlist list                # permanent exceptions
 rv doctor                        # health
-rv uninstall                     # raw dog it
+rv uninstall                     # remove rv-owned files
 ```
 
 ## License

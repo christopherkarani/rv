@@ -5,6 +5,9 @@ _rv() {
   commands=(
     'test:Evaluate a command'
     'explain:Explain a decision'
+    'packs:List and enable packs'
+    'policy:Typed rules'
+    'scan:Session forensics'
     'allow-once:Mint and redeem single-use unlock codes'
     'allowlist:Manage permanent user-layer exceptions'
     'service:Service status'
@@ -27,6 +30,21 @@ _rv() {
           local -a al
           al=('add:Add rule' 'add-command:Add exact command' 'list:List' 'remove:Remove' 'validate:Validate')
           _describe -t commands 'allowlist' al
+          ;;
+        packs)
+          local -a pk
+          pk=('enable:Enable a pack' 'disable:Disable a pack' 'info:Pack details')
+          _describe -t commands 'packs' pk
+          ;;
+        policy)
+          local -a po
+          po=('show:List rules' 'draft:Compile English' 'validate:Validate' 'export:Export' 'apply:Apply')
+          _describe -t commands 'policy' po
+          ;;
+        scan)
+          local -a sc
+          sc=('sessions:Scan host session stores')
+          _describe -t commands 'scan' sc
           ;;
       esac
       ;;

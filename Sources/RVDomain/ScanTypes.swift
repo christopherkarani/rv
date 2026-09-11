@@ -22,16 +22,8 @@ public struct ScanBounds: Sendable, Equatable {
 }
 
 /// Known host session-store kinds for forensics discovery.
-public enum ScanHostID: String, Sendable, Equatable, Hashable {
-    case claude
-    case pi
-    case grok
-    case opencode
-    case openclaw
-    case hermes
-    case codex
-    case cursor
-}
+/// Same identity as `HookHost` — one host family, two adapters (hook vs scan).
+public typealias ScanHostID = HookHost
 
 /// Non-empty injectable home path for session-store discovery.
 /// Fails on "". Not `RVPolicy.HomeDirectory`.

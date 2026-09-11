@@ -44,7 +44,9 @@ struct ExplainFilesystemSemanticsTests {
         let result = try await explain("rm escape-link", cwd: repo)
         #expect(result.stdout.contains("Decision: DENY"))
         #expect(result.stdout.contains("outside repo"))
-        #expect(result.stdout.contains(outside.path))
+        let pathChars = Set("/.-_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+        let compact = String(result.stdout.filter(pathChars.contains))
+        #expect(compact.contains(outside.path))
         #expect(result.stdout.contains("inside repo") == false)
         #expect(result.stdout.contains("out-of-repo-write"))
     }

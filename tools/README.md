@@ -12,7 +12,7 @@ by the Swift package.
 
 | Script | Purpose | Source of truth |
 |---|---|---|
-| `preflight.sh` | Encodes the four grok-skill checklists as 16 exit-code assertions. Run before claiming a ticket is done. | `.grok/skills/*/SKILL.md` preflight sections |
+| `preflight.sh` | Encodes the four grok-skill checklists as 17 exit-code assertions. Run before claiming a ticket is done. | `.grok/skills/*/SKILL.md` preflight sections |
 | `swift-6.3.3` | Puts the `.swift-version` toolchain first on `PATH`, then `exec`s `swift`. Eliminates the `/usr/bin/swift` 6.2.x trap. Linux also looks at the official tarball dest. | `.swift-version`, `docs/dev/SWIFT.md` |
 | `install-official-swift-linux.sh` | Official `download.swift.org` Linux tarball for `.swift-version`. Never apt `swift`. | `.github/workflows/pr.yml` Ubuntu gate |
 | `gate.sh` | `preflight.sh` + filtered `swift test` via `swift-6.3.3`. Explicit filter or infer from git-changed modules (union when multi-module / `Package.swift`). Not the Ubuntu PR gate. | `AGENTS.md` gate |

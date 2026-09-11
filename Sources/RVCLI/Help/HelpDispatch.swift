@@ -21,6 +21,10 @@ public enum HelpTopic: Equatable, Sendable {
     case uninstall
     case doctor
     case allowOnce
+    case packs
+    case scan
+    case policy
+    case allowlist
 }
 
 /// Intercepts help argv before ArgumentParser so passthrough commands still get help.
@@ -102,6 +106,14 @@ public enum HelpDispatch {
             return rest.allSatisfy(isFormatFlag) ? .doctor : nil
         case "allow-once":
             return rest.allSatisfy(isFormatFlag) ? .allowOnce : nil
+        case "packs":
+            return .packs
+        case "scan":
+            return .scan
+        case "policy":
+            return .policy
+        case "allowlist":
+            return .allowlist
         case "help":
             return rest.isEmpty ? .help : nil
         default:

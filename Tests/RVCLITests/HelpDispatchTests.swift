@@ -29,6 +29,13 @@ import RVTheme
     #expect(HelpDispatch.topic(arguments: ["doctor", "--help"]) == .doctor)
     #expect(HelpDispatch.topic(arguments: ["allow-once", "--help"]) == .allowOnce)
     #expect(HelpDispatch.topic(arguments: ["help", "allow-once"]) == .allowOnce)
+    #expect(HelpDispatch.topic(arguments: ["packs", "--help"]) == .packs)
+    #expect(HelpDispatch.topic(arguments: ["help", "packs", "enable"]) == .packs)
+    #expect(HelpDispatch.topic(arguments: ["scan", "--help"]) == .scan)
+    #expect(HelpDispatch.topic(arguments: ["scan", "sessions", "-h"]) == .scan)
+    #expect(HelpDispatch.topic(arguments: ["policy", "--help"]) == .policy)
+    #expect(HelpDispatch.topic(arguments: ["help", "policy", "draft"]) == .policy)
+    #expect(HelpDispatch.topic(arguments: ["allowlist", "--help"]) == .allowlist)
 }
 
 @Test func helpTopic_doesNotStealCommandArgs() {
@@ -59,6 +66,11 @@ import RVTheme
     #expect(text.contains("rv setup"))
     #expect(text.contains("rv help setup"))
     #expect(text.contains("allow-once"))
+    #expect(text.contains("packs"))
+    #expect(text.contains("scan"))
+    #expect(text.contains("policy"))
+    #expect(text.contains("allowlist"))
+    #expect(text.contains("Cursor"))
     #expect(text.contains("rv help test") == false)
     #expect(text.contains("OVERVIEW:") == false)
     #expect(text.contains("SUBCOMMANDS:") == false)
@@ -99,7 +111,7 @@ import RVTheme
     #expect(text.contains("Examples") == false)
     #expect(text.contains("event.json") == false)
     #expect(text.contains("Next") == false)
-    #expect(text.contains("openclaw, hermes, codex"))
+    #expect(text.contains("openclaw, hermes, codex, cursor"))
 }
 
 @Test func helpText_uninstall_hasNoPasteableTeardown() {
@@ -123,7 +135,7 @@ import RVTheme
 }
 
 @Test func helpText_leafPagesOmitTitleAndNext() {
-    for topic: HelpTopic in [.test, .explain, .doctor, .service, .serviceStatus, .hook, .help] {
+    for topic: HelpTopic in [.test, .explain, .doctor, .service, .serviceStatus, .hook, .help, .packs, .scan, .policy, .allowlist] {
         let text = HelpDispatch.text(topic, palette: colorOffPalette)
         #expect(text.hasPrefix("Usage") || text.hasPrefix("\n") == false)
         #expect(text.contains("Next") == false)
@@ -139,4 +151,12 @@ import RVTheme
     let uninstall = HelpDispatch.text(.uninstall, palette: colorOffPalette)
     #expect(uninstall.contains("After uninstall"))
     #expect(uninstall.contains("rv setup"))
+}
+
+@Test func helpText_root_listsEveryParserCommand() {
+    let text = HelpDispatch.text(.root, palette: colorOffPalette)
+    let names = RV.configuration.subcommands.compactMap { $0.configuration.commandName }
+    for name in names {
+        #expect(text.contains(name), "root help missing \(name)")
+    }
 }

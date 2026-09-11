@@ -58,6 +58,12 @@ jobs:
       - name: Stage release binaries
         run: tools/release.sh
 
+      - name: C hook process proof
+        env:
+          RV_C_HOOK_SKIP_RELEASE: "1"
+          RV_RELEASE_STAGE: ${{ github.workspace }}/.build/release-stage
+        run: tools/c-hook-proof.sh
+
       - uses: actions/upload-artifact@v4
         with:
           name: rv-${{ github.ref_name }}

@@ -21,6 +21,11 @@ import Testing
     #expect(ScanHostID.cursor.rawValue == "cursor")
 }
 
+@Test func scanHostID_isHookHost() {
+    #expect(ScanHostID.cursor == HookHost.cursor)
+    #expect(ScanHostID.setupSlotOrder == HookHost.setupSlotOrder)
+}
+
 @Test func scanHome_rejectsEmptyPath() {
     #expect(ScanHome(validating: "") == nil)
 }

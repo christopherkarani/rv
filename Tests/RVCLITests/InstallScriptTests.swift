@@ -147,6 +147,16 @@ private func runInstallScript(
     #expect(text.localizedCaseInsensitiveContains("brew") == false)
 }
 
+@Test func readme_scanCommandIsScanNotScn() throws {
+    let text = try String(
+        contentsOf: repoRootURL().appendingPathComponent("README.md"),
+        encoding: .utf8
+    )
+    #expect(text.contains("rv scn") == false)
+    #expect(text.contains("rv scan"))
+    #expect(text.localizedCaseInsensitiveContains("scan repo") == false)
+}
+
 @Test func installSh_refusesWindows() throws {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-install-\(UUID().uuidString)", isDirectory: true)

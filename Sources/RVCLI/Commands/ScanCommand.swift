@@ -7,8 +7,6 @@ import RVScan
 import RVTheme
 import RVTUI
 
-extension ScanHostID: ExpressibleByArgument {}
-
 struct ScanSessionsFlags: ParsableArguments {
     @Option(name: .customLong("host"), help: "Restrict to one host session store.")
     var host: ScanHostID?
@@ -289,8 +287,7 @@ func scanSetupNudgeRecommended(
     pathEntries: [String],
     fileManager: FileManager
 ) -> Bool {
-    let setupHosts = Set(hosts.map(\.hookHost))
-    guard setupHosts.isEmpty == false else { return false }
+    guard hosts.isEmpty == false else { return false }
     guard let homeDirectory = HomeDirectory(validating: home.path) else { return false }
     guard let snapshot = try? HostAdapterInstallation.inspect(
         paths: OwnedPaths(home: homeDirectory),
@@ -299,22 +296,7 @@ func scanSetupNudgeRecommended(
     ) else {
         return false
     }
-    return setupHosts.contains { snapshot.state(for: $0) != .wired }
-}
-
-private extension ScanHostID {
-    var hookHost: HookHost {
-        switch self {
-        case .claude: .claude
-        case .pi: .pi
-        case .grok: .grok
-        case .opencode: .opencode
-        case .openclaw: .openclaw
-        case .hermes: .hermes
-        case .codex: .codex
-        case .cursor: .cursor
-        }
-    }
+    return hosts.contains { snapshot.state(for: $0) != .wired }
 }
 
 private func scanCommandViewModel(

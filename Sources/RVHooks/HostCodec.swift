@@ -89,10 +89,9 @@ extension HostCodec {
         HookWire(stdout: "", exitCode: 0)
     }
 
-    /// Returns deny JSON plus a trailing newline, with this host's deny exit code.
-    /// `rule` is slash display; `next` uses the existing unlock sentences.
-    /// Both JSON keys are omitted when the value is empty.
-    public func encodeDeny(
+    /// Grok / Pi / OpenCode / OpenClaw / Hermes honor JSON (`decision` key).
+    /// Codex / Cursor / Claude must not call this — they own a native honor path.
+    public func encodeLeftoverDecisionDeny(
         reason: String,
         rule: RuleID? = nil,
         next: HookVoiceNext = .none
@@ -107,8 +106,8 @@ extension HostCodec {
         )
     }
 
-    /// Short Ask JSON. Not empty allow. Not a `Decision.ask` case.
-    public func encodeAsk(
+    /// Short leftover Ask JSON. Not empty allow. Not a `Decision.ask` case.
+    public func encodeLeftoverDecisionAsk(
         reason: String,
         rule: RuleID? = nil,
         next: HookVoiceNext = .none

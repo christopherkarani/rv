@@ -14,6 +14,7 @@ SWIFT_WRAP="$ROOT/tools/swift-6.3.3"
 QUIET=0
 EXPLICIT=0
 FILTERS=""
+RUN_C_UNITS=0
 
 usage() {
   cat <<'EOF'
@@ -121,6 +122,10 @@ infer_filters() {
         m="${base%%/*}"
         case "$m" in
           rv|rvd) ;;
+          rv-c)
+            add_filter "CHookPipeTests"
+            RUN_C_UNITS=1
+            ;;
           *Tests) add_filter "$m" ;;
           *) add_filter "${m}Tests" ;;
         esac
@@ -167,5 +172,14 @@ for filt in $FILTERS; do
     fail=1
   fi
 done
+
+if [[ "$RUN_C_UNITS" -eq 1 ]]; then
+  if [[ "$QUIET" -eq 0 ]]; then
+    printf "gate: Sources/rv-c/tests/run.sh\n"
+  fi
+  if ! "$ROOT/Sources/rv-c/tests/run.sh"; then
+    fail=1
+  fi
+fi
 
 exit "$fail"
