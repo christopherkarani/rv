@@ -58,6 +58,7 @@ public struct ClaudeSessionStoreAdapter: SessionStoreAdapter {
         }
 
         let occurredAt = parseTimestamp(root["timestamp"])
+        let envelopeCwd = ScanStoreWorkingDirectory.fromEnvelope(root)
         let sessionID: String? = {
             if let value = root["sessionId"] as? String, value.isEmpty == false { return value }
             if fallbackSessionID.isEmpty == false { return fallbackSessionID }
@@ -86,7 +87,8 @@ public struct ClaudeSessionStoreAdapter: SessionStoreAdapter {
                     sessionID: sessionID,
                     sourcePath: sourcePath,
                     occurredAt: occurredAt,
-                    command: ShellCommand(rawValue: command)
+                    command: ShellCommand(rawValue: command),
+                    workingDirectory: ScanStoreWorkingDirectory.fromEnvelope(input) ?? envelopeCwd
                 )
             )
         }

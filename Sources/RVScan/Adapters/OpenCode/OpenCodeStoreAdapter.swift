@@ -81,7 +81,8 @@ public struct OpenCodeStoreAdapter: SessionStoreAdapter {
                         sessionID: sessionID,
                         sourcePath: sourcePath,
                         occurredAt: occurredAt,
-                        command: ShellCommand(rawValue: command)
+                        command: ShellCommand(rawValue: command),
+                        workingDirectory: ScanStoreWorkingDirectory.fromEnvelope(object)
                     )
                 )
                 stepStatus = sqlite3_step(statement)
