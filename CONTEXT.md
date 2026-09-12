@@ -20,6 +20,10 @@ _Avoid_: rv-cli CLI, operator CLI, three CLIs
 The compiled day-one packs from which a Decision is produced. TTY test/explain and a hook miss share one; TTY never asks rvd. It does not honor allow-once grants.
 _Avoid_: in-process fallback, composer, warm evaluate
 
+**Evaluation door**:
+`evaluateWithSemantics` (RVEngine): pack evaluate → unwrap → probe → analyze → apply semantics in one composition. Pack deny / indeterminate is the floor; semantic stages only tighten an allow. Path / cwd / repo I/O enters through the injected `filesystemProbe`; the Engine stays pure. The Policy gate runs after the door, never inside it. `EvaluateSession.evaluateWithSemantics` is the session's door; `rv scan` classify shares it.
+_Avoid_: per-caller evaluate + applySemantics composition, bare `evaluate` for product decisions
+
 **Matching view**:
 The T1-normalized command text an EvaluationResult was decided on. The Policy gate fingerprints it; TTY and XPC explain read it.
 _Avoid_: raw argv as the grant key

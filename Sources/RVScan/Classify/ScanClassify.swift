@@ -8,7 +8,10 @@ public enum ScanClassifyError: Error, Sendable, Equatable {
     case packsUnavailable
 }
 
-/// Warmed pack world: `PackRegistry` snapshots + `ICUPatternEngine` → deny-only findings via `evaluate`.
+/// Warmed pack world: `PackRegistry` snapshots + `ICUPatternEngine` → deny-only
+/// findings via the evaluation door (`evaluateWithSemantics`). Offline scan has
+/// no live cwd / probe facts, so semantic stages see empty contexts; pack deny
+/// stays the floor and semantic denies can only tighten an allow.
 public struct ScanClassify: Sendable {
     public let enabledPacks: [PackID]
 
@@ -59,7 +62,7 @@ public struct ScanClassify: Sendable {
                 command: event.command,
                 enabledPacks: enabledPacks
             )
-            let result = evaluate(
+            let result = evaluateWithSemantics(
                 request,
                 packs: snapshots,
                 patterns: engine,

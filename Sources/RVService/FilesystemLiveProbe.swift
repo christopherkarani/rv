@@ -11,6 +11,26 @@ import RVEngine
 enum FilesystemLiveProbe {
     static let symlinkHopLimit = 8
 
+    /// Probe the command the door unwrapped: the inner command and its peeled
+    /// cwd when unwrap completed, the original command otherwise.
+    static func context(
+        unwrapped: UnwrapOutcome,
+        command: ShellCommand,
+        cwd: WorkingDirectory?,
+        homeDirectory: String?
+    ) -> FilesystemAnalysisContext {
+        switch unwrapped {
+        case .complete(let extracted):
+            return context(
+                command: extracted.command,
+                cwd: extracted.workingDirectory ?? cwd,
+                homeDirectory: homeDirectory
+            )
+        case .limited:
+            return context(command: command, cwd: cwd, homeDirectory: homeDirectory)
+        }
+    }
+
     static func context(
         command: ShellCommand,
         cwd: WorkingDirectory?,
