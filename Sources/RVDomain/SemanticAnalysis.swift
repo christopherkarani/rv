@@ -109,7 +109,9 @@ public struct FilesystemAnalysisContext: Sendable, Equatable, Codable {
     public var homeDirectory: String?
     public var catalog: SecretPathCatalog
     public var facts: [FilesystemPathFact]
-    /// Injected filesystem I/O world. `empty` is unprobed.
+    /// Injected filesystem I/O world. `empty` is unprobed. Memberwise copies that
+    /// omit `probe:` become unprobed even when the source was probed; apply
+    /// must keep the injected world, not a rebuilt copy.
     public var probe: FilesystemProbeState
 
     public init(

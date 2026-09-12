@@ -65,14 +65,19 @@ public func applyFilesystemSemantics(
         if context.probe == .unprobed,
             deny.ruleID == ActionPolicyEngine.Builtin.unresolvedFilesystem.ruleID
         {
+            // ActionPolicyEngine ranks unresolved first. Unprobed worlds skip
+            // that tighten, but catalog / out-of-repo hits on other targets
+            // must still deny.
+            if let boundary = catalogOrBoundaryDeny(for: action) {
+                return filesystemSemanticDeny(
+                    boundary,
+                    pack: pack,
+                    analysis: analysis
+                )
+            }
             return result
         }
-        return EvaluationResult(
-            outcome: .deny(deny, matched: nil),
-            matchingView: pack.matchingView,
-            analysis: analysis,
-            boundReview: .deny(deny)
-        )
+        return filesystemSemanticDeny(deny, pack: pack, analysis: analysis)
     case .mandatoryHuman(let deny):
         return EvaluationResult(
             outcome: .deny(deny, matched: nil),
@@ -81,4 +86,30 @@ public func applyFilesystemSemantics(
             boundReview: .mandatoryHuman(deny)
         )
     }
+}
+
+private func filesystemSemanticDeny(
+    _ deny: Deny,
+    pack: EvaluationResult,
+    analysis: SemanticAnalysis
+) -> EvaluationResult {
+    EvaluationResult(
+        outcome: .deny(deny, matched: nil),
+        matchingView: pack.matchingView,
+        analysis: analysis,
+        boundReview: .deny(deny)
+    )
+}
+
+/// Protected-path and out-of-repo still tighten when unprobed. Unresolved
+/// must not mask those hits on a mixed-target command.
+private func catalogOrBoundaryDeny(for action: FilesystemAction) -> Deny? {
+    let kinds = action.effects.kinds
+    if kinds.contains(.protectedPathMutation) {
+        return ActionPolicyEngine.Builtin.protectedPath
+    }
+    if kinds.contains(.outsideRepositoryMutation) {
+        return ActionPolicyEngine.Builtin.outsideRepository
+    }
+    return nil
 }
