@@ -13,7 +13,6 @@ struct RulePinningTests {
         .workingTreeDiscard,
         .outsideRepository,
         .unresolvedPath,
-        .unwrapLimited,
     ])
     func alwaysAllowPreview_hardStopForbidsSave(kind: RuleHardStopKind) {
         let preview = RulePinning.preview(record: wait(kind: kind), polarity: .allow)
@@ -21,6 +20,71 @@ struct RulePinningTests {
         #expect(preview.draft.isEmpty == false)
         #expect(preview.sentence.contains("hard stop"))
         #expect(RulePinning.hardStop(in: wait(kind: kind).action) == kind)
+    }
+
+    @Test func emptyEffectUnwrapPending_doesNotPreviewUnwrapHardStop() {
+        let record = wait(
+            id: "unwrap",
+            command: "bash -c git reset --hard",
+            effects: [],
+            branchName: nil
+        )
+        #expect(RulePinning.hardStop(in: record.action) == nil)
+        let preview = RulePinning.preview(record: record, polarity: .allow)
+        #expect(preview.allowedToSave)
+    }
+
+    @Test func pendingForcePush_draftIsV2GitPushNotFingerprintV1() throws {
+        let host = HookHost.pi
+        let session = try #require(SessionID(validating: "sess"))
+        let cwd = wd("/tmp/ws")
+        let command = ShellCommand(rawValue: "git push --force origin feature")
+        let result = EvaluationResult(
+            outcome: .deny(
+                Deny(
+                    ruleID: RuleID(pack: .coreGit, pattern: "push-force-long"),
+                    reason: "force-push"
+                ),
+                matched: nil
+            ),
+            matchingView: MatchingView(command.rawValue),
+            analysis: .git(
+                .push(remote: "origin", refspec: "feature", force: .force, delete: false)
+            )
+        )
+        let action = result.pendingAction(
+            host: host,
+            session: session,
+            cwd: cwd,
+            command: command
+        )
+        #expect(
+            action.fingerprint
+                == ActionFingerprint.make(host: host, session: session, cwd: cwd, command: command)
+        )
+        #expect(action.effects.kinds.contains(.remoteSharedBranchMutation))
+        #expect(action.fingerprint.rawValue.hasPrefix("shell:git") == false)
+
+        let record = PendingApproval(
+            id: ApprovalID(rawValue: "force-push-feature"),
+            identity: ApprovalIdentity(
+                session: SessionIdentity(rawValue: "sess"),
+                agent: AgentIdentity(rawValue: "pi")
+            ),
+            action: action,
+            reason: .hostAsk,
+            continuation: .hostNative,
+            timeoutPolicy: .keepWaiting,
+            createdAt: now,
+            expiresAt: now.addingTimeInterval(3600),
+            state: .awaitingHuman
+        )
+        let draft = RulePinning.draft(record: record, polarity: .block)
+        let decoded = try decodePinDraft(draft)
+        #expect(decoded.v == 2)
+        #expect(decoded.predicate == .gitPush(force: .force, branch: "feature"))
+        #expect(decoded.fingerprint == nil)
+        #expect(draft.contains("gitPush"))
     }
 
     @Test func alwaysAllowPreview_pinOkMaySave() {
@@ -438,8 +502,10 @@ struct RulePinningTests {
             return wait(
                 id: "secret",
                 command: "cat .env",
-                effects: [],
-                branchName: nil
+                effects: [.filesystemRead],
+                branchName: nil,
+                path: ".env",
+                scope: .insideRepository
             )
         case .protectedPath:
             return wait(

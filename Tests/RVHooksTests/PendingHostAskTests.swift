@@ -5,6 +5,77 @@ import RVDomain
 
 @Suite("PendingHostAsk hook door")
 struct PendingHostAskHookTests {
+    @Test func PendingHostAsk_recordsHostDoorFingerprintAndAnalyzedPushEffects() async throws {
+        let probe = PendingHostAskProbe()
+        let command = ShellCommand(rawValue: "git push --force origin feature")
+        let session = try #require(SessionID(validating: "sess-pi"))
+        let cwd = try #require(WorkingDirectory(validating: "/tmp/ws"))
+        let result = EvaluationResult(
+            outcome: .deny(
+                Deny(
+                    ruleID: RuleID(pack: .coreGit, pattern: "push-force-long"),
+                    reason: "force-push"
+                ),
+                matched: nil
+            ),
+            matchingView: MatchingView(command.rawValue),
+            analysis: .git(
+                .push(remote: "origin", refspec: "feature", force: .force, delete: false)
+            )
+        )
+        let wire = await hookWire(
+            host: .pi,
+            stdin: piAskStdin(session: "sess-pi", command: command.rawValue),
+            evaluate: { _, _ in result },
+            recordHostAsk: { request, action in
+                try await probe.record(request, action)
+            }
+        )
+        _ = try askJSON(wire)
+        let records = await probe.records
+        #expect(records.count == 1)
+        let action = records[0].action
+        #expect(
+            action.fingerprint
+                == ActionFingerprint.make(host: .pi, session: session, cwd: cwd, command: command)
+        )
+        #expect(action.effects.kinds.contains(.remoteSharedBranchMutation))
+        #expect(action.resources.branchName == "feature")
+        #expect(action.fingerprint.rawValue.contains("shell:git") == false)
+    }
+
+    @Test func PendingHostAsk_spendClearsAnalyzedActionFromSpendResult() async throws {
+        let probe = PendingHostAskProbe()
+        let command = ShellCommand(rawValue: "git push --force origin feature")
+        let session = try #require(SessionID(validating: "sess-pi"))
+        let cwd = try #require(WorkingDirectory(validating: "/tmp/ws"))
+        let spent = EvaluationResult(
+            outcome: .plain,
+            matchingView: MatchingView(command.rawValue),
+            analysis: .git(
+                .push(remote: "origin", refspec: "feature", force: .force, delete: false)
+            )
+        )
+        let wire = await hookWire(
+            host: .pi,
+            stdin: piSpendStdin(session: "sess-pi", command: command.rawValue),
+            evaluate: { _, _ in resetHardDeny },
+            spendHostAsk: { _, _ in spent },
+            clearHostAsk: { request, action in
+                try await probe.clear(request, action)
+            }
+        )
+        #expect(wire.stdout.isEmpty)
+        #expect(wire.exitCode == 0)
+        let clears = await probe.clears
+        #expect(clears.count == 1)
+        #expect(
+            clears[0].action.fingerprint
+                == ActionFingerprint.make(host: .pi, session: session, cwd: cwd, command: command)
+        )
+        #expect(clears[0].action.effects.kinds.contains(.remoteSharedBranchMutation))
+    }
+
     @Test func PendingHostAsk_piAskWithSessionRecordsBeforeEncodeAsk() async throws {
         let probe = PendingHostAskProbe()
         let stdin = piAskStdin(session: "sess-pi")
@@ -189,20 +260,20 @@ private let resetHardDeny = EvaluationResult(
     matchingView: MatchingView("git reset --hard")
 )
 
-private func piAskStdin(session: String?) -> String {
+private func piAskStdin(session: String?, command: String = "git reset --hard") -> String {
     if let session {
         return """
-        {"toolName":"bash","cwd":"/tmp/ws","sessionId":"\(session)","input":{"command":"git reset --hard"}}
+        {"toolName":"bash","cwd":"/tmp/ws","sessionId":"\(session)","input":{"command":"\(command)"}}
         """
     }
     return """
-    {"toolName":"bash","cwd":"/tmp/ws","input":{"command":"git reset --hard"}}
+    {"toolName":"bash","cwd":"/tmp/ws","input":{"command":"\(command)"}}
     """
 }
 
-private func piSpendStdin(session: String) -> String {
+private func piSpendStdin(session: String, command: String = "git reset --hard") -> String {
     """
-    {"toolName":"bash","cwd":"/tmp/ws","sessionId":"\(session)","input":{"command":"git reset --hard"},"hostAsk":"spend"}
+    {"toolName":"bash","cwd":"/tmp/ws","sessionId":"\(session)","input":{"command":"\(command)"},"hostAsk":"spend"}
     """
 }
 
