@@ -20,6 +20,7 @@ public struct PiStoreAdapter: SessionStoreAdapter {
     public func extract(fileURL: URL, data: Data) throws -> [ExtractedEvent] {
         let sourcePath = fileURL.path
         var sessionID: String?
+        var sessionCwd: WorkingDirectory?
         var events: [ExtractedEvent] = []
 
         for line in Self.jsonlLines(in: data) {
@@ -27,8 +28,13 @@ public struct PiStoreAdapter: SessionStoreAdapter {
                 continue
             }
             let type = object["type"] as? String
-            if type == "session", let id = object["id"] as? String, id.isEmpty == false {
-                sessionID = id
+            if type == "session" {
+                if let id = object["id"] as? String, id.isEmpty == false {
+                    sessionID = id
+                }
+                if let cwd = ScanStoreWorkingDirectory.fromEnvelope(object) {
+                    sessionCwd = cwd
+                }
             }
             guard type == "message",
                   let message = object["message"] as? [String: Any],
@@ -54,7 +60,10 @@ public struct PiStoreAdapter: SessionStoreAdapter {
                         sessionID: sessionID,
                         sourcePath: sourcePath,
                         occurredAt: occurredAt,
-                        command: ShellCommand(rawValue: command)
+                        command: ShellCommand(rawValue: command),
+                        workingDirectory: ScanStoreWorkingDirectory.fromEnvelope(arguments)
+                            ?? ScanStoreWorkingDirectory.fromEnvelope(item)
+                            ?? sessionCwd
                     )
                 )
             }

@@ -153,6 +153,8 @@ import RVDomain
         let text = try String(contentsOf: file, encoding: .utf8)
         #expect(text.contains("import RVPolicy") == false)
         #expect(text.contains("import RVHistory") == false)
+        #expect(text.contains("import RVService") == false)
+        #expect(text.contains("FilesystemLiveProbe") == false)
         #expect(text.contains("AllowOnce") == false)
         #expect(text.contains("GatedEvaluate") == false)
         #expect(text.contains("PolicyGate") == false)
@@ -168,4 +170,75 @@ import RVDomain
 @Test func classify_defaultsToDayOnePacks() throws {
     let classify = try ScanClassify()
     #expect(classify.enabledPacks == dayOnePackIDs)
+}
+
+@Test func classify_extractedEventDefaultsWorkingDirectoryNil() {
+    let event = ExtractedEvent(
+        host: .claude,
+        sourcePath: "/tmp/fixture/session.jsonl",
+        command: ShellCommand(rawValue: "echo hi > file")
+    )
+    #expect(event.workingDirectory == nil)
+}
+
+@Test func classify_nilWorkingDirectory_packAllowWrite_staysUnprobed() throws {
+    let events = [
+        ExtractedEvent(
+            host: .claude,
+            sourcePath: "/tmp/fixture/session.jsonl",
+            command: ShellCommand(rawValue: "echo hi > file"),
+            workingDirectory: nil
+        ),
+    ]
+    let findings = try ScanClassify().classify(events)
+    #expect(findings.isEmpty)
+}
+
+@Test func classify_workingDirectory_packAllowWrite_isUnresolvedPath() throws {
+    let cwd = try #require(WorkingDirectory(validating: "/tmp/rv-scan-ws"))
+    let events = [
+        ExtractedEvent(
+            host: .grok,
+            sourcePath: "/tmp/fixture/chat_history.jsonl",
+            command: ShellCommand(rawValue: "echo hi > file"),
+            workingDirectory: cwd
+        ),
+    ]
+    let findings = try ScanClassify().classify(events)
+    let finding = try #require(findings.first)
+    #expect(findings.count == 1)
+    #expect(finding.ruleID == ActionPolicyEngine.Builtin.unresolvedFilesystem.ruleID)
+}
+
+@Test func classify_workingDirectory_protectedPathLexicalHit_stillDenies() throws {
+    let cwd = try #require(WorkingDirectory(validating: "/tmp/.ssh"))
+    let events = [
+        ExtractedEvent(
+            host: .claude,
+            sourcePath: "/tmp/fixture/session.jsonl",
+            command: ShellCommand(rawValue: "rm config"),
+            workingDirectory: cwd
+        ),
+    ]
+    let findings = try ScanClassify().classify(events)
+    let finding = try #require(findings.first)
+    #expect(findings.count == 1)
+    #expect(finding.ruleID == ActionPolicyEngine.Builtin.protectedPath.ruleID)
+}
+
+@Test func classify_workingDirectory_envChdirDotDot_doesNotKeepStoreProtectedPath() throws {
+    let cwd = try #require(WorkingDirectory(validating: "/tmp/.ssh"))
+    let events = [
+        ExtractedEvent(
+            host: .claude,
+            sourcePath: "/tmp/fixture/session.jsonl",
+            command: ShellCommand(rawValue: "env -C .. rm config"),
+            workingDirectory: cwd
+        ),
+    ]
+    let findings = try ScanClassify().classify(events)
+    let finding = try #require(findings.first)
+    #expect(findings.count == 1)
+    #expect(finding.ruleID == ActionPolicyEngine.Builtin.unresolvedFilesystem.ruleID)
+    #expect(finding.ruleID != ActionPolicyEngine.Builtin.protectedPath.ruleID)
 }

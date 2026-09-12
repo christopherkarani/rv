@@ -76,7 +76,8 @@ public struct OpenClawStoreAdapter: SessionStoreAdapter {
                         sessionID: sessionID,
                         sourcePath: sourcePath,
                         occurredAt: occurredAt,
-                        command: ShellCommand(rawValue: extracted)
+                        command: ShellCommand(rawValue: extracted.command),
+                        workingDirectory: extracted.workingDirectory
                     )
                 )
                 stepStatus = sqlite3_step(statement)
@@ -150,7 +151,12 @@ public struct OpenClawStoreAdapter: SessionStoreAdapter {
         return OwnedSQLiteDatabase(db: db, buffer: raw)
     }
 
-    private static func extractCommand(from eventJSON: String) -> String? {
+    private struct ExtractedShell {
+        var command: String
+        var workingDirectory: WorkingDirectory?
+    }
+
+    private static func extractCommand(from eventJSON: String) -> ExtractedShell? {
         guard let data = eventJSON.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else {
@@ -159,19 +165,26 @@ public struct OpenClawStoreAdapter: SessionStoreAdapter {
         return extractCommand(from: object)
     }
 
-    private static func extractCommand(from object: [String: Any]) -> String? {
+    private static func extractCommand(from object: [String: Any]) -> ExtractedShell? {
         if let command = execCommand(in: object) {
-            return command
+            return ExtractedShell(
+                command: command,
+                workingDirectory: ScanStoreWorkingDirectory.fromEnvelope(object)
+            )
         }
         if let toolCall = object["toolCall"] as? [String: Any],
            let command = execCommand(in: toolCall) {
-            return command
+            return ExtractedShell(
+                command: command,
+                workingDirectory: ScanStoreWorkingDirectory.fromEnvelope(toolCall)
+                    ?? ScanStoreWorkingDirectory.fromEnvelope(object)
+            )
         }
         if let message = object["message"] as? [String: Any],
            let content = message["content"] as? [[String: Any]] {
             for item in content {
-                if let command = extractCommand(from: item) {
-                    return command
+                if let extracted = extractCommand(from: item) {
+                    return extracted
                 }
             }
         }
