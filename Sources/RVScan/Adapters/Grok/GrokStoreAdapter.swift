@@ -26,6 +26,7 @@ public struct GrokStoreAdapter: SessionStoreAdapter {
     public func extract(fileURL: URL, data: Data) throws -> [ExtractedEvent] {
         let sourcePath = fileURL.path
         let sessionID = fileURL.deletingLastPathComponent().lastPathComponent
+        let workingDirectory = ScanStoreWorkingDirectory.fromGrokLayout(fileURL: fileURL)
         var events: [ExtractedEvent] = []
 
         for line in Self.jsonlLines(in: data) {
@@ -49,7 +50,8 @@ public struct GrokStoreAdapter: SessionStoreAdapter {
                         sessionID: sessionID.isEmpty ? nil : sessionID,
                         sourcePath: sourcePath,
                         occurredAt: nil,
-                        command: ShellCommand(rawValue: command)
+                        command: ShellCommand(rawValue: command),
+                        workingDirectory: workingDirectory
                     )
                 )
             }

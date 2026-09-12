@@ -63,14 +63,15 @@ public struct HermesStoreAdapter: SessionStoreAdapter {
                 let sessionID = Self.textColumn(statement, index: 0)
                 let occurredAt = Self.date(fromTimestamp: sqlite3_column_double(statement, 2))
                 if let toolCalls = Self.textColumn(statement, index: 1) {
-                    for command in Self.extractCommands(from: toolCalls) {
+                    for extracted in Self.extractCommands(from: toolCalls) {
                         events.append(
                             ExtractedEvent(
                                 host: .hermes,
                                 sessionID: sessionID,
                                 sourcePath: sourcePath,
                                 occurredAt: occurredAt,
-                                command: ShellCommand(rawValue: command)
+                                command: ShellCommand(rawValue: extracted.command),
+                                workingDirectory: extracted.workingDirectory
                             )
                         )
                     }
@@ -146,20 +147,33 @@ public struct HermesStoreAdapter: SessionStoreAdapter {
         return OwnedSQLiteDatabase(db: db, buffer: raw)
     }
 
-    private static func extractCommands(from toolCallsJSON: String) -> [String] {
+    private struct ExtractedShell {
+        var command: String
+        var workingDirectory: WorkingDirectory?
+    }
+
+    private static func extractCommands(from toolCallsJSON: String) -> [ExtractedShell] {
         guard let data = toolCallsJSON.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: data)
         else {
             return []
         }
         if let list = object as? [[String: Any]] {
-            return list.compactMap(terminalCommand(in:))
+            return list.compactMap(extractedShell(in:))
         }
         if let object = object as? [String: Any],
-           let command = terminalCommand(in: object) {
-            return [command]
+           let extracted = extractedShell(in: object) {
+            return [extracted]
         }
         return []
+    }
+
+    private static func extractedShell(in object: [String: Any]) -> ExtractedShell? {
+        guard let command = terminalCommand(in: object) else { return nil }
+        return ExtractedShell(
+            command: command,
+            workingDirectory: ScanStoreWorkingDirectory.fromEnvelope(object)
+        )
     }
 
     private static func terminalCommand(in object: [String: Any]) -> String? {
