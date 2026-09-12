@@ -21,7 +21,7 @@ The compiled day-one packs from which a Decision is produced. TTY test/explain a
 _Avoid_: in-process fallback, composer, warm evaluate
 
 **Evaluation door**:
-`evaluateWithSemantics` (RVEngine): pack evaluate → unwrap → probe → analyze → apply semantics in one composition. Pack deny / indeterminate is the floor; semantic stages only tighten an allow. Path / cwd / repo I/O enters through the injected `filesystemProbe`; the Engine stays pure. Default empty filesystem context is **unprobed**: unresolved-path does not tighten a pack allow. Unwrap-limited still tightens. Live `GatedEvaluate` injects a probed `FilesystemLiveProbe` (missing cwd stays fail-closed). The Policy gate runs after the door, never inside it. `EvaluateSession.evaluateWithSemantics` is the session's door; `rv scan` classify shares the Engine door (RVScan does not import RVService).
+`evaluateWithSemantics` (RVEngine): pack evaluate → unwrap → probe → analyze → apply semantics in one composition. Pack deny / indeterminate is the floor; semantic stages only tighten an allow. Path / cwd / repo I/O enters through the injected `filesystemProbe`; the Engine stays pure. Default empty filesystem context is **unprobed**: unresolved-path does not tighten a pack allow. Unwrap-limited and catalog protected-path still tighten. Live `GatedEvaluate` injects a probed `FilesystemLiveProbe` (missing cwd stays fail-closed). The Policy gate runs after the door, never inside it. `EvaluateSession.evaluateWithSemantics` is the session's door; `rv scan` classify shares the Engine door (RVScan does not import RVService).
 _Avoid_: per-caller evaluate + applySemantics composition, bare `evaluate` for product decisions
 
 **Matching view**:
@@ -93,7 +93,7 @@ Denial-only list of live hook denials (including in-process miss). timestamp, ho
 _Avoid_: audit log, allow history, RVHistory as a product, recording peek/explain
 
 **Session forensics**:
-Offline `rv scan` / `rv scan sessions`: read known host session stores (or a path of known layouts), extract shell candidates, run the same `evaluate`, list deny-only findings. Offline scan is **unprobed**; pack deny stays the floor; unwrap-limited still tightens; unresolved-path does not tighten an unprobed allow. Live `GatedEvaluate` still injects a probed `FilesystemLiveProbe`. Not `RVHistory`, not repo/CI `rv scan repo`, not live hook enforcement. Fence: `docs/factory/specs/phase-4-session-scan.md`.
+Offline `rv scan` / `rv scan sessions`: read known host session stores (or a path of known layouts), extract shell candidates, run the same `evaluate`, list deny-only findings. Offline scan is **unprobed**; pack deny stays the floor; unwrap-limited and catalog protected-path still tighten; unresolved-path does not tighten an unprobed allow. Live `GatedEvaluate` still injects a probed `FilesystemLiveProbe`. Not `RVHistory`, not repo/CI `rv scan repo`, not live hook enforcement. Fence: `docs/factory/specs/phase-4-session-scan.md`.
 _Avoid_: history scan, recon, audit log (unless meaning this CLI)
 
 **EvaluationWorld**:
