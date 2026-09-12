@@ -124,7 +124,6 @@ private func hookBody<C: HostCodec>(
                 evaluateFile: evaluateFile
             )
         }
-        let action = codec.proposedAction(from: request)
         if request.hostAsk == .spend {
             guard let spendHostAsk else {
                 return codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
@@ -138,7 +137,7 @@ private func hookBody<C: HostCodec>(
             )
             if let clearHostAsk {
                 await ignoreHostAskFailure {
-                    try await clearHostAsk(request, action)
+                    try await clearHostAsk(request, pendingAction(from: result, request: request))
                 }
             }
             return wire
@@ -159,7 +158,7 @@ private func hookBody<C: HostCodec>(
         )
         if let recordHostAsk, encodesHostAsk(result: result, verdict: verdict) {
             await ignoreHostAskFailure {
-                try await recordHostAsk(request, action)
+                try await recordHostAsk(request, pendingAction(from: result, request: request))
             }
         }
         return hookWire(
@@ -197,6 +196,15 @@ private func hookFileBody<C: HostCodec>(
         command: request.command,
         using: codec,
         cwd: request.cwd
+    )
+}
+
+private func pendingAction(from result: EvaluationResult, request: HookRequest) -> ProposedAction {
+    result.pendingAction(
+        host: request.host,
+        session: request.session,
+        cwd: request.cwd,
+        command: request.command
     )
 }
 

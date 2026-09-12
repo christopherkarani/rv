@@ -245,6 +245,39 @@ public struct EvaluationResult: Sendable, Equatable {
     public var wire: EvaluationResult {
         EvaluationResult(outcome: outcome, matchingView: matchingView, analysis: analysis)
     }
+
+    /// Host-door pending identity. Fingerprint is `ActionFingerprint.make`, never
+    /// analyzer `shell:git.*` / `shell:fs.*`. Effects come from analyzed git or
+    /// filesystem actions; unknown and unwrap-limited may be empty.
+    public func pendingAction(
+        host: HookHost,
+        session: SessionID?,
+        cwd: WorkingDirectory?,
+        command: ShellCommand
+    ) -> ProposedAction {
+        let analyzed: (ActionEffects, ActionResources)
+        if let git = analysis.gitAction {
+            analyzed = (git.effects, git.resources)
+        } else if let filesystem = analysis.filesystemAction {
+            analyzed = (filesystem.effects, filesystem.resources)
+        } else {
+            analyzed = (ActionEffects(), ActionResources())
+        }
+        return .shell(
+            ShellAction(
+                fingerprint: ActionFingerprint.make(
+                    host: host,
+                    session: session,
+                    cwd: cwd,
+                    command: command
+                ),
+                effects: analyzed.0,
+                resources: analyzed.1,
+                scope: ActionScope(workingDirectory: cwd),
+                supportingCommand: command
+            )
+        )
+    }
 }
 
 /// In-process hook-door evaluation. `bound` is required; IPC decode cannot produce this type.
