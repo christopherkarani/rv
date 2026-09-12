@@ -17,6 +17,21 @@ struct AnalyzeSemanticsTests {
         #expect(wrapped.wrappers == [.bash])
     }
 
+    @Test func precomputedUnwrap_matchesCommandEntry() {
+        let command = ShellCommand(rawValue: "sudo env FOO=bar sh -c 'git reset --hard'")
+        let cwd = WorkingDirectory(validating: "/repo")
+        let git = GitAnalysisContext(workingDirectory: cwd)
+        let fromCommand = analyzeSemantics(command, gitContext: git, filesystemContext: repo)
+        let fromUnwrap = analyzeSemantics(
+            unwrapped: unwrapCommand(command, workingDirectory: cwd),
+            gitContext: git,
+            filesystemContext: repo
+        )
+        #expect(fromUnwrap == fromCommand)
+        #expect(fromUnwrap.wrappers == [.sudo, .env, .sh])
+        #expect(fromUnwrap.gitAction == .reset(mode: .hard, target: nil))
+    }
+
     @Test func sudoEnvSh_innerGitDrivesSemantics() {
         let direct = analyzeSemantics(ShellCommand(rawValue: "git reset --hard"))
         let wrapped = analyzeSemantics(

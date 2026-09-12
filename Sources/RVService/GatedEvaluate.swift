@@ -10,6 +10,23 @@ public enum EvaluationIntent: Sendable, Equatable {
     case apply
 }
 
+/// Policy-gate verb after the Evaluate session. Host Ask spend is apply, then
+/// plant-and-spend this turn — not a third EvaluationIntent.
+private enum PolicyVerb: Sendable {
+    case peek
+    case apply
+    case hostAskSpend
+
+    var recordsDenial: Bool {
+        switch self {
+        case .peek:
+            false
+        case .apply, .hostAskSpend:
+            true
+        }
+    }
+}
+
 /// Runs the Evaluate session, then the Policy gate.
 public struct GatedEvaluate: Sendable {
     public var corePacksReady: Bool { resolvedSession().corePacksReady }
@@ -96,7 +113,7 @@ public struct GatedEvaluate: Sendable {
         tool: String = "Bash"
     ) async -> EvaluationResult {
         await gated(
-            intent,
+            Self.policyVerb(intent),
             Self.makeRequest(command: command, home: home),
             cwd: cwd,
             home: home,
@@ -132,7 +149,7 @@ public struct GatedEvaluate: Sendable {
         tool: String = "Bash"
     ) async -> EvaluationResult {
         await gated(
-            .peek,
+            PolicyVerb.peek,
             request,
             cwd: cwd,
             home: home,
@@ -177,41 +194,17 @@ public struct GatedEvaluate: Sendable {
         host: String = "tty",
         tool: String = "Bash"
     ) async -> EvaluationResult {
-        let result = evaluateWithSemantics(request, cwd: cwd, home: home)
-        let finished: EvaluationResult
-        switch result.decision {
-        case .allow, .indeterminate:
-            finished = result
-        case .deny:
-            if Self.skipsPolicyGate(result) {
-                finished = result
-            } else {
-                let snapshot = allowlist()
-                let rebasing = GitRebaseProbe.rebaseInProgress(cwd: cwd)
-                let applied = await PolicyGate.apply(
-                    result,
-                    cwd: cwd,
-                    allowlist: snapshot,
-                    store: store,
-                    now: now,
-                    rebaseInProgress: rebasing
-                )
-                if case .allow = applied.result.decision {
-                    finished = applied.result
-                } else {
-                    finished = await PolicyGate.spendHostAllowOnce(
-                        result,
-                        cwd: cwd,
-                        allowlist: snapshot,
-                        store: store,
-                        now: now,
-                        rebaseInProgress: rebasing
-                    ).result
-                }
-            }
-        }
-        recordDenialIfNeeded(finished, path: nil, home: home, host: host, tool: tool, now: now)
-        return finished
+        await gated(
+            .hostAskSpend,
+            request,
+            cwd: cwd,
+            home: home,
+            store: store,
+            now: now,
+            allowlist: allowlist,
+            host: host,
+            tool: tool
+        )
     }
 
     /// Wire-path apply for an already-built request (ServiceRuntime evaluate).
@@ -227,7 +220,7 @@ public struct GatedEvaluate: Sendable {
         tool: String = "Bash"
     ) async -> EvaluationResult {
         await gated(
-            .apply,
+            PolicyVerb.apply,
             request,
             cwd: cwd,
             home: home,
@@ -239,8 +232,17 @@ public struct GatedEvaluate: Sendable {
         )
     }
 
+    private static func policyVerb(_ intent: EvaluationIntent) -> PolicyVerb {
+        switch intent {
+        case .peek:
+            .peek
+        case .apply:
+            .apply
+        }
+    }
+
     private func gated(
-        _ intent: EvaluationIntent,
+        _ verb: PolicyVerb,
         _ request: EvaluationRequest,
         cwd: WorkingDirectory?,
         home: HomeDirectory?,
@@ -263,32 +265,72 @@ public struct GatedEvaluate: Sendable {
             } else {
                 let snapshot = allowlist()
                 let rebasing = GitRebaseProbe.rebaseInProgress(cwd: cwd)
-                switch intent {
-                case .peek:
-                    finished = await PolicyGate.peek(
-                        result,
-                        cwd: cwd,
-                        allowlist: snapshot,
-                        store: store,
-                        now: now,
-                        rebaseInProgress: rebasing
-                    ).result
-                case .apply:
-                    finished = await PolicyGate.apply(
-                        result,
-                        cwd: cwd,
-                        allowlist: snapshot,
-                        store: store,
-                        now: now,
-                        rebaseInProgress: rebasing
-                    ).result
-                }
+                finished = await Self.applyPolicy(
+                    verb,
+                    result: result,
+                    cwd: cwd,
+                    snapshot: snapshot,
+                    store: store,
+                    now: now,
+                    rebaseInProgress: rebasing
+                )
             }
         }
-        if case .apply = intent {
+        if verb.recordsDenial {
             recordDenialIfNeeded(finished, path: nil, home: home, host: host, tool: tool, now: now)
         }
         return finished
+    }
+
+    private static func applyPolicy(
+        _ verb: PolicyVerb,
+        result: EvaluationResult,
+        cwd: WorkingDirectory?,
+        snapshot: AllowlistSnapshot,
+        store: AllowOnceStore,
+        now: Date,
+        rebaseInProgress: Bool
+    ) async -> EvaluationResult {
+        switch verb {
+        case .peek:
+            return await PolicyGate.peek(
+                result,
+                cwd: cwd,
+                allowlist: snapshot,
+                store: store,
+                now: now,
+                rebaseInProgress: rebaseInProgress
+            ).result
+        case .apply:
+            return await PolicyGate.apply(
+                result,
+                cwd: cwd,
+                allowlist: snapshot,
+                store: store,
+                now: now,
+                rebaseInProgress: rebaseInProgress
+            ).result
+        case .hostAskSpend:
+            let applied = await PolicyGate.apply(
+                result,
+                cwd: cwd,
+                allowlist: snapshot,
+                store: store,
+                now: now,
+                rebaseInProgress: rebaseInProgress
+            )
+            if case .allow = applied.result.decision {
+                return applied.result
+            }
+            return await PolicyGate.spendHostAllowOnce(
+                result,
+                cwd: cwd,
+                allowlist: snapshot,
+                store: store,
+                now: now,
+                rebaseInProgress: rebaseInProgress
+            ).result
+        }
     }
 
     private func evaluateWithSemantics(
@@ -303,7 +345,14 @@ public struct GatedEvaluate: Sendable {
             allowPaths: SecretAllowPaths.loadEffective(home: home, workspace: workspace),
             home: home?.rawValue
         )
-        let probe = wrapperProbe(command: request.command, cwd: cwd, home: home)
+        let gitContext = GitAnalysisContext(workingDirectory: cwd)
+        let unwrapped = unwrapCommand(request.command, workingDirectory: cwd)
+        let probe = filesystemProbe(
+            unwrapped: unwrapped,
+            command: request.command,
+            cwd: cwd,
+            home: home
+        )
         let policy: EffectiveActionPolicy
         do {
             policy = EffectiveActionPolicy(rules: try Self.loadTypedRules(cwd: cwd, home: home))
@@ -324,8 +373,13 @@ public struct GatedEvaluate: Sendable {
         }
         return applySemantics(
             pack: pack,
+            analysis: analyzeSemantics(
+                unwrapped: unwrapped,
+                gitContext: gitContext,
+                filesystemContext: probe
+            ),
             command: request.command,
-            gitContext: GitAnalysisContext(workingDirectory: cwd),
+            gitContext: gitContext,
             filesystemContext: probe,
             enabledPacks: request.enabledPacks,
             policy: policy
@@ -381,12 +435,12 @@ public struct GatedEvaluate: Sendable {
         )
     }
 
-    private func wrapperProbe(
+    private func filesystemProbe(
+        unwrapped: UnwrapOutcome,
         command: ShellCommand,
         cwd: WorkingDirectory?,
         home: HomeDirectory?
     ) -> FilesystemAnalysisContext {
-        let unwrapped = unwrapCommand(command, workingDirectory: cwd)
         let probeCommand: ShellCommand
         let probeCwd: WorkingDirectory?
         switch unwrapped {
