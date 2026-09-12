@@ -50,7 +50,7 @@ public struct FileToolPath: RawRepresentable, Hashable, Sendable, Equatable, Cod
         firstPresent(Array(values))
     }
 
-    public static func firstPresent(_ values: [String?]) -> FileToolPath? {
+    fileprivate static func firstPresent(_ values: [String?]) -> FileToolPath? {
         for value in values {
             if let value, value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
                 return FileToolPath(rawValue: value)

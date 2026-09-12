@@ -112,6 +112,16 @@ func cursorDecode_extractsBeforeShellCommand(_ file: String, expected: String) t
     #expect(codec.decode(stdin) == .foreign)
 }
 
+@Test func cursorDecode_preToolUseReadWithoutPathIsFileToolNotForeign() {
+    let stdin = #"{"hook_event_name":"preToolUse","tool_name":"Read","tool_input":{}}"#
+    guard case .request(let request) = codec.decode(stdin) else {
+        Issue.record("expected .request for Read with empty path")
+        return
+    }
+    #expect(request.file?.kind == .read)
+    #expect(request.file?.path.isEmpty == true)
+}
+
 @Test func cursorDecode_afterShellIsForeign() {
     let stdin = """
     {"hook_event_name":"afterShellExecution","command":"git status","cwd":"/tmp/ws"}

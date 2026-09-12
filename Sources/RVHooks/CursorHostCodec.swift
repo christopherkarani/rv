@@ -31,24 +31,25 @@ public struct CursorHostCodec: HostCodec {
         case .foreign:
             return .foreign
         case .file:
-            if let file = FileToolAction.decoded(
+            guard let file = FileToolAction.decoded(
                 toolName: envelope.toolName,
                 paths: envelope.toolInput?.filePath,
                 envelope.toolInput?.path,
                 envelope.toolInput?.targetFile,
                 envelope.toolInput?.target
-            ) {
-                return .request(
-                    HookRequest(
-                        host: .cursor,
-                        command: ShellCommand(rawValue: ""),
-                        cwd: cwd,
-                        session: session,
-                        file: file
-                    )
-                )
+            ) else {
+                // Classify already matched a File tool. Foreign would fail-open.
+                return .malformed(.unreadable)
             }
-            return .foreign
+            return .request(
+                HookRequest(
+                    host: .cursor,
+                    command: ShellCommand(rawValue: ""),
+                    cwd: cwd,
+                    session: session,
+                    file: file
+                )
+            )
         case .shell:
             break
         }
