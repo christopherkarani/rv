@@ -291,3 +291,153 @@ func hostInstallation_currentResourceWithExecutableIsWired(_ host: HookHost) thr
         #expect(snapshot.state(for: host) == .wired)
     }
 }
+
+@Test func hostInstallation_fileToolsNotApplicableWhenMissing() throws {
+    try withInstallationHome { _, paths in
+        let snapshot = try HostAdapterInstallation.inspect(
+            paths: paths,
+            pathEntries: [],
+            fileManager: .default
+        )
+        #expect(snapshot.fileTools(for: .grok) == .notApplicable)
+        #expect(snapshot.fileTools(for: .claude) == .notApplicable)
+        #expect(snapshot.fileTools(for: .cursor) == .notApplicable)
+        #expect(snapshot.fileTools(for: .pi) == .notApplicable)
+    }
+}
+
+@Test func hostInstallation_wiredGrokTemplateIsFileToolWired() throws {
+    try withInstallationHome { home, paths in
+        let executable = home.appendingPathComponent("bin/rv")
+        try makeExecutable(executable)
+        try FileManager.default.createDirectory(
+            atPath: paths.grokDirectory,
+            withIntermediateDirectories: true
+        )
+        try writeWiredAdapter(
+            host: .grok,
+            destination: paths.hostAdapter(for: .grok).destination,
+            rvPath: executable.path
+        )
+
+        let snapshot = try HostAdapterInstallation.inspect(
+            paths: paths,
+            pathEntries: [],
+            fileManager: .default
+        )
+
+        #expect(snapshot.state(for: .grok) == .wired)
+        #expect(snapshot.fileTools(for: .grok) == .wired)
+        #expect(snapshot.fileTools(for: .pi) == .notApplicable)
+    }
+}
+
+@Test func grokHookInspect_openPreToolUseIsFileToolDoor() throws {
+    let rendered = try HookHost.grok.adapterResource().rendered(rvPath: "/usr/local/bin/rv")
+    #expect(GrokHookInspect.hasFileToolDoor(in: Data(rendered.utf8)))
+}
+
+@Test func grokHookInspect_matcherIsNotFileToolDoor() throws {
+    let body = try grokBodyWithMatcher(rvPath: "/usr/local/bin/rv", matcher: "Bash")
+    #expect(GrokHookInspect.hasFileToolDoor(in: Data(body.utf8)) == false)
+}
+
+@Test func hostInstallation_wiredGrokBytesWithMatcherAreShellOnly() throws {
+    try withInstallationHome { _, paths in
+        let body = try grokBodyWithMatcher(rvPath: "/usr/local/bin/rv", matcher: "Bash")
+        let installation = HostAdapterInstallation.wired(
+            path: paths.hostAdapter(for: .grok),
+            existingData: Data(body.utf8)
+        )
+        #expect(installation.fileTools() == .shellOnly)
+    }
+}
+
+@Test func hostInstallation_wiredClaudeMergeIsFileToolWired() throws {
+    try withInstallationHome { home, paths in
+        let executable = home.appendingPathComponent("bin/rv")
+        try makeExecutable(executable)
+        try FileManager.default.createDirectory(
+            atPath: paths.claudeDirectory,
+            withIntermediateDirectories: true
+        )
+        try writeWiredAdapter(
+            host: .claude,
+            destination: paths.hostAdapter(for: .claude).destination,
+            rvPath: executable.path
+        )
+
+        let snapshot = try HostAdapterInstallation.inspect(
+            paths: paths,
+            pathEntries: [],
+            fileManager: .default
+        )
+
+        #expect(snapshot.state(for: .claude) == .wired)
+        #expect(snapshot.fileTools(for: .claude) == .wired)
+    }
+}
+
+@Test func hostInstallation_wiredCursorAdapterWithoutHooksJSONIsShellOnly() throws {
+    try withInstallationHome { home, paths in
+        let executable = home.appendingPathComponent("bin/rv")
+        try makeExecutable(executable)
+        try FileManager.default.createDirectory(
+            atPath: paths.cursorDirectory,
+            withIntermediateDirectories: true
+        )
+        try writeWiredAdapter(
+            host: .cursor,
+            destination: paths.hostAdapter(for: .cursor).destination,
+            rvPath: executable.path
+        )
+
+        let snapshot = try HostAdapterInstallation.inspect(
+            paths: paths,
+            pathEntries: [],
+            fileManager: .default
+        )
+
+        #expect(snapshot.state(for: .cursor) == .wired)
+        #expect(snapshot.fileTools(for: .cursor) == .shellOnly)
+    }
+}
+
+@Test func hostInstallation_wiredCursorWithPreToolUseIsFileToolWired() throws {
+    try withInstallationHome { home, paths in
+        let executable = home.appendingPathComponent("bin/rv")
+        try makeExecutable(executable)
+        try FileManager.default.createDirectory(
+            atPath: paths.cursorDirectory,
+            withIntermediateDirectories: true
+        )
+        try writeWiredAdapter(
+            host: .cursor,
+            destination: paths.hostAdapter(for: .cursor).destination,
+            rvPath: executable.path
+        )
+        let merged = try CursorHooksMerge.merge(
+            existingData: nil,
+            adapterPath: paths.cursorHook
+        )
+        try merged.data.write(to: URL(fileURLWithPath: paths.cursorHooksJSON))
+
+        let snapshot = try HostAdapterInstallation.inspect(
+            paths: paths,
+            pathEntries: [],
+            fileManager: .default
+        )
+
+        #expect(snapshot.state(for: .cursor) == .wired)
+        #expect(snapshot.fileTools(for: .cursor) == .wired)
+    }
+}
+
+private func grokBodyWithMatcher(rvPath: String, matcher: String) throws -> String {
+    let rendered = try HookHost.grok.adapterResource().rendered(rvPath: rvPath)
+    let needle = "      {\n        \"hooks\":"
+    let insert = "      {\n        \"matcher\": \"\(matcher)\",\n        \"hooks\":"
+    let replaced = rendered.replacingOccurrences(of: needle, with: insert)
+    try #require(replaced != rendered)
+    return replaced
+}

@@ -30,20 +30,20 @@ public struct GrokHostCodec: HostCodec {
                 )
             )
         }
-        if let kind = FileToolKind(toolName: envelope.toolName ?? "") {
-            let path = FileToolPath.firstPresent(
-                envelope.toolInput?.filePath,
-                envelope.toolInput?.path,
-                envelope.toolInput?.targetFile,
-                envelope.toolInput?.target
-            ) ?? FileToolPath(rawValue: "")
+        if let file = FileToolAction.decoded(
+            toolName: envelope.toolName,
+            paths: envelope.toolInput?.filePath,
+            envelope.toolInput?.path,
+            envelope.toolInput?.targetFile,
+            envelope.toolInput?.target
+        ) {
             return .request(
                 HookRequest(
                     host: .grok,
                     command: ShellCommand(rawValue: ""),
                     cwd: cwd,
                     session: session,
-                    file: FileToolAction(kind: kind, path: path)
+                    file: file
                 )
             )
         }

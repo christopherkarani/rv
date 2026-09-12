@@ -1,7 +1,6 @@
 import ArgumentParser
 import Foundation
 import RVDomain
-import RVEngine
 import RVHooks
 
 extension HookHost: ExpressibleByArgument {}
@@ -41,7 +40,7 @@ struct Hook: AsyncParsableCommand {
             host: host,
             stdin: stdin,
             evaluate: evaluate,
-            evaluateFile: evaluateFile ?? { action, _ in evaluateFileTool(action) },
+            evaluateFile: evaluateFile,
             spendHostAsk: spendHostAsk
         )
         return (wire.stdout, wire.stderr, wire.exitCode)
