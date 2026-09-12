@@ -44,6 +44,7 @@ public func analyzeSemantics(
         if case .git = git {
             return git.wrapping(unwrapped.layers)
         }
+        // Copy probeMode: omitting it makes unprobed scan look like live-empty.
         let filesystem = analyzeFilesystem(
             unwrapped.command,
             context: FilesystemAnalysisContext(
@@ -51,7 +52,8 @@ public func analyzeSemantics(
                 repositoryRoot: filesystemContext.repositoryRoot,
                 homeDirectory: filesystemContext.homeDirectory,
                 catalog: filesystemContext.catalog,
-                facts: filesystemContext.facts
+                facts: filesystemContext.facts,
+                probeMode: filesystemContext.probeMode
             )
         )
         return filesystem.wrapping(unwrapped.layers)
