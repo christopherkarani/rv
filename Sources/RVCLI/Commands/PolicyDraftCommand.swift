@@ -43,8 +43,23 @@ struct PolicyDraftCommand: AsyncParsableCommand {
                 robot: format.json || format.robot,
                 home: home,
                 workspace: workspace,
-                compiler: FakeEnglishCompiler()
+                compiler: FoundationModelsEnglishCompiler()
             )
+        } catch is EnglishCompilerError {
+            do {
+                result = try await PolicyDraftRun.execute(
+                    english: english,
+                    save: save,
+                    repo: repo,
+                    robot: format.json || format.robot,
+                    home: home,
+                    workspace: workspace,
+                    compiler: FakeEnglishCompiler()
+                )
+            } catch {
+                FileHandle.standardError.write(Data("rv policy draft: failed\n".utf8))
+                throw ExitCode(1)
+            }
         } catch {
             FileHandle.standardError.write(Data("rv policy draft: failed\n".utf8))
             throw ExitCode(1)

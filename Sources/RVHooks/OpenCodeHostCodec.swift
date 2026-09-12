@@ -35,6 +35,14 @@ public struct OpenCodeHostCodec: HostCodec {
             )
         )
     }
+
+    public func encodeDeny(reason: String, rule: RuleID? = nil, next: HookVoiceNext = .none) -> HookWire {
+        encodeLeftoverDecisionDeny(reason: reason, rule: rule, next: next)
+    }
+
+    public func encodeAsk(reason: String, rule: RuleID? = nil, next: HookVoiceNext = .none) -> HookWire {
+        encodeLeftoverDecisionAsk(reason: reason, rule: rule, next: next)
+    }
 }
 
 /// Official agent tool id is `bash`. TUI `session.shell` is the same shell door.

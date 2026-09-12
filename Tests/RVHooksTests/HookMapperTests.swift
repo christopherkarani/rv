@@ -337,6 +337,10 @@ private final class EncodeDenySpy: HostCodec, @unchecked Sendable {
         denyCalls.append((reason, rule, next))
         return HookWire(stdout: "spy\n", exitCode: 9)
     }
+
+    func encodeAsk(reason: String, rule: RuleID?, next: HookVoiceNext) -> HookWire {
+        HookWire(stdout: "spy-ask\n", exitCode: 9)
+    }
 }
 
 private final class EncodeDoorSpy: HostCodec, @unchecked Sendable {

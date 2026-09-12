@@ -38,6 +38,14 @@ public struct GrokHostCodec: HostCodec {
         "run_terminal_cmd",
         "Bash",
     ]
+
+    public func encodeDeny(reason: String, rule: RuleID? = nil, next: HookVoiceNext = .none) -> HookWire {
+        encodeLeftoverDecisionDeny(reason: reason, rule: rule, next: next)
+    }
+
+    public func encodeAsk(reason: String, rule: RuleID? = nil, next: HookVoiceNext = .none) -> HookWire {
+        encodeLeftoverDecisionAsk(reason: reason, rule: rule, next: next)
+    }
 }
 
 private struct GrokEnvelope: Decodable {

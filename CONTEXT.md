@@ -61,8 +61,8 @@ The pack IDs on an evaluate request. Empty means none — not the catalog, not a
 _Avoid_: refill, default packs
 
 **Day-one packs**:
-core.filesystem, core.git, and system.disk. v1 evaluate always uses these; the catalog does not change a Decision.
-_Avoid_: live catalog, enabled catalog
+core.filesystem, core.git, and system.disk. Evaluate always compiles walk ∪ day-one. Extra enabled packs can add denials; they cannot weaken day-one.
+_Avoid_: live catalog as the only compile set; implying `rv packs enable` is a no-op
 
 **Explain pipeline**:
 The stages an EvaluationResult already took, in evaluation order: normalize, quick-reject, safe, destructive, default. TTY explain and XPC explain show the same stages. XPC `ExplainStage.name` is that kebab-case id (`quick-reject`, not camelCase `quickReject`); `elapsedMs` is currently always 0.
@@ -89,5 +89,5 @@ The client Decision from transport and advertised service semver to an Evaluatio
 _Avoid_: isMajorSkew at the client evaluate call site, flipping isMajorSkew true on parse failure, transportPresent Bool
 
 **English compile**:
-You type English, rv shows a typed rule, you save it, the hook matches that form with no model. Shareable file is `policy.toml`. Law: `docs/architecture/english-compile.md`, `spec/spec-architecture-policy-document.md`. Not 02.md § Order.
+You type English, rv shows a typed rule, you save it, the hook matches that form with no model. Shareable file is `policy.toml`. `rv policy draft` uses Apple Intelligence when available and the canned gitPush fixture (`FakeEnglishCompiler`) when it is not. Law: `docs/architecture/english-compile.md`, `spec/spec-architecture-policy-document.md`. Not 02.md § Order. Not live Auto-review.
 _Avoid_: saving English as the matcher, importing `scratch/english-review`, live Auto-review on the hook, YAML policy files
