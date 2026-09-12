@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 import RVDomain
 
@@ -129,6 +130,79 @@ struct FilesystemActionTests {
         #expect(action.primaryTarget?.scope == .unknown)
         #expect(action.effects.kinds.contains(.unresolvedFilesystem))
         #expect(action.resources.filesystemScope == .unknown)
+    }
+
+    @Test func unprobedScope_isCodableRawUnprobed() throws {
+        #expect(FilesystemScope.unprobed.rawValue == "unprobed")
+        let encoded = try JSONEncoder().encode(FilesystemScope.unprobed)
+        #expect(try JSONDecoder().decode(FilesystemScope.self, from: encoded) == .unprobed)
+    }
+
+    @Test func unprobedFactory_isDistinctFromEmptyLiveContext() {
+        #expect(FilesystemAnalysisContext.empty.probeMode == .live)
+        #expect(FilesystemAnalysisContext().probeMode == .live)
+        #expect(FilesystemAnalysisContext.unprobed().probeMode == .unprobed)
+        #expect(FilesystemAnalysisContext.empty != FilesystemAnalysisContext.unprobed())
+    }
+
+    @Test func unprobedTarget_doesNotAddUnresolvedEffect() {
+        let target = FilesystemTarget(
+            apparent: "file",
+            canonical: "file",
+            scope: .unprobed,
+            kind: .unknown
+        )
+        let action = FilesystemAction.overwrite(targets: [target])
+        #expect(action.effects.kinds.contains(.unresolvedFilesystem) == false)
+        #expect(action.effects.kinds == [.filesystemOverwrite])
+        #expect(action.explainScope == "unprobed")
+        #expect(action.resources.filesystemScope == .unprobed)
+    }
+
+    @Test func unknownTarget_outranksUnprobedForFailClosed() {
+        let unprobed = FilesystemTarget(
+            apparent: "offline",
+            canonical: "offline",
+            scope: .unprobed,
+            kind: .unknown
+        )
+        let unknown = FilesystemTarget(
+            apparent: "gone",
+            canonical: "/gone",
+            scope: .unknown,
+            kind: .unknown,
+            resolution: .uncertain
+        )
+        let action = FilesystemAction.delete(
+            targets: [unprobed, unknown],
+            recursive: false,
+            force: false
+        )
+        #expect(action.primaryTarget?.scope == .unknown)
+        #expect(action.effects.kinds.contains(.unresolvedFilesystem))
+    }
+
+    @Test func protectedTarget_outranksUnprobed() {
+        let unprobed = FilesystemTarget(
+            apparent: "file",
+            canonical: "file",
+            scope: .unprobed,
+            kind: .unknown
+        )
+        let protected = FilesystemTarget(
+            apparent: "config",
+            canonical: "/home/.ssh/config",
+            scope: .protectedPath,
+            kind: .unknown
+        )
+        let action = FilesystemAction.delete(
+            targets: [unprobed, protected],
+            recursive: false,
+            force: false
+        )
+        #expect(action.primaryTarget?.scope == .protectedPath)
+        #expect(action.effects.kinds.contains(.protectedPathMutation))
+        #expect(action.effects.kinds.contains(.unresolvedFilesystem) == false)
     }
 
     @Test func outsideWrite_addsIndependentEffect() {

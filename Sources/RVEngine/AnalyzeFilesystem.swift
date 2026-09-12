@@ -783,7 +783,8 @@ func filesystemScopeForResolution(
     _ resolution: FilesystemResolution,
     canonical: String,
     repositoryRoot: RepositoryRoot?,
-    catalog: SecretPathCatalog
+    catalog: SecretPathCatalog,
+    probeMode: FilesystemProbeMode
 ) -> FilesystemScope {
     if resolution == .uncertain {
         return .unknown
@@ -791,7 +792,8 @@ func filesystemScopeForResolution(
     return classifyFilesystemScope(
         canonical: canonical,
         repositoryRoot: repositoryRoot,
-        catalog: catalog
+        catalog: catalog,
+        probeMode: probeMode
     )
 }
 
@@ -815,12 +817,20 @@ public func lexicalFilesystemPath(
 func classifyFilesystemScope(
     canonical: String,
     repositoryRoot: RepositoryRoot?,
-    catalog: SecretPathCatalog
+    catalog: SecretPathCatalog,
+    probeMode: FilesystemProbeMode
 ) -> FilesystemScope {
     if catalog.firstMatch(of: canonical) != nil {
         return .protectedPath
     }
-    guard let repositoryRoot else { return .unknown }
+    guard let repositoryRoot else {
+        switch probeMode {
+        case .live:
+            return .unknown
+        case .unprobed:
+            return .unprobed
+        }
+    }
     if isInsideRepository(canonical, root: repositoryRoot.rawValue) {
         return .insideRepository
     }
@@ -860,7 +870,8 @@ private func classifiedTarget(
             resolution,
             canonical: canonical,
             repositoryRoot: context.repositoryRoot,
-            catalog: context.catalog
+            catalog: context.catalog,
+            probeMode: context.probeMode
         ),
         kind: classifyFilesystemKind(canonical),
         followedSymlink: followedSymlink,

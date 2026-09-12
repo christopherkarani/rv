@@ -323,6 +323,8 @@ public enum ActionPolicyEngine: Sendable {
                 semanticallyCovered: true
             )
         }
+        // Unprobed writes are semantically uncovered: pack fallback, not
+        // unresolved-path. Live unknown already returned above.
         return CoreHit(
             decision: .reviewEligible(fallback: Builtin.uncovered),
             ruleID: Builtin.uncovered.ruleID,

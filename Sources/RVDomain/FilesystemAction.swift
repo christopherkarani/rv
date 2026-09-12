@@ -1,9 +1,11 @@
 /// Security scope after canonicalize. Protected wins over repository boundary.
+/// `.unprobed` is offline (no probe). `.unknown` is live-uncertain / missing root.
 public enum FilesystemScope: String, Sendable, Equatable, Codable {
     case insideRepository
     case outsideRepository
     case protectedPath
     case unknown
+    case unprobed
 }
 
 /// Closed filesystem mutation family used by policy. Write covers overwrite and mode change.
@@ -158,6 +160,8 @@ public enum FilesystemAction: Sendable, Equatable, Codable {
             return "outside repo"
         case .protectedPath:
             return "protected path"
+        case .unprobed:
+            return "unprobed"
         case .unknown, nil:
             return "unknown"
         }
@@ -224,7 +228,7 @@ public enum FilesystemAction: Sendable, Equatable, Codable {
         case .read:
             kinds.append(.filesystemRead)
         }
-        if targets.contains(where: { $0.resolution == .uncertain || $0.scope == .unknown }) {
+        if targets.contains(where: Self.addsUnresolvedFilesystem) {
             kinds.append(.unresolvedFilesystem)
         }
         if operationKind != .read,
@@ -268,16 +272,31 @@ public enum FilesystemAction: Sendable, Equatable, Codable {
         return kindRank(left.kind) < kindRank(right.kind)
     }
 
+    /// Live-uncertain or unknown scope is unresolved. Unprobed is not.
+    private static func addsUnresolvedFilesystem(_ target: FilesystemTarget) -> Bool {
+        if target.resolution == .uncertain {
+            return true
+        }
+        switch target.scope {
+        case .unknown:
+            return true
+        case .unprobed, .insideRepository, .outsideRepository, .protectedPath:
+            return false
+        }
+    }
+
     private static func scopeRank(_ scope: FilesystemScope) -> Int {
         switch scope {
         case .insideRepository:
             return 1
-        case .outsideRepository:
+        case .unprobed:
             return 2
-        case .unknown:
+        case .outsideRepository:
             return 3
-        case .protectedPath:
+        case .unknown:
             return 4
+        case .protectedPath:
+            return 5
         }
     }
 

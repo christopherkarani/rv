@@ -93,29 +93,56 @@ public struct GitAnalysisContext: Sendable, Equatable {
     }
 }
 
+/// Whether the caller ran a live path probe. Empty context stays live.
+public enum FilesystemProbeMode: Sendable, Equatable {
+    /// Probe ran or was omitted; missing repo root is fail-closed unknown.
+    case live
+    /// Caller injected no path/repo facts. Distinct from live-uncertain.
+    case unprobed
+}
+
 /// Caller-supplied path facts. Live canonicalize stays at the evaluate door.
+///
+/// Default empty context is live fail-closed. Offline callers must use
+/// ``unprobed(homeDirectory:catalog:)``; forgetting context must not look unprobed.
 public struct FilesystemAnalysisContext: Sendable, Equatable {
     public var workingDirectory: WorkingDirectory?
     public var repositoryRoot: RepositoryRoot?
     public var homeDirectory: String?
     public var catalog: SecretPathCatalog
     public var facts: [FilesystemPathFact]
+    public var probeMode: FilesystemProbeMode
 
     public init(
         workingDirectory: WorkingDirectory? = nil,
         repositoryRoot: RepositoryRoot? = nil,
         homeDirectory: String? = nil,
         catalog: SecretPathCatalog = .dayOne,
-        facts: [FilesystemPathFact] = []
+        facts: [FilesystemPathFact] = [],
+        probeMode: FilesystemProbeMode = .live
     ) {
         self.workingDirectory = workingDirectory
         self.repositoryRoot = repositoryRoot
         self.homeDirectory = homeDirectory
         self.catalog = catalog
         self.facts = facts
+        self.probeMode = probeMode
     }
 
+    /// Live probe default. Missing repository root classifies as unknown.
     public static let empty = FilesystemAnalysisContext()
+
+    /// Offline analysis with no path/repo probe. Empty live context is not this.
+    public static func unprobed(
+        homeDirectory: String? = nil,
+        catalog: SecretPathCatalog = .dayOne
+    ) -> FilesystemAnalysisContext {
+        FilesystemAnalysisContext(
+            homeDirectory: homeDirectory,
+            catalog: catalog,
+            probeMode: .unprobed
+        )
+    }
 
     public func fact(for apparent: String) -> FilesystemPathFact? {
         facts.first { $0.apparent == apparent }
