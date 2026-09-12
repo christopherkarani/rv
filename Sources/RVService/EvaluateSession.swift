@@ -78,7 +78,7 @@ public struct EvaluateSession: Sendable {
                 matchingView: Normalize.matchingView(of: request.command.rawValue)
             )
         }
-        return callEngineEvaluate(
+        return engineEvaluate(
             request,
             packs: snapshots,
             safety: safety,
@@ -88,9 +88,50 @@ public struct EvaluateSession: Sendable {
             compiled: compiled
         )
     }
+
+    /// The evaluation door on this session's compiled packs: pack evaluate,
+    /// then unwrap, analyze, and apply semantic policy. Path / cwd / repo I/O
+    /// stays with the caller via `filesystemProbe`.
+    ///
+    /// Missing core packs stay `indeterminate` for every command, including empty
+    /// input that bare `evaluate` would allow. The Engine door still runs so
+    /// unwrap / probe / analyze attach; the session then floors the outcome.
+    public func evaluateWithSemantics(
+        _ request: EvaluationRequest,
+        safety: SafetyLevel = .normal,
+        allowPaths: SecretAllowPathSet = .empty,
+        home: String? = nil,
+        gitContext: GitAnalysisContext = .empty,
+        filesystemProbe: (UnwrapOutcome) -> FilesystemAnalysisContext = { _ in .empty },
+        policy: EffectiveActionPolicy = .empty
+    ) -> EvaluationResult {
+        let result = engineEvaluateWithSemantics(
+            request,
+            packs: snapshots,
+            safety: safety,
+            allowPaths: allowPaths,
+            home: home,
+            engine: engine,
+            compiled: compiled,
+            gitContext: gitContext,
+            filesystemProbe: filesystemProbe,
+            policy: policy
+        )
+        guard corePacksReady else {
+            return EvaluationResult(
+                outcome: .indeterminate(.corePacksUnavailable),
+                matchingView: Normalize.matchingView(of: request.command.rawValue),
+                analysis: result.analysis
+            )
+        }
+        return result
+    }
 }
 
-private func callEngineEvaluate(
+// The `RVEngine` anchor enum shadows the module name and the members shadow
+// the globals inside the struct, so the Engine doors are reached through
+// file-private shims. Not indirection for its own sake — name collision.
+private func engineEvaluate(
     _ request: EvaluationRequest,
     packs: [PackSnapshot],
     safety: SafetyLevel,
@@ -107,5 +148,31 @@ private func callEngineEvaluate(
         home: home,
         patterns: engine,
         compiled: compiled
+    )
+}
+
+private func engineEvaluateWithSemantics(
+    _ request: EvaluationRequest,
+    packs: [PackSnapshot],
+    safety: SafetyLevel,
+    allowPaths: SecretAllowPathSet,
+    home: String?,
+    engine: ICUPatternEngine,
+    compiled: CompiledPacks<ICUCompiledPattern>,
+    gitContext: GitAnalysisContext,
+    filesystemProbe: (UnwrapOutcome) -> FilesystemAnalysisContext,
+    policy: EffectiveActionPolicy
+) -> EvaluationResult {
+    evaluateWithSemantics(
+        request,
+        packs: packs,
+        safety: safety,
+        allowPaths: allowPaths,
+        home: home,
+        patterns: engine,
+        compiled: compiled,
+        gitContext: gitContext,
+        filesystemProbe: filesystemProbe,
+        policy: policy
     )
 }

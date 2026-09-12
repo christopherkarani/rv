@@ -41,6 +41,9 @@ public func applySemantics(
     enabledPacks: [PackID] = dayOnePackIDs,
     policy: EffectiveActionPolicy = .empty
 ) -> EvaluationResult {
+    if let floored = pack.packFloor(attaching: analysis) {
+        return floored
+    }
     let limited = applyUnwrapLimit(pack: pack, analysis: analysis)
     let afterGit = applyGitSemantics(
         pack: limited,
@@ -60,19 +63,32 @@ public func applySemantics(
     )
 }
 
+extension EvaluationResult {
+    /// Pack deny / indeterminate is a floor: semantic stages attach `analysis`
+    /// but never rewrite the outcome. `nil` means the pack allowed and
+    /// semantic policy may tighten.
+    func packFloor(attaching analysis: SemanticAnalysis) -> EvaluationResult? {
+        switch decision {
+        case .deny, .indeterminate:
+            var result = self
+            result.analysis = analysis
+            return result
+        case .allow:
+            return nil
+        }
+    }
+}
+
 /// Fail-closed deny when unwrap hit a depth / size / parse limit.
 public func applyUnwrapLimit(
     pack: EvaluationResult,
     analysis: SemanticAnalysis
 ) -> EvaluationResult {
+    if let floored = pack.packFloor(attaching: analysis) {
+        return floored
+    }
     var result = pack
     result.analysis = analysis
-    switch pack.decision {
-    case .deny, .indeterminate:
-        return result
-    case .allow:
-        break
-    }
     guard case .unwrapLimited = analysis.innermost else {
         return result
     }

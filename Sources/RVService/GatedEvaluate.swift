@@ -333,26 +333,15 @@ public struct GatedEvaluate: Sendable {
         }
     }
 
+    /// Policy-store I/O (safety, secret allow-paths, typed rules) around the
+    /// Engine evaluation door. The door owns evaluate → unwrap → probe →
+    /// analyze → apply; the Policy gate runs after, in `gated`.
     private func evaluateWithSemantics(
         _ request: EvaluationRequest,
         cwd: WorkingDirectory?,
         home: HomeDirectory? = nil
     ) -> EvaluationResult {
         let workspace = Self.workspaceURL(cwd: cwd)
-        let pack = resolvedSession().evaluate(
-            request,
-            safety: SafetyStore.loadEffective(home: home, workspace: workspace),
-            allowPaths: SecretAllowPaths.loadEffective(home: home, workspace: workspace),
-            home: home?.rawValue
-        )
-        let gitContext = GitAnalysisContext(workingDirectory: cwd)
-        let unwrapped = unwrapCommand(request.command, workingDirectory: cwd)
-        let probe = filesystemProbe(
-            unwrapped: unwrapped,
-            command: request.command,
-            cwd: cwd,
-            home: home
-        )
         let policy: EffectiveActionPolicy
         do {
             policy = EffectiveActionPolicy(rules: try Self.loadTypedRules(cwd: cwd, home: home))
@@ -368,20 +357,23 @@ public struct GatedEvaluate: Sendable {
                     ),
                     matched: nil
                 ),
-                matchingView: pack.matchingView
+                matchingView: Normalize.matchingView(of: request.command.rawValue)
             )
         }
-        return applySemantics(
-            pack: pack,
-            analysis: analyzeSemantics(
-                unwrapped: unwrapped,
-                gitContext: gitContext,
-                filesystemContext: probe
-            ),
-            command: request.command,
-            gitContext: gitContext,
-            filesystemContext: probe,
-            enabledPacks: request.enabledPacks,
+        return resolvedSession().evaluateWithSemantics(
+            request,
+            safety: SafetyStore.loadEffective(home: home, workspace: workspace),
+            allowPaths: SecretAllowPaths.loadEffective(home: home, workspace: workspace),
+            home: home?.rawValue,
+            gitContext: GitAnalysisContext(workingDirectory: cwd),
+            filesystemProbe: { unwrapped in
+                FilesystemLiveProbe.context(
+                    unwrapped: unwrapped,
+                    command: request.command,
+                    cwd: cwd,
+                    homeDirectory: home?.rawValue
+                )
+            },
             policy: policy
         )
     }
@@ -432,29 +424,6 @@ public struct GatedEvaluate: Sendable {
             cwd: cwd,
             ruleID: deny.ruleID,
             now: now
-        )
-    }
-
-    private func filesystemProbe(
-        unwrapped: UnwrapOutcome,
-        command: ShellCommand,
-        cwd: WorkingDirectory?,
-        home: HomeDirectory?
-    ) -> FilesystemAnalysisContext {
-        let probeCommand: ShellCommand
-        let probeCwd: WorkingDirectory?
-        switch unwrapped {
-        case .complete(let extracted):
-            probeCommand = extracted.command
-            probeCwd = extracted.workingDirectory ?? cwd
-        case .limited:
-            probeCommand = command
-            probeCwd = cwd
-        }
-        return FilesystemLiveProbe.context(
-            command: probeCommand,
-            cwd: probeCwd,
-            homeDirectory: home?.rawValue
         )
     }
 

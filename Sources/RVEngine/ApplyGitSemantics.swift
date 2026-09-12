@@ -31,15 +31,12 @@ public func applyGitSemantics(
     enabledPacks: [PackID] = dayOnePackIDs,
     policy: EffectiveActionPolicy = .empty
 ) -> EvaluationResult {
+    if let floored = pack.packFloor(attaching: analysis) {
+        return floored
+    }
+
     var result = pack
     result.analysis = analysis
-
-    switch pack.decision {
-    case .deny, .indeterminate:
-        return result
-    case .allow:
-        break
-    }
 
     guard let action = analysis.gitAction else {
         return result

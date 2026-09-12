@@ -28,6 +28,23 @@ import RVDomain
     #expect(finding.matchingView.rawValue.contains("reset"))
 }
 
+@Test func classify_semanticOnlyDeny_emitsFinding() throws {
+    // Packs allow this (no destructive pattern); the evaluation door's
+    // unwrap-limited fail-closed deny must still surface as a finding.
+    let events = [
+        ExtractedEvent(
+            host: .claude,
+            sourcePath: "/tmp/fixture/session.jsonl",
+            command: ShellCommand(rawValue: #"python -c "mystery(payload)""#)
+        ),
+    ]
+    let findings = try ScanClassify().classify(events)
+
+    let finding = try #require(findings.first)
+    #expect(findings.count == 1)
+    #expect(finding.ruleID == ActionPolicyEngine.Builtin.unwrapLimited.ruleID)
+}
+
 @Test func classify_allowGitStatus_emitsNoFindings() throws {
     let events = [
         ExtractedEvent(
