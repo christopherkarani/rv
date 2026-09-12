@@ -10,12 +10,26 @@ public func analyzeSemantics(
     maxBytes: Int = UnwrapLimits.maxBytes
 ) -> SemanticAnalysis {
     let startCwd = gitContext.workingDirectory ?? filesystemContext.workingDirectory
-    switch unwrapCommand(
-        command,
-        workingDirectory: startCwd,
-        maxDepth: maxDepth,
-        maxBytes: maxBytes
-    ) {
+    return analyzeSemantics(
+        unwrapped: unwrapCommand(
+            command,
+            workingDirectory: startCwd,
+            maxDepth: maxDepth,
+            maxBytes: maxBytes
+        ),
+        gitContext: gitContext,
+        filesystemContext: filesystemContext
+    )
+}
+
+/// Same analyzers as the command entry, when the caller already unwrapped once
+/// (Evaluate door live probe).
+public func analyzeSemantics(
+    unwrapped: UnwrapOutcome,
+    gitContext: GitAnalysisContext = .empty,
+    filesystemContext: FilesystemAnalysisContext = .empty
+) -> SemanticAnalysis {
+    switch unwrapped {
     case .limited(let layers):
         return SemanticAnalysis.unwrapLimited.wrapping(layers)
     case .complete(let unwrapped):
