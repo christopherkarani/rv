@@ -47,7 +47,8 @@ enum FilesystemLiveProbe {
                         workingDirectory: nil,
                         homeDirectory: homeDirectory
                     )
-                }
+                },
+                probe: .probed
             )
         }
         guard let resolvedCwd = resolveExistingDirectory(working) else {
@@ -64,7 +65,8 @@ enum FilesystemLiveProbe {
                         ),
                         resolution: .uncertain
                     )
-                }
+                },
+                probe: .probed
             )
         }
         let facts = paths.map { apparent in
@@ -79,7 +81,8 @@ enum FilesystemLiveProbe {
             repositoryRoot: discoverRepositoryRoot(from: resolvedCwd),
             homeDirectory: homeDirectory,
             catalog: .dayOne,
-            facts: facts
+            facts: facts,
+            probe: .probed
         )
     }
 

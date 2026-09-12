@@ -93,31 +93,78 @@ public struct GitAnalysisContext: Sendable, Equatable {
     }
 }
 
+/// Whether a filesystem world was injected for analysis.
+///
+/// Unprobed worlds must not fail-closed as unresolved-path. A probed world
+/// with missing cwd or repo root stays fail-closed unknown.
+public enum FilesystemProbeState: String, Sendable, Equatable, Codable {
+    case unprobed
+    case probed
+}
+
 /// Caller-supplied path facts. Live canonicalize stays at the evaluate door.
-public struct FilesystemAnalysisContext: Sendable, Equatable {
+public struct FilesystemAnalysisContext: Sendable, Equatable, Codable {
     public var workingDirectory: WorkingDirectory?
     public var repositoryRoot: RepositoryRoot?
     public var homeDirectory: String?
     public var catalog: SecretPathCatalog
     public var facts: [FilesystemPathFact]
+    /// Injected filesystem I/O world. `empty` is unprobed.
+    public var probe: FilesystemProbeState
 
     public init(
         workingDirectory: WorkingDirectory? = nil,
         repositoryRoot: RepositoryRoot? = nil,
         homeDirectory: String? = nil,
         catalog: SecretPathCatalog = .dayOne,
-        facts: [FilesystemPathFact] = []
+        facts: [FilesystemPathFact] = [],
+        probe: FilesystemProbeState = .unprobed
     ) {
         self.workingDirectory = workingDirectory
         self.repositoryRoot = repositoryRoot
         self.homeDirectory = homeDirectory
         self.catalog = catalog
         self.facts = facts
+        self.probe = probe
     }
 
     public static let empty = FilesystemAnalysisContext()
 
     public func fact(for apparent: String) -> FilesystemPathFact? {
         facts.first { $0.apparent == apparent }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case workingDirectory
+        case repositoryRoot
+        case homeDirectory
+        case facts
+        case probe
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        workingDirectory = try container.decodeIfPresent(
+            WorkingDirectory.self,
+            forKey: .workingDirectory
+        )
+        repositoryRoot = try container.decodeIfPresent(
+            RepositoryRoot.self,
+            forKey: .repositoryRoot
+        )
+        homeDirectory = try container.decodeIfPresent(String.self, forKey: .homeDirectory)
+        catalog = .dayOne
+        facts = try container.decodeIfPresent([FilesystemPathFact].self, forKey: .facts) ?? []
+        probe = try container.decodeIfPresent(FilesystemProbeState.self, forKey: .probe)
+            ?? .unprobed
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(workingDirectory, forKey: .workingDirectory)
+        try container.encodeIfPresent(repositoryRoot, forKey: .repositoryRoot)
+        try container.encodeIfPresent(homeDirectory, forKey: .homeDirectory)
+        try container.encode(facts, forKey: .facts)
+        try container.encode(probe, forKey: .probe)
     }
 }
