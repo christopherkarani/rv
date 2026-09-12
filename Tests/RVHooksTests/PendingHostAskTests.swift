@@ -95,6 +95,15 @@ struct PendingHostAskHookTests {
         #expect(records[0].request.session?.rawValue == "sess-pi")
         #expect(records[0].request.host == .pi)
         #expect(records[0].action.supportingCommand?.rawValue == "git reset --hard")
+        let session = try #require(SessionID(validating: "sess-pi"))
+        let cwd = try #require(WorkingDirectory(validating: "/tmp/ws"))
+        let command = ShellCommand(rawValue: "git reset --hard")
+        #expect(
+            records[0].action.fingerprint
+                == ActionFingerprint.make(host: .pi, session: session, cwd: cwd, command: command)
+        )
+        #expect(records[0].action.effects.kinds.contains(.workingTreeDiscard))
+        #expect(records[0].action.fingerprint.rawValue.contains("shell:git") == false)
         #expect(await probe.clears.isEmpty)
     }
 
@@ -257,7 +266,8 @@ private let resetHardDeny = EvaluationResult(
         ),
         matched: nil
     ),
-    matchingView: MatchingView("git reset --hard")
+    matchingView: MatchingView("git reset --hard"),
+    analysis: .git(.reset(mode: .hard, target: nil))
 )
 
 private func piAskStdin(session: String?, command: String = "git reset --hard") -> String {

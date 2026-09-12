@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 import RVDomain
 
@@ -145,5 +146,41 @@ struct PendingActionTests {
         #expect(action.effects.kinds.isEmpty)
         #expect(action.resources.path == nil)
         #expect(action.fingerprint.rawValue.hasPrefix("shell:") == false)
+    }
+
+    @Test func oldEmptyEffectPendingJSON_stillDecodes() throws {
+        let json = """
+        {
+          "id": "legacy-empty",
+          "identity": {"session": "sess", "agent": "pi"},
+          "action": {
+            "shell": {
+              "_0": {
+                "fingerprint": "pi:sess:/tmp/ws:git reset --hard",
+                "effects": {"kinds": []},
+                "resources": {},
+                "scope": {"workingDirectory": "/tmp/ws"},
+                "supportingCommand": "git reset --hard",
+                "legacyExtra": true
+              }
+            }
+          },
+          "reason": "hostAsk",
+          "continuation": {"kind": "hostNative"},
+          "timeoutPolicy": "keepWaiting",
+          "createdAt": "2023-11-14T22:13:20Z",
+          "expiresAt": "2023-11-14T23:13:20Z",
+          "state": {"kind": "awaitingHuman"}
+        }
+        """
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = try decoder.decode(PendingApproval.self, from: Data(json.utf8))
+        #expect(decoded.id.rawValue == "legacy-empty")
+        #expect(decoded.fingerprint.rawValue == "pi:sess:/tmp/ws:git reset --hard")
+        #expect(decoded.action.effects.kinds.isEmpty)
+        #expect(decoded.action.resources.path == nil)
+        #expect(decoded.action.supportingCommand?.rawValue == "git reset --hard")
+        #expect(decoded.state == .awaitingHuman)
     }
 }
