@@ -2,7 +2,7 @@
 
 Work only in `~/CodingProjects/rv`. Do not implement in sibling repos. Do not write foreign product names into this tree.
 
-v1 platform: macOS 26, Apple Silicon only. Package tools Swift 6.3. Language mode 6.
+v1 platform: macOS 26 Apple Silicon, and Linux aarch64/x86_64. Darwin `rvd` is XPC; Linux `rvd` is AF_UNIX. Package tools Swift 6.3. Language mode 6.
 
 Hexagonal modules; dependency arrows down; a test that needs a TTY to prove a **decision** is in the wrong module.
 
@@ -43,5 +43,5 @@ Gate: `tools/gate.sh` (runs `preflight` + filtered tests via `tools/swift-6.3.3`
 - No live-HOME tests.
 - No command text in `os_log`. v1: history off by default. 0.2 audit: `docs/architecture/02.md`.
 - No OS-enforced / Seatbelt claim. Grade is hook.
-- No Linux / Windows / macOS 14 / 15 claim.
+- No Windows / Intel Mac / macOS 14 / 15 claim. Linux aarch64/x86_64 is in (OPE-261–262). Factory specs that still say mac-only are superseded for platform.
 - Analytics never carries command text, paths, or secrets; host hooks never phone home.

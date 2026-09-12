@@ -31,7 +31,7 @@ Do not invent a module. Do not restyle the graph from memory.
 
 ## Toolchain
 
-Pin is `.swift-version` (`6.3.3`). Language mode 6. macOS 26, Apple Silicon.
+Pin is `.swift-version` (`6.3.3`). Language mode 6. Platforms: macOS 26 Apple Silicon, Linux aarch64/x86_64.
 
 `/usr/bin/swift` on this machine may be Xcode 6.2. Before any compile claim:
 

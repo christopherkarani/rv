@@ -122,7 +122,7 @@ Absolute path = baked install `rv` (same resolution as other hosts). Never regis
 ## 4. Constraints & Guidelines
 
 - **CON-001**: Toolchain `tools/gate.sh` / Swift 6.3.3. Do not wipe `.build`.
-- **CON-002**: macOS 26 Apple Silicon only.
+- **CON-002**: macOS 26 Apple Silicon, and Linux aarch64/x86_64. No Windows / Intel Mac / macOS 14/15.
 - **CON-003**: Temp `HOME` in tests. No live-HOME mutation in CI.
 - **CON-004**: Do not claim OS-enforced / Seatbelt. Grade remains hook.
 - **GUD-001**: Prefer extending `HostCodec` with an optional rich payload or a Claude-specific encode path over forking a second hook runtime.

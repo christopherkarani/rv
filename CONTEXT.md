@@ -1,6 +1,6 @@
 # rv
 
-Mac-native destructive-command guard for coding-agent shell hooks. Day-one hosts: Pi, Grok, OpenCode. Also: Claude (settings merge), OpenClaw (`~/.openclaw/extensions/rv-guard/`, host only, no Ask), Hermes (`~/.hermes/plugins/rv-guard/`, host only, no Ask), Codex (`~/.codex/hooks/rv-guard.py`, host only, official `block` + stderr reason + exit 2, no Ask), and Cursor (`~/.cursor/hooks/rv-guard.py`, host only, official `permission: deny` + exit 0, no Ask).
+Destructive-command guard for coding-agent shell hooks on macOS 26 Apple Silicon and Linux (aarch64/x86_64). Day-one hosts: Pi, Grok, OpenCode. Also: Claude (settings merge), OpenClaw (`~/.openclaw/extensions/rv-guard/`, host only, no Ask), Hermes (`~/.hermes/plugins/rv-guard/`, host only, no Ask), Codex (`~/.codex/hooks/rv-guard.py`, host only, official `block` + stderr reason + exit 2, no Ask), and Cursor (`~/.cursor/hooks/rv-guard.py`, host only, official `permission: deny` + exit 0, no Ask).
 
 ## Language
 

@@ -1,6 +1,6 @@
 # Swift
 
-Package tools: Swift 6.3. Language mode 6. macOS 26, Apple Silicon only.
+Package tools: Swift 6.3. Language mode 6. Platforms: macOS 26 Apple Silicon, Linux aarch64/x86_64.
 
 Pin: `.swift-version` (`6.3.3`). This machine’s `/usr/bin/swift` may still be Xcode 6.2. Prefer `tools/swift-6.3.3` (or put `~/Library/Developer/Toolchains/swift-6.3.3-RELEASE.xctoolchain/usr/bin` on `PATH` first). `swiftly run 6.3.3 -- swift test` also works if proven.
 
