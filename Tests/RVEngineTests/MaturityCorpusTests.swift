@@ -78,8 +78,8 @@ struct MaturityCorpusTests {
     }
 
     @Test func door_forceWithLeaseFeature_isAskNotNeverSlip() throws {
-        // Overlay quiet list: pack evaluate allows (landmine). Today's door
-        // Ask-maps-to-deny (`remoteBranchAsk`) until Host Ask — not never-slip.
+        // Dual-view: pin `evaluate` / `near.force-with-lease` still allows (landmine).
+        // Today's product door Ask-maps-to-deny (`remoteBranchAsk`) — not never-slip.
         let result = try runDoor("git push --force-with-lease origin feature")
         let ask = ActionPolicyEngine.Builtin.remoteBranchAsk
         #expect(result.decision == .deny(ask))
