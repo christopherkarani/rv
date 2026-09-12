@@ -81,6 +81,21 @@ private final class EvaluateProbe: @unchecked Sendable {
     #expect(wire.stdout.contains("no command text"))
 }
 
+@Test func hookDispatch_omittedEvaluateFileFailClosesIncomplete() async {
+    let probe = EvaluateProbe()
+    let stdin = """
+    {"hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{"file_path":"/tmp/rv-oracle/.env"}}
+    """
+    let wire = await hookWire(
+        host: .claude,
+        stdin: stdin,
+        evaluate: { command, cwd in probe.evaluate(command, cwd) }
+    )
+    #expect(probe.commands.isEmpty)
+    #expect(probe.files.isEmpty)
+    #expect(wire.stdout.contains(incompleteEvalSentence))
+}
+
 @Test func hookDispatch_shellResetHardStillEvaluates() async {
     let probe = EvaluateProbe()
     let stdin = """

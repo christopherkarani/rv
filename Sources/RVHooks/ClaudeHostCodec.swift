@@ -32,13 +32,13 @@ public struct ClaudeHostCodec: HostCodec {
                 )
             )
         }
-        if let kind = FileToolKind(toolName: envelope.toolName ?? "") {
-            let path = FileToolPath.firstPresent(
-                envelope.toolInput?.filePath,
-                envelope.toolInput?.path,
-                envelope.toolInput?.targetFile,
-                envelope.toolInput?.target
-            ) ?? FileToolPath(rawValue: "")
+        if let file = FileToolAction.decoded(
+            toolName: envelope.toolName,
+            paths: envelope.toolInput?.filePath,
+            envelope.toolInput?.path,
+            envelope.toolInput?.targetFile,
+            envelope.toolInput?.target
+        ) {
             return .request(
                 HookRequest(
                     host: .claude,
@@ -46,7 +46,7 @@ public struct ClaudeHostCodec: HostCodec {
                     cwd: cwd,
                     session: session,
                     hostAsk: hostAsk,
-                    file: FileToolAction(kind: kind, path: path)
+                    file: file
                 )
             )
         }

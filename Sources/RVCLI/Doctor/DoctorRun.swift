@@ -88,12 +88,7 @@ enum DoctorRun {
                         installation,
                         fileManager: environment.fileManager
                     ),
-                    fileTools: fileToolsState(
-                        host: host,
-                        installation: installation,
-                        paths: paths,
-                        fileManager: environment.fileManager
-                    )
+                    fileTools: installations.fileTools(for: host)
                 )
             },
             config: configState(path: paths.configDirectory, fileManager: environment.fileManager),
@@ -108,59 +103,6 @@ enum DoctorRun {
                 inConfigDirectory: URL(fileURLWithPath: paths.configDirectory, isDirectory: true)
             )
         )
-    }
-
-    private static func fileToolsState(
-        host: HookHost,
-        installation: HostAdapterInstallation,
-        paths: OwnedPaths,
-        fileManager: FileManager
-    ) -> DoctorFileToolsState {
-        switch host {
-        case .claude, .cursor, .grok:
-            break
-        case .pi, .opencode, .openclaw, .hermes, .codex:
-            return .notApplicable
-        }
-        guard case .wired = installation else {
-            return .notApplicable
-        }
-        switch host {
-        case .claude:
-            guard let data = fileManager.contents(atPath: paths.claudeSettings),
-                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  ClaudeSettingsMerge.hasFileToolMatchers(in: root)
-            else {
-                return .shellOnly
-            }
-            return .wired
-        case .cursor:
-            guard let data = fileManager.contents(atPath: paths.cursorHooksJSON),
-                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  CursorHooksMerge.hasFileToolEntry(in: root)
-            else {
-                return .shellOnly
-            }
-            return .wired
-        case .grok:
-            guard let data = fileManager.contents(atPath: paths.grokHook) else {
-                return .shellOnly
-            }
-            return grokFileToolsWired(data) ? .wired : .shellOnly
-        case .pi, .opencode, .openclaw, .hermes, .codex:
-            return .notApplicable
-        }
-    }
-
-    private static func grokFileToolsWired(_ data: Data) -> Bool {
-        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let hooks = root["hooks"] as? [String: Any],
-              let pre = hooks["PreToolUse"] as? [[String: Any]],
-              let first = pre.first
-        else {
-            return false
-        }
-        return first["matcher"] == nil
     }
 
     /// Miss path needs sibling `rv-cli`. Missing or non-exec is `.broken`, not `.wired`.

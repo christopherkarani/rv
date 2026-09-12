@@ -45,7 +45,7 @@ The rv-owned integration for one supported host that turns a host shell event in
 _Avoid_: host hook, HostCodec (only one part)
 
 **Host adapter installation state**:
-The read-only classification of one owned Host adapter path: missing, absent-file, occupied, broken, or wired. RVCLI derives it from host detection, resource identity, and the baked executable path; setup and doctor consume the same snapshot.
+The read-only classification of one owned Host adapter path: missing, absent-file, occupied, broken, or wired — and, for Claude / Grok / Cursor, whether the File tool door is wired, shell-only, or not applicable. RVCLI derives it once; setup and doctor consume the same snapshot.
 _Avoid_: parsing Host adapter behavior in setup or doctor
 
 **Service health**:
@@ -81,8 +81,8 @@ The allow-path scan of path-shaped operands on the matching view against `Secret
 _Avoid_: secret pack, path sandbox, realpath
 
 **File tool**:
-Read / Edit / Write (and host aliases `read_file`, `write_file`, `edit_file`). Catalog match on the extracted path. Same `SecretPathCatalog`. Not pack evaluate. Not Grep, Glob, search, MCP, or `apply_patch`. **Read / Edit / Write secret-path** only.
-_Avoid_: file firewall, fake `cat <path>`
+Read / Edit / Write (and host aliases `read_file`, `write_file`, `edit_file`). Catalog match on the extracted path. Same `SecretPathCatalog`. Not pack evaluate. Not Grep, Glob, search, MCP, or `apply_patch`. **Read / Edit / Write secret-path** only. Host adapters decode onto one File tool action; honor is the File tool door, not pack evaluate. Host adapter installation state carries whether that door is wired.
+_Avoid_: file firewall, fake `cat <path>`, catalog evaluate as the hook default
 
 **Safety level**:
 `normal` (default) or `strict`. Machine config plus `.rv/policy.toml` `safety.level`. Restrict-only overlay: repo may raise `normal` → `strict`; repo cannot lower machine `strict`. Does not enable extra packs.

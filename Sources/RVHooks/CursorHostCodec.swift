@@ -30,22 +30,25 @@ public struct CursorHostCodec: HostCodec {
         switch classify(envelope) {
         case .foreign:
             return .foreign
-        case .file(let kind):
-            let path = FileToolPath.firstPresent(
-                envelope.toolInput?.filePath,
+        case .file:
+            if let file = FileToolAction.decoded(
+                toolName: envelope.toolName,
+                paths: envelope.toolInput?.filePath,
                 envelope.toolInput?.path,
                 envelope.toolInput?.targetFile,
                 envelope.toolInput?.target
-            ) ?? FileToolPath(rawValue: "")
-            return .request(
-                HookRequest(
-                    host: .cursor,
-                    command: ShellCommand(rawValue: ""),
-                    cwd: cwd,
-                    session: session,
-                    file: FileToolAction(kind: kind, path: path)
+            ) {
+                return .request(
+                    HookRequest(
+                        host: .cursor,
+                        command: ShellCommand(rawValue: ""),
+                        cwd: cwd,
+                        session: session,
+                        file: file
+                    )
                 )
-            )
+            }
+            return .foreign
         case .shell:
             break
         }
@@ -95,7 +98,7 @@ public struct CursorHostCodec: HostCodec {
 
 private enum CursorEventClass {
     case shell
-    case file(FileToolKind)
+    case file
     case foreign
 }
 
@@ -109,8 +112,8 @@ private func classify(_ envelope: CursorEnvelope) -> CursorEventClass {
         if tool == "Shell" || tool == "Bash" {
             return .shell
         }
-        if let kind = FileToolKind(toolName: tool) {
-            return .file(kind)
+        if FileToolKind(toolName: tool) != nil {
+            return .file
         }
         return .foreign
     }

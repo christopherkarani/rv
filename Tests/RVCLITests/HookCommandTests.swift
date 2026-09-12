@@ -104,6 +104,17 @@ private func runHook(
     }
 }
 
+private func runHonorHook(
+    stdin: String,
+    host: HookHost = .grok
+) async throws -> HookWire {
+    let client = try isolatedClient(transport: nil)
+    var hook = Hook()
+    hook.host = host
+    let outcome = await hook.run(stdin: stdin, client: client)
+    return HookWire(stdout: outcome.stdout, exitCode: outcome.exitCode, stderr: outcome.stderr)
+}
+
 @Test func hookAllowGitStatus_emptyStdoutExitZero() async throws {
     let expected = try grokExpected("allow-git-status")
     let wire = try await runHook(stdin: try grokFixture("allow-git-status.json"))
@@ -180,18 +191,9 @@ private func runHook(
     #expect(wire.exitCode == expected.exit)
 }
 
-@Test func hookNonShellRead_doesNotEvaluate() async throws {
-    let probe = EvaluateProbe()
+@Test func hookNonShellRead_allowsOrdinaryFileWithoutPackEvaluate() async throws {
     let expected = try grokExpected("allow-non-shell-read")
-    let wire = try await runHook(stdin: try grokFixture("allow-non-shell-read.json")) { command, _ in
-        probe.record(command, result: EvaluationResult(
-            outcome: .deny(
-                Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "should not run"),
-                matched: nil
-            )
-        ))
-    }
-    #expect(probe.commands.isEmpty)
+    let wire = try await runHonorHook(stdin: try grokFixture("allow-non-shell-read.json"))
     #expect(wire.stdout == expected.stdout)
     #expect(wire.exitCode == expected.exit)
 }
@@ -217,19 +219,25 @@ private func runHook(
     #expect(wire.exitCode == expected.exit)
 }
 
-@Test func hookForeignStillAllowsAfterFailClosedMalformed() async throws {
+@Test func hookOrdinaryFileStillAllowsAfterFailClosedMalformed() async throws {
     let expected = try grokExpected("allow-non-shell-read")
-    let wire = try await runHook(stdin: try grokFixture("allow-non-shell-read.json"))
+    let wire = try await runHonorHook(stdin: try grokFixture("allow-non-shell-read.json"))
     #expect(wire.stdout == expected.stdout)
     #expect(wire.exitCode == expected.exit)
 }
 
-@Test func hookGrokFileEnv_deniesCoreSecretsWithoutPackEvaluate() async throws {
+@Test func hookFileTool_omittedEvaluateFileFailClosesIncomplete() async throws {
     let probe = EvaluateProbe()
     let wire = try await runHook(stdin: try grokFixture("deny-file-env.json")) { command, _ in
         probe.record(command, result: EvaluationResult(outcome: .plain))
     }
     #expect(probe.commands.isEmpty)
+    #expect(wire.stdout.contains(incompleteEvalSentence))
+    #expect(wire.stdout.contains("core.secrets") == false)
+}
+
+@Test func hookGrokFileEnv_deniesCoreSecretsWithoutPackEvaluate() async throws {
+    let wire = try await runHonorHook(stdin: try grokFixture("deny-file-env.json"))
     #expect(wire.exitCode == 0)
     let json = try denyJSON(wire.stdout)
     #expect(json["decision"] as? String == "deny")
@@ -237,7 +245,7 @@ private func runHook(
 }
 
 @Test func hookClaudeFileEnv_deniesPermissionDecision() async throws {
-    let wire = try await runHook(
+    let wire = try await runHonorHook(
         stdin: try hostFixture("claude", "deny-file-env.json"),
         host: .claude
     )
@@ -247,7 +255,7 @@ private func runHook(
 }
 
 @Test func hookCursorFileSsh_deniesPermission() async throws {
-    let wire = try await runHook(
+    let wire = try await runHonorHook(
         stdin: try hostFixture("cursor", "deny-file-ssh.json"),
         host: .cursor
     )
@@ -394,21 +402,12 @@ private func runHook(
     #expect(wire.exitCode == expected.exit)
 }
 
-@Test func hookClaudeNonShellRead_doesNotEvaluate() async throws {
-    let probe = EvaluateProbe()
+@Test func hookClaudeOrdinaryFile_allowsWithoutPackEvaluate() async throws {
     let expected = try hostExpected("claude", "allow-non-shell-read")
-    let wire = try await runHook(
+    let wire = try await runHonorHook(
         stdin: try hostFixture("claude", "allow-non-shell-read.json"),
         host: .claude
-    ) { command, _ in
-        probe.record(command, result: EvaluationResult(
-            outcome: .deny(
-                Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "should not run"),
-                matched: nil
-            )
-        ))
-    }
-    #expect(probe.commands.isEmpty)
+    )
     #expect(wire.stdout == expected.stdout)
     #expect(wire.exitCode == expected.exit)
 }
@@ -732,21 +731,12 @@ private func runHook(
     #expect(json["permission"] as? String == "allow")
 }
 
-@Test func hookCursorNonShellRead_doesNotEvaluate() async throws {
-    let probe = EvaluateProbe()
+@Test func hookCursorOrdinaryFile_allowsWithoutPackEvaluate() async throws {
     let expected = try hostExpected("cursor", "allow-non-shell-read")
-    let wire = try await runHook(
+    let wire = try await runHonorHook(
         stdin: try hostFixture("cursor", "allow-non-shell-read.json"),
         host: .cursor
-    ) { command, _ in
-        probe.record(command, result: EvaluationResult(
-            outcome: .deny(
-                Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "should not run"),
-                matched: nil
-            )
-        ))
-    }
-    #expect(probe.commands.isEmpty)
+    )
     #expect(wire.stdout == expected.stdout)
     #expect(wire.exitCode == expected.exit)
 }

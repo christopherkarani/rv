@@ -11,6 +11,53 @@ enum HostAdapterInstallation: Equatable, Sendable {
     case broken(path: OwnedHostAdapterPath, existingData: Data)
     case wired(path: OwnedHostAdapterPath, existingData: Data)
 
+    /// File-tool door on this Host adapter. `companionJSON` is Cursor `hooks.json`.
+    func fileTools(companionJSON: Data? = nil) -> DoctorFileToolsState {
+        switch ownedPath.host {
+        case .pi, .opencode, .openclaw, .hermes, .codex:
+            return .notApplicable
+        case .claude, .cursor, .grok:
+            break
+        }
+        guard case .wired(_, let data) = self else {
+            return .notApplicable
+        }
+        switch ownedPath.host {
+        case .claude:
+            guard let root = jsonObject(data),
+                  ClaudeSettingsMerge.hasFileToolMatchers(in: root)
+            else {
+                return .shellOnly
+            }
+            return .wired
+        case .grok:
+            return GrokHookInspect.hasFileToolDoor(in: data) ? .wired : .shellOnly
+        case .cursor:
+            guard let companionJSON,
+                  let root = jsonObject(companionJSON),
+                  CursorHooksMerge.hasFileToolEntry(in: root)
+            else {
+                return .shellOnly
+            }
+            return .wired
+        case .pi, .opencode, .openclaw, .hermes, .codex:
+            return .notApplicable
+        }
+    }
+
+    private var ownedPath: OwnedHostAdapterPath {
+        switch self {
+        case .missing(let path), .absentFile(let path), .occupied(let path):
+            path
+        case .broken(path: let path, _), .wired(path: let path, _):
+            path
+        }
+    }
+
+    private func jsonObject(_ data: Data) -> [String: Any]? {
+        (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+    }
+
     /// What setup should do for this installation, given `--force`.
     func setupPlan(force: Bool) -> HostAdapterSetupPlan {
         switch self {
@@ -77,6 +124,8 @@ struct HostAdapterInstallationSnapshot: Equatable, Sendable {
     private var hermes: HostAdapterInstallation
     private var codex: HostAdapterInstallation
     private var cursor: HostAdapterInstallation
+    /// Cursor File tool matchers live in `hooks.json`, not the adapter script.
+    private var cursorHooksJSON: Data?
 
     init(
         grok: HostAdapterInstallation,
@@ -86,7 +135,8 @@ struct HostAdapterInstallationSnapshot: Equatable, Sendable {
         openClaw: HostAdapterInstallation,
         hermes: HostAdapterInstallation,
         codex: HostAdapterInstallation,
-        cursor: HostAdapterInstallation
+        cursor: HostAdapterInstallation,
+        cursorHooksJSON: Data? = nil
     ) {
         self.grok = grok
         self.pi = pi
@@ -96,11 +146,19 @@ struct HostAdapterInstallationSnapshot: Equatable, Sendable {
         self.hermes = hermes
         self.codex = codex
         self.cursor = cursor
+        self.cursorHooksJSON = cursorHooksJSON
     }
 
     /// Returns the doctor-facing state for `host`.
     func state(for host: HookHost) -> DoctorHostState {
         installation(for: host).state
+    }
+
+    /// File-tool door for `host`. Doctor consumes this; it does not re-parse adapter bytes.
+    func fileTools(for host: HookHost) -> DoctorFileToolsState {
+        installation(for: host).fileTools(
+            companionJSON: host == .cursor ? cursorHooksJSON : nil
+        )
     }
 
     /// Returns the full installation record for `host`.
@@ -173,7 +231,8 @@ extension HostAdapterInstallation {
                 path: paths.hostAdapter(for: .cursor),
                 pathEntries: pathEntries,
                 fileManager: fileManager
-            )
+            ),
+            cursorHooksJSON: fileManager.contents(atPath: paths.cursorHooksJSON)
         )
     }
 

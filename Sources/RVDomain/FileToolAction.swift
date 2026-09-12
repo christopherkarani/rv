@@ -47,6 +47,10 @@ public struct FileToolPath: RawRepresentable, Hashable, Sendable, Equatable, Cod
 
     /// First non-empty of `file_path`, `path`, `target_file`, `target`.
     public static func firstPresent(_ values: String?...) -> FileToolPath? {
+        firstPresent(Array(values))
+    }
+
+    public static func firstPresent(_ values: [String?]) -> FileToolPath? {
         for value in values {
             if let value, value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
                 return FileToolPath(rawValue: value)
@@ -64,5 +68,15 @@ public struct FileToolAction: Sendable, Equatable, Codable {
     public init(kind: FileToolKind, path: FileToolPath) {
         self.kind = kind
         self.path = path
+    }
+
+    /// Host-adapter decode: closed kind plus first non-empty path key.
+    /// Unknown tools are `nil` (foreign). Missing path keys yield an empty path.
+    public static func decoded(toolName: String?, paths: String?...) -> FileToolAction? {
+        guard let kind = FileToolKind(toolName: toolName ?? "") else {
+            return nil
+        }
+        let path = FileToolPath.firstPresent(Array(paths)) ?? FileToolPath(rawValue: "")
+        return FileToolAction(kind: kind, path: path)
     }
 }

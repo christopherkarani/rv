@@ -47,3 +47,24 @@ import Testing
     #expect(FileToolPath(rawValue: "").isEmpty)
     #expect(FileToolPath(rawValue: "   ").isEmpty)
 }
+
+@Test func fileToolAction_decodedMapsKindAndFirstPresentPath() {
+    let action = FileToolAction.decoded(
+        toolName: "Read",
+        paths: nil, "  ", "/tmp/rv-oracle/.env", "ignored"
+    )
+    #expect(action?.kind == .read)
+    #expect(action?.path.rawValue == "/tmp/rv-oracle/.env")
+}
+
+@Test func fileToolAction_decodedEmptyPathKeysStillYieldsEmptyPath() {
+    let action = FileToolAction.decoded(toolName: "write_file", paths: nil, "  ", "", nil)
+    #expect(action?.kind == .write)
+    #expect(action?.path.isEmpty == true)
+}
+
+@Test func fileToolAction_decodedRejectsGrepAndBash() {
+    #expect(FileToolAction.decoded(toolName: "Grep", paths: "/tmp/rv-oracle/.env") == nil)
+    #expect(FileToolAction.decoded(toolName: "Bash", paths: "/tmp/x") == nil)
+    #expect(FileToolAction.decoded(toolName: nil, paths: "/tmp/x") == nil)
+}
