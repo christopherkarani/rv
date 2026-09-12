@@ -9,6 +9,7 @@ public func evaluate<E: PatternEngine>(
     secrets: SecretPathCatalog = .dayOne,
     safety: SafetyLevel = .normal,
     allowPaths: SecretAllowPathSet = .empty,
+    home: String? = nil,
     patterns: E,
     compiled: CompiledPacks<E.Compiled>
 ) -> EvaluationResult {
@@ -36,7 +37,8 @@ public func evaluate<E: PatternEngine>(
             EvaluationResult(outcome: .quickRejected, matchingView: matchingView),
             catalog: secrets,
             safety: safety,
-            allowPaths: allowPaths
+            allowPaths: allowPaths,
+            home: home
         )
     }
 
@@ -72,13 +74,20 @@ public func evaluate<E: PatternEngine>(
         if isTerminal(result.outcome) {
             return viewed
         }
-        return foldSecretPathIfAllow(viewed, catalog: secrets, safety: safety, allowPaths: allowPaths)
+        return foldSecretPathIfAllow(
+            viewed,
+            catalog: secrets,
+            safety: safety,
+            allowPaths: allowPaths,
+            home: home
+        )
     }
     return foldSecretPathIfAllow(
         EvaluationResult(outcome: .plain, matchingView: matchingView),
         catalog: secrets,
         safety: safety,
-        allowPaths: allowPaths
+        allowPaths: allowPaths,
+        home: home
     )
 }
 
@@ -86,7 +95,8 @@ private func foldSecretPathIfAllow(
     _ result: EvaluationResult,
     catalog: SecretPathCatalog,
     safety: SafetyLevel,
-    allowPaths: SecretAllowPathSet
+    allowPaths: SecretAllowPathSet,
+    home: String?
 ) -> EvaluationResult {
     switch result.outcome {
     case .quickRejected, .plain, .safeOnly, .hit:
@@ -104,7 +114,7 @@ private func foldSecretPathIfAllow(
     }
     if let path = matched.matchedText,
        let rule = catalog.firstMatch(of: path),
-       allowPaths.exempts(path, rule: rule)
+       allowPaths.exempts(path, rule: rule, home: home)
     {
         return result
     }

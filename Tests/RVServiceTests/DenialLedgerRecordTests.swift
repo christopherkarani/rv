@@ -72,6 +72,32 @@ struct DenialLedgerRecordTests {
         )
     }
 
+    @Test func peek_doesNotWrite() async throws {
+        let home = try tempHome()
+        defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let store = AllowOnceStore(baseDirectory: RVPolicyPaths.configDirectory(home: home))
+        let result = await GatedEvaluate().run(
+            .peek,
+            command: ShellCommand(rawValue: "git reset --hard"),
+            cwd: WorkingDirectory(validating: home.rawValue),
+            home: home,
+            store: store,
+            now: now,
+            allowlist: { .empty },
+            host: "tty"
+        )
+        guard case .deny = result.decision else {
+            Issue.record("expected peek deny")
+            return
+        }
+        #expect(
+            DenialLedger(configDirectory: RVPolicyPaths.configDirectory(home: home))
+                .list(now: now)
+                .isEmpty
+        )
+    }
+
     @Test func shellDeny_appends() async throws {
         let home = try tempHome()
         defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
@@ -98,6 +124,32 @@ struct DenialLedgerRecordTests {
         #expect(rows[0].tool == "Bash")
         #expect(rows[0].ruleID == "core.git:reset-hard")
         #expect(rows[0].path.isEmpty)
+    }
+
+    @Test func spendHostAsk_appends() async throws {
+        let home = try tempHome()
+        defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let store = AllowOnceStore(baseDirectory: RVPolicyPaths.configDirectory(home: home))
+        let result = await GatedEvaluate().spendHostAsk(
+            command: ShellCommand(rawValue: "cat .env"),
+            cwd: WorkingDirectory(validating: home.rawValue),
+            home: home,
+            store: store,
+            now: now,
+            allowlist: { .empty },
+            host: "claude"
+        )
+        guard case .deny = result.decision else {
+            Issue.record("expected spend-host-ask deny")
+            return
+        }
+        let rows = DenialLedger(configDirectory: RVPolicyPaths.configDirectory(home: home))
+            .list(now: now)
+        #expect(rows.count == 1)
+        #expect(rows[0].host == "claude")
+        #expect(rows[0].tool == "Bash")
+        #expect(rows[0].ruleID == "core.secrets:env")
     }
 
     private func tempHome() throws -> HomeDirectory {

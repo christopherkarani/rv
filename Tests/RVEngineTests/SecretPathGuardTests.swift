@@ -49,6 +49,7 @@ private func run(
     secrets: SecretPathCatalog = .dayOne,
     safety: SafetyLevel = .normal,
     allowPaths: SecretAllowPathSet = .empty,
+    home: String? = nil,
     budget: EvaluationBudget? = nil
 ) throws -> EvaluationResult {
     let packs = packs ?? samplePacks()
@@ -64,6 +65,7 @@ private func run(
         secrets: secrets,
         safety: safety,
         allowPaths: allowPaths,
+        home: home,
         patterns: engine,
         compiled: compiled
     )
@@ -282,6 +284,42 @@ struct SecretPathGuardTests {
             allowPaths: SecretAllowPathSet(literals: ["/tmp/rv-oracle/.env"])
         )
         #expect(result.decision == .allow)
+    }
+
+    @Test func evaluate_allowPath_tildeExpandsWithHome() throws {
+        let result = try run(
+            "cat /Users/ada/.env",
+            allowPaths: SecretAllowPathSet(literals: ["~/.env"]),
+            home: "/Users/ada"
+        )
+        #expect(result.decision == .allow)
+    }
+
+    @Test func evaluate_allowPath_dollarHomeExpandsWithHome() throws {
+        let result = try run(
+            "cat /Users/ada/.env",
+            allowPaths: SecretAllowPathSet(literals: ["$HOME/.env"]),
+            home: "/Users/ada"
+        )
+        #expect(result.decision == .allow)
+        let braced = try run(
+            "cat /Users/ada/.env",
+            allowPaths: SecretAllowPathSet(literals: ["${HOME}/.env"]),
+            home: "/Users/ada"
+        )
+        #expect(braced.decision == .allow)
+    }
+
+    @Test func evaluate_allowPath_tildeWithoutHomeStaysDenied() throws {
+        let result = try run(
+            "cat /Users/ada/.env",
+            allowPaths: SecretAllowPathSet(literals: ["~/.env"])
+        )
+        guard case .deny(let deny, _) = result.outcome else {
+            Issue.record("expected deny without home expansion")
+            return
+        }
+        #expect(deny.ruleID.rawValue == "core.secrets:env")
     }
 
     @Test func secretPathGuard_findNameValueIsNotCandidate() {

@@ -285,7 +285,9 @@ public struct GatedEvaluate: Sendable {
                 }
             }
         }
-        recordDenialIfNeeded(finished, path: nil, home: home, host: host, tool: tool, now: now)
+        if case .apply = intent {
+            recordDenialIfNeeded(finished, path: nil, home: home, host: host, tool: tool, now: now)
+        }
         return finished
     }
 
@@ -298,7 +300,8 @@ public struct GatedEvaluate: Sendable {
         let pack = resolvedSession().evaluate(
             request,
             safety: SafetyStore.loadEffective(home: home, workspace: workspace),
-            allowPaths: SecretAllowPaths.loadEffective(home: home, workspace: workspace)
+            allowPaths: SecretAllowPaths.loadEffective(home: home, workspace: workspace),
+            home: home?.rawValue
         )
         let probe = wrapperProbe(command: request.command, cwd: cwd, home: home)
         let policy: EffectiveActionPolicy

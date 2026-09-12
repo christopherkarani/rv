@@ -76,6 +76,8 @@ import RVTheme
     #expect(text.contains("scan"))
     #expect(text.contains("policy"))
     #expect(text.contains("allowlist"))
+    #expect(text.contains("safety"))
+    #expect(text.contains("blocks"))
     #expect(text.contains("Cursor"))
     #expect(text.contains("rv help test") == false)
     #expect(text.contains("OVERVIEW:") == false)

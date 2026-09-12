@@ -85,8 +85,8 @@ _Avoid_: file firewall, fake `cat <path>`
 _Avoid_: third preset, pack-ID posture
 
 **Block ledger**:
-Denial-only list of hook/TTY denials (timestamp, host, tool, `rule_id`, category, redacted path with `$HOME` → `~`). Default on. Off with `blocks.enabled: false` in `~/.config/rv/config.json`. Not allow history. Not `os_log` command text. CLI: `rv blocks`.
-_Avoid_: audit log, allow history, RVHistory as a product
+Denial-only list of live hook denials (including in-process miss). timestamp, host, tool, `rule_id`, category, redacted path with `$HOME` → `~`. Default on. Off with `blocks.enabled: false` in `~/.config/rv/config.json`. `rv test` / `rv explain` do not write. Not allow history. Not `os_log` command text. CLI: `rv blocks`.
+_Avoid_: audit log, allow history, RVHistory as a product, recording peek/explain
 
 **Session forensics**:
 Offline `rv scan` / `rv scan sessions`: read known host session stores (or a path of known layouts), extract shell candidates, run the same `evaluate`, list deny-only findings. Not `RVHistory`, not repo/CI `rv scan repo`, not live hook enforcement. Fence: `docs/factory/specs/phase-4-session-scan.md`.
