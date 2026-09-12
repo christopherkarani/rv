@@ -2,5 +2,10 @@
 #error("rv v1 is Apple Silicon only")
 #endif
 
-// Stub; history stays off by default; do not persist command text.
-public enum RVHistory {}
+import Foundation
+
+/// Denial-only block ledger. Allows are never stored. Not command text.
+public enum RVHistory {
+    public static let maxRows = 200
+    public static let maxAge: TimeInterval = 7 * 24 * 60 * 60
+}

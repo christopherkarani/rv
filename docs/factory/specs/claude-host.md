@@ -8,7 +8,7 @@ tags: [hosts, claude, rvhooks, setup]
 
 # Claude Code host
 
-Additive host after v1 Pi / Grok / OpenCode. Locked product choices: **settings merge only**, **Bash shell only**, **DCG-rich Claude deny wire**, **no live allow-once code**, **ask / secrets / MCP fenced later**.
+Additive host after v1 Pi / Grok / OpenCode. Locked product choices: **settings merge only**, **Bash shell plus Read / Edit / Write secret-path**, **DCG-rich Claude deny wire**, **no live allow-once code**, **ask / MCP fenced later**.
 
 Parity source for *decisions* remains DCG **0.11.0** engine. Claude *wire* follows current Claude Code hooks docs (`hookSpecificOutput.permissionDecision`), not Grok’s `{decision,reason}`.
 
@@ -36,7 +36,7 @@ These occupancy / merge / `--force` rules are product amendments, not optional c
 | Ticket | Fence |
 |---|---|
 | **CL-later-ask** | Never emit official `permissionDecision: "ask"` (leftover-ask-as-permit). Host Ask is wrapper confirm-then-spend on `{decision:ask}` (exit 2). Never treat Claude ask-approve as allow-once. |
-| **CL-later-secrets** | Read / Edit / Write secret-path guards (cc-safety-net competitive). |
+| **CL-later-secrets** | In progress: Read / Edit / Write of a catalog path denies; ordinary project file allows. Grep / MCP stay foreign allow. |
 | **CL-later-mcp** | MCP tool-name / args policy. |
 | — | Claude plugin marketplace install; PowerShell matcher; Codex / Gemini codecs; `MessageDisplay`; `RV_BYPASS` / `DCG_BYPASS`; live HOME tests |
 
@@ -55,7 +55,7 @@ Audience: implementer and reviewer subagents. Base: current `worktree/lucky-rive
 ### Wire / codec
 
 - **REQ-001**: `HookHost` gains `claude` (`rawValue` `"claude"`). Unknown host decode stays fail-closed at IPC where already strict.
-- **REQ-002**: `ClaudeHostCodec` decodes snake_case Claude stdin. Shell iff `hook_event_name == "PreToolUse"` and `tool_name == "Bash"`. Command from `tool_input.command` (non-empty string). `cwd` from `cwd` when non-empty. Other events / tools → `.foreign` → allow. Unreadable / missing command → `.malformed` → allow (Claude fail-open).
+- **REQ-002**: `ClaudeHostCodec` decodes snake_case Claude stdin. Shell iff `hook_event_name == "PreToolUse"` and `tool_name == "Bash"`. Command from `tool_input.command` (non-empty string). File tool iff `PreToolUse` and `tool_name` is `Read` / `Edit` / `Write`. Path is the first non-empty of `file_path`, `path`, `target_file`, `target`. Catalog-path deny; ordinary project file allow. MCP and other tools → `.foreign` → allow. Unreadable / missing command or empty file path → `.malformed`. Empty path denies (same voice as missing shell command).
 - **REQ-003**: Allow → empty stdout, exit `0`.
 - **REQ-004**: Engine deny → exit `0` and JSON locked to documented Claude Code fields. Extra `hookSpecificOutput` keys are **not** on the host wire: Claude treats exit-0 JSON that fails schema validation as a non-blocking error and the action proceeds, so extras can fail-open a deny (e.g. `git reset --hard`).
 
@@ -93,7 +93,7 @@ Do not emit `ruleId`, `packId`, `severity`, `remediation`, `updatedInput`, `addi
 ### Setup / doctor
 
 - **REQ-012**: Detect Claude when `$HOME/.claude` exists. Do not mkdir `.claude` only to detect.
-- **REQ-013**: Setup merges one PreToolUse entry into `$HOME/.claude/settings.json`:
+- **REQ-013**: Setup merges PreToolUse entries into `$HOME/.claude/settings.json` for `Bash`, `Read`, `Edit`, and `Write` (same wrapper). Do not omit matcher (MCP stays off the hook):
 
 ```json
 {
@@ -108,7 +108,7 @@ Do not emit `ruleId`, `packId`, `severity`, `remediation`, `updatedInput`, `addi
 }
 ```
 
-Absolute path = baked install `rv` (same resolution as other hosts). Never register bare `rv` on PATH. Matcher is **`Bash` only** (macOS product; no PowerShell).
+Absolute path = baked install `rv` (same resolution as other hosts). Never register bare `rv` on PATH. Matchers are **`Bash`**, **`Read`**, **`Edit`**, **`Write`** (macOS product; no PowerShell; no Grep / MCP).
 
 - **REQ-014**: Merge rules: preserve foreign hooks (including `dcg`), plus model / MCP / permissions keys. If an rv-fingerprinted handler already matches the current template (modulo absolute path rewrite), treat as wired / path-fix only. Stale v1 `hook --host claude` is outdated: setup without `--force` rewrites it. Foreign/tampered `rv-guard.py` that is not current and `--force` is unset → **occupied** → skip. With `--force`, replace the rv-fingerprinted handler(s) only. Do not skip, `*.bak`, or rewrite the whole `settings.json` (PLAN #20 does not apply).
 - **REQ-015**: Uninstall removes only rv-fingerprinted Claude handlers; leave the rest of `settings.json` (and the file itself if non-empty of foreign content).
@@ -134,7 +134,7 @@ Absolute path = baked install `rv` (same resolution as other hosts). Never regis
 - **AC-001**: Fixture: Claude Bash `git reset --hard` → exit 0, `permissionDecision` deny, `systemMessage` starts with `RV · Blocked`, `permissionDecisionReason` contains `Rule: core.git:reset-hard` and `rv allow-once`, no allow-once code fields.
 - **AC-002**: Fixture: allow path (non-destructive or medium/low) → empty stdout, exit 0.
 - **AC-003**: Fixture: indeterminate → Claude deny envelope, incomplete-eval sentence, no pack / rule / severity / remediation sections in the reason.
-- **AC-004**: Fixture: `tool_name` Read/Edit/Write/MCP → empty allow (foreign).
+- **AC-004**: Fixture: Read/Edit/Write of a catalog path → Claude deny envelope; ordinary project file → empty allow; MCP → empty allow (foreign).
 - **AC-005**: Temp HOME setup: detected `.claude` → settings contain current `RV_BINARY=… python3 …/hooks/rv-guard.py` timeout 90; foreign PreToolUse entry and non-hook keys unchanged; stale v1 `hook --host claude` upgrades without `--force`; occupied foreign `rv-guard.py` skipped without `--force`; `--force` replaces only rv-fingerprinted handlers and does not `*.bak` `settings.json`.
 - **AC-006**: Uninstall removes only rv fingerprint; foreign hooks remain.
 - **AC-007**: `tools/gate.sh` green for touched targets (`RVDomainTests`, `RVHooksTests`, `RVCLITests`, and any dispatch/service hook host enum tests).
@@ -158,7 +158,7 @@ Parallel: none until CL-T2 green. CL-T3/T4 may split worktrees only with exclusi
 
 ## 7. Open questions (do not answer in code)
 
-None for this ship. Ask / secrets / MCP remain fenced.
+None for this ship. Ask / MCP remain fenced. File-tool catalog-path deny is in progress.
 
 ## 8. Definition of done
 

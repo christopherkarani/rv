@@ -94,7 +94,13 @@ private func runHook(
     evaluate: (@Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult)? = nil
 ) async throws -> HookWire {
     try await withTempHome { _ in
-        await hookWire(host: host, stdin: stdin, evaluate: evaluate ?? inProcessEvaluate)
+        var hook = Hook()
+        hook.host = host
+        let outcome = await hook.run(
+            stdin: stdin,
+            evaluate: evaluate ?? inProcessEvaluate
+        )
+        return HookWire(stdout: outcome.stdout, exitCode: outcome.exitCode, stderr: outcome.stderr)
     }
 }
 
@@ -216,6 +222,38 @@ private func runHook(
     let wire = try await runHook(stdin: try grokFixture("allow-non-shell-read.json"))
     #expect(wire.stdout == expected.stdout)
     #expect(wire.exitCode == expected.exit)
+}
+
+@Test func hookGrokFileEnv_deniesCoreSecretsWithoutPackEvaluate() async throws {
+    let probe = EvaluateProbe()
+    let wire = try await runHook(stdin: try grokFixture("deny-file-env.json")) { command, _ in
+        probe.record(command, result: EvaluationResult(outcome: .plain))
+    }
+    #expect(probe.commands.isEmpty)
+    #expect(wire.exitCode == 0)
+    let json = try denyJSON(wire.stdout)
+    #expect(json["decision"] as? String == "deny")
+    #expect(wire.stdout.contains("core.secrets"))
+}
+
+@Test func hookClaudeFileEnv_deniesPermissionDecision() async throws {
+    let wire = try await runHook(
+        stdin: try hostFixture("claude", "deny-file-env.json"),
+        host: .claude
+    )
+    #expect(wire.exitCode == 0)
+    #expect(wire.stdout.contains("\"permissionDecision\":\"deny\""))
+    #expect(wire.stdout.contains("core.secrets"))
+}
+
+@Test func hookCursorFileSsh_deniesPermission() async throws {
+    let wire = try await runHook(
+        stdin: try hostFixture("cursor", "deny-file-ssh.json"),
+        host: .cursor
+    )
+    #expect(wire.exitCode == 0)
+    #expect(wire.stdout.contains("\"permission\":\"deny\""))
+    #expect(wire.stdout.contains("\"permissionDecision\"") == false)
 }
 
 @Test func hookXPCDown_stillDeniesResetHard() async throws {

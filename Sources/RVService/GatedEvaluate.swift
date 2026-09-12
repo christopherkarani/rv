@@ -1,6 +1,7 @@
 import Foundation
 import RVDomain
 import RVEngine
+import RVHistory
 import RVPolicy
 
 /// Peek shows a matching grant without consuming it. Apply spends it.
@@ -52,6 +53,34 @@ public struct GatedEvaluate: Sendable {
         }
     }
 
+    /// Catalog-only file-tool door. Packs and Policy gate never see the path.
+    public func runFile(
+        _ action: FileToolAction,
+        home: HomeDirectory? = nil,
+        cwd: WorkingDirectory? = nil,
+        host: String = "tty",
+        now: Date = Date()
+    ) -> EvaluationResult {
+        let allowPaths = SecretAllowPaths.loadEffective(
+            home: home,
+            workspace: Self.workspaceURL(cwd: cwd)
+        )
+        let result = evaluateFileTool(
+            action,
+            allowPaths: allowPaths,
+            home: home?.rawValue
+        )
+        recordDenialIfNeeded(
+            result,
+            path: action.path.rawValue,
+            home: home,
+            host: host,
+            tool: action.kind.ledgerName,
+            now: now
+        )
+        return result
+    }
+
     /// Builds `EvaluationRequest` and runs peek or apply.
     ///
     /// `allowlist` is invoked only on deny (T13: allow/indeterminate skip allowlist I/O).
@@ -62,7 +91,9 @@ public struct GatedEvaluate: Sendable {
         home: HomeDirectory? = nil,
         store: AllowOnceStore,
         now: Date,
-        allowlist: @escaping @Sendable () -> AllowlistSnapshot
+        allowlist: @escaping @Sendable () -> AllowlistSnapshot,
+        host: String = "tty",
+        tool: String = "Bash"
     ) async -> EvaluationResult {
         await gated(
             intent,
@@ -71,7 +102,9 @@ public struct GatedEvaluate: Sendable {
             home: home,
             store: store,
             now: now,
-            allowlist: allowlist
+            allowlist: allowlist,
+            host: host,
+            tool: tool
         )
     }
 
@@ -94,7 +127,9 @@ public struct GatedEvaluate: Sendable {
         home: HomeDirectory? = nil,
         store: AllowOnceStore,
         now: Date,
-        allowlist: @escaping @Sendable () -> AllowlistSnapshot
+        allowlist: @escaping @Sendable () -> AllowlistSnapshot,
+        host: String = "tty",
+        tool: String = "Bash"
     ) async -> EvaluationResult {
         await gated(
             .peek,
@@ -103,7 +138,9 @@ public struct GatedEvaluate: Sendable {
             home: home,
             store: store,
             now: now,
-            allowlist: allowlist
+            allowlist: allowlist,
+            host: host,
+            tool: tool
         )
     }
 
@@ -114,7 +151,9 @@ public struct GatedEvaluate: Sendable {
         home: HomeDirectory? = nil,
         store: AllowOnceStore,
         now: Date,
-        allowlist: @escaping @Sendable () -> AllowlistSnapshot
+        allowlist: @escaping @Sendable () -> AllowlistSnapshot,
+        host: String = "tty",
+        tool: String = "Bash"
     ) async -> EvaluationResult {
         await spendHostAsk(
             Self.makeRequest(command: command, home: home),
@@ -122,7 +161,9 @@ public struct GatedEvaluate: Sendable {
             home: home,
             store: store,
             now: now,
-            allowlist: allowlist
+            allowlist: allowlist,
+            host: host,
+            tool: tool
         )
     }
 
@@ -132,38 +173,45 @@ public struct GatedEvaluate: Sendable {
         home: HomeDirectory? = nil,
         store: AllowOnceStore,
         now: Date,
-        allowlist: @escaping @Sendable () -> AllowlistSnapshot
+        allowlist: @escaping @Sendable () -> AllowlistSnapshot,
+        host: String = "tty",
+        tool: String = "Bash"
     ) async -> EvaluationResult {
         let result = evaluateWithSemantics(request, cwd: cwd, home: home)
+        let finished: EvaluationResult
         switch result.decision {
         case .allow, .indeterminate:
-            return result
+            finished = result
         case .deny:
             if Self.skipsPolicyGate(result) {
-                return result
+                finished = result
+            } else {
+                let snapshot = allowlist()
+                let rebasing = GitRebaseProbe.rebaseInProgress(cwd: cwd)
+                let applied = await PolicyGate.apply(
+                    result,
+                    cwd: cwd,
+                    allowlist: snapshot,
+                    store: store,
+                    now: now,
+                    rebaseInProgress: rebasing
+                )
+                if case .allow = applied.result.decision {
+                    finished = applied.result
+                } else {
+                    finished = await PolicyGate.spendHostAllowOnce(
+                        result,
+                        cwd: cwd,
+                        allowlist: snapshot,
+                        store: store,
+                        now: now,
+                        rebaseInProgress: rebasing
+                    ).result
+                }
             }
-            let snapshot = allowlist()
-            let rebasing = GitRebaseProbe.rebaseInProgress(cwd: cwd)
-            let applied = await PolicyGate.apply(
-                result,
-                cwd: cwd,
-                allowlist: snapshot,
-                store: store,
-                now: now,
-                rebaseInProgress: rebasing
-            )
-            if case .allow = applied.result.decision {
-                return applied.result
-            }
-            return await PolicyGate.spendHostAllowOnce(
-                result,
-                cwd: cwd,
-                allowlist: snapshot,
-                store: store,
-                now: now,
-                rebaseInProgress: rebasing
-            ).result
         }
+        recordDenialIfNeeded(finished, path: nil, home: home, host: host, tool: tool, now: now)
+        return finished
     }
 
     /// Wire-path apply for an already-built request (ServiceRuntime evaluate).
@@ -174,7 +222,9 @@ public struct GatedEvaluate: Sendable {
         home: HomeDirectory? = nil,
         store: AllowOnceStore,
         now: Date,
-        allowlist: @escaping @Sendable () -> AllowlistSnapshot
+        allowlist: @escaping @Sendable () -> AllowlistSnapshot,
+        host: String = "tty",
+        tool: String = "Bash"
     ) async -> EvaluationResult {
         await gated(
             .apply,
@@ -183,7 +233,9 @@ public struct GatedEvaluate: Sendable {
             home: home,
             store: store,
             now: now,
-            allowlist: allowlist
+            allowlist: allowlist,
+            host: host,
+            tool: tool
         )
     }
 
@@ -194,41 +246,49 @@ public struct GatedEvaluate: Sendable {
         home: HomeDirectory?,
         store: AllowOnceStore,
         now: Date,
-        allowlist: @escaping @Sendable () -> AllowlistSnapshot
+        allowlist: @escaping @Sendable () -> AllowlistSnapshot,
+        host: String,
+        tool: String
     ) async -> EvaluationResult {
         let result = evaluateWithSemantics(request, cwd: cwd, home: home)
         // Fast path: allow/indeterminate never touch PolicyGate or the
         // allowlist loader; PolicyGate returns them unchanged anyway.
+        let finished: EvaluationResult
         switch result.decision {
         case .allow, .indeterminate:
-            return result
+            finished = result
         case .deny:
             if Self.skipsPolicyGate(result) {
-                return result
-            }
-            let snapshot = allowlist()
-            let rebasing = GitRebaseProbe.rebaseInProgress(cwd: cwd)
-            switch intent {
-            case .peek:
-                return await PolicyGate.peek(
-                    result,
-                    cwd: cwd,
-                    allowlist: snapshot,
-                    store: store,
-                    now: now,
-                    rebaseInProgress: rebasing
-                ).result
-            case .apply:
-                return await PolicyGate.apply(
-                    result,
-                    cwd: cwd,
-                    allowlist: snapshot,
-                    store: store,
-                    now: now,
-                    rebaseInProgress: rebasing
-                ).result
+                finished = result
+            } else {
+                let snapshot = allowlist()
+                let rebasing = GitRebaseProbe.rebaseInProgress(cwd: cwd)
+                switch intent {
+                case .peek:
+                    finished = await PolicyGate.peek(
+                        result,
+                        cwd: cwd,
+                        allowlist: snapshot,
+                        store: store,
+                        now: now,
+                        rebaseInProgress: rebasing
+                    ).result
+                case .apply:
+                    finished = await PolicyGate.apply(
+                        result,
+                        cwd: cwd,
+                        allowlist: snapshot,
+                        store: store,
+                        now: now,
+                        rebaseInProgress: rebasing
+                    ).result
+                }
             }
         }
+        if case .apply = intent {
+            recordDenialIfNeeded(finished, path: nil, home: home, host: host, tool: tool, now: now)
+        }
+        return finished
     }
 
     private func evaluateWithSemantics(
@@ -236,7 +296,13 @@ public struct GatedEvaluate: Sendable {
         cwd: WorkingDirectory?,
         home: HomeDirectory? = nil
     ) -> EvaluationResult {
-        let pack = resolvedSession().evaluate(request)
+        let workspace = Self.workspaceURL(cwd: cwd)
+        let pack = resolvedSession().evaluate(
+            request,
+            safety: SafetyStore.loadEffective(home: home, workspace: workspace),
+            allowPaths: SecretAllowPaths.loadEffective(home: home, workspace: workspace),
+            home: home?.rawValue
+        )
         let probe = wrapperProbe(command: request.command, cwd: cwd, home: home)
         let policy: EffectiveActionPolicy
         do {
@@ -335,6 +401,53 @@ public struct GatedEvaluate: Sendable {
             command: probeCommand,
             cwd: probeCwd,
             homeDirectory: home?.rawValue
+        )
+    }
+
+    private static func workspaceURL(cwd: WorkingDirectory?) -> URL? {
+        cwd.map { URL(fileURLWithPath: $0.rawValue, isDirectory: true) }
+    }
+
+    private func recordDenialIfNeeded(
+        _ result: EvaluationResult,
+        path: String?,
+        home: HomeDirectory?,
+        host: String,
+        tool: String,
+        now: Date
+    ) {
+        guard case .deny(let deny, let matched) = result.outcome else { return }
+        guard let home else { return }
+        let configDir = RVPolicyPaths.configDirectory(home: home)
+        guard DenialLedgerPreferences.isEnabled(inConfigDirectory: configDir) else { return }
+        let rawPath: String
+        if let path, path.isEmpty == false {
+            rawPath = path
+        } else if let text = matched?.matchedText,
+                  SecretPathCatalog.dayOne.firstMatch(of: text) != nil
+        {
+            rawPath = text
+        } else {
+            rawPath = ""
+        }
+        let category: String
+        if let text = matched?.matchedText,
+           let rule = SecretPathCatalog.dayOne.firstMatch(of: text)
+        {
+            category = rule.category.rawValue
+        } else {
+            category = deny.ruleID.pack.rawValue
+        }
+        DenialLedger(configDirectory: configDir).append(
+            DenialLedgerRecord(
+                timestamp: now,
+                host: host,
+                tool: tool,
+                ruleID: deny.ruleID.rawValue,
+                category: category,
+                path: DenialPathRedaction.redact(rawPath, home: home.rawValue)
+            ),
+            now: now
         )
     }
 }

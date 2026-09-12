@@ -5,27 +5,39 @@ enum SecretPathGuard {
 
     static func firstHit(
         in matchingView: MatchingView,
-        catalog: SecretPathCatalog
+        catalog: SecretPathCatalog,
+        includeMetadata: Bool = false
     ) -> RuleMatch? {
         guard !catalog.rules.isEmpty else { return nil }
         let view = matchingView.rawValue
         let segments = splitSegments(view)
         if segments.count > 1 {
             for segment in segments {
-                if let hit = firstHit(inHaystack: segment, catalog: catalog, searchText: view) {
+                if let hit = firstHit(
+                    inHaystack: segment,
+                    catalog: catalog,
+                    searchText: view,
+                    includeMetadata: includeMetadata
+                ) {
                     return hit
                 }
             }
         }
-        return firstHit(inHaystack: view, catalog: catalog, searchText: view)
+        return firstHit(
+            inHaystack: view,
+            catalog: catalog,
+            searchText: view,
+            includeMetadata: includeMetadata
+        )
     }
 
     private static func firstHit(
         inHaystack haystack: String,
         catalog: SecretPathCatalog,
-        searchText: String
+        searchText: String,
+        includeMetadata: Bool
     ) -> RuleMatch? {
-        for candidate in candidates(in: haystack) {
+        for candidate in candidates(in: haystack, includeMetadata: includeMetadata) {
             if let rule = catalog.firstMatch(of: candidate) {
                 let ruleID = RuleID(pack: .coreSecrets, pattern: rule.pattern)
                 return RuleMatch(
@@ -43,7 +55,7 @@ enum SecretPathGuard {
         return nil
     }
 
-    private static func candidates(in haystack: String) -> [String] {
+    private static func candidates(in haystack: String, includeMetadata: Bool) -> [String] {
         let tokens = tokenizeCommand(haystack)
         guard let headToken = tokens.first else { return [] }
         switch headKind(basename(headToken.decoded)) {
@@ -53,6 +65,9 @@ enum SecretPathGuard {
             return grepCandidates(tokens.dropFirst())
         case .find:
             return findCandidates(tokens.dropFirst())
+        case .metadata:
+            guard includeMetadata else { return [] }
+            return otherCandidates(tokens.dropFirst())
         case .other:
             return otherCandidates(tokens.dropFirst())
         }
@@ -63,6 +78,7 @@ private enum HeadKind {
     case nonPath
     case grep
     case find
+    case metadata
     case other
 }
 
@@ -74,6 +90,8 @@ private func headKind(_ argv0: String) -> HeadKind {
         return .grep
     case "find":
         return .find
+    case "ls", "test", "stat":
+        return .metadata
     default:
         return .other
     }

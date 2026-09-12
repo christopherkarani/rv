@@ -6,6 +6,7 @@ import Glibc
 import Foundation
 import RVAnalytics
 import RVDomain
+import RVHistory
 import RVHooks
 import RVPolicy
 import RVPresentation
@@ -455,7 +456,9 @@ enum SetupRun {
         let configDir = URL(fileURLWithPath: layout.configDirectory, isDirectory: true)
         let analytics = AnalyticsPaths(configDirectory: configDir)
         let configArtifacts =
-            analytics.uninstallArtifacts + RVPolicyPaths.uninstallArtifacts(inConfigDir: configDir)
+            analytics.uninstallArtifacts
+            + RVPolicyPaths.uninstallArtifacts(inConfigDir: configDir)
+            + DenialLedgerPaths(configDirectory: configDir).uninstallArtifacts
         let configExisted = configArtifacts.contains { files.fileExists($0.path) }
         for artifact in configArtifacts {
             removedPaths.append(artifact.path)

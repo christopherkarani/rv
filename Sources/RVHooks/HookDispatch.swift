@@ -6,6 +6,7 @@ public func hookWire(
     host: HookHost,
     stdin: String,
     evaluate: @Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult,
+    evaluateFile: (@Sendable (FileToolAction, WorkingDirectory?) async -> EvaluationResult)? = nil,
     spendHostAsk: (@Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult)? = nil,
     mintOnDeny: (@Sendable (EvaluationResult, WorkingDirectory?) async -> String?)? = nil,
     recordHostAsk: (@Sendable (HookRequest, ProposedAction) async throws -> Void)? = nil,
@@ -17,6 +18,7 @@ public func hookWire(
             stdin: stdin,
             codec: GrokHostCodec(),
             evaluate: evaluate,
+            evaluateFile: evaluateFile,
             spendHostAsk: spendHostAsk,
             mintOnDeny: mintOnDeny,
             recordHostAsk: recordHostAsk,
@@ -27,6 +29,7 @@ public func hookWire(
             stdin: stdin,
             codec: PiHostCodec(),
             evaluate: evaluate,
+            evaluateFile: evaluateFile,
             spendHostAsk: spendHostAsk,
             mintOnDeny: mintOnDeny,
             recordHostAsk: recordHostAsk,
@@ -37,6 +40,7 @@ public func hookWire(
             stdin: stdin,
             codec: OpenCodeHostCodec(),
             evaluate: evaluate,
+            evaluateFile: evaluateFile,
             spendHostAsk: spendHostAsk,
             mintOnDeny: mintOnDeny,
             recordHostAsk: recordHostAsk,
@@ -47,6 +51,7 @@ public func hookWire(
             stdin: stdin,
             codec: ClaudeHostCodec(),
             evaluate: evaluate,
+            evaluateFile: evaluateFile,
             spendHostAsk: spendHostAsk,
             mintOnDeny: mintOnDeny,
             recordHostAsk: recordHostAsk,
@@ -57,6 +62,7 @@ public func hookWire(
             stdin: stdin,
             codec: OpenClawHostCodec(),
             evaluate: evaluate,
+            evaluateFile: evaluateFile,
             spendHostAsk: spendHostAsk,
             mintOnDeny: mintOnDeny,
             recordHostAsk: recordHostAsk,
@@ -67,6 +73,7 @@ public func hookWire(
             stdin: stdin,
             codec: HermesHostCodec(),
             evaluate: evaluate,
+            evaluateFile: evaluateFile,
             spendHostAsk: spendHostAsk,
             mintOnDeny: mintOnDeny,
             recordHostAsk: recordHostAsk,
@@ -77,6 +84,7 @@ public func hookWire(
             stdin: stdin,
             codec: CodexHostCodec(),
             evaluate: evaluate,
+            evaluateFile: evaluateFile,
             spendHostAsk: spendHostAsk,
             mintOnDeny: mintOnDeny,
             recordHostAsk: recordHostAsk,
@@ -87,6 +95,7 @@ public func hookWire(
             stdin: stdin,
             codec: CursorHostCodec(),
             evaluate: evaluate,
+            evaluateFile: evaluateFile,
             spendHostAsk: spendHostAsk,
             mintOnDeny: mintOnDeny,
             recordHostAsk: recordHostAsk,
@@ -99,6 +108,7 @@ private func hookBody<C: HostCodec>(
     stdin: String,
     codec: C,
     evaluate: @Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult,
+    evaluateFile: (@Sendable (FileToolAction, WorkingDirectory?) async -> EvaluationResult)?,
     spendHostAsk: (@Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult)?,
     mintOnDeny: (@Sendable (EvaluationResult, WorkingDirectory?) async -> String?)?,
     recordHostAsk: (@Sendable (HookRequest, ProposedAction) async throws -> Void)?,
@@ -106,6 +116,14 @@ private func hookBody<C: HostCodec>(
 ) async -> HookWire {
     switch codec.decode(stdin) {
     case .request(let request):
+        if let file = request.file {
+            return await hookFileBody(
+                request: request,
+                file: file,
+                codec: codec,
+                evaluateFile: evaluateFile
+            )
+        }
         let action = codec.proposedAction(from: request)
         if request.hostAsk == .spend {
             guard let spendHostAsk else {
@@ -155,6 +173,31 @@ private func hookBody<C: HostCodec>(
     case .malformed(let malformation):
         return codec.encodeDeny(reason: malformedHookSentence(malformation), rule: nil, next: .none)
     }
+}
+
+private func hookFileBody<C: HostCodec>(
+    request: HookRequest,
+    file: FileToolAction,
+    codec: C,
+    evaluateFile: (@Sendable (FileToolAction, WorkingDirectory?) async -> EvaluationResult)?
+) async -> HookWire {
+    if file.path.isEmpty {
+        return codec.encodeDeny(
+            reason: malformedHookSentence(.missingCommand),
+            rule: nil,
+            next: .none
+        )
+    }
+    guard let evaluateFile else {
+        return codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
+    }
+    let result = await evaluateFile(file, request.cwd)
+    return hookWire(
+        from: result,
+        command: request.command,
+        using: codec,
+        cwd: request.cwd
+    )
 }
 
 /// Matches `encodeAsked`: Ask JSON only for allow/deny results whose product

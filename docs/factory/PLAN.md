@@ -12,7 +12,7 @@ Not ryk. Not line-for-line Rust. Repo: `~/CodingProjects/rv` (`christopherkarani
 - **Platform v1:** **macOS 26, Apple Silicon only.** No Linux/Windows. No claimed 14/15 matrix. Linux pack *patterns* and the `careful_company_running_windows` egress packs may live in the catalog as data; do not claim those OSes. The `windows.*` OS packs are excluded from the bundled catalog.
 - **XPC is in v1.** App is not. `rvd` is **on-demand** LaunchAgent (`dev.rv.evaluate`), idle-exit ~5m. Not KeepAlive by default. Down/skew → **in-process evaluate**. Never allow because XPC missed.
 - **Install:** v1 is **curl only.** Hero is `curl -fsSL …/install | sh` (real HOME → `$HOME/.local/bin/{rv,rvd}`, then `rv setup`). No Homebrew formula, tap, bottle, or `post_install` in v1. T6 must not add a formula stub or brew README path. Homebrew is Phase 4+. `install.sh` places binaries and execs `rv setup`. Setup owns the TTY show.
-- **Hosts v1:** **Pi, Grok, OpenCode only.** Shell/command tools only. No Read/Edit/MCP.
+- **Hosts v1:** **Pi, Grok, OpenCode only** for the day-one shell door. Shell stays the destructive-command door. **Read / Edit / Write secret-path** only is allowed on Claude, Cursor, and Grok. Grep / Glob / MCP stay forbidden.
 - **Deny UX:** Native host deny **text** is the block path (one sentence + `rule_id` + next step). Pi also posts a display-only transcript card (`registerMessageRenderer` + `sendMessage`, customType `rv-decision`). OpenCode also shows a display-only TUI toast (`client.tui.showToast`, title `RV · Blocked`). Card and toast are chrome, not the deny. Pi renderer must return `{ render(width) => string[] }`, never a string. OpenCode `throw new Error(reason)` remains the abort. Toast failure must still throw. No host Allow, no confirm, no leftover-ask.
 - **Unlock:** Run command in Terminal, or `rv allow-once <code>` in a **TTY**. No host Allow button. **No `RV_BYPASS`.**
 - **Day-one packs:** `core.git` + `core.filesystem` only. Rest catalog, off until enabled.
@@ -120,7 +120,7 @@ When two agents run in parallel they **must** use git worktrees from the same ba
 - `RV_BYPASS` or any env the hook child honors to skip evaluate.
 - Allowing because `rvd` is down (must in-process evaluate).
 - Evaluating against a version-skewed `rvd` (in-process + doctor warn).
-- Hooking Read/Edit/MCP in v1.
+- Hooking Grep / Glob / MCP. Read / Edit / Write secret-path only is the named file-tool exception.
 - Pi renderer as the deny path, Pi confirm/Allow UI, leftover-ask-as-permit, or OpenCode toast as the deny path in v1.
 - Host Allow / leftover-ask-as-permit UI.
 - Writing foreign hook files. Writing the human’s real HOME from tests.

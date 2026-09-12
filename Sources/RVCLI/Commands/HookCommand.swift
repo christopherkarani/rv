@@ -1,6 +1,7 @@
 import ArgumentParser
 import Foundation
 import RVDomain
+import RVEngine
 import RVHooks
 
 extension HookHost: ExpressibleByArgument {}
@@ -33,12 +34,14 @@ struct Hook: AsyncParsableCommand {
     func run(
         stdin: String,
         evaluate: @Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult,
+        evaluateFile: (@Sendable (FileToolAction, WorkingDirectory?) async -> EvaluationResult)? = nil,
         spendHostAsk: (@Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult)? = nil
     ) async -> (stdout: String, stderr: String, exitCode: Int32) {
         let wire = await hookWire(
             host: host,
             stdin: stdin,
             evaluate: evaluate,
+            evaluateFile: evaluateFile ?? { action, _ in evaluateFileTool(action) },
             spendHostAsk: spendHostAsk
         )
         return (wire.stdout, wire.stderr, wire.exitCode)

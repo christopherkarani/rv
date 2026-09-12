@@ -38,6 +38,13 @@ public enum DoctorProtectionGrade: String, Equatable, Sendable {
     case hook
 }
 
+/// Whether a named host has the file-tool door as well as the shell door.
+public enum DoctorFileToolsState: String, Equatable, Sendable {
+    case wired
+    case shellOnly = "shell-only"
+    case notApplicable = "n-a"
+}
+
 /// Readiness of the in-process evaluation fallback.
 public enum DoctorFallbackState: String, Equatable, Sendable {
     case ready
@@ -130,11 +137,18 @@ public struct DoctorHostView: Equatable, Sendable {
     public var host: HookHost
     /// Installation state at the Host's owned path.
     public var state: DoctorHostState
+    /// File-tool wiring for Claude / Cursor / Grok. Other hosts are not applicable.
+    public var fileTools: DoctorFileToolsState
 
     /// Creates a Host adapter fact.
-    public init(host: HookHost, state: DoctorHostState) {
+    public init(
+        host: HookHost,
+        state: DoctorHostState,
+        fileTools: DoctorFileToolsState = .notApplicable
+    ) {
         self.host = host
         self.state = state
+        self.fileTools = fileTools
     }
 }
 
@@ -150,6 +164,10 @@ public struct DoctorViewModel: Equatable, Sendable {
     public var config: DoctorConfigState
     /// Truthful protection grade.
     public var grade: DoctorProtectionGrade
+    /// Effective safety posture.
+    public var safety: SafetyLevel
+    /// Whether the denial ledger is writing.
+    public var blocksEnabled: Bool
 
     /// Creates a complete doctor health model.
     public init(
@@ -157,13 +175,17 @@ public struct DoctorViewModel: Equatable, Sendable {
         packs: DoctorPacksView,
         hosts: [DoctorHostView],
         config: DoctorConfigState,
-        grade: DoctorProtectionGrade = .hook
+        grade: DoctorProtectionGrade = .hook,
+        safety: SafetyLevel = .normal,
+        blocksEnabled: Bool = true
     ) {
         self.service = service
         self.packs = packs
         self.hosts = hosts
         self.config = config
         self.grade = grade
+        self.safety = safety
+        self.blocksEnabled = blocksEnabled
     }
 
     /// Whether doctor should return a successful exit code.

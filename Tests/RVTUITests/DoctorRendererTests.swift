@@ -45,7 +45,7 @@ private let doctorRendererFixture = DoctorViewModel(
         "    extras off",
         "",
         "  Config",
-        "    readable · grade hook",
+        "    readable · grade hook · safety normal · block ledger on",
         "",
         "  Next",
         "  →  rv setup    Wire Pi, OpenCode, and Claude",
@@ -71,6 +71,22 @@ private let doctorRendererFixture = DoctorViewModel(
     #expect(joined.contains("→  rv setup    Wire Pi, OpenCode, and Claude"))
     #expect(joined.contains("Grok") && joined.contains("wired"))
     #expect(lines.contains { $0.contains("Grok") && $0.contains("rv setup") } == false)
+}
+
+@Test func doctorRenderer_wiredFileToolsShowsFileToolSuffix() {
+    var fixture = doctorRendererFixture
+    fixture.hosts = [
+        DoctorHostView(host: .grok, state: .wired, fileTools: .wired),
+        DoctorHostView(host: .cursor, state: .wired, fileTools: .shellOnly),
+        DoctorHostView(host: .pi, state: .wired),
+    ]
+
+    let lines = DoctorRenderer().render(fixture, palette: colorOffPalette)
+    let joined = lines.joined(separator: "\n")
+
+    #expect(joined.contains("Grok") && joined.contains("wired · file-tool"))
+    #expect(joined.contains("Cursor") && joined.contains("wired · shell-only"))
+    #expect(joined.contains("Pi") && joined.contains("wired"))
 }
 
 @Test func doctorRenderer_occupiedHostsDoNotClaimSetupFixesThem() {

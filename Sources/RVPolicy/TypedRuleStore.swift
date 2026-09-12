@@ -37,14 +37,20 @@ public struct TypedRuleStore: Sendable {
     }
 
     public func saveMachine(_ rules: [TypedRule]) throws {
+        let existing = (try? loadMachineDocument()) ?? PolicyDocument()
         try saveMachine(
-            PolicyDocument(rules: rules.map { rule in
-                PolicyDocumentRule(
-                    id: rule.id,
-                    verdict: rule.verdict,
-                    predicate: rule.predicate
-                )
-            })
+            PolicyDocument(
+                schemaVersion: existing.schemaVersion,
+                rules: rules.map { rule in
+                    PolicyDocumentRule(
+                        id: rule.id,
+                        verdict: rule.verdict,
+                        predicate: rule.predicate
+                    )
+                },
+                safetyLevel: existing.safetyLevel,
+                allowPaths: existing.allowPaths
+            )
         )
     }
 
@@ -76,14 +82,20 @@ public struct TypedRuleStore: Sendable {
     }
 
     public func saveRepo(_ rules: [TypedRule], workspace: URL) throws {
+        let existing = (try? loadRepoDocument(workspace: workspace)) ?? PolicyDocument()
         try saveRepo(
-            PolicyDocument(rules: rules.map { rule in
-                PolicyDocumentRule(
-                    id: rule.id,
-                    verdict: rule.verdict,
-                    predicate: rule.predicate
-                )
-            }),
+            PolicyDocument(
+                schemaVersion: existing.schemaVersion,
+                rules: rules.map { rule in
+                    PolicyDocumentRule(
+                        id: rule.id,
+                        verdict: rule.verdict,
+                        predicate: rule.predicate
+                    )
+                },
+                safetyLevel: existing.safetyLevel,
+                allowPaths: existing.allowPaths
+            ),
             workspace: workspace
         )
     }

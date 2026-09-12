@@ -67,7 +67,20 @@ public struct DoctorRenderer: FrameRenderer {
         let ink = hostInk(host.state, palette: palette)
         let paintedMark = paint(mark, slot: ink, reset: palette.reset)
         let name = padRight(host.host.displayName, to: nameWidth)
-        let status = paint(host.state.rawValue, slot: good ? palette.fact : ink, reset: palette.reset)
+        let statusText: String
+        if host.state == .wired {
+            switch host.fileTools {
+            case .wired:
+                statusText = "wired · file-tool"
+            case .shellOnly:
+                statusText = "wired · shell-only"
+            case .notApplicable:
+                statusText = host.state.rawValue
+            }
+        } else {
+            statusText = host.state.rawValue
+        }
+        let status = paint(statusText, slot: good ? palette.fact : ink, reset: palette.reset)
         return "\(paintedMark)  \(name)  \(status)"
     }
 
@@ -101,8 +114,9 @@ public struct DoctorRenderer: FrameRenderer {
 
     private func configSection(_ model: DoctorViewModel, palette: Palette) -> [String] {
         let configInk = model.config == .readable ? palette.fact : palette.deny
+        let ledger = model.blocksEnabled ? "on" : "off"
         let body = paint(
-            "\(model.config.rawValue) · grade \(model.grade.rawValue)",
+            "\(model.config.rawValue) · grade \(model.grade.rawValue) · safety \(model.safety.rawValue) · block ledger \(ledger)",
             slot: configInk,
             reset: palette.reset
         )

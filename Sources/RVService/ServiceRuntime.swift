@@ -255,7 +255,10 @@ public actor ServiceRuntime {
                     // (`EvaluationWorld.walkedPackIDs`): a warm rvd must never decide on a
                     // narrower or wider set than a cold one.
                     let request = GatedEvaluate.makeRequest(command: command, home: self.configHome)
-                    return await self.runEvaluate(request, cwd: cwd)
+                    return await self.runEvaluate(request, cwd: cwd, host: params.host.rawValue)
+                },
+                evaluateFile: { action, cwd in
+                    await self.runFile(action, cwd: cwd, host: params.host)
                 },
                 spendHostAsk: { command, cwd in
                     await self.runSpendHostAsk(command: command, cwd: cwd)
@@ -294,7 +297,25 @@ public actor ServiceRuntime {
         }
     }
 
-    private func runEvaluate(_ request: EvaluationRequest, cwd: WorkingDirectory?) async -> EvaluationResult {
+    private func runFile(
+        _ action: FileToolAction,
+        cwd: WorkingDirectory?,
+        host: HookHost
+    ) -> EvaluationResult {
+        gated.runFile(
+            action,
+            home: configHome,
+            cwd: cwd,
+            host: host.rawValue,
+            now: clock()
+        )
+    }
+
+    private func runEvaluate(
+        _ request: EvaluationRequest,
+        cwd: WorkingDirectory?,
+        host: String = "tty"
+    ) async -> EvaluationResult {
         rebuildWhenUncovered(wanted: WalkedPackIDs(ids: request.enabledPacks))
         let now = clock()
         let baseDirectory = allowOnce.baseDirectory
@@ -307,7 +328,8 @@ public actor ServiceRuntime {
             allowlist: {
                 AllowlistStore(baseDirectory: baseDirectory)
                     .loadUserSnapshot(workspacePath: cwd.map(\.rawValue), now: now)
-            }
+            },
+            host: host
         )
         recordAnalytics(for: result)
         return result

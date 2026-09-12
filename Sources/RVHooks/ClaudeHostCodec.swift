@@ -15,24 +15,42 @@ public struct ClaudeHostCodec: HostCodec {
         guard envelope.hookEventName == "PreToolUse" else {
             return .foreign
         }
-        guard envelope.toolName == "Bash" else {
-            return .foreign
-        }
-        guard let command = envelope.toolInput?.command, command.isEmpty == false else {
-            return .malformed(.missingCommand)
-        }
         let cwd = envelope.cwd.flatMap { WorkingDirectory(validating: $0) }
         let session = firstNonEmpty(envelope.sessionId)
         let hostAsk = envelope.hostAsk.flatMap(HostAskHookIntent.init(rawValue:))
-        return .request(
-            HookRequest(
-                host: .claude,
-                command: ShellCommand(rawValue: command),
-                cwd: cwd,
-                session: session,
-                hostAsk: hostAsk
+        if envelope.toolName == "Bash" {
+            guard let command = envelope.toolInput?.command, command.isEmpty == false else {
+                return .malformed(.missingCommand)
+            }
+            return .request(
+                HookRequest(
+                    host: .claude,
+                    command: ShellCommand(rawValue: command),
+                    cwd: cwd,
+                    session: session,
+                    hostAsk: hostAsk
+                )
             )
-        )
+        }
+        if let kind = FileToolKind(toolName: envelope.toolName ?? "") {
+            let path = FileToolPath.firstPresent(
+                envelope.toolInput?.filePath,
+                envelope.toolInput?.path,
+                envelope.toolInput?.targetFile,
+                envelope.toolInput?.target
+            ) ?? FileToolPath(rawValue: "")
+            return .request(
+                HookRequest(
+                    host: .claude,
+                    command: ShellCommand(rawValue: ""),
+                    cwd: cwd,
+                    session: session,
+                    hostAsk: hostAsk,
+                    file: FileToolAction(kind: kind, path: path)
+                )
+            )
+        }
+        return .foreign
     }
 
     /// Short `{decision:ask,continuation:hostNative}` for the PreToolUse wrapper.
@@ -124,6 +142,18 @@ private struct ClaudeEnvelope: Decodable {
 
 private struct ClaudeToolInput: Decodable {
     var command: String?
+    var filePath: String?
+    var path: String?
+    var targetFile: String?
+    var target: String?
+
+    enum CodingKeys: String, CodingKey {
+        case command
+        case filePath = "file_path"
+        case path
+        case targetFile = "target_file"
+        case target
+    }
 }
 
 private func firstNonEmpty(_ values: String?...) -> String? {

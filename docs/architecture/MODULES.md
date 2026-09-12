@@ -2,7 +2,7 @@
 
 Each module keeps a small public API, `package` internals later, and its own test target. Hexagonal: dependency arrows down. Engine never imports CLI, TUI, or XPC. A test that needs a TTY to prove a **decision** is in the wrong module.
 
-`RVHistory` is a **stub**. History stays off by default. Do not persist command text.
+`RVHistory` owns the **denial-only block ledger**. Allows stay off. Do not persist command text.
 
 `RVAnalytics` owns anonymous product analytics (PostHog). Opt-out via `analytics.enabled` in `~/.config/rv/config.json` (missing = on). Never command text, paths, or secrets. Host hook processes never call it.
 
@@ -10,19 +10,19 @@ Each module keeps a small public API, `package` internals later, and its own tes
 
 | Module | Owns | Must not |
 |---|---|---|
-| **RVDomain** | `Decision`, `Severity`, `PackID`, `RuleID`, `SecretPathCatalog`, `EvaluationRequest/Result`, Explain pipeline (`ExplainStep`), `ProposedAction`, `HardPolicyDecision`, `ActionPolicyEngine`, `ActionReviewer`, `PendingApproval`, `HostNativeAsk`, `ApprovalBridge`, `SemanticAnalysis`, `GitAction`, `FilesystemAction`, `PolicyPredicate`, `TypedRule`, `PolicyDocument`, `EnglishCompiler` (shapes) | I/O, TTY, XPC |
-| **RVEngine** | normalize, quick-reject, safe then destructive, secret-path on allow, deadline, `PatternEngine`, `analyzeGit`, `applyGitSemantics`, `analyzeFilesystem`, `applyFilesystemSemantics`, `unwrapCommand`, `analyzeSemantics`, `applySemantics` | pack files, hooks |
+| **RVDomain** | `Decision`, `Severity`, `PackID`, `RuleID`, `SecretPathCatalog`, `FileToolAction` / `FileToolKind`, `EvaluationRequest/Result`, Explain pipeline (`ExplainStep`), `ProposedAction`, `HardPolicyDecision`, `ActionPolicyEngine`, `ActionReviewer`, `PendingApproval`, `HostNativeAsk`, `ApprovalBridge`, `SemanticAnalysis`, `GitAction`, `FilesystemAction`, `PolicyPredicate`, `TypedRule`, `PolicyDocument`, `EnglishCompiler` (shapes) | I/O, TTY, XPC |
+| **RVEngine** | normalize, quick-reject, safe then destructive, secret-path on allow, `evaluateFileTool` (catalog only; no packs), deadline, `PatternEngine`, `analyzeGit`, `applyGitSemantics`, `analyzeFilesystem`, `applyFilesystemSemantics`, `unwrapCommand`, `analyzeSemantics`, `applySemantics` | pack files, hooks |
 | **RVPacks** | registry, bundled JSON, enable/disable | decisions, rendering |
 | **RVScan** | session-store discovery, bounds walk, store adapters, extract, classify, dedupe | CLI, TUI, XPC, hooks codecs, Policy gate |
-| **RVPolicy** | config merge, allowlist, allow-once, `HostGrantWriter`, durable `PendingApprovalStore`, Apple Foundation Models `ActionReviewer` adapter (shadow library; not on the hook), `ShadowReviewRunner` (never `ReviewBind.apply`), `TypedRule` / `policy.toml` store (load/save/merge), `FoundationModelsEnglishCompiler` (CLI draft; Fake fixture on miss) | rendering; live Auto-review |
-| **RVHooks** | **Pi / Grok / OpenCode / Claude / OpenClaw / Hermes / Codex / Cursor** Host adapters: shell codecs, Hook mapper/voice, Pi/OpenCode confirm-or-resolution spend-then-allow, OpenCode `bash` + TUI `session.shell` / `shell.env` official permission create + TUI `DialogConfirm` Ask then spend-then-allow (missing confirm still fail-closed; last-match is not a permit), Claude spend-first Ask via wrapper confirm-then-spend (never leftover `permissionDecision` ask; leftover `hook --host claude` fail-closes at encodeAsk exit 2), Codex host-only official older `decision: block` + stderr reason + exit 2 (stdout-only block and Claude permission deny are not the honor path), Cursor host-only official native `permission: deny` + exit 0 (Claude permissionDecision and Codex `decision: block` + exit 2 are not the honor path), embedded adapter resources | evaluation, setup mutations |
+| **RVPolicy** | config merge, allowlist, allow-once, `SafetyStore`, `secret.allow_paths`, `HostGrantWriter`, durable `PendingApprovalStore`, Apple Foundation Models `ActionReviewer` adapter (shadow library; not on the hook), `ShadowReviewRunner` (never `ReviewBind.apply`), `TypedRule` / `policy.toml` store (load/save/merge), `FoundationModelsEnglishCompiler` (CLI draft; Fake fixture on miss) | rendering; live Auto-review |
+| **RVHooks** | **Pi / Grok / OpenCode / Claude / OpenClaw / Hermes / Codex / Cursor** Host adapters: shell codecs, Claude/Cursor/Grok **Read / Edit / Write secret-path** file-tool decode (Grep/MCP stay foreign), Hook mapper/voice, Pi/OpenCode confirm-or-resolution spend-then-allow, OpenCode `bash` + TUI `session.shell` / `shell.env` official permission create + TUI `DialogConfirm` Ask then spend-then-allow (missing confirm still fail-closed; last-match is not a permit), Claude spend-first Ask via wrapper confirm-then-spend (never leftover `permissionDecision` ask; leftover `hook --host claude` fail-closes at encodeAsk exit 2), Codex host-only official older `decision: block` + stderr reason + exit 2 (stdout-only block and Claude permission deny are not the honor path), Cursor host-only official native `permission: deny` + exit 0 (Claude permissionDecision and Codex `decision: block` + exit 2 are not the honor path), embedded adapter resources | evaluation, setup mutations |
 | **RVIPC** | `rv.ipc.v1` Codable | transport details |
 | **RVService** | XPC listener, EvaluationWorld (single assembly), EvaluateSession (compiled day-one packs + evaluate), GatedEvaluate (session then Policy gate), launchd; hook-door pending create/cancel; IPC `pendingResolve allowOnce` plants `AllowOnceStore`; `PacksFacade` (list/enable/disable assembly over Packs+Policy) | ArgumentParser, SwiftUI |
 | **RVPresentation** | deny/explain/packs/doctor view models | ANSI |
 | **RVTheme** | palettes, pure capability detect | business rules |
 | **RVTUI** | `FrameRenderer` `render` → `[String]` | opening a TTY |
 | **RVCLI** | ArgumentParser, output mode, thin XPC client, typed service diagnostics, service health facts, GatedEvaluate for TTY test/explain and hook XPC miss (same pending create/cancel as `rvd`), Host adapter installation state + setup mutations | regex, pack parse |
-| **RVHistory** | stub; later; off by default | logging full argv |
+| **RVHistory** | denial-only block ledger (`blocks.jsonl`); redacted path; default on | logging full argv; allow history |
 | **RVAnalytics** | anonymous install / DAU / product counters; PostHog sink; opt-out preferences; `AnalyticsNotice` seam | command text, paths, secrets; hook-process I/O |
 
 ## Dependency graph
@@ -37,7 +37,7 @@ Each module keeps a small public API, `package` internals later, and its own tes
 | `RVPolicy` | `RVDomain` | Packs config merge; allowlist / allow-once; AFM shadow reviewer. Darwin: CryptoKit. Linux: `Crypto` (swift-crypto) added on that graph only. |
 | `RVHooks` | `RVDomain` | Complete Pi/Grok/OpenCode/Claude/OpenClaw/Hermes/Codex/Cursor Host adapter behavior (`ClaudeHostCodec` + rich deny + wrapper Ask `{decision:ask}` exit 2; OpenClaw short deny; Hermes spend-first; Codex official `block` + exit 2; Cursor official native `permission: deny` + exit 0); no setup mutations. |
 | `RVIPC` | `RVDomain` | `rv.ipc.v1` Codable later. |
-| `RVHistory` | `RVDomain` | **Stub.** Off by default forever until a later ticket enables it. Must not log argv. |
+| `RVHistory` | `RVDomain` | Denial-only block ledger. Must not log argv. Allows never stored. |
 | `RVAnalytics` | none | Store actor allowed. Network only in PostHog sink. |
 | `RVPresentation` | `RVDomain`, `RVTheme` | View models later. No ANSI. |
 | `RVTUI` | `RVTheme`, `RVPresentation` | `FrameRenderer.render` → `[String]`. Must not open a TTY. |

@@ -15,6 +15,8 @@ _rv() {
     'setup:Install hooks'
     'uninstall:Remove rv-owned files'
     'doctor:Read-only health'
+    'safety:Show or set normal or strict'
+    'blocks:List recent denials'
   )
   _arguments '1: :->cmds' '*:: :->args'
   case $state in
@@ -45,6 +47,11 @@ _rv() {
           local -a sc
           sc=('sessions:Scan host session stores')
           _describe -t commands 'scan' sc
+          ;;
+        safety)
+          local -a sf
+          sf=('normal:File-tool secrets plus shell evaluate' 'strict:Also deny ls / test / stat of a catalog path')
+          _describe -t commands 'safety' sf
           ;;
       esac
       ;;

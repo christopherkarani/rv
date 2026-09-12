@@ -19,6 +19,8 @@ public struct RV: AsyncParsableCommand {
             Doctor.self,
             AllowOnceCommand.self,
             AllowlistCommand.self,
+            Safety.self,
+            Blocks.self,
         ]
     )
 

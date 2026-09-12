@@ -66,7 +66,12 @@ public struct EvaluateSession: Sendable {
         )
     }
 
-    public func evaluate(_ request: EvaluationRequest) -> EvaluationResult {
+    public func evaluate(
+        _ request: EvaluationRequest,
+        safety: SafetyLevel = .normal,
+        allowPaths: SecretAllowPathSet = .empty,
+        home: String? = nil
+    ) -> EvaluationResult {
         if !corePacksReady {
             return EvaluationResult(
                 outcome: .indeterminate(.corePacksUnavailable),
@@ -76,6 +81,9 @@ public struct EvaluateSession: Sendable {
         return callEngineEvaluate(
             request,
             packs: snapshots,
+            safety: safety,
+            allowPaths: allowPaths,
+            home: home,
             engine: engine,
             compiled: compiled
         )
@@ -85,8 +93,19 @@ public struct EvaluateSession: Sendable {
 private func callEngineEvaluate(
     _ request: EvaluationRequest,
     packs: [PackSnapshot],
+    safety: SafetyLevel,
+    allowPaths: SecretAllowPathSet,
+    home: String?,
     engine: ICUPatternEngine,
     compiled: CompiledPacks<ICUCompiledPattern>
 ) -> EvaluationResult {
-    evaluate(request, packs: packs, patterns: engine, compiled: compiled)
+    evaluate(
+        request,
+        packs: packs,
+        safety: safety,
+        allowPaths: allowPaths,
+        home: home,
+        patterns: engine,
+        compiled: compiled
+    )
 }

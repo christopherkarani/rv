@@ -46,6 +46,12 @@ import Testing
             "home-keyrings",
             "home-password-store",
             "home-gh",
+            "host-claude-auth",
+            "host-cursor-auth",
+            "host-cursor-config-auth",
+            "host-codex-auth",
+            "host-hermes-auth",
+            "host-openclaw-auth",
         ]
     )
     let reason = "Access to a sensitive path is not allowed."
@@ -64,6 +70,12 @@ import Testing
     #expect(SecretPathCatalog.dayOne.firstMatch(of: "/isolated-home/.ssh/config")?.pattern == "home-ssh")
     #expect(SecretPathCatalog.dayOne.firstMatch(of: "/repo/.env")?.pattern == "env")
     #expect(SecretPathCatalog.dayOne.firstMatch(of: "/repo/Sources/Foo.swift") == nil)
+    #expect(SecretPathCatalog.dayOne.firstMatch(of: "~/.claude/.credentials.json")?.pattern == "host-claude-auth")
+    #expect(SecretPathCatalog.dayOne.firstMatch(of: "~/.cursor/auth.json")?.pattern == "host-cursor-auth")
+    #expect(SecretPathCatalog.dayOne.firstMatch(of: "~/.config/cursor/auth.json")?.pattern == "host-cursor-config-auth")
+    #expect(SecretPathCatalog.dayOne.firstMatch(of: "~/.codex/auth.json")?.pattern == "host-codex-auth")
+    #expect(SecretPathCatalog.dayOne.firstMatch(of: "~/.hermes/auth.json")?.pattern == "host-hermes-auth")
+    #expect(SecretPathCatalog.dayOne.firstMatch(of: "~/.openclaw/credentials/oauth.json")?.pattern == "host-openclaw-auth")
 }
 
 @Test func secretPathCatalog_matchesHomeAliasesAndNewHostSecrets() {

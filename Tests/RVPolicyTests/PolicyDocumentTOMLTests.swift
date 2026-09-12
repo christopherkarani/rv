@@ -142,6 +142,19 @@ struct PolicyDocumentTOMLTests {
         }
     }
 
+    @Test func additiveSafetyAndAllowPaths_roundTrip() throws {
+        let source = """
+        schema_version = 1
+        safety.level = "strict"
+        secret.allow_paths = [".env", "config/secrets"]
+        """
+        let document = try PolicyDocumentTOML.parse(source)
+        #expect(document.safetyLevel == .strict)
+        #expect(document.allowPaths == [".env", "config/secrets"])
+        let again = try PolicyDocumentTOML.parse(PolicyDocumentTOML.render(document))
+        #expect(again == document)
+    }
+
     @Test func mergeLayer_keepsTighterVerdict() {
         let allow = PolicyDocumentRule(
             id: RuleID(pack: .typedGit, pattern: "allow"),

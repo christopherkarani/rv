@@ -47,6 +47,9 @@ private func run(
     _ command: String,
     packs: [PackSnapshot]? = nil,
     secrets: SecretPathCatalog = .dayOne,
+    safety: SafetyLevel = .normal,
+    allowPaths: SecretAllowPathSet = .empty,
+    home: String? = nil,
     budget: EvaluationBudget? = nil
 ) throws -> EvaluationResult {
     let packs = packs ?? samplePacks()
@@ -60,6 +63,9 @@ private func run(
         ),
         packs: packs,
         secrets: secrets,
+        safety: safety,
+        allowPaths: allowPaths,
+        home: home,
         patterns: engine,
         compiled: compiled
     )
@@ -228,6 +234,92 @@ struct SecretPathGuardTests {
             catalog: .dayOne
         )
         #expect(afterRegexp?.ruleID.rawValue == "core.secrets:env")
+    }
+
+    @Test func evaluate_metadataDiscovery_allowsUnderNormal() throws {
+        for command in ["test -f ~/.ssh/id_rsa", "ls ~/.ssh", "stat ~/.ssh/id_rsa"] {
+            let result = try run(command)
+            #expect(result.decision == .allow, "\(command) got \(String(describing: result.decision))")
+        }
+    }
+
+    @Test func evaluate_metadataDiscovery_deniesUnderStrict() throws {
+        let result = try run("test -f ~/.ssh/id_rsa", safety: .strict)
+        guard case .deny(let deny, _) = result.outcome else {
+            Issue.record("expected strict deny")
+            return
+        }
+        #expect(deny.ruleID.rawValue == "core.secrets:id-rsa")
+        let ls = try run("ls ~/.ssh", safety: .strict)
+        guard case .deny(let lsDeny, _) = ls.outcome else {
+            Issue.record("expected strict ls deny")
+            return
+        }
+        #expect(lsDeny.ruleID.rawValue == "core.secrets:home-ssh")
+    }
+
+    @Test func evaluate_gitResetHard_deniesInBothLevels() throws {
+        for safety: SafetyLevel in [.normal, .strict] {
+            let result = try run("git reset --hard", safety: safety)
+            guard case .deny(let deny, _) = result.outcome else {
+                Issue.record("expected pack deny at \(safety)")
+                return
+            }
+            #expect(deny.ruleID.rawValue == "core.git:reset-hard")
+        }
+    }
+
+    @Test func evaluate_rmCatalogPath_stillDeniesUnderNormal() throws {
+        let result = try run("rm .env")
+        guard case .deny(let deny, _) = result.outcome else {
+            Issue.record("expected rm deny")
+            return
+        }
+        #expect(deny.ruleID.rawValue == "core.secrets:env")
+    }
+
+    @Test func evaluate_allowPath_suppressesNonHostAuth() throws {
+        let result = try run(
+            "cat /tmp/rv-oracle/.env",
+            allowPaths: SecretAllowPathSet(literals: ["/tmp/rv-oracle/.env"])
+        )
+        #expect(result.decision == .allow)
+    }
+
+    @Test func evaluate_allowPath_tildeExpandsWithHome() throws {
+        let result = try run(
+            "cat /Users/ada/.env",
+            allowPaths: SecretAllowPathSet(literals: ["~/.env"]),
+            home: "/Users/ada"
+        )
+        #expect(result.decision == .allow)
+    }
+
+    @Test func evaluate_allowPath_dollarHomeExpandsWithHome() throws {
+        let result = try run(
+            "cat /Users/ada/.env",
+            allowPaths: SecretAllowPathSet(literals: ["$HOME/.env"]),
+            home: "/Users/ada"
+        )
+        #expect(result.decision == .allow)
+        let braced = try run(
+            "cat /Users/ada/.env",
+            allowPaths: SecretAllowPathSet(literals: ["${HOME}/.env"]),
+            home: "/Users/ada"
+        )
+        #expect(braced.decision == .allow)
+    }
+
+    @Test func evaluate_allowPath_tildeWithoutHomeStaysDenied() throws {
+        let result = try run(
+            "cat /Users/ada/.env",
+            allowPaths: SecretAllowPathSet(literals: ["~/.env"])
+        )
+        guard case .deny(let deny, _) = result.outcome else {
+            Issue.record("expected deny without home expansion")
+            return
+        }
+        #expect(deny.ruleID.rawValue == "core.secrets:env")
     }
 
     @Test func secretPathGuard_findNameValueIsNotCandidate() {

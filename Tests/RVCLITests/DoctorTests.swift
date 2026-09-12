@@ -68,6 +68,8 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
         #expect(outcome.stdout.contains("OpenCode") && outcome.stdout.contains("missing"))
         #expect(outcome.stdout.contains("Claude") && outcome.stdout.contains("missing"))
         #expect(outcome.stdout.contains("→  rv setup"))
+        #expect(outcome.stdout.contains("safety normal"))
+        #expect(outcome.stdout.contains("block ledger on"))
         #expect(try FileManager.default.contentsOfDirectory(atPath: home.path) == before)
     }
 }
@@ -96,6 +98,7 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
 
         #expect(outcome.exitCode == 0)
         #expect(outcome.stdout.contains("Grok") && outcome.stdout.contains("wired"))
+        #expect(outcome.stdout.contains("file-tool"))
         #expect(outcome.stdout.contains("→  rv setup    Wire Grok") == false)
     }
 }
@@ -125,6 +128,73 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
 
         #expect(outcome.exitCode == 0)
         #expect(outcome.stdout.contains("Claude") && outcome.stdout.contains("wired"))
+        #expect(outcome.stdout.contains("file-tool"))
+    }
+}
+
+@Test func doctor_wiredCursorReportsFileTool() throws {
+    try withDoctorHome { home, paths, environment in
+        let executable = home.appendingPathComponent("bin/rv")
+        try makeExecutable(executable)
+        try makeExecutable(home.appendingPathComponent("bin/rv-cli"))
+        try FileManager.default.createDirectory(
+            atPath: (paths.cursorHook as NSString).deletingLastPathComponent,
+            withIntermediateDirectories: true
+        )
+        let body = try HookHost.cursor.adapterResource().rendered(rvPath: executable.path)
+        try body.write(toFile: paths.cursorHook, atomically: true, encoding: .utf8)
+        let merged = try CursorHooksMerge.merge(
+            existingData: nil,
+            adapterPath: paths.cursorHook
+        )
+        try merged.data.write(to: URL(fileURLWithPath: paths.cursorHooksJSON))
+
+        let outcome = DoctorRun.run(
+            environment: environment,
+            diagnostics: localReady,
+            appearance: .pretty(colorOffPalette)
+        )
+
+        #expect(outcome.exitCode == 0)
+        #expect(outcome.stdout.contains("Cursor") && outcome.stdout.contains("wired"))
+        #expect(outcome.stdout.contains("file-tool"))
+        #expect(outcome.stdout.contains("shell-only") == false)
+    }
+}
+
+@Test func doctor_cursorShellOnlyWhenPreToolUseMissing() throws {
+    try withDoctorHome { home, paths, environment in
+        let executable = home.appendingPathComponent("bin/rv")
+        try makeExecutable(executable)
+        try makeExecutable(home.appendingPathComponent("bin/rv-cli"))
+        try FileManager.default.createDirectory(
+            atPath: (paths.cursorHook as NSString).deletingLastPathComponent,
+            withIntermediateDirectories: true
+        )
+        let body = try HookHost.cursor.adapterResource().rendered(rvPath: executable.path)
+        try body.write(toFile: paths.cursorHook, atomically: true, encoding: .utf8)
+        let shellOnly = """
+        {
+          "version": 1,
+          "hooks": {
+            "beforeShellExecution": [
+              { "command": "python3 \(paths.cursorHook)", "failClosed": true, "timeout": 5 }
+            ]
+          }
+        }
+        """
+        try shellOnly.write(toFile: paths.cursorHooksJSON, atomically: true, encoding: .utf8)
+
+        let outcome = DoctorRun.run(
+            environment: environment,
+            diagnostics: localReady,
+            appearance: .pretty(colorOffPalette)
+        )
+
+        #expect(outcome.exitCode == 0)
+        #expect(outcome.stdout.contains("Cursor") && outcome.stdout.contains("wired"))
+        #expect(outcome.stdout.contains("shell-only"))
+        #expect(outcome.stdout.contains("file-tool") == false)
     }
 }
 

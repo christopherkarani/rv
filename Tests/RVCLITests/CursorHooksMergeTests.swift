@@ -16,6 +16,12 @@ import Testing
     #expect(before[0]["failClosed"] as? Bool == true)
     #expect(before[0]["matcher"] == nil)
     #expect(hooksRoot["PreToolUse"] == nil)
+    let preToolUse = try #require(hooksRoot["preToolUse"] as? [[String: Any]])
+    #expect(preToolUse.count == 1)
+    #expect(preToolUse[0]["command"] as? String == "python3 \(adapter)")
+    #expect(preToolUse[0]["timeout"] as? Int == 5)
+    #expect(preToolUse[0]["failClosed"] as? Bool == true)
+    #expect(preToolUse[0]["matcher"] == nil)
 }
 
 @Test func cursorHooksMerge_preservesForeignBeforeShell() throws {

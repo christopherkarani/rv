@@ -10,6 +10,8 @@ public enum PolicyDocumentTOML {
     public static func parse(_ text: String) throws -> PolicyDocument {
         let blocks = splitRuleBlocks(text)
         var schemaVersion: Int?
+        var safetyLevel: SafetyLevel?
+        var allowPaths: [String] = []
         var seenRootKeys: Set<String> = []
         for line in preambleLines(text) {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
@@ -19,17 +21,28 @@ public enum PolicyDocumentTOML {
             }
             let key = trimmed[..<eq].trimmingCharacters(in: .whitespaces)
             let raw = String(trimmed[trimmed.index(after: eq)...].trimmingCharacters(in: .whitespaces))
-            if key != "schema_version" {
-                throw PolicyDocumentError.invalidFile
-            }
             if seenRootKeys.contains(key) {
                 throw PolicyDocumentError.invalidFile
             }
-            seenRootKeys.insert(key)
-            guard let value = Int(parseTOMLString(raw)), value == PolicyDocument.currentSchemaVersion else {
+            switch key {
+            case "schema_version":
+                seenRootKeys.insert(key)
+                guard let value = Int(parseTOMLString(raw)), value == PolicyDocument.currentSchemaVersion else {
+                    throw PolicyDocumentError.invalidFile
+                }
+                schemaVersion = value
+            case "safety.level":
+                seenRootKeys.insert(key)
+                guard let level = SafetyLevel(rawValue: parseTOMLString(raw)) else {
+                    throw PolicyDocumentError.invalidFile
+                }
+                safetyLevel = level
+            case "secret.allow_paths":
+                seenRootKeys.insert(key)
+                allowPaths = try parseTOMLStringArray(raw)
+            default:
                 throw PolicyDocumentError.invalidFile
             }
-            schemaVersion = value
         }
         guard schemaVersion == PolicyDocument.currentSchemaVersion else {
             throw PolicyDocumentError.invalidFile
@@ -49,11 +62,25 @@ public enum PolicyDocumentTOML {
             predicates.append(rule.predicate)
             rules.append(rule)
         }
-        return PolicyDocument(schemaVersion: PolicyDocument.currentSchemaVersion, rules: rules)
+        return PolicyDocument(
+            schemaVersion: PolicyDocument.currentSchemaVersion,
+            rules: rules,
+            safetyLevel: safetyLevel,
+            allowPaths: allowPaths
+        )
     }
 
     public static func render(_ document: PolicyDocument) -> String {
         var parts = ["schema_version = \(document.schemaVersion)"]
+        if let safety = document.safetyLevel {
+            parts.append("safety.level = \"\(safety.rawValue)\"")
+        }
+        if document.allowPaths.isEmpty == false {
+            let quoted = document.allowPaths
+                .map { "\"\(escapeTOMLString($0))\"" }
+                .joined(separator: ", ")
+            parts.append("secret.allow_paths = [\(quoted)]")
+        }
         for rule in document.rules {
             var lines = ["[[rule]]"]
             lines.append("id = \"\(escapeTOMLString(rule.id.rawValue))\"")
@@ -216,5 +243,50 @@ public enum PolicyDocumentTOML {
             predicate: .gitPush(force: force, branch: branch),
             english: englishRaw
         )
+    }
+
+    private static func parseTOMLStringArray(_ raw: String) throws -> [String] {
+        let text = raw.trimmingCharacters(in: .whitespaces)
+        guard text.hasPrefix("["), text.hasSuffix("]") else {
+            throw PolicyDocumentError.invalidFile
+        }
+        let inner = String(text.dropFirst().dropLast()).trimmingCharacters(in: .whitespaces)
+        if inner.isEmpty { return [] }
+        var items: [String] = []
+        var current = ""
+        var inQuote = false
+        var escape = false
+        for character in inner {
+            if escape {
+                current.append(character)
+                escape = false
+                continue
+            }
+            if character == "\\", inQuote {
+                escape = true
+                continue
+            }
+            if character == "\"" {
+                inQuote.toggle()
+                current.append(character)
+                continue
+            }
+            if character == ",", inQuote == false {
+                let piece = current.trimmingCharacters(in: .whitespaces)
+                guard piece.isEmpty == false else {
+                    throw PolicyDocumentError.invalidFile
+                }
+                items.append(parseTOMLString(piece))
+                current = ""
+                continue
+            }
+            current.append(character)
+        }
+        let last = current.trimmingCharacters(in: .whitespaces)
+        guard last.isEmpty == false else {
+            throw PolicyDocumentError.invalidFile
+        }
+        items.append(parseTOMLString(last))
+        return items
     }
 }

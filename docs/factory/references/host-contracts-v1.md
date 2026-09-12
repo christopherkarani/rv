@@ -5,11 +5,11 @@ rv owns codecs. Do not copy ryk leftover-ask-as-permit. Do not copy DCG fail-ope
 ## Grok
 
 - Discover: `~/.grok/hooks/*.json`. Setup writes an **rv-owned** file (e.g. `rv.json`), never `dcg.json`, never a foreign hook.
-- Matcher: `PreToolUse` / `Bash` (Grok aliases to `run_terminal_cmd`).
-- Stdin shape (camelCase): `hookEventName: "pre_tool_use"`, `toolName: "run_terminal_command"` or `run_terminal_cmd` or `Bash`. Also detect `GROK_SESSION_ID` / `GROK_HOOK_EVENT` / `GROK_WORKSPACE_ROOT`.
+- Matcher: `PreToolUse` with **no `matcher` key** so file tools reach the hook. Grok shell aliases: `run_terminal_command` / `run_terminal_cmd` / `Bash`. File-tool aliases: `read_file` / `Read` / `write_file` / `Write` / `Edit`. Codec evaluates those; Grep / Glob / MCP stay foreign allow. Host is fail-open if the hook emits nothing.
+- Stdin shape (camelCase): `hookEventName: "pre_tool_use"`, `toolName` as above. File path is the first non-empty of `file_path`, `path`, `target_file`, `target`. Also detect `GROK_SESSION_ID` / `GROK_HOOK_EVENT` / `GROK_WORKSPACE_ROOT`.
 - Deny stdout: `{"decision":"deny","reason":"..."}`. Word is **deny**, not Hermes `block`.
 - Documented preferred: JSON deny with exit 0. Exit 2 is also honored. Other exits fail-open at the host.
-- Non-shell tools: pass through. No Read/Edit/MCP in v1.
+- Grep / Glob / MCP: pass through. Read / Edit / Write of a catalog path deny.
 - Occupied single slot: skip + one line. Do not overwrite foreign hooks.
 
 ## Pi
@@ -32,10 +32,10 @@ rv owns codecs. Do not copy ryk leftover-ask-as-permit. Do not copy DCG fail-ope
 ## Claude Code (post-v1; see `docs/factory/specs/claude-host.md`)
 
 - Discover: `~/.claude/`. Setup **merges** into `$HOME/.claude/settings.json` (shared file; not an exclusive owned filename). PLAN #11 filename occupancy and PLAN #20 `*.bak` whole-file rewrite do **not** apply to `settings.json`.
-- Matcher: `PreToolUse` / `Bash` only. Current command is `RV_BINARY=<absolute-rv> python3 ~/.claude/hooks/rv-guard.py`, `timeout` 90. Foreign hooks (incl. dcg) and non-hook keys (model / MCP / permissions) untouched. Occupied = foreign/tampered `rv-guard.py` that is not current → skip unless `--force`. Stale v1 `…/rv hook --host claude` is outdated rv: setup without `--force` rewrites it. `--force` replaces **only** rv-fingerprinted handlers.
-- Stdin (snake_case): `hook_event_name: "PreToolUse"`, `tool_name: "Bash"`, `tool_input.command`. `cwd` when present. Non-Bash tools: allow (empty). Malformed: allow (host fail-open).
+- Matcher: `PreToolUse` entries for `Bash`, `Read`, `Edit`, `Write` (do not omit matcher). Current command is `RV_BINARY=<absolute-rv> python3 ~/.claude/hooks/rv-guard.py`, `timeout` 90. Foreign hooks (incl. dcg) and non-hook keys (model / MCP / permissions) untouched. Occupied = foreign/tampered `rv-guard.py` that is not current → skip unless `--force`. Stale v1 `…/rv hook --host claude` is outdated rv: setup without `--force` rewrites it. `--force` replaces **only** rv-fingerprinted handlers.
+- Stdin (snake_case): `hook_event_name: "PreToolUse"`. Shell: `tool_name: "Bash"`, `tool_input.command`. File-tool aliases: `Read` / `Edit` / `Write`; path is first non-empty of `file_path`, `path`, `target_file`, `target`. Catalog-path deny; ordinary project file allow. MCP: allow (empty). Empty file path: deny (same voice as missing command).
 - Deny stdout (exit 0): documented Claude fields only — `systemMessage` branded `RV · Blocked` + short hostDenyText; `hookSpecificOutput` with exactly `hookEventName`, `permissionDecision: "deny"`, rich `permissionDecisionReason`. Pack / rule / severity / remediation live inside the reason text. **No** extra `hookSpecificOutput` keys (`ruleId`, `packId`, `severity`, `remediation`, …): schema-invalid exit-0 JSON is a non-blocking error and the action proceeds. **No** `allowOnceCode` / redeemable code. Indeterminate: deny envelope + incomplete-eval sentence; no pack sections in the reason.
-- Allow: empty stdout, exit 0. First-call Ask is `{decision:ask}` at exit 2 for the wrapper (confirm then spend). Never emit official `permissionDecision: "ask"` (CL-later-ask leftover-ask-as-permit). No Read/Edit/Write/MCP matchers (CL-later-secrets / CL-later-mcp).
+- Allow: empty stdout, exit 0. First-call Ask is `{decision:ask}` at exit 2 for the wrapper (confirm then spend). Never emit official `permissionDecision: "ask"` (CL-later-ask leftover-ask-as-permit). File-tool aliases `Read` / `Edit` / `Write`. No Grep / MCP matchers (CL-later-mcp).
 
 ## OpenClaw (OPE-266; host only, no Ask)
 
@@ -108,8 +108,8 @@ rv owns codecs. Do not copy ryk leftover-ask-as-permit. Do not copy DCG fail-ope
 ## Cursor (OPE-270; host only, no Ask)
 
 - Discover: `~/.cursor/` exists or `cursor` on PATH. Linux and macOS only. No Windows path.
-- Setup writes an **exclusive adapter** `$HOME/.cursor/hooks/rv-guard.py` (`__RV_BINARY__` baked) and **merges** `$HOME/.cursor/hooks.json` (official native `hooks.beforeShellExecution` entry: `python3 …/rv-guard.py`, `failClosed: true`, timeout 5, schema `version: 1`). Occupancy is the exclusive adapter, not the merge file. Foreign `hooks.json` siblings stay. `--force` replaces only the rv-fingerprinted adapter. Do **not** write project `.cursor/hooks.json` (no foreign hook writes into repos).
-- Real intercept: official Cursor command hook `beforeShellExecution` ([hooks](https://cursor.com/docs/hooks.md)). Stdin: `command`, `cwd`, optional `conversation_id` / `generation_id` / `sandbox`. Also decode `preToolUse` + `tool_name` `Shell`/`Bash` as shell (`tool_input.command`); other tools and `afterShellExecution` are foreign allow. cwd is `tool_input.working_directory` then envelope `cwd` then `workspace_roots[0]`. session is `conversation_id` then `session_id` then `generation_id`. Unreadable JSON or missing/empty command: deny.
+- Setup writes an **exclusive adapter** `$HOME/.cursor/hooks/rv-guard.py` (`__RV_BINARY__` baked) and **merges** `$HOME/.cursor/hooks.json` (official native `hooks.beforeShellExecution` entry plus `preToolUse` file-tool entry: `python3 …/rv-guard.py`, `failClosed: true`, timeout 5, schema `version: 1`, no matcher on `preToolUse`). Occupancy is the exclusive adapter, not the merge file. Foreign `hooks.json` siblings stay. `--force` replaces only the rv-fingerprinted adapter. Do **not** write project `.cursor/hooks.json` (no foreign hook writes into repos).
+- Real intercept: official Cursor command hook `beforeShellExecution` ([hooks](https://cursor.com/docs/hooks.md)). Stdin: `command`, `cwd`, optional `conversation_id` / `generation_id` / `sandbox`. Also decode `preToolUse` + `tool_name` `Shell`/`Bash` as shell (`tool_input.command`); `preToolUse` + file-tool aliases `Read` / `Edit` / `Write` as file (path first non-empty of `file_path`, `path`, `target_file`, `target`; catalog-path deny). Other tools and `afterShellExecution` are foreign allow. cwd is `tool_input.working_directory` then envelope `cwd` then `workspace_roots[0]`. session is `conversation_id` then `session_id` then `generation_id`. Unreadable JSON or missing/empty command or empty file path: deny.
 - Honor path (QA / live Agent): official native `beforeShellExecution` stdout JSON and process exit **0** (docs: “Exit code 0 — use the JSON output”):
 
   ```json

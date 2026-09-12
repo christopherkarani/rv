@@ -87,8 +87,29 @@ func cursorDecode_extractsBeforeShellCommand(_ file: String, expected: String) t
     #expect(request.session == SessionID(validating: "conv_shell"))
 }
 
-@Test func cursorDecode_nonShellPreToolUseIsForeign() throws {
-    #expect(codec.decode(try cursorFixture("allow-non-shell-read.json")) == .foreign)
+@Test func cursorDecode_preToolUseReadIsFileTool() throws {
+    guard case .request(let request) = codec.decode(try cursorFixture("allow-non-shell-read.json")) else {
+        Issue.record("expected .request for preToolUse Read")
+        return
+    }
+    #expect(request.file?.kind == .read)
+    #expect(request.file?.path.rawValue == "/tmp/ws/README.md")
+}
+
+@Test func cursorDecode_preToolUseReadSshIsCatalogPath() throws {
+    guard case .request(let request) = codec.decode(try cursorFixture("deny-file-ssh.json")) else {
+        Issue.record("expected .request for deny-file-ssh")
+        return
+    }
+    #expect(request.file?.kind == .read)
+    #expect(request.file?.path.rawValue == "/tmp/rv-oracle/.ssh/id_ed25519")
+}
+
+@Test func cursorDecode_preToolUseGrepIsForeign() {
+    let stdin = """
+    {"hook_event_name":"preToolUse","tool_name":"Grep","tool_input":{"path":"/tmp/ws/.env"}}
+    """
+    #expect(codec.decode(stdin) == .foreign)
 }
 
 @Test func cursorDecode_afterShellIsForeign() {

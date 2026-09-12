@@ -65,11 +65,28 @@ func grokDecode_extractsShellCommand(_ file: String, expected: String) throws {
 }
 
 @Test(arguments: [
-    "allow-non-shell-read.json",
     "ignore-passive-session-start.json",
 ])
 func grokDecode_otherToolOrEventIsForeign(_ file: String) throws {
     #expect(codec.decode(try grokFixture(file)) == .foreign)
+}
+
+@Test func grokDecode_readFileIsFileTool() throws {
+    guard case .request(let request) = codec.decode(try grokFixture("allow-non-shell-read.json")) else {
+        Issue.record("expected .request for read_file")
+        return
+    }
+    #expect(request.file?.kind == .read)
+    #expect(request.file?.path.rawValue == "/tmp/rv-hook-fixture/README.md")
+}
+
+@Test func grokDecode_readFileEnvIsCatalogPath() throws {
+    guard case .request(let request) = codec.decode(try grokFixture("deny-file-env.json")) else {
+        Issue.record("expected .request for deny-file-env")
+        return
+    }
+    #expect(request.file?.kind == .read)
+    #expect(request.file?.path.rawValue == "/tmp/rv-oracle/.env")
 }
 
 @Test func grokDecode_emptyCommandIsMissingCommand() throws {

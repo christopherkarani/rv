@@ -7,6 +7,9 @@ public func evaluate<E: PatternEngine>(
     _ request: EvaluationRequest,
     packs: [PackSnapshot],
     secrets: SecretPathCatalog = .dayOne,
+    safety: SafetyLevel = .normal,
+    allowPaths: SecretAllowPathSet = .empty,
+    home: String? = nil,
     patterns: E,
     compiled: CompiledPacks<E.Compiled>
 ) -> EvaluationResult {
@@ -32,7 +35,10 @@ public func evaluate<E: PatternEngine>(
     if QuickReject.shouldSkip(matchingView: matchingView, enabled: enabledSnapshots) {
         return foldSecretPathIfAllow(
             EvaluationResult(outcome: .quickRejected, matchingView: matchingView),
-            catalog: secrets
+            catalog: secrets,
+            safety: safety,
+            allowPaths: allowPaths,
+            home: home
         )
     }
 
@@ -68,17 +74,29 @@ public func evaluate<E: PatternEngine>(
         if isTerminal(result.outcome) {
             return viewed
         }
-        return foldSecretPathIfAllow(viewed, catalog: secrets)
+        return foldSecretPathIfAllow(
+            viewed,
+            catalog: secrets,
+            safety: safety,
+            allowPaths: allowPaths,
+            home: home
+        )
     }
     return foldSecretPathIfAllow(
         EvaluationResult(outcome: .plain, matchingView: matchingView),
-        catalog: secrets
+        catalog: secrets,
+        safety: safety,
+        allowPaths: allowPaths,
+        home: home
     )
 }
 
 private func foldSecretPathIfAllow(
     _ result: EvaluationResult,
-    catalog: SecretPathCatalog
+    catalog: SecretPathCatalog,
+    safety: SafetyLevel,
+    allowPaths: SecretAllowPathSet,
+    home: String?
 ) -> EvaluationResult {
     switch result.outcome {
     case .quickRejected, .plain, .safeOnly, .hit:
@@ -87,7 +105,17 @@ private func foldSecretPathIfAllow(
         return result
     }
     guard !catalog.rules.isEmpty else { return result }
-    guard let matched = SecretPathGuard.firstHit(in: result.matchingView, catalog: catalog) else {
+    guard let matched = SecretPathGuard.firstHit(
+        in: result.matchingView,
+        catalog: catalog,
+        includeMetadata: safety == .strict
+    ) else {
+        return result
+    }
+    if let path = matched.matchedText,
+       let rule = catalog.firstMatch(of: path),
+       allowPaths.exempts(path, rule: rule, home: home)
+    {
         return result
     }
     return EvaluationResult(

@@ -15,22 +15,39 @@ public struct GrokHostCodec: HostCodec {
         guard envelope.hookEventName == "pre_tool_use" else {
             return .foreign
         }
-        guard Self.shellTools.contains(envelope.toolName ?? "") else {
-            return .foreign
-        }
-        guard let command = envelope.toolInput?.command, command.isEmpty == false else {
-            return .malformed(.missingCommand)
-        }
         let cwd = envelope.cwd.flatMap { WorkingDirectory(validating: $0) }
         let session = firstNonEmpty(envelope.sessionId)
-        return .request(
-            HookRequest(
-                host: .grok,
-                command: ShellCommand(rawValue: command),
-                cwd: cwd,
-                session: session
+        if Self.shellTools.contains(envelope.toolName ?? "") {
+            guard let command = envelope.toolInput?.command, command.isEmpty == false else {
+                return .malformed(.missingCommand)
+            }
+            return .request(
+                HookRequest(
+                    host: .grok,
+                    command: ShellCommand(rawValue: command),
+                    cwd: cwd,
+                    session: session
+                )
             )
-        )
+        }
+        if let kind = FileToolKind(toolName: envelope.toolName ?? "") {
+            let path = FileToolPath.firstPresent(
+                envelope.toolInput?.filePath,
+                envelope.toolInput?.path,
+                envelope.toolInput?.targetFile,
+                envelope.toolInput?.target
+            ) ?? FileToolPath(rawValue: "")
+            return .request(
+                HookRequest(
+                    host: .grok,
+                    command: ShellCommand(rawValue: ""),
+                    cwd: cwd,
+                    session: session,
+                    file: FileToolAction(kind: kind, path: path)
+                )
+            )
+        }
+        return .foreign
     }
 
     private static let shellTools: Set<String> = [
@@ -58,6 +75,10 @@ private struct GrokEnvelope: Decodable {
 
 private struct GrokToolInput: Decodable {
     var command: String?
+    var filePath: String?
+    var path: String?
+    var targetFile: String?
+    var target: String?
 }
 
 private func firstNonEmpty(_ values: String?...) -> String? {
