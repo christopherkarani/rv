@@ -1,19 +1,19 @@
 # rv Architecture Map
 
-> **Source version:** `1.0.0` (`rv.ipc.v1`) — `Package.swift` swift-tools 6.3, Swift 6 language mode, macOS 26 Apple Silicon only.
+> **Source version:** `1.0.0` (`rv.ipc.v1`) — `Package.swift` swift-tools 6.3, Swift 6 language mode, macOS 26 Apple Silicon and Linux aarch64/x86_64.
 > **Synthesized:** 2026-08-23 from `Package.swift`, `docs/architecture/MODULES.md`, `docs/dev/SWIFT.md`, `docs/dev/PARITY.md`, `CONTEXT.md`, `docs/factory/PLAN.md`, `Sources/**`, `Sources/rv-c/*`, `Tests/**`, `tools/*` — hand-maintained view, not auto-generated; `docs/architecture/MODULES.md` + `docs/factory/PLAN.md` are arbiters.
 
 ## 1. Overview
 
-**rv** is a Mac-native destructive-command guard for coding-agent *shell* hooks. One CLI: `rv`. `rvd` is the service.
+**rv** is a destructive-command guard for coding-agent *shell* hooks on macOS 26 Apple Silicon and Linux. One CLI: `rv`. `rvd` is the service.
 
 - **Hook client** — C program installed as `$HOME/.local/bin/rv`. Hosts spawn `rv hook --host {grok,pi,opencode,claude,openclaw,hermes,codex,cursor}`. Pipes `hookEvaluate` to `rvd`, or execs the **operator** on miss / non-hook argv.
 - **Operator** — Swift binary (SPM product `rv`) staged on disk as `rv-cli` so C can keep the `rv` path. Not a second CLI. Do not document it as a command.
-- **Service** — `rvd`, on-demand Mach XPC `dev.rv.evaluate`, `KeepAlive false`, idle-exit ~300 s. Owns compiled day-one packs and gated evaluation.
+- **Service** — `rvd`. Darwin: on-demand Mach XPC `dev.rv.evaluate`, LaunchAgent, `KeepAlive false`, idle-exit ~300 s. Linux: systemd user unit; AF_UNIX under `$XDG_RUNTIME_DIR`. Owns compiled day-one packs and gated evaluation.
 
 **Day-one win:** `git reset --hard` → `deny core.git:reset-hard`. `git stash drop` → `allow` + match (medium). Oversize / missing core → `indeterminate` → host deny without rule_id.
 **Hosts v1:** Pi (`~/.pi/agent/extensions/rv-guard.ts`), Grok (`~/.grok/hooks/rv.json`), OpenCode (`~/.config/opencode/plugins/rv-guard.js`), Claude (`~/.claude/settings.json` merge, PreToolUse/Bash only). **Also:** OpenClaw (`~/.openclaw/extensions/rv-guard/`, `before_tool_call` / `exec`, short deny, no Ask), Hermes (`~/.hermes/plugins/rv-guard/`, `pre_tool_call` / `terminal`, short deny, no Ask), Codex (`~/.codex/hooks/rv-guard.py` + `hooks.json` merge, PreToolUse/Bash, official older `decision: block` + stderr reason + exit 2, no Ask), and Cursor (`~/.cursor/hooks/rv-guard.py` + `hooks.json` merge, `beforeShellExecution`, official native `permission: deny` + exit 0, no Ask). Shell/command tools only; no Read/Edit/MCP hooks. Quiet allow; Pi/Grok/OpenCode/OpenClaw/Hermes short deny text; Claude rich deny JSON (`systemMessage` + `hookSpecificOutput`); Codex honor path is `{"decision":"block","reason"}` on stdout + the 271 line on stderr + exit 2 (stdout-only block and Claude `permissionDecision: deny` are not honored). Cursor honor path is `{"permission":"deny","user_message","agent_message"}` on stdout + exit 0 (Claude `permissionDecision` and Codex `decision: block` + exit 2 are not honored). Pi also shows display-only transcript card (`registerMessageRenderer` → `string[]`); OpenCode also shows display-only toast; card/toast never replace `throw`.
-**Platform:** macOS 26, Apple Silicon, Swift 6.3.3, `clang -Os` for C. No Linux/Windows/macOS 14/15 claim. Config dir `$HOME/.config/rv/` (`HOME` only, no `XDG_CONFIG_HOME`). Grade is *hook*, not OS-enforced. `RV_BYPASS` is forbidden.
+**Platform:** macOS 26 Apple Silicon, Linux aarch64/x86_64, Swift 6.3.3, `clang -Os` for C. No Windows / Intel Mac / macOS 14/15 claim. Config dir `$HOME/.config/rv/` (`HOME` only, no `XDG_CONFIG_HOME`). Grade is *hook*, not OS-enforced. `RV_BYPASS` is forbidden.
 
 ---
 
@@ -279,7 +279,7 @@ Explain pipeline ↔ IPC `ExplainStage`: `explainSteps(from:)` maps `EvaluationO
 
 ```
 rv/
-├── Package.swift                     # 13 libs + rv + rvd, swift-tools 6.3, macOS 26, SPM bundle for packs
+├── Package.swift                     # 13 libs + rv + rvd, swift-tools 6.3, macOS 26 + Linux graph, SPM bundle for packs
 ├── .swift-version                   # 6.3.3 pin (tools/swift-6.3.3 preferred)
 ├── README.md / AGENTS.md / CONTEXT.md
 ├── spec/spec-architecture-c-hook-pipe.md  # T1–T5 C hook pipe spec (supersedes T15 thin Swift)

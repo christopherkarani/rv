@@ -6,11 +6,11 @@ Not ryk. Not line-for-line Rust. Repo: `~/CodingProjects/rv` (`christopherkarani
 
 ## Decisions (locked)
 
-- **Job:** Mac-native destructive-command guard for coding-agent **shell** hooks. Day-one win: Pi / Grok / OpenCode block `git reset --hard` via a fast XPC-backed hook. User forgets rv until a block. Not a ryk replacement. Not a `dcg` binary alias. Mac app later, same `rv.ipc.v1`.
-- **Name:** `rv` (the only CLI and the hook client hosts spawn), `rvd` (XPC service). Prefix `RV_`. Config `~/.config/rv/`. The Swift operator may be staged on disk as `rv-cli` so C can keep the `rv` path; that filename is not a product and must not appear in README, help, or install hero copy.
+- **Job:** Destructive-command guard for coding-agent **shell** hooks. Day-one win: Pi / Grok / OpenCode block `git reset --hard` via a fast local-service hook (Darwin XPC, Linux AF_UNIX). User forgets rv until a block. Not a ryk replacement. Not a `dcg` binary alias. Mac app later, same `rv.ipc.v1`.
+- **Name:** `rv` (the only CLI and the hook client hosts spawn), `rvd` (service: XPC on Darwin, AF_UNIX on Linux). Prefix `RV_`. Config `~/.config/rv/`. The Swift operator may be staged on disk as `rv-cli` so C can keep the `rv` path; that filename is not a product and must not appear in README, help, or install hero copy.
 - **Parity source:** DCG **0.11.0** decisions/packs/contracts.
-- **Platform v1:** **macOS 26, Apple Silicon only.** No Linux/Windows. No claimed 14/15 matrix. Linux pack *patterns* and the `careful_company_running_windows` egress packs may live in the catalog as data; do not claim those OSes. The `windows.*` OS packs are excluded from the bundled catalog.
-- **XPC is in v1.** App is not. `rvd` is **on-demand** LaunchAgent (`dev.rv.evaluate`), idle-exit ~5m. Not KeepAlive by default. Down/skew → **in-process evaluate**. Never allow because XPC missed.
+- **Platform:** **macOS 26 Apple Silicon, and Linux aarch64/x86_64.** No Windows. No Intel Mac. No claimed 14/15 matrix. Linux pack *patterns* and the `careful_company_running_windows` egress packs may live in the catalog as data; do not claim Windows. The `windows.*` OS packs are excluded from the bundled catalog. `install.sh` refuses anything else. Factory T0–T9 specs that still say mac-only are superseded here.
+- **Service is in v1.** App is not. Darwin: `rvd` is **on-demand** LaunchAgent (`dev.rv.evaluate`), idle-exit ~5m. Linux: systemd user unit; `rvd` listens on AF_UNIX under `$XDG_RUNTIME_DIR`. Not KeepAlive by default. Down/skew → **in-process evaluate**. Never allow because the service missed.
 - **Install:** v1 is **curl only.** Hero is `curl -fsSL …/install | sh` (real HOME → `$HOME/.local/bin/{rv,rvd}`, then `rv setup`). No Homebrew formula, tap, bottle, or `post_install` in v1. T6 must not add a formula stub or brew README path. Homebrew is Phase 4+. `install.sh` places binaries and execs `rv setup`. Setup owns the TTY show.
 - **Hosts v1:** **Pi, Grok, OpenCode only** for the day-one shell door. Shell stays the destructive-command door. **Read / Edit / Write secret-path** only is allowed on Claude, Cursor, and Grok. Grep / Glob / MCP stay forbidden.
 - **Deny UX:** Native host deny **text** is the block path (one sentence + `rule_id` + next step). Pi also posts a display-only transcript card (`registerMessageRenderer` + `sendMessage`, customType `rv-decision`). OpenCode also shows a display-only TUI toast (`client.tui.showToast`, title `RV · Blocked`). Card and toast are chrome, not the deny. Pi renderer must return `{ render(width) => string[] }`, never a string. OpenCode `throw new Error(reason)` remains the abort. Toast failure must still throw. No host Allow, no confirm, no leftover-ask.
@@ -26,7 +26,7 @@ Not ryk. Not line-for-line Rust. Repo: `~/CodingProjects/rv` (`christopherkarani
 
 **v1 scoreboard:** same decision + `rule_id` as DCG **0.11.0 engine source** (critical/high → deny; medium/low → allow + match). SKILL.md marketing rows that disagree are quarantine fixtures, not the scoreboard. Hook JSON/exit codes for **Grok / Pi / OpenCode shell events**. Quiet allow, native deny text.
 
-**Later (not v1 gate):** remaining bundled packs enabled-by-default (95 IDs stay in catalog, off; `windows.*` stay excluded), Claude/Codex/etc., scan (session forensics fence `docs/factory/specs/phase-4-session-scan.md`; repo/CI later), MCP, heredoc/AST (shared extract ladder for session forensics **and** the live destructive-command guard — surface → bounded unwrap → heredoc/AST; details in `docs/factory/specs/phase-4-later.md`), SARIF, Mac app, Intel, older macOS, Homebrew.
+**Later (not a current gate):** remaining bundled packs enabled-by-default (95 IDs stay in catalog, off; `windows.*` stay excluded), scan repo/CI, MCP, heredoc/AST (shared extract ladder for session forensics **and** the live destructive-command guard — surface → bounded unwrap → heredoc/AST; details in `docs/factory/specs/phase-4-later.md`), SARIF, Mac app, Intel, older macOS, Windows, Homebrew. Linux aarch64/x86_64 is in (OPE-261–262), not later.
 
 `dcg test` vs `rv test` agree-rate is the long-term scoreboard when `dcg` is on PATH. Do not block v1 on it.
 
@@ -56,7 +56,7 @@ Hexagonal. Engine never imports CLI, TUI, or XPC. Each module: small public API,
 
 **PatternEngine:** protocol; ICU first; packs are **data** (JSON extract from DCG), not 99 Swift files. Corpus quarantines mismatches.
 
-**IPC (app-ready, app not built):** `evaluate`, `explain`, `classify`, `listPacks`, `setPackEnabled`, `allowOnce.consume`, `doctorSnapshot`. Unix socket **tests only**.
+**IPC (app-ready, app not built):** `evaluate`, `explain`, `classify`, `listPacks`, `setPackEnabled`, `allowOnce.consume`, `doctorSnapshot`. Darwin production is XPC (`dev.rv.evaluate`). Linux production is AF_UNIX under `$XDG_RUNTIME_DIR`. Darwin unix-socket fixtures remain tests only.
 
 ## Swift style contract
 
@@ -126,7 +126,7 @@ When two agents run in parallel they **must** use git worktrees from the same ba
 - Writing foreign hook files. Writing the human’s real HOME from tests.
 - Persisting raw command text to os_log or default history.
 - Claiming OS-enforced / Seatbelt. Grade is **hook**.
-- Claiming Linux/Windows/macOS 14/15 support.
+- Claiming Windows / Intel Mac / macOS 14/15 support.
 - Command text, paths, or secrets in analytics payloads. Analytics calls from host hook processes. Network install of packs.
 - Implementing this product inside ryk.
 - Installing or rebinding ryk on this machine.
@@ -137,7 +137,7 @@ When two agents run in parallel they **must** use git worktrees from the same ba
 - Not ryk (no Seatbelt, no policy YAML, no leftover-ask rewrite, no ryk detection).
 - Not FM steward.
 - Not fail-closed on unknown commands (DCG default-allow).
-- Not Linux/Windows/older macOS in v1.
+- Not Windows / Intel Mac / older macOS.
 - Not a system daemon. Not KeepAlive by default.
 - Not adversarial security. Agents can still edit hook files — say so.
 
@@ -157,7 +157,7 @@ These close implementer forks. Specs that disagree are wrong. Adversarial FN + k
 7. **Grok deny wire.** `{"decision":"deny","reason":"<hostDenyText>"}` + exit 0. Accept `run_terminal_command` and `run_terminal_cmd`. Empty stdout on allow. Do not emit exit 2. No `block` keyword.
 8. **hostDenyText** never includes a redeemable code. Canonical: `Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once.`
 9. **allowOnce.consume** spends a grant `{ command, cwd }`, not a plaintext code. Code redeem is TTY CLI only.
-10. **LaunchAgent owner is T6.** `rv setup` writes `$HOME/Library/LaunchAgents/dev.rv.evaluate.plist` from the T3 template, `KeepAlive` false. T3 does not load a live agent. Hooks still work in-process if launchd is down.
+10. **Service unit owner is T6.** Darwin: `rv setup` writes `$HOME/Library/LaunchAgents/dev.rv.evaluate.plist` from the T3 template, `KeepAlive` false. Linux: systemd user unit (OPE-261–262); `rvd` listens on AF_UNIX under `$XDG_RUNTIME_DIR`. T3 does not load a live agent. Hooks still work in-process if the service is down.
 11. **Occupied** means the **owned filename** is present and is not the current rv template. Foreign siblings (`dcg.json`, other extensions) are not occupied. Hostless = no v1 host detected.
 12. **Config dir** is `$HOME/.config/rv/` (process `HOME` only). No `NSHomeDirectory()`. No `XDG_CONFIG_HOME` in v1.
 13. **RuleID.** Canonical `rawValue` is `pack:pattern`. Display / hostDenyText uses `pack/pattern`. Robot JSON `rule_id` is the colon form.

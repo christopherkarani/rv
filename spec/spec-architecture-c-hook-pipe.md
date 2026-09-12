@@ -109,9 +109,9 @@ Implementers of rv (Swift 6.3.3, macOS 26, Apple Silicon) and reviewers using `i
 ## Constraints
 
 - **CON-001**: Protocol stays `rv.ipc.v1`. Do not bump to `v2`.
-- **CON-002**: Production transport is Mach / XPC `dev.rv.evaluate`. No Unix socket in production `rvd`.
+- **CON-002**: Darwin production transport is Mach / XPC `dev.rv.evaluate`. Linux production is AF_UNIX under `$XDG_RUNTIME_DIR` (OPE-261–262). Darwin unix-socket fixtures remain tests only.
 - **CON-003**: One-shot budget remains 700 ms. Do not raise host adapter timeouts.
-- **CON-004**: C is compiled with the platform `clang` (Apple Silicon, macOS 26). No Swift runtime, no Foundation, no ArgumentParser in the C hook.
+- **CON-004**: C is compiled with the platform `clang` (Darwin: Apple Silicon, macOS 26; Linux: aarch64/x86_64). No Swift runtime, no Foundation, no ArgumentParser in the C hook.
 - **CON-005**: C is not an SPM executable product. `Package.swift` product `rv` remains the Swift operator (staged as `rv-cli`).
 - **CON-006**: `RVService` may gain a dependency on `RVHooks` for the hook door only. `RVHooks` still must not evaluate and must not import CLI, TUI, Presentation, or Service.
 - **CON-007**: `RVEngine` must not import XPC, IPC transport, CLI, or TUI.
@@ -329,7 +329,7 @@ SPM keeps product `rv` as Swift so ArgumentParser/`@main` law does not move. Ins
 
 ### Technology Platform Dependencies
 
-- **PLT-001**: macOS 26, Apple Silicon, Swift 6.3.3 language mode 6 — existing pin.
+- **PLT-001**: macOS 26 Apple Silicon and Linux aarch64/x86_64, Swift 6.3.3 language mode 6 — existing pin.
 - **PLT-002**: Host `clang` for the C hook — no extra compiler distribution.
 - **PLT-003**: libSystem / XPC C API — no Foundation.
 

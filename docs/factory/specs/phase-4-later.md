@@ -10,7 +10,7 @@ Parity source remains DCG **0.11.0**. Repo remains `~/CodingProjects/rv`. Never 
 
 ## Goal
 
-Keep v1 small: Pi / Grok / OpenCode **shell** hooks, `core.git` + `core.filesystem`, on-demand `rvd` over `rv.ipc.v1`, macOS 26 Apple Silicon, quiet allow / native deny text.
+Keep v1 small: Pi / Grok / OpenCode **shell** hooks, `core.git` + `core.filesystem`, on-demand `rvd` over `rv.ipc.v1`, macOS 26 Apple Silicon (Linux aarch64/x86_64 landed after, OPE-261–262), quiet allow / native deny text.
 
 Name the later surface so agents do not pull it into T0–T9. Name the contracts that must stay stable so later work is an additive client, pack-policy, or codec — not a rewrite.
 
@@ -37,13 +37,13 @@ These are later. They are not v1 gates, not T0–T9 acceptance, and not implied 
 Also later, not v1:
 
 - `dcg test` vs `rv test` agree-rate as a ship gate (long-term scoreboard only; do not block v1 on `dcg` being on PATH).
-- Linux / Windows runtimes (catalog may hold those pack *patterns* as data; do not claim those OSes).
+- Windows runtime (catalog may hold those pack *patterns* as data; do not claim Windows). Linux aarch64/x86_64 is in (OPE-261–262).
 - KeepAlive / always-on daemon (v1 `rvd` is on-demand, idle-exit ~5m).
 - Pi confirm / Allow UI / leftover-ask-as-permit. Display-only Pi deny card and OpenCode toast are v1.
 - License choice (still deferred).
 - Homebrew formula / tap / bottle (v1 is curl only).
 
-Windows / Linux pack JSON in the catalog is data, not a platform claim.
+Windows pack JSON in the catalog is data, not a Windows platform claim.
 
 ## Why these wait
 
@@ -75,7 +75,7 @@ Later features plug in. They do not fork the product.
 8. **Deny UX law.** Allow is silent. Hook deny is native host text (one sentence + `rule_id` + next step). Pi may show a display-only transcript card; the block path is still `{ block: true, reason }`. OpenCode may show a display-only TUI toast; the block path is still `throw new Error(reason)`. Pretty panels stay TTY `rv test` / `explain` / human CLI. Later hosts must not require a renderer or toast to be correct.
 9. **Unlock law.** Terminal, or `rv allow-once <code>` in a TTY. No host Allow button. The app, if built, is another client of `allowOnce.consume` — not a new permit channel.
 10. **Fallback law.** `rvd` down or version-skewed → in-process evaluate. Never allow because XPC missed. The app must not treat “service down” as permit.
-11. **Platform claims stay honest.** v1 claims macOS 26 Apple Silicon only. Later Intel / older macOS / Linux / Windows are new claimed targets with tests — not a README edit.
+11. **Platform claims stay honest.** Claimed platforms are macOS 26 Apple Silicon and Linux aarch64/x86_64. Later Intel / older macOS / Windows are new claimed targets with tests — not a README edit.
 12. **Scoreboard.** v1: same decision + `rule_id` as DCG on the SKILL.md table and the core-pack corpus; hook JSON/exit codes for Grok / Pi / OpenCode shell events. Later agree-rate vs `dcg test` is additive.
 
 ## History / privacy constraints that apply even later

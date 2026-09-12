@@ -137,7 +137,7 @@ Implementers of rv (Swift 6.3 language mode 6, macOS 26, Apple Silicon) and revi
 - **CON-005**: `RVHooks` host **codecs** are not session-store adapters. Do not parse PreToolUse stdin envelopes as the forensics file format unless a store file literally uses that shape; prefer dedicated store parsers.
 - **CON-006**: Do not implement `rv scan repo` in this wave. Prefer omit from help rather than a mutating stub.
 - **CON-007**: Do not write foreign product names into Sources/ or Tests/ (PLAN name-hygiene). Docs under `docs/factory/` may reference fences only as needed.
-- **CON-008**: Platform claim stays macOS 26 Apple Silicon only.
+- **CON-008**: Platform claim is macOS 26 Apple Silicon and Linux aarch64/x86_64. No Windows / Intel Mac / macOS 14/15.
 - **CON-009**: Value types in Domain/Engine/Scan/Presentation. `class` only at existing XPC/`NSObject` edges.
 
 ## Guidelines
@@ -396,7 +396,7 @@ Claude store adapters ship for discovery without requiring Claude hook codecs in
 
 ### Technology Platform Dependencies
 
-- **PLT-001**: macOS 26, Apple Silicon, Swift 6.3 language mode 6 — existing pin.
+- **PLT-001**: macOS 26 Apple Silicon and Linux aarch64/x86_64, Swift 6.3 language mode 6 — existing pin.
 - **PLT-002**: ArgumentParser CLI patterns already used by `RVCLI`.
 
 ### Compliance Dependencies
