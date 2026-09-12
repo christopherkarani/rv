@@ -62,6 +62,11 @@ public func applyFilesystemSemantics(
     case .hardAllow, .reviewEligible:
         return result
     case .hardDeny(let deny):
+        if context.probe == .unprobed,
+            deny.ruleID == ActionPolicyEngine.Builtin.unresolvedFilesystem.ruleID
+        {
+            return result
+        }
         return EvaluationResult(
             outcome: .deny(deny, matched: nil),
             matchingView: pack.matchingView,
