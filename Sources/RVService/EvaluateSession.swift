@@ -92,6 +92,10 @@ public struct EvaluateSession: Sendable {
     /// The evaluation door on this session's compiled packs: pack evaluate,
     /// then unwrap, analyze, and apply semantic policy. Path / cwd / repo I/O
     /// stays with the caller via `filesystemProbe`.
+    ///
+    /// Missing core packs stay `indeterminate` for every command, including empty
+    /// input that bare `evaluate` would allow. The Engine door still runs so
+    /// unwrap / probe / analyze attach; the session then floors the outcome.
     public func evaluateWithSemantics(
         _ request: EvaluationRequest,
         safety: SafetyLevel = .normal,
@@ -101,13 +105,7 @@ public struct EvaluateSession: Sendable {
         filesystemProbe: (UnwrapOutcome) -> FilesystemAnalysisContext = { _ in .empty },
         policy: EffectiveActionPolicy = .empty
     ) -> EvaluationResult {
-        if !corePacksReady {
-            return EvaluationResult(
-                outcome: .indeterminate(.corePacksUnavailable),
-                matchingView: Normalize.matchingView(of: request.command.rawValue)
-            )
-        }
-        return engineEvaluateWithSemantics(
+        let result = engineEvaluateWithSemantics(
             request,
             packs: snapshots,
             safety: safety,
@@ -119,6 +117,14 @@ public struct EvaluateSession: Sendable {
             filesystemProbe: filesystemProbe,
             policy: policy
         )
+        guard corePacksReady else {
+            return EvaluationResult(
+                outcome: .indeterminate(.corePacksUnavailable),
+                matchingView: Normalize.matchingView(of: request.command.rawValue),
+                analysis: result.analysis
+            )
+        }
+        return result
     }
 }
 

@@ -80,6 +80,43 @@ struct EvaluateSessionTests {
         }
     }
 
+    @Test func evaluateWithSemantics_missingCore_staysIndeterminateAndAnalyzes() {
+        let result = EvaluateSession.missingCore.evaluateWithSemantics(
+            EvaluationRequest(
+                command: ShellCommand(rawValue: "bash -c 'git reset --hard'"),
+                enabledPacks: dayOnePackIDs
+            )
+        )
+        #expect(result.decision == .indeterminate(.corePacksUnavailable))
+        #expect(result.analysis.wrappers == [.bash])
+        #expect(result.analysis.gitAction == .reset(mode: .hard, target: nil))
+    }
+
+    @Test func evaluateWithSemantics_missingCore_emptyCommand_isIndeterminateNotAllow() {
+        let result = EvaluateSession.missingCore.evaluateWithSemantics(
+            EvaluationRequest(
+                command: ShellCommand(rawValue: "  "),
+                enabledPacks: dayOnePackIDs
+            )
+        )
+        #expect(result.decision == .indeterminate(.corePacksUnavailable))
+    }
+
+    @Test func evaluateWithSemantics_unwrapLimited_failClosed() {
+        let result = EvaluateSession().evaluateWithSemantics(
+            EvaluationRequest(
+                command: ShellCommand(rawValue: #"python -c "mystery(payload)""#),
+                enabledPacks: dayOnePackIDs
+            )
+        )
+        guard case .deny(let deny) = result.decision else {
+            Issue.record("unreliable python must fail-closed, got \(result.decision)")
+            return
+        }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.unwrapLimited.ruleID)
+        #expect(result.analysis.innermost == .unwrapLimited)
+    }
+
     @Test func uncompilableResetHardIsIndeterminateNotAllow() {
         let session = EvaluateSession.uncompilableCore
         #expect(session.corePacksReady == false)

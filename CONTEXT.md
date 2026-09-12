@@ -21,7 +21,7 @@ The compiled day-one packs from which a Decision is produced. TTY test/explain a
 _Avoid_: in-process fallback, composer, warm evaluate
 
 **Evaluation door**:
-`evaluateWithSemantics` (RVEngine): pack evaluate → unwrap → probe → analyze → apply semantics in one composition. Pack deny / indeterminate is the floor; semantic stages only tighten an allow. Path / cwd / repo I/O enters through the injected `filesystemProbe`; the Engine stays pure. The Policy gate runs after the door, never inside it. `EvaluateSession.evaluateWithSemantics` is the session's door; `rv scan` classify shares it.
+`evaluateWithSemantics` (RVEngine): pack evaluate → unwrap → probe → analyze → apply semantics in one composition. Pack deny / indeterminate is the floor; semantic stages only tighten an allow. Path / cwd / repo I/O enters through the injected `filesystemProbe`; the Engine stays pure. The Policy gate runs after the door, never inside it. `EvaluateSession.evaluateWithSemantics` is the session's door; `rv scan` classify shares the Engine door (RVScan does not import RVService).
 _Avoid_: per-caller evaluate + applySemantics composition, bare `evaluate` for product decisions
 
 **Matching view**:

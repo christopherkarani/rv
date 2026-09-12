@@ -7,7 +7,9 @@ import RVDomain
 @Suite("EvaluateWithSemantics")
 struct EvaluateWithSemanticsTests {
     @Test func packAllow_semanticGitDeny_tightens() throws {
-        let command = "bash -c 'git push --force-with-lease origin main'"
+        // `feature` is not a name-based shared branch; dropping `gitContext`
+        // would demote this to `remoteBranchAsk` instead of the shared-branch wall.
+        let command = "bash -c 'git push --force-with-lease origin feature'"
         let result = try runDoor(
             command,
             gitContext: GitAnalysisContext(isSharedBranch: true)
@@ -19,6 +21,23 @@ struct EvaluateWithSemanticsTests {
         #expect(deny.ruleID == ActionPolicyEngine.Builtin.remoteSharedBranch.ruleID)
         #expect(result.analysis.wrappers == [.bash])
         #expect(result.analysis.gitAction != nil)
+    }
+
+    @Test func missingCorePacks_staysIndeterminateAndAnalyzes() throws {
+        let engine = ICUPatternEngine()
+        let compiled = try CompiledPacks<ICUCompiledPattern>.compile(packs: [], using: engine)
+        let result = evaluateWithSemantics(
+            EvaluationRequest(
+                command: ShellCommand(rawValue: "bash -c 'git reset --hard'"),
+                enabledPacks: dayOnePackIDs
+            ),
+            packs: [],
+            patterns: engine,
+            compiled: compiled
+        )
+        #expect(result.decision == .indeterminate(.corePacksUnavailable))
+        #expect(result.analysis.wrappers == [.bash])
+        #expect(result.analysis.gitAction == .reset(mode: .hard, target: nil))
     }
 
     @Test func packDeny_staysFloor() throws {

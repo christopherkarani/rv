@@ -136,6 +136,7 @@ struct GatedEvaluateTests {
 
         let peeked = await gated.peek(request, cwd: wd("/tmp/ws"), store: store, now: now, allowlist: { .empty })
         #expect(peeked.decision == .indeterminate(.corePacksUnavailable))
+        #expect(peeked.analysis.gitAction == .reset(mode: .hard, target: nil))
         let applied = await gated.apply(request, cwd: wd("/tmp/ws"), store: store, now: now, allowlist: { .empty })
         #expect(applied.decision == .indeterminate(.corePacksUnavailable))
         let still = await store.consume(
