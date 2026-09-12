@@ -225,3 +225,20 @@ import RVDomain
     #expect(findings.count == 1)
     #expect(finding.ruleID == ActionPolicyEngine.Builtin.protectedPath.ruleID)
 }
+
+@Test func classify_workingDirectory_envChdirDotDot_doesNotKeepStoreProtectedPath() throws {
+    let cwd = try #require(WorkingDirectory(validating: "/tmp/.ssh"))
+    let events = [
+        ExtractedEvent(
+            host: .claude,
+            sourcePath: "/tmp/fixture/session.jsonl",
+            command: ShellCommand(rawValue: "env -C .. rm config"),
+            workingDirectory: cwd
+        ),
+    ]
+    let findings = try ScanClassify().classify(events)
+    let finding = try #require(findings.first)
+    #expect(findings.count == 1)
+    #expect(finding.ruleID == ActionPolicyEngine.Builtin.unresolvedFilesystem.ruleID)
+    #expect(finding.ruleID != ActionPolicyEngine.Builtin.protectedPath.ruleID)
+}
