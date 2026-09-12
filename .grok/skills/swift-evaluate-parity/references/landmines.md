@@ -69,3 +69,26 @@ Do not invent `deny(core.git:unavailable)`.
 
 Quarantine a pattern name when ICU cannot compile it. Do not retarget the
 row’s expected `rule_id`. Never quarantine `reset-hard` or `fork-bomb`.
+
+## Maturity
+
+Load `docs/architecture/never-slip.md` and `docs/architecture/residual-risk.md`
+before changing evaluate. A false-block of a landmine / `near-miss` row is
+merge-blocking.
+
+Pin pack `evaluate` is the 0.11.0 scoreboard. Product door is
+`evaluateWithSemantics` (pack evaluate → unwrap → probe → analyze → apply).
+Pack deny is the floor; semantic stages only tighten an allow.
+
+Quoted reset in data stays allow on the door:
+
+- `echo 'git reset --hard'`
+- `python -c "print('git reset --hard')"`
+
+Pin walk may still match those guts (**RV-RR-02**). Do not add a `normal`
+regex to "fix" the walk. Do not deny `echo` / `print` / `git commit -m` /
+`rg` guts as executing shell.
+
+Do not delete pin landmines or `near-miss.json` rows to go green. A new
+`normal` walker that denies `git push --force-with-lease` or any required
+allow row is a failed ticket, not a win.
