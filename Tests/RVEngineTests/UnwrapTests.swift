@@ -145,10 +145,63 @@ struct UnwrapTests {
         }
     }
 
-    @Test func unknownPython_isLimited() {
-        let outcome = unwrapCommand(ShellCommand(rawValue: #"python -c "mystery(payload)""#))
+    @Test(arguments: [
+        #"python3 -c "x=1""#,
+        #"python3 -c "print(1)""#,
+        #"python3 -c "import os, json, sys""#,
+        #"python3 -c "import json,sys; json.dump({}, sys.stdout)""#,
+        #"python3 -c "from pathlib import Path; print(Path('.').resolve())""#,
+        #"python3 -c "mystery(payload)""#,
+        #"python -c "mystery(payload)""#,
+        #"node -e "JSON.parse('{}')""#,
+        #"node -e "console.log(1)""#,
+    ])
+    func interpreterDataOnly_isCompleteWithoutExtractedShell(_ raw: String) {
+        let outcome = unwrapCommand(ShellCommand(rawValue: raw))
+        guard case .complete(let unwrapped) = outcome else {
+            Issue.record("data-only interpreter must complete, got \(outcome) for \(raw)")
+            return
+        }
+        #expect(unwrapped.layers.isEmpty)
+        #expect(unwrapped.command.rawValue == raw)
+    }
+
+    @Test(arguments: [
+        #"python -c "os.system(x)""#,
+        #"python -c "os.popen(x)""#,
+        #"python -c "subprocess.run(x)""#,
+        #"python -c "shutil.rmtree(x)""#,
+        #"node -e "child_process.exec(x)""#,
+        #"node -e "child_process.execSync(x)""#,
+        #"node -e "require('child_process').exec(x)""#,
+    ])
+    func unparseableInterpreterSpawn_isLimited(_ raw: String) {
+        let outcome = unwrapCommand(ShellCommand(rawValue: raw))
         guard case .limited(let layers) = outcome else {
-            Issue.record("expected limited, got \(outcome)")
+            Issue.record("unparseable spawn must be limited, got \(outcome) for \(raw)")
+            return
+        }
+        #expect(layers == (raw.hasPrefix("node") ? [.node] : [.python]))
+    }
+
+    @Test func pythonOpenWrite_peelsToRedirect() {
+        let outcome = unwrapCommand(
+            ShellCommand(rawValue: #"python3 -c "open('foo','w').write('x')""#)
+        )
+        guard case .complete(let unwrapped) = outcome else {
+            Issue.record("open write must peel to a redirect, got \(outcome)")
+            return
+        }
+        #expect(unwrapped.layers == [.python])
+        #expect(unwrapped.command.rawValue.contains("foo"))
+        #expect(unwrapped.command.rawValue.contains(">"))
+        #expect(unwrapped.command.rawValue.contains("open(") == false)
+    }
+
+    @Test func unparseablePythonOpenWrite_isLimited() {
+        let outcome = unwrapCommand(ShellCommand(rawValue: #"python -c "open(path, 'w')""#))
+        guard case .limited(let layers) = outcome else {
+            Issue.record("unparseable open write must be limited, got \(outcome)")
             return
         }
         #expect(layers == [.python])

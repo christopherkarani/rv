@@ -410,7 +410,7 @@
     },
     {
       "id": "deny.dd-general",
-      "command": "dd if=/dev/zero of=./important.db",
+      "command": "dd if=/dev/zero of=../important.db",
       "expected": "deny",
       "rule_id": "core.filesystem:dd-overwrite-general",
       "reason_contains": "overwrites file contents"

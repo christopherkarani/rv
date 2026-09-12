@@ -63,14 +63,14 @@ struct ApplySemanticsTests {
     }
 
     @Test func unwrapLimit_neverAutoAllows() throws {
-        let pack = try runSemanticsPack(#"python -c "mystery(payload)""#)
+        let pack = try runSemanticsPack(#"python -c "os.system(x)""#)
         #expect(pack.decision == .allow)
         let composed = applySemantics(
             pack: pack,
-            command: ShellCommand(rawValue: #"python -c "mystery(payload)""#)
+            command: ShellCommand(rawValue: #"python -c "os.system(x)""#)
         )
         guard case .deny(let deny) = composed.decision else {
-            Issue.record("unreliable python must fail-closed, got \(composed.decision)")
+            Issue.record("unparseable spawn must fail-closed, got \(composed.decision)")
             return
         }
         #expect(deny.ruleID == ActionPolicyEngine.Builtin.unwrapLimited.ruleID)
@@ -78,7 +78,7 @@ struct ApplySemanticsTests {
     }
 
     @Test func wrappedForceWithLease_isDeniedBySemantics() throws {
-        let command = "bash -c 'git push --force-with-lease origin main'"
+        let command = "bash -c 'git push --force origin main'"
         let pack = try runSemanticsPack(command)
         #expect(pack.decision == .allow)
         let composed = applySemantics(
@@ -87,7 +87,7 @@ struct ApplySemanticsTests {
             gitContext: GitAnalysisContext(isSharedBranch: true)
         )
         guard case .deny(let deny) = composed.decision else {
-            Issue.record("wrapped force-with-lease to main must deny")
+            Issue.record("wrapped force-push to main must deny")
             return
         }
         #expect(deny.ruleID == ActionPolicyEngine.Builtin.remoteSharedBranch.ruleID)
@@ -197,11 +197,11 @@ struct ApplySemanticsTests {
     @Test func packIndeterminate_isNotLiftedByLimit() {
         let pack = EvaluationResult(
             outcome: .indeterminate(.corePacksUnavailable),
-            matchingView: MatchingView("python -c mystery")
+            matchingView: MatchingView("python -c os.system")
         )
         let composed = applySemantics(
             pack: pack,
-            command: ShellCommand(rawValue: #"python -c "mystery(payload)""#)
+            command: ShellCommand(rawValue: #"python -c "os.system(x)""#)
         )
         #expect(composed.decision == .indeterminate(.corePacksUnavailable))
         #expect(composed.analysis.innermost == .unwrapLimited)

@@ -70,7 +70,7 @@ struct ApplySemanticsPrefixTests {
         #expect(wrapped.analysis.wrappers == [.mise])
     }
 
-    @Test func sshForceWithLease_isDeniedBySemantics() throws {
+    @Test func sshForceWithLease_staysAllow() throws {
         let command = "ssh h 'git push --force-with-lease origin main'"
         let pack = try runSemanticsPack(command)
         #expect(pack.decision == .allow)
@@ -79,8 +79,32 @@ struct ApplySemanticsPrefixTests {
             command: ShellCommand(rawValue: command),
             gitContext: GitAnalysisContext(isSharedBranch: true)
         )
+        #expect(composed.decision == .allow)
+        #expect(composed.boundReview == nil)
+        #expect(composed.analysis.gitAction != nil)
+        #expect(composed.analysis.wrappers == [.ssh])
+    }
+
+    @Test func sshForce_toMain_isDeniedBySemantics() throws {
+        let command = "ssh h 'git push --force origin main'"
+        let pack = try runSemanticsPack(command)
+        let composed = applySemantics(
+            pack: pack,
+            command: ShellCommand(rawValue: command),
+            gitContext: GitAnalysisContext(isSharedBranch: true)
+        )
+        if case .deny(let packDeny) = pack.decision {
+            guard case .deny(let deny) = composed.decision else {
+                Issue.record("pack deny of ssh --force must stay the floor")
+                return
+            }
+            #expect(deny.ruleID == packDeny.ruleID)
+            #expect(composed.analysis.wrappers == [.ssh])
+            return
+        }
+        #expect(pack.decision == .allow)
         guard case .deny(let deny) = composed.decision else {
-            Issue.record("ssh force-with-lease to main must deny, got \(composed.decision)")
+            Issue.record("ssh --force to main must deny, got \(composed.decision)")
             return
         }
         #expect(deny.ruleID == ActionPolicyEngine.Builtin.remoteSharedBranch.ruleID)

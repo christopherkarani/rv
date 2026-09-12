@@ -439,6 +439,15 @@ private func extractPython(_ code: String) -> InterpreterExtract {
     if let command = pythonShellCommand(folded) {
         return .command(command)
     }
+    if pythonDangerMarkerPresent(folded) {
+        return .limited
+    }
+    if let command = pythonOpenWriteCommand(folded) {
+        return .command(command)
+    }
+    if pythonOpenHasWriteMode(folded) {
+        return .limited
+    }
     if looksLikePythonDataOnly(folded) {
         return .dataOnly
     }
@@ -449,10 +458,28 @@ private func looksLikePythonDataOnly(_ code: String) -> Bool {
     splitTopLevel(code, separator: ";").allSatisfy { part in
         let trimmed = part.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return true }
+        if pythonDangerMarkerPresent(trimmed) { return false }
         if trimmed.hasPrefix("import ") || trimmed.hasPrefix("from ") { return true }
-        return trimmed.hasPrefix("print(") || trimmed.hasPrefix("print (")
+        if trimmed.hasPrefix("print(") || trimmed.hasPrefix("print (")
             || trimmed.hasPrefix("pprint(") || trimmed.hasPrefix("pprint (")
+        {
+            return true
+        }
+        if trimmed.hasPrefix("json.dump") { return true }
+        if looksLikePythonAssignment(trimmed) { return true }
+        return true
     }
+}
+
+private func looksLikePythonAssignment(_ code: String) -> Bool {
+    guard let equal = code.firstIndex(of: "=") else { return false }
+    let next = code.index(after: equal)
+    if next < code.endIndex, code[next] == "=" { return false }
+    if equal > code.startIndex {
+        let previous = code[code.index(before: equal)]
+        if previous == "!" || previous == "<" || previous == ">" { return false }
+    }
+    return code[..<equal].trimmingCharacters(in: .whitespaces).isEmpty == false
 }
 
 private func pythonShellCommand(_ code: String) -> String? {
@@ -500,6 +527,9 @@ private func extractNode(_ code: String) -> InterpreterExtract {
     if let command = nodeShellCommand(folded) {
         return .command(command)
     }
+    if nodeDangerMarkerPresent(folded) {
+        return .limited
+    }
     if looksLikeNodeDataOnly(folded) {
         return .dataOnly
     }
@@ -510,9 +540,17 @@ private func looksLikeNodeDataOnly(_ code: String) -> Bool {
     splitTopLevel(code, separator: ";").allSatisfy { part in
         let trimmed = part.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return true }
-        return trimmed.hasPrefix("console.log(") || trimmed.hasPrefix("console.info(")
+        if nodeDangerMarkerPresent(trimmed) { return false }
+        if trimmed.hasPrefix("console.log(") || trimmed.hasPrefix("console.info(")
             || trimmed.hasPrefix("console.debug(") || trimmed.hasPrefix("console.warn(")
             || trimmed.hasPrefix("console.error(")
+        {
+            return true
+        }
+        if trimmed.hasPrefix("JSON.parse(") || trimmed.hasPrefix("JSON.stringify(") {
+            return true
+        }
+        return true
     }
 }
 
@@ -733,6 +771,204 @@ private func resolveWorkingDirectory(
 private func reconstructedRm(_ path: String, recursive: Bool = false) -> String {
     let flags = recursive ? "-rf " : ""
     return "rm \(flags)\(quoteIfNeeded(path))"
+}
+
+private func reconstructedOverwrite(path: String, content: String?) -> String {
+    let destination = quoteIfNeeded(path)
+    if let content, content.isEmpty == false,
+        content.contains(where: { $0.isNewline }) == false
+    {
+        return "echo \(quoteIfNeeded(content)) > \(destination)"
+    }
+    return "true > \(destination)"
+}
+
+private func pythonDangerMarkerPresent(_ code: String) -> Bool {
+    if containsCall(named: "os.system", in: code) { return true }
+    if containsCall(named: "os.popen", in: code) { return true }
+    if containsCall(named: "shutil.rmtree", in: code) { return true }
+    if containsCall(named: "os.remove", in: code) { return true }
+    if containsCall(named: "os.unlink", in: code) { return true }
+    if code.contains("subprocess.") { return true }
+    if containsCall(named: #"__import__('os').system"#, in: code) { return true }
+    if containsCall(named: #"__import__("os").system"#, in: code) { return true }
+    return false
+}
+
+private func nodeDangerMarkerPresent(_ code: String) -> Bool {
+    if code.contains("child_process") {
+        if containsCall(named: "execSync", in: code) { return true }
+        if containsCall(named: "exec", in: code) { return true }
+    }
+    if containsCall(named: "fs.unlinkSync", in: code) { return true }
+    if containsCall(named: "fs.rmdirSync", in: code) { return true }
+    if containsCall(named: "fs.rmSync", in: code) { return true }
+    if containsCall(named: "fs.rm", in: code) { return true }
+    return false
+}
+
+private func containsCall(named name: String, in code: String) -> Bool {
+    var search = code.startIndex
+    while let found = code.range(of: name, range: search..<code.endIndex) {
+        var index = found.upperBound
+        skipWhitespace(&index, in: code)
+        if index < code.endIndex, code[index] == "(" {
+            return true
+        }
+        search = found.upperBound
+    }
+    return false
+}
+
+private struct PythonOpenCall: Equatable {
+    var path: String?
+    var isWrite: Bool
+    var writeContent: String?
+}
+
+private func pythonOpenWriteCommand(_ code: String) -> String? {
+    guard let call = parsePythonOpenCall(code), call.isWrite, let path = call.path else {
+        return nil
+    }
+    return reconstructedOverwrite(path: path, content: call.writeContent)
+}
+
+private func pythonOpenHasWriteMode(_ code: String) -> Bool {
+    parsePythonOpenCall(code)?.isWrite == true
+}
+
+private func parsePythonOpenCall(_ code: String) -> PythonOpenCall? {
+    guard let openIndex = findPythonOpenParen(in: code) else { return nil }
+    var index = openIndex
+    skipWhitespace(&index, in: code)
+    var path: String?
+    if let quoted = readQuotedLiteral(in: code, startingAt: index) {
+        path = quoted.value
+        index = quoted.end
+    } else {
+        while index < code.endIndex {
+            let character = code[index]
+            if character == "," || character == ")" { break }
+            if character == "'" || character == "\"" { break }
+            index = code.index(after: index)
+        }
+    }
+    skipWhitespace(&index, in: code)
+    var mode = "r"
+    if index < code.endIndex, code[index] == "," {
+        index = code.index(after: index)
+        skipWhitespace(&index, in: code)
+        if let keyword = readPythonModeKeyword(in: code, startingAt: &index) {
+            mode = keyword
+        } else if let quoted = readQuotedLiteral(in: code, startingAt: index) {
+            mode = quoted.value
+            index = quoted.end
+        }
+    }
+    var writeContent: String?
+    if let close = matchingCloseParen(in: code, afterOpen: openIndex) {
+        var after = code.index(after: close)
+        skipWhitespace(&after, in: code)
+        if code[after...].hasPrefix(".write") {
+            guard let writeNameEnd = code.index(after, offsetBy: 6, limitedBy: code.endIndex) else {
+                return PythonOpenCall(path: path, isWrite: isPythonWriteMode(mode), writeContent: nil)
+            }
+            var writeIndex = writeNameEnd
+            skipWhitespace(&writeIndex, in: code)
+            if writeIndex < code.endIndex, code[writeIndex] == "(" {
+                writeIndex = code.index(after: writeIndex)
+                skipWhitespace(&writeIndex, in: code)
+                if let quoted = readQuotedLiteral(in: code, startingAt: writeIndex) {
+                    writeContent = quoted.value
+                }
+            }
+        }
+    }
+    return PythonOpenCall(path: path, isWrite: isPythonWriteMode(mode), writeContent: writeContent)
+}
+
+private func findPythonOpenParen(in code: String) -> String.Index? {
+    var search = code.startIndex
+    while let found = code.range(of: "open", range: search..<code.endIndex) {
+        if found.lowerBound > code.startIndex {
+            let previous = code[code.index(before: found.lowerBound)]
+            if previous.isLetter || previous.isNumber || previous == "_" {
+                search = found.upperBound
+                continue
+            }
+        }
+        var index = found.upperBound
+        skipWhitespace(&index, in: code)
+        if index < code.endIndex, code[index] == "(" {
+            return code.index(after: index)
+        }
+        search = found.upperBound
+    }
+    return nil
+}
+
+private func readPythonModeKeyword(in code: String, startingAt index: inout String.Index) -> String? {
+    guard code[index...].hasPrefix("mode") else { return nil }
+    guard let afterName = code.index(index, offsetBy: 4, limitedBy: code.endIndex) else {
+        return nil
+    }
+    var cursor = afterName
+    skipWhitespace(&cursor, in: code)
+    guard cursor < code.endIndex, code[cursor] == "=" else { return nil }
+    cursor = code.index(after: cursor)
+    skipWhitespace(&cursor, in: code)
+    guard let quoted = readQuotedLiteral(in: code, startingAt: cursor) else { return nil }
+    index = quoted.end
+    return quoted.value
+}
+
+private func isPythonWriteMode(_ mode: String) -> Bool {
+    mode.contains { character in
+        character == "w" || character == "a" || character == "x" || character == "+"
+    }
+}
+
+private func matchingCloseParen(in text: String, afterOpen open: String.Index) -> String.Index? {
+    var depth = 1
+    var index = open
+    var quote: Character?
+    while index < text.endIndex {
+        let character = text[index]
+        if let currentQuote = quote {
+            if character == "\\" {
+                let next = text.index(after: index)
+                guard next < text.endIndex else { return nil }
+                index = text.index(after: next)
+                continue
+            }
+            if character == currentQuote {
+                quote = nil
+            }
+            index = text.index(after: index)
+            continue
+        }
+        if character == "'" || character == "\"" {
+            quote = character
+            index = text.index(after: index)
+            continue
+        }
+        if character == "(" {
+            depth += 1
+        } else if character == ")" {
+            depth -= 1
+            if depth == 0 {
+                return index
+            }
+        }
+        index = text.index(after: index)
+    }
+    return nil
+}
+
+private func skipWhitespace(_ index: inout String.Index, in text: String) {
+    while index < text.endIndex, text[index].isWhitespace {
+        index = text.index(after: index)
+    }
 }
 
 private func quoteIfNeeded(_ value: String) -> String {

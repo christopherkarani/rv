@@ -1,6 +1,7 @@
-/// Security scope after canonicalize. Protected wins over repository boundary.
+/// Security scope after canonicalize. Protected wins over temp and repository boundary.
 public enum FilesystemScope: String, Sendable, Equatable, Codable {
     case insideRepository
+    case temporary
     case outsideRepository
     case protectedPath
     case unknown
@@ -154,6 +155,8 @@ public enum FilesystemAction: Sendable, Equatable, Codable {
         switch primaryTarget?.scope {
         case .insideRepository:
             return "inside repo"
+        case .temporary:
+            return "temp directory"
         case .outsideRepository:
             return "outside repo"
         case .protectedPath:
@@ -272,12 +275,14 @@ public enum FilesystemAction: Sendable, Equatable, Codable {
         switch scope {
         case .insideRepository:
             return 1
-        case .outsideRepository:
+        case .temporary:
             return 2
-        case .unknown:
+        case .outsideRepository:
             return 3
-        case .protectedPath:
+        case .unknown:
             return 4
+        case .protectedPath:
+            return 5
         }
     }
 

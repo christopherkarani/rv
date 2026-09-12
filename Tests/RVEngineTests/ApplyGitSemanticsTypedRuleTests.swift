@@ -38,12 +38,12 @@ struct ApplyGitSemanticsTypedRuleTests {
     }
 
     @Test func typedAllow_cannotBeatSharedBranchHardDeny() throws {
-        let command = "git push --force-with-lease origin main"
+        let command = "git push --force origin main"
         let pack = try runPack(command)
         #expect(pack.decision == .allow)
         let rule = TypedRule(
             id: RuleID(pack: .coreGit, pattern: "allow-force-with-lease-main"),
-            predicate: .gitPush(force: .forceWithLease, branch: "main"),
+            predicate: .gitPush(force: .force, branch: "main"),
             verdict: .allow,
             origin: .machine
         )

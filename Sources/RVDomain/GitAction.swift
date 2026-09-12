@@ -246,7 +246,7 @@ public enum GitAction: Sendable, Equatable, Codable {
         case .clean(let force, let dryRun, _):
             return force && dryRun == false ? [.workingTreeDiscard] : []
         case .push(_, _, let force, let delete):
-            return force != .none || delete ? [.remoteSharedBranchMutation] : []
+            return force == .force || delete ? [.remoteSharedBranchMutation] : []
         case .switchBranch(_, true):
             return [.workingTreeDiscard]
         case .createBranch, .switchBranch, .deleteBranch, .deleteTag, .stash, .rebase:

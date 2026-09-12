@@ -820,12 +820,34 @@ func classifyFilesystemScope(
     if catalog.firstMatch(of: canonical) != nil {
         return .protectedPath
     }
+    if isTemporaryFilesystemPath(canonical) {
+        return .temporary
+    }
     guard let repositoryRoot else { return .unknown }
     if isInsideRepository(canonical, root: repositoryRoot.rawValue) {
         return .insideRepository
     }
     return .outsideRepository
 }
+
+/// Literal OS temp roots. Prefix must be the root plus `/` so `/tmpfoo` and
+/// `/var/tmp-backup` stay outside. Collapse of `..` happens before classify.
+private func isTemporaryFilesystemPath(_ canonical: String) -> Bool {
+    for root in temporaryFilesystemRoots {
+        if canonical == root || canonical.hasPrefix(root + "/") {
+            return true
+        }
+    }
+    return false
+}
+
+private let temporaryFilesystemRoots: [String] = [
+    "/tmp",
+    "/private/tmp",
+    "/var/tmp",
+    "/private/var/tmp",
+    "/var/folders",
+]
 
 func classifyFilesystemKind(_ canonical: String) -> FilesystemResourceKind {
     let parts = canonical.split(separator: "/", omittingEmptySubsequences: true).map(String.init)

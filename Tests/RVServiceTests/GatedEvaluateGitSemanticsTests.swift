@@ -46,6 +46,20 @@ struct GatedEvaluateGitSemanticsTests {
         #expect(force == .force)
     }
 
+    @Test(arguments: [
+        "git push --force-with-lease origin feature",
+        "git push --force-with-lease origin main",
+    ])
+    func forceWithLease_staysAllow(_ command: String) async throws {
+        let result = try await peek(command)
+        #expect(result.decision == .allow)
+        guard case .git(.push(_, _, let force, _)) = result.analysis else {
+            Issue.record("expected push analysis, got \(result.analysis)")
+            return
+        }
+        #expect(force == .forceWithLease)
+    }
+
     @Test func unsupportedGlobals_stillDenyResetHard() async throws {
         let result = try await peek("git --weird-flag reset --hard")
         #expect(result.analysis == .unknown)

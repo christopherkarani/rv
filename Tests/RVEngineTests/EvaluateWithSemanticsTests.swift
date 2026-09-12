@@ -7,15 +7,14 @@ import RVDomain
 @Suite("EvaluateWithSemantics")
 struct EvaluateWithSemanticsTests {
     @Test func packAllow_semanticGitDeny_tightens() throws {
-        // `feature` is not a name-based shared branch; dropping `gitContext`
-        // would demote this to `remoteBranchAsk` instead of the shared-branch wall.
-        let command = "bash -c 'git push --force-with-lease origin feature'"
+        // `main` is a name-based shared branch; `--force` is the semantic wall.
+        let command = "bash -c 'git push --force origin main'"
         let result = try runDoor(
             command,
             gitContext: GitAnalysisContext(isSharedBranch: true)
         )
         guard case .deny(let deny) = result.decision else {
-            Issue.record("wrapped force-with-lease to shared branch must deny")
+            Issue.record("wrapped --force to main must deny")
             return
         }
         #expect(deny.ruleID == ActionPolicyEngine.Builtin.remoteSharedBranch.ruleID)
@@ -53,13 +52,25 @@ struct EvaluateWithSemanticsTests {
     }
 
     @Test func unwrapLimited_failClosed() throws {
-        let result = try runDoor(#"python -c "mystery(payload)""#)
+        let result = try runDoor(#"python -c "os.system(x)""#)
         guard case .deny(let deny) = result.decision else {
-            Issue.record("unreliable python must fail-closed, got \(result.decision)")
+            Issue.record("unparseable spawn must fail-closed, got \(result.decision)")
             return
         }
         #expect(deny.ruleID == ActionPolicyEngine.Builtin.unwrapLimited.ruleID)
         #expect(result.analysis.innermost == .unwrapLimited)
+    }
+
+    @Test(arguments: [
+        #"python3 -c "x=1""#,
+        #"python3 -c "mystery(payload)""#,
+        #"python3 -c "import json,sys; json.dump({}, sys.stdout)""#,
+        #"node -e "JSON.parse('{}')""#,
+    ])
+    func interpreterDataOnly_staysAllow(_ command: String) throws {
+        let result = try runDoor(command)
+        #expect(result.decision == .allow)
+        #expect(result.analysis.innermost != .unwrapLimited)
     }
 
     @Test func indeterminate_staysFloor() throws {

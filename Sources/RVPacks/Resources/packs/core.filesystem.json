@@ -183,6 +183,16 @@
       "description": ""
     },
     {
+      "name": "dd-file-out",
+      "pattern": "dd\\s+.*\\bof=['\"]?[^/\\s'\"]+['\"]?(?:\\s|$)",
+      "description": ""
+    },
+    {
+      "name": "dd-file-out-dot-slash",
+      "pattern": "dd\\s+.*\\bof=['\"]?\\./[^/\\s'\"]+['\"]?(?:\\s|$)",
+      "description": ""
+    },
+    {
       "name": "dd-help",
       "pattern": "^dd\\s+(?:--help|--version)\\s*$",
       "description": ""

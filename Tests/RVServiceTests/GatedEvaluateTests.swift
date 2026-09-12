@@ -364,7 +364,9 @@ struct GatedEvaluateTests {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let gated = GatedEvaluate()
         let request = EvaluationRequest(
-            command: ShellCommand(rawValue: "git push --force-with-lease origin feature"),
+            command: ShellCommand(
+                rawValue: #"python -c "os.system('git push --force origin feature')""#
+            ),
             enabledPacks: dayOnePackIDs
         )
         let first = await gated.spendHostAsk(

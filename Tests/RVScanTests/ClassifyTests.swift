@@ -29,13 +29,13 @@ import RVDomain
 }
 
 @Test func classify_semanticOnlyDeny_emitsFinding() throws {
-    // Packs allow this (no destructive pattern); the evaluation door's
-    // unwrap-limited fail-closed deny must still surface as a finding.
+    // Packs allow this (no destructive pattern); unparseable spawn still
+    // fail-closes as unwrap-limited and must surface as a finding.
     let events = [
         ExtractedEvent(
             host: .claude,
             sourcePath: "/tmp/fixture/session.jsonl",
-            command: ShellCommand(rawValue: #"python -c "mystery(payload)""#)
+            command: ShellCommand(rawValue: #"python -c "os.system(x)""#)
         ),
     ]
     let findings = try ScanClassify().classify(events)

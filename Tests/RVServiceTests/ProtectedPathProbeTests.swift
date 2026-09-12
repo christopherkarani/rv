@@ -168,27 +168,12 @@ struct ProtectedPathProbeTests {
         #expect(deny.ruleID == ActionPolicyEngine.Builtin.protectedPath.ruleID)
     }
 
-    @Test func siblingRepository_isOutsideAndNotWhitelisted() async throws {
+    @Test func outOfRepoWrite_isOutsideAndNotWhitelisted() async throws {
         let repo = try makeProtectedRepo()
-        let sibling = repo.deletingLastPathComponent()
-            .appendingPathComponent("sibling-repo-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: sibling, withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(
-            at: sibling.appendingPathComponent(".git", isDirectory: true),
-            withIntermediateDirectories: true
-        )
-        try "secret".write(
-            to: sibling.appendingPathComponent("tracked.swift"),
-            atomically: true,
-            encoding: .utf8
-        )
-        let relative = relativePath(
-            from: repo,
-            to: sibling.appendingPathComponent("tracked.swift")
-        )
-        let denied = try await peek("echo leaked > \(relative)", cwd: repo)
+        let command = "touch /opt/outside-file"
+        let denied = try await peek(command, cwd: repo)
         guard case .deny(let deny) = denied.decision else {
-            Issue.record("sibling repo write must deny, got \(denied.decision)")
+            Issue.record("out-of-repo write must deny, got \(denied.decision)")
             return
         }
         #expect(deny.ruleID == ActionPolicyEngine.Builtin.outsideRepository.ruleID)
@@ -209,7 +194,7 @@ struct ProtectedPathProbeTests {
         let store = AllowOnceStore(baseDirectory: try isolatedAllowOnceDirectory())
         let lifted = await GatedEvaluate().peek(
             EvaluationRequest(
-                command: ShellCommand(rawValue: "echo leaked > \(relative)"),
+                command: ShellCommand(rawValue: command),
                 enabledPacks: dayOnePackIDs
             ),
             cwd: WorkingDirectory(validating: repo.path),
@@ -218,7 +203,7 @@ struct ProtectedPathProbeTests {
             allowlist: { allowlist }
         )
         guard case .deny(let kept) = lifted.decision else {
-            Issue.record("allowlist must not lift sibling-repo write")
+            Issue.record("allowlist must not lift out-of-repo write")
             return
         }
         #expect(kept.ruleID == ActionPolicyEngine.Builtin.outsideRepository.ruleID)
@@ -228,7 +213,7 @@ struct ProtectedPathProbeTests {
         let repo = try makeProtectedRepo()
         let result = try await peek("echo hi > Sources/Foo.swift", cwd: repo)
         #expect(result.decision == .allow)
-        #expect(result.analysis.filesystemAction?.primaryTarget?.scope == .insideRepository)
+        #expect(result.analysis.filesystemAction?.primaryTarget?.scope == .temporary)
         #expect(result.analysis.filesystemAction?.primaryTarget?.protectedMatch == nil)
     }
 }

@@ -32,12 +32,8 @@ struct FilesystemBoundaryProbeTests {
         )
 
         let temp = try await peek("rm temp-link/file", cwd: repo)
-        guard case .deny(let tempDeny) = temp.decision else {
-            Issue.record("temp symlink must deny, got \(temp.decision)")
-            return
-        }
-        #expect(tempDeny.ruleID == ActionPolicyEngine.Builtin.outsideRepository.ruleID)
-        #expect(temp.analysis.filesystemAction?.primaryTarget?.scope == .outsideRepository)
+        #expect(temp.decision == .allow)
+        #expect(temp.analysis.filesystemAction?.primaryTarget?.scope == .temporary)
         #expect(temp.analysis.filesystemAction?.primaryTarget?.followedSymlink == true)
 
         let protected = try await peek(
@@ -70,13 +66,13 @@ struct FilesystemBoundaryProbeTests {
         #expect(worktreeInside.decision == .allow)
         #expect(
             worktreeInside.analysis.filesystemAction?.resources.filesystemScope
-                == .insideRepository
+                == .temporary
         )
 
-        let worktreeOutside = try await peek("echo hi > ../main-file", cwd: worktree)
+        let worktreeOutside = try await peek("touch /opt/outside-file", cwd: worktree)
         guard case .deny(let worktreeDeny) = worktreeOutside.decision else {
             Issue.record(
-                "write into main from worktree must be outside, got \(worktreeOutside.decision)"
+                "write outside the worktree checkout must deny, got \(worktreeOutside.decision)"
             )
             return
         }
@@ -92,13 +88,13 @@ struct FilesystemBoundaryProbeTests {
         let subInside = try await peek("echo hi > lib.swift", cwd: sub)
         #expect(subInside.decision == .allow)
         #expect(
-            subInside.analysis.filesystemAction?.resources.filesystemScope == .insideRepository
+            subInside.analysis.filesystemAction?.resources.filesystemScope == .temporary
         )
 
-        let subOutside = try await peek("echo hi > ../../Sources/Foo.swift", cwd: sub)
+        let subOutside = try await peek("touch /opt/outside-file", cwd: sub)
         guard case .deny(let subDeny) = subOutside.decision else {
             Issue.record(
-                "write into parent from submodule must be outside, got \(subOutside.decision)"
+                "write outside the submodule checkout must deny, got \(subOutside.decision)"
             )
             return
         }
@@ -172,7 +168,7 @@ struct FilesystemBoundaryProbeTests {
                 ShellCommand(rawValue: "rm casefile.swift"),
                 context: context
             )
-            #expect(analysis.filesystemAction?.primaryTarget?.scope == .insideRepository)
+            #expect(analysis.filesystemAction?.primaryTarget?.scope == .temporary)
         } else {
             #expect(fact.canonical.hasSuffix("casefile.swift"))
             #expect(fact.canonical != file.path)

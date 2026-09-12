@@ -134,7 +134,7 @@ struct FilesystemActionTests {
     @Test func outsideWrite_addsIndependentEffect() {
         let target = FilesystemTarget(
             apparent: "../outside-file",
-            canonical: "/tmp/outside-file",
+            canonical: "/opt/outside-file",
             scope: .outsideRepository,
             kind: .unknown
         )
@@ -145,5 +145,45 @@ struct FilesystemActionTests {
             FilesystemAction.read(targets: [target]).effects.kinds
                 .contains(.outsideRepositoryMutation) == false
         )
+    }
+
+    @Test func temporaryWrite_doesNotAddOutsideEffect() {
+        let target = FilesystemTarget(
+            apparent: "/tmp/rv-agent.txt",
+            canonical: "/tmp/rv-agent.txt",
+            scope: .temporary,
+            kind: .unknown
+        )
+        let action = FilesystemAction.overwrite(targets: [target])
+        #expect(action.effects.kinds.contains(.outsideRepositoryMutation) == false)
+        #expect(action.effects.kinds.contains(.filesystemOverwrite))
+        #expect(action.explainScope == "temp directory")
+        #expect(action.resources.filesystemScope == .temporary)
+    }
+
+    @Test func temporaryRanksBelowOutsideAndAboveInside() {
+        let inside = FilesystemTarget(
+            apparent: "file",
+            canonical: "/repo/file",
+            scope: .insideRepository,
+            kind: .unknown
+        )
+        let temporary = FilesystemTarget(
+            apparent: "/tmp/rv-agent",
+            canonical: "/tmp/rv-agent",
+            scope: .temporary,
+            kind: .unknown
+        )
+        let outside = FilesystemTarget(
+            apparent: "/etc/passwd",
+            canonical: "/etc/passwd",
+            scope: .outsideRepository,
+            kind: .unknown
+        )
+        let mixedTempAndEtc = FilesystemAction.overwrite(targets: [temporary, outside])
+        #expect(mixedTempAndEtc.primaryTarget?.scope == .outsideRepository)
+        #expect(mixedTempAndEtc.effects.kinds.contains(.outsideRepositoryMutation))
+        let mixedTempAndInside = FilesystemAction.overwrite(targets: [inside, temporary])
+        #expect(mixedTempAndInside.primaryTarget?.scope == .temporary)
     }
 }

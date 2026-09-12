@@ -53,6 +53,18 @@ struct GatedEvaluateWrapperSemanticsTests {
         #expect(result.analysis.wrappers.isEmpty)
     }
 
+    @Test(arguments: [
+        #"python -c "mystery(payload)""#,
+        #"python3 -c "x=1""#,
+        #"python3 -c "import json,sys; json.dump({}, sys.stdout)""#,
+        #"node -e "JSON.parse('{}')""#,
+    ])
+    func interpreterDataOnly_isAllowed(_ command: String) async throws {
+        let result = try await peek(command)
+        #expect(result.decision == .allow)
+        #expect(result.analysis.innermost != .unwrapLimited)
+    }
+
     @Test func pythonQuotedHeredocOsSystem_isDenied() async throws {
         let result = try await peek("python3 <<'PY'\nimport os\nos.system('git reset --hard')\nPY")
         guard case .deny(let deny) = result.decision else {

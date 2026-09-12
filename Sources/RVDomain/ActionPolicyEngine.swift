@@ -105,6 +105,11 @@ public enum ActionPolicyEngine: Sendable {
         public static let inRepositoryReason =
             "In-repository filesystem writes are allowed by built-in policy."
 
+        public static let temporaryPath = RuleID(pack: pack, pattern: "temp-path-write")
+
+        public static let temporaryPathReason =
+            "Writes under a literal temp directory are allowed by built-in policy."
+
         public static let outsideRepository = Deny(
             ruleID: RuleID(pack: pack, pattern: "out-of-repo-write"),
             reason: "Writing outside the repository is a built-in hard deny."
@@ -294,6 +299,14 @@ public enum ActionPolicyEngine: Sendable {
                 decision: .hardDeny(Builtin.protectedPath),
                 ruleID: Builtin.protectedPath.ruleID,
                 reason: Builtin.protectedPath.reason,
+                semanticallyCovered: true
+            )
+        }
+        if scope == .temporary {
+            return CoreHit(
+                decision: .hardAllow,
+                ruleID: Builtin.temporaryPath,
+                reason: Builtin.temporaryPathReason,
                 semanticallyCovered: true
             )
         }

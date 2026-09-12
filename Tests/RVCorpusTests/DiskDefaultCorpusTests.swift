@@ -16,12 +16,17 @@ import RVPacks
     }
 
     @Test func ddWipeDevice_deniesOnDayOne() throws {
-        let result = try evaluateDayOne("dd if=/dev/zero of=/dev/rdisk0 bs=1m")
-        guard case .deny(let deny) = result.decision else {
-            Issue.record("expected deny, got \(result.decision)")
-            return
+        for command in [
+            "dd if=/dev/zero of=/dev/rdisk0 bs=1m",
+            "dd if=/dev/zero of=/dev/disk0",
+        ] {
+            let result = try evaluateDayOne(command)
+            guard case .deny(let deny) = result.decision else {
+                Issue.record("\(command): expected deny, got \(result.decision)")
+                continue
+            }
+            #expect(deny.ruleID.pack == .systemDisk, "\(command)")
         }
-        #expect(deny.ruleID.pack == .systemDisk)
     }
 
     @Test func ddFileOut_allowsOnDiskPack() throws {
@@ -40,13 +45,28 @@ import RVPacks
         #expect(result.decision == .allow)
     }
 
-    @Test func ddFileOut_dayOneStillDeniedByFilesystem() throws {
-        let result = try evaluateDayOne("dd if=/dev/zero of=./out.bin")
+    @Test func ddFileOut_dayOneAllowsRelativeFile() throws {
+        for command in [
+            "dd if=/dev/zero of=out.bin",
+            "dd if=/dev/zero of=./out.bin",
+        ] {
+            let result = try evaluateDayOne(command)
+            #expect(result.decision == .allow, "\(command) got \(result.decision)")
+        }
+    }
+
+    @Test func ddOverwritePasswd_deniesOnDayOne() throws {
+        let result = try evaluateDayOne("dd if=/dev/zero of=/etc/passwd")
         guard case .deny(let deny) = result.decision else {
-            Issue.record("expected filesystem deny, got \(result.decision)")
+            Issue.record("expected deny, got \(result.decision)")
             return
         }
-        #expect(deny.ruleID.rawValue == "core.filesystem:dd-overwrite-general")
+        #expect(deny.ruleID.rawValue == "core.filesystem:dd-overwrite-root-home")
+    }
+
+    @Test func ddTmp_allowsOnDayOne() throws {
+        let result = try evaluateDayOne("dd if=/dev/zero of=/tmp/x")
+        #expect(result.decision == .allow)
     }
 
     @Test func inventoryCommands_allowOnDayOne() throws {

@@ -101,7 +101,7 @@ struct AnalyzeSemanticsTests {
             return
         }
         #expect(targets[0].canonical == "/tmp/file")
-        #expect(targets[0].scope == .outsideRepository)
+        #expect(targets[0].scope == .temporary)
         #expect(analysis.wrappers == [.env])
     }
 

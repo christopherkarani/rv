@@ -81,15 +81,18 @@ struct GatedEvaluateTypedRuleLoadTests {
         let workspace = try isolatedWorkspace()
         let rule = TypedRule(
             id: RuleID(pack: .coreGit, pattern: "hook-load-allow-main"),
-            predicate: .gitPush(force: .forceWithLease, branch: "main"),
+            predicate: .gitPush(force: .force, branch: "main"),
             verdict: .allow,
             origin: .machine
         )
         try TypedRuleStore(baseDirectory: RVPolicyPaths.configDirectory(home: home))
             .saveMachine([rule])
 
+        // python -c masks the payload in matchingView, so day-one
+        // `push-force-long` does not floor. bash -c quotes do not mask, so
+        // pack still matches `--force`. Unwrap then hits the builtin wall.
         let result = try await peek(
-            "git push --force-with-lease origin main",
+            #"python -c "os.system('git push --force origin main')""#,
             cwd: workspace,
             home: home
         )

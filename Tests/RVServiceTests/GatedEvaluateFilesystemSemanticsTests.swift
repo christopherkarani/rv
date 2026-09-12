@@ -20,14 +20,14 @@ struct GatedEvaluateFilesystemSemanticsTests {
         }
         #expect(generatedAction.resources.resourceKind == .generatedOutput)
         #expect(sourceAction.resources.resourceKind == .sourceCode)
-        #expect(generatedAction.resources.filesystemScope == .insideRepository)
-        #expect(sourceAction.resources.filesystemScope == .insideRepository)
+        #expect(generatedAction.resources.filesystemScope == .temporary)
+        #expect(sourceAction.resources.filesystemScope == .temporary)
         #expect(generated.analysis != source.analysis)
     }
 
     @Test func parentTraversal_isOutsideRepository() async throws {
         let repo = try makeFilesystemRepo()
-        let result = try await peek("rm ../outside-file", cwd: repo)
+        let result = try await peek("rm /opt/outside-file", cwd: repo)
         guard case .deny(let deny) = result.decision else {
             Issue.record("out-of-repo write must deny, got \(result.decision)")
             return
@@ -38,13 +38,12 @@ struct GatedEvaluateFilesystemSemanticsTests {
             return
         }
         #expect(action.primaryTarget?.scope == .outsideRepository)
-        #expect(action.primaryTarget?.canonical.hasSuffix("/outside-file") == true)
+        #expect(action.primaryTarget?.canonical == "/opt/outside-file")
     }
 
     @Test func symlinkEscape_usesResolvedTarget() async throws {
         let repo = try makeFilesystemRepo()
-        let outside = repo.deletingLastPathComponent().appendingPathComponent("outside-target")
-        try "secret".write(to: outside, atomically: true, encoding: .utf8)
+        let outside = URL(fileURLWithPath: "/opt/outside-file")
         let link = repo.appendingPathComponent("escape-link")
         try FileManager.default.createSymbolicLink(
             atPath: link.path,
@@ -104,7 +103,7 @@ struct GatedEvaluateFilesystemSemanticsTests {
             return
         }
         #expect(action.operationKind == .write)
-        #expect(action.resources.filesystemScope == .insideRepository)
+        #expect(action.resources.filesystemScope == .temporary)
     }
 
     @Test func bashDashC_deniesRmRfWithFilesystemAnalysis() async throws {

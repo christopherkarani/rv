@@ -42,6 +42,10 @@ struct SemanticAnalysisTests {
             ActionPolicyEngine.Builtin.protectedPath.ruleID.rawValue
                 == "builtin.action:protected-path-mutation"
         )
+        #expect(
+            ActionPolicyEngine.Builtin.temporaryPath.rawValue
+                == "builtin.action:temp-path-write"
+        )
     }
 
     @Test func wrapper_codableRoundTrip() throws {

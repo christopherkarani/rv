@@ -19,15 +19,30 @@ struct GitActionTests {
             force: .none,
             delete: false
         )
+        let leased = GitAction.push(
+            remote: "origin",
+            refspec: "feature",
+            force: .forceWithLease,
+            delete: false
+        )
         let forced = GitAction.push(
             remote: "origin",
             refspec: "main",
             force: .force,
             delete: false
         )
+        let deleted = GitAction.push(
+            remote: "origin",
+            refspec: "feature",
+            force: .none,
+            delete: true
+        )
         #expect(normal.effects.kinds.isEmpty)
+        #expect(leased.effects.kinds.isEmpty)
         #expect(forced.effects.kinds == [.remoteSharedBranchMutation])
+        #expect(deleted.effects.kinds == [.remoteSharedBranchMutation])
         #expect(normal.effectScope == .remote)
+        #expect(leased.effectScope == .remote)
         #expect(forced.effectScope == .remote)
     }
 

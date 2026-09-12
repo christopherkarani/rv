@@ -64,6 +64,58 @@ struct ApplyFilesystemSemanticsTests {
         #expect(action.primaryTarget?.canonical == "/outside-file")
     }
 
+    @Test func literalTempMkdir_isAllowed() throws {
+        let pack = try runFilesystemPack("mkdir -p /tmp/rv-agent")
+        #expect(pack.decision == .allow)
+        let composed = applyFilesystemSemantics(
+            pack: pack,
+            command: ShellCommand(rawValue: "mkdir -p /tmp/rv-agent"),
+            context: repo
+        )
+        #expect(composed.decision == .allow)
+        #expect(composed.boundReview == nil)
+        guard case .filesystem(let action) = composed.analysis else {
+            Issue.record("expected filesystem analysis")
+            return
+        }
+        #expect(action.resources.filesystemScope == .temporary)
+        #expect(action.operationKind == .create)
+    }
+
+    @Test func literalTempRedirect_isAllowed() throws {
+        let pack = try runFilesystemPack("echo hi > /tmp/rv-agent.txt")
+        #expect(pack.decision == .allow)
+        let composed = applyFilesystemSemantics(
+            pack: pack,
+            command: ShellCommand(rawValue: "echo hi > /tmp/rv-agent.txt"),
+            context: repo
+        )
+        #expect(composed.decision == .allow)
+        #expect(composed.boundReview == nil)
+        guard case .filesystem(let action) = composed.analysis else {
+            Issue.record("expected filesystem analysis")
+            return
+        }
+        #expect(action.resources.filesystemScope == .temporary)
+        #expect(action.operationKind == .write)
+    }
+
+    @Test func etcPasswdWrite_isStillOutsideDeny() throws {
+        let pack = try runFilesystemPack("echo hi > /etc/passwd")
+        #expect(pack.decision == .allow)
+        let composed = applyFilesystemSemantics(
+            pack: pack,
+            command: ShellCommand(rawValue: "echo hi > /etc/passwd"),
+            context: repo
+        )
+        guard case .deny(let deny) = composed.decision else {
+            Issue.record("/etc write must deny, got \(composed.decision)")
+            return
+        }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.outsideRepository.ruleID)
+        #expect(composed.analysis.filesystemAction?.primaryTarget?.scope == .outsideRepository)
+    }
+
     @Test func symlinkEscape_usesCanonicalScopeForPolicy() throws {
         let pack = try runFilesystemPack("rm link")
         #expect(pack.decision == .allow)
@@ -73,7 +125,7 @@ struct ApplyFilesystemSemanticsTests {
             facts: [
                 FilesystemPathFact(
                     apparent: "link",
-                    canonical: "/tmp/outside-file",
+                    canonical: "/opt/outside-file",
                     followedSymlink: true,
                     resolution: .resolved
                 ),
@@ -89,7 +141,7 @@ struct ApplyFilesystemSemanticsTests {
             return
         }
         #expect(deny.ruleID == ActionPolicyEngine.Builtin.outsideRepository.ruleID)
-        #expect(composed.analysis.filesystemAction?.primaryTarget?.canonical == "/tmp/outside-file")
+        #expect(composed.analysis.filesystemAction?.primaryTarget?.canonical == "/opt/outside-file")
         #expect(composed.analysis.filesystemAction?.primaryTarget?.scope == .outsideRepository)
     }
 

@@ -21,7 +21,8 @@ let expectedFilesystemSafe = [
     "unlink-help", "truncate-help", "truncate-grow", "truncate-tmp",
     "truncate-var-tmp", "shred-help", "shred-tmp", "shred-var-tmp",
     "tar-remove-files-tmp", "tar-remove-files-var-tmp", "dd-tmp", "dd-var-tmp",
-    "dd-help", "mv-tmp", "mv-var-tmp", "mv-help", "mv-to-trash",
+    "dd-file-out", "dd-file-out-dot-slash", "dd-help", "mv-tmp", "mv-var-tmp",
+    "mv-help", "mv-to-trash",
 ]
 let expectedFilesystemDestructive = [
     "sed-exec-unverified", "cp-sensitive-then-delete",

@@ -186,6 +186,16 @@
       "id": "near.node-e-console-reset",
       "command": "node -e \"console.log('git reset --hard')\"",
       "expected": "allow"
+    },
+    {
+      "id": "near.dd-relative-file-out",
+      "command": "dd if=/dev/zero of=out.bin",
+      "expected": "allow"
+    },
+    {
+      "id": "near.dd-dot-slash-file-out",
+      "command": "dd if=/dev/zero of=./out.bin",
+      "expected": "allow"
     }
   ]
 }

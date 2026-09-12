@@ -105,12 +105,12 @@ struct EvaluateSessionTests {
     @Test func evaluateWithSemantics_unwrapLimited_failClosed() {
         let result = EvaluateSession().evaluateWithSemantics(
             EvaluationRequest(
-                command: ShellCommand(rawValue: #"python -c "mystery(payload)""#),
+                command: ShellCommand(rawValue: #"python -c "os.system(x)""#),
                 enabledPacks: dayOnePackIDs
             )
         )
         guard case .deny(let deny) = result.decision else {
-            Issue.record("unreliable python must fail-closed, got \(result.decision)")
+            Issue.record("unparseable spawn must fail-closed, got \(result.decision)")
             return
         }
         #expect(deny.ruleID == ActionPolicyEngine.Builtin.unwrapLimited.ruleID)

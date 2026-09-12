@@ -70,9 +70,25 @@ struct ApplyGitSemanticsTests {
         #expect(composedEcho.analysis == .unknown)
     }
 
-    @Test func forcePushPackMiss_isDeniedBySemantics() throws {
-        let command = "git push --force-with-lease origin main"
+    @Test(arguments: [
+        "git push --force origin main",
+        "git push -f origin main",
+    ])
+    func forcePushPackMiss_isDeniedBySemantics(_ command: String) throws {
         let pack = try runPack(command)
+        if case .deny(let packDeny) = pack.decision {
+            let composed = applyGitSemantics(
+                pack: pack,
+                command: ShellCommand(rawValue: command),
+                context: GitAnalysisContext(isSharedBranch: true)
+            )
+            guard case .deny(let deny) = composed.decision else {
+                Issue.record("pack deny of --force must stay the floor")
+                return
+            }
+            #expect(deny.ruleID == packDeny.ruleID)
+            return
+        }
         #expect(pack.decision == .allow)
         let composed = applyGitSemantics(
             pack: pack,
@@ -80,7 +96,7 @@ struct ApplyGitSemanticsTests {
             context: GitAnalysisContext(isSharedBranch: true)
         )
         guard case .deny(let deny) = composed.decision else {
-            Issue.record("force-with-lease to main must deny")
+            Issue.record("--force to main must deny")
             return
         }
         #expect(deny.ruleID == ActionPolicyEngine.Builtin.remoteSharedBranch.ruleID)
@@ -88,8 +104,25 @@ struct ApplyGitSemanticsTests {
         #expect(composed.analysis != .unknown)
     }
 
+    @Test(arguments: [
+        "git push --force-with-lease origin main",
+        "git push --force-with-lease --force-if-includes origin main",
+    ])
+    func forceWithLeasePackMiss_staysAllow(_ command: String) throws {
+        let pack = try runPack(command)
+        #expect(pack.decision == .allow)
+        let composed = applyGitSemantics(
+            pack: pack,
+            command: ShellCommand(rawValue: command),
+            context: GitAnalysisContext(isSharedBranch: true)
+        )
+        #expect(composed.decision == .allow)
+        #expect(composed.boundReview == nil)
+        #expect(composed.analysis != .unknown)
+    }
+
     @Test func forcePushPrivateBranch_carriesMandatoryHumanBoundReview() throws {
-        let command = "git push --force-with-lease origin feature"
+        let command = "git push --force origin feature"
         let pack = try runPack(command)
         #expect(pack.decision == .allow)
         #expect(pack.boundReview == nil)
@@ -100,6 +133,19 @@ struct ApplyGitSemanticsTests {
         let deny = ActionPolicyEngine.Builtin.remoteBranchAsk
         #expect(composed.decision == .deny(deny))
         #expect(composed.boundReview == .mandatoryHuman(deny))
+    }
+
+    @Test func forceWithLeasePrivateBranch_staysAllow() throws {
+        let command = "git push --force-with-lease origin feature"
+        let pack = try runPack(command)
+        #expect(pack.decision == .allow)
+        #expect(pack.boundReview == nil)
+        let composed = applyGitSemantics(
+            pack: pack,
+            command: ShellCommand(rawValue: command)
+        )
+        #expect(composed.decision == .allow)
+        #expect(composed.boundReview == nil)
     }
 
     @Test func unforcedPush_leavesBoundReviewNil() throws {

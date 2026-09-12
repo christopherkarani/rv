@@ -58,7 +58,7 @@ struct AnalyzeFilesystemTests {
             facts: [
                 FilesystemPathFact(
                     apparent: "link",
-                    canonical: "/tmp/outside-file",
+                    canonical: "/opt/outside-file",
                     followedSymlink: true,
                     resolution: .resolved
                 ),
@@ -69,7 +69,7 @@ struct AnalyzeFilesystemTests {
             Issue.record("expected delete, got \(analysis)")
             return
         }
-        #expect(targets[0].canonical == "/tmp/outside-file")
+        #expect(targets[0].canonical == "/opt/outside-file")
         #expect(targets[0].scope == .outsideRepository)
         #expect(targets[0].followedSymlink)
         #expect(targets[0].apparent == "link")
@@ -276,7 +276,7 @@ struct AnalyzeFilesystemTests {
             return
         }
         #expect(sources[0].kind == .sourceCode)
-        #expect(destination.scope == .outsideRepository)
+        #expect(destination.scope == .temporary)
 
         guard case .filesystem(.overwrite(let targets)) =
             analyzeFilesystem(
@@ -297,5 +297,108 @@ struct AnalyzeFilesystemTests {
         }
         #expect(mode == "000")
         #expect(chmodTargets[0].kind == .sourceCode)
+    }
+
+    @Test(arguments: [
+        "mkdir -p /tmp/rv-agent",
+        "touch /tmp/rv-agent/x",
+        "echo hi > /tmp/rv-agent.txt",
+        "rm -rf /tmp/rv-agent",
+        "rm -f /tmp/rv-agent.txt",
+    ])
+    func literalTempCommands_areTemporary(command: String) {
+        let analysis = analyzeFilesystem(ShellCommand(rawValue: command), context: repo)
+        guard case .filesystem(let action) = analysis else {
+            Issue.record("expected filesystem analysis for \(command)")
+            return
+        }
+        #expect(action.primaryTarget?.scope == .temporary)
+        #expect(action.explainScope == "temp directory")
+        #expect(action.effects.kinds.contains(.outsideRepositoryMutation) == false)
+    }
+
+    @Test func tmpSshConfig_staysProtected() {
+        let analysis = analyzeFilesystem(
+            ShellCommand(rawValue: "echo hi > /tmp/.ssh/config"),
+            context: repo
+        )
+        guard case .filesystem(let action) = analysis else {
+            Issue.record("expected filesystem analysis")
+            return
+        }
+        #expect(action.primaryTarget?.scope == .protectedPath)
+        #expect(action.primaryTarget?.canonical == "/tmp/.ssh/config")
+        #expect(action.effects.kinds.contains(.protectedPathMutation))
+    }
+
+    @Test func tmpfoo_isNotTemporary() {
+        let analysis = analyzeFilesystem(
+            ShellCommand(rawValue: "touch /tmpfoo"),
+            context: repo
+        )
+        guard case .filesystem(.create(let targets)) = analysis else {
+            Issue.record("expected create, got \(analysis)")
+            return
+        }
+        #expect(targets[0].canonical == "/tmpfoo")
+        #expect(targets[0].scope == .outsideRepository)
+        #expect(targets[0].scope != .temporary)
+    }
+
+    @Test(arguments: [
+        "/tmp",
+        "/tmp/rv-agent",
+        "/private/tmp",
+        "/private/tmp/x",
+        "/var/tmp",
+        "/var/tmp/x",
+        "/private/var/tmp",
+        "/private/var/tmp/x",
+        "/var/folders",
+        "/var/folders/zz/T/x",
+    ])
+    func temporaryRoots_matchExactOrChild(canonical: String) {
+        #expect(
+            classifyFilesystemScope(
+                canonical: canonical,
+                repositoryRoot: RepositoryRoot(validating: "/repo"),
+                catalog: .dayOne
+            ) == .temporary
+        )
+    }
+
+    @Test(arguments: [
+        "/tmpfoo",
+        "/var/tmp-backup",
+        "/var/tmp-backup/x",
+        "/opt/outside-file",
+        "/etc/passwd",
+    ])
+    func nonTemporaryPaths_areNotTemporary(canonical: String) {
+        let scope = classifyFilesystemScope(
+            canonical: canonical,
+            repositoryRoot: RepositoryRoot(validating: "/repo"),
+            catalog: .dayOne
+        )
+        #expect(scope != .temporary)
+        #expect(scope == .outsideRepository)
+    }
+
+    @Test func collapsedTraversalOutOfTmp_isNotTemporary() {
+        let analysis = analyzeFilesystem(
+            ShellCommand(rawValue: "echo hi > /tmp/../etc/passwd"),
+            context: repo
+        )
+        guard case .filesystem(let action) = analysis else {
+            Issue.record("expected filesystem analysis")
+            return
+        }
+        #expect(action.primaryTarget?.canonical == "/etc/passwd")
+        #expect(action.primaryTarget?.scope == .outsideRepository)
+    }
+
+    @Test func unexpandedTmpdir_isUnknownNotTemporary() {
+        #expect(analyzeFilesystem(ShellCommand(rawValue: "echo hi > $TMPDIR/x")) == .unknown)
+        #expect(analyzeFilesystem(ShellCommand(rawValue: "rm -rf ${TMPDIR}/build")) == .unknown)
     }
 }

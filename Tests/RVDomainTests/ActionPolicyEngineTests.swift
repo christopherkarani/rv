@@ -265,12 +265,12 @@ struct ActionPolicyEngineTests {
     @Test func outOfRepoWrite_isIndependentHardDeny() {
         let write = ActionPolicyFixtures.filesystem(
             effects: [.filesystemOverwrite, .outsideRepositoryMutation],
-            path: "/tmp/outside-file",
+            path: "/opt/outside-file",
             scope: .outsideRepository
         )
         let delete = ActionPolicyFixtures.filesystem(
             effects: [.filesystemDelete, .outsideRepositoryMutation],
-            path: "/tmp/outside-file",
+            path: "/opt/outside-file",
             scope: .outsideRepository
         )
         let denied = ActionPolicyEngine.evaluate(action: write, context: shared)
@@ -293,10 +293,44 @@ struct ActionPolicyEngineTests {
         #expect(bound == .deny(ActionPolicyEngine.Builtin.outsideRepository))
     }
 
+    @Test func tempPathWrite_isHardAllowAndOverlayCanTighten() {
+        let write = ActionPolicyFixtures.filesystem(
+            effects: [.filesystemOverwrite],
+            path: "/tmp/rv-agent.txt",
+            scope: .temporary
+        )
+        let create = ActionPolicyFixtures.filesystem(
+            effects: [.filesystemCreate],
+            path: "/tmp/rv-agent",
+            scope: .temporary
+        )
+        let allowed = ActionPolicyEngine.evaluate(action: write, context: shared)
+        #expect(allowed.decision == .hardAllow)
+        #expect(allowed.explanation.ruleID == ActionPolicyEngine.Builtin.temporaryPath)
+        #expect(allowed.explanation.reason == ActionPolicyEngine.Builtin.temporaryPathReason)
+        #expect(ActionPolicyEngine.evaluate(action: create, context: shared).decision == .hardAllow)
+        let overlayAllow = ActionPolicyEngine.evaluate(
+            action: write,
+            context: shared,
+            policy: EffectiveActionPolicy(overlay: .allow)
+        )
+        #expect(overlayAllow.decision == .hardAllow)
+        let overlayDeny = Deny(
+            ruleID: RuleID(pack: PackID(rawValue: "repo.policy"), pattern: "no-temp-writes"),
+            reason: "Repository policy forbids temp writes."
+        )
+        let tightened = ActionPolicyEngine.evaluate(
+            action: write,
+            context: shared,
+            policy: EffectiveActionPolicy(overlay: .deny(overlayDeny))
+        )
+        #expect(tightened.decision == .hardDeny(overlayDeny))
+    }
+
     @Test func outOfRepoRead_isIndependentlyGovernable() {
         let read = ActionPolicyFixtures.filesystem(
             effects: [.filesystemRead],
-            path: "/tmp/outside-file",
+            path: "/opt/outside-file",
             scope: .outsideRepository
         )
         let allowed = ActionPolicyEngine.evaluate(action: read, context: shared)
@@ -316,7 +350,7 @@ struct ActionPolicyEngineTests {
             ActionPolicyEngine.evaluate(
                 action: ActionPolicyFixtures.filesystem(
                     effects: [.filesystemOverwrite, .outsideRepositoryMutation],
-                    path: "/tmp/outside-file",
+                    path: "/opt/outside-file",
                     scope: .outsideRepository
                 ),
                 context: shared,
