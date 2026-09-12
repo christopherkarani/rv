@@ -18,6 +18,7 @@ Living board for implement sessions. Do **not** re-grill. Do **not** load `docs/
 | Done | Hermes host (OPE-265) | Spend-first Ask. `HookHost.hermes`, `pre_tool_call` / `terminal`, exclusive `~/.hermes/plugins/rv-guard/`, confirm then spend. Never `action:approve`. |
 | Next | Claude CL-later-ask | Fenced: never emit official `permissionDecision: "ask"` (leftover-ask-as-permit). Host Ask is wrapper confirm-then-spend. |
 | In progress | File-tool secrets | Program `planning/2026-09-12-file-tool-secrets-implementable-program.md`. W1 file door landed. W2: `normal`/`strict`, `secret.allow_paths`, denial-only `rv blocks`. Grep / MCP still forbidden. |
+| Overlay | Guard maturity | Program `planning/2026-09-13-guard-maturity-implementable-program.md`. Honor never-slip + residual-risk. Does not start OPE-156. |
 | Next | Claude CL-later-mcp | Fenced: MCP tool-name / args policy. Not started. |
 
 `docs/factory/PLAN.md` wins product-law conflicts. It is a conflict arbiter, not mandatory full session-start reading.
