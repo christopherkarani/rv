@@ -325,6 +325,52 @@ struct ActionPolicyEngineTests {
         )
     }
 
+    @Test func unprobedWrite_isSemanticallyUncoveredNotUnresolved() {
+        let action = ActionPolicyFixtures.filesystem(
+            effects: [.filesystemOverwrite],
+            path: "file",
+            scope: .unprobed
+        )
+        let uncovered = ActionPolicyEngine.evaluate(action: action, context: shared)
+        #expect(uncovered.decision == .reviewEligible(fallback: ActionPolicyEngine.Builtin.uncovered))
+        #expect(uncovered.explanation.zone == .reviewEligible)
+
+        let packDeny = Deny(
+            ruleID: RuleID(pack: .coreFilesystem, pattern: "sample-write"),
+            reason: "pack denied the write."
+        )
+        let withPack = ActionPolicyEngine.evaluate(
+            action: action,
+            context: shared,
+            policy: EffectiveActionPolicy(packFallback: .deny(packDeny))
+        )
+        #expect(withPack.decision == .hardDeny(packDeny))
+        #expect(withPack.explanation.ruleID == packDeny.ruleID)
+
+        let overlay = ActionPolicyEngine.evaluate(
+            action: action,
+            context: shared,
+            policy: EffectiveActionPolicy(overlay: .allow)
+        )
+        #expect(overlay.decision == .reviewEligible(fallback: ActionPolicyEngine.Builtin.uncovered))
+    }
+
+    @Test func unprobedProtectedWrite_isStillHardDeny() {
+        let action = ActionPolicyFixtures.filesystem(
+            effects: [.filesystemOverwrite],
+            path: "/home/.ssh/config",
+            scope: .protectedPath
+        )
+        let denied = ActionPolicyEngine.evaluate(action: action, context: shared)
+        #expect(denied.decision == .hardDeny(ActionPolicyEngine.Builtin.protectedPath))
+        let overlay = ActionPolicyEngine.evaluate(
+            action: action,
+            context: shared,
+            policy: EffectiveActionPolicy(overlay: .allow)
+        )
+        #expect(overlay.decision == .hardDeny(ActionPolicyEngine.Builtin.protectedPath))
+    }
+
     @Test func unresolvedFilesystem_isFailClosed() {
         let unknown = ActionPolicyFixtures.filesystem(
             effects: [.filesystemOverwrite, .unresolvedFilesystem],

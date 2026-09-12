@@ -134,6 +134,38 @@ struct ApplyFilesystemSemanticsTests {
         #expect(deny.ruleID == ActionPolicyEngine.Builtin.unresolvedFilesystem.ruleID)
     }
 
+    @Test func unprobedOrdinaryWrite_staysPackAllow() throws {
+        let pack = try runFilesystemPack("echo hi > file")
+        #expect(pack.decision == .allow)
+        let composed = applyFilesystemSemantics(
+            pack: pack,
+            command: ShellCommand(rawValue: "echo hi > file"),
+            context: .unprobed()
+        )
+        #expect(composed.decision == .allow)
+        #expect(composed.analysis.filesystemAction?.primaryTarget?.scope == .unprobed)
+        #expect(
+            composed.analysis.filesystemAction?.effects.kinds.contains(.unresolvedFilesystem)
+                == false
+        )
+    }
+
+    @Test func unprobedProtectedPath_isStillHardDeny() throws {
+        let pack = try runFilesystemPack("rm ~/.ssh/config", secrets: .empty)
+        #expect(pack.decision == .allow)
+        let composed = applyFilesystemSemantics(
+            pack: pack,
+            command: ShellCommand(rawValue: "rm ~/.ssh/config"),
+            context: .unprobed()
+        )
+        guard case .deny(let deny) = composed.decision else {
+            Issue.record("unprobed catalog mutation must deny, got \(composed.decision)")
+            return
+        }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.protectedPath.ruleID)
+        #expect(composed.analysis.filesystemAction?.primaryTarget?.scope == .protectedPath)
+    }
+
     @Test func generatedDelete_staysAllowUnderDefaultPolicy() throws {
         let pack = try runFilesystemPack("rm .build/artifact")
         #expect(pack.decision == .allow)

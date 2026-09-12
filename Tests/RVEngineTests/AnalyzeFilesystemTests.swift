@@ -184,6 +184,45 @@ struct AnalyzeFilesystemTests {
         }
     }
 
+    @Test func liveEmptyContext_classifiesMissingRootAsUnknown() {
+        let analysis = analyzeFilesystem(ShellCommand(rawValue: "echo hi > file"))
+        guard case .filesystem(let action) = analysis else {
+            Issue.record("expected overwrite, got \(analysis)")
+            return
+        }
+        #expect(action.primaryTarget?.scope == .unknown)
+        #expect(action.effects.kinds.contains(.unresolvedFilesystem))
+    }
+
+    @Test func unprobedContext_classifiesMissingRootAsUnprobed() {
+        let analysis = analyzeFilesystem(
+            ShellCommand(rawValue: "echo hi > file"),
+            context: .unprobed()
+        )
+        guard case .filesystem(let action) = analysis else {
+            Issue.record("expected overwrite, got \(analysis)")
+            return
+        }
+        #expect(action.primaryTarget?.scope == .unprobed)
+        #expect(action.effects.kinds.contains(.unresolvedFilesystem) == false)
+        #expect(action.effects.kinds.contains(.filesystemOverwrite))
+    }
+
+    @Test func unprobedCatalogHit_isProtectedPath() {
+        let analysis = analyzeFilesystem(
+            ShellCommand(rawValue: "rm ~/.ssh/config"),
+            context: .unprobed()
+        )
+        guard case .filesystem(let action) = analysis else {
+            Issue.record("expected delete, got \(analysis)")
+            return
+        }
+        #expect(action.primaryTarget?.scope == .protectedPath)
+        #expect(action.effects.kinds.contains(.protectedPathMutation))
+        #expect(action.effects.kinds.contains(.unresolvedFilesystem) == false)
+        #expect(action.primaryTarget?.protectedMatch?.pattern == "home-ssh")
+    }
+
     @Test func uncertainResolution_isUnknownNotInside() {
         let context = FilesystemAnalysisContext(
             workingDirectory: WorkingDirectory(validating: "/repo"),
