@@ -76,6 +76,18 @@ _Avoid_: ExplainStage
 The allow-path scan of path-shaped operands on the matching view against `SecretPathCatalog`. Deny `rule_id` is `core.secrets:<pattern>`. Not a catalog pack. Not a third day-one ICU pack. Does not rewrite matching view.
 _Avoid_: secret pack, path sandbox, realpath
 
+**File tool**:
+Read / Edit / Write (and host aliases `read_file`, `write_file`, `edit_file`). Catalog match on the extracted path. Same `SecretPathCatalog`. Not pack evaluate. Not Grep, Glob, search, MCP, or `apply_patch`. **Read / Edit / Write secret-path** only.
+_Avoid_: file firewall, fake `cat <path>`
+
+**Safety level**:
+`normal` (default) or `strict`. Machine config plus `.rv/policy.toml` `safety.level`. Restrict-only overlay: repo may raise `normal` → `strict`; repo cannot lower machine `strict`. Does not enable extra packs.
+_Avoid_: third preset, pack-ID posture
+
+**Block ledger**:
+Denial-only list of hook/TTY denials (timestamp, host, tool, `rule_id`, category, redacted path with `$HOME` → `~`). Default on. Off with `blocks.enabled: false` in `~/.config/rv/config.json`. Not allow history. Not `os_log` command text. CLI: `rv blocks`.
+_Avoid_: audit log, allow history, RVHistory as a product
+
 **Session forensics**:
 Offline `rv scan` / `rv scan sessions`: read known host session stores (or a path of known layouts), extract shell candidates, run the same `evaluate`, list deny-only findings. Not `RVHistory`, not repo/CI `rv scan repo`, not live hook enforcement. Fence: `docs/factory/specs/phase-4-session-scan.md`.
 _Avoid_: history scan, recon, audit log (unless meaning this CLI)

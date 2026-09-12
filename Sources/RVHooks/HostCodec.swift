@@ -26,19 +26,22 @@ public struct HookRequest: Equatable, Sendable {
     public var cwd: WorkingDirectory?
     public var session: SessionID?
     public var hostAsk: HostAskHookIntent?
+    public var file: FileToolAction?
 
     public init(
         host: HookHost,
         command: ShellCommand,
         cwd: WorkingDirectory? = nil,
         session: String? = nil,
-        hostAsk: HostAskHookIntent? = nil
+        hostAsk: HostAskHookIntent? = nil,
+        file: FileToolAction? = nil
     ) {
         self.host = host
         self.command = command
         self.cwd = cwd
         self.session = session.flatMap { SessionID(validating: $0) }
         self.hostAsk = hostAsk
+        self.file = file
     }
 }
 

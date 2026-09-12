@@ -60,14 +60,14 @@ private func runOpenCodePluginContract(_ source: String) async throws -> OpenCod
     )
 }
 
-@Test func grokTemplate_bakesRvPathIntoBashMatcher() throws {
+@Test func grokTemplate_bakesRvPathWithoutMatcher() throws {
     let source = try adapterSource(for: .grok, rvPath: "/opt/rv")
     let object = try JSONSerialization.jsonObject(with: Data(source.utf8))
     let root = try #require(object as? [String: Any])
     let hooks = try #require(root["hooks"] as? [String: Any])
     let preToolUse = try #require(hooks["PreToolUse"] as? [[String: Any]])
     let entry = try #require(preToolUse.first)
-    #expect(entry["matcher"] as? String == "Bash")
+    #expect(entry["matcher"] == nil)
     let commands = try #require(entry["hooks"] as? [[String: Any]])
     #expect(commands.first?["command"] as? String == "/opt/rv hook --host grok")
 }

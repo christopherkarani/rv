@@ -56,13 +56,25 @@ func claudeDecode_extractsShellCommand(_ file: String, expected: String) throws 
 }
 
 @Test(arguments: [
-    "allow-non-shell-read.json",
-    "allow-non-shell-edit.json",
-    "allow-non-shell-write.json",
     "allow-non-shell-mcp.json",
 ])
 func claudeDecode_otherToolOrEventIsForeign(_ file: String) throws {
     #expect(codec.decode(try claudeFixture(file)) == .foreign)
+}
+
+@Test(arguments: [
+    ("allow-non-shell-read.json", FileToolKind.read, "/tmp/rv-hook-fixture/README.md"),
+    ("allow-non-shell-edit.json", FileToolKind.edit, "/tmp/rv-hook-fixture/README.md"),
+    ("allow-non-shell-write.json", FileToolKind.write, "/tmp/rv-hook-fixture/README.md"),
+    ("deny-file-env.json", FileToolKind.read, "/tmp/rv-oracle/.env"),
+])
+func claudeDecode_fileToolsExtractPath(_ file: String, kind: FileToolKind, path: String) throws {
+    guard case .request(let request) = codec.decode(try claudeFixture(file)) else {
+        Issue.record("expected .request for \(file)")
+        return
+    }
+    #expect(request.file?.kind == kind)
+    #expect(request.file?.path.rawValue == path)
 }
 
 @Test func claudeDecode_emptyCommandIsMissingCommand() throws {

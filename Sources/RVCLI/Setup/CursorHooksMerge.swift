@@ -9,6 +9,7 @@ enum CursorHooksMerge {
     static let versionKey = "version"
     static let hooksRootKey = "hooks"
     static let beforeShellKey = "beforeShellExecution"
+    static let preToolUseKey = "preToolUse"
     static let fingerprint = "rv-guard.py"
     static let timeout = 5
     static let schemaVersion = 1
@@ -91,20 +92,21 @@ enum CursorHooksMerge {
         return object
     }
 
-    private static func stripFingerprinted(from root: [String: Any]) -> [String: Any] {
-        guard var hooksRoot = root[hooksRootKey] as? [String: Any],
-              let beforeShell = hooksRoot[beforeShellKey] as? [[String: Any]]
+    static func hasFileToolEntry(in root: [String: Any]) -> Bool {
+        guard let hooksRoot = root[hooksRootKey] as? [String: Any],
+              let preToolUse = hooksRoot[preToolUseKey] as? [[String: Any]]
         else {
+            return false
+        }
+        return preToolUse.contains(where: isFingerprintedHook)
+    }
+
+    private static func stripFingerprinted(from root: [String: Any]) -> [String: Any] {
+        guard var hooksRoot = root[hooksRootKey] as? [String: Any] else {
             return root
         }
-
-        let nextEntries = beforeShell.filter { isFingerprintedHook($0) == false }
-
-        if nextEntries.isEmpty {
-            hooksRoot.removeValue(forKey: beforeShellKey)
-        } else {
-            hooksRoot[beforeShellKey] = nextEntries
-        }
+        hooksRoot = stripFingerprinted(fromHooksRoot: hooksRoot, key: beforeShellKey)
+        hooksRoot = stripFingerprinted(fromHooksRoot: hooksRoot, key: preToolUseKey)
 
         var next = root
         if hooksRoot.isEmpty {
@@ -115,12 +117,32 @@ enum CursorHooksMerge {
         return next
     }
 
+    private static func stripFingerprinted(
+        fromHooksRoot hooksRoot: [String: Any],
+        key: String
+    ) -> [String: Any] {
+        guard let entries = hooksRoot[key] as? [[String: Any]] else {
+            return hooksRoot
+        }
+        let nextEntries = entries.filter { isFingerprintedHook($0) == false }
+        var next = hooksRoot
+        if nextEntries.isEmpty {
+            next.removeValue(forKey: key)
+        } else {
+            next[key] = nextEntries
+        }
+        return next
+    }
+
     private static func insertRVEntry(into root: [String: Any], adapterPath: String) -> [String: Any] {
         var next = root
         var hooksRoot = next[hooksRootKey] as? [String: Any] ?? [:]
         var beforeShell = hooksRoot[beforeShellKey] as? [[String: Any]] ?? []
         beforeShell.append(rvEntry(adapterPath: adapterPath))
         hooksRoot[beforeShellKey] = beforeShell
+        var preToolUse = hooksRoot[preToolUseKey] as? [[String: Any]] ?? []
+        preToolUse.append(rvEntry(adapterPath: adapterPath))
+        hooksRoot[preToolUseKey] = preToolUse
         next[hooksRootKey] = hooksRoot
         return next
     }

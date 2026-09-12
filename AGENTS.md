@@ -37,7 +37,7 @@ Gate: `tools/gate.sh` (runs `preflight` + filtered tests via `tools/swift-6.3.3`
 - One user command: `rv`. Do not present `rv-cli` as a CLI or install hero. It is the on-disk operator sibling the hook client execs. Vocabulary: `CONTEXT.md`.
 - No `RV_BYPASS` or any env a hook child honors to skip evaluate.
 - No allow-because-XPC-missed (down or skew must in-process evaluate).
-- No Read/Edit/MCP hooks in v1.
+- Shell stays the destructive-command door. **Read / Edit / Write secret-path** only is allowed. Grep / Glob / MCP stay forbidden.
 - v1 hook path: host deny text is the block; Pi card / OpenCode toast are display-only. 0.2 host Ask (Pi, OpenCode, Claude, Hermes) before Auto-review: `docs/architecture/02.md`.
 - No foreign hook writes.
 - No live-HOME tests.

@@ -4,10 +4,21 @@ public struct PolicyDocument: Sendable, Equatable {
 
     public var schemaVersion: Int
     public var rules: [PolicyDocumentRule]
+    /// Absent means this layer does not speak. Overlay may raise `normal` → `strict`.
+    public var safetyLevel: SafetyLevel?
+    /// Literal file or directory paths. Host-auth catalog rows are never exempted.
+    public var allowPaths: [String]
 
-    public init(schemaVersion: Int = currentSchemaVersion, rules: [PolicyDocumentRule] = []) {
+    public init(
+        schemaVersion: Int = currentSchemaVersion,
+        rules: [PolicyDocumentRule] = [],
+        safetyLevel: SafetyLevel? = nil,
+        allowPaths: [String] = []
+    ) {
         self.schemaVersion = schemaVersion
         self.rules = rules
+        self.safetyLevel = safetyLevel
+        self.allowPaths = allowPaths
     }
 
     public func typedRules(origin: TypedRuleOrigin) -> [TypedRule] {

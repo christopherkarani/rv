@@ -17,7 +17,7 @@ Living board for implement sessions. Do **not** re-grill. Do **not** load `docs/
 | Done | OpenClaw host (OPE-266) | Host only, no Ask. `HookHost.openclaw`, `before_tool_call` / `exec`, exclusive `~/.openclaw/extensions/rv-guard/`, fail-closed sqlite scan. |
 | Done | Hermes host (OPE-265) | Spend-first Ask. `HookHost.hermes`, `pre_tool_call` / `terminal`, exclusive `~/.hermes/plugins/rv-guard/`, confirm then spend. Never `action:approve`. |
 | Next | Claude CL-later-ask | Fenced: never emit official `permissionDecision: "ask"` (leftover-ask-as-permit). Host Ask is wrapper confirm-then-spend. |
-| Next | Claude CL-later-secrets | Fenced: Read/Edit/Write secret-path guards. Not started. |
+| In progress | File-tool secrets | Program `planning/2026-09-12-file-tool-secrets-implementable-program.md`. W1 file door landed. W2: `normal`/`strict`, `secret.allow_paths`, denial-only `rv blocks`. Grep / MCP still forbidden. |
 | Next | Claude CL-later-mcp | Fenced: MCP tool-name / args policy. Not started. |
 
 `docs/factory/PLAN.md` wins product-law conflicts. It is a conflict arbiter, not mandatory full session-start reading.
@@ -37,7 +37,7 @@ Living board for implement sessions. Do **not** re-grill. Do **not** load `docs/
 | `specs/phase-4-session-scan.md` | Implemented (T1–T10). Session forensics `rv scan`. Spec: [`spec/spec-architecture-session-scan.md`](../../spec/spec-architecture-session-scan.md) |
 | `specs/phase-5-size-speed.md` | Implementing (T10–T14) |
 | [`spec/spec-architecture-c-hook-pipe.md`](../../spec/spec-architecture-c-hook-pipe.md) | Implemented (T1–T5). C hook pipe + Swift miss. Supersedes the T15 thin-Swift fence. |
-| [`specs/claude-host.md`](specs/claude-host.md) | Implemented (CL-T1–T5). Fenced later: CL-later-ask, CL-later-secrets, CL-later-mcp. |
+| [`specs/claude-host.md`](specs/claude-host.md) | Implemented (CL-T1–T5). File-tool secrets in progress (this program). Fenced later: CL-later-ask, CL-later-mcp. |
 | [`specs/cli-thin.md`](specs/cli-thin.md) | Implemented (CL1, CL3, CL4) on `feat/cli-thin` (#150). CL2 withdrawn (`HookRun` gone; do not fold miss into `HookDoor`). |
 
 ## Parallel rules (reminder)

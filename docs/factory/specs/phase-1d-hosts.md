@@ -27,7 +27,7 @@ After this phase a real-HOME hero install (`curl | sh`) plus `rv setup` is what 
 - TTY `allow-once` mint / consume (T8). Deny copy may name `rv allow-once`. Do not print a fabricated code. **No `RV_BYPASS`.**
 - Remaining catalog packs or `rv packs` (T9). Day-one packs stay `core.git` + `core.filesystem`.
 - Claude, Codex, Gemini, Copilot, Cursor, Hermes, Antigravity, or any other host.
-- Read / Edit / Write / MCP / `apply_patch` / `user_bash` hooks.
+- Grep / Glob / MCP / `apply_patch` / `user_bash` hooks. Grok **Read / Edit / Write secret-path** is the named file-tool exception (Claude / Cursor same exception in their host contracts).
 - Pi `ctx.ui.confirm` / `notify` as the deny path. OpenCode toast as the deny path. Display-only Pi `registerMessageRenderer` and OpenCode `client.tui.showToast` are allowed (not the deny path).
 - Host Allow button, leftover-ask-as-permit, `permission.ask` as a permit channel.
 - Project-local hooks (`.grok/hooks/`, `.pi/extensions/`, `.opencode/plugins/`) in v1.
@@ -85,7 +85,6 @@ Personal hooks are every `*.json` under `~/.grok/hooks/`. T6 writes **only** `$H
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
@@ -102,7 +101,7 @@ Personal hooks are every `*.json` under `~/.grok/hooks/`. T6 writes **only** `$H
 Rules:
 
 - Event key in the **file** is `PreToolUse`. The **stdin** event name is `pre_tool_use`.
-- `matcher` is `"Bash"`. Grok aliases Claude `Bash` → `run_terminal_command` and still matches `Bash`. An omitted matcher would also fire on Read/Edit/MCP — **forbidden**.
+- Omit `matcher`. Grok shell aliases: `run_terminal_command` / `run_terminal_cmd` / `Bash`. File-tool aliases: `read_file` / `Read` / `write_file` / `Write` / `Edit`. Codec evaluates those; Grep / Glob / MCP stay foreign allow. Host is fail-open if the hook emits nothing.
 - `type` is `"command"` only. No `"http"`.
 - `timeout` is `5` (Grok’s documented default). The hook must finish well under that. Do not raise it to hide a slow evaluate.
 - `command` is an absolute path to the installed `rv` plus `hook --host grok`. Write `$HOME/.local/bin/rv` at setup time (curl install). Do not probe Homebrew.
@@ -220,7 +219,8 @@ Checked-in under `Tests/RVHooksTests/Fixtures/grok/`. Each case is stdin file + 
 | `allow-git-status.json` | `toolName: run_terminal_command`, `toolInput.command: git status` | empty stdout, exit 0 |
 | `deny-git-reset-hard.json` | `command: git reset --hard` | stdout JSON `decision=deny`, `reason` equals T2 `hostDenyText` for that result (contains `core.git/reset-hard` or T1’s locked `RuleID` display, and `rv allow-once`), exit 0 |
 | `deny-reason-is-one-line.json` | same deny | `reason` has no `\\n`, no `═`, no CSI |
-| `allow-non-shell-read.json` | `toolName: read_file` (or `Read`) | empty stdout, exit 0, **evaluate not called** |
+| `allow-non-shell-read.json` | `toolName: read_file` of an ordinary project file | empty stdout, exit 0, **pack evaluate not called** |
+| `deny-file-env.json` | `toolName: read_file` of a catalog path | deny JSON naming `core.secrets`, pack evaluate not called |
 | `deny-empty-command.json` | `toolInput: {}` | deny JSON, reason is `malformedHookSentence(.missingCommand)`, no pack `rule`/`next`, **evaluate not called**, exit 0 |
 | `allow-legacy-run-terminal-cmd.json` | `toolName: run_terminal_cmd`, `git status` | empty stdout, exit 0 |
 | `ignore-passive-session-start.json` | `hookEventName: session_start` | empty stdout, exit 0 |
@@ -472,7 +472,7 @@ Host adapter resources live in `Sources/RVHooks/Resources/hosts/` (`rv.json.tmpl
 | Case | Assert |
 |---|---|
 | Hostless | no `~/.grok`, `~/.pi`, `~/.config/opencode` created; exit 0; stdout has one line mentioning `rv setup` |
-| Grok only | `$HOME/.grok` pre-created; writes `hooks/rv.json` equal to the RVHooks Grok adapter rendered with the baked `rvPath`; leftover `__RV_BINARY__` absent; no other files under `.grok`. Adapter-contract (`PreToolUse` / `matcher: Bash` / `rv hook --host grok`) is `Tests/RVHooksTests/AdapterHookTests` |
+| Grok only | `$HOME/.grok` pre-created; writes `hooks/rv.json` equal to the RVHooks Grok adapter rendered with the baked `rvPath`; leftover `__RV_BINARY__` absent; no other files under `.grok`. Adapter-contract (`PreToolUse` / no `matcher` / `rv hook --host grok`) is `Tests/RVHooksTests/AdapterHookTests` |
 | Pi only | writes `rv-guard.ts` equal to the RVHooks Pi adapter rendered with the baked `rvPath`; no `settings.json` edit |
 | OpenCode only | writes `rv-guard.js` equal to the RVHooks OpenCode adapter rendered with the baked `rvPath` |
 | Occupied `rv.json` | pre-write foreign JSON at owned path; setup skips; file bytes unchanged; one skip line |
@@ -600,7 +600,7 @@ Do not add Claude/Codex codecs. Do not add files under a ryk tree.
 - `RV_BYPASS` or any env the hook child honors to skip evaluate.
 - Allowing because `rvd` is down or skewed (in-process evaluate).
 - Treating Grok `permissionMode: bypassPermissions` as skip-evaluate.
-- Hooking Read / Edit / MCP / `user_bash` / `apply_patch`.
+- Hooking Grep / Glob / MCP / `user_bash` / `apply_patch`. Read / Edit / Write secret-path only is the named file-tool exception on Grok (and Claude / Cursor).
 - Pi confirm/notify as deny UX, Pi renderer as the deny path, OpenCode toast as the deny path.
 - Host Allow button / `permission.ask` permit UI / leftover-ask rewrite.
 - Claude `hookSpecificOutput` as the Grok/Pi/OpenCode deny document.

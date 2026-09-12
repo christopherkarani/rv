@@ -12,6 +12,8 @@ enum ClaudeSettingsMerge {
     static let fingerprintLegacy = "hook --host claude"
     static let fingerprint = "rv-guard.py"
     static let matcher = "Bash"
+    static let fileMatchers = ["Read", "Edit", "Write"]
+    static var matchers: [String] { [matcher] + fileMatchers }
     static let hookType = "command"
     /// Claude waits this long for the wrapper, including the human confirm dialog.
     static let timeout = 90
@@ -91,7 +93,7 @@ enum ClaudeSettingsMerge {
         return command.contains(fingerprintLegacy) && command.contains(fingerprint) == false
     }
 
-    static func rvEntry(rvPath: String, adapterPath: String) -> [String: Any] {
+    static func rvEntry(rvPath: String, adapterPath: String, matcher: String) -> [String: Any] {
         [
             "matcher": matcher,
             "hooks": [
@@ -102,6 +104,11 @@ enum ClaudeSettingsMerge {
                 ] as [String: Any],
             ],
         ]
+    }
+
+    static func hasFileToolMatchers(in root: [String: Any]) -> Bool {
+        let present = Set(locateFingerprintedHooks(in: root).compactMap { $0.entry["matcher"] as? String })
+        return Set(fileMatchers).isSubset(of: present)
     }
 
     /// Returns merged settings bytes and whether content changed.
@@ -154,7 +161,10 @@ enum ClaudeSettingsMerge {
         var hasStaleLegacy = false
         var hasNonCurrentGuard = false
         for item in located {
-            if item.entry["matcher"] as? String == matcher, matchesCurrentHook(item.hook) {
+            if let itemMatcher = item.entry["matcher"] as? String,
+               matchers.contains(itemMatcher),
+               matchesCurrentHook(item.hook)
+            {
                 continue
             }
             allCurrent = false
@@ -172,7 +182,11 @@ enum ClaudeSettingsMerge {
             else {
                 return .occupied
             }
-            return .wired(bakedPath: bakedPath)
+            let present = Set(located.compactMap { $0.entry["matcher"] as? String })
+            if Set(matchers).isSubset(of: present) {
+                return .wired(bakedPath: bakedPath)
+            }
+            return .outdated
         }
         if hasNonCurrentGuard {
             return .occupied
@@ -254,7 +268,9 @@ enum ClaudeSettingsMerge {
         var next = root
         var hooksRoot = next[hooksRootKey] as? [String: Any] ?? [:]
         var preToolUse = hooksRoot[preToolUseKey] as? [[String: Any]] ?? []
-        preToolUse.append(rvEntry(rvPath: rvPath, adapterPath: adapterPath))
+        for name in matchers {
+            preToolUse.append(rvEntry(rvPath: rvPath, adapterPath: adapterPath, matcher: name))
+        }
         hooksRoot[preToolUseKey] = preToolUse
         next[hooksRootKey] = hooksRoot
         return next

@@ -25,6 +25,8 @@ public enum HelpTopic: Equatable, Sendable {
     case scan
     case policy
     case allowlist
+    case safety
+    case blocks
 }
 
 /// Intercepts help argv before ArgumentParser so passthrough commands still get help.
@@ -114,6 +116,10 @@ public enum HelpDispatch {
             return .policy
         case "allowlist":
             return .allowlist
+        case "safety":
+            return rest.allSatisfy(isSafetyToken) ? .safety : nil
+        case "blocks":
+            return rest.allSatisfy(isFormatFlag) ? .blocks : nil
         case "help":
             return rest.isEmpty ? .help : nil
         default:
@@ -141,6 +147,10 @@ public enum HelpDispatch {
 
     private static func isTestFlag(_ token: String) -> Bool {
         token == "--explain" || isFormatFlag(token)
+    }
+
+    private static func isSafetyToken(_ token: String) -> Bool {
+        token == "normal" || token == "strict" || isFormatFlag(token)
     }
 
     private static func isHookPath(_ tokens: [String]) -> Bool {

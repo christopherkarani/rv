@@ -36,6 +36,12 @@ import RVTheme
     #expect(HelpDispatch.topic(arguments: ["policy", "--help"]) == .policy)
     #expect(HelpDispatch.topic(arguments: ["help", "policy", "draft"]) == .policy)
     #expect(HelpDispatch.topic(arguments: ["allowlist", "--help"]) == .allowlist)
+    #expect(HelpDispatch.topic(arguments: ["safety", "--help"]) == .safety)
+    #expect(HelpDispatch.topic(arguments: ["help", "safety"]) == .safety)
+    #expect(HelpDispatch.topic(arguments: ["safety", "strict", "--help"]) == .safety)
+    #expect(HelpDispatch.topic(arguments: ["blocks", "--help"]) == .blocks)
+    #expect(HelpDispatch.topic(arguments: ["help", "blocks"]) == .blocks)
+    #expect(HelpDispatch.topic(arguments: ["blocks", "--json", "--help"]) == .blocks)
 }
 
 @Test func helpTopic_doesNotStealCommandArgs() {
@@ -135,7 +141,10 @@ import RVTheme
 }
 
 @Test func helpText_leafPagesOmitTitleAndNext() {
-    for topic: HelpTopic in [.test, .explain, .doctor, .service, .serviceStatus, .hook, .help, .packs, .scan, .policy, .allowlist] {
+    for topic: HelpTopic in [
+        .test, .explain, .doctor, .service, .serviceStatus, .hook, .help,
+        .packs, .scan, .policy, .allowlist, .safety, .blocks,
+    ] {
         let text = HelpDispatch.text(topic, palette: colorOffPalette)
         #expect(text.hasPrefix("Usage") || text.hasPrefix("\n") == false)
         #expect(text.contains("Next") == false)

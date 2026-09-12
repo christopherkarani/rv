@@ -22,6 +22,8 @@ enum HelpCatalog {
         case .scan: scan
         case .policy: policy
         case .allowlist: allowlist
+        case .safety: safety
+        case .blocks: blocks
         }
     }
 
@@ -42,6 +44,8 @@ enum HelpCatalog {
                 HelpRow(name: "explain", description: "Why something was allowed or blocked"),
                 HelpRow(name: "allow-once", description: "Redeem the six-character code from a hook deny"),
                 HelpRow(name: "scan", description: "Session forensics for deny-only findings"),
+                HelpRow(name: "safety", description: "Show or set normal or strict"),
+                HelpRow(name: "blocks", description: "List recent denials"),
                 HelpRow(name: "service", description: "Is rvd running, down, or skewed"),
             ]),
             HelpSection(heading: "Advanced", rows: [
@@ -228,6 +232,58 @@ enum HelpCatalog {
         examples: [
             "rv doctor",
             "rv doctor --json",
+        ]
+    )
+
+    static let safety = HelpViewModel(
+        title: "",
+        blurb: "",
+        sections: [
+            HelpSection(heading: "Usage", rows: [
+                HelpRow(name: "rv safety"),
+                HelpRow(name: "rv safety normal"),
+                HelpRow(name: "rv safety strict"),
+            ]),
+            HelpSection(heading: "Notes", rows: [
+                HelpRow(
+                    name: "normal",
+                    description: "File-tool secret paths plus today's shell evaluate"
+                ),
+                HelpRow(
+                    name: "strict",
+                    description: "Also deny ls / test / stat of a catalog path"
+                ),
+            ]),
+        ],
+        examples: [
+            "rv safety",
+            "rv safety strict",
+        ]
+    )
+
+    static let blocks = HelpViewModel(
+        title: "",
+        blurb: "",
+        sections: [
+            HelpSection(heading: "Usage", rows: [
+                HelpRow(name: "rv blocks [--json] [--robot] [--plain] [--no-color]"),
+            ]),
+            HelpSection(heading: "Flags", rows: [
+                HelpRow(name: "--json", description: "JSON array on stdout"),
+                HelpRow(name: "--robot", description: "JSON array on stdout"),
+                HelpRow(name: "--plain", description: "Disable color"),
+                HelpRow(name: "--no-color", description: "Disable color"),
+            ]),
+            HelpSection(heading: "Notes", rows: [
+                HelpRow(
+                    name: "ledger",
+                    description: "Denial-only. Paths replace the home prefix with ~"
+                ),
+            ]),
+        ],
+        examples: [
+            "rv blocks",
+            "rv blocks --json",
         ]
     )
 

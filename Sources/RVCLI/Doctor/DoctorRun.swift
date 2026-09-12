@@ -1,5 +1,6 @@
 import Foundation
 import RVDomain
+import RVHistory
 import RVHooks
 import RVIPC
 import RVPolicy
@@ -80,16 +81,86 @@ enum DoctorRun {
             service: health.service,
             packs: health.packs,
             hosts: HookHost.setupSlotOrder.map { host in
-                DoctorHostView(
+                let installation = installations.installation(for: host)
+                return DoctorHostView(
                     host: host,
                     state: doctorHostState(
-                        installations.installation(for: host),
+                        installation,
+                        fileManager: environment.fileManager
+                    ),
+                    fileTools: fileToolsState(
+                        host: host,
+                        installation: installation,
+                        paths: paths,
                         fileManager: environment.fileManager
                     )
                 )
             },
-            config: configState(path: paths.configDirectory, fileManager: environment.fileManager)
+            config: configState(path: paths.configDirectory, fileManager: environment.fileManager),
+            safety: SafetyStore.loadEffective(
+                home: environment.home,
+                workspace: URL(
+                    fileURLWithPath: environment.fileManager.currentDirectoryPath,
+                    isDirectory: true
+                )
+            ),
+            blocksEnabled: DenialLedgerPreferences.isEnabled(
+                inConfigDirectory: URL(fileURLWithPath: paths.configDirectory, isDirectory: true)
+            )
         )
+    }
+
+    private static func fileToolsState(
+        host: HookHost,
+        installation: HostAdapterInstallation,
+        paths: OwnedPaths,
+        fileManager: FileManager
+    ) -> DoctorFileToolsState {
+        switch host {
+        case .claude, .cursor, .grok:
+            break
+        case .pi, .opencode, .openclaw, .hermes, .codex:
+            return .notApplicable
+        }
+        guard case .wired = installation else {
+            return .notApplicable
+        }
+        switch host {
+        case .claude:
+            guard let data = fileManager.contents(atPath: paths.claudeSettings),
+                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  ClaudeSettingsMerge.hasFileToolMatchers(in: root)
+            else {
+                return .shellOnly
+            }
+            return .wired
+        case .cursor:
+            guard let data = fileManager.contents(atPath: paths.cursorHooksJSON),
+                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  CursorHooksMerge.hasFileToolEntry(in: root)
+            else {
+                return .shellOnly
+            }
+            return .wired
+        case .grok:
+            guard let data = fileManager.contents(atPath: paths.grokHook) else {
+                return .shellOnly
+            }
+            return grokFileToolsWired(data) ? .wired : .shellOnly
+        case .pi, .opencode, .openclaw, .hermes, .codex:
+            return .notApplicable
+        }
+    }
+
+    private static func grokFileToolsWired(_ data: Data) -> Bool {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let hooks = root["hooks"] as? [String: Any],
+              let pre = hooks["PreToolUse"] as? [[String: Any]],
+              let first = pre.first
+        else {
+            return false
+        }
+        return first["matcher"] == nil
     }
 
     /// Miss path needs sibling `rv-cli`. Missing or non-exec is `.broken`, not `.wired`.

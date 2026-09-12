@@ -119,6 +119,12 @@ private let dayOneRules: [SecretPathRule] = [
     dayOneRule("home-keyrings", .homeSuffix([".local", "share", "keyrings"]), .keychain),
     dayOneRule("home-password-store", .homeSuffix([".password-store"]), .keychain),
     dayOneRule("home-gh", .homeSuffix([".config", "gh"]), .credentials),
+    dayOneRule("host-claude-auth", .hostAuth([".claude", ".credentials.json"]), .host),
+    dayOneRule("host-cursor-auth", .hostAuth([".cursor", "auth.json"]), .host),
+    dayOneRule("host-cursor-config-auth", .hostAuth([".config", "cursor", "auth.json"]), .host),
+    dayOneRule("host-codex-auth", .hostAuth([".codex", "auth.json"]), .host),
+    dayOneRule("host-hermes-auth", .hostAuth([".hermes", "auth.json"]), .host),
+    dayOneRule("host-openclaw-auth", .hostAuth([".openclaw", "credentials"]), .host),
 ]
 
 // Matching helpers live in SecretPathMatching.swift — single matcher for catalog and policy.

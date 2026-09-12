@@ -128,7 +128,11 @@ public struct ServiceClient: Sendable {
         try await store.insertGranted(matchingView: matchingView, cwd: cwd, now: now)
     }
 
-    private func inProcessApply(command: ShellCommand, cwd: WorkingDirectory?) async -> EvaluationResult {
+    private func inProcessApply(
+        command: ShellCommand,
+        cwd: WorkingDirectory?,
+        host: String = "tty"
+    ) async -> EvaluationResult {
         let now = clock()
         let baseDirectory = store.baseDirectory
         return await door.run(
@@ -141,7 +145,8 @@ public struct ServiceClient: Sendable {
             allowlist: {
                 AllowlistStore(baseDirectory: baseDirectory)
                     .loadUserSnapshot(workspacePath: cwd.map(\.rawValue), now: now)
-            }
+            },
+            host: host
         )
     }
 
@@ -203,7 +208,20 @@ public struct ServiceClient: Sendable {
                 host: host,
                 stdin: stdin,
                 evaluate: { command, cwd in
-                    await self.inProcessApply(command: command, cwd: cwd)
+                    await self.inProcessApply(
+                        command: command,
+                        cwd: cwd,
+                        host: host.rawValue
+                    )
+                },
+                evaluateFile: { action, cwd in
+                    self.door.runFile(
+                        action,
+                        home: self.home,
+                        cwd: cwd,
+                        host: host.rawValue,
+                        now: self.clock()
+                    )
                 },
                 spendHostAsk: { command, cwd in
                     await self.spendHostAsk(command: command, cwd: cwd)

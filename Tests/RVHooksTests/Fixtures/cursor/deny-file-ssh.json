@@ -1,0 +1,6 @@
+{
+  "hook_event_name": "preToolUse",
+  "tool_name": "Read",
+  "tool_input": { "path": "/tmp/rv-oracle/.ssh/id_ed25519" },
+  "cwd": "/tmp/rv-oracle"
+}

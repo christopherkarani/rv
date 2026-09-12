@@ -16,15 +16,6 @@ public struct CursorHostCodec: HostCodec {
         else {
             return .malformed(.unreadable)
         }
-        switch classify(envelope) {
-        case .foreign:
-            return .foreign
-        case .shell:
-            break
-        }
-        guard let command = shellCommand(in: envelope), command.isEmpty == false else {
-            return .malformed(.missingCommand)
-        }
         let cwdText = firstNonEmpty(
             envelope.toolInput?.workingDirectory,
             envelope.cwd,
@@ -36,6 +27,31 @@ public struct CursorHostCodec: HostCodec {
             envelope.sessionId,
             envelope.generationId
         )
+        switch classify(envelope) {
+        case .foreign:
+            return .foreign
+        case .file(let kind):
+            let path = FileToolPath.firstPresent(
+                envelope.toolInput?.filePath,
+                envelope.toolInput?.path,
+                envelope.toolInput?.targetFile,
+                envelope.toolInput?.target
+            ) ?? FileToolPath(rawValue: "")
+            return .request(
+                HookRequest(
+                    host: .cursor,
+                    command: ShellCommand(rawValue: ""),
+                    cwd: cwd,
+                    session: session,
+                    file: FileToolAction(kind: kind, path: path)
+                )
+            )
+        case .shell:
+            break
+        }
+        guard let command = shellCommand(in: envelope), command.isEmpty == false else {
+            return .malformed(.missingCommand)
+        }
         return .request(
             HookRequest(
                 host: .cursor,
@@ -79,6 +95,7 @@ public struct CursorHostCodec: HostCodec {
 
 private enum CursorEventClass {
     case shell
+    case file(FileToolKind)
     case foreign
 }
 
@@ -91,6 +108,9 @@ private func classify(_ envelope: CursorEnvelope) -> CursorEventClass {
         let tool = envelope.toolName ?? ""
         if tool == "Shell" || tool == "Bash" {
             return .shell
+        }
+        if let kind = FileToolKind(toolName: tool) {
+            return .file(kind)
         }
         return .foreign
     }
@@ -132,10 +152,18 @@ private struct CursorEnvelope: Decodable {
 private struct CursorToolInput: Decodable {
     var command: String?
     var workingDirectory: String?
+    var filePath: String?
+    var path: String?
+    var targetFile: String?
+    var target: String?
 
     enum CodingKeys: String, CodingKey {
         case command
         case workingDirectory = "working_directory"
+        case filePath = "file_path"
+        case path
+        case targetFile = "target_file"
+        case target
     }
 }
 

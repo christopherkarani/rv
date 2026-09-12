@@ -1,0 +1,10 @@
+{
+  "hookEventName": "pre_tool_use",
+  "sessionId": "abc-123",
+  "cwd": "/tmp/rv-oracle",
+  "workspaceRoot": "/tmp/rv-oracle",
+  "permissionMode": "default",
+  "toolName": "read_file",
+  "toolInput": { "path": "/tmp/rv-oracle/.env" },
+  "timestamp": "2026-04-14T12:00:00Z"
+}
