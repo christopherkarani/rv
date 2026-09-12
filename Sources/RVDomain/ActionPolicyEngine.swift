@@ -274,13 +274,24 @@ public enum ActionPolicyEngine: Sendable {
     private static func filesystemHit(_ shell: ShellAction) -> CoreHit {
         let kinds = shell.effects.kinds
         let scope = shell.resources.filesystemScope
-        if kinds.contains(.unresolvedFilesystem) || scope == .unknown || scope == nil {
+        if kinds.contains(.unresolvedFilesystem) {
             return CoreHit(
                 decision: .hardDeny(Builtin.unresolvedFilesystem),
                 ruleID: Builtin.unresolvedFilesystem.ruleID,
                 reason: Builtin.unresolvedFilesystem.reason,
                 semanticallyCovered: true
             )
+        }
+        switch scope {
+        case .unknown, nil:
+            return CoreHit(
+                decision: .hardDeny(Builtin.unresolvedFilesystem),
+                ruleID: Builtin.unresolvedFilesystem.ruleID,
+                reason: Builtin.unresolvedFilesystem.reason,
+                semanticallyCovered: true
+            )
+        case .unprobed, .protectedPath, .outsideRepository, .insideRepository:
+            break
         }
         // Scope alone is enough: a write that omitted `.protectedPathMutation`
         // must not fall through to reviewEligible / overlay allow.
@@ -323,8 +334,7 @@ public enum ActionPolicyEngine: Sendable {
                 semanticallyCovered: true
             )
         }
-        // Unprobed writes are semantically uncovered: pack fallback, not
-        // unresolved-path. Live unknown already returned above.
+        // Unprobed writes reach here: pack fallback, not unresolved-path.
         return CoreHit(
             decision: .reviewEligible(fallback: Builtin.uncovered),
             ruleID: Builtin.uncovered.ruleID,
