@@ -9,11 +9,14 @@ public enum ScanClassifyError: Error, Sendable, Equatable {
 }
 
 /// Warmed pack world: `PackRegistry` snapshots + `ICUPatternEngine` → deny-only
-/// findings via the evaluation door (`evaluateWithSemantics`). Offline scan has
-/// no live cwd / probe facts, so semantic stages see empty contexts; pack deny
-/// stays the floor and semantic denies can only tighten an allow.
+/// findings via the evaluation door (`evaluateWithSemantics`). Offline scan
+/// injects `FilesystemAnalysisContext.unprobed(homeDirectory:)`; empty live
+/// context is not the scan default. Pack deny stays the floor and semantic
+/// denies can only tighten an allow.
 public struct ScanClassify: Sendable {
     public let enabledPacks: [PackID]
+    /// Scan-home path for `~` expansion. Nil is valid unprobed (no live HOME).
+    public let homeDirectory: String?
 
     private let snapshots: [PackSnapshot]
     private let compiled: CompiledPacks<ICUCompiledPattern>
@@ -21,7 +24,8 @@ public struct ScanClassify: Sendable {
 
     public init(
         enabledPacks: [PackID] = dayOnePackIDs,
-        snapshots: [PackSnapshot]? = nil
+        snapshots: [PackSnapshot]? = nil,
+        homeDirectory: String? = nil
     ) throws {
         let loaded: [PackSnapshot]
         if let snapshots {
@@ -48,6 +52,7 @@ public struct ScanClassify: Sendable {
         }
 
         self.enabledPacks = enabledPacks
+        self.homeDirectory = homeDirectory
         self.snapshots = loaded
         self.compiled = compiled
         self.engine = engine
@@ -66,7 +71,10 @@ public struct ScanClassify: Sendable {
                 request,
                 packs: snapshots,
                 patterns: engine,
-                compiled: compiled
+                compiled: compiled,
+                filesystemProbe: { _ in
+                    .unprobed(homeDirectory: homeDirectory)
+                }
             )
             guard case .deny(let deny, _) = result.outcome else {
                 continue

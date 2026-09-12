@@ -195,7 +195,10 @@ public struct SessionScan: Sendable {
 
         let classify: ScanClassify
         do {
-            classify = try ScanClassify(enabledPacks: request.packIDs)
+            classify = try ScanClassify(
+                enabledPacks: request.packIDs,
+                homeDirectory: request.home.path
+            )
         } catch ScanClassifyError.packsUnavailable {
             throw SessionScanError.packsUnavailable
         }

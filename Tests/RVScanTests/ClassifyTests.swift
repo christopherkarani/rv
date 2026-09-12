@@ -57,6 +57,45 @@ import RVDomain
     #expect(findings.isEmpty)
 }
 
+@Test func classify_packAllowOrdinaryWrite_emitsNoUnresolvedPathFinding() throws {
+    let events = [
+        ExtractedEvent(
+            host: .claude,
+            sourcePath: "/tmp/fixture/session.jsonl",
+            command: ShellCommand(rawValue: "echo hi > file")
+        ),
+    ]
+    let findings = try ScanClassify().classify(events)
+    #expect(
+        findings.contains { $0.ruleID == ActionPolicyEngine.Builtin.unresolvedFilesystem.ruleID }
+            == false
+    )
+    #expect(findings.isEmpty)
+}
+
+@Test func classify_catalogMutatingPath_deniesWithoutLiveFilesystemProbe() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-scan-classify-home-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let home = try #require(ScanHome(validating: root.path))
+
+    let events = [
+        ExtractedEvent(
+            host: .claude,
+            sourcePath: "/tmp/fixture/session.jsonl",
+            command: ShellCommand(rawValue: "rm ~/.ssh/config")
+        ),
+    ]
+    let findings = try ScanClassify(homeDirectory: home.path).classify(events)
+    let finding = try #require(findings.first)
+    #expect(finding.ruleID != ActionPolicyEngine.Builtin.unresolvedFilesystem.ruleID)
+    #expect(
+        finding.ruleID == ActionPolicyEngine.Builtin.protectedPath.ruleID
+            || finding.ruleID.pack == .coreSecrets
+    )
+}
+
 @Test func classify_ignoresPolicyShape_stillDeniesResetHard() throws {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-scan-classify-\(UUID().uuidString)", isDirectory: true)
@@ -129,10 +168,31 @@ import RVDomain
         let text = try String(contentsOf: file, encoding: .utf8)
         #expect(text.contains("import RVPolicy") == false)
         #expect(text.contains("import RVHistory") == false)
+        #expect(text.contains("import RVService") == false)
+        #expect(text.contains("import RVCLI") == false)
+        #expect(text.contains("import RVTUI") == false)
+        #expect(text.contains("import RVHooks") == false)
         #expect(text.contains("AllowOnce") == false)
         #expect(text.contains("GatedEvaluate") == false)
         #expect(text.contains("PolicyGate") == false)
+        #expect(text.contains("FilesystemLiveProbe") == false)
     }
+
+    let sessionScan = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .appendingPathComponent("Sources/RVScan/SessionScan.swift", isDirectory: false)
+    let sessionText = try String(contentsOf: sessionScan, encoding: .utf8)
+    #expect(sessionText.contains("import RVPolicy") == false)
+    #expect(sessionText.contains("import RVHistory") == false)
+    #expect(sessionText.contains("import RVService") == false)
+    #expect(sessionText.contains("import RVCLI") == false)
+    #expect(sessionText.contains("import RVTUI") == false)
+    #expect(sessionText.contains("import RVHooks") == false)
+    #expect(sessionText.contains("FilesystemLiveProbe") == false)
+    #expect(sessionText.contains("AllowOnce") == false)
+    #expect(sessionText.contains("PolicyGate") == false)
 }
 
 @Test func classify_rejectsEnabledPacksThatCannotWarmCore() {
@@ -144,4 +204,5 @@ import RVDomain
 @Test func classify_defaultsToDayOnePacks() throws {
     let classify = try ScanClassify()
     #expect(classify.enabledPacks == dayOnePackIDs)
+    #expect(classify.homeDirectory == nil)
 }
