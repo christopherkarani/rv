@@ -22,6 +22,31 @@ import RVDomain
     #expect(events.map(\.command.rawValue) == ["git reset --hard", "git status"])
     #expect(events.allSatisfy { $0.host == .grok })
     #expect(events.allSatisfy { $0.sessionID == "sess-grok-1" })
+    // No `.grok/sessions/<cwd>/` layout — recovery would guess. Leave nil.
+    #expect(events.allSatisfy { $0.workingDirectory == nil })
+}
+
+@Test func grokAdapter_percentEncodedAbsoluteSlug_fillsWorkingDirectory() throws {
+    let adapter = GrokStoreAdapter()
+    let data = try Data(contentsOf: fixtureURL("grok/chat_history.jsonl"))
+    let fileURL = URL(fileURLWithPath: "/tmp/rv-scan-grok-home")
+        .appendingPathComponent(".grok/sessions/%2Ftmp%2Frv-ws/sess-enc/chat_history.jsonl")
+    let events = try adapter.extract(fileURL: fileURL, data: data)
+    #expect(events.isEmpty == false)
+    #expect(events.allSatisfy { $0.sessionID == "sess-enc" })
+    #expect(events.allSatisfy { $0.workingDirectory?.rawValue == "/tmp/rv-ws" })
+}
+
+@Test func grokAdapter_ambiguousRelativeSlug_leavesWorkingDirectoryNil() throws {
+    let adapter = GrokStoreAdapter()
+    let data = try Data(contentsOf: fixtureURL("grok/chat_history.jsonl"))
+    let fileURL = URL(fileURLWithPath: "/tmp/rv-scan-grok-home")
+        .appendingPathComponent(".grok/sessions/my-project/sess-rel/chat_history.jsonl")
+    let events = try adapter.extract(fileURL: fileURL, data: data)
+    #expect(events.isEmpty == false)
+    #expect(events.allSatisfy { $0.sessionID == "sess-rel" })
+    // Relative layout slug is not a filesystem path without live I/O. Do not guess.
+    #expect(events.allSatisfy { $0.workingDirectory == nil })
 }
 
 @Test func grokAdapter_recognizesOnlyChatHistory() throws {
@@ -56,5 +81,6 @@ import RVDomain
         let events = try adapter.extract(fileURL: dest, data: data)
         #expect(events.count == 2)
         #expect(events.allSatisfy { $0.sessionID == "sess-a" })
+        #expect(events.allSatisfy { $0.workingDirectory?.rawValue == "/tmp" })
     }
 }

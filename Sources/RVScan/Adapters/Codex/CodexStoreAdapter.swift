@@ -72,7 +72,8 @@ public struct CodexStoreAdapter: SessionStoreAdapter {
                         sessionID: sessionID(in: object) ?? fallbackSession,
                         sourcePath: sourcePath,
                         occurredAt: parseTimestamp(object["timestamp"] ?? object["ts"]),
-                        command: ShellCommand(rawValue: command)
+                        command: ShellCommand(rawValue: command),
+                        workingDirectory: ScanStoreWorkingDirectory.fromEnvelope(object)
                     )
                 )
             }
