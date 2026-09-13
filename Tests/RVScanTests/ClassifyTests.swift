@@ -226,6 +226,21 @@ import RVDomain
     #expect(finding.ruleID == ActionPolicyEngine.Builtin.protectedPath.ruleID)
 }
 
+@Test func classify_codexNestedWorkdir_rmConfig_isUnresolvedNotProtected() throws {
+    let payload = """
+    {"session_id":"s","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"rm config","workdir":"/tmp"},"cwd":"/tmp/.ssh"}
+    """
+    let events = try CodexStoreAdapter().extract(
+        fileURL: URL(fileURLWithPath: "/tmp/inline-codex-nested-cwd.jsonl"),
+        data: Data(payload.utf8)
+    )
+    let findings = try ScanClassify().classify(events)
+    let finding = try #require(findings.first)
+    #expect(findings.count == 1)
+    #expect(finding.ruleID == ActionPolicyEngine.Builtin.unresolvedFilesystem.ruleID)
+    #expect(finding.ruleID != ActionPolicyEngine.Builtin.protectedPath.ruleID)
+}
+
 @Test func classify_workingDirectory_envChdirDotDot_doesNotKeepStoreProtectedPath() throws {
     let cwd = try #require(WorkingDirectory(validating: "/tmp/.ssh"))
     let events = [

@@ -43,11 +43,10 @@ public protocol SessionStoreAdapter: Sendable {
 /// no `process.cwd`, no live symlink follow.
 enum ScanStoreWorkingDirectory {
     /// Hook-codec field names: `cwd`, `workdir`, `working_directory`.
+    /// Nested command objects (`tool_input`, `params`, `args`, …) win over the
+    /// envelope, matching Codex/Cursor/Hermes/OpenClaw `firstNonEmpty`.
     static func fromEnvelope(_ object: [String: Any], depth: Int = 0) -> WorkingDirectory? {
         guard depth < 6 else { return nil }
-        if let direct = fromFields(object) {
-            return direct
-        }
         let nestedKeys = [
             "params", "args", "toolInput", "tool_input", "input",
             "arguments", "state", "payload", "function",
@@ -62,7 +61,7 @@ enum ScanStoreWorkingDirectory {
                 return found
             }
         }
-        return nil
+        return fromFields(object)
     }
 
     /// `$HOME/.grok/sessions/<cwd>/<session-id>/chat_history.jsonl`.
