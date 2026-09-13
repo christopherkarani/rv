@@ -41,7 +41,7 @@ The engine work for “one parsed command” is already ticketed (OPE-156, then 
 | F-python-print | `python -c "print('git reset --hard')"` allows | landed | `pythonPrintReset_isAllowed` | keep; do not scan print guts as shell |
 | F-python-exec | `os.system('git reset --hard')` denies | landed | wrapper semantics tests | do not reconstruct a Python interpreter |
 | F-safety | `normal` / `strict` only | landed | `SafetyLevel.swift`; file-tool W2 | no `paranoid` |
-| F-overlay-degrade | bad `policy.toml` ignored | partial | `SafetyStore.loadDocumentLevel` `catch { nil }` | no oracle that `git status` still allows |
+| F-overlay-degrade | bad `config.json` safety overlay ignored; invalid typed-rule `policy.toml` still fail-closes | partial | `SafetyStore.loadDocumentLevel` `catch { nil }`; `GatedEvaluateTypedRuleLoadTests` | oracle is invalid `safety.level`, not typed-rules-invalid |
 | F-core-missing | missing core packs → indeterminate → hook deny | landed | evaluate-parity skill; `HookMapper` | **keep**; this is not optional-config degrade |
 | F-secrets | secrets scan `matchingView` tokens | partial | `SecretPathGuard.swift` | wrapped / print-string FPs and FNs not named as law |
 | F-ir | `ProposedAction.shell` empty-effect on codecs | partial | `ProposedAction.swift`; 02.md item 1 | OPE-156, not this program |
@@ -65,7 +65,7 @@ The engine work for “one parsed command” is already ticketed (OPE-156, then 
 | Crafted bypass | If it is not on the never-slip list, it is **residual** or `strict` — not a new `normal` regex | Stops parser hill-climb | w1-residual |
 | Never-slip (must deny, wrapped or not) | (1) `git reset --hard` and other day-one **critical/high** executing git/fs hits (`rm -rf /`, fork-bomb). (2) `SecretPathCatalog` hits on executing operands. (3) `unwrapLimited` / unparseable executing wrapper. (4) Pinned unlockable denies (`core.secrets`, `builtin.action`, protected-path). Recursion/parse limits → deny, never allow | Product promise | w1-never-slip, w2-ns |
 | Residual in `normal` (do not chase) | Encoded / reconstructed secret names; interpreter bodies that are not executing sinks; Grok fail-open when the hook is not invoked; host-specific stdin/write gaps named in STATUS; anything that needs a partial language interpreter | Honest product | w1-residual |
-| Broken config | Malformed **optional** overlay (`safety.level`, `secret.allow_paths`, extra `policy.toml` rules) → ignore, keep day-one. Missing **core packs** stays indeterminate → hook deny. Unreadable hook JSON stays deny | Optional overlay must not freeze `git status`. Core missing is “product not installed” | w2-degrade |
+| Broken config | Malformed **optional** overlay (`safety.level`, `secret.allow_paths`) → ignore, keep day-one. Invalid typed-rule `policy.toml` stays `builtin.action:typed-rules-invalid`. Missing **core packs** stays indeterminate → hook deny. Unreadable hook JSON stays deny | Optional safety overlay must not freeze `git status`. Typed-rule parse failure is not optional. Core missing is “product not installed” | w2-degrade |
 | Live proof | Isolated HOME only. No live-HOME. Not a substitute for 02.md Manual on steps 6–9 | AGENTS.md | W3 |
 | Corpus vs `evaluateWithSemantics` | Pin `deny.json` / `near-miss.json` stay on **pack `evaluate`** (0.11.0 scoreboard). New wrapper/prose rows that need unwrap live in `Tests/RVEngineTests/` or Service door tests, not by changing the pin scoreboard | Pin must not absorb semantics | w2-fp, w2-ns |
 | Foreign names | Do not write other product names into this tree | AGENTS.md | all |
@@ -107,7 +107,7 @@ Unresolved forks: **none**.
 | 5 | Isolated HOME: `rv test "bash -c 'git reset --hard'"` | deny, not allow | W3 |
 | 6 | Isolated HOME: `rv test "echo 'git reset --hard'"` | allow | W3 |
 | 7 | Isolated HOME: `rv test "python -c \"print('git reset --hard')\""` | allow | W3 |
-| 8 | Isolated HOME + garbage `.rv/policy.toml` | `rv test 'git status'` still allow | W3 |
+| 8 | Isolated HOME + garbage `config.json` `safety.level` | `rv test 'git status'` still allow | W3; invalid typed-rule `policy.toml` stays fail-closed |
 | 9 | `rg -n 'Never-slip' docs/architecture/02.md` | hit required | overlay pointer exists |
 
 ---
@@ -250,7 +250,7 @@ W1: `w1-never-slip` ∥ `w1-residual`; then `w1-queue` ∥ `w1-review`. W2: `w2-
 - **agent_budget:** 512
 - **product_oracle_cmds:**
   - `tools/gate.sh --quiet RVEngineTests RVCorpusTests RVPolicyTests`
-- **Wave done when:** new allow rows cannot be deleted without failing tests; never-slip wrapped door tests deny; garbage policy overlay does not deny `git status`
+- **Wave done when:** new allow rows cannot be deleted without failing tests; never-slip wrapped door tests deny; garbage `config.json` safety overlay does not deny `git status`
 
 #### Unit: w2-fp
 
@@ -303,7 +303,8 @@ Probe before adding a pin row: run pack `evaluate` (same as `CorpusTests`). If d
 - **Acceptance:**
   1. New `Tests/RVEngineTests/MaturityCorpusTests.swift` table:
      - deny: `git reset --hard`, `bash -c 'git reset --hard'`, `sudo env sh -c 'git reset --hard'`, `python -c "os.system('git reset --hard')"`, `bash -c $CMD` (unwrapLimited), `cat ~/.ssh/id_rsa`
-     - allow: `echo 'git reset --hard'`, `python -c "print('git reset --hard')"`, `git push --force-with-lease origin feature`, `git checkout -b topic`
+     - allow: `echo 'git reset --hard'`, `python -c "print('git reset --hard')"`, `git checkout -b topic`
+     - Ask-maps-to-deny (not never-slip): `git push --force-with-lease origin feature` (`remoteBranchAsk` / `mandatoryHuman`). Pack `evaluate` / `near.force-with-lease` still allows (landmine).
   2. A comment on the python-print row cites `RV-RR-02` if pack `evaluate` would deny the same string
 - **Live smoke:** `tools/gate.sh --quiet RVEngineTests` → filter `MaturityCorpus` pass
 - **Depends on:** none
@@ -321,10 +322,10 @@ Probe before adding a pin row: run pack `evaluate` (same as `CorpusTests`). If d
 
 - **Title:** Optional overlay must not freeze ordinary work
 - **Mode:** implement
-- **Goal:** Garbage `policy.toml` does not deny `git status`
+- **Goal:** Garbage `config.json` / repo **safety** overlay does not deny `git status`. Invalid typed-rule `policy.toml` stays `builtin.action:typed-rules-invalid`.
 - **Acceptance:**
-  1. `Tests/RVPolicyTests/OptionalOverlayDegradeTests.swift`: unreadable / invalid `safety.level` / broken TOML → `SafetyStore.loadEffective` stays `normal` (or machine value), `TypedRuleStore.loadEffective` does not throw into the hook
-  2. A Service-level test **or** the same policy test plus `EvaluateSession` with that workspace: `git status` is **allow** (not indeterminate, not deny)
+  1. `Tests/RVPolicyTests/OptionalOverlayDegradeTests.swift`: unreadable / invalid `safety.level` / broken **safety** TOML → `SafetyStore.loadEffective` stays `normal` (or machine value)
+  2. Do **not** treat invalid typed-rule `policy.toml` as optional overlay. That path is `GatedEvaluateTypedRuleLoadTests.invalidPolicyTOML_failClosedNotAllow`. A Service-level test **or** policy test plus `EvaluateSession` with a garbage **config.json** `safety.level`: `git status` is **allow** (not indeterminate, not deny)
 - **Live smoke:** `tools/gate.sh --quiet RVPolicyTests RVServiceTests` (only if a Service test is added; else Policy only)
 - **Depends on:** none
 - **Parallel-safe with:** w2-door, w2-fp

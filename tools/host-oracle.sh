@@ -153,8 +153,8 @@ if want == "deny" and needle:
             str(obj.get("pack_id") or ""),
         ]
     )
-    if needle not in blob and "core.git" not in blob:
-        raise SystemExit("deny missing %r / core.git: %r" % (needle, obj))
+    if needle not in blob:
+        raise SystemExit("deny missing %r: %r" % (needle, obj))
 PY
   if [[ "$want" == "allow" ]]; then
     [[ "$st" -eq 0 ]] || fail "$name exit $st (want 0) stderr=$(cat "$ORACLE_ROOT/${name}.err")"

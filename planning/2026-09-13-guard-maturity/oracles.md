@@ -12,7 +12,7 @@ Human picture: one scripted transcript an implementor can run without touching l
 
 Each case is `rv test --robot <one argv command>`. Do **not** pass `rv test --robot -- <cmd>`: ArgumentParser `captureForPassthrough` keeps `--` in the evaluated command text (`Command: -- echo '…'`), which pack-matches `core.git:reset-hard` and breaks the data rows. The oracle passes each command as one argv after `--robot` (c-hook-proof style).
 
-Stdout is one `rv.test.v1` JSON object. Allow → exit 0. Deny → exit 1. Deny rows should carry `reset-hard` / `core.git` in reason, rule_id, or pack_id.
+Stdout is one `rv.test.v1` JSON object. Allow → exit 0. Deny → exit 1. The reset-hard transcript row must carry `reset-hard` in reason, `rule_id`, or `pack_id` — a generic `core.git:*` deny is not enough.
 
 ## Transcript
 
