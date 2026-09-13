@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 import RVDomain
 @testable import RVEngine
@@ -6,7 +7,8 @@ import RVDomain
 struct ApplyFilesystemSemanticsTests {
     private let repo = FilesystemAnalysisContext(
         workingDirectory: WorkingDirectory(validating: "/repo"),
-        repositoryRoot: RepositoryRoot(validating: "/repo")
+        repositoryRoot: RepositoryRoot(validating: "/repo"),
+        probe: .probed
     )
 
     @Test func inRepoWriteAndCreate_stayAllowUnderDefaultPolicy() throws {
@@ -77,7 +79,8 @@ struct ApplyFilesystemSemanticsTests {
                     followedSymlink: true,
                     resolution: .resolved
                 ),
-            ]
+            ],
+            probe: .probed
         )
         let composed = applyFilesystemSemantics(
             pack: pack,
@@ -105,7 +108,8 @@ struct ApplyFilesystemSemanticsTests {
                     canonical: "/repo/file",
                     resolution: .uncertain
                 ),
-            ]
+            ],
+            probe: .probed
         )
         let composed = applyFilesystemSemantics(
             pack: pack,
@@ -123,15 +127,135 @@ struct ApplyFilesystemSemanticsTests {
     @Test func missingRepositoryRoot_isFailClosed() throws {
         let pack = try runFilesystemPack("echo hi > file")
         #expect(pack.decision == .allow)
+        var probed = FilesystemAnalysisContext.empty
+        probed.probe = .probed
         let composed = applyFilesystemSemantics(
             pack: pack,
-            command: ShellCommand(rawValue: "echo hi > file")
+            command: ShellCommand(rawValue: "echo hi > file"),
+            context: probed
         )
         guard case .deny(let deny) = composed.decision else {
             Issue.record("no repo root must fail-closed, got \(composed.decision)")
             return
         }
         #expect(deny.ruleID == ActionPolicyEngine.Builtin.unresolvedFilesystem.ruleID)
+    }
+
+    @Test func unprobedEmpty_packAllowWrite_staysAllowAndAttachesAnalysis() throws {
+        #expect(FilesystemAnalysisContext.empty.probe == .unprobed)
+        let pack = try runFilesystemPack("echo hi > file")
+        #expect(pack.decision == .allow)
+        let composed = applyFilesystemSemantics(
+            pack: pack,
+            command: ShellCommand(rawValue: "echo hi > file")
+        )
+        #expect(composed.decision == .allow)
+        guard case .filesystem(let action) = composed.analysis else {
+            Issue.record("unprobed write must still attach filesystem analysis")
+            return
+        }
+        #expect(action.operationKind == .write)
+    }
+
+    @Test func unprobedCatalogWrite_stillDeniesProtectedPath() throws {
+        let command = "echo leaked > id_rsa"
+        let pack = try runFilesystemPack(command, secrets: .empty)
+        #expect(pack.decision == .allow)
+        let composed = applyFilesystemSemantics(
+            pack: pack,
+            command: ShellCommand(rawValue: command)
+        )
+        guard case .deny(let deny) = composed.decision else {
+            Issue.record("unprobed catalog hit must still deny, got \(composed.decision)")
+            return
+        }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.protectedPath.ruleID)
+        #expect(composed.analysis.filesystemAction?.primaryTarget?.scope == .protectedPath)
+    }
+
+    @Test func unprobedMixedUnknownAndProtected_deniesProtectedPath() throws {
+        let command = "rm file id_rsa"
+        let pack = try runFilesystemPack(command, secrets: .empty)
+        #expect(pack.decision == .allow)
+        let composed = applyFilesystemSemantics(
+            pack: pack,
+            command: ShellCommand(rawValue: command)
+        )
+        guard case .deny(let deny) = composed.decision else {
+            Issue.record(
+                "unprobed unresolved must not mask a catalog hit, got \(composed.decision)"
+            )
+            return
+        }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.protectedPath.ruleID)
+        let scopes = composed.analysis.filesystemAction?.targets.map(\.scope) ?? []
+        #expect(scopes.contains(.unknown))
+        #expect(scopes.contains(.protectedPath))
+    }
+
+    @Test func unprobedMixedUncertainAndOutside_deniesOutside() throws {
+        let command = "rm file ../outside-file"
+        let pack = try runFilesystemPack(command)
+        #expect(pack.decision == .allow)
+        let context = FilesystemAnalysisContext(
+            workingDirectory: WorkingDirectory(validating: "/repo"),
+            repositoryRoot: RepositoryRoot(validating: "/repo"),
+            facts: [
+                FilesystemPathFact(
+                    apparent: "file",
+                    canonical: "/repo/file",
+                    resolution: .uncertain
+                ),
+            ],
+            probe: .unprobed
+        )
+        let composed = applyFilesystemSemantics(
+            pack: pack,
+            command: ShellCommand(rawValue: command),
+            context: context
+        )
+        guard case .deny(let deny) = composed.decision else {
+            Issue.record(
+                "unprobed unresolved must not mask out-of-repo, got \(composed.decision)"
+            )
+            return
+        }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.outsideRepository.ruleID)
+    }
+
+    @Test func evaluateDoor_defaultUnprobed_packAllowWrite_staysAllow() throws {
+        let result = try runFilesystemDoor("echo hi > file")
+        #expect(result.decision == .allow)
+        #expect(result.analysis.filesystemAction?.operationKind == .write)
+    }
+
+    @Test func evaluateDoor_injectedProbedEmpty_packAllowWrite_isFailClosed() throws {
+        let result = try runFilesystemDoor("echo hi > file") { _ in
+            FilesystemAnalysisContext(probe: .probed)
+        }
+        guard case .deny(let deny) = result.decision else {
+            Issue.record(
+                "injected probed empty must fail-closed at the door, got \(result.decision)"
+            )
+            return
+        }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.unresolvedFilesystem.ruleID)
+    }
+
+    @Test func probeState_missingCodableField_decodesUnprobed() throws {
+        let missing = Data(#"{"facts":[]}"#.utf8)
+        let decoded = try JSONDecoder().decode(FilesystemAnalysisContext.self, from: missing)
+        #expect(decoded.probe == .unprobed)
+
+        var probed = FilesystemAnalysisContext.empty
+        probed.probe = .probed
+        let data = try JSONEncoder().encode(probed)
+        let roundTrip = try JSONDecoder().decode(FilesystemAnalysisContext.self, from: data)
+        #expect(roundTrip.probe == .probed)
+        #expect(roundTrip.workingDirectory == nil)
+        #expect(roundTrip.repositoryRoot == nil)
+        #expect(roundTrip.homeDirectory == nil)
+        #expect(roundTrip.facts.isEmpty)
     }
 
     @Test func generatedDelete_staysAllowUnderDefaultPolicy() throws {
@@ -216,7 +340,8 @@ struct ApplyFilesystemSemanticsTests {
                     followedSymlink: true,
                     resolution: .resolved
                 ),
-            ]
+            ],
+            probe: .probed
         )
         let composed = applyFilesystemSemantics(
             pack: pack,
@@ -243,7 +368,8 @@ struct ApplyFilesystemSemanticsTests {
         let context = FilesystemAnalysisContext(
             workingDirectory: WorkingDirectory(validating: "/repo"),
             repositoryRoot: RepositoryRoot(validating: "/repo"),
-            homeDirectory: "/isolated-home"
+            homeDirectory: "/isolated-home",
+            probe: .probed
         )
         let composed = applyFilesystemSemantics(
             pack: pack,
@@ -271,7 +397,8 @@ struct ApplyFilesystemSemanticsTests {
                     followedSymlink: true,
                     resolution: .resolved
                 ),
-            ]
+            ],
+            probe: .probed
         )
         let composed = applyFilesystemSemantics(
             pack: EvaluationResult(
@@ -323,10 +450,13 @@ struct ApplyFilesystemSemanticsTests {
     }
 }
 
-private func runFilesystemPack(
-    _ command: String,
-    secrets: SecretPathCatalog = .dayOne
-) throws -> EvaluationResult {
+private struct FilesystemSampleWorld {
+    let packs: [PackSnapshot]
+    let engine: ICUPatternEngine
+    let compiled: CompiledPacks<ICUCompiledPattern>
+}
+
+private func filesystemSampleWorld() throws -> FilesystemSampleWorld {
     let packs = [
         PackSnapshot(
             id: .coreFilesystem,
@@ -361,11 +491,33 @@ private func runFilesystemPack(
     ]
     let engine = ICUPatternEngine()
     let compiled = try CompiledPacks<ICUCompiledPattern>.compile(packs: packs, using: engine)
+    return FilesystemSampleWorld(packs: packs, engine: engine, compiled: compiled)
+}
+
+private func runFilesystemPack(
+    _ command: String,
+    secrets: SecretPathCatalog = .dayOne
+) throws -> EvaluationResult {
+    let world = try filesystemSampleWorld()
     return evaluate(
         EvaluationRequest(command: ShellCommand(rawValue: command), enabledPacks: dayOnePackIDs),
-        packs: packs,
+        packs: world.packs,
         secrets: secrets,
-        patterns: engine,
-        compiled: compiled
+        patterns: world.engine,
+        compiled: world.compiled
+    )
+}
+
+private func runFilesystemDoor(
+    _ command: String,
+    filesystemProbe: (UnwrapOutcome) -> FilesystemAnalysisContext = { _ in .empty }
+) throws -> EvaluationResult {
+    let world = try filesystemSampleWorld()
+    return evaluateWithSemantics(
+        EvaluationRequest(command: ShellCommand(rawValue: command), enabledPacks: dayOnePackIDs),
+        packs: world.packs,
+        patterns: world.engine,
+        compiled: world.compiled,
+        filesystemProbe: filesystemProbe
     )
 }
