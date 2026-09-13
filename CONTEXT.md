@@ -88,6 +88,14 @@ _Avoid_: file firewall, fake `cat <path>`, catalog evaluate as the hook default
 `normal` (default) or `strict`. Machine config plus `.rv/policy.toml` `safety.level`. Restrict-only overlay: repo may raise `normal` → `strict`; repo cannot lower machine `strict`. Does not enable extra packs.
 _Avoid_: third preset, pack-ID posture
 
+**Never-slip**:
+Families that must deny even when wrapped: day-one critical/high executing git/fs, `SecretPathCatalog` on executing operands, `unwrapLimited` / unparseable executing wrapper, pinned unlockable. Law: `docs/architecture/never-slip.md`.
+_Avoid_: scanning data (`echo` / `print` / `git commit -m` / `rg`) as executing shell; a third safety level
+
+**Residual risk**:
+Named holes in `normal` we will not chase (`RV-RR-*`). A crafted bypass that is not never-slip is a new row or a `strict` deny. Law: `docs/architecture/residual-risk.md`.
+_Avoid_: a new `normal` regex to close a named hole; treating `unwrapLimited` as residual
+
 **Block ledger**:
 Denial-only list of live hook denials (including in-process miss). timestamp, host, tool, `rule_id`, category, redacted path with `$HOME` → `~`. Default on. Off with `blocks.enabled: false` in `~/.config/rv/config.json`. `rv test` / `rv explain` do not write. Not allow history. Not `os_log` command text. CLI: `rv blocks`.
 _Avoid_: audit log, allow history, RVHistory as a product, recording peek/explain

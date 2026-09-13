@@ -31,6 +31,13 @@
       "reason_contains": "destroys uncommitted changes"
     },
     {
+      "id": "deny.chained-git-reset",
+      "command": "echo hello && git reset --hard",
+      "expected": "deny",
+      "rule_id": "core.git:reset-hard",
+      "reason_contains": "destroys uncommitted changes"
+    },
+    {
       "id": "deny.quoted-dollar-subst-reset",
       "command": "echo \"$(git reset --hard)\"",
       "expected": "deny",

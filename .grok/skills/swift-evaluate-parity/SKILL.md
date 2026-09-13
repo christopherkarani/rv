@@ -30,6 +30,8 @@ Landmines: [references/landmines.md](references/landmines.md).
    `CompiledPacks.swift`, `PatternEngine.swift`, `ICUPatternEngine.swift`
 4. `Tests/RVEngineTests/Fixtures/corpus/` (`deny.json`, `near-miss.json`,
    `quarantine.json`, `skill-table.json`)
+5. `docs/architecture/never-slip.md`
+6. `docs/architecture/residual-risk.md`
 
 ## Steps
 
