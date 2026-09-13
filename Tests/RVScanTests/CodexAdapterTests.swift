@@ -38,6 +38,35 @@ import RVDomain
     #expect(events.allSatisfy { $0.sessionID == "sess_hook" })
 }
 
+@Test func scanStoreWorkingDirectory_nestedWorkdirBeatsEnvelopeCwd() {
+    let object: [String: Any] = [
+        "cwd": "/tmp/.ssh",
+        "tool_input": [
+            "command": "rm config",
+            "workdir": "/tmp",
+        ],
+    ]
+    #expect(ScanStoreWorkingDirectory.fromEnvelope(object)?.rawValue == "/tmp")
+}
+
+@Test func scanStoreWorkingDirectory_envelopeCwdWhenNestedHasNone() {
+    let object: [String: Any] = [
+        "cwd": "/tmp/ws",
+        "tool_input": ["command": "git status"],
+    ]
+    #expect(ScanStoreWorkingDirectory.fromEnvelope(object)?.rawValue == "/tmp/ws")
+}
+
+@Test func codexAdapter_nestedWorkdirBeatsEnvelopeCwd() throws {
+    let payload = """
+    {"session_id":"s","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"rm config","workdir":"/tmp"},"cwd":"/tmp/.ssh"}
+    """
+    let url = URL(fileURLWithPath: "/tmp/inline-codex-nested-cwd.jsonl")
+    let events = try CodexStoreAdapter().extract(fileURL: url, data: Data(payload.utf8))
+    #expect(events.map(\.command.rawValue) == ["rm config"])
+    #expect(events.map { $0.workingDirectory?.rawValue } == ["/tmp"])
+}
+
 @Test func codexAdapter_emptyOrUnreadableThrows() throws {
     let adapter = CodexStoreAdapter()
     let source = URL(fileURLWithPath: "/tmp/codex-unreadable.jsonl")

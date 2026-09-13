@@ -9,7 +9,7 @@ public enum RebaseRecovery: Sendable {
         if isNeverEligibleRule(deny.ruleID) {
             return false
         }
-        if isUnoverridableHardStop(result, deny: deny) {
+        if isUnoverridableHardStop(result) {
             return false
         }
         guard let action = result.analysis.gitAction else {
@@ -19,21 +19,15 @@ public enum RebaseRecovery: Sendable {
     }
 
     /// Rebase recovery may lift the working-tree-discard pin. Secrets,
-    /// protected-path, unwrap-limited, and other hard stops stay denied.
-    private static func isUnoverridableHardStop(
-        _ result: EvaluationResult,
-        deny: Deny
-    ) -> Bool {
-        if result.analysis.innermost == .unwrapLimited {
-            return true
-        }
-        if result.analysis.filesystemAction?.primaryTarget?.scope == .protectedPath {
-            return true
-        }
-        if deny.ruleID == ActionPolicyEngine.Builtin.workingTreeDiscard.ruleID {
+    /// protected-path, unwrap-limited, and other hard stops stay denied via
+    /// `UnlockableDeny`.
+    private static func isUnoverridableHardStop(_ result: EvaluationResult) -> Bool {
+        if case .deny(let deny) = result.decision,
+           deny.ruleID == ActionPolicyEngine.Builtin.workingTreeDiscard.ruleID
+        {
             return false
         }
-        return RulePinning.blocksAllowOverride(deny)
+        return UnlockableDeny.isPinned(result)
     }
 
     private static func isNeverEligibleRule(_ ruleID: RuleID) -> Bool {

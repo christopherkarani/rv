@@ -104,12 +104,12 @@ public enum RulePinning: Sendable {
             if deny.ruleID == ActionPolicyEngine.Builtin.protectedPath.ruleID {
                 return .protectedPath
             }
+            if deny.ruleID == ActionPolicyEngine.Builtin.unwrapLimited.ruleID {
+                return .unwrapLimited
+            }
             return .protectedSharedBranch
         }
-        if unwrapLimitedCommand(action.supportingCommand) {
-            return .unwrapLimited
-        }
-        if secretPathHit(action.supportingCommand) {
+        if secretPathOnStoredAction(action) {
             return .secretPath
         }
         return nil
@@ -117,31 +117,6 @@ public enum RulePinning: Sendable {
 
     public static func blocksAllowOverride(_ result: EvaluationResult) -> Bool {
         UnlockableDeny.isPinned(result)
-    }
-
-    public static func blocksAllowOverride(_ deny: Deny) -> Bool {
-        if deny.ruleID.pack == .coreSecrets {
-            return true
-        }
-        if deny.ruleID == ActionPolicyEngine.Builtin.remoteSharedBranch.ruleID {
-            return true
-        }
-        if deny.ruleID == ActionPolicyEngine.Builtin.workingTreeDiscard.ruleID {
-            return true
-        }
-        if deny.ruleID == ActionPolicyEngine.Builtin.outsideRepository.ruleID {
-            return true
-        }
-        if deny.ruleID == ActionPolicyEngine.Builtin.unresolvedFilesystem.ruleID {
-            return true
-        }
-        if deny.ruleID == ActionPolicyEngine.Builtin.protectedPath.ruleID {
-            return true
-        }
-        if deny.ruleID == ActionPolicyEngine.Builtin.unwrapLimited.ruleID {
-            return true
-        }
-        return false
     }
 
     public static func matchingView(of action: ProposedAction) -> MatchingView? {
@@ -196,9 +171,8 @@ public enum RulePinning: Sendable {
     }
 
     /// Typed form for git push pins. Matcher is `GitAction.push`, not argv.
-    /// Pending records have no analyzer `GitAction`; emit a push only for a
-    /// named-branch remote shared-branch mutation — never empty effects,
-    /// switch, discard, or delete.
+    /// Analyzed pending rows carry `remoteSharedBranchMutation`; empty-effect
+    /// legacy rows stay fingerprint v1.
     private static func gitPushPredicate(from action: ProposedAction) -> PolicyPredicate? {
         guard let git = gitPushAction(from: action) else {
             return nil
@@ -291,73 +265,14 @@ private struct TypedPinDraft: Codable, Equatable {
     var v: Int
 }
 
-private func unwrapLimitedCommand(_ command: ShellCommand?) -> Bool {
-    guard let raw = command?.rawValue.trimmingCharacters(in: .whitespacesAndNewlines),
-          raw.isEmpty == false
-    else {
+/// Catalog match on a path already stored on the action. Does not tokenize
+/// `supportingCommand`.
+private func secretPathOnStoredAction(_ action: ProposedAction) -> Bool {
+    if action.resources.protectedMatch != nil {
+        return true
+    }
+    guard let path = action.resources.path, path.isEmpty == false else {
         return false
     }
-    let tokens = raw.split(whereSeparator: \.isWhitespace).map(String.init)
-    guard let headIndex = tokens.firstIndex(where: { ["bash", "sh", "zsh"].contains($0.lowercased()) })
-    else {
-        return false
-    }
-    var index = headIndex + 1
-    while index < tokens.count {
-        let token = tokens[index]
-        if token == "-c" || token == "--command" {
-            guard index + 1 < tokens.count else { return true }
-            let payload = tokens[index + 1]
-            if payload.hasPrefix("'") || payload.hasPrefix("\"") {
-                return false
-            }
-            return true
-        }
-        if token.hasPrefix("-") {
-            index += 1
-            continue
-        }
-        return false
-    }
-    return false
+    return SecretPathCatalog.dayOne.firstMatch(of: path) != nil
 }
-
-private func secretPathHit(_ command: ShellCommand?) -> Bool {
-    guard let command else { return false }
-    let candidates = pathCandidates(in: command.rawValue)
-    guard candidates.isEmpty == false else { return false }
-    for candidate in candidates {
-        for rule in SecretPathCatalog.dayOne.rules {
-            if secretPathMatches(candidate, rule.kind) {
-                return true
-            }
-        }
-    }
-    return false
-}
-
-private func pathCandidates(in command: String) -> [String] {
-    var collected: [String] = []
-    for token in command.split(whereSeparator: \.isWhitespace) {
-        let decoded = String(token)
-        if decoded.hasPrefix("-"), decoded.contains("=") == false {
-            continue
-        }
-        let value: String
-        if let eq = decoded.firstIndex(of: "="), eq > decoded.startIndex {
-            value = String(decoded[decoded.index(after: eq)...])
-        } else {
-            value = decoded
-        }
-        if value.isEmpty == false {
-            collected.append(value)
-        }
-    }
-    return collected
-}
-
-private func secretPathMatches(_ candidate: String, _ kind: SecretPathKind) -> Bool {
-    secretPathKindMatches(candidate, kind)
-}
-
-// Matching helpers now live in RVDomain/SecretPathMatching.swift — single matcher.

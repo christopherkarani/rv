@@ -141,6 +141,29 @@ struct RebaseRecoveryTests {
         #expect(RebaseRecovery.isEligible(result: result) == false)
     }
 
+    @Test func unoverridableHardStop_usesUnlockableDenyExceptWorkingTreeDiscard() {
+        let secrets = EvaluationResult(
+            outcome: .deny(
+                Deny(ruleID: RuleID(pack: .coreSecrets, pattern: "ssh-private-key"), reason: "secret"),
+                matched: nil
+            ),
+            matchingView: "git checkout -- id_rsa",
+            analysis: .git(.discardWorktree(pathspecs: ["id_rsa"], source: nil))
+        )
+        #expect(UnlockableDeny.isPinned(secrets))
+        #expect(RulePinning.blocksAllowOverride(secrets))
+        #expect(RebaseRecovery.isEligible(result: secrets) == false)
+
+        let builtinDiscard = EvaluationResult(
+            outcome: .deny(ActionPolicyEngine.Builtin.workingTreeDiscard, matched: nil),
+            matchingView: "git checkout -- file",
+            analysis: .git(.discardWorktree(pathspecs: ["file"], source: nil))
+        )
+        #expect(UnlockableDeny.isPinned(builtinDiscard))
+        #expect(RulePinning.blocksAllowOverride(builtinDiscard))
+        #expect(RebaseRecovery.isEligible(result: builtinDiscard))
+    }
+
     @Test func decideAllowsEligibleDiscardBeforeWorkingTreePin() {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let denied = EvaluationResult(

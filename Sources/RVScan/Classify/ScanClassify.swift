@@ -9,9 +9,12 @@ public enum ScanClassifyError: Error, Sendable, Equatable {
 }
 
 /// Warmed pack world: `PackRegistry` snapshots + `ICUPatternEngine` → deny-only
-/// findings via the evaluation door (`evaluateWithSemantics`). Offline scan has
-/// no live cwd / probe facts, so semantic stages see empty contexts; pack deny
-/// stays the floor and semantic denies can only tighten an allow.
+/// findings via the evaluation door (`evaluateWithSemantics`). Nil event cwd is
+/// **unprobed**: pack deny stays the floor, unwrap-limited still tightens,
+/// unresolved-path does not tighten an allow. Non-nil cwd injects a **probed**
+/// lexical filesystem context (catalog `.dayOne`, empty facts). Repository
+/// root stays nil unless it can be derived without `FileManager` — probed
+/// unknown writes stay fail-closed. No Policy gate, grant spend, or history.
 public struct ScanClassify: Sendable {
     public let enabledPacks: [PackID]
 
@@ -62,11 +65,18 @@ public struct ScanClassify: Sendable {
                 command: event.command,
                 enabledPacks: enabledPacks
             )
+            // Unwrap starts from store cwd so relative `-C` / `--chdir` cannot
+            // drop `..` against a nil base and then classify against the store path.
+            let gitContext = GitAnalysisContext(
+                workingDirectory: event.workingDirectory
+            )
             let result = evaluateWithSemantics(
                 request,
                 packs: snapshots,
                 patterns: engine,
-                compiled: compiled
+                compiled: compiled,
+                gitContext: gitContext,
+                filesystemProbe: { _ in Self.lexicalFilesystemContext(for: event) }
             )
             guard case .deny(let deny, _) = result.outcome else {
                 continue
@@ -86,5 +96,21 @@ public struct ScanClassify: Sendable {
             )
         }
         return findings
+    }
+
+    /// Probed lexical world when the store already recorded cwd. No live I/O.
+    private static func lexicalFilesystemContext(
+        for event: ExtractedEvent
+    ) -> FilesystemAnalysisContext {
+        guard let cwd = event.workingDirectory else {
+            return .empty
+        }
+        return FilesystemAnalysisContext(
+            workingDirectory: cwd,
+            repositoryRoot: nil,
+            catalog: .dayOne,
+            facts: [],
+            probe: .probed
+        )
     }
 }
