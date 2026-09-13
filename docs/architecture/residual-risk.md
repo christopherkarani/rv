@@ -34,6 +34,10 @@ Named `RV-RR-NN`. Each row is a hole in `normal`. `strict` may tighten a row; `n
 
 Levels are `normal` (default) and `strict` only. Never-slip still denies at both. A crafted bypass that is not never-slip is a new `RV-RR-*` row or a `strict` deny — not a new `normal` regex.
 
+## Operator
+
+The two lists are this page (`RV-RR-*`) and `docs/architecture/never-slip.md`. Operator surface is `rv safety` (effective `normal` / `strict`) and `rv test` (`rv test --robot '<cmd>'` → `rv.test.v1` JSON). Isolated-HOME W3 transcript: `planning/2026-09-13-guard-maturity/oracles.md`; scripted run: `tools/host-oracle.sh`. Not a new CLI. Not 02.md § Order Manual for Ask.
+
 ## Locked
 
 1. Crafted bypass that is not never-slip is residual or `strict` — not a new `normal` regex.
