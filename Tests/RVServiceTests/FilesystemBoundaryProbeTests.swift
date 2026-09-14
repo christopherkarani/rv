@@ -110,7 +110,11 @@ struct FilesystemBoundaryProbeTests {
             cwd: WorkingDirectory(validating: sub.path),
             homeDirectory: nil
         )
-        #expect(probe.repositoryRoot?.rawValue == resolveExistingDirectory(sub.path))
+        guard case .probed(let probed) = probe else {
+            Issue.record("live probe must be probed")
+            return
+        }
+        #expect(probed.repositoryRoot?.rawValue == resolveExistingDirectory(sub.path))
     }
 
     @Test func deletedAndMovedCwd_failClosed() async throws {
@@ -145,6 +149,19 @@ struct FilesystemBoundaryProbeTests {
         #expect(FilesystemLiveProbe.discoverRepositoryRoot(from: dest.path) != nil)
     }
 
+    @Test func nilCwd_isStillProbed() {
+        let world = FilesystemLiveProbe.context(
+            command: ShellCommand(rawValue: "echo hi > file"),
+            cwd: nil,
+            homeDirectory: nil
+        )
+        guard case .probed(let context) = world else {
+            Issue.record("missing cwd live probe must be probed")
+            return
+        }
+        #expect(context.workingDirectory == nil)
+    }
+
     @Test func caseNormalization_followsPlatform() throws {
         let repo = try makeBoundaryRepo(name: "boundary-case")
         let file = repo.appendingPathComponent("CaseFile.swift")
@@ -163,11 +180,15 @@ struct FilesystemBoundaryProbeTests {
                 fact.canonical == file.path
                     || fact.canonical.lowercased() == file.path.lowercased()
             )
-            let context = FilesystemLiveProbe.context(
+            let world = FilesystemLiveProbe.context(
                 command: ShellCommand(rawValue: "rm casefile.swift"),
                 cwd: WorkingDirectory(validating: repo.path),
                 homeDirectory: nil
             )
+            guard case .probed(let context) = world else {
+                Issue.record("live probe must be probed")
+                return
+            }
             let analysis = analyzeFilesystem(
                 ShellCommand(rawValue: "rm casefile.swift"),
                 context: context

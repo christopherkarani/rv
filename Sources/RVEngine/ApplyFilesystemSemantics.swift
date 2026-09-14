@@ -9,13 +9,13 @@ import RVDomain
 public func applyFilesystemSemantics(
     pack: EvaluationResult,
     command: ShellCommand,
-    context: FilesystemAnalysisContext = .empty,
+    context: FilesystemAnalysisWorld = .unprobed,
     enabledPacks: [PackID] = dayOnePackIDs,
     policy: EffectiveActionPolicy = .empty
 ) -> EvaluationResult {
     applyFilesystemSemantics(
         pack: pack,
-        analysis: analyzeFilesystem(command, context: context),
+        analysis: analyzeFilesystem(command, context: filesystemAnalysisContext(context)),
         command: command,
         context: context,
         enabledPacks: enabledPacks,
@@ -27,7 +27,7 @@ public func applyFilesystemSemantics(
     pack: EvaluationResult,
     analysis: SemanticAnalysis,
     command: ShellCommand,
-    context: FilesystemAnalysisContext = .empty,
+    context: FilesystemAnalysisWorld = .unprobed,
     enabledPacks: [PackID] = dayOnePackIDs,
     policy: EffectiveActionPolicy = .empty
 ) -> EvaluationResult {
@@ -53,7 +53,7 @@ public func applyFilesystemSemantics(
     let verdict = ActionPolicyEngine.evaluate(
         action: action.proposedAction(
             command: command,
-            workingDirectory: context.workingDirectory
+            workingDirectory: filesystemWorkingDirectory(context)
         ),
         context: ReviewContext(repository: RepositoryReviewContext()),
         policy: policy
@@ -62,7 +62,7 @@ public func applyFilesystemSemantics(
     case .hardAllow, .reviewEligible:
         return result
     case .hardDeny(let deny):
-        if context.probe == .unprobed,
+        if case .unprobed = context,
             deny.ruleID == ActionPolicyEngine.Builtin.unresolvedFilesystem.ruleID
         {
             // ActionPolicyEngine ranks unresolved first. Unprobed worlds skip
@@ -103,6 +103,24 @@ private func filesystemSemanticDeny(
 
 /// Protected-path and out-of-repo still tighten when unprobed. Unresolved
 /// must not mask those hits on a mixed-target command.
+private func filesystemAnalysisContext(_ world: FilesystemAnalysisWorld) -> FilesystemAnalysisContext {
+    switch world {
+    case .unprobed:
+        return .empty
+    case .probed(let context):
+        return context
+    }
+}
+
+private func filesystemWorkingDirectory(_ world: FilesystemAnalysisWorld) -> WorkingDirectory? {
+    switch world {
+    case .unprobed:
+        return nil
+    case .probed(let context):
+        return context.workingDirectory
+    }
+}
+
 private func catalogOrBoundaryDeny(for action: FilesystemAction) -> Deny? {
     let kinds = action.effects.kinds
     if kinds.contains(.protectedPathMutation) {

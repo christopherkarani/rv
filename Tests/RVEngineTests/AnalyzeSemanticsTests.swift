@@ -4,9 +4,11 @@ import RVDomain
 
 @Suite("AnalyzeSemantics")
 struct AnalyzeSemanticsTests {
-    private let repo = FilesystemAnalysisContext(
-        workingDirectory: WorkingDirectory(validating: "/repo"),
-        repositoryRoot: RepositoryRoot(validating: "/repo")
+    private let repo = FilesystemAnalysisWorld.probed(
+        FilesystemAnalysisContext(
+            workingDirectory: WorkingDirectory(validating: "/repo"),
+            repositoryRoot: RepositoryRoot(validating: "/repo")
+        )
     )
 
     @Test func bashDashC_matchesDirectGitReset() {
@@ -21,11 +23,11 @@ struct AnalyzeSemanticsTests {
         let command = ShellCommand(rawValue: "sudo env FOO=bar sh -c 'git reset --hard'")
         let cwd = WorkingDirectory(validating: "/repo")
         let git = GitAnalysisContext(workingDirectory: cwd)
-        let fromCommand = analyzeSemantics(command, gitContext: git, filesystemContext: repo)
+        let fromCommand = analyzeSemantics(command, gitContext: git, filesystemWorld: repo)
         let fromUnwrap = analyzeSemantics(
             unwrapped: unwrapCommand(command, workingDirectory: cwd),
             gitContext: git,
-            filesystemContext: repo
+            filesystemWorld: repo
         )
         #expect(fromUnwrap == fromCommand)
         #expect(fromUnwrap.wrappers == [.sudo, .env, .sh])
@@ -44,7 +46,7 @@ struct AnalyzeSemanticsTests {
     @Test func echoQuotedRm_isNotDelete() {
         let analysis = analyzeSemantics(
             ShellCommand(rawValue: "echo 'rm -rf /'"),
-            filesystemContext: repo
+            filesystemWorld: repo
         )
         #expect(analysis == .unknown)
         #expect(analysis.filesystemAction == nil)
@@ -53,7 +55,7 @@ struct AnalyzeSemanticsTests {
     @Test func pythonPrintRm_isNotDelete() {
         let analysis = analyzeSemantics(
             ShellCommand(rawValue: #"python -c "print('rm -rf /')""#),
-            filesystemContext: repo
+            filesystemWorld: repo
         )
         #expect(analysis.innermost == .unknown)
         #expect(analysis.filesystemAction == nil)
@@ -62,7 +64,7 @@ struct AnalyzeSemanticsTests {
     @Test func pythonOsSystem_surfacesFilesystemDelete() {
         let analysis = analyzeSemantics(
             ShellCommand(rawValue: #"python -c "os.system('rm -rf Sources')""#),
-            filesystemContext: repo
+            filesystemWorld: repo
         )
         #expect(analysis.wrappers == [.python])
         guard case .filesystem(.delete(_, let recursive, let force)) = analysis.innermost else {
@@ -88,13 +90,15 @@ struct AnalyzeSemanticsTests {
     }
 
     @Test func envChdir_changesFilesystemScope() {
-        let context = FilesystemAnalysisContext(
-            workingDirectory: WorkingDirectory(validating: "/repo"),
-            repositoryRoot: RepositoryRoot(validating: "/repo")
+        let context = FilesystemAnalysisWorld.probed(
+            FilesystemAnalysisContext(
+                workingDirectory: WorkingDirectory(validating: "/repo"),
+                repositoryRoot: RepositoryRoot(validating: "/repo")
+            )
         )
         let analysis = analyzeSemantics(
             ShellCommand(rawValue: "env -C /tmp rm file"),
-            filesystemContext: context
+            filesystemWorld: context
         )
         guard case .filesystem(.delete(let targets, _, _)) = analysis.innermost else {
             Issue.record("expected delete, got \(analysis)")
@@ -130,6 +134,19 @@ struct AnalyzeSemanticsTests {
         let analysis = analyzeSemantics(ShellCommand(rawValue: "bash -c $'git reset --hard'"))
         #expect(analysis.innermost == .unwrapLimited)
         #expect(analysis != .unknown)
+    }
+
+    @Test func unprobedWorld_writeStaysUnknownScope() {
+        let analysis = analyzeSemantics(ShellCommand(rawValue: "echo hi > file"))
+        #expect(analysis.filesystemAction?.resources.filesystemScope == .unknown)
+    }
+
+    @Test func probedWorld_writeClassifiesInsideRepo() {
+        let analysis = analyzeSemantics(
+            ShellCommand(rawValue: "echo hi > file"),
+            filesystemWorld: repo
+        )
+        #expect(analysis.filesystemAction?.resources.filesystemScope == .insideRepository)
     }
 
     @Test func pythonPrintOsSystem_surfacesGitReset() {

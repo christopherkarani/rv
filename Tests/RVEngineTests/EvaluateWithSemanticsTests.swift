@@ -74,9 +74,11 @@ struct EvaluateWithSemanticsTests {
             "bash -c 'echo hi'",
             filesystemProbe: { outcome in
                 probed = outcome
-                return FilesystemAnalysisContext(
-                    workingDirectory: WorkingDirectory(validating: "/repo"),
-                    repositoryRoot: RepositoryRoot(validating: "/repo")
+                return .probed(
+                    FilesystemAnalysisContext(
+                        workingDirectory: WorkingDirectory(validating: "/repo"),
+                        repositoryRoot: RepositoryRoot(validating: "/repo")
+                    )
                 )
             }
         )
@@ -93,9 +95,11 @@ struct EvaluateWithSemanticsTests {
         let result = try runDoor(
             "bash -c 'echo hi > ../outside-file'",
             filesystemProbe: { _ in
-                FilesystemAnalysisContext(
-                    workingDirectory: WorkingDirectory(validating: "/repo"),
-                    repositoryRoot: RepositoryRoot(validating: "/repo")
+                .probed(
+                    FilesystemAnalysisContext(
+                        workingDirectory: WorkingDirectory(validating: "/repo"),
+                        repositoryRoot: RepositoryRoot(validating: "/repo")
+                    )
                 )
             }
         )
@@ -107,6 +111,12 @@ struct EvaluateWithSemanticsTests {
         #expect(result.analysis.filesystemAction?.resources.filesystemScope == .outsideRepository)
     }
 
+    @Test func defaultProbe_packAllowWrite_staysAllow() throws {
+        let result = try runDoor("echo hi > file")
+        #expect(result.decision == .allow)
+        #expect(result.analysis.filesystemAction?.operationKind == .write)
+    }
+
     @Test func plainAllow_staysAllow() throws {
         let result = try runDoor("git status")
         #expect(result.decision == .allow)
@@ -116,7 +126,7 @@ struct EvaluateWithSemanticsTests {
 private func runDoor(
     _ command: String,
     gitContext: GitAnalysisContext = .empty,
-    filesystemProbe: (UnwrapOutcome) -> FilesystemAnalysisContext = { _ in .empty },
+    filesystemProbe: (UnwrapOutcome) -> FilesystemAnalysisWorld = { _ in .unprobed },
     policy: EffectiveActionPolicy = .empty
 ) throws -> EvaluationResult {
     let packs = [

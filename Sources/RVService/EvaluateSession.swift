@@ -102,7 +102,7 @@ public struct EvaluateSession: Sendable {
         allowPaths: SecretAllowPathSet = .empty,
         home: String? = nil,
         gitContext: GitAnalysisContext = .empty,
-        filesystemProbe: (UnwrapOutcome) -> FilesystemAnalysisContext = { _ in .empty },
+        filesystemProbe: (UnwrapOutcome) -> FilesystemAnalysisWorld = { _ in .unprobed },
         policy: EffectiveActionPolicy = .empty
     ) -> EvaluationResult {
         let result = engineEvaluateWithSemantics(
@@ -160,7 +160,7 @@ private func engineEvaluateWithSemantics(
     engine: ICUPatternEngine,
     compiled: CompiledPacks<ICUCompiledPattern>,
     gitContext: GitAnalysisContext,
-    filesystemProbe: (UnwrapOutcome) -> FilesystemAnalysisContext,
+    filesystemProbe: (UnwrapOutcome) -> FilesystemAnalysisWorld,
     policy: EffectiveActionPolicy
 ) -> EvaluationResult {
     evaluateWithSemantics(

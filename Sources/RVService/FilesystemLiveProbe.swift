@@ -18,7 +18,7 @@ enum FilesystemLiveProbe {
         command: ShellCommand,
         cwd: WorkingDirectory?,
         homeDirectory: String?
-    ) -> FilesystemAnalysisContext {
+    ) -> FilesystemAnalysisWorld {
         switch unwrapped {
         case .complete(let extracted):
             return context(
@@ -35,38 +35,40 @@ enum FilesystemLiveProbe {
         command: ShellCommand,
         cwd: WorkingDirectory?,
         homeDirectory: String?
-    ) -> FilesystemAnalysisContext {
+    ) -> FilesystemAnalysisWorld {
         let paths = filesystemApparentPaths(command)
         guard let working = cwd?.rawValue else {
-            return FilesystemAnalysisContext(
-                workingDirectory: cwd,
-                homeDirectory: homeDirectory,
-                facts: paths.map { apparent in
-                    resolve(
-                        apparent: apparent,
-                        workingDirectory: nil,
-                        homeDirectory: homeDirectory
-                    )
-                },
-                probe: .probed
+            return .probed(
+                FilesystemAnalysisContext(
+                    workingDirectory: cwd,
+                    homeDirectory: homeDirectory,
+                    facts: paths.map { apparent in
+                        resolve(
+                            apparent: apparent,
+                            workingDirectory: nil,
+                            homeDirectory: homeDirectory
+                        )
+                    }
+                )
             )
         }
         guard let resolvedCwd = resolveExistingDirectory(working) else {
-            return FilesystemAnalysisContext(
-                workingDirectory: cwd,
-                homeDirectory: homeDirectory,
-                facts: paths.map { apparent in
-                    FilesystemPathFact(
-                        apparent: apparent,
-                        canonical: lexicalFilesystemPath(
-                            apparent,
-                            workingDirectory: working,
-                            homeDirectory: homeDirectory
-                        ),
-                        resolution: .uncertain
-                    )
-                },
-                probe: .probed
+            return .probed(
+                FilesystemAnalysisContext(
+                    workingDirectory: cwd,
+                    homeDirectory: homeDirectory,
+                    facts: paths.map { apparent in
+                        FilesystemPathFact(
+                            apparent: apparent,
+                            canonical: lexicalFilesystemPath(
+                                apparent,
+                                workingDirectory: working,
+                                homeDirectory: homeDirectory
+                            ),
+                            resolution: .uncertain
+                        )
+                    }
+                )
             )
         }
         let facts = paths.map { apparent in
@@ -76,13 +78,14 @@ enum FilesystemLiveProbe {
                 homeDirectory: homeDirectory
             )
         }
-        return FilesystemAnalysisContext(
-            workingDirectory: WorkingDirectory(validating: resolvedCwd) ?? cwd,
-            repositoryRoot: discoverRepositoryRoot(from: resolvedCwd),
-            homeDirectory: homeDirectory,
-            catalog: .dayOne,
-            facts: facts,
-            probe: .probed
+        return .probed(
+            FilesystemAnalysisContext(
+                workingDirectory: WorkingDirectory(validating: resolvedCwd) ?? cwd,
+                repositoryRoot: discoverRepositoryRoot(from: resolvedCwd),
+                homeDirectory: homeDirectory,
+                catalog: .dayOne,
+                facts: facts
+            )
         )
     }
 

@@ -93,41 +93,39 @@ public struct GitAnalysisContext: Sendable, Equatable {
     }
 }
 
-/// Whether a filesystem world was injected for analysis.
+/// Whether a filesystem I/O world was injected for analysis.
 ///
-/// Unprobed worlds must not fail-closed as unresolved-path. A probed world
-/// with missing cwd or repo root stays fail-closed unknown.
-public enum FilesystemProbeState: String, Sendable, Equatable, Codable {
+/// Unprobed: pack deny is the floor; unresolved-path does not tighten an allow.
+/// Probed: missing cwd or repo root stays fail-closed unknown.
+public enum FilesystemAnalysisWorld: Sendable, Equatable {
     case unprobed
-    case probed
+    case probed(FilesystemAnalysisContext)
 }
 
 /// Caller-supplied path facts. Live canonicalize stays at the evaluate door.
+///
+/// `empty` is the empty probed payload (no cwd, no facts), used only inside
+/// `.probed` when a live probe ran with missing cwd. No world injected is
+/// `FilesystemAnalysisWorld.unprobed`, not `.probed(.empty)`.
 public struct FilesystemAnalysisContext: Sendable, Equatable, Codable {
     public var workingDirectory: WorkingDirectory?
     public var repositoryRoot: RepositoryRoot?
     public var homeDirectory: String?
     public var catalog: SecretPathCatalog
     public var facts: [FilesystemPathFact]
-    /// Injected filesystem I/O world. `empty` is unprobed. Memberwise copies that
-    /// omit `probe:` become unprobed even when the source was probed; apply
-    /// must keep the injected world, not a rebuilt copy.
-    public var probe: FilesystemProbeState
 
     public init(
         workingDirectory: WorkingDirectory? = nil,
         repositoryRoot: RepositoryRoot? = nil,
         homeDirectory: String? = nil,
         catalog: SecretPathCatalog = .dayOne,
-        facts: [FilesystemPathFact] = [],
-        probe: FilesystemProbeState = .unprobed
+        facts: [FilesystemPathFact] = []
     ) {
         self.workingDirectory = workingDirectory
         self.repositoryRoot = repositoryRoot
         self.homeDirectory = homeDirectory
         self.catalog = catalog
         self.facts = facts
-        self.probe = probe
     }
 
     public static let empty = FilesystemAnalysisContext()
@@ -141,7 +139,6 @@ public struct FilesystemAnalysisContext: Sendable, Equatable, Codable {
         case repositoryRoot
         case homeDirectory
         case facts
-        case probe
     }
 
     public init(from decoder: Decoder) throws {
@@ -157,8 +154,6 @@ public struct FilesystemAnalysisContext: Sendable, Equatable, Codable {
         homeDirectory = try container.decodeIfPresent(String.self, forKey: .homeDirectory)
         catalog = .dayOne
         facts = try container.decodeIfPresent([FilesystemPathFact].self, forKey: .facts) ?? []
-        probe = try container.decodeIfPresent(FilesystemProbeState.self, forKey: .probe)
-            ?? .unprobed
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -167,6 +162,5 @@ public struct FilesystemAnalysisContext: Sendable, Equatable, Codable {
         try container.encodeIfPresent(repositoryRoot, forKey: .repositoryRoot)
         try container.encodeIfPresent(homeDirectory, forKey: .homeDirectory)
         try container.encode(facts, forKey: .facts)
-        try container.encode(probe, forKey: .probe)
     }
 }

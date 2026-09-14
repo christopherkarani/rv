@@ -4,9 +4,11 @@ import RVDomain
 
 @Suite("ApplySemantics")
 struct ApplySemanticsTests {
-    private let repo = FilesystemAnalysisContext(
-        workingDirectory: WorkingDirectory(validating: "/repo"),
-        repositoryRoot: RepositoryRoot(validating: "/repo")
+    private let repo = FilesystemAnalysisWorld.probed(
+        FilesystemAnalysisContext(
+            workingDirectory: WorkingDirectory(validating: "/repo"),
+            repositoryRoot: RepositoryRoot(validating: "/repo")
+        )
     )
 
     @Test func wrappedGitReset_matchesDirectDecision() throws {
@@ -56,7 +58,7 @@ struct ApplySemanticsTests {
         let composed = applySemantics(
             pack: pack,
             command: ShellCommand(rawValue: "echo 'rm -rf /'"),
-            filesystemContext: repo
+            filesystemWorld: repo
         )
         #expect(composed.decision == .allow)
         #expect(composed.analysis.filesystemAction == nil)
@@ -101,7 +103,7 @@ struct ApplySemanticsTests {
         let composed = applySemantics(
             pack: pack,
             command: ShellCommand(rawValue: command),
-            filesystemContext: repo
+            filesystemWorld: repo
         )
         guard case .deny(let deny) = composed.decision else {
             Issue.record("wrapped out-of-repo write must deny, got \(composed.decision)")
@@ -118,22 +120,24 @@ struct ApplySemanticsTests {
         let command = #"python -c "os.remove('link')""#
         let pack = try runSemanticsPack(command)
         #expect(pack.decision == .allow)
-        let context = FilesystemAnalysisContext(
-            workingDirectory: WorkingDirectory(validating: "/repo"),
-            repositoryRoot: RepositoryRoot(validating: "/repo"),
-            facts: [
-                FilesystemPathFact(
-                    apparent: "link",
-                    canonical: "/isolated-home/.ssh/id_rsa",
-                    followedSymlink: true,
-                    resolution: .resolved
-                ),
-            ]
+        let context = FilesystemAnalysisWorld.probed(
+            FilesystemAnalysisContext(
+                workingDirectory: WorkingDirectory(validating: "/repo"),
+                repositoryRoot: RepositoryRoot(validating: "/repo"),
+                facts: [
+                    FilesystemPathFact(
+                        apparent: "link",
+                        canonical: "/isolated-home/.ssh/id_rsa",
+                        followedSymlink: true,
+                        resolution: .resolved
+                    ),
+                ]
+            )
         )
         let composed = applySemantics(
             pack: pack,
             command: ShellCommand(rawValue: command),
-            filesystemContext: context
+            filesystemWorld: context
         )
         guard case .deny(let deny) = composed.decision else {
             Issue.record("protected path via python must deny")
@@ -142,6 +146,34 @@ struct ApplySemanticsTests {
         #expect(deny.ruleID == ActionPolicyEngine.Builtin.protectedPath.ruleID)
         #expect(composed.analysis.wrappers == [.python])
         #expect(composed.analysis.filesystemAction?.primaryTarget?.scope == .protectedPath)
+    }
+
+    @Test func unprobedWorld_packAllowWrite_staysAllow() throws {
+        let pack = try runSemanticsPack("echo hi > file")
+        #expect(pack.decision == .allow)
+        let composed = applySemantics(
+            pack: pack,
+            command: ShellCommand(rawValue: "echo hi > file")
+        )
+        #expect(composed.decision == .allow)
+        #expect(composed.analysis.filesystemAction?.operationKind == .write)
+    }
+
+    @Test func probedEmptyWorld_packAllowWrite_isFailClosedThroughAnalyze() throws {
+        let pack = try runSemanticsPack("echo hi > file")
+        #expect(pack.decision == .allow)
+        let composed = applySemantics(
+            pack: pack,
+            command: ShellCommand(rawValue: "echo hi > file"),
+            filesystemWorld: .probed(.empty)
+        )
+        guard case .deny(let deny) = composed.decision else {
+            Issue.record(
+                "probed empty must fail-closed through analyze+apply, got \(composed.decision)"
+            )
+            return
+        }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.unresolvedFilesystem.ruleID)
     }
 
     @Test func unquotedBashDashC_keepsPackDenyAndUnwrapLimited() throws {
