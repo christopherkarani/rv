@@ -2,6 +2,7 @@ import Foundation
 import RVAnalytics
 import RVDomain
 import RVEngine
+import RVHistory
 import RVHooks
 import RVIPC
 import RVPacks
@@ -255,7 +256,7 @@ public actor ServiceRuntime {
                     // (`EvaluationWorld.walkedPackIDs`): a warm rvd must never decide on a
                     // narrower or wider set than a cold one.
                     let request = GatedEvaluate.makeRequest(command: command, home: self.configHome)
-                    return await self.runEvaluate(request, cwd: cwd, host: params.host.rawValue)
+                    return await self.runEvaluate(request, cwd: cwd, host: .hook(params.host))
                 },
                 evaluateFile: { action, cwd in
                     await self.runFile(action, cwd: cwd, host: params.host)
@@ -306,7 +307,7 @@ public actor ServiceRuntime {
             action,
             home: configHome,
             cwd: cwd,
-            host: host.rawValue,
+            host: .hook(host),
             now: clock()
         )
     }
@@ -314,7 +315,7 @@ public actor ServiceRuntime {
     private func runEvaluate(
         _ request: EvaluationRequest,
         cwd: WorkingDirectory?,
-        host: String = "tty"
+        host: LedgerHost = .tty
     ) async -> EvaluationResult {
         rebuildWhenUncovered(wanted: WalkedPackIDs(ids: request.enabledPacks))
         let now = clock()

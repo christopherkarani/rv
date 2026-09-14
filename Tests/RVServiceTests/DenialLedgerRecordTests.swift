@@ -16,7 +16,7 @@ struct DenialLedgerRecordTests {
                 path: FileToolPath(rawValue: home.rawValue + "/.env")
             ),
             home: home,
-            host: "claude",
+            host: .hook(.claude),
             now: now
         )
         guard case .deny = result.decision else {
@@ -26,9 +26,9 @@ struct DenialLedgerRecordTests {
         let rows = DenialLedger(configDirectory: RVPolicyPaths.configDirectory(home: home))
             .list(now: now)
         #expect(rows.count == 1)
-        #expect(rows[0].host == "claude")
-        #expect(rows[0].tool == "Read")
-        #expect(rows[0].ruleID == "core.secrets:env")
+        #expect(rows[0].host == .hook(.claude))
+        #expect(rows[0].tool == .file(.read))
+        #expect(rows[0].ruleID == RuleID(pack: .coreSecrets, pattern: "env"))
         #expect(rows[0].path == "~/.env")
     }
 
@@ -42,7 +42,7 @@ struct DenialLedgerRecordTests {
                 path: FileToolPath(rawValue: "/tmp/rv-oracle/src/main.swift")
             ),
             home: home,
-            host: "claude",
+            host: .hook(.claude),
             now: now
         )
         #expect(result.decision == .allow)
@@ -64,7 +64,7 @@ struct DenialLedgerRecordTests {
         _ = GatedEvaluate().runFile(
             FileToolAction(kind: .read, path: FileToolPath(rawValue: "/tmp/rv-oracle/.env")),
             home: home,
-            host: "claude",
+            host: .hook(.claude),
             now: now
         )
         #expect(
@@ -85,7 +85,7 @@ struct DenialLedgerRecordTests {
             store: store,
             now: now,
             allowlist: { .empty },
-            host: "tty"
+            host: .tty
         )
         guard case .deny = result.decision else {
             Issue.record("expected peek deny")
@@ -111,7 +111,7 @@ struct DenialLedgerRecordTests {
             store: store,
             now: now,
             allowlist: { .empty },
-            host: "grok"
+            host: .hook(.grok)
         )
         guard case .deny = result.decision else {
             Issue.record("expected shell deny")
@@ -120,9 +120,10 @@ struct DenialLedgerRecordTests {
         let rows = DenialLedger(configDirectory: RVPolicyPaths.configDirectory(home: home))
             .list(now: now)
         #expect(rows.count == 1)
-        #expect(rows[0].host == "grok")
-        #expect(rows[0].tool == "Bash")
-        #expect(rows[0].ruleID == "core.git:reset-hard")
+        #expect(rows[0].host == .hook(.grok))
+        #expect(rows[0].tool == .bash)
+        #expect(rows[0].ruleID == RuleID(pack: .coreGit, pattern: "reset-hard"))
+        #expect(rows[0].category == .pack(.coreGit))
         #expect(rows[0].path.isEmpty)
     }
 
@@ -138,7 +139,7 @@ struct DenialLedgerRecordTests {
             store: store,
             now: now,
             allowlist: { .empty },
-            host: "claude"
+            host: .hook(.claude)
         )
         guard case .deny = result.decision else {
             Issue.record("expected spend-host-ask deny")
@@ -147,9 +148,10 @@ struct DenialLedgerRecordTests {
         let rows = DenialLedger(configDirectory: RVPolicyPaths.configDirectory(home: home))
             .list(now: now)
         #expect(rows.count == 1)
-        #expect(rows[0].host == "claude")
-        #expect(rows[0].tool == "Bash")
-        #expect(rows[0].ruleID == "core.secrets:env")
+        #expect(rows[0].host == .hook(.claude))
+        #expect(rows[0].tool == .bash)
+        #expect(rows[0].ruleID == RuleID(pack: .coreSecrets, pattern: "env"))
+        #expect(rows[0].category == .secret(.environment))
     }
 
     private func tempHome() throws -> HomeDirectory {

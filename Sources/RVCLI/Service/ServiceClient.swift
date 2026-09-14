@@ -1,5 +1,6 @@
 import Foundation
 import RVDomain
+import RVHistory
 import RVHooks
 import RVIPC
 import RVPolicy
@@ -131,7 +132,7 @@ public struct ServiceClient: Sendable {
     private func inProcessApply(
         command: ShellCommand,
         cwd: WorkingDirectory?,
-        host: String = "tty"
+        host: LedgerHost = .tty
     ) async -> EvaluationResult {
         let now = clock()
         let baseDirectory = store.baseDirectory
@@ -211,7 +212,7 @@ public struct ServiceClient: Sendable {
                     await self.inProcessApply(
                         command: command,
                         cwd: cwd,
-                        host: host.rawValue
+                        host: .hook(host)
                     )
                 },
                 evaluateFile: { action, cwd in
@@ -219,7 +220,7 @@ public struct ServiceClient: Sendable {
                         action,
                         home: self.home,
                         cwd: cwd,
-                        host: host.rawValue,
+                        host: .hook(host),
                         now: self.clock()
                     )
                 },

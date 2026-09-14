@@ -75,7 +75,7 @@ public struct GatedEvaluate: Sendable {
         _ action: FileToolAction,
         home: HomeDirectory? = nil,
         cwd: WorkingDirectory? = nil,
-        host: String = "tty",
+        host: LedgerHost = .tty,
         now: Date = Date()
     ) -> EvaluationResult {
         let allowPaths = SecretAllowPaths.loadEffective(
@@ -92,7 +92,7 @@ public struct GatedEvaluate: Sendable {
             path: action.path.rawValue,
             home: home,
             host: host,
-            tool: action.kind.ledgerName,
+            tool: .file(action.kind),
             now: now
         )
         return result
@@ -109,8 +109,8 @@ public struct GatedEvaluate: Sendable {
         store: AllowOnceStore,
         now: Date,
         allowlist: @escaping @Sendable () -> AllowlistSnapshot,
-        host: String = "tty",
-        tool: String = "Bash"
+        host: LedgerHost = .tty,
+        tool: LedgerTool = .bash
     ) async -> EvaluationResult {
         await gated(
             Self.policyVerb(intent),
@@ -145,8 +145,8 @@ public struct GatedEvaluate: Sendable {
         store: AllowOnceStore,
         now: Date,
         allowlist: @escaping @Sendable () -> AllowlistSnapshot,
-        host: String = "tty",
-        tool: String = "Bash"
+        host: LedgerHost = .tty,
+        tool: LedgerTool = .bash
     ) async -> EvaluationResult {
         await gated(
             PolicyVerb.peek,
@@ -169,8 +169,8 @@ public struct GatedEvaluate: Sendable {
         store: AllowOnceStore,
         now: Date,
         allowlist: @escaping @Sendable () -> AllowlistSnapshot,
-        host: String = "tty",
-        tool: String = "Bash"
+        host: LedgerHost = .tty,
+        tool: LedgerTool = .bash
     ) async -> EvaluationResult {
         await spendHostAsk(
             Self.makeRequest(command: command, home: home),
@@ -191,8 +191,8 @@ public struct GatedEvaluate: Sendable {
         store: AllowOnceStore,
         now: Date,
         allowlist: @escaping @Sendable () -> AllowlistSnapshot,
-        host: String = "tty",
-        tool: String = "Bash"
+        host: LedgerHost = .tty,
+        tool: LedgerTool = .bash
     ) async -> EvaluationResult {
         await gated(
             .hostAskSpend,
@@ -216,8 +216,8 @@ public struct GatedEvaluate: Sendable {
         store: AllowOnceStore,
         now: Date,
         allowlist: @escaping @Sendable () -> AllowlistSnapshot,
-        host: String = "tty",
-        tool: String = "Bash"
+        host: LedgerHost = .tty,
+        tool: LedgerTool = .bash
     ) async -> EvaluationResult {
         await gated(
             PolicyVerb.apply,
@@ -249,8 +249,8 @@ public struct GatedEvaluate: Sendable {
         store: AllowOnceStore,
         now: Date,
         allowlist: @escaping @Sendable () -> AllowlistSnapshot,
-        host: String,
-        tool: String
+        host: LedgerHost,
+        tool: LedgerTool
     ) async -> EvaluationResult {
         let result = evaluateWithSemantics(request, cwd: cwd, home: home)
         // Fast path: allow/indeterminate never touch PolicyGate or the
@@ -435,8 +435,8 @@ public struct GatedEvaluate: Sendable {
         _ result: EvaluationResult,
         path: String?,
         home: HomeDirectory?,
-        host: String,
-        tool: String,
+        host: LedgerHost,
+        tool: LedgerTool,
         now: Date
     ) {
         guard case .deny(let deny, let matched) = result.outcome else { return }
@@ -453,20 +453,20 @@ public struct GatedEvaluate: Sendable {
         } else {
             rawPath = ""
         }
-        let category: String
+        let category: LedgerCategory
         if let text = matched?.matchedText,
            let rule = SecretPathCatalog.dayOne.firstMatch(of: text)
         {
-            category = rule.category.rawValue
+            category = .secret(rule.category)
         } else {
-            category = deny.ruleID.pack.rawValue
+            category = .pack(deny.ruleID.pack)
         }
         DenialLedger(configDirectory: configDir).append(
             DenialLedgerRecord(
                 timestamp: now,
                 host: host,
                 tool: tool,
-                ruleID: deny.ruleID.rawValue,
+                ruleID: deny.ruleID,
                 category: category,
                 path: DenialPathRedaction.redact(rawPath, home: home.rawValue)
             ),

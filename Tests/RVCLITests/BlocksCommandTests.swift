@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import RVDomain
 import RVHistory
 import RVPolicy
 @testable import RVCLI
@@ -22,10 +23,10 @@ struct BlocksCommandTests {
         ledger.append(
             DenialLedgerRecord(
                 timestamp: now.addingTimeInterval(-5),
-                host: "claude",
-                tool: "Read",
-                ruleID: "core.secrets:env",
-                category: "environment",
+                host: .hook(.claude),
+                tool: .file(.read),
+                ruleID: RuleID(pack: .coreSecrets, pattern: "env"),
+                category: .secret(.environment),
                 path: "/tmp/rv-oracle/.env"
             ),
             now: now
@@ -33,10 +34,10 @@ struct BlocksCommandTests {
         ledger.append(
             DenialLedgerRecord(
                 timestamp: now,
-                host: "cursor",
-                tool: "Read",
-                ruleID: "core.secrets:id-ed25519",
-                category: "ssh",
+                host: .hook(.cursor),
+                tool: .file(.read),
+                ruleID: RuleID(pack: .coreSecrets, pattern: "id-ed25519"),
+                category: .secret(.ssh),
                 path: "~/.ssh/id_ed25519"
             ),
             now: now
@@ -44,9 +45,16 @@ struct BlocksCommandTests {
         let pretty = BlocksRun.list(home: home, json: false, now: now)
         let first = pretty.split(separator: "\n").first.map(String.init) ?? ""
         #expect(first.contains("core.secrets:id-ed25519"))
+        #expect(
+            first.contains("cursor  Read  core.secrets:id-ed25519  ssh  ~/.ssh/id_ed25519")
+        )
         #expect(pretty.contains("core.secrets:env"))
+        #expect(pretty.contains("claude  Read  core.secrets:env  environment  /tmp/rv-oracle/.env"))
         let json = BlocksRun.list(home: home, json: true, now: now)
         #expect(json.contains("\"rule_id\":\"core.secrets:id-ed25519\""))
+        #expect(json.contains("\"host\":\"cursor\""))
+        #expect(json.contains("\"tool\":\"Read\""))
+        #expect(json.contains("\"category\":\"ssh\""))
         #expect(json.contains("git reset") == false)
     }
 
