@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import RVDomain
+import RVHistory
 import RVHooks
 import RVPolicy
 @testable import RVCLI
@@ -24,6 +25,28 @@ struct HostAskSpendTests {
             Issue.record("replay after production hookEvaluate spend must deny")
             return
         }
+    }
+
+    @Test func hookEvaluateSpendDeny_recordsHookHost() async throws {
+        let home = try isolatedHome()
+        defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let client = ServiceClient(
+            transport: nil,
+            allowOnceDirectory: try isolatedAllowOnceDirectory(),
+            home: home,
+            clock: { now }
+        )
+        let stdin = """
+        {"toolName":"bash","cwd":"\(home.rawValue)","input":{"command":"cat .env"},"hostAsk":"spend"}
+        """
+        _ = await client.hookEvaluate(host: .pi, stdin: stdin)
+        let rows = DenialLedger(configDirectory: RVPolicyPaths.configDirectory(home: home))
+            .list(now: now)
+        #expect(rows.count == 1)
+        #expect(rows[0].host == .hook(.pi))
+        #expect(rows[0].tool == .bash)
+        #expect(rows[0].category == .secret(.environment))
     }
 
     @Test func piSpendCallbackAllowsOnceThenReplayDenies() async throws {

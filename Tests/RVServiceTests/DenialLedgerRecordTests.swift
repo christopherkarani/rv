@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import RVDomain
 import RVHistory
+import RVIPC
 import RVPolicy
 @testable import RVService
 
@@ -29,6 +30,7 @@ struct DenialLedgerRecordTests {
         #expect(rows[0].host == .hook(.claude))
         #expect(rows[0].tool == .file(.read))
         #expect(rows[0].ruleID == RuleID(pack: .coreSecrets, pattern: "env"))
+        #expect(rows[0].category == .secret(.environment))
         #expect(rows[0].path == "~/.env")
     }
 
@@ -151,6 +153,29 @@ struct DenialLedgerRecordTests {
         #expect(rows[0].host == .hook(.claude))
         #expect(rows[0].tool == .bash)
         #expect(rows[0].ruleID == RuleID(pack: .coreSecrets, pattern: "env"))
+        #expect(rows[0].category == .secret(.environment))
+    }
+
+    @Test func hookEvaluateSpendDeny_recordsHookHost() async throws {
+        let home = try tempHome()
+        defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let runtime = ServiceRuntime(
+            home: home,
+            allowOnceDirectory: try isolatedAllowOnceDirectory(),
+            clock: { now }
+        )
+        let stdin = """
+        {"toolName":"bash","cwd":"\(home.rawValue)","input":{"command":"cat .env"},"hostAsk":"spend"}
+        """
+        _ = await runtime.dispatch(
+            IPCRequest(method: .hookEvaluate(HookEvaluateParams(host: .pi, stdin: stdin)))
+        )
+        let rows = DenialLedger(configDirectory: RVPolicyPaths.configDirectory(home: home))
+            .list(now: now)
+        #expect(rows.count == 1)
+        #expect(rows[0].host == .hook(.pi))
+        #expect(rows[0].tool == .bash)
         #expect(rows[0].category == .secret(.environment))
     }
 

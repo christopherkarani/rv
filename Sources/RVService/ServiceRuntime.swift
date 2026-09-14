@@ -262,7 +262,7 @@ public actor ServiceRuntime {
                     await self.runFile(action, cwd: cwd, host: params.host)
                 },
                 spendHostAsk: { command, cwd in
-                    await self.runSpendHostAsk(command: command, cwd: cwd)
+                    await self.runSpendHostAsk(command: command, cwd: cwd, host: .hook(params.host))
                 },
                 mintOnDeny: { result, cwd in
                     await GatedEvaluate.mintUnlockCode(
@@ -336,7 +336,7 @@ public actor ServiceRuntime {
         return result
     }
 
-    private func runSpendHostAsk(command: ShellCommand, cwd: WorkingDirectory?) async -> EvaluationResult {
+    private func runSpendHostAsk(command: ShellCommand, cwd: WorkingDirectory?, host: LedgerHost) async -> EvaluationResult {
         rebuildWhenUncovered(wanted: EvaluationWorld.walkedPackIDs(home: configHome))
         let now = clock()
         let baseDirectory = allowOnce.baseDirectory
@@ -349,7 +349,8 @@ public actor ServiceRuntime {
             allowlist: {
                 AllowlistStore(baseDirectory: baseDirectory)
                     .loadUserSnapshot(workspacePath: cwd.map(\.rawValue), now: now)
-            }
+            },
+            host: host
         )
         recordAnalytics(for: result)
         return result

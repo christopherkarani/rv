@@ -225,7 +225,7 @@ public struct ServiceClient: Sendable {
                     )
                 },
                 spendHostAsk: { command, cwd in
-                    await self.spendHostAsk(command: command, cwd: cwd)
+                    await self.spendHostAsk(command: command, cwd: cwd, host: .hook(host))
                 },
                 mintOnDeny: { result, cwd in
                     await GatedEvaluate.mintUnlockCode(
@@ -296,7 +296,11 @@ public struct ServiceClient: Sendable {
     }
 
     /// Plant+spend a host Allow once on the same grant file evaluate uses.
-    public func spendHostAsk(command: ShellCommand, cwd: WorkingDirectory? = nil) async -> EvaluationResult {
+    public func spendHostAsk(
+        command: ShellCommand,
+        cwd: WorkingDirectory? = nil,
+        host: LedgerHost = .tty
+    ) async -> EvaluationResult {
         let now = clock()
         let baseDirectory = store.baseDirectory
         return await door.spendHostAsk(
@@ -308,7 +312,8 @@ public struct ServiceClient: Sendable {
             allowlist: {
                 AllowlistStore(baseDirectory: baseDirectory)
                     .loadUserSnapshot(workspacePath: cwd.map(\.rawValue), now: now)
-            }
+            },
+            host: host
         )
     }
 
