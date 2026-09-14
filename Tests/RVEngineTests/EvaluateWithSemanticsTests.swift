@@ -117,6 +117,26 @@ struct EvaluateWithSemanticsTests {
         #expect(result.analysis.filesystemAction?.operationKind == .write)
     }
 
+    @Test func defaultProbe_envChdirWrite_staysAllow() throws {
+        let result = try runDoor("env -C /tmp echo hi > file")
+        #expect(result.decision == .allow)
+        #expect(result.analysis.filesystemAction?.operationKind == .write)
+        #expect(result.analysis.filesystemAction?.resources.filesystemScope == .unknown)
+    }
+
+    @Test func defaultProbe_envChdirProtectedPath_stillDenies() throws {
+        let result = try runDoor("env -C /tmp/.ssh rm config")
+        guard case .deny(let deny) = result.decision else {
+            Issue.record(
+                "unprobed unwrap cwd must still catalog-deny, got \(result.decision)"
+            )
+            return
+        }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.protectedPath.ruleID)
+        #expect(result.analysis.wrappers == [.env])
+        #expect(result.analysis.filesystemAction?.primaryTarget?.scope == .protectedPath)
+    }
+
     @Test func plainAllow_staysAllow() throws {
         let result = try runDoor("git status")
         #expect(result.decision == .allow)

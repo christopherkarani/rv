@@ -70,7 +70,11 @@ private func filesystemContext(
 ) -> FilesystemAnalysisContext {
     switch world {
     case .unprobed:
-        return .empty
+        // Unwrap cwd is command text (`env -C`), not a live probe.
+        guard let workingDirectory else {
+            return .empty
+        }
+        return FilesystemAnalysisContext(workingDirectory: workingDirectory)
     case .probed(let context):
         return FilesystemAnalysisContext(
             workingDirectory: workingDirectory ?? context.workingDirectory,
