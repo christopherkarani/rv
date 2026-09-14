@@ -81,7 +81,7 @@ struct PolicyDraftCommandTests {
             )
             let machine = try store.loadMachine()
             #expect(machine.count == 1)
-            #expect(machine[0].predicate == .gitPush(force: .force, branch: "main"))
+            #expect(machine[0].predicate == .gitPush(force: .exactly(.force), branch: "main"))
             #expect(machine[0].verdict == .deny)
             #expect(machine[0].origin == .machine)
             #expect(machine[0].id == RuleID(pack: .typedGit, pattern: "force-push-main"))
@@ -103,7 +103,7 @@ struct PolicyDraftCommandTests {
             let other = PolicyDocumentRule(
                 id: RuleID(pack: .typedGit, pattern: "force-push-develop"),
                 verdict: .deny,
-                predicate: .gitPush(force: .force, branch: "develop")
+                predicate: .gitPush(force: .exactly(.force), branch: "develop")
             )
             try store.saveMachine(PolicyDocument(rules: [other]))
 
@@ -130,7 +130,7 @@ struct PolicyDraftCommandTests {
             #expect(machine.count == 2)
             #expect(machine.contains(where: { $0.predicate == other.predicate && $0.verdict == .deny }))
             #expect(
-                machine.filter { $0.predicate == .gitPush(force: .force, branch: "main") }.count == 1
+                machine.filter { $0.predicate == .gitPush(force: .exactly(.force), branch: "main") }.count == 1
             )
         }
     }
@@ -180,7 +180,7 @@ struct PolicyDocumentCommandTests {
                     PolicyDocumentRule(
                         id: RuleID(pack: .typedGit, pattern: "allow"),
                         verdict: .allow,
-                        predicate: .gitPush(force: .force, branch: "main")
+                        predicate: .gitPush(force: .exactly(.force), branch: "main")
                     ),
                 ]
             )
@@ -190,7 +190,7 @@ struct PolicyDocumentCommandTests {
                 PolicyDocumentRule(
                     id: RuleID(pack: .typedGit, pattern: "deny"),
                     verdict: .deny,
-                    predicate: .gitPush(force: .force, branch: "main")
+                    predicate: .gitPush(force: .exactly(.force), branch: "main")
                 ),
             ]
         )

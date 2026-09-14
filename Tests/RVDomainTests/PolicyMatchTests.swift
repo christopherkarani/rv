@@ -3,7 +3,7 @@ import RVDomain
 
 @Suite("PolicyMatch")
 struct PolicyMatchTests {
-    private let forceMain = PolicyPredicate.gitPush(force: .force, branch: "main")
+    private let forceMain = PolicyPredicate.gitPush(force: .exactly(.force), branch: "main")
 
     @Test func forceMain_matchesGitPushForceMain() {
         let git = forcePush(refspec: "main")
@@ -65,9 +65,9 @@ struct PolicyMatchTests {
 
     @Test func gitPush_doesNotMatchNonForceSwitchBranch() {
         let switched = GitAction.switchBranch(name: "main", force: false)
-        #expect(PolicyMatch.matches(.gitPush(force: nil, branch: "main"), action: switched) == false)
+        #expect(PolicyMatch.matches(.gitPush(force: .any, branch: "main"), action: switched) == false)
         #expect(
-            PolicyMatch.matches(.gitPush(force: GitPushForce.none, branch: "main"), action: switched)
+            PolicyMatch.matches(.gitPush(force: .exactly(.none), branch: "main"), action: switched)
                 == false
         )
         #expect(PolicyMatch.matches(forceMain, action: switched) == false)
@@ -83,18 +83,27 @@ struct PolicyMatchTests {
         #expect(PolicyMatch.matches(forceMain, action: leased) == false)
     }
 
-    @Test func gitPushForceUnspecified_matchesForceAndNonForceMainNotFeature() {
-        let anyMain = PolicyPredicate.gitPush(force: nil, branch: "main")
+    @Test func gitPushForceAny_matchesForceAndNonForceMainNotFeature() {
+        let anyMain = PolicyPredicate.gitPush(force: .any, branch: "main")
         #expect(PolicyMatch.matches(anyMain, action: forcePush(refspec: "main")))
         #expect(PolicyMatch.matches(anyMain, action: push(refspec: "main", force: .none)))
         #expect(PolicyMatch.matches(anyMain, action: forcePush(refspec: "feature")) == false)
         #expect(PolicyMatch.matches(anyMain, action: push(refspec: "feature", force: .none)) == false)
     }
 
-    @Test func gitPushForceNone_matchesNonForceMainNotForce() {
-        let noneMain = PolicyPredicate.gitPush(force: GitPushForce.none, branch: "main")
+    @Test func gitPushForceExactlyNone_matchesNonForceMainNotForce() {
+        let noneMain = PolicyPredicate.gitPush(force: .exactly(.none), branch: "main")
         #expect(PolicyMatch.matches(noneMain, action: push(refspec: "main", force: .none)))
         #expect(PolicyMatch.matches(noneMain, action: forcePush(refspec: "main")) == false)
+    }
+
+    @Test func gitPushForceAny_matchesForcePushToMain_exactlyNoneDoesNot() {
+        let forcePushToMain = forcePush(refspec: "main")
+        #expect(PolicyMatch.matches(.gitPush(force: .any, branch: "main"), action: forcePushToMain))
+        #expect(
+            PolicyMatch.matches(.gitPush(force: .exactly(.none), branch: "main"), action: forcePushToMain)
+                == false
+        )
     }
 }
 

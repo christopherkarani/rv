@@ -21,7 +21,7 @@ struct PolicyDocumentTOMLTests {
         let rule = document.rules[0]
         #expect(rule.id == RuleID(pack: .typedGit, pattern: "force-push-main"))
         #expect(rule.verdict == .deny)
-        #expect(rule.predicate == .gitPush(force: .force, branch: "main"))
+        #expect(rule.predicate == .gitPush(force: .exactly(.force), branch: "main"))
         #expect(rule.english == "Never allow force-push to main")
         let typed = rule.typedRule(origin: .machine)
         #expect(typed.predicate == rule.predicate)
@@ -110,7 +110,7 @@ struct PolicyDocumentTOMLTests {
                 PolicyDocumentRule(
                     id: RuleID(pack: .typedGit, pattern: "force-push-main"),
                     verdict: .deny,
-                    predicate: .gitPush(force: .force, branch: "main"),
+                    predicate: .gitPush(force: .exactly(.force), branch: "main"),
                     english: "Never allow\nforce-push to main"
                 ),
             ]
@@ -159,17 +159,65 @@ struct PolicyDocumentTOMLTests {
         let allow = PolicyDocumentRule(
             id: RuleID(pack: .typedGit, pattern: "allow"),
             verdict: .allow,
-            predicate: .gitPush(force: .force, branch: "main")
+            predicate: .gitPush(force: .exactly(.force), branch: "main")
         )
         let deny = PolicyDocumentRule(
             id: RuleID(pack: .typedGit, pattern: "deny"),
             verdict: .deny,
-            predicate: .gitPush(force: .force, branch: "main"),
+            predicate: .gitPush(force: .exactly(.force), branch: "main"),
             english: "Never allow force-push to main"
         )
         let merged = PolicyDocumentTOML.mergeLayer(existing: [allow], incoming: [deny])
         #expect(merged == [deny])
         let unchanged = PolicyDocumentTOML.mergeLayer(existing: [deny], incoming: [allow])
         #expect(unchanged == [deny])
+    }
+
+    @Test func omittedForce_isAny_distinctFromForceNone() throws {
+        let omitted = """
+        schema_version = 1
+
+        [[rule]]
+        id = "typed.git:any-push-main"
+        verdict = "deny"
+        predicate = "gitPush"
+        branch = "main"
+        """
+        let none = """
+        schema_version = 1
+
+        [[rule]]
+        id = "typed.git:non-force-main"
+        verdict = "deny"
+        predicate = "gitPush"
+        force = "none"
+        branch = "main"
+        """
+        let omittedDocument = try PolicyDocumentTOML.parse(omitted)
+        let noneDocument = try PolicyDocumentTOML.parse(none)
+        #expect(omittedDocument.rules[0].predicate == .gitPush(force: .any, branch: "main"))
+        #expect(noneDocument.rules[0].predicate == .gitPush(force: .exactly(.none), branch: "main"))
+        #expect(omittedDocument.rules[0].predicate != noneDocument.rules[0].predicate)
+        let omittedRendered = PolicyDocumentTOML.render(omittedDocument)
+        let noneRendered = PolicyDocumentTOML.render(noneDocument)
+        #expect(omittedRendered.contains("force =") == false)
+        #expect(noneRendered.contains("force = \"none\""))
+        #expect(try PolicyDocumentTOML.parse(omittedRendered) == omittedDocument)
+        #expect(try PolicyDocumentTOML.parse(noneRendered) == noneDocument)
+    }
+
+    @Test func unknownForce_refuses() {
+        let source = """
+        schema_version = 1
+        [[rule]]
+        id = "typed.git:x"
+        verdict = "deny"
+        predicate = "gitPush"
+        force = "withLeaseMaybe"
+        branch = "main"
+        """
+        #expect(throws: PolicyDocumentError.invalidFile) {
+            _ = try PolicyDocumentTOML.parse(source)
+        }
     }
 }

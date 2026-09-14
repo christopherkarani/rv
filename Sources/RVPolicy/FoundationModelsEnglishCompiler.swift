@@ -58,7 +58,7 @@ public struct FoundationModelsEnglishCompiler: EnglishCompiler {
 
 package enum FoundationModelsEnglishCompileMapping: Sendable {
     package static func preview(
-        force: GitPushForce?,
+        force: GitPushForceConstraint,
         branch: String?,
         verdict: TypedRuleVerdict,
         sentence: String,
@@ -82,16 +82,16 @@ package enum FoundationModelsEnglishCompileMapping: Sendable {
     }
 
     private static func ruleID(
-        force: GitPushForce?,
+        force: GitPushForceConstraint,
         branch: String?,
         verdict: TypedRuleVerdict
     ) -> RuleID {
-        if force == .force, branch == "main", verdict == .deny {
+        if force == .exactly(.force), branch == "main", verdict == .deny {
             return RuleID(pack: .typedGit, pattern: "force-push-main")
         }
         var parts = ["git-push"]
-        if let force {
-            parts.append(force.rawValue)
+        if case .exactly(let value) = force {
+            parts.append(value.rawValue)
         }
         if let branch {
             parts.append(branch)
@@ -101,17 +101,17 @@ package enum FoundationModelsEnglishCompileMapping: Sendable {
     }
 
     private static func defaultSentence(
-        force: GitPushForce?,
+        force: GitPushForceConstraint,
         branch: String?,
         verdict: TypedRuleVerdict
     ) -> String {
         let branchText = branch ?? "any branch"
         switch (force, verdict) {
-        case (.force, .deny):
+        case (.exactly(.force), .deny):
             return "Always block force-push to \(branchText)"
-        case (.force, .allow):
+        case (.exactly(.force), .allow):
             return "Always allow force-push to \(branchText)"
-        case (.force, .ask):
+        case (.exactly(.force), .ask):
             return "Ask before force-push to \(branchText)"
         case (_, .deny):
             return "Always block git push to \(branchText)"
@@ -237,16 +237,16 @@ enum FoundationModelsEnglishCompileClient: Sendable {
         }
     }
 
-    private static func gitForce(_ value: FoundationModelsEnglishForce) -> GitPushForce? {
+    private static func gitForce(_ value: FoundationModelsEnglishForce) -> GitPushForceConstraint {
         switch value {
         case .unspecified:
-            return nil
+            return .any
         case .none:
-            return GitPushForce.none
+            return .exactly(.none)
         case .forceWithLease:
-            return .forceWithLease
+            return .exactly(.forceWithLease)
         case .force:
-            return .force
+            return .exactly(.force)
         }
     }
 

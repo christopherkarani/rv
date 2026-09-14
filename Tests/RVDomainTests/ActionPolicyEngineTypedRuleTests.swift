@@ -54,7 +54,7 @@ struct ActionPolicyEngineTypedRuleTests {
     @Test func typedAsk_featureForcePush_isMandatoryHuman() {
         let rule = typedRule(
             id: RuleID(pack: .coreGit, pattern: "ask-force-push-feature"),
-            predicate: .gitPush(force: .force, branch: "feature"),
+            predicate: .gitPush(force: .exactly(.force), branch: "feature"),
             verdict: .ask
         )
         let git = forcePush(branchName: "feature")
@@ -89,12 +89,12 @@ struct ActionPolicyEngineTypedRuleTests {
     @Test func typedAsk_beatsTypedAllowOnFeatureForcePush() {
         let allow = typedRule(
             id: RuleID(pack: .coreGit, pattern: "allow-force-push-feature"),
-            predicate: .gitPush(force: .force, branch: "feature"),
+            predicate: .gitPush(force: .exactly(.force), branch: "feature"),
             verdict: .allow
         )
         let ask = typedRule(
             id: RuleID(pack: .coreGit, pattern: "ask-force-push-feature"),
-            predicate: .gitPush(force: .force, branch: "feature"),
+            predicate: .gitPush(force: .exactly(.force), branch: "feature"),
             verdict: .ask
         )
         let git = forcePush(branchName: "feature")
@@ -170,7 +170,7 @@ struct ActionPolicyEngineTypedRuleTests {
     @Test func typedRestriction_askMatchesPushMainWithoutBuiltinWall() {
         let rule = TypedRule(
             id: RuleID(pack: .coreGit, pattern: "git-push-none-main-ask"),
-            predicate: .gitPush(force: GitPushForce.none, branch: "main"),
+            predicate: .gitPush(force: .exactly(.none), branch: "main"),
             verdict: .ask,
             origin: .machine
         )
@@ -199,7 +199,7 @@ struct ActionPolicyEngineTypedRuleTests {
 
 private func typedRule(
     id: RuleID = RuleID(pack: .coreGit, pattern: "force-push-main"),
-    predicate: PolicyPredicate = .gitPush(force: .force, branch: "main"),
+    predicate: PolicyPredicate = .gitPush(force: .exactly(.force), branch: "main"),
     verdict: TypedRuleVerdict,
     origin: TypedRuleOrigin = .machine
 ) -> TypedRule {

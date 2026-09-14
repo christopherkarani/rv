@@ -11,7 +11,7 @@ struct EnglishCompilerTests {
             Issue.record("expected preview, got \(result)")
             return
         }
-        #expect(preview.rule.predicate == .gitPush(force: .force, branch: "main"))
+        #expect(preview.rule.predicate == .gitPush(force: .exactly(.force), branch: "main"))
         #expect(preview.rule.verdict == .deny)
         #expect(preview.allowedToSave == true)
         #expect(preview.sentence == "Always block force-push to main")
@@ -36,7 +36,7 @@ struct EnglishCompilerTests {
             rule: PolicyDocumentRule(
                 id: RuleID(pack: .typedGit, pattern: "force-push-main"),
                 verdict: .deny,
-                predicate: .gitPush(force: .force, branch: "main")
+                predicate: .gitPush(force: .exactly(.force), branch: "main")
             ),
             allowedToSave: true
         )
@@ -77,7 +77,7 @@ private struct StubEnglishCompiler: EnglishCompiler {
                     rule: PolicyDocumentRule(
                         id: RuleID(pack: .typedGit, pattern: "force-push-main"),
                         verdict: .deny,
-                        predicate: .gitPush(force: .force, branch: "main")
+                        predicate: .gitPush(force: .exactly(.force), branch: "main")
                     ),
                     allowedToSave: true
                 )

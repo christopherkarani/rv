@@ -18,7 +18,7 @@ struct TypedRuleAskWinsTests {
     func samePredicate_askAndAllow_isMandatoryHumanFromAsk(
         _ order: [TypedRuleVerdict]
     ) throws {
-        let predicate = PolicyPredicate.gitPush(force: .force, branch: "feature")
+        let predicate = PolicyPredicate.gitPush(force: .exactly(.force), branch: "feature")
         let rules = order.map { verdict in
             TypedRule(
                 id: RuleID(pack: .coreGit, pattern: "\(verdict.rawValue)-force-push-feature"),
@@ -65,7 +65,7 @@ struct TypedRuleAskWinsTests {
     func samePredicate_askAndAllow_onUncoveredPush_isMandatoryHumanFromAsk(
         _ order: [TypedRuleVerdict]
     ) throws {
-        let predicate = PolicyPredicate.gitPush(force: GitPushForce.none, branch: "feature")
+        let predicate = PolicyPredicate.gitPush(force: .exactly(.none), branch: "feature")
         let rules = order.map { verdict in
             TypedRule(
                 id: RuleID(pack: .coreGit, pattern: "\(verdict.rawValue)-push-feature"),

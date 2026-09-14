@@ -13,7 +13,7 @@ struct GatedEvaluateTypedRuleLoadTests {
         let ruleID = RuleID(pack: .coreGit, pattern: "hook-load-feature-deny")
         let rule = TypedRule(
             id: ruleID,
-            predicate: .gitPush(force: .forceWithLease, branch: "feature"),
+            predicate: .gitPush(force: .exactly(.forceWithLease), branch: "feature"),
             verdict: .deny,
             origin: .machine
         )
@@ -81,7 +81,7 @@ struct GatedEvaluateTypedRuleLoadTests {
         let workspace = try isolatedWorkspace()
         let rule = TypedRule(
             id: RuleID(pack: .coreGit, pattern: "hook-load-allow-main"),
-            predicate: .gitPush(force: .forceWithLease, branch: "main"),
+            predicate: .gitPush(force: .exactly(.forceWithLease), branch: "main"),
             verdict: .allow,
             origin: .machine
         )
@@ -108,7 +108,7 @@ struct GatedEvaluateTypedRuleLoadTests {
         let ruleID = RuleID(pack: .coreGit, pattern: "hook-load-main-deny")
         let rule = TypedRule(
             id: ruleID,
-            predicate: .gitPush(force: .forceWithLease, branch: "main"),
+            predicate: .gitPush(force: .exactly(.forceWithLease), branch: "main"),
             verdict: .deny,
             origin: .machine
         )
@@ -145,7 +145,7 @@ struct GatedEvaluateTypedRuleLoadTests {
         let ruleID = RuleID(pack: .coreGit, pattern: "hook-load-main-deny")
         let rule = TypedRule(
             id: ruleID,
-            predicate: .gitPush(force: .forceWithLease, branch: "main"),
+            predicate: .gitPush(force: .exactly(.forceWithLease), branch: "main"),
             verdict: .deny,
             origin: .machine
         )

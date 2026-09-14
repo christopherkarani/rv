@@ -10,7 +10,7 @@ struct ApplyGitSemanticsTypedRuleTests {
         #expect(pack.decision == .allow)
         let rule = TypedRule(
             id: RuleID(pack: .coreGit, pattern: "deny-force-with-lease-feature"),
-            predicate: .gitPush(force: .forceWithLease, branch: "feature"),
+            predicate: .gitPush(force: .exactly(.forceWithLease), branch: "feature"),
             verdict: .deny,
             origin: .machine
         )
@@ -43,7 +43,7 @@ struct ApplyGitSemanticsTypedRuleTests {
         #expect(pack.decision == .allow)
         let rule = TypedRule(
             id: RuleID(pack: .coreGit, pattern: "allow-force-with-lease-main"),
-            predicate: .gitPush(force: .forceWithLease, branch: "main"),
+            predicate: .gitPush(force: .exactly(.forceWithLease), branch: "main"),
             verdict: .allow,
             origin: .machine
         )
@@ -67,7 +67,7 @@ struct ApplyGitSemanticsTypedRuleTests {
         #expect(pack.decision == .allow)
         let rule = TypedRule(
             id: RuleID(pack: .coreGit, pattern: "git-push-none-main-ask"),
-            predicate: .gitPush(force: GitPushForce.none, branch: "main"),
+            predicate: .gitPush(force: .exactly(.none), branch: "main"),
             verdict: .ask,
             origin: .machine
         )
@@ -94,7 +94,7 @@ struct ApplyGitSemanticsTypedRuleTests {
         )
         let rule = TypedRule(
             id: RuleID(pack: .coreGit, pattern: "git-push-none-main-ask"),
-            predicate: .gitPush(force: GitPushForce.none, branch: "main"),
+            predicate: .gitPush(force: .exactly(.none), branch: "main"),
             verdict: .ask,
             origin: .machine
         )
@@ -114,7 +114,7 @@ struct ApplyGitSemanticsTypedRuleTests {
         #expect(pack.decision == .allow)
         let rule = TypedRule(
             id: RuleID(pack: .coreGit, pattern: "deny-force-with-lease-feature"),
-            predicate: .gitPush(force: .forceWithLease, branch: "feature"),
+            predicate: .gitPush(force: .exactly(.forceWithLease), branch: "feature"),
             verdict: .deny,
             origin: .machine
         )

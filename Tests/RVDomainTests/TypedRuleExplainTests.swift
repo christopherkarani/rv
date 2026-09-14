@@ -29,7 +29,7 @@ struct TypedRuleExplainTests {
 private func typedPushDeny() -> TypedRule {
     TypedRule(
         id: RuleID(pack: .coreGit, pattern: "force-push-main"),
-        predicate: .gitPush(force: .force, branch: "main"),
+        predicate: .gitPush(force: .exactly(.force), branch: "main"),
         verdict: .deny,
         origin: .machine
     )

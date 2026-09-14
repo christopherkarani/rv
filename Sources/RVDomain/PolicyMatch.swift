@@ -13,14 +13,14 @@ public enum PolicyMatch: Sendable {
     }
 
     private static func matchesGitPush(
-        wantForce: GitPushForce?,
+        wantForce: GitPushForceConstraint,
         wantBranch: String?,
         on action: GitAction
     ) -> Bool {
         guard case .push(_, let refspec, let force, let delete) = action, delete == false else {
             return false
         }
-        if let wantForce, wantForce != force {
+        if case .exactly(let want) = wantForce, want != force {
             return false
         }
         if let wantBranch, names(wantBranch, refspec: refspec ?? action.resources.branchName) == false {

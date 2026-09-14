@@ -11,7 +11,7 @@ struct TypedRuleStoreTests {
         let store = TypedRuleStore(baseDirectory: root)
         let rule = TypedRule(
             id: RuleID(pack: .coreGit, pattern: "force-push-main"),
-            predicate: .gitPush(force: .force, branch: "main"),
+            predicate: .gitPush(force: .exactly(.force), branch: "main"),
             verdict: .deny,
             origin: .machine
         )
@@ -29,7 +29,7 @@ struct TypedRuleStoreTests {
     }
 
     @Test func repoAllowCannotDropMachineDeny() {
-        let predicate = PolicyPredicate.gitPush(force: .force, branch: "main")
+        let predicate = PolicyPredicate.gitPush(force: .exactly(.force), branch: "main")
         let machineDeny = TypedRule(
             id: RuleID(pack: .coreGit, pattern: "force-push-main"),
             predicate: predicate,
@@ -53,7 +53,7 @@ struct TypedRuleStoreTests {
     }
 
     @Test func machineAllowCannotDropBuiltinDeny() {
-        let predicate = PolicyPredicate.gitPush(force: .force, branch: "main")
+        let predicate = PolicyPredicate.gitPush(force: .exactly(.force), branch: "main")
         let builtinDeny = TypedRule(
             id: RuleID(pack: .coreGit, pattern: "force-push-main-builtin"),
             predicate: predicate,
@@ -84,7 +84,7 @@ struct TypedRuleStoreTests {
             try? FileManager.default.removeItem(at: workspace)
         }
         let store = TypedRuleStore(baseDirectory: config)
-        let predicate = PolicyPredicate.gitPush(force: .force, branch: "main")
+        let predicate = PolicyPredicate.gitPush(force: .exactly(.force), branch: "main")
         let machineDeny = TypedRule(
             id: RuleID(pack: .coreGit, pattern: "force-push-main"),
             predicate: predicate,
@@ -112,7 +112,7 @@ struct TypedRuleStoreTests {
         let store = TypedRuleStore(baseDirectory: root)
         let rule = TypedRule(
             id: RuleID(pack: .coreGit, pattern: "force-push-main"),
-            predicate: .gitPush(force: .force, branch: "main"),
+            predicate: .gitPush(force: .exactly(.force), branch: "main"),
             verdict: .deny,
             origin: .machine
         )
@@ -160,13 +160,13 @@ struct TypedRuleStoreTests {
         let store = TypedRuleStore(baseDirectory: root)
         let tomlRule = TypedRule(
             id: RuleID(pack: .typedGit, pattern: "from-toml"),
-            predicate: .gitPush(force: .force, branch: "main"),
+            predicate: .gitPush(force: .exactly(.force), branch: "main"),
             verdict: .deny,
             origin: .machine
         )
         let jsonRule = TypedRule(
             id: RuleID(pack: .coreGit, pattern: "from-json"),
-            predicate: .gitPush(force: .force, branch: "develop"),
+            predicate: .gitPush(force: .exactly(.force), branch: "develop"),
             verdict: .deny,
             origin: .machine
         )
@@ -189,7 +189,7 @@ struct TypedRuleStoreTests {
         let loaded = try store.loadMachine()
         #expect(loaded.count == 1)
         #expect(loaded[0].id == RuleID(pack: .coreGit, pattern: "force-push-main"))
-        #expect(loaded[0].predicate == .gitPush(force: .force, branch: "main"))
+        #expect(loaded[0].predicate == .gitPush(force: .exactly(.force), branch: "main"))
     }
 
     @Test func schemaVersionRoundTripsAndRejectsOtherVersions() throws {
@@ -198,7 +198,7 @@ struct TypedRuleStoreTests {
         let store = TypedRuleStore(baseDirectory: root)
         let rule = TypedRule(
             id: RuleID(pack: .coreGit, pattern: "force-push-main"),
-            predicate: .gitPush(force: .force, branch: "main"),
+            predicate: .gitPush(force: .exactly(.force), branch: "main"),
             verdict: .deny,
             origin: .machine
         )
@@ -236,7 +236,7 @@ struct TypedRuleStoreTests {
                 PolicyDocumentRule(
                     id: RuleID(pack: .typedGit, pattern: "force-push-main"),
                     verdict: .deny,
-                    predicate: .gitPush(force: .force, branch: "main"),
+                    predicate: .gitPush(force: .exactly(.force), branch: "main"),
                     english: "Never allow force-push to main"
                 ),
             ]
