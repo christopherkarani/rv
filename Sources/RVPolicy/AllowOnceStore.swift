@@ -35,7 +35,7 @@ public actor AllowOnceStore {
         now: Date,
         robot: Bool = false,
         ttl: TimeInterval = 24 * 60 * 60
-    ) async throws -> String {
+    ) async throws -> AllowOnceUnlockCode {
         guard allowsInteractiveAllowOnce(tty) else { throw AllowOnceError.ttyRequired }
         guard robot == false else { throw AllowOnceError.robotRefused }
         let trimmed = matchingView.rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -44,7 +44,7 @@ public actor AllowOnceStore {
         var lastError: AllowOnceError = .collision
         for _ in 0..<8 {
             let code = try generateAllowOnceCode()
-            let hash = sha256Hex(code)
+            let hash = sha256Hex(code.rawValue)
             do {
                 try withFileLock {
                     let fresh = try AllowOnceLedger.mint(
@@ -68,7 +68,7 @@ public actor AllowOnceStore {
         throw lastError
     }
 
-    /// Hook deny mint. Not TTY-gated. Returns plaintext 6-hex or nil.
+    /// Hook deny mint. Not TTY-gated. Returns a six-hex code or nil.
     /// Writes `kind: .pending` only. Never plants a granted row.
     package func mintFromDeny(
         matchingView: MatchingView,
@@ -76,18 +76,18 @@ public actor AllowOnceStore {
         ruleID: RuleID?,
         now: Date,
         ttl: TimeInterval = 24 * 60 * 60
-    ) async -> String? {
+    ) async -> AllowOnceUnlockCode? {
         let trimmed = matchingView.rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty == false else { return nil }
         let view = MatchingView(trimmed)
         for _ in 0..<8 {
-            let code: String
+            let code: AllowOnceUnlockCode
             do {
                 code = try generateAllowOnceCode()
             } catch {
                 return nil
             }
-            let hash = sha256Hex(code)
+            let hash = sha256Hex(code.rawValue)
             do {
                 try withFileLock(nonBlocking: true) {
                     let fresh = try AllowOnceLedger.mint(
@@ -350,9 +350,13 @@ public actor AllowOnceStore {
     }
 }
 
-private func generateAllowOnceCode() throws -> String {
+public func generateAllowOnceCode() throws -> AllowOnceUnlockCode {
     // Linux 6.3.3 has no SystemRandomNumberGenerator.fill; CSPRNG via the generator.
     var generator = SystemRandomNumberGenerator()
     let bytes = (0..<3).map { _ in UInt8.random(in: 0...255, using: &generator) }
-    return bytes.map { String(format: "%02x", $0) }.joined()
+    let raw = bytes.map { String(format: "%02x", $0) }.joined()
+    guard let code = AllowOnceUnlockCode(validating: raw) else {
+        throw AllowOnceError.encodeFailed
+    }
+    return code
 }

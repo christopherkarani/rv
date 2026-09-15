@@ -25,7 +25,7 @@ public func hookWire(
     evaluate: @Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult,
     evaluateFile: (@Sendable (FileToolAction, WorkingDirectory?) async -> EvaluationResult)? = nil,
     spendHostAsk: (@Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult)? = nil,
-    mintOnDeny: (@Sendable (EvaluationResult, WorkingDirectory?) async -> String?)? = nil,
+    mintOnDeny: (@Sendable (EvaluationResult, WorkingDirectory?) async -> AllowOnceUnlockCode?)? = nil,
     recordHostAsk: (@Sendable (HookRequest, ProposedAction) async throws -> Void)? = nil,
     clearHostAsk: (@Sendable (HookRequest, ProposedAction) async throws -> Void)? = nil
 ) async -> HookWire {
@@ -127,7 +127,7 @@ private func hookBody<C: HostCodec>(
     evaluate: @Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult,
     evaluateFile: (@Sendable (FileToolAction, WorkingDirectory?) async -> EvaluationResult)?,
     spendHostAsk: (@Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult)?,
-    mintOnDeny: (@Sendable (EvaluationResult, WorkingDirectory?) async -> String?)?,
+    mintOnDeny: (@Sendable (EvaluationResult, WorkingDirectory?) async -> AllowOnceUnlockCode?)?,
     recordHostAsk: (@Sendable (HookRequest, ProposedAction) async throws -> Void)?,
     clearHostAsk: (@Sendable (HookRequest, ProposedAction) async throws -> Void)?
 ) async -> HookWire {
@@ -190,7 +190,7 @@ private func hookBody<C: HostCodec>(
                 using: codec,
                 intent: .firstCall(
                     verdict: verdict,
-                    unlockCode: unlockCode.flatMap(AllowOnceUnlockCode.init(validating:))
+                    unlockCode: unlockCode
                 )
             )
         }
@@ -283,8 +283,8 @@ private func mintUnlockCodeIfNeeded(
     result: EvaluationResult,
     verdict: HostAskVerdict,
     cwd: WorkingDirectory?,
-    mintOnDeny: (@Sendable (EvaluationResult, WorkingDirectory?) async -> String?)?
-) async -> String? {
+    mintOnDeny: (@Sendable (EvaluationResult, WorkingDirectory?) async -> AllowOnceUnlockCode?)?
+) async -> AllowOnceUnlockCode? {
     guard let mintOnDeny else { return nil }
     guard case .deny = result.decision else { return nil }
     switch verdict {

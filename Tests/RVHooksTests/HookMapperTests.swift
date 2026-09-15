@@ -306,6 +306,7 @@ func hookWire_samePathHosts_resetHardIsShortDeny(_ host: HookHost) throws {
 
 @Test func hookWire_mintedUnlockCodePassesTypedNext() throws {
     let denyCodec = EncodeDenySpy()
+    let code: AllowOnceUnlockCode = try mintedUnlock()
     _ = hookWire(
         from: EvaluationResult(
             outcome: .deny(
@@ -315,12 +316,12 @@ func hookWire_samePathHosts_resetHardIsShortDeny(_ host: HookHost) throws {
         ),
         command: ShellCommand(rawValue: "git reset --hard"),
         using: denyCodec,
-        intent: .firstCall(verdict: .deny, unlockCode: try mintedUnlock())
+        intent: .firstCall(verdict: .deny, unlockCode: code)
     )
-    let code = try mintedUnlock()
     #expect(denyCodec.denyCalls.count == 1)
     #expect(denyCodec.denyCalls[0].rule == RuleID(pack: .coreGit, pattern: "reset-hard"))
     #expect(denyCodec.denyCalls[0].next == .minted(code))
+    // hookWire(..., unlockCode: "ABC") does not compile.
 }
 
 @Test func hookWire_invalidUnlockCodePassesNone() {

@@ -9,6 +9,13 @@ import RVDomain
 @testable import RVPolicy
 
 struct AllowOnceStoreTests {
+    @Test func generateAllowOnceCode_returnsAllowOnceUnlockCode() throws {
+        let code: AllowOnceUnlockCode = try generateAllowOnceCode()
+        #expect(AllowOnceUnlockCode.isValid(code.rawValue))
+        #expect(code.rawValue.count == 6)
+        #expect(code.rawValue == code.rawValue.lowercased())
+    }
+
     @Test func nonTTYMintRefusesAndDoesNotWrite() async throws {
         let store = try isolatedStore()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
@@ -44,19 +51,19 @@ struct AllowOnceStoreTests {
         let store = try isolatedStore()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
-        let code = try await store.mint(
+        let code: AllowOnceUnlockCode = try await store.mint(
             matchingView: "git reset --hard",
             cwd: wd("/tmp/a"),
             ruleID: nil,
             tty: tty,
             now: now
         )
-        #expect(code.count == 6)
+        #expect(code.rawValue.count == 6)
         let disk = try String(contentsOf: jsonl(store), encoding: .utf8)
-        #expect(disk.contains(code) == false)
+        #expect(disk.contains(code.rawValue) == false)
         #expect(disk.contains("code_hash"))
         #expect(disk.contains("short_code") == false)
-        _ = try await store.redeem(code: code, tty: tty, now: now)
+        _ = try await store.redeem(code: code.rawValue, tty: tty, now: now)
         let first = await store.consume(matchingView: "git reset --hard", cwd: wd("/tmp/a"), now: now)
         let second = await store.consume(matchingView: "git reset --hard", cwd: wd("/tmp/a"), now: now)
         guard case .consumed = first else {
@@ -65,7 +72,7 @@ struct AllowOnceStoreTests {
         }
         #expect(second == .alreadyConsumed)
         await #expect(throws: AllowOnceError.alreadySpent) {
-            try await store.redeem(code: code, tty: tty, now: now)
+            try await store.redeem(code: code.rawValue, tty: tty, now: now)
         }
     }
 
@@ -285,15 +292,14 @@ struct AllowOnceStoreTests {
             now: now
         )
         let minted = try #require(code)
-        #expect(minted.count == 6)
-        #expect(isAllowOnceStoreHex(minted))
-        #expect(minted == minted.lowercased())
+        #expect(AllowOnceUnlockCode.isValid(minted.rawValue))
+        #expect(minted.rawValue == minted.rawValue.lowercased())
         let rows = await store.list(now: now)
         #expect(rows.count == 1)
         #expect(rows[0].kind == .pending)
         #expect(rows[0].cwd == wd("/tmp/ws"))
         let disk = try String(contentsOf: jsonl(store), encoding: .utf8)
-        #expect(disk.contains(minted) == false)
+        #expect(disk.contains(minted.rawValue) == false)
         #expect(disk.contains("\"kind\":\"pending\""))
         #expect(disk.contains("consumed_at") == false)
     }
@@ -339,16 +345,16 @@ struct AllowOnceStoreTests {
         )
         await #expect(throws: AllowOnceError.ttyRequired) {
             try await store.redeem(
-                code: minted,
+                code: minted.rawValue,
                 tty: TTYCapability(stdinIsTTY: false, stdoutIsTTY: false, ci: false),
                 now: now
             )
         }
         await #expect(throws: AllowOnceError.robotRefused) {
-            try await store.redeem(code: minted, tty: tty, now: now, robot: true)
+            try await store.redeem(code: minted.rawValue, tty: tty, now: now, robot: true)
         }
         #expect((await store.list(now: now)).contains { $0.kind == .pending })
-        _ = try await store.redeem(code: minted, tty: tty, now: now)
+        _ = try await store.redeem(code: minted.rawValue, tty: tty, now: now)
         let first = await store.consume(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
         let second = await store.consume(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
         guard case .consumed = first else {
@@ -479,12 +485,6 @@ private func readProbeStatus(directory: URL, outputName: String, process: Proces
     try #require(FileManager.default.fileExists(atPath: url.path))
     return try String(contentsOf: url, encoding: .utf8)
         .trimmingCharacters(in: .whitespacesAndNewlines)
-}
-
-private func isAllowOnceStoreHex(_ code: String) -> Bool {
-    code.count == 6 && code.unicodeScalars.allSatisfy { scalar in
-        (scalar >= "0" && scalar <= "9") || (scalar >= "a" && scalar <= "f")
-    }
 }
 
 private func isolatedStore() throws -> AllowOnceStore {
