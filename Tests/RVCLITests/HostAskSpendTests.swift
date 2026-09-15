@@ -58,12 +58,14 @@ struct HostAskSpendTests {
         let wire = await hookWire(
             host: .pi,
             stdin: stdin,
-            evaluate: { command, cwd in
-                await client.evaluateResult(command: command, cwd: cwd)
-            },
-            spendHostAsk: { command, cwd in
-                await client.spendHostAsk(command: command, cwd: cwd)
-            }
+            ports: HookWirePorts(
+                evaluate: { command, cwd in
+                    await client.evaluateResult(command: command, cwd: cwd)
+                },
+                spendHostAsk: { command, cwd in
+                    await client.spendHostAsk(command: command, cwd: cwd)
+                }
+            )
         )
         #expect(wire.stdout.isEmpty)
         #expect(wire.exitCode == 0)
@@ -111,12 +113,14 @@ struct HostAskSpendTests {
         let wire = await hookWire(
             host: .opencode,
             stdin: stdin,
-            evaluate: { command, cwd in
-                await client.evaluateResult(command: command, cwd: cwd)
-            },
-            spendHostAsk: { command, cwd in
-                await client.spendHostAsk(command: command, cwd: cwd)
-            }
+            ports: HookWirePorts(
+                evaluate: { command, cwd in
+                    await client.evaluateResult(command: command, cwd: cwd)
+                },
+                spendHostAsk: { command, cwd in
+                    await client.spendHostAsk(command: command, cwd: cwd)
+                }
+            )
         )
         #expect(wire.stdout.isEmpty)
         #expect(wire.exitCode == 0)
@@ -140,12 +144,14 @@ struct HostAskSpendTests {
         let wire = await hookWire(
             host: .opencode,
             stdin: stdin,
-            evaluate: { command, cwd in
-                await client.evaluateResult(command: command, cwd: cwd)
-            },
-            spendHostAsk: { command, cwd in
-                await client.spendHostAsk(command: command, cwd: cwd)
-            }
+            ports: HookWirePorts(
+                evaluate: { command, cwd in
+                    await client.evaluateResult(command: command, cwd: cwd)
+                },
+                spendHostAsk: { command, cwd in
+                    await client.spendHostAsk(command: command, cwd: cwd)
+                }
+            )
         )
         #expect(wire.stdout.isEmpty)
         #expect(wire.exitCode == 0)
@@ -169,12 +175,14 @@ struct HostAskSpendTests {
         let wire = await hookWire(
             host: .claude,
             stdin: stdin,
-            evaluate: { command, cwd in
-                await client.evaluateResult(command: command, cwd: cwd)
-            },
-            spendHostAsk: { command, cwd in
-                await client.spendHostAsk(command: command, cwd: cwd)
-            }
+            ports: HookWirePorts(
+                evaluate: { command, cwd in
+                    await client.evaluateResult(command: command, cwd: cwd)
+                },
+                spendHostAsk: { command, cwd in
+                    await client.spendHostAsk(command: command, cwd: cwd)
+                }
+            )
         )
         #expect(wire.stdout.isEmpty)
         #expect(wire.exitCode == 0)
@@ -239,12 +247,14 @@ struct HostAskSpendTests {
         let wire = await hookWire(
             host: .grok,
             stdin: stdin,
-            evaluate: { command, cwd in
-                await client.evaluateResult(command: command, cwd: cwd)
-            },
-            spendHostAsk: { command, cwd in
-                await client.spendHostAsk(command: command, cwd: cwd)
-            }
+            ports: HookWirePorts(
+                evaluate: { command, cwd in
+                    await client.evaluateResult(command: command, cwd: cwd)
+                },
+                spendHostAsk: { command, cwd in
+                    await client.spendHostAsk(command: command, cwd: cwd)
+                }
+            )
         )
         #expect(wire.stdout.isEmpty == false)
         let json = try #require(

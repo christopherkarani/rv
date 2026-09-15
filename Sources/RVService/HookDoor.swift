@@ -9,25 +9,18 @@ public struct HookDoor: Sendable {
     public static func run(
         host: HookHost,
         stdin: String,
-        evaluate: @Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult,
-        evaluateFile: (@Sendable (FileToolAction, WorkingDirectory?) async -> EvaluationResult)? = nil,
-        spendHostAsk: (@Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult)? = nil,
-        mintOnDeny: (@Sendable (EvaluationResult, WorkingDirectory?) async -> String?)? = nil,
-        recordHostAsk: (@Sendable (HookRequest, ProposedAction) async throws -> Void)? = nil,
-        clearHostAsk: (@Sendable (HookRequest, ProposedAction) async throws -> Void)? = nil
-    ) async throws -> HookEvaluateReply {
-        reply(
-            await hookWire(
-                host: host,
-                stdin: stdin,
-                evaluate: evaluate,
-                evaluateFile: evaluateFile,
-                spendHostAsk: spendHostAsk,
-                mintOnDeny: mintOnDeny,
-                recordHostAsk: recordHostAsk,
-                clearHostAsk: clearHostAsk
-            )
-        )
+        ports: HookWirePorts
+    ) async -> HookEvaluateReply {
+        reply(await hookWire(host: host, stdin: stdin, ports: ports))
+    }
+
+    /// Evaluate-only convenience for tests. Extra ports default to nil (fail closed).
+    public static func run(
+        host: HookHost,
+        stdin: String,
+        evaluate: @escaping @Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult
+    ) async -> HookEvaluateReply {
+        await run(host: host, stdin: stdin, ports: HookWirePorts(evaluate: evaluate))
     }
 
     /// Create one awaiting row for a product Ask. Missing session is a no-op.

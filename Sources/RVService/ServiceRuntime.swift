@@ -247,10 +247,10 @@ public actor ServiceRuntime {
     }
 
     private func makeHookEvaluateResult(_ params: HookEvaluateParams) async -> IPCResult {
-        do {
-            let reply = try await HookDoor.run(
-                host: params.host,
-                stdin: params.stdin,
+        let reply = await HookDoor.run(
+            host: params.host,
+            stdin: params.stdin,
+            ports: HookWirePorts(
                 evaluate: { command, cwd in
                     // Same pack resolution as the rv-cli miss path
                     // (`EvaluationWorld.walkedPackIDs`): a warm rvd must never decide on a
@@ -290,12 +290,8 @@ public actor ServiceRuntime {
                     )
                 }
             )
-            return .hookEvaluate(reply)
-        } catch let error as IPCError {
-            return .error(error)
-        } catch {
-            return .error(.hookEvaluateFailed)
-        }
+        )
+        return .hookEvaluate(reply)
     }
 
     private func runFile(

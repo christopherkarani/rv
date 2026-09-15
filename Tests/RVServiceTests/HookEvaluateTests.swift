@@ -335,7 +335,7 @@ struct HookEvaluateTests {
 
     @Test func hookDoor_replyCopiesWireStderr() async throws {
         let probe = EvaluateCallProbe()
-        let reply = try await HookDoor.run(host: .codex, stdin: "") { command, cwd in
+        let reply = await HookDoor.run(host: .codex, stdin: "") { command, cwd in
             await probe.evaluate(command, cwd: cwd)
         }
         let wire = CodexHostCodec().encodeDeny(reason: malformedHookSentence(.unreadable))
@@ -348,7 +348,7 @@ struct HookEvaluateTests {
 
     @Test func emptyStdin_failsClosedWithDenyJSON() async throws {
         let probe = EvaluateCallProbe()
-        let reply = try await HookDoor.run(host: .grok, stdin: "") { command, cwd in
+        let reply = await HookDoor.run(host: .grok, stdin: "") { command, cwd in
             await probe.evaluate(command, cwd: cwd)
         }
         let object = try JSONSerialization.jsonObject(with: Data(reply.stdout.utf8))
@@ -362,7 +362,7 @@ struct HookEvaluateTests {
 
     @Test func missingCommand_failsClosedWithDenyJSONAndDenyExitCode() async throws {
         let probe = EvaluateCallProbe()
-        let reply = try await HookDoor.run(host: .pi, stdin: "{\"toolName\":\"bash\",\"input\":{}}") { command, cwd in
+        let reply = await HookDoor.run(host: .pi, stdin: "{\"toolName\":\"bash\",\"input\":{}}") { command, cwd in
             await probe.evaluate(command, cwd: cwd)
         }
         let object = try JSONSerialization.jsonObject(with: Data(reply.stdout.utf8))

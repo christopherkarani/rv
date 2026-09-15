@@ -53,8 +53,10 @@ private final class EvaluateProbe: @unchecked Sendable {
     let wire = await hookWire(
         host: .claude,
         stdin: stdin,
-        evaluate: { command, cwd in probe.evaluate(command, cwd) },
-        evaluateFile: { action, cwd in probe.evaluateFile(action, cwd) }
+        ports: HookWirePorts(
+            evaluate: { command, cwd in probe.evaluate(command, cwd) },
+            evaluateFile: { action, cwd in probe.evaluateFile(action, cwd) }
+        )
     )
     #expect(probe.commands.isEmpty)
     #expect(probe.files == ["/tmp/rv-oracle/.env"])
@@ -71,8 +73,10 @@ private final class EvaluateProbe: @unchecked Sendable {
     let wire = await hookWire(
         host: .claude,
         stdin: stdin,
-        evaluate: { command, cwd in probe.evaluate(command, cwd) },
-        evaluateFile: { action, cwd in probe.evaluateFile(action, cwd) }
+        ports: HookWirePorts(
+            evaluate: { command, cwd in probe.evaluate(command, cwd) },
+            evaluateFile: { action, cwd in probe.evaluateFile(action, cwd) }
+        )
     )
     #expect(probe.commands.isEmpty)
     #expect(probe.files.isEmpty)
@@ -104,8 +108,10 @@ private final class EvaluateProbe: @unchecked Sendable {
     let wire = await hookWire(
         host: .grok,
         stdin: stdin,
-        evaluate: { command, cwd in probe.evaluate(command, cwd) },
-        evaluateFile: { action, cwd in probe.evaluateFile(action, cwd) }
+        ports: HookWirePorts(
+            evaluate: { command, cwd in probe.evaluate(command, cwd) },
+            evaluateFile: { action, cwd in probe.evaluateFile(action, cwd) }
+        )
     )
     #expect(probe.commands == ["git reset --hard"])
     #expect(probe.files.isEmpty)

@@ -5,114 +5,41 @@ import RVDomain
 public func hookWire(
     host: HookHost,
     stdin: String,
-    evaluate: @Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult,
-    evaluateFile: (@Sendable (FileToolAction, WorkingDirectory?) async -> EvaluationResult)? = nil,
-    spendHostAsk: (@Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult)? = nil,
-    mintOnDeny: (@Sendable (EvaluationResult, WorkingDirectory?) async -> String?)? = nil,
-    recordHostAsk: (@Sendable (HookRequest, ProposedAction) async throws -> Void)? = nil,
-    clearHostAsk: (@Sendable (HookRequest, ProposedAction) async throws -> Void)? = nil
+    ports: HookWirePorts
 ) async -> HookWire {
     switch host {
     case .grok:
-        return await hookBody(
-            stdin: stdin,
-            codec: GrokHostCodec(),
-            evaluate: evaluate,
-            evaluateFile: evaluateFile,
-            spendHostAsk: spendHostAsk,
-            mintOnDeny: mintOnDeny,
-            recordHostAsk: recordHostAsk,
-            clearHostAsk: clearHostAsk
-        )
+        return await hookBody(stdin: stdin, codec: GrokHostCodec(), ports: ports)
     case .pi:
-        return await hookBody(
-            stdin: stdin,
-            codec: PiHostCodec(),
-            evaluate: evaluate,
-            evaluateFile: evaluateFile,
-            spendHostAsk: spendHostAsk,
-            mintOnDeny: mintOnDeny,
-            recordHostAsk: recordHostAsk,
-            clearHostAsk: clearHostAsk
-        )
+        return await hookBody(stdin: stdin, codec: PiHostCodec(), ports: ports)
     case .opencode:
-        return await hookBody(
-            stdin: stdin,
-            codec: OpenCodeHostCodec(),
-            evaluate: evaluate,
-            evaluateFile: evaluateFile,
-            spendHostAsk: spendHostAsk,
-            mintOnDeny: mintOnDeny,
-            recordHostAsk: recordHostAsk,
-            clearHostAsk: clearHostAsk
-        )
+        return await hookBody(stdin: stdin, codec: OpenCodeHostCodec(), ports: ports)
     case .claude:
-        return await hookBody(
-            stdin: stdin,
-            codec: ClaudeHostCodec(),
-            evaluate: evaluate,
-            evaluateFile: evaluateFile,
-            spendHostAsk: spendHostAsk,
-            mintOnDeny: mintOnDeny,
-            recordHostAsk: recordHostAsk,
-            clearHostAsk: clearHostAsk
-        )
+        return await hookBody(stdin: stdin, codec: ClaudeHostCodec(), ports: ports)
     case .openclaw:
-        return await hookBody(
-            stdin: stdin,
-            codec: OpenClawHostCodec(),
-            evaluate: evaluate,
-            evaluateFile: evaluateFile,
-            spendHostAsk: spendHostAsk,
-            mintOnDeny: mintOnDeny,
-            recordHostAsk: recordHostAsk,
-            clearHostAsk: clearHostAsk
-        )
+        return await hookBody(stdin: stdin, codec: OpenClawHostCodec(), ports: ports)
     case .hermes:
-        return await hookBody(
-            stdin: stdin,
-            codec: HermesHostCodec(),
-            evaluate: evaluate,
-            evaluateFile: evaluateFile,
-            spendHostAsk: spendHostAsk,
-            mintOnDeny: mintOnDeny,
-            recordHostAsk: recordHostAsk,
-            clearHostAsk: clearHostAsk
-        )
+        return await hookBody(stdin: stdin, codec: HermesHostCodec(), ports: ports)
     case .codex:
-        return await hookBody(
-            stdin: stdin,
-            codec: CodexHostCodec(),
-            evaluate: evaluate,
-            evaluateFile: evaluateFile,
-            spendHostAsk: spendHostAsk,
-            mintOnDeny: mintOnDeny,
-            recordHostAsk: recordHostAsk,
-            clearHostAsk: clearHostAsk
-        )
+        return await hookBody(stdin: stdin, codec: CodexHostCodec(), ports: ports)
     case .cursor:
-        return await hookBody(
-            stdin: stdin,
-            codec: CursorHostCodec(),
-            evaluate: evaluate,
-            evaluateFile: evaluateFile,
-            spendHostAsk: spendHostAsk,
-            mintOnDeny: mintOnDeny,
-            recordHostAsk: recordHostAsk,
-            clearHostAsk: clearHostAsk
-        )
+        return await hookBody(stdin: stdin, codec: CursorHostCodec(), ports: ports)
     }
+}
+
+/// Evaluate-only convenience. Extra ports default to nil (fail closed).
+public func hookWire(
+    host: HookHost,
+    stdin: String,
+    evaluate: @escaping @Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult
+) async -> HookWire {
+    await hookWire(host: host, stdin: stdin, ports: HookWirePorts(evaluate: evaluate))
 }
 
 private func hookBody<C: HostCodec>(
     stdin: String,
     codec: C,
-    evaluate: @Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult,
-    evaluateFile: (@Sendable (FileToolAction, WorkingDirectory?) async -> EvaluationResult)?,
-    spendHostAsk: (@Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult)?,
-    mintOnDeny: (@Sendable (EvaluationResult, WorkingDirectory?) async -> String?)?,
-    recordHostAsk: (@Sendable (HookRequest, ProposedAction) async throws -> Void)?,
-    clearHostAsk: (@Sendable (HookRequest, ProposedAction) async throws -> Void)?
+    ports: HookWirePorts
 ) async -> HookWire {
     switch codec.decode(stdin) {
     case .request(let request):
@@ -121,11 +48,11 @@ private func hookBody<C: HostCodec>(
                 request: request,
                 file: file,
                 codec: codec,
-                evaluateFile: evaluateFile
+                evaluateFile: ports.evaluateFile
             )
         }
         if request.hostAsk == .spend {
-            guard let spendHostAsk else {
+            guard let spendHostAsk = ports.spendHostAsk else {
                 return codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
             }
             let result = await spendHostAsk(request.command, request.cwd)
@@ -135,14 +62,14 @@ private func hookBody<C: HostCodec>(
                 using: codec,
                 intent: .afterSpend
             )
-            if let clearHostAsk {
+            if let clearHostAsk = ports.clearHostAsk {
                 await ignoreHostAskFailure {
                     try await clearHostAsk(request, pendingAction(from: result, request: request))
                 }
             }
             return wire
         }
-        let result = await evaluate(request.command, request.cwd)
+        let result = await ports.evaluate(request.command, request.cwd)
         let bound = BoundReview.packProjected(from: result)
         let verdict = HostNativeAsk.verdict(
             host: codec.host,
@@ -154,9 +81,9 @@ private func hookBody<C: HostCodec>(
             result: result,
             verdict: verdict,
             cwd: request.cwd,
-            mintOnDeny: mintOnDeny
+            mintOnDeny: ports.mintOnDeny
         )
-        if let recordHostAsk, encodesHostAsk(result: result, verdict: verdict) {
+        if let recordHostAsk = ports.recordHostAsk, encodesHostAsk(result: result, verdict: verdict) {
             await ignoreHostAskFailure {
                 try await recordHostAsk(request, pendingAction(from: result, request: request))
             }

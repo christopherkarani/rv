@@ -32,17 +32,9 @@ struct Hook: AsyncParsableCommand {
 
     func run(
         stdin: String,
-        evaluate: @Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult,
-        evaluateFile: (@Sendable (FileToolAction, WorkingDirectory?) async -> EvaluationResult)? = nil,
-        spendHostAsk: (@Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult)? = nil
+        evaluate: @escaping @Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult
     ) async -> (stdout: String, stderr: String, exitCode: Int32) {
-        let wire = await hookWire(
-            host: host,
-            stdin: stdin,
-            evaluate: evaluate,
-            evaluateFile: evaluateFile,
-            spendHostAsk: spendHostAsk
-        )
+        let wire = await hookWire(host: host, stdin: stdin, evaluate: evaluate)
         return (wire.stdout, wire.stderr, wire.exitCode)
     }
 }

@@ -208,50 +208,52 @@ public struct ServiceClient: Sendable {
             await hookWire(
                 host: host,
                 stdin: stdin,
-                evaluate: { command, cwd in
-                    await self.inProcessApply(
-                        command: command,
-                        cwd: cwd,
-                        host: .hook(host)
-                    )
-                },
-                evaluateFile: { action, cwd in
-                    self.door.runFile(
-                        action,
-                        home: self.home,
-                        cwd: cwd,
-                        host: .hook(host),
-                        now: self.clock()
-                    )
-                },
-                spendHostAsk: { command, cwd in
-                    await self.spendHostAsk(command: command, cwd: cwd, host: .hook(host))
-                },
-                mintOnDeny: { result, cwd in
-                    await GatedEvaluate.mintUnlockCode(
-                        for: result,
-                        cwd: cwd,
-                        store: self.store,
-                        now: self.clock(),
-                        home: self.home
-                    )
-                },
-                recordHostAsk: { request, action in
-                    try await HookDoor.recordPending(
-                        request: request,
-                        action: action,
-                        store: self.pendingApprovals,
-                        now: self.clock()
-                    )
-                },
-                clearHostAsk: { request, action in
-                    try await HookDoor.clearPending(
-                        request: request,
-                        action: action,
-                        store: self.pendingApprovals,
-                        now: self.clock()
-                    )
-                }
+                ports: HookWirePorts(
+                    evaluate: { command, cwd in
+                        await self.inProcessApply(
+                            command: command,
+                            cwd: cwd,
+                            host: .hook(host)
+                        )
+                    },
+                    evaluateFile: { action, cwd in
+                        self.door.runFile(
+                            action,
+                            home: self.home,
+                            cwd: cwd,
+                            host: .hook(host),
+                            now: self.clock()
+                        )
+                    },
+                    spendHostAsk: { command, cwd in
+                        await self.spendHostAsk(command: command, cwd: cwd, host: .hook(host))
+                    },
+                    mintOnDeny: { result, cwd in
+                        await GatedEvaluate.mintUnlockCode(
+                            for: result,
+                            cwd: cwd,
+                            store: self.store,
+                            now: self.clock(),
+                            home: self.home
+                        )
+                    },
+                    recordHostAsk: { request, action in
+                        try await HookDoor.recordPending(
+                            request: request,
+                            action: action,
+                            store: self.pendingApprovals,
+                            now: self.clock()
+                        )
+                    },
+                    clearHostAsk: { request, action in
+                        try await HookDoor.clearPending(
+                            request: request,
+                            action: action,
+                            store: self.pendingApprovals,
+                            now: self.clock()
+                        )
+                    }
+                )
             )
         }
         guard let transport else {

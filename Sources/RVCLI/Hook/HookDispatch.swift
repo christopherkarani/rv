@@ -40,7 +40,7 @@ public enum HookDispatch {
     static func run(
         arguments: [String],
         stdin: String,
-        evaluate: @Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult
+        evaluate: @escaping @Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult
     ) async throws -> (stdout: String, stderr: String, exitCode: Int32) {
         let hook = try parse(arguments)
         return await hook.run(stdin: stdin, evaluate: evaluate)
