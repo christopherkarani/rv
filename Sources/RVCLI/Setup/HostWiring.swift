@@ -14,8 +14,8 @@ enum HostWiring {
             return .notApplicable
         case .claude:
             guard let adapterData,
-                  let root = jsonObject(adapterData),
-                  ClaudeSettingsMerge.hasFileToolMatchers(in: root)
+                  let slice = ClaudeRVSlice.decode(from: adapterData),
+                  slice.hasFileToolMatchers
             else {
                 return .shellOnly
             }
@@ -27,8 +27,8 @@ enum HostWiring {
             return .wired
         case .cursor:
             guard let companionJSON,
-                  let root = jsonObject(companionJSON),
-                  CursorHooksMerge.hasFileToolEntry(in: root)
+                  let slice = CursorRVSlice.decode(from: companionJSON),
+                  slice.registersPreToolUse
             else {
                 return .shellOnly
             }

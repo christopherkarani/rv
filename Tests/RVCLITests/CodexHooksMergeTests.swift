@@ -103,3 +103,33 @@ import Testing
         _ = try CodexHooksMerge.merge(existingData: Data("[]".utf8), adapterPath: "/x")
     }
 }
+
+@Test func codexHooksMerge_secondMergeIsByteIdentical() throws {
+    let adapter = "/tmp/home/.codex/hooks/rv-guard.py"
+    let first = try CodexHooksMerge.merge(existingData: nil, adapterPath: adapter)
+    let second = try CodexHooksMerge.merge(existingData: first.data, adapterPath: adapter)
+    #expect(second.wrote == false)
+    #expect(second.data == first.data)
+}
+
+@Test func codexHooksMerge_applyThenHostWiringFileToolsStayNotApplicable() throws {
+    let adapter = "/tmp/home/.codex/hooks/rv-guard.py"
+    let merged = try CodexHooksMerge.merge(existingData: nil, adapterPath: adapter)
+    let slice = try #require(CodexRVSlice.decode(from: merged.data))
+    #expect(slice.adapterPath == adapter)
+    #expect(slice.matcher == CodexHooksMerge.matcher)
+    #expect(slice.matcher != "Read")
+    #expect(slice.matcher != "Edit")
+    #expect(slice.matcher != "Write")
+    let root = try #require(JSONSerialization.jsonObject(with: merged.data) as? [String: Any])
+    let hooksRoot = try #require(root["hooks"] as? [String: Any])
+    let pre = try #require(hooksRoot["PreToolUse"] as? [[String: Any]])
+    #expect(pre.map { $0["matcher"] as? String } == ["Bash"])
+    #expect(
+        HostWiring.fileTools(
+            host: .codex,
+            adapterData: merged.data,
+            companionJSON: nil
+        ) == .notApplicable
+    )
+}
