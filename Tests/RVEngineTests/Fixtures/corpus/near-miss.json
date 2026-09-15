@@ -186,6 +186,46 @@
       "id": "near.node-e-console-reset",
       "command": "node -e \"console.log('git reset --hard')\"",
       "expected": "allow"
+    },
+    {
+      "id": "near.git-log-grep-reset",
+      "command": "git log --grep='git reset --hard'",
+      "expected": "allow"
+    },
+    {
+      "id": "near.git-grep-rm-rf",
+      "command": "git grep -n \"rm -rf\"",
+      "expected": "allow"
+    },
+    {
+      "id": "near.git-log-pickaxe-reset",
+      "command": "git log -S'git reset --hard'",
+      "expected": "allow"
+    },
+    {
+      "id": "near.git-log-pickaxe-rm",
+      "command": "git log -G\"rm -rf\"",
+      "expected": "allow"
+    },
+    {
+      "id": "near.echo-unquoted-reset",
+      "command": "echo git reset --hard",
+      "expected": "allow"
+    },
+    {
+      "id": "near.tldr-reset-hard",
+      "command": "tldr git reset --hard",
+      "expected": "allow"
+    },
+    {
+      "id": "near.man-reset-hard",
+      "command": "man git reset --hard",
+      "expected": "allow"
+    },
+    {
+      "id": "near.find-name-rm-rf",
+      "command": "find . -name '*rm -rf*'",
+      "expected": "allow"
     }
   ]
 }
