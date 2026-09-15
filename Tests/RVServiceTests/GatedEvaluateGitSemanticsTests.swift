@@ -103,10 +103,16 @@ struct GatedEvaluateGitSemanticsTests {
             return
         }
         #expect(refspec == nil)
-        if case .deny(let deny) = result.decision {
-            #expect(deny.ruleID != ActionPolicyEngine.Builtin.unresolvedFilesystem.ruleID)
-            #expect(deny.ruleID != ActionPolicyEngine.Builtin.remoteSharedBranch.ruleID)
+        guard case .deny(let deny) = result.decision else {
+            Issue.record(
+                "probed-unknown implicit force-with-lease must fail-closed ask, got \(result.decision)"
+            )
+            return
         }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.remoteBranchAsk.ruleID)
+        #expect(deny.ruleID != ActionPolicyEngine.Builtin.unresolvedFilesystem.ruleID)
+        #expect(deny.ruleID != ActionPolicyEngine.Builtin.remoteSharedBranch.ruleID)
+        #expect(result.boundReview == .mandatoryHuman(ActionPolicyEngine.Builtin.remoteBranchAsk))
     }
 
     @Test func forceWithLeaseNoRefspec_detachedHEAD_isRemoteBranchAsk() async throws {
