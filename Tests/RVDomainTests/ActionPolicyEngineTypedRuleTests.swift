@@ -7,7 +7,7 @@ struct ActionPolicyEngineTypedRuleTests {
         repository: RepositoryReviewContext(
             name: "rv",
             currentBranch: "main",
-            isSharedBranch: true
+            sharedness: .shared
         )
     )
 
@@ -15,7 +15,7 @@ struct ActionPolicyEngineTypedRuleTests {
         repository: RepositoryReviewContext(
             name: "rv",
             currentBranch: "feature",
-            isSharedBranch: false
+            sharedness: .notShared
         )
     )
 

@@ -64,7 +64,7 @@ public enum ReviewPromptBuilder: Sendable {
         if let branch = context.repository.currentBranch {
             lines.append("repository.currentBranch: \(branch)")
         }
-        lines.append("repository.isSharedBranch: \(context.repository.isSharedBranch)")
+        lines.append("repository.sharedness: \(context.repository.sharedness.rawValue)")
         lines.append("environment.isCI: \(context.environment.isCI)")
         if context.environment.labels.isEmpty == false {
             lines.append("environment.labels: \(context.environment.labels.joined(separator: ","))")

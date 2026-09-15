@@ -82,7 +82,7 @@ private enum ActionPolicyEngineShadowFixtures {
         repository: RepositoryReviewContext(
             name: "rv",
             currentBranch: "main",
-            isSharedBranch: true
+            sharedness: .shared
         )
     )
 

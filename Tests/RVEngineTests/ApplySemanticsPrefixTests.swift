@@ -77,7 +77,9 @@ struct ApplySemanticsPrefixTests {
         let composed = applySemantics(
             pack: pack,
             command: ShellCommand(rawValue: command),
-            gitContext: GitAnalysisContext(isSharedBranch: true)
+            gitContext: GitAnalysisContext(
+                branchWorld: .probed(currentBranch: "main", isShared: true)
+            )
         )
         guard case .deny(let deny) = composed.decision else {
             Issue.record("ssh force-with-lease to main must deny, got \(composed.decision)")

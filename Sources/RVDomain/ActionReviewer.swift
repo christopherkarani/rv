@@ -56,19 +56,49 @@ public enum ActionReviewerError: Error, Sendable, Equatable {
     case timeout
 }
 
+/// Whether the current branch is known to be shared.
+///
+/// Missing Codable key decodes as `unknown`, never as not-shared.
+public enum GitSharedness: String, Sendable, Equatable, Codable {
+    case unknown
+    case notShared
+    case shared
+}
+
 public struct RepositoryReviewContext: Sendable, Equatable, Codable {
     public var name: String?
     public var currentBranch: String?
-    public var isSharedBranch: Bool
+    public var sharedness: GitSharedness
 
     public init(
         name: String? = nil,
         currentBranch: String? = nil,
-        isSharedBranch: Bool = false
+        sharedness: GitSharedness = .unknown
     ) {
         self.name = name
         self.currentBranch = currentBranch
-        self.isSharedBranch = isSharedBranch
+        self.sharedness = sharedness
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decodeIfPresent(String.self, forKey: .name)
+        currentBranch = try container.decodeIfPresent(String.self, forKey: .currentBranch)
+        sharedness = try container.decodeIfPresent(GitSharedness.self, forKey: .sharedness)
+            ?? .unknown
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(name, forKey: .name)
+        try container.encodeIfPresent(currentBranch, forKey: .currentBranch)
+        try container.encode(sharedness, forKey: .sharedness)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case currentBranch
+        case sharedness
     }
 }
 

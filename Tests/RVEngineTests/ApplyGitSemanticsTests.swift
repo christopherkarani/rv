@@ -70,6 +70,58 @@ struct ApplyGitSemanticsTests {
         #expect(composedEcho.analysis == .unknown)
     }
 
+    @Test func unprobedForcePushHEAD_isNotSharedBranchWall() throws {
+        let command = "git push --force origin HEAD"
+        let pack = try runPack(command)
+        #expect(pack.decision == .allow)
+        let composed = applyGitSemantics(
+            pack: pack,
+            command: ShellCommand(rawValue: command),
+            context: GitAnalysisContext(workingDirectory: WorkingDirectory(validating: "/tmp/rv"))
+        )
+        guard case .deny(let deny) = composed.decision else {
+            Issue.record("unprobed force-push HEAD must ask, got \(composed.decision)")
+            return
+        }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.remoteBranchAsk.ruleID)
+        #expect(deny.ruleID != ActionPolicyEngine.Builtin.remoteSharedBranch.ruleID)
+    }
+
+    @Test func unprobedForcePushMain_hitsNameDenylist() throws {
+        let command = "git push --force origin main"
+        let pack = try runPack(command)
+        #expect(pack.decision == .allow)
+        let composed = applyGitSemantics(
+            pack: pack,
+            command: ShellCommand(rawValue: command),
+            context: GitAnalysisContext(workingDirectory: WorkingDirectory(validating: "/tmp/rv"))
+        )
+        guard case .deny(let deny) = composed.decision else {
+            Issue.record("unprobed force-push main must hit denylist, got \(composed.decision)")
+            return
+        }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.remoteSharedBranch.ruleID)
+    }
+
+    @Test func probedSharedForcePushHEAD_isSharedBranchWall() throws {
+        let command = "git push --force origin HEAD"
+        let pack = try runPack(command)
+        #expect(pack.decision == .allow)
+        let composed = applyGitSemantics(
+            pack: pack,
+            command: ShellCommand(rawValue: command),
+            context: GitAnalysisContext(
+                workingDirectory: WorkingDirectory(validating: "/tmp/rv"),
+                branchWorld: .probed(currentBranch: "main", isShared: true)
+            )
+        )
+        guard case .deny(let deny) = composed.decision else {
+            Issue.record("probed shared force-push HEAD must wall, got \(composed.decision)")
+            return
+        }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.remoteSharedBranch.ruleID)
+    }
+
     @Test func forcePushPackMiss_isDeniedBySemantics() throws {
         let command = "git push --force-with-lease origin main"
         let pack = try runPack(command)
@@ -77,7 +129,9 @@ struct ApplyGitSemanticsTests {
         let composed = applyGitSemantics(
             pack: pack,
             command: ShellCommand(rawValue: command),
-            context: GitAnalysisContext(isSharedBranch: true)
+            context: GitAnalysisContext(
+                branchWorld: .probed(currentBranch: "main", isShared: true)
+            )
         )
         guard case .deny(let deny) = composed.decision else {
             Issue.record("force-with-lease to main must deny")
@@ -170,7 +224,9 @@ struct ApplyGitSemanticsTests {
         let composed = applyGitSemantics(
             pack: pack,
             command: ShellCommand(rawValue: command),
-            context: GitAnalysisContext(isSharedBranch: true),
+            context: GitAnalysisContext(
+                branchWorld: .probed(currentBranch: "main", isShared: true)
+            ),
             policy: EffectiveActionPolicy(rules: [rule])
         )
         guard case .deny(let deny) = composed.decision else {

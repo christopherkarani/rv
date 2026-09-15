@@ -6,13 +6,39 @@ import RVDomain
 /// with pack deny / indeterminate as the floor.
 @Suite("EvaluateWithSemantics")
 struct EvaluateWithSemanticsTests {
+    @Test func unprobedForcePushHEAD_isNotSharedBranchWall() throws {
+        let result = try runDoor("git push --force origin HEAD")
+        guard case .deny(let deny) = result.decision else {
+            Issue.record("unprobed force-push HEAD must ask, got \(result.decision)")
+            return
+        }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.remoteBranchAsk.ruleID)
+    }
+
+    @Test func probedSharedWrappedForcePushHEAD_isSharedBranchWall() throws {
+        let result = try runDoor(
+            "bash -c 'git push --force origin HEAD'",
+            gitContext: GitAnalysisContext(
+                branchWorld: .probed(currentBranch: "main", isShared: true)
+            )
+        )
+        guard case .deny(let deny) = result.decision else {
+            Issue.record("probed shared wrapped force-push HEAD must wall, got \(result.decision)")
+            return
+        }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.remoteSharedBranch.ruleID)
+        #expect(result.analysis.wrappers == [.bash])
+    }
+
     @Test func packAllow_semanticGitDeny_tightens() throws {
         // `feature` is not a name-based shared branch; dropping `gitContext`
         // would demote this to `remoteBranchAsk` instead of the shared-branch wall.
         let command = "bash -c 'git push --force-with-lease origin feature'"
         let result = try runDoor(
             command,
-            gitContext: GitAnalysisContext(isSharedBranch: true)
+            gitContext: GitAnalysisContext(
+                branchWorld: .probed(currentBranch: "feature", isShared: true)
+            )
         )
         guard case .deny(let deny) = result.decision else {
             Issue.record("wrapped force-with-lease to shared branch must deny")

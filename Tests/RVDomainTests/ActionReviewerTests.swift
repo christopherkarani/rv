@@ -19,7 +19,7 @@ struct ActionReviewerTests {
         #expect(shell.resources.branchName == "main")
         #expect(shell.scope.workingDirectory?.rawValue == "/tmp/rv")
         #expect(request.action.fingerprint.rawValue == "shell:git.force-push:origin:main")
-        #expect(request.context.repository.isSharedBranch)
+        #expect(request.context.repository.sharedness == .shared)
         #expect(request.context.repository.currentBranch == "main")
         #expect(shell.supportingCommand?.rawValue == "git push --force origin main")
     }

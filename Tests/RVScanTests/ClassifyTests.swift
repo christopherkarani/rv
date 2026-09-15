@@ -69,6 +69,32 @@ import RVDomain
     #expect(findings.isEmpty)
 }
 
+@Test func classify_forceWithLeaseHEAD_unprobed_isNotSharedWall() throws {
+    let events = [
+        ExtractedEvent(
+            host: .claude,
+            sourcePath: "/tmp/fixture/session.jsonl",
+            command: ShellCommand(rawValue: "git push --force-with-lease origin HEAD")
+        ),
+    ]
+    let findings = try ScanClassify().classify(events)
+    let finding = try #require(findings.first)
+    #expect(finding.ruleID == ActionPolicyEngine.Builtin.remoteBranchAsk.ruleID)
+}
+
+@Test func classify_forceWithLeaseMain_unprobed_hitsNameDenylist() throws {
+    let events = [
+        ExtractedEvent(
+            host: .claude,
+            sourcePath: "/tmp/fixture/session.jsonl",
+            command: ShellCommand(rawValue: "git push --force-with-lease origin main")
+        ),
+    ]
+    let findings = try ScanClassify().classify(events)
+    let finding = try #require(findings.first)
+    #expect(finding.ruleID == ActionPolicyEngine.Builtin.remoteSharedBranch.ruleID)
+}
+
 @Test func classify_allowGitStatus_emitsNoFindings() throws {
     let events = [
         ExtractedEvent(

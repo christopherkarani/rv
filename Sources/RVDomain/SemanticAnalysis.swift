@@ -65,31 +65,60 @@ public enum SemanticAnalysis: Sendable, Equatable, Codable {
     }
 }
 
+/// Whether current branch and sharedness were probed.
+///
+/// Unprobed: hook cwd may be known; sharedness is unknown. Name denylist
+/// on explicit `main`/`master` still runs.
+/// Probed: caller supplied current branch and sharedness.
+public enum GitBranchWorld: Sendable, Equatable {
+    case unprobed
+    case probed(currentBranch: String?, isShared: Bool)
+}
+
 /// Caller-supplied repository facts. Analyzers do not read disk.
+///
+/// `GitAnalysisContext(workingDirectory:)` is unprobed cwd, not
+/// sharedness-false. `empty` is nil cwd and unprobed.
 public struct GitAnalysisContext: Sendable, Equatable {
     public var workingDirectory: WorkingDirectory?
-    public var currentBranch: String?
-    public var isSharedBranch: Bool
+    public var branchWorld: GitBranchWorld
 
     public init(
         workingDirectory: WorkingDirectory? = nil,
-        currentBranch: String? = nil,
-        isSharedBranch: Bool = false
+        branchWorld: GitBranchWorld = .unprobed
     ) {
         self.workingDirectory = workingDirectory
-        self.currentBranch = currentBranch
-        self.isSharedBranch = isSharedBranch
+        self.branchWorld = branchWorld
     }
 
     public static let empty = GitAnalysisContext()
+
+    /// Current branch when probed; `nil` when unprobed.
+    public var currentBranch: String? {
+        switch branchWorld {
+        case .unprobed:
+            return nil
+        case .probed(let currentBranch, _):
+            return currentBranch
+        }
+    }
 
     public var reviewContext: ReviewContext {
         ReviewContext(
             repository: RepositoryReviewContext(
                 currentBranch: currentBranch,
-                isSharedBranch: isSharedBranch
+                sharedness: gitSharedness
             )
         )
+    }
+
+    private var gitSharedness: GitSharedness {
+        switch branchWorld {
+        case .unprobed:
+            return .unknown
+        case .probed(_, let isShared):
+            return isShared ? .shared : .notShared
+        }
     }
 }
 

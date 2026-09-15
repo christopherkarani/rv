@@ -37,8 +37,7 @@ public func analyzeSemantics(
             unwrapped.command,
             context: GitAnalysisContext(
                 workingDirectory: unwrapped.workingDirectory ?? gitContext.workingDirectory,
-                currentBranch: gitContext.currentBranch,
-                isSharedBranch: gitContext.isSharedBranch
+                branchWorld: gitContext.branchWorld
             )
         )
         if case .git = git {

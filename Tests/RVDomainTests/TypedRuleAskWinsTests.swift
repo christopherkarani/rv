@@ -7,7 +7,7 @@ struct TypedRuleAskWinsTests {
         repository: RepositoryReviewContext(
             name: "rv",
             currentBranch: "feature",
-            isSharedBranch: false
+            sharedness: .notShared
         )
     )
 

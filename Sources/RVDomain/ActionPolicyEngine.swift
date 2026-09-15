@@ -359,13 +359,15 @@ public enum ActionPolicyEngine: Sendable {
     }
 
     private static func isSharedTarget(resources: ActionResources, context: ReviewContext) -> Bool {
-        if context.repository.isSharedBranch {
+        switch context.repository.sharedness {
+        case .shared:
             return true
+        case .notShared, .unknown:
+            if let branch = resources.branchName, Self.sharedBranchNames.contains(branch) {
+                return true
+            }
+            return false
         }
-        if let branch = resources.branchName, Self.sharedBranchNames.contains(branch) {
-            return true
-        }
-        return false
     }
 
     private static let sharedBranchNames: Set<String> = ["main", "master"]

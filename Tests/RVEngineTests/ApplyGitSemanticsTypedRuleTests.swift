@@ -50,7 +50,9 @@ struct ApplyGitSemanticsTypedRuleTests {
         let composed = applyGitSemantics(
             pack: pack,
             command: ShellCommand(rawValue: command),
-            context: GitAnalysisContext(isSharedBranch: true),
+            context: GitAnalysisContext(
+                branchWorld: .probed(currentBranch: "main", isShared: true)
+            ),
             policy: EffectiveActionPolicy(rules: [rule])
         )
         guard case .deny(let deny) = composed.decision else {

@@ -358,6 +358,50 @@ struct ActionPolicyEngineTests {
         )
         #expect(verdict.decision == .hardDeny(overlayDeny))
     }
+
+    @Test func unknownSharedness_forcePushHEAD_isNotSharedWall() {
+        let verdict = ActionPolicyEngine.evaluate(
+            action: ActionPolicyFixtures.forcePush(branchName: "HEAD"),
+            context: ActionPolicyFixtures.unknownContext
+        )
+        #expect(verdict.decision == .mandatoryHuman(ActionPolicyEngine.Builtin.remoteBranchAsk))
+        #expect(verdict.decision != .hardDeny(ActionPolicyEngine.Builtin.remoteSharedBranch))
+    }
+
+    @Test func unknownSharedness_forcePushMain_hitsNameDenylist() {
+        let verdict = ActionPolicyEngine.evaluate(
+            action: ActionPolicyFixtures.forcePush(branchName: "main"),
+            context: ActionPolicyFixtures.unknownContext
+        )
+        #expect(verdict.decision == .hardDeny(ActionPolicyEngine.Builtin.remoteSharedBranch))
+    }
+
+    @Test func notShared_forcePushMain_stillHitsNameDenylist() {
+        let verdict = ActionPolicyEngine.evaluate(
+            action: ActionPolicyFixtures.forcePush(branchName: "main"),
+            context: privateBranch
+        )
+        #expect(verdict.decision == .hardDeny(ActionPolicyEngine.Builtin.remoteSharedBranch))
+    }
+
+    @Test func shared_forcePushHEAD_isSharedWall() {
+        let verdict = ActionPolicyEngine.evaluate(
+            action: ActionPolicyFixtures.forcePush(branchName: "HEAD"),
+            context: shared
+        )
+        #expect(verdict.decision == .hardDeny(ActionPolicyEngine.Builtin.remoteSharedBranch))
+    }
+
+    @Test func unprobedAnalysisContext_forcePushHEAD_isNotSharedWall() {
+        let cwd = WorkingDirectory(validating: "/tmp/rv")
+        let git = GitAnalysisContext(workingDirectory: cwd)
+        let verdict = ActionPolicyEngine.evaluate(
+            action: ActionPolicyFixtures.forcePush(branchName: "HEAD"),
+            context: git.reviewContext
+        )
+        #expect(git.branchWorld == .unprobed)
+        #expect(verdict.decision == .mandatoryHuman(ActionPolicyEngine.Builtin.remoteBranchAsk))
+    }
 }
 
 private enum ActionPolicyFixtures {
@@ -365,7 +409,7 @@ private enum ActionPolicyFixtures {
         repository: RepositoryReviewContext(
             name: "rv",
             currentBranch: "main",
-            isSharedBranch: true
+            sharedness: .shared
         )
     )
 
@@ -373,7 +417,14 @@ private enum ActionPolicyFixtures {
         repository: RepositoryReviewContext(
             name: "rv",
             currentBranch: "topic",
-            isSharedBranch: false
+            sharedness: .notShared
+        )
+    )
+
+    static let unknownContext = ReviewContext(
+        repository: RepositoryReviewContext(
+            name: "rv",
+            sharedness: .unknown
         )
     )
 

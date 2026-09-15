@@ -480,10 +480,10 @@ struct HostNativeAskTests {
 
 private enum HostNativeAskFixtures {
     static let privateContext = ReviewContext(
-        repository: RepositoryReviewContext(isSharedBranch: false)
+        repository: RepositoryReviewContext(sharedness: .notShared)
     )
     static let sharedContext = ReviewContext(
-        repository: RepositoryReviewContext(isSharedBranch: true)
+        repository: RepositoryReviewContext(sharedness: .shared)
     )
 
     static func emptyEffects(command: String) -> ProposedAction {

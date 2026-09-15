@@ -365,7 +365,7 @@ public struct GatedEvaluate: Sendable {
             safety: SafetyStore.loadEffective(home: home, workspace: workspace),
             allowPaths: SecretAllowPaths.loadEffective(home: home, workspace: workspace),
             home: home?.rawValue,
-            gitContext: GitAnalysisContext(workingDirectory: cwd),
+            gitContext: GitAnalysisContext(workingDirectory: cwd, branchWorld: .unprobed),
             filesystemProbe: { unwrapped in
                 FilesystemLiveProbe.context(
                     unwrapped: unwrapped,

@@ -45,7 +45,7 @@ enum ActionReviewerFixtures {
             repository: RepositoryReviewContext(
                 name: "rv",
                 currentBranch: "main",
-                isSharedBranch: true
+                sharedness: .shared
             ),
             environment: EnvironmentReviewContext(labels: ["development"], isCI: false)
         )

@@ -39,7 +39,7 @@ public enum ReviewSanitizer: Sendable {
             repository: RepositoryReviewContext(
                 name: sanitizeField(context.repository.name),
                 currentBranch: sanitizeField(context.repository.currentBranch),
-                isSharedBranch: context.repository.isSharedBranch
+                sharedness: context.repository.sharedness
             ),
             environment: EnvironmentReviewContext(
                 labels: context.environment.labels.compactMap { label in

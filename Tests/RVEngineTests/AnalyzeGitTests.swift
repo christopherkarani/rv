@@ -154,7 +154,9 @@ struct AnalyzeGitTests {
     }
 
     @Test func pushWithoutRefspec_usesCurrentBranch() {
-        let context = GitAnalysisContext(currentBranch: "topic")
+        let context = GitAnalysisContext(
+            branchWorld: .probed(currentBranch: "topic", isShared: false)
+        )
         let analysis = analyzeGit(ShellCommand(rawValue: "git push origin"), context: context)
         #expect(
             analysis

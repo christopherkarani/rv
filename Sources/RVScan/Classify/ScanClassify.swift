@@ -68,7 +68,8 @@ public struct ScanClassify: Sendable {
             // Unwrap starts from store cwd so relative `-C` / `--chdir` cannot
             // drop `..` against a nil base and then classify against the store path.
             let gitContext = GitAnalysisContext(
-                workingDirectory: event.workingDirectory
+                workingDirectory: event.workingDirectory,
+                branchWorld: .unprobed
             )
             let result = evaluateWithSemantics(
                 request,

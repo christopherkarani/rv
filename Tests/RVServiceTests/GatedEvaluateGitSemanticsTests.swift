@@ -46,6 +46,34 @@ struct GatedEvaluateGitSemanticsTests {
         #expect(force == .force)
     }
 
+    @Test func forcePushHEAD_unprobed_isNotSharedBranchWall() async throws {
+        let result = try await peek("git push --force origin HEAD")
+        guard case .deny(let deny) = result.decision else {
+            Issue.record("force-push HEAD must deny, got \(result.decision)")
+            return
+        }
+        #expect(deny.ruleID != ActionPolicyEngine.Builtin.remoteSharedBranch.ruleID)
+    }
+
+    @Test func forceWithLeaseHEAD_unprobed_isRemoteBranchAskNotWall() async throws {
+        let result = try await peek("git push --force-with-lease origin HEAD")
+        guard case .deny(let deny) = result.decision else {
+            Issue.record("force-with-lease HEAD must deny as ask, got \(result.decision)")
+            return
+        }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.remoteBranchAsk.ruleID)
+        #expect(deny.ruleID != ActionPolicyEngine.Builtin.remoteSharedBranch.ruleID)
+    }
+
+    @Test func forceWithLeaseMain_unprobed_hitsNameDenylist() async throws {
+        let result = try await peek("git push --force-with-lease origin main")
+        guard case .deny(let deny) = result.decision else {
+            Issue.record("force-with-lease main must hit denylist, got \(result.decision)")
+            return
+        }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.remoteSharedBranch.ruleID)
+    }
+
     @Test func unsupportedGlobals_stillDenyResetHard() async throws {
         let result = try await peek("git --weird-flag reset --hard")
         #expect(result.analysis == .unknown)

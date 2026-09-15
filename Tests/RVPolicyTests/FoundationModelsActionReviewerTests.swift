@@ -54,7 +54,7 @@ struct FoundationModelsActionReviewerTests {
         #expect(payload.text.contains("kind: shell"))
         #expect(payload.text.contains("fingerprint: shell:git.force-push:origin:main"))
         #expect(payload.text.contains("resources.branchName: main"))
-        #expect(payload.text.contains("repository.isSharedBranch: true"))
+        #expect(payload.text.contains("repository.sharedness: shared"))
     }
 
     @Test func builder_redactsSecretInSupportingCommand() {
