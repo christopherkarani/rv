@@ -366,6 +366,9 @@ public struct GatedEvaluate: Sendable {
             allowPaths: SecretAllowPaths.loadEffective(home: home, workspace: workspace),
             home: home?.rawValue,
             workingDirectory: cwd,
+            gitProbe: { unwrapped in
+                GitLiveProbe.world(unwrapped: unwrapped, fallbackCwd: cwd)
+            },
             filesystemProbe: { unwrapped in
                 FilesystemLiveProbe.context(
                     unwrapped: unwrapped,
