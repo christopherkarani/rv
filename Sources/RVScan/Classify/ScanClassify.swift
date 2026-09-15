@@ -101,16 +101,16 @@ public struct ScanClassify: Sendable {
     /// Probed lexical world when the store already recorded cwd. No live I/O.
     private static func lexicalFilesystemContext(
         for event: ExtractedEvent
-    ) -> FilesystemAnalysisContext {
+    ) -> FilesystemAnalysisWorld {
         guard let cwd = event.workingDirectory else {
-            return .empty
+            return .unprobed
         }
-        return FilesystemAnalysisContext(
-            workingDirectory: cwd,
-            repositoryRoot: nil,
-            catalog: .dayOne,
-            facts: [],
-            probe: .probed
+        return .probed(
+            FilesystemAnalysisContext(
+                workingDirectory: cwd,
+                catalog: .dayOne,
+                facts: []
+            )
         )
     }
 }

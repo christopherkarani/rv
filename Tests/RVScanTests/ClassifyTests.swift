@@ -194,6 +194,21 @@ import RVDomain
     #expect(findings.isEmpty)
 }
 
+@Test func classify_nilWorkingDirectory_envChdirProtectedPath_stillDenies() throws {
+    let events = [
+        ExtractedEvent(
+            host: .claude,
+            sourcePath: "/tmp/fixture/session.jsonl",
+            command: ShellCommand(rawValue: "env -C /tmp/.ssh rm config"),
+            workingDirectory: nil
+        ),
+    ]
+    let findings = try ScanClassify().classify(events)
+    let finding = try #require(findings.first)
+    #expect(findings.count == 1)
+    #expect(finding.ruleID == ActionPolicyEngine.Builtin.protectedPath.ruleID)
+}
+
 @Test func classify_workingDirectory_packAllowWrite_isUnresolvedPath() throws {
     let cwd = try #require(WorkingDirectory(validating: "/tmp/rv-scan-ws"))
     let events = [

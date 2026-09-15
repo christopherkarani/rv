@@ -18,7 +18,7 @@ public func evaluateWithSemantics<E: PatternEngine>(
     patterns: E,
     compiled: CompiledPacks<E.Compiled>,
     gitContext: GitAnalysisContext = .empty,
-    filesystemProbe: (UnwrapOutcome) -> FilesystemAnalysisContext = { _ in .empty },
+    filesystemProbe: (UnwrapOutcome) -> FilesystemAnalysisWorld = { _ in .unprobed },
     policy: EffectiveActionPolicy = .empty
 ) -> EvaluationResult {
     let pack = evaluate(
@@ -35,18 +35,18 @@ public func evaluateWithSemantics<E: PatternEngine>(
         request.command,
         workingDirectory: gitContext.workingDirectory
     )
-    let filesystemContext = filesystemProbe(unwrapped)
+    let filesystemWorld = filesystemProbe(unwrapped)
     let analysis = analyzeSemantics(
         unwrapped: unwrapped,
         gitContext: gitContext,
-        filesystemContext: filesystemContext
+        filesystemWorld: filesystemWorld
     )
     return applySemantics(
         pack: pack,
         analysis: analysis,
         command: request.command,
         gitContext: gitContext,
-        filesystemContext: filesystemContext,
+        filesystemWorld: filesystemWorld,
         enabledPacks: request.enabledPacks,
         policy: policy
     )

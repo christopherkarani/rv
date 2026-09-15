@@ -90,7 +90,7 @@ struct MaturityCorpusTests {
 private func runDoor(
     _ command: String,
     gitContext: GitAnalysisContext = .empty,
-    filesystemProbe: (UnwrapOutcome) -> FilesystemAnalysisContext = { _ in .empty },
+    filesystemProbe: (UnwrapOutcome) -> FilesystemAnalysisWorld = { _ in .unprobed },
     policy: EffectiveActionPolicy = .empty
 ) throws -> EvaluationResult {
     let packs = [

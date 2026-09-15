@@ -5,10 +5,12 @@ import RVDomain
 
 @Suite("ApplySemantics executing sinks")
 struct ApplySemanticsSinkTests {
-    private let home = FilesystemAnalysisContext(
-        workingDirectory: WorkingDirectory(validating: "/repo"),
-        repositoryRoot: RepositoryRoot(validating: "/repo"),
-        homeDirectory: "/isolated-home"
+    private let home = FilesystemAnalysisWorld.probed(
+        FilesystemAnalysisContext(
+            workingDirectory: WorkingDirectory(validating: "/repo"),
+            repositoryRoot: RepositoryRoot(validating: "/repo"),
+            homeDirectory: "/isolated-home"
+        )
     )
 
     @Test func echoPipeBashNorcReset_matchesDirectInnermost() throws {
@@ -43,7 +45,7 @@ struct ApplySemanticsSinkTests {
         let composed = applySemantics(
             pack: pack,
             command: ShellCommand(rawValue: command),
-            filesystemContext: home
+            filesystemWorld: home
         )
         guard case .deny = composed.decision else {
             Issue.record("piped rm -rf ~ must deny, got \(composed.decision)")
@@ -232,7 +234,7 @@ struct ApplySemanticsSinkTests {
 
     @Test func lift_0_14_applySemanticsCanaries() throws {
         for row in try loadLiftRows() {
-            try assertLiftRow(row, filesystemContext: home)
+            try assertLiftRow(row, filesystemWorld: home)
         }
     }
 }
@@ -257,7 +259,7 @@ private func loadLiftRows() throws -> [LiftRow] {
 
 private func assertLiftRow(
     _ row: LiftRow,
-    filesystemContext: FilesystemAnalysisContext
+    filesystemWorld: FilesystemAnalysisWorld
 ) throws {
     let command = ShellCommand(rawValue: row.command)
     switch row.expected {
@@ -266,7 +268,7 @@ private func assertLiftRow(
         let composed = applySemantics(
             pack: pack,
             command: command,
-            filesystemContext: filesystemContext
+            filesystemWorld: filesystemWorld
         )
         guard case .deny = composed.decision else {
             Issue.record("\(row.id): expected deny, got \(composed.decision)")
@@ -280,7 +282,7 @@ private func assertLiftRow(
         let composed = applySemantics(
             pack: pack,
             command: command,
-            filesystemContext: filesystemContext
+            filesystemWorld: filesystemWorld
         )
         #expect(composed.decision == .allow, "\(row.id) got \(String(describing: composed.decision))")
         #expect(composed.analysis.gitAction == nil, "\(row.id) must not unwrap to git")

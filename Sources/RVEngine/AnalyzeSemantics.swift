@@ -5,11 +5,11 @@ import RVDomain
 public func analyzeSemantics(
     _ command: ShellCommand,
     gitContext: GitAnalysisContext = .empty,
-    filesystemContext: FilesystemAnalysisContext = .empty,
+    filesystemWorld: FilesystemAnalysisWorld = .unprobed,
     maxDepth: Int = UnwrapLimits.maxDepth,
     maxBytes: Int = UnwrapLimits.maxBytes
 ) -> SemanticAnalysis {
-    let startCwd = gitContext.workingDirectory ?? filesystemContext.workingDirectory
+    let startCwd = gitContext.workingDirectory ?? filesystemWorkingDirectory(filesystemWorld)
     return analyzeSemantics(
         unwrapped: unwrapCommand(
             command,
@@ -18,7 +18,7 @@ public func analyzeSemantics(
             maxBytes: maxBytes
         ),
         gitContext: gitContext,
-        filesystemContext: filesystemContext
+        filesystemWorld: filesystemWorld
     )
 }
 
@@ -27,7 +27,7 @@ public func analyzeSemantics(
 public func analyzeSemantics(
     unwrapped: UnwrapOutcome,
     gitContext: GitAnalysisContext = .empty,
-    filesystemContext: FilesystemAnalysisContext = .empty
+    filesystemWorld: FilesystemAnalysisWorld = .unprobed
 ) -> SemanticAnalysis {
     switch unwrapped {
     case .limited(let layers):
@@ -46,14 +46,42 @@ public func analyzeSemantics(
         }
         let filesystem = analyzeFilesystem(
             unwrapped.command,
-            context: FilesystemAnalysisContext(
-                workingDirectory: unwrapped.workingDirectory ?? filesystemContext.workingDirectory,
-                repositoryRoot: filesystemContext.repositoryRoot,
-                homeDirectory: filesystemContext.homeDirectory,
-                catalog: filesystemContext.catalog,
-                facts: filesystemContext.facts
+            context: filesystemContext(
+                world: filesystemWorld,
+                workingDirectory: unwrapped.workingDirectory
             )
         )
         return filesystem.wrapping(unwrapped.layers)
+    }
+}
+
+private func filesystemWorkingDirectory(_ world: FilesystemAnalysisWorld) -> WorkingDirectory? {
+    switch world {
+    case .unprobed:
+        return nil
+    case .probed(let context):
+        return context.workingDirectory
+    }
+}
+
+private func filesystemContext(
+    world: FilesystemAnalysisWorld,
+    workingDirectory: WorkingDirectory?
+) -> FilesystemAnalysisContext {
+    switch world {
+    case .unprobed:
+        // Unwrap cwd is command text (`env -C`), not a live probe.
+        guard let workingDirectory else {
+            return .empty
+        }
+        return FilesystemAnalysisContext(workingDirectory: workingDirectory)
+    case .probed(let context):
+        return FilesystemAnalysisContext(
+            workingDirectory: workingDirectory ?? context.workingDirectory,
+            repositoryRoot: context.repositoryRoot,
+            homeDirectory: context.homeDirectory,
+            catalog: context.catalog,
+            facts: context.facts
+        )
     }
 }
