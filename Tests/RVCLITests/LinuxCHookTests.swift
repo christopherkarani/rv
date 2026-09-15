@@ -84,7 +84,7 @@ struct LinuxCHookTests {
         let out = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
         #expect(out.contains("\"decision\":\"deny\""))
         let code = try #require(allowOnceUnlockCode(in: out))
-        #expect(out.contains("Paste in Terminal to allow once: rv allow-once \(code)."))
+        #expect(out.contains(unlockLine(for: code)))
         #expect(out.contains("Destroys uncommitted changes. Use 'git stash' first."))
         #expect(out.contains("git reset --hard") == false)
         #expect(out.contains("\"decision\":\"allow\"") == false)

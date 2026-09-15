@@ -16,7 +16,8 @@ import RVDomain
     let wire = hookWire(
         from: result,
         command: ShellCommand(rawValue: "git reset --hard"),
-        using: GrokHostCodec()
+        using: GrokHostCodec(),
+        intent: .firstCall(verdict: .deny, unlockCode: nil)
     )
     let object = try JSONSerialization.jsonObject(with: Data(wire.stdout.utf8))
     let json = try #require(object as? [String: Any])
@@ -44,13 +45,13 @@ import RVDomain
     )
     let json = try #require(JSONSerialization.jsonObject(with: Data(withVoice.stdout.utf8)) as? [String: Any])
     #expect(json["rule"] as? String == "core.git/reset-hard")
-    #expect(json["next"] as? String == hookUnlockNext)
+    #expect(json["next"] as? String == ttyUnlockHint)
     #expect(withVoice.stdout.contains("core.git:reset-hard") == false)
 
-    let code = try #require(AllowOnceUnlockCode(validating: "a1b2c3"))
+    let code = try mintedUnlock()
     let minted = codec.encodeDeny(reason: resetHardHostDeny, rule: rule, next: .minted(code))
     let mintedJSON = try #require(JSONSerialization.jsonObject(with: Data(minted.stdout.utf8)) as? [String: Any])
-    #expect(mintedJSON["next"] as? String == hookUnlockNext(code: "a1b2c3"))
+    #expect(mintedJSON["next"] as? String == unlockLine(for: code))
 }
 
 @Test func hookWire_invalidUnlockCodeOmitsNext() throws {
@@ -63,11 +64,12 @@ import RVDomain
             matched: nil
         )
     )
+    #expect(AllowOnceUnlockCode(validating: "abcde") == nil)
     let wire = hookWire(
         from: result,
         command: ShellCommand(rawValue: "git reset --hard"),
         using: GrokHostCodec(),
-        unlockCode: "abcde"
+        intent: .firstCall(verdict: .deny, unlockCode: nil)
     )
     let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
     #expect(json["next"] == nil)
@@ -93,23 +95,24 @@ func hookWire_samePathHosts_resetHardIsShortDeny(_ host: HookHost) throws {
     )
     let command = ShellCommand(rawValue: "git reset --hard")
     let wire: HookWire
+    let intent = HookWireIntent.firstCall(verdict: .deny, unlockCode: nil)
     switch host {
     case .grok:
-        wire = hookWire(from: result, command: command, using: GrokHostCodec())
+        wire = hookWire(from: result, command: command, using: GrokHostCodec(), intent: intent)
     case .pi:
-        wire = hookWire(from: result, command: command, using: PiHostCodec())
+        wire = hookWire(from: result, command: command, using: PiHostCodec(), intent: intent)
     case .opencode:
-        wire = hookWire(from: result, command: command, using: OpenCodeHostCodec())
+        wire = hookWire(from: result, command: command, using: OpenCodeHostCodec(), intent: intent)
     case .openclaw:
-        wire = hookWire(from: result, command: command, using: OpenClawHostCodec())
+        wire = hookWire(from: result, command: command, using: OpenClawHostCodec(), intent: intent)
     case .hermes:
-        wire = hookWire(from: result, command: command, using: HermesHostCodec())
+        wire = hookWire(from: result, command: command, using: HermesHostCodec(), intent: intent)
     case .claude:
-        wire = hookWire(from: result, command: command, using: ClaudeHostCodec())
+        wire = hookWire(from: result, command: command, using: ClaudeHostCodec(), intent: intent)
     case .codex:
-        wire = hookWire(from: result, command: command, using: CodexHostCodec())
+        wire = hookWire(from: result, command: command, using: CodexHostCodec(), intent: intent)
     case .cursor:
-        wire = hookWire(from: result, command: command, using: CursorHostCodec())
+        wire = hookWire(from: result, command: command, using: CursorHostCodec(), intent: intent)
     }
     #expect(wire.stdout.isEmpty == false)
     #expect(wire.stdout.contains("\"permissionDecision\":\"ask\"") == false)
@@ -161,27 +164,28 @@ func hookWire_samePathHosts_resetHardIsShortDeny(_ host: HookHost) throws {
         )
     )
     let command = ShellCommand(rawValue: "git reset --hard")
-    let pi = hookWire(from: result, command: command, using: PiHostCodec())
-    let openCode = hookWire(from: result, command: command, using: OpenCodeHostCodec())
+    let intent = HookWireIntent.firstCall(verdict: .deny, unlockCode: nil)
+    let pi = hookWire(from: result, command: command, using: PiHostCodec(), intent: intent)
+    let openCode = hookWire(from: result, command: command, using: OpenCodeHostCodec(), intent: intent)
     #expect(pi.stdout.contains("\"permissionDecision\"") == false)
     #expect(pi.stdout.contains("\"decision\":\"deny\""))
     #expect(openCode.stdout.contains("\"permissionDecision\"") == false)
     #expect(openCode.stdout.contains("\"decision\":\"deny\""))
-    let openClaw = hookWire(from: result, command: command, using: OpenClawHostCodec())
+    let openClaw = hookWire(from: result, command: command, using: OpenClawHostCodec(), intent: intent)
     #expect(openClaw.stdout.contains("\"permissionDecision\"") == false)
     #expect(openClaw.stdout.contains("\"decision\":\"deny\""))
     #expect(openClaw.exitCode == 1)
-    let hermes = hookWire(from: result, command: command, using: HermesHostCodec())
+    let hermes = hookWire(from: result, command: command, using: HermesHostCodec(), intent: intent)
     #expect(hermes.stdout.contains("\"permissionDecision\"") == false)
     #expect(hermes.stdout.contains("\"decision\":\"deny\""))
     #expect(hermes.exitCode == 1)
-    let codex = hookWire(from: result, command: command, using: CodexHostCodec())
+    let codex = hookWire(from: result, command: command, using: CodexHostCodec(), intent: intent)
     #expect(codex.stdout.contains("\"permissionDecision\"") == false)
     #expect(codex.stdout.contains("\"decision\":\"block\""))
     #expect(codex.stdout.contains("\"decision\":\"deny\"") == false)
     #expect(codex.exitCode == 2)
     #expect(codex.stderr.isEmpty == false)
-    let cursor = hookWire(from: result, command: command, using: CursorHostCodec())
+    let cursor = hookWire(from: result, command: command, using: CursorHostCodec(), intent: intent)
     #expect(cursor.stdout.contains("\"permissionDecision\"") == false)
     #expect(cursor.stdout.contains("\"permission\":\"deny\""))
     #expect(cursor.stdout.contains("\"decision\":\"block\"") == false)
@@ -193,7 +197,8 @@ func hookWire_samePathHosts_resetHardIsShortDeny(_ host: HookHost) throws {
     let wire = hookWire(
         from: EvaluationResult(outcome: .plain),
         command: ShellCommand(rawValue: "git status"),
-        using: GrokHostCodec()
+        using: GrokHostCodec(),
+        intent: .firstCall(verdict: .allow, unlockCode: nil)
     )
     #expect(wire.stdout.isEmpty)
     #expect(wire.exitCode == 0)
@@ -215,7 +220,12 @@ func hookWire_samePathHosts_resetHardIsShortDeny(_ host: HookHost) throws {
             matched: match
         )
     )
-    let wire = hookWire(from: result, command: resetHard, using: ClaudeHostCodec())
+    let wire = hookWire(
+        from: result,
+        command: resetHard,
+        using: ClaudeHostCodec(),
+        intent: .firstCall(verdict: .deny, unlockCode: nil)
+    )
     #expect(wire.exitCode == 0)
     #expect(wire.stdout.contains("\"permissionDecision\":\"deny\""))
     #expect(wire.stdout.contains("\"ruleId\":\"core.git:reset-hard\""))
@@ -226,7 +236,8 @@ func hookWire_samePathHosts_resetHardIsShortDeny(_ host: HookHost) throws {
     let wire = hookWire(
         from: EvaluationResult(outcome: .plain),
         command: ShellCommand(rawValue: "git status"),
-        using: ClaudeHostCodec()
+        using: ClaudeHostCodec(),
+        intent: .firstCall(verdict: .allow, unlockCode: nil)
     )
     #expect(wire.stdout.isEmpty)
     #expect(wire.exitCode == 0)
@@ -236,7 +247,8 @@ func hookWire_samePathHosts_resetHardIsShortDeny(_ host: HookHost) throws {
     let wire = hookWire(
         from: EvaluationResult(outcome: .indeterminate(.commandTooLarge)),
         command: ShellCommand(rawValue: "x"),
-        using: ClaudeHostCodec()
+        using: ClaudeHostCodec(),
+        intent: .firstCall(verdict: .deny, unlockCode: nil)
     )
     #expect(wire.exitCode == 0)
     #expect(wire.stdout.contains(incompleteEvalSentence))
@@ -248,7 +260,8 @@ func hookWire_samePathHosts_resetHardIsShortDeny(_ host: HookHost) throws {
     let wire = hookWire(
         from: EvaluationResult(outcome: .indeterminate(.commandTooLarge)),
         command: ShellCommand(rawValue: "x"),
-        using: GrokHostCodec()
+        using: GrokHostCodec(),
+        intent: .firstCall(verdict: .deny, unlockCode: nil)
     )
     let object = try JSONSerialization.jsonObject(with: Data(wire.stdout.utf8))
     let json = try #require(object as? [String: Any])
@@ -268,7 +281,8 @@ func hookWire_samePathHosts_resetHardIsShortDeny(_ host: HookHost) throws {
             )
         ),
         command: ShellCommand(rawValue: "git reset --hard"),
-        using: denyCodec
+        using: denyCodec,
+        intent: .firstCall(verdict: .deny, unlockCode: nil)
     )
     #expect(denyWire.stdout == "spy\n")
     #expect(denyWire.exitCode == 9)
@@ -280,7 +294,8 @@ func hookWire_samePathHosts_resetHardIsShortDeny(_ host: HookHost) throws {
     let incompleteWire = hookWire(
         from: EvaluationResult(outcome: .indeterminate(.commandTooLarge)),
         command: ShellCommand(rawValue: "x"),
-        using: incompleteCodec
+        using: incompleteCodec,
+        intent: .firstCall(verdict: .deny, unlockCode: nil)
     )
     #expect(incompleteWire.stdout == "spy\n")
     #expect(incompleteCodec.denyCalls.count == 1)
@@ -300,15 +315,16 @@ func hookWire_samePathHosts_resetHardIsShortDeny(_ host: HookHost) throws {
         ),
         command: ShellCommand(rawValue: "git reset --hard"),
         using: denyCodec,
-        unlockCode: "a1b2c3"
+        intent: .firstCall(verdict: .deny, unlockCode: try mintedUnlock())
     )
-    let code = try #require(AllowOnceUnlockCode(validating: "a1b2c3"))
+    let code = try mintedUnlock()
     #expect(denyCodec.denyCalls.count == 1)
     #expect(denyCodec.denyCalls[0].rule == RuleID(pack: .coreGit, pattern: "reset-hard"))
     #expect(denyCodec.denyCalls[0].next == .minted(code))
 }
 
 @Test func hookWire_invalidUnlockCodePassesNone() {
+    #expect(AllowOnceUnlockCode(validating: "abcde") == nil)
     let denyCodec = EncodeDenySpy()
     _ = hookWire(
         from: EvaluationResult(
@@ -319,7 +335,7 @@ func hookWire_samePathHosts_resetHardIsShortDeny(_ host: HookHost) throws {
         ),
         command: ShellCommand(rawValue: "git reset --hard"),
         using: denyCodec,
-        unlockCode: "abcde"
+        intent: .firstCall(verdict: .deny, unlockCode: nil)
     )
     #expect(denyCodec.denyCalls.count == 1)
     #expect(denyCodec.denyCalls[0].next == .none)
@@ -379,7 +395,8 @@ private final class EncodeDoorSpy: HostCodec, @unchecked Sendable {
     _ = hookWire(
         from: EvaluationResult(outcome: .deny(deny, matched: nil)),
         command: ShellCommand(rawValue: "git reset --hard"),
-        using: spy
+        using: spy,
+        intent: .firstCall(verdict: .deny, unlockCode: nil)
     )
     #expect(spy.allowCalls == 0)
     #expect(spy.denyCalls == 1)
@@ -393,7 +410,7 @@ private final class EncodeDoorSpy: HostCodec, @unchecked Sendable {
         from: EvaluationResult(outcome: .deny(deny, matched: nil)),
         command: ShellCommand(rawValue: "git reset --hard"),
         using: spy,
-        bound: .allow
+        intent: .firstCall(verdict: .allow, unlockCode: nil)
     )
     #expect(spy.allowCalls == 0)
     #expect(spy.denyCalls == 1)
@@ -413,8 +430,7 @@ private final class EncodeDoorSpy: HostCodec, @unchecked Sendable {
         ),
         command: ShellCommand(rawValue: "git push origin feature"),
         using: spy,
-        bound: .mandatoryHuman(deny),
-        cwd: wd("/tmp/ws")
+        intent: .firstCall(verdict: .ask(.hostNative), unlockCode: nil)
     )
     #expect(spy.allowCalls == 0)
     #expect(spy.denyCalls == 0)
@@ -434,8 +450,7 @@ private final class EncodeDoorSpy: HostCodec, @unchecked Sendable {
         ),
         command: ShellCommand(rawValue: "git push origin feature"),
         using: spy,
-        bound: .mandatoryHuman(deny),
-        cwd: wd("/tmp/ws")
+        intent: .firstCall(verdict: .ask(.hostNative), unlockCode: nil)
     )
     #expect(spy.allowCalls == 0)
     #expect(spy.denyCalls == 0)
@@ -452,8 +467,7 @@ private final class EncodeDoorSpy: HostCodec, @unchecked Sendable {
         ),
         command: ShellCommand(rawValue: "git reset --hard"),
         using: spy,
-        bound: .deny(deny),
-        cwd: wd("/tmp/ws")
+        intent: .firstCall(verdict: .ask(.hostNative), unlockCode: nil)
     )
     #expect(spy.allowCalls == 0)
     #expect(spy.denyCalls == 0)
@@ -475,14 +489,14 @@ private final class EncodeDoorSpy: HostCodec, @unchecked Sendable {
         from: result,
         command: ShellCommand(rawValue: "git reset --hard"),
         using: GrokHostCodec(),
-        cwd: wd("/tmp/ws"),
-        unlockCode: "a1b2c3"
+        intent: .firstCall(verdict: .deny, unlockCode: try mintedUnlock())
     )
     let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
     #expect(json["decision"] as? String == "deny")
     let reason = try #require(json["reason"] as? String)
-    #expect(reason == mintedResetHardHostDeny("a1b2c3"))
-    #expect(json["next"] as? String == hookUnlockNext(code: "a1b2c3"))
+    let unlock = try mintedUnlock()
+    #expect(reason == mintedResetHardHostDeny(unlock))
+    #expect(json["next"] as? String == unlockLine(for: unlock))
     #expect(json["rule"] as? String == "core.git/reset-hard")
     _ = try assertMintedHookUnlock(reason)
 }
@@ -504,14 +518,15 @@ private final class EncodeDoorSpy: HostCodec, @unchecked Sendable {
         matchingView: "git reset --hard"
     )
     let command = ShellCommand(rawValue: "git reset --hard")
-    let unlock = "a1b2c3"
+    let unlock = try mintedUnlock()
     let expected = mintedResetHardHostDeny(unlock)
+    let intent = HookWireIntent.firstCall(verdict: .deny, unlockCode: unlock)
 
     let claude = hookWire(
         from: result,
         command: command,
         using: ClaudeHostCodec(),
-        unlockCode: unlock
+        intent: intent
     )
     #expect(claude.stdout.contains("\"permissionDecision\":\"deny\""))
     #expect(claude.stdout.contains(expected))
@@ -521,7 +536,7 @@ private final class EncodeDoorSpy: HostCodec, @unchecked Sendable {
         from: result,
         command: command,
         using: CodexHostCodec(),
-        unlockCode: unlock
+        intent: intent
     )
     let codexJSON = try #require(JSONSerialization.jsonObject(with: Data(codex.stdout.utf8)) as? [String: Any])
     #expect(codexJSON["decision"] as? String == "block")
@@ -533,7 +548,7 @@ private final class EncodeDoorSpy: HostCodec, @unchecked Sendable {
         from: result,
         command: command,
         using: CursorHostCodec(),
-        unlockCode: unlock
+        intent: intent
     )
     let cursorJSON = try #require(JSONSerialization.jsonObject(with: Data(cursor.stdout.utf8)) as? [String: Any])
     #expect(cursorJSON["permission"] as? String == "deny")
@@ -551,9 +566,7 @@ private final class EncodeDoorSpy: HostCodec, @unchecked Sendable {
         ),
         command: ShellCommand(rawValue: "git reset --hard"),
         using: PiHostCodec(),
-        bound: .deny(deny),
-        cwd: wd("/tmp/ws"),
-        unlockCode: "a1b2c3"
+        intent: .firstCall(verdict: .ask(.hostNative), unlockCode: try mintedUnlock())
     )
     let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
     #expect(json["decision"] as? String == "ask")

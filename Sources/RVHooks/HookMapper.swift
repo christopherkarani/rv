@@ -2,7 +2,7 @@ import RVDomain
 
 /// First-call vs post-spend encode. Product Ask is `HostAskVerdict`; codecs only encode.
 public enum HookWireIntent: Sendable, Equatable {
-    case firstCall(verdict: HostAskVerdict, unlockCode: String?)
+    case firstCall(verdict: HostAskVerdict, unlockCode: AllowOnceUnlockCode?)
     case afterSpend
 }
 
@@ -57,7 +57,10 @@ public func hookWire<C: HostCodec>(
         from: result,
         command: command,
         using: codec,
-        intent: .firstCall(verdict: verdict, unlockCode: unlockCode)
+        intent: .firstCall(
+            verdict: verdict,
+            unlockCode: unlockCode.flatMap(AllowOnceUnlockCode.init(validating:))
+        )
     )
 }
 
@@ -66,7 +69,7 @@ private func encodeFirstCall<C: HostCodec>(
     command: ShellCommand,
     using codec: C,
     verdict: HostAskVerdict,
-    unlockCode: String?
+    unlockCode: AllowOnceUnlockCode?
 ) -> HookWire {
     switch verdict {
     case .allow:
@@ -116,7 +119,7 @@ private func encodeLiveDeny<C: HostCodec>(
     from result: EvaluationResult,
     command: ShellCommand,
     using codec: C,
-    unlockCode: String?
+    unlockCode: AllowOnceUnlockCode?
 ) -> HookWire {
     switch result.decision {
     case .allow:

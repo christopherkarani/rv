@@ -245,7 +245,7 @@ struct OneShotEvaluateClientTests {
         let whyRest = why.hasPrefix("RV · Blocked. ")
             ? String(why.dropFirst("RV · Blocked. ".count))
             : why
-        let expected = "RV · Blocked. \(hookUnlockNext(code: code)) \(whyRest)"
+        let expected = "RV · Blocked. \(unlockLine(for: code)) \(whyRest)"
         #expect(outcome.exitCode == 2)
         #expect(outcome.stdout.contains("\"decision\":\"block\""))
         #expect(stderr == expected)

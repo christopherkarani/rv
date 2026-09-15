@@ -139,12 +139,12 @@ struct AllowOnceGrantHonorTests {
         #expect(json["decision"] as? String == "deny")
         let reason = try #require(json["reason"] as? String)
         let code = try #require(allowOnceUnlockCode(in: reason))
-        #expect(json["next"] as? String == hookUnlockNext(code: code))
+        #expect(json["next"] as? String == unlockLine(for: code))
         let store = AllowOnceStore(baseDirectory: directory)
         #expect((await store.list(now: now)).contains { $0.kind == .pending })
 
         let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
-        _ = try await store.redeem(code: code, tty: tty, now: now)
+        _ = try await store.redeem(code: code.rawValue, tty: tty, now: now)
         let first = await client.evaluateResult(
             command: ShellCommand(rawValue: "git reset --hard"),
             cwd: wd("/tmp/ws")
