@@ -99,7 +99,7 @@ public struct AllowlistStore: Sendable {
                 switch entry.selector {
                 case .rule(let ruleID):
                     return ruleID.rawValue == needle
-                        || displayRuleID(ruleID) == needle
+                        || ruleID.slashDisplay == needle
                         || parseAllowlistRuleID(needle) == ruleID
                 case .exactCommand(let command):
                     return aliases.contains(command.rawValue)

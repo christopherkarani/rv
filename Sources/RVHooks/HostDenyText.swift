@@ -111,7 +111,7 @@ public func hookDenyCommandPreview(_ command: ShellCommand) -> String {
 
 /// Ask JSON reason. Deny hook payload must not use this line.
 public func hostAskLine(command: ShellCommand, ruleID: RuleID) -> String {
-    "Blocked \(hookDenyCommandPreview(command)) (\(displayRuleID(ruleID))). \(hookUnlockNext)"
+    "Blocked \(hookDenyCommandPreview(command)) (\(ruleID.slashDisplay)). \(hookUnlockNext)"
 }
 
 /// Sentence 1 of `reason`, plus sentence 2 when it is a safe one-line tip.

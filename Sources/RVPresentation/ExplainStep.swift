@@ -16,7 +16,7 @@ extension ExplainStep {
         case .safe(.none), .destructive(.none):
             return "none"
         case .safe(.rule(let ruleID)), .destructive(.rule(let ruleID)):
-            return displayRuleID(ruleID)
+            return ruleID.slashDisplay
         case .default(.allow):
             return "allow"
         case .default(.incomplete):

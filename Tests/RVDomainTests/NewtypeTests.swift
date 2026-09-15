@@ -40,6 +40,7 @@ import Testing
 @Test func ruleID_isPackColonPattern() {
     let rule = RuleID(pack: PackID(rawValue: "core.git"), pattern: "reset-hard")
     #expect(rule.rawValue == "core.git:reset-hard")
+    #expect(rule.slashDisplay == "core.git/reset-hard")
     #expect(RuleID(rawValue: "core.git:reset-hard")?.pattern == "reset-hard")
 }
 

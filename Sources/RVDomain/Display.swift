@@ -4,5 +4,5 @@ public let incompleteEvalSentence =
 
 /// Slash display (`core.git/reset-hard`); `RuleID.rawValue` is colon (`core.git:reset-hard`).
 public func displayRuleID(_ ruleID: RuleID) -> String {
-    "\(ruleID.pack.rawValue)/\(ruleID.pattern)"
+    ruleID.slashDisplay
 }

@@ -73,11 +73,7 @@ public struct SecretPathCatalog: Sendable, Equatable {
     /// First configured rule that matches `path`. Reused by the secret-path
     /// guard and the filesystem analyzer — not a second scanner.
     public func firstMatch(of path: String) -> SecretPathRule? {
-        rules.first { Self.matches(path, $0.kind) }
-    }
-
-    private static func matches(_ candidate: String, _ kind: SecretPathKind) -> Bool {
-        secretPathKindMatches(candidate, kind)
+        rules.first { $0.kind.matches(path) }
     }
 }
 

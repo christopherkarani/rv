@@ -70,7 +70,7 @@ private func mediumAllow() -> EvaluationResult {
     #expect(vm.packReason == reason)
     #expect(vm.nextAction == "run it in Terminal, or rv allow-once")
     #expect(vm.ruleID.rawValue == "core.git:reset-hard")
-    #expect(displayRuleID(vm.ruleID) == "core.git/reset-hard")
+    #expect(vm.ruleID.slashDisplay == "core.git/reset-hard")
     #expect(vm.ruleDisplay == "core.git/reset-hard")
 }
 

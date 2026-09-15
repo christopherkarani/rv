@@ -190,7 +190,7 @@ public enum FilesystemAction: Sendable, Equatable, Codable {
     }
 
     public var explainCatalogRule: String? {
-        primaryTarget?.protectedMatch.map { displayRuleID($0.ruleID) }
+        primaryTarget?.protectedMatch.map { $0.ruleID.slashDisplay }
     }
 
     public func proposedAction(

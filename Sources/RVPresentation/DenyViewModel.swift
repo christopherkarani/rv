@@ -11,7 +11,7 @@ public struct DenyViewModel: Equatable, Sendable {
     public var packReason: String
     public var nextAction: String
 
-    public var ruleDisplay: String { displayRuleID(ruleID) }
+    public var ruleDisplay: String { ruleID.slashDisplay }
 
     public init(
         decision: Decision,

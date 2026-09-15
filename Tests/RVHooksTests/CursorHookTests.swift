@@ -228,7 +228,7 @@ func cursorDecode_extractsBeforeShellCommand(_ file: String, expected: String) t
         next: .ttyHint
     )
     try assertCursorHonorPath(wire, reason: resetHardHostDeny)
-    #expect(HostNativeAsk.leftoverAskIsPermit("ask") == false)
+    #expect(HostNativeAsk.leftoverAskIsPermit == false)
     #expect(wire.stdout == codec.encodeDeny(reason: resetHardHostDeny).stdout)
     #expect(wire.exitCode == codec.encodeDeny(reason: resetHardHostDeny).exitCode)
     #expect(wire.stdout.contains("\"permission\":\"ask\"") == false)
@@ -284,7 +284,7 @@ func cursorDecode_extractsBeforeShellCommand(_ file: String, expected: String) t
     #expect(HostNativeAsk.capability(for: .opencode) == .spendFirst)
     #expect(HostNativeAsk.capability(for: .codex) == .denyOrTTY)
     #expect(
-        HostNativeAsk.verdict(
+        HostNativeAsk.hostAskVerdict(
             host: .cursor,
             result: result,
             cwd: wd("/tmp/ws"),

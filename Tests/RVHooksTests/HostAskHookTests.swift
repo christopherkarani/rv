@@ -193,7 +193,7 @@ func hookWire_firstCallAllowCannotSkipPolicyGate(_ host: HookHost) throws {
     )
     let json = try #require(JSONSerialization.jsonObject(with: Data(pi.stdout.utf8)) as? [String: Any])
     #expect(json["decision"] as? String == "deny")
-    #expect(HostNativeAsk.leftoverAskIsPermit("ask") == false)
+    #expect(HostNativeAsk.leftoverAskIsPermit == false)
 }
 
 @Test func hookWire_afterFailedSpendStaysDeny() throws {
@@ -255,7 +255,7 @@ func hookWire_firstCallAllowCannotSkipPolicyGate(_ host: HookHost) throws {
     #expect(denyWire.stdout.isEmpty == false)
     #expect(denyJSON["decision"] as? String != "allow")
     #expect(leftoverJSON["decision"] as? String == "deny")
-    #expect(HostNativeAsk.leftoverAskIsPermit("ask") == false)
+    #expect(HostNativeAsk.leftoverAskIsPermit == false)
 }
 
 @Test func hookWire_openCodeSpendIntentWithoutCallbackDenies() async throws {
