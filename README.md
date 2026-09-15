@@ -17,13 +17,13 @@
 
 # rv (Rykan V)
 
-**Control what your agent can do, rv blocks dangerous commands before they can run**
+**Control what your agent can do.** rv is a **hook-grade** guard: it blocks destructive shell (and Read / Edit / Write secret-path on Grok, Claude, and Cursor) when the host actually calls `rv`. It is not an OS sandbox. A host that never invokes the hook is not blocked.
 
 Site: [rykanv.com](https://rykanv.com) · Docs: [rykanv.com/docs/introduction](https://rykanv.com/docs/introduction) · Discord: [discord.gg/uZn9MDUYKx](https://discord.gg/uZn9MDUYKx)
 
 ## Why this exists
 
-Everyday I find a new victim of rm -rf, when agents are deep in work, they can make mistakes. Irreversible mistakes, like sending a badly formatted email to your hottest sales lead or deletes your production db, rv acts as the control layer you enforce on your agents to block them from doing this. setup is simple, run the curl command and the script and rv will place itself before the hook runs.
+Agents delete the wrong tree. rv sits on the host's pre-tool hook and denies the command before the host runs it. Install is one curl; `rv setup` writes adapters for hosts it can see.
 
 ## Quick start
 
@@ -40,21 +40,21 @@ curl -fsSL https://rykanv.com/install | sh
 | Secret paths | `.env`, SSH keys, and other known credential files |
 | Allow once | Redeem the code from a block; the next matching call in this working directory runs once |
 | Explain | `rv explain` shows which pack would fire |
-| Hosts | Grok, Pi, OpenCode, Claude, OpenClaw, Hermes, Codex, Cursor — wired by `rv setup` |
-| Platform | macOS 26 Apple Silicon, Linux aarch64/x86_64. |
+| Hosts | Grok, Pi, OpenCode, Claude, OpenClaw, Hermes, Codex, Cursor. `rv setup` writes a host only when that host is already on the machine. |
+| Platform | macOS 26 Apple Silicon, Linux aarch64/x86_64. PR CI Linux is ubuntu-24.04 x86_64; aarch64 is a supported install, not a PR job. |
 
 ## Supported hosts
 
-| Host | After `rv setup` |
-| --- | --- |
-| Grok | `~/.grok/hooks/rv.json` |
-| Pi | `~/.pi/agent/extensions/rv-guard.ts` |
-| OpenCode | `~/.config/opencode/plugins/rv-guard.js` |
-| Claude | settings merge |
-| OpenClaw | `~/.openclaw/extensions/rv-guard/` |
-| Hermes | `~/.hermes/plugins/rv-guard/` |
-| Codex | `~/.codex/hooks/rv-guard.py` |
-| Cursor | `~/.cursor/hooks/rv-guard.py` |
+| Host | After `rv setup` (if detected) | File-tool Read / Edit / Write |
+| --- | --- | --- |
+| Grok | `~/.grok/hooks/rv.json` | yes |
+| Pi | `~/.pi/agent/extensions/rv-guard.ts` | shell only |
+| OpenCode | `~/.config/opencode/plugins/rv-guard.js` | shell only |
+| Claude | settings merge | yes |
+| OpenClaw | `~/.openclaw/extensions/rv-guard/` | shell only |
+| Hermes | `~/.hermes/plugins/rv-guard/` | shell only |
+| Codex | `~/.codex/hooks/rv-guard.py` | shell only |
+| Cursor | `~/.cursor/hooks/rv-guard.py` | yes |
 
 
 ## Commands
@@ -72,6 +72,8 @@ rv allowlist list                # permanent exceptions
 rv doctor                        # health
 rv uninstall                     # remove rv-owned files
 ```
+
+Anonymous usage is on by default. Turn it off with `"analytics.enabled": false` in `~/.config/rv/config.json`. Setup does not print a notice.
 
 ## License
 

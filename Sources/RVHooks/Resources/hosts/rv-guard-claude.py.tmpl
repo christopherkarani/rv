@@ -30,13 +30,27 @@ def main():
         _emit_deny({"action": "block", "reason": "rv failed"})
 
 
+_FILE_TOOLS = ("Read", "Edit", "Write", "read_file", "edit_file", "write_file")
+
+
 def _guard(raw):
     envelope = _parse(raw)
     if envelope is None:
         return {"action": "block", "reason": "rv failed"}
     if envelope.get("hook_event_name") != "PreToolUse":
         return {"action": "allow"}
-    if envelope.get("tool_name") != "Bash":
+    tool = envelope.get("tool_name")
+    if tool in _FILE_TOOLS:
+        mapped = _spawn_rv_hook("claude", raw)
+        if mapped["action"] == "allow":
+            return mapped
+        if mapped["action"] == "ask":
+            return {
+                "action": "block",
+                "reason": _blocking_reason(mapped.get("reason")),
+            }
+        return mapped
+    if tool != "Bash":
         return {"action": "allow"}
     mapped = _spawn_rv_hook("claude", raw)
     if mapped["action"] == "allow":

@@ -1,6 +1,6 @@
 # rv
 
-Destructive-command guard for coding-agent shell hooks on macOS 26 Apple Silicon and Linux (aarch64/x86_64). Day-one hosts: Pi, Grok, OpenCode. Also: Claude (settings merge), OpenClaw (`~/.openclaw/extensions/rv-guard/`, host only, no Ask), Hermes (`~/.hermes/plugins/rv-guard/`, host only, no Ask), Codex (`~/.codex/hooks/rv-guard.py`, host only, official `block` + stderr reason + exit 2, no Ask), and Cursor (`~/.cursor/hooks/rv-guard.py`, host only, official `permission: deny` + exit 0, no Ask).
+Destructive-command guard for coding-agent shell hooks on macOS 26 Apple Silicon and Linux (aarch64/x86_64). Grade is hook, not OS sandbox. Day-one hosts: Pi, Grok, OpenCode. Also: Claude (settings merge, spend-first Ask), OpenClaw (`~/.openclaw/extensions/rv-guard/`, host only, no Ask), Hermes (`~/.hermes/plugins/rv-guard/`, spend-first Ask), Codex (`~/.codex/hooks/rv-guard.py`, host only, official `block` + stderr reason + exit 2, no Ask), and Cursor (`~/.cursor/hooks/rv-guard.py`, host only, official `permission: deny` + exit 0, no Ask). File-tool Read / Edit / Write secret-path: Grok, Claude, Cursor. Pi / OpenCode / OpenClaw / Hermes / Codex are shell-only.
 
 ## Language
 
@@ -100,8 +100,12 @@ _Avoid_: a new `normal` regex to close a named hole; treating `unwrapLimited` as
 Denial-only list of live hook denials (including in-process miss). timestamp, host, tool, `rule_id`, category, redacted path with `$HOME` → `~`. Default on. Off with `blocks.enabled: false` in `~/.config/rv/config.json`. `rv test` / `rv explain` do not write. Not allow history. Not `os_log` command text. CLI: `rv blocks`.
 _Avoid_: audit log, allow history, RVHistory as a product, recording peek/explain
 
+**Analytics**:
+Anonymous product counters (PostHog). Opt-out: `analytics.enabled: false` in `~/.config/rv/config.json`. Missing key means on. Setup and doctor print no notice (`AnalyticsNotice` is reserved). Never command text, paths, or secrets. Host hook processes never call it.
+_Avoid_: treating silence as opt-in; command text in the sink
+
 **Session forensics**:
-Offline `rv scan` / `rv scan sessions`: read known host session stores (or a path of known layouts), extract shell candidates, run the same `evaluate`, list deny-only findings. Offline scan is **unprobed**; pack deny stays the floor; unwrap-limited and catalog protected-path still tighten; unresolved-path does not tighten an unprobed allow. Live `GatedEvaluate` still injects a probed `FilesystemLiveProbe`. Not `RVHistory`, not repo/CI `rv scan repo`, not live hook enforcement. Fence: `docs/factory/specs/phase-4-session-scan.md`.
+Offline `rv scan` / `rv scan sessions`: read known host session stores (or a path of known layouts), extract shell candidates, run the same `evaluate`, list deny-only findings. Nil event cwd is **unprobed** (unresolved-path does not tighten a pack allow). A stored cwd is a **probed lexical** world (catalog `.dayOne`, empty facts) so unresolved-path can tighten. Unwrap-limited and catalog protected-path still tighten either way. Live `GatedEvaluate` still injects a probed `FilesystemLiveProbe`. Not `RVHistory`, not repo/CI `rv scan repo`, not live hook enforcement. Fence: `docs/factory/specs/phase-4-session-scan.md`.
 _Avoid_: history scan, recon, audit log (unless meaning this CLI)
 
 **EvaluationWorld**:

@@ -215,6 +215,9 @@ func codexWrapper_missingReasonDoesNotExitTwoWithWhitespaceStderr(_ stubStdout: 
     let source = try adapterSource(for: .cursor, rvPath: "/opt/rv")
     #expect(source.contains("beforeShellExecution"))
     #expect(source.contains("\"cursor\""))
+    #expect(source.contains("\"Read\""))
+    #expect(source.contains("\"Edit\""))
+    #expect(source.contains("\"Write\""))
     #expect(source.contains("RV_BINARY = \"/opt/rv\""))
     #expect(source.contains("\"permission\"") || source.contains("'permission'"))
     #expect(source.contains("\"deny\"") || source.contains("'deny'"))
@@ -356,6 +359,74 @@ func cursorWrapper_emptyOrWhitespaceStdoutExitZeroIsDenyNotAllow(_ stubStdout: S
     )
     #expect(json["permission"] as? String == "deny")
     #expect(json["user_message"] as? String == "rv missing")
+    #expect(result.exitCode == 0)
+}
+
+@Test(arguments: [
+    "Read",
+    "Edit",
+    "Write",
+    "read_file",
+    "edit_file",
+    "write_file",
+])
+func cursorWrapper_preToolUseFileToolMissingRvDenies(_ tool: String) async throws {
+    let result = try await runCursorWrapper(
+        event: [
+            "hook_event_name": "preToolUse",
+            "tool_name": tool,
+            "tool_input": ["path": "/tmp/ws/.env"],
+            "cwd": "/tmp/ws",
+        ],
+        stub: .missing
+    )
+    let json = try #require(
+        JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any]
+    )
+    #expect(json["permission"] as? String == "deny")
+    #expect(json["user_message"] as? String == "rv missing")
+    #expect(json["permission"] as? String != "allow")
+    #expect(result.exitCode == 0)
+}
+
+@Test func cursorWrapper_preToolUseReadDenyIsPermissionDeny() async throws {
+    let reason = resetHardReason
+    let result = try await runCursorWrapper(
+        event: [
+            "hook_event_name": "preToolUse",
+            "tool_name": "Read",
+            "tool_input": ["path": "/tmp/ws/.ssh/id_ed25519"],
+            "cwd": "/tmp/ws",
+        ],
+        stub: .stdout(
+            "{\"permission\":\"deny\",\"user_message\":\"\(reason)\",\"agent_message\":\"\(reason)\"}\n",
+            exit: 0
+        )
+    )
+    let json = try #require(
+        JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any]
+    )
+    #expect(json["permission"] as? String == "deny")
+    #expect(json["user_message"] as? String == reason)
+    #expect(json["permission"] as? String != "allow")
+    #expect(result.exitCode == 0)
+}
+
+@Test(arguments: ["Grep", "Glob"])
+func cursorWrapper_preToolUseForeignMissingRvAllows(_ tool: String) async throws {
+    let result = try await runCursorWrapper(
+        event: [
+            "hook_event_name": "preToolUse",
+            "tool_name": tool,
+            "tool_input": ["path": "/tmp/ws/.env"],
+            "cwd": "/tmp/ws",
+        ],
+        stub: .missing
+    )
+    let json = try #require(
+        JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any]
+    )
+    #expect(json["permission"] as? String == "allow")
     #expect(result.exitCode == 0)
 }
 

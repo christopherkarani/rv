@@ -96,7 +96,7 @@ jobs:
   hook-grade:
     name: macos hook grade
     runs-on: macos-26
-    timeout-minutes: 40
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -135,3 +135,14 @@ jobs:
           RV_C_HOOK_SKIP_RELEASE: "1"
           RV_RELEASE_STAGE: ${{ github.workspace }}/.build/release-stage
         run: tools/c-hook-proof.sh
+
+      # Linux PR already ran unfiltered swift test. Darwin XPC / LaunchAgent
+      # and the isolated-HOME oracle only exist here. Skip the in-process
+      # CHookPipeTests proof — this job already ran tools/c-hook-proof.sh.
+      - name: Darwin Swift (XPC / CLI)
+        run: |
+          tools/swift-6.3.3 test --filter RVServiceTests --skip injectedOneSecondIdleFiresWithoutKeepAlive
+          tools/swift-6.3.3 test --filter RVCLITests --skip CHookPipeTests.cHookProof
+
+      - name: Isolated-HOME oracle
+        run: tools/host-oracle.sh

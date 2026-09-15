@@ -64,7 +64,7 @@ rv owns codecs. Do not copy ryk leftover-ask-as-permit. Do not copy DCG fail-ope
 - Session store: per-agent SQLite `$HOME/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`, table `transcript_events (session_id, event_json, created_at)`. `extract(fileURL:data:)` uses **`data`**, never reopens the path. sqlite open / prepare / unreadable bytes **throw**. Empty valid `transcript_events` may return `[]`. Skip non-exec / unparseable rows.
 - Occupied slot: skip + one line. No Ask UI. No AFM / ActionReviewer.
 
-## Hermes (OPE-265; host only, no Ask)
+## Hermes (OPE-265; spend-first Ask)
 
 - Discover: `~/.hermes/` exists or `hermes` on PATH. Linux and macOS only. No Windows path.
 - Setup writes an **exclusive plugin directory** `$HOME/.hermes/plugins/rv-guard/`:
@@ -85,9 +85,9 @@ rv owns codecs. Do not copy ryk leftover-ask-as-permit. Do not copy DCG fail-ope
   ```
 
   Decode: unreadable JSON → deny. `toolName != "terminal"` → foreign allow. Terminal with missing/empty `args.command` → deny. cwd is `args.workdir` then envelope `cwd`. session is `sessionId` then `taskId`.
-- Deny: plugin returns `{"action": "block", "message"}` where `message` is `hostDenyText`. **No** `{"action": "approve"}` (Ask is out of scope). Missing `rv` → `{"action": "block", "message": "rv missing"}`. Timeout/crash / hook exception → `{"action": "block", "message": "rv failed"}` (Hermes isolates hook errors and would otherwise fail open). Operator stdout is short `{decision,reason}` JSON and exit **1**.
+- Deny: plugin returns `{"action": "block", "message"}` where `message` is `hostDenyText`. Ask is host confirm then PolicyGate spend; allow is None (the tool runs). Never `{"action": "approve"}`. Missing `rv` → `{"action": "block", "message": "rv missing"}`. Timeout/crash / hook exception → `{"action": "block", "message": "rv failed"}` (Hermes isolates hook errors and would otherwise fail open). Operator stdout is short `{decision,reason}` JSON and exit **1**.
 - Session store: `$HOME/.hermes/state.db`, table `messages (session_id, tool_calls, timestamp)`. `tool_calls` is JSON (OpenAI-style `function.name` / `arguments.command`, or a top-level `name`). `extract(fileURL:data:)` uses **`data`**, never reopens the path. sqlite open / prepare / unreadable bytes **throw**. Empty valid `messages` may return `[]`. Skip non-terminal / unparseable rows.
-- Occupied slot: skip + one line. No Ask UI. No AFM / ActionReviewer.
+- Occupied slot: skip + one line. Confirm-then-spend Ask. No AFM / ActionReviewer.
 
 ## Codex (OPE-269; host only, no Ask)
 

@@ -61,6 +61,18 @@ clang -Os "${CLANG_OS_FLAGS[@]}" -std=c11 -Wall \
   "$SRC/json_reply.c" \
   "$SRC/rv.c"
 
+# Pipe hosts must match HookHost.setupSlotOrder. Invalid hosts exec rv-cli
+# before the socket/XPC door, so a missing name is silent miss-as-operator.
+if ! awk '
+  /static int is_valid_host/,/^}/ {
+    if ($0 ~ /"cursor"/) found = 1
+  }
+  END { exit found ? 0 : 1 }
+' "$SRC/rv.c"; then
+  printf "rv-c tests: is_valid_host must include cursor\n" >&2
+  exit 1
+fi
+
 if [[ "$OS" == "Darwin" ]]; then
   if otool -L "$OUT/rv" | grep -E 'Foundation|CFNetwork' >/dev/null; then
     printf "rv-c tests: C rv must not link Foundation or CFNetwork\n" >&2
@@ -147,6 +159,20 @@ if [[ "$claude_nul_st" -ne 17 ]]; then
 fi
 if ! grep -q -- '--host' "$CLAUDE_NUL_LOG" || ! grep -q -- 'claude' "$CLAUDE_NUL_LOG"; then
   printf "rv-c tests: Claude NUL miss argv was not hook --host claude\n" >&2
+  exit 1
+fi
+
+CURSOR_NUL_LOG="$OUT/nul-cursor.argv"
+set +e
+printf 'a\0b' | RV_C_ARGV_LOG="$CURSOR_NUL_LOG" RV_C_STDIN_LOG="/dev/null" "$PROBE/rv" hook --host cursor
+cursor_nul_st=$?
+set -e
+if [[ "$cursor_nul_st" -ne 17 ]]; then
+  printf "rv-c tests: Cursor NUL miss expected replay exit 17, got %s\n" "$cursor_nul_st" >&2
+  exit 1
+fi
+if ! grep -q -- '--host' "$CURSOR_NUL_LOG" || ! grep -q -- 'cursor' "$CURSOR_NUL_LOG"; then
+  printf "rv-c tests: Cursor NUL miss argv was not hook --host cursor\n" >&2
   exit 1
 fi
 if [[ "$(wc -c < "$NUL_STDIN" | tr -d ' ')" != "3" ]]; then

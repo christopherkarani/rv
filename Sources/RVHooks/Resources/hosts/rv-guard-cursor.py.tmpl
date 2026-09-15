@@ -1,6 +1,7 @@
 """RV destructive-command guard for Cursor shell.
 
-Cursor beforeShellExecution command hook. Live deny is the official native
+Cursor beforeShellExecution command hook plus preToolUse Read / Edit / Write.
+Live deny is the official native
 honor path ``{"permission":"deny","user_message":...,"agent_message":...}``
 on stdout and process exit 0. See https://cursor.com/docs/hooks.md.
 Do not emit Claude nested permission JSON. Do not emit Codex
@@ -31,6 +32,10 @@ def main():
         _emit_deny("rv failed")
 
 
+_SHELL_TOOLS = ("Shell", "Bash")
+_FILE_TOOLS = ("Read", "Edit", "Write", "read_file", "edit_file", "write_file")
+
+
 def _guard(raw):
     envelope = _parse(raw)
     if envelope is None:
@@ -40,7 +45,7 @@ def _guard(raw):
         return {"action": "allow"}
     if event == "preToolUse":
         tool = envelope.get("tool_name") or ""
-        if tool not in ("Shell", "Bash"):
+        if tool not in _SHELL_TOOLS and tool not in _FILE_TOOLS:
             return {"action": "allow"}
     elif event not in ("", "beforeShellExecution"):
         return {"action": "allow"}
