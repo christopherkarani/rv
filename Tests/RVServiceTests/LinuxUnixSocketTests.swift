@@ -42,9 +42,9 @@ struct LinuxUnixSocketTests {
         try listener.start()
         defer { listener.stop() }
 
-        #expect(try UnixSocketPath.posixMode(xdg) & 0o777 == 0o700)
-        #expect(try UnixSocketPath.posixMode(socketURL.deletingLastPathComponent()) & 0o777 == 0o700)
-        #expect(try UnixSocketPath.posixMode(socketURL) & 0o777 == 0o600)
+        #expect(try UnixSocketPath.posixMode(of: xdg) & 0o777 == 0o700)
+        #expect(try UnixSocketPath.posixMode(of: socketURL.deletingLastPathComponent()) & 0o777 == 0o700)
+        #expect(try UnixSocketPath.posixMode(of: socketURL) & 0o777 == 0o600)
 
         let client = try retryUnixConnect(path: socketURL.path)
         defer { client.close() }
@@ -113,8 +113,8 @@ struct LinuxUnixSocketTests {
             return
         }
         #expect(deny.ruleID.rawValue == "core.git:reset-hard")
-        #expect(try UnixSocketPath.posixMode(socketURL) & 0o777 == 0o600)
-        #expect(try UnixSocketPath.posixMode(xdg) & 0o777 == 0o700)
+        #expect(try UnixSocketPath.posixMode(of: socketURL) & 0o777 == 0o600)
+        #expect(try UnixSocketPath.posixMode(of: xdg) & 0o777 == 0o700)
     }
 
     @Test func rvdSocketWithUnsetXDGExitsWithoutTmpSocket() throws {
