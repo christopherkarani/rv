@@ -26,7 +26,7 @@ public struct CursorHostCodec: HostCodec {
             envelope.conversationId,
             envelope.sessionId,
             envelope.generationId
-        )
+        ).flatMap { SessionID(validating: $0) }
         switch classify(envelope) {
         case .foreign:
             return .foreign
@@ -44,10 +44,9 @@ public struct CursorHostCodec: HostCodec {
             return .request(
                 HookRequest(
                     host: .cursor,
-                    command: ShellCommand(rawValue: ""),
                     cwd: cwd,
                     session: session,
-                    file: file
+                    invocation: .file(file)
                 )
             )
         case .shell:
@@ -59,9 +58,9 @@ public struct CursorHostCodec: HostCodec {
         return .request(
             HookRequest(
                 host: .cursor,
-                command: ShellCommand(rawValue: command),
                 cwd: cwd,
-                session: session
+                session: session,
+                invocation: .shell(command: ShellCommand(rawValue: command), ask: nil)
             )
         )
     }

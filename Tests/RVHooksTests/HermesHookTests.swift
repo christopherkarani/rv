@@ -30,7 +30,7 @@ func hermesDecode_extractsTerminalCommand(_ file: String, expected: String) thro
         return
     }
     #expect(request.host == .hermes)
-    #expect(request.command.rawValue == expected)
+    #expect(hookShellCommand(request)?.rawValue == expected)
 }
 
 @Test func hermesDecode_nonTerminalIsForeign() throws {
@@ -142,6 +142,6 @@ func hermesDecode_extractsTerminalCommand(_ file: String, expected: String) thro
         Issue.record("expected .request for hostAsk spend")
         return
     }
-    #expect(request.hostAsk == .spend)
+    #expect(hookAsk(request) == .spend)
     #expect(request.cwd?.rawValue == "/tmp/ws")
 }

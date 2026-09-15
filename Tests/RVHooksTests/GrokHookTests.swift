@@ -50,7 +50,7 @@ func grokDecode_extractsShellCommand(_ file: String, expected: String) throws {
         return
     }
     #expect(request.host == .grok)
-    #expect(request.command.rawValue == expected)
+    #expect(hookShellCommand(request)?.rawValue == expected)
 }
 
 @Test func grokDecode_oversizeExtractsFullCommand() throws {
@@ -60,8 +60,9 @@ func grokDecode_extractsShellCommand(_ file: String, expected: String) throws {
         return
     }
     #expect(request.host == .grok)
-    #expect(request.command.rawValue.utf8.count > 65_536)
-    #expect(request.command.rawValue.hasSuffix(" git reset --hard"))
+    let command = hookShellCommand(request)
+    #expect(command?.rawValue.utf8.count ?? 0 > 65_536)
+    #expect(command?.rawValue.hasSuffix(" git reset --hard") == true)
 }
 
 @Test(arguments: [
@@ -76,8 +77,8 @@ func grokDecode_otherToolOrEventIsForeign(_ file: String) throws {
         Issue.record("expected .request for read_file")
         return
     }
-    #expect(request.file?.kind == .read)
-    #expect(request.file?.path.rawValue == "/tmp/rv-hook-fixture/README.md")
+    #expect(hookFileAction(request)?.kind == .read)
+    #expect(hookFileAction(request)?.path.rawValue == "/tmp/rv-hook-fixture/README.md")
 }
 
 @Test func grokDecode_readFileEnvIsCatalogPath() throws {
@@ -85,8 +86,8 @@ func grokDecode_otherToolOrEventIsForeign(_ file: String) throws {
         Issue.record("expected .request for deny-file-env")
         return
     }
-    #expect(request.file?.kind == .read)
-    #expect(request.file?.path.rawValue == "/tmp/rv-oracle/.env")
+    #expect(hookFileAction(request)?.kind == .read)
+    #expect(hookFileAction(request)?.path.rawValue == "/tmp/rv-oracle/.env")
 }
 
 @Test func grokDecode_emptyCommandIsMissingCommand() throws {
@@ -103,7 +104,12 @@ func grokDecode_otherToolOrEventIsForeign(_ file: String) throws {
     """
     #expect(
         codec.decode(stdin)
-            == .request(HookRequest(host: .grok, command: ShellCommand(rawValue: "git status")))
+            == .request(
+                HookRequest(
+                    host: .grok,
+                    invocation: .shell(command: ShellCommand(rawValue: "git status"), ask: nil)
+                )
+            )
     )
 }
 

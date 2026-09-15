@@ -30,7 +30,7 @@ func openCodeDecode_extractsBashCommand(_ file: String, expected: String) throws
         return
     }
     #expect(request.host == .opencode)
-    #expect(request.command.rawValue == expected)
+    #expect(hookShellCommand(request)?.rawValue == expected)
 }
 
 @Test func openCodeDecode_nonShellIsForeign() throws {
@@ -46,7 +46,7 @@ func openCodeDecode_extractsBashCommand(_ file: String, expected: String) throws
         return
     }
     #expect(request.host == .opencode)
-    #expect(request.command.rawValue == "git reset --hard")
+    #expect(hookShellCommand(request)?.rawValue == "git reset --hard")
 }
 
 @Test func openCodeDecode_sessionShellEmptyCommandIsMissingCommand() {
@@ -148,7 +148,7 @@ func openCodeDecode_readsSessionId(_ stdin: String, expected: String) {
         return
     }
     #expect(request.session == SessionID(validating: expected))
-    #expect(request.command.rawValue == "git status")
+    #expect(hookShellCommand(request)?.rawValue == "git status")
 }
 
 @Test(arguments: [
@@ -171,7 +171,7 @@ func openCodeDecode_emptySessionIsNil(_ stdin: String) {
         Issue.record("expected .request for hostAsk spend")
         return
     }
-    #expect(request.hostAsk == .spend)
+    #expect(hookAsk(request) == .spend)
     #expect(request.cwd?.rawValue == "/tmp/ws")
 }
 

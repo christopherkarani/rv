@@ -78,7 +78,7 @@ func codexDecode_extractsBashCommand(_ file: String, expected: String) throws {
         return
     }
     #expect(request.host == .codex)
-    #expect(request.command.rawValue == expected)
+    #expect(hookShellCommand(request)?.rawValue == expected)
 }
 
 @Test func codexDecode_nonBashIsForeign() throws {
@@ -247,13 +247,14 @@ func codexHonorPath_missingReasonExitTwoWithWhitespaceStderrIsNotEnough(_ missin
     #expect(request.cwd?.rawValue == "/tmp/ws")
     #expect(request.session == SessionID(validating: "sess_1"))
     let action = codec.proposedAction(from: request)
+    let command = try #require(hookShellCommand(request))
     #expect(
         action.fingerprint
             == ActionFingerprint.make(
                 host: .codex,
                 session: request.session,
                 cwd: request.cwd,
-                command: request.command
+                command: command
             )
     )
     guard case .shell(let shell) = action else {
@@ -302,8 +303,8 @@ func codexHonorPath_missingReasonExitTwoWithWhitespaceStderrIsNotEnough(_ missin
 @Test func codexHookRequest_emptySessionStringIsNil() {
     let request = HookRequest(
         host: .codex,
-        command: ShellCommand(rawValue: "git status"),
-        session: ""
+        session: SessionID(validating: ""),
+        invocation: .shell(command: ShellCommand(rawValue: "git status"), ask: nil)
     )
     #expect(request.session == nil)
     #expect(

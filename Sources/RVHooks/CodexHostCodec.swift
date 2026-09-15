@@ -28,12 +28,13 @@ public struct CodexHostCodec: HostCodec {
         let cwdText = firstNonEmpty(envelope.toolInput?.workdir, envelope.cwd)
         let cwd = cwdText.flatMap { WorkingDirectory(validating: $0) }
         let session = firstNonEmpty(envelope.sessionId, envelope.turnId)
+            .flatMap { SessionID(validating: $0) }
         return .request(
             HookRequest(
                 host: .codex,
-                command: ShellCommand(rawValue: command),
                 cwd: cwd,
-                session: session
+                session: session,
+                invocation: .shell(command: ShellCommand(rawValue: command), ask: nil)
             )
         )
     }

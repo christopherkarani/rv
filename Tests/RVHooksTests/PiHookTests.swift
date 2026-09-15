@@ -30,7 +30,7 @@ func piDecode_extractsBashCommand(_ file: String, expected: String) throws {
         return
     }
     #expect(request.host == .pi)
-    #expect(request.command.rawValue == expected)
+    #expect(hookShellCommand(request)?.rawValue == expected)
 }
 
 @Test func piDecode_nonShellIsForeign() throws {
@@ -106,7 +106,7 @@ func piDecode_extractsBashCommand(_ file: String, expected: String) throws {
         Issue.record("expected .request for hostAsk spend")
         return
     }
-    #expect(request.hostAsk == .spend)
+    #expect(hookAsk(request) == .spend)
     #expect(request.cwd?.rawValue == "/tmp/ws")
 }
 

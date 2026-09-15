@@ -629,6 +629,6 @@ private final class EncodeDoorSpy: HostCodec, @unchecked Sendable {
         Issue.record("expected .request for cwd stdin")
         return
     }
-    #expect(request.command.rawValue == "git status")
+    #expect(hookShellCommand(request)?.rawValue == "git status")
     #expect(request.cwd == wd("/tmp/ws"))
 }

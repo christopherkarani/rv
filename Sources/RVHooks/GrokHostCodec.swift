@@ -16,7 +16,7 @@ public struct GrokHostCodec: HostCodec {
             return .foreign
         }
         let cwd = envelope.cwd.flatMap { WorkingDirectory(validating: $0) }
-        let session = firstNonEmpty(envelope.sessionId)
+        let session = firstNonEmpty(envelope.sessionId).flatMap { SessionID(validating: $0) }
         if Self.shellTools.contains(envelope.toolName ?? "") {
             guard let command = envelope.toolInput?.command, command.isEmpty == false else {
                 return .malformed(.missingCommand)
@@ -24,9 +24,9 @@ public struct GrokHostCodec: HostCodec {
             return .request(
                 HookRequest(
                     host: .grok,
-                    command: ShellCommand(rawValue: command),
                     cwd: cwd,
-                    session: session
+                    session: session,
+                    invocation: .shell(command: ShellCommand(rawValue: command), ask: nil)
                 )
             )
         }
@@ -40,10 +40,9 @@ public struct GrokHostCodec: HostCodec {
             return .request(
                 HookRequest(
                     host: .grok,
-                    command: ShellCommand(rawValue: ""),
                     cwd: cwd,
                     session: session,
-                    file: file
+                    invocation: .file(file)
                 )
             )
         }

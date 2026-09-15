@@ -52,7 +52,7 @@ func claudeDecode_extractsShellCommand(_ file: String, expected: String) throws 
         return
     }
     #expect(request.host == .claude)
-    #expect(request.command.rawValue == expected)
+    #expect(hookShellCommand(request)?.rawValue == expected)
 }
 
 @Test(arguments: [
@@ -73,8 +73,8 @@ func claudeDecode_fileToolsExtractPath(_ file: String, kind: FileToolKind, path:
         Issue.record("expected .request for \(file)")
         return
     }
-    #expect(request.file?.kind == kind)
-    #expect(request.file?.path.rawValue == path)
+    #expect(hookFileAction(request)?.kind == kind)
+    #expect(hookFileAction(request)?.path.rawValue == path)
 }
 
 @Test func claudeDecode_emptyCommandIsMissingCommand() throws {
@@ -93,7 +93,7 @@ func claudeDecode_fileToolsExtractPath(_ file: String, kind: FileToolKind, path:
         Issue.record("expected .request for cwd stdin")
         return
     }
-    #expect(request.command.rawValue == "git status")
+    #expect(hookShellCommand(request)?.rawValue == "git status")
     #expect(request.cwd == WorkingDirectory(validating: "/tmp/ws"))
     #expect(request.session == nil)
 }
@@ -125,7 +125,7 @@ func claudeDecode_fileToolsExtractPath(_ file: String, kind: FileToolKind, path:
         Issue.record("expected .request for hostAsk spend")
         return
     }
-    #expect(request.hostAsk == .spend)
+    #expect(hookAsk(request) == .spend)
     #expect(request.cwd == WorkingDirectory(validating: "/tmp/ws"))
 }
 

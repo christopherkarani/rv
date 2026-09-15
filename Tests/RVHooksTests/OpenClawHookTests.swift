@@ -30,7 +30,7 @@ func openClawDecode_extractsExecCommand(_ file: String, expected: String) throws
         return
     }
     #expect(request.host == .openclaw)
-    #expect(request.command.rawValue == expected)
+    #expect(hookShellCommand(request)?.rawValue == expected)
 }
 
 @Test func openClawDecode_nonExecIsForeign() throws {

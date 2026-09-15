@@ -24,14 +24,14 @@ public struct OpenCodeHostCodec: HostCodec {
         }
         let cwd = envelope.cwd.flatMap { WorkingDirectory(validating: $0) }
         let session = firstNonEmpty(envelope.sessionID, envelope.sessionId)
+            .flatMap { SessionID(validating: $0) }
         let hostAsk = envelope.hostAsk.flatMap(HostAskHookIntent.init(rawValue:))
         return .request(
             HookRequest(
                 host: .opencode,
-                command: ShellCommand(rawValue: command),
                 cwd: cwd,
                 session: session,
-                hostAsk: hostAsk
+                invocation: .shell(command: ShellCommand(rawValue: command), ask: hostAsk)
             )
         )
     }
