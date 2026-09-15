@@ -39,7 +39,7 @@ struct GatedEvaluateRebaseRecoveryTests {
         #expect(result.decision == .allow)
         #expect(
             result.analysis.gitAction
-                == .restore(pathspecs: ["."], staged: false, worktree: true, source: nil)
+                == .restore(pathspecs: ["."], destination: .worktree, source: nil)
         )
     }
 
@@ -48,7 +48,7 @@ struct GatedEvaluateRebaseRecoveryTests {
         let result = try await apply("git restore --staged .", cwd: repo)
         #expect(
             result.analysis.gitAction
-                == .restore(pathspecs: ["."], staged: true, worktree: false, source: nil)
+                == .restore(pathspecs: ["."], destination: .index, source: nil)
         )
         #expect(result.decision == .allow)
     }

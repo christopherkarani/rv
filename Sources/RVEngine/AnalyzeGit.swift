@@ -367,10 +367,16 @@ private func parseRestore(_ args: [String]) -> GitAction? {
         pathspecs.append(token)
         index += 1
     }
-    if staged == false && worktree == false {
-        worktree = true
+    let destination: GitRestoreDestination
+    switch (staged, worktree) {
+    case (true, true):
+        destination = .worktreeAndIndex
+    case (true, false):
+        destination = .index
+    case (false, true), (false, false):
+        destination = .worktree
     }
-    return .restore(pathspecs: pathspecs, staged: staged, worktree: worktree, source: source)
+    return .restore(pathspecs: pathspecs, destination: destination, source: source)
 }
 
 private let restoreSkipFlags: Set<String> = [
@@ -647,7 +653,7 @@ private func parseBranch(_ args: [String]) -> GitAction? {
         index += 1
     }
     guard delete, let name = names.first, names.count == 1 else { return nil }
-    return .deleteBranch(name: name, force: force, remote: false)
+    return .deleteBranch(name: name, force: force)
 }
 
 private let branchSkipFlags: Set<String> = [

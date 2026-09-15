@@ -1,3 +1,8 @@
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Foundation
 
 public enum UnixSocketPathError: Error, Sendable, Equatable {
@@ -29,9 +34,18 @@ public enum UnixSocketPath {
     }
 
     public static func production(
-        environment: [String: String] = ProcessInfo.processInfo.environment
+        environment: [String: String]? = nil
     ) throws -> URL {
-        try resolve(xdgRuntimeDir: environment["XDG_RUNTIME_DIR"])
+        if let environment {
+            return try resolve(xdgRuntimeDir: environment["XDG_RUNTIME_DIR"])
+        }
+        return try resolve(xdgRuntimeDir: liveXDGRuntimeDir())
+    }
+
+    /// `getenv`, not `ProcessInfo.environment` (Darwin caches the snapshot).
+    private static func liveXDGRuntimeDir() -> String? {
+        guard let pointer = getenv("XDG_RUNTIME_DIR") else { return nil }
+        return String(cString: pointer)
     }
 
     /// Creates `$XDG_RUNTIME_DIR` and `$XDG_RUNTIME_DIR/rv` at 0700, then unlinks a stale socket.

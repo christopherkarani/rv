@@ -106,8 +106,7 @@ struct AnalyzeGitTests {
                 == .git(
                     .restore(
                         pathspecs: ["file.swift"],
-                        staged: false,
-                        worktree: true,
+                        destination: .worktree,
                         source: nil
                     )
                 )
@@ -118,7 +117,7 @@ struct AnalyzeGitTests {
         )
         #expect(
             analyzeGit(ShellCommand(rawValue: "git branch -D stale"))
-                == .git(.deleteBranch(name: "stale", force: true, remote: false))
+                == .git(.deleteBranch(name: "stale", force: true))
         )
         #expect(
             analyzeGit(ShellCommand(rawValue: "git tag -d v1"))
@@ -179,6 +178,71 @@ struct AnalyzeGitTests {
         #expect(PolicyMatch.matches(.gitPush(force: .any, branch: nil), action: action) == false)
         #expect(
             PolicyMatch.matches(.gitPush(force: .any, branch: "topic"), action: action) == false
+        )
+    }
+
+    @Test func restoreStaged_isIndex() {
+        #expect(
+            analyzeGit(ShellCommand(rawValue: "git restore --staged file.swift"))
+                == .git(
+                    .restore(
+                        pathspecs: ["file.swift"],
+                        destination: .index,
+                        source: nil
+                    )
+                )
+        )
+        #expect(
+            analyzeGit(ShellCommand(rawValue: "git restore -S file.swift"))
+                == .git(
+                    .restore(
+                        pathspecs: ["file.swift"],
+                        destination: .index,
+                        source: nil
+                    )
+                )
+        )
+    }
+
+    @Test func restoreStagedAndWorktree_isWorktreeAndIndex() {
+        #expect(
+            analyzeGit(ShellCommand(rawValue: "git restore --staged --worktree file.swift"))
+                == .git(
+                    .restore(
+                        pathspecs: ["file.swift"],
+                        destination: .worktreeAndIndex,
+                        source: nil
+                    )
+                )
+        )
+        guard case .git(let action) = analyzeGit(
+            ShellCommand(rawValue: "git restore -SW file.swift")
+        ) else {
+            Issue.record("expected git analysis")
+            return
+        }
+        #expect(
+            action
+                == .restore(
+                    pathspecs: ["file.swift"],
+                    destination: .worktreeAndIndex,
+                    source: nil
+                )
+        )
+        #expect(action.effectScope == .localWorkingTree)
+        #expect(action.effects.kinds == [.workingTreeDiscard])
+    }
+
+    @Test func restoreWorktreeFlag_isWorktree() {
+        #expect(
+            analyzeGit(ShellCommand(rawValue: "git restore --worktree file.swift"))
+                == .git(
+                    .restore(
+                        pathspecs: ["file.swift"],
+                        destination: .worktree,
+                        source: nil
+                    )
+                )
         )
     }
 

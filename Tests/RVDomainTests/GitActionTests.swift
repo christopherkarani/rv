@@ -54,4 +54,42 @@ struct GitActionTests {
         #expect(proposed.resources.branchName == "feature")
         #expect(proposed.supportingCommand?.rawValue == "git checkout -- file.swift")
     }
+
+    @Test func restore_usesClosedDestinationNotBoolFlags() {
+        let worktree = GitAction.restore(
+            pathspecs: ["file.swift"],
+            destination: .worktree,
+            source: nil
+        )
+        let index = GitAction.restore(
+            pathspecs: ["file.swift"],
+            destination: .index,
+            source: nil
+        )
+        let both = GitAction.restore(
+            pathspecs: ["file.swift"],
+            destination: .worktreeAndIndex,
+            source: nil
+        )
+        #expect(worktree.effectScope == .localWorkingTree)
+        #expect(worktree.effects.kinds == [.workingTreeDiscard])
+        #expect(worktree.explainAction == "working-tree overwrite/discard")
+        #expect(index.effectScope == .localIndex)
+        #expect(index.effects.kinds.isEmpty)
+        #expect(index.explainAction == "index unstage")
+        #expect(both.effectScope == .localWorkingTree)
+        #expect(both.effects.kinds == [.workingTreeDiscard])
+        #expect(both.explainAction == "working-tree overwrite/discard")
+    }
+
+    @Test func deleteBranch_isLocalRefWithoutRemoteFlag() {
+        let deleted = GitAction.deleteBranch(name: "stale", force: true)
+        #expect(deleted.effectScope == .localRef)
+        #expect(deleted.explainAction == "force branch delete")
+        #expect(deleted.effects.kinds.isEmpty)
+        #expect(deleted.resources.branchName == "stale")
+        let soft = GitAction.deleteBranch(name: "topic", force: false)
+        #expect(soft.explainAction == "branch delete")
+        #expect(soft.effectScope == .localRef)
+    }
 }
