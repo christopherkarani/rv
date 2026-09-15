@@ -136,15 +136,45 @@ public enum ActionPolicyEngine: Sendable {
         )
     }
 
+    /// ReviewContext-only door: repository facts were supplied, so treat them
+    /// as `.probed`. The Engine evaluation door passes `gitWorld:` explicitly
+    /// (default `.unprobed` there) and must not go through this overload.
     public static func evaluate(
         action: ProposedAction,
         context: ReviewContext = ReviewContext(repository: RepositoryReviewContext()),
         policy: EffectiveActionPolicy = .empty,
         gitAction: GitAction? = nil
     ) -> ActionPolicyVerdict {
+        evaluate(
+            action: action,
+            context: context,
+            policy: policy,
+            gitAction: gitAction,
+            gitWorld: .probed(
+                GitAnalysisContext(
+                    currentBranch: context.repository.currentBranch,
+                    isSharedBranch: context.repository.isSharedBranch
+                )
+            )
+        )
+    }
+
+    public static func evaluate(
+        action: ProposedAction,
+        context: ReviewContext,
+        policy: EffectiveActionPolicy = .empty,
+        gitAction: GitAction? = nil,
+        gitWorld: GitAnalysisWorld
+    ) -> ActionPolicyVerdict {
         switch action {
         case .shell(let shell):
-            return evaluateShell(shell, context: context, policy: policy, gitAction: gitAction)
+            return evaluateShell(
+                shell,
+                context: context,
+                policy: policy,
+                gitAction: gitAction,
+                gitWorld: gitWorld
+            )
         }
     }
 
@@ -200,9 +230,10 @@ public enum ActionPolicyEngine: Sendable {
         _ shell: ShellAction,
         context: ReviewContext,
         policy: EffectiveActionPolicy,
-        gitAction: GitAction?
+        gitAction: GitAction?,
+        gitWorld: GitAnalysisWorld
     ) -> ActionPolicyVerdict {
-        var hit = builtinHit(shell: shell, context: context)
+        var hit = builtinHit(shell: shell, context: context, gitWorld: gitWorld)
         hit = applyTypedRules(hit, policy.rules, gitAction: gitAction)
         if hit.semanticallyCovered == false {
             hit = applyPackFallback(hit, policy.packFallback)
@@ -218,7 +249,11 @@ public enum ActionPolicyEngine: Sendable {
         )
     }
 
-    private static func builtinHit(shell: ShellAction, context: ReviewContext) -> CoreHit {
+    private static func builtinHit(
+        shell: ShellAction,
+        context: ReviewContext,
+        gitWorld: GitAnalysisWorld
+    ) -> CoreHit {
         let kinds = shell.effects.kinds
         if kinds.contains(.protectedPathMutation) {
             return CoreHit(
@@ -237,12 +272,21 @@ public enum ActionPolicyEngine: Sendable {
             )
         }
         if kinds.contains(.remoteSharedBranchMutation) {
-            if isSharedTarget(resources: shell.resources, context: context) {
+            if isSharedTarget(resources: shell.resources, context: context, gitWorld: gitWorld) {
                 return CoreHit(
                     decision: .hardDeny(Builtin.remoteSharedBranch),
                     ruleID: Builtin.remoteSharedBranch.ruleID,
                     reason: Builtin.remoteSharedBranch.reason,
                     semanticallyCovered: true
+                )
+            }
+            if case .unprobed = gitWorld, shell.resources.branchName == nil {
+                // Implicit HEAD was not injected. Pack floor; do not treat as private.
+                return CoreHit(
+                    decision: .reviewEligible(fallback: Builtin.uncovered),
+                    ruleID: Builtin.uncovered.ruleID,
+                    reason: Builtin.uncovered.reason,
+                    semanticallyCovered: false
                 )
             }
             return CoreHit(
@@ -358,9 +402,21 @@ public enum ActionPolicyEngine: Sendable {
         })
     }
 
-    private static func isSharedTarget(resources: ActionResources, context: ReviewContext) -> Bool {
-        if context.repository.isSharedBranch {
-            return true
+    private static func isSharedTarget(
+        resources: ActionResources,
+        context: ReviewContext,
+        gitWorld: GitAnalysisWorld
+    ) -> Bool {
+        switch gitWorld {
+        case .unprobed:
+            break
+        case .probed(let git):
+            // REQ-104: `isSharedBranch` only when probed. World payload and
+            // ReviewContext stay in lockstep on the Engine door; consult both
+            // so a mismatched caller cannot skip the shared-branch wall.
+            if git.isSharedBranch || context.repository.isSharedBranch {
+                return true
+            }
         }
         if let branch = resources.branchName, Self.sharedBranchNames.contains(branch) {
             return true

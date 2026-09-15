@@ -66,6 +66,9 @@ public enum SemanticAnalysis: Sendable, Equatable, Codable {
 }
 
 /// Caller-supplied repository facts. Analyzers do not read disk.
+///
+/// `empty` is the empty probed payload. No world injected is
+/// `GitAnalysisWorld.unprobed`, not `.probed(.empty)`.
 public struct GitAnalysisContext: Sendable, Equatable {
     public var workingDirectory: WorkingDirectory?
     public var currentBranch: String?
@@ -91,6 +94,16 @@ public struct GitAnalysisContext: Sendable, Equatable {
             )
         )
     }
+}
+
+/// Whether git repository facts were injected for analysis.
+///
+/// Unprobed: pack deny is the floor; implicit refspec is nil; `isSharedBranch`
+/// is not consulted. Probed: HEAD / shared-by-name facts may fill
+/// `GitAnalysisContext`.
+public enum GitAnalysisWorld: Sendable, Equatable {
+    case unprobed
+    case probed(GitAnalysisContext)
 }
 
 /// Whether a filesystem I/O world was injected for analysis.

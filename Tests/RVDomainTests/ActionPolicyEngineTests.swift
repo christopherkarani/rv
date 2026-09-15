@@ -68,6 +68,53 @@ struct ActionPolicyEngineTests {
         #expect(asked.decision == .mandatoryHuman(ActionPolicyEngine.Builtin.remoteBranchAsk))
     }
 
+    @Test func unprobed_ignoresRepositoryIsSharedBranch() {
+        let topic = ActionPolicyFixtures.forcePush(branchName: "topic")
+        let unprobedTopic = ActionPolicyEngine.evaluate(
+            action: topic,
+            context: shared,
+            gitWorld: .unprobed
+        )
+        #expect(
+            unprobedTopic.decision == .mandatoryHuman(ActionPolicyEngine.Builtin.remoteBranchAsk)
+        )
+
+        let probedTopic = ActionPolicyEngine.evaluate(
+            action: topic,
+            context: shared,
+            gitWorld: .probed(GitAnalysisContext(isSharedBranch: true))
+        )
+        #expect(probedTopic.decision == .hardDeny(ActionPolicyEngine.Builtin.remoteSharedBranch))
+
+        let probedWorldPrivateContext = ActionPolicyEngine.evaluate(
+            action: topic,
+            context: privateBranch,
+            gitWorld: .probed(GitAnalysisContext(isSharedBranch: true))
+        )
+        #expect(
+            probedWorldPrivateContext.decision
+                == .hardDeny(ActionPolicyEngine.Builtin.remoteSharedBranch)
+        )
+
+        let implicit = ActionPolicyFixtures.implicitForcePush()
+        let unprobedImplicit = ActionPolicyEngine.evaluate(
+            action: implicit,
+            context: shared,
+            gitWorld: .unprobed
+        )
+        #expect(
+            unprobedImplicit.decision
+                == .reviewEligible(fallback: ActionPolicyEngine.Builtin.uncovered)
+        )
+
+        let probedImplicit = ActionPolicyEngine.evaluate(
+            action: implicit,
+            context: shared,
+            gitWorld: .probed(GitAnalysisContext(isSharedBranch: true))
+        )
+        #expect(probedImplicit.decision == .hardDeny(ActionPolicyEngine.Builtin.remoteSharedBranch))
+    }
+
     @Test func gitCheckoutFamily_differsByEffectsNotCommandText() {
         let family = "git checkout"
         let create = ActionPolicyFixtures.checkout(
@@ -393,6 +440,18 @@ private enum ActionPolicyFixtures {
                 resources: ActionResources(remoteName: "origin", branchName: branchName),
                 scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/rv")),
                 supportingCommand: ShellCommand(rawValue: "git push --force origin \(branchName)")
+            )
+        )
+    }
+
+    static func implicitForcePush() -> ProposedAction {
+        .shell(
+            ShellAction(
+                fingerprint: ActionFingerprint(rawValue: "shell:git.force-push:implicit"),
+                effects: ActionEffects(kinds: [.remoteSharedBranchMutation]),
+                resources: ActionResources(remoteName: "origin"),
+                scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/rv")),
+                supportingCommand: ShellCommand(rawValue: "git push --force-with-lease")
             )
         )
     }

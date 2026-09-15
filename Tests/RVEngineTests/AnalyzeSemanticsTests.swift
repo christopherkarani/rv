@@ -22,11 +22,9 @@ struct AnalyzeSemanticsTests {
     @Test func precomputedUnwrap_matchesCommandEntry() {
         let command = ShellCommand(rawValue: "sudo env FOO=bar sh -c 'git reset --hard'")
         let cwd = WorkingDirectory(validating: "/repo")
-        let git = GitAnalysisContext(workingDirectory: cwd)
-        let fromCommand = analyzeSemantics(command, gitContext: git, filesystemWorld: repo)
+        let fromCommand = analyzeSemantics(command, filesystemWorld: repo)
         let fromUnwrap = analyzeSemantics(
             unwrapped: unwrapCommand(command, workingDirectory: cwd),
-            gitContext: git,
             filesystemWorld: repo
         )
         #expect(fromUnwrap == fromCommand)

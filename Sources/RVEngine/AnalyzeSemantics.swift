@@ -4,12 +4,12 @@ import RVDomain
 /// on the inner command. Does not invent a second policy engine.
 public func analyzeSemantics(
     _ command: ShellCommand,
-    gitContext: GitAnalysisContext = .empty,
+    gitWorld: GitAnalysisWorld = .unprobed,
     filesystemWorld: FilesystemAnalysisWorld = .unprobed,
     maxDepth: Int = UnwrapLimits.maxDepth,
     maxBytes: Int = UnwrapLimits.maxBytes
 ) -> SemanticAnalysis {
-    let startCwd = gitContext.workingDirectory ?? filesystemWorkingDirectory(filesystemWorld)
+    let startCwd = gitWorkingDirectory(gitWorld) ?? filesystemWorkingDirectory(filesystemWorld)
     return analyzeSemantics(
         unwrapped: unwrapCommand(
             command,
@@ -17,7 +17,7 @@ public func analyzeSemantics(
             maxDepth: maxDepth,
             maxBytes: maxBytes
         ),
-        gitContext: gitContext,
+        gitWorld: gitWorld,
         filesystemWorld: filesystemWorld
     )
 }
@@ -26,7 +26,7 @@ public func analyzeSemantics(
 /// (Evaluate door live probe).
 public func analyzeSemantics(
     unwrapped: UnwrapOutcome,
-    gitContext: GitAnalysisContext = .empty,
+    gitWorld: GitAnalysisWorld = .unprobed,
     filesystemWorld: FilesystemAnalysisWorld = .unprobed
 ) -> SemanticAnalysis {
     switch unwrapped {
@@ -35,10 +35,9 @@ public func analyzeSemantics(
     case .complete(let unwrapped):
         let git = analyzeGit(
             unwrapped.command,
-            context: GitAnalysisContext(
-                workingDirectory: unwrapped.workingDirectory ?? gitContext.workingDirectory,
-                currentBranch: gitContext.currentBranch,
-                isSharedBranch: gitContext.isSharedBranch
+            context: gitAnalysisContext(
+                world: gitWorld,
+                workingDirectory: unwrapped.workingDirectory
             )
         )
         if case .git = git {
@@ -52,6 +51,31 @@ public func analyzeSemantics(
             )
         )
         return filesystem.wrapping(unwrapped.layers)
+    }
+}
+
+private func gitWorkingDirectory(_ world: GitAnalysisWorld) -> WorkingDirectory? {
+    switch world {
+    case .unprobed:
+        return nil
+    case .probed(let context):
+        return context.workingDirectory
+    }
+}
+
+private func gitAnalysisContext(
+    world: GitAnalysisWorld,
+    workingDirectory: WorkingDirectory?
+) -> GitAnalysisContext {
+    switch world {
+    case .unprobed:
+        return GitAnalysisContext(workingDirectory: workingDirectory)
+    case .probed(let context):
+        return GitAnalysisContext(
+            workingDirectory: workingDirectory ?? context.workingDirectory,
+            currentBranch: context.currentBranch,
+            isSharedBranch: context.isSharedBranch
+        )
     }
 }
 

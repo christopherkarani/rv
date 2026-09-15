@@ -7,7 +7,7 @@ import RVDomain
 public func applySemantics(
     pack: EvaluationResult,
     command: ShellCommand,
-    gitContext: GitAnalysisContext = .empty,
+    gitWorld: GitAnalysisWorld = .unprobed,
     filesystemWorld: FilesystemAnalysisWorld = .unprobed,
     enabledPacks: [PackID] = dayOnePackIDs,
     maxDepth: Int = UnwrapLimits.maxDepth,
@@ -16,7 +16,7 @@ public func applySemantics(
 ) -> EvaluationResult {
     let analysis = analyzeSemantics(
         command,
-        gitContext: gitContext,
+        gitWorld: gitWorld,
         filesystemWorld: filesystemWorld,
         maxDepth: maxDepth,
         maxBytes: maxBytes
@@ -25,7 +25,7 @@ public func applySemantics(
         pack: pack,
         analysis: analysis,
         command: command,
-        gitContext: gitContext,
+        gitWorld: gitWorld,
         filesystemWorld: filesystemWorld,
         enabledPacks: enabledPacks,
         policy: policy
@@ -36,7 +36,7 @@ public func applySemantics(
     pack: EvaluationResult,
     analysis: SemanticAnalysis,
     command: ShellCommand,
-    gitContext: GitAnalysisContext = .empty,
+    gitWorld: GitAnalysisWorld = .unprobed,
     filesystemWorld: FilesystemAnalysisWorld = .unprobed,
     enabledPacks: [PackID] = dayOnePackIDs,
     policy: EffectiveActionPolicy = .empty
@@ -49,7 +49,7 @@ public func applySemantics(
         pack: limited,
         analysis: analysis,
         command: command,
-        context: gitContext,
+        context: gitWorld,
         enabledPacks: enabledPacks,
         policy: policy
     )
