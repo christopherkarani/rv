@@ -397,7 +397,7 @@ private final class EvaluateCallProbe: @unchecked Sendable {
         lock.withLock { count += 1 }
         return EvaluationResult(
             outcome: .plain,
-            matchingView: Normalize.matchingView(of: command.rawValue)
+            matchingView: Normalize.matchingView(of: command)
         )
     }
 }

@@ -130,7 +130,7 @@ private func runDoor(
     return evaluateWithSemantics(
         EvaluationRequest(command: ShellCommand(rawValue: command), enabledPacks: dayOnePackIDs),
         packs: packs,
-        patterns: engine,
+        engine: engine,
         compiled: compiled,
         gitProbe: gitProbe,
         filesystemProbe: filesystemProbe,

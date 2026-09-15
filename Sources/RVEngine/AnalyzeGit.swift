@@ -5,7 +5,7 @@ public func analyzeGit(
     _ command: ShellCommand,
     context: GitAnalysisContext = .empty
 ) -> SemanticAnalysis {
-    let view = Normalize.matchingView(of: command.rawValue).rawValue
+    let view = Normalize.matchingView(of: command).rawValue
     if view.isEmpty { return .unknown }
     if splitSegments(view).count > 1 { return .unknown }
     let tokens = tokenizeCommand(view).map(\.decoded)

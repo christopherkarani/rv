@@ -18,7 +18,7 @@ struct ApplyFilesystemSemanticsTests {
         let writeComposed = applyFilesystemSemantics(
             pack: write,
             command: ShellCommand(rawValue: "echo hi > Sources/Foo.swift"),
-            context: repo
+            filesystemWorld: repo
         )
         #expect(writeComposed.decision == .allow)
         guard case .filesystem(let writeAction) = writeComposed.analysis else {
@@ -34,7 +34,7 @@ struct ApplyFilesystemSemanticsTests {
         let createComposed = applyFilesystemSemantics(
             pack: create,
             command: ShellCommand(rawValue: "touch new.swift"),
-            context: repo
+            filesystemWorld: repo
         )
         #expect(createComposed.decision == .allow)
         guard case .filesystem(let createAction) = createComposed.analysis else {
@@ -51,7 +51,7 @@ struct ApplyFilesystemSemanticsTests {
         let composed = applyFilesystemSemantics(
             pack: pack,
             command: ShellCommand(rawValue: "echo hi > ../outside-file"),
-            context: repo
+            filesystemWorld: repo
         )
         guard case .deny(let deny) = composed.decision else {
             Issue.record("out-of-repo write must deny, got \(composed.decision)")
@@ -87,7 +87,7 @@ struct ApplyFilesystemSemanticsTests {
         let composed = applyFilesystemSemantics(
             pack: pack,
             command: ShellCommand(rawValue: "rm link"),
-            context: context
+            filesystemWorld: context
         )
         guard case .deny(let deny) = composed.decision else {
             Issue.record("symlink escape must deny as outside, got \(composed.decision)")
@@ -117,7 +117,7 @@ struct ApplyFilesystemSemanticsTests {
         let composed = applyFilesystemSemantics(
             pack: pack,
             command: ShellCommand(rawValue: "rm file"),
-            context: context
+            filesystemWorld: context
         )
         guard case .deny(let deny) = composed.decision else {
             Issue.record("uncertain path must fail-closed, got \(composed.decision)")
@@ -133,7 +133,7 @@ struct ApplyFilesystemSemanticsTests {
         let composed = applyFilesystemSemantics(
             pack: pack,
             command: ShellCommand(rawValue: "echo hi > file"),
-            context: .probed(.empty)
+            filesystemWorld: .probed(.empty)
         )
         guard case .deny(let deny) = composed.decision else {
             Issue.record("no repo root must fail-closed, got \(composed.decision)")
@@ -215,7 +215,7 @@ struct ApplyFilesystemSemanticsTests {
             pack: pack,
             analysis: analysis,
             command: ShellCommand(rawValue: command),
-            context: .unprobed
+            filesystemWorld: .unprobed
         )
         guard case .deny(let deny) = composed.decision else {
             Issue.record(
@@ -267,7 +267,7 @@ struct ApplyFilesystemSemanticsTests {
         let composed = applyFilesystemSemantics(
             pack: pack,
             command: ShellCommand(rawValue: "rm .build/artifact"),
-            context: repo
+            filesystemWorld: repo
         )
         #expect(composed.decision == .allow)
         guard case .filesystem(let action) = composed.analysis else {
@@ -286,7 +286,7 @@ struct ApplyFilesystemSemanticsTests {
         let composed = applyFilesystemSemantics(
             pack: pack,
             command: ShellCommand(rawValue: "rm -rf Sources"),
-            context: repo
+            filesystemWorld: repo
         )
         guard case .deny(let deny) = composed.decision else {
             Issue.record("composed must keep pack deny")
@@ -350,7 +350,7 @@ struct ApplyFilesystemSemanticsTests {
         let composed = applyFilesystemSemantics(
             pack: pack,
             command: ShellCommand(rawValue: command),
-            context: context
+            filesystemWorld: context
         )
         guard case .deny(let deny) = composed.decision else {
             Issue.record("protected symlink delete must deny")
@@ -379,7 +379,7 @@ struct ApplyFilesystemSemanticsTests {
         let composed = applyFilesystemSemantics(
             pack: pack,
             command: ShellCommand(rawValue: command),
-            context: context
+            filesystemWorld: context
         )
         guard case .deny(let deny) = composed.decision else {
             Issue.record("HOME-aliased write must deny, got \(composed.decision)")
@@ -412,7 +412,7 @@ struct ApplyFilesystemSemanticsTests {
                 matchingView: MatchingView("rm link")
             ),
             command: ShellCommand(rawValue: "rm link"),
-            context: context,
+            filesystemWorld: context,
             enabledPacks: []
         )
         #expect(composed.decision == .allow)
@@ -431,7 +431,7 @@ struct ApplyFilesystemSemanticsTests {
         let composed = applyFilesystemSemantics(
             pack: pack,
             command: ShellCommand(rawValue: "rm -rf Sources"),
-            context: repo
+            filesystemWorld: repo
         )
         #expect(composed.decision == .indeterminate(.corePacksUnavailable))
         guard case .filesystem(let action) = composed.analysis else {
@@ -450,7 +450,7 @@ struct ApplyFilesystemSemanticsTests {
         let composed = applyFilesystemSemantics(
             pack: pack,
             command: ShellCommand(rawValue: "rm Sources/Foo.swift"),
-            context: repo
+            filesystemWorld: repo
         )
         #expect(composed.analysis == pack.analysis)
     }
@@ -509,7 +509,7 @@ private func runFilesystemPack(
         EvaluationRequest(command: ShellCommand(rawValue: command), enabledPacks: dayOnePackIDs),
         packs: world.packs,
         secrets: secrets,
-        patterns: world.engine,
+        engine: world.engine,
         compiled: world.compiled
     )
 }
@@ -522,7 +522,7 @@ private func runFilesystemDoor(
     return evaluateWithSemantics(
         EvaluationRequest(command: ShellCommand(rawValue: command), enabledPacks: dayOnePackIDs),
         packs: world.packs,
-        patterns: world.engine,
+        engine: world.engine,
         compiled: world.compiled,
         filesystemProbe: filesystemProbe
     )

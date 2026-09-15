@@ -357,7 +357,7 @@ public struct GatedEvaluate: Sendable {
                     ),
                     matched: nil
                 ),
-                matchingView: Normalize.matchingView(of: request.command.rawValue)
+                matchingView: Normalize.matchingView(of: request.command)
             )
         }
         return resolvedSession().evaluateWithSemantics(

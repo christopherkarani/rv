@@ -16,7 +16,7 @@ import RVPacks
         let off = evaluate(
             EvaluationRequest(command: command, enabledPacks: PackSet.defaultIDs),
             packs: packs,
-            patterns: engine,
+            engine: engine,
             compiled: compiled
         )
         #expect(off.decision == .allow)
@@ -27,7 +27,7 @@ import RVPacks
                 enabledPacks: PackSet.defaultIDs + [PackID(rawValue: "database.sqlite")]
             ),
             packs: packs,
-            patterns: engine,
+            engine: engine,
             compiled: compiled
         )
         guard case .deny(let deny) = on.decision else {
@@ -44,7 +44,7 @@ import RVPacks
         let result = evaluate(
             EvaluationRequest.makeDayOne(command: ShellCommand(rawValue: "git reset --hard")),
             packs: packs,
-            patterns: engine,
+            engine: engine,
             compiled: compiled
         )
         guard case .deny(let deny) = result.decision else {

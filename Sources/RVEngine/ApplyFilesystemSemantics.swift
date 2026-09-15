@@ -9,15 +9,15 @@ import RVDomain
 public func applyFilesystemSemantics(
     pack: EvaluationResult,
     command: ShellCommand,
-    context: FilesystemAnalysisWorld = .unprobed,
+    filesystemWorld: FilesystemAnalysisWorld = .unprobed,
     enabledPacks: [PackID] = dayOnePackIDs,
     policy: EffectiveActionPolicy = .empty
 ) -> EvaluationResult {
     applyFilesystemSemantics(
         pack: pack,
-        analysis: analyzeFilesystem(command, context: filesystemAnalysisContext(context)),
+        analysis: analyzeFilesystem(command, context: filesystemAnalysisContext(filesystemWorld)),
         command: command,
-        context: context,
+        filesystemWorld: filesystemWorld,
         enabledPacks: enabledPacks,
         policy: policy
     )
@@ -27,7 +27,7 @@ public func applyFilesystemSemantics(
     pack: EvaluationResult,
     analysis: SemanticAnalysis,
     command: ShellCommand,
-    context: FilesystemAnalysisWorld = .unprobed,
+    filesystemWorld: FilesystemAnalysisWorld = .unprobed,
     enabledPacks: [PackID] = dayOnePackIDs,
     policy: EffectiveActionPolicy = .empty
 ) -> EvaluationResult {
@@ -53,7 +53,7 @@ public func applyFilesystemSemantics(
     let verdict = ActionPolicyEngine.evaluate(
         action: action.proposedAction(
             command: command,
-            workingDirectory: filesystemWorkingDirectory(context)
+            workingDirectory: filesystemWorkingDirectory(filesystemWorld)
         ),
         context: ReviewContext(repository: RepositoryReviewContext()),
         policy: policy
@@ -62,7 +62,7 @@ public func applyFilesystemSemantics(
     case .hardAllow, .reviewEligible:
         return result
     case .hardDeny(let deny):
-        if case .unprobed = context,
+        if case .unprobed = filesystemWorld,
             deny.ruleID == ActionPolicyEngine.Builtin.unresolvedFilesystem.ruleID
         {
             // ActionPolicyEngine ranks unresolved first. Unprobed worlds skip

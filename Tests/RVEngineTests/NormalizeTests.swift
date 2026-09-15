@@ -10,6 +10,11 @@ import RVDomain
     #expect(Normalize.matchingView(of: "/usr/bin/git reset --hard") == "git reset --hard")
 }
 
+@Test func matchingView_shellCommand_matchesStringOverload() {
+    let command = ShellCommand(rawValue: "sudo git reset --hard")
+    #expect(Normalize.matchingView(of: command) == Normalize.matchingView(of: command.rawValue))
+}
+
 @Test func normalize_keepsCommandQuery() {
     #expect(Normalize.matchingView(of: "command -v git") == "command -v git")
     #expect(Normalize.matchingView(of: "command -V git") == "command -V git")
@@ -285,7 +290,7 @@ private func evaluateNormalized(_ command: String) throws -> EvaluationResult {
     return evaluate(
         EvaluationRequest(command: ShellCommand(rawValue: command), enabledPacks: dayOnePackIDs),
         packs: packs,
-        patterns: engine,
+        engine: engine,
         compiled: compiled
     )
 }

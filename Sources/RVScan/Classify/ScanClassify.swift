@@ -71,7 +71,7 @@ public struct ScanClassify: Sendable {
             let result = evaluateWithSemantics(
                 request,
                 packs: snapshots,
-                patterns: engine,
+                engine: engine,
                 compiled: compiled,
                 workingDirectory: event.workingDirectory,
                 gitProbe: { _ in .unprobed },

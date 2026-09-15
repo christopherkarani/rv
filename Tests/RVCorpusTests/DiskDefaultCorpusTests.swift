@@ -34,7 +34,7 @@ import RVPacks
                 enabledPacks: [.systemDisk]
             ),
             packs: packs,
-            patterns: engine,
+            engine: engine,
             compiled: compiled
         )
         #expect(result.decision == .allow)
@@ -67,7 +67,7 @@ import RVPacks
                 enabledPacks: withoutDisk
             ),
             packs: packs,
-            patterns: engine,
+            engine: engine,
             compiled: compiled
         )
         #expect(result.decision == .allow)
@@ -81,7 +81,7 @@ private func evaluateDayOne(_ command: String) throws -> EvaluationResult {
     return evaluate(
         EvaluationRequest.makeDayOne(command: ShellCommand(rawValue: command)),
         packs: packs,
-        patterns: engine,
+        engine: engine,
         compiled: compiled
     )
 }
