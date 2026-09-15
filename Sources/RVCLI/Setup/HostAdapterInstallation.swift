@@ -273,10 +273,7 @@ extension HostAdapterInstallation {
         case .outdated:
             return .broken(path: path, existingData: data)
         case .wired(let bakedPath):
-            let executable = bakedPath.isEmpty == false
-                && bakedPath.hasPrefix("/")
-                && fileManager.isExecutableFile(atPath: bakedPath)
-            if executable {
+            if isWiredMissPath(bakedRvPath: bakedPath, fileManager: fileManager) {
                 return .wired(path: path, existingData: data)
             }
             return .broken(path: path, existingData: data)
@@ -307,13 +304,22 @@ extension HostAdapterInstallation {
         guard let bakedRvPath = adapter.bakedRvPath(in: text) else {
             return .occupied(path)
         }
-        let wired = bakedRvPath.isEmpty == false
-            && bakedRvPath.hasPrefix("/")
-            && fileManager.isExecutableFile(atPath: bakedRvPath)
-        if wired {
+        if isWiredMissPath(bakedRvPath: bakedRvPath, fileManager: fileManager) {
             return .wired(path: path, existingData: data)
         }
         return .broken(path: path, existingData: data)
+    }
+
+    /// Baked `rv` is executable and sibling `rv-cli` is executable next to it.
+    private static func isWiredMissPath(bakedRvPath: String, fileManager: FileManager) -> Bool {
+        bakedRvPath.isEmpty == false
+            && bakedRvPath.hasPrefix("/")
+            && fileManager.isExecutableFile(atPath: bakedRvPath)
+            && fileManager.isExecutableFile(atPath: siblingRvCli(nextTo: bakedRvPath))
+    }
+
+    private static func siblingRvCli(nextTo rvPath: String) -> String {
+        (rvPath as NSString).deletingLastPathComponent + "/rv-cli"
     }
 
     private static func isDetected(

@@ -2,7 +2,7 @@ import Foundation
 
 /// Merge / inspect / uninstall for `$HOME/.claude/settings.json` (REQ-012..015).
 /// Command is `python3` on the exclusive adapter; baked rv stays in `RV_BINARY=`
-/// so doctor/inspect still check sibling `rv-cli` without changing HostAdapterInstallation.
+/// so `HostAdapterInstallation.inspect` can require sibling `rv-cli` for `.wired`.
 /// Occupied is a foreign/tampered `rv-guard.py` that is not current. Stale
 /// `hook --host claude` is outdated rv: setup rewrites without `--force`.
 enum ClaudeSettingsMerge {
