@@ -256,7 +256,8 @@ public actor ServiceRuntime {
                     world: liveWorld(),
                     host: params.host,
                     pending: pendingApprovals,
-                    clock: clock
+                    clock: clock,
+                    recordDecision: analyticsRecorder()
                 )
             )
             return .hookEvaluate(reply)
@@ -287,13 +288,6 @@ public actor ServiceRuntime {
         return result
     }
 
-    private func runSpendHostAsk(command: ShellCommand, cwd: WorkingDirectory?, host: LedgerHost) async -> EvaluationResult {
-        rebuildWhenUncovered(wanted: EvaluationWorld.walkedPackIDs(home: configHome))
-        let result = await liveWorld().spend(command: command, cwd: cwd, host: host)
-        recordAnalytics(for: result)
-        return result
-    }
-
     /// Frame-level major-version guard: runs even when a Hello on this
     /// connection already succeeded, so a skewed `clientSemver` can never ride
     /// an open handshake into an evaluation. Applies to evaluate and
@@ -308,7 +302,27 @@ public actor ServiceRuntime {
         )
     }
 
+    private func analyticsRecorder() -> @Sendable (EvaluationResult) -> Void {
+        let analytics = self.analytics
+        let packs = analyticsEnabledPackIDs
+        return { result in
+            Self.recordAnalytics(result, analytics: analytics, enabledPackIDs: packs)
+        }
+    }
+
     private func recordAnalytics(for result: EvaluationResult) {
+        Self.recordAnalytics(
+            result,
+            analytics: analytics,
+            enabledPackIDs: analyticsEnabledPackIDs
+        )
+    }
+
+    private static func recordAnalytics(
+        _ result: EvaluationResult,
+        analytics: AnalyticsCoordinator?,
+        enabledPackIDs: [String]
+    ) {
         guard let analytics else { return }
         let kind: AnalyticsDecisionKind
         switch result.decision {
@@ -319,10 +333,9 @@ public actor ServiceRuntime {
         case .indeterminate:
             kind = .indeterminate
         }
-        let packs = analyticsEnabledPackIDs
         Task {
             await analytics.recordDecision(kind)
-            await analytics.noteEnabledPacks(packs)
+            await analytics.noteEnabledPacks(enabledPackIDs)
             await analytics.flushDailyIfNeeded()
         }
     }

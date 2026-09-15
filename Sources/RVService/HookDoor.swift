@@ -98,18 +98,23 @@ extension HookEvaluateWorld {
         world: LiveEvaluateWorld,
         host: HookHost,
         pending: (any PendingApprovalCoordinating)?,
-        clock: @escaping @Sendable () -> Date
+        clock: @escaping @Sendable () -> Date,
+        recordDecision: (@Sendable (EvaluationResult) -> Void)? = nil
     ) -> HookEvaluateWorld {
         let ledger = LedgerHost.hook(host)
         return HookEvaluateWorld(
             evaluate: { command, cwd in
-                await world.apply(command: command, cwd: cwd, host: ledger)
+                let result = await world.apply(command: command, cwd: cwd, host: ledger)
+                recordDecision?(result)
+                return result
             },
             evaluateFile: { action, cwd in
                 world.runFile(action: action, cwd: cwd, host: ledger)
             },
             spend: { command, cwd in
-                await world.spend(command: command, cwd: cwd, host: ledger)
+                let result = await world.spend(command: command, cwd: cwd, host: ledger)
+                recordDecision?(result)
+                return result
             },
             mintOnDeny: { result, cwd in
                 await world.mintUnlockCode(for: result, cwd: cwd)
