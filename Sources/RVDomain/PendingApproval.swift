@@ -20,50 +20,12 @@ public struct ApprovalID: RawRepresentable, Hashable, Sendable, Equatable, Codab
     }
 }
 
-/// Agent execution identity bound onto a pending approval.
-public struct AgentIdentity: RawRepresentable, Hashable, Sendable, Equatable, Codable {
-    public var rawValue: String
-
-    public init(rawValue: String) {
-        self.rawValue = rawValue
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        rawValue = try container.decode(String.self)
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.singleValueContainer()
-        try container.encode(rawValue)
-    }
-}
-
-/// Session execution identity bound onto a pending approval.
-public struct SessionIdentity: RawRepresentable, Hashable, Sendable, Equatable, Codable {
-    public var rawValue: String
-
-    public init(rawValue: String) {
-        self.rawValue = rawValue
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        rawValue = try container.decode(String.self)
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.singleValueContainer()
-        try container.encode(rawValue)
-    }
-}
-
-/// Session plus agent the pending record is allowed to resume.
+/// Session plus host the pending record is allowed to resume.
 public struct ApprovalIdentity: Hashable, Sendable, Equatable, Codable {
-    public var session: SessionIdentity
-    public var agent: AgentIdentity
+    public var session: SessionID
+    public var agent: HookHost
 
-    public init(session: SessionIdentity, agent: AgentIdentity) {
+    public init(session: SessionID, agent: HookHost) {
         self.session = session
         self.agent = agent
     }

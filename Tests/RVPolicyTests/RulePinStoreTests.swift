@@ -117,8 +117,8 @@ private func resetHardWait() -> PendingApproval {
     return PendingApproval(
         id: ApprovalID(rawValue: "pin-ok"),
         identity: ApprovalIdentity(
-            session: SessionIdentity(rawValue: "sess"),
-            agent: AgentIdentity(rawValue: "pi")
+            session: SessionID(validating: "sess")!,
+            agent: .pi
         ),
         action: .shell(
             ShellAction(
@@ -143,8 +143,8 @@ private func forcePushWait(id: String, branch: String) -> PendingApproval {
     return PendingApproval(
         id: ApprovalID(rawValue: id),
         identity: ApprovalIdentity(
-            session: SessionIdentity(rawValue: "sess"),
-            agent: AgentIdentity(rawValue: "pi")
+            session: SessionID(validating: "sess")!,
+            agent: .pi
         ),
         action: .shell(
             ShellAction(

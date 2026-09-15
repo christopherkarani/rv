@@ -180,11 +180,7 @@ public enum PendingApprovalLedger: Sendable {
     }
 
     private static func validate(_ request: PendingApprovalRequest) throws(PendingApprovalError) {
-        if request.id.rawValue.isEmpty
-            || request.identity.session.rawValue.isEmpty
-            || request.identity.agent.rawValue.isEmpty
-            || request.ttl <= 0
-        {
+        if request.id.rawValue.isEmpty || request.ttl <= 0 {
             throw .invalidRequest
         }
         switch request.continuation {

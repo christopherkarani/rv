@@ -8,8 +8,8 @@ struct PendingAndRuleRoundTripTests {
 
     private var identity: ApprovalIdentity {
         ApprovalIdentity(
-            session: SessionIdentity(rawValue: "sess"),
-            agent: AgentIdentity(rawValue: "pi")
+            session: SessionID(validating: "sess")!,
+            agent: .pi
         )
     }
 
@@ -150,6 +150,31 @@ struct PendingAndRuleRoundTripTests {
                 Issue.record("expected dataCorrupted, got \(error)")
                 return
             }
+        }
+    }
+
+    @Test(arguments: [
+        (["session": "sess", "agent": "not-a-host"], "unknown agent"),
+        (["session": "", "agent": "pi"], "empty session"),
+    ])
+    func pendingResolve_rejectsUnrepresentableIdentity(
+        identity: [String: String],
+        reason: String
+    ) throws {
+        let payload = try JSONSerialization.data(withJSONObject: [
+            "id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            "protocol": ProtocolVersion.name,
+            "method": [
+                "pendingResolve": [
+                    "id": "ask-1",
+                    "decision": "deny",
+                    "fingerprint": "shell:git",
+                    "identity": identity,
+                ]
+            ],
+        ])
+        #expect(throws: DecodingError.self, "\(reason)") {
+            try IPCJSON.decode(IPCRequest.self, from: payload)
         }
     }
 

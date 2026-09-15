@@ -391,8 +391,8 @@ extension IPCMethod {
                         decision: .deny,
                         fingerprint: ActionFingerprint(rawValue: "shell:git"),
                         identity: ApprovalIdentity(
-                            session: SessionIdentity(rawValue: "sess"),
-                            agent: AgentIdentity(rawValue: "pi")
+                            session: SessionID(validating: "sess")!,
+                            agent: .pi
                         )
                     )
                 )
@@ -499,8 +499,8 @@ extension IPCResult {
                                 fingerprint: ActionFingerprint(rawValue: "shell:git"),
                                 sessionSuffix: nil,
                                 identity: ApprovalIdentity(
-                                    session: SessionIdentity(rawValue: "sess"),
-                                    agent: AgentIdentity(rawValue: "pi")
+                                    session: SessionID(validating: "sess")!,
+                                    agent: .pi
                                 )
                             )
                         ]

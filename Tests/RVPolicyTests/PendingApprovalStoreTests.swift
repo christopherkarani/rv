@@ -356,8 +356,8 @@ private extension PendingApprovalStoreTests {
     static let now = Date(timeIntervalSince1970: 1_700_000_000)
     static let fingerprint = ActionFingerprint(rawValue: "shell:git.force-push:origin:main")
     static let identity = ApprovalIdentity(
-        session: SessionIdentity(rawValue: "sess-1"),
-        agent: AgentIdentity(rawValue: "agent-1")
+        session: SessionID(validating: "sess-1")!,
+        agent: .pi
     )
 
     static func request(

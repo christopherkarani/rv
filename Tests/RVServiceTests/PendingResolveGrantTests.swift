@@ -156,8 +156,8 @@ struct PendingResolveGrantTests {
         let wait = PendingApproval(
             id: ApprovalID(rawValue: "down-1"),
             identity: ApprovalIdentity(
-                session: SessionIdentity(rawValue: "sess-pi"),
-                agent: AgentIdentity(rawValue: HookHost.pi.rawValue)
+                session: SessionID(validating: "sess-pi")!,
+                agent: .pi
             ),
             action: .shell(
                 ShellAction(
@@ -285,8 +285,8 @@ private struct IsolatedPendingResolve {
             PendingApprovalRequest(
                 id: PendingApprovalStore.makeID(),
                 identity: ApprovalIdentity(
-                    session: SessionIdentity(rawValue: "sess-pi"),
-                    agent: AgentIdentity(rawValue: HookHost.pi.rawValue)
+                    session: SessionID(validating: "sess-pi")!,
+                    agent: .pi
                 ),
                 action: .shell(
                     ShellAction(
