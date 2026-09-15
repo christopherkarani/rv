@@ -624,9 +624,6 @@ public actor ServiceRuntime {
         }
         switch params.decision {
         case .allowOnce:
-            if params.identity.session.rawValue.isEmpty {
-                return .error(.pendingIdentityMismatch)
-            }
             return await resolveAllowOnce(params, store: pendingApprovals)
         case .deny:
             return await resolvePendingDecision(

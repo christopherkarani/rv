@@ -385,8 +385,8 @@ struct PendingApprovalLedgerTests {
     @Test func identityMismatchCannotResolveOrConsume() throws {
         let created = try Self.created()
         let other = ApprovalIdentity(
-            session: SessionIdentity(rawValue: "sess-other"),
-            agent: AgentIdentity(rawValue: "agent-1")
+            session: SessionID(validating: "sess-other")!,
+            agent: .pi
         )
         #expect(throws: PendingApprovalError.identityMismatch) {
             _ = try PendingApprovalLedger.resolve(
@@ -618,13 +618,32 @@ struct PendingApprovalLedgerTests {
         #expect(decoded == resolved)
     }
 
-    @Test func emptyIdentityOrTTLIsRejected() {
-        let emptyIdentity = PendingApprovalRequest(
-            id: ApprovalID(rawValue: "ask"),
-            identity: ApprovalIdentity(
-                session: SessionIdentity(rawValue: ""),
-                agent: AgentIdentity(rawValue: "agent-1")
-            ),
+    @Test func unknownAgentOnDurableDecodeFails() {
+        let json = Data(#"{"agent":"not-a-host","session":"sess-1"}"#.utf8)
+        #expect(throws: DecodingError.self) {
+            _ = try JSONDecoder().decode(ApprovalIdentity.self, from: json)
+        }
+    }
+
+    @Test func emptySessionOnDurableDecodeFails() {
+        let json = Data(#"{"agent":"pi","session":""}"#.utf8)
+        #expect(throws: DecodingError.self) {
+            _ = try JSONDecoder().decode(ApprovalIdentity.self, from: json)
+        }
+    }
+
+    @Test func validHostIdentityRoundTrips() throws {
+        let data = try JSONEncoder().encode(Self.identity)
+        #expect(try JSONDecoder().decode(ApprovalIdentity.self, from: data) == Self.identity)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(object["agent"] as? String == "pi")
+        #expect(object["session"] as? String == "sess-1")
+    }
+
+    @Test func emptyIDOrZeroTTLIsRejected() {
+        let emptyID = PendingApprovalRequest(
+            id: ApprovalID(rawValue: ""),
+            identity: Self.identity,
             action: Self.action(),
             reason: .hostAsk,
             continuation: .hostNative,
@@ -632,7 +651,7 @@ struct PendingApprovalLedgerTests {
             ttl: 60
         )
         #expect(throws: PendingApprovalError.invalidRequest) {
-            _ = try PendingApprovalLedger.create(records: [], request: emptyIdentity, now: Self.now)
+            _ = try PendingApprovalLedger.create(records: [], request: emptyID, now: Self.now)
         }
         #expect(throws: PendingApprovalError.invalidRequest) {
             _ = try PendingApprovalLedger.create(
@@ -674,8 +693,8 @@ struct PendingApprovalLedgerTests {
 private extension PendingApprovalLedgerTests {
     static let fingerprint = ActionFingerprint(rawValue: "shell:git.force-push:origin:main")
     static let identity = ApprovalIdentity(
-        session: SessionIdentity(rawValue: "sess-1"),
-        agent: AgentIdentity(rawValue: "agent-1")
+        session: SessionID(validating: "sess-1")!,
+        agent: .pi
     )
 
     static func action(fingerprint: String = "shell:git.force-push:origin:main") -> ProposedAction {

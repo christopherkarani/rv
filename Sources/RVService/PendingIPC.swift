@@ -19,7 +19,7 @@ enum PendingListProjection {
             }
             return lhs.id.rawValue < rhs.id.rawValue
         }
-        return applyingSessionSuffix(ordered.compactMap(item(from:)))
+        return applyingSessionSuffix(ordered.map(item(from:)))
     }
 
     static func fingerprint(_ records: [PendingApproval]) -> [String] {
@@ -52,13 +52,10 @@ enum PendingListProjection {
         return coordinatorUnavailable
     }
 
-    private static func item(from record: PendingApproval) -> PendingListItem? {
-        guard let host = HookHost(rawValue: record.identity.agent.rawValue) else {
-            return nil
-        }
-        return PendingListItem(
+    private static func item(from record: PendingApproval) -> PendingListItem {
+        PendingListItem(
             id: record.id,
-            host: host,
+            host: record.identity.agent,
             folder: folder(of: record.action),
             actionKind: actionKind(of: record.action),
             fingerprint: record.fingerprint,
@@ -138,11 +135,8 @@ enum PendingListProjection {
         }
     }
 
-    private static func sessionSuffix(_ session: SessionIdentity) -> String? {
+    private static func sessionSuffix(_ session: SessionID) -> String? {
         let raw = session.rawValue
-        if raw.isEmpty {
-            return nil
-        }
         if raw.count <= 4 {
             return raw
         }

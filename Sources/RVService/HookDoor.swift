@@ -41,8 +41,8 @@ public struct HookDoor: Sendable {
         let pending = PendingApprovalRequest(
             id: PendingApprovalStore.makeID(),
             identity: ApprovalIdentity(
-                session: SessionIdentity(rawValue: session.rawValue),
-                agent: AgentIdentity(rawValue: request.host.rawValue)
+                session: session,
+                agent: request.host
             ),
             action: action,
             reason: .hostAsk,
@@ -61,8 +61,8 @@ public struct HookDoor: Sendable {
     ) async throws {
         guard let store, let session = request.session else { return }
         let identity = ApprovalIdentity(
-            session: SessionIdentity(rawValue: session.rawValue),
-            agent: AgentIdentity(rawValue: request.host.rawValue)
+            session: session,
+            agent: request.host
         )
         let fingerprint = action.fingerprint
         let awaiting = try await store.list(now: now)

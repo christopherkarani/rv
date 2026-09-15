@@ -78,33 +78,6 @@ struct PendingDispatchTests {
         #expect(await approvals.resolveCalls.map(\.decision) == [.allowOnce])
     }
 
-    @Test func emptySessionCannotAllowOnceButDenyStillResolves() async throws {
-        let approvals = FakePendingApprovals()
-        let wait = record(id: "empty-1", host: .pi, session: "", folder: "ws", createdAt: now)
-        await approvals.seed(wait)
-        let runtime = try makeRuntime(approvals: approvals)
-
-        let allow = await runtime.dispatch(
-            IPCRequest(method: .pendingResolve(resolveParams(wait, decision: .allowOnce)))
-        )
-        #expect(allow.result == .error(.pendingIdentityMismatch))
-        #expect(await approvals.resolveCalls.isEmpty)
-
-        let deny = await runtime.dispatch(
-            IPCRequest(method: .pendingResolve(resolveParams(wait, decision: .deny)))
-        )
-        guard case .pendingResolve(let reply) = deny.result else {
-            Issue.record("Deny may proceed with an empty session")
-            return
-        }
-        #expect(reply.id == wait.id)
-        #expect(reply.terminal)
-        #expect(await approvals.resolveCalls.map(\.decision) == [.deny])
-
-        let remaining = try requireList(await runtime.dispatch(IPCRequest(method: .pendingList)))
-        #expect(remaining.items.isEmpty)
-    }
-
     @Test func missingCoordinatorFailsClosedWithoutSpendingAGrant() async throws {
         let allowOnceDirectory = try isolatedAllowOnceDirectory()
         let homeURL = try isolatedHomeDirectory()
@@ -207,7 +180,7 @@ struct PendingDispatchTests {
         #expect(items[2].sessionSuffix == nil)
     }
 
-    @Test func unknownHostIsOmittedAndMissingFolderUsesPlaceholder() async throws {
+    @Test func missingFolderUsesPlaceholder() async throws {
         let approvals = FakePendingApprovals()
         await approvals.seed(
             record(
@@ -218,20 +191,12 @@ struct PendingDispatchTests {
                 createdAt: now
             )
         )
-        var unknown = record(
-            id: "ghost",
-            host: .pi,
-            session: "sess-x",
-            folder: "ws",
-            createdAt: now.addingTimeInterval(1)
-        )
-        unknown.identity.agent = AgentIdentity(rawValue: "not-a-host")
-        await approvals.seed(unknown)
         let runtime = try makeRuntime(approvals: approvals)
         let items = try requireList(await runtime.dispatch(IPCRequest(method: .pendingList))).items
         #expect(items.map(\.id.rawValue) == ["known"])
         let known = try #require(items.first)
         #expect(known.folder == ".")
+        #expect(known.host == .pi)
     }
 
     @Test func resolveMapsLedgerErrors() async throws {
@@ -262,7 +227,7 @@ struct PendingDispatchTests {
                         decision: .deny,
                         fingerprint: wait.fingerprint,
                         identity: ApprovalIdentity(
-                            session: SessionIdentity(rawValue: "other"),
+                            session: SessionID(validating: "other")!,
                             agent: wait.identity.agent
                         )
                     )
@@ -660,8 +625,8 @@ struct PendingDispatchTests {
             PendingApprovalRequest(
                 id: ApprovalID(rawValue: "live-1"),
                 identity: ApprovalIdentity(
-                    session: SessionIdentity(rawValue: "sess-pi"),
-                    agent: AgentIdentity(rawValue: HookHost.pi.rawValue)
+                    session: SessionID(validating: "sess-pi")!,
+                    agent: .pi
                 ),
                 action: .shell(
                     ShellAction(
@@ -761,8 +726,8 @@ struct PendingDispatchTests {
         PendingApproval(
             id: ApprovalID(rawValue: id),
             identity: ApprovalIdentity(
-                session: SessionIdentity(rawValue: session),
-                agent: AgentIdentity(rawValue: host.rawValue)
+                session: SessionID(validating: session)!,
+                agent: host
             ),
             action: .shell(
                 ShellAction(

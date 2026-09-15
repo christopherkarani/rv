@@ -555,8 +555,8 @@ struct RulePinningTests {
         PendingApproval(
             id: ApprovalID(rawValue: id),
             identity: ApprovalIdentity(
-                session: SessionIdentity(rawValue: "sess"),
-                agent: AgentIdentity(rawValue: "pi")
+                session: SessionID(validating: "sess")!,
+                agent: .pi
             ),
             action: action,
             reason: .hostAsk,
@@ -641,8 +641,8 @@ struct RulePinningTests {
         PendingApproval(
             id: ApprovalID(rawValue: id),
             identity: ApprovalIdentity(
-                session: SessionIdentity(rawValue: "sess"),
-                agent: AgentIdentity(rawValue: "pi")
+                session: SessionID(validating: "sess")!,
+                agent: .pi
             ),
             action: .shell(
                 ShellAction(
