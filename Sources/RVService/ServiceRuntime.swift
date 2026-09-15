@@ -8,6 +8,17 @@ import RVIPC
 import RVPacks
 import RVPolicy
 
+/// One IPC frame plus whether this connection's handshake is now accepted.
+public struct IncomingReply: Sendable, Equatable {
+    public var frame: Data
+    public var handshakeAccepted: Bool
+
+    public init(frame: Data, handshakeAccepted: Bool) {
+        self.frame = frame
+        self.handshakeAccepted = handshakeAccepted
+    }
+}
+
 public actor ServiceRuntime {
     public let corePacksReady: Bool
     public let idleExitSeconds: Int
@@ -66,7 +77,7 @@ public actor ServiceRuntime {
         } else if let allowOnceDirectory {
             self.allowOnce = AllowOnceStore(baseDirectory: allowOnceDirectory)
         } else if let resolvedHome {
-            self.allowOnce = AllowOnceStore.live(home: resolvedHome)
+            self.allowOnce = AllowOnceStore.makeLive(home: resolvedHome)
         } else {
             self.allowOnce = AllowOnceStore(baseDirectory: uniqueEphemeralAllowOnceDirectory())
         }
@@ -101,15 +112,15 @@ public actor ServiceRuntime {
         _ body: Data,
         handshakeOK: Bool,
         stdinOverlay: Data? = nil
-    ) async -> (Data, Bool) {
+    ) async -> IncomingReply {
         if let hello = try? IPCJSON.decode(Hello.self, from: body), hello.clientSemver.isEmpty == false {
             let ack = acknowledge(hello)
             let data = (try? IPCJSON.encode(ack)) ?? Data()
             switch ack.status {
             case .ok:
-                return (data, true)
+                return IncomingReply(frame: data, handshakeAccepted: true)
             case .skew:
-                return (data, false)
+                return IncomingReply(frame: data, handshakeAccepted: false)
             }
         }
         if handshakeOK == false {
@@ -118,29 +129,38 @@ public actor ServiceRuntime {
         do {
             let request = try decodeRequest(body, stdinOverlay: stdinOverlay)
             let response = await dispatch(request)
-            return ((try? IPCJSON.encode(response)) ?? Data(), true)
+            return IncomingReply(
+                frame: (try? IPCJSON.encode(response)) ?? Data(),
+                handshakeAccepted: true
+            )
         } catch {
             let response = IPCResponse(id: UUID(), result: .error(.decodeFailed))
-            return ((try? IPCJSON.encode(response)) ?? Data(), true)
+            return IncomingReply(
+                frame: (try? IPCJSON.encode(response)) ?? Data(),
+                handshakeAccepted: true
+            )
         }
     }
 
     /// Implicit hello on first evaluate when `clientSemver` is set. Old clients Hello first.
-    private func handleUnreadyIncoming(_ body: Data, stdinOverlay: Data?) async -> (Data, Bool) {
+    private func handleUnreadyIncoming(_ body: Data, stdinOverlay: Data?) async -> IncomingReply {
         guard let request = try? IPCJSON.decode(IPCRequest.self, from: body) else {
             let response = IPCResponse(
                 id: UUID(),
                 result: .error(.protocolSkew(.handshakeRequired))
             )
             let data = (try? IPCJSON.encode(response)) ?? Data()
-            return (data, false)
+            return IncomingReply(frame: data, handshakeAccepted: false)
         }
         let overlaid: IPCRequest
         do {
             overlaid = try Self.applyStdinOverlay(request, stdinOverlay)
         } catch {
             let response = IPCResponse(id: request.id, result: .error(.decodeFailed))
-            return ((try? IPCJSON.encode(response)) ?? Data(), false)
+            return IncomingReply(
+                frame: (try? IPCJSON.encode(response)) ?? Data(),
+                handshakeAccepted: false
+            )
         }
         if let clientSemver = implicitHelloSemver(overlaid.method),
            clientSemver.isEmpty == false
@@ -150,13 +170,19 @@ public actor ServiceRuntime {
             switch ack.status {
             case .ok:
                 let response = await dispatch(overlaid)
-                return ((try? IPCJSON.encode(response)) ?? Data(), true)
+                return IncomingReply(
+                    frame: (try? IPCJSON.encode(response)) ?? Data(),
+                    handshakeAccepted: true
+                )
             case .skew(let reason):
                 let response = IPCResponse(
                     id: overlaid.id,
                     result: .error(.protocolSkew(reason))
                 )
-                return ((try? IPCJSON.encode(response)) ?? Data(), false)
+                return IncomingReply(
+                    frame: (try? IPCJSON.encode(response)) ?? Data(),
+                    handshakeAccepted: false
+                )
             }
         }
         let response = IPCResponse(
@@ -164,7 +190,7 @@ public actor ServiceRuntime {
             result: .error(.protocolSkew(.handshakeRequired))
         )
         let data = (try? IPCJSON.encode(response)) ?? Data()
-        return (data, false)
+        return IncomingReply(frame: data, handshakeAccepted: false)
     }
 
     private func decodeRequest(_ body: Data, stdinOverlay: Data?) throws -> IPCRequest {
@@ -205,7 +231,7 @@ public actor ServiceRuntime {
             if Self.isMajorSkewed(params.clientSemver) {
                 result = .error(.protocolSkew(.majorVersion))
             } else {
-                result = .evaluate(await makeEvaluateReply(params.request, cwd: params.cwd))
+                result = .evaluate(await evaluate(params.request, cwd: params.cwd))
             }
         case .hookEvaluate(let params):
             if Self.isMajorSkewed(params.clientSemver) {
@@ -242,7 +268,7 @@ public actor ServiceRuntime {
         try await allowOnce.insertGranted(matchingView: matchingView, cwd: cwd, now: now)
     }
 
-    public func makeEvaluateReply(_ request: EvaluationRequest, cwd: WorkingDirectory? = nil) async -> EvaluateReply {
+    public func evaluate(_ request: EvaluationRequest, cwd: WorkingDirectory? = nil) async -> EvaluateReply {
         EvaluateReply(result: await runEvaluate(request, cwd: cwd))
     }
 
@@ -824,7 +850,7 @@ public actor ServiceRuntime {
         switch binding {
         case .automatic:
             if let home {
-                return PendingApprovalStore.live(home: home)
+                return PendingApprovalStore.makeLive(home: home)
             }
             return PendingApprovalStore(baseDirectory: uniqueEphemeralPendingDirectory())
         case .coordinator(let coordinator):

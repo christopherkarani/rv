@@ -42,7 +42,7 @@ enum AllowOnceCLI {
     }
 
     static func store(home: HomeDirectory) -> AllowOnceStore {
-        AllowOnceStore.live(home: home)
+        AllowOnceStore.makeLive(home: home)
     }
 
     static func redeem(

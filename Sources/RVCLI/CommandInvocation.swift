@@ -31,7 +31,7 @@ enum CommandInvocation {
 
     static func allowOnceStore(home: HomeDirectory?) -> AllowOnceStore {
         if let home {
-            return AllowOnceStore.live(home: home)
+            return AllowOnceStore.makeLive(home: home)
         }
         return AllowOnceStore(baseDirectory: uniqueEphemeralAllowOnceDirectory())
     }

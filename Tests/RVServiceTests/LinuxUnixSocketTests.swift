@@ -13,8 +13,7 @@ import RVPolicy
 struct LinuxUnixSocketTests {
     @Test func inProcessMissStillDeniesResetHard() async throws {
         let gated = GatedEvaluate()
-        let result = await gated.run(
-            .apply,
+        let result = await gated.apply(
             command: ShellCommand(rawValue: "git reset --hard"),
             cwd: wd("/tmp/ws"),
             home: HomeDirectory(validating: try isolatedHomeDirectory().path),
@@ -59,7 +58,7 @@ struct LinuxUnixSocketTests {
             Issue.record("socket evaluate must return evaluate")
             return
         }
-        #expect(reply.via == .xpc)
+        #expect(reply.via == .service)
         guard case .deny(let deny) = reply.result.decision else {
             Issue.record("socket evaluate must deny reset-hard")
             return

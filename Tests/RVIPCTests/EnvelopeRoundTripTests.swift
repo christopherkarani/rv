@@ -65,7 +65,7 @@ struct EnvelopeRoundTripTests {
         let data = try IPCJSON.encode(reply)
         let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
         #expect(object["via"] as? String == "xpc")
-        #expect(try IPCJSON.decode(EvaluateReply.self, from: data).via == .xpc)
+        #expect(try IPCJSON.decode(EvaluateReply.self, from: data).via == .service)
         #expect(try IPCJSON.decode(EvaluateReply.self, from: data).serviceSemver == ProtocolVersion.serviceSemver)
 
         for badVia in ["inProcess", "bogus"] {
@@ -84,7 +84,7 @@ struct EnvelopeRoundTripTests {
         object.removeValue(forKey: "serviceSemver")
         let omitted = try JSONSerialization.data(withJSONObject: object)
         let decoded = try IPCJSON.decode(EvaluateReply.self, from: omitted)
-        #expect(decoded.via == .xpc)
+        #expect(decoded.via == .service)
         #expect(decoded.serviceSemver == nil)
     }
 

@@ -138,12 +138,12 @@ final class FakeXPCServer: @unchecked Sendable {
             let runtime = self.runtime
             let accepted = handshakeOK
             Task {
-                let pair = await runtime.handleIncoming(body, handshakeOK: accepted)
-                gate.finish(pair)
+                let incoming = await runtime.handleIncoming(body, handshakeOK: accepted)
+                gate.finish(incoming)
             }
-            let pair = gate.wait()
-            handshakeOK = pair.1
-            try? UnixFrameIO.writeFrame(fd: fd, body: pair.0)
+            let incoming = gate.wait()
+            handshakeOK = incoming.handshakeAccepted
+            try? UnixFrameIO.writeFrame(fd: fd, body: incoming.frame)
         }
     }
 }
@@ -196,16 +196,16 @@ final class FakeXPCClient {
 
 final class ReplyGate: @unchecked Sendable {
     private let sem = DispatchSemaphore(value: 0)
-    private var pair: (Data, Bool) = (Data(), false)
+    private var reply = IncomingReply(frame: Data(), handshakeAccepted: false)
 
-    func finish(_ pair: (Data, Bool)) {
-        self.pair = pair
+    func finish(_ reply: IncomingReply) {
+        self.reply = reply
         sem.signal()
     }
 
-    func wait() -> (Data, Bool) {
+    func wait() -> IncomingReply {
         sem.wait()
-        return pair
+        return reply
     }
 }
 

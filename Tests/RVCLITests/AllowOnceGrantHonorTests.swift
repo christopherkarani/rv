@@ -111,7 +111,7 @@ struct AllowOnceGrantHonorTests {
             command: ShellCommand(rawValue: "git reset --hard"),
             cwd: wd("/tmp/ws")
         )
-        #expect(reply.path == .xpc)
+        #expect(reply.path == .service)
         try #require(denyPayload(from: reply.result.decision) != nil)
         #expect(transport.sendCount == 1)
 

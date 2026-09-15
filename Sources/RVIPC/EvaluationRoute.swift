@@ -2,7 +2,7 @@ public enum EvaluationRoute: Sendable {
     public enum Facts: Sendable, Equatable {
         /// Transport missing, send threw, or no evaluate reply was decoded.
         case transportAbsent
-        /// Decoded evaluate / hookEvaluate reply. `via == .xpc` already enforced.
+        /// Decoded evaluate / hookEvaluate reply. `via == .service` already enforced.
         case reply(clientSemver: String, advertisedServiceSemver: String?)
     }
 
@@ -21,7 +21,7 @@ public enum EvaluationRoute: Sendable {
             else {
                 return .inProcess
             }
-            return .xpc
+            return .service
         }
     }
 }

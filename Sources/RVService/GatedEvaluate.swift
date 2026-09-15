@@ -27,7 +27,7 @@ private enum PolicyVerb: Sendable {
     }
 }
 
-/// Runs the Evaluate session, then the Policy gate.
+/// Evaluates a command through the Evaluate session, then the Policy gate.
 public struct GatedEvaluate: Sendable {
     public var corePacksReady: Bool { resolvedSession().corePacksReady }
 
@@ -98,7 +98,7 @@ public struct GatedEvaluate: Sendable {
         return result
     }
 
-    /// Builds `EvaluationRequest` and runs peek or apply.
+    /// Trampoline onto `peek(command:)` or `apply(command:)`.
     ///
     /// `allowlist` is invoked only on deny (T13: allow/indeterminate skip allowlist I/O).
     public func run(
@@ -112,8 +112,67 @@ public struct GatedEvaluate: Sendable {
         host: LedgerHost = .tty,
         tool: LedgerTool = .bash
     ) async -> EvaluationResult {
-        await gated(
-            Self.policyVerb(intent),
+        switch intent {
+        case .peek:
+            await peek(
+                command: command,
+                cwd: cwd,
+                home: home,
+                store: store,
+                now: now,
+                allowlist: allowlist,
+                host: host,
+                tool: tool
+            )
+        case .apply:
+            await apply(
+                command: command,
+                cwd: cwd,
+                home: home,
+                store: store,
+                now: now,
+                allowlist: allowlist,
+                host: host,
+                tool: tool
+            )
+        }
+    }
+
+    /// Shows a matching grant without spending it. TTY `test` / `explain`.
+    public func peek(
+        command: ShellCommand,
+        cwd: WorkingDirectory?,
+        home: HomeDirectory? = nil,
+        store: AllowOnceStore,
+        now: Date,
+        allowlist: @escaping @Sendable () -> AllowlistSnapshot,
+        host: LedgerHost = .tty,
+        tool: LedgerTool = .bash
+    ) async -> EvaluationResult {
+        await peek(
+            Self.makeRequest(command: command, home: home),
+            cwd: cwd,
+            home: home,
+            store: store,
+            now: now,
+            allowlist: allowlist,
+            host: host,
+            tool: tool
+        )
+    }
+
+    /// Spends a matching grant. Hook / `rvd` / in-process fallback.
+    public func apply(
+        command: ShellCommand,
+        cwd: WorkingDirectory?,
+        home: HomeDirectory? = nil,
+        store: AllowOnceStore,
+        now: Date,
+        allowlist: @escaping @Sendable () -> AllowlistSnapshot,
+        host: LedgerHost = .tty,
+        tool: LedgerTool = .bash
+    ) async -> EvaluationResult {
+        await apply(
             Self.makeRequest(command: command, home: home),
             cwd: cwd,
             home: home,
@@ -137,7 +196,7 @@ public struct GatedEvaluate: Sendable {
     }
 
     /// Wire-path peek for an already-built request (ServiceRuntime explain/classify).
-    /// CLI and in-process fallback must use `run(.peek, ...)` so pack resolution stays shared.
+    /// CLI and in-process fallback must use `peek(command:)` so pack resolution stays shared.
     func peek(
         _ request: EvaluationRequest,
         cwd: WorkingDirectory?,
@@ -208,7 +267,7 @@ public struct GatedEvaluate: Sendable {
     }
 
     /// Wire-path apply for an already-built request (ServiceRuntime evaluate).
-    /// CLI and in-process fallback must use `run(.apply, ...)` so pack resolution stays shared.
+    /// CLI and in-process fallback must use `apply(command:)` so pack resolution stays shared.
     func apply(
         _ request: EvaluationRequest,
         cwd: WorkingDirectory?,
@@ -230,15 +289,6 @@ public struct GatedEvaluate: Sendable {
             host: host,
             tool: tool
         )
-    }
-
-    private static func policyVerb(_ intent: EvaluationIntent) -> PolicyVerb {
-        switch intent {
-        case .peek:
-            .peek
-        case .apply:
-            .apply
-        }
     }
 
     private func gated(
@@ -293,8 +343,8 @@ public struct GatedEvaluate: Sendable {
     ) async -> EvaluationResult {
         switch verb {
         case .peek:
-            return await PolicyGate.peek(
-                result,
+            return await PolicyGate.preview(
+                for: result,
                 cwd: cwd,
                 allowlist: snapshot,
                 store: store,
@@ -302,8 +352,8 @@ public struct GatedEvaluate: Sendable {
                 rebaseInProgress: rebaseInProgress
             ).result
         case .apply:
-            return await PolicyGate.apply(
-                result,
+            return await PolicyGate.consumingGrant(
+                for: result,
                 cwd: cwd,
                 allowlist: snapshot,
                 store: store,
@@ -311,8 +361,8 @@ public struct GatedEvaluate: Sendable {
                 rebaseInProgress: rebaseInProgress
             ).result
         case .hostAskSpend:
-            let applied = await PolicyGate.apply(
-                result,
+            let applied = await PolicyGate.consumingGrant(
+                for: result,
                 cwd: cwd,
                 allowlist: snapshot,
                 store: store,

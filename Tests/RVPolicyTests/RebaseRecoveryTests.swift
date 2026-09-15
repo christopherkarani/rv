@@ -117,8 +117,8 @@ struct RebaseRecoveryTests {
         )
         #expect(RebaseRecovery.isEligible(result: result) == false)
         let now = Date(timeIntervalSince1970: 1_700_000_000)
-        let gated = PolicyGate.decide(
-            result,
+        let gated = PolicyGate.decision(
+            for: result,
             cwd: wd("/tmp/ws"),
             allowlist: .empty,
             grant: .none,
@@ -181,8 +181,8 @@ struct RebaseRecoveryTests {
             analysis: .git(.discardWorktree(pathspecs: ["file"], source: nil))
         )
         #expect(RulePinning.blocksAllowOverride(denied))
-        let withoutRebase = PolicyGate.decide(
-            denied,
+        let withoutRebase = PolicyGate.decision(
+            for: denied,
             cwd: wd("/tmp/ws"),
             allowlist: .empty,
             grant: .pending,
@@ -193,8 +193,8 @@ struct RebaseRecoveryTests {
             Issue.record("pin must keep builtin discard denied without rebase")
             return
         }
-        let withRebase = PolicyGate.decide(
-            denied,
+        let withRebase = PolicyGate.decision(
+            for: denied,
             cwd: wd("/tmp/ws"),
             allowlist: .empty,
             grant: .none,
@@ -215,8 +215,8 @@ struct RebaseRecoveryTests {
             matchingView: "bash -c git checkout -- file",
             analysis: .unwrapLimited.wrapping([.bash])
         )
-        let gated = PolicyGate.decide(
-            denied,
+        let gated = PolicyGate.decision(
+            for: denied,
             cwd: wd("/tmp/ws"),
             allowlist: .empty,
             grant: .none,
@@ -237,8 +237,8 @@ struct RebaseRecoveryTests {
             pattern: "reset-hard",
             analysis: .git(.reset(mode: .hard, target: nil))
         )
-        let gated = PolicyGate.decide(
-            denied,
+        let gated = PolicyGate.decision(
+            for: denied,
             cwd: wd("/tmp/ws"),
             allowlist: .empty,
             grant: .none,
@@ -261,8 +261,8 @@ struct RebaseRecoveryTests {
             cwd: wd("/tmp/ws"),
             now: now
         )
-        let gated = await PolicyGate.apply(
-            denied,
+        let gated = await PolicyGate.consumingGrant(
+            for: denied,
             cwd: wd("/tmp/ws"),
             store: store,
             now: now,

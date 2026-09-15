@@ -17,7 +17,7 @@ struct ServiceRuntimeEvaluateTests {
         #expect(await runtime.compiledPackIDs == dayOnePackIDs)
 
         _ = try PacksFacade.enable(home: home, ids: ["database.sqlite"])
-        let reply = await runtime.makeEvaluateReply(
+        let reply = await runtime.evaluate(
             EvaluationRequest(
                 command: ShellCommand(rawValue: "git stash drop"),
                 enabledPacks: dayOnePackIDs
@@ -39,7 +39,7 @@ struct ServiceRuntimeEvaluateTests {
         )
         _ = try PacksFacade.enable(home: home, ids: [sqlite.rawValue])
 
-        let reply = await runtime.makeEvaluateReply(
+        let reply = await runtime.evaluate(
             EvaluationRequest(
                 command: ShellCommand(rawValue: "DROP TABLE users"),
                 enabledPacks: dayOnePackIDs + [sqlite]

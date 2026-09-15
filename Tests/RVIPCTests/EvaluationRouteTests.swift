@@ -62,7 +62,7 @@ struct EvaluationRouteTests {
         #expect(
             EvaluationRoute.path(
                 for: .reply(clientSemver: "1.0.0", advertisedServiceSemver: "1.9.9")
-            ) == .xpc
+            ) == .service
         )
     }
 

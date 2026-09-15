@@ -18,10 +18,11 @@ public struct PolicyDecision: Equatable, Sendable {
     }
 }
 
+/// Chooses allowlist, allow-once, or rebase-recovery overrides for an evaluation result.
 public enum PolicyGate {
     /// Total override order. No store, clock, or filesystem.
-    public static func decide(
-        _ result: EvaluationResult,
+    public static func decision(
+        for result: EvaluationResult,
         cwd: WorkingDirectory?,
         allowlist: AllowlistSnapshot,
         grant: GrantPresence,
@@ -61,16 +62,16 @@ public enum PolicyGate {
     }
 
     /// Spends a matching grant. Hook / `rvd` / in-process fallback.
-    public static func apply(
-        _ result: EvaluationResult,
+    public static func consumingGrant(
+        for result: EvaluationResult,
         cwd: WorkingDirectory?,
         allowlist: AllowlistSnapshot = .empty,
         store: AllowOnceStore,
         now: Date,
         rebaseInProgress: Bool = false
     ) async -> PolicyDecision {
-        let withoutGrant = decide(
-            result,
+        let withoutGrant = decision(
+            for: result,
             cwd: cwd,
             allowlist: allowlist,
             grant: .none,
@@ -86,8 +87,8 @@ public enum PolicyGate {
             now: now
         ) {
         case .consumed:
-            return decide(
-                result,
+            return decision(
+                for: result,
                 cwd: cwd,
                 allowlist: allowlist,
                 grant: .pending,
@@ -114,8 +115,8 @@ public enum PolicyGate {
         case .indeterminate:
             return PolicyDecision(result: result, override: .none)
         case .deny:
-            let withoutGrant = decide(
-                result,
+            let withoutGrant = decision(
+                for: result,
                 cwd: cwd,
                 allowlist: allowlist,
                 grant: .none,
@@ -135,8 +136,8 @@ public enum PolicyGate {
                 now: now
             ) {
             case .spent:
-                return decide(
-                    result,
+                return decision(
+                    for: result,
                     cwd: cwd,
                     allowlist: allowlist,
                     grant: .pending,
@@ -150,16 +151,16 @@ public enum PolicyGate {
     }
 
     /// Shows a matching grant / allowlist without spending it. TTY `test` / `explain`.
-    public static func peek(
-        _ result: EvaluationResult,
+    public static func preview(
+        for result: EvaluationResult,
         cwd: WorkingDirectory?,
         allowlist: AllowlistSnapshot = .empty,
         store: AllowOnceStore,
         now: Date,
         rebaseInProgress: Bool = false
     ) async -> PolicyDecision {
-        let withoutGrant = decide(
-            result,
+        let withoutGrant = decision(
+            for: result,
             cwd: cwd,
             allowlist: allowlist,
             grant: .none,
@@ -174,8 +175,8 @@ public enum PolicyGate {
             cwd: cwd,
             now: now
         ) ? .pending : .none
-        return decide(
-            result,
+        return decision(
+            for: result,
             cwd: cwd,
             allowlist: allowlist,
             grant: grant,
@@ -184,7 +185,7 @@ public enum PolicyGate {
         )
     }
 
-    /// Consume / hasGrant only when decide would still need a pending grant.
+    /// Consume / hasGrant only when decision would still need a pending grant.
     private static func honorCwd(
         _ result: EvaluationResult,
         cwd: WorkingDirectory?,

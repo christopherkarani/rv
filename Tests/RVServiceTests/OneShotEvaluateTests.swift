@@ -7,10 +7,12 @@ import RVIPC
 struct OneShotEvaluateTests {
     @Test func implicitHelloOnEvaluate_oneShotDeniesResetHard() async throws {
         let runtime = try isolatedRuntime()
-        let (data, ok) = await runtime.handleIncoming(
+        let incoming = await runtime.handleIncoming(
             try evaluateBody(command: "git reset --hard", clientSemver: ProtocolVersion.serviceSemver),
             handshakeOK: false
         )
+        let data = incoming.frame
+        let ok = incoming.handshakeAccepted
         #expect(ok == true)
         let response = try IPCJSON.decode(IPCResponse.self, from: data)
         guard case .evaluate(let reply) = response.result else {
@@ -22,16 +24,18 @@ struct OneShotEvaluateTests {
             return
         }
         #expect(deny.ruleID.rawValue == "core.git:reset-hard")
-        #expect(reply.via == .xpc)
+        #expect(reply.via == .service)
         #expect(reply.serviceSemver == ProtocolVersion.serviceSemver)
     }
 
     @Test func evaluateWithoutClientSemverAndNoHello_isHandshakeRequired() async throws {
         let runtime = try isolatedRuntime()
-        let (data, ok) = await runtime.handleIncoming(
+        let incoming = await runtime.handleIncoming(
             try evaluateBody(command: "git reset --hard"),
             handshakeOK: false
         )
+        let data = incoming.frame
+        let ok = incoming.handshakeAccepted
         #expect(ok == false)
         let response = try IPCJSON.decode(IPCResponse.self, from: data)
         guard case .error(.protocolSkew(let reason)) = response.result else {
@@ -49,7 +53,9 @@ struct OneShotEvaluateTests {
             command: "git reset --hard",
             clientSemver: ProtocolVersion.serviceSemver
         )
-        let (first, ok) = await runtime.handleIncoming(firstBody, handshakeOK: false)
+        let incoming = await runtime.handleIncoming(firstBody, handshakeOK: false)
+        let first = incoming.frame
+        let ok = incoming.handshakeAccepted
         #expect(ok == false)
         let firstResponse = try IPCJSON.decode(IPCResponse.self, from: first)
         guard case .error(.protocolSkew(let reason)) = firstResponse.result else {
@@ -62,10 +68,12 @@ struct OneShotEvaluateTests {
             Issue.record("failed implicit hello must not return evaluate")
         }
 
-        let (second, stillClosed) = await runtime.handleIncoming(
+        let next = await runtime.handleIncoming(
             try evaluateBody(command: "git reset --hard"),
             handshakeOK: ok
         )
+        let second = next.frame
+        let stillClosed = next.handshakeAccepted
         #expect(stillClosed == false)
         let secondResponse = try IPCJSON.decode(IPCResponse.self, from: second)
         guard case .error(.protocolSkew(let again)) = secondResponse.result else {
@@ -78,7 +86,7 @@ struct OneShotEvaluateTests {
 
     @Test func skewedImplicitHello_doesNotEvaluate() async throws {
         let runtime = try isolatedRuntime()
-        let (data, ok) = await runtime.handleIncoming(
+        let incoming = await runtime.handleIncoming(
             try evaluateBody(
                 command: "git reset --hard",
                 clientSemver: ProtocolVersion.serviceSemver,
@@ -86,6 +94,8 @@ struct OneShotEvaluateTests {
             ),
             handshakeOK: false
         )
+        let data = incoming.frame
+        let ok = incoming.handshakeAccepted
         #expect(ok == false)
         let response = try IPCJSON.decode(IPCResponse.self, from: data)
         guard case .error(.protocolSkew(let reason)) = response.result else {
@@ -101,13 +111,15 @@ struct OneShotEvaluateTests {
 
     @Test func majorSemverImplicitHello_doesNotEvaluate() async throws {
         let runtime = try isolatedRuntime()
-        let (data, ok) = await runtime.handleIncoming(
+        let incoming = await runtime.handleIncoming(
             try evaluateBody(
                 command: "git reset --hard",
                 clientSemver: "2.0.0"
             ),
             handshakeOK: false
         )
+        let data = incoming.frame
+        let ok = incoming.handshakeAccepted
         #expect(ok == false)
         let response = try IPCJSON.decode(IPCResponse.self, from: data)
         guard case .error(.protocolSkew(let reason)) = response.result else {
@@ -127,13 +139,16 @@ struct OneShotEvaluateTests {
             protocolName: ProtocolVersion.name,
             clientSemver: ProtocolVersion.serviceSemver
         )
-        let (_, helloOK) = await runtime.handleIncoming(try IPCJSON.encode(hello), handshakeOK: false)
+        let incoming = await runtime.handleIncoming(try IPCJSON.encode(hello), handshakeOK: false)
+        let helloOK = incoming.handshakeAccepted
         #expect(helloOK == true)
 
-        let (data, ok) = await runtime.handleIncoming(
+        let next = await runtime.handleIncoming(
             try evaluateBody(command: "git reset --hard", clientSemver: "2.0.0"),
             handshakeOK: helloOK
         )
+        let data = next.frame
+        let ok = next.handshakeAccepted
         #expect(ok == true)
         let response = try IPCJSON.decode(IPCResponse.self, from: data)
         guard case .error(.protocolSkew(let reason)) = response.result else {
@@ -153,10 +168,11 @@ struct OneShotEvaluateTests {
             protocolName: ProtocolVersion.name,
             clientSemver: ProtocolVersion.serviceSemver
         )
-        let (_, helloOK) = await runtime.handleIncoming(try IPCJSON.encode(hello), handshakeOK: false)
+        let incoming = await runtime.handleIncoming(try IPCJSON.encode(hello), handshakeOK: false)
+        let helloOK = incoming.handshakeAccepted
         #expect(helloOK == true)
 
-        let (data, ok) = await runtime.handleIncoming(
+        let next = await runtime.handleIncoming(
             try evaluateBody(
                 command: "git reset --hard",
                 clientSemver: ProtocolVersion.serviceSemver,
@@ -164,6 +180,8 @@ struct OneShotEvaluateTests {
             ),
             handshakeOK: helloOK
         )
+        let data = next.frame
+        let ok = next.handshakeAccepted
         #expect(ok == true)
         let response = try IPCJSON.decode(IPCResponse.self, from: data)
         guard case .error(.protocolSkew(let reason)) = response.result else {
@@ -183,16 +201,19 @@ struct OneShotEvaluateTests {
             protocolName: ProtocolVersion.name,
             clientSemver: ProtocolVersion.serviceSemver
         )
-        let (_, helloOK) = await runtime.handleIncoming(try IPCJSON.encode(hello), handshakeOK: false)
+        let incoming = await runtime.handleIncoming(try IPCJSON.encode(hello), handshakeOK: false)
+        let helloOK = incoming.handshakeAccepted
         #expect(helloOK == true)
 
-        let (data, ok) = await runtime.handleIncoming(
+        let next = await runtime.handleIncoming(
             try evaluateBody(
                 command: "git reset --hard",
                 clientSemver: ProtocolVersion.serviceSemver
             ),
             handshakeOK: helloOK
         )
+        let data = next.frame
+        let ok = next.handshakeAccepted
         #expect(ok == true)
         let response = try IPCJSON.decode(IPCResponse.self, from: data)
         guard case .evaluate(let reply) = response.result else {
@@ -209,15 +230,19 @@ struct OneShotEvaluateTests {
     @Test func oldHelloThenEvaluateWithoutClientSemver_stillWorks() async throws {
         let runtime = try isolatedRuntime()
         let hello = Hello(protocolName: ProtocolVersion.name, clientSemver: ProtocolVersion.serviceSemver)
-        let (ackData, helloOK) = await runtime.handleIncoming(try IPCJSON.encode(hello), handshakeOK: false)
+        let incoming = await runtime.handleIncoming(try IPCJSON.encode(hello), handshakeOK: false)
+        let ackData = incoming.frame
+        let helloOK = incoming.handshakeAccepted
         let ack = try IPCJSON.decode(HelloAck.self, from: ackData)
         #expect(helloOK == true)
         #expect(ack.status == .ok)
 
-        let (data, ok) = await runtime.handleIncoming(
+        let next = await runtime.handleIncoming(
             try evaluateBody(command: "git reset --hard"),
             handshakeOK: helloOK
         )
+        let data = next.frame
+        let ok = next.handshakeAccepted
         #expect(ok == true)
         let response = try IPCJSON.decode(IPCResponse.self, from: data)
         guard case .evaluate(let reply) = response.result else {

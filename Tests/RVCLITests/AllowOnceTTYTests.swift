@@ -81,9 +81,9 @@ struct AllowOnceTTYTests {
             ),
             matchingView: "git reset --hard"
         )
-        let first = await PolicyGate.apply(denied, cwd: wd("/tmp/a"), store: store, now: now)
+        let first = await PolicyGate.consumingGrant(for: denied, cwd: wd("/tmp/a"), store: store, now: now)
         #expect(first.override == .allowOnce)
-        let second = await PolicyGate.apply(denied, cwd: wd("/tmp/a"), store: store, now: now)
+        let second = await PolicyGate.consumingGrant(for: denied, cwd: wd("/tmp/a"), store: store, now: now)
         guard case .deny = second.result.decision else {
             Issue.record("second must deny")
             return

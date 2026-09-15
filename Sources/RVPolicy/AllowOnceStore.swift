@@ -13,7 +13,7 @@ public actor AllowOnceStore {
         self.baseDirectory = baseDirectory
     }
 
-    nonisolated public static func live(home: HomeDirectory) -> AllowOnceStore {
+    nonisolated public static func makeLive(home: HomeDirectory) -> AllowOnceStore {
         AllowOnceStore(baseDirectory: RVPolicyPaths.configDirectory(home: home))
     }
 

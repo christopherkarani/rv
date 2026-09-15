@@ -167,7 +167,7 @@ package struct LiveEvaluateWorld: Sendable {
 
     private static func defaultStore(home: HomeDirectory?) -> AllowOnceStore {
         if let home {
-            return AllowOnceStore.live(home: home)
+            return AllowOnceStore.makeLive(home: home)
         }
         return AllowOnceStore(
             baseDirectory: FileManager.default.temporaryDirectory

@@ -17,17 +17,19 @@ struct HookEvaluateTests {
     @Test func implicitHello_grokResetHardReturnsCanonicalDenyWire() async throws {
         let runtime = try isolatedRuntime()
         let stdin = try grokFixture("deny-git-reset-hard.json")
-        let (data, ok) = await runtime.handleIncoming(
+        let incoming = await runtime.handleIncoming(
             try hookEvaluateBody(host: .grok, stdin: stdin, clientSemver: ProtocolVersion.serviceSemver),
             handshakeOK: false
         )
+        let data = incoming.frame
+        let ok = incoming.handshakeAccepted
         #expect(ok == true)
         let response = try IPCJSON.decode(IPCResponse.self, from: data)
         guard case .hookEvaluate(let reply) = response.result else {
             Issue.record("implicit hello hookEvaluate must dispatch")
             return
         }
-        #expect(reply.via == .xpc)
+        #expect(reply.via == .service)
         #expect(reply.serviceSemver == ProtocolVersion.serviceSemver)
         #expect(reply.exitCode == 0)
         let json = try grokDenyJSON(reply.stdout)
@@ -37,17 +39,19 @@ struct HookEvaluateTests {
     @Test func implicitHello_claudeResetHardReturnsAskWire() async throws {
         let runtime = try isolatedRuntime()
         let stdin = try claudeFixture("deny-git-reset-hard.json")
-        let (data, ok) = await runtime.handleIncoming(
+        let incoming = await runtime.handleIncoming(
             try hookEvaluateBody(host: .claude, stdin: stdin, clientSemver: ProtocolVersion.serviceSemver),
             handshakeOK: false
         )
+        let data = incoming.frame
+        let ok = incoming.handshakeAccepted
         #expect(ok == true)
         let response = try IPCJSON.decode(IPCResponse.self, from: data)
         guard case .hookEvaluate(let reply) = response.result else {
             Issue.record("implicit hello claude hookEvaluate must dispatch")
             return
         }
-        #expect(reply.via == .xpc)
+        #expect(reply.via == .service)
         #expect(reply.exitCode == 2)
         let json = try #require(
             JSONSerialization.jsonObject(with: Data(reply.stdout.utf8)) as? [String: Any]
@@ -74,10 +78,12 @@ struct HookEvaluateTests {
         let runtime = try isolatedRuntime(home: HomeDirectory(validating: home.path))
 
         let stdin = try grokFixture("deny-git-reset-hard.json")
-        let (data, ok) = await runtime.handleIncoming(
+        let incoming = await runtime.handleIncoming(
             try hookEvaluateBody(host: .grok, stdin: stdin, clientSemver: ProtocolVersion.serviceSemver),
             handshakeOK: false
         )
+        let data = incoming.frame
+        let ok = incoming.handshakeAccepted
         #expect(ok == true)
         let response = try IPCJSON.decode(IPCResponse.self, from: data)
         guard case .hookEvaluate(let reply) = response.result else {
@@ -93,10 +99,12 @@ struct HookEvaluateTests {
     @Test func majorSemver_doesNotEvaluate() async throws {
         let runtime = try isolatedRuntime()
         let stdin = try grokFixture("deny-git-reset-hard.json")
-        let (data, ok) = await runtime.handleIncoming(
+        let incoming = await runtime.handleIncoming(
             try hookEvaluateBody(host: .grok, stdin: stdin, clientSemver: "2.0.0"),
             handshakeOK: false
         )
+        let data = incoming.frame
+        let ok = incoming.handshakeAccepted
         #expect(ok == false)
         let response = try IPCJSON.decode(IPCResponse.self, from: data)
         guard case .error(.protocolSkew(let reason)) = response.result else {
@@ -113,10 +121,12 @@ struct HookEvaluateTests {
     @Test func missingClientSemverAndNoHello_isHandshakeRequired() async throws {
         let runtime = try isolatedRuntime()
         let stdin = try grokFixture("deny-git-reset-hard.json")
-        let (data, ok) = await runtime.handleIncoming(
+        let incoming = await runtime.handleIncoming(
             try hookEvaluateBody(host: .grok, stdin: stdin),
             handshakeOK: false
         )
+        let data = incoming.frame
+        let ok = incoming.handshakeAccepted
         #expect(ok == false)
         let response = try IPCJSON.decode(IPCResponse.self, from: data)
         guard case .error(.protocolSkew(let reason)) = response.result else {
@@ -133,11 +143,13 @@ struct HookEvaluateTests {
     @Test func stdinOverlay_replacesJSONStdinOnImplicitHello() async throws {
         let runtime = try isolatedRuntime()
         let overlay = Data(try grokFixture("deny-git-reset-hard.json").utf8)
-        let (data, ok) = await runtime.handleIncoming(
+        let incoming = await runtime.handleIncoming(
             try hookEvaluateBody(host: .grok, stdin: "", clientSemver: ProtocolVersion.serviceSemver),
             handshakeOK: false,
             stdinOverlay: overlay
         )
+        let data = incoming.frame
+        let ok = incoming.handshakeAccepted
         #expect(ok == true)
         let response = try IPCJSON.decode(IPCResponse.self, from: data)
         guard case .hookEvaluate(let reply) = response.result else {
@@ -151,7 +163,7 @@ struct HookEvaluateTests {
 
     @Test func emptyStdinOverlay_overridesJSONStdin() async throws {
         let runtime = try isolatedRuntime()
-        let (data, ok) = await runtime.handleIncoming(
+        let incoming = await runtime.handleIncoming(
             try hookEvaluateBody(
                 host: .grok,
                 stdin: try grokFixture("deny-git-reset-hard.json"),
@@ -160,6 +172,8 @@ struct HookEvaluateTests {
             handshakeOK: false,
             stdinOverlay: Data()
         )
+        let data = incoming.frame
+        let ok = incoming.handshakeAccepted
         #expect(ok == true)
         let response = try IPCJSON.decode(IPCResponse.self, from: data)
         guard case .hookEvaluate(let reply) = response.result else {
@@ -174,7 +188,7 @@ struct HookEvaluateTests {
     @Test func stdinOverlay_winsOverJSONAllowStdin() async throws {
         let runtime = try isolatedRuntime()
         let overlay = Data(try grokFixture("deny-git-reset-hard.json").utf8)
-        let (data, ok) = await runtime.handleIncoming(
+        let incoming = await runtime.handleIncoming(
             try hookEvaluateBody(
                 host: .grok,
                 stdin: try grokFixture("allow-git-status.json"),
@@ -183,6 +197,8 @@ struct HookEvaluateTests {
             handshakeOK: false,
             stdinOverlay: overlay
         )
+        let data = incoming.frame
+        let ok = incoming.handshakeAccepted
         #expect(ok == true)
         let response = try IPCJSON.decode(IPCResponse.self, from: data)
         guard case .hookEvaluate(let reply) = response.result else {
@@ -195,7 +211,7 @@ struct HookEvaluateTests {
 
     @Test func invalidUTF8StdinOverlay_isDecodeFailedAndDoesNotEvaluate() async throws {
         let runtime = try isolatedRuntime()
-        let (data, ok) = await runtime.handleIncoming(
+        let incoming = await runtime.handleIncoming(
             try hookEvaluateBody(
                 host: .grok,
                 stdin: try grokFixture("deny-git-reset-hard.json"),
@@ -204,6 +220,8 @@ struct HookEvaluateTests {
             handshakeOK: false,
             stdinOverlay: Data([0xFF, 0xFE])
         )
+        let data = incoming.frame
+        let ok = incoming.handshakeAccepted
         #expect(ok == false)
         let response = try IPCJSON.decode(IPCResponse.self, from: data)
         guard case .error(.decodeFailed) = response.result else {
@@ -217,7 +235,7 @@ struct HookEvaluateTests {
 
     @Test func missingStdinOverlay_keepsJSONStdin() async throws {
         let runtime = try isolatedRuntime()
-        let (data, ok) = await runtime.handleIncoming(
+        let incoming = await runtime.handleIncoming(
             try hookEvaluateBody(
                 host: .grok,
                 stdin: try grokFixture("allow-medium-stash-drop.json"),
@@ -226,6 +244,8 @@ struct HookEvaluateTests {
             handshakeOK: false,
             stdinOverlay: nil
         )
+        let data = incoming.frame
+        let ok = incoming.handshakeAccepted
         #expect(ok == true)
         let response = try IPCJSON.decode(IPCResponse.self, from: data)
         guard case .hookEvaluate(let reply) = response.result else {
@@ -239,17 +259,19 @@ struct HookEvaluateTests {
     @Test func grokStashDrop_emptyStdout() async throws {
         let runtime = try isolatedRuntime()
         let stdin = try grokFixture("allow-medium-stash-drop.json")
-        let (data, ok) = await runtime.handleIncoming(
+        let incoming = await runtime.handleIncoming(
             try hookEvaluateBody(host: .grok, stdin: stdin, clientSemver: ProtocolVersion.serviceSemver),
             handshakeOK: false
         )
+        let data = incoming.frame
+        let ok = incoming.handshakeAccepted
         #expect(ok == true)
         let response = try IPCJSON.decode(IPCResponse.self, from: data)
         guard case .hookEvaluate(let reply) = response.result else {
             Issue.record("stash drop must dispatch hookEvaluate")
             return
         }
-        #expect(reply.via == .xpc)
+        #expect(reply.via == .service)
         #expect(reply.stdout.isEmpty)
         #expect(reply.exitCode == 0)
     }
@@ -273,7 +295,9 @@ struct HookEvaluateTests {
         let hostile = try #require(frame.map {
             $0.replacingOccurrences(of: "\"host\":\"grok\"", with: "\"host\":\"nope\"")
         })
-        let (data, ok) = await runtime.handleIncoming(Data(hostile.utf8), handshakeOK: true)
+        let incoming = await runtime.handleIncoming(Data(hostile.utf8), handshakeOK: true)
+        let data = incoming.frame
+        let ok = incoming.handshakeAccepted
         #expect(ok == true)
         let response = try IPCJSON.decode(IPCResponse.self, from: data)
         guard case .error(.decodeFailed) = response.result else {
@@ -295,12 +319,14 @@ struct HookEvaluateTests {
             ),
             handshakeOK: false
         )
-        #expect(hook.1 == true)
+        #expect(hook.handshakeAccepted == true)
 
-        let (data, ok) = await runtime.handleIncoming(
+        let incoming = await runtime.handleIncoming(
             try evaluateBody(command: "git reset --hard", clientSemver: ProtocolVersion.serviceSemver),
-            handshakeOK: hook.1
+            handshakeOK: hook.handshakeAccepted
         )
+        let data = incoming.frame
+        let ok = incoming.handshakeAccepted
         #expect(ok == true)
         let response = try IPCJSON.decode(IPCResponse.self, from: data)
         guard case .evaluate(let reply) = response.result else {
@@ -312,7 +338,7 @@ struct HookEvaluateTests {
             return
         }
         #expect(deny.ruleID.rawValue == "core.git:reset-hard")
-        #expect(reply.via == .xpc)
+        #expect(reply.via == .service)
     }
 
     @Test func hookEvaluate_doesNotLogCommandText() async throws {
@@ -357,7 +383,7 @@ struct HookEvaluateTests {
         #expect(json["reason"] as? String == malformedHookSentence(.unreadable))
         #expect(probe.calls == 0)
         #expect(reply.exitCode == 0)
-        #expect(reply.via == .xpc)
+        #expect(reply.via == .service)
     }
 
     @Test func missingCommand_failsClosedWithDenyJSONAndDenyExitCode() async throws {
@@ -371,7 +397,7 @@ struct HookEvaluateTests {
         #expect(json["reason"] as? String == malformedHookSentence(.missingCommand))
         #expect(probe.calls == 0)
         #expect(reply.exitCode == 1)
-        #expect(reply.via == .xpc)
+        #expect(reply.via == .service)
     }
 
     #if canImport(XPC)

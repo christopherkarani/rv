@@ -289,7 +289,7 @@ struct PendingApprovalStoreTests {
 
     @Test func liveUsesConfigDirectoryUnderHome() throws {
         let home = try #require(HomeDirectory(validating: "/tmp/rv-home-\(UUID().uuidString)"))
-        let store = PendingApprovalStore.live(home: home)
+        let store = PendingApprovalStore.makeLive(home: home)
         #expect(store.baseDirectory == RVPolicyPaths.configDirectory(home: home))
     }
 

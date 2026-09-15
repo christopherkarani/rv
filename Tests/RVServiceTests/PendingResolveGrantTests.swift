@@ -271,7 +271,7 @@ private struct IsolatedPendingResolve {
             clock: { Date(timeIntervalSince1970: 1_700_000_000) },
             pendingApprovals: .automatic
         )
-        pending = PendingApprovalStore.live(home: home)
+        pending = PendingApprovalStore.makeLive(home: home)
         grants = AllowOnceStore(baseDirectory: allowOnceDirectory)
     }
 

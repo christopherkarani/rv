@@ -56,7 +56,7 @@ public struct HookEvaluateReply: Sendable, Equatable, Codable {
         self.stdout = stdout
         self.exitCode = exitCode
         self.stderr = stderr
-        self.via = .xpc
+        self.via = .service
         self.serviceSemver = serviceSemver
     }
 
@@ -65,7 +65,7 @@ public struct HookEvaluateReply: Sendable, Equatable, Codable {
         stdout = try container.decode(String.self, forKey: .stdout)
         exitCode = try container.decode(Int32.self, forKey: .exitCode)
         let decodedVia = try container.decode(EvaluationPath.self, forKey: .via)
-        guard decodedVia == .xpc else {
+        guard decodedVia == .service else {
             throw DecodingError.dataCorruptedError(
                 forKey: .via,
                 in: container,

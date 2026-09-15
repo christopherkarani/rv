@@ -17,7 +17,7 @@ struct HostGrantWriterTests {
         #expect(first.override == .allowOnce)
         #expect(first.result.decision == .allow)
 
-        let replay = await PolicyGate.apply(denied, cwd: wd("/tmp/ws"), store: store, now: now)
+        let replay = await PolicyGate.consumingGrant(for: denied, cwd: wd("/tmp/ws"), store: store, now: now)
         #expect(replay.override == .none)
         guard case .deny = replay.result.decision else {
             Issue.record("replay without a live grant must deny")
@@ -111,7 +111,7 @@ struct HostGrantWriterTests {
         #expect(first.override == .allowOnce)
         #expect(first.result.decision == .allow)
 
-        let replay = await PolicyGate.apply(denied, cwd: wd("/tmp/ws"), store: store, now: now)
+        let replay = await PolicyGate.consumingGrant(for: denied, cwd: wd("/tmp/ws"), store: store, now: now)
         #expect(replay.override == .none)
         guard case .deny = replay.result.decision else {
             Issue.record("replay without a live grant must deny")
