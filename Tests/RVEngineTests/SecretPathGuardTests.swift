@@ -49,7 +49,7 @@ private func run(
     secrets: SecretPathCatalog = .dayOne,
     safety: SafetyLevel = .normal,
     allowPaths: SecretAllowPathSet = .empty,
-    home: String? = nil,
+    home: HomePath? = nil,
     budget: EvaluationBudget? = nil
 ) throws -> EvaluationResult {
     let packs = packs ?? samplePacks()
@@ -287,25 +287,27 @@ struct SecretPathGuardTests {
     }
 
     @Test func evaluate_allowPath_tildeExpandsWithHome() throws {
+        // `evaluate(..., home: "")` and `home: WorkingDirectory(...)` do not compile.
         let result = try run(
             "cat /Users/ada/.env",
             allowPaths: SecretAllowPathSet(literals: ["~/.env"]),
-            home: "/Users/ada"
+            home: HomePath(validating: "/Users/ada")
         )
         #expect(result.decision == .allow)
     }
 
     @Test func evaluate_allowPath_dollarHomeExpandsWithHome() throws {
+        let home = HomePath(validating: "/Users/ada")
         let result = try run(
             "cat /Users/ada/.env",
             allowPaths: SecretAllowPathSet(literals: ["$HOME/.env"]),
-            home: "/Users/ada"
+            home: home
         )
         #expect(result.decision == .allow)
         let braced = try run(
             "cat /Users/ada/.env",
             allowPaths: SecretAllowPathSet(literals: ["${HOME}/.env"]),
-            home: "/Users/ada"
+            home: home
         )
         #expect(braced.decision == .allow)
     }

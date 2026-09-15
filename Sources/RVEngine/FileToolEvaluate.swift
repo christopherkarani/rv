@@ -5,7 +5,7 @@ public func evaluateFileTool(
     _ action: FileToolAction,
     catalog: SecretPathCatalog = .dayOne,
     allowPaths: SecretAllowPathSet = .empty,
-    home: String? = nil
+    home: HomePath? = nil
 ) -> EvaluationResult {
     let path = action.path.rawValue
     let matchingView = MatchingView(path)

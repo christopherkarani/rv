@@ -10,7 +10,7 @@ public func evaluate<E: PatternEngine>(
     secrets: SecretPathCatalog = .dayOne,
     safety: SafetyLevel = .normal,
     allowPaths: SecretAllowPathSet = .empty,
-    home: String? = nil,
+    home: HomePath? = nil,
     engine: E,
     compiled: CompiledPacks<E.Compiled>
 ) -> EvaluationResult {
@@ -97,7 +97,7 @@ private func foldSecretPathIfAllow(
     catalog: SecretPathCatalog,
     safety: SafetyLevel,
     allowPaths: SecretAllowPathSet,
-    home: String?
+    home: HomePath?
 ) -> EvaluationResult {
     switch result.outcome {
     case .quickRejected, .plain, .safeOnly, .hit:

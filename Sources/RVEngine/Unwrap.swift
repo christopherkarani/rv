@@ -724,7 +724,7 @@ private func resolveWorkingDirectory(
 ) -> WorkingDirectory? {
     let path = lexicalFilesystemPath(
         apparent,
-        workingDirectory: current?.rawValue,
+        workingDirectory: current,
         homeDirectory: nil
     )
     return WorkingDirectory(validating: path)

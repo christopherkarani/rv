@@ -766,7 +766,7 @@ func classifyFilesystemTarget(
     }
     let canonical = lexicalFilesystemPath(
         apparent,
-        workingDirectory: context.workingDirectory?.rawValue,
+        workingDirectory: context.workingDirectory,
         homeDirectory: context.homeDirectory
     )
     return classifiedTarget(
@@ -797,15 +797,15 @@ func filesystemScopeForResolution(
 
 public func lexicalFilesystemPath(
     _ apparent: String,
-    workingDirectory: String?,
-    homeDirectory: String?
+    workingDirectory: WorkingDirectory?,
+    homeDirectory: HomePath?
 ) -> String {
     let expanded = expandHomeAlias(apparent, homeDirectory: homeDirectory)
     let absolute: String
     if expanded.hasPrefix("/") {
         absolute = expanded
     } else if let workingDirectory {
-        absolute = joinFilesystemPath(workingDirectory, expanded)
+        absolute = joinFilesystemPath(workingDirectory.rawValue, expanded)
     } else {
         absolute = expanded
     }
@@ -868,20 +868,21 @@ private func classifiedTarget(
     )
 }
 
-private func expandHomeAlias(_ path: String, homeDirectory: String?) -> String {
+private func expandHomeAlias(_ path: String, homeDirectory: HomePath?) -> String {
     guard let homeDirectory, isHomeAliasPath(path) else {
         return path
     }
+    let home = homeDirectory.rawValue
     if path == "~" || path == "$HOME" || path == "${HOME}" {
-        return homeDirectory
+        return home
     }
     if path.hasPrefix("~/") {
-        return joinFilesystemPath(homeDirectory, String(path.dropFirst(2)))
+        return joinFilesystemPath(home, String(path.dropFirst(2)))
     }
     if path.hasPrefix("$HOME/") {
-        return joinFilesystemPath(homeDirectory, String(path.dropFirst(6)))
+        return joinFilesystemPath(home, String(path.dropFirst(6)))
     }
-    return joinFilesystemPath(homeDirectory, String(path.dropFirst(8)))
+    return joinFilesystemPath(home, String(path.dropFirst(8)))
 }
 
 private func joinFilesystemPath(_ left: String, _ right: String) -> String {

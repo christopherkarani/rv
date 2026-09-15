@@ -85,7 +85,7 @@ public struct GatedEvaluate: Sendable {
         let result = evaluateFileTool(
             action,
             allowPaths: allowPaths,
-            home: home?.rawValue
+            home: home
         )
         recordDenialIfNeeded(
             result,
@@ -414,7 +414,7 @@ public struct GatedEvaluate: Sendable {
             request,
             safety: SafetyStore.loadEffective(home: home, workspace: workspace),
             allowPaths: SecretAllowPaths.loadEffective(home: home, workspace: workspace),
-            home: home?.rawValue,
+            home: home,
             workingDirectory: cwd,
             gitProbe: { unwrapped in
                 GitLiveProbe.world(unwrapped: unwrapped, fallbackCwd: cwd)
@@ -424,7 +424,7 @@ public struct GatedEvaluate: Sendable {
                     unwrapped: unwrapped,
                     command: request.command,
                     cwd: cwd,
-                    homeDirectory: home?.rawValue
+                    homeDirectory: home
                 )
             },
             policy: policy
@@ -521,7 +521,7 @@ public struct GatedEvaluate: Sendable {
                 tool: tool,
                 ruleID: deny.ruleID,
                 category: category,
-                path: DenialPathRedaction.redact(rawPath, home: home.rawValue)
+                path: DenialPathRedaction.redact(rawPath, home: home)
             ),
             now: now
         )

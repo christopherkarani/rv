@@ -9,7 +9,7 @@ struct ApplySemanticsSinkTests {
         FilesystemAnalysisContext(
             workingDirectory: WorkingDirectory(validating: "/repo"),
             repositoryRoot: RepositoryRoot(validating: "/repo"),
-            homeDirectory: "/isolated-home"
+            homeDirectory: HomePath(validating: "/isolated-home")
         )
     )
 

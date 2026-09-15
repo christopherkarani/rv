@@ -135,14 +135,14 @@ public enum FilesystemAnalysisWorld: Sendable, Equatable {
 public struct FilesystemAnalysisContext: Sendable, Equatable, Codable {
     public var workingDirectory: WorkingDirectory?
     public var repositoryRoot: RepositoryRoot?
-    public var homeDirectory: String?
+    public var homeDirectory: HomePath?
     public var catalog: SecretPathCatalog
     public var facts: [FilesystemPathFact]
 
     public init(
         workingDirectory: WorkingDirectory? = nil,
         repositoryRoot: RepositoryRoot? = nil,
-        homeDirectory: String? = nil,
+        homeDirectory: HomePath? = nil,
         catalog: SecretPathCatalog = .dayOne,
         facts: [FilesystemPathFact] = []
     ) {
@@ -176,7 +176,7 @@ public struct FilesystemAnalysisContext: Sendable, Equatable, Codable {
             RepositoryRoot.self,
             forKey: .repositoryRoot
         )
-        homeDirectory = try container.decodeIfPresent(String.self, forKey: .homeDirectory)
+        homeDirectory = try container.decodeIfPresent(HomePath.self, forKey: .homeDirectory)
         catalog = .dayOne
         facts = try container.decodeIfPresent([FilesystemPathFact].self, forKey: .facts) ?? []
     }

@@ -70,7 +70,7 @@ public struct EvaluateSession: Sendable {
         _ request: EvaluationRequest,
         safety: SafetyLevel = .normal,
         allowPaths: SecretAllowPathSet = .empty,
-        home: String? = nil
+        home: HomePath? = nil
     ) -> EvaluationResult {
         if !corePacksReady {
             return EvaluationResult(
@@ -101,7 +101,7 @@ public struct EvaluateSession: Sendable {
         _ request: EvaluationRequest,
         safety: SafetyLevel = .normal,
         allowPaths: SecretAllowPathSet = .empty,
-        home: String? = nil,
+        home: HomePath? = nil,
         workingDirectory: WorkingDirectory? = nil,
         gitProbe: (UnwrapOutcome) -> GitAnalysisWorld = { _ in .unprobed },
         filesystemProbe: (UnwrapOutcome) -> FilesystemAnalysisWorld = { _ in .unprobed },
@@ -139,7 +139,7 @@ private func engineEvaluate(
     packs: [PackSnapshot],
     safety: SafetyLevel,
     allowPaths: SecretAllowPathSet,
-    home: String?,
+    home: HomePath?,
     engine: ICUPatternEngine,
     compiled: CompiledPacks<ICUCompiledPattern>
 ) -> EvaluationResult {
@@ -159,7 +159,7 @@ private func engineEvaluateWithSemantics(
     packs: [PackSnapshot],
     safety: SafetyLevel,
     allowPaths: SecretAllowPathSet,
-    home: String?,
+    home: HomePath?,
     engine: ICUPatternEngine,
     compiled: CompiledPacks<ICUCompiledPattern>,
     workingDirectory: WorkingDirectory?,

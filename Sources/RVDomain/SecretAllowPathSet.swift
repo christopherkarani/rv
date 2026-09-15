@@ -10,7 +10,7 @@ public struct SecretAllowPathSet: Sendable, Equatable {
 
     public static let empty = SecretAllowPathSet(literals: [])
 
-    public func exempts(_ path: String, rule: SecretPathRule, home: String? = nil) -> Bool {
+    public func exempts(_ path: String, rule: SecretPathRule, home: HomePath? = nil) -> Bool {
         guard rule.category != .host else { return false }
         let candidate = Self.normalize(path, home: home)
         for literal in literals {
@@ -21,23 +21,24 @@ public struct SecretAllowPathSet: Sendable, Equatable {
         return false
     }
 
-    public static func normalize(_ path: String, home: String?) -> String {
+    public static func normalize(_ path: String, home: HomePath?) -> String {
         var value = path.trimmingCharacters(in: .whitespacesAndNewlines)
         while value.count > 1, value.hasSuffix("/") {
             value.removeLast()
         }
-        if let home, home.isEmpty == false {
-            if value == "~" { return home }
+        if let home {
+            let homePath = home.rawValue
+            if value == "~" { return homePath }
             if value.hasPrefix("~/") {
-                return home + "/" + value.dropFirst(2)
+                return homePath + "/" + value.dropFirst(2)
             }
             if value.hasPrefix("${HOME}") {
-                return home + value.dropFirst(7)
+                return homePath + value.dropFirst(7)
             }
             if value.hasPrefix("$HOME") {
                 let rest = value.dropFirst(5)
                 if rest.isEmpty || rest.hasPrefix("/") {
-                    return home + rest
+                    return homePath + rest
                 }
             }
             return value
