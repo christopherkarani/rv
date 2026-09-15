@@ -446,6 +446,45 @@ func hostInstallation_currentResourceWithExecutableIsWired(_ host: HookHost) thr
     }
 }
 
+@Test func hostWiring_fileToolsAgreesWithInstallationOnClaudeWiredAndCursorShellOnly() throws {
+    try withInstallationHome { _, paths in
+        let claudePath = paths.hostAdapter(for: .claude)
+        let claudeSettings = try ClaudeSettingsMerge.merge(
+            existingData: nil,
+            rvPath: "/usr/local/bin/rv",
+            adapterPath: ClaudeSettingsMerge.adapterPath(settingsPath: claudePath.destination),
+            force: false
+        ).data
+        let claudeInstallation = HostAdapterInstallation.wired(
+            path: claudePath,
+            existingData: claudeSettings
+        )
+        let claudeDoor = HostWiring.fileTools(
+            host: .claude,
+            adapterData: claudeSettings,
+            companionJSON: nil
+        )
+        #expect(claudeDoor == .wired)
+        #expect(claudeInstallation.fileTools() == claudeDoor)
+
+        let cursorPath = paths.hostAdapter(for: .cursor)
+        let cursorAdapter = Data(
+            try HookHost.cursor.adapterResource().rendered(rvPath: "/usr/local/bin/rv").utf8
+        )
+        let cursorInstallation = HostAdapterInstallation.wired(
+            path: cursorPath,
+            existingData: cursorAdapter
+        )
+        let cursorDoor = HostWiring.fileTools(
+            host: .cursor,
+            adapterData: cursorAdapter,
+            companionJSON: nil
+        )
+        #expect(cursorDoor == .shellOnly)
+        #expect(cursorInstallation.fileTools() == cursorDoor)
+    }
+}
+
 @Test func hostInstallation_wiredCursorWithPreToolUseIsFileToolWired() throws {
     try withInstallationHome { home, paths in
         let executable = try makeWiredMissPath(home: home)

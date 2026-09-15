@@ -13,34 +13,14 @@ enum HostAdapterInstallation: Equatable, Sendable {
 
     /// File-tool door on this Host adapter. `companionJSON` is Cursor `hooks.json`.
     func fileTools(companionJSON: Data? = nil) -> DoctorFileToolsState {
-        switch ownedPath.host {
-        case .pi, .opencode, .openclaw, .hermes, .codex:
-            return .notApplicable
-        case .claude, .cursor, .grok:
-            break
-        }
-        guard case .wired(_, let data) = self else {
-            return .notApplicable
-        }
-        switch ownedPath.host {
-        case .claude:
-            guard let root = jsonObject(data),
-                  ClaudeSettingsMerge.hasFileToolMatchers(in: root)
-            else {
-                return .shellOnly
-            }
-            return .wired
-        case .grok:
-            return GrokHookInspect.hasFileToolDoor(in: data) ? .wired : .shellOnly
-        case .cursor:
-            guard let companionJSON,
-                  let root = jsonObject(companionJSON),
-                  CursorHooksMerge.hasFileToolEntry(in: root)
-            else {
-                return .shellOnly
-            }
-            return .wired
-        case .pi, .opencode, .openclaw, .hermes, .codex:
+        switch self {
+        case .wired(_, let data):
+            return HostWiring.fileTools(
+                host: ownedPath.host,
+                adapterData: data,
+                companionJSON: companionJSON
+            )
+        case .missing, .absentFile, .occupied, .broken:
             return .notApplicable
         }
     }
@@ -52,10 +32,6 @@ enum HostAdapterInstallation: Equatable, Sendable {
         case .broken(path: let path, _), .wired(path: let path, _):
             path
         }
-    }
-
-    private func jsonObject(_ data: Data) -> [String: Any]? {
-        (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
     }
 
     /// What setup should do for this installation, given `--force`.
