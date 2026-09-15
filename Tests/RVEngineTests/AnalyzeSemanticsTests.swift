@@ -142,7 +142,10 @@ struct AnalyzeSemanticsTests {
     @Test func unprobedWorld_envChdirProtectedPath_stillClassifies() {
         let analysis = analyzeSemantics(ShellCommand(rawValue: "env -C /tmp/.ssh rm config"))
         #expect(analysis.wrappers == [.env])
-        #expect(analysis.filesystemAction?.primaryTarget?.scope == .protectedPath)
+        #expect(
+            analysis.filesystemAction?.primaryTarget?.scope
+                == .protectedPath(SecretPathMatch(pattern: "home-ssh", category: .ssh))
+        )
         #expect(analysis.filesystemAction?.primaryTarget?.canonical == "/tmp/.ssh/config")
     }
 

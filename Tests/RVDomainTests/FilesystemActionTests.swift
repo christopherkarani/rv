@@ -36,10 +36,11 @@ struct FilesystemActionTests {
     }
 
     @Test func protectedTarget_addsNonOverridableEffect() {
+        let match = SecretPathMatch(pattern: "home-ssh", category: .ssh)
         let target = FilesystemTarget(
             apparent: "link",
             canonical: "/home/.ssh/id_rsa",
-            scope: .protectedPath,
+            scope: .protectedPath(match),
             kind: .unknown,
             followedSymlink: true,
             resolution: .resolved
@@ -47,43 +48,32 @@ struct FilesystemActionTests {
         let action = FilesystemAction.delete(targets: [target], recursive: false, force: false)
         #expect(action.effects.kinds.contains(.protectedPathMutation))
         #expect(action.explainScope == "protected path")
-        #expect(action.explainCategory == nil)
-        let labelled = FilesystemTarget(
-            apparent: "link",
-            canonical: "/home/.ssh/id_rsa",
-            scope: .protectedPath,
-            kind: .unknown,
-            followedSymlink: true,
-            resolution: .resolved,
-            protectedMatch: SecretPathMatch(pattern: "home-ssh", category: .ssh)
-        )
-        let labelledAction = FilesystemAction.delete(
-            targets: [labelled],
-            recursive: false,
-            force: false
-        )
-        #expect(labelledAction.explainCategory == "ssh")
-        #expect(labelledAction.explainCatalogRule == "core.secrets/home-ssh")
-        #expect(labelledAction.resources.protectedMatch?.pattern == "home-ssh")
+        #expect(action.explainCategory == "ssh")
+        #expect(action.explainCatalogRule == "core.secrets/home-ssh")
+        #expect(action.resources.protectedMatch == match)
+        #expect(target.protectedMatch == match)
         let proposed = action.proposedAction(
             command: ShellCommand(rawValue: "rm link"),
             workingDirectory: WorkingDirectory(validating: "/repo")
         )
         #expect(proposed.effects.kinds.contains(.protectedPathMutation))
-        #expect(proposed.resources.filesystemScope == .protectedPath)
+        #expect(proposed.resources.filesystemScope == .protectedPath(match))
+        #expect(proposed.resources.protectedMatch == match)
     }
 
     @Test func uncertainProtected_doesNotAddExtraDenyEffect() {
         let target = FilesystemTarget(
             apparent: "maybe",
             canonical: "/repo/maybe",
-            scope: .protectedPath,
+            scope: .unknown,
             kind: .unknown,
             resolution: .uncertain
         )
         let action = FilesystemAction.delete(targets: [target], recursive: false, force: false)
         #expect(action.effects.kinds.contains(.protectedPathMutation) == false)
         #expect(action.effects.kinds.contains(.unresolvedFilesystem))
+        #expect(action.primaryTarget?.scope == .unknown)
+        #expect(action.resources.protectedMatch == nil)
     }
 
     @Test func operations_areDistinguished() {
@@ -129,6 +119,38 @@ struct FilesystemActionTests {
         #expect(action.primaryTarget?.scope == .unknown)
         #expect(action.effects.kinds.contains(.unresolvedFilesystem))
         #expect(action.resources.filesystemScope == .unknown)
+    }
+
+    @Test func primaryTarget_ranksProtectedSourceOverProtectedUnknownRegardlessOfMatchPayload() {
+        let sshUnknown = FilesystemTarget(
+            apparent: "id_rsa",
+            canonical: "/home/.ssh/id_rsa",
+            scope: .protectedPath(SecretPathMatch(pattern: "id-rsa", category: .ssh)),
+            kind: .unknown
+        )
+        let cloudSource = FilesystemTarget(
+            apparent: "credentials",
+            canonical: "/home/.aws/credentials",
+            scope: .protectedPath(SecretPathMatch(pattern: "home-aws", category: .cloud)),
+            kind: .sourceCode
+        )
+        let sshFirst = FilesystemAction.delete(
+            targets: [sshUnknown, cloudSource],
+            recursive: false,
+            force: false
+        )
+        let sourceFirst = FilesystemAction.delete(
+            targets: [cloudSource, sshUnknown],
+            recursive: false,
+            force: false
+        )
+        #expect(sshFirst.primaryTarget == cloudSource)
+        #expect(sourceFirst.primaryTarget == cloudSource)
+        #expect(sshFirst.explainKind == "source code")
+        #expect(sshFirst.explainCategory == "cloud")
+        #expect(sshFirst.explainCatalogRule == "core.secrets/home-aws")
+        #expect(sshFirst.resources.resourceKind == .sourceCode)
+        #expect(sshFirst.resources.protectedMatch?.category == .cloud)
     }
 
     @Test func outsideWrite_addsIndependentEffect() {

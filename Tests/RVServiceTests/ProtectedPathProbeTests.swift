@@ -32,7 +32,7 @@ struct ProtectedPathProbeTests {
                     || deny.ruleID.pack == .coreSecrets
                     || deny.ruleID.pack == .coreFilesystem
             )
-            #expect(result.analysis.filesystemAction?.primaryTarget?.scope == .protectedPath)
+            #expect(result.analysis.filesystemAction?.primaryTarget?.protectedMatch != nil)
             #expect(result.analysis.filesystemAction?.explainCategory == "ssh")
         }
     }
@@ -57,7 +57,7 @@ struct ProtectedPathProbeTests {
             deny.ruleID == ActionPolicyEngine.Builtin.protectedPath.ruleID
                 || deny.ruleID.pack == .coreSecrets
         )
-        #expect(result.analysis.filesystemAction?.primaryTarget?.scope == .protectedPath)
+        #expect(result.analysis.filesystemAction?.primaryTarget?.protectedMatch != nil)
     }
 
     @Test func inRepoSymlinkToSSH_isProtectedNotInRepo() async throws {
@@ -78,7 +78,7 @@ struct ProtectedPathProbeTests {
             return
         }
         #expect(deny.ruleID == ActionPolicyEngine.Builtin.protectedPath.ruleID)
-        #expect(result.analysis.filesystemAction?.primaryTarget?.scope == .protectedPath)
+        #expect(result.analysis.filesystemAction?.primaryTarget?.protectedMatch != nil)
         #expect(result.analysis.filesystemAction?.primaryTarget?.followedSymlink == true)
         #expect(result.analysis.filesystemAction?.explainCatalogRule == "core.secrets/home-ssh")
     }
@@ -95,7 +95,7 @@ struct ProtectedPathProbeTests {
             return
         }
         #expect(deny.ruleID.pack == .coreFilesystem)
-        #expect(denied.analysis.filesystemAction?.primaryTarget?.scope == .protectedPath)
+        #expect(denied.analysis.filesystemAction?.primaryTarget?.protectedMatch != nil)
 
         let allowlist = AllowlistSnapshot(entries: [
             AllowlistEntry(

@@ -263,7 +263,7 @@ struct ActionPolicyEngineTests {
         let action = ActionPolicyFixtures.filesystem(
             effects: [.filesystemOverwrite],
             path: "/home/.ssh/id_rsa",
-            scope: .protectedPath
+            scope: .protectedPath(SecretPathMatch(pattern: "id-rsa", category: .ssh))
         )
         let denied = ActionPolicyEngine.evaluate(action: action, context: shared)
         #expect(denied.decision == .hardDeny(ActionPolicyEngine.Builtin.protectedPath))
@@ -279,7 +279,7 @@ struct ActionPolicyEngineTests {
         let action = ActionPolicyFixtures.filesystem(
             effects: [.filesystemDelete, .protectedPathMutation],
             path: "/home/.ssh/id_rsa",
-            scope: .protectedPath
+            scope: .protectedPath(SecretPathMatch(pattern: "id-rsa", category: .ssh))
         )
         let denied = ActionPolicyEngine.evaluate(action: action, context: shared)
         #expect(denied.decision == .hardDeny(ActionPolicyEngine.Builtin.protectedPath))

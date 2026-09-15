@@ -145,7 +145,10 @@ struct ApplySemanticsTests {
         }
         #expect(deny.ruleID == ActionPolicyEngine.Builtin.protectedPath.ruleID)
         #expect(composed.analysis.wrappers == [.python])
-        #expect(composed.analysis.filesystemAction?.primaryTarget?.scope == .protectedPath)
+        #expect(
+            composed.analysis.filesystemAction?.primaryTarget?.scope
+                == .protectedPath(SecretPathMatch(pattern: "id-rsa", category: .ssh))
+        )
     }
 
     @Test func unprobedWorld_packAllowWrite_staysAllow() throws {

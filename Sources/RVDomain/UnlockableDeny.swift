@@ -16,7 +16,7 @@ public enum UnlockableDeny: Sendable {
         if result.analysis.innermost == .unwrapLimited {
             return true
         }
-        if result.analysis.filesystemAction?.primaryTarget?.scope == .protectedPath {
+        if case .protectedPath? = result.analysis.filesystemAction?.primaryTarget?.scope {
             return true
         }
         if case .mandatoryHuman = result.boundReview {

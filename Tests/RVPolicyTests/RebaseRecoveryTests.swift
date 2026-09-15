@@ -88,7 +88,7 @@ struct RebaseRecoveryTests {
         let target = FilesystemTarget(
             apparent: ".ssh/id_rsa",
             canonical: "/isolated-home/.ssh/id_rsa",
-            scope: .protectedPath,
+            scope: .protectedPath(SecretPathMatch(pattern: "id-rsa", category: .ssh)),
             kind: .unknown,
             resolution: .resolved
         )

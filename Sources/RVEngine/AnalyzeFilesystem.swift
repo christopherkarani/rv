@@ -817,8 +817,8 @@ func classifyFilesystemScope(
     repositoryRoot: RepositoryRoot?,
     catalog: SecretPathCatalog
 ) -> FilesystemScope {
-    if catalog.firstMatch(of: canonical) != nil {
-        return .protectedPath
+    if let rule = catalog.firstMatch(of: canonical) {
+        return .protectedPath(SecretPathMatch(rule))
     }
     guard let repositoryRoot else { return .unknown }
     if isInsideRepository(canonical, root: repositoryRoot.rawValue) {
@@ -864,22 +864,8 @@ private func classifiedTarget(
         ),
         kind: classifyFilesystemKind(canonical),
         followedSymlink: followedSymlink,
-        resolution: resolution,
-        protectedMatch: protectedMatch(
-            canonical: canonical,
-            resolution: resolution,
-            catalog: context.catalog
-        )
+        resolution: resolution
     )
-}
-
-private func protectedMatch(
-    canonical: String,
-    resolution: FilesystemResolution,
-    catalog: SecretPathCatalog
-) -> SecretPathMatch? {
-    guard resolution != .uncertain else { return nil }
-    return catalog.firstMatch(of: canonical).map(SecretPathMatch.init)
 }
 
 private func expandHomeAlias(_ path: String, homeDirectory: String?) -> String {

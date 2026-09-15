@@ -327,7 +327,7 @@ public enum ActionPolicyEngine: Sendable {
         // they are still covered by `SecretPathGuard` (core.secrets) when
         // evaluated via `Evaluate`. Guard like `outsideRepository`.
         if kinds.contains(.protectedPathMutation)
-            || (isWriteLike(kinds) && scope == .protectedPath)
+            || (isWriteLike(kinds) && scope?.protectedMatch != nil)
         {
             return CoreHit(
                 decision: .hardDeny(Builtin.protectedPath),

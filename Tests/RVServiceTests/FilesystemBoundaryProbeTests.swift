@@ -50,7 +50,7 @@ struct FilesystemBoundaryProbeTests {
             return
         }
         #expect(sshDeny.ruleID == ActionPolicyEngine.Builtin.protectedPath.ruleID)
-        #expect(protected.analysis.filesystemAction?.primaryTarget?.scope == .protectedPath)
+        #expect(protected.analysis.filesystemAction?.primaryTarget?.protectedMatch != nil)
     }
 
     @Test func worktreeAndSubmodule_useCheckoutBoundary() async throws {

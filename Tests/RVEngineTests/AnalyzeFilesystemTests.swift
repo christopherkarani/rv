@@ -93,7 +93,10 @@ struct AnalyzeFilesystemTests {
                 Issue.record("expected filesystem analysis for \(command)")
                 continue
             }
-            #expect(action.primaryTarget?.scope == .protectedPath)
+            #expect(
+                action.primaryTarget?.scope
+                    == .protectedPath(SecretPathMatch(pattern: "home-ssh", category: .ssh))
+            )
             #expect(action.primaryTarget?.canonical == "/isolated-home/.ssh/config")
             #expect(action.primaryTarget?.protectedMatch?.pattern == "home-ssh")
             #expect(action.primaryTarget?.protectedMatch?.category == .ssh)
@@ -135,7 +138,10 @@ struct AnalyzeFilesystemTests {
                 Issue.record("expected filesystem analysis for \(command)")
                 continue
             }
-            #expect(action.primaryTarget?.scope == .protectedPath)
+            #expect(
+                action.primaryTarget?.scope
+                    == .protectedPath(SecretPathMatch(pattern: pattern, category: category))
+            )
             #expect(action.primaryTarget?.protectedMatch?.pattern == pattern)
             #expect(action.primaryTarget?.protectedMatch?.category == category)
         }
@@ -159,7 +165,10 @@ struct AnalyzeFilesystemTests {
             Issue.record("expected filesystem analysis")
             return
         }
-        #expect(action.primaryTarget?.scope == .protectedPath)
+        #expect(
+            action.primaryTarget?.scope
+                == .protectedPath(SecretPathMatch(pattern: "id-rsa", category: .ssh))
+        )
         #expect(action.effects.kinds.contains(.protectedPathMutation))
         #expect(action.primaryTarget?.protectedMatch?.pattern == "id-rsa")
         #expect(action.primaryTarget?.protectedMatch?.category == .ssh)
@@ -204,6 +213,30 @@ struct AnalyzeFilesystemTests {
         #expect(targets[0].canonical == "/repo/file")
         #expect(targets[0].scope == .unknown)
         #expect(targets[0].resolution == .uncertain)
+        #expect(targets[0].protectedMatch == nil)
+    }
+
+    @Test func uncertainCatalogShapedPath_isUnknownNotProtected() {
+        let context = FilesystemAnalysisContext(
+            workingDirectory: WorkingDirectory(validating: "/repo"),
+            repositoryRoot: RepositoryRoot(validating: "/repo"),
+            facts: [
+                FilesystemPathFact(
+                    apparent: "id_rsa",
+                    canonical: "/isolated-home/.ssh/id_rsa",
+                    resolution: .uncertain
+                ),
+            ]
+        )
+        let analysis = analyzeFilesystem(ShellCommand(rawValue: "rm id_rsa"), context: context)
+        guard case .filesystem(let action) = analysis else {
+            Issue.record("expected filesystem analysis")
+            return
+        }
+        #expect(action.primaryTarget?.scope == .unknown)
+        #expect(action.primaryTarget?.protectedMatch == nil)
+        #expect(action.effects.kinds.contains(.protectedPathMutation) == false)
+        #expect(action.effects.kinds.contains(.unresolvedFilesystem))
     }
 
     @Test func operations_areDistinguished() {
