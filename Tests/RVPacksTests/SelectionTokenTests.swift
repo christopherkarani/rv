@@ -5,12 +5,12 @@ import RVDomain
 @Test func selectionToken_parseClassifiesPackCategoryAndPreset() throws {
     let index = try PackRegistry.loadIndex()
     #expect(
-        SelectionToken.parse("database.redis", index: index)
+        SelectionToken.tokens(from: "database.redis", index: index)
             == [.id(PackID(rawValue: "database.redis"))]
     )
-    #expect(SelectionToken.parse("database", index: index) == [.category("database")])
+    #expect(SelectionToken.tokens(from: "database", index: index) == [.category("database")])
     #expect(
-        SelectionToken.parse("careful_company_running_windows", index: index)
+        SelectionToken.tokens(from: "careful_company_running_windows", index: index)
             == [
                 .category("careful_company_running_windows"),
                 .preset("careful_company_running_windows"),
@@ -20,7 +20,7 @@ import RVDomain
 
 @Test func selectionToken_parseKeepsOverlappingPackAndCategoryAdditive() throws {
     let index = try PackRegistry.loadIndex()
-    let tokens = SelectionToken.parse("strict_git", index: index)
+    let tokens = SelectionToken.tokens(from: "strict_git", index: index)
     #expect(Set(tokens) == [
         .id(PackID(rawValue: "strict_git")),
         .category("strict_git"),
@@ -32,11 +32,11 @@ import RVDomain
 @Test func selectionToken_unknownBecomesIDCarryingOperatorSpelling() throws {
     let index = try PackRegistry.loadIndex()
     #expect(
-        SelectionToken.parse("paranoid", index: index)
+        SelectionToken.tokens(from: "paranoid", index: index)
             == [.id(PackID(rawValue: "paranoid"))]
     )
     #expect(
-        SelectionToken.parse("Not A Pack!", index: index)
+        SelectionToken.tokens(from: "Not A Pack!", index: index)
             == [.id(PackID(rawValue: "Not A Pack!"))]
     )
 }
@@ -44,7 +44,7 @@ import RVDomain
 @Test func selectionToken_rawValueRoundTripsThroughParse() throws {
     let index = try PackRegistry.loadIndex()
     for raw in ["database.redis", "database", "careful_company_running_windows"] {
-        for token in SelectionToken.parse(raw, index: index) {
+        for token in SelectionToken.tokens(from: raw, index: index) {
             #expect(token.rawValue == raw)
         }
     }
@@ -56,6 +56,6 @@ import RVDomain
     let index = try PackRegistry.loadIndex()
     #expect(index.packIDs.contains(.coreGit))
     #expect(index.packIDs.contains(.coreFilesystem))
-    let catalog = PackCatalog.bundlingAll(enabled: [.coreGit], index: index)
+    let catalog = PackCatalog.make(enabled: [.coreGit], index: index)
     #expect(catalog.enabledIDs.contains(.coreGit))
 }

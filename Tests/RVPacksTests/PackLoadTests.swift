@@ -51,10 +51,10 @@ let expectedFilesystemDestructive = [
 }
 
 @Test func packLoad_coreStillDefaultOn() throws {
-    let git = try PackRegistry.loadDocument(id: "core.git")
-    let filesystem = try PackRegistry.loadDocument(id: "core.filesystem")
+    let git = try PackRegistry.loadDocument(.coreGit)
+    let filesystem = try PackRegistry.loadDocument(.coreFilesystem)
     #expect(git.enabledByDefault)
     #expect(filesystem.enabledByDefault)
-    let disk = try PackRegistry.loadDocument(id: "system.disk")
+    let disk = try PackRegistry.loadDocument(.systemDisk)
     #expect(disk.enabledByDefault)
 }

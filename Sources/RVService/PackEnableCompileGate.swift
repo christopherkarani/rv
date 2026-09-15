@@ -7,7 +7,7 @@ enum PackEnableCompileGate {
     static func assertBlockingPatternsCompile(packIDs: Set<PackID>) throws {
         let engine = ICUPatternEngine()
         for id in packIDs.sorted(by: { $0.rawValue < $1.rawValue }) {
-            let snapshot = try PackRegistry.loadDocument(id: id.rawValue).snapshot
+            let snapshot = try PackRegistry.loadDocument(id).snapshot
             if let ruleID = firstUncompilableBlockingRule(in: [snapshot], using: engine) {
                 throw PacksCommandError.criticalPatternUncompilable(ruleID)
             }

@@ -39,7 +39,7 @@ import RVDomain
 @Test func enablement_presetMembershipDropsWindowsOSPacks() throws {
     let index = try PackRegistry.loadIndex()
     let ids = try PackSet.effectiveOrdered(
-        enabled: SelectionToken.parse("careful_company_running_windows", index: index),
+        enabled: SelectionToken.tokens(from: "careful_company_running_windows", index: index),
         disabled: [.id(PackID(rawValue: "remote.rsync"))],
         index: index
     )

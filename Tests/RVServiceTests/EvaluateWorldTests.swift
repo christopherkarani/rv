@@ -56,7 +56,7 @@ struct EvaluateWorldTests {
 
     @Test func catalogDisableCannotUncompileDayOneRules() throws {
         var catalog = PackCatalog()
-        _ = try catalog.setEnabled(id: .coreGit, enabled: false)
+        _ = try catalog.disable(.coreGit)
         let coverage = EvaluationWorld.coverage(catalog: catalog, home: try isolatedHome())
         #expect(coverage.walked.ids.contains(.coreGit) == false)
         #expect(coverage.compiled.ids.contains(.coreGit))

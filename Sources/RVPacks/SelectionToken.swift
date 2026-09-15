@@ -17,11 +17,11 @@ public enum SelectionToken: Hashable, Sendable {
         }
     }
 
-    /// The sanctioned boundary where raw operator strings become tokens. One string
-    /// may match several families at once (a preset sharing a category's name); every
-    /// match is returned so expansion stays additive. Unknown strings surface as
-    /// `.id` so rejection carries the operator's own spelling.
-    public static func parse(_ raw: String, index: PackIndex) -> [SelectionToken] {
+    /// Classifies one operator string into tokens. One string may match several
+    /// families at once (a preset sharing a category's name); every match is
+    /// returned so expansion stays additive. Unknown strings surface as `.id` so
+    /// rejection carries the operator's own spelling.
+    public static func tokens(from raw: String, index: PackIndex) -> [SelectionToken] {
         var tokens: [SelectionToken] = []
         if index.categories[raw] != nil {
             tokens.append(.category(raw))

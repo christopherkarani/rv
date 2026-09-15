@@ -6,7 +6,7 @@ import RVPacks
 
 @Suite struct CatalogEnablementCorpusTests {
     @Test func sqliteDropTable_allowsByDefault_deniesWhenEnabled() throws {
-        let sqlite = try PackRegistry.loadDocument(id: "database.sqlite").snapshot
+        let sqlite = try PackRegistry.loadDocument(PackID(rawValue: "database.sqlite")).snapshot
         let core = try PackRegistry.loadDayOne()
         let packs = core + [sqlite]
         let engine = ICUPatternEngine()

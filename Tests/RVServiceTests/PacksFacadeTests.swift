@@ -115,12 +115,12 @@ import RVService
         defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
         let url = PacksConfigStore.configURL(home: home)
 
-        _ = try PacksFacade.enable(home: home, tokens: [
+        _ = try PacksFacade.enable(home: home, selections: [
             .category("kubernetes"),
             .preset("careful_company_running_windows"),
             .id(PackID(rawValue: "strict_git")),
         ])
-        _ = try PacksFacade.disable(home: home, tokens: [.id(PackID(rawValue: "core.git"))])
+        _ = try PacksFacade.disable(home: home, selections: [.id(PackID(rawValue: "core.git"))])
 
         let text = try String(contentsOf: url, encoding: .utf8)
         let config = PacksConfigStore.parse(text)
@@ -150,7 +150,7 @@ import RVService
         defer { try? FileManager.default.removeItem(atPath: homeB.rawValue) }
 
         let fromStrings = try PacksFacade.enable(home: homeA, ids: ["kubernetes"])
-        let fromTokens = try PacksFacade.enable(home: homeB, tokens: [.category("kubernetes")])
+        let fromTokens = try PacksFacade.enable(home: homeB, selections: [.category("kubernetes")])
         #expect(fromStrings.changed.map(\.rawValue) == fromTokens.changed.map(\.rawValue))
         #expect(fromStrings.enabledCount == fromTokens.enabledCount)
     }

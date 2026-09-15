@@ -90,8 +90,7 @@ public enum PacksFacade {
         return row
     }
 
-    /// Verb-argument / XPC boundary: raw selection strings become tokens here and
-    /// nowhere else downstream of the persisted config.
+    /// Verb-argument / XPC boundary: raw operator strings become tokens here.
     public static func enable(home: HomeDirectory, ids: [String]) throws -> PacksMutationResult {
         try mutate(home: home, ids: ids, enabling: true)
     }
@@ -100,12 +99,14 @@ public enum PacksFacade {
         try mutate(home: home, ids: ids, enabling: false)
     }
 
-    public static func enable(home: HomeDirectory, tokens: [SelectionToken]) throws -> PacksMutationResult {
-        try mutate(home: home, tokens: tokens, enabling: true)
+    /// Enables the packs, categories, and presets named by `selections`.
+    public static func enable(home: HomeDirectory, selections: [SelectionToken]) throws -> PacksMutationResult {
+        try mutate(home: home, selections: selections, enabling: true)
     }
 
-    public static func disable(home: HomeDirectory, tokens: [SelectionToken]) throws -> PacksMutationResult {
-        try mutate(home: home, tokens: tokens, enabling: false)
+    /// Disables the packs, categories, and presets named by `selections`.
+    public static func disable(home: HomeDirectory, selections: [SelectionToken]) throws -> PacksMutationResult {
+        try mutate(home: home, selections: selections, enabling: false)
     }
 
     public static func effectiveIDs(home: HomeDirectory) throws -> [PackID] {
@@ -125,14 +126,14 @@ public enum PacksFacade {
     public static func makeCatalog(home: HomeDirectory) throws -> PackCatalog {
         let index = try PackRegistry.loadIndex()
         let enabled = Set(try effectiveIDs(home: home))
-        return PackCatalog.bundlingAll(enabled: enabled, index: index)
+        return PackCatalog.make(enabled: enabled, index: index)
     }
 
     private static func mutate(home: HomeDirectory, ids: [String], enabling: Bool) throws -> PacksMutationResult {
         let index = try PackRegistry.loadIndex()
         return try mutate(
             home: home,
-            tokens: selectionTokens(ids, index: index),
+            selections: selectionTokens(ids, index: index),
             enabling: enabling,
             index: index
         )
@@ -140,22 +141,22 @@ public enum PacksFacade {
 
     private static func mutate(
         home: HomeDirectory,
-        tokens: [SelectionToken],
+        selections: [SelectionToken],
         enabling: Bool
     ) throws -> PacksMutationResult {
         let index = try PackRegistry.loadIndex()
-        return try mutate(home: home, tokens: tokens, enabling: enabling, index: index)
+        return try mutate(home: home, selections: selections, enabling: enabling, index: index)
     }
 
     private static func mutate(
         home: HomeDirectory,
-        tokens: [SelectionToken],
+        selections: [SelectionToken],
         enabling: Bool,
         index: PackIndex
     ) throws -> PacksMutationResult {
         let expansion: Set<PackID>
         do {
-            expansion = try PackSet.expand(tokens, index: index, rejectUnknown: true)
+            expansion = try PackSet.expand(selections, index: index, rejectUnknown: true)
         } catch PackSetError.unknownID(let token) {
             throw PacksCommandError.unknownID(token)
         }
@@ -174,7 +175,7 @@ public enum PacksFacade {
             try PackEnableCompileGate.assertBlockingPatternsCompile(packIDs: expansion)
 
             // Persist operator tokens (pack / category / preset); expand at read time.
-            config.enabled = mergeUnique(config.enabled, tokens.map(\.rawValue))
+            config.enabled = mergeUnique(config.enabled, selections.map(\.rawValue))
             config.disabled = config.disabled.filter { token in
                 let tokenExpansion =
                     (try? PackSet.expand(selectionTokens([token], index: index), index: index))
@@ -183,9 +184,9 @@ public enum PacksFacade {
             }
         } else {
             // Drop exact enabled tokens that the operator named; persist disables after expand.
-            let named = Set(tokens.map(\.rawValue))
+            let named = Set(selections.map(\.rawValue))
             config.enabled = config.enabled.filter { !named.contains($0) }
-            config.disabled = mergeUnique(config.disabled, tokens.map(\.rawValue))
+            config.disabled = mergeUnique(config.disabled, selections.map(\.rawValue))
         }
 
         do {
@@ -214,7 +215,7 @@ public enum PacksFacade {
     }
 
     private static func selectionTokens(_ raws: [String], index: PackIndex) -> [SelectionToken] {
-        raws.flatMap { SelectionToken.parse($0, index: index) }
+        raws.flatMap { SelectionToken.tokens(from: $0, index: index) }
     }
 
     private static func mergeUnique(_ base: [String], _ extra: [String]) -> [String] {
