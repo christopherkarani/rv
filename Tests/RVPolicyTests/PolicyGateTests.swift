@@ -173,7 +173,7 @@ struct PolicyGateTests {
             tty: tty,
             now: now
         )
-        _ = try await store.redeem(code: code, tty: tty, now: now)
+        _ = try await store.redeem(code: code.rawValue, tty: tty, now: now)
         let first = await PolicyGate.consumingGrant(for: denied, cwd: wd("/tmp/a"), store: store, now: now)
         #expect(first.override == .allowOnce)
         #expect(first.result.decision == .allow)

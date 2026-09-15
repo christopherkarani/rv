@@ -21,7 +21,7 @@ public struct HookDoor: Sendable {
         evaluate: @Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult,
         evaluateFile: (@Sendable (FileToolAction, WorkingDirectory?) async -> EvaluationResult)? = nil,
         spendHostAsk: (@Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult)? = nil,
-        mintOnDeny: (@Sendable (EvaluationResult, WorkingDirectory?) async -> String?)? = nil,
+        mintOnDeny: (@Sendable (EvaluationResult, WorkingDirectory?) async -> AllowOnceUnlockCode?)? = nil,
         recordHostAsk: (@Sendable (HookRequest, ProposedAction) async throws -> Void)? = nil,
         clearHostAsk: (@Sendable (HookRequest, ProposedAction) async throws -> Void)? = nil
     ) async throws -> HookEvaluateReply {

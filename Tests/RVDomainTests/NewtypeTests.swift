@@ -115,6 +115,16 @@ import Testing
     let _: WorkingDirectory? = cwd
 }
 
+@Test func allowOnceUnlockCode_isSixLowercaseHex() {
+    #expect(AllowOnceUnlockCode(validating: "abc") == nil)
+    #expect(AllowOnceUnlockCode(validating: "abcde") == nil)
+    #expect(AllowOnceUnlockCode(validating: "ABCDEF") == nil)
+    #expect(AllowOnceUnlockCode(validating: "a1b2c3")?.rawValue == "a1b2c3")
+    #expect(AllowOnceUnlockCode(validating: "000000")?.rawValue == "000000")
+    #expect(AllowOnceUnlockCode.isValid("a1b2c3"))
+    #expect(AllowOnceUnlockCode.isValid("abcde") == false)
+}
+
 @Test func homePath_codableIsJSONString() throws {
     let home = try #require(HomePath(validating: "/tmp/h"))
     let encoder = JSONEncoder()

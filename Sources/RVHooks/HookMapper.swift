@@ -40,8 +40,7 @@ public func hookWire<C: HostCodec>(
     using codec: C,
     bound: BoundReview? = nil,
     cwd: WorkingDirectory? = nil,
-    afterSpend: Bool = false,
-    unlockCode: String? = nil
+    afterSpend: Bool = false
 ) -> HookWire {
     if afterSpend {
         return hookWire(from: result, command: command, using: codec, intent: .afterSpend)
@@ -57,10 +56,7 @@ public func hookWire<C: HostCodec>(
         from: result,
         command: command,
         using: codec,
-        intent: .firstCall(
-            verdict: verdict,
-            unlockCode: unlockCode.flatMap(AllowOnceUnlockCode.init(validating:))
-        )
+        intent: .firstCall(verdict: verdict, unlockCode: nil)
     )
 }
 

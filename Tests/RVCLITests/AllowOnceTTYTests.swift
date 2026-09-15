@@ -41,7 +41,7 @@ struct AllowOnceTTYTests {
         let ci = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: true)
         await #expect(throws: AllowOnceError.ttyRequired) {
             try await AllowOnceCLI.redeem(
-                code: code,
+                code: code.rawValue,
                 tty: ci,
                 robot: false,
                 store: store,
@@ -63,7 +63,7 @@ struct AllowOnceTTYTests {
             now: now
         )
         let row = try await AllowOnceCLI.redeem(
-            code: code,
+            code: code.rawValue,
             tty: tty,
             robot: false,
             store: store,

@@ -208,7 +208,7 @@ struct GatedEvaluateTests {
             return
         }
         #expect(deny.ruleID.rawValue == "core.git:reset-hard")
-        let code = try #require(
+        let code: AllowOnceUnlockCode = try #require(
             await GatedEvaluate.mintUnlockCode(
                 for: applied,
                 cwd: wd("/tmp/ws"),
@@ -217,7 +217,7 @@ struct GatedEvaluateTests {
                 home: mintHome()
             )
         )
-        #expect(code.count == 6)
+        #expect(AllowOnceUnlockCode.isValid(code.rawValue))
         let rows = await store.list(now: now)
         #expect(rows.contains { $0.kind == .pending && $0.cwd == wd("/tmp/ws") })
     }

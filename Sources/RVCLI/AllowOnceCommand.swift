@@ -62,7 +62,7 @@ enum AllowOnceCLI {
         robot: Bool,
         store: AllowOnceStore,
         now: Date
-    ) async throws -> String {
+    ) async throws -> AllowOnceUnlockCode {
         let matchingView = EvaluationWorld.matchingView(of: command)
         return try await store.mint(
             matchingView: matchingView,
@@ -181,7 +181,7 @@ struct AllowOnceMint: AsyncParsableCommand {
                 now: Date()
             )
             FileHandle.standardOutput.write(
-                Data("allow-once code: \(code)\nrv allow-once \(code)\n".utf8)
+                Data("allow-once code: \(code.rawValue)\nrv allow-once \(code.rawValue)\n".utf8)
             )
         } catch AllowOnceError.ttyRequired {
             FileHandle.standardError.write(

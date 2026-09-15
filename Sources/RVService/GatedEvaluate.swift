@@ -467,7 +467,7 @@ public struct GatedEvaluate: Sendable {
         store: AllowOnceStore,
         now: Date,
         home: HomeDirectory?
-    ) async -> String? {
+    ) async -> AllowOnceUnlockCode? {
         guard home != nil else { return nil }
         if case .deny = result.boundReview { return nil }
         guard let cwd, UnlockableDeny.matches(result: result, cwd: cwd) else { return nil }

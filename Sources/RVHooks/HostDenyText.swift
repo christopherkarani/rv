@@ -6,24 +6,6 @@ public let ttyUnlockHint = "Run it in Terminal, or rv allow-once."
 /// Same sentence as `ttyUnlockHint`. Kept so existing TTY copy sites compile.
 public let hookUnlockNext = ttyUnlockHint
 
-/// Six lowercase hex characters minted for `rv allow-once`.
-public struct AllowOnceUnlockCode: Hashable, Sendable, Equatable {
-    public let rawValue: String
-
-    /// True when `code` is exactly six lowercase hex characters.
-    public static func isValid(_ code: String) -> Bool {
-        guard code.count == 6 else { return false }
-        return code.unicodeScalars.allSatisfy { scalar in
-            (scalar >= "0" && scalar <= "9") || (scalar >= "a" && scalar <= "f")
-        }
-    }
-
-    public init?(validating rawValue: String) {
-        guard Self.isValid(rawValue) else { return nil }
-        self.rawValue = rawValue
-    }
-}
-
 /// Six lowercase hex characters minted for TTY redeem.
 public func isAllowOnceUnlockCode(_ code: String) -> Bool {
     AllowOnceUnlockCode.isValid(code)
@@ -40,14 +22,6 @@ public enum HookVoiceNext: Sendable, Equatable {
 /// Code goes first so truncated host cards still show the paste.
 public func unlockLine(for code: AllowOnceUnlockCode) -> String {
     "Paste in Terminal to allow once: rv allow-once \(code.rawValue)."
-}
-
-/// Unlock line with a minted code, or the no-code `ttyUnlockHint` constant.
-public func hookUnlockNext(code: String?) -> String {
-    if let code, let typed = AllowOnceUnlockCode(validating: code) {
-        return unlockLine(for: typed)
-    }
-    return ttyUnlockHint
 }
 
 func hookVoiceNextSentence(_ next: HookVoiceNext) -> String? {
@@ -205,14 +179,6 @@ public func hostDenyLine(
     unlockCode: AllowOnceUnlockCode? = nil
 ) -> String {
     wrappedHostDeny(why: hostDenyWhy(reason, command: command), unlockCode: unlockCode)
-}
-
-public func hostDenyLine(command: ShellCommand, reason: String, unlockCode: String?) -> String {
-    hostDenyLine(
-        command: command,
-        reason: reason,
-        unlockCode: unlockCode.flatMap(AllowOnceUnlockCode.init(validating:))
-    )
 }
 
 /// File-tool deny sentence. Does not preview an empty `ShellCommand`.
