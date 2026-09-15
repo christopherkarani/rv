@@ -17,7 +17,7 @@ public enum PolicyMatch: Sendable {
         wantBranch: String?,
         on action: GitAction
     ) -> Bool {
-        guard case .push(_, let refspec, let force, let delete) = action, delete == false else {
+        guard case .push(_, let refspec, let force) = action else {
             return false
         }
         if case .exactly(let want) = wantForce, want != force {

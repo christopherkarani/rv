@@ -115,7 +115,7 @@ struct RulePinningTests {
             ),
             matchingView: MatchingView(command.rawValue),
             analysis: .git(
-                .push(remote: "origin", refspec: "feature", force: .force, delete: false)
+                .push(remote: "origin", refspec: "feature", force: .force)
             )
         )
         let action = result.pendingAction(
@@ -140,6 +140,72 @@ struct RulePinningTests {
         #expect(decoded.predicate == .gitPush(force: .exactly(.force), branch: "feature"))
         #expect(decoded.fingerprint == nil)
         #expect(draft.contains("gitPush"))
+    }
+
+    @Test func pendingForceWithLease_draftPinsExactlyForceWithLease() throws {
+        let host = HookHost.pi
+        let session = try #require(SessionID(validating: "sess"))
+        let cwd = wd("/tmp/ws")
+        let command = ShellCommand(rawValue: "git push --force-with-lease origin feature")
+        let result = EvaluationResult(
+            outcome: .deny(
+                Deny(
+                    ruleID: RuleID(pack: .coreGit, pattern: "push-force-with-lease"),
+                    reason: "force-push with lease"
+                ),
+                matched: nil
+            ),
+            matchingView: MatchingView(command.rawValue),
+            analysis: .git(
+                .push(remote: "origin", refspec: "feature", force: .forceWithLease)
+            )
+        )
+        let action = result.pendingAction(
+            host: host,
+            session: session,
+            cwd: cwd,
+            command: command
+        )
+        let draft = RulePinning.draft(
+            record: pendingRecord(id: "force-with-lease-feature", action: action),
+            polarity: .block
+        )
+        let decoded = try decodePinDraft(draft)
+        #expect(decoded.v == 2)
+        #expect(decoded.predicate == .gitPush(force: .exactly(.forceWithLease), branch: "feature"))
+        #expect(decoded.fingerprint == nil)
+    }
+
+    @Test func pendingDeleteRemoteRef_isNotGitPushPin() throws {
+        let host = HookHost.pi
+        let session = try #require(SessionID(validating: "sess"))
+        let cwd = wd("/tmp/ws")
+        let command = ShellCommand(rawValue: "git push origin :topic")
+        let result = EvaluationResult(
+            outcome: .deny(
+                Deny(
+                    ruleID: RuleID(pack: .coreGit, pattern: "push-delete"),
+                    reason: "remote ref delete"
+                ),
+                matched: nil
+            ),
+            matchingView: MatchingView(command.rawValue),
+            analysis: .git(.deleteRemoteRef(remote: "origin", refspec: "topic"))
+        )
+        let action = result.pendingAction(
+            host: host,
+            session: session,
+            cwd: cwd,
+            command: command
+        )
+        let draft = RulePinning.draft(
+            record: pendingRecord(id: "delete-remote-topic", action: action),
+            polarity: .block
+        )
+        let decoded = try decodePinDraft(draft)
+        #expect(decoded.predicate == nil)
+        #expect(draft.contains("gitPush") == false)
+        #expect(action.gitAction == .deleteRemoteRef(remote: "origin", refspec: "topic"))
     }
 
     @Test func alwaysAllowPreview_pinOkMaySave() {
@@ -593,7 +659,8 @@ struct RulePinningTests {
                 id: "shared",
                 command: "git push --force origin main",
                 effects: [.remoteSharedBranchMutation],
-                branchName: "main"
+                branchName: "main",
+                gitAction: .push(remote: "origin", refspec: "main", force: .force)
             )
         case .workingTreeDiscard:
             return wait(
@@ -636,7 +703,8 @@ struct RulePinningTests {
         effects: [ActionEffectKind],
         branchName: String?,
         path: String? = nil,
-        scope: FilesystemScope? = nil
+        scope: FilesystemScope? = nil,
+        gitAction: GitAction? = nil
     ) -> PendingApproval {
         PendingApproval(
             id: ApprovalID(rawValue: id),
@@ -655,7 +723,8 @@ struct RulePinningTests {
                         filesystemScope: scope
                     ),
                     scope: ActionScope(workingDirectory: wd("/tmp/ws")),
-                    supportingCommand: ShellCommand(rawValue: command)
+                    supportingCommand: ShellCommand(rawValue: command),
+                    gitAction: gitAction
                 )
             ),
             reason: .hostAsk,

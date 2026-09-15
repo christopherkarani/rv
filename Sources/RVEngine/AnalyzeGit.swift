@@ -583,7 +583,10 @@ private func parsePush(_ args: [String], context: GitAnalysisContext) -> GitActi
             refspec = String(spec.dropFirst())
         }
     }
-    return .push(remote: remote, refspec: refspec, force: force, delete: delete)
+    if delete {
+        return .deleteRemoteRef(remote: remote, refspec: refspec)
+    }
+    return .push(remote: remote, refspec: refspec, force: force)
 }
 
 private let pushSkipFlags: Set<String> = [

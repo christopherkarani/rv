@@ -46,7 +46,8 @@ public enum GitAction: Sendable, Equatable, Codable {
     case restore(pathspecs: [String], staged: Bool, worktree: Bool, source: String?)
     case reset(mode: GitResetMode, target: String?)
     case clean(force: Bool, dryRun: Bool, directories: Bool)
-    case push(remote: String?, refspec: String?, force: GitPushForce, delete: Bool)
+    case push(remote: String?, refspec: String?, force: GitPushForce)
+    case deleteRemoteRef(remote: String?, refspec: String?)
     case deleteBranch(name: String, force: Bool, remote: Bool)
     case deleteTag(name: String, remote: String?)
     case stash(verb: GitStashVerb)
@@ -69,7 +70,7 @@ public enum GitAction: Sendable, Equatable, Codable {
             case .keep, .mixed, .soft:
                 return .localIndex
             }
-        case .push, .deleteBranch(_, _, true), .deleteTag:
+        case .push, .deleteRemoteRef, .deleteBranch(_, _, true), .deleteTag:
             return .remote
         case .stash, .rebase:
             return .localRef
@@ -84,7 +85,7 @@ public enum GitAction: Sendable, Equatable, Codable {
         switch self {
         case .createBranch(let name, _, _), .switchBranch(let name, _):
             return ActionResources(branchName: name)
-        case .push(let remote, let refspec, _, _):
+        case .push(let remote, let refspec, _), .deleteRemoteRef(let remote, let refspec):
             return ActionResources(remoteName: remote, branchName: refspec)
         case .deleteBranch(let name, _, _):
             return ActionResources(branchName: name)
@@ -125,16 +126,14 @@ public enum GitAction: Sendable, Equatable, Codable {
             return "clean force"
         case .clean:
             return "clean"
-        case .push(_, _, .force, false):
+        case .push(_, _, .force):
             return "force-push"
-        case .push(_, _, .forceWithLease, false):
+        case .push(_, _, .forceWithLease):
             return "force-push with lease"
-        case .push(_, _, .none, true):
-            return "remote ref delete"
-        case .push(_, _, _, true):
-            return "force remote ref delete"
         case .push:
             return "push"
+        case .deleteRemoteRef:
+            return "remote ref delete"
         case .deleteBranch(_, _, true):
             return "remote branch delete"
         case .deleteBranch(_, true, false):
@@ -193,7 +192,7 @@ public enum GitAction: Sendable, Equatable, Codable {
         case .createBranch(let name, _, _), .switchBranch(let name, _),
             .deleteBranch(let name, _, _), .deleteTag(let name, _):
             return name
-        case .push(_, let refspec, _, _):
+        case .push(_, let refspec, _), .deleteRemoteRef(_, let refspec):
             return refspec
         case .reset(_, let target):
             return target
@@ -223,7 +222,8 @@ public enum GitAction: Sendable, Equatable, Codable {
                 effects: effects,
                 resources: resources,
                 scope: ActionScope(workingDirectory: workingDirectory),
-                supportingCommand: command
+                supportingCommand: command,
+                gitAction: self
             )
         )
     }
@@ -245,8 +245,10 @@ public enum GitAction: Sendable, Equatable, Codable {
             }
         case .clean(let force, let dryRun, _):
             return force && dryRun == false ? [.workingTreeDiscard] : []
-        case .push(_, _, let force, let delete):
-            return force != .none || delete ? [.remoteSharedBranchMutation] : []
+        case .push(_, _, let force):
+            return force != .none ? [.remoteSharedBranchMutation] : []
+        case .deleteRemoteRef:
+            return [.remoteSharedBranchMutation]
         case .switchBranch(_, true):
             return [.workingTreeDiscard]
         case .createBranch, .switchBranch, .deleteBranch, .deleteTag, .stash, .rebase:
@@ -268,8 +270,10 @@ public enum GitAction: Sendable, Equatable, Codable {
             return "shell:git.reset:\(mode.rawValue):\(target ?? "")"
         case .clean(let force, let dryRun, let directories):
             return "shell:git.clean:\(force):\(dryRun):\(directories)"
-        case .push(let remote, let refspec, let force, let delete):
-            return "shell:git.push:\(force.rawValue):\(delete):\(remote ?? ""):\(refspec ?? "")"
+        case .push(let remote, let refspec, let force):
+            return "shell:git.push:\(force.rawValue):\(remote ?? ""):\(refspec ?? "")"
+        case .deleteRemoteRef(let remote, let refspec):
+            return "shell:git.delete-remote-ref:\(remote ?? ""):\(refspec ?? "")"
         case .deleteBranch(let name, let force, let remote):
             return "shell:git.delete-branch:\(force):\(remote):\(name)"
         case .deleteTag(let name, let remote):

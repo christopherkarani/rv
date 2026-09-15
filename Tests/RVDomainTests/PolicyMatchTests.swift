@@ -46,21 +46,18 @@ struct PolicyMatchTests {
         #expect(PolicyMatch.matches(forceMain, action: reset) == false)
     }
 
-    @Test func forceMain_doesNotMatchDeletePush() {
-        let deleteNamed = GitAction.push(
-            remote: "origin",
-            refspec: "main",
-            force: .force,
-            delete: true
+    @Test func gitPush_doesNotMatchDeleteRemoteRef() {
+        let deleted = GitAction.deleteRemoteRef(remote: "origin", refspec: "topic")
+        let anyPush = PolicyPredicate.gitPush(force: .any, branch: nil)
+        #expect(PolicyMatch.matches(anyPush, action: deleted) == false)
+        #expect(PolicyMatch.matches(anyPush, action: forcePush(refspec: "topic")))
+        #expect(PolicyMatch.matches(forceMain, action: deleted) == false)
+        #expect(
+            PolicyMatch.matches(
+                .gitPush(force: .any, branch: "topic"),
+                action: GitAction.deleteRemoteRef(remote: "origin", refspec: "topic")
+            ) == false
         )
-        let colonRefspec = GitAction.push(
-            remote: "origin",
-            refspec: ":main",
-            force: .force,
-            delete: true
-        )
-        #expect(PolicyMatch.matches(forceMain, action: deleteNamed) == false)
-        #expect(PolicyMatch.matches(forceMain, action: colonRefspec) == false)
     }
 
     @Test func gitPush_doesNotMatchNonForceSwitchBranch() {
@@ -77,8 +74,7 @@ struct PolicyMatchTests {
         let leased = GitAction.push(
             remote: "origin",
             refspec: "main",
-            force: .forceWithLease,
-            delete: false
+            force: .forceWithLease
         )
         #expect(PolicyMatch.matches(forceMain, action: leased) == false)
     }
@@ -112,7 +108,7 @@ private func forcePush(refspec: String) -> GitAction {
 }
 
 private func push(refspec: String, force: GitPushForce) -> GitAction {
-    .push(remote: "origin", refspec: refspec, force: force, delete: false)
+    .push(remote: "origin", refspec: refspec, force: force)
 }
 
 private func proposed(_ git: GitAction, command: String) -> ProposedAction {

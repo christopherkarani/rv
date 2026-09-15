@@ -20,7 +20,7 @@ struct PendingHostAskHookTests {
             ),
             matchingView: MatchingView(command.rawValue),
             analysis: .git(
-                .push(remote: "origin", refspec: "feature", force: .force, delete: false)
+                .push(remote: "origin", refspec: "feature", force: .force)
             )
         )
         let wire = await hookWire(
@@ -53,7 +53,7 @@ struct PendingHostAskHookTests {
             outcome: .plain,
             matchingView: MatchingView(command.rawValue),
             analysis: .git(
-                .push(remote: "origin", refspec: "feature", force: .force, delete: false)
+                .push(remote: "origin", refspec: "feature", force: .force)
             )
         )
         let wire = await hookWire(

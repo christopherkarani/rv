@@ -52,7 +52,6 @@ public func applyGitSemantics(
             ),
             context: gitContext.reviewContext,
             policy: policy,
-            gitAction: action,
             gitWorld: context
         )
     } else if let typed = ActionPolicyEngine.typedRestriction(

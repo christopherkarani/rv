@@ -79,7 +79,7 @@ struct ApplyGitSemanticsTests {
             command: ShellCommand(rawValue: command)
         )
         #expect(composed.decision == .allow)
-        guard case .git(.push(_, let refspec, .forceWithLease, false)) = composed.analysis else {
+        guard case .git(.push(_, let refspec, .forceWithLease)) = composed.analysis else {
             Issue.record("unprobed implicit push must parse, got \(composed.analysis)")
             return
         }
@@ -116,7 +116,7 @@ struct ApplyGitSemanticsTests {
             return
         }
         #expect(deny.ruleID == ActionPolicyEngine.Builtin.remoteSharedBranch.ruleID)
-        guard case .git(.push(_, let refspec, .forceWithLease, false)) = composed.analysis else {
+        guard case .git(.push(_, let refspec, .forceWithLease)) = composed.analysis else {
             Issue.record("probed implicit push must parse refspec main, got \(composed.analysis)")
             return
         }

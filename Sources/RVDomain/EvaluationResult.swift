@@ -274,7 +274,8 @@ public struct EvaluationResult: Sendable, Equatable {
                 effects: analyzed.0,
                 resources: analyzed.1,
                 scope: ActionScope(workingDirectory: cwd),
-                supportingCommand: command
+                supportingCommand: command,
+                gitAction: analysis.gitAction
             )
         )
     }

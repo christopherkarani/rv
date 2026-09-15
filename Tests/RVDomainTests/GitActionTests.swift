@@ -16,19 +16,32 @@ struct GitActionTests {
         let normal = GitAction.push(
             remote: "origin",
             refspec: "feature",
-            force: .none,
-            delete: false
+            force: .none
         )
         let forced = GitAction.push(
             remote: "origin",
             refspec: "main",
-            force: .force,
-            delete: false
+            force: .force
         )
         #expect(normal.effects.kinds.isEmpty)
         #expect(forced.effects.kinds == [.remoteSharedBranchMutation])
         #expect(normal.effectScope == .remote)
         #expect(forced.effectScope == .remote)
+        #expect(normal.explainAction == "push")
+        #expect(forced.explainAction == "force-push")
+    }
+
+    @Test func deleteRemoteRef_isRemoteMutationNotPush() {
+        let deleted = GitAction.deleteRemoteRef(remote: "origin", refspec: "topic")
+        #expect(deleted.effects.kinds == [.remoteSharedBranchMutation])
+        #expect(deleted.effectScope == .remote)
+        #expect(deleted.explainAction == "remote ref delete")
+        #expect(deleted.resources.branchName == "topic")
+        let proposed = deleted.proposedAction(
+            command: ShellCommand(rawValue: "git push origin :topic"),
+            workingDirectory: WorkingDirectory(validating: "/tmp/rv")
+        )
+        #expect(proposed.gitAction == deleted)
     }
 
     @Test func proposedAction_carriesEffectsNotCommandText() {

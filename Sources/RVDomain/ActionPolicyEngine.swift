@@ -69,8 +69,9 @@ public struct ActionPolicyVerdict: Sendable, Equatable, Codable {
 }
 
 /// Pure semantic evaluator. Same typed action + policy → same verdict.
-/// Typed gitPush rules match `gitAction` when present; missing git analysis
-/// fails closed. `supportingCommand` is never consulted.
+/// Typed gitPush rules match analyzed `GitAction` on the shell action when
+/// present; missing git analysis fails closed. `supportingCommand` is never
+/// consulted.
 public enum ActionPolicyEngine: Sendable {
     public enum Builtin {
         public static let pack = PackID(rawValue: "builtin.action")
@@ -142,14 +143,12 @@ public enum ActionPolicyEngine: Sendable {
     public static func evaluate(
         action: ProposedAction,
         context: ReviewContext = ReviewContext(repository: RepositoryReviewContext()),
-        policy: EffectiveActionPolicy = .empty,
-        gitAction: GitAction? = nil
+        policy: EffectiveActionPolicy = .empty
     ) -> ActionPolicyVerdict {
         evaluate(
             action: action,
             context: context,
             policy: policy,
-            gitAction: gitAction,
             gitWorld: .probed(
                 GitAnalysisContext(
                     currentBranch: context.repository.currentBranch,
@@ -163,7 +162,6 @@ public enum ActionPolicyEngine: Sendable {
         action: ProposedAction,
         context: ReviewContext,
         policy: EffectiveActionPolicy = .empty,
-        gitAction: GitAction? = nil,
         gitWorld: GitAnalysisWorld
     ) -> ActionPolicyVerdict {
         switch action {
@@ -172,7 +170,6 @@ public enum ActionPolicyEngine: Sendable {
                 shell,
                 context: context,
                 policy: policy,
-                gitAction: gitAction,
                 gitWorld: gitWorld
             )
         }
@@ -230,11 +227,10 @@ public enum ActionPolicyEngine: Sendable {
         _ shell: ShellAction,
         context: ReviewContext,
         policy: EffectiveActionPolicy,
-        gitAction: GitAction?,
         gitWorld: GitAnalysisWorld
     ) -> ActionPolicyVerdict {
         var hit = builtinHit(shell: shell, context: context, gitWorld: gitWorld)
-        hit = applyTypedRules(hit, policy.rules, gitAction: gitAction)
+        hit = applyTypedRules(hit, policy.rules, gitAction: shell.gitAction)
         if hit.semanticallyCovered == false {
             hit = applyPackFallback(hit, policy.packFallback)
         }

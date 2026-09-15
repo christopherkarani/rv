@@ -25,8 +25,7 @@ struct ActionPolicyEngineTypedRuleTests {
         let verdict = ActionPolicyEngine.evaluate(
             action: proposed(git),
             context: shared,
-            policy: EffectiveActionPolicy(rules: [rule]),
-            gitAction: git
+            policy: EffectiveActionPolicy(rules: [rule])
         )
         guard case .hardDeny(let deny) = verdict.decision else {
             Issue.record("expected hardDeny, got \(verdict.decision)")
@@ -43,8 +42,7 @@ struct ActionPolicyEngineTypedRuleTests {
         let verdict = ActionPolicyEngine.evaluate(
             action: proposed(git),
             context: shared,
-            policy: EffectiveActionPolicy(rules: [rule]),
-            gitAction: git
+            policy: EffectiveActionPolicy(rules: [rule])
         )
         #expect(verdict.decision == .hardDeny(ActionPolicyEngine.Builtin.remoteSharedBranch))
         #expect(verdict.explanation.ruleID == ActionPolicyEngine.Builtin.remoteSharedBranch.ruleID)
@@ -61,8 +59,7 @@ struct ActionPolicyEngineTypedRuleTests {
         let verdict = ActionPolicyEngine.evaluate(
             action: proposed(git),
             context: privateBranch,
-            policy: EffectiveActionPolicy(rules: [rule]),
-            gitAction: git
+            policy: EffectiveActionPolicy(rules: [rule])
         )
         guard case .mandatoryHuman(let deny) = verdict.decision else {
             Issue.record("expected mandatoryHuman, got \(verdict.decision)")
@@ -79,8 +76,7 @@ struct ActionPolicyEngineTypedRuleTests {
         let verdict = ActionPolicyEngine.evaluate(
             action: proposed(git),
             context: shared,
-            policy: EffectiveActionPolicy(rules: [rule]),
-            gitAction: git
+            policy: EffectiveActionPolicy(rules: [rule])
         )
         #expect(verdict.decision == .hardDeny(ActionPolicyEngine.Builtin.remoteSharedBranch))
         #expect(verdict.explanation.zone == .hardDeny)
@@ -101,8 +97,7 @@ struct ActionPolicyEngineTypedRuleTests {
         let verdict = ActionPolicyEngine.evaluate(
             action: proposed(git),
             context: privateBranch,
-            policy: EffectiveActionPolicy(rules: [allow, ask]),
-            gitAction: git
+            policy: EffectiveActionPolicy(rules: [allow, ask])
         )
         guard case .mandatoryHuman(let deny) = verdict.decision else {
             Issue.record("expected mandatoryHuman, got \(verdict.decision)")
@@ -118,8 +113,7 @@ struct ActionPolicyEngineTypedRuleTests {
         let featureVerdict = ActionPolicyEngine.evaluate(
             action: proposed(feature, supportingCommand: "git push --force origin main"),
             context: privateBranch,
-            policy: EffectiveActionPolicy(rules: [rule]),
-            gitAction: feature
+            policy: EffectiveActionPolicy(rules: [rule])
         )
         #expect(featureVerdict.decision == .mandatoryHuman(ActionPolicyEngine.Builtin.remoteBranchAsk))
 
@@ -127,8 +121,7 @@ struct ActionPolicyEngineTypedRuleTests {
         let mainVerdict = ActionPolicyEngine.evaluate(
             action: proposed(main, supportingCommand: "git push --force origin feature"),
             context: shared,
-            policy: EffectiveActionPolicy(rules: [rule]),
-            gitAction: main
+            policy: EffectiveActionPolicy(rules: [rule])
         )
         guard case .hardDeny(let deny) = mainVerdict.decision else {
             Issue.record("expected hardDeny, got \(mainVerdict.decision)")
@@ -140,8 +133,23 @@ struct ActionPolicyEngineTypedRuleTests {
     @Test func typedDeny_doesNotMatchWhenGitActionMissing() {
         let rule = typedRule(verdict: .deny)
         let git = forcePush(branchName: "main")
+        let full = proposed(git)
+        guard case .shell(let shell) = full else {
+            Issue.record("expected shell action")
+            return
+        }
+        let stripped = ProposedAction.shell(
+            ShellAction(
+                fingerprint: shell.fingerprint,
+                effects: shell.effects,
+                resources: shell.resources,
+                scope: shell.scope,
+                supportingCommand: shell.supportingCommand
+            )
+        )
+        #expect(stripped.gitAction == nil)
         let verdict = ActionPolicyEngine.evaluate(
-            action: proposed(git),
+            action: stripped,
             context: shared,
             policy: EffectiveActionPolicy(rules: [rule])
         )
@@ -159,8 +167,7 @@ struct ActionPolicyEngineTypedRuleTests {
         let denied = ActionPolicyEngine.evaluate(
             action: proposed(git, supportingCommand: "git reset --hard"),
             context: shared,
-            policy: EffectiveActionPolicy(packFallback: .deny(packDeny), rules: [typed]),
-            gitAction: git
+            policy: EffectiveActionPolicy(packFallback: .deny(packDeny), rules: [typed])
         )
         #expect(denied.decision == .hardDeny(packDeny))
         #expect(denied.explanation.ruleID == packDeny.ruleID)
@@ -177,8 +184,7 @@ struct ActionPolicyEngineTypedRuleTests {
         let git = GitAction.push(
             remote: "origin",
             refspec: "main",
-            force: .none,
-            delete: false
+            force: .none
         )
         let matched = ActionPolicyEngine.typedRestriction(gitAction: git, rules: [rule])
         guard let matched else {
@@ -207,14 +213,14 @@ private func typedRule(
 }
 
 private func forcePush(branchName: String) -> GitAction {
-    .push(remote: "origin", refspec: branchName, force: .force, delete: false)
+    .push(remote: "origin", refspec: branchName, force: .force)
 }
 
 private func proposed(_ git: GitAction, supportingCommand: String? = nil) -> ProposedAction {
     let command: String
     if let supportingCommand {
         command = supportingCommand
-    } else if case .push(_, let refspec, let force, _) = git {
+    } else if case .push(_, let refspec, let force) = git {
         let flag = force == .force ? " --force" : ""
         command = "git push\(flag) origin \(refspec ?? "")"
     } else {
