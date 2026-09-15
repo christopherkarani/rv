@@ -7,9 +7,9 @@ import RVPolicy
 /// store, home, clock, and the T13 lazy allowlist.
 package struct LiveEvaluateWorld: Sendable {
     package let store: AllowOnceStore
+    package let home: HomeDirectory?
 
     private let gated: GatedEvaluate
-    private let home: HomeDirectory?
     private let clock: @Sendable () -> Date
     private let allowlist: @Sendable (WorkingDirectory?, Date) -> AllowlistSnapshot
 
@@ -91,6 +91,57 @@ package struct LiveEvaluateWorld: Sendable {
             cwd: cwd,
             host: host,
             now: clock()
+        )
+    }
+
+    /// Wire-path peek for an already-built request.
+    package func peek(
+        _ request: EvaluationRequest,
+        cwd: WorkingDirectory?,
+        host: LedgerHost = .tty
+    ) async -> EvaluationResult {
+        let now = clock()
+        let load = allowlist
+        return await gated.peek(
+            request,
+            cwd: cwd,
+            home: home,
+            store: store,
+            now: now,
+            allowlist: { load(cwd, now) },
+            host: host
+        )
+    }
+
+    /// Wire-path apply for an already-built request.
+    package func apply(
+        _ request: EvaluationRequest,
+        cwd: WorkingDirectory?,
+        host: LedgerHost = .tty
+    ) async -> EvaluationResult {
+        let now = clock()
+        let load = allowlist
+        return await gated.apply(
+            request,
+            cwd: cwd,
+            home: home,
+            store: store,
+            now: now,
+            allowlist: { load(cwd, now) },
+            host: host
+        )
+    }
+
+    package func mintUnlockCode(
+        for result: EvaluationResult,
+        cwd: WorkingDirectory?
+    ) async -> String? {
+        await GatedEvaluate.mintUnlockCode(
+            for: result,
+            cwd: cwd,
+            store: store,
+            now: clock(),
+            home: home
         )
     }
 

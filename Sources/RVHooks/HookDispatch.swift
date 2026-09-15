@@ -1,7 +1,24 @@
 import RVDomain
 
-/// The single codec-dispatch body: decode stdin with the host's concrete codec,
-/// evaluate, and map the result to host wire. `.foreign` allows; `.malformed` denies.
+/// Live hook door. Production call sites pass `HookEvaluateWorld`.
+public func hookWire(
+    host: HookHost,
+    stdin: String,
+    world: HookEvaluateWorld
+) async -> HookWire {
+    await hookWire(
+        host: host,
+        stdin: stdin,
+        evaluate: world.evaluate,
+        evaluateFile: world.evaluateFile,
+        spendHostAsk: world.spend,
+        mintOnDeny: world.mintOnDeny,
+        recordHostAsk: world.recordHostAsk,
+        clearHostAsk: world.clearHostAsk
+    )
+}
+
+/// Test/legacy adapter. Missing file/spend/mint/record ports fail closed as today.
 public func hookWire(
     host: HookHost,
     stdin: String,
