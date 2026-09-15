@@ -55,15 +55,65 @@ struct GatedEvaluateGitSemanticsTests {
         }
         #expect(deny.ruleID.rawValue == "core.git:reset-hard")
     }
+
+    @Test func forceWithLeaseOnMainWithoutRefspec_deniesRemoteSharedBranch() async throws {
+        let repo = try makeGitRepo(head: "ref: refs/heads/main\n")
+        let result = try await peek("git push --force-with-lease", cwd: repo)
+        guard case .deny(let deny) = result.decision else {
+            Issue.record("force-with-lease on main must deny, got \(result.decision)")
+            return
+        }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.remoteSharedBranch.ruleID)
+        #expect(
+            result.analysis
+                == .git(
+                    .push(remote: nil, refspec: "main", force: .forceWithLease, delete: false)
+                )
+        )
+    }
+
+    @Test func forceWithLeaseWithoutGitdir_doesNotInventMain() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-git-nongit-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let result = try await peek("git push --force-with-lease", cwd: root)
+        if case .deny(let deny) = result.decision {
+            #expect(deny.ruleID != ActionPolicyEngine.Builtin.remoteSharedBranch.ruleID)
+            #expect(deny.ruleID != ActionPolicyEngine.Builtin.unresolvedFilesystem.ruleID)
+        }
+        guard case .git(.push(_, let refspec, let force, _)) = result.analysis else {
+            Issue.record("expected push analysis, got \(result.analysis)")
+            return
+        }
+        #expect(force == .forceWithLease)
+        #expect(refspec == nil)
+    }
 }
 
 private func peek(_ command: String) async throws -> EvaluationResult {
+    try await peek(command, cwd: WorkingDirectory(validating: "/tmp/ws"))
+}
+
+private func peek(_ command: String, cwd: URL) async throws -> EvaluationResult {
+    try await peek(command, cwd: WorkingDirectory(validating: cwd.path))
+}
+
+private func peek(_ command: String, cwd: WorkingDirectory?) async throws -> EvaluationResult {
     let store = AllowOnceStore(baseDirectory: try isolatedAllowOnceDirectory())
     return await GatedEvaluate().peek(
         EvaluationRequest(command: ShellCommand(rawValue: command), enabledPacks: dayOnePackIDs),
-        cwd: WorkingDirectory(validating: "/tmp/ws"),
+        cwd: cwd,
         store: store,
         now: Date(timeIntervalSince1970: 1_700_000_000),
         allowlist: { .empty }
     )
+}
+
+private func makeGitRepo(head: String) throws -> URL {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-git-eval-\(UUID().uuidString)", isDirectory: true)
+    let git = root.appendingPathComponent(".git", isDirectory: true)
+    try FileManager.default.createDirectory(at: git, withIntermediateDirectories: true)
+    try head.write(to: git.appendingPathComponent("HEAD"), atomically: true, encoding: .utf8)
+    return root
 }

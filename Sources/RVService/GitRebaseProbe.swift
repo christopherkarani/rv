@@ -15,7 +15,7 @@ enum GitRebaseProbe {
             || isRebaseDirectory(gitdir + "/rebase-apply")
     }
 
-    private static func resolvedGitDir(repoRoot: String) -> String? {
+    static func resolvedGitDir(repoRoot: String) -> String? {
         let git = repoRoot == "/" ? "/.git" : repoRoot + "/.git"
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: git, isDirectory: &isDirectory) else {
