@@ -12,7 +12,7 @@ struct RebaseRecoveryTests {
         let result = deny(
             pack: .coreGit,
             pattern: "restore-worktree",
-            analysis: .git(.restore(pathspecs: ["."], staged: false, worktree: true, source: nil))
+            analysis: .git(.restore(pathspecs: ["."], destination: .worktree, source: nil))
         )
         #expect(RebaseRecovery.isEligible(result: result))
     }
@@ -21,7 +21,7 @@ struct RebaseRecoveryTests {
         let result = deny(
             pack: .coreGit,
             pattern: "restore-staged",
-            analysis: .git(.restore(pathspecs: ["."], staged: true, worktree: false, source: nil))
+            analysis: .git(.restore(pathspecs: ["."], destination: .index, source: nil))
         )
         #expect(RebaseRecovery.isEligible(result: result) == false)
     }

@@ -43,11 +43,11 @@ public enum RebaseRecovery: Sendable {
         switch action {
         case .discardWorktree:
             return true
-        case .restore(_, _, true, _):
+        case .restore(_, .worktree, _), .restore(_, .worktreeAndIndex, _):
             return true
         case .reset, .clean, .push, .deleteRemoteRef, .switchBranch, .stash,
             .createBranch, .deleteBranch, .deleteTag, .rebase,
-            .restore(_, _, false, _):
+            .restore(_, .index, _):
             return false
         }
     }
