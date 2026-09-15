@@ -260,7 +260,11 @@ public actor ServiceRuntime {
         case .pendingResolve(let params):
             result = await approvals.pendingResolveResult(
                 params,
-                peek: ApprovalRuntime.livePeek(home: configHome, store: allowOnce, gated: gated)
+                peek: ApprovalRuntime.livePeek(
+                    home: configHome,
+                    store: allowOnce,
+                    gated: { await self.currentGated() }
+                )
             )
         case .rulePreview(let params):
             result = await approvals.rulePreviewResult(params)
@@ -308,6 +312,12 @@ public actor ServiceRuntime {
             gated: gated,
             clock: clock
         )
+    }
+
+    /// Compile set after the last `rebuildGated` / `setPackEnabled`. Read at peek
+    /// time so allow-once does not snapshot `gated` across the ApprovalRuntime hop.
+    private func currentGated() -> GatedEvaluate {
+        gated
     }
 
     private func runEvaluate(

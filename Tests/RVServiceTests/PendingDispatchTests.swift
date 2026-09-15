@@ -621,6 +621,22 @@ struct PendingDispatchTests {
             clock: { now },
             pendingApprovals: .coordinator(approvals)
         )
+        let dropTable = EvaluationRequest(
+            command: ShellCommand(rawValue: "DROP TABLE users"),
+            enabledPacks: dayOnePackIDs
+        )
+        let before = await runtime.dispatch(
+            IPCRequest(method: .evaluate(EvaluateParams(request: dropTable, cwd: wd("/tmp/ws"))))
+        )
+        guard case .evaluate(let allowed) = before.result else {
+            Issue.record("day-one evaluate must run, got \(before.result)")
+            return
+        }
+        guard case .allow = allowed.result.decision else {
+            Issue.record("DROP TABLE must allow before database.sqlite enable")
+            return
+        }
+
         let sqlite = PackID(rawValue: "database.sqlite")
         let enable = await runtime.dispatch(
             IPCRequest(method: .setPackEnabled(SetPackEnabledParams(id: sqlite, enabled: true)))
@@ -629,6 +645,7 @@ struct PendingDispatchTests {
             Issue.record("database.sqlite must enable, got \(enable.result)")
             return
         }
+        #expect(await runtime.compiledPackIDs.contains(sqlite))
 
         let resolved = await runtime.dispatch(
             IPCRequest(method: .pendingResolve(resolveParams(wait, decision: .allowOnce)))
