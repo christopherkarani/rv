@@ -108,7 +108,7 @@ struct EvaluateWithSemanticsTests {
         #expect(unwrapped.layers == [.bash])
         #expect(result.decision == .allow)
         #expect(result.analysis.wrappers == [.bash])
-        guard case .git(.push(_, let refspec, .forceWithLease, false)) = result.analysis.innermost
+        guard case .git(.push(_, let refspec, .forceWithLease)) = result.analysis.innermost
         else {
             Issue.record("unprobed implicit push must parse, got \(result.analysis)")
             return
@@ -179,7 +179,7 @@ struct EvaluateWithSemanticsTests {
             policy: EffectiveActionPolicy(rules: [rule])
         )
         #expect(result.decision == .allow)
-        guard case .git(.push(_, let refspec, .forceWithLease, false)) = result.analysis else {
+        guard case .git(.push(_, let refspec, .forceWithLease)) = result.analysis else {
             Issue.record("unprobed implicit push must parse, got \(result.analysis)")
             return
         }
@@ -206,7 +206,7 @@ struct EvaluateWithSemanticsTests {
         }
         #expect(deny.ruleID == ActionPolicyEngine.Builtin.remoteSharedBranch.ruleID)
         #expect(result.boundReview == .deny(ActionPolicyEngine.Builtin.remoteSharedBranch))
-        guard case .git(.push(_, let refspec, .forceWithLease, false)) = result.analysis else {
+        guard case .git(.push(_, let refspec, .forceWithLease)) = result.analysis else {
             Issue.record("probed implicit push must parse refspec main, got \(result.analysis)")
             return
         }

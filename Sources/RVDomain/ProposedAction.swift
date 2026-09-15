@@ -98,19 +98,23 @@ public struct ShellAction: Sendable, Equatable, Codable {
     public var scope: ActionScope
     /// Supporting evidence only. Never the primary review input.
     public var supportingCommand: ShellCommand?
+    /// Analyzed Git operation when this shell action was built from one.
+    public var gitAction: GitAction?
 
     public init(
         fingerprint: ActionFingerprint,
         effects: ActionEffects = ActionEffects(),
         resources: ActionResources = ActionResources(),
         scope: ActionScope = ActionScope(),
-        supportingCommand: ShellCommand? = nil
+        supportingCommand: ShellCommand? = nil,
+        gitAction: GitAction? = nil
     ) {
         self.fingerprint = fingerprint
         self.effects = effects
         self.resources = resources
         self.scope = scope
         self.supportingCommand = supportingCommand
+        self.gitAction = gitAction
     }
 }
 
@@ -151,6 +155,13 @@ public enum ProposedAction: Sendable, Equatable, Codable {
         switch self {
         case .shell(let action):
             return action.scope
+        }
+    }
+
+    public var gitAction: GitAction? {
+        switch self {
+        case .shell(let action):
+            return action.gitAction
         }
     }
 }

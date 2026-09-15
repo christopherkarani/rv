@@ -171,14 +171,17 @@ public enum RulePinning: Sendable {
     }
 
     /// Typed form for git push pins. Matcher is `GitAction.push`, not argv.
-    /// Analyzed pending rows carry `remoteSharedBranchMutation`; empty-effect
-    /// legacy rows stay fingerprint v1.
+    /// Force is taken from the analyzed push, including `.forceWithLease`.
+    /// Delete-remote is not a gitPush pin.
     private static func gitPushPredicate(from action: ProposedAction) -> PolicyPredicate? {
         guard let git = gitPushAction(from: action) else {
             return nil
         }
+        guard case .push(_, _, let force) = git else {
+            return nil
+        }
         let predicate = PolicyPredicate.gitPush(
-            force: .exactly(.force),
+            force: .exactly(force),
             branch: git.resources.branchName
         )
         guard PolicyMatch.matches(predicate, action: git) else {
@@ -191,6 +194,9 @@ public enum RulePinning: Sendable {
         guard case .shell(let shell) = action else {
             return nil
         }
+        guard case .push(let remote, let refspec, let force)? = shell.gitAction else {
+            return nil
+        }
         let kinds = shell.effects.kinds
         guard kinds.contains(.remoteSharedBranchMutation) else {
             return nil
@@ -198,15 +204,7 @@ public enum RulePinning: Sendable {
         if kinds.contains(where: isNonPushEffect) {
             return nil
         }
-        guard let branch = shell.resources.branchName, branch.isEmpty == false else {
-            return nil
-        }
-        return .push(
-            remote: shell.resources.remoteName,
-            refspec: branch,
-            force: GitPushForce.force,
-            delete: false
-        )
+        return .push(remote: remote, refspec: refspec, force: force)
     }
 
     private static func isNonPushEffect(_ kind: ActionEffectKind) -> Bool {

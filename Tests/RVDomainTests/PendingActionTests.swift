@@ -12,8 +12,7 @@ struct PendingActionTests {
         let git = GitAction.push(
             remote: "origin",
             refspec: "feature",
-            force: .force,
-            delete: false
+            force: .force
         )
         let result = EvaluationResult(
             outcome: .deny(
@@ -66,7 +65,7 @@ struct PendingActionTests {
             ),
             matchingView: MatchingView(command.rawValue),
             analysis: .git(
-                .push(remote: "origin", refspec: "feature", force: .force, delete: false)
+                .push(remote: "origin", refspec: "feature", force: .force)
             ).wrapping([.bash])
         )
 

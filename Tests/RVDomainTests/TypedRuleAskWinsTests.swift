@@ -34,8 +34,7 @@ struct TypedRuleAskWinsTests {
         let git = GitAction.push(
             remote: "origin",
             refspec: "feature",
-            force: .force,
-            delete: false
+            force: .force
         )
         let verdict = ActionPolicyEngine.evaluate(
             action: git.proposedAction(
@@ -43,8 +42,7 @@ struct TypedRuleAskWinsTests {
                 workingDirectory: WorkingDirectory(validating: "/tmp/rv")
             ),
             context: privateBranch,
-            policy: EffectiveActionPolicy(rules: rules),
-            gitAction: git
+            policy: EffectiveActionPolicy(rules: rules)
         )
 
         guard case .mandatoryHuman(let deny) = verdict.decision else {
@@ -79,8 +77,7 @@ struct TypedRuleAskWinsTests {
         let git = GitAction.push(
             remote: "origin",
             refspec: "feature",
-            force: .none,
-            delete: false
+            force: .none
         )
         let verdict = ActionPolicyEngine.evaluate(
             action: git.proposedAction(
@@ -88,8 +85,7 @@ struct TypedRuleAskWinsTests {
                 workingDirectory: WorkingDirectory(validating: "/tmp/rv")
             ),
             context: privateBranch,
-            policy: EffectiveActionPolicy(rules: rules),
-            gitAction: git
+            policy: EffectiveActionPolicy(rules: rules)
         )
 
         guard case .mandatoryHuman(let deny) = verdict.decision else {

@@ -45,7 +45,7 @@ public enum RebaseRecovery: Sendable {
             return true
         case .restore(_, _, true, _):
             return true
-        case .reset, .clean, .push, .switchBranch, .stash,
+        case .reset, .clean, .push, .deleteRemoteRef, .switchBranch, .stash,
             .createBranch, .deleteBranch, .deleteTag, .rebase,
             .restore(_, _, false, _):
             return false

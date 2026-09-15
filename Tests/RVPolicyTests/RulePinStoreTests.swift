@@ -155,7 +155,8 @@ private func forcePushWait(id: String, branch: String) -> PendingApproval {
                     branchName: branch
                 ),
                 scope: ActionScope(workingDirectory: wd("/tmp/ws")),
-                supportingCommand: ShellCommand(rawValue: "git push --force origin \(branch)")
+                supportingCommand: ShellCommand(rawValue: "git push --force origin \(branch)"),
+                gitAction: .push(remote: "origin", refspec: branch, force: .force)
             )
         ),
         reason: .hostAsk,

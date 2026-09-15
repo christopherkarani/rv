@@ -19,7 +19,7 @@ struct ApplyGitSemanticsTypedRuleTests {
             command: ShellCommand(rawValue: command),
             policy: EffectiveActionPolicy(rules: [rule])
         )
-        guard case .git(.push(_, let refspec, .forceWithLease, false)) = composed.analysis else {
+        guard case .git(.push(_, let refspec, .forceWithLease)) = composed.analysis else {
             Issue.record("proof command must parse as force-with-lease, got \(composed.analysis)")
             return
         }

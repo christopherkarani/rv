@@ -59,16 +59,14 @@ struct AnalyzeGitTests {
             normalAction == .push(
                 remote: "origin",
                 refspec: "feature",
-                force: .none,
-                delete: false
+                force: .none
             )
         )
         #expect(
             forcedAction == .push(
                 remote: "origin",
                 refspec: "main",
-                force: .force,
-                delete: false
+                force: .force
             )
         )
         #expect(normalAction.effects.kinds.isEmpty)
@@ -140,15 +138,14 @@ struct AnalyzeGitTests {
                     .push(
                         remote: "origin",
                         refspec: "main",
-                        force: .forceWithLease,
-                        delete: false
+                        force: .forceWithLease
                     )
                 )
         )
         #expect(
             analyzeGit(ShellCommand(rawValue: "git push -f origin main"))
                 == .git(
-                    .push(remote: "origin", refspec: "main", force: .force, delete: false)
+                    .push(remote: "origin", refspec: "main", force: .force)
                 )
         )
     }
@@ -159,8 +156,29 @@ struct AnalyzeGitTests {
         #expect(
             analysis
                 == .git(
-                    .push(remote: "origin", refspec: "topic", force: .none, delete: false)
+                    .push(remote: "origin", refspec: "topic", force: .none)
                 )
+        )
+    }
+
+    @Test(arguments: [
+        "git push --delete origin topic",
+        "git push -d origin topic",
+        "git push origin :topic",
+    ])
+    func pushDelete_isDeleteRemoteRefNotPush(_ command: String) {
+        let analysis = analyzeGit(ShellCommand(rawValue: command))
+        #expect(
+            analysis == .git(.deleteRemoteRef(remote: "origin", refspec: "topic")),
+            Comment(rawValue: command)
+        )
+        guard case .git(let action) = analysis else { return }
+        #expect(action.effectScope == .remote)
+        #expect(action.effects.kinds == [.remoteSharedBranchMutation])
+        #expect(action.explainAction == "remote ref delete")
+        #expect(PolicyMatch.matches(.gitPush(force: .any, branch: nil), action: action) == false)
+        #expect(
+            PolicyMatch.matches(.gitPush(force: .any, branch: "topic"), action: action) == false
         )
     }
 

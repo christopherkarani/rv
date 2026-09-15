@@ -40,7 +40,7 @@ struct GatedEvaluateGitSemanticsTests {
             return
         }
         #expect(deny.ruleID.rawValue == "core.git:push-force-long")
-        guard case .git(.push(_, _, let force, _)) = forced.analysis else {
+        guard case .git(.push(_, _, let force)) = forced.analysis else {
             Issue.record("expected push analysis")
             return
         }
@@ -69,7 +69,7 @@ struct GatedEvaluateGitSemanticsTests {
         }
         #expect(deny.ruleID == ActionPolicyEngine.Builtin.remoteSharedBranch.ruleID)
         #expect(result.boundReview == .deny(ActionPolicyEngine.Builtin.remoteSharedBranch))
-        guard case .git(.push(_, let refspec, .forceWithLease, false)) = result.analysis else {
+        guard case .git(.push(_, let refspec, .forceWithLease)) = result.analysis else {
             Issue.record("expected implicit main refspec, got \(result.analysis)")
             return
         }
@@ -98,7 +98,7 @@ struct GatedEvaluateGitSemanticsTests {
         #expect(context.isSharedBranch == false)
 
         let result = try await peek("git push --force-with-lease", cwd: root.path)
-        guard case .git(.push(_, let refspec, .forceWithLease, false)) = result.analysis else {
+        guard case .git(.push(_, let refspec, .forceWithLease)) = result.analysis else {
             Issue.record("expected push analysis, got \(result.analysis)")
             return
         }

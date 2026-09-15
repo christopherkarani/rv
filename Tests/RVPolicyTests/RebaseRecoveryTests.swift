@@ -136,7 +136,16 @@ struct RebaseRecoveryTests {
         let result = deny(
             pack: .coreGit,
             pattern: "push-force-long",
-            analysis: .git(.push(remote: "origin", refspec: "main", force: .force, delete: false))
+            analysis: .git(.push(remote: "origin", refspec: "main", force: .force))
+        )
+        #expect(RebaseRecovery.isEligible(result: result) == false)
+    }
+
+    @Test func deleteRemoteRefIsNeverEligible() {
+        let result = deny(
+            pack: .coreGit,
+            pattern: "push-delete",
+            analysis: .git(.deleteRemoteRef(remote: "origin", refspec: "topic"))
         )
         #expect(RebaseRecovery.isEligible(result: result) == false)
     }

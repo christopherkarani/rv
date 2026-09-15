@@ -17,8 +17,7 @@ struct TypedRuleExplainTests {
         let verdict = ActionPolicyEngine.evaluate(
             action: proposed(git, supportingCommand: "git reset --hard"),
             context: shared,
-            policy: EffectiveActionPolicy(rules: [rule]),
-            gitAction: git
+            policy: EffectiveActionPolicy(rules: [rule])
         )
         #expect(verdict.explanation.ruleID == ActionPolicyEngine.Builtin.workingTreeDiscard.ruleID)
         #expect(verdict.explanation.zone == .hardDeny)
