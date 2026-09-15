@@ -4,7 +4,7 @@ import RVDomain
 /// One surface-extracted shell candidate plus provenance.
 public struct ExtractedEvent: Sendable, Equatable {
     public var host: ScanHostID
-    public var sessionID: String?
+    public var sessionID: SessionID?
     public var sourcePath: String
     public var occurredAt: Date?
     public var command: ShellCommand
@@ -14,7 +14,7 @@ public struct ExtractedEvent: Sendable, Equatable {
 
     public init(
         host: ScanHostID,
-        sessionID: String? = nil,
+        sessionID: SessionID? = nil,
         sourcePath: String,
         occurredAt: Date? = nil,
         command: ShellCommand,

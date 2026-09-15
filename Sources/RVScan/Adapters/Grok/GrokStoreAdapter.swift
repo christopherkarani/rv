@@ -47,7 +47,7 @@ public struct GrokStoreAdapter: SessionStoreAdapter {
                 events.append(
                     ExtractedEvent(
                         host: .grok,
-                        sessionID: sessionID.isEmpty ? nil : sessionID,
+                        sessionID: SessionID(validating: sessionID),
                         sourcePath: sourcePath,
                         occurredAt: nil,
                         command: ShellCommand(rawValue: command),

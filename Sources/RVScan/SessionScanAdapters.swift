@@ -13,8 +13,9 @@ public enum SessionScanAdapters {
         CursorStoreAdapter(),
     ]
 
-    public static func selected(hostFilter: ScanHostID?) -> [any SessionStoreAdapter] {
-        guard let hostFilter else { return all }
-        return all.filter { $0.host == hostFilter }
+    /// Adapters for `host`, or every registered adapter when `host` is nil.
+    public static func adapters(for host: ScanHostID?) -> [any SessionStoreAdapter] {
+        guard let host else { return all }
+        return all.filter { $0.host == host }
     }
 }

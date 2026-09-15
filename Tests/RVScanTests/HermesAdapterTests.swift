@@ -30,7 +30,7 @@ import RVDomain
         let events = try adapter.extract(fileURL: dbURL, data: data)
         #expect(events.map(\.command.rawValue) == ["git reset --hard"])
         #expect(events.allSatisfy { $0.host == .hermes })
-        #expect(events.allSatisfy { $0.sessionID == "sess_fixture_1" })
+        #expect(events.allSatisfy { $0.sessionID == SessionID(validating: "sess_fixture_1") })
         #expect(events.allSatisfy { $0.sourcePath == dbURL.path })
     }
 }
@@ -46,7 +46,7 @@ import RVDomain
         let adapter = HermesStoreAdapter()
         let events = try adapter.extract(fileURL: dbURL, data: Data(contentsOf: dbURL))
         #expect(events.map(\.command.rawValue) == ["git status"])
-        #expect(events.allSatisfy { $0.sessionID == "sess_nested" })
+        #expect(events.allSatisfy { $0.sessionID == SessionID(validating: "sess_nested") })
     }
 }
 
@@ -135,7 +135,7 @@ import RVDomain
         let events = try adapter.extract(fileURL: dbURL, data: diskBytes)
         #expect(events.map(\.command.rawValue) == ["git reset --hard"])
         #expect(events.allSatisfy { $0.host == .hermes })
-        #expect(events.allSatisfy { $0.sessionID == "sess_disk" })
+        #expect(events.allSatisfy { $0.sessionID == SessionID(validating: "sess_disk") })
         #expect(events.allSatisfy { $0.sourcePath == dbURL.path })
     }
 }

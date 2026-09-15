@@ -7,7 +7,7 @@ import RVDomain
     let events = [
         ExtractedEvent(
             host: .claude,
-            sessionID: "s1",
+            sessionID: SessionID(validating: "s1"),
             sourcePath: "/tmp/fixture/session.jsonl",
             occurredAt: Date(timeIntervalSince1970: 1_700_000_000),
             command: ShellCommand(rawValue: "git reset --hard")
@@ -21,7 +21,7 @@ import RVDomain
     #expect(finding.packID == finding.ruleID.pack)
     #expect(finding.packID == .coreGit)
     #expect(finding.host == .claude)
-    #expect(finding.sessionID == "s1")
+    #expect(finding.sessionID == SessionID(validating: "s1"))
     #expect(finding.sourcePath == "/tmp/fixture/session.jsonl")
     #expect(finding.count == 1)
     #expect(finding.matchingView.rawValue.contains("git"))

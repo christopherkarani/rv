@@ -89,7 +89,7 @@ private func scanFindingRobotRow(
 ) -> ScanFindingRobotRow {
     ScanFindingRobotRow(
         host: finding.host.rawValue,
-        sessionID: finding.sessionID,
+        sessionID: finding.sessionID?.rawValue,
         path: finding.sourcePath,
         occurredAt: scanRobotISO8601(finding.occurredAt),
         ruleID: finding.ruleID.rawValue,

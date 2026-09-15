@@ -67,7 +67,7 @@ public struct HermesStoreAdapter: SessionStoreAdapter {
                         events.append(
                             ExtractedEvent(
                                 host: .hermes,
-                                sessionID: sessionID,
+                                sessionID: sessionID.flatMap(SessionID.init(validating:)),
                                 sourcePath: sourcePath,
                                 occurredAt: occurredAt,
                                 command: ShellCommand(rawValue: extracted.command),

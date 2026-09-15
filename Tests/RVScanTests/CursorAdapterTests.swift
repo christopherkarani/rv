@@ -26,7 +26,7 @@ import RVDomain
     let events = try CursorStoreAdapter().extract(fileURL: fixture, data: data)
     #expect(events.map(\.command.rawValue) == ["git reset --hard"])
     #expect(events.allSatisfy { $0.host == .cursor })
-    #expect(events.allSatisfy { $0.sessionID == "sess_cursor_1" })
+    #expect(events.allSatisfy { $0.sessionID == SessionID(validating: "sess_cursor_1") })
     #expect(events.allSatisfy { $0.sourcePath == fixture.path })
 }
 
@@ -35,7 +35,7 @@ import RVDomain
     let data = try Data(contentsOf: fixture)
     let events = try CursorStoreAdapter().extract(fileURL: fixture, data: data)
     #expect(events.map(\.command.rawValue) == ["git status"])
-    #expect(events.allSatisfy { $0.sessionID == "sess_hook" })
+    #expect(events.allSatisfy { $0.sessionID == SessionID(validating: "sess_hook") })
 }
 
 @Test func cursorAdapter_emptyOrUnreadableThrows() throws {
@@ -99,7 +99,7 @@ import RVDomain
         let events = try adapter.extract(fileURL: fileURL, data: diskBytes)
         #expect(events.map(\.command.rawValue) == ["git reset --hard"])
         #expect(events.allSatisfy { $0.host == .cursor })
-        #expect(events.allSatisfy { $0.sessionID == "sess_cursor_1" })
+        #expect(events.allSatisfy { $0.sessionID == SessionID(validating: "sess_cursor_1") })
         #expect(events.allSatisfy { $0.sourcePath == fileURL.path })
     }
 }

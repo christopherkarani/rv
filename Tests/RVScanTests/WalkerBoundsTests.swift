@@ -10,7 +10,7 @@ import RVDomain
         }
         let result = try DirectoryWalker(
             bounds: ScanBounds(maxDepth: 8, maxFiles: 3, maxTotalBytes: 1_000_000, maxFileBytes: 1_000)
-        ).walk(root: root)
+        ).walk(at: root)
 
         #expect(result.filesVisited == 3)
         #expect(result.fileURLs.count == 3)
@@ -28,7 +28,7 @@ import RVDomain
 
         let result = try DirectoryWalker(
             bounds: ScanBounds(maxDepth: 8, maxFiles: 100, maxTotalBytes: 50, maxFileBytes: 100)
-        ).walk(root: root)
+        ).walk(at: root)
 
         #expect(result.filesVisited == 1)
         #expect(result.bytesAccounted == 40)
@@ -47,7 +47,7 @@ import RVDomain
 
         let result = try DirectoryWalker(
             bounds: ScanBounds(maxDepth: 1, maxFiles: 100, maxTotalBytes: 1_000_000, maxFileBytes: 1_000)
-        ).walk(root: root)
+        ).walk(at: root)
 
         #expect(result.fileURLs.map(\.lastPathComponent) == ["top.txt"])
         #expect(result.warnings == [
@@ -66,7 +66,7 @@ import RVDomain
 
         let result = try DirectoryWalker(
             bounds: ScanBounds(maxDepth: 8, maxFiles: 100, maxTotalBytes: 1_000_000, maxFileBytes: 50)
-        ).walk(root: root)
+        ).walk(at: root)
 
         #expect(result.fileURLs.map(\.lastPathComponent) == ["ok.txt"])
         #expect(result.filesVisited == 2)
@@ -88,7 +88,7 @@ import RVDomain
 
         let result = try DirectoryWalker(
             bounds: ScanBounds(maxDepth: 8, maxFiles: 2, maxTotalBytes: 1_000_000, maxFileBytes: 20)
-        ).walk(root: root)
+        ).walk(at: root)
 
         #expect(result.fileURLs.isEmpty)
         #expect(result.filesVisited == 2)
@@ -110,7 +110,7 @@ import RVDomain
         try writeFile(first.appendingPathComponent("z.txt"), contents: "first")
         try writeFile(second.appendingPathComponent("a.txt"), contents: "second")
 
-        let result = try DirectoryWalker(bounds: .default).walk(root: root)
+        let result = try DirectoryWalker(bounds: .default).walk(at: root)
 
         #expect(result.fileURLs == [
             root.appendingPathComponent("0-root.txt").standardizedFileURL,
@@ -136,7 +136,7 @@ import RVDomain
             withDestinationURL: realFile
         )
 
-        let result = try DirectoryWalker(bounds: .default).walk(root: root)
+        let result = try DirectoryWalker(bounds: .default).walk(at: root)
 
         #expect(result.fileURLs == [realFile.standardizedFileURL])
         #expect(result.warnings.isEmpty)
@@ -148,7 +148,7 @@ import RVDomain
         let file = root.appendingPathComponent("not-a-dir.txt").standardizedFileURL
         try writeFile(file, contents: "x")
         #expect(throws: DirectoryWalkError.listingFailed(file.path)) {
-            try DirectoryWalker().walk(root: file)
+            try DirectoryWalker().walk(at: file)
         }
     }
 }
@@ -165,7 +165,7 @@ import RVDomain
             try FileManager.default.contentsOfDirectory(at: nested, includingPropertiesForKeys: nil)
         }
 
-        let result = try DirectoryWalker(bounds: .default).walk(root: root)
+        let result = try DirectoryWalker(bounds: .default).walk(at: root)
         #expect(result.fileURLs.map(\.lastPathComponent) == ["top.txt"])
         #expect(result.warnings.contains { $0.code == "io.list" })
     }
@@ -179,7 +179,7 @@ import RVDomain
             #expect(root.path.hasPrefix(liveHome) == false)
         }
         try writeFile(root.appendingPathComponent("one.txt"), contents: "1")
-        let result = try DirectoryWalker(bounds: .default).walk(root: root)
+        let result = try DirectoryWalker(bounds: .default).walk(at: root)
         #expect(result.filesVisited == 1)
         #expect(result.warnings.isEmpty)
     }

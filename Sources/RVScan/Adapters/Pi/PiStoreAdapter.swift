@@ -19,7 +19,7 @@ public struct PiStoreAdapter: SessionStoreAdapter {
 
     public func extract(fileURL: URL, data: Data) throws -> [ExtractedEvent] {
         let sourcePath = fileURL.path
-        var sessionID: String?
+        var sessionID: SessionID?
         var sessionCwd: WorkingDirectory?
         var events: [ExtractedEvent] = []
 
@@ -29,8 +29,8 @@ public struct PiStoreAdapter: SessionStoreAdapter {
             }
             let type = object["type"] as? String
             if type == "session" {
-                if let id = object["id"] as? String, id.isEmpty == false {
-                    sessionID = id
+                if let id = object["id"] as? String, let parsed = SessionID(validating: id) {
+                    sessionID = parsed
                 }
                 if let cwd = ScanStoreWorkingDirectory.fromEnvelope(object) {
                     sessionCwd = cwd

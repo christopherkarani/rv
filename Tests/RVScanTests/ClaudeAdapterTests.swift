@@ -31,7 +31,7 @@ import RVDomain
     #expect(events.count == 1)
     #expect(events[0].host == .claude)
     #expect(events[0].command.rawValue == "git reset --hard")
-    #expect(events[0].sessionID == "ac001-session")
+    #expect(events[0].sessionID == SessionID(validating: "ac001-session"))
     #expect(events[0].sourcePath == fixture.path)
     #expect(events[0].occurredAt != nil)
 }
@@ -68,7 +68,7 @@ import RVDomain
         let home = try #require(ScanHome(validating: homeURL.path))
         let adapter = ClaudeSessionStoreAdapter()
         let root = try #require(adapter.roots(home: home).first)
-        let walk = try DirectoryWalker(bounds: .default).walk(root: root)
+        let walk = try DirectoryWalker(bounds: .default).walk(at: root)
 
         var extracted: [ExtractedEvent] = []
         for fileURL in walk.fileURLs {

@@ -1,29 +1,32 @@
 import Foundation
 import RVDomain
 
-/// Dedupe identity: matching view + `rule_id` colon form (REQ-010).
+/// Dedupe identity: matching view + rule (REQ-010).
 public struct ScanDedupeKey: Hashable, Sendable, Equatable {
-    public let matchingView: String
-    public let ruleID: String
+    public let matchingView: MatchingView
+    public let ruleID: RuleID
 
     public init(matchingView: MatchingView, ruleID: RuleID) {
-        self.matchingView = matchingView.rawValue
-        self.ruleID = ruleID.rawValue
+        self.matchingView = matchingView
+        self.ruleID = ruleID
     }
 
     public init(finding: ScanFinding) {
-        matchingView = finding.matchingView.rawValue
-        ruleID = finding.ruleID.rawValue
+        matchingView = finding.matchingView
+        ruleID = finding.ruleID
     }
 }
 
 public enum ScanDedupe {
-    public static func apply(
+    /// Groups findings that share a matching view and rule, keeping the latest.
+    ///
+    /// - Parameter reportsEveryEvent: When true, returns `findings` unchanged.
+    public static func grouped(
         _ findings: [ScanFinding],
-        allEvents: Bool = false,
+        reportsEveryEvent: Bool = false,
         resolver: ScanFindingInstantResolver = ScanFindingInstantResolver()
     ) -> [ScanFinding] {
-        guard allEvents == false else { return findings }
+        guard reportsEveryEvent == false else { return findings }
 
         var groups: [ScanDedupeKey: [ScanFinding]] = [:]
         for finding in findings {

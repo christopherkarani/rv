@@ -20,7 +20,7 @@ import RVDomain
     let lastSeen = Date(timeIntervalSince1970: 1_700_000_200)
     let finding = ScanFinding(
         host: .pi,
-        sessionID: "s1",
+        sessionID: SessionID(validating: "s1"),
         sourcePath: "/tmp/session.jsonl",
         occurredAt: occurred,
         ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
@@ -98,7 +98,7 @@ import RVDomain
         "hostFilter",
         "timeWindow",
         "packIDs",
-        "allEvents",
+        "reportsEveryEvent",
         "bounds",
     ])
 }
@@ -107,9 +107,10 @@ import RVDomain
     #expect(SessionScanAdapters.all.map(\.host) == [
         .claude, .pi, .grok, .opencode, .openclaw, .hermes, .codex, .cursor,
     ])
-    #expect(SessionScanAdapters.selected(hostFilter: .pi).map(\.host) == [.pi])
-    #expect(SessionScanAdapters.selected(hostFilter: .codex).map(\.host) == [.codex])
-    #expect(SessionScanAdapters.selected(hostFilter: .cursor).map(\.host) == [.cursor])
+    #expect(SessionScanAdapters.adapters(for: .pi).map(\.host) == [.pi])
+    #expect(SessionScanAdapters.adapters(for: .codex).map(\.host) == [.codex])
+    #expect(SessionScanAdapters.adapters(for: .cursor).map(\.host) == [.cursor])
+    #expect(SessionScanAdapters.adapters(for: nil).map(\.host) == SessionScanAdapters.all.map(\.host))
 }
 
 @Test func sessionScan_runNilRootPath_usesKnownHostRootsWithoutMissingRoot() throws {

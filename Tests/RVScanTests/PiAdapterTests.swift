@@ -20,7 +20,7 @@ import RVDomain
     let events = try adapter.extract(fileURL: fixture, data: data)
     #expect(events.map(\.command.rawValue) == ["git reset --hard", "git status"])
     #expect(events.allSatisfy { $0.host == .pi })
-    #expect(events.allSatisfy { $0.sessionID == "pi-sess-fixture-1" })
+    #expect(events.allSatisfy { $0.sessionID == SessionID(validating: "pi-sess-fixture-1") })
     #expect(events.allSatisfy { $0.sourcePath == fixture.path })
 }
 
