@@ -57,6 +57,7 @@ enum CursorHooksMerge {
     }
 
     /// Returns merged hooks bytes and whether content changed.
+    /// Setup writes through `HostWiring.applyCursor`.
     static func merge(
         existingData: Data?,
         adapterPath: String

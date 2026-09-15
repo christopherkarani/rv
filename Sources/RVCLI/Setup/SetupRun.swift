@@ -201,12 +201,29 @@ enum SetupRun {
         }
         do {
             let destination = layout.hostAdapter(for: host).destination
-            let wroteAdapter = try writeOwned(
-                path: destination,
-                contents: adapter.rendered(rvPath: env.rvPath),
-                existingData: existingData,
-                files: files
-            )
+            let wroteAdapter: Bool
+            if host == .grok {
+                let applied = HostWiring.applyGrok(
+                    existing: existingData,
+                    rendered: Data(adapter.rendered(rvPath: env.rvPath).utf8)
+                )
+                guard let contents = String(data: applied.data, encoding: .utf8) else {
+                    throw SetupError.hostHookWriteFailed(.grok)
+                }
+                wroteAdapter = try writeOwned(
+                    path: destination,
+                    contents: contents,
+                    existingData: existingData,
+                    files: files
+                )
+            } else {
+                wroteAdapter = try writeOwned(
+                    path: destination,
+                    contents: adapter.rendered(rvPath: env.rvPath),
+                    existingData: existingData,
+                    files: files
+                )
+            }
             let wroteCompanions = try writeCompanions(
                 host,
                 directory: (destination as NSString).deletingLastPathComponent,
@@ -562,10 +579,11 @@ enum SetupRun {
         }
         let merged: (data: Data, wrote: Bool)
         do {
-            merged = try CursorHooksMerge.merge(
-                existingData: files.readData(hooksPath),
+            let applied = try HostWiring.applyCursor(
+                existing: files.readData(hooksPath),
                 adapterPath: adapterPath
             )
+            merged = (applied.data, applied.wrote)
         } catch {
             throw SetupError.hostHookWriteFailed(.cursor)
         }
@@ -759,12 +777,13 @@ enum SetupRun {
         }
         let merged: (data: Data, wrote: Bool)
         do {
-            merged = try ClaudeSettingsMerge.merge(
-                existingData: existingData,
+            let applied = try HostWiring.applyClaude(
+                existing: existingData,
                 rvPath: rvPath,
                 adapterPath: adapterPath,
                 force: force
             )
+            merged = (applied.data, applied.wrote)
         } catch {
             throw SetupError.hostHookWriteFailed(.claude)
         }
