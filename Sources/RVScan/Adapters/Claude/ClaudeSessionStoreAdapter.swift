@@ -25,7 +25,7 @@ public struct ClaudeSessionStoreAdapter: SessionStoreAdapter {
         guard recognizes(fileURL: fileURL) else { return [] }
 
         let sourcePath = fileURL.path
-        let fallbackSessionID = fileURL.deletingPathExtension().lastPathComponent
+        let fallbackSessionID = SessionID(validating: fileURL.deletingPathExtension().lastPathComponent)
         var events: [ExtractedEvent] = []
 
         var offset = data.startIndex
@@ -51,7 +51,7 @@ public struct ClaudeSessionStoreAdapter: SessionStoreAdapter {
         fromLine line: Data,
         host: ScanHostID,
         sourcePath: String,
-        fallbackSessionID: String
+        fallbackSessionID: SessionID?
     ) -> [ExtractedEvent] {
         guard let root = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else {
             return []
@@ -59,10 +59,11 @@ public struct ClaudeSessionStoreAdapter: SessionStoreAdapter {
 
         let occurredAt = parseTimestamp(root["timestamp"])
         let envelopeCwd = ScanStoreWorkingDirectory.fromEnvelope(root)
-        let sessionID: String? = {
-            if let value = root["sessionId"] as? String, value.isEmpty == false { return value }
-            if fallbackSessionID.isEmpty == false { return fallbackSessionID }
-            return nil
+        let sessionID: SessionID? = {
+            if let value = root["sessionId"] as? String {
+                return SessionID(validating: value) ?? fallbackSessionID
+            }
+            return fallbackSessionID
         }()
 
         guard let message = root["message"] as? [String: Any] else { return [] }

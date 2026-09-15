@@ -78,7 +78,7 @@ public struct OpenCodeStoreAdapter: SessionStoreAdapter {
                 events.append(
                     ExtractedEvent(
                         host: .opencode,
-                        sessionID: sessionID,
+                        sessionID: sessionID.flatMap(SessionID.init(validating:)),
                         sourcePath: sourcePath,
                         occurredAt: occurredAt,
                         command: ShellCommand(rawValue: command),

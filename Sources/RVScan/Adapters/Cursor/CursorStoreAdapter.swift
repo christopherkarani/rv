@@ -42,15 +42,14 @@ public struct CursorStoreAdapter: SessionStoreAdapter {
         )
     }
 
-    private static func sessionID(from fileURL: URL) -> String? {
-        let stem = fileURL.deletingPathExtension().lastPathComponent
-        return stem.isEmpty ? nil : stem
+    private static func sessionID(from fileURL: URL) -> SessionID? {
+        SessionID(validating: fileURL.deletingPathExtension().lastPathComponent)
     }
 
     private static func events(
         in data: Data,
         sourcePath: String,
-        fallbackSession: String?
+        fallbackSession: SessionID?
     ) throws -> [ExtractedEvent] {
         guard data.isEmpty == false else {
             throw CursorStoreError.unreadable(sourcePath: sourcePath)
@@ -88,10 +87,16 @@ public struct CursorStoreAdapter: SessionStoreAdapter {
         return events
     }
 
-    private static func sessionID(in object: [String: Any]) -> String? {
-        if let value = object["conversation_id"] as? String, value.isEmpty == false { return value }
-        if let value = object["session_id"] as? String, value.isEmpty == false { return value }
-        if let value = object["sessionId"] as? String, value.isEmpty == false { return value }
+    private static func sessionID(in object: [String: Any]) -> SessionID? {
+        if let value = object["conversation_id"] as? String, let id = SessionID(validating: value) {
+            return id
+        }
+        if let value = object["session_id"] as? String, let id = SessionID(validating: value) {
+            return id
+        }
+        if let value = object["sessionId"] as? String, let id = SessionID(validating: value) {
+            return id
+        }
         return nil
     }
 

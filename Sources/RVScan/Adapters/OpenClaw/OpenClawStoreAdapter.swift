@@ -73,7 +73,7 @@ public struct OpenClawStoreAdapter: SessionStoreAdapter {
                 events.append(
                     ExtractedEvent(
                         host: .openclaw,
-                        sessionID: sessionID,
+                        sessionID: sessionID.flatMap(SessionID.init(validating:)),
                         sourcePath: sourcePath,
                         occurredAt: occurredAt,
                         command: ShellCommand(rawValue: extracted.command),

@@ -30,7 +30,7 @@ import RVDomain
         let events = try adapter.extract(fileURL: dbURL, data: data)
         #expect(events.map(\.command.rawValue) == ["git reset --hard"])
         #expect(events.allSatisfy { $0.host == .opencode })
-        #expect(events.allSatisfy { $0.sessionID == "ses_fixture_1" })
+        #expect(events.allSatisfy { $0.sessionID == SessionID(validating: "ses_fixture_1") })
         #expect(events.allSatisfy { $0.sourcePath == dbURL.path })
     }
 }
@@ -142,7 +142,7 @@ import RVDomain
         let events = try adapter.extract(fileURL: dbURL, data: diskBytes)
         #expect(events.map(\.command.rawValue) == ["git reset --hard"])
         #expect(events.allSatisfy { $0.host == .opencode })
-        #expect(events.allSatisfy { $0.sessionID == "ses_disk" })
+        #expect(events.allSatisfy { $0.sessionID == SessionID(validating: "ses_disk") })
         #expect(events.allSatisfy { $0.sourcePath == dbURL.path })
     }
 }

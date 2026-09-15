@@ -225,7 +225,7 @@ enum ScanRun {
                     hostFilter: request.hostFilter,
                     timeWindow: request.timeWindow,
                     packIDs: request.packIDs,
-                    allEvents: request.allEvents,
+                    reportsEveryEvent: request.allEvents,
                     bounds: request.bounds
                 ),
                 fileManager: request.fileManager
@@ -317,7 +317,7 @@ private func scanCommandViewModel(
 private func scanFindingRow(from finding: ScanFinding, showCommand: Bool) -> ScanFindingRow {
     scanFindingRow(
         host: finding.host,
-        sessionID: finding.sessionID,
+        sessionID: finding.sessionID?.rawValue,
         sourcePath: finding.sourcePath,
         occurredAt: finding.occurredAt,
         ruleID: finding.ruleID,

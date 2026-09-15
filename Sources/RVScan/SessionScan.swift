@@ -4,7 +4,7 @@ import RVDomain
 /// A deny finding (or later dedupe group) from session forensics.
 public struct ScanFinding: Sendable, Equatable {
     public var host: ScanHostID
-    public var sessionID: String?
+    public var sessionID: SessionID?
     public var sourcePath: String
     public var occurredAt: Date?
     public var ruleID: RuleID
@@ -15,7 +15,7 @@ public struct ScanFinding: Sendable, Equatable {
 
     public init(
         host: ScanHostID,
-        sessionID: String? = nil,
+        sessionID: SessionID? = nil,
         sourcePath: String,
         occurredAt: Date? = nil,
         ruleID: RuleID,
@@ -65,7 +65,8 @@ public struct SessionScanRequest: Sendable, Equatable {
     public var hostFilter: ScanHostID?
     public var timeWindow: ScanTimeWindow
     public var packIDs: [PackID]
-    public var allEvents: Bool
+    /// When true, each deny is reported instead of grouped.
+    public var reportsEveryEvent: Bool
     public var bounds: ScanBounds
 
     public init(
@@ -76,7 +77,7 @@ public struct SessionScanRequest: Sendable, Equatable {
         hostFilter: ScanHostID? = nil,
         timeWindow: ScanTimeWindow = .default,
         packIDs: [PackID] = dayOnePackIDs,
-        allEvents: Bool = false,
+        reportsEveryEvent: Bool = false,
         bounds: ScanBounds = .default
     ) {
         self.home = home
@@ -86,7 +87,7 @@ public struct SessionScanRequest: Sendable, Equatable {
         self.hostFilter = hostFilter
         self.timeWindow = timeWindow
         self.packIDs = packIDs
-        self.allEvents = allEvents
+        self.reportsEveryEvent = reportsEveryEvent
         self.bounds = bounds
     }
 }
@@ -111,7 +112,7 @@ public struct SessionScan: Sendable {
             throw SessionScanError.includeGlobRequiresPath
         }
 
-        let selected = SessionScanAdapters.selected(hostFilter: request.hostFilter)
+        let selected = SessionScanAdapters.adapters(for: request.hostFilter)
         let walker = DirectoryWalker(bounds: request.bounds)
         var warnings: [ScanWarning] = []
         var candidates: [ExtractCandidate] = []
@@ -202,7 +203,11 @@ public struct SessionScan: Sendable {
         let resolver = fileInstantResolver()
         let rawFindings = classify.classify(events)
         let inWindow = request.timeWindow.filter(rawFindings, now: request.now, resolver: resolver)
-        let findings = ScanDedupe.apply(inWindow, allEvents: request.allEvents, resolver: resolver)
+        let findings = ScanDedupe.grouped(
+            inWindow,
+            reportsEveryEvent: request.reportsEveryEvent,
+            resolver: resolver
+        )
 
         return SessionScanResult(
             report: ScanReport(
@@ -222,7 +227,7 @@ private func walkMapped(
     fileManager: FileManager
 ) throws -> DirectoryWalkResult {
     do {
-        return try walker.walk(root: root, fileManager: fileManager)
+        return try walker.walk(at: root, fileManager: fileManager)
     } catch DirectoryWalkError.listingFailed(let path) {
         throw SessionScanError.listingFailed(path)
     }

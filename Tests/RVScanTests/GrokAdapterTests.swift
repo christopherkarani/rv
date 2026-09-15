@@ -21,7 +21,7 @@ import RVDomain
     let events = try adapter.extract(fileURL: fileURL, data: data)
     #expect(events.map(\.command.rawValue) == ["git reset --hard", "git status"])
     #expect(events.allSatisfy { $0.host == .grok })
-    #expect(events.allSatisfy { $0.sessionID == "sess-grok-1" })
+    #expect(events.allSatisfy { $0.sessionID == SessionID(validating: "sess-grok-1") })
     // No `.grok/sessions/<cwd>/` layout — recovery would guess. Leave nil.
     #expect(events.allSatisfy { $0.workingDirectory == nil })
 }
@@ -33,7 +33,7 @@ import RVDomain
         .appendingPathComponent(".grok/sessions/%2Ftmp%2Frv-ws/sess-enc/chat_history.jsonl")
     let events = try adapter.extract(fileURL: fileURL, data: data)
     #expect(events.isEmpty == false)
-    #expect(events.allSatisfy { $0.sessionID == "sess-enc" })
+    #expect(events.allSatisfy { $0.sessionID == SessionID(validating: "sess-enc") })
     #expect(events.allSatisfy { $0.workingDirectory?.rawValue == "/tmp/rv-ws" })
 }
 
@@ -44,7 +44,7 @@ import RVDomain
         .appendingPathComponent(".grok/sessions/my-project/sess-rel/chat_history.jsonl")
     let events = try adapter.extract(fileURL: fileURL, data: data)
     #expect(events.isEmpty == false)
-    #expect(events.allSatisfy { $0.sessionID == "sess-rel" })
+    #expect(events.allSatisfy { $0.sessionID == SessionID(validating: "sess-rel") })
     // Relative layout slug is not a filesystem path without live I/O. Do not guess.
     #expect(events.allSatisfy { $0.workingDirectory == nil })
 }
@@ -80,7 +80,7 @@ import RVDomain
         let data = try Data(contentsOf: dest)
         let events = try adapter.extract(fileURL: dest, data: data)
         #expect(events.count == 2)
-        #expect(events.allSatisfy { $0.sessionID == "sess-a" })
+        #expect(events.allSatisfy { $0.sessionID == SessionID(validating: "sess-a") })
         #expect(events.allSatisfy { $0.workingDirectory?.rawValue == "/tmp" })
     }
 }

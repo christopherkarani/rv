@@ -23,16 +23,16 @@ private func resetHardFindings(
     }
 
     let raw = resetHardFindings(classify: classify, events: events)
-    let deduped = ScanDedupe.apply(raw)
+    let deduped = ScanDedupe.grouped(raw)
 
     #expect(deduped.count == 1)
     let finding = try #require(deduped.first)
     #expect(finding.count == 3)
     #expect(finding.ruleID.rawValue == "core.git:reset-hard")
-    #expect(ScanDedupeKey(finding: finding).ruleID == "core.git:reset-hard")
+    #expect(ScanDedupeKey(finding: finding).ruleID.rawValue == "core.git:reset-hard")
 }
 
-@Test func dedupe_allEvents_emitsOneRowPerDeny() throws {
+@Test func dedupe_reportsEveryEvent_emitsOneRowPerDeny() throws {
     let classify = try ScanClassify()
     let base = Date(timeIntervalSince1970: 1_700_000_000)
     let events = (0 ..< 3).map { offset in
@@ -45,7 +45,7 @@ private func resetHardFindings(
     }
 
     let raw = resetHardFindings(classify: classify, events: events)
-    let rows = ScanDedupe.apply(raw, allEvents: true)
+    let rows = ScanDedupe.grouped(raw, reportsEveryEvent: true)
 
     #expect(rows.count == 3)
     #expect(rows.allSatisfy { $0.count == 1 })
@@ -79,7 +79,7 @@ private func resetHardFindings(
 
     let raw = resetHardFindings(classify: classify, events: events)
     let inWindow = ScanTimeWindow.default.filter(raw, now: now)
-    let deduped = ScanDedupe.apply(inWindow)
+    let deduped = ScanDedupe.grouped(inWindow)
 
     #expect(deduped.count == 1)
     #expect(deduped.first?.count == 1)
@@ -108,12 +108,12 @@ private func resetHardFindings(
 
     let raw = resetHardFindings(classify: classify, events: events)
     let eligible = ScanTimeWindow.all.filter(raw, now: now)
-    let deduped = ScanDedupe.apply(eligible)
+    let deduped = ScanDedupe.grouped(eligible)
 
     #expect(deduped.count == 1)
     #expect(deduped.first?.count == 2)
 
-    let droppedByDefault = ScanDedupe.apply(ScanTimeWindow.default.filter(raw, now: now))
+    let droppedByDefault = ScanDedupe.grouped(ScanTimeWindow.default.filter(raw, now: now))
     #expect(droppedByDefault.count == 1)
     #expect(droppedByDefault.first?.count == 1)
     #expect(droppedByDefault.first?.sourcePath == "/tmp/recent.jsonl")
