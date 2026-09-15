@@ -276,6 +276,7 @@ func hostInstallation_currentResourceWithExecutableIsWired(_ host: HookHost) thr
         let owned = paths.hostAdapter(for: host)
         let executable = home.appendingPathComponent("bin/rv")
         try makeExecutable(executable)
+        try makeExecutable(home.appendingPathComponent("bin/rv-cli"))
         try FileManager.default.createDirectory(
             atPath: owned.detectionDirectory,
             withIntermediateDirectories: true
@@ -289,6 +290,47 @@ func hostInstallation_currentResourceWithExecutableIsWired(_ host: HookHost) thr
         )
 
         #expect(snapshot.state(for: host) == .wired)
+    }
+}
+
+@Test(arguments: HookHost.setupSlotOrder)
+func hostInstallation_nonExecutableRvCliNextToBakedRvIsBrokenNotWired(_ host: HookHost) throws {
+    try withInstallationHome { home, paths in
+        let owned = paths.hostAdapter(for: host)
+        let executable = home.appendingPathComponent("bin/rv")
+        try makeExecutable(executable)
+        let cli = home.appendingPathComponent("bin/rv-cli")
+        try FileManager.default.createDirectory(
+            at: cli.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try "not-exec".write(to: cli, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o644],
+            ofItemAtPath: cli.path
+        )
+        try FileManager.default.createDirectory(
+            atPath: owned.detectionDirectory,
+            withIntermediateDirectories: true
+        )
+        try writeWiredAdapter(host: host, destination: owned.destination, rvPath: executable.path)
+        let existing = try Data(contentsOf: URL(fileURLWithPath: owned.destination))
+
+        let snapshot = try HostAdapterInstallation.inspect(
+            paths: paths,
+            pathEntries: [],
+            fileManager: .default
+        )
+
+        #expect(snapshot.state(for: host) == .broken)
+        #expect(snapshot.state(for: host) != .wired)
+        switch snapshot.installation(for: host) {
+        case .broken(_, let data):
+            #expect(data == existing)
+        default:
+            Issue.record("expected .broken with existing adapter bytes")
+        }
+        #expect(try Data(contentsOf: URL(fileURLWithPath: owned.destination)) == existing)
     }
 }
 
@@ -310,6 +352,7 @@ func hostInstallation_currentResourceWithExecutableIsWired(_ host: HookHost) thr
     try withInstallationHome { home, paths in
         let executable = home.appendingPathComponent("bin/rv")
         try makeExecutable(executable)
+        try makeExecutable(home.appendingPathComponent("bin/rv-cli"))
         try FileManager.default.createDirectory(
             atPath: paths.grokDirectory,
             withIntermediateDirectories: true
@@ -357,6 +400,7 @@ func hostInstallation_currentResourceWithExecutableIsWired(_ host: HookHost) thr
     try withInstallationHome { home, paths in
         let executable = home.appendingPathComponent("bin/rv")
         try makeExecutable(executable)
+        try makeExecutable(home.appendingPathComponent("bin/rv-cli"))
         try FileManager.default.createDirectory(
             atPath: paths.claudeDirectory,
             withIntermediateDirectories: true
@@ -382,6 +426,7 @@ func hostInstallation_currentResourceWithExecutableIsWired(_ host: HookHost) thr
     try withInstallationHome { home, paths in
         let executable = home.appendingPathComponent("bin/rv")
         try makeExecutable(executable)
+        try makeExecutable(home.appendingPathComponent("bin/rv-cli"))
         try FileManager.default.createDirectory(
             atPath: paths.cursorDirectory,
             withIntermediateDirectories: true
@@ -407,6 +452,7 @@ func hostInstallation_currentResourceWithExecutableIsWired(_ host: HookHost) thr
     try withInstallationHome { home, paths in
         let executable = home.appendingPathComponent("bin/rv")
         try makeExecutable(executable)
+        try makeExecutable(home.appendingPathComponent("bin/rv-cli"))
         try FileManager.default.createDirectory(
             atPath: paths.cursorDirectory,
             withIntermediateDirectories: true

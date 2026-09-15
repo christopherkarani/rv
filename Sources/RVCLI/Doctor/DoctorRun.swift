@@ -1,7 +1,6 @@
 import Foundation
 import RVDomain
 import RVHistory
-import RVHooks
 import RVIPC
 import RVPolicy
 import RVPresentation
@@ -81,13 +80,9 @@ enum DoctorRun {
             service: health.service,
             packs: health.packs,
             hosts: HookHost.setupSlotOrder.map { host in
-                let installation = installations.installation(for: host)
-                return DoctorHostView(
+                DoctorHostView(
                     host: host,
-                    state: doctorHostState(
-                        installation,
-                        fileManager: environment.fileManager
-                    ),
+                    state: doctorHostState(installations.installation(for: host)),
                     fileTools: installations.fileTools(for: host)
                 )
             },
@@ -105,40 +100,11 @@ enum DoctorRun {
         )
     }
 
-    /// Miss path needs sibling `rv-cli`. Missing or non-exec is `.broken`, not `.wired`.
+    /// Inspect already classified miss-path; doctor projects that state.
     private static func doctorHostState(
-        _ installation: HostAdapterInstallation,
-        fileManager: FileManager
+        _ installation: HostAdapterInstallation
     ) -> DoctorHostState {
-        switch installation {
-        case .wired(let owned, let data):
-            if owned.host == .claude {
-                guard case .wired(let bakedRvPath) = ClaudeSettingsMerge.inspectionState(of: data),
-                      isExecutableRvCli(nextTo: bakedRvPath, fileManager: fileManager)
-                else {
-                    return .broken
-                }
-                return .wired
-            }
-            guard let text = String(data: data, encoding: .utf8),
-                  let adapter = try? HostAdapterResources.load(for: owned.host),
-                  let bakedRvPath = adapter.bakedRvPath(in: text),
-                  isExecutableRvCli(nextTo: bakedRvPath, fileManager: fileManager)
-            else {
-                return .broken
-            }
-            return .wired
-        case .missing, .absentFile, .occupied, .broken:
-            return installation.state
-        }
-    }
-
-    private static func isExecutableRvCli(
-        nextTo rvPath: String,
-        fileManager: FileManager
-    ) -> Bool {
-        let sibling = (rvPath as NSString).deletingLastPathComponent + "/rv-cli"
-        return fileManager.isExecutableFile(atPath: sibling)
+        installation.state
     }
 
     private static func configState(

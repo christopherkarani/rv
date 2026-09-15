@@ -273,10 +273,7 @@ extension HostAdapterInstallation {
         case .outdated:
             return .broken(path: path, existingData: data)
         case .wired(let bakedPath):
-            let executable = bakedPath.isEmpty == false
-                && bakedPath.hasPrefix("/")
-                && fileManager.isExecutableFile(atPath: bakedPath)
-            if executable {
+            if isWiredBakedRv(bakedPath, fileManager: fileManager) {
                 return .wired(path: path, existingData: data)
             }
             return .broken(path: path, existingData: data)
@@ -307,13 +304,24 @@ extension HostAdapterInstallation {
         guard let bakedRvPath = adapter.bakedRvPath(in: text) else {
             return .occupied(path)
         }
-        let wired = bakedRvPath.isEmpty == false
-            && bakedRvPath.hasPrefix("/")
-            && fileManager.isExecutableFile(atPath: bakedRvPath)
-        if wired {
+        if isWiredBakedRv(bakedRvPath, fileManager: fileManager) {
             return .wired(path: path, existingData: data)
         }
         return .broken(path: path, existingData: data)
+    }
+
+    /// `.wired` means the C hook can exec sibling `rv-cli` next to baked `rv`.
+    private static func isWiredBakedRv(_ bakedRvPath: String, fileManager: FileManager) -> Bool {
+        bakedRvPath.isEmpty == false
+            && bakedRvPath.hasPrefix("/")
+            && fileManager.isExecutableFile(atPath: bakedRvPath)
+            && isExecutableRvCli(nextTo: bakedRvPath, fileManager: fileManager)
+    }
+
+    /// Miss path: C hook execs sibling `rv-cli` next to baked `rv`.
+    package static func isExecutableRvCli(nextTo rvPath: String, fileManager: FileManager) -> Bool {
+        let sibling = (rvPath as NSString).deletingLastPathComponent + "/rv-cli"
+        return fileManager.isExecutableFile(atPath: sibling)
     }
 
     private static func isDetected(

@@ -55,6 +55,7 @@ private func wirePiAdapter(homeURL: URL) throws {
     let owned = paths.hostAdapter(for: .pi)
     let executable = homeURL.appendingPathComponent("bin/rv")
     try makeExecutable(executable)
+    try makeExecutable(homeURL.appendingPathComponent("bin/rv-cli"))
     let body = try HookHost.pi.adapterResource().rendered(rvPath: executable.path)
     try FileManager.default.createDirectory(
         atPath: (owned.destination as NSString).deletingLastPathComponent,
@@ -230,6 +231,34 @@ private func runPiScan(home: ScanHome) throws -> ScanRunResult {
         )
         #expect(outcome.stdout.contains("rv setup") == false)
         #expect(outcome.stdout.contains("Some hosts are not wired") == false)
+    }
+}
+
+@Test func scanSetupNudge_nonExecutableRvCliNextToBakedRv_recommends() throws {
+    try withTempScanHome { home, homeURL in
+        try installPiFixture(into: homeURL)
+        try wirePiAdapter(homeURL: homeURL)
+        let cli = homeURL.appendingPathComponent("bin/rv-cli")
+        try "not-exec".write(to: cli, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o644],
+            ofItemAtPath: cli.path
+        )
+
+        let result = try runPiScan(home: home)
+        let snapshot = try HostAdapterInstallation.inspect(
+            paths: OwnedPaths(home: try #require(HomeDirectory(validating: homeURL.path))),
+            pathEntries: [],
+            fileManager: .default
+        )
+        #expect(snapshot.state(for: .pi) == .broken)
+        let nudge = scanSetupNudgeRecommended(
+            hosts: result.eventHosts,
+            home: home,
+            pathEntries: [],
+            fileManager: .default
+        )
+        #expect(nudge)
     }
 }
 
