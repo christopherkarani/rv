@@ -30,7 +30,11 @@ func hermesDecode_extractsTerminalCommand(_ file: String, expected: String) thro
         return
     }
     #expect(request.host == .hermes)
-    #expect(request.command.rawValue == expected)
+    guard case .shell(_, let command, _, _) = request else {
+        Issue.record("expected .shell for \(file)")
+        return
+    }
+    #expect(command.rawValue == expected)
 }
 
 @Test func hermesDecode_nonTerminalIsForeign() throws {
@@ -142,6 +146,10 @@ func hermesDecode_extractsTerminalCommand(_ file: String, expected: String) thro
         Issue.record("expected .request for hostAsk spend")
         return
     }
-    #expect(request.hostAsk == .spend)
+    guard case .spend(_, let command, _, _) = request else {
+        Issue.record("expected .spend for hostAsk spend")
+        return
+    }
+    #expect(command.rawValue == "git reset --hard")
     #expect(request.cwd?.rawValue == "/tmp/ws")
 }

@@ -50,7 +50,11 @@ func grokDecode_extractsShellCommand(_ file: String, expected: String) throws {
         return
     }
     #expect(request.host == .grok)
-    #expect(request.command.rawValue == expected)
+    guard case .shell(_, let command, _, _) = request else {
+        Issue.record("expected .shell for \(file)")
+        return
+    }
+    #expect(command.rawValue == expected)
 }
 
 @Test func grokDecode_oversizeExtractsFullCommand() throws {
@@ -60,8 +64,12 @@ func grokDecode_extractsShellCommand(_ file: String, expected: String) throws {
         return
     }
     #expect(request.host == .grok)
-    #expect(request.command.rawValue.utf8.count > 65_536)
-    #expect(request.command.rawValue.hasSuffix(" git reset --hard"))
+    guard case .shell(_, let command, _, _) = request else {
+        Issue.record("expected .shell for oversize stdin")
+        return
+    }
+    #expect(command.rawValue.utf8.count > 65_536)
+    #expect(command.rawValue.hasSuffix(" git reset --hard"))
 }
 
 @Test(arguments: [
@@ -76,8 +84,12 @@ func grokDecode_otherToolOrEventIsForeign(_ file: String) throws {
         Issue.record("expected .request for read_file")
         return
     }
-    #expect(request.file?.kind == .read)
-    #expect(request.file?.path.rawValue == "/tmp/rv-hook-fixture/README.md")
+    guard case .file(_, let file, _, _) = request else {
+        Issue.record("expected .file for read_file")
+        return
+    }
+    #expect(file.kind == .read)
+    #expect(file.path.rawValue == "/tmp/rv-hook-fixture/README.md")
 }
 
 @Test func grokDecode_readFileEnvIsCatalogPath() throws {
@@ -85,8 +97,12 @@ func grokDecode_otherToolOrEventIsForeign(_ file: String) throws {
         Issue.record("expected .request for deny-file-env")
         return
     }
-    #expect(request.file?.kind == .read)
-    #expect(request.file?.path.rawValue == "/tmp/rv-oracle/.env")
+    guard case .file(_, let file, _, _) = request else {
+        Issue.record("expected .file for deny-file-env")
+        return
+    }
+    #expect(file.kind == .read)
+    #expect(file.path.rawValue == "/tmp/rv-oracle/.env")
 }
 
 @Test func grokDecode_emptyCommandIsMissingCommand() throws {
@@ -103,7 +119,14 @@ func grokDecode_otherToolOrEventIsForeign(_ file: String) throws {
     """
     #expect(
         codec.decode(stdin)
-            == .request(HookRequest(host: .grok, command: ShellCommand(rawValue: "git status")))
+            == .request(
+                .shell(
+                    host: .grok,
+                    command: ShellCommand(rawValue: "git status"),
+                    cwd: nil,
+                    session: nil
+                )
+            )
     )
 }
 

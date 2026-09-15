@@ -16,18 +16,13 @@ public struct GrokHostCodec: HostCodec {
             return .foreign
         }
         let cwd = envelope.cwd.flatMap { WorkingDirectory(validating: $0) }
-        let session = firstNonEmpty(envelope.sessionId)
+        let session = firstNonEmpty(envelope.sessionId).flatMap { SessionID(validating: $0) }
         if Self.shellTools.contains(envelope.toolName ?? "") {
-            guard let command = envelope.toolInput?.command, command.isEmpty == false else {
-                return .malformed(.missingCommand)
-            }
-            return .request(
-                HookRequest(
-                    host: .grok,
-                    command: ShellCommand(rawValue: command),
-                    cwd: cwd,
-                    session: session
-                )
+            return HookRequest.decoded(
+                host: .grok,
+                command: envelope.toolInput?.command,
+                cwd: cwd,
+                session: session
             )
         }
         if let file = FileToolAction.decoded(
@@ -37,14 +32,12 @@ public struct GrokHostCodec: HostCodec {
             envelope.toolInput?.targetFile,
             envelope.toolInput?.target
         ) {
-            return .request(
-                HookRequest(
-                    host: .grok,
-                    command: ShellCommand(rawValue: ""),
-                    cwd: cwd,
-                    session: session,
-                    file: file
-                )
+            return HookRequest.decoded(
+                host: .grok,
+                command: nil,
+                cwd: cwd,
+                session: session,
+                file: file
             )
         }
         return .foreign

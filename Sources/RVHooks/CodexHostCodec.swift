@@ -22,19 +22,15 @@ public struct CodexHostCodec: HostCodec {
         guard envelope.toolName == "Bash" else {
             return .foreign
         }
-        guard let command = envelope.toolInput?.command, command.isEmpty == false else {
-            return .malformed(.missingCommand)
-        }
         let cwdText = firstNonEmpty(envelope.toolInput?.workdir, envelope.cwd)
         let cwd = cwdText.flatMap { WorkingDirectory(validating: $0) }
         let session = firstNonEmpty(envelope.sessionId, envelope.turnId)
-        return .request(
-            HookRequest(
-                host: .codex,
-                command: ShellCommand(rawValue: command),
-                cwd: cwd,
-                session: session
-            )
+            .flatMap { SessionID(validating: $0) }
+        return HookRequest.decoded(
+            host: .codex,
+            command: envelope.toolInput?.command,
+            cwd: cwd,
+            session: session
         )
     }
 

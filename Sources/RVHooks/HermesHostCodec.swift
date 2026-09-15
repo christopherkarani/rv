@@ -19,21 +19,17 @@ public struct HermesHostCodec: HostCodec {
         guard envelope.toolName == "terminal" else {
             return .foreign
         }
-        guard let command = envelope.args?.command, command.isEmpty == false else {
-            return .malformed(.missingCommand)
-        }
         let cwdText = firstNonEmpty(envelope.args?.workdir, envelope.cwd)
         let cwd = cwdText.flatMap { WorkingDirectory(validating: $0) }
         let session = firstNonEmpty(envelope.sessionId, envelope.taskId)
+            .flatMap { SessionID(validating: $0) }
         let hostAsk = envelope.hostAsk.flatMap(HostAskHookIntent.init(rawValue:))
-        return .request(
-            HookRequest(
-                host: .hermes,
-                command: ShellCommand(rawValue: command),
-                cwd: cwd,
-                session: session,
-                hostAsk: hostAsk
-            )
+        return HookRequest.decoded(
+            host: .hermes,
+            command: envelope.args?.command,
+            cwd: cwd,
+            session: session,
+            hostAsk: hostAsk
         )
     }
 

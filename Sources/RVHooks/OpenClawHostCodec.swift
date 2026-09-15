@@ -22,19 +22,15 @@ public struct OpenClawHostCodec: HostCodec {
         guard envelope.toolName == "exec" else {
             return .foreign
         }
-        guard let command = envelope.params?.command, command.isEmpty == false else {
-            return .malformed(.missingCommand)
-        }
         let cwdText = firstNonEmpty(envelope.params?.workdir, envelope.cwd)
         let cwd = cwdText.flatMap { WorkingDirectory(validating: $0) }
         let session = firstNonEmpty(envelope.sessionId, envelope.sessionKey)
-        return .request(
-            HookRequest(
-                host: .openclaw,
-                command: ShellCommand(rawValue: command),
-                cwd: cwd,
-                session: session
-            )
+            .flatMap { SessionID(validating: $0) }
+        return HookRequest.decoded(
+            host: .openclaw,
+            command: envelope.params?.command,
+            cwd: cwd,
+            session: session
         )
     }
 

@@ -19,20 +19,15 @@ public struct PiHostCodec: HostCodec {
         guard envelope.toolName == "bash" else {
             return .foreign
         }
-        guard let command = envelope.input?.command, command.isEmpty == false else {
-            return .malformed(.missingCommand)
-        }
         let cwd = envelope.cwd.flatMap { WorkingDirectory(validating: $0) }
-        let session = firstNonEmpty(envelope.sessionId)
+        let session = firstNonEmpty(envelope.sessionId).flatMap { SessionID(validating: $0) }
         let hostAsk = envelope.hostAsk.flatMap(HostAskHookIntent.init(rawValue:))
-        return .request(
-            HookRequest(
-                host: .pi,
-                command: ShellCommand(rawValue: command),
-                cwd: cwd,
-                session: session,
-                hostAsk: hostAsk
-            )
+        return HookRequest.decoded(
+            host: .pi,
+            command: envelope.input?.command,
+            cwd: cwd,
+            session: session,
+            hostAsk: hostAsk
         )
     }
 
