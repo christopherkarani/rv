@@ -25,7 +25,7 @@ struct DenialLedgerRecordTests {
             return
         }
         let rows = DenialLedger(configDirectory: RVPolicyPaths.configDirectory(home: home))
-            .list(now: now)
+            .records(asOf: now)
         #expect(rows.count == 1)
         #expect(rows[0].host == .hook(.claude))
         #expect(rows[0].tool == .file(.read))
@@ -50,7 +50,7 @@ struct DenialLedgerRecordTests {
         #expect(result.decision == .allow)
         #expect(
             DenialLedger(configDirectory: RVPolicyPaths.configDirectory(home: home))
-                .list(now: now)
+                .records(asOf: now)
                 .isEmpty
         )
     }
@@ -70,7 +70,7 @@ struct DenialLedgerRecordTests {
             now: now
         )
         #expect(
-            DenialLedger(configDirectory: configDir).list(now: now).isEmpty
+            DenialLedger(configDirectory: configDir).records(asOf: now).isEmpty
         )
     }
 
@@ -95,7 +95,7 @@ struct DenialLedgerRecordTests {
         }
         #expect(
             DenialLedger(configDirectory: RVPolicyPaths.configDirectory(home: home))
-                .list(now: now)
+                .records(asOf: now)
                 .isEmpty
         )
     }
@@ -120,7 +120,7 @@ struct DenialLedgerRecordTests {
             return
         }
         let rows = DenialLedger(configDirectory: RVPolicyPaths.configDirectory(home: home))
-            .list(now: now)
+            .records(asOf: now)
         #expect(rows.count == 1)
         #expect(rows[0].host == .hook(.grok))
         #expect(rows[0].tool == .bash)
@@ -148,7 +148,7 @@ struct DenialLedgerRecordTests {
             return
         }
         let rows = DenialLedger(configDirectory: RVPolicyPaths.configDirectory(home: home))
-            .list(now: now)
+            .records(asOf: now)
         #expect(rows.count == 1)
         #expect(rows[0].host == .hook(.claude))
         #expect(rows[0].tool == .bash)
@@ -172,7 +172,7 @@ struct DenialLedgerRecordTests {
             IPCRequest(method: .hookEvaluate(HookEvaluateParams(host: .pi, stdin: stdin)))
         )
         let rows = DenialLedger(configDirectory: RVPolicyPaths.configDirectory(home: home))
-            .list(now: now)
+            .records(asOf: now)
         #expect(rows.count == 1)
         #expect(rows[0].host == .hook(.pi))
         #expect(rows[0].tool == .bash)

@@ -42,7 +42,7 @@ struct HostAskSpendTests {
         """
         _ = await client.hookEvaluate(host: .pi, stdin: stdin)
         let rows = DenialLedger(configDirectory: RVPolicyPaths.configDirectory(home: home))
-            .list(now: now)
+            .records(asOf: now)
         #expect(rows.count == 1)
         #expect(rows[0].host == .hook(.pi))
         #expect(rows[0].tool == .bash)
