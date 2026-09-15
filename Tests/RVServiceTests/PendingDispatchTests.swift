@@ -566,6 +566,82 @@ struct PendingDispatchTests {
         #expect(remaining.items.isEmpty)
     }
 
+    @Test func failedPlantConsumesWaitAndReportsNotUnlockable() async throws {
+        let allowOnceDirectory = try isolatedAllowOnceDirectory()
+        let homeURL = try isolatedHomeDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: homeURL)
+            try? FileManager.default.removeItem(at: allowOnceDirectory)
+        }
+        let approvals = FakePendingApprovals()
+        let wait = pinOkRecord(id: "plant-fail", createdAt: now)
+        await approvals.seed(wait)
+        let runtime = try makeRuntime(
+            approvals: approvals,
+            homeURL: homeURL,
+            allowOnceDirectory: allowOnceDirectory
+        )
+        try FileManager.default.removeItem(at: allowOnceDirectory)
+        #expect(FileManager.default.createFile(atPath: allowOnceDirectory.path, contents: Data()))
+
+        let resolved = await runtime.dispatch(
+            IPCRequest(method: .pendingResolve(resolveParams(wait, decision: .allowOnce)))
+        )
+        #expect(resolved.result == .error(.pendingAllowOnceNotUnlockable))
+        #expect(await approvals.resolveCalls.map(\.decision) == [.allowOnce])
+        let remaining = try requireList(await runtime.dispatch(IPCRequest(method: .pendingList)))
+        #expect(remaining.items.isEmpty)
+        let grants = AllowOnceStore(baseDirectory: allowOnceDirectory)
+        #expect(await grants.list(now: now).filter { $0.kind == .granted }.isEmpty)
+    }
+
+    @Test func allowOncePeekUsesCompileSetAfterPackEnable() async throws {
+        let homeURL = try isolatedHomeDirectory()
+        let allowOnceDirectory = try isolatedAllowOnceDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: homeURL)
+            try? FileManager.default.removeItem(at: allowOnceDirectory)
+        }
+        let home = try #require(HomeDirectory(validating: homeURL.path))
+        let approvals = FakePendingApprovals()
+        let wait = record(
+            id: "sqlite-1",
+            host: .pi,
+            session: "sess-pi",
+            folder: "ws",
+            createdAt: now,
+            effects: [],
+            branchName: nil,
+            command: "DROP TABLE users"
+        )
+        await approvals.seed(wait)
+        let runtime = ServiceRuntime(
+            home: home,
+            allowOnceDirectory: allowOnceDirectory,
+            clock: { now },
+            pendingApprovals: .coordinator(approvals)
+        )
+        let sqlite = PackID(rawValue: "database.sqlite")
+        let enable = await runtime.dispatch(
+            IPCRequest(method: .setPackEnabled(SetPackEnabledParams(id: sqlite, enabled: true)))
+        )
+        guard case .setPackEnabled = enable.result else {
+            Issue.record("database.sqlite must enable, got \(enable.result)")
+            return
+        }
+
+        let resolved = await runtime.dispatch(
+            IPCRequest(method: .pendingResolve(resolveParams(wait, decision: .allowOnce)))
+        )
+        guard case .pendingResolve(let reply) = resolved.result else {
+            Issue.record("allow-once after pack enable must resolve, got \(resolved.result)")
+            return
+        }
+        #expect(reply.terminal)
+        let grants = AllowOnceStore(baseDirectory: allowOnceDirectory)
+        #expect(await grants.list(now: now).filter { $0.kind == .granted }.count == 1)
+    }
+
     @Test func hookEvaluateAskOnPiPersistsWaitWithoutCommandOnList() async throws {
         let approvals = FakePendingApprovals()
         let runtime = try makeRuntime(approvals: approvals)
