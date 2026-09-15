@@ -145,12 +145,14 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 mkdir -p /tmp/swift-arch-c8hook21
-for _i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
+_i=0
+while [[ "$_i" -lt 180 ]]; do
+  _i=$((_i + 1))
   if mkdir "$LOCKDIR" 2>/dev/null; then
     break
   fi
   sleep 1
-  if [[ "$_i" -eq 30 ]]; then
+  if [[ "$_i" -eq 180 ]]; then
     fail "could not acquire proof lock"
   fi
 done

@@ -11,12 +11,13 @@ struct CHookPipeTests {
         let script = root.appendingPathComponent("tools/c-hook-proof.sh")
         #expect(FileManager.default.fileExists(atPath: script.path))
 
-        let stage = URL(fileURLWithPath: "/tmp/swift-arch-c8hook21/stage", isDirectory: true)
+        let stage = root.appendingPathComponent(".build/c-hook-stage", isDirectory: true)
         let skipRelease = trioIsStaged(at: stage) ? "1" : "0"
         let isolationHome = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-c-hook-iso-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: isolationHome, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: isolationHome) }
+        try exposePinnedToolchain(in: isolationHome, repoRoot: root)
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/bash")
@@ -25,7 +26,8 @@ struct CHookPipeTests {
         process.environment = [
             "HOME": isolationHome.path,
             "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
-            "TMPDIR": FileManager.default.temporaryDirectory.path,
+            // launchd cannot read plists under Darwin TMPDIR (/var/folders/...).
+            "TMPDIR": "/tmp",
             "RV_RELEASE_STAGE": stage.path,
             "RV_C_HOOK_SKIP_RELEASE": skipRelease,
             "TERM": "dumb",
@@ -60,6 +62,27 @@ private func repoRootURL() -> URL {
         .deletingLastPathComponent()
         .deletingLastPathComponent()
         .deletingLastPathComponent()
+}
+
+/// Darwin `tools/swift-6.3.3` looks up the pin under `$HOME`. Isolation HOME
+/// must still see the login toolchain so skip-release-off can run release.sh.
+private func exposePinnedToolchain(in isolationHome: URL, repoRoot: URL) throws {
+    guard let loginHome = ProcessInfo.processInfo.environment["HOME"], loginHome.isEmpty == false else {
+        return
+    }
+    let pin = try String(contentsOf: repoRoot.appendingPathComponent(".swift-version"), encoding: .utf8)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    guard pin.isEmpty == false else { return }
+    let name = "swift-\(pin)-RELEASE.xctoolchain"
+    let src = URL(fileURLWithPath: loginHome, isDirectory: true)
+        .appendingPathComponent("Library/Developer/Toolchains/\(name)", isDirectory: true)
+    guard FileManager.default.fileExists(atPath: src.path) else { return }
+    let destDir = isolationHome.appendingPathComponent("Library/Developer/Toolchains", isDirectory: true)
+    try FileManager.default.createDirectory(at: destDir, withIntermediateDirectories: true)
+    try FileManager.default.createSymbolicLink(
+        at: destDir.appendingPathComponent(name, isDirectory: true),
+        withDestinationURL: src
+    )
 }
 
 private func trioIsStaged(at stage: URL) -> Bool {

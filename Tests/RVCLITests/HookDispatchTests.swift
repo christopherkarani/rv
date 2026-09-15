@@ -1,3 +1,6 @@
+#if canImport(Darwin)
+import Darwin
+#endif
 import Foundation
 import Testing
 import RVDomain
@@ -119,41 +122,46 @@ import RVTheme
         builtRVExecutable(),
         "build --product rv to prove the process hook path"
     )
-    try await withDispatchTempHome { home in
-        let allow = try runBuiltRV(
-            rv,
-            arguments: ["hook", "--host", "grok"],
-            stdin: grokBashStdin("git stash drop"),
-            home: home
-        )
-        #expect(allow.stdout.isEmpty)
-        #expect(allow.status == 0)
+    // Live rvd uses login-home packs; unload so temp HOME is the miss path.
+    try await withCHookProofLock {
+        try await withUnloadedEvaluateAgent {
+            try await withDispatchTempHome { home in
+                let allow = try runBuiltRV(
+                    rv,
+                    arguments: ["hook", "--host", "grok"],
+                    stdin: grokBashStdin("git stash drop"),
+                    home: home
+                )
+                #expect(allow.stdout.isEmpty)
+                #expect(allow.status == 0)
 
-        let deny = try runBuiltRV(
-            rv,
-            arguments: ["hook", "--host", "grok"],
-            stdin: grokBashStdin("git reset --hard"),
-            home: home
-        )
-        let json = try dispatchDenyJSON(deny.stdout)
-        #expect(json["decision"] as? String == "deny")
-        #expect(json["reason"] as? String == "RV · Blocked. Destroys uncommitted changes. Use 'git stash' first.")
-        #expect((json["reason"] as? String)?.contains("git reset --hard") == false)
-        #expect((json["reason"] as? String)?.contains("Terminal") == false)
-        #expect((json["reason"] as? String)?.contains("allow-once") == false)
-        #expect(deny.status == 0)
+                let deny = try runBuiltRV(
+                    rv,
+                    arguments: ["hook", "--host", "grok"],
+                    stdin: grokBashStdin("git reset --hard"),
+                    home: home
+                )
+                let json = try dispatchDenyJSON(deny.stdout)
+                #expect(json["decision"] as? String == "deny")
+                #expect(json["reason"] as? String == "RV · Blocked. Destroys uncommitted changes. Use 'git stash' first.")
+                #expect((json["reason"] as? String)?.contains("git reset --hard") == false)
+                #expect((json["reason"] as? String)?.contains("Terminal") == false)
+                #expect((json["reason"] as? String)?.contains("allow-once") == false)
+                #expect(deny.status == 0)
 
-        let help = try runBuiltRV(
-            rv,
-            arguments: ["hook", "--help"],
-            stdin: "",
-            home: home
-        )
-        #expect(help.status == 0)
-        #expect(help.stdout == HelpDispatch.text(.hook, palette: colorOffPalette))
-        #expect(help.stdout.contains("OVERVIEW:") == false)
-        #expect(help.stdout.contains("SUBCOMMANDS:") == false)
-        #expect(help.stderr.contains("Error:") == false)
+                let help = try runBuiltRV(
+                    rv,
+                    arguments: ["hook", "--help"],
+                    stdin: "",
+                    home: home
+                )
+                #expect(help.status == 0)
+                #expect(help.stdout == HelpDispatch.text(.hook, palette: colorOffPalette))
+                #expect(help.stdout.contains("OVERVIEW:") == false)
+                #expect(help.stdout.contains("SUBCOMMANDS:") == false)
+                #expect(help.stderr.contains("Error:") == false)
+            }
+        }
     }
 }
 
@@ -262,3 +270,74 @@ private func runBuiltRV(
     let stderr = String(data: stderrPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
     return (stdout, stderr, process.terminationStatus)
 }
+
+private struct DispatchProofError: Error {
+    let message: String
+}
+
+/// Same lockdir as tools/c-hook-proof.sh so process proofs do not fight over rvd.
+private func withCHookProofLock<T>(_ body: () async throws -> T) async throws -> T {
+    let parent = URL(fileURLWithPath: "/tmp/swift-arch-c8hook21", isDirectory: true)
+    let lock = parent.appendingPathComponent("c-hook-proof.lockdir", isDirectory: true)
+    try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+    for _ in 0..<180 {
+        let acquired: Bool
+        do {
+            try FileManager.default.createDirectory(at: lock, withIntermediateDirectories: false)
+            acquired = true
+        } catch {
+            acquired = false
+        }
+        if acquired {
+            defer { try? FileManager.default.removeItem(at: lock) }
+            return try await body()
+        }
+        try await Task.sleep(for: .seconds(1))
+    }
+    throw DispatchProofError(message: "could not acquire c-hook-proof lock")
+}
+
+private func withUnloadedEvaluateAgent<T>(_ body: () async throws -> T) async throws -> T {
+#if os(macOS)
+    let uid = getuid()
+    let domain = "gui/\(uid)"
+    let target = "\(domain)/dev.rv.evaluate"
+    let wasLoaded = launchctl(["print", target]) == 0
+    _ = launchctl(["bootout", target])
+    try await Task.sleep(for: .milliseconds(200))
+    defer {
+        if wasLoaded, let home = loginHomePath() {
+            let plist = "\(home)/Library/LaunchAgents/dev.rv.evaluate.plist"
+            if FileManager.default.fileExists(atPath: plist) {
+                _ = launchctl(["bootstrap", domain, plist])
+            }
+        }
+    }
+    return try await body()
+#else
+    return try await body()
+#endif
+}
+
+#if os(macOS)
+private func loginHomePath() -> String? {
+    guard let pw = getpwuid(getuid()) else { return nil }
+    return String(cString: pw.pointee.pw_dir)
+}
+
+@discardableResult
+private func launchctl(_ arguments: [String]) -> Int32 {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+    process.arguments = arguments
+    process.standardOutput = FileHandle.nullDevice
+    process.standardError = FileHandle.nullDevice
+    do {
+        try process.run()
+        process.waitUntilExit()
+        return process.terminationStatus
+    } catch {
+        return 1
+    }
+}
+#endif
