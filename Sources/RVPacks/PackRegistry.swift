@@ -16,12 +16,11 @@ public enum PackRegistry {
     }
 
     public static func loadDayOne(from bundle: Bundle) throws -> [PackSnapshot] {
-        let names = dayOnePackIDs.map(\.rawValue)
         var snapshots: [PackSnapshot] = []
-        for name in names {
-            let document = try loadDocument(id: name, from: bundle)
+        for id in dayOnePackIDs {
+            let document = try loadDocument(id, from: bundle)
             if document.safe.isEmpty && document.destructive.isEmpty {
-                throw PackLoadError.emptyCorePack(name)
+                throw PackLoadError.emptyCorePack(id.rawValue)
             }
             snapshots.append(document.snapshot)
         }
@@ -41,17 +40,17 @@ public enum PackRegistry {
         var documents: [PackDocument] = []
         documents.reserveCapacity(index.packCount)
         for id in index.packIDs {
-            documents.append(try loadDocument(id: id.rawValue, from: bundle))
+            documents.append(try loadDocument(id, from: bundle))
         }
         return documents
     }
 
-    public static func loadDocument(id: String) throws -> PackDocument {
-        try loadDocument(id: id, from: .module)
+    public static func loadDocument(_ id: PackID) throws -> PackDocument {
+        try loadDocument(id, from: .module)
     }
 
-    public static func loadDocument(id: String, from bundle: Bundle) throws -> PackDocument {
-        let data = try resourceData(named: id, extension: "json", bundle: bundle)
+    public static func loadDocument(_ id: PackID, from bundle: Bundle) throws -> PackDocument {
+        let data = try resourceData(named: id.rawValue, extension: "json", bundle: bundle)
         return try PackJSON.decodeDocument(data)
     }
 

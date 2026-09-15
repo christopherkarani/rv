@@ -69,7 +69,7 @@ package enum EvaluationWorld {
         if let catalog {
             let ids = catalog.records.isEmpty
                 ? dayOnePackIDs
-                : catalog.records.filter(\.enabled).map(\.id)
+                : catalog.records.filter(\.isEnabled).map(\.id)
             walked = WalkedPackIDs(ids: ids)
         } else {
             walked = walkedPackIDs(home: home)

@@ -477,7 +477,7 @@ public actor ServiceRuntime {
             }
             return .setPackEnabled(
                 SetPackEnabledReply(
-                    pack: PackRecord(id: updated.id, enabled: updated.enabled, bundled: updated.bundled)
+                    pack: PackRecord(id: updated.id, enabled: updated.isEnabled, bundled: updated.isBundled)
                 )
             )
         } catch PacksCommandError.unknownID {
@@ -495,7 +495,7 @@ public actor ServiceRuntime {
         rebuildWhenUncovered(
             wanted: EvaluationWorld.coverage(catalog: catalog, home: configHome).compiled
         )
-        let packs = catalog.records.map { PackRecord(id: $0.id, enabled: $0.enabled, bundled: $0.bundled) }
+        let packs = catalog.records.map { PackRecord(id: $0.id, enabled: $0.isEnabled, bundled: $0.isBundled) }
         return ListPacksReply(
             packs: packs,
             enabledCount: packs.filter(\.enabled).count,
@@ -888,7 +888,7 @@ public actor ServiceRuntime {
     /// Catalog for a home; nil home mirrors the old empty-HOME catalog with the day-one packs enabled.
     private static func makeCatalog(home: HomeDirectory?) -> PackCatalog? {
         guard let home else {
-            return try? PackCatalog.bundlingAll(
+            return try? PackCatalog.make(
                 enabled: Set(dayOnePackIDs),
                 index: PackRegistry.loadIndex()
             )
