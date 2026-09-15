@@ -52,7 +52,7 @@ On Linux (OPE-261–262), `RVService`, `rvd`, `RVCLI`, `rv`, and their tests are
 
 **English compile / typed rules.** Product law: `docs/architecture/english-compile.md`. `PolicyPredicate` and `TypedRule` shapes live in RVDomain so `ActionPolicyEngine` stays pure. Persistence (load/save/merge) is RVPolicy. Not the 0.2 execute queue.
 
-**Git analyzer (OPE-254).** `analyzeGit` (RVEngine) parses global options and high-value Git operations into `GitAction`. `applyGitSemantics` attaches that analysis and may add a semantic deny when packs allow. Pack deny / indeterminate is a floor: unknown or unsupported Git syntax never becomes more permissive than the pack verdict.
+**Git analyzer (OPE-254).** `analyzeGit` (RVEngine) parses global options and high-value Git operations into `GitAction`. Git facts enter the evaluation door through `gitProbe` after unwrap (default unprobed). `applyGitSemantics` attaches that analysis and may add a semantic deny when packs allow. Pack deny / indeterminate is a floor: unknown or unsupported Git syntax never becomes more permissive than the pack verdict.
 
 **Filesystem analyzer (OPE-255).** `analyzeFilesystem` (RVEngine) parses high-value filesystem mutations into `FilesystemAction` with canonical targets, repository boundary, and file kind. Path / cwd / repo I/O lives at the evaluate door (`FilesystemLiveProbe`). `applyFilesystemSemantics` attaches that analysis beside Git and may add a semantic deny for protected paths when `core.filesystem` is enabled. Pack deny / indeterminate is a floor: unsupported or uncertain syntax never becomes more permissive than the pack verdict.
 

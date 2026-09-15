@@ -155,6 +155,7 @@ import RVDomain
         #expect(text.contains("import RVHistory") == false)
         #expect(text.contains("import RVService") == false)
         #expect(text.contains("FilesystemLiveProbe") == false)
+        #expect(text.contains("GitLiveProbe") == false)
         #expect(text.contains("AllowOnce") == false)
         #expect(text.contains("GatedEvaluate") == false)
         #expect(text.contains("PolicyGate") == false)
@@ -179,6 +180,20 @@ import RVDomain
         command: ShellCommand(rawValue: "echo hi > file")
     )
     #expect(event.workingDirectory == nil)
+}
+
+@Test func classify_packAllowForceWithLeaseNoRefspec_emitsNoFindings() throws {
+    let cwd = try #require(WorkingDirectory(validating: "/tmp/rv-scan-ws"))
+    let events = [
+        ExtractedEvent(
+            host: .claude,
+            sourcePath: "/tmp/fixture/session.jsonl",
+            command: ShellCommand(rawValue: "git push --force-with-lease"),
+            workingDirectory: cwd
+        ),
+    ]
+    let findings = try ScanClassify().classify(events)
+    #expect(findings.isEmpty)
 }
 
 @Test func classify_nilWorkingDirectory_packAllowWrite_staysUnprobed() throws {

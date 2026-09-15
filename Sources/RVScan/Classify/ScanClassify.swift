@@ -10,11 +10,12 @@ public enum ScanClassifyError: Error, Sendable, Equatable {
 
 /// Warmed pack world: `PackRegistry` snapshots + `ICUPatternEngine` → deny-only
 /// findings via the evaluation door (`evaluateWithSemantics`). Nil event cwd is
-/// **unprobed**: pack deny stays the floor, unwrap-limited still tightens,
-/// unresolved-path does not tighten an allow. Non-nil cwd injects a **probed**
-/// lexical filesystem context (catalog `.dayOne`, empty facts). Repository
-/// root stays nil unless it can be derived without `FileManager` — probed
-/// unknown writes stay fail-closed. No Policy gate, grant spend, or history.
+/// **unprobed** filesystem: pack deny stays the floor, unwrap-limited still
+/// tightens, unresolved-path does not tighten an allow. Non-nil cwd injects a
+/// **probed** lexical filesystem context (catalog `.dayOne`, empty facts).
+/// Repository root stays nil unless it can be derived without `FileManager` —
+/// probed unknown writes stay fail-closed. Git stays **unprobed** (no HEAD).
+/// No Policy gate, grant spend, or history.
 public struct ScanClassify: Sendable {
     public let enabledPacks: [PackID]
 
@@ -67,15 +68,13 @@ public struct ScanClassify: Sendable {
             )
             // Unwrap starts from store cwd so relative `-C` / `--chdir` cannot
             // drop `..` against a nil base and then classify against the store path.
-            let gitContext = GitAnalysisContext(
-                workingDirectory: event.workingDirectory
-            )
             let result = evaluateWithSemantics(
                 request,
                 packs: snapshots,
                 patterns: engine,
                 compiled: compiled,
-                gitContext: gitContext,
+                workingDirectory: event.workingDirectory,
+                gitProbe: { _ in .unprobed },
                 filesystemProbe: { _ in Self.lexicalFilesystemContext(for: event) }
             )
             guard case .deny(let deny, _) = result.outcome else {

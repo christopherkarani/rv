@@ -91,7 +91,8 @@ public struct EvaluateSession: Sendable {
 
     /// The evaluation door on this session's compiled packs: pack evaluate,
     /// then unwrap, analyze, and apply semantic policy. Path / cwd / repo I/O
-    /// stays with the caller via `filesystemProbe`.
+    /// stays with the caller via `filesystemProbe`. Git facts stay with the
+    /// caller via `gitProbe`. Defaults are unprobed.
     ///
     /// Missing core packs stay `indeterminate` for every command, including empty
     /// input that bare `evaluate` would allow. The Engine door still runs so
@@ -101,7 +102,8 @@ public struct EvaluateSession: Sendable {
         safety: SafetyLevel = .normal,
         allowPaths: SecretAllowPathSet = .empty,
         home: String? = nil,
-        gitContext: GitAnalysisContext = .empty,
+        workingDirectory: WorkingDirectory? = nil,
+        gitProbe: (UnwrapOutcome) -> GitAnalysisWorld = { _ in .unprobed },
         filesystemProbe: (UnwrapOutcome) -> FilesystemAnalysisWorld = { _ in .unprobed },
         policy: EffectiveActionPolicy = .empty
     ) -> EvaluationResult {
@@ -113,7 +115,8 @@ public struct EvaluateSession: Sendable {
             home: home,
             engine: engine,
             compiled: compiled,
-            gitContext: gitContext,
+            workingDirectory: workingDirectory,
+            gitProbe: gitProbe,
             filesystemProbe: filesystemProbe,
             policy: policy
         )
@@ -159,7 +162,8 @@ private func engineEvaluateWithSemantics(
     home: String?,
     engine: ICUPatternEngine,
     compiled: CompiledPacks<ICUCompiledPattern>,
-    gitContext: GitAnalysisContext,
+    workingDirectory: WorkingDirectory?,
+    gitProbe: (UnwrapOutcome) -> GitAnalysisWorld,
     filesystemProbe: (UnwrapOutcome) -> FilesystemAnalysisWorld,
     policy: EffectiveActionPolicy
 ) -> EvaluationResult {
@@ -171,7 +175,8 @@ private func engineEvaluateWithSemantics(
         home: home,
         patterns: engine,
         compiled: compiled,
-        gitContext: gitContext,
+        workingDirectory: workingDirectory,
+        gitProbe: gitProbe,
         filesystemProbe: filesystemProbe,
         policy: policy
     )

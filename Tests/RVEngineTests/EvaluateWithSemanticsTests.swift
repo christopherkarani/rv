@@ -7,12 +7,12 @@ import RVDomain
 @Suite("EvaluateWithSemantics")
 struct EvaluateWithSemanticsTests {
     @Test func packAllow_semanticGitDeny_tightens() throws {
-        // `feature` is not a name-based shared branch; dropping `gitContext`
-        // would demote this to `remoteBranchAsk` instead of the shared-branch wall.
+        // `feature` is not a name-based shared branch; dropping the probed
+        // world would demote this to `remoteBranchAsk` instead of the wall.
         let command = "bash -c 'git push --force-with-lease origin feature'"
         let result = try runDoor(
             command,
-            gitContext: GitAnalysisContext(isSharedBranch: true)
+            gitProbe: { _ in .probed(GitAnalysisContext(isSharedBranch: true)) }
         )
         guard case .deny(let deny) = result.decision else {
             Issue.record("wrapped force-with-lease to shared branch must deny")
@@ -141,11 +141,57 @@ struct EvaluateWithSemanticsTests {
         let result = try runDoor("git status")
         #expect(result.decision == .allow)
     }
+
+    @Test func defaultProbe_forceWithLeaseNoRefspec_typedGitPushMain_doesNotMatch() throws {
+        let rule = TypedRule(
+            id: RuleID(pack: .typedGit, pattern: "force-with-lease-main"),
+            predicate: .gitPush(force: .exactly(.forceWithLease), branch: "main"),
+            verdict: .deny,
+            origin: .machine
+        )
+        let result = try runDoor(
+            "git push --force-with-lease",
+            policy: EffectiveActionPolicy(rules: [rule])
+        )
+        #expect(result.decision == .allow)
+        guard case .git(.push(_, let refspec, .forceWithLease, false)) = result.analysis else {
+            Issue.record("unprobed implicit push must parse, got \(result.analysis)")
+            return
+        }
+        #expect(refspec == nil)
+    }
+
+    @Test func gitProbe_forceWithLeaseNoRefspec_probedMain_typedAllowCannotBeatSharedWall() throws {
+        let rule = TypedRule(
+            id: RuleID(pack: .typedGit, pattern: "allow-force-with-lease-main"),
+            predicate: .gitPush(force: .exactly(.forceWithLease), branch: "main"),
+            verdict: .allow,
+            origin: .machine
+        )
+        let result = try runDoor(
+            "git push --force-with-lease",
+            gitProbe: { _ in
+                .probed(GitAnalysisContext(currentBranch: "main", isSharedBranch: true))
+            },
+            policy: EffectiveActionPolicy(rules: [rule])
+        )
+        guard case .deny(let deny) = result.decision else {
+            Issue.record("probed implicit HEAD main must hard-deny, got \(result.decision)")
+            return
+        }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.remoteSharedBranch.ruleID)
+        #expect(result.boundReview == .deny(ActionPolicyEngine.Builtin.remoteSharedBranch))
+        guard case .git(.push(_, let refspec, .forceWithLease, false)) = result.analysis else {
+            Issue.record("probed implicit push must parse refspec main, got \(result.analysis)")
+            return
+        }
+        #expect(refspec == "main")
+    }
 }
 
 private func runDoor(
     _ command: String,
-    gitContext: GitAnalysisContext = .empty,
+    gitProbe: (UnwrapOutcome) -> GitAnalysisWorld = { _ in .unprobed },
     filesystemProbe: (UnwrapOutcome) -> FilesystemAnalysisWorld = { _ in .unprobed },
     policy: EffectiveActionPolicy = .empty
 ) throws -> EvaluationResult {
@@ -188,7 +234,7 @@ private func runDoor(
         packs: packs,
         patterns: engine,
         compiled: compiled,
-        gitContext: gitContext,
+        gitProbe: gitProbe,
         filesystemProbe: filesystemProbe,
         policy: policy
     )

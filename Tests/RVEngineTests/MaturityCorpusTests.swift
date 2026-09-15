@@ -89,7 +89,7 @@ struct MaturityCorpusTests {
 
 private func runDoor(
     _ command: String,
-    gitContext: GitAnalysisContext = .empty,
+    gitProbe: (UnwrapOutcome) -> GitAnalysisWorld = { _ in .unprobed },
     filesystemProbe: (UnwrapOutcome) -> FilesystemAnalysisWorld = { _ in .unprobed },
     policy: EffectiveActionPolicy = .empty
 ) throws -> EvaluationResult {
@@ -132,7 +132,7 @@ private func runDoor(
         packs: packs,
         patterns: engine,
         compiled: compiled,
-        gitContext: gitContext,
+        gitProbe: gitProbe,
         filesystemProbe: filesystemProbe,
         policy: policy
     )

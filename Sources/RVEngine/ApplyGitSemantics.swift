@@ -9,13 +9,13 @@ import RVDomain
 public func applyGitSemantics(
     pack: EvaluationResult,
     command: ShellCommand,
-    context: GitAnalysisContext = .empty,
+    context: GitAnalysisWorld = .unprobed,
     enabledPacks: [PackID] = dayOnePackIDs,
     policy: EffectiveActionPolicy = .empty
 ) -> EvaluationResult {
     applyGitSemantics(
         pack: pack,
-        analysis: analyzeGit(command, context: context),
+        analysis: analyzeGit(command, context: gitAnalysisContext(context)),
         command: command,
         context: context,
         enabledPacks: enabledPacks,
@@ -27,7 +27,7 @@ public func applyGitSemantics(
     pack: EvaluationResult,
     analysis: SemanticAnalysis,
     command: ShellCommand,
-    context: GitAnalysisContext = .empty,
+    context: GitAnalysisWorld = .unprobed,
     enabledPacks: [PackID] = dayOnePackIDs,
     policy: EffectiveActionPolicy = .empty
 ) -> EvaluationResult {
@@ -42,16 +42,18 @@ public func applyGitSemantics(
         return result
     }
 
+    let gitContext = gitAnalysisContext(context)
     let verdict: ActionPolicyVerdict
     if enabledPacks.contains(.coreGit) {
         verdict = ActionPolicyEngine.evaluate(
             action: action.proposedAction(
                 command: command,
-                workingDirectory: context.workingDirectory
+                workingDirectory: gitContext.workingDirectory
             ),
-            context: context.reviewContext,
+            context: gitContext.reviewContext,
             policy: policy,
-            gitAction: action
+            gitAction: action,
+            gitWorld: context
         )
     } else if let typed = ActionPolicyEngine.typedRestriction(
         gitAction: action,
@@ -78,5 +80,14 @@ public func applyGitSemantics(
             analysis: analysis,
             boundReview: .mandatoryHuman(deny)
         )
+    }
+}
+
+private func gitAnalysisContext(_ world: GitAnalysisWorld) -> GitAnalysisContext {
+    switch world {
+    case .unprobed:
+        return .empty
+    case .probed(let context):
+        return context
     }
 }

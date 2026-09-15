@@ -140,11 +140,18 @@ public enum ActionPolicyEngine: Sendable {
         action: ProposedAction,
         context: ReviewContext = ReviewContext(repository: RepositoryReviewContext()),
         policy: EffectiveActionPolicy = .empty,
-        gitAction: GitAction? = nil
+        gitAction: GitAction? = nil,
+        gitWorld: GitAnalysisWorld = .unprobed
     ) -> ActionPolicyVerdict {
         switch action {
         case .shell(let shell):
-            return evaluateShell(shell, context: context, policy: policy, gitAction: gitAction)
+            return evaluateShell(
+                shell,
+                context: context,
+                policy: policy,
+                gitAction: gitAction,
+                gitWorld: gitWorld
+            )
         }
     }
 
@@ -200,9 +207,10 @@ public enum ActionPolicyEngine: Sendable {
         _ shell: ShellAction,
         context: ReviewContext,
         policy: EffectiveActionPolicy,
-        gitAction: GitAction?
+        gitAction: GitAction?,
+        gitWorld: GitAnalysisWorld
     ) -> ActionPolicyVerdict {
-        var hit = builtinHit(shell: shell, context: context)
+        var hit = builtinHit(shell: shell, context: context, gitWorld: gitWorld)
         hit = applyTypedRules(hit, policy.rules, gitAction: gitAction)
         if hit.semanticallyCovered == false {
             hit = applyPackFallback(hit, policy.packFallback)
@@ -218,7 +226,11 @@ public enum ActionPolicyEngine: Sendable {
         )
     }
 
-    private static func builtinHit(shell: ShellAction, context: ReviewContext) -> CoreHit {
+    private static func builtinHit(
+        shell: ShellAction,
+        context: ReviewContext,
+        gitWorld: GitAnalysisWorld
+    ) -> CoreHit {
         let kinds = shell.effects.kinds
         if kinds.contains(.protectedPathMutation) {
             return CoreHit(
@@ -237,12 +249,21 @@ public enum ActionPolicyEngine: Sendable {
             )
         }
         if kinds.contains(.remoteSharedBranchMutation) {
-            if isSharedTarget(resources: shell.resources, context: context) {
+            if isSharedTarget(resources: shell.resources, context: context, gitWorld: gitWorld) {
                 return CoreHit(
                     decision: .hardDeny(Builtin.remoteSharedBranch),
                     ruleID: Builtin.remoteSharedBranch.ruleID,
                     reason: Builtin.remoteSharedBranch.reason,
                     semanticallyCovered: true
+                )
+            }
+            if case .unprobed = gitWorld, shell.resources.branchName == nil {
+                // Implicit HEAD was not injected. Pack floor; do not treat as private.
+                return CoreHit(
+                    decision: .reviewEligible(fallback: Builtin.uncovered),
+                    ruleID: Builtin.uncovered.ruleID,
+                    reason: Builtin.uncovered.reason,
+                    semanticallyCovered: false
                 )
             }
             return CoreHit(
@@ -358,8 +379,12 @@ public enum ActionPolicyEngine: Sendable {
         })
     }
 
-    private static func isSharedTarget(resources: ActionResources, context: ReviewContext) -> Bool {
-        if context.repository.isSharedBranch {
+    private static func isSharedTarget(
+        resources: ActionResources,
+        context: ReviewContext,
+        gitWorld: GitAnalysisWorld
+    ) -> Bool {
+        if case .probed = gitWorld, context.repository.isSharedBranch {
             return true
         }
         if let branch = resources.branchName, Self.sharedBranchNames.contains(branch) {

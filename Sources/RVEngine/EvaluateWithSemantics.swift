@@ -5,9 +5,9 @@ import RVDomain
 ///
 /// Pack deny / indeterminate is a floor — semantic stages can only tighten an
 /// allow. Path / cwd / repo I/O stays outside the Engine: callers inject
-/// filesystem facts through `filesystemProbe`, which the door calls once with
-/// the unwrapped outcome. The Policy gate is downstream of this door, never
-/// inside it.
+/// filesystem facts through `filesystemProbe`, and git facts through
+/// `gitProbe`, each called once with the unwrapped outcome. Defaults are
+/// unprobed. The Policy gate is downstream of this door, never inside it.
 public func evaluateWithSemantics<E: PatternEngine>(
     _ request: EvaluationRequest,
     packs: [PackSnapshot],
@@ -17,7 +17,8 @@ public func evaluateWithSemantics<E: PatternEngine>(
     home: String? = nil,
     patterns: E,
     compiled: CompiledPacks<E.Compiled>,
-    gitContext: GitAnalysisContext = .empty,
+    workingDirectory: WorkingDirectory? = nil,
+    gitProbe: (UnwrapOutcome) -> GitAnalysisWorld = { _ in .unprobed },
     filesystemProbe: (UnwrapOutcome) -> FilesystemAnalysisWorld = { _ in .unprobed },
     policy: EffectiveActionPolicy = .empty
 ) -> EvaluationResult {
@@ -33,19 +34,20 @@ public func evaluateWithSemantics<E: PatternEngine>(
     )
     let unwrapped = unwrapCommand(
         request.command,
-        workingDirectory: gitContext.workingDirectory
+        workingDirectory: workingDirectory
     )
+    let gitWorld = gitProbe(unwrapped)
     let filesystemWorld = filesystemProbe(unwrapped)
     let analysis = analyzeSemantics(
         unwrapped: unwrapped,
-        gitContext: gitContext,
+        gitWorld: gitWorld,
         filesystemWorld: filesystemWorld
     )
     return applySemantics(
         pack: pack,
         analysis: analysis,
         command: request.command,
-        gitContext: gitContext,
+        gitWorld: gitWorld,
         filesystemWorld: filesystemWorld,
         enabledPacks: request.enabledPacks,
         policy: policy

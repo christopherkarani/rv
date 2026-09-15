@@ -70,6 +70,43 @@ struct ApplyGitSemanticsTests {
         #expect(composedEcho.analysis == .unknown)
     }
 
+    @Test func unprobed_forceWithLeaseNoRefspec_staysAllow() throws {
+        let command = "git push --force-with-lease"
+        let pack = try runPack(command)
+        #expect(pack.decision == .allow)
+        let composed = applyGitSemantics(
+            pack: pack,
+            command: ShellCommand(rawValue: command)
+        )
+        #expect(composed.decision == .allow)
+        guard case .git(.push(_, let refspec, .forceWithLease, false)) = composed.analysis else {
+            Issue.record("unprobed implicit push must parse, got \(composed.analysis)")
+            return
+        }
+        #expect(refspec == nil)
+    }
+
+    @Test func probed_forceWithLeaseNoRefspec_sharedMain_hardDenies() throws {
+        let command = "git push --force-with-lease"
+        let pack = try runPack(command)
+        #expect(pack.decision == .allow)
+        let composed = applyGitSemantics(
+            pack: pack,
+            command: ShellCommand(rawValue: command),
+            context: .probed(GitAnalysisContext(currentBranch: "main", isSharedBranch: true))
+        )
+        guard case .deny(let deny) = composed.decision else {
+            Issue.record("probed implicit HEAD main must hard-deny, got \(composed.decision)")
+            return
+        }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.remoteSharedBranch.ruleID)
+        guard case .git(.push(_, let refspec, .forceWithLease, false)) = composed.analysis else {
+            Issue.record("probed implicit push must parse refspec main, got \(composed.analysis)")
+            return
+        }
+        #expect(refspec == "main")
+    }
+
     @Test func forcePushPackMiss_isDeniedBySemantics() throws {
         let command = "git push --force-with-lease origin main"
         let pack = try runPack(command)
@@ -77,7 +114,7 @@ struct ApplyGitSemanticsTests {
         let composed = applyGitSemantics(
             pack: pack,
             command: ShellCommand(rawValue: command),
-            context: GitAnalysisContext(isSharedBranch: true)
+            context: .probed(GitAnalysisContext(isSharedBranch: true))
         )
         guard case .deny(let deny) = composed.decision else {
             Issue.record("force-with-lease to main must deny")
@@ -170,7 +207,7 @@ struct ApplyGitSemanticsTests {
         let composed = applyGitSemantics(
             pack: pack,
             command: ShellCommand(rawValue: command),
-            context: GitAnalysisContext(isSharedBranch: true),
+            context: .probed(GitAnalysisContext(isSharedBranch: true)),
             policy: EffectiveActionPolicy(rules: [rule])
         )
         guard case .deny(let deny) = composed.decision else {
