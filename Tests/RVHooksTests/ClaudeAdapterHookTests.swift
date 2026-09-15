@@ -187,12 +187,7 @@ struct ClaudeAdapterHookTests {
     @Test(arguments: ["Read", "Edit", "Write"])
     func fileToolMissingRv_denies(_ tool: String) async throws {
         let result = try await runClaudeWrapper(
-            event: [
-                "hook_event_name": "PreToolUse",
-                "tool_name": tool,
-                "cwd": "/tmp/ws",
-                "tool_input": ["file_path": "/tmp/ws/.env"],
-            ],
+            event: fileToolEvent(tool),
             stub: .missing,
             confirm: "yes"
         )
@@ -200,11 +195,54 @@ struct ClaudeAdapterHookTests {
         #expect(result.spawnCount == 0)
     }
 
-    @Test func grepIsForeignAllow_evenWhenRvIsMissing() async throws {
+    @Test(arguments: ["Read", "Edit", "Write"])
+    func fileToolDenyJSON_deniesWithoutConfirm(_ tool: String) async throws {
+        let deny = claudeDenyJSON(reason: resetHardReason)
+        let result = try await runClaudeWrapper(
+            event: fileToolEvent(tool),
+            first: (deny, 0),
+            spend: (askJSON, 0),
+            confirm: "yes"
+        )
+        try expectClaudeDeny(result, reason: resetHardReason)
+        #expect(result.spawnCount == 1)
+        #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
+        #expect(result.stdout.contains("\"permissionDecision\":\"ask\"") == false)
+    }
+
+    @Test func fileToolLeftoverAsk_isDenyNotPermit() async throws {
+        let leftover = """
+        {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"once?"}}\n
+        """
+        let result = try await runClaudeWrapper(
+            event: fileToolEvent("Read"),
+            first: (leftover, 0),
+            spend: ("", 0),
+            confirm: "yes"
+        )
+        try expectClaudeDeny(result)
+        #expect(result.spawnCount == 1)
+        #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
+    }
+
+    @Test func fileToolDecisionAsk_isDenyNotPermit() async throws {
+        let result = try await runClaudeWrapper(
+            event: fileToolEvent("Read"),
+            first: (askJSON, 0),
+            spend: ("", 0),
+            confirm: "yes"
+        )
+        try expectClaudeDeny(result, reason: askReason)
+        #expect(result.spawnCount == 1)
+        #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
+    }
+
+    @Test(arguments: ["Grep", "Glob"])
+    func foreignToolMissingRv_allows(_ tool: String) async throws {
         let result = try await runClaudeWrapper(
             event: [
                 "hook_event_name": "PreToolUse",
-                "tool_name": "Grep",
+                "tool_name": tool,
                 "cwd": "/tmp/ws",
                 "tool_input": ["path": "/tmp/ws/.env"],
             ],
@@ -224,6 +262,15 @@ private func resetHardEvent() -> [String: Any] {
         "tool_name": "Bash",
         "cwd": "/tmp/ws",
         "tool_input": ["command": "git reset --hard"],
+    ]
+}
+
+private func fileToolEvent(_ tool: String) -> [String: Any] {
+    [
+        "hook_event_name": "PreToolUse",
+        "tool_name": tool,
+        "cwd": "/tmp/ws",
+        "tool_input": ["file_path": "/tmp/ws/.env"],
     ]
 }
 
