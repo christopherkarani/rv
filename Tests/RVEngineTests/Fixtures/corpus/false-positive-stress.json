@@ -1,0 +1,292 @@
+{
+  "schema_version": 1,
+  "source": "false_positive_stress",
+  "cases": [
+    {
+      "id": "fp.landmine.checkout-b-bare",
+      "command": "git checkout -b",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.landmine.force-with-lease-origin-feature",
+      "command": "git push --force-with-lease origin feature",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.landmine.force-with-lease-equals",
+      "command": "git push --force-with-lease=origin/main",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.data.echo-rm-rf-root",
+      "command": "echo \"rm -rf /\"",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.data.git-commit-reset-hard-message",
+      "command": "git commit -m \"git reset --hard\"",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.data.git-log-grep-reset",
+      "command": "git log --grep='git reset --hard'",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.data.git-grep-rm-rf",
+      "command": "git grep -n \"rm -rf\"",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.data.printf-reset",
+      "command": "printf '%s\\n' 'git reset --hard'",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.data.ruby-puts-reset",
+      "command": "ruby -e \"puts 'git reset --hard'\"",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.data.python-print-rm-rf",
+      "command": "python3 -c \"print('rm -rf /')\"",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.canary.stash-drop",
+      "command": "git stash drop",
+      "expected": "allow",
+      "rule_id": "core.git:stash-drop"
+    },
+    {
+      "id": "fp.quiet.git-status-short",
+      "command": "git status --short",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.quiet.git-log-oneline",
+      "command": "git log --oneline -20",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.quiet.git-diff-cached",
+      "command": "git diff --cached",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.quiet.git-add-all",
+      "command": "git add -A",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.quiet.git-commit-message",
+      "command": "git commit -m \"pin evaluate quiet work\"",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.quiet.git-commit-amend",
+      "command": "git commit --amend --no-edit",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.quiet.git-push-set-upstream",
+      "command": "git push -u origin feature",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.quiet.git-push-head",
+      "command": "git push origin HEAD",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.quiet.git-pull-ff-only",
+      "command": "git pull --ff-only",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.quiet.git-fetch-prune",
+      "command": "git fetch --all --prune",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.quiet.git-switch-create",
+      "command": "git switch -c topic",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.quiet.git-reset-soft",
+      "command": "git reset --soft HEAD~1",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.quiet.git-reset-mixed",
+      "command": "git reset HEAD",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.quiet.git-stash-push",
+      "command": "git stash push -m wip",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.quiet.git-stash-show",
+      "command": "git stash show",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.quiet.git-rebase-abort",
+      "command": "git rebase --abort",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.quiet.git-no-pager-diff",
+      "command": "git --no-pager diff",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.quiet.git-C-status",
+      "command": "git -C /tmp status",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.quiet.escaped-argv0-status",
+      "command": "\\git status",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.quiet.git-help-reset",
+      "command": "git help reset",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.quiet.ls",
+      "command": "ls -la Sources",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.quiet.cat-readme",
+      "command": "cat README.md",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.quiet.cat-package",
+      "command": "cat Package.swift",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.quiet.rg-sources",
+      "command": "rg -n evaluate Sources",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.quiet.find-swift",
+      "command": "find . -name '*.swift'",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.quiet.mkdir-tmp",
+      "command": "mkdir -p /tmp/rv-fp-scratch",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.quiet.redirect-tmp",
+      "command": "echo scratch > /tmp/rv-fp-scratch/out.txt",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.quiet.append-readme",
+      "command": "echo line >> README.md",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.quiet.chmod-plus-x",
+      "command": "chmod +x tools/gate.sh",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.quiet.swift-test-filter",
+      "command": "swift test --filter RVEngineTests",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.quiet.gate-engine",
+      "command": "tools/gate.sh --quiet RVEngineTests",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.quiet.rm-help",
+      "command": "rm --help",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.quiet.dd-help",
+      "command": "dd --help",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.quiet.rm-rf-tmp-scratch",
+      "command": "rm -rf /tmp/rv-fp-scratch",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.quiet.tmp-compound",
+      "command": "set -e && rm -rf /tmp/rv-fp-a /tmp/rv-fp-b && mkdir -p /tmp/rv-fp-a",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.compound.status-then-quoted-reset",
+      "command": "git status && echo \"git reset --hard\"",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.compound.echo-then-log",
+      "command": "echo hello && git log --oneline",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.compound.status-and-diff",
+      "command": "git status && git diff",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.docs.unlink-help",
+      "command": "unlink --help",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.docs.shred-help",
+      "command": "shred --help",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.docs.mkfs-help",
+      "command": "mkfs --help",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.docs.mkswap-version",
+      "command": "mkswap --version",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.docs.wipefs-help",
+      "command": "wipefs --help",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.docs.pvremove-help",
+      "command": "pvremove --help",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.docs.shutdown-help",
+      "command": "shutdown --help",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.docs.dropdb-help",
+      "command": "dropdb --help",
+      "expected": "allow"
+    }
+  ]
+}
