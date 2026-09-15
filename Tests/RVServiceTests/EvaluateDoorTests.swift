@@ -13,8 +13,7 @@ struct EvaluateDoorTests {
         let command = ShellCommand(rawValue: "git reset --hard")
         try await store.insertGranted(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
 
-        let peeked = await door.run(
-            .peek,
+        let peeked = await door.peek(
             command: command,
             cwd: wd("/tmp/ws"),
             home: home,
@@ -23,8 +22,7 @@ struct EvaluateDoorTests {
             allowlist: { .empty }
         )
         #expect(peeked.decision == .allow)
-        let peekedAgain = await door.run(
-            .peek,
+        let peekedAgain = await door.peek(
             command: command,
             cwd: wd("/tmp/ws"),
             home: home,
@@ -34,8 +32,7 @@ struct EvaluateDoorTests {
         )
         #expect(peekedAgain.decision == .allow)
 
-        let first = await door.run(
-            .apply,
+        let first = await door.apply(
             command: command,
             cwd: wd("/tmp/ws"),
             home: home,
@@ -44,8 +41,7 @@ struct EvaluateDoorTests {
             allowlist: { .empty }
         )
         #expect(first.decision == .allow)
-        let second = await door.run(
-            .apply,
+        let second = await door.apply(
             command: command,
             cwd: wd("/tmp/ws"),
             home: home,

@@ -270,7 +270,7 @@ struct OneShotEvaluateClientTests {
         )
         let client = try isolatedClient(transport: transport)
         let reply = await client.evaluate(command: ShellCommand(rawValue: "git reset --hard"))
-        #expect(reply.path == .xpc)
+        #expect(reply.path == .service)
         try #require(denyPayload(from: reply.result.decision) != nil)
         #expect(transport.sendCount == 1)
         #expect(transport.helloCount == 0)

@@ -21,7 +21,7 @@ struct LazyFallbackTests {
             return EvaluateSession()
         }
         let reply = await client.evaluate(command: resetHard)
-        #expect(reply.path == .xpc)
+        #expect(reply.path == .service)
         #expect(sessions.withLock { $0 } == 0)
         #expect(transport.sendCount == 1)
     }

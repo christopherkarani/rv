@@ -79,8 +79,7 @@ struct DenialLedgerRecordTests {
         defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let store = AllowOnceStore(baseDirectory: RVPolicyPaths.configDirectory(home: home))
-        let result = await GatedEvaluate().run(
-            .peek,
+        let result = await GatedEvaluate().peek(
             command: ShellCommand(rawValue: "git reset --hard"),
             cwd: WorkingDirectory(validating: home.rawValue),
             home: home,
@@ -105,8 +104,7 @@ struct DenialLedgerRecordTests {
         defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let store = AllowOnceStore(baseDirectory: RVPolicyPaths.configDirectory(home: home))
-        let result = await GatedEvaluate().run(
-            .apply,
+        let result = await GatedEvaluate().apply(
             command: ShellCommand(rawValue: "git reset --hard"),
             cwd: WorkingDirectory(validating: home.rawValue),
             home: home,

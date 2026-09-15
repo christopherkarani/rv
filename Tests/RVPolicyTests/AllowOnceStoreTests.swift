@@ -248,7 +248,7 @@ struct AllowOnceStoreTests {
 
     @Test func live_usesConfigDirectoryUnderHome() throws {
         let home = try #require(HomeDirectory(validating: "/tmp/rv-home-\(UUID().uuidString)"))
-        let store = AllowOnceStore.live(home: home)
+        let store = AllowOnceStore.makeLive(home: home)
         #expect(store.baseDirectory == RVPolicyPaths.configDirectory(home: home))
         #expect(store.baseDirectory.path.contains("rv-allow-once-nohome") == false)
     }

@@ -170,8 +170,7 @@ private func applyResetHard(
     home: HomeDirectory,
     store: AllowOnceStore
 ) async -> EvaluationResult {
-    await door.run(
-        .apply,
+    await door.apply(
         command: ShellCommand(rawValue: "git reset --hard"),
         cwd: nil,
         home: home,

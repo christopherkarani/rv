@@ -168,14 +168,14 @@ public struct ServiceClient: Sendable {
                 transport.invalidate()
                 return await inProcessRoute()
             }
-            // Decode already requires EvaluateReply.via == .xpc; anything else falls back.
+            // Decode already requires EvaluateReply.via == .service; anything else falls back.
             if case .evaluate(let reply) = response.result {
                 switch EvaluationRoute.path(for: .reply(
                     clientSemver: ProtocolVersion.serviceSemver,
                     advertisedServiceSemver: reply.serviceSemver
                 )) {
-                case .xpc:
-                    return RoutedEvaluation(result: reply.result, path: .xpc)
+                case .service:
+                    return RoutedEvaluation(result: reply.result, path: .service)
                 case .inProcess:
                     transport.invalidate()
                     return await inProcessRoute()
@@ -233,7 +233,7 @@ public struct ServiceClient: Sendable {
                     clientSemver: ProtocolVersion.serviceSemver,
                     advertisedServiceSemver: reply.serviceSemver
                 )) {
-                case .xpc:
+                case .service:
                     return HookWire(stdout: reply.stdout, exitCode: reply.exitCode, stderr: reply.stderr)
                 case .inProcess:
                     transport.invalidate()
@@ -412,14 +412,14 @@ public struct ServiceClient: Sendable {
             return AllowOnceStore(baseDirectory: allowOnceDirectory)
         }
         if let home {
-            return AllowOnceStore.live(home: home)
+            return AllowOnceStore.makeLive(home: home)
         }
         return AllowOnceStore(baseDirectory: isolatedFactoryDirectory())
     }
 
     private static func resolvePending(home: HomeDirectory?) -> (any PendingApprovalCoordinating)? {
         if let home {
-            return PendingApprovalStore.live(home: home)
+            return PendingApprovalStore.makeLive(home: home)
         }
         return PendingApprovalStore(baseDirectory: isolatedFactoryDirectory())
     }

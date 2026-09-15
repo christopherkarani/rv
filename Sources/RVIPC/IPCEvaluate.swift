@@ -34,12 +34,13 @@ public struct EvaluateParams: Sendable, Equatable, Codable {
     }
 }
 
-/// Evaluation route: trusted service reply (`xpc`) or client in-process fallback (`inProcess`).
+/// Evaluation route: trusted service reply (`service`, wire `"xpc"`) or client in-process fallback (`inProcess`).
 ///
-/// On `EvaluateReply`, only `.xpc` decodes. `.inProcess` is reserved for client-side
+/// On `EvaluateReply`, only `.service` decodes. `.inProcess` is reserved for client-side
 /// routing and is rejected on the wire.
 public enum EvaluationPath: String, Sendable, Equatable, Codable {
-    case xpc
+    /// Darwin XPC or Linux AF_UNIX. Encodes as `"xpc"` so the wire does not change.
+    case service = "xpc"
     case inProcess
 }
 
@@ -52,7 +53,7 @@ public struct EvaluateReply: Sendable, Equatable, Codable {
 
     public init(result: EvaluationResult, serviceSemver: String? = ProtocolVersion.serviceSemver) {
         self.result = result
-        self.via = .xpc
+        self.via = .service
         self.serviceSemver = serviceSemver
     }
 
@@ -60,7 +61,7 @@ public struct EvaluateReply: Sendable, Equatable, Codable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         result = try container.decode(EvaluationResult.self, forKey: .result)
         let decodedVia = try container.decode(EvaluationPath.self, forKey: .via)
-        guard decodedVia == .xpc else {
+        guard decodedVia == .service else {
             throw DecodingError.dataCorruptedError(
                 forKey: .via,
                 in: container,

@@ -11,8 +11,8 @@ struct PolicyGateTests {
         let allowlist = AllowlistSnapshot(entries: [
             AllowlistEntry(selector: .rule(ruleID), reason: "ci", addedAt: now),
         ])
-        let gated = PolicyGate.decide(
-            denied,
+        let gated = PolicyGate.decision(
+            for: denied,
             cwd: wd("/tmp/ws"),
             allowlist: allowlist,
             grant: .pending,
@@ -24,8 +24,8 @@ struct PolicyGateTests {
 
     @Test func decidePendingGrantHonorsMandatoryHuman() {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
-        let gated = PolicyGate.decide(
-            mandatoryHumanRemoteBranchAsk(),
+        let gated = PolicyGate.decision(
+            for: mandatoryHumanRemoteBranchAsk(),
             cwd: wd("/tmp/ws"),
             allowlist: .empty,
             grant: .pending,
@@ -37,8 +37,8 @@ struct PolicyGateTests {
 
     @Test func decideEmptyCwdSkipsPendingGrant() {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
-        let gated = PolicyGate.decide(
-            resetHardDeny(),
+        let gated = PolicyGate.decision(
+            for: resetHardDeny(),
             cwd: nil,
             allowlist: .empty,
             grant: .pending,
@@ -57,8 +57,8 @@ struct PolicyGateTests {
             outcome: .indeterminate(.commandTooLarge),
             matchingView: "git reset --hard"
         )
-        let gated = PolicyGate.decide(
-            incomplete,
+        let gated = PolicyGate.decision(
+            for: incomplete,
             cwd: wd("/tmp/ws"),
             allowlist: .empty,
             grant: .pending,
@@ -75,7 +75,7 @@ struct PolicyGateTests {
         let store = try isolatedStore()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let denied = resetHardDeny()
-        let gated = await PolicyGate.apply(denied, cwd: wd("/tmp/ws"), store: store, now: now)
+        let gated = await PolicyGate.consumingGrant(for: denied, cwd: wd("/tmp/ws"), store: store, now: now)
         #expect(gated.override == .none)
         guard case .deny = gated.result.decision else {
             Issue.record("engine deny without grant must stay deny")
@@ -88,10 +88,10 @@ struct PolicyGateTests {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let denied = resetHardDeny()
         try await store.insertGranted(matchingView: denied.matchingView, cwd: wd("/tmp/ws"), now: now)
-        let first = await PolicyGate.apply(denied, cwd: wd("/tmp/ws"), store: store, now: now)
+        let first = await PolicyGate.consumingGrant(for: denied, cwd: wd("/tmp/ws"), store: store, now: now)
         #expect(first.override == .allowOnce)
         #expect(first.result.decision == .allow)
-        let second = await PolicyGate.apply(denied, cwd: wd("/tmp/ws"), store: store, now: now)
+        let second = await PolicyGate.consumingGrant(for: denied, cwd: wd("/tmp/ws"), store: store, now: now)
         #expect(second.override == .none)
         guard case .deny = second.result.decision else {
             Issue.record("second evaluate must deny after the grant is spent")
@@ -108,8 +108,8 @@ struct PolicyGateTests {
         let allowlist = AllowlistSnapshot(entries: [
             AllowlistEntry(selector: .rule(ruleID), reason: "ci", addedAt: now),
         ])
-        let gated = await PolicyGate.apply(
-            denied,
+        let gated = await PolicyGate.consumingGrant(
+            for: denied,
             cwd: wd("/tmp/ws"),
             allowlist: allowlist,
             store: store,
@@ -129,7 +129,7 @@ struct PolicyGateTests {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         try await store.insertGranted(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
         let allow = EvaluationResult(outcome: .plain, matchingView: "git reset --hard")
-        let gated = await PolicyGate.apply(allow, cwd: wd("/tmp/ws"), store: store, now: now)
+        let gated = await PolicyGate.consumingGrant(for: allow, cwd: wd("/tmp/ws"), store: store, now: now)
         #expect(gated.override == .none)
         #expect(gated.result.decision == .allow)
         let still = await store.consume(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
@@ -147,7 +147,7 @@ struct PolicyGateTests {
             outcome: .indeterminate(.commandTooLarge),
             matchingView: "git reset --hard"
         )
-        let gated = await PolicyGate.apply(incomplete, cwd: wd("/tmp/ws"), store: store, now: now)
+        let gated = await PolicyGate.consumingGrant(for: incomplete, cwd: wd("/tmp/ws"), store: store, now: now)
         #expect(gated.override == .none)
         #expect(gated.result.decision != .allow)
         guard case .indeterminate = gated.result.decision else {
@@ -174,10 +174,10 @@ struct PolicyGateTests {
             now: now
         )
         _ = try await store.redeem(code: code, tty: tty, now: now)
-        let first = await PolicyGate.apply(denied, cwd: wd("/tmp/a"), store: store, now: now)
+        let first = await PolicyGate.consumingGrant(for: denied, cwd: wd("/tmp/a"), store: store, now: now)
         #expect(first.override == .allowOnce)
         #expect(first.result.decision == .allow)
-        let second = await PolicyGate.apply(denied, cwd: wd("/tmp/a"), store: store, now: now)
+        let second = await PolicyGate.consumingGrant(for: denied, cwd: wd("/tmp/a"), store: store, now: now)
         guard case .deny = second.result.decision else {
             Issue.record("second identical command must deny")
             return
@@ -189,7 +189,7 @@ struct PolicyGateTests {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let denied = resetHardDenyWithMatch()
         try await store.insertGranted(matchingView: denied.matchingView, cwd: wd("/tmp/ws"), now: now)
-        let gated = await PolicyGate.apply(denied, cwd: wd("/tmp/ws"), store: store, now: now)
+        let gated = await PolicyGate.consumingGrant(for: denied, cwd: wd("/tmp/ws"), store: store, now: now)
         #expect(gated.override == .allowOnce)
         guard case .hit(let match, safe: nil) = gated.result.outcome else {
             Issue.record("override must keep the hit structure on an allow")
@@ -205,8 +205,8 @@ struct PolicyGateTests {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let denied = resetHardDeny()
         try await store.insertGranted(matchingView: denied.matchingView, cwd: wd("/tmp/ws"), now: now)
-        let preview = await PolicyGate.peek(
-            denied,
+        let preview = await PolicyGate.preview(
+            for: denied,
             cwd: wd("/tmp/ws"),
             store: store,
             now: now
@@ -226,7 +226,7 @@ struct PolicyGateTests {
         let denied = resetHardDeny()
         try await store.insertGranted(matchingView: denied.matchingView, cwd: wd("/tmp/ws"), now: now)
         try sabotageLock(in: store.baseDirectory)
-        let gated = await PolicyGate.apply(denied, cwd: wd("/tmp/ws"), store: store, now: now)
+        let gated = await PolicyGate.consumingGrant(for: denied, cwd: wd("/tmp/ws"), store: store, now: now)
         #expect(gated.override == .none)
         guard case .deny = gated.result.decision else {
             Issue.record("store unavailable must stay deny")
@@ -239,7 +239,7 @@ struct PolicyGateTests {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let denied = resetHardDeny()
         try await store.insertGranted(matchingView: denied.matchingView, cwd: wd("/tmp/ws"), now: now)
-        let gated = await PolicyGate.apply(denied, cwd: nil, store: store, now: now)
+        let gated = await PolicyGate.consumingGrant(for: denied, cwd: nil, store: store, now: now)
         #expect(gated.override == .none)
         guard case .deny = gated.result.decision else {
             Issue.record("empty cwd must not honor")

@@ -387,8 +387,8 @@ struct RulePinningTests {
         #expect(snap.entries.count == 1)
         #expect(snap.matches(ruleID: nil, matchingView: "git reset --hard", now: now))
         let denied = resetHardDeny()
-        let gated = PolicyGate.decide(
-            denied,
+        let gated = PolicyGate.decision(
+            for: denied,
             cwd: wd("/tmp/ws"),
             allowlist: snap,
             grant: .none,
@@ -419,8 +419,8 @@ struct RulePinningTests {
         let snap = AllowlistStore(baseDirectory: root).loadUserSnapshot(workspacePath: nil, now: now)
         #expect(snap.blocked.matches("git reset --hard"))
         #expect(snap.matches(ruleID: nil, matchingView: "git reset --hard", now: now) == false)
-        let gated = PolicyGate.decide(
-            resetHardDeny(),
+        let gated = PolicyGate.decision(
+            for: resetHardDeny(),
             cwd: wd("/tmp/ws"),
             allowlist: snap,
             grant: .none,
@@ -454,8 +454,8 @@ struct RulePinningTests {
                 addedAt: now
             ),
         ])
-        let gated = PolicyGate.decide(
-            deny,
+        let gated = PolicyGate.decision(
+            for: deny,
             cwd: wd("/tmp/ws"),
             allowlist: allowlist,
             grant: .none,
@@ -491,8 +491,8 @@ struct RulePinningTests {
                 addedAt: now
             ),
         ])
-        let gated = PolicyGate.decide(
-            deny,
+        let gated = PolicyGate.decision(
+            for: deny,
             cwd: wd("/tmp/ws"),
             allowlist: allowlist,
             grant: .none,
@@ -516,8 +516,8 @@ struct RulePinningTests {
             matchingView: "bash -c git reset --hard",
             analysis: .unwrapLimited.wrapping([.bash])
         )
-        let gated = PolicyGate.decide(
-            deny,
+        let gated = PolicyGate.decision(
+            for: deny,
             cwd: wd("/tmp/ws"),
             allowlist: .empty,
             grant: .pending,
@@ -564,8 +564,8 @@ struct RulePinningTests {
                 addedAt: now
             ),
         ])
-        let gated = PolicyGate.decide(
-            deny,
+        let gated = PolicyGate.decision(
+            for: deny,
             cwd: wd("/tmp/ws"),
             allowlist: allowlist,
             grant: .none,
@@ -594,8 +594,8 @@ struct RulePinningTests {
         let allowlist = AllowlistSnapshot(entries: [
             AllowlistEntry(selector: .exactCommand("cat .env"), reason: "nope", addedAt: now),
         ])
-        let gated = PolicyGate.decide(
-            deny,
+        let gated = PolicyGate.decision(
+            for: deny,
             cwd: wd("/tmp/ws"),
             allowlist: allowlist,
             grant: .none,

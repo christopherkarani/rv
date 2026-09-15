@@ -99,12 +99,12 @@ struct HookEvaluateRoundTripTests {
         #expect(body["exitCode"] as? Int == 0)
         #expect(body["via"] as? String == "xpc")
         #expect(body["serviceSemver"] as? String == ProtocolVersion.serviceSemver)
-        #expect(try IPCJSON.decode(HookEvaluateReply.self, from: IPCJSON.encode(reply)).via == .xpc)
+        #expect(try IPCJSON.decode(HookEvaluateReply.self, from: IPCJSON.encode(reply)).via == .service)
     }
 
     @Test func hookEvaluateReply_viaMustBeXpc() throws {
         let data = try IPCJSON.encode(HookEvaluateReply(stdout: "", exitCode: 0))
-        #expect(try IPCJSON.decode(HookEvaluateReply.self, from: data).via == .xpc)
+        #expect(try IPCJSON.decode(HookEvaluateReply.self, from: data).via == .service)
 
         for badVia in ["inProcess", "bogus"] {
             var spoofed = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -122,7 +122,7 @@ struct HookEvaluateRoundTripTests {
         object.removeValue(forKey: "serviceSemver")
         let omitted = try JSONSerialization.data(withJSONObject: object)
         let decoded = try IPCJSON.decode(HookEvaluateReply.self, from: omitted)
-        #expect(decoded.via == .xpc)
+        #expect(decoded.via == .service)
         #expect(decoded.serviceSemver == nil)
         #expect(decoded.exitCode == 0)
         #expect(decoded.stdout == "")
@@ -151,7 +151,7 @@ struct HookEvaluateRoundTripTests {
         let decoded = try IPCJSON.decode(HookEvaluateReply.self, from: Data(json.utf8))
         #expect(decoded.stderr == "")
         #expect(decoded.exitCode == 1)
-        #expect(decoded.via == .xpc)
+        #expect(decoded.via == .service)
     }
 
     @Test func hookEvaluateReply_decodesNonemptyStderr() throws {
@@ -160,7 +160,7 @@ struct HookEvaluateRoundTripTests {
         #expect(decoded.stderr == "blocked")
         #expect(decoded.exitCode == 1)
         #expect(decoded.stdout == "")
-        #expect(decoded.via == .xpc)
+        #expect(decoded.via == .service)
     }
 
     @Test func oldEvaluateEnvelopes_stillDecodeOnV1() throws {

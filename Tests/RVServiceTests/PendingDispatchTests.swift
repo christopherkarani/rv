@@ -620,7 +620,7 @@ struct PendingDispatchTests {
             try? FileManager.default.removeItem(at: allowOnceDirectory)
         }
         let home = try #require(HomeDirectory(validating: homeURL.path))
-        let store = PendingApprovalStore.live(home: home)
+        let store = PendingApprovalStore.makeLive(home: home)
         let created = try await store.create(
             PendingApprovalRequest(
                 id: ApprovalID(rawValue: "live-1"),

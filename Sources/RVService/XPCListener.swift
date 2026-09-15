@@ -145,23 +145,25 @@ final class XPCPeerSession: @unchecked Sendable {
             let incoming = XPCIPCWire.body(from: message)
             let stdinOverlay = XPCIPCWire.stdin(from: message)
             let accepted = self.lock.withLock { self.handshakeOK }
-            let (data, ok): (Data, Bool)
+            let incomingReply: IncomingReply
             if let incoming {
-                (data, ok) = await self.runtime.handleIncoming(
+                incomingReply = await self.runtime.handleIncoming(
                     incoming,
                     handshakeOK: accepted,
                     stdinOverlay: stdinOverlay
                 )
             } else {
                 let response = IPCResponse(id: UUID(), result: .error(.decodeFailed))
-                data = (try? IPCJSON.encode(response)) ?? Data()
-                ok = accepted
+                incomingReply = IncomingReply(
+                    frame: (try? IPCJSON.encode(response)) ?? Data(),
+                    handshakeAccepted: accepted
+                )
             }
-            self.lock.withLock { self.handshakeOK = ok }
+            self.lock.withLock { self.handshakeOK = incomingReply.handshakeAccepted }
             guard let reply = xpc_dictionary_create_reply(message) else {
                 return
             }
-            XPCIPCWire.set(data, on: reply)
+            XPCIPCWire.set(incomingReply.frame, on: reply)
             if let peer = xpc_dictionary_get_remote_connection(message) {
                 xpc_connection_send_message(peer, reply)
             }

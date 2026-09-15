@@ -16,7 +16,7 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
         self.baseDirectory = baseDirectory
     }
 
-    nonisolated public static func live(home: HomeDirectory) -> PendingApprovalStore {
+    nonisolated public static func makeLive(home: HomeDirectory) -> PendingApprovalStore {
         PendingApprovalStore(baseDirectory: RVPolicyPaths.configDirectory(home: home))
     }
 

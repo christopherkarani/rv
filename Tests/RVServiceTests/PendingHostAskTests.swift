@@ -30,7 +30,7 @@ struct PendingHostAskServiceTests {
         #expect(row.action.supportingCommand?.rawValue == "git reset --hard")
         #expect(row.expiresAt == now.addingTimeInterval(PendingApprovalRequest.defaultTTL))
 
-        let restarted = PendingApprovalStore.live(home: env.home)
+        let restarted = PendingApprovalStore.makeLive(home: env.home)
         let afterRestart = try await restarted.list(now: now)
         #expect(afterRestart.map(\.id) == [row.id])
         #expect(afterRestart.first?.state == .awaitingHuman)
@@ -224,7 +224,7 @@ private struct IsolatedPendingHostAsk {
             clock: { Date(timeIntervalSince1970: 1_700_000_000) },
             pendingApprovals: .automatic
         )
-        store = PendingApprovalStore.live(home: home)
+        store = PendingApprovalStore.makeLive(home: home)
     }
 
     func makeAllowOnceUnwritable() throws {

@@ -208,7 +208,8 @@ struct FakeXPCUnixSocketTests {
             {"id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","protocol":"rv.ipc.v1","method":{"evaluate":{"request":{"command":"git reset --hard","enabledPacks":["core.filesystem","core.git"]}}}}
             """.utf8
         )
-        let (replyData, _) = await runtime.handleIncoming(body, handshakeOK: true)
+        let incoming = await runtime.handleIncoming(body, handshakeOK: true)
+        let replyData = incoming.frame
         let object = try #require(JSONSerialization.jsonObject(with: replyData) as? [String: Any])
         let decision = nested(object, ["result", "evaluate", "result", "decision"])
         #expect(decision?["decision"] as? String == "indeterminate")
