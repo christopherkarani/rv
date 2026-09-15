@@ -197,6 +197,10 @@ private func evaluateSingle<E: PatternEngine>(
     attempts: inout Int,
     budget: Int?
 ) -> EvaluationResult? {
+    if isDocumentationQuery(view) {
+        return nil
+    }
+
     var remembered: RuleMatch?
     var lastSafe: SafeMatch?
 
