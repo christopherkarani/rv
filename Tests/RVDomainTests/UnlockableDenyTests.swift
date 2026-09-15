@@ -68,7 +68,9 @@ enum UnlockableDenyTable {
                                 FilesystemTarget(
                                     apparent: "~/.ssh/config",
                                     canonical: "/home/.ssh/config",
-                                    scope: .protectedPath,
+                                    scope: .protectedPath(
+                                        SecretPathMatch(pattern: "home-ssh", category: .ssh)
+                                    ),
                                     kind: .unknown
                                 ),
                             ]

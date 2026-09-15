@@ -170,7 +170,10 @@ struct ApplyFilesystemSemanticsTests {
             return
         }
         #expect(deny.ruleID == ActionPolicyEngine.Builtin.protectedPath.ruleID)
-        #expect(composed.analysis.filesystemAction?.primaryTarget?.scope == .protectedPath)
+        #expect(
+            composed.analysis.filesystemAction?.primaryTarget?.scope
+                == .protectedPath(SecretPathMatch(pattern: "id-rsa", category: .ssh))
+        )
     }
 
     @Test func unprobedMixedUnknownAndProtected_deniesProtectedPath() throws {
@@ -190,7 +193,7 @@ struct ApplyFilesystemSemanticsTests {
         #expect(deny.ruleID == ActionPolicyEngine.Builtin.protectedPath.ruleID)
         let scopes = composed.analysis.filesystemAction?.targets.map(\.scope) ?? []
         #expect(scopes.contains(.unknown))
-        #expect(scopes.contains(.protectedPath))
+        #expect(scopes.contains { $0.protectedMatch != nil })
     }
 
     @Test func unprobedMixedUncertainAndOutside_deniesOutside() throws {
@@ -361,7 +364,10 @@ struct ApplyFilesystemSemanticsTests {
             Issue.record("expected filesystem analysis")
             return
         }
-        #expect(action.primaryTarget?.scope == .protectedPath)
+        #expect(
+            action.primaryTarget?.scope
+                == .protectedPath(SecretPathMatch(pattern: "id-rsa", category: .ssh))
+        )
         #expect(action.primaryTarget?.protectedMatch?.pattern == "id-rsa")
     }
 
@@ -386,7 +392,10 @@ struct ApplyFilesystemSemanticsTests {
             return
         }
         #expect(deny.ruleID == ActionPolicyEngine.Builtin.protectedPath.ruleID)
-        #expect(composed.analysis.filesystemAction?.primaryTarget?.scope == .protectedPath)
+        #expect(
+            composed.analysis.filesystemAction?.primaryTarget?.scope
+                == .protectedPath(SecretPathMatch(pattern: "home-ssh", category: .ssh))
+        )
         #expect(composed.analysis.filesystemAction?.explainCategory == "ssh")
         #expect(composed.analysis.filesystemAction?.explainCatalogRule == "core.secrets/home-ssh")
     }
@@ -420,7 +429,10 @@ struct ApplyFilesystemSemanticsTests {
             Issue.record("analysis still attaches when packs are off")
             return
         }
-        #expect(action.primaryTarget?.scope == .protectedPath)
+        #expect(
+            action.primaryTarget?.scope
+                == .protectedPath(SecretPathMatch(pattern: "id-rsa", category: .ssh))
+        )
     }
 
     @Test func packIndeterminate_isNotLifted() {

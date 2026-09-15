@@ -91,7 +91,7 @@ struct GatedEvaluateFilesystemSemanticsTests {
             Issue.record("expected filesystem analysis")
             return
         }
-        #expect(action.primaryTarget?.scope == .protectedPath)
+        #expect(action.primaryTarget?.protectedMatch != nil)
         #expect(action.primaryTarget?.followedSymlink == true)
     }
 

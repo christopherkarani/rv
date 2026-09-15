@@ -159,7 +159,10 @@ struct EvaluateWithSemanticsTests {
         }
         #expect(deny.ruleID == ActionPolicyEngine.Builtin.protectedPath.ruleID)
         #expect(result.analysis.wrappers == [.env])
-        #expect(result.analysis.filesystemAction?.primaryTarget?.scope == .protectedPath)
+        #expect(
+            result.analysis.filesystemAction?.primaryTarget?.scope
+                == .protectedPath(SecretPathMatch(pattern: "home-ssh", category: .ssh))
+        )
     }
 
     @Test func plainAllow_staysAllow() throws {

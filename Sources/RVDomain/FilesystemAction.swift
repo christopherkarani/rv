@@ -1,9 +1,30 @@
 /// Security scope after canonicalize. Protected wins over repository boundary.
-public enum FilesystemScope: String, Sendable, Equatable, Codable {
+public enum FilesystemScope: Sendable, Equatable, Codable {
     case insideRepository
     case outsideRepository
-    case protectedPath
+    case protectedPath(SecretPathMatch)
     case unknown
+
+    /// Case name for display. Associated match is not part of this string.
+    public var rawValue: String {
+        switch self {
+        case .insideRepository:
+            return "insideRepository"
+        case .outsideRepository:
+            return "outsideRepository"
+        case .protectedPath:
+            return "protectedPath"
+        case .unknown:
+            return "unknown"
+        }
+    }
+
+    public var protectedMatch: SecretPathMatch? {
+        if case .protectedPath(let match) = self {
+            return match
+        }
+        return nil
+    }
 }
 
 /// Closed filesystem mutation family used by policy. Write covers overwrite and mode change.
@@ -57,7 +78,10 @@ public struct FilesystemTarget: Sendable, Equatable, Codable {
     public var kind: FilesystemResourceKind
     public var followedSymlink: Bool
     public var resolution: FilesystemResolution
-    public var protectedMatch: SecretPathMatch?
+
+    public var protectedMatch: SecretPathMatch? {
+        scope.protectedMatch
+    }
 
     public init(
         apparent: String,
@@ -65,8 +89,7 @@ public struct FilesystemTarget: Sendable, Equatable, Codable {
         scope: FilesystemScope,
         kind: FilesystemResourceKind,
         followedSymlink: Bool = false,
-        resolution: FilesystemResolution = .lexical,
-        protectedMatch: SecretPathMatch? = nil
+        resolution: FilesystemResolution = .lexical
     ) {
         self.apparent = apparent
         self.canonical = canonical
@@ -74,7 +97,6 @@ public struct FilesystemTarget: Sendable, Equatable, Codable {
         self.kind = kind
         self.followedSymlink = followedSymlink
         self.resolution = resolution
-        self.protectedMatch = protectedMatch
     }
 }
 
@@ -236,7 +258,7 @@ public enum FilesystemAction: Sendable, Equatable, Codable {
         // still denied via `SecretPathGuard` (core.secrets), but the filesystem
         // effect is conservative and only marks mutating operations.
         if operationKind != .read,
-            targets.contains(where: { $0.scope == .protectedPath && $0.resolution != .uncertain })
+            targets.contains(where: { $0.scope.protectedMatch != nil })
         {
             kinds.append(.protectedPathMutation)
         }
