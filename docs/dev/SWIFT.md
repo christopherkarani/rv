@@ -1,6 +1,6 @@
 # Swift
 
-Package tools: Swift 6.3. Language mode 6. Platforms: macOS 26 Apple Silicon, Linux aarch64/x86_64.
+Package tools: Swift 6.3. Language mode 6. Platforms: macOS 26 Apple Silicon, Linux aarch64/x86_64. PR CI Linux is ubuntu-24.04 x86_64 (`swift test` plus C units). Darwin `hook-grade` runs C proof, RVServiceTests, RVCLITests, and `tools/host-oracle.sh`. Linux aarch64 is a supported install target, not a PR job.
 
 Pin: `.swift-version` (`6.3.3`). This machine’s `/usr/bin/swift` may still be Xcode 6.2. Prefer `tools/swift-6.3.3` (or put `~/Library/Developer/Toolchains/swift-6.3.3-RELEASE.xctoolchain/usr/bin` on `PATH` first). `swiftly run 6.3.3 -- swift test` also works if proven.
 

@@ -9,6 +9,9 @@ struct ClaudeAdapterHookTests {
         let source = try adapterSource(rvPath: "/opt/rv")
         #expect(source.contains("PreToolUse"))
         #expect(source.contains("\"Bash\""))
+        #expect(source.contains("\"Read\""))
+        #expect(source.contains("\"Edit\""))
+        #expect(source.contains("\"Write\""))
         #expect(source.contains("\"claude\""))
         #expect(source.contains("RV_BINARY = \"/opt/rv\""))
         #expect(source.contains("hostAsk"))
@@ -179,6 +182,39 @@ struct ClaudeAdapterHookTests {
         )
         try expectClaudeDeny(result)
         #expect(result.spawnCount == 1)
+    }
+
+    @Test(arguments: ["Read", "Edit", "Write"])
+    func fileToolMissingRv_denies(_ tool: String) async throws {
+        let result = try await runClaudeWrapper(
+            event: [
+                "hook_event_name": "PreToolUse",
+                "tool_name": tool,
+                "cwd": "/tmp/ws",
+                "tool_input": ["file_path": "/tmp/ws/.env"],
+            ],
+            stub: .missing,
+            confirm: "yes"
+        )
+        try expectClaudeDeny(result, reason: "rv missing")
+        #expect(result.spawnCount == 0)
+    }
+
+    @Test func grepIsForeignAllow_evenWhenRvIsMissing() async throws {
+        let result = try await runClaudeWrapper(
+            event: [
+                "hook_event_name": "PreToolUse",
+                "tool_name": "Grep",
+                "cwd": "/tmp/ws",
+                "tool_input": ["path": "/tmp/ws/.env"],
+            ],
+            stub: .missing,
+            confirm: "yes"
+        )
+        #expect(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        #expect(result.exitCode == 0)
+        #expect(result.stdout.contains("permissionDecision") == false)
+        #expect(result.spawnCount == 0)
     }
 }
 
