@@ -150,6 +150,121 @@ struct PolicyDraftCommandTests {
             assertNoPolicyWrites(home: home, workspace: workspace)
         }
     }
+
+    @Test func run_constructsChainAndCallsExecuteOnce() throws {
+        let source = try String(contentsOf: policyDraftCommandSourceURL(), encoding: .utf8)
+        let run = try #require(source.split(separator: "func run() async throws", maxSplits: 1).last)
+        let body = String(run.split(separator: "struct PolicyDraftResult", maxSplits: 1)[0])
+        #expect(body.contains("EnglishCompileChain("))
+        #expect(body.components(separatedBy: "PolicyDraftRun.execute").count == 2)
+        #expect(body.contains("catch is EnglishCompilerError") == false)
+        #expect(body.contains("FakeEnglishCompiler(") == false)
+    }
+
+    @Test func unavailablePrimary_fixtureEnglish_previewsCannedGitPushDeny() async throws {
+        try await withTempPolicyContext { home, workspace in
+            let result = try await PolicyDraftRun.execute(
+                english: "never allow force-push to main",
+                save: false,
+                robot: false,
+                home: home,
+                workspace: workspace,
+                compiler: EnglishCompileChain(
+                    primary: UnavailableEnglishCompiler(),
+                    fallback: FakeEnglishCompiler()
+                )
+            )
+            #expect(result.outcome == .preview(saved: false))
+            #expect(result.text.contains("Always block force-push to main"))
+            #expect(result.text.contains("gitPush"))
+            #expect(result.text.contains("force=force"))
+            #expect(result.text.contains("branch=main"))
+            assertNoPolicyWrites(home: home, workspace: workspace)
+        }
+    }
+
+    @Test func unavailablePrimary_uncompilableEnglish_refusesAndWritesNothing() async throws {
+        try await withTempPolicyContext { home, workspace in
+            let result = try await PolicyDraftRun.execute(
+                english: "be careful in prod",
+                save: true,
+                robot: false,
+                home: home,
+                workspace: workspace,
+                compiler: EnglishCompileChain(
+                    primary: UnavailableEnglishCompiler(),
+                    fallback: FakeEnglishCompiler()
+                )
+            )
+            #expect(result.outcome == .refuse(.uncompilable))
+            #expect(result.text.contains("uncompilable"))
+            assertNoPolicyWrites(home: home, workspace: workspace)
+        }
+    }
+
+    @Test func save_unavailablePrimary_persistsFakePreviewOnce() async throws {
+        try await withTempPolicyContext { home, workspace in
+            let fallbackLog = CompileCallLog()
+            let result = try await PolicyDraftRun.execute(
+                english: "never allow force-push to main",
+                save: true,
+                robot: false,
+                home: home,
+                workspace: workspace,
+                compiler: EnglishCompileChain(
+                    primary: UnavailableEnglishCompiler(),
+                    fallback: CountingEnglishCompiler(log: fallbackLog)
+                )
+            )
+            #expect(result.outcome == .preview(saved: true))
+            #expect(await fallbackLog.count == 1)
+
+            let store = TypedRuleStore(
+                baseDirectory: RVPolicyPaths.configDirectory(home: home)
+            )
+            let machine = try store.loadMachine()
+            #expect(machine.count == 1)
+            #expect(machine[0].predicate == .gitPush(force: .exactly(.force), branch: "main"))
+            #expect(machine[0].verdict == .deny)
+        }
+    }
+
+    @Test func save_storeError_doesNotInvokeFallbackAgain() async throws {
+        try await withTempPolicyContext { home, workspace in
+            let config = RVPolicyPaths.configDirectory(home: home)
+            try FileManager.default.createDirectory(
+                at: config.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try Data().write(to: config)
+
+            let fallbackLog = CompileCallLog()
+            var threw = false
+            do {
+                let result = try await PolicyDraftRun.execute(
+                    english: "never allow force-push to main",
+                    save: true,
+                    robot: false,
+                    home: home,
+                    workspace: workspace,
+                    compiler: EnglishCompileChain(
+                        primary: UnavailableEnglishCompiler(),
+                        fallback: CountingEnglishCompiler(log: fallbackLog)
+                    )
+                )
+                Issue.record("expected store failure, got \(result.outcome)")
+            } catch {
+                threw = true
+            }
+            #expect(threw)
+            #expect(await fallbackLog.count == 1)
+            #expect(
+                FileManager.default.fileExists(
+                    atPath: TypedRuleStore(baseDirectory: config).machineFileURL.path
+                ) == false
+            )
+        }
+    }
 }
 
 struct PolicyDocumentCommandTests {
@@ -258,6 +373,35 @@ private func withTempPolicyContext(
         try? FileManager.default.removeItem(at: workspace)
     }
     try await body(home, workspace)
+}
+
+private func policyDraftCommandSourceURL() -> URL {
+    URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .appendingPathComponent("Sources/RVCLI/Commands/PolicyDraftCommand.swift")
+}
+
+private struct UnavailableEnglishCompiler: EnglishCompiler {
+    func compile(_: String) async throws -> EnglishCompileResult {
+        throw EnglishCompilerError.unavailable
+    }
+}
+
+private actor CompileCallLog {
+    private(set) var count = 0
+    func mark() { count += 1 }
+}
+
+private struct CountingEnglishCompiler: EnglishCompiler {
+    let log: CompileCallLog
+    let inner = FakeEnglishCompiler()
+
+    func compile(_ english: String) async throws -> EnglishCompileResult {
+        await log.mark()
+        return try await inner.compile(english)
+    }
 }
 
 private func assertNoPolicyWrites(home: HomeDirectory, workspace: URL) {
