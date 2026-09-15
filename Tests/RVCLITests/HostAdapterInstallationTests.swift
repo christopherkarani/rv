@@ -485,6 +485,107 @@ func hostInstallation_currentResourceWithExecutableIsWired(_ host: HookHost) thr
     }
 }
 
+@Test func ClaudeSettingsMerge_applyThenHostWiringFileToolsIsWired() throws {
+    let first = try ClaudeSettingsMerge.merge(
+        existingData: nil,
+        rvPath: "/usr/local/bin/rv",
+        adapterPath: "/tmp/.claude/hooks/rv-guard.py",
+        force: false
+    )
+    #expect(first.wrote)
+    let slice = try #require(ClaudeRVSlice.decode(from: first.data))
+    #expect(slice.bakedRvPath == "/usr/local/bin/rv")
+    #expect(slice.adapterPath == "/tmp/.claude/hooks/rv-guard.py")
+    #expect(slice.matchers == ClaudeSettingsMerge.matchers)
+    #expect(slice.hasFileToolMatchers)
+    #expect(
+        HostWiring.fileTools(
+            host: .claude,
+            adapterData: first.data,
+            companionJSON: nil
+        ) == .wired
+    )
+    let second = try ClaudeSettingsMerge.merge(
+        existingData: first.data,
+        rvPath: "/usr/local/bin/rv",
+        adapterPath: "/tmp/.claude/hooks/rv-guard.py",
+        force: false
+    )
+    #expect(second.wrote == false)
+    #expect(second.data == first.data)
+}
+
+@Test func ClaudeSettingsMerge_foreignNotificationSurvivesMergeAndStrip() throws {
+    let existing = """
+    {
+      "permissionMode": "default",
+      "hooks": {
+        "Notification": [
+          {
+            "matcher": "*",
+            "hooks": [
+              { "type": "command", "command": "notify-send rv" }
+            ]
+          }
+        ]
+      }
+    }
+    """
+    let merged = try ClaudeSettingsMerge.merge(
+        existingData: Data(existing.utf8),
+        rvPath: "/usr/local/bin/rv",
+        adapterPath: "/tmp/.claude/hooks/rv-guard.py",
+        force: false
+    )
+    let mergedRoot = try #require(
+        JSONSerialization.jsonObject(with: merged.data) as? [String: Any]
+    )
+    #expect(mergedRoot["permissionMode"] as? String == "default")
+    let mergedHooks = try #require(mergedRoot["hooks"] as? [String: Any])
+    #expect(mergedHooks["Notification"] != nil)
+    let pre = try #require(mergedHooks["PreToolUse"] as? [[String: Any]])
+    #expect(pre.map { $0["matcher"] as? String } == ClaudeSettingsMerge.matchers)
+    let stripped = try #require(try ClaudeSettingsMerge.uninstall(existingData: merged.data))
+    let strippedRoot = try #require(
+        JSONSerialization.jsonObject(with: stripped) as? [String: Any]
+    )
+    #expect(strippedRoot["permissionMode"] as? String == "default")
+    let strippedHooks = try #require(strippedRoot["hooks"] as? [String: Any])
+    #expect(strippedHooks["Notification"] != nil)
+    #expect(strippedHooks["PreToolUse"] == nil)
+}
+
+@Test func hostWiring_cursorMergeCompanionThenFileToolsIsWired() throws {
+    let adapterBytes = Data(
+        try HookHost.cursor.adapterResource().rendered(rvPath: "/usr/local/bin/rv").utf8
+    )
+    let mergedHooks = try CursorHooksMerge.merge(
+        existingData: nil,
+        adapterPath: "/tmp/home/.cursor/hooks/rv-guard.py"
+    ).data
+    #expect(
+        HostWiring.fileTools(
+            host: .cursor,
+            adapterData: adapterBytes,
+            companionJSON: mergedHooks
+        ) == .wired
+    )
+}
+
+@Test func hostWiring_codexMergeFileToolsStayNotApplicable() throws {
+    let merged = try CodexHooksMerge.merge(
+        existingData: nil,
+        adapterPath: "/tmp/home/.codex/hooks/rv-guard.py"
+    ).data
+    #expect(
+        HostWiring.fileTools(
+            host: .codex,
+            adapterData: merged,
+            companionJSON: nil
+        ) == .notApplicable
+    )
+}
+
 @Test func hostInstallation_wiredCursorWithPreToolUseIsFileToolWired() throws {
     try withInstallationHome { home, paths in
         let executable = try makeWiredMissPath(home: home)

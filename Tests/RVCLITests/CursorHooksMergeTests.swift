@@ -89,3 +89,29 @@ import Testing
         _ = try CursorHooksMerge.merge(existingData: Data("[]".utf8), adapterPath: "/x")
     }
 }
+
+@Test func cursorHooksMerge_secondMergeIsByteIdentical() throws {
+    let adapter = "/tmp/home/.cursor/hooks/rv-guard.py"
+    let first = try CursorHooksMerge.merge(existingData: nil, adapterPath: adapter)
+    let second = try CursorHooksMerge.merge(existingData: first.data, adapterPath: adapter)
+    #expect(second.wrote == false)
+    #expect(second.data == first.data)
+}
+
+@Test func cursorHooksMerge_applyThenHostWiringFileToolsIsWired() throws {
+    let adapter = "/tmp/home/.cursor/hooks/rv-guard.py"
+    let adapterBytes = Data("cursor-adapter".utf8)
+    let merged = try CursorHooksMerge.merge(existingData: nil, adapterPath: adapter)
+    let slice = try #require(CursorRVSlice.decode(from: merged.data))
+    #expect(slice.adapterPath == adapter)
+    #expect(slice.registersPreToolUse)
+    #expect(slice.failClosed)
+    #expect(slice.timeout == CursorHooksMerge.timeout)
+    #expect(
+        HostWiring.fileTools(
+            host: .cursor,
+            adapterData: adapterBytes,
+            companionJSON: merged.data
+        ) == .wired
+    )
+}

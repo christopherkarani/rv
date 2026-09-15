@@ -11,7 +11,7 @@ enum CursorHooksMerge {
     static let beforeShellKey = "beforeShellExecution"
     static let preToolUseKey = "preToolUse"
     static let fingerprint = "rv-guard.py"
-    static let timeout = 5
+    static let timeout = CursorRVSlice.defaultTimeout
     static let schemaVersion = 1
 
     static func hookCommand(adapterPath: String) -> String {
@@ -49,11 +49,12 @@ enum CursorHooksMerge {
     }
 
     static func rvEntry(adapterPath: String) -> [String: Any] {
-        [
-            "command": hookCommand(adapterPath: adapterPath),
-            "failClosed": true,
-            "timeout": timeout,
-        ]
+        CursorRVSlice(
+            adapterPath: adapterPath,
+            timeout: timeout,
+            failClosed: CursorRVSlice.defaultFailClosed,
+            registersPreToolUse: true
+        ).hookObject()
     }
 
     /// Returns merged hooks bytes and whether content changed.
@@ -61,9 +62,14 @@ enum CursorHooksMerge {
         existingData: Data?,
         adapterPath: String
     ) throws -> (data: Data, wrote: Bool) {
-        let root = try parseRoot(existingData)
-        var next = stripFingerprinted(from: root)
-        next = insertRVEntry(into: next, adapterPath: adapterPath)
+        let remainder = try parseRoot(existingData)
+        let slice = CursorRVSlice(
+            adapterPath: adapterPath,
+            timeout: timeout,
+            failClosed: CursorRVSlice.defaultFailClosed,
+            registersPreToolUse: true
+        )
+        var next = slice.inserting(into: stripFingerprinted(from: remainder))
         if next[versionKey] == nil {
             next[versionKey] = schemaVersion
         }
@@ -93,12 +99,7 @@ enum CursorHooksMerge {
     }
 
     static func hasFileToolEntry(in root: [String: Any]) -> Bool {
-        guard let hooksRoot = root[hooksRootKey] as? [String: Any],
-              let preToolUse = hooksRoot[preToolUseKey] as? [[String: Any]]
-        else {
-            return false
-        }
-        return preToolUse.contains(where: isFingerprintedHook)
+        CursorRVSlice.decode(from: root)?.registersPreToolUse == true
     }
 
     private static func stripFingerprinted(from root: [String: Any]) -> [String: Any] {
@@ -134,19 +135,6 @@ enum CursorHooksMerge {
         return next
     }
 
-    private static func insertRVEntry(into root: [String: Any], adapterPath: String) -> [String: Any] {
-        var next = root
-        var hooksRoot = next[hooksRootKey] as? [String: Any] ?? [:]
-        var beforeShell = hooksRoot[beforeShellKey] as? [[String: Any]] ?? []
-        beforeShell.append(rvEntry(adapterPath: adapterPath))
-        hooksRoot[beforeShellKey] = beforeShell
-        var preToolUse = hooksRoot[preToolUseKey] as? [[String: Any]] ?? []
-        preToolUse.append(rvEntry(adapterPath: adapterPath))
-        hooksRoot[preToolUseKey] = preToolUse
-        next[hooksRootKey] = hooksRoot
-        return next
-    }
-
     private static func encode(_ root: [String: Any]) throws -> Data {
         guard JSONSerialization.isValidJSONObject(root) else {
             throw CursorHooksMergeError.unreadable
@@ -157,4 +145,63 @@ enum CursorHooksMerge {
 
 enum CursorHooksMergeError: Error, Equatable {
     case unreadable
+}
+
+/// Typed RV hooks.json slice. Foreign handlers stay in the remainder bag.
+struct CursorRVSlice: Equatable, Sendable {
+    static let defaultTimeout = 5
+    static let defaultFailClosed = true
+
+    var adapterPath: String
+    var timeout: Int
+    var failClosed: Bool
+    var registersPreToolUse: Bool
+
+    func hookObject() -> [String: Any] {
+        [
+            "command": CursorHooksMerge.hookCommand(adapterPath: adapterPath),
+            "failClosed": failClosed,
+            "timeout": timeout,
+        ]
+    }
+
+    func inserting(into remainder: [String: Any]) -> [String: Any] {
+        var next = remainder
+        var hooksRoot = next[CursorHooksMerge.hooksRootKey] as? [String: Any] ?? [:]
+        var beforeShell = hooksRoot[CursorHooksMerge.beforeShellKey] as? [[String: Any]] ?? []
+        beforeShell.append(hookObject())
+        hooksRoot[CursorHooksMerge.beforeShellKey] = beforeShell
+        if registersPreToolUse {
+            var preToolUse = hooksRoot[CursorHooksMerge.preToolUseKey] as? [[String: Any]] ?? []
+            preToolUse.append(hookObject())
+            hooksRoot[CursorHooksMerge.preToolUseKey] = preToolUse
+        }
+        next[CursorHooksMerge.hooksRootKey] = hooksRoot
+        return next
+    }
+
+    static func decode(from data: Data) -> CursorRVSlice? {
+        guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            return nil
+        }
+        return decode(from: root)
+    }
+
+    static func decode(from root: [String: Any]) -> CursorRVSlice? {
+        guard let hooksRoot = root[CursorHooksMerge.hooksRootKey] as? [String: Any] else {
+            return nil
+        }
+        let before = (hooksRoot[CursorHooksMerge.beforeShellKey] as? [[String: Any]]) ?? []
+        let preToolUse = (hooksRoot[CursorHooksMerge.preToolUseKey] as? [[String: Any]]) ?? []
+        let rvBefore = before.first(where: CursorHooksMerge.isFingerprintedHook)
+        let rvPre = preToolUse.first(where: CursorHooksMerge.isFingerprintedHook)
+        guard let hook = rvBefore ?? rvPre else { return nil }
+        let command = (hook["command"] as? String) ?? ""
+        return CursorRVSlice(
+            adapterPath: CursorHooksMerge.adapterPath(in: command) ?? "",
+            timeout: (hook["timeout"] as? Int) ?? CursorHooksMerge.timeout,
+            failClosed: (hook["failClosed"] as? Bool) ?? false,
+            registersPreToolUse: rvPre != nil
+        )
+    }
 }

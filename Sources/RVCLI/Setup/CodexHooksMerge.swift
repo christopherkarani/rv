@@ -8,10 +8,10 @@ enum CodexHooksMerge {
     static let hooksRootKey = "hooks"
     static let preToolUseKey = "PreToolUse"
     static let fingerprint = "rv-guard.py"
-    static let matcher = "Bash"
+    static let matcher = CodexRVSlice.shellMatcher
     static let hookType = "command"
-    static let timeout = 5
-    static let statusMessage = "RV"
+    static let timeout = CodexRVSlice.defaultTimeout
+    static let statusMessage = CodexRVSlice.defaultStatusMessage
 
     static func hookCommand(adapterPath: String) -> String {
         "python3 \(adapterPath)"
@@ -50,17 +50,12 @@ enum CodexHooksMerge {
     }
 
     static func rvEntry(adapterPath: String) -> [String: Any] {
-        [
-            "matcher": matcher,
-            "hooks": [
-                [
-                    "type": hookType,
-                    "command": hookCommand(adapterPath: adapterPath),
-                    "timeout": timeout,
-                    "statusMessage": statusMessage,
-                ] as [String: Any],
-            ],
-        ]
+        CodexRVSlice(
+            adapterPath: adapterPath,
+            matcher: matcher,
+            timeout: timeout,
+            statusMessage: statusMessage
+        ).entry()
     }
 
     /// Returns merged hooks bytes and whether content changed.
@@ -68,9 +63,14 @@ enum CodexHooksMerge {
         existingData: Data?,
         adapterPath: String
     ) throws -> (data: Data, wrote: Bool) {
-        let root = try parseRoot(existingData)
-        var next = stripFingerprinted(from: root)
-        next = insertRVEntry(into: next, adapterPath: adapterPath)
+        let remainder = try parseRoot(existingData)
+        let slice = CodexRVSlice(
+            adapterPath: adapterPath,
+            matcher: CodexRVSlice.shellMatcher,
+            timeout: CodexRVSlice.defaultTimeout,
+            statusMessage: CodexRVSlice.defaultStatusMessage
+        )
+        let next = slice.inserting(into: stripFingerprinted(from: remainder))
         let data = try encode(next)
         return (data, existingData != data)
     }
@@ -127,16 +127,6 @@ enum CodexHooksMerge {
         return next
     }
 
-    private static func insertRVEntry(into root: [String: Any], adapterPath: String) -> [String: Any] {
-        var next = root
-        var hooksRoot = next[hooksRootKey] as? [String: Any] ?? [:]
-        var preToolUse = hooksRoot[preToolUseKey] as? [[String: Any]] ?? []
-        preToolUse.append(rvEntry(adapterPath: adapterPath))
-        hooksRoot[preToolUseKey] = preToolUse
-        next[hooksRootKey] = hooksRoot
-        return next
-    }
-
     private static func encode(_ root: [String: Any]) throws -> Data {
         guard JSONSerialization.isValidJSONObject(root) else {
             throw CodexHooksMergeError.unreadable
@@ -147,4 +137,70 @@ enum CodexHooksMerge {
 
 enum CodexHooksMergeError: Error, Equatable {
     case unreadable
+}
+
+/// Typed RV PreToolUse slice. Shell matcher only — no file-tool registration.
+struct CodexRVSlice: Equatable, Sendable {
+    static let shellMatcher = "Bash"
+    static let defaultTimeout = 5
+    static let defaultStatusMessage = "RV"
+
+    var adapterPath: String
+    var matcher: String
+    var timeout: Int
+    var statusMessage: String
+
+    func entry() -> [String: Any] {
+        [
+            "matcher": matcher,
+            "hooks": [
+                [
+                    "type": CodexHooksMerge.hookType,
+                    "command": CodexHooksMerge.hookCommand(adapterPath: adapterPath),
+                    "timeout": timeout,
+                    "statusMessage": statusMessage,
+                ] as [String: Any],
+            ],
+        ]
+    }
+
+    func inserting(into remainder: [String: Any]) -> [String: Any] {
+        var next = remainder
+        var hooksRoot = next[CodexHooksMerge.hooksRootKey] as? [String: Any] ?? [:]
+        var preToolUse = hooksRoot[CodexHooksMerge.preToolUseKey] as? [[String: Any]] ?? []
+        preToolUse.append(entry())
+        hooksRoot[CodexHooksMerge.preToolUseKey] = preToolUse
+        next[CodexHooksMerge.hooksRootKey] = hooksRoot
+        return next
+    }
+
+    static func decode(from data: Data) -> CodexRVSlice? {
+        guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            return nil
+        }
+        return decode(from: root)
+    }
+
+    static func decode(from root: [String: Any]) -> CodexRVSlice? {
+        guard let hooksRoot = root[CodexHooksMerge.hooksRootKey] as? [String: Any],
+              let preToolUse = hooksRoot[CodexHooksMerge.preToolUseKey] as? [[String: Any]]
+        else {
+            return nil
+        }
+        for entry in preToolUse {
+            guard let hooks = entry["hooks"] as? [[String: Any]],
+                  let hook = hooks.first(where: CodexHooksMerge.isFingerprintedHook)
+            else {
+                continue
+            }
+            let command = (hook["command"] as? String) ?? ""
+            return CodexRVSlice(
+                adapterPath: CodexHooksMerge.adapterPath(in: command) ?? "",
+                matcher: (entry["matcher"] as? String) ?? CodexHooksMerge.matcher,
+                timeout: (hook["timeout"] as? Int) ?? CodexHooksMerge.timeout,
+                statusMessage: (hook["statusMessage"] as? String) ?? CodexHooksMerge.statusMessage
+            )
+        }
+        return nil
+    }
 }

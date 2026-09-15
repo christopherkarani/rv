@@ -11,12 +11,12 @@ enum ClaudeSettingsMerge {
     static let preToolUseKey = "PreToolUse"
     static let fingerprintLegacy = "hook --host claude"
     static let fingerprint = "rv-guard.py"
-    static let matcher = "Bash"
-    static let fileMatchers = ["Read", "Edit", "Write"]
-    static var matchers: [String] { [matcher] + fileMatchers }
+    static let matcher = ClaudeRVSlice.shellMatcher
+    static let fileMatchers = ClaudeRVSlice.fileMatchers
+    static var matchers: [String] { ClaudeRVSlice.defaultMatchers }
     static let hookType = "command"
     /// Claude waits this long for the wrapper, including the human confirm dialog.
-    static let timeout = 90
+    static let timeout = ClaudeRVSlice.defaultTimeout
 
     static func adapterPath(settingsPath: String) -> String {
         (settingsPath as NSString).deletingLastPathComponent + "/hooks/rv-guard.py"
@@ -94,21 +94,16 @@ enum ClaudeSettingsMerge {
     }
 
     static func rvEntry(rvPath: String, adapterPath: String, matcher: String) -> [String: Any] {
-        [
-            "matcher": matcher,
-            "hooks": [
-                [
-                    "type": hookType,
-                    "command": hookCommand(rvPath: rvPath, adapterPath: adapterPath),
-                    "timeout": timeout,
-                ] as [String: Any],
-            ],
-        ]
+        ClaudeRVSlice(
+            bakedRvPath: rvPath,
+            adapterPath: adapterPath,
+            matchers: [matcher],
+            timeout: timeout
+        ).entry(matcher: matcher)
     }
 
     static func hasFileToolMatchers(in root: [String: Any]) -> Bool {
-        let present = Set(locateFingerprintedHooks(in: root).compactMap { $0.entry["matcher"] as? String })
-        return Set(fileMatchers).isSubset(of: present)
+        ClaudeRVSlice.decode(from: root)?.hasFileToolMatchers == true
     }
 
     /// Returns merged settings bytes and whether content changed.
@@ -118,12 +113,17 @@ enum ClaudeSettingsMerge {
         adapterPath: String,
         force: Bool
     ) throws -> (data: Data, wrote: Bool) {
-        let root = try parseRoot(existingData)
-        if force == false, inspectionState(of: root) == .occupied {
+        let remainder = try parseRoot(existingData)
+        if force == false, inspectionState(of: remainder) == .occupied {
             preconditionFailure("merge called on occupied settings without --force")
         }
-        var next = stripFingerprinted(from: root)
-        next = insertRVEntry(into: next, rvPath: rvPath, adapterPath: adapterPath)
+        let slice = ClaudeRVSlice(
+            bakedRvPath: rvPath,
+            adapterPath: adapterPath,
+            matchers: ClaudeRVSlice.defaultMatchers,
+            timeout: ClaudeRVSlice.defaultTimeout
+        )
+        let next = slice.inserting(into: stripFingerprinted(from: remainder))
         let data = try encode(next)
         let wrote = existingData != data
         return (data, wrote)
@@ -197,12 +197,12 @@ enum ClaudeSettingsMerge {
         return .occupied
     }
 
-    private struct LocatedHook {
+    fileprivate struct LocatedHook {
         var entry: [String: Any]
         var hook: [String: Any]
     }
 
-    private static func locateFingerprintedHooks(in root: [String: Any]) -> [LocatedHook] {
+    fileprivate static func locateFingerprintedHooks(in root: [String: Any]) -> [LocatedHook] {
         guard let hooksRoot = root[hooksRootKey] as? [String: Any],
               let preToolUse = hooksRoot[preToolUseKey] as? [[String: Any]]
         else {
@@ -260,22 +260,6 @@ enum ClaudeSettingsMerge {
         return next
     }
 
-    private static func insertRVEntry(
-        into root: [String: Any],
-        rvPath: String,
-        adapterPath: String
-    ) -> [String: Any] {
-        var next = root
-        var hooksRoot = next[hooksRootKey] as? [String: Any] ?? [:]
-        var preToolUse = hooksRoot[preToolUseKey] as? [[String: Any]] ?? []
-        for name in matchers {
-            preToolUse.append(rvEntry(rvPath: rvPath, adapterPath: adapterPath, matcher: name))
-        }
-        hooksRoot[preToolUseKey] = preToolUse
-        next[hooksRootKey] = hooksRoot
-        return next
-    }
-
     private static func encode(_ root: [String: Any]) throws -> Data {
         guard JSONSerialization.isValidJSONObject(root) else {
             throw ClaudeSettingsMergeError.unreadable
@@ -286,4 +270,68 @@ enum ClaudeSettingsMerge {
 
 enum ClaudeSettingsMergeError: Error, Equatable {
     case unreadable
+}
+
+/// Typed RV PreToolUse slice. Foreign settings keys stay in the remainder bag.
+struct ClaudeRVSlice: Equatable, Sendable {
+    static let shellMatcher = "Bash"
+    static let fileMatchers = ["Read", "Edit", "Write"]
+    static let defaultTimeout = 90
+    static var defaultMatchers: [String] { [shellMatcher] + fileMatchers }
+
+    var bakedRvPath: String
+    var adapterPath: String
+    var matchers: [String]
+    var timeout: Int
+
+    var hasFileToolMatchers: Bool {
+        Set(Self.fileMatchers).isSubset(of: Set(matchers))
+    }
+
+    func entry(matcher: String) -> [String: Any] {
+        [
+            "matcher": matcher,
+            "hooks": [
+                [
+                    "type": ClaudeSettingsMerge.hookType,
+                    "command": ClaudeSettingsMerge.hookCommand(
+                        rvPath: bakedRvPath,
+                        adapterPath: adapterPath
+                    ),
+                    "timeout": timeout,
+                ] as [String: Any],
+            ],
+        ]
+    }
+
+    func inserting(into remainder: [String: Any]) -> [String: Any] {
+        var next = remainder
+        var hooksRoot = next[ClaudeSettingsMerge.hooksRootKey] as? [String: Any] ?? [:]
+        var preToolUse = hooksRoot[ClaudeSettingsMerge.preToolUseKey] as? [[String: Any]] ?? []
+        for name in matchers {
+            preToolUse.append(entry(matcher: name))
+        }
+        hooksRoot[ClaudeSettingsMerge.preToolUseKey] = preToolUse
+        next[ClaudeSettingsMerge.hooksRootKey] = hooksRoot
+        return next
+    }
+
+    static func decode(from data: Data) -> ClaudeRVSlice? {
+        guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            return nil
+        }
+        return decode(from: root)
+    }
+
+    static func decode(from root: [String: Any]) -> ClaudeRVSlice? {
+        let located = ClaudeSettingsMerge.locateFingerprintedHooks(in: root)
+        guard located.isEmpty == false else { return nil }
+        let command = (located.first?.hook["command"] as? String) ?? ""
+        return ClaudeRVSlice(
+            bakedRvPath: ClaudeSettingsMerge.bakedRvPath(in: command) ?? "",
+            adapterPath: ClaudeSettingsMerge.adapterPath(in: command) ?? "",
+            matchers: located.compactMap { $0.entry["matcher"] as? String },
+            timeout: (located.first?.hook["timeout"] as? Int) ?? ClaudeSettingsMerge.timeout
+        )
+    }
 }
