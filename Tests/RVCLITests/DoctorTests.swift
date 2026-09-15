@@ -404,6 +404,13 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
         )
         try body.write(toFile: paths.grokHook, atomically: true, encoding: .utf8)
 
+        let snapshot = try HostAdapterInstallation.inspect(
+            paths: paths,
+            pathEntries: environment.pathEntries,
+            fileManager: environment.fileManager
+        )
+        #expect(snapshot.state(for: .grok) == .broken)
+
         let pretty = DoctorRun.run(
             environment: environment,
             diagnostics: localReady,
@@ -452,6 +459,19 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
         )
         try body.write(toFile: paths.grokHook, atomically: true, encoding: .utf8)
 
+        let snapshot = try HostAdapterInstallation.inspect(
+            paths: paths,
+            pathEntries: environment.pathEntries,
+            fileManager: environment.fileManager
+        )
+        let installation = snapshot.installation(for: .grok)
+        #expect(installation.state == .broken)
+        guard case .broken(_, let data) = installation else {
+            Issue.record("expected inspect .broken")
+            return
+        }
+        #expect(installation.setupPlan(force: false) == .write(existingData: data))
+
         let outcome = DoctorRun.run(
             environment: environment,
             diagnostics: localReady,
@@ -471,6 +491,16 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
         #expect(outcome.stdout.contains("wired") == false)
         #expect(hosts["grok"] == "broken")
         #expect(object["grade"] as? String == "hook")
+
+        let scanHome = try #require(ScanHome(validating: home.path))
+        #expect(
+            scanSetupNudgeRecommended(
+                hosts: [.grok],
+                home: scanHome,
+                pathEntries: environment.pathEntries,
+                fileManager: environment.fileManager
+            )
+        )
     }
 }
 

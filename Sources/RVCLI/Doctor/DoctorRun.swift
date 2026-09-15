@@ -1,7 +1,6 @@
 import Foundation
 import RVDomain
 import RVHistory
-import RVHooks
 import RVIPC
 import RVPolicy
 import RVPresentation
@@ -84,10 +83,7 @@ enum DoctorRun {
                 let installation = installations.installation(for: host)
                 return DoctorHostView(
                     host: host,
-                    state: doctorHostState(
-                        installation,
-                        fileManager: environment.fileManager
-                    ),
+                    state: doctorHostState(installation),
                     fileTools: installations.fileTools(for: host)
                 )
             },
@@ -105,40 +101,9 @@ enum DoctorRun {
         )
     }
 
-    /// Miss path needs sibling `rv-cli`. Missing or non-exec is `.broken`, not `.wired`.
-    private static func doctorHostState(
-        _ installation: HostAdapterInstallation,
-        fileManager: FileManager
-    ) -> DoctorHostState {
-        switch installation {
-        case .wired(let owned, let data):
-            if owned.host == .claude {
-                guard case .wired(let bakedRvPath) = ClaudeSettingsMerge.inspectionState(of: data),
-                      isExecutableRvCli(nextTo: bakedRvPath, fileManager: fileManager)
-                else {
-                    return .broken
-                }
-                return .wired
-            }
-            guard let text = String(data: data, encoding: .utf8),
-                  let adapter = try? HostAdapterResources.load(for: owned.host),
-                  let bakedRvPath = adapter.bakedRvPath(in: text),
-                  isExecutableRvCli(nextTo: bakedRvPath, fileManager: fileManager)
-            else {
-                return .broken
-            }
-            return .wired
-        case .missing, .absentFile, .occupied, .broken:
-            return installation.state
-        }
-    }
-
-    private static func isExecutableRvCli(
-        nextTo rvPath: String,
-        fileManager: FileManager
-    ) -> Bool {
-        let sibling = (rvPath as NSString).deletingLastPathComponent + "/rv-cli"
-        return fileManager.isExecutableFile(atPath: sibling)
+    /// Doctor consumes inspect state. Miss-path `.wired` already required sibling `rv-cli`.
+    private static func doctorHostState(_ installation: HostAdapterInstallation) -> DoctorHostState {
+        installation.state
     }
 
     private static func configState(

@@ -271,11 +271,57 @@ func hostInstallation_currentResourceWithMissingExecutableIsBroken(_ host: HookH
 }
 
 @Test(arguments: HookHost.setupSlotOrder)
-func hostInstallation_currentResourceWithExecutableIsWired(_ host: HookHost) throws {
+func hostInstallation_currentResourceWithNonExecutableRvCliIsBrokenNotWired(_ host: HookHost) throws {
     try withInstallationHome { home, paths in
         let owned = paths.hostAdapter(for: host)
         let executable = home.appendingPathComponent("bin/rv")
         try makeExecutable(executable)
+        try writeNonExecutableSiblingCli(nextTo: executable)
+        try FileManager.default.createDirectory(
+            atPath: owned.detectionDirectory,
+            withIntermediateDirectories: true
+        )
+        try writeWiredAdapter(host: host, destination: owned.destination, rvPath: executable.path)
+
+        let snapshot = try HostAdapterInstallation.inspect(
+            paths: paths,
+            pathEntries: [],
+            fileManager: .default
+        )
+
+        #expect(snapshot.state(for: host) == .broken)
+        #expect(snapshot.state(for: host) != .wired)
+    }
+}
+
+@Test(arguments: HookHost.setupSlotOrder)
+func hostInstallation_currentResourceWithMissingRvCliIsBrokenNotWired(_ host: HookHost) throws {
+    try withInstallationHome { home, paths in
+        let owned = paths.hostAdapter(for: host)
+        let executable = home.appendingPathComponent("bin/rv")
+        try makeExecutable(executable)
+        try FileManager.default.createDirectory(
+            atPath: owned.detectionDirectory,
+            withIntermediateDirectories: true
+        )
+        try writeWiredAdapter(host: host, destination: owned.destination, rvPath: executable.path)
+
+        let snapshot = try HostAdapterInstallation.inspect(
+            paths: paths,
+            pathEntries: [],
+            fileManager: .default
+        )
+
+        #expect(snapshot.state(for: host) == .broken)
+        #expect(snapshot.state(for: host) != .wired)
+    }
+}
+
+@Test(arguments: HookHost.setupSlotOrder)
+func hostInstallation_currentResourceWithExecutableIsWired(_ host: HookHost) throws {
+    try withInstallationHome { home, paths in
+        let owned = paths.hostAdapter(for: host)
+        let executable = try makeWiredMissPath(home: home)
         try FileManager.default.createDirectory(
             atPath: owned.detectionDirectory,
             withIntermediateDirectories: true
@@ -308,8 +354,7 @@ func hostInstallation_currentResourceWithExecutableIsWired(_ host: HookHost) thr
 
 @Test func hostInstallation_wiredGrokTemplateIsFileToolWired() throws {
     try withInstallationHome { home, paths in
-        let executable = home.appendingPathComponent("bin/rv")
-        try makeExecutable(executable)
+        let executable = try makeWiredMissPath(home: home)
         try FileManager.default.createDirectory(
             atPath: paths.grokDirectory,
             withIntermediateDirectories: true
@@ -355,8 +400,7 @@ func hostInstallation_currentResourceWithExecutableIsWired(_ host: HookHost) thr
 
 @Test func hostInstallation_wiredClaudeMergeIsFileToolWired() throws {
     try withInstallationHome { home, paths in
-        let executable = home.appendingPathComponent("bin/rv")
-        try makeExecutable(executable)
+        let executable = try makeWiredMissPath(home: home)
         try FileManager.default.createDirectory(
             atPath: paths.claudeDirectory,
             withIntermediateDirectories: true
@@ -380,8 +424,7 @@ func hostInstallation_currentResourceWithExecutableIsWired(_ host: HookHost) thr
 
 @Test func hostInstallation_wiredCursorAdapterWithoutHooksJSONIsShellOnly() throws {
     try withInstallationHome { home, paths in
-        let executable = home.appendingPathComponent("bin/rv")
-        try makeExecutable(executable)
+        let executable = try makeWiredMissPath(home: home)
         try FileManager.default.createDirectory(
             atPath: paths.cursorDirectory,
             withIntermediateDirectories: true
@@ -405,8 +448,7 @@ func hostInstallation_currentResourceWithExecutableIsWired(_ host: HookHost) thr
 
 @Test func hostInstallation_wiredCursorWithPreToolUseIsFileToolWired() throws {
     try withInstallationHome { home, paths in
-        let executable = home.appendingPathComponent("bin/rv")
-        try makeExecutable(executable)
+        let executable = try makeWiredMissPath(home: home)
         try FileManager.default.createDirectory(
             atPath: paths.cursorDirectory,
             withIntermediateDirectories: true
@@ -431,6 +473,26 @@ func hostInstallation_currentResourceWithExecutableIsWired(_ host: HookHost) thr
         #expect(snapshot.state(for: .cursor) == .wired)
         #expect(snapshot.fileTools(for: .cursor) == .wired)
     }
+}
+
+private func makeWiredMissPath(home: URL) throws -> URL {
+    let rv = home.appendingPathComponent("bin/rv")
+    try makeExecutable(rv)
+    try makeExecutable(home.appendingPathComponent("bin/rv-cli"))
+    return rv
+}
+
+private func writeNonExecutableSiblingCli(nextTo rv: URL) throws {
+    let cli = rv.deletingLastPathComponent().appendingPathComponent("rv-cli")
+    try FileManager.default.createDirectory(
+        at: cli.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+    )
+    try "not-exec".write(to: cli, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes(
+        [.posixPermissions: 0o644],
+        ofItemAtPath: cli.path
+    )
 }
 
 private func grokBodyWithMatcher(rvPath: String, matcher: String) throws -> String {
