@@ -566,6 +566,51 @@ struct PendingDispatchTests {
         #expect(remaining.items.isEmpty)
     }
 
+    @Test func allowOncePeekUsesCompileSetAfterPackEnable() async throws {
+        let allowOnceDirectory = try isolatedAllowOnceDirectory()
+        let homeURL = try isolatedHomeDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: homeURL)
+            try? FileManager.default.removeItem(at: allowOnceDirectory)
+        }
+        let approvals = FakePendingApprovals()
+        let wait = record(
+            id: "sql-1",
+            host: .pi,
+            session: "sess-pi",
+            folder: "ws",
+            createdAt: now,
+            effects: [],
+            branchName: nil,
+            command: "DROP TABLE users"
+        )
+        await approvals.seed(wait)
+        let runtime = try makeRuntime(
+            approvals: approvals,
+            homeURL: homeURL,
+            allowOnceDirectory: allowOnceDirectory
+        )
+        let sqlite = PackID(rawValue: "database.sqlite")
+        let enable = await runtime.dispatch(
+            IPCRequest(method: .setPackEnabled(SetPackEnabledParams(id: sqlite, enabled: true)))
+        )
+        guard case .setPackEnabled = enable.result else {
+            Issue.record("expected setPackEnabled, got \(enable.result)")
+            return
+        }
+
+        let resolved = await runtime.dispatch(
+            IPCRequest(method: .pendingResolve(resolveParams(wait, decision: .allowOnce)))
+        )
+        guard case .pendingResolve(let reply) = resolved.result else {
+            Issue.record("allow-once after sqlite enable must plant, got \(resolved.result)")
+            return
+        }
+        #expect(reply.terminal)
+        let grants = AllowOnceStore(baseDirectory: allowOnceDirectory)
+        #expect(await grants.list(now: now).filter { $0.kind == .granted }.count == 1)
+    }
+
     @Test func hookEvaluateAskOnPiPersistsWaitWithoutCommandOnList() async throws {
         let approvals = FakePendingApprovals()
         let runtime = try makeRuntime(approvals: approvals)

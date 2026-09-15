@@ -25,7 +25,8 @@ struct CHookPipeTests {
         process.environment = [
             "HOME": isolationHome.path,
             "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
-            "TMPDIR": FileManager.default.temporaryDirectory.path,
+            // launchd cannot read plists under Darwin TMPDIR (/var/folders/...).
+            "TMPDIR": "/tmp",
             "RV_RELEASE_STAGE": stage.path,
             "RV_C_HOOK_SKIP_RELEASE": skipRelease,
             "TERM": "dumb",
