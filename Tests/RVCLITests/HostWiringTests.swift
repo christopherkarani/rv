@@ -96,6 +96,64 @@ func hostWiring_hostsWithoutFileToolDoorIgnoreBytes(_ host: HookHost) {
     )
 }
 
+@Test func hostWiring_applyClaudeCurrentMatchers_fileToolsOnReturnedDataEqualsApplyAndIsWired() throws {
+    let rvPath = "/usr/local/bin/rv"
+    let adapterPath = "/tmp/rv-t2/.claude/hooks/rv-guard.py"
+    let applied = try HostWiring.applyClaude(
+        existing: nil,
+        rvPath: rvPath,
+        adapterPath: adapterPath
+    )
+    let inspected = HostWiring.fileTools(
+        host: .claude,
+        adapterBytes: applied.data,
+        companionJSON: nil
+    )
+    #expect(inspected == applied.fileTools)
+    #expect(applied.fileTools == .wired)
+    let merged = try ClaudeSettingsMerge.merge(
+        existingData: nil,
+        rvPath: rvPath,
+        adapterPath: adapterPath,
+        force: false
+    )
+    #expect(applied.data == merged.data)
+    #expect(applied.wrote == merged.wrote)
+}
+
+@Test func hostWiring_applyCursorCompanion_fileToolsOnReturnedDataEqualsApplyAndIsWired() throws {
+    let adapterPath = "/tmp/rv-t2/.cursor/hooks/rv-guard.py"
+    let applied = try HostWiring.applyCursor(existing: nil, adapterPath: adapterPath)
+    let inspected = HostWiring.fileTools(
+        host: .cursor,
+        adapterBytes: applied.data,
+        companionJSON: applied.data
+    )
+    #expect(inspected == applied.fileTools)
+    #expect(applied.fileTools == .wired)
+    let merged = try CursorHooksMerge.merge(existingData: nil, adapterPath: adapterPath)
+    #expect(applied.data == merged.data)
+    #expect(applied.wrote == merged.wrote)
+}
+
+@Test func hostWiring_applyGrokOpenPreToolUse_fileToolsOnReturnedDataEqualsApplyAndIsWired() {
+    let rendered = Data(
+        """
+        {"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"/usr/local/bin/rv hook --host grok","timeout":5}]}]}}
+        """.utf8
+    )
+    let applied = HostWiring.applyGrok(existing: nil, rendered: rendered)
+    let inspected = HostWiring.fileTools(
+        host: .grok,
+        adapterBytes: applied.data,
+        companionJSON: nil
+    )
+    #expect(inspected == applied.fileTools)
+    #expect(applied.fileTools == .wired)
+    #expect(applied.data == rendered)
+    #expect(applied.wrote)
+}
+
 private func claudeSettings(matchers: [String]) throws -> Data {
     let root: [String: Any] = [
         ClaudeSettingsMerge.hooksRootKey: [

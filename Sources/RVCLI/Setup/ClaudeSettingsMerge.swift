@@ -112,6 +112,7 @@ enum ClaudeSettingsMerge {
     }
 
     /// Returns merged settings bytes and whether content changed.
+    /// Setup writes through `HostWiring.applyClaude`.
     static func merge(
         existingData: Data?,
         rvPath: String,
