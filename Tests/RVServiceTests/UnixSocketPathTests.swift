@@ -29,8 +29,7 @@ struct UnixSocketPathTests {
 
     @Test func productionReadsInjectedXDGNotTmpFallback() throws {
         let previous = ProcessInfo.processInfo.environment["XDG_RUNTIME_DIR"]
-        let injected = FileManager.default.temporaryDirectory
-            .appendingPathComponent("rv-xdg-inject-\(UUID().uuidString)", isDirectory: true)
+        let injected = shortRuntimeDir("i")
         setenv("XDG_RUNTIME_DIR", injected.path, 1)
         defer { restoreXDG(previous) }
 
@@ -63,8 +62,7 @@ struct UnixSocketPathTests {
     }
 
     @Test func prepareRuntimeCreatesOwnerOnlyDirs() throws {
-        let xdg = FileManager.default.temporaryDirectory
-            .appendingPathComponent("rv-xdg-prep-\(UUID().uuidString)", isDirectory: true)
+        let xdg = shortRuntimeDir("p")
         let socket = try UnixSocketPath.resolve(xdgRuntimeDir: xdg.path)
         try UnixSocketPath.prepareRuntime(for: socket)
         defer { try? FileManager.default.removeItem(at: xdg) }
@@ -73,6 +71,13 @@ struct UnixSocketPathTests {
         #expect(try UnixSocketPath.posixMode(of: socket.deletingLastPathComponent()) & 0o777 == 0o700)
         #expect(FileManager.default.fileExists(atPath: socket.path) == false)
     }
+}
+
+/// Darwin TMPDIR plus a UUID overflows sockaddr_un (108 bytes) in resolve.
+private func shortRuntimeDir(_ tag: String) -> URL {
+    let token = String(UInt32.random(in: .min ... .max), radix: 16)
+    return FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv\(tag)-\(token)", isDirectory: true)
 }
 
 private func restoreXDG(_ previous: String?) {

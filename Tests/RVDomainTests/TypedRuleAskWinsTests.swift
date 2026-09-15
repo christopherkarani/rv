@@ -6,8 +6,7 @@ struct TypedRuleAskWinsTests {
     private let privateBranch = ReviewContext(
         repository: RepositoryReviewContext(
             name: "rv",
-            currentBranch: "feature",
-            isSharedBranch: false
+            currentBranch: "feature"
         )
     )
 

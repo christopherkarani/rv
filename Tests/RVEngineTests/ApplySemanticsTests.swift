@@ -86,7 +86,7 @@ struct ApplySemanticsTests {
         let composed = applySemantics(
             pack: pack,
             command: ShellCommand(rawValue: command),
-            gitWorld: .probed(GitAnalysisContext(isSharedBranch: true))
+            gitWorld: .probed(GitAnalysisContext(currentBranch: "main"))
         )
         guard case .deny(let deny) = composed.decision else {
             Issue.record("wrapped force-with-lease to main must deny")

@@ -70,8 +70,7 @@ enum ShadowReviewFixtures {
         context: ReviewContext = ReviewContext(
             repository: RepositoryReviewContext(
                 name: "rv",
-                currentBranch: "main",
-                isSharedBranch: true
+                currentBranch: "main"
             ),
             environment: EnvironmentReviewContext(labels: ["development"], isCI: false)
         )

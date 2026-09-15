@@ -6,8 +6,7 @@ struct TypedRuleExplainTests {
     private let shared = ReviewContext(
         repository: RepositoryReviewContext(
             name: "rv",
-            currentBranch: "main",
-            isSharedBranch: true
+            currentBranch: "main"
         )
     )
 

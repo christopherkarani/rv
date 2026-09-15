@@ -38,8 +38,7 @@ public enum ReviewSanitizer: Sendable {
         ReviewContext(
             repository: RepositoryReviewContext(
                 name: sanitizeField(context.repository.name),
-                currentBranch: sanitizeField(context.repository.currentBranch),
-                isSharedBranch: context.repository.isSharedBranch
+                currentBranch: sanitizeField(context.repository.currentBranch)
             ),
             environment: EnvironmentReviewContext(
                 labels: context.environment.labels.compactMap { label in

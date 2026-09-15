@@ -81,8 +81,7 @@ private enum ActionPolicyEngineShadowFixtures {
     static let sharedContext = ReviewContext(
         repository: RepositoryReviewContext(
             name: "rv",
-            currentBranch: "main",
-            isSharedBranch: true
+            currentBranch: "main"
         )
     )
 

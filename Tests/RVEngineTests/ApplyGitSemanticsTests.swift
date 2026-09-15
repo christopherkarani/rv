@@ -109,7 +109,7 @@ struct ApplyGitSemanticsTests {
         let composed = applyGitSemantics(
             pack: pack,
             command: ShellCommand(rawValue: command),
-            context: .probed(GitAnalysisContext(currentBranch: "main", isSharedBranch: true))
+            context: .probed(GitAnalysisContext(currentBranch: "main"))
         )
         guard case .deny(let deny) = composed.decision else {
             Issue.record("probed implicit HEAD main must hard-deny, got \(composed.decision)")
@@ -130,7 +130,7 @@ struct ApplyGitSemanticsTests {
         let composed = applyGitSemantics(
             pack: pack,
             command: ShellCommand(rawValue: command),
-            context: .probed(GitAnalysisContext(isSharedBranch: true))
+            context: .probed(GitAnalysisContext(currentBranch: "main"))
         )
         guard case .deny(let deny) = composed.decision else {
             Issue.record("force-with-lease to main must deny")
@@ -223,7 +223,7 @@ struct ApplyGitSemanticsTests {
         let composed = applyGitSemantics(
             pack: pack,
             command: ShellCommand(rawValue: command),
-            context: .probed(GitAnalysisContext(isSharedBranch: true)),
+            context: .probed(GitAnalysisContext(currentBranch: "main")),
             policy: EffectiveActionPolicy(rules: [rule])
         )
         guard case .deny(let deny) = composed.decision else {

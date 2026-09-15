@@ -6,16 +6,14 @@ struct ActionPolicyEngineTypedRuleTests {
     private let shared = ReviewContext(
         repository: RepositoryReviewContext(
             name: "rv",
-            currentBranch: "main",
-            isSharedBranch: true
+            currentBranch: "main"
         )
     )
 
     private let privateBranch = ReviewContext(
         repository: RepositoryReviewContext(
             name: "rv",
-            currentBranch: "feature",
-            isSharedBranch: false
+            currentBranch: "feature"
         )
     )
 

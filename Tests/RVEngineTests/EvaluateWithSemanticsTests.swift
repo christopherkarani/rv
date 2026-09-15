@@ -7,12 +7,12 @@ import RVDomain
 @Suite("EvaluateWithSemantics")
 struct EvaluateWithSemanticsTests {
     @Test func packAllow_semanticGitDeny_tightens() throws {
-        // `feature` is not a name-based shared branch; dropping the probed
-        // world would demote this to `remoteBranchAsk` instead of the wall.
+        // `feature` is not a name-based shared branch; probed HEAD `main`
+        // is. Dropping the probed world would demote this to `remoteBranchAsk`.
         let command = "bash -c 'git push --force-with-lease origin feature'"
         let result = try runDoor(
             command,
-            gitProbe: { _ in .probed(GitAnalysisContext(isSharedBranch: true)) }
+            gitProbe: { _ in .probed(GitAnalysisContext(currentBranch: "main")) }
         )
         guard case .deny(let deny) = result.decision else {
             Issue.record("wrapped force-with-lease to shared branch must deny")
@@ -196,7 +196,7 @@ struct EvaluateWithSemanticsTests {
         let result = try runDoor(
             "git push --force-with-lease",
             gitProbe: { _ in
-                .probed(GitAnalysisContext(currentBranch: "main", isSharedBranch: true))
+                .probed(GitAnalysisContext(currentBranch: "main"))
             },
             policy: EffectiveActionPolicy(rules: [rule])
         )
