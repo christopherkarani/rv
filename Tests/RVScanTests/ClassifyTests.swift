@@ -156,6 +156,8 @@ import RVDomain
         #expect(text.contains("import RVService") == false)
         #expect(text.contains("FilesystemLiveProbe") == false)
         #expect(text.contains("GitLiveProbe") == false)
+        #expect(text.contains("FileManager.default") == false)
+        #expect(text.contains("gitProbe: { _ in .unprobed }"))
         #expect(text.contains("AllowOnce") == false)
         #expect(text.contains("GatedEvaluate") == false)
         #expect(text.contains("PolicyGate") == false)

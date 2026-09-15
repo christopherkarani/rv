@@ -86,6 +86,22 @@ struct ApplyGitSemanticsTests {
         #expect(refspec == nil)
     }
 
+    @Test func unprobed_forceWithLeaseNamedMain_stillHardDenies() throws {
+        let command = "git push --force-with-lease origin main"
+        let pack = try runPack(command)
+        #expect(pack.decision == .allow)
+        let composed = applyGitSemantics(
+            pack: pack,
+            command: ShellCommand(rawValue: command)
+        )
+        guard case .deny(let deny) = composed.decision else {
+            Issue.record("unprobed name-based main must hard-deny, got \(composed.decision)")
+            return
+        }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.remoteSharedBranch.ruleID)
+        #expect(composed.boundReview == .deny(ActionPolicyEngine.Builtin.remoteSharedBranch))
+    }
+
     @Test func probed_forceWithLeaseNoRefspec_sharedMain_hardDenies() throws {
         let command = "git push --force-with-lease"
         let pack = try runPack(command)

@@ -91,6 +91,31 @@ struct EvaluateWithSemanticsTests {
         #expect(result.decision == .allow)
     }
 
+    @Test func gitProbeReceivesUnwrappedOutcome_defaultStaysUnprobed() throws {
+        var probed: UnwrapOutcome?
+        let result = try runDoor(
+            "bash -c 'git push --force-with-lease'",
+            gitProbe: { outcome in
+                probed = outcome
+                return .unprobed
+            }
+        )
+        guard case .complete(let unwrapped) = probed else {
+            Issue.record("gitProbe must see the unwrapped outcome")
+            return
+        }
+        #expect(unwrapped.command.rawValue == "git push --force-with-lease")
+        #expect(unwrapped.layers == [.bash])
+        #expect(result.decision == .allow)
+        #expect(result.analysis.wrappers == [.bash])
+        guard case .git(.push(_, let refspec, .forceWithLease, false)) = result.analysis.innermost
+        else {
+            Issue.record("unprobed implicit push must parse, got \(result.analysis)")
+            return
+        }
+        #expect(refspec == nil)
+    }
+
     @Test func packAllow_filesystemDeny_viaProbeFacts() throws {
         let result = try runDoor(
             "bash -c 'echo hi > ../outside-file'",

@@ -136,12 +136,35 @@ public enum ActionPolicyEngine: Sendable {
         )
     }
 
+    /// ReviewContext-only door: repository facts were supplied, so treat them
+    /// as `.probed`. The Engine evaluation door passes `gitWorld:` explicitly
+    /// (default `.unprobed` there) and must not go through this overload.
     public static func evaluate(
         action: ProposedAction,
         context: ReviewContext = ReviewContext(repository: RepositoryReviewContext()),
         policy: EffectiveActionPolicy = .empty,
+        gitAction: GitAction? = nil
+    ) -> ActionPolicyVerdict {
+        evaluate(
+            action: action,
+            context: context,
+            policy: policy,
+            gitAction: gitAction,
+            gitWorld: .probed(
+                GitAnalysisContext(
+                    currentBranch: context.repository.currentBranch,
+                    isSharedBranch: context.repository.isSharedBranch
+                )
+            )
+        )
+    }
+
+    public static func evaluate(
+        action: ProposedAction,
+        context: ReviewContext,
+        policy: EffectiveActionPolicy = .empty,
         gitAction: GitAction? = nil,
-        gitWorld: GitAnalysisWorld = .unprobed
+        gitWorld: GitAnalysisWorld
     ) -> ActionPolicyVerdict {
         switch action {
         case .shell(let shell):
@@ -384,8 +407,16 @@ public enum ActionPolicyEngine: Sendable {
         context: ReviewContext,
         gitWorld: GitAnalysisWorld
     ) -> Bool {
-        if case .probed = gitWorld, context.repository.isSharedBranch {
-            return true
+        switch gitWorld {
+        case .unprobed:
+            break
+        case .probed(let git):
+            // REQ-104: `isSharedBranch` only when probed. World payload and
+            // ReviewContext stay in lockstep on the Engine door; consult both
+            // so a mismatched caller cannot skip the shared-branch wall.
+            if git.isSharedBranch || context.repository.isSharedBranch {
+                return true
+            }
         }
         if let branch = resources.branchName, Self.sharedBranchNames.contains(branch) {
             return true
