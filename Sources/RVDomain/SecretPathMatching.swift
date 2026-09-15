@@ -16,16 +16,18 @@ public func isHomeAliasPath(_ path: String) -> Bool {
 
 // MARK: - Kind matching (Sendable pure)
 
-/// Pure matcher for a single `SecretPathKind`. Used by `SecretPathCatalog.firstMatch`
-/// and `RulePinning.secretPathHit`. No I/O, no `Date()`.
-public func secretPathKindMatches(_ candidate: String, _ kind: SecretPathKind) -> Bool {
-    switch kind {
-    case .basename(let name):
-        return lastPathComponent(candidate) == name
-    case .envVariant:
-        return isEnvVariant(lastPathComponent(candidate))
-    case .homeSuffix(let parts), .hostAuth(let parts):
-        return matchesHomeSuffix(candidate, parts: parts)
+extension SecretPathKind {
+    /// Returns whether `path` matches this catalog kind. Used by
+    /// `SecretPathCatalog.firstMatch` and `RulePinning`. No I/O, no `Date()`.
+    public func matches(_ path: String) -> Bool {
+        switch self {
+        case .basename(let name):
+            return lastPathComponent(path) == name
+        case .envVariant:
+            return isEnvVariant(lastPathComponent(path))
+        case .homeSuffix(let parts), .hostAuth(let parts):
+            return matchesHomeSuffix(path, parts: parts)
+        }
     }
 }
 

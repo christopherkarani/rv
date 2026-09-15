@@ -27,12 +27,12 @@ public struct ClaudeHostCodec: HostCodec {
                 hostAsk: hostAsk
             )
         }
-        if let file = FileToolAction.decoded(
+        if let file = FileToolAction.make(
             toolName: envelope.toolName,
-            paths: envelope.toolInput?.filePath,
-            envelope.toolInput?.path,
-            envelope.toolInput?.targetFile,
-            envelope.toolInput?.target
+            filePath: envelope.toolInput?.filePath,
+            path: envelope.toolInput?.path,
+            targetFile: envelope.toolInput?.targetFile,
+            target: envelope.toolInput?.target
         ) {
             return HookRequest.decoded(
                 host: .claude,
@@ -60,7 +60,7 @@ public struct ClaudeHostCodec: HostCodec {
         HookWire(
             stdout: hookAskJSON(
                 reason: reason,
-                rule: rule.map(displayRuleID),
+                rule: rule.map(\.slashDisplay),
                 next: hookVoiceNextSentence(next)
             ),
             exitCode: 2

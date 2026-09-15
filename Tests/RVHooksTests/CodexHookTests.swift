@@ -180,7 +180,7 @@ func codexHonorPath_missingReasonExitTwoWithWhitespaceStderrIsNotEnough(_ missin
         next: .ttyHint
     )
     try assertCodexHonorPath(wire, reason: resetHardHostDeny)
-    #expect(HostNativeAsk.leftoverAskIsPermit("ask") == false)
+    #expect(HostNativeAsk.leftoverAskIsPermit == false)
     #expect(wire.stdout == codec.encodeDeny(reason: resetHardHostDeny).stdout)
     #expect(wire.stderr == codec.encodeDeny(reason: resetHardHostDeny).stderr)
     #expect(wire.exitCode == codec.encodeDeny(reason: resetHardHostDeny).exitCode)
@@ -232,7 +232,7 @@ func codexHonorPath_missingReasonExitTwoWithWhitespaceStderrIsNotEnough(_ missin
     )
     #expect(HostNativeAsk.capability(for: .codex) == .denyOrTTY)
     #expect(
-        HostNativeAsk.verdict(
+        HostNativeAsk.hostAskVerdict(
             host: .codex,
             result: result,
             cwd: wd("/tmp/ws"),

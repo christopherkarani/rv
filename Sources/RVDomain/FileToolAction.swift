@@ -70,13 +70,28 @@ public struct FileToolAction: Sendable, Equatable, Codable {
         self.path = path
     }
 
-    /// Host-adapter decode: closed kind plus first non-empty path key.
+    /// Host-adapter factory: closed kind plus first non-empty path key.
     /// Unknown tools are `nil` (foreign). Missing path keys yield an empty path.
+    public static func make(
+        toolName: String?,
+        filePath: String? = nil,
+        path: String? = nil,
+        targetFile: String? = nil,
+        target: String? = nil
+    ) -> FileToolAction? {
+        make(toolName: toolName, paths: [filePath, path, targetFile, target])
+    }
+
+    /// Variadic path-key trampoline in `file_path`, `path`, `target_file`, `target` order.
     public static func decoded(toolName: String?, paths: String?...) -> FileToolAction? {
+        make(toolName: toolName, paths: Array(paths))
+    }
+
+    private static func make(toolName: String?, paths: [String?]) -> FileToolAction? {
         guard let kind = FileToolKind(toolName: toolName ?? "") else {
             return nil
         }
-        let path = FileToolPath.firstPresent(Array(paths)) ?? FileToolPath(rawValue: "")
+        let path = FileToolPath.firstPresent(paths) ?? FileToolPath(rawValue: "")
         return FileToolAction(kind: kind, path: path)
     }
 }

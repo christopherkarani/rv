@@ -14,8 +14,7 @@ struct HostNativeAskTests {
     )
 
     @Test func leftoverAskIsNeverAPermit() {
-        #expect(HostNativeAsk.leftoverAskIsPermit("ask") == false)
-        #expect(HostNativeAsk.leftoverAskIsPermit("allow") == false)
+        #expect(HostNativeAsk.leftoverAskIsPermit == false)
         #expect(HostNativeAsk.leftoverAskDeny.ruleID.rawValue == "builtin.action:leftover-ask")
     }
 
@@ -33,7 +32,7 @@ struct HostNativeAskTests {
             outcome: .plain,
             matchingView: MatchingView("git push --force origin topic")
         )
-        let verdict = HostNativeAsk.verdict(
+        let verdict = HostNativeAsk.hostAskVerdict(
             host: host,
             result: result,
             cwd: cwd,
@@ -51,7 +50,7 @@ struct HostNativeAskTests {
             outcome: .plain,
             matchingView: MatchingView("git push --force origin topic")
         )
-        let verdict = HostNativeAsk.verdict(
+        let verdict = HostNativeAsk.hostAskVerdict(
             host: host,
             result: result,
             cwd: cwd,
@@ -80,17 +79,17 @@ struct HostNativeAskTests {
 
     @Test func packDecisionDenyStaysDeny() {
         let denied = Decision.deny(packDeny)
-        let verdict: PackDoorVerdict = HostNativeAsk.verdict(denied)
+        let verdict = HostNativeAsk.packDoorVerdict(for: denied)
         #expect(verdict == .deny)
     }
 
     @Test func packDecisionAllowIsAllow() {
-        let verdict: PackDoorVerdict = HostNativeAsk.verdict(.allow)
+        let verdict = HostNativeAsk.packDoorVerdict(for: .allow)
         #expect(verdict == .allow)
     }
 
     @Test func packDecisionIndeterminateIsDeny() {
-        let verdict: PackDoorVerdict = HostNativeAsk.verdict(.indeterminate(.commandTooLarge))
+        let verdict = HostNativeAsk.packDoorVerdict(for: .indeterminate(.commandTooLarge))
         #expect(verdict == .deny)
     }
 
@@ -130,7 +129,7 @@ struct HostNativeAskTests {
             matchingView: MatchingView("git reset --hard")
         )
         #expect(
-            HostNativeAsk.verdict(
+            HostNativeAsk.hostAskVerdict(
                 host: .pi,
                 result: result,
                 cwd: cwd,
@@ -138,7 +137,7 @@ struct HostNativeAskTests {
             ) == .ask(.hostNative)
         )
         #expect(
-            HostNativeAsk.verdict(
+            HostNativeAsk.hostAskVerdict(
                 host: .opencode,
                 result: result,
                 cwd: cwd,
@@ -146,7 +145,7 @@ struct HostNativeAskTests {
             ) == .ask(.hostNative)
         )
         #expect(
-            HostNativeAsk.verdict(
+            HostNativeAsk.hostAskVerdict(
                 host: .claude,
                 result: result,
                 cwd: cwd,
@@ -154,7 +153,7 @@ struct HostNativeAskTests {
             ) == .ask(.hostNative)
         )
         #expect(
-            HostNativeAsk.verdict(
+            HostNativeAsk.hostAskVerdict(
                 host: .hermes,
                 result: result,
                 cwd: cwd,
@@ -162,7 +161,7 @@ struct HostNativeAskTests {
             ) == .ask(.hostNative)
         )
         #expect(
-            HostNativeAsk.verdict(
+            HostNativeAsk.hostAskVerdict(
                 host: .grok,
                 result: result,
                 cwd: cwd,
@@ -170,7 +169,7 @@ struct HostNativeAskTests {
             ) == .deny
         )
         #expect(
-            HostNativeAsk.verdict(
+            HostNativeAsk.hostAskVerdict(
                 host: .codex,
                 result: result,
                 cwd: cwd,
@@ -178,7 +177,7 @@ struct HostNativeAskTests {
             ) == .deny
         )
         #expect(
-            HostNativeAsk.verdict(
+            HostNativeAsk.hostAskVerdict(
                 host: .cursor,
                 result: result,
                 cwd: cwd,
@@ -186,7 +185,7 @@ struct HostNativeAskTests {
             ) == .deny
         )
         #expect(
-            HostNativeAsk.verdict(
+            HostNativeAsk.hostAskVerdict(
                 host: .openclaw,
                 result: result,
                 cwd: cwd,
@@ -201,7 +200,7 @@ struct HostNativeAskTests {
             matchingView: MatchingView("git reset --hard")
         )
         #expect(
-            HostNativeAsk.verdict(
+            HostNativeAsk.hostAskVerdict(
                 host: .pi,
                 result: result,
                 cwd: nil,
@@ -209,7 +208,7 @@ struct HostNativeAskTests {
             ) == .deny
         )
         #expect(
-            HostNativeAsk.verdict(
+            HostNativeAsk.hostAskVerdict(
                 host: .pi,
                 result: result,
                 cwd: nil,
@@ -222,7 +221,7 @@ struct HostNativeAskTests {
         let cwd = try #require(WorkingDirectory(validating: "/tmp/ws"))
         let packResult = EvaluationResult(outcome: .deny(packDeny, matched: nil))
         #expect(
-            HostNativeAsk.verdict(
+            HostNativeAsk.hostAskVerdict(
                 host: .pi,
                 result: packResult,
                 cwd: cwd,
@@ -231,7 +230,7 @@ struct HostNativeAskTests {
         )
         let humanResult = EvaluationResult(outcome: .plain)
         #expect(
-            HostNativeAsk.verdict(
+            HostNativeAsk.hostAskVerdict(
                 host: .pi,
                 result: humanResult,
                 cwd: cwd,
@@ -248,7 +247,7 @@ struct HostNativeAskTests {
             analysis: .unwrapLimited.wrapping([.bash])
         )
         #expect(
-            HostNativeAsk.verdict(
+            HostNativeAsk.hostAskVerdict(
                 host: .pi,
                 result: result,
                 cwd: cwd,
@@ -268,7 +267,7 @@ struct HostNativeAskTests {
             matchingView: MatchingView("cat ~/.aws/credentials")
         )
         #expect(
-            HostNativeAsk.verdict(
+            HostNativeAsk.hostAskVerdict(
                 host: .pi,
                 result: result,
                 cwd: cwd,
@@ -285,7 +284,7 @@ struct HostNativeAskTests {
             matchingView: MatchingView("git reset --hard")
         )
         #expect(
-            HostNativeAsk.verdict(
+            HostNativeAsk.hostAskVerdict(
                 host: .pi,
                 result: result,
                 cwd: cwd,
@@ -301,7 +300,7 @@ struct HostNativeAskTests {
             matchingView: MatchingView("git push --force origin topic")
         )
         #expect(
-            HostNativeAsk.verdict(
+            HostNativeAsk.hostAskVerdict(
                 host: .pi,
                 result: result,
                 cwd: cwd,
@@ -309,7 +308,7 @@ struct HostNativeAskTests {
             ) == .ask(.hostNative)
         )
         #expect(
-            HostNativeAsk.verdict(
+            HostNativeAsk.hostAskVerdict(
                 host: .claude,
                 result: result,
                 cwd: cwd,
@@ -317,7 +316,7 @@ struct HostNativeAskTests {
             ) == .ask(.hostNative)
         )
         #expect(
-            HostNativeAsk.verdict(
+            HostNativeAsk.hostAskVerdict(
                 host: .hermes,
                 result: result,
                 cwd: cwd,
@@ -325,7 +324,7 @@ struct HostNativeAskTests {
             ) == .ask(.hostNative)
         )
         #expect(
-            HostNativeAsk.verdict(
+            HostNativeAsk.hostAskVerdict(
                 host: .grok,
                 result: result,
                 cwd: cwd,
@@ -341,7 +340,7 @@ struct HostNativeAskTests {
             matchingView: MatchingView("git reset --hard")
         )
         #expect(
-            HostNativeAsk.verdict(
+            HostNativeAsk.hostAskVerdict(
                 host: .pi,
                 result: result,
                 cwd: cwd,

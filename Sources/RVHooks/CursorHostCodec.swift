@@ -31,12 +31,12 @@ public struct CursorHostCodec: HostCodec {
         case .foreign:
             return .foreign
         case .file:
-            guard let file = FileToolAction.decoded(
+            guard let file = FileToolAction.make(
                 toolName: envelope.toolName,
-                paths: envelope.toolInput?.filePath,
-                envelope.toolInput?.path,
-                envelope.toolInput?.targetFile,
-                envelope.toolInput?.target
+                filePath: envelope.toolInput?.filePath,
+                path: envelope.toolInput?.path,
+                targetFile: envelope.toolInput?.targetFile,
+                target: envelope.toolInput?.target
             ) else {
                 // Classify already matched a File tool. Foreign would fail-open.
                 return .malformed(.unreadable)

@@ -25,12 +25,12 @@ public struct GrokHostCodec: HostCodec {
                 session: session
             )
         }
-        if let file = FileToolAction.decoded(
+        if let file = FileToolAction.make(
             toolName: envelope.toolName,
-            paths: envelope.toolInput?.filePath,
-            envelope.toolInput?.path,
-            envelope.toolInput?.targetFile,
-            envelope.toolInput?.target
+            filePath: envelope.toolInput?.filePath,
+            path: envelope.toolInput?.path,
+            targetFile: envelope.toolInput?.targetFile,
+            target: envelope.toolInput?.target
         ) {
             return HookRequest.decoded(
                 host: .grok,

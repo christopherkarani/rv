@@ -151,7 +151,7 @@ extension HostCodec {
         HookWire(
             stdout: hookDenyJSON(
                 reason: reason,
-                rule: rule.map(displayRuleID),
+                rule: rule.map(\.slashDisplay),
                 next: hookVoiceNextSentence(next)
             ),
             exitCode: host.denyExitCode
@@ -167,7 +167,7 @@ extension HostCodec {
         HookWire(
             stdout: hookAskJSON(
                 reason: reason,
-                rule: rule.map(displayRuleID),
+                rule: rule.map(\.slashDisplay),
                 next: hookVoiceNextSentence(next)
             ),
             exitCode: host.denyExitCode

@@ -48,23 +48,47 @@ import Testing
     #expect(FileToolPath(rawValue: "   ").isEmpty)
 }
 
-@Test func fileToolAction_decodedMapsKindAndFirstPresentPath() {
-    let action = FileToolAction.decoded(
+@Test func fileToolAction_makeMapsKindAndFirstPresentPath() {
+    let action = FileToolAction.make(
         toolName: "Read",
-        paths: nil, "  ", "/tmp/rv-oracle/.env", "ignored"
+        filePath: nil,
+        path: "  ",
+        targetFile: "/tmp/rv-oracle/.env",
+        target: "ignored"
     )
     #expect(action?.kind == .read)
     #expect(action?.path.rawValue == "/tmp/rv-oracle/.env")
 }
 
-@Test func fileToolAction_decodedEmptyPathKeysStillYieldsEmptyPath() {
-    let action = FileToolAction.decoded(toolName: "write_file", paths: nil, "  ", "", nil)
+@Test func fileToolAction_makeEmptyPathKeysStillYieldsEmptyPath() {
+    let action = FileToolAction.make(
+        toolName: "write_file",
+        filePath: nil,
+        path: "  ",
+        targetFile: "",
+        target: nil
+    )
     #expect(action?.kind == .write)
     #expect(action?.path.isEmpty == true)
 }
 
-@Test func fileToolAction_decodedRejectsGrepAndBash() {
-    #expect(FileToolAction.decoded(toolName: "Grep", paths: "/tmp/rv-oracle/.env") == nil)
-    #expect(FileToolAction.decoded(toolName: "Bash", paths: "/tmp/x") == nil)
-    #expect(FileToolAction.decoded(toolName: nil, paths: "/tmp/x") == nil)
+@Test func fileToolAction_makeRejectsGrepAndBash() {
+    #expect(FileToolAction.make(toolName: "Grep", filePath: "/tmp/rv-oracle/.env") == nil)
+    #expect(FileToolAction.make(toolName: "Bash", filePath: "/tmp/x") == nil)
+    #expect(FileToolAction.make(toolName: nil, filePath: "/tmp/x") == nil)
+}
+
+@Test func fileToolAction_decodedForwardsToMake() {
+    let viaMake = FileToolAction.make(
+        toolName: "Read",
+        filePath: nil,
+        path: "  ",
+        targetFile: "/tmp/rv-oracle/.env",
+        target: "ignored"
+    )
+    let viaDecoded = FileToolAction.decoded(
+        toolName: "Read",
+        paths: nil, "  ", "/tmp/rv-oracle/.env", "ignored"
+    )
+    #expect(viaDecoded == viaMake)
 }

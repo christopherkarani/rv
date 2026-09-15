@@ -11,6 +11,11 @@ public struct RuleID: Hashable, Sendable, Equatable {
         "\(pack.rawValue):\(pattern)"
     }
 
+    /// Slash display (`core.git/reset-hard`). `rawValue` is colon (`core.git:reset-hard`).
+    public var slashDisplay: String {
+        "\(pack.rawValue)/\(pattern)"
+    }
+
     public init?(rawValue: String) {
         let parts = rawValue.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
         guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty else {

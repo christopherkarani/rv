@@ -60,7 +60,7 @@ public struct ExplainViewModel: Equatable, Sendable {
     public var decisionWord: String { decision.displayName }
     public var explainDecisionWord: String { decision.emphasizedName }
     public var decisionTone: DecisionTone { decision.tone }
-    public var ruleDisplay: String? { ruleID.map(displayRuleID) }
+    public var ruleDisplay: String? { ruleID.map(\.slashDisplay) }
     public var packDisplay: String? { packID?.rawValue }
     public var severityDisplay: String? { severity?.rawValue }
 

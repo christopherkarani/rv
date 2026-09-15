@@ -47,7 +47,7 @@ public func hookWire<C: HostCodec>(
         return hookWire(from: result, command: command, using: codec, intent: .afterSpend)
     }
     let bound = bound ?? BoundReview.packProjected(from: result)
-    let verdict = HostNativeAsk.verdict(
+    let verdict = HostNativeAsk.hostAskVerdict(
         host: codec.host,
         result: result,
         cwd: cwd,

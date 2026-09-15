@@ -79,8 +79,8 @@ public enum HostNativeAsk {
     }
 
     /// Pack / evaluate `Decision` on the hook door. Cannot Ask.
-    /// Product Ask is `verdict(host:result:cwd:bound:)`.
-    public static func verdict(_ decision: Decision) -> PackDoorVerdict {
+    /// Product Ask is `hostAskVerdict(host:result:cwd:bound:)`.
+    public static func packDoorVerdict(for decision: Decision) -> PackDoorVerdict {
         switch decision {
         case .allow:
             return .allow
@@ -93,7 +93,7 @@ public enum HostNativeAsk {
     /// could spend: Unlockable deny or `mandatoryHuman`. Secret-path, builtin
     /// hard deny, unwrap-limited, protected-path, incomplete evaluate,
     /// deny-or-TTY, missing cwd, and empty matching view stay deny.
-    public static func verdict(
+    public static func hostAskVerdict(
         host: HookHost,
         result: EvaluationResult,
         cwd: WorkingDirectory?,
@@ -170,10 +170,7 @@ public enum HostNativeAsk {
     }
 
     /// A leftover unused ask token is never a permit.
-    public static func leftoverAskIsPermit(_ unused: String) -> Bool {
-        _ = unused
-        return false
-    }
+    public static let leftoverAskIsPermit = false
 
     private static func pauseIfSpendable(
         host: HookHost,
