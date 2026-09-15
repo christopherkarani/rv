@@ -252,7 +252,13 @@ public struct GatedEvaluate: Sendable {
         host: LedgerHost,
         tool: LedgerTool
     ) async -> EvaluationResult {
-        let result = evaluateWithSemantics(request, cwd: cwd, home: home)
+        let facts = GitLiveProbe.facts(cwd: cwd, homeDirectory: home?.rawValue)
+        let result = evaluateWithSemantics(
+            request,
+            cwd: cwd,
+            home: home,
+            gitContext: facts.analysis
+        )
         // Fast path: allow/indeterminate never touch PolicyGate or the
         // allowlist loader; PolicyGate returns them unchanged anyway.
         let finished: EvaluationResult
@@ -264,7 +270,6 @@ public struct GatedEvaluate: Sendable {
                 finished = result
             } else {
                 let snapshot = allowlist()
-                let rebasing = GitRebaseProbe.rebaseInProgress(cwd: cwd)
                 finished = await Self.applyPolicy(
                     verb,
                     result: result,
@@ -272,7 +277,7 @@ public struct GatedEvaluate: Sendable {
                     snapshot: snapshot,
                     store: store,
                     now: now,
-                    rebaseInProgress: rebasing
+                    rebaseInProgress: facts.rebaseInProgress
                 )
             }
         }
@@ -339,7 +344,8 @@ public struct GatedEvaluate: Sendable {
     private func evaluateWithSemantics(
         _ request: EvaluationRequest,
         cwd: WorkingDirectory?,
-        home: HomeDirectory? = nil
+        home: HomeDirectory? = nil,
+        gitContext: GitAnalysisContext
     ) -> EvaluationResult {
         let workspace = Self.workspaceURL(cwd: cwd)
         let policy: EffectiveActionPolicy
@@ -365,7 +371,7 @@ public struct GatedEvaluate: Sendable {
             safety: SafetyStore.loadEffective(home: home, workspace: workspace),
             allowPaths: SecretAllowPaths.loadEffective(home: home, workspace: workspace),
             home: home?.rawValue,
-            gitContext: GitAnalysisContext(workingDirectory: cwd),
+            gitContext: gitContext,
             filesystemProbe: { unwrapped in
                 FilesystemLiveProbe.context(
                     unwrapped: unwrapped,
