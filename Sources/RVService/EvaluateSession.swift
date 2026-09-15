@@ -75,7 +75,7 @@ public struct EvaluateSession: Sendable {
         if !corePacksReady {
             return EvaluationResult(
                 outcome: .indeterminate(.corePacksUnavailable),
-                matchingView: Normalize.matchingView(of: request.command.rawValue)
+                matchingView: Normalize.matchingView(of: request.command)
             )
         }
         return engineEvaluate(
@@ -123,7 +123,7 @@ public struct EvaluateSession: Sendable {
         guard corePacksReady else {
             return EvaluationResult(
                 outcome: .indeterminate(.corePacksUnavailable),
-                matchingView: Normalize.matchingView(of: request.command.rawValue),
+                matchingView: Normalize.matchingView(of: request.command),
                 analysis: result.analysis
             )
         }
@@ -149,7 +149,7 @@ private func engineEvaluate(
         safety: safety,
         allowPaths: allowPaths,
         home: home,
-        patterns: engine,
+        engine: engine,
         compiled: compiled
     )
 }
@@ -173,7 +173,7 @@ private func engineEvaluateWithSemantics(
         safety: safety,
         allowPaths: allowPaths,
         home: home,
-        patterns: engine,
+        engine: engine,
         compiled: compiled,
         workingDirectory: workingDirectory,
         gitProbe: gitProbe,

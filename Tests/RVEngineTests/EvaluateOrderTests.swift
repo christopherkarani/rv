@@ -64,7 +64,7 @@ private func run(
             budget: budget
         ),
         packs: packs,
-        patterns: engine,
+        engine: engine,
         compiled: compiled
     )
 }
@@ -218,7 +218,7 @@ private func run(
             enabledPacks: dayOnePackIDs
         ),
         packs: packs,
-        patterns: engine,
+        engine: engine,
         compiled: compiled
     )
     #expect(result.decision == .indeterminate(.corePacksUnavailable))
@@ -237,7 +237,7 @@ private func run(
             enabledPacks: []
         ),
         packs: packs,
-        patterns: engine,
+        engine: engine,
         compiled: compiled
     )
     #expect(result.decision == .allow)
@@ -255,7 +255,7 @@ private func run(
             enabledPacks: []
         ),
         packs: [],
-        patterns: engine,
+        engine: engine,
         compiled: compiled
     )
     #expect(result.decision == .indeterminate(.corePacksUnavailable))
@@ -290,7 +290,7 @@ private func run(
             enabledPacks: dayOnePackIDs
         ),
         packs: packs,
-        patterns: engine,
+        engine: engine,
         compiled: compiled
     )
     #expect(result.decision == .indeterminate(.corePacksUnavailable))
@@ -347,7 +347,7 @@ private struct HitlessPatternEngine: PatternEngine {
             enabledPacks: dayOnePackIDs
         ),
         packs: packs,
-        patterns: engine,
+        engine: engine,
         compiled: compiled
     )
     #expect(result.decision == .allow)

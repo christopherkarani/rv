@@ -32,7 +32,7 @@ struct EvaluateWithSemanticsTests {
                 enabledPacks: dayOnePackIDs
             ),
             packs: [],
-            patterns: engine,
+            engine: engine,
             compiled: compiled
         )
         #expect(result.decision == .indeterminate(.corePacksUnavailable))
@@ -257,7 +257,7 @@ private func runDoor(
     return evaluateWithSemantics(
         EvaluationRequest(command: ShellCommand(rawValue: command), enabledPacks: dayOnePackIDs),
         packs: packs,
-        patterns: engine,
+        engine: engine,
         compiled: compiled,
         gitProbe: gitProbe,
         filesystemProbe: filesystemProbe,

@@ -15,7 +15,7 @@ public func evaluateWithSemantics<E: PatternEngine>(
     safety: SafetyLevel = .normal,
     allowPaths: SecretAllowPathSet = .empty,
     home: String? = nil,
-    patterns: E,
+    engine: E,
     compiled: CompiledPacks<E.Compiled>,
     workingDirectory: WorkingDirectory? = nil,
     gitProbe: (UnwrapOutcome) -> GitAnalysisWorld = { _ in .unprobed },
@@ -29,7 +29,7 @@ public func evaluateWithSemantics<E: PatternEngine>(
         safety: safety,
         allowPaths: allowPaths,
         home: home,
-        patterns: patterns,
+        engine: engine,
         compiled: compiled
     )
     let unwrapped = unwrapCommand(

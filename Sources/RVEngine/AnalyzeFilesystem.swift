@@ -5,7 +5,7 @@ public func analyzeFilesystem(
     _ command: ShellCommand,
     context: FilesystemAnalysisContext = .empty
 ) -> SemanticAnalysis {
-    let view = Normalize.matchingView(of: command.rawValue).rawValue
+    let view = Normalize.matchingView(of: command).rawValue
     if view.isEmpty { return .unknown }
     if splitSegments(view).count > 1 { return .unknown }
     let tokens = tokenizeCommand(view).map(\.decoded)
@@ -43,7 +43,7 @@ public func analyzeFilesystem(
 
 /// Apparent path operands for a parseable filesystem command. Empty if unsupported.
 public func filesystemApparentPaths(_ command: ShellCommand) -> [String] {
-    let view = Normalize.matchingView(of: command.rawValue).rawValue
+    let view = Normalize.matchingView(of: command).rawValue
     if view.isEmpty { return [] }
     if splitSegments(view).count > 1 { return [] }
     let tokens = tokenizeCommand(view).map(\.decoded)

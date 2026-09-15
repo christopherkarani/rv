@@ -57,7 +57,7 @@ public func applySemantics(
         pack: afterGit,
         analysis: analysis,
         command: command,
-        context: filesystemWorld,
+        filesystemWorld: filesystemWorld,
         enabledPacks: enabledPacks,
         policy: policy
     )

@@ -66,7 +66,7 @@ private func run(
         safety: safety,
         allowPaths: allowPaths,
         home: home,
-        patterns: engine,
+        engine: engine,
         compiled: compiled
     )
 }

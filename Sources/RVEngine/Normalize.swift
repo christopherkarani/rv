@@ -1,4 +1,5 @@
 import Foundation
+import RVDomain
 
 public enum Normalize {
     public static let maxWrapperIterations = 32
@@ -29,6 +30,11 @@ public enum Normalize {
             break
         }
         return MatchingView(stripAbsolutePathOnArgv0(current))
+    }
+
+    /// Returns the matching view of `command`.
+    public static func matchingView(of command: ShellCommand) -> MatchingView {
+        matchingView(of: command.rawValue)
     }
 }
 

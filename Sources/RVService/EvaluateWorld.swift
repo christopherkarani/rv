@@ -104,6 +104,6 @@ package enum EvaluationWorld {
 
     /// T1 matching view for grant mint, allowlist, and explain render.
     package static func matchingView(of command: ShellCommand) -> MatchingView {
-        Normalize.matchingView(of: command.rawValue)
+        Normalize.matchingView(of: command)
     }
 }

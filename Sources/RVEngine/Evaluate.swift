@@ -3,6 +3,7 @@ import RVDomain
 
 public let commandByteCap = 65_536
 
+/// Returns the pack-only evaluation of `request`; semantic policy is `evaluateWithSemantics`.
 public func evaluate<E: PatternEngine>(
     _ request: EvaluationRequest,
     packs: [PackSnapshot],
@@ -10,7 +11,7 @@ public func evaluate<E: PatternEngine>(
     safety: SafetyLevel = .normal,
     allowPaths: SecretAllowPathSet = .empty,
     home: String? = nil,
-    patterns: E,
+    engine: E,
     compiled: CompiledPacks<E.Compiled>
 ) -> EvaluationResult {
     let raw = request.command.rawValue
@@ -30,7 +31,7 @@ public func evaluate<E: PatternEngine>(
         )
     }
 
-    let matchingView = Normalize.matchingView(of: raw)
+    let matchingView = Normalize.matchingView(of: request.command)
     let enabledSnapshots = enabledPacks(from: packs, enabledIDs: request.enabledPacks)
     if QuickReject.shouldSkip(matchingView: matchingView, enabled: enabledSnapshots) {
         return foldSecretPathIfAllow(
@@ -52,7 +53,7 @@ public func evaluate<E: PatternEngine>(
                 segment,
                 compiled: compiled,
                 enabledIDs: request.enabledPacks,
-                patterns: patterns,
+                engine: engine,
                 attempts: &attempts,
                 budget: budget
             )
@@ -66,7 +67,7 @@ public func evaluate<E: PatternEngine>(
         matchingView.rawValue,
         compiled: compiled,
         enabledIDs: request.enabledPacks,
-        patterns: patterns,
+        engine: engine,
         attempts: &attempts,
         budget: budget
     ) {
@@ -192,7 +193,7 @@ private func evaluateSingle<E: PatternEngine>(
     _ view: String,
     compiled: CompiledPacks<E.Compiled>,
     enabledIDs: [PackID],
-    patterns: E,
+    engine: E,
     attempts: inout Int,
     budget: Int?
 ) -> EvaluationResult? {
@@ -215,7 +216,7 @@ private func evaluateSingle<E: PatternEngine>(
             if let budget, attempts > budget {
                 return EvaluationResult(outcome: .indeterminate(.budgetExhausted))
             }
-            if patterns.matches(named.compiled, in: view) {
+            if engine.matches(named.compiled, in: view) {
                 lastSafe = SafeMatch(packID: pack.snapshot.id, patternName: named.name)
                 skippedBySafe = true
                 break
@@ -231,7 +232,7 @@ private func evaluateSingle<E: PatternEngine>(
                 return EvaluationResult(outcome: .indeterminate(.budgetExhausted))
             }
             // firstMatch is the sole destructive hit test so span/matchedText cannot disagree with the hit.
-            guard let range = patterns.firstMatch(rule.compiled, in: view) else { continue }
+            guard let range = engine.firstMatch(rule.compiled, in: view) else { continue }
             let span = MatchSpan(
                 start: view.distance(from: view.startIndex, to: range.lowerBound),
                 end: view.distance(from: view.startIndex, to: range.upperBound)
