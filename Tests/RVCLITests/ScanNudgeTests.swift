@@ -55,6 +55,7 @@ private func wirePiAdapter(homeURL: URL) throws {
     let owned = paths.hostAdapter(for: .pi)
     let executable = homeURL.appendingPathComponent("bin/rv")
     try makeExecutable(executable)
+    try makeExecutable(homeURL.appendingPathComponent("bin/rv-cli"))
     let body = try HookHost.pi.adapterResource().rendered(rvPath: executable.path)
     try FileManager.default.createDirectory(
         atPath: (owned.destination as NSString).deletingLastPathComponent,

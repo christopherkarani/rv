@@ -273,10 +273,7 @@ extension HostAdapterInstallation {
         case .outdated:
             return .broken(path: path, existingData: data)
         case .wired(let bakedPath):
-            let executable = bakedPath.isEmpty == false
-                && bakedPath.hasPrefix("/")
-                && fileManager.isExecutableFile(atPath: bakedPath)
-            if executable {
+            if isWiredMissPath(bakedPath, fileManager: fileManager) {
                 return .wired(path: path, existingData: data)
             }
             return .broken(path: path, existingData: data)
@@ -307,13 +304,25 @@ extension HostAdapterInstallation {
         guard let bakedRvPath = adapter.bakedRvPath(in: text) else {
             return .occupied(path)
         }
-        let wired = bakedRvPath.isEmpty == false
-            && bakedRvPath.hasPrefix("/")
-            && fileManager.isExecutableFile(atPath: bakedRvPath)
-        if wired {
+        if isWiredMissPath(bakedRvPath, fileManager: fileManager) {
             return .wired(path: path, existingData: data)
         }
         return .broken(path: path, existingData: data)
+    }
+
+    /// Miss path execs sibling `rv-cli` next to baked `rv`. Missing or non-exec is not `.wired`.
+    private static func isWiredMissPath(
+        _ bakedRvPath: String,
+        fileManager: FileManager
+    ) -> Bool {
+        guard bakedRvPath.isEmpty == false,
+              bakedRvPath.hasPrefix("/"),
+              fileManager.isExecutableFile(atPath: bakedRvPath)
+        else {
+            return false
+        }
+        let sibling = (bakedRvPath as NSString).deletingLastPathComponent + "/rv-cli"
+        return fileManager.isExecutableFile(atPath: sibling)
     }
 
     private static func isDetected(

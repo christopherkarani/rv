@@ -474,6 +474,37 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
     }
 }
 
+@Test func doctorHostState_wiredProjectsInspectWithoutReloadingAdapter() throws {
+    try withDoctorHome { _, paths, _ in
+        let grok = HostAdapterInstallation.wired(
+            path: paths.hostAdapter(for: .grok),
+            existingData: Data("not-current-adapter".utf8)
+        )
+        #expect(DoctorRun.doctorHostState(grok) == .wired)
+
+        let claude = HostAdapterInstallation.wired(
+            path: paths.hostAdapter(for: .claude),
+            existingData: Data("{not-json".utf8)
+        )
+        #expect(DoctorRun.doctorHostState(claude) == .wired)
+
+        #expect(
+            DoctorRun.doctorHostState(.missing(paths.hostAdapter(for: .pi))) == .missing
+        )
+        #expect(
+            DoctorRun.doctorHostState(
+                .broken(path: paths.hostAdapter(for: .grok), existingData: Data())
+            ) == .broken
+        )
+        #expect(
+            DoctorRun.doctorHostState(.occupied(paths.hostAdapter(for: .cursor))) == .occupied
+        )
+        #expect(
+            DoctorRun.doctorHostState(.absentFile(paths.hostAdapter(for: .hermes))) == .absentFile
+        )
+    }
+}
+
 @Test func doctor_detectedGrokWithoutOwnedFileIsAbsentFile() throws {
     try withDoctorHome { _, paths, environment in
         try FileManager.default.createDirectory(
