@@ -8,6 +8,7 @@ public enum PendingApprovalsBinding: Sendable {
     case missing
 }
 
+/// List items and set fingerprint for `ApprovalRuntime` watch generation.
 enum PendingListProjection {
     static let missingFolder = "."
     static let coordinatorUnavailable = IPCError.pendingCoordinatorUnavailable
