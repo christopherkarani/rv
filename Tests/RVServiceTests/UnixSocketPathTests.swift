@@ -69,8 +69,8 @@ struct UnixSocketPathTests {
         try UnixSocketPath.prepareRuntime(for: socket)
         defer { try? FileManager.default.removeItem(at: xdg) }
 
-        #expect(try UnixSocketPath.posixMode(xdg) & 0o777 == 0o700)
-        #expect(try UnixSocketPath.posixMode(socket.deletingLastPathComponent()) & 0o777 == 0o700)
+        #expect(try UnixSocketPath.posixMode(of: xdg) & 0o777 == 0o700)
+        #expect(try UnixSocketPath.posixMode(of: socket.deletingLastPathComponent()) & 0o777 == 0o700)
         #expect(FileManager.default.fileExists(atPath: socket.path) == false)
     }
 }

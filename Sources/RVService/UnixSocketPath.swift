@@ -46,18 +46,20 @@ public enum UnixSocketPath {
         }
     }
 
-    public static func assertSocketMode(_ socketURL: URL) throws {
+    /// Sets POSIX 0600 on the socket, then throws `permission` if the mode is not owner-only.
+    public static func applyOwnerOnlySocketMode(to socketURL: URL) throws {
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o600],
             ofItemAtPath: socketURL.path
         )
-        let mode = try posixMode(socketURL)
+        let mode = try posixMode(of: socketURL)
         guard mode & 0o777 == 0o600 else {
             throw UnixSocketPathError.permission
         }
     }
 
-    public static func posixMode(_ url: URL) throws -> Int {
+    /// Returns POSIX permission bits of `url`.
+    public static func posixMode(of url: URL) throws -> Int {
         let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
         guard let raw = attrs[.posixPermissions] as? NSNumber else {
             throw UnixSocketPathError.permission
@@ -75,7 +77,7 @@ public enum UnixSocketPath {
             [.posixPermissions: 0o700],
             ofItemAtPath: url.path
         )
-        let mode = try posixMode(url)
+        let mode = try posixMode(of: url)
         guard mode & 0o777 == 0o700 else {
             throw UnixSocketPathError.permission
         }

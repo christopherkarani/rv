@@ -114,7 +114,7 @@ public final class UnixEvaluateListener: @unchecked Sendable {
             throw UnixFrameError.bind
         }
         do {
-            try UnixSocketPath.assertSocketMode(socketURL)
+            try UnixSocketPath.applyOwnerOnlySocketMode(to: socketURL)
         } catch {
             _ = Glibc.close(fd)
             throw error
