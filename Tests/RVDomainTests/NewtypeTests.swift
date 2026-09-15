@@ -97,6 +97,38 @@ import Testing
     #expect(WorkingDirectory(rawValue: "/tmp/ws") != nil)
 }
 
+@Test func homePath_rejectsEmptyAndAcceptsNonempty() throws {
+    #expect(HomePath(validating: "") == nil)
+    let home = try #require(HomePath(validating: "/tmp/h"))
+    #expect(home.rawValue == "/tmp/h")
+    #expect(home.path == "/tmp/h")
+    #expect(HomePath(rawValue: "") == nil)
+    #expect(HomePath(rawValue: "/tmp/h") != nil)
+}
+
+@Test func homePath_isDistinctFromWorkingDirectory() throws {
+    let home = try #require(HomePath(validating: "/tmp/h"))
+    let cwd = try #require(WorkingDirectory(validating: "/tmp/h"))
+    #expect(home.rawValue == cwd.rawValue)
+    // `evaluate(..., home: "")` and `home: cwd` do not compile.
+    let _: HomePath? = home
+    let _: WorkingDirectory? = cwd
+}
+
+@Test func homePath_codableIsJSONString() throws {
+    let home = try #require(HomePath(validating: "/tmp/h"))
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = .withoutEscapingSlashes
+    let data = try encoder.encode(home)
+    #expect(String(data: data, encoding: .utf8) == "\"/tmp/h\"")
+    #expect(try JSONDecoder().decode(HomePath.self, from: data) == home)
+
+    let empty = try JSONEncoder().encode("")
+    #expect(throws: DecodingError.self) {
+        _ = try JSONDecoder().decode(HomePath.self, from: empty)
+    }
+}
+
 @Test func repositoryRoot_rejectsEmptyAndAcceptsNonempty() throws {
     #expect(RepositoryRoot(validating: "") == nil)
     let root = try #require(RepositoryRoot(validating: "/tmp/repo"))

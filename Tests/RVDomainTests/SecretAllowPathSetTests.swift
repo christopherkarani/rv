@@ -23,11 +23,12 @@ struct SecretAllowPathSetTests {
         )
         #expect(rule.category == .host)
         #expect(set.exempts("~/.claude/.credentials.json", rule: rule) == false)
+        let home = try #require(HomePath(validating: "/Users/ada"))
         #expect(
             set.exempts(
                 "/Users/ada/.claude/.credentials.json",
                 rule: rule,
-                home: "/Users/ada"
+                home: home
             ) == false
         )
     }
@@ -35,6 +36,7 @@ struct SecretAllowPathSetTests {
     @Test func homeExpansion_matchesTilde() throws {
         let set = SecretAllowPathSet(literals: ["~/.env"])
         let rule = try #require(SecretPathCatalog.dayOne.firstMatch(of: "/Users/ada/.env"))
-        #expect(set.exempts("/Users/ada/.env", rule: rule, home: "/Users/ada"))
+        let home = try #require(HomePath(validating: "/Users/ada"))
+        #expect(set.exempts("/Users/ada/.env", rule: rule, home: home))
     }
 }

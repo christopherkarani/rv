@@ -26,12 +26,6 @@ public struct ScanBounds: Sendable, Equatable {
 public typealias ScanHostID = HookHost
 
 /// Non-empty injectable home path for session-store discovery.
-/// Fails on "". Not `RVPolicy.HomeDirectory`.
-public struct ScanHome: Hashable, Sendable {
-    public let path: String
+/// Same identity as `HomePath`; empty is not representable.
+public typealias ScanHome = HomePath
 
-    public init?(validating path: String) {
-        guard path.isEmpty == false else { return nil }
-        self.path = path
-    }
-}

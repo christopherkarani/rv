@@ -17,7 +17,7 @@ enum FilesystemLiveProbe {
         unwrapped: UnwrapOutcome,
         command: ShellCommand,
         cwd: WorkingDirectory?,
-        homeDirectory: String?
+        homeDirectory: HomePath?
     ) -> FilesystemAnalysisWorld {
         switch unwrapped {
         case .complete(let extracted):
@@ -34,7 +34,7 @@ enum FilesystemLiveProbe {
     static func context(
         command: ShellCommand,
         cwd: WorkingDirectory?,
-        homeDirectory: String?
+        homeDirectory: HomePath?
     ) -> FilesystemAnalysisWorld {
         let paths = filesystemApparentPaths(command)
         guard let working = cwd?.rawValue else {
@@ -62,7 +62,7 @@ enum FilesystemLiveProbe {
                             apparent: apparent,
                             canonical: lexicalFilesystemPath(
                                 apparent,
-                                workingDirectory: working,
+                                workingDirectory: cwd,
                                 homeDirectory: homeDirectory
                             ),
                             resolution: .uncertain
@@ -107,11 +107,11 @@ enum FilesystemLiveProbe {
     static func resolve(
         apparent: String,
         workingDirectory: String?,
-        homeDirectory: String?
+        homeDirectory: HomePath?
     ) -> FilesystemPathFact {
         let started = lexicalFilesystemPath(
             apparent,
-            workingDirectory: workingDirectory,
+            workingDirectory: workingDirectory.flatMap(WorkingDirectory.init(validating:)),
             homeDirectory: homeDirectory
         )
         return follow(

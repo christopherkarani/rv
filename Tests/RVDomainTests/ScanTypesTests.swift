@@ -35,6 +35,13 @@ import Testing
     #expect(home.path == "/tmp/rv-scan-home")
 }
 
+@Test func scanHome_isHomePath() throws {
+    let home = try #require(ScanHome(validating: "/tmp/h"))
+    let typed: HomePath = home
+    #expect(typed.rawValue == "/tmp/h")
+    #expect(typed.path == home.path)
+}
+
 @Test func scanTypes_areSendableValueTypes() throws {
     let bounds: any Sendable = ScanBounds.default
     let host: any Sendable = ScanHostID.opencode

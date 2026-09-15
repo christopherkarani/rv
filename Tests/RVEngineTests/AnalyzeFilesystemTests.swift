@@ -79,7 +79,7 @@ struct AnalyzeFilesystemTests {
         let context = FilesystemAnalysisContext(
             workingDirectory: WorkingDirectory(validating: "/isolated-home/project"),
             repositoryRoot: RepositoryRoot(validating: "/isolated-home/project"),
-            homeDirectory: "/isolated-home"
+            homeDirectory: HomePath(validating: "/isolated-home")
         )
         let commands = [
             "rm ~/.ssh/config",
@@ -124,7 +124,7 @@ struct AnalyzeFilesystemTests {
         let context = FilesystemAnalysisContext(
             workingDirectory: WorkingDirectory(validating: "/repo"),
             repositoryRoot: RepositoryRoot(validating: "/repo"),
-            homeDirectory: "/isolated-home"
+            homeDirectory: HomePath(validating: "/isolated-home")
         )
         let rows: [(String, String, SecretPathCategory)] = [
             ("rm ~/.aws/config", "home-aws", .cloud),

@@ -69,6 +69,24 @@ struct SemanticAnalysisTests {
         #expect(RepositoryReviewContext().isSharedBranch == false)
     }
 
+    @Test func filesystemAnalysisContext_homeDirectory_isHomePathJSONString() throws {
+        let home = try #require(HomePath(validating: "/tmp/h"))
+        let context = FilesystemAnalysisContext(homeDirectory: home)
+        #expect(context.homeDirectory == home)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        let data = try encoder.encode(context)
+        let json = try #require(String(data: data, encoding: .utf8))
+        #expect(json.contains("\"homeDirectory\":\"/tmp/h\""))
+        let decoded = try JSONDecoder().decode(FilesystemAnalysisContext.self, from: data)
+        #expect(decoded.homeDirectory == home)
+
+        let empty = Data(#"{"homeDirectory":""}"#.utf8)
+        #expect(throws: DecodingError.self) {
+            _ = try JSONDecoder().decode(FilesystemAnalysisContext.self, from: empty)
+        }
+    }
+
     @Test func wrapper_codableRoundTrip() throws {
         let analysis = SemanticAnalysis.filesystem(
             .delete(

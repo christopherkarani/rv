@@ -80,10 +80,11 @@ struct DenialLedgerTests {
         #expect(rows.allSatisfy { $0.tool != .bash })
     }
 
-    @Test func redact_replacesHomePrefix() {
-        #expect(DenialPathRedaction.redact("/Users/ada/.env", home: "/Users/ada") == "~/.env")
-        #expect(DenialPathRedaction.redact("$HOME/.ssh/id_rsa", home: "/Users/ada") == "~/.ssh/id_rsa")
-        #expect(DenialPathRedaction.redact("/tmp/rv-oracle/.env", home: "/Users/ada") == "/tmp/rv-oracle/.env")
+    @Test func redact_replacesHomePrefix() throws {
+        let home = try #require(HomePath(validating: "/Users/ada"))
+        #expect(DenialPathRedaction.redact("/Users/ada/.env", home: home) == "~/.env")
+        #expect(DenialPathRedaction.redact("$HOME/.ssh/id_rsa", home: home) == "~/.ssh/id_rsa")
+        #expect(DenialPathRedaction.redact("/tmp/rv-oracle/.env", home: home) == "/tmp/rv-oracle/.env")
     }
 
     @Test func pruned_dropsOlderThanSevenDaysAndCapsAt200() throws {
