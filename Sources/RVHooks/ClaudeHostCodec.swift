@@ -83,7 +83,7 @@ public struct ClaudeHostCodec: HostCodec {
     public func encodeRichDeny(
         from result: EvaluationResult,
         command: ShellCommand,
-        unlockCode: String? = nil
+        unlockCode: AllowOnceUnlockCode? = nil
     ) -> HookWire {
         switch result.decision {
         case .allow:

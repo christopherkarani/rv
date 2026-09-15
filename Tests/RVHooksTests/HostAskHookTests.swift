@@ -16,8 +16,7 @@ import RVDomain
         from: result,
         command: ShellCommand(rawValue: "git push origin feature"),
         using: PiHostCodec(),
-        bound: .mandatoryHuman(deny),
-        cwd: wd("/tmp/ws")
+        intent: .firstCall(verdict: .ask(.hostNative), unlockCode: nil)
     )
     let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
     #expect(json["decision"] as? String == "ask")
@@ -40,8 +39,7 @@ import RVDomain
         from: result,
         command: ShellCommand(rawValue: "git push origin feature"),
         using: OpenCodeHostCodec(),
-        bound: .mandatoryHuman(deny),
-        cwd: wd("/tmp/ws")
+        intent: .firstCall(verdict: .ask(.hostNative), unlockCode: nil)
     )
     let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
     #expect(json["decision"] as? String == "ask")
@@ -65,8 +63,7 @@ import RVDomain
         from: result,
         command: ShellCommand(rawValue: "git push origin feature"),
         using: ClaudeHostCodec(),
-        bound: .mandatoryHuman(deny),
-        cwd: wd("/tmp/ws")
+        intent: .firstCall(verdict: .ask(.hostNative), unlockCode: nil)
     )
     let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
     #expect(json["decision"] as? String == "ask")
@@ -90,7 +87,7 @@ import RVDomain
         from: result,
         command: ShellCommand(rawValue: "git push origin feature"),
         using: CodexHostCodec(),
-        bound: .mandatoryHuman(deny)
+        intent: .firstCall(verdict: .deny, unlockCode: nil)
     )
     #expect(HostNativeAsk.capability(for: .codex) == .denyOrTTY)
     #expect(wire.stdout.isEmpty == false)
@@ -118,7 +115,7 @@ import RVDomain
         from: result,
         command: ShellCommand(rawValue: "git push origin feature"),
         using: CursorHostCodec(),
-        bound: .mandatoryHuman(deny)
+        intent: .firstCall(verdict: .deny, unlockCode: nil)
     )
     #expect(HostNativeAsk.capability(for: .cursor) == .denyOrTTY)
     #expect(HostNativeAsk.capability(for: .pi) == .spendFirst)
@@ -152,14 +149,14 @@ func hookWire_firstCallAllowCannotSkipPolicyGate(_ host: HookHost) throws {
             from: result,
             command: command,
             using: ClaudeHostCodec(),
-            bound: .mandatoryHuman(deny)
+            intent: .firstCall(verdict: .deny, unlockCode: nil)
         )
     case .grok:
         wire = hookWire(
             from: result,
             command: command,
             using: GrokHostCodec(),
-            bound: .mandatoryHuman(deny)
+            intent: .firstCall(verdict: .deny, unlockCode: nil)
         )
     default:
         Issue.record("unexpected host \(host)")
@@ -188,8 +185,7 @@ func hookWire_firstCallAllowCannotSkipPolicyGate(_ host: HookHost) throws {
         from: result,
         command: command,
         using: PiHostCodec(),
-        bound: .deny(leftover),
-        cwd: wd("/tmp/ws")
+        intent: .firstCall(verdict: .deny, unlockCode: nil)
     )
     let json = try #require(JSONSerialization.jsonObject(with: Data(pi.stdout.utf8)) as? [String: Any])
     #expect(json["decision"] as? String == "deny")
@@ -206,8 +202,7 @@ func hookWire_firstCallAllowCannotSkipPolicyGate(_ host: HookHost) throws {
         from: result,
         command: ShellCommand(rawValue: "git reset --hard"),
         using: PiHostCodec(),
-        bound: .mandatoryHuman(deny),
-        afterSpend: true
+        intent: .afterSpend
     )
     let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
     #expect(json["decision"] as? String == "deny")
@@ -503,8 +498,7 @@ func hookWire_firstCallAllowCannotSkipPolicyGate(_ host: HookHost) throws {
         ),
         command: ShellCommand(rawValue: "cat ~/.aws/credentials"),
         using: ClaudeHostCodec(),
-        bound: .deny(secret),
-        cwd: wd("/tmp/ws")
+        intent: .firstCall(verdict: .deny, unlockCode: nil)
     )
     #expect(wire.stdout.isEmpty == false)
     #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
@@ -521,8 +515,7 @@ func hookWire_firstCallAllowCannotSkipPolicyGate(_ host: HookHost) throws {
         ),
         command: ShellCommand(rawValue: "git reset --hard"),
         using: ClaudeHostCodec(),
-        bound: .deny(leftover),
-        cwd: wd("/tmp/ws")
+        intent: .firstCall(verdict: .deny, unlockCode: nil)
     )
     #expect(wire.stdout.isEmpty == false)
     #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
@@ -542,7 +535,7 @@ func hookWire_firstCallAllowCannotSkipPolicyGate(_ host: HookHost) throws {
         ),
         command: ShellCommand(rawValue: "git push origin feature"),
         using: ClaudeHostCodec(),
-        bound: .mandatoryHuman(deny)
+        intent: .firstCall(verdict: .deny, unlockCode: nil)
     )
     #expect(wire.stdout.isEmpty == false)
     #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
@@ -559,8 +552,7 @@ func hookWire_firstCallAllowCannotSkipPolicyGate(_ host: HookHost) throws {
         from: EvaluationResult(outcome: .deny(deny, matched: nil)),
         command: ShellCommand(rawValue: "git push origin feature"),
         using: ClaudeHostCodec(),
-        bound: .mandatoryHuman(deny),
-        cwd: wd("/tmp/ws")
+        intent: .firstCall(verdict: .deny, unlockCode: nil)
     )
     #expect(wire.stdout.isEmpty == false)
     #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
@@ -573,7 +565,7 @@ func hookWire_firstCallAllowCannotSkipPolicyGate(_ host: HookHost) throws {
         from: EvaluationResult(outcome: .plain),
         command: ShellCommand(rawValue: "git reset --hard"),
         using: ClaudeHostCodec(),
-        afterSpend: true
+        intent: .afterSpend
     )
     #expect(wire.stdout.isEmpty)
     #expect(wire.exitCode == 0)

@@ -427,7 +427,7 @@ private func assertGrokMintedResetHard(_ json: [String: Any]) throws {
     #expect(json["decision"] as? String == "deny")
     let reason = try #require(json["reason"] as? String)
     let code = try #require(allowOnceUnlockCode(in: reason))
-    let unlock = hookUnlockNext(code: code)
+    let unlock = unlockLine(for: code)
     #expect(reason == "RV · Blocked. \(unlock) Destroys uncommitted changes. Use 'git stash' first.")
     #expect(json["next"] as? String == unlock)
     #expect(reason.hasPrefix("RV · Blocked. Paste in Terminal to allow once:"))

@@ -188,7 +188,10 @@ private func hookBody<C: HostCodec>(
                 from: result,
                 command: command,
                 using: codec,
-                intent: .firstCall(verdict: verdict, unlockCode: unlockCode)
+                intent: .firstCall(
+                    verdict: verdict,
+                    unlockCode: unlockCode.flatMap(AllowOnceUnlockCode.init(validating:))
+                )
             )
         }
     case .foreign:
