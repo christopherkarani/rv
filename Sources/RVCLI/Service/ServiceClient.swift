@@ -1,5 +1,6 @@
 import Foundation
 import RVDomain
+import RVHistory
 import RVHooks
 import RVIPC
 import RVPolicy
@@ -131,7 +132,7 @@ public struct ServiceClient: Sendable {
     private func inProcessApply(
         command: ShellCommand,
         cwd: WorkingDirectory?,
-        host: String = "tty"
+        host: LedgerHost = .tty
     ) async -> EvaluationResult {
         let now = clock()
         let baseDirectory = store.baseDirectory
@@ -211,7 +212,7 @@ public struct ServiceClient: Sendable {
                     await self.inProcessApply(
                         command: command,
                         cwd: cwd,
-                        host: host.rawValue
+                        host: .hook(host)
                     )
                 },
                 evaluateFile: { action, cwd in
@@ -219,12 +220,12 @@ public struct ServiceClient: Sendable {
                         action,
                         home: self.home,
                         cwd: cwd,
-                        host: host.rawValue,
+                        host: .hook(host),
                         now: self.clock()
                     )
                 },
                 spendHostAsk: { command, cwd in
-                    await self.spendHostAsk(command: command, cwd: cwd)
+                    await self.spendHostAsk(command: command, cwd: cwd, host: .hook(host))
                 },
                 mintOnDeny: { result, cwd in
                     await GatedEvaluate.mintUnlockCode(
@@ -295,7 +296,11 @@ public struct ServiceClient: Sendable {
     }
 
     /// Plant+spend a host Allow once on the same grant file evaluate uses.
-    public func spendHostAsk(command: ShellCommand, cwd: WorkingDirectory? = nil) async -> EvaluationResult {
+    public func spendHostAsk(
+        command: ShellCommand,
+        cwd: WorkingDirectory? = nil,
+        host: LedgerHost = .tty
+    ) async -> EvaluationResult {
         let now = clock()
         let baseDirectory = store.baseDirectory
         return await door.spendHostAsk(
@@ -307,7 +312,8 @@ public struct ServiceClient: Sendable {
             allowlist: {
                 AllowlistStore(baseDirectory: baseDirectory)
                     .loadUserSnapshot(workspacePath: cwd.map(\.rawValue), now: now)
-            }
+            },
+            host: host
         )
     }
 

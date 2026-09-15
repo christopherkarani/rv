@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import RVDomain
 import RVHistory
 import RVPolicy
 
@@ -20,10 +21,10 @@ enum BlocksRun {
     private static func prettyLine(_ record: DenialLedgerRecord) -> String {
         [
             iso8601(record.timestamp),
-            record.host,
-            record.tool,
-            record.ruleID,
-            record.category,
+            record.host.rawValue,
+            record.tool.rawValue,
+            record.ruleID.rawValue,
+            record.category.rawValue,
             record.path,
         ].joined(separator: "  ")
     }

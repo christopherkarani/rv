@@ -2,6 +2,7 @@ import Foundation
 import RVAnalytics
 import RVDomain
 import RVEngine
+import RVHistory
 import RVHooks
 import RVIPC
 import RVPacks
@@ -255,13 +256,13 @@ public actor ServiceRuntime {
                     // (`EvaluationWorld.walkedPackIDs`): a warm rvd must never decide on a
                     // narrower or wider set than a cold one.
                     let request = GatedEvaluate.makeRequest(command: command, home: self.configHome)
-                    return await self.runEvaluate(request, cwd: cwd, host: params.host.rawValue)
+                    return await self.runEvaluate(request, cwd: cwd, host: .hook(params.host))
                 },
                 evaluateFile: { action, cwd in
                     await self.runFile(action, cwd: cwd, host: params.host)
                 },
                 spendHostAsk: { command, cwd in
-                    await self.runSpendHostAsk(command: command, cwd: cwd)
+                    await self.runSpendHostAsk(command: command, cwd: cwd, host: .hook(params.host))
                 },
                 mintOnDeny: { result, cwd in
                     await GatedEvaluate.mintUnlockCode(
@@ -306,7 +307,7 @@ public actor ServiceRuntime {
             action,
             home: configHome,
             cwd: cwd,
-            host: host.rawValue,
+            host: .hook(host),
             now: clock()
         )
     }
@@ -314,7 +315,7 @@ public actor ServiceRuntime {
     private func runEvaluate(
         _ request: EvaluationRequest,
         cwd: WorkingDirectory?,
-        host: String = "tty"
+        host: LedgerHost = .tty
     ) async -> EvaluationResult {
         rebuildWhenUncovered(wanted: WalkedPackIDs(ids: request.enabledPacks))
         let now = clock()
@@ -335,7 +336,7 @@ public actor ServiceRuntime {
         return result
     }
 
-    private func runSpendHostAsk(command: ShellCommand, cwd: WorkingDirectory?) async -> EvaluationResult {
+    private func runSpendHostAsk(command: ShellCommand, cwd: WorkingDirectory?, host: LedgerHost) async -> EvaluationResult {
         rebuildWhenUncovered(wanted: EvaluationWorld.walkedPackIDs(home: configHome))
         let now = clock()
         let baseDirectory = allowOnce.baseDirectory
@@ -348,7 +349,8 @@ public actor ServiceRuntime {
             allowlist: {
                 AllowlistStore(baseDirectory: baseDirectory)
                     .loadUserSnapshot(workspacePath: cwd.map(\.rawValue), now: now)
-            }
+            },
+            host: host
         )
         recordAnalytics(for: result)
         return result
