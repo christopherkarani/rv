@@ -23,7 +23,9 @@ public actor ServiceRuntime {
     public let corePacksReady: Bool
     public let idleExitSeconds: Int
 
-    private var gated: GatedEvaluate
+    /// Compile set for evaluate and pending peek. A lock so ApprovalRuntime's
+    /// injected peek sees `rebuildGated` without hopping back into this actor.
+    private let gatedSlot: UnfairLock<GatedEvaluate>
     private var catalog: PackCatalog
     private var lastUncoveredWanted: Set<PackID> = []
     private var lastCoverageRebuildAt: UInt64 = 0
@@ -69,7 +71,7 @@ public actor ServiceRuntime {
         self.compiledPackIDs = session.compiledPackIDs
         self.compiledPackIDSet = Set(session.compiledPackIDs)
         let gated = GatedEvaluate(session)
-        self.gated = gated
+        self.gatedSlot = UnfairLock(gated)
         self.corePacksReady = gated.corePacksReady
         if let allowOnce {
             self.allowOnce = allowOnce
@@ -91,7 +93,7 @@ public actor ServiceRuntime {
         self.pendingApprovals = resolvedPending
         self.analyticsEnabledPackIDs = Self.analyticsEnabledPackIDs(from: self.catalog)
         let resolvedAllowOnce = self.allowOnce
-        let resolvedGated = gated
+        let gatedSlot = self.gatedSlot
         self.approvals = ApprovalRuntime(
             pendingApprovals: resolvedPending,
             allowOnce: resolvedAllowOnce,
@@ -100,7 +102,7 @@ public actor ServiceRuntime {
                 await LiveEvaluateWorld(
                     home: resolvedHome,
                     store: resolvedAllowOnce,
-                    gated: resolvedGated,
+                    gated: gatedSlot.withLock { $0 },
                     clock: { now }
                 ).peek(command: command, cwd: cwd)
             }
@@ -313,7 +315,7 @@ public actor ServiceRuntime {
         LiveEvaluateWorld(
             home: configHome,
             store: allowOnce,
-            gated: gated,
+            gated: gatedSlot.withLock { $0 },
             clock: clock
         )
     }
@@ -545,7 +547,7 @@ public actor ServiceRuntime {
         let compiledPackIDs = session.compiledPackIDs
         self.compiledPackIDs = compiledPackIDs
         compiledPackIDSet = Set(compiledPackIDs)
-        gated = GatedEvaluate(session)
+        gatedSlot.withLock { $0 = GatedEvaluate(session) }
     }
 
     /// Wire request walk set. Those IDs must already be compiled, or we rebuild.
