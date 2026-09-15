@@ -6,7 +6,7 @@ struct PolicyDocumentTests {
         let row = PolicyDocumentRule(
             id: RuleID(pack: .typedGit, pattern: "force-push-main"),
             verdict: .deny,
-            predicate: .gitPush(force: .force, branch: "main"),
+            predicate: .gitPush(force: .exactly(.force), branch: "main"),
             english: "Never allow force-push to main"
         )
         #expect(row.english == "Never allow force-push to main")
@@ -21,7 +21,7 @@ struct PolicyDocumentTests {
         let row = PolicyDocumentRule(
             id: RuleID(pack: .typedGit, pattern: "force-push-main"),
             verdict: .deny,
-            predicate: .gitPush(force: .force, branch: "main"),
+            predicate: .gitPush(force: .exactly(.force), branch: "main"),
             english: "   "
         )
         #expect(row.english == nil)
@@ -31,7 +31,7 @@ struct PolicyDocumentTests {
         let row = PolicyDocumentRule(
             id: RuleID(pack: .typedGit, pattern: "force-push-main"),
             verdict: .deny,
-            predicate: .gitPush(force: .force, branch: "main"),
+            predicate: .gitPush(force: .exactly(.force), branch: "main"),
             english: "Never allow\nforce-push to main"
         )
         #expect(row.english == "Never allow force-push to main")
@@ -43,7 +43,7 @@ struct PolicyDocumentTests {
                 PolicyDocumentRule(
                     id: RuleID(pack: .typedGit, pattern: "force-push-main"),
                     verdict: .deny,
-                    predicate: .gitPush(force: .force, branch: "main"),
+                    predicate: .gitPush(force: .exactly(.force), branch: "main"),
                     english: "Never allow force-push to main"
                 ),
             ]
@@ -51,6 +51,6 @@ struct PolicyDocumentTests {
         let rules = document.typedRules(origin: .repo)
         #expect(rules.count == 1)
         #expect(rules[0].origin == .repo)
-        #expect(rules[0].predicate == .gitPush(force: .force, branch: "main"))
+        #expect(rules[0].predicate == .gitPush(force: .exactly(.force), branch: "main"))
     }
 }

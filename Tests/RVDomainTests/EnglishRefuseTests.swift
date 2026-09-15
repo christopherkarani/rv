@@ -26,7 +26,7 @@ struct EnglishRefuseTests {
     func compile_refuseEnglish_leavesRuleStoreUnchanged(_ english: String) async throws {
         let existing = TypedRule(
             id: RuleID(pack: .coreGit, pattern: "force-push-main"),
-            predicate: .gitPush(force: .force, branch: "main"),
+            predicate: .gitPush(force: .exactly(.force), branch: "main"),
             verdict: .deny,
             origin: .machine
         )

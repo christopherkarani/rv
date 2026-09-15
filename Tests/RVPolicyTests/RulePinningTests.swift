@@ -137,7 +137,7 @@ struct RulePinningTests {
         )
         let decoded = try decodePinDraft(draft)
         #expect(decoded.v == 2)
-        #expect(decoded.predicate == .gitPush(force: .force, branch: "feature"))
+        #expect(decoded.predicate == .gitPush(force: .exactly(.force), branch: "feature"))
         #expect(decoded.fingerprint == nil)
         #expect(draft.contains("gitPush"))
     }
@@ -158,7 +158,7 @@ struct RulePinningTests {
         #expect(preview.sentence.contains("Always block force-push to main"))
         let draft = try decodePinDraft(preview.draft)
         #expect(draft.polarity == "block")
-        #expect(draft.predicate == .gitPush(force: .force, branch: "main"))
+        #expect(draft.predicate == .gitPush(force: .exactly(.force), branch: "main"))
     }
 
     @Test func forcePushMainPreview_allowHardStopIncludesGitPushAndBlocksSave() throws {
@@ -171,7 +171,7 @@ struct RulePinningTests {
         #expect(preview.sentence.contains("cannot override"))
         let draft = try decodePinDraft(preview.draft)
         #expect(draft.polarity == "allow")
-        #expect(draft.predicate == .gitPush(force: .force, branch: "main"))
+        #expect(draft.predicate == .gitPush(force: .exactly(.force), branch: "main"))
     }
 
     @Test func nonGitPreview_keepsFingerprintDraftWithoutGitPush() throws {

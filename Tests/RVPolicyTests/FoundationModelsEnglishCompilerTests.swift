@@ -21,7 +21,7 @@ struct FoundationModelsEnglishCompilerTests {
             Issue.record("expected preview from injected fake, got \(result)")
             return
         }
-        #expect(preview.rule.predicate == .gitPush(force: .force, branch: "main"))
+        #expect(preview.rule.predicate == .gitPush(force: .exactly(.force), branch: "main"))
         #expect(preview.allowedToSave == true)
     }
 

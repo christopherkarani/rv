@@ -169,7 +169,13 @@ func formatDocumentRule(_ rule: PolicyDocumentRule) -> String {
 func predicateText(_ predicate: PolicyPredicate) -> String {
     switch predicate {
     case .gitPush(let force, let branch):
-        let forceText = force?.rawValue ?? "-"
+        let forceText: String
+        switch force {
+        case .any:
+            forceText = "-"
+        case .exactly(let value):
+            forceText = value.rawValue
+        }
         let branchText = branch ?? "-"
         return "gitPush force=\(forceText) branch=\(branchText)"
     }

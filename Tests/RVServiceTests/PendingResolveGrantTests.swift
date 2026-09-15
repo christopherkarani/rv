@@ -119,7 +119,7 @@ struct PendingResolveGrantTests {
             .saveMachine([
                 TypedRule(
                     id: ruleID,
-                    predicate: .gitPush(force: .forceWithLease, branch: "main"),
+                    predicate: .gitPush(force: .exactly(.forceWithLease), branch: "main"),
                     verdict: .deny,
                     origin: .machine
                 ),

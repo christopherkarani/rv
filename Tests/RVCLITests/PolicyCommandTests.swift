@@ -65,7 +65,7 @@ struct PolicyCommandTests {
             let store = TypedRuleStore(
                 baseDirectory: RVPolicyPaths.configDirectory(home: home)
             )
-            let predicate = PolicyPredicate.gitPush(force: .force, branch: "main")
+            let predicate = PolicyPredicate.gitPush(force: .exactly(.force), branch: "main")
             let machineDeny = TypedRule(
                 id: RuleID(pack: .coreGit, pattern: "force-push-main"),
                 predicate: predicate,
@@ -99,7 +99,7 @@ struct PolicyCommandTests {
         try withTempPolicyContext { home, workspace in
             let builtin = TypedRule(
                 id: RuleID(pack: .coreGit, pattern: "force-push-main-builtin"),
-                predicate: .gitPush(force: .force, branch: "main"),
+                predicate: .gitPush(force: .exactly(.force), branch: "main"),
                 verdict: .deny,
                 origin: .builtin
             )
@@ -141,7 +141,7 @@ struct PolicyCommandTests {
             )
             let machineRule = TypedRule(
                 id: RuleID(pack: .coreGit, pattern: "force-push-main"),
-                predicate: .gitPush(force: .force, branch: "main"),
+                predicate: .gitPush(force: .exactly(.force), branch: "main"),
                 verdict: .deny,
                 origin: .machine
             )
@@ -166,7 +166,7 @@ struct PolicyCommandTests {
             #expect(decoded.machine == [machineRule])
             #expect(decoded.machine[0].id == machineRule.id)
             #expect(decoded.machine[0].verdict == .deny)
-            #expect(decoded.machine[0].predicate == .gitPush(force: .force, branch: "main"))
+            #expect(decoded.machine[0].predicate == .gitPush(force: .exactly(.force), branch: "main"))
         }
     }
 

@@ -178,7 +178,7 @@ public enum RulePinning: Sendable {
             return nil
         }
         let predicate = PolicyPredicate.gitPush(
-            force: GitPushForce.force,
+            force: .exactly(.force),
             branch: git.resources.branchName
         )
         guard PolicyMatch.matches(predicate, action: git) else {
@@ -236,9 +236,15 @@ public enum RulePinning: Sendable {
         }
     }
 
-    private static func gitPushTarget(force: GitPushForce?, branch: String?) -> String {
+    private static func gitPushTarget(force: GitPushForceConstraint, branch: String?) -> String {
         let named = branch.flatMap { $0.isEmpty ? nil : $0 }
-        let isForce = force == GitPushForce.force || force == .forceWithLease
+        let isForce: Bool
+        switch force {
+        case .exactly(.force), .exactly(.forceWithLease):
+            isForce = true
+        case .any, .exactly(.none):
+            isForce = false
+        }
         if isForce {
             if let named {
                 return "force-push to \(named)"

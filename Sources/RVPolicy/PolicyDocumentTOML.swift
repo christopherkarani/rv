@@ -88,8 +88,8 @@ public enum PolicyDocumentTOML {
             lines.append("predicate = \"gitPush\"")
             switch rule.predicate {
             case .gitPush(let force, let branch):
-                if let force {
-                    lines.append("force = \"\(force.rawValue)\"")
+                if case .exactly(let value) = force {
+                    lines.append("force = \"\(value.rawValue)\"")
                 }
                 if let branch {
                     lines.append("branch = \"\(escapeTOMLString(branch))\"")
@@ -218,14 +218,14 @@ public enum PolicyDocumentTOML {
         guard predicateRaw == "gitPush" else {
             throw PolicyDocumentError.invalidFile
         }
-        let force: GitPushForce?
+        let force: GitPushForceConstraint
         if let forceRaw {
             guard let parsed = GitPushForce(rawValue: forceRaw) else {
                 throw PolicyDocumentError.invalidFile
             }
-            force = parsed
+            force = .exactly(parsed)
         } else {
-            force = nil
+            force = .any
         }
         let branch: String?
         if let branchRaw {

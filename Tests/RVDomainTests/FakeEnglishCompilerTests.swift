@@ -12,7 +12,7 @@ struct FakeEnglishCompilerTests {
             Issue.record("expected preview, got \(result)")
             return
         }
-        #expect(preview.rule.predicate == .gitPush(force: .force, branch: "main"))
+        #expect(preview.rule.predicate == .gitPush(force: .exactly(.force), branch: "main"))
         #expect(preview.rule.verdict == .deny)
         #expect(preview.allowedToSave == true)
         #expect(preview.sentence == "Always block force-push to main")
@@ -43,6 +43,6 @@ struct FakeEnglishCompilerTests {
             Issue.record("expected preview through any EnglishCompiler")
             return
         }
-        #expect(preview.rule.predicate == .gitPush(force: .force, branch: "main"))
+        #expect(preview.rule.predicate == .gitPush(force: .exactly(.force), branch: "main"))
     }
 }

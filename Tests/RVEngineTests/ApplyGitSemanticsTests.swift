@@ -140,7 +140,7 @@ struct ApplyGitSemanticsTests {
         #expect(pack.decision == .allow)
         let rule = TypedRule(
             id: RuleID(pack: .typedGit, pattern: "force-push-main"),
-            predicate: .gitPush(force: .force, branch: "main"),
+            predicate: .gitPush(force: .exactly(.force), branch: "main"),
             verdict: .deny,
             origin: .machine
         )
@@ -163,7 +163,7 @@ struct ApplyGitSemanticsTests {
         #expect(pack.decision == .allow)
         let rule = TypedRule(
             id: RuleID(pack: .typedGit, pattern: "force-push-main-allow"),
-            predicate: .gitPush(force: .force, branch: "main"),
+            predicate: .gitPush(force: .exactly(.force), branch: "main"),
             verdict: .allow,
             origin: .machine
         )

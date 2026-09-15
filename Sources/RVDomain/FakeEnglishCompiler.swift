@@ -26,7 +26,7 @@ public struct FakeEnglishCompiler: EnglishCompiler {
             rule: PolicyDocumentRule(
                 id: RuleID(pack: .typedGit, pattern: "force-push-main"),
                 verdict: .deny,
-                predicate: .gitPush(force: .force, branch: "main"),
+                predicate: .gitPush(force: .exactly(.force), branch: "main"),
                 english: english
             ),
             allowedToSave: true

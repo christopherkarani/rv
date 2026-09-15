@@ -26,7 +26,7 @@ struct TypedRuleTests {
         )
         let rule = try JSONDecoder().decode(TypedRule.self, from: json)
         #expect(rule.id == RuleID(pack: .coreGit, pattern: "force-push-main"))
-        #expect(rule.predicate == .gitPush(force: .force, branch: "main"))
+        #expect(rule.predicate == .gitPush(force: .exactly(.force), branch: "main"))
         #expect(rule.verdict == .deny)
         #expect(rule.origin == .machine)
     }
@@ -73,7 +73,7 @@ struct TypedRuleTests {
 
 private func sampleRule(
     id: RuleID = RuleID(pack: .coreGit, pattern: "force-push-main"),
-    predicate: PolicyPredicate = .gitPush(force: .force, branch: "main"),
+    predicate: PolicyPredicate = .gitPush(force: .exactly(.force), branch: "main"),
     verdict: TypedRuleVerdict = .deny,
     origin: TypedRuleOrigin = .machine
 ) -> TypedRule {
