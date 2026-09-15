@@ -71,6 +71,22 @@ import RVDomain
     #expect(applyRoleAwareQuotes("git reset \"--hard\"") == "git reset --hard")
 }
 
+@Test func normalize_masksGitLogGrepAndGitGrepPatterns() {
+    let reset = String(repeating: " ", count: 16)
+    let rm = String(repeating: " ", count: 6)
+    #expect(
+        applyRoleAwareQuotes("git log --grep='git reset --hard'") == "git log --grep=" + reset
+    )
+    #expect(applyRoleAwareQuotes("git grep -n \"rm -rf\"") == "git grep -n " + rm)
+    #expect(applyRoleAwareQuotes("git --no-pager grep -n \"rm -rf\"") == "git --no-pager grep -n " + rm)
+    #expect(
+        Normalize.matchingView(of: "git log --grep='git reset --hard'").rawValue.contains("reset")
+            == false
+    )
+    #expect(Normalize.matchingView(of: "git grep -n \"rm -rf\"").rawValue.contains("rm") == false)
+    #expect(Normalize.matchingView(of: "git reset --hard") == "git reset --hard")
+}
+
 @Test func normalize_preservesEmptyQuotedArguments() {
     let tokens = tokenizeCommand("git commit -m \"\" \"git push --force\"")
     #expect(tokens.map(\.decoded) == ["git", "commit", "-m", "", "git push --force"])
