@@ -13,36 +13,20 @@ enum HostAdapterInstallation: Equatable, Sendable {
 
     /// File-tool door on this Host adapter. `companionJSON` is Cursor `hooks.json`.
     func fileTools(companionJSON: Data? = nil) -> DoctorFileToolsState {
-        switch ownedPath.host {
-        case .pi, .opencode, .openclaw, .hermes, .codex:
-            return .notApplicable
-        case .claude, .cursor, .grok:
-            break
-        }
+        HostWiring.fileTools(
+            host: ownedPath.host,
+            adapterBytes: adapterBytesIfWired,
+            companionJSON: companionJSON
+        )
+    }
+
+    /// Bytes only when the setup slot is `.wired`. Other states pass `nil` so
+    /// Claude / Grok / Cursor file-tool is `.notApplicable`.
+    fileprivate var adapterBytesIfWired: Data? {
         guard case .wired(_, let data) = self else {
-            return .notApplicable
+            return nil
         }
-        switch ownedPath.host {
-        case .claude:
-            guard let root = jsonObject(data),
-                  ClaudeSettingsMerge.hasFileToolMatchers(in: root)
-            else {
-                return .shellOnly
-            }
-            return .wired
-        case .grok:
-            return GrokHookInspect.hasFileToolDoor(in: data) ? .wired : .shellOnly
-        case .cursor:
-            guard let companionJSON,
-                  let root = jsonObject(companionJSON),
-                  CursorHooksMerge.hasFileToolEntry(in: root)
-            else {
-                return .shellOnly
-            }
-            return .wired
-        case .pi, .opencode, .openclaw, .hermes, .codex:
-            return .notApplicable
-        }
+        return data
     }
 
     private var ownedPath: OwnedHostAdapterPath {
@@ -52,10 +36,6 @@ enum HostAdapterInstallation: Equatable, Sendable {
         case .broken(path: let path, _), .wired(path: let path, _):
             path
         }
-    }
-
-    private func jsonObject(_ data: Data) -> [String: Any]? {
-        (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
     }
 
     /// What setup should do for this installation, given `--force`.
@@ -156,7 +136,9 @@ struct HostAdapterInstallationSnapshot: Equatable, Sendable {
 
     /// File-tool door for `host`. Doctor consumes this; it does not re-parse adapter bytes.
     func fileTools(for host: HookHost) -> DoctorFileToolsState {
-        installation(for: host).fileTools(
+        HostWiring.fileTools(
+            host: host,
+            adapterBytes: installation(for: host).adapterBytesIfWired,
             companionJSON: host == .cursor ? cursorHooksJSON : nil
         )
     }

@@ -446,6 +446,68 @@ func hostInstallation_currentResourceWithExecutableIsWired(_ host: HookHost) thr
     }
 }
 
+@Test func hostInstallation_fileToolsEqualsHostWiringOnSameBytes() throws {
+    let bytes = try ClaudeSettingsMerge.merge(
+        existingData: nil,
+        rvPath: "/usr/local/bin/rv",
+        adapterPath: "/tmp/rv-t1/.claude/hooks/rv-guard.py",
+        force: false
+    ).data
+    let installation = HostAdapterInstallation.wired(
+        path: OwnedHostAdapterPath(
+            host: .claude,
+            detectionDirectory: "/tmp/rv-t1/.claude",
+            executableName: "claude",
+            destination: "/tmp/rv-t1/.claude/settings.json"
+        ),
+        existingData: bytes
+    )
+
+    #expect(
+        installation.fileTools()
+            == HostWiring.fileTools(host: .claude, adapterBytes: bytes, companionJSON: nil)
+    )
+}
+
+@Test func hostInstallation_wiredCursorCompanionWithoutFileToolEntryIsShellOnly() throws {
+    let companion = try cursorCompanionWithoutFileToolEntry()
+    let snapshot = cursorFileToolsSnapshot(
+        cursor: .wired(
+            path: OwnedHostAdapterPath(
+                host: .cursor,
+                detectionDirectory: "/tmp/rv-t1/.cursor",
+                executableName: "cursor",
+                destination: "/tmp/rv-t1/.cursor/hooks/rv-guard.py"
+            ),
+            existingData: Data("{}".utf8)
+        ),
+        cursorHooksJSON: companion
+    )
+
+    #expect(snapshot.fileTools(for: .cursor) == .shellOnly)
+}
+
+@Test func hostInstallation_wiredCursorCompanionWithFileToolEntryIsWired() throws {
+    let companion = try CursorHooksMerge.merge(
+        existingData: nil,
+        adapterPath: "/tmp/rv-t1/.cursor/hooks/rv-guard.py"
+    ).data
+    let snapshot = cursorFileToolsSnapshot(
+        cursor: .wired(
+            path: OwnedHostAdapterPath(
+                host: .cursor,
+                detectionDirectory: "/tmp/rv-t1/.cursor",
+                executableName: "cursor",
+                destination: "/tmp/rv-t1/.cursor/hooks/rv-guard.py"
+            ),
+            existingData: Data("{}".utf8)
+        ),
+        cursorHooksJSON: companion
+    )
+
+    #expect(snapshot.fileTools(for: .cursor) == .wired)
+}
+
 @Test func hostInstallation_wiredCursorWithPreToolUseIsFileToolWired() throws {
     try withInstallationHome { home, paths in
         let executable = try makeWiredMissPath(home: home)
@@ -493,6 +555,44 @@ private func writeNonExecutableSiblingCli(nextTo rv: URL) throws {
         [.posixPermissions: 0o644],
         ofItemAtPath: cli.path
     )
+}
+
+private func cursorFileToolsSnapshot(
+    cursor: HostAdapterInstallation,
+    cursorHooksJSON: Data?
+) -> HostAdapterInstallationSnapshot {
+    func missing(_ host: HookHost) -> HostAdapterInstallation {
+        .missing(
+            OwnedHostAdapterPath(
+                host: host,
+                detectionDirectory: "/tmp/rv-t1/\(host.rawValue)",
+                executableName: host.rawValue,
+                destination: "/tmp/rv-t1/\(host.rawValue)/adapter"
+            )
+        )
+    }
+    return HostAdapterInstallationSnapshot(
+        grok: missing(.grok),
+        pi: missing(.pi),
+        openCode: missing(.opencode),
+        claude: missing(.claude),
+        openClaw: missing(.openclaw),
+        hermes: missing(.hermes),
+        codex: missing(.codex),
+        cursor: cursor,
+        cursorHooksJSON: cursorHooksJSON
+    )
+}
+
+private func cursorCompanionWithoutFileToolEntry() throws -> Data {
+    let adapterPath = "/tmp/rv-t1/.cursor/hooks/rv-guard.py"
+    let root: [String: Any] = [
+        CursorHooksMerge.versionKey: CursorHooksMerge.schemaVersion,
+        CursorHooksMerge.hooksRootKey: [
+            CursorHooksMerge.beforeShellKey: [CursorHooksMerge.rvEntry(adapterPath: adapterPath)],
+        ],
+    ]
+    return try JSONSerialization.data(withJSONObject: root)
 }
 
 private func grokBodyWithMatcher(rvPath: String, matcher: String) throws -> String {
