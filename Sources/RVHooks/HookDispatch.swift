@@ -149,7 +149,7 @@ private func hookBody<C: HostCodec>(
                 }
             }
             return wire
-        case .shell(let command, _):
+        case .shell(let command, nil):
             let result = await evaluate(command, request.cwd)
             let bound = BoundReview.packProjected(from: result)
             let verdict = HostNativeAsk.verdict(

@@ -41,22 +41,42 @@ import RVDomain
 }
 
 @Test func claudeDecode_fileToolHasNoAsk() throws {
-    let stdin = """
-    {"hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{"file_path":"/tmp/rv-oracle/.env"},"hostAsk":"spend"}
-    """
-    guard case .request(let request) = ClaudeHostCodec().decode(stdin) else {
-        Issue.record("expected .request for Claude file+hostAsk envelope")
-        return
-    }
-    switch request.invocation {
-    case .file(let file):
-        #expect(file.kind == .read)
-        #expect(file.path.rawValue == "/tmp/rv-oracle/.env")
-    case .shell(_, .spend):
-        Issue.record("Claude file decode must not carry HostAskHookIntent")
-    case .shell:
-        Issue.record("expected .file")
-    }
+    expectFileDecodeHasNoAsk(
+        ClaudeHostCodec().decode(
+            """
+            {"hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{"file_path":"/tmp/rv-oracle/.env"},"hostAsk":"spend"}
+            """
+        ),
+        host: "Claude",
+        kind: .read,
+        path: "/tmp/rv-oracle/.env"
+    )
+}
+
+@Test func grokDecode_fileToolHasNoAsk() throws {
+    expectFileDecodeHasNoAsk(
+        GrokHostCodec().decode(
+            """
+            {"hookEventName":"pre_tool_use","toolName":"read_file","toolInput":{"path":"/tmp/rv-oracle/.env"},"hostAsk":"spend"}
+            """
+        ),
+        host: "Grok",
+        kind: .read,
+        path: "/tmp/rv-oracle/.env"
+    )
+}
+
+@Test func cursorDecode_fileToolHasNoAsk() throws {
+    expectFileDecodeHasNoAsk(
+        CursorHostCodec().decode(
+            """
+            {"hook_event_name":"preToolUse","tool_name":"Read","tool_input":{"file_path":"/tmp/rv-oracle/.env"},"hostAsk":"spend"}
+            """
+        ),
+        host: "Cursor",
+        kind: .read,
+        path: "/tmp/rv-oracle/.env"
+    )
 }
 
 @Test func grokDecode_emptyCommandWithoutFileIsMalformed() throws {
@@ -85,6 +105,7 @@ import RVDomain
                 command: ShellCommand(rawValue: "")
             )
     )
+    #expect(action.fingerprint.rawValue.contains(":file:read:") == true)
 }
 
 @Test func hookDispatch_fileDenyVoiceDoesNotUseEmptyShellCommand() async throws {
@@ -116,6 +137,28 @@ import RVDomain
     #expect(wire.stdout.contains(hostFileDenyLine(reason: reason)))
     #expect(wire.stdout.contains("\"decision\":\"deny\""))
     #expect(wire.stdout.contains("Blocked  (") == false)
+}
+
+private func expectFileDecodeHasNoAsk(
+    _ outcome: HookDecodeOutcome,
+    host: String,
+    kind: FileToolKind,
+    path: String
+) {
+    guard case .request(let request) = outcome else {
+        Issue.record("expected .request for \(host) file+hostAsk envelope")
+        return
+    }
+    switch request.invocation {
+    case .file(let file):
+        #expect(file.kind == kind)
+        #expect(file.path.rawValue == path)
+        #expect(hookAsk(request) == nil)
+    case .shell(_, .spend):
+        Issue.record("\(host) file decode must not carry HostAskHookIntent")
+    case .shell:
+        Issue.record("expected .file")
+    }
 }
 
 private func grokEmptyCommandFixture() throws -> String {
