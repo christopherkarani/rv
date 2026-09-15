@@ -30,7 +30,11 @@ func openCodeDecode_extractsBashCommand(_ file: String, expected: String) throws
         return
     }
     #expect(request.host == .opencode)
-    #expect(request.command.rawValue == expected)
+    guard case .shell(_, let command, _, _) = request else {
+        Issue.record("expected .shell for \(file)")
+        return
+    }
+    #expect(command.rawValue == expected)
 }
 
 @Test func openCodeDecode_nonShellIsForeign() throws {
@@ -46,7 +50,11 @@ func openCodeDecode_extractsBashCommand(_ file: String, expected: String) throws
         return
     }
     #expect(request.host == .opencode)
-    #expect(request.command.rawValue == "git reset --hard")
+    guard case .shell(_, let command, _, _) = request else {
+        Issue.record("expected .shell for session.shell")
+        return
+    }
+    #expect(command.rawValue == "git reset --hard")
 }
 
 @Test func openCodeDecode_sessionShellEmptyCommandIsMissingCommand() {
@@ -148,7 +156,11 @@ func openCodeDecode_readsSessionId(_ stdin: String, expected: String) {
         return
     }
     #expect(request.session == SessionID(validating: expected))
-    #expect(request.command.rawValue == "git status")
+    guard case .shell(_, let command, _, _) = request else {
+        Issue.record("expected .shell for session id")
+        return
+    }
+    #expect(command.rawValue == "git status")
 }
 
 @Test(arguments: [
@@ -171,7 +183,11 @@ func openCodeDecode_emptySessionIsNil(_ stdin: String) {
         Issue.record("expected .request for hostAsk spend")
         return
     }
-    #expect(request.hostAsk == .spend)
+    guard case .spend(_, let command, _, _) = request else {
+        Issue.record("expected .spend for hostAsk spend")
+        return
+    }
+    #expect(command.rawValue == "git reset --hard")
     #expect(request.cwd?.rawValue == "/tmp/ws")
 }
 

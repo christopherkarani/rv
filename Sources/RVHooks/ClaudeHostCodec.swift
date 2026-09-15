@@ -16,20 +16,15 @@ public struct ClaudeHostCodec: HostCodec {
             return .foreign
         }
         let cwd = envelope.cwd.flatMap { WorkingDirectory(validating: $0) }
-        let session = firstNonEmpty(envelope.sessionId)
+        let session = firstNonEmpty(envelope.sessionId).flatMap { SessionID(validating: $0) }
         let hostAsk = envelope.hostAsk.flatMap(HostAskHookIntent.init(rawValue:))
         if envelope.toolName == "Bash" {
-            guard let command = envelope.toolInput?.command, command.isEmpty == false else {
-                return .malformed(.missingCommand)
-            }
-            return .request(
-                HookRequest(
-                    host: .claude,
-                    command: ShellCommand(rawValue: command),
-                    cwd: cwd,
-                    session: session,
-                    hostAsk: hostAsk
-                )
+            return HookRequest.decoded(
+                host: .claude,
+                command: envelope.toolInput?.command,
+                cwd: cwd,
+                session: session,
+                hostAsk: hostAsk
             )
         }
         if let file = FileToolAction.decoded(
@@ -39,15 +34,12 @@ public struct ClaudeHostCodec: HostCodec {
             envelope.toolInput?.targetFile,
             envelope.toolInput?.target
         ) {
-            return .request(
-                HookRequest(
-                    host: .claude,
-                    command: ShellCommand(rawValue: ""),
-                    cwd: cwd,
-                    session: session,
-                    hostAsk: hostAsk,
-                    file: file
-                )
+            return HookRequest.decoded(
+                host: .claude,
+                command: nil,
+                cwd: cwd,
+                session: session,
+                file: file
             )
         }
         return .foreign

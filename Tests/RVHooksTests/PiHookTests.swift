@@ -30,7 +30,11 @@ func piDecode_extractsBashCommand(_ file: String, expected: String) throws {
         return
     }
     #expect(request.host == .pi)
-    #expect(request.command.rawValue == expected)
+    guard case .shell(_, let command, _, _) = request else {
+        Issue.record("expected .shell for \(file)")
+        return
+    }
+    #expect(command.rawValue == expected)
 }
 
 @Test func piDecode_nonShellIsForeign() throws {
@@ -106,7 +110,11 @@ func piDecode_extractsBashCommand(_ file: String, expected: String) throws {
         Issue.record("expected .request for hostAsk spend")
         return
     }
-    #expect(request.hostAsk == .spend)
+    guard case .spend(_, let command, _, _) = request else {
+        Issue.record("expected .spend for hostAsk spend")
+        return
+    }
+    #expect(command.rawValue == "git reset --hard")
     #expect(request.cwd?.rawValue == "/tmp/ws")
 }
 
