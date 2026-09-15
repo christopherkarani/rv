@@ -38,7 +38,7 @@ struct AllPacksFalsePositiveStressTests {
                     continue
                 }
                 let enabled = uniquePackIDs(dayOnePackIDs + [pack.id])
-                let result = catalog.evaluate(command, enabled: enabled)
+                let result = catalog.run(command, enabled: enabled)
                 if result.decision != .allow {
                     overBlocks += 1
                     Issue.record(
@@ -57,7 +57,7 @@ struct AllPacksFalsePositiveStressTests {
         var overBlocks = 0
         for row in rows {
             guard let command = row.command else { continue }
-            let result = catalog.evaluate(command, enabled: enabled)
+            let result = catalog.run(command, enabled: enabled)
             if result.decision != .allow {
                 overBlocks += 1
                 Issue.record(
@@ -84,7 +84,7 @@ struct AllPacksFalsePositiveStressTests {
         ]
         var overBlocks = 0
         for command in commands {
-            let result = catalog.evaluate(command, enabled: enabled)
+            let result = catalog.run(command, enabled: enabled)
             if result.decision != .allow {
                 overBlocks += 1
                 Issue.record("all-packs data-role over-block \(describe(result)) on \(command)")
@@ -106,7 +106,7 @@ private struct CatalogSession: Sendable {
         return CatalogSession(packs: packs, compiled: compiled, engine: engine)
     }
 
-    func evaluate(_ command: String, enabled: [PackID]) -> EvaluationResult {
+    func run(_ command: String, enabled: [PackID]) -> EvaluationResult {
         evaluate(
             EvaluationRequest(command: ShellCommand(rawValue: command), enabledPacks: enabled),
             packs: packs,
