@@ -10,8 +10,7 @@ import RVPacks
 ///
 /// `strict_git` is designed to deny `--force-with-lease`. Those rows are
 /// tagged `skip-strict-git`. Empty-keyword packs never scan (quick-reject).
-/// Command-name `--help` / `--version` denials are pin-residual (extracted
-/// walkers); they are not this suite's fail.
+/// Command-name `--help` / `--version` must allow (documentation query).
 ///
 /// Run:
 /// `tools/gate.sh --quiet RVCorpusTests --filter AllPacksFalsePositiveStress`
@@ -119,9 +118,6 @@ struct AllPacksFalsePositiveStressTests {
                 }
                 let result = catalog.run(command, enabled: enabled)
                 if result.decision != .allow {
-                    if isDocumentationFlagProbe(command) {
-                        continue
-                    }
                     overBlocks += 1
                     Issue.record(
                         "\(pack.id.rawValue) quiet-probe over-block \(describe(result)) on \(command)"
