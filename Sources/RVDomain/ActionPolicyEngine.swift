@@ -151,8 +151,7 @@ public enum ActionPolicyEngine: Sendable {
             policy: policy,
             gitWorld: .probed(
                 GitAnalysisContext(
-                    currentBranch: context.repository.currentBranch,
-                    isSharedBranch: context.repository.isSharedBranch
+                    currentBranch: context.repository.currentBranch
                 )
             )
         )
@@ -407,20 +406,16 @@ public enum ActionPolicyEngine: Sendable {
         case .unprobed:
             break
         case .probed(let git):
-            // REQ-104: `isSharedBranch` only when probed. World payload and
-            // ReviewContext stay in lockstep on the Engine door; consult both
-            // so a mismatched caller cannot skip the shared-branch wall.
-            if git.isSharedBranch || context.repository.isSharedBranch {
+            // Unprobed never consults implicit HEAD. Probed uses the name
+            // against the shared set, not a stored bool on world or ReviewContext.
+            if GitSharedBranch.contains(git.currentBranch)
+                || GitSharedBranch.contains(context.repository.currentBranch)
+            {
                 return true
             }
         }
-        if let branch = resources.branchName, Self.sharedBranchNames.contains(branch) {
-            return true
-        }
-        return false
+        return GitSharedBranch.contains(resources.branchName)
     }
-
-    private static let sharedBranchNames: Set<String> = ["main", "master"]
 
     /// Restrict-only. Rank is deny > ask > allow, independent of list order.
     /// Ask beats allow when both match. Typed allow cannot loosen a built-in hit.

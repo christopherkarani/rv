@@ -73,8 +73,7 @@ private func gitAnalysisContext(
     case .probed(let context):
         return GitAnalysisContext(
             workingDirectory: workingDirectory ?? context.workingDirectory,
-            currentBranch: context.currentBranch,
-            isSharedBranch: context.isSharedBranch
+            currentBranch: context.currentBranch
         )
     }
 }

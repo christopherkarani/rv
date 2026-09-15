@@ -65,6 +65,17 @@ public enum SemanticAnalysis: Sendable, Equatable, Codable {
     }
 }
 
+/// Shared-by-name set used by `GitAnalysisContext.isSharedBranch` and
+/// `ActionPolicyEngine`.
+enum GitSharedBranch {
+    static let names: Set<String> = ["main", "master"]
+
+    static func contains(_ name: String?) -> Bool {
+        guard let name else { return false }
+        return names.contains(name)
+    }
+}
+
 /// Caller-supplied repository facts. Analyzers do not read disk.
 ///
 /// `empty` is the empty probed payload. No world injected is
@@ -72,16 +83,18 @@ public enum SemanticAnalysis: Sendable, Equatable, Codable {
 public struct GitAnalysisContext: Sendable, Equatable {
     public var workingDirectory: WorkingDirectory?
     public var currentBranch: String?
-    public var isSharedBranch: Bool
+
+    /// True iff `currentBranch` is `main` or `master`.
+    public var isSharedBranch: Bool {
+        GitSharedBranch.contains(currentBranch)
+    }
 
     public init(
         workingDirectory: WorkingDirectory? = nil,
-        currentBranch: String? = nil,
-        isSharedBranch: Bool = false
+        currentBranch: String? = nil
     ) {
         self.workingDirectory = workingDirectory
         self.currentBranch = currentBranch
-        self.isSharedBranch = isSharedBranch
     }
 
     public static let empty = GitAnalysisContext()
@@ -89,8 +102,7 @@ public struct GitAnalysisContext: Sendable, Equatable {
     public var reviewContext: ReviewContext {
         ReviewContext(
             repository: RepositoryReviewContext(
-                currentBranch: currentBranch,
-                isSharedBranch: isSharedBranch
+                currentBranch: currentBranch
             )
         )
     }

@@ -45,12 +45,11 @@ private func context(cwd: WorkingDirectory?) -> GitAnalysisContext {
     }
     return GitAnalysisContext(
         workingDirectory: cwd,
-        currentBranch: branch.name,
-        isSharedBranch: branch.shared
+        currentBranch: branch
     )
 }
 
-private func attachedBranch(at gitdir: String) -> (name: String, shared: Bool)? {
+private func attachedBranch(at gitdir: String) -> String? {
     guard let contents = try? String(contentsOfFile: gitdir + "/HEAD", encoding: .utf8) else {
         return nil
     }
@@ -64,7 +63,7 @@ private func attachedBranch(at gitdir: String) -> (name: String, shared: Bool)? 
     guard ref.hasPrefix(heads) else { return nil }
     let name = String(ref.dropFirst(heads.count))
     guard name.isEmpty == false else { return nil }
-    return (name, name == "main" || name == "master")
+    return name
 }
 
 private func parseGitDirFile(at path: String, repoRoot: String) -> String? {

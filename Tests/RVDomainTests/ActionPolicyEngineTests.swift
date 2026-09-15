@@ -68,6 +68,23 @@ struct ActionPolicyEngineTests {
         #expect(asked.decision == .mandatoryHuman(ActionPolicyEngine.Builtin.remoteBranchAsk))
     }
 
+    @Test func probedCurrentBranch_mainIsShared_featureIsNot() {
+        let implicit = ActionPolicyFixtures.implicitForcePush()
+        let onMain = ActionPolicyEngine.evaluate(
+            action: implicit,
+            context: privateBranch,
+            gitWorld: .probed(GitAnalysisContext(currentBranch: "main"))
+        )
+        #expect(onMain.decision == .hardDeny(ActionPolicyEngine.Builtin.remoteSharedBranch))
+
+        let onFeature = ActionPolicyEngine.evaluate(
+            action: implicit,
+            context: privateBranch,
+            gitWorld: .probed(GitAnalysisContext(currentBranch: "feature"))
+        )
+        #expect(onFeature.decision == .mandatoryHuman(ActionPolicyEngine.Builtin.remoteBranchAsk))
+    }
+
     @Test func unprobed_ignoresRepositoryIsSharedBranch() {
         let topic = ActionPolicyFixtures.forcePush(branchName: "topic")
         let unprobedTopic = ActionPolicyEngine.evaluate(
@@ -82,14 +99,14 @@ struct ActionPolicyEngineTests {
         let probedTopic = ActionPolicyEngine.evaluate(
             action: topic,
             context: shared,
-            gitWorld: .probed(GitAnalysisContext(isSharedBranch: true))
+            gitWorld: .probed(GitAnalysisContext(currentBranch: "main"))
         )
         #expect(probedTopic.decision == .hardDeny(ActionPolicyEngine.Builtin.remoteSharedBranch))
 
         let probedWorldPrivateContext = ActionPolicyEngine.evaluate(
             action: topic,
             context: privateBranch,
-            gitWorld: .probed(GitAnalysisContext(isSharedBranch: true))
+            gitWorld: .probed(GitAnalysisContext(currentBranch: "main"))
         )
         #expect(
             probedWorldPrivateContext.decision
@@ -110,7 +127,7 @@ struct ActionPolicyEngineTests {
         let probedImplicit = ActionPolicyEngine.evaluate(
             action: implicit,
             context: shared,
-            gitWorld: .probed(GitAnalysisContext(isSharedBranch: true))
+            gitWorld: .probed(GitAnalysisContext(currentBranch: "main"))
         )
         #expect(probedImplicit.decision == .hardDeny(ActionPolicyEngine.Builtin.remoteSharedBranch))
     }
@@ -411,16 +428,14 @@ private enum ActionPolicyFixtures {
     static let sharedContext = ReviewContext(
         repository: RepositoryReviewContext(
             name: "rv",
-            currentBranch: "main",
-            isSharedBranch: true
+            currentBranch: "main"
         )
     )
 
     static let privateContext = ReviewContext(
         repository: RepositoryReviewContext(
             name: "rv",
-            currentBranch: "topic",
-            isSharedBranch: false
+            currentBranch: "topic"
         )
     )
 

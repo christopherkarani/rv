@@ -44,6 +44,31 @@ struct SemanticAnalysisTests {
         )
     }
 
+    @Test(arguments: ["main", "master"])
+    func gitAnalysisContext_sharedName_isShared(_ name: String) {
+        let git = GitAnalysisContext(currentBranch: name)
+        #expect(git.isSharedBranch)
+        #expect(git.reviewContext.repository.currentBranch == name)
+        #expect(git.reviewContext.repository.isSharedBranch)
+        #expect(RepositoryReviewContext(currentBranch: name).isSharedBranch)
+    }
+
+    @Test func gitAnalysisContext_feature_isNotShared() {
+        #expect(GitAnalysisContext(currentBranch: "feature").isSharedBranch == false)
+        #expect(
+            GitAnalysisContext(currentBranch: "feature").reviewContext.repository.isSharedBranch
+                == false
+        )
+        #expect(RepositoryReviewContext(currentBranch: "feature").isSharedBranch == false)
+    }
+
+    @Test func gitAnalysisContext_missingBranch_isNotShared() {
+        #expect(GitAnalysisContext().isSharedBranch == false)
+        let withCwd = GitAnalysisContext(workingDirectory: WorkingDirectory(validating: "/tmp"))
+        #expect(withCwd.isSharedBranch == false)
+        #expect(RepositoryReviewContext().isSharedBranch == false)
+    }
+
     @Test func wrapper_codableRoundTrip() throws {
         let analysis = SemanticAnalysis.filesystem(
             .delete(

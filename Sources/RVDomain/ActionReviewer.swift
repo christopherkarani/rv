@@ -59,16 +59,18 @@ public enum ActionReviewerError: Error, Sendable, Equatable {
 public struct RepositoryReviewContext: Sendable, Equatable, Codable {
     public var name: String?
     public var currentBranch: String?
-    public var isSharedBranch: Bool
+
+    /// True iff `currentBranch` is `main` or `master`.
+    public var isSharedBranch: Bool {
+        GitSharedBranch.contains(currentBranch)
+    }
 
     public init(
         name: String? = nil,
-        currentBranch: String? = nil,
-        isSharedBranch: Bool = false
+        currentBranch: String? = nil
     ) {
         self.name = name
         self.currentBranch = currentBranch
-        self.isSharedBranch = isSharedBranch
     }
 }
 
