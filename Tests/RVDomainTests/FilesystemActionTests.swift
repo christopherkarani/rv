@@ -121,6 +121,38 @@ struct FilesystemActionTests {
         #expect(action.resources.filesystemScope == .unknown)
     }
 
+    @Test func primaryTarget_ranksProtectedSourceOverProtectedUnknownRegardlessOfMatchPayload() {
+        let sshUnknown = FilesystemTarget(
+            apparent: "id_rsa",
+            canonical: "/home/.ssh/id_rsa",
+            scope: .protectedPath(SecretPathMatch(pattern: "id-rsa", category: .ssh)),
+            kind: .unknown
+        )
+        let cloudSource = FilesystemTarget(
+            apparent: "credentials",
+            canonical: "/home/.aws/credentials",
+            scope: .protectedPath(SecretPathMatch(pattern: "home-aws", category: .cloud)),
+            kind: .sourceCode
+        )
+        let sshFirst = FilesystemAction.delete(
+            targets: [sshUnknown, cloudSource],
+            recursive: false,
+            force: false
+        )
+        let sourceFirst = FilesystemAction.delete(
+            targets: [cloudSource, sshUnknown],
+            recursive: false,
+            force: false
+        )
+        #expect(sshFirst.primaryTarget == cloudSource)
+        #expect(sourceFirst.primaryTarget == cloudSource)
+        #expect(sshFirst.explainKind == "source code")
+        #expect(sshFirst.explainCategory == "cloud")
+        #expect(sshFirst.explainCatalogRule == "core.secrets/home-aws")
+        #expect(sshFirst.resources.resourceKind == .sourceCode)
+        #expect(sshFirst.resources.protectedMatch?.category == .cloud)
+    }
+
     @Test func outsideWrite_addsIndependentEffect() {
         let target = FilesystemTarget(
             apparent: "../outside-file",

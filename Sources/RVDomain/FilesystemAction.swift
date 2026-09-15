@@ -283,9 +283,13 @@ public enum FilesystemAction: Sendable, Equatable, Codable {
         }
     }
 
+    /// Rank by security class, then resource kind. Do not use `FilesystemScope.==`:
+    /// `.protectedPath` carries a match payload, which is not a different class.
     private static func isLessSevere(_ left: FilesystemTarget, _ right: FilesystemTarget) -> Bool {
-        if left.scope != right.scope {
-            return scopeRank(left.scope) < scopeRank(right.scope)
+        let leftScope = scopeRank(left.scope)
+        let rightScope = scopeRank(right.scope)
+        if leftScope != rightScope {
+            return leftScope < rightScope
         }
         return kindRank(left.kind) < kindRank(right.kind)
     }
