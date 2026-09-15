@@ -215,12 +215,28 @@ private func hookFileBody<C: HostCodec>(
         return codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
     }
     let result = await evaluateFile(file, request.cwd)
-    return hookWire(
-        from: result,
-        command: ShellCommand(rawValue: ""),
-        using: codec,
-        cwd: request.cwd
-    )
+    return hookFileWire(from: result, using: codec)
+}
+
+private func hookFileWire<C: HostCodec>(
+    from result: EvaluationResult,
+    using codec: C
+) -> HookWire {
+    switch result.decision {
+    case .allow:
+        return codec.encodeAllow()
+    case .indeterminate:
+        return codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
+    case .deny(let deny):
+        let reason = hostFileDenyLine(reason: deny.reason)
+        if codec.host == .claude, case .deny(_, let matched?) = result.outcome {
+            return HookWire(
+                stdout: claudeRichDenyJSON(hostDenyText: reason, match: matched),
+                exitCode: codec.host.denyExitCode
+            )
+        }
+        return codec.encodeDeny(reason: reason, rule: deny.ruleID, next: .none)
+    }
 }
 
 private func pendingAction(

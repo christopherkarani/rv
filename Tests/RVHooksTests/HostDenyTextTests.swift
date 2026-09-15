@@ -245,6 +245,12 @@ func assertMintedHookUnlock(_ text: String, why: String = resetHardHostDeny) thr
     #expect(unlockHookVoiceNext("a1b2c3") == .minted(code))
 }
 
+@Test func hostFileDenyLine_doesNotPreviewEmptyShellCommand() {
+    let reason = "Access to a sensitive path is not allowed."
+    #expect(hostFileDenyLine(reason: reason) == "RV · Blocked. Access to a sensitive path is not allowed.")
+    #expect(hostFileDenyLine(reason: reason).contains("Blocked  (") == false)
+}
+
 @Test func hostDenyLine_appendsUnlockWhenCodeIsMinted() throws {
     let command = resetHard
     let reason = "git reset --hard destroys uncommitted changes. Use 'git stash' first."
