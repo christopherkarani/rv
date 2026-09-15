@@ -28,7 +28,7 @@ struct UnixSocketPathTests {
     }
 
     @Test func productionReadsInjectedXDGNotTmpFallback() throws {
-        let previous = ProcessInfo.processInfo.environment["XDG_RUNTIME_DIR"]
+        let previous = liveXDG()
         let injected = shortRuntimeDir("i")
         setenv("XDG_RUNTIME_DIR", injected.path, 1)
         defer { restoreXDG(previous) }
@@ -40,7 +40,7 @@ struct UnixSocketPathTests {
     }
 
     @Test func productionUnsetXDGThrowsWithoutCreatingTmpSocket() throws {
-        let previous = ProcessInfo.processInfo.environment["XDG_RUNTIME_DIR"]
+        let previous = liveXDG()
         unsetenv("XDG_RUNTIME_DIR")
         defer { restoreXDG(previous) }
 
@@ -52,7 +52,7 @@ struct UnixSocketPathTests {
     }
 
     @Test func productionEmptyXDGThrows() throws {
-        let previous = ProcessInfo.processInfo.environment["XDG_RUNTIME_DIR"]
+        let previous = liveXDG()
         setenv("XDG_RUNTIME_DIR", "", 1)
         defer { restoreXDG(previous) }
 
@@ -78,6 +78,10 @@ private func shortRuntimeDir(_ tag: String) -> URL {
     let token = String(UInt32.random(in: .min ... .max), radix: 16)
     return FileManager.default.temporaryDirectory
         .appendingPathComponent("rv\(tag)-\(token)", isDirectory: true)
+}
+
+private func liveXDG() -> String? {
+    getenv("XDG_RUNTIME_DIR").map { String(cString: $0) }
 }
 
 private func restoreXDG(_ previous: String?) {
