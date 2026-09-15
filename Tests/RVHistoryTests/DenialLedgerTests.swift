@@ -56,13 +56,13 @@ struct DenialLedgerTests {
             + LedgerJSONL.claudeReadEnv + "\n"
         try Data(text.utf8).write(to: file)
         let now = Date(timeIntervalSince1970: 1_800_000_000)
-        let rows = DenialLedger(fileURL: file).list(now: now)
+        let rows = DenialLedger(fileURL: file).records(asOf: now)
         #expect(rows.count == 2)
         #expect(rows[0].host == .hook(.claude))
         #expect(rows[1].host == .tty)
     }
 
-    @Test func append_list_newestFirst_andAllowNeverWritten() throws {
+    @Test func append_records_newestFirst_andAllowNeverWritten() throws {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-ledger-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -73,7 +73,7 @@ struct DenialLedgerTests {
         older.timestamp = now.addingTimeInterval(-10)
         ledger.append(older, now: now)
         ledger.append(try decode(LedgerJSONL.cursorReadSSH), now: now)
-        let rows = ledger.list(now: now)
+        let rows = ledger.records(asOf: now)
         #expect(rows.count == 2)
         #expect(rows[0].ruleID == RuleID(pack: .coreSecrets, pattern: "id-ed25519"))
         #expect(rows[1].path == "/tmp/rv-oracle/.env")
@@ -86,7 +86,7 @@ struct DenialLedgerTests {
         #expect(DenialPathRedaction.redact("/tmp/rv-oracle/.env", home: "/Users/ada") == "/tmp/rv-oracle/.env")
     }
 
-    @Test func prune_dropsOlderThanSevenDaysAndCapsAt200() throws {
+    @Test func pruned_dropsOlderThanSevenDaysAndCapsAt200() throws {
         let ledger = DenialLedger(fileURL: URL(fileURLWithPath: "/tmp/unused-blocks.jsonl"))
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         var template = try decode(LedgerJSONL.ttyBashResetHard)
@@ -99,7 +99,7 @@ struct DenialLedgerTests {
             env.timestamp = now.addingTimeInterval(TimeInterval(index))
             records.append(env)
         }
-        let kept = ledger.prune(records, now: now.addingTimeInterval(210))
+        let kept = ledger.pruned(records, now: now.addingTimeInterval(210))
         #expect(kept.count == 200)
         #expect(kept.contains(where: { $0.timestamp < now.addingTimeInterval(-7 * 24 * 60 * 60) }) == false)
     }

@@ -8,7 +8,7 @@ enum BlocksRun {
     static func list(home: HomeDirectory, json: Bool, now: Date = Date()) -> String {
         let records = DenialLedger(
             configDirectory: RVPolicyPaths.configDirectory(home: home)
-        ).list(now: now)
+        ).records(asOf: now)
         if json {
             return encodeJSON(records)
         }

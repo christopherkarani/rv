@@ -1,7 +1,8 @@
 public actor IdleWatchdog {
     public static let defaultSeconds = 300
 
-    public private(set) var fired = false
+    /// Whether the idle timer has elapsed without a ping.
+    public private(set) var hasFired = false
     private(set) var pingCount = 0
     private var generation = 0
     private let seconds: Double
@@ -15,14 +16,14 @@ public actor IdleWatchdog {
     public func ping() {
         pingCount += 1
         generation += 1
-        fired = false
+        hasFired = false
         let gen = generation
         let delay = seconds
         Task {
             let ns = UInt64(delay * 1_000_000_000)
             try? await Task.sleep(nanoseconds: ns)
             guard gen == self.generation else { return }
-            self.fired = true
+            self.hasFired = true
             await self.onFire()
         }
     }

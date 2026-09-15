@@ -1,6 +1,6 @@
 import Foundation
 
-/// JSONL denial store. Newest-first list. Prunes to 200 rows or 7 days.
+/// JSONL denial store. Newest-first records. Prunes to 200 rows or 7 days.
 public struct DenialLedger: Sendable {
     public var fileURL: URL
 
@@ -15,15 +15,18 @@ public struct DenialLedger: Sendable {
     public func append(_ record: DenialLedgerRecord, now: Date) {
         var records = loadRaw()
         records.append(record)
-        write(prune(records, now: now))
+        write(pruned(records, now: now))
     }
 
-    /// Newest first. Missing file is empty.
-    public func list(now: Date) -> [DenialLedgerRecord] {
-        prune(loadRaw(), now: now).reversed()
+    /// Returns denial records as of `now`, newest-first after cap.
+    ///
+    /// - Note: Reads the JSONL file (O(n) in file length). A missing file is empty.
+    public func records(asOf now: Date) -> [DenialLedgerRecord] {
+        pruned(loadRaw(), now: now).reversed()
     }
 
-    public func prune(_ records: [DenialLedgerRecord], now: Date) -> [DenialLedgerRecord] {
+    /// Returns records still inside the age window, oldest first, capped at `RVHistory.maxRows`.
+    public func pruned(_ records: [DenialLedgerRecord], now: Date) -> [DenialLedgerRecord] {
         let cutoff = now.addingTimeInterval(-RVHistory.maxAge)
         let fresh = records
             .filter { $0.timestamp >= cutoff }

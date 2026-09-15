@@ -21,7 +21,7 @@ struct IdleExitTests {
         try? await Task.sleep(nanoseconds: 400_000_000)
         await watchdog.ping()
         try? await Task.sleep(nanoseconds: 400_000_000)
-        #expect(await watchdog.fired == false)
+        #expect(await watchdog.hasFired == false)
         #expect(await waitUntilIdleFired(watchdog))
     }
 
@@ -36,10 +36,10 @@ struct IdleExitTests {
         await task.value
 
         try? await Task.sleep(nanoseconds: 400_000_000)
-        #expect(await watchdog.fired == false)
+        #expect(await watchdog.hasFired == false)
         #expect(await watchdog.pingCount == 2)
         try? await Task.sleep(nanoseconds: 800_000_000)
-        #expect(await watchdog.fired)
+        #expect(await watchdog.hasFired)
     }
     #endif
 }
@@ -52,8 +52,8 @@ private func waitUntilIdleFired(
 ) async -> Bool {
     let deadline = ContinuousClock.now + .nanoseconds(Int64(timeoutNanoseconds))
     while ContinuousClock.now < deadline {
-        if await watchdog.fired { return true }
+        if await watchdog.hasFired { return true }
         try? await Task.sleep(nanoseconds: 50_000_000)
     }
-    return await watchdog.fired
+    return await watchdog.hasFired
 }
