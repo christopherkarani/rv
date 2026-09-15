@@ -14,7 +14,8 @@ CANONICAL='RV · Blocked. Destroys uncommitted changes. Use '\''git stash'\'' fi
 LABEL="dev.rv.evaluate"
 UID_NUM="$(id -u)"
 DOMAIN="gui/${UID_NUM}"
-PROOF_ROOT="${TMPDIR:-/tmp}/rv-c-hook-proof-$$"
+# launchd cannot read plists under Darwin TMPDIR (/var/folders/...).
+PROOF_ROOT="/tmp/rv-c-hook-proof-$$"
 CLI_LOG="$PROOF_ROOT/rv-cli.log"
 IMAGE_LOG="$PROOF_ROOT/image.log"
 LOCKDIR="/tmp/swift-arch-c8hook21/c-hook-proof.lockdir"
@@ -108,12 +109,28 @@ HAD_LIVE=0
 RESTORE_PLIST=""
 CLEANED=0
 
+bootout_label() {
+  /bin/launchctl bootout "${DOMAIN}/${LABEL}" >/dev/null 2>&1 || true
+}
+
+wait_unloaded() {
+  local i
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    if ! /bin/launchctl print "${DOMAIN}/${LABEL}" >/dev/null 2>&1; then
+      return 0
+    fi
+    bootout_label
+    sleep 0.2
+  done
+}
+
 cleanup() {
   if [[ "$CLEANED" -eq 1 ]]; then
     return
   fi
   CLEANED=1
   /bin/launchctl bootout "${DOMAIN}/${LABEL}" >/dev/null 2>&1 || true
+  wait_unloaded
   if [[ "$HAD_LIVE" -eq 1 ]]; then
     if [[ -f "$LIVE_PLIST" ]]; then
       :
@@ -399,13 +416,10 @@ write_plist() {
 EOF
 }
 
-bootout_label() {
-  /bin/launchctl bootout "${DOMAIN}/${LABEL}" >/dev/null 2>&1 || true
-}
-
 bootstrap_plist() {
   local plist="$1"
   bootout_label
+  wait_unloaded
   /bin/launchctl bootstrap "$DOMAIN" "$plist" || fail "launchctl bootstrap failed for $plist"
   /bin/launchctl kickstart -k "${DOMAIN}/${LABEL}" >/dev/null 2>&1 || true
 }
