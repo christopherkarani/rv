@@ -41,6 +41,8 @@ struct FalsePositiveStressTests {
         "near.echo-quoted-reset",
         "near.rg-quoted-rm",
         "near.checkout-new-branch",
+        "near.git-log-grep-reset",
+        "near.git-grep-rm-rf",
     ]
 
     static let truePositiveDenies: [(command: String, ruleID: String)] = [
@@ -57,6 +59,8 @@ struct FalsePositiveStressTests {
         "git commit -m \"git reset --hard\"",
         "git commit -m \"git push --force\"",
         "rg -n \"rm -rf\"",
+        "git log --grep='git reset --hard'",
+        "git grep -n \"rm -rf\"",
         "python3 -c \"print('git reset --hard')\"",
         "python -c \"print('git reset --hard')\"",
         "node -e \"console.log('git reset --hard')\"",

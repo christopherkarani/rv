@@ -186,6 +186,16 @@
       "id": "near.node-e-console-reset",
       "command": "node -e \"console.log('git reset --hard')\"",
       "expected": "allow"
+    },
+    {
+      "id": "near.git-log-grep-reset",
+      "command": "git log --grep='git reset --hard'",
+      "expected": "allow"
+    },
+    {
+      "id": "near.git-grep-rm-rf",
+      "command": "git grep -n \"rm -rf\"",
+      "expected": "allow"
     }
   ]
 }
