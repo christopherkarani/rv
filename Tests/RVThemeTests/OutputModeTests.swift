@@ -94,19 +94,8 @@ private struct ModeCase {
     ]
 
     for item in cases {
-        #expect(
-            resolveOutputMode(probe: item.probe, requested: item.requested) == item.mode,
-            Comment(rawValue: item.name)
-        )
-        let resolved = resolveOutputMode(probe: item.probe, requested: item.requested)
-        #expect(
-            colorCapability(probe: item.probe, mode: resolved).colorsEnabled == item.colors,
-            Comment(rawValue: item.name)
-        )
-        #expect(
-            OutputMode(probe: item.probe, requested: item.requested) == item.mode,
-            Comment(rawValue: item.name)
-        )
+        let resolved = OutputMode(probe: item.probe, requested: item.requested)
+        #expect(resolved == item.mode, Comment(rawValue: item.name))
         #expect(
             ColorCapability(probe: item.probe, mode: resolved).colorsEnabled == item.colors,
             Comment(rawValue: item.name)

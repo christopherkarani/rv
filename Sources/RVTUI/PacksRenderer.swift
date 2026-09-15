@@ -1,16 +1,52 @@
 import RVPresentation
 import RVTheme
 
+/// Grouped catalog plus the flags the pretty packs frame needs.
+public struct PacksGroupedFrame: Equatable, Sendable {
+    public var model: PacksGroupedViewModel
+    public var verbose: Bool
+    public var expand: Bool
+    public var maxPatterns: Int
+    public var collapsed: Bool
+
+    public init(
+        model: PacksGroupedViewModel,
+        verbose: Bool = false,
+        expand: Bool = false,
+        maxPatterns: Int = 10,
+        collapsed: Bool = false
+    ) {
+        self.model = model
+        self.verbose = verbose
+        self.expand = expand
+        self.maxPatterns = maxPatterns
+        self.collapsed = collapsed
+    }
+}
+
 public struct PacksRenderer: FrameRenderer {
+    public typealias Model = PacksGroupedFrame
+
     public init() {}
+
+    public func render(_ frame: PacksGroupedFrame, palette: Palette) -> [String] {
+        renderGrouped(
+            frame.model,
+            palette: palette,
+            verbose: frame.verbose,
+            expand: frame.expand,
+            maxPatterns: frame.maxPatterns,
+            collapsed: frame.collapsed
+        )
+    }
 
     // Legacy flat (kept for PacksListFormatTests:2).
     public func render(_ model: PacksViewModel, palette: Palette) -> [String] {
         let width = model.rows.map(\.id.rawValue.count).max() ?? 0
         return model.rows.flatMap { row in
             let id = padRight(row.id.rawValue, to: width)
-            let flag = row.enabled ? "on" : "off"
-            let painted = paint(flag, slot: row.enabled ? palette.allow : palette.muted, reset: palette.reset)
+            let flag = row.isEnabled ? "on" : "off"
+            let painted = paint(flag, slot: row.isEnabled ? palette.allow : palette.muted, reset: palette.reset)
             return wrapLine("\(id)  \(painted)")
         }
     }
@@ -32,7 +68,7 @@ public struct PacksRenderer: FrameRenderer {
         if collapsed {
             var lines: [String] = []
             for group in model.groups {
-                let enabled = group.packs.filter(\.enabled)
+                let enabled = group.packs.filter(\.isEnabled)
                 let disabledCount = group.packs.count - enabled.count
                 if enabled.isEmpty {
                     lines.append(paint("\(group.category): \(disabledCount) off", slot: palette.muted, reset: palette.reset))
@@ -56,8 +92,8 @@ public struct PacksRenderer: FrameRenderer {
         for group in model.groups {
             var packItems: [OutlineItem] = []
             for pack in group.packs {
-                let mark = pack.enabled ? "●" : "○"
-                let emphasis: OutlineEmphasis = pack.enabled ? .allow : .muted
+                let mark = pack.isEnabled ? "●" : "○"
+                let emphasis: OutlineEmphasis = pack.isEnabled ? .allow : .muted
                 let label: String
                 if verbose {
                     let desc = singleLine(pack.description)
@@ -101,8 +137,8 @@ public struct PacksRenderer: FrameRenderer {
     }
 
     private func packLine(_ row: GroupedPackRow, palette: Palette, verbose: Bool) -> String {
-        let mark = row.enabled ? "✓" : "○"
-        let markSlot = row.enabled ? palette.allow : palette.muted
+        let mark = row.isEnabled ? "✓" : "○"
+        let markSlot = row.isEnabled ? palette.allow : palette.muted
         let paintedMark = paint(mark, slot: markSlot, reset: palette.reset)
         let idPart = row.id.rawValue
         if verbose {

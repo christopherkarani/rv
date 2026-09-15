@@ -167,11 +167,11 @@ git reset --hard discards ALL uncommitted changes in your working directory \\ A
 }
 
 @Test func snapshot_prettyPacksDayOne() throws {
-    let vm = packsViewModel(
+    let vm = PacksViewModel.make(
         enabled: dayOnePackIDs,
         catalog: [
-            (.coreFilesystem, "filesystem"),
-            (.coreGit, "git"),
+            (id: .coreFilesystem, summary: "filesystem"),
+            (id: .coreGit, summary: "git"),
         ]
     )
     let lines = PacksRenderer().render(vm, palette: colorOffPalette)

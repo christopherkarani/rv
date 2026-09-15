@@ -81,7 +81,7 @@ private func decoded(_ json: String) throws -> NSDictionary {
         name: "Core Filesystem",
         category: "core",
         description: "rm",
-        enabled: false,
+        isEnabled: false,
         safePatternCount: 0,
         destructivePatternCount: 4
     )
@@ -97,7 +97,7 @@ private func decoded(_ json: String) throws -> NSDictionary {
         name: "Core Filesystem",
         category: "core",
         description: "rm",
-        enabled: false,
+        isEnabled: false,
         safePatternCount: 0,
         destructivePatternCount: 4
     )

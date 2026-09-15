@@ -30,7 +30,7 @@ import Testing
                 name: "SQLite",
                 category: "database",
                 description: "Protects database commands",
-                enabled: false,
+                isEnabled: false,
                 safePatternCount: 1,
                 destructivePatternCount: 1,
                 safePatterns: [NamedPattern(name: "select", pattern: "SELECT")],
@@ -48,7 +48,7 @@ import Testing
                 name: "Core Git",
                 category: "core",
                 description: "Protects git commands",
-                enabled: true,
+                isEnabled: true,
                 safePatternCount: 0,
                 destructivePatternCount: 1
             ),
@@ -88,7 +88,7 @@ import Testing
             name: $0.name,
             category: $0.category,
             description: $0.description,
-            enabled: $0.enabled,
+            isEnabled: $0.enabled,
             safePatternCount: $0.safePatternCount,
             destructivePatternCount: $0.destructivePatternCount
         )

@@ -2,12 +2,12 @@ import RVDomain
 
 public struct PackRow: Equatable, Sendable {
     public var id: PackID
-    public var enabled: Bool
+    public var isEnabled: Bool
     public var summary: String
 
-    public init(id: PackID, enabled: Bool, summary: String) {
+    public init(id: PackID, isEnabled: Bool, summary: String) {
         self.id = id
-        self.enabled = enabled
+        self.isEnabled = isEnabled
         self.summary = summary
     }
 }
@@ -18,14 +18,22 @@ public struct PacksViewModel: Equatable, Sendable {
     public init(rows: [PackRow]) {
         self.rows = rows
     }
+
+    /// Creates a packs list from the enabled set and catalog summaries.
+    public static func make(
+        enabled: [PackID],
+        catalog: [(id: PackID, summary: String)]
+    ) -> PacksViewModel {
+        let on = Set(enabled)
+        let rows = catalog.map { item in
+            PackRow(id: item.id, isEnabled: on.contains(item.id), summary: item.summary)
+        }
+        return PacksViewModel(rows: rows)
+    }
 }
 
 public func packsViewModel(enabled: [PackID], catalog: [(PackID, String)]) -> PacksViewModel {
-    let on = Set(enabled)
-    let rows = catalog.map { item in
-        PackRow(id: item.0, enabled: on.contains(item.0), summary: item.1)
-    }
-    return PacksViewModel(rows: rows)
+    PacksViewModel.make(enabled: enabled, catalog: catalog.map { (id: $0.0, summary: $0.1) })
 }
 
 // MARK: - Grouped pack presentation
@@ -41,7 +49,7 @@ public struct GroupedPackRow: Equatable, Sendable {
     /// The short description shown in verbose output.
     public var description: String
     /// Whether the pack is in the effective enabled set.
-    public var enabled: Bool
+    public var isEnabled: Bool
     /// The number of safe patterns in the pack.
     public var safePatternCount: Int
     /// The number of destructive rules in the pack.
@@ -57,7 +65,7 @@ public struct GroupedPackRow: Equatable, Sendable {
         name: String,
         category: String,
         description: String,
-        enabled: Bool,
+        isEnabled: Bool,
         safePatternCount: Int,
         destructivePatternCount: Int,
         safePatterns: [NamedPattern] = [],
@@ -67,7 +75,7 @@ public struct GroupedPackRow: Equatable, Sendable {
         self.name = name
         self.category = category
         self.description = description
-        self.enabled = enabled
+        self.isEnabled = isEnabled
         self.safePatternCount = safePatternCount
         self.destructivePatternCount = destructivePatternCount
         self.safePatterns = safePatterns
@@ -89,7 +97,7 @@ public struct PackCategoryGroup: Equatable, Sendable {
     }
 
     /// The number of enabled packs in the group.
-    public var enabledCount: Int { packs.filter(\.enabled).count }
+    public var enabledCount: Int { packs.filter(\.isEnabled).count }
     /// The number of packs in the group.
     public var totalCount: Int { packs.count }
 }

@@ -27,6 +27,7 @@ public enum RequestedMode: Equatable, Sendable {
 }
 
 /// Spec name. Prefer `OutputMode(probe:requested:)`.
+@available(*, deprecated, renamed: "OutputMode.init(probe:requested:)")
 public func resolveOutputMode(probe: ThemeProbe, requested: RequestedMode) -> OutputMode {
     OutputMode(probe: probe, requested: requested)
 }

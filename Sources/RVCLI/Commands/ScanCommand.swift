@@ -272,7 +272,7 @@ enum ScanRun {
             )
             let lines: [String]
             if probe.isBrowseEligible {
-                lines = scanBrowseRender(scanBrowseState(model: model), palette: palette)
+                lines = ScanBrowseRenderer().render(ScanBrowseState(model: model), palette: palette)
             } else {
                 lines = ScanPrettyRenderer().render(model, palette: palette)
             }
@@ -310,7 +310,7 @@ private func scanCommandViewModel(
         filesScanned: report.filesScanned,
         eventsExtracted: report.eventsExtracted,
         setupNudgeRecommended: setupNudgeRecommended,
-        showCommand: showCommand
+        showsCommand: showCommand
     )
 }
 
@@ -325,6 +325,6 @@ private func scanFindingRow(from finding: ScanFinding, showCommand: Bool) -> Sca
         matchingView: finding.matchingView,
         count: finding.count,
         lastSeen: finding.lastSeen,
-        showCommand: showCommand
+        showsCommand: showCommand
     )
 }

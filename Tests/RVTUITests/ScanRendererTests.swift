@@ -7,7 +7,7 @@ import RVTheme
 
 private let resetHardRule = RuleID(pack: .coreGit, pattern: "reset-hard")
 
-private func sampleModel(showCommand: Bool = false) -> ScanViewModel {
+private func sampleModel(showsCommand: Bool = false) -> ScanViewModel {
     ScanViewModel(
         rows: [
             scanFindingRow(
@@ -18,7 +18,7 @@ private func sampleModel(showCommand: Bool = false) -> ScanViewModel {
                 packID: .coreGit,
                 matchingView: MatchingView("git reset --hard"),
                 count: 3,
-                showCommand: showCommand
+                showsCommand: showsCommand
             ),
             scanFindingRow(
                 host: .pi,
@@ -26,14 +26,14 @@ private func sampleModel(showCommand: Bool = false) -> ScanViewModel {
                 ruleID: RuleID(pack: .coreFilesystem, pattern: "rm-rf-general"),
                 packID: .coreFilesystem,
                 matchingView: MatchingView("rm -rf ./src"),
-                showCommand: showCommand
+                showsCommand: showsCommand
             ),
         ],
         warnings: [ScanWarningRow(code: "cap.files", message: "Stopped after 10000 files")],
         filesScanned: 12,
         eventsExtracted: 40,
         setupNudgeRecommended: true,
-        showCommand: showCommand
+        showsCommand: showsCommand
     )
 }
 
@@ -64,26 +64,26 @@ private func sampleModel(showCommand: Bool = false) -> ScanViewModel {
 }
 
 @Test func scanBrowseReduce_movesSelectionWithinBounds() {
-    let state = scanBrowseState(model: sampleModel())
+    let state = ScanBrowseState(model: sampleModel())
     #expect(state.selectedIndex == 0)
 
-    let down = scanBrowseReduce(state, .down)
+    let down = state.applying(.down)
     #expect(down.selectedIndex == 1)
 
-    let downAgain = scanBrowseReduce(down, .down)
+    let downAgain = down.applying(.down)
     #expect(downAgain.selectedIndex == 1)
 
-    let up = scanBrowseReduce(downAgain, .up)
+    let up = downAgain.applying(.up)
     #expect(up.selectedIndex == 0)
 
-    let upAgain = scanBrowseReduce(up, .up)
+    let upAgain = up.applying(.up)
     #expect(upAgain.selectedIndex == 0)
 }
 
 @Test func scanBrowseRender_paintsSelectedRowWithoutTTY() {
-    var state = scanBrowseState(model: sampleModel())
-    state = scanBrowseReduce(state, .down)
-    let lines = scanBrowseRender(state, palette: colorOffPalette)
+    var state = ScanBrowseState(model: sampleModel())
+    state = state.applying(.down)
+    let lines = ScanBrowseRenderer().render(state, palette: colorOffPalette)
     let joined = lines.joined(separator: "\n")
 
     #expect(lines.first == "RV SCAN")
@@ -95,8 +95,8 @@ private func sampleModel(showCommand: Bool = false) -> ScanViewModel {
 }
 
 @Test func scanBrowseRender_emptyFindingsStillFrames() {
-    let state = scanBrowseState(model: ScanViewModel(rows: []))
-    let lines = scanBrowseRender(state, palette: colorOffPalette)
+    let state = ScanBrowseState(model: ScanViewModel(rows: []))
+    let lines = ScanBrowseRenderer().render(state, palette: colorOffPalette)
     let joined = lines.joined(separator: "\n")
 
     #expect(joined.contains("No deny findings."))
@@ -105,14 +105,14 @@ private func sampleModel(showCommand: Bool = false) -> ScanViewModel {
 }
 
 @Test func scanBrowseReduce_noOpOnEmptyList() {
-    let state = scanBrowseState(model: ScanViewModel(rows: []))
-    #expect(scanBrowseReduce(state, .down).selectedIndex == 0)
-    #expect(scanBrowseReduce(state, .up).selectedIndex == 0)
+    let state = ScanBrowseState(model: ScanViewModel(rows: []))
+    #expect(state.applying(.down).selectedIndex == 0)
+    #expect(state.applying(.up).selectedIndex == 0)
 }
 
 @Test func scanBrowseRender_clampsOutOfRangeSelection() {
     let state = ScanBrowseState(model: sampleModel(), selectedIndex: 99)
-    let lines = scanBrowseRender(state, palette: colorOffPalette)
+    let lines = ScanBrowseRenderer().render(state, palette: colorOffPalette)
     let joined = lines.joined(separator: "\n")
 
     #expect(state.selectedIndex == 1)
@@ -121,7 +121,7 @@ private func sampleModel(showCommand: Bool = false) -> ScanViewModel {
 }
 
 @Test func scanPrettyRenderer_showCommandPrintsFullCommand() {
-    let vm = sampleModel(showCommand: true)
+    let vm = sampleModel(showsCommand: true)
     let joined = ScanPrettyRenderer().render(vm, palette: colorOffPalette).joined(separator: "\n")
 
     #expect(joined.contains("git reset --hard"))

@@ -8,46 +8,68 @@ public enum DecisionTone: Equatable, Sendable {
 
 public let explainHeading = "RV EXPLAIN"
 
-public func decisionWord(_ decision: Decision) -> String {
-    switch decision {
-    case .allow:
-        return "allow"
-    case .deny:
-        return "deny"
-    case .indeterminate:
-        return "incomplete"
+extension Decision {
+    /// Lowercase operator word for explain body copy.
+    public var displayName: String {
+        switch self {
+        case .allow:
+            "allow"
+        case .deny:
+            "deny"
+        case .indeterminate:
+            "incomplete"
+        }
     }
+
+    /// Uppercase decision word for explain headings.
+    public var emphasizedName: String {
+        switch self {
+        case .allow:
+            "ALLOW"
+        case .deny:
+            "DENY"
+        case .indeterminate:
+            "INCOMPLETE"
+        }
+    }
+
+    /// Test-result word painted on the test frame.
+    public var testResultName: String {
+        switch self {
+        case .allow:
+            "ALLOWED"
+        case .deny:
+            "BLOCKED"
+        case .indeterminate:
+            "INCOMPLETE"
+        }
+    }
+
+    /// Palette slot for this decision.
+    public var tone: DecisionTone {
+        switch self {
+        case .allow:
+            .allow
+        case .deny:
+            .deny
+        case .indeterminate:
+            .incomplete
+        }
+    }
+}
+
+public func decisionWord(_ decision: Decision) -> String {
+    decision.displayName
 }
 
 public func explainDecisionWord(_ decision: Decision) -> String {
-    switch decision {
-    case .allow:
-        return "ALLOW"
-    case .deny:
-        return "DENY"
-    case .indeterminate:
-        return "INCOMPLETE"
-    }
+    decision.emphasizedName
 }
 
 public func testResultWord(_ decision: Decision) -> String {
-    switch decision {
-    case .allow:
-        return "ALLOWED"
-    case .deny:
-        return "BLOCKED"
-    case .indeterminate:
-        return "INCOMPLETE"
-    }
+    decision.testResultName
 }
 
 public func decisionTone(_ decision: Decision) -> DecisionTone {
-    switch decision {
-    case .allow:
-        return .allow
-    case .deny:
-        return .deny
-    case .indeterminate:
-        return .incomplete
-    }
+    decision.tone
 }

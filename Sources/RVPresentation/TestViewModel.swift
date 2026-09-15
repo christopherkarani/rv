@@ -45,43 +45,55 @@ public struct TestViewModel: Equatable, Sendable {
     }
 }
 
+extension MatchSpan {
+    /// Projects a pack match span onto a display command.
+    public static func projected(
+        span: MatchSpan?,
+        matchedText: String?,
+        searchText: String? = nil,
+        onto command: String
+    ) -> MatchSpan? {
+        if let search = searchText, !search.isEmpty, let found = command.range(of: search) {
+            let offset = command.distance(from: command.startIndex, to: found.lowerBound)
+            if let span {
+                let mapped = MatchSpan(start: span.start + offset, end: span.end + offset)
+                if mapped.start >= 0, mapped.end <= command.count, mapped.end > mapped.start {
+                    return mapped
+                }
+            }
+            if let text = matchedText, !text.isEmpty, let inner = search.range(of: text) {
+                let innerStart = search.distance(from: search.startIndex, to: inner.lowerBound)
+                let innerEnd = search.distance(from: search.startIndex, to: inner.upperBound)
+                let mapped = MatchSpan(start: innerStart + offset, end: innerEnd + offset)
+                if mapped.end <= command.count, mapped.end > mapped.start {
+                    return mapped
+                }
+            }
+            return nil
+        }
+        if searchText == nil || searchText != command {
+            if let text = matchedText, !text.isEmpty, let range = command.range(of: text) {
+                let start = command.distance(from: command.startIndex, to: range.lowerBound)
+                let end = command.distance(from: command.startIndex, to: range.upperBound)
+                if end > start {
+                    return MatchSpan(start: start, end: end)
+                }
+            }
+        }
+        if let span, searchText == command, span.start >= 0, span.end <= command.count, span.end > span.start {
+            return span
+        }
+        return nil
+    }
+}
+
 public func remapMatchSpan(
     span: MatchSpan?,
     matchedText: String?,
     searchText: String? = nil,
     onto command: String
 ) -> MatchSpan? {
-    if let search = searchText, !search.isEmpty, let found = command.range(of: search) {
-        let offset = command.distance(from: command.startIndex, to: found.lowerBound)
-        if let span {
-            let mapped = MatchSpan(start: span.start + offset, end: span.end + offset)
-            if mapped.start >= 0, mapped.end <= command.count, mapped.end > mapped.start {
-                return mapped
-            }
-        }
-        if let text = matchedText, !text.isEmpty, let inner = search.range(of: text) {
-            let innerStart = search.distance(from: search.startIndex, to: inner.lowerBound)
-            let innerEnd = search.distance(from: search.startIndex, to: inner.upperBound)
-            let mapped = MatchSpan(start: innerStart + offset, end: innerEnd + offset)
-            if mapped.end <= command.count, mapped.end > mapped.start {
-                return mapped
-            }
-        }
-        return nil
-    }
-    if searchText == nil || searchText != command {
-        if let text = matchedText, !text.isEmpty, let range = command.range(of: text) {
-            let start = command.distance(from: command.startIndex, to: range.lowerBound)
-            let end = command.distance(from: command.startIndex, to: range.upperBound)
-            if end > start {
-                return MatchSpan(start: start, end: end)
-            }
-        }
-    }
-    if let span, searchText == command, span.start >= 0, span.end <= command.count, span.end > span.start {
-        return span
-    }
-    return nil
+    MatchSpan.projected(span: span, matchedText: matchedText, searchText: searchText, onto: command)
 }
 
 public func testViewModel(
@@ -89,8 +101,8 @@ public func testViewModel(
     command: ShellCommand,
     columns: Int = 80
 ) -> TestViewModel {
-    let resultWord = testResultWord(result.decision)
-    let tone = decisionTone(result.decision)
+    let resultWord = result.decision.testResultName
+    let tone = result.decision.tone
     switch result.outcome {
     case .quickRejected, .plain, .safeOnly:
         return TestViewModel(
@@ -102,7 +114,7 @@ public func testViewModel(
     case .hit(let match, _):
         return TestViewModel(
             command: command,
-            span: remapMatchSpan(
+            span: MatchSpan.projected(
                 span: match.span,
                 matchedText: match.matchedText,
                 searchText: match.searchText,
@@ -117,7 +129,7 @@ public func testViewModel(
         let deny = denyViewModel(payload, command: command)
         return TestViewModel(
             command: command,
-            span: remapMatchSpan(
+            span: MatchSpan.projected(
                 span: matched?.span,
                 matchedText: matched?.matchedText,
                 searchText: matched?.searchText,
