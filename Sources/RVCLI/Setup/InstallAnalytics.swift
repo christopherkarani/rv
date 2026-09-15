@@ -33,7 +33,7 @@ struct BlockingInstallAnalytics: InstallAnalyticsCapturing {
         environment["HOME"] = home.rawValue
         let captured = environment
         return BlockingInstallAnalytics {
-            AnalyticsBootstrap.live(productVersion: productVersion, environment: captured)
+            AnalyticsBootstrap.makeLive(productVersion: productVersion, environment: captured)
         }
     }
 

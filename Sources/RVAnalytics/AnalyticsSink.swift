@@ -3,28 +3,36 @@ import Foundation
 import FoundationNetworking
 #endif
 
+/// Result of handing an event to an analytics sink.
+public enum AnalyticsDelivery: Sendable, Equatable {
+    /// The sink accepted the event for transport.
+    case accepted
+    /// The sink dropped the event (no credentials, encode failure, or transport error).
+    case dropped
+}
+
 public protocol AnalyticsSink: Sendable {
-    /// Returns `true` only when the event was accepted by the transport.
-    func capture(_ payload: AnalyticsPayload) async -> Bool
+    /// Returns `.accepted` only when the event was accepted by the transport.
+    func capture(_ payload: AnalyticsPayload) async -> AnalyticsDelivery
 }
 
 public struct NoOpAnalyticsSink: AnalyticsSink {
     public init() {}
 
-    public func capture(_ payload: AnalyticsPayload) async -> Bool {
+    public func capture(_ payload: AnalyticsPayload) async -> AnalyticsDelivery {
         _ = payload
-        return false
+        return .dropped
     }
 }
 
 public protocol HTTPPosting: Sendable {
-    func post(url: URL, body: Data, contentType: String) async throws
+    func post(to url: URL, body: Data, contentType: String) async throws
 }
 
 public struct URLSessionHTTPPoster: HTTPPosting {
     public init() {}
 
-    public func post(url: URL, body: Data, contentType: String) async throws {
+    public func post(to url: URL, body: Data, contentType: String) async throws {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue(contentType, forHTTPHeaderField: "Content-Type")
@@ -53,15 +61,15 @@ public struct PostHogSink: AnalyticsSink {
         self.poster = poster
     }
 
-    public func capture(_ payload: AnalyticsPayload) async -> Bool {
-        guard apiKey.isEmpty == false else { return false }
-        guard let body = try? Self.encodeBatch(apiKey: apiKey, payload: payload) else { return false }
+    public func capture(_ payload: AnalyticsPayload) async -> AnalyticsDelivery {
+        guard apiKey.isEmpty == false else { return .dropped }
+        guard let body = try? Self.encodeBatch(apiKey: apiKey, payload: payload) else { return .dropped }
         let url = host.appendingPathComponent("batch/")
         do {
-            try await poster.post(url: url, body: body, contentType: "application/json")
-            return true
+            try await poster.post(to: url, body: body, contentType: "application/json")
+            return .accepted
         } catch {
-            return false
+            return .dropped
         }
     }
 

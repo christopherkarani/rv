@@ -67,9 +67,13 @@ public actor AnalyticsCoordinator {
         persistState()
     }
 
-    public func noteEnabledPacks(_ ids: [String]) {
+    /// Records enabled pack identifiers for the next daily flush.
+    ///
+    /// - Parameter packIDs: Pack identifier strings (`PackID.rawValue`). RVAnalytics
+    ///   does not import RVDomain, so this stays `[String]`.
+    public func noteEnabledPacks(_ packIDs: [String]) {
         guard preferences.isEnabled else { return }
-        state.enabledPackIDs = ids.sorted()
+        state.enabledPackIDs = packIDs.sorted()
         persistState()
     }
 
@@ -87,10 +91,10 @@ public actor AnalyticsCoordinator {
             return
         }
         noteHosts(hosts)
-        let delivered = await sink.capture(
+        let delivery = await sink.capture(
             makePayload(event: AnalyticsPayload.installEvent, extra: [:])
         )
-        guard delivered else { return }
+        guard delivery == .accepted else { return }
         installSent = true
         try? Data("1".utf8).write(to: paths.installSentFile, options: .atomic)
     }
@@ -111,11 +115,11 @@ public actor AnalyticsCoordinator {
         for (host, status) in state.hosts {
             extra["host_\(host)"] = .string(status)
         }
-        let delivered = await sink.capture(
+        let delivery = await sink.capture(
             makePayload(event: AnalyticsPayload.dailyActiveEvent, extra: extra)
         )
         state.lastFlushDay = day
-        if delivered {
+        if delivery == .accepted {
             state.allowCount = 0
             state.denyCount = 0
             state.indeterminateCount = 0
@@ -129,8 +133,8 @@ public actor AnalyticsCoordinator {
     ) -> AnalyticsPayload {
         var properties: [String: AnalyticsPropertyValue] = [
             "rv_version": .string(productVersion),
-            "macos_version": .string(platform.macosVersion),
-            "macos_build": .string(platform.macosBuild),
+            "macos_version": .string(platform.osVersion),
+            "macos_build": .string(platform.osBuild),
         ]
         for (key, value) in extra {
             properties[key] = value
@@ -185,13 +189,15 @@ public actor AnalyticsCoordinator {
 }
 
 public enum AnalyticsBootstrap {
-    /// Live coordinator for setup / rvd. Returns nil when HOME is missing or analytics is opted out.
-    public static func live(
+    /// Creates a coordinator for setup / rvd using the live filesystem and identity store.
+    ///
+    /// Returns `nil` when `HOME` is missing or analytics is opted out.
+    public static func makeLive(
         productVersion: String,
         sink: (any AnalyticsSink)? = nil,
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> AnalyticsCoordinator? {
-        guard let paths = AnalyticsPaths.liveFromEnvironment(environment: environment) else {
+        guard let paths = AnalyticsPaths.makeFromEnvironment(environment: environment) else {
             return nil
         }
         let preferences = AnalyticsPreferences.load(from: paths)
@@ -225,7 +231,7 @@ public enum AnalyticsBootstrap {
             identity: identity,
             sink: resolvedSink,
             productVersion: productVersion,
-            platform: .live()
+            platform: .makeLive()
         )
     }
 }

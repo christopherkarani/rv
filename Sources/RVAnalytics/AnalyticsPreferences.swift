@@ -8,21 +8,22 @@ public struct AnalyticsPreferences: Sendable, Equatable {
         self.isEnabled = isEnabled
     }
 
-    public static let optOutDefault = AnalyticsPreferences(isEnabled: true)
+    /// Missing config means analytics is on (opt-out, not opt-in).
+    public static let enabledByDefault = AnalyticsPreferences(isEnabled: true)
 
     public static func load(from paths: AnalyticsPaths, fileManager: FileManager = .default) -> AnalyticsPreferences {
         guard let data = fileManager.contents(atPath: paths.configFile.path) else {
-            return .optOutDefault
+            return .enabledByDefault
         }
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return .optOutDefault
+            return .enabledByDefault
         }
         guard let analytics = root["analytics"] as? [String: Any] else {
-            return .optOutDefault
+            return .enabledByDefault
         }
         if let enabled = analytics["enabled"] as? Bool {
             return AnalyticsPreferences(isEnabled: enabled)
         }
-        return .optOutDefault
+        return .enabledByDefault
     }
 }

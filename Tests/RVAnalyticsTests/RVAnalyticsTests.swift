@@ -44,7 +44,7 @@ struct AnalyticsBootstrapTests {
         try Data(#"{"analytics":{"enabled":false}}"#.utf8).write(
             to: configDir.appendingPathComponent("config.json", isDirectory: false)
         )
-        let result = AnalyticsBootstrap.live(
+        let result = AnalyticsBootstrap.makeLive(
             productVersion: "1.0.0",
             environment: ["HOME": fakeHome.path]
         )
@@ -88,7 +88,7 @@ struct PostHogSinkTests {
             AnalyticsPayload(event: "install", distinctID: "x")
         )
         let count = await poster.count
-        #expect(delivered == false)
+        #expect(delivered == .dropped)
         #expect(count == 0)
     }
 }
@@ -101,11 +101,11 @@ struct AnalyticsCoordinatorTests {
         let sink = RecordingAnalyticsSink()
         let coordinator = AnalyticsCoordinator(
             paths: paths,
-            preferences: .optOutDefault,
+            preferences: .enabledByDefault,
             identity: AnalyticsIdentity(distinctID: "user-1"),
             sink: sink,
             productVersion: "1.0.0",
-            platform: PlatformSnapshot(macosVersion: "26.0.0", macosBuild: "25A354")
+            platform: PlatformSnapshot(osVersion: "26.0.0", osBuild: "25A354")
         )
         await coordinator.captureInstall(hosts: ["grok": "wired", "pi": "pending"])
         await coordinator.recordDecision(.allow)
@@ -123,6 +123,8 @@ struct AnalyticsCoordinatorTests {
             AnalyticsPayload.dailyActiveEvent,
             AnalyticsPayload.dailyActiveEvent,
         ])
+        #expect(events[0].properties["macos_version"] == .string("26.0.0"))
+        #expect(events[0].properties["macos_build"] == .string("25A354"))
         let daily = events[1]
         #expect(daily.properties["allow_count"] == .int(1))
         #expect(daily.properties["deny_count"] == .int(1))
@@ -137,11 +139,11 @@ struct AnalyticsCoordinatorTests {
         let sink = FailingAnalyticsSink()
         let coordinator = AnalyticsCoordinator(
             paths: paths,
-            preferences: .optOutDefault,
+            preferences: .enabledByDefault,
             identity: AnalyticsIdentity(distinctID: "user-1"),
             sink: sink,
             productVersion: "1.0.0",
-            platform: PlatformSnapshot(macosVersion: "26.0.0", macosBuild: "25A354")
+            platform: PlatformSnapshot(osVersion: "26.0.0", osBuild: "25A354")
         )
         await coordinator.captureInstall(hosts: ["grok": "wired"])
         #expect(FileManager.default.fileExists(atPath: paths.installSentFile.path) == false)
@@ -149,11 +151,11 @@ struct AnalyticsCoordinatorTests {
         let okSink = RecordingAnalyticsSink()
         let retry = AnalyticsCoordinator(
             paths: paths,
-            preferences: .optOutDefault,
+            preferences: .enabledByDefault,
             identity: AnalyticsIdentity(distinctID: "user-1"),
             sink: okSink,
             productVersion: "1.0.0",
-            platform: PlatformSnapshot(macosVersion: "26.0.0", macosBuild: "25A354")
+            platform: PlatformSnapshot(osVersion: "26.0.0", osBuild: "25A354")
         )
         await retry.captureInstall(hosts: ["grok": "wired"])
         let events = await okSink.events
@@ -167,11 +169,11 @@ struct AnalyticsCoordinatorTests {
         let sink = FailingAnalyticsSink()
         let coordinator = AnalyticsCoordinator(
             paths: paths,
-            preferences: .optOutDefault,
+            preferences: .enabledByDefault,
             identity: AnalyticsIdentity(distinctID: "user-1"),
             sink: sink,
             productVersion: "1.0.0",
-            platform: PlatformSnapshot(macosVersion: "26.0.0", macosBuild: "25A354")
+            platform: PlatformSnapshot(osVersion: "26.0.0", osBuild: "25A354")
         )
         await coordinator.recordDecision(.allow)
         await coordinator.recordDecision(.deny)
@@ -180,11 +182,11 @@ struct AnalyticsCoordinatorTests {
         let okSink = RecordingAnalyticsSink()
         let next = AnalyticsCoordinator(
             paths: paths,
-            preferences: .optOutDefault,
+            preferences: .enabledByDefault,
             identity: AnalyticsIdentity(distinctID: "user-1"),
             sink: okSink,
             productVersion: "1.0.0",
-            platform: PlatformSnapshot(macosVersion: "26.0.0", macosBuild: "25A354")
+            platform: PlatformSnapshot(osVersion: "26.0.0", osBuild: "25A354")
         )
         await next.flushDailyIfNeeded(now: day(2026, 8, 21))
         let events = await okSink.events
@@ -203,7 +205,7 @@ struct AnalyticsCoordinatorTests {
             identity: AnalyticsIdentity(distinctID: "user-1"),
             sink: sink,
             productVersion: "1.0.0",
-            platform: PlatformSnapshot(macosVersion: "26.0.0", macosBuild: "25A354")
+            platform: PlatformSnapshot(osVersion: "26.0.0", osBuild: "25A354")
         )
         await coordinator.captureInstall(hosts: [:])
         await coordinator.recordDecision(.deny)
@@ -224,23 +226,23 @@ struct AnalyticsNoticeTests {
 actor RecordingAnalyticsSink: AnalyticsSink {
     private(set) var events: [AnalyticsPayload] = []
 
-    func capture(_ payload: AnalyticsPayload) async -> Bool {
+    func capture(_ payload: AnalyticsPayload) async -> AnalyticsDelivery {
         events.append(payload)
-        return true
+        return .accepted
     }
 }
 
 actor FailingAnalyticsSink: AnalyticsSink {
-    func capture(_ payload: AnalyticsPayload) async -> Bool {
+    func capture(_ payload: AnalyticsPayload) async -> AnalyticsDelivery {
         _ = payload
-        return false
+        return .dropped
     }
 }
 
 actor RecordingHTTPPoster: HTTPPosting {
     private(set) var count = 0
 
-    func post(url: URL, body: Data, contentType: String) async throws {
+    func post(to url: URL, body: Data, contentType: String) async throws {
         _ = url
         _ = body
         _ = contentType

@@ -33,8 +33,8 @@ public struct AnalyticsPaths: Sendable, Equatable {
         [configFile, identityFile, countersFile, installSentFile, hostsFile]
     }
 
-    /// Derives config directory from `$HOME/.config/rv`. Returns nil when HOME is unset.
-    public static func liveFromEnvironment(
+    /// Creates paths under `$HOME/.config/rv`. Returns `nil` when `HOME` is unset or empty.
+    public static func makeFromEnvironment(
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> AnalyticsPaths? {
         guard let home = environment["HOME"], home.isEmpty == false else { return nil }
