@@ -180,6 +180,81 @@
       "command": "git push origin feature-f",
       "expected": "allow",
       "kind": "skip-strict-git"
+    },
+    {
+      "id": "catalog.quiet.docker-ps",
+      "command": "docker ps",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.quiet.docker-images",
+      "command": "docker images",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.quiet.kubectl-get-pods",
+      "command": "kubectl get pods",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.quiet.kubectl-describe",
+      "command": "kubectl describe node",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.quiet.terraform-plan",
+      "command": "terraform plan",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.quiet.terraform-validate",
+      "command": "terraform validate",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.quiet.aws-s3-ls",
+      "command": "aws s3 ls",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.quiet.aws-sts",
+      "command": "aws sts get-caller-identity",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.quiet.helm-list",
+      "command": "helm list",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.quiet.systemctl-status",
+      "command": "systemctl status",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.quiet.psql-select",
+      "command": "psql -c 'SELECT 1'",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.quiet.mysql-select",
+      "command": "mysql -e 'SELECT 1'",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.quiet.redis-ping",
+      "command": "redis-cli PING",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.quiet.cargo-test",
+      "command": "cargo test",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.quiet.gh-pr-view",
+      "command": "gh pr view",
+      "expected": "allow"
     }
   ]
 }

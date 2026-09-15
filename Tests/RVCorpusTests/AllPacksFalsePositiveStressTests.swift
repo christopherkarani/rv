@@ -10,6 +10,8 @@ import RVPacks
 ///
 /// `strict_git` is designed to deny `--force-with-lease`. Those rows are
 /// tagged `skip-strict-git`. Empty-keyword packs never scan (quick-reject).
+/// Command-name `--help` / `--version` denials are pin-residual (extracted
+/// walkers); they are not this suite's fail.
 ///
 /// Run:
 /// `tools/gate.sh --quiet RVCorpusTests --filter AllPacksFalsePositiveStress`
@@ -92,6 +94,106 @@ struct AllPacksFalsePositiveStressTests {
         }
         #expect(overBlocks == 0)
     }
+
+    @Test func emptyKeywordPacks_neverScan() throws {
+        let catalog = try CatalogSession.make()
+        let empty = catalog.packs.filter(\.keywords.isEmpty)
+        #expect(empty.count == 6)
+        for pack in empty {
+            #expect(pack.id.rawValue.hasPrefix("careful_company_running_windows."))
+        }
+        let probe = "Set-MpPreference -DisableRealtimeMonitoring $true"
+        let enabled = uniquePackIDs(dayOnePackIDs + empty.map(\.id))
+        let result = catalog.run(probe, enabled: enabled)
+        #expect(result.decision == .allow, "empty-keyword packs must quick-reject, got \(describe(result))")
+    }
+
+    @Test func perPack_keywordQuietProbes_doNotDeny() throws {
+        let catalog = try CatalogSession.make()
+        var overBlocks = 0
+        for pack in catalog.packs {
+            let enabled = uniquePackIDs(dayOnePackIDs + [pack.id])
+            for command in keywordQuietProbes(for: pack) {
+                if pack.id == Self.strictGit, isStrictGitByDesign(command) {
+                    continue
+                }
+                let result = catalog.run(command, enabled: enabled)
+                if result.decision != .allow {
+                    if isDocumentationFlagProbe(command) {
+                        continue
+                    }
+                    overBlocks += 1
+                    Issue.record(
+                        "\(pack.id.rawValue) quiet-probe over-block \(describe(result)) on \(command)"
+                    )
+                }
+            }
+        }
+        #expect(overBlocks == 0)
+    }
+
+    /// Bypass keywords: every blocking walker vs the allow matching view.
+    /// Catches over-broad extracted regexes that evaluate currently skips.
+    @Test func walkers_allowCorpus_doNotMatchBlocking() throws {
+        let catalog = try CatalogSession.make()
+        let rows = try loadCorpus("all-packs-allow.json")
+        var overBlocks = 0
+        var views: [(id: String, command: String, view: String, kind: String?)] = []
+        views.reserveCapacity(rows.count)
+        for row in rows {
+            guard let command = row.command else { continue }
+            views.append(
+                (
+                    id: row.id,
+                    command: command,
+                    view: Normalize.matchingView(of: command).rawValue,
+                    kind: row.kind
+                )
+            )
+        }
+        for compiled in catalog.compiled.packs {
+            for rule in compiled.destructive where rule.rule.severity.blocksByDefault {
+                let ruleID = RuleID(pack: compiled.snapshot.id, pattern: rule.rule.name)
+                for row in views {
+                    if row.kind == "skip-strict-git", compiled.snapshot.id == Self.strictGit {
+                        continue
+                    }
+                    if catalog.engine.matches(rule.compiled, in: row.view) {
+                        overBlocks += 1
+                        Issue.record(
+                            "walker \(ruleID.rawValue) matches \(row.id): \(row.command)"
+                        )
+                    }
+                }
+            }
+        }
+        #expect(overBlocks == 0)
+    }
+
+    @Test func walkers_keywordQuietProbes_doNotMatchBlocking() throws {
+        let catalog = try CatalogSession.make()
+        var overBlocks = 0
+        for compiled in catalog.compiled.packs {
+            let probes = keywordQuietProbes(for: compiled.snapshot)
+            for rule in compiled.destructive where rule.rule.severity.blocksByDefault {
+                let ruleID = RuleID(pack: compiled.snapshot.id, pattern: rule.rule.name)
+                for command in probes {
+                    if compiled.snapshot.id == Self.strictGit, isStrictGitByDesign(command) {
+                        continue
+                    }
+                    if isDocumentationFlagProbe(command) {
+                        continue
+                    }
+                    let view = Normalize.matchingView(of: command).rawValue
+                    if catalog.engine.matches(rule.compiled, in: view) {
+                        overBlocks += 1
+                        Issue.record("walker \(ruleID.rawValue) matches quiet \(command)")
+                    }
+                }
+            }
+        }
+        #expect(overBlocks == 0)
+    }
 }
 
 private struct CatalogSession: Sendable {
@@ -114,6 +216,56 @@ private struct CatalogSession: Sendable {
             compiled: compiled
         )
     }
+}
+
+private func isCommandNameKeyword(_ keyword: String) -> Bool {
+    guard let first = keyword.first, first.isLetter else { return false }
+    return keyword.unicodeScalars.allSatisfy { scalar in
+        guard scalar.isASCII else { return false }
+        let value = scalar.value
+        return (65...90).contains(value)
+            || (97...122).contains(value)
+            || (48...57).contains(value)
+            || value == 45
+            || value == 46
+            || value == 95
+    }
+}
+
+private func keywordQuietProbes(for pack: PackSnapshot) -> [String] {
+    var seen = Set<String>()
+    var out: [String] = []
+    for keyword in pack.keywords where isCommandNameKeyword(keyword) {
+        let probes = [
+            "\(keyword) --help",
+            "\(keyword) --version",
+            "echo \"\(keyword)\"",
+        ]
+        for command in probes where seen.insert(command).inserted {
+            out.append(command)
+        }
+    }
+    return out
+}
+
+/// Pin command-name walkers still deny `--help` / `--version` (extracted regex).
+/// That class is residual until the documentation-query allow lands.
+private func isDocumentationFlagProbe(_ command: String) -> Bool {
+    command.hasSuffix(" --help") || command.hasSuffix(" --version")
+}
+
+/// `strict_git` is designed to deny rebase / force-with-lease / history rewrite.
+private func isStrictGitByDesign(_ command: String) -> Bool {
+    let view = command.lowercased()
+    return view.contains("rebase")
+        || view.contains("force-with-lease")
+        || view.contains("--force")
+        || view.contains(" --amend")
+        || view.contains("cherry-pick")
+        || view.contains("filter-branch")
+        || view.contains("filter-repo")
+        || view.contains("reflog expire")
+        || view.contains("worktree remove")
 }
 
 private func uniquePackIDs(_ ids: [PackID]) -> [PackID] {
