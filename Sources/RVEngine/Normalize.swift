@@ -159,15 +159,19 @@ func applyRoleAwareQuotes(_ text: String) -> String {
     var tokens = tokenizeCommand(text)
     guard !tokens.isEmpty else { return text }
     var commandBase: String?
+    var gitSubcommand: String?
+    var pendingGitGlobalArg = false
     var pendingDataFlag = false
     var wrapperSeek = WrapperSeek.none
     var pendingInterpreterPayload = false
+    let unquotedDataMaskSafe = tokens.contains { tokenHasShellMeta($0.decoded) } == false
 
     for index in tokens.indices {
         if tokens[index].wasAnsiC,
            let surfaced = surfacedAnsiC(
                tokens[index],
                commandBase: commandBase,
+               gitSubcommand: gitSubcommand,
                pendingDataFlag: pendingDataFlag,
                pendingInterpreterPayload: pendingInterpreterPayload,
                isOnlyToken: tokens.count == 1
@@ -189,6 +193,8 @@ func applyRoleAwareQuotes(_ text: String) -> String {
 
         if isShellSeparator(decoded) {
             commandBase = nil
+            gitSubcommand = nil
+            pendingGitGlobalArg = false
             pendingDataFlag = false
             wrapperSeek = .none
             continue
@@ -203,6 +209,24 @@ func applyRoleAwareQuotes(_ text: String) -> String {
             }
             commandBase = basename(decoded)
             continue
+        }
+
+        if commandBase == "git", gitSubcommand == nil {
+            if pendingGitGlobalArg {
+                pendingGitGlobalArg = false
+                continue
+            }
+            if isGitGlobalValueFlag(decoded) {
+                pendingGitGlobalArg = true
+                continue
+            }
+            if isGitGlobalAttachedFlag(decoded) {
+                continue
+            }
+            if decoded.hasPrefix("-") == false {
+                gitSubcommand = decoded
+                continue
+            }
         }
 
         if let commandBase, isInterpreterExecutable(commandBase) {
@@ -223,20 +247,43 @@ func applyRoleAwareQuotes(_ text: String) -> String {
             continue
         }
 
-        if let masked = maskAttachedDataValue(command: commandBase, token: token) {
+        if let masked = maskAttachedDataValue(
+            command: commandBase,
+            gitSubcommand: gitSubcommand,
+            token: token
+        ) {
             tokens[index].decoded = masked
             pendingDataFlag = false
             continue
         }
 
         if decoded.hasPrefix("-") {
-            if isDataConsumingFlag(command: commandBase, flag: decoded) {
+            if isDataConsumingFlag(
+                command: commandBase,
+                gitSubcommand: gitSubcommand,
+                flag: decoded
+            ) {
                 pendingDataFlag = true
             }
             continue
         }
 
-        if token.wasQuoted, shouldMaskQuotedData(command: commandBase, pendingDataFlag: pendingDataFlag) {
+        if unquotedDataMaskSafe,
+           isAllArgsData(commandBase),
+           containsInlineCode(token) == false
+        {
+            tokens[index].decoded = String(repeating: " ", count: max(decoded.count, 1))
+            pendingDataFlag = false
+            continue
+        }
+
+        if token.wasQuoted,
+           shouldMaskQuotedData(
+               command: commandBase,
+               gitSubcommand: gitSubcommand,
+               pendingDataFlag: pendingDataFlag
+           )
+        {
             tokens[index].decoded = String(repeating: " ", count: max(decoded.count, 1))
             pendingDataFlag = false
             continue
@@ -309,11 +356,19 @@ private func containsInlineCode(_ token: CommandToken) -> Bool {
     token.decoded.contains("$(") || token.decoded.contains("`")
 }
 
+/// Tokenizer is whitespace-only, so `echo ok; git reset --hard` is one
+/// `ok;` token. Unquoted echo/tldr masking must not run on a line that
+/// still has glued `;` / redirect / pipe metacharacters.
+private func tokenHasShellMeta(_ decoded: String) -> Bool {
+    decoded.contains(where: { ";|&<>()".contains($0) })
+}
+
 /// Matching-view surface for `$''` tokens. Tokenizer keeps `$` in `decoded` so
 /// unwrap of `bash -c $'…'` stays limited.
 private func surfacedAnsiC(
     _ token: CommandToken,
     commandBase: String?,
+    gitSubcommand: String?,
     pendingDataFlag: Bool,
     pendingInterpreterPayload: Bool,
     isOnlyToken: Bool
@@ -323,7 +378,11 @@ private func surfacedAnsiC(
     let inner = String(token.decoded[token.decoded.index(after: dollar)...])
     let candidate = prefix + decodeAnsiCEscapes(inner)
     if pendingInterpreterPayload { return nil }
-    if shouldMaskQuotedData(command: commandBase, pendingDataFlag: pendingDataFlag) {
+    if shouldMaskQuotedData(
+        command: commandBase,
+        gitSubcommand: gitSubcommand,
+        pendingDataFlag: pendingDataFlag
+    ) {
         return nil
     }
     if commandBase == nil {
@@ -420,7 +479,12 @@ private func decodeAnsiCEscapes(_ inner: String) -> String {
 
 private func isAllArgsData(_ command: String?) -> Bool {
     guard let command else { return false }
-    return command == "echo" || command == "printf"
+    switch command {
+    case "echo", "printf", "man", "tldr", "whatis", "apropos":
+        return true
+    default:
+        return false
+    }
 }
 
 private func isSearchCommand(_ command: String?) -> Bool {
@@ -428,25 +492,79 @@ private func isSearchCommand(_ command: String?) -> Bool {
     return command == "rg" || command == "grep"
 }
 
-private func isDataConsumingFlag(command: String?, flag: String) -> Bool {
-    switch command {
-    case "git":
-        if flag == "--message" || flag.hasPrefix("--message=") { return true }
-        if flag == "-m" { return true }
-        return flag.hasPrefix("-") && !flag.hasPrefix("--") && flag.contains("m") && flag != "--"
-    case "rg", "grep":
-        return flag == "-e" || flag == "--regexp" || flag.hasPrefix("--regexp=")
+private func isGitGlobalValueFlag(_ flag: String) -> Bool {
+    flag == "-C" || flag == "-c"
+        || flag == "--git-dir" || flag == "--work-tree"
+        || flag == "--namespace" || flag == "--config-env"
+}
+
+private func isGitGlobalAttachedFlag(_ flag: String) -> Bool {
+    flag.hasPrefix("--git-dir=") || flag.hasPrefix("--work-tree=")
+        || flag.hasPrefix("--namespace=") || flag.hasPrefix("--config-env=")
+}
+
+private func isGitSearchSubcommand(_ subcommand: String?) -> Bool {
+    switch subcommand {
+    case "log", "show", "diff", "whatchanged", "rev-list":
+        return true
     default:
         return false
     }
 }
 
-private func maskAttachedDataValue(command: String?, token: CommandToken) -> String? {
+private func isDataConsumingFlag(command: String?, gitSubcommand: String?, flag: String) -> Bool {
+    switch command {
+    case "git":
+        if flag == "--message" || flag.hasPrefix("--message=") { return true }
+        if flag == "-m" { return true }
+        if flag == "--grep" || flag.hasPrefix("--grep=") { return true }
+        if flag == "--grep-reflog" || flag.hasPrefix("--grep-reflog=") { return true }
+        if gitSubcommand == "grep" {
+            return flag == "-e" || flag == "--regexp" || flag.hasPrefix("--regexp=")
+        }
+        if isGitSearchSubcommand(gitSubcommand) {
+            if flag == "-S" || flag == "-G" { return true }
+        }
+        return flag.hasPrefix("-") && !flag.hasPrefix("--") && flag.contains("m") && flag != "--"
+    case "rg", "grep":
+        return flag == "-e" || flag == "--regexp" || flag.hasPrefix("--regexp=")
+    case "find":
+        return flag == "-name" || flag == "-iname"
+            || flag == "-path" || flag == "-ipath"
+            || flag == "-wholename" || flag == "-iwholename"
+            || flag == "-regex" || flag == "-iregex"
+            || flag == "-lname"
+    default:
+        return false
+    }
+}
+
+private func maskAttachedDataValue(
+    command: String?,
+    gitSubcommand: String?,
+    token: CommandToken
+) -> String? {
     let decoded = token.decoded
     guard let command else { return nil }
     if command == "git", decoded.hasPrefix("--message=") {
         let valueCount = decoded.dropFirst("--message=".count).count
         return "--message=" + String(repeating: " ", count: max(valueCount, 1))
+    }
+    if command == "git", decoded.hasPrefix("--grep-reflog=") {
+        let valueCount = decoded.dropFirst("--grep-reflog=".count).count
+        return "--grep-reflog=" + String(repeating: " ", count: max(valueCount, 1))
+    }
+    if command == "git", decoded.hasPrefix("--grep=") {
+        let valueCount = decoded.dropFirst("--grep=".count).count
+        return "--grep=" + String(repeating: " ", count: max(valueCount, 1))
+    }
+    if command == "git", isGitSearchSubcommand(gitSubcommand) {
+        if decoded.hasPrefix("-S"), decoded.count > 2, decoded.hasPrefix("--") == false {
+            return "-S" + String(repeating: " ", count: max(decoded.count - 2, 1))
+        }
+        if decoded.hasPrefix("-G"), decoded.count > 2, decoded.hasPrefix("--") == false {
+            return "-G" + String(repeating: " ", count: max(decoded.count - 2, 1))
+        }
     }
     if command == "git", decoded.hasPrefix("-m"), decoded.count > 2, !decoded.hasPrefix("--") {
         return "-m" + String(repeating: " ", count: max(decoded.count - 2, 1))
@@ -454,8 +572,15 @@ private func maskAttachedDataValue(command: String?, token: CommandToken) -> Str
     return nil
 }
 
-private func shouldMaskQuotedData(command: String?, pendingDataFlag: Bool) -> Bool {
-    isAllArgsData(command) || isSearchCommand(command) || pendingDataFlag
+private func shouldMaskQuotedData(
+    command: String?,
+    gitSubcommand: String?,
+    pendingDataFlag: Bool
+) -> Bool {
+    isAllArgsData(command)
+        || isSearchCommand(command)
+        || gitSubcommand == "grep"
+        || pendingDataFlag
 }
 
 func isInterpreterExecutable(_ head: String) -> Bool {
