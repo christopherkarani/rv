@@ -16,6 +16,7 @@ public struct ColorCapability: Equatable, Sendable {
 }
 
 /// Spec name. Prefer `ColorCapability(probe:mode:)`.
+@available(*, deprecated, renamed: "ColorCapability.init(probe:mode:)")
 public func colorCapability(probe: ThemeProbe, mode: OutputMode) -> ColorCapability {
     ColorCapability(probe: probe, mode: mode)
 }

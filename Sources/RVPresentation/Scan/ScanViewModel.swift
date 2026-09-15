@@ -57,7 +57,7 @@ public struct ScanViewModel: Equatable, Sendable {
     public var filesScanned: Int
     public var eventsExtracted: Int
     public var setupNudgeRecommended: Bool
-    public var showCommand: Bool
+    public var showsCommand: Bool
 
     public init(
         rows: [ScanFindingRow],
@@ -65,14 +65,14 @@ public struct ScanViewModel: Equatable, Sendable {
         filesScanned: Int = 0,
         eventsExtracted: Int = 0,
         setupNudgeRecommended: Bool = false,
-        showCommand: Bool = false
+        showsCommand: Bool = false
     ) {
         self.rows = rows
         self.warnings = warnings
         self.filesScanned = filesScanned
         self.eventsExtracted = eventsExtracted
         self.setupNudgeRecommended = setupNudgeRecommended
-        self.showCommand = showCommand
+        self.showsCommand = showsCommand
     }
 }
 
@@ -87,9 +87,9 @@ public func scanFindingRow(
     matchingView: MatchingView,
     count: Int = 1,
     lastSeen: Date? = nil,
-    showCommand: Bool
+    showsCommand: Bool
 ) -> ScanFindingRow {
-    let commandDisplay = showCommand
+    let commandDisplay = showsCommand
         ? matchingView.rawValue
         : redactMatchingView(matchingView)
     return ScanFindingRow(

@@ -92,8 +92,9 @@ extension Palette {
 }
 
 /// Spec name. Prefer `Palette(for:)`.
+@available(*, deprecated, renamed: "Palette.init(for:)")
 public func palette(for capability: ColorCapability) -> Palette {
     Palette(for: capability)
 }
 
-public let colorOffPalette = palette(for: ColorCapability(colorsEnabled: false))
+public let colorOffPalette = Palette(for: ColorCapability(colorsEnabled: false))

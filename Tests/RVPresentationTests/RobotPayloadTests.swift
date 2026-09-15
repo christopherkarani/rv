@@ -119,7 +119,7 @@ private let readyService = DoctorServiceView(
         name: "Core Git",
         category: "core",
         description: "git destruction",
-        enabled: true,
+        isEnabled: true,
         safePatternCount: 1,
         destructivePatternCount: 2
     )

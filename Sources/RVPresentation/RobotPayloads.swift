@@ -87,7 +87,17 @@ public struct DoctorRobotPayload: Equatable, Sendable, Encodable {
     public var hosts: [String: String]
     public var config: String
     public var grade: String
-    public var ok: Bool
+    public var isHealthy: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case schema
+        case service
+        case packs
+        case hosts
+        case config
+        case grade
+        case isHealthy = "ok"
+    }
 }
 
 /// One `rv.packs.v1` row (also the `packs info` robot object).
@@ -96,7 +106,7 @@ public struct PacksRobotRow: Equatable, Sendable, Encodable {
     public var name: String
     public var category: String
     public var description: String
-    public var enabled: Bool
+    public var isEnabled: Bool
     public var safePatternCount: Int
     public var destructivePatternCount: Int
 
@@ -105,7 +115,7 @@ public struct PacksRobotRow: Equatable, Sendable, Encodable {
         case name
         case category
         case description
-        case enabled
+        case isEnabled = "enabled"
         case safePatternCount = "safe_pattern_count"
         case destructivePatternCount = "destructive_pattern_count"
     }
@@ -115,7 +125,7 @@ public struct PacksRobotRow: Equatable, Sendable, Encodable {
         name: String,
         category: String,
         description: String,
-        enabled: Bool,
+        isEnabled: Bool,
         safePatternCount: Int,
         destructivePatternCount: Int
     ) {
@@ -123,7 +133,7 @@ public struct PacksRobotRow: Equatable, Sendable, Encodable {
         self.name = name
         self.category = category
         self.description = description
-        self.enabled = enabled
+        self.isEnabled = isEnabled
         self.safePatternCount = safePatternCount
         self.destructivePatternCount = destructivePatternCount
     }
@@ -207,7 +217,7 @@ public func doctorRobotPayload(from model: DoctorViewModel) -> DoctorRobotPayloa
         ),
         config: model.config.rawValue,
         grade: model.grade.rawValue,
-        ok: model.isHealthy
+        isHealthy: model.isHealthy
     )
 }
 

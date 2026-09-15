@@ -57,9 +57,9 @@ public struct ExplainViewModel: Equatable, Sendable {
     public var semantic: ExplainSemanticView?
 
     public var heading: String { explainHeading }
-    public var decisionWord: String { RVPresentation.decisionWord(decision) }
-    public var explainDecisionWord: String { RVPresentation.explainDecisionWord(decision) }
-    public var decisionTone: DecisionTone { RVPresentation.decisionTone(decision) }
+    public var decisionWord: String { decision.displayName }
+    public var explainDecisionWord: String { decision.emphasizedName }
+    public var decisionTone: DecisionTone { decision.tone }
     public var ruleDisplay: String? { ruleID.map(displayRuleID) }
     public var packDisplay: String? { packID?.rawValue }
     public var severityDisplay: String? { severity?.rawValue }
@@ -70,13 +70,13 @@ public struct ExplainViewModel: Equatable, Sendable {
         decision: Decision,
         packID: PackID?,
         ruleID: RuleID?,
-        patternName: String? = nil,
-        severity: Severity? = nil,
         fact: String,
-        explanation: String? = nil,
-        regex: String? = nil,
         nextAction: String?,
         steps: [ExplainStep],
+        patternName: String? = nil,
+        severity: Severity? = nil,
+        explanation: String? = nil,
+        regex: String? = nil,
         suggestions: [ExplainSuggestion] = [],
         semantic: ExplainSemanticView? = nil
     ) {
@@ -125,13 +125,13 @@ public func explainViewModel(
         decision: result.decision,
         packID: packID,
         ruleID: ruleID,
-        patternName: match?.patternName,
-        severity: match?.severity,
         fact: fact,
-        explanation: match?.explanation,
-        regex: match?.regex,
         nextAction: next,
         steps: explainSteps(from: result),
+        patternName: match?.patternName,
+        severity: match?.severity,
+        explanation: match?.explanation,
+        regex: match?.regex,
         suggestions: ruleID.map { suggestions(for: $0) } ?? [],
         semantic: explainSemantic(from: result.analysis)
     )

@@ -2,7 +2,7 @@ import RVPresentation
 import RVTheme
 
 /// Paints ceremony frames. Slot marks and progress use `Palette`; labels stay unpainted.
-public struct SetupRenderer: Sendable {
+public struct SetupRenderer: FrameRenderer {
     public static let progressWidth = 24
     /// Leading gutter so the show sits off the terminal edge.
     public static let leadingPad = "  "

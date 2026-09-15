@@ -8,7 +8,7 @@ private let resetHardRule = RuleID(pack: .coreGit, pattern: "reset-hard")
 private func sampleRow(
     command: String = "git reset --hard",
     count: Int = 1,
-    showCommand: Bool = false
+    showsCommand: Bool = false
 ) -> ScanFindingRow {
     scanFindingRow(
         host: .claude,
@@ -20,7 +20,7 @@ private func sampleRow(
         matchingView: MatchingView(command),
         count: count,
         lastSeen: Date(timeIntervalSince1970: 1_724_100_000),
-        showCommand: showCommand
+        showsCommand: showsCommand
     )
 }
 
@@ -40,7 +40,7 @@ private func sampleRow(
 }
 
 @Test func scanFindingRow_showCommandUsesMatchingView() {
-    let row = sampleRow(showCommand: true)
+    let row = sampleRow(showsCommand: true)
     #expect(row.commandDisplay == "git reset --hard")
 }
 
@@ -60,7 +60,7 @@ private func sampleRow(
     #expect(vm.filesScanned == 12)
     #expect(vm.eventsExtracted == 40)
     #expect(vm.setupNudgeRecommended)
-    #expect(vm.showCommand == false)
+    #expect(vm.showsCommand == false)
 }
 
 @Test func scanViewModel_emptyDefaults() {

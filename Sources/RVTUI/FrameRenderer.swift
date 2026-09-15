@@ -1,7 +1,9 @@
 import RVTheme
 
+/// Paints one screen as terminal lines. Never opens a TTY.
 public protocol FrameRenderer<Model>: Sendable {
     associatedtype Model
+    /// Returns the painted lines for `model` using `palette`.
     func render(_ model: Model, palette: Palette) -> [String]
 }
 

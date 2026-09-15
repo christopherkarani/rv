@@ -90,7 +90,7 @@ struct Packs: AsyncParsableCommand {
                 name: row.name,
                 category: row.category,
                 description: row.description,
-                enabled: row.enabled,
+                isEnabled: row.enabled,
                 safePatternCount: row.safePatternCount,
                 destructivePatternCount: row.destructivePatternCount,
                 safePatterns: verboseFlag ? row.safePatterns : [],
@@ -276,13 +276,15 @@ enum PacksListFormat {
             palette = value
         }
         return PrettyWriter.join(
-            PacksRenderer().renderGrouped(
-                model,
-                palette: palette,
-                verbose: verbose,
-                expand: expand,
-                maxPatterns: maxPatterns,
-                collapsed: collapsed
+            PacksRenderer().render(
+                PacksGroupedFrame(
+                    model: model,
+                    verbose: verbose,
+                    expand: expand,
+                    maxPatterns: maxPatterns,
+                    collapsed: collapsed
+                ),
+                palette: palette
             )
         )
     }
@@ -294,7 +296,7 @@ private func packsRobotRow(_ row: PacksListRow) -> PacksRobotRow {
         name: row.name,
         category: row.category,
         description: row.description,
-        enabled: row.enabled,
+        isEnabled: row.enabled,
         safePatternCount: row.safePatternCount,
         destructivePatternCount: row.destructivePatternCount
     )

@@ -192,17 +192,28 @@ private func mediumAllow() -> EvaluationResult {
 }
 
 @Test func decisionTone_mapsClosedDecision() {
+    #expect(Decision.allow.displayName == "allow")
+    #expect(Decision.allow.emphasizedName == "ALLOW")
+    #expect(Decision.allow.testResultName == "ALLOWED")
+    #expect(Decision.allow.tone == .allow)
+    #expect(decisionWord(.allow) == Decision.allow.displayName)
+    #expect(explainDecisionWord(.allow) == Decision.allow.emphasizedName)
+    #expect(testResultWord(.allow) == Decision.allow.testResultName)
     #expect(decisionTone(.allow) == .allow)
-    #expect(
-        decisionTone(
-            .deny(
-                Deny(
-                    ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
-                    reason: "git reset --hard destroys uncommitted changes"
-                )
-            )
-        ) == .deny
+    let deny = Decision.deny(
+        Deny(
+            ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+            reason: "git reset --hard destroys uncommitted changes"
+        )
     )
+    #expect(deny.displayName == "deny")
+    #expect(deny.emphasizedName == "DENY")
+    #expect(deny.testResultName == "BLOCKED")
+    #expect(deny.tone == .deny)
+    #expect(decisionTone(deny) == .deny)
+    #expect(Decision.indeterminate(.commandTooLarge).displayName == "incomplete")
+    #expect(Decision.indeterminate(.commandTooLarge).emphasizedName == "INCOMPLETE")
+    #expect(Decision.indeterminate(.commandTooLarge).testResultName == "INCOMPLETE")
     #expect(decisionTone(.indeterminate(.commandTooLarge)) == .incomplete)
 }
 
@@ -466,15 +477,15 @@ private func mediumAllow() -> EvaluationResult {
 }
 
 @Test func packsViewModel_dayOneEnabled() {
-    let vm = packsViewModel(
+    let vm = PacksViewModel.make(
         enabled: dayOnePackIDs,
         catalog: [
-            (.coreFilesystem, "filesystem"),
-            (.coreGit, "git"),
-            (.systemDisk, "disk"),
+            (id: .coreFilesystem, summary: "filesystem"),
+            (id: .coreGit, summary: "git"),
+            (id: .systemDisk, summary: "disk"),
         ]
     )
     #expect(vm.rows.count == 3)
-    #expect(vm.rows.allSatisfy { $0.enabled })
+    #expect(vm.rows.allSatisfy { $0.isEnabled })
     #expect(vm.rows.map(\.id) == dayOnePackIDs)
 }

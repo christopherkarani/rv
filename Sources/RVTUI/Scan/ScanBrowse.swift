@@ -10,6 +10,23 @@ public struct ScanBrowseState: Equatable, Sendable {
         self.selectedIndex = Self.clampedSelection(selectedIndex, rowCount: model.rows.count)
     }
 
+    /// Returns the next browse state after applying `event`.
+    public func applying(_ event: ScanBrowseEvent) -> ScanBrowseState {
+        var next = self
+        switch event {
+        case .up:
+            guard next.model.rows.isEmpty == false else { break }
+            next.selectedIndex = max(0, next.selectedIndex - 1)
+        case .down:
+            guard next.model.rows.isEmpty == false else { break }
+            next.selectedIndex = min(next.model.rows.count - 1, next.selectedIndex + 1)
+        case .enter, .quit, .noop:
+            break
+        }
+        next.selectedIndex = Self.clampedSelection(next.selectedIndex, rowCount: next.model.rows.count)
+        return next
+    }
+
     fileprivate static func clampedSelection(_ selectedIndex: Int, rowCount: Int) -> Int {
         guard rowCount > 0 else { return 0 }
         return min(max(0, selectedIndex), rowCount - 1)
@@ -32,52 +49,49 @@ public func scanBrowseState(
 }
 
 public func scanBrowseReduce(_ state: ScanBrowseState, _ event: ScanBrowseEvent) -> ScanBrowseState {
-    var next = state
-    switch event {
-    case .up:
-        guard next.model.rows.isEmpty == false else { break }
-        next.selectedIndex = max(0, next.selectedIndex - 1)
-    case .down:
-        guard next.model.rows.isEmpty == false else { break }
-        next.selectedIndex = min(next.model.rows.count - 1, next.selectedIndex + 1)
-    case .enter, .quit, .noop:
-        break
+    state.applying(event)
+}
+
+/// Paints the scan browse frame. Never opens a TTY.
+public struct ScanBrowseRenderer: FrameRenderer {
+    public init() {}
+
+    public func render(_ state: ScanBrowseState, palette: Palette) -> [String] {
+        let selectedIndex = ScanBrowseState.clampedSelection(state.selectedIndex, rowCount: state.model.rows.count)
+        var lines: [String] = [paint("RV SCAN", slot: palette.silver, reset: palette.reset), ""]
+        if state.model.rows.isEmpty {
+            lines.append(paint("No deny findings.", slot: palette.muted, reset: palette.reset))
+        } else {
+            for (index, row) in state.model.rows.enumerated() {
+                lines.append(browseListLine(row, selected: index == selectedIndex, palette: palette))
+            }
+            lines.append("")
+            lines.append(contentsOf: browseDetail(state.model.rows[selectedIndex], palette: palette))
+        }
+        for warning in state.model.warnings {
+            lines.append(
+                paint("warning \(warning.code): \(warning.message)", slot: palette.mark, reset: palette.reset)
+            )
+        }
+        lines.append("")
+        lines.append(summaryBrowseLine(state.model, palette: palette))
+        if state.model.setupNudgeRecommended {
+            lines.append(
+                paint(
+                    "Some hosts are not wired. Run rv setup or rv doctor.",
+                    slot: palette.silver,
+                    reset: palette.reset
+                )
+            )
+        }
+        lines.append("")
+        lines.append(paint("j/k move · q quit", slot: palette.muted, reset: palette.reset))
+        return lines
     }
-    next.selectedIndex = ScanBrowseState.clampedSelection(next.selectedIndex, rowCount: next.model.rows.count)
-    return next
 }
 
 public func scanBrowseRender(_ state: ScanBrowseState, palette: Palette) -> [String] {
-    let selectedIndex = ScanBrowseState.clampedSelection(state.selectedIndex, rowCount: state.model.rows.count)
-    var lines: [String] = [paint("RV SCAN", slot: palette.silver, reset: palette.reset), ""]
-    if state.model.rows.isEmpty {
-        lines.append(paint("No deny findings.", slot: palette.muted, reset: palette.reset))
-    } else {
-        for (index, row) in state.model.rows.enumerated() {
-            lines.append(browseListLine(row, selected: index == selectedIndex, palette: palette))
-        }
-        lines.append("")
-        lines.append(contentsOf: browseDetail(state.model.rows[selectedIndex], palette: palette))
-    }
-    for warning in state.model.warnings {
-        lines.append(
-            paint("warning \(warning.code): \(warning.message)", slot: palette.mark, reset: palette.reset)
-        )
-    }
-    lines.append("")
-    lines.append(summaryBrowseLine(state.model, palette: palette))
-    if state.model.setupNudgeRecommended {
-        lines.append(
-            paint(
-                "Some hosts are not wired. Run rv setup or rv doctor.",
-                slot: palette.silver,
-                reset: palette.reset
-            )
-        )
-    }
-    lines.append("")
-    lines.append(paint("j/k move · q quit", slot: palette.muted, reset: palette.reset))
-    return lines
+    ScanBrowseRenderer().render(state, palette: palette)
 }
 
 private func browseListLine(_ row: ScanFindingRow, selected: Bool, palette: Palette) -> String {

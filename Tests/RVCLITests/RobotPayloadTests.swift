@@ -140,7 +140,7 @@ private func object(from stdout: String) throws -> [String: Any] {
         name: "Core Filesystem",
         category: "core",
         description: "rm",
-        enabled: false,
+        isEnabled: false,
         safePatternCount: 0,
         destructivePatternCount: 4
     )

@@ -65,7 +65,7 @@ private func stripCSI(_ text: String) -> String {
         ),
         command: ShellCommand(rawValue: command)
     )
-    let on = palette(for: ColorCapability(colorsEnabled: true))
+    let on = Palette(for: ColorCapability(colorsEnabled: true))
     let lines = TestRenderer().render(vm, palette: on)
     #expect(lines[0].contains("\u{001B}"))
     #expect(stripCSI(lines[0]).hasPrefix("Command: git reset --hard"))
@@ -168,7 +168,7 @@ private func isTreeSpacer(_ line: String) -> Bool {
         ),
         command: ShellCommand(rawValue: "git reset --hard")
     )
-    let on = palette(for: ColorCapability(colorsEnabled: true))
+    let on = Palette(for: ColorCapability(colorsEnabled: true))
     let lines = ExplainRenderer().render(vm, palette: on)
     #expect(lines.allSatisfy { stripCSI($0).count <= 80 })
     #expect(stripCSI(lines[0]) == "RV EXPLAIN")
@@ -214,7 +214,7 @@ private func isTreeSpacer(_ line: String) -> Bool {
     #expect(regexOff?.contains(regex) == true)
     #expect(regexOff?.contains("\u{001B}") == false)
 
-    let on = palette(for: ColorCapability(colorsEnabled: true))
+    let on = Palette(for: ColorCapability(colorsEnabled: true))
     let lines = ExplainRenderer().render(vm, palette: on)
     let regexOn = try #require(lines.first { stripCSI($0).contains("Regex") })
     #expect(stripCSI(regexOn).contains(regex))
@@ -243,7 +243,7 @@ private func isTreeSpacer(_ line: String) -> Bool {
     #expect(off.allSatisfy { !$0.contains("\u{001B}") })
     #expect(off.contains { $0.contains("[ \\t]") || $0.contains("\\t]") })
 
-    let on = palette(for: ColorCapability(colorsEnabled: true))
+    let on = Palette(for: ColorCapability(colorsEnabled: true))
     let painted = paintedRegexLines(pattern, width: 24, palette: on)
     #expect(painted.map(stripCSI).joined() == pattern)
     #expect(painted.contains { $0.contains(on.regex.meta) })
@@ -358,7 +358,7 @@ private func isTreeSpacer(_ line: String) -> Bool {
         ),
         command: ShellCommand(rawValue: "git reset --hard")
     )
-    let on = palette(for: ColorCapability(colorsEnabled: true))
+    let on = Palette(for: ColorCapability(colorsEnabled: true))
     let lines = TestRenderer().render(vm, palette: on)
     let pack = try #require(lines.first { stripCSI($0).hasPrefix("Pack:") })
     let pattern = try #require(lines.first { stripCSI($0).hasPrefix("Pattern:") })
