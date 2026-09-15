@@ -164,6 +164,7 @@ func applyRoleAwareQuotes(_ text: String) -> String {
     var pendingDataFlag = false
     var wrapperSeek = WrapperSeek.none
     var pendingInterpreterPayload = false
+    let unquotedDataMaskSafe = tokens.contains { tokenHasShellMeta($0.decoded) } == false
 
     for index in tokens.indices {
         if tokens[index].wasAnsiC,
@@ -267,7 +268,10 @@ func applyRoleAwareQuotes(_ text: String) -> String {
             continue
         }
 
-        if isAllArgsData(commandBase), containsInlineCode(token) == false {
+        if unquotedDataMaskSafe,
+           isAllArgsData(commandBase),
+           containsInlineCode(token) == false
+        {
             tokens[index].decoded = String(repeating: " ", count: max(decoded.count, 1))
             pendingDataFlag = false
             continue
@@ -350,6 +354,13 @@ private func isShellSeparator(_ token: String) -> Bool {
 
 private func containsInlineCode(_ token: CommandToken) -> Bool {
     token.decoded.contains("$(") || token.decoded.contains("`")
+}
+
+/// Tokenizer is whitespace-only, so `echo ok; git reset --hard` is one
+/// `ok;` token. Unquoted echo/tldr masking must not run on a line that
+/// still has glued `;` / redirect / pipe metacharacters.
+private func tokenHasShellMeta(_ decoded: String) -> Bool {
+    decoded.contains(where: { ";|&<>()".contains($0) })
 }
 
 /// Matching-view surface for `$''` tokens. Tokenizer keeps `$` in `decoded` so

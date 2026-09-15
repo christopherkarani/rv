@@ -102,6 +102,12 @@ import RVDomain
     #expect(
         Normalize.matchingView(of: "find . -name '*rm -rf*'").rawValue.contains("rm") == false
     )
+    #expect(
+        Normalize.matchingView(of: "echo ok; git reset --hard").rawValue.contains("git reset --hard")
+    )
+    #expect(
+        Normalize.matchingView(of: "echo hi > Sources/Foo.swift").rawValue.contains("Sources/Foo.swift")
+    )
 }
 
 @Test func normalize_preservesEmptyQuotedArguments() {
