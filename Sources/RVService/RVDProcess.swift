@@ -6,7 +6,7 @@ import RVIPC
 
 public enum RVDProcess {
     public static func run(configuration: RVDConfiguration) throws {
-        let analytics = AnalyticsBootstrap.live(productVersion: ProtocolVersion.serviceSemver)
+        let analytics = AnalyticsBootstrap.makeLive(productVersion: ProtocolVersion.serviceSemver)
         let runtime = ServiceRuntime(
             idleExitSeconds: configuration.idleExitSeconds,
             analytics: analytics
@@ -35,7 +35,7 @@ import RVIPC
 public enum RVDProcess {
     public static func run(configuration: RVDConfiguration) throws {
         let socketURL = try UnixSocketPath.production()
-        let analytics = AnalyticsBootstrap.live(productVersion: ProtocolVersion.serviceSemver)
+        let analytics = AnalyticsBootstrap.makeLive(productVersion: ProtocolVersion.serviceSemver)
         let runtime = ServiceRuntime(
             idleExitSeconds: configuration.idleExitSeconds,
             analytics: analytics

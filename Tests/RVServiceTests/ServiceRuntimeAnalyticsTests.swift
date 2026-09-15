@@ -107,9 +107,9 @@ struct ServiceRuntimeAnalyticsTests {
 actor RecordingAnalyticsSink: AnalyticsSink {
     private(set) var events: [AnalyticsPayload] = []
 
-    func capture(_ payload: AnalyticsPayload) async -> Bool {
+    func capture(_ payload: AnalyticsPayload) async -> AnalyticsDelivery {
         events.append(payload)
-        return true
+        return .accepted
     }
 }
 
@@ -137,11 +137,11 @@ private func makeAnalyticsFixture() throws -> AnalyticsFixture {
     let sink = RecordingAnalyticsSink()
     let coordinator = AnalyticsCoordinator(
         paths: AnalyticsPaths(configDirectory: analyticsURL),
-        preferences: .optOutDefault,
+        preferences: .enabledByDefault,
         identity: AnalyticsIdentity(distinctID: "user-1"),
         sink: sink,
         productVersion: "1.0.0",
-        platform: PlatformSnapshot(macosVersion: "26.0.0", macosBuild: "25A354")
+        platform: PlatformSnapshot(osVersion: "26.0.0", osBuild: "25A354")
     )
     let runtime = ServiceRuntime(
         home: home,

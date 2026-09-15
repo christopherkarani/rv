@@ -7,20 +7,23 @@ import Foundation
 
 /// Non-identifying platform facts for product counters.
 public struct PlatformSnapshot: Sendable, Equatable {
-    public var macosVersion: String
-    public var macosBuild: String
+    /// Posted as JSON `macos_version` (stable wire name on every platform).
+    public var osVersion: String
+    /// Posted as JSON `macos_build` (stable wire name on every platform).
+    public var osBuild: String
 
-    public init(macosVersion: String, macosBuild: String) {
-        self.macosVersion = macosVersion
-        self.macosBuild = macosBuild
+    public init(osVersion: String, osBuild: String) {
+        self.osVersion = osVersion
+        self.osBuild = osBuild
     }
 
-    public static func live(
+    /// Creates a snapshot from the current process's operating system version.
+    public static func makeLive(
         processInfo: ProcessInfo = .processInfo
     ) -> PlatformSnapshot {
         let v = processInfo.operatingSystemVersion
         let version = "\(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"
-        return PlatformSnapshot(macosVersion: version, macosBuild: kernelOSVersion())
+        return PlatformSnapshot(osVersion: version, osBuild: kernelOSVersion())
     }
 
     private static func kernelOSVersion() -> String {
