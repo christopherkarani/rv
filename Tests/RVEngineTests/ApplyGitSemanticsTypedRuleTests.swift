@@ -176,7 +176,7 @@ private func runPack(_ command: String) throws -> EvaluationResult {
     return evaluate(
         EvaluationRequest(command: ShellCommand(rawValue: command), enabledPacks: dayOnePackIDs),
         packs: packs,
-        patterns: engine,
+        engine: engine,
         compiled: compiled
     )
 }
