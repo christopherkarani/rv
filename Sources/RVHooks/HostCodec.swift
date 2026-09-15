@@ -20,28 +20,59 @@ public enum HostAskHookIntent: String, Sendable, Equatable {
     case spend
 }
 
-public struct HookRequest: Equatable, Sendable {
-    public var host: HookHost
-    public var command: ShellCommand
-    public var cwd: WorkingDirectory?
-    public var session: SessionID?
-    public var hostAsk: HostAskHookIntent?
-    public var file: FileToolAction?
+/// What a codec decoded from host stdin. Closed over shell, file tool, or same-turn spend.
+public enum HookRequest: Equatable, Sendable {
+    case shell(host: HookHost, command: ShellCommand, cwd: WorkingDirectory?, session: SessionID?)
+    case file(host: HookHost, file: FileToolAction, cwd: WorkingDirectory?, session: SessionID?)
+    case spend(host: HookHost, command: ShellCommand, cwd: WorkingDirectory?, session: SessionID?)
 
-    public init(
+    public var host: HookHost {
+        switch self {
+        case .shell(let host, _, _, _),
+             .file(let host, _, _, _),
+             .spend(let host, _, _, _):
+            return host
+        }
+    }
+
+    public var cwd: WorkingDirectory? {
+        switch self {
+        case .shell(_, _, let cwd, _),
+             .file(_, _, let cwd, _),
+             .spend(_, _, let cwd, _):
+            return cwd
+        }
+    }
+
+    public var session: SessionID? {
+        switch self {
+        case .shell(_, _, _, let session),
+             .file(_, _, _, let session),
+             .spend(_, _, _, let session):
+            return session
+        }
+    }
+
+    /// File wins a spend flag on the same envelope. Spend requires command text.
+    static func decoded(
         host: HookHost,
-        command: ShellCommand,
-        cwd: WorkingDirectory? = nil,
-        session: String? = nil,
-        hostAsk: HostAskHookIntent? = nil,
-        file: FileToolAction? = nil
-    ) {
-        self.host = host
-        self.command = command
-        self.cwd = cwd
-        self.session = session.flatMap { SessionID(validating: $0) }
-        self.hostAsk = hostAsk
-        self.file = file
+        command: String?,
+        cwd: WorkingDirectory?,
+        session: SessionID?,
+        file: FileToolAction? = nil,
+        hostAsk: HostAskHookIntent? = nil
+    ) -> HookDecodeOutcome {
+        if let file {
+            return .request(.file(host: host, file: file, cwd: cwd, session: session))
+        }
+        guard let command, command.isEmpty == false else {
+            return .malformed(.missingCommand)
+        }
+        let shell = ShellCommand(rawValue: command)
+        if hostAsk == .spend {
+            return .request(.spend(host: host, command: shell, cwd: cwd, session: session))
+        }
+        return .request(.shell(host: host, command: shell, cwd: cwd, session: session))
     }
 }
 
@@ -68,23 +99,41 @@ public protocol HostCodec: Sendable {
 }
 
 extension HostCodec {
-    /// Maps a decoded request to an empty-effect shell action.
+    /// Maps a decoded shell or spend request to an empty-effect shell action.
     ///
     /// Fingerprint spelling is `ActionFingerprint.make`. Command text remains
     /// supporting evidence; nil session and cwd occupy empty field slots.
+    /// File-tool requests are not empty-command shell actions; the file door
+    /// does not call this.
     public func proposedAction(from request: HookRequest) -> ProposedAction {
-        .shell(
-            ShellAction(
-                fingerprint: ActionFingerprint.make(
-                    host: host,
-                    session: request.session,
-                    cwd: request.cwd,
-                    command: request.command
-                ),
-                scope: ActionScope(workingDirectory: request.cwd),
-                supportingCommand: request.command
+        switch request {
+        case .shell(_, let command, let cwd, let session),
+             .spend(_, let command, let cwd, let session):
+            return .shell(
+                ShellAction(
+                    fingerprint: ActionFingerprint.make(
+                        host: host,
+                        session: session,
+                        cwd: cwd,
+                        command: command
+                    ),
+                    scope: ActionScope(workingDirectory: cwd),
+                    supportingCommand: command
+                )
             )
-        )
+        case .file(_, let file, let cwd, let session):
+            return .shell(
+                ShellAction(
+                    fingerprint: ActionFingerprint.make(
+                        host: host,
+                        session: session,
+                        cwd: cwd,
+                        command: ShellCommand(rawValue: file.path.rawValue)
+                    ),
+                    scope: ActionScope(workingDirectory: cwd)
+                )
+            )
+        }
     }
 
     /// Returns empty stdout and exit 0.

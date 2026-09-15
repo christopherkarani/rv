@@ -129,26 +129,16 @@ public struct ServiceClient: Sendable {
         try await store.insertGranted(matchingView: matchingView, cwd: cwd, now: now)
     }
 
+    private func liveWorld() -> LiveEvaluateWorld {
+        LiveEvaluateWorld(home: home, store: store, gated: door, clock: clock)
+    }
+
     private func inProcessApply(
         command: ShellCommand,
         cwd: WorkingDirectory?,
         host: LedgerHost = .tty
     ) async -> EvaluationResult {
-        let now = clock()
-        let baseDirectory = store.baseDirectory
-        return await door.run(
-            .apply,
-            command: command,
-            cwd: cwd,
-            home: home,
-            store: store,
-            now: now,
-            allowlist: {
-                AllowlistStore(baseDirectory: baseDirectory)
-                    .loadUserSnapshot(workspacePath: cwd.map(\.rawValue), now: now)
-            },
-            host: host
-        )
+        await liveWorld().apply(command: command, cwd: cwd, host: host)
     }
 
     public func evaluate(command: ShellCommand, cwd: WorkingDirectory? = nil) async -> RoutedEvaluation {
@@ -208,50 +198,12 @@ public struct ServiceClient: Sendable {
             await hookWire(
                 host: host,
                 stdin: stdin,
-                evaluate: { command, cwd in
-                    await self.inProcessApply(
-                        command: command,
-                        cwd: cwd,
-                        host: .hook(host)
-                    )
-                },
-                evaluateFile: { action, cwd in
-                    self.door.runFile(
-                        action,
-                        home: self.home,
-                        cwd: cwd,
-                        host: .hook(host),
-                        now: self.clock()
-                    )
-                },
-                spendHostAsk: { command, cwd in
-                    await self.spendHostAsk(command: command, cwd: cwd, host: .hook(host))
-                },
-                mintOnDeny: { result, cwd in
-                    await GatedEvaluate.mintUnlockCode(
-                        for: result,
-                        cwd: cwd,
-                        store: self.store,
-                        now: self.clock(),
-                        home: self.home
-                    )
-                },
-                recordHostAsk: { request, action in
-                    try await HookDoor.recordPending(
-                        request: request,
-                        action: action,
-                        store: self.pendingApprovals,
-                        now: self.clock()
-                    )
-                },
-                clearHostAsk: { request, action in
-                    try await HookDoor.clearPending(
-                        request: request,
-                        action: action,
-                        store: self.pendingApprovals,
-                        now: self.clock()
-                    )
-                }
+                world: HookEvaluateWorld.live(
+                    world: liveWorld(),
+                    host: host,
+                    pending: pendingApprovals,
+                    clock: clock
+                )
             )
         }
         guard let transport else {
@@ -301,20 +253,7 @@ public struct ServiceClient: Sendable {
         cwd: WorkingDirectory? = nil,
         host: LedgerHost = .tty
     ) async -> EvaluationResult {
-        let now = clock()
-        let baseDirectory = store.baseDirectory
-        return await door.spendHostAsk(
-            command: command,
-            cwd: cwd,
-            home: home,
-            store: store,
-            now: now,
-            allowlist: {
-                AllowlistStore(baseDirectory: baseDirectory)
-                    .loadUserSnapshot(workspacePath: cwd.map(\.rawValue), now: now)
-            },
-            host: host
-        )
+        await liveWorld().spend(command: command, cwd: cwd, host: host)
     }
 
     public func status() async -> ServiceStatusReport {

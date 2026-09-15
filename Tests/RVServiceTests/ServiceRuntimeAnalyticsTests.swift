@@ -102,6 +102,49 @@ struct ServiceRuntimeAnalyticsTests {
         #expect(daily.properties.keys.contains("command") == false)
         #expect(daily.properties.keys.contains("path") == false)
     }
+
+    @Test func hookEvaluateRecordsDecisionAnalyticsWithoutCommandText() async throws {
+        let fixture = try makeAnalyticsFixture()
+        defer { fixture.removeDirectories() }
+
+        let stdin = try grokHookFixture("deny-git-reset-hard.json")
+        let response = await fixture.runtime.dispatch(
+            IPCRequest(
+                method: .hookEvaluate(
+                    HookEvaluateParams(
+                        host: .grok,
+                        stdin: stdin,
+                        clientSemver: ProtocolVersion.serviceSemver
+                    )
+                )
+            )
+        )
+        guard case .hookEvaluate(let reply) = response.result else {
+            Issue.record("expected hookEvaluate reply")
+            return
+        }
+        #expect(reply.exitCode == 0)
+        #expect(reply.stdout.contains("\"decision\":\"deny\""))
+
+        guard let daily = await flushUntilDailyEvent(
+            coordinator: fixture.coordinator,
+            sink: fixture.sink,
+            containsCoreGit: true
+        ) else {
+            return
+        }
+        let events = await fixture.sink.events
+        #expect(events.contains { payload in
+            payload.properties["deny_count"] == .int(1)
+        })
+        #expect(enabledPackIDs(in: daily)?.contains("core.git") == true)
+        #expect(daily.properties.keys.contains("command") == false)
+        #expect(daily.properties.keys.contains("path") == false)
+        #expect(events.allSatisfy { payload in
+            payload.properties.keys.contains("command") == false
+                && payload.properties.keys.contains("path") == false
+        })
+    }
 }
 
 actor RecordingAnalyticsSink: AnalyticsSink {
@@ -200,4 +243,12 @@ private func analyticsDay(offset: Int) -> Date {
     let start = components.date ?? Date(timeIntervalSince1970: 0)
     return Calendar(identifier: .gregorian)
         .date(byAdding: .day, value: offset, to: start) ?? start
+}
+
+private func grokHookFixture(_ name: String) throws -> String {
+    let url = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .appendingPathComponent("RVHooksTests/Fixtures/grok/\(name)")
+    return try String(contentsOf: url, encoding: .utf8)
 }

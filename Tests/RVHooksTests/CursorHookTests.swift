@@ -70,7 +70,11 @@ func cursorDecode_extractsBeforeShellCommand(_ file: String, expected: String) t
         return
     }
     #expect(request.host == .cursor)
-    #expect(request.command.rawValue == expected)
+    guard case .shell(_, let command, _, _) = request else {
+        Issue.record("expected .shell for \(file)")
+        return
+    }
+    #expect(command.rawValue == expected)
 }
 
 @Test func cursorDecode_preToolUseShellIsShell() {
@@ -82,7 +86,11 @@ func cursorDecode_extractsBeforeShellCommand(_ file: String, expected: String) t
         return
     }
     #expect(request.host == .cursor)
-    #expect(request.command.rawValue == "git status")
+    guard case .shell(_, let command, _, _) = request else {
+        Issue.record("expected .shell for preToolUse Shell")
+        return
+    }
+    #expect(command.rawValue == "git status")
     #expect(request.cwd?.rawValue == "/tmp/from-input")
     #expect(request.session == SessionID(validating: "conv_shell"))
 }
@@ -92,8 +100,12 @@ func cursorDecode_extractsBeforeShellCommand(_ file: String, expected: String) t
         Issue.record("expected .request for preToolUse Read")
         return
     }
-    #expect(request.file?.kind == .read)
-    #expect(request.file?.path.rawValue == "/tmp/ws/README.md")
+    guard case .file(_, let file, _, _) = request else {
+        Issue.record("expected .file for preToolUse Read")
+        return
+    }
+    #expect(file.kind == .read)
+    #expect(file.path.rawValue == "/tmp/ws/README.md")
 }
 
 @Test func cursorDecode_preToolUseReadSshIsCatalogPath() throws {
@@ -101,8 +113,12 @@ func cursorDecode_extractsBeforeShellCommand(_ file: String, expected: String) t
         Issue.record("expected .request for deny-file-ssh")
         return
     }
-    #expect(request.file?.kind == .read)
-    #expect(request.file?.path.rawValue == "/tmp/rv-oracle/.ssh/id_ed25519")
+    guard case .file(_, let file, _, _) = request else {
+        Issue.record("expected .file for deny-file-ssh")
+        return
+    }
+    #expect(file.kind == .read)
+    #expect(file.path.rawValue == "/tmp/rv-oracle/.ssh/id_ed25519")
 }
 
 @Test func cursorDecode_preToolUseGrepIsForeign() {
@@ -118,8 +134,12 @@ func cursorDecode_extractsBeforeShellCommand(_ file: String, expected: String) t
         Issue.record("expected .request for Read with empty path")
         return
     }
-    #expect(request.file?.kind == .read)
-    #expect(request.file?.path.isEmpty == true)
+    guard case .file(_, let file, _, _) = request else {
+        Issue.record("expected .file for Read with empty path")
+        return
+    }
+    #expect(file.kind == .read)
+    #expect(file.path.isEmpty == true)
 }
 
 @Test func cursorDecode_afterShellIsForeign() {
@@ -288,6 +308,10 @@ func cursorDecode_extractsBeforeShellCommand(_ file: String, expected: String) t
     }
     #expect(request.cwd?.rawValue == "/tmp/ws")
     #expect(request.session == SessionID(validating: "sess_1"))
+    guard case .shell(_, let command, _, _) = request else {
+        Issue.record("expected .shell for cwd stdin")
+        return
+    }
     let action = codec.proposedAction(from: request)
     #expect(
         action.fingerprint
@@ -295,7 +319,7 @@ func cursorDecode_extractsBeforeShellCommand(_ file: String, expected: String) t
                 host: .cursor,
                 session: request.session,
                 cwd: request.cwd,
-                command: request.command
+                command: command
             )
     )
     guard case .shell(let shell) = action else {
@@ -353,10 +377,11 @@ func cursorDecode_extractsBeforeShellCommand(_ file: String, expected: String) t
 }
 
 @Test func cursorHookRequest_emptySessionStringIsNil() {
-    let request = HookRequest(
+    let request = HookRequest.shell(
         host: .cursor,
         command: ShellCommand(rawValue: "git status"),
-        session: ""
+        cwd: nil,
+        session: SessionID(validating: "")
     )
     #expect(request.session == nil)
     #expect(

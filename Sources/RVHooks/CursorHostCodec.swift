@@ -26,7 +26,7 @@ public struct CursorHostCodec: HostCodec {
             envelope.conversationId,
             envelope.sessionId,
             envelope.generationId
-        )
+        ).flatMap { SessionID(validating: $0) }
         switch classify(envelope) {
         case .foreign:
             return .foreign
@@ -41,28 +41,21 @@ public struct CursorHostCodec: HostCodec {
                 // Classify already matched a File tool. Foreign would fail-open.
                 return .malformed(.unreadable)
             }
-            return .request(
-                HookRequest(
-                    host: .cursor,
-                    command: ShellCommand(rawValue: ""),
-                    cwd: cwd,
-                    session: session,
-                    file: file
-                )
+            return HookRequest.decoded(
+                host: .cursor,
+                command: nil,
+                cwd: cwd,
+                session: session,
+                file: file
             )
         case .shell:
             break
         }
-        guard let command = shellCommand(in: envelope), command.isEmpty == false else {
-            return .malformed(.missingCommand)
-        }
-        return .request(
-            HookRequest(
-                host: .cursor,
-                command: ShellCommand(rawValue: command),
-                cwd: cwd,
-                session: session
-            )
+        return HookRequest.decoded(
+            host: .cursor,
+            command: shellCommand(in: envelope),
+            cwd: cwd,
+            session: session
         )
     }
 

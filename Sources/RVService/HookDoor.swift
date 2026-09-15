@@ -1,11 +1,20 @@
 import Foundation
 import RVDomain
+import RVHistory
 import RVHooks
 import RVIPC
 import RVPolicy
 
 /// Server-side host codec door. Maps host stdin through gated evaluate to host wire.
 public struct HookDoor: Sendable {
+    public static func run(
+        host: HookHost,
+        stdin: String,
+        world: HookEvaluateWorld
+    ) async throws -> HookEvaluateReply {
+        reply(await hookWire(host: host, stdin: stdin, world: world))
+    }
+
     public static func run(
         host: HookHost,
         stdin: String,
@@ -80,5 +89,52 @@ public struct HookDoor: Sendable {
 
     private static func reply(_ wire: HookWire) -> HookEvaluateReply {
         HookEvaluateReply(stdout: wire.stdout, exitCode: wire.exitCode, stderr: wire.stderr)
+    }
+}
+
+extension HookEvaluateWorld {
+    /// Production ports over a `LiveEvaluateWorld`. Miss and warm rvd share this.
+    package static func live(
+        world: LiveEvaluateWorld,
+        host: HookHost,
+        pending: (any PendingApprovalCoordinating)?,
+        clock: @escaping @Sendable () -> Date,
+        recordDecision: (@Sendable (EvaluationResult) -> Void)? = nil
+    ) -> HookEvaluateWorld {
+        let ledger = LedgerHost.hook(host)
+        return HookEvaluateWorld(
+            evaluate: { command, cwd in
+                let result = await world.apply(command: command, cwd: cwd, host: ledger)
+                recordDecision?(result)
+                return result
+            },
+            evaluateFile: { action, cwd in
+                world.runFile(action: action, cwd: cwd, host: ledger)
+            },
+            spend: { command, cwd in
+                let result = await world.spend(command: command, cwd: cwd, host: ledger)
+                recordDecision?(result)
+                return result
+            },
+            mintOnDeny: { result, cwd in
+                await world.mintUnlockCode(for: result, cwd: cwd)
+            },
+            recordHostAsk: { request, action in
+                try await HookDoor.recordPending(
+                    request: request,
+                    action: action,
+                    store: pending,
+                    now: clock()
+                )
+            },
+            clearHostAsk: { request, action in
+                try await HookDoor.clearPending(
+                    request: request,
+                    action: action,
+                    store: pending,
+                    now: clock()
+                )
+            }
+        )
     }
 }

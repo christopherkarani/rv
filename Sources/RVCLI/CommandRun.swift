@@ -49,18 +49,9 @@ public enum CommandRun {
         now: Date = Date(),
         home: HomeDirectory? = HomeDirectory.process()
     ) async -> EvaluationResult {
-        let baseDirectory = store.baseDirectory
-        return await EvaluationWorld.assemble(home: home, snapshots: nil, catalog: nil).run(
-            .peek,
+        await LiveEvaluateWorld(home: home, store: store, clock: { now }).peek(
             command: ShellCommand(rawValue: raw),
-            cwd: cwd,
-            home: home,
-            store: store,
-            now: now,
-            allowlist: {
-                AllowlistStore(baseDirectory: baseDirectory)
-                    .loadUserSnapshot(workspacePath: cwd.map(\.rawValue), now: now)
-            }
+            cwd: cwd
         )
     }
 

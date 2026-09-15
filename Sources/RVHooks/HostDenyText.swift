@@ -116,9 +116,9 @@ public func hostAskLine(command: ShellCommand, ruleID: RuleID) -> String {
 
 /// Sentence 1 of `reason`, plus sentence 2 when it is a safe one-line tip.
 /// Command prefix stripped, sentence 1 capitalized, both clauses end with `.`.
-func hostDenyWhy(_ reason: String, command: ShellCommand) -> String {
+func hostDenyWhy(_ reason: String, command: ShellCommand?) -> String {
     var text = reason.trimmingCharacters(in: .whitespacesAndNewlines)
-    let preview = hookDenyCommandPreview(command)
+    let preview = command.map(hookDenyCommandPreview) ?? ""
     if !preview.isEmpty, text.lowercased().hasPrefix(preview.lowercased()) {
         text = String(text.dropFirst(preview.count))
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -188,7 +188,15 @@ private func shouldOmitDenySentence2(_ sentence2: String, sentence1: String) -> 
 }
 
 public func hostDenyLine(command: ShellCommand, reason: String, unlockCode: String? = nil) -> String {
-    let why = hostDenyWhy(reason, command: command)
+    wrappedHostDeny(why: hostDenyWhy(reason, command: command), unlockCode: unlockCode)
+}
+
+/// File-tool deny sentence. Does not preview an empty `ShellCommand`.
+public func hostFileDenyLine(reason: String, unlockCode: String? = nil) -> String {
+    wrappedHostDeny(why: hostDenyWhy(reason, command: nil), unlockCode: unlockCode)
+}
+
+private func wrappedHostDeny(why: String, unlockCode: String?) -> String {
     let blocked = "RV · Blocked."
     let withoutCode = why.isEmpty ? blocked : "\(blocked) \(why)"
     guard let unlock = mintedUnlockNext(unlockCode) else {

@@ -1,7 +1,24 @@
 import RVDomain
 
-/// The single codec-dispatch body: decode stdin with the host's concrete codec,
-/// evaluate, and map the result to host wire. `.foreign` allows; `.malformed` denies.
+/// Live hook door. Production call sites pass `HookEvaluateWorld`.
+public func hookWire(
+    host: HookHost,
+    stdin: String,
+    world: HookEvaluateWorld
+) async -> HookWire {
+    await hookWire(
+        host: host,
+        stdin: stdin,
+        evaluate: world.evaluate,
+        evaluateFile: world.evaluateFile,
+        spendHostAsk: world.spend,
+        mintOnDeny: world.mintOnDeny,
+        recordHostAsk: world.recordHostAsk,
+        clearHostAsk: world.clearHostAsk
+    )
+}
+
+/// Test/legacy adapter. Missing file/spend/mint/record ports fail closed as today.
 public func hookWire(
     host: HookHost,
     stdin: String,
@@ -116,57 +133,64 @@ private func hookBody<C: HostCodec>(
 ) async -> HookWire {
     switch codec.decode(stdin) {
     case .request(let request):
-        if let file = request.file {
+        switch request {
+        case .file(_, let file, _, _):
             return await hookFileBody(
                 request: request,
                 file: file,
                 codec: codec,
                 evaluateFile: evaluateFile
             )
-        }
-        if request.hostAsk == .spend {
+        case .spend(_, let command, let cwd, _):
             guard let spendHostAsk else {
                 return codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
             }
-            let result = await spendHostAsk(request.command, request.cwd)
+            let result = await spendHostAsk(command, cwd)
             let wire = hookWire(
                 from: result,
-                command: request.command,
+                command: command,
                 using: codec,
                 intent: .afterSpend
             )
             if let clearHostAsk {
                 await ignoreHostAskFailure {
-                    try await clearHostAsk(request, pendingAction(from: result, request: request))
+                    try await clearHostAsk(
+                        request,
+                        pendingAction(from: result, request: request, command: command)
+                    )
                 }
             }
             return wire
-        }
-        let result = await evaluate(request.command, request.cwd)
-        let bound = BoundReview.packProjected(from: result)
-        let verdict = HostNativeAsk.verdict(
-            host: codec.host,
-            result: result,
-            cwd: request.cwd,
-            bound: bound
-        )
-        let unlockCode = await mintUnlockCodeIfNeeded(
-            result: result,
-            verdict: verdict,
-            cwd: request.cwd,
-            mintOnDeny: mintOnDeny
-        )
-        if let recordHostAsk, encodesHostAsk(result: result, verdict: verdict) {
-            await ignoreHostAskFailure {
-                try await recordHostAsk(request, pendingAction(from: result, request: request))
+        case .shell(_, let command, let cwd, _):
+            let result = await evaluate(command, cwd)
+            let bound = BoundReview.packProjected(from: result)
+            let verdict = HostNativeAsk.verdict(
+                host: codec.host,
+                result: result,
+                cwd: cwd,
+                bound: bound
+            )
+            let unlockCode = await mintUnlockCodeIfNeeded(
+                result: result,
+                verdict: verdict,
+                cwd: cwd,
+                mintOnDeny: mintOnDeny
+            )
+            if let recordHostAsk, encodesHostAsk(result: result, verdict: verdict) {
+                await ignoreHostAskFailure {
+                    try await recordHostAsk(
+                        request,
+                        pendingAction(from: result, request: request, command: command)
+                    )
+                }
             }
+            return hookWire(
+                from: result,
+                command: command,
+                using: codec,
+                intent: .firstCall(verdict: verdict, unlockCode: unlockCode)
+            )
         }
-        return hookWire(
-            from: result,
-            command: request.command,
-            using: codec,
-            intent: .firstCall(verdict: verdict, unlockCode: unlockCode)
-        )
     case .foreign:
         return codec.encodeAllow()
     case .malformed(let malformation):
@@ -191,20 +215,40 @@ private func hookFileBody<C: HostCodec>(
         return codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
     }
     let result = await evaluateFile(file, request.cwd)
-    return hookWire(
-        from: result,
-        command: request.command,
-        using: codec,
-        cwd: request.cwd
-    )
+    return hookFileWire(from: result, using: codec)
 }
 
-private func pendingAction(from result: EvaluationResult, request: HookRequest) -> ProposedAction {
+private func hookFileWire<C: HostCodec>(
+    from result: EvaluationResult,
+    using codec: C
+) -> HookWire {
+    switch result.decision {
+    case .allow:
+        return codec.encodeAllow()
+    case .indeterminate:
+        return codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
+    case .deny(let deny):
+        let reason = hostFileDenyLine(reason: deny.reason)
+        if codec.host == .claude, case .deny(_, let matched?) = result.outcome {
+            return HookWire(
+                stdout: claudeRichDenyJSON(hostDenyText: reason, match: matched),
+                exitCode: codec.host.denyExitCode
+            )
+        }
+        return codec.encodeDeny(reason: reason, rule: deny.ruleID, next: .none)
+    }
+}
+
+private func pendingAction(
+    from result: EvaluationResult,
+    request: HookRequest,
+    command: ShellCommand
+) -> ProposedAction {
     result.pendingAction(
         host: request.host,
         session: request.session,
         cwd: request.cwd,
-        command: request.command
+        command: command
     )
 }
 

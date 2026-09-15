@@ -248,47 +248,17 @@ public actor ServiceRuntime {
 
     private func makeHookEvaluateResult(_ params: HookEvaluateParams) async -> IPCResult {
         do {
+            rebuildWhenUncovered(wanted: EvaluationWorld.walkedPackIDs(home: configHome))
             let reply = try await HookDoor.run(
                 host: params.host,
                 stdin: params.stdin,
-                evaluate: { command, cwd in
-                    // Same pack resolution as the rv-cli miss path
-                    // (`EvaluationWorld.walkedPackIDs`): a warm rvd must never decide on a
-                    // narrower or wider set than a cold one.
-                    let request = GatedEvaluate.makeRequest(command: command, home: self.configHome)
-                    return await self.runEvaluate(request, cwd: cwd, host: .hook(params.host))
-                },
-                evaluateFile: { action, cwd in
-                    await self.runFile(action, cwd: cwd, host: params.host)
-                },
-                spendHostAsk: { command, cwd in
-                    await self.runSpendHostAsk(command: command, cwd: cwd, host: .hook(params.host))
-                },
-                mintOnDeny: { result, cwd in
-                    await GatedEvaluate.mintUnlockCode(
-                        for: result,
-                        cwd: cwd,
-                        store: self.allowOnce,
-                        now: self.clock(),
-                        home: self.configHome
-                    )
-                },
-                recordHostAsk: { request, action in
-                    try await HookDoor.recordPending(
-                        request: request,
-                        action: action,
-                        store: self.pendingApprovals,
-                        now: self.clock()
-                    )
-                },
-                clearHostAsk: { request, action in
-                    try await HookDoor.clearPending(
-                        request: request,
-                        action: action,
-                        store: self.pendingApprovals,
-                        now: self.clock()
-                    )
-                }
+                world: HookEvaluateWorld.live(
+                    world: liveWorld(),
+                    host: params.host,
+                    pending: pendingApprovals,
+                    clock: clock,
+                    recordDecision: analyticsRecorder()
+                )
             )
             return .hookEvaluate(reply)
         } catch let error as IPCError {
@@ -298,17 +268,12 @@ public actor ServiceRuntime {
         }
     }
 
-    private func runFile(
-        _ action: FileToolAction,
-        cwd: WorkingDirectory?,
-        host: HookHost
-    ) -> EvaluationResult {
-        gated.runFile(
-            action,
+    private func liveWorld() -> LiveEvaluateWorld {
+        LiveEvaluateWorld(
             home: configHome,
-            cwd: cwd,
-            host: .hook(host),
-            now: clock()
+            store: allowOnce,
+            gated: gated,
+            clock: clock
         )
     }
 
@@ -318,40 +283,7 @@ public actor ServiceRuntime {
         host: LedgerHost = .tty
     ) async -> EvaluationResult {
         rebuildWhenUncovered(wanted: WalkedPackIDs(ids: request.enabledPacks))
-        let now = clock()
-        let baseDirectory = allowOnce.baseDirectory
-        let result = await gated.apply(
-            request,
-            cwd: cwd,
-            home: configHome,
-            store: allowOnce,
-            now: now,
-            allowlist: {
-                AllowlistStore(baseDirectory: baseDirectory)
-                    .loadUserSnapshot(workspacePath: cwd.map(\.rawValue), now: now)
-            },
-            host: host
-        )
-        recordAnalytics(for: result)
-        return result
-    }
-
-    private func runSpendHostAsk(command: ShellCommand, cwd: WorkingDirectory?, host: LedgerHost) async -> EvaluationResult {
-        rebuildWhenUncovered(wanted: EvaluationWorld.walkedPackIDs(home: configHome))
-        let now = clock()
-        let baseDirectory = allowOnce.baseDirectory
-        let result = await gated.spendHostAsk(
-            command: command,
-            cwd: cwd,
-            home: configHome,
-            store: allowOnce,
-            now: now,
-            allowlist: {
-                AllowlistStore(baseDirectory: baseDirectory)
-                    .loadUserSnapshot(workspacePath: cwd.map(\.rawValue), now: now)
-            },
-            host: host
-        )
+        let result = await liveWorld().apply(request, cwd: cwd, host: host)
         recordAnalytics(for: result)
         return result
     }
@@ -370,7 +302,27 @@ public actor ServiceRuntime {
         )
     }
 
+    private func analyticsRecorder() -> @Sendable (EvaluationResult) -> Void {
+        let analytics = self.analytics
+        let packs = analyticsEnabledPackIDs
+        return { result in
+            Self.recordAnalytics(result, analytics: analytics, enabledPackIDs: packs)
+        }
+    }
+
     private func recordAnalytics(for result: EvaluationResult) {
+        Self.recordAnalytics(
+            result,
+            analytics: analytics,
+            enabledPackIDs: analyticsEnabledPackIDs
+        )
+    }
+
+    private static func recordAnalytics(
+        _ result: EvaluationResult,
+        analytics: AnalyticsCoordinator?,
+        enabledPackIDs: [String]
+    ) {
         guard let analytics else { return }
         let kind: AnalyticsDecisionKind
         switch result.decision {
@@ -381,29 +333,16 @@ public actor ServiceRuntime {
         case .indeterminate:
             kind = .indeterminate
         }
-        let packs = analyticsEnabledPackIDs
         Task {
             await analytics.recordDecision(kind)
-            await analytics.noteEnabledPacks(packs)
+            await analytics.noteEnabledPacks(enabledPackIDs)
             await analytics.flushDailyIfNeeded()
         }
     }
 
     private func explain(_ params: ExplainParams) async -> ExplainReply {
-        let now = clock()
-        let baseDirectory = allowOnce.baseDirectory
         let cwd = params.cwd
-        let result = await gated.peek(
-            params.request,
-            cwd: cwd,
-            home: configHome,
-            store: allowOnce,
-            now: now,
-            allowlist: {
-                AllowlistStore(baseDirectory: baseDirectory)
-                    .loadUserSnapshot(workspacePath: cwd.map(\.rawValue), now: now)
-            }
-        )
+        let result = await liveWorld().peek(params.request, cwd: cwd)
         let normalized = result.matchingView.rawValue
         let stages = explainSteps(from: result).map {
             ExplainStage(name: $0.id, elapsedMs: 0)
@@ -426,20 +365,8 @@ public actor ServiceRuntime {
     }
 
     private func classify(_ params: ClassifyParams) async -> ClassifyReply {
-        let now = clock()
-        let baseDirectory = allowOnce.baseDirectory
         let cwd = params.cwd
-        let result = await gated.peek(
-            params.request,
-            cwd: cwd,
-            home: configHome,
-            store: allowOnce,
-            now: now,
-            allowlist: {
-                AllowlistStore(baseDirectory: baseDirectory)
-                    .loadUserSnapshot(workspacePath: cwd.map(\.rawValue), now: now)
-            }
-        )
+        let result = await liveWorld().peek(params.request, cwd: cwd)
         let suggestions: [String]
         switch result.decision {
         case .deny:
@@ -741,19 +668,12 @@ public actor ServiceRuntime {
         cwd: WorkingDirectory?,
         now: Date
     ) async -> EvaluationResult {
-        let request = GatedEvaluate.makeRequest(command: command, home: configHome)
-        let baseDirectory = allowOnce.baseDirectory
-        return await gated.peek(
-            request,
-            cwd: cwd,
+        return await LiveEvaluateWorld(
             home: configHome,
             store: allowOnce,
-            now: now,
-            allowlist: {
-                AllowlistStore(baseDirectory: baseDirectory)
-                    .loadUserSnapshot(workspacePath: cwd.map(\.rawValue), now: now)
-            }
-        )
+            gated: gated,
+            clock: { now }
+        ).peek(command: command, cwd: cwd)
     }
 
     private func isTerminal(_ state: PendingApprovalState) -> Bool {

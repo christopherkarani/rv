@@ -52,7 +52,11 @@ func claudeDecode_extractsShellCommand(_ file: String, expected: String) throws 
         return
     }
     #expect(request.host == .claude)
-    #expect(request.command.rawValue == expected)
+    guard case .shell(_, let command, _, _) = request else {
+        Issue.record("expected .shell for \(file)")
+        return
+    }
+    #expect(command.rawValue == expected)
 }
 
 @Test(arguments: [
@@ -73,8 +77,12 @@ func claudeDecode_fileToolsExtractPath(_ file: String, kind: FileToolKind, path:
         Issue.record("expected .request for \(file)")
         return
     }
-    #expect(request.file?.kind == kind)
-    #expect(request.file?.path.rawValue == path)
+    guard case .file(_, let action, _, _) = request else {
+        Issue.record("expected .file for \(file)")
+        return
+    }
+    #expect(action.kind == kind)
+    #expect(action.path.rawValue == path)
 }
 
 @Test func claudeDecode_emptyCommandIsMissingCommand() throws {
@@ -93,7 +101,11 @@ func claudeDecode_fileToolsExtractPath(_ file: String, kind: FileToolKind, path:
         Issue.record("expected .request for cwd stdin")
         return
     }
-    #expect(request.command.rawValue == "git status")
+    guard case .shell(_, let command, _, _) = request else {
+        Issue.record("expected .shell for cwd stdin")
+        return
+    }
+    #expect(command.rawValue == "git status")
     #expect(request.cwd == WorkingDirectory(validating: "/tmp/ws"))
     #expect(request.session == nil)
 }
@@ -125,7 +137,11 @@ func claudeDecode_fileToolsExtractPath(_ file: String, kind: FileToolKind, path:
         Issue.record("expected .request for hostAsk spend")
         return
     }
-    #expect(request.hostAsk == .spend)
+    guard case .spend(_, let command, _, _) = request else {
+        Issue.record("expected .spend for hostAsk spend")
+        return
+    }
+    #expect(command.rawValue == "git reset --hard")
     #expect(request.cwd == WorkingDirectory(validating: "/tmp/ws"))
 }
 
