@@ -105,7 +105,9 @@ EOF
 LOGIN_HOME="$(python3 -c 'import pwd, os; print(pwd.getpwuid(os.getuid()).pw_dir)')"
 [[ -n "$LOGIN_HOME" ]] || fail "could not resolve login HOME via getpwuid"
 LIVE_PLIST="$LOGIN_HOME/Library/LaunchAgents/dev.rv.evaluate.plist"
+ASIDE_PLIST="${LIVE_PLIST}.rv-c-hook-proof-aside"
 HAD_LIVE=0
+PARKED=0
 RESTORE_PLIST=""
 CLEANED=0
 
@@ -115,13 +117,29 @@ bootout_label() {
 
 wait_unloaded() {
   local i
-  for i in 1 2 3 4 5 6 7 8 9 10; do
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25; do
     if ! /bin/launchctl print "${DOMAIN}/${LABEL}" >/dev/null 2>&1; then
       return 0
     fi
     bootout_label
     sleep 0.2
   done
+}
+
+restore_live_plist() {
+  if [[ -f "$LIVE_PLIST" ]]; then
+    return 0
+  fi
+  mkdir -p "$LOGIN_HOME"/Library/LaunchAgents
+  if [[ -n "$RESTORE_PLIST" && -f "$RESTORE_PLIST" ]]; then
+    cp "$RESTORE_PLIST" "$LIVE_PLIST" || return 1
+    return 0
+  fi
+  if [[ -f "$ASIDE_PLIST" ]]; then
+    mv "$ASIDE_PLIST" "$LIVE_PLIST" || return 1
+    return 0
+  fi
+  return 1
 }
 
 cleanup() {
@@ -131,30 +149,24 @@ cleanup() {
   CLEANED=1
   /bin/launchctl bootout "${DOMAIN}/${LABEL}" >/dev/null 2>&1 || true
   wait_unloaded
-  if [[ "$HAD_LIVE" -eq 1 ]]; then
-    if [[ -f "$LIVE_PLIST" ]]; then
-      :
-    elif [[ -n "$RESTORE_PLIST" && -f "$RESTORE_PLIST" ]]; then
-      mkdir -p "$(dirname "$LIVE_PLIST")"
-      cp "$RESTORE_PLIST" "$LIVE_PLIST" || {
-        printf 'c-hook-proof: could not write restore plist to %s\n' "$LIVE_PLIST" >&2
-        rm -rf "$PROOF_ROOT"
-        rmdir "$LOCKDIR" >/dev/null 2>&1 || true
-        exit 1
-      }
-    else
-      printf 'c-hook-proof: LaunchAgent was loaded but no restore plist remains\n' >&2
+  if [[ "$HAD_LIVE" -eq 1 || "$PARKED" -eq 1 ]]; then
+    if ! restore_live_plist; then
+      printf 'c-hook-proof: LaunchAgent plist could not be restored' >&2
+      rm -f "$ASIDE_PLIST"
       rm -rf "$PROOF_ROOT"
       rmdir "$LOCKDIR" >/dev/null 2>&1 || true
       exit 1
     fi
-    if ! /bin/launchctl bootstrap "$DOMAIN" "$LIVE_PLIST"; then
+    if [[ "$HAD_LIVE" -eq 1 ]]; then
+      if ! /bin/launchctl bootstrap "$DOMAIN" "$LIVE_PLIST"; then
       printf 'c-hook-proof: failed to restore LaunchAgent from %s\n' "$LIVE_PLIST" >&2
       rm -rf "$PROOF_ROOT"
       rmdir "$LOCKDIR" >/dev/null 2>&1 || true
       exit 1
     fi
+    fi
   fi
+  rm -f "$ASIDE_PLIST"
   rm -rf "$PROOF_ROOT"
   rmdir "$LOCKDIR" >/dev/null 2>&1 || true
 }
@@ -206,7 +218,8 @@ stage_stale() {
 if [[ "${RV_C_HOOK_SKIP_RELEASE:-0}" == "1" ]] && stage_ok && ! stage_stale; then
   printf 'c-hook-proof: using existing stage %s\n' "$STAGE"
 else
-  RV_RELEASE_STAGE="$STAGE" bash "$ROOT/tools/release.sh"
+  # tools/swift-6.3.3 resolves the pin under $HOME; proof HOME is a fixture.
+  HOME="$LOGIN_HOME" RV_RELEASE_STAGE="$STAGE" bash "$ROOT/tools/release.sh"
   stage_ok || fail "release stage incomplete: $STAGE"
 fi
 
@@ -424,6 +437,11 @@ bootstrap_plist() {
   /bin/launchctl kickstart -k "${DOMAIN}/${LABEL}" >/dev/null 2>&1 || true
 }
 
+if [[ ! -f "$LIVE_PLIST" && -f "$ASIDE_PLIST" ]]; then
+  mkdir -p "$LOGIN_HOME"/Library/LaunchAgents
+  mv "$ASIDE_PLIST" "$LIVE_PLIST" || fail "could not recover parked LaunchAgent plist"
+fi
+
 if /bin/launchctl print "${DOMAIN}/${LABEL}" >/dev/null 2>&1; then
   HAD_LIVE=1
   if [[ ! -f "$LIVE_PLIST" ]]; then
@@ -431,6 +449,16 @@ if /bin/launchctl print "${DOMAIN}/${LABEL}" >/dev/null 2>&1; then
   fi
   RESTORE_PLIST="$PROOF_ROOT/restore-launchagent.plist"
   cp "$LIVE_PLIST" "$RESTORE_PLIST" || fail "could not snapshot LaunchAgent plist"
+fi
+
+if [[ -f "$LIVE_PLIST" ]]; then
+  if [[ -z "$RESTORE_PLIST" ]]; then
+    RESTORE_PLIST="$PROOF_ROOT/restore-launchagent.plist"
+    cp "$LIVE_PLIST" "$RESTORE_PLIST" || fail "could not snapshot LaunchAgent plist"
+  fi
+  rm -f "$ASIDE_PLIST"
+  mv "$LIVE_PLIST" "$ASIDE_PLIST" || fail "could not park LaunchAgent plist"
+  PARKED=1
 fi
 
 write_plist "$STAGE/rvd" "$PROOF_ROOT/rvd.plist"

@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#endif
 import Testing
 import RVDomain
 import RVHooks
@@ -119,7 +122,8 @@ import RVTheme
         builtRVExecutable(),
         "build --product rv to prove the process hook path"
     )
-    try await withDispatchTempHome { home in
+    try await withIsolatedEvaluateService {
+        try await withDispatchTempHome { home in
         let allow = try runBuiltRV(
             rv,
             arguments: ["hook", "--host", "grok"],
@@ -154,6 +158,7 @@ import RVTheme
         #expect(help.stdout.contains("OVERVIEW:") == false)
         #expect(help.stdout.contains("SUBCOMMANDS:") == false)
         #expect(help.stderr.contains("Error:") == false)
+        }
     }
 }
 
@@ -262,3 +267,127 @@ private func runBuiltRV(
     let stderr = String(data: stderrPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
     return (stdout, stderr, process.terminationStatus)
 }
+
+private let evaluateProofLockPath = "/tmp/swift-arch-c8hook21/c-hook-proof.lockdir"
+private let evaluateProofAsideSuffix = ".rv-c-hook-proof-aside"
+private let evaluateProofLabel = "dev.rv.evaluate"
+
+/// Built `rv hook` uses the login Mach service. Park it so temp HOME evaluates in-process.
+private func withIsolatedEvaluateService<T>(
+    _ body: () async throws -> T
+) async throws -> T {
+#if os(macOS)
+    try await withEvaluateProofLock {
+        try await withParkedLiveEvaluateAgent(body)
+    }
+#else
+    try await body()
+#endif
+}
+
+#if os(macOS)
+private struct EvaluateProofLockError: Error {}
+
+private func withEvaluateProofLock<T>(
+    _ body: () async throws -> T
+) async throws -> T {
+    mkdir("/tmp/swift-arch-c8hook21", mode_t(0o755))
+    var acquired = false
+    for _ in 1...360 {
+        if mkdir(evaluateProofLockPath, mode_t(0o755)) == 0 {
+            acquired = true
+            break
+        }
+        try await Task.sleep(nanoseconds: 1_000_000_000)
+    }
+    guard acquired else {
+        throw EvaluateProofLockError()
+    }
+    defer { rmdir(evaluateProofLockPath) }
+    return try await body()
+}
+
+private func loginHomePath() -> String? {
+    guard let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir else {
+        return nil
+    }
+    return String(cString: dir)
+}
+
+private func launchctl(_ arguments: [String]) -> Int32 {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+    process.arguments = arguments
+    process.standardInput = FileHandle.nullDevice
+    process.standardOutput = FileHandle.nullDevice
+    process.standardError = FileHandle.nullDevice
+    do {
+        try process.run()
+        process.waitUntilExit()
+        return process.terminationStatus
+    } catch {
+        return 1
+    }
+}
+
+private func evaluateServiceTarget() -> (domain: String, target: String) {
+    let domain = "gui/\(getuid())"
+    return (domain, "\(domain)/\(evaluateProofLabel)")
+}
+
+private func evaluateServiceIsLoaded(_ target: String) -> Bool {
+    launchctl(["print", target]) == 0
+}
+
+private func bootoutEvaluateService(_ target: String) {
+    _ = launchctl(["bootout", target])
+    for _ in 1...25 {
+        if evaluateServiceIsLoaded(target) == false {
+            return
+        }
+        _ = launchctl(["bootout", target])
+        usleep(200_000)
+    }
+}
+
+private func withParkedLiveEvaluateAgent<T>(
+    _ body: () async throws -> T
+) async throws -> T {
+    let fm = FileManager.default
+    let names = evaluateServiceTarget()
+    guard let login = loginHomePath() else {
+        return try await body()
+    }
+    let live = URL(fileURLWithPath: login)
+        .appendingPathComponent("Library/LaunchAgents/\(evaluateProofLabel).plist")
+    let aside = URL(fileURLWithPath: live.path + evaluateProofAsideSuffix)
+    let loaded = evaluateServiceIsLoaded(names.target)
+    if fm.fileExists(atPath: live.path) == false && fm.fileExists(atPath: aside.path) {
+        try fm.moveItem(at: aside, to: live)
+    }
+    if loaded && fm.fileExists(atPath: live.path) == false {
+        throw EvaluateProofLockError()
+    }
+    var parked: URL?
+    if fm.fileExists(atPath: live.path) {
+        if fm.fileExists(atPath: aside.path) {
+            try fm.removeItem(at: aside)
+        }
+        try fm.moveItem(at: live, to: aside)
+        parked = aside
+    }
+    bootoutEvaluateService(names.target)
+    defer {
+        bootoutEvaluateService(names.target)
+        if let parked {
+            if fm.fileExists(atPath: live.path) == false, fm.fileExists(atPath: parked.path) {
+                try? fm.moveItem(at: parked, to: live)
+            }
+            if loaded, fm.fileExists(atPath: live.path) {
+                _ = launchctl(["bootstrap", names.domain, live.path])
+            }
+        }
+    }
+    return try await body()
+}
+#endif
