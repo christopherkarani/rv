@@ -101,7 +101,17 @@ enum PendingListProjection {
                 return "unresolved filesystem path"
             }
         }
-        let base = labels.isEmpty ? "shell" : labels.joined(separator: ", ")
+        let base: String
+        if labels.isEmpty {
+            switch action {
+            case .file(let file):
+                base = "\(file.file.kind.ledgerName.lowercased()) file"
+            case .shell:
+                base = "shell"
+            }
+        } else {
+            base = labels.joined(separator: ", ")
+        }
         switch (action.resources.remoteName, action.resources.branchName) {
         case let (remote?, branch?) where remote.isEmpty == false && branch.isEmpty == false:
             return "\(base) on \(remote)/\(branch)"

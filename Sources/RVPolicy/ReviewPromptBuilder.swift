@@ -54,6 +54,14 @@ public enum ReviewPromptBuilder: Sendable {
             if let cwd = shell.scope.workingDirectory {
                 lines.append("scope.workingDirectory: \(cwd.rawValue)")
             }
+        case .file(let file):
+            lines.append("kind: file")
+            lines.append("fingerprint: \(file.fingerprint.rawValue)")
+            lines.append("path: \(file.file.path.rawValue)")
+            lines.append("kind: \(file.file.kind.rawValue)")
+            if let cwd = file.scope.workingDirectory {
+                lines.append("scope.workingDirectory: \(cwd.rawValue)")
+            }
         }
     }
 

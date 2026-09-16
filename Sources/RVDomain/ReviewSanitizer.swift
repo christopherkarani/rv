@@ -7,6 +7,8 @@ public enum ReviewSanitizer: Sendable {
         switch action {
         case .shell(let shell):
             return .shell(sanitize(shell))
+        case .file(let file):
+            return .file(sanitize(file))
         }
     }
 
@@ -31,6 +33,31 @@ public enum ReviewSanitizer: Sendable {
             supportingCommand: shell.supportingCommand.map { command in
                 ShellCommand(rawValue: redactCredentials(in: command.rawValue))
             }
+        )
+    }
+
+    public static func sanitize(_ file: FileAction) -> FileAction {
+        FileAction(
+            fingerprint: ActionFingerprint(
+                rawValue: redactCredentials(in: file.fingerprint.rawValue)
+            ),
+            file: FileToolAction(
+                kind: file.file.kind,
+                path: FileToolPath(rawValue: sanitizeField(file.file.path.rawValue) ?? file.file.path.rawValue)
+            ),
+            effects: file.effects,
+            resources: ActionResources(
+                remoteName: sanitizeField(file.resources.remoteName),
+                branchName: sanitizeField(file.resources.branchName),
+                path: sanitizeField(file.resources.path),
+                filesystemScope: file.resources.filesystemScope,
+                resourceKind: file.resources.resourceKind
+            ),
+            scope: ActionScope(
+                workingDirectory: file.scope.workingDirectory.flatMap { directory in
+                    WorkingDirectory(rawValue: redactCredentials(in: directory.rawValue))
+                }
+            )
         )
     }
 

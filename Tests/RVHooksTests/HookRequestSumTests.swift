@@ -145,17 +145,36 @@ import RVDomain
         cwd: wd("/tmp/ws"),
         session: SessionID(validating: "abc-123")
     )
+    let file = FileToolAction(
+        kind: .read,
+        path: FileToolPath(rawValue: "/tmp/rv-oracle/.env")
+    )
     let action = ClaudeHostCodec().proposedAction(from: request)
     #expect(action.supportingCommand == nil)
+    #expect(
+        action.fingerprint
+            == ActionFingerprint.make(
+                host: .claude,
+                session: request.session,
+                cwd: request.cwd,
+                file: file
+            )
+    )
     #expect(
         action.fingerprint
             != ActionFingerprint.make(
                 host: .claude,
                 session: request.session,
                 cwd: request.cwd,
-                command: ShellCommand(rawValue: "")
+                command: ShellCommand(rawValue: file.path.rawValue)
             )
     )
+    guard case .file(let fileAction) = action else {
+        Issue.record("expected ProposedAction.file")
+        return
+    }
+    #expect(fileAction.resources.path == file.path.rawValue)
+    #expect(fileAction.effects.kinds.isEmpty)
 }
 
 @Test func hookDispatch_fileWinsOverSpendCallback() async {

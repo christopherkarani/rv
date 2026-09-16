@@ -171,6 +171,8 @@ public enum ActionPolicyEngine: Sendable {
                 policy: policy,
                 gitWorld: gitWorld
             )
+        case .file(let file):
+            return evaluateFile(file, policy: policy)
         }
     }
 
@@ -230,6 +232,33 @@ public enum ActionPolicyEngine: Sendable {
     ) -> ActionPolicyVerdict {
         var hit = builtinHit(shell: shell, context: context, gitWorld: gitWorld)
         hit = applyTypedRules(hit, policy.rules, gitAction: shell.gitAction)
+        if hit.semanticallyCovered == false {
+            hit = applyPackFallback(hit, policy.packFallback)
+        }
+        hit = applyOverlay(hit, policy.overlay)
+        return ActionPolicyVerdict(
+            decision: hit.decision,
+            explanation: ActionPolicyExplanation(
+                zone: hit.decision.zone,
+                ruleID: hit.ruleID,
+                reason: hit.reason
+            )
+        )
+    }
+
+    /// Catalog-only file tools. Do not run the git/filesystem builtin wall.
+    /// Empty effects follow the uncovered → pack fallback → overlay path.
+    private static func evaluateFile(
+        _: FileAction,
+        policy: EffectiveActionPolicy
+    ) -> ActionPolicyVerdict {
+        var hit = CoreHit(
+            decision: .reviewEligible(fallback: Builtin.uncovered),
+            ruleID: Builtin.uncovered.ruleID,
+            reason: Builtin.uncovered.reason,
+            semanticallyCovered: false
+        )
+        hit = applyTypedRules(hit, policy.rules, gitAction: nil)
         if hit.semanticallyCovered == false {
             hit = applyPackFallback(hit, policy.packFallback)
         }

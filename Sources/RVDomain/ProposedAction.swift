@@ -1,8 +1,9 @@
 /// Stable identity for grants, audit, and replay.
 ///
-/// IR owns host-door fingerprint construction via `make(host:session:cwd:command:)`.
-/// Semantic `GitAction` / `FilesystemAction` fingerprints remain distinct until a
-/// later IR composition ticket.
+/// IR owns host-door fingerprint construction via `make(host:session:cwd:command:)`
+/// and `make(host:session:cwd:file:)`. Semantic `GitAction` /
+/// `FilesystemAction` fingerprints remain distinct until a later IR
+/// composition ticket.
 public struct ActionFingerprint: RawRepresentable, Hashable, Sendable, Equatable, Codable {
     public var rawValue: String
 
@@ -19,6 +20,20 @@ public struct ActionFingerprint: RawRepresentable, Hashable, Sendable, Equatable
     ) -> ActionFingerprint {
         ActionFingerprint(
             rawValue: "\(host.rawValue):\(session?.rawValue ?? ""):\(cwd?.rawValue ?? ""):\(command.rawValue)"
+        )
+    }
+
+    /// File-tool fingerprint. Cannot collide with the shell spelling.
+    /// Nil session and cwd occupy empty field slots.
+    /// Spelling: `file:<host>:<session>:<cwd>:<kind>:<path>`
+    public static func make(
+        host: HookHost,
+        session: SessionID?,
+        cwd: WorkingDirectory?,
+        file: FileToolAction
+    ) -> ActionFingerprint {
+        ActionFingerprint(
+            rawValue: "file:\(host.rawValue):\(session?.rawValue ?? ""):\(cwd?.rawValue ?? ""):\(file.kind.rawValue):\(file.path.rawValue)"
         )
     }
 
@@ -118,28 +133,59 @@ public struct ShellAction: Sendable, Equatable, Codable {
     }
 }
 
-/// Closed action family. v1 starts at `.shell`; further cases stay off this slice.
+/// Catalog-only Read / Edit / Write action. Never a `ShellCommand`.
+public struct FileAction: Sendable, Equatable, Codable {
+    public var fingerprint: ActionFingerprint
+    public var file: FileToolAction
+    public var effects: ActionEffects
+    public var resources: ActionResources
+    public var scope: ActionScope
+
+    public init(
+        fingerprint: ActionFingerprint,
+        file: FileToolAction,
+        effects: ActionEffects = ActionEffects(),
+        resources: ActionResources = ActionResources(),
+        scope: ActionScope = ActionScope()
+    ) {
+        self.fingerprint = fingerprint
+        self.file = file
+        self.effects = effects
+        self.resources = resources
+        self.scope = scope
+    }
+}
+
+/// Closed action family. File tools are Read / Edit / Write only.
 public enum ProposedAction: Sendable, Equatable, Codable {
     case shell(ShellAction)
+    case file(FileAction)
 
     public var fingerprint: ActionFingerprint {
         switch self {
         case .shell(let action):
             return action.fingerprint
+        case .file(let action):
+            return action.fingerprint
         }
     }
 
     /// Supporting evidence only. Reviewers must use `effects` / `resources` / `scope`.
+    /// File tools never carry a `ShellCommand`.
     public var supportingCommand: ShellCommand? {
         switch self {
         case .shell(let action):
             return action.supportingCommand
+        case .file:
+            return nil
         }
     }
 
     public var effects: ActionEffects {
         switch self {
         case .shell(let action):
+            return action.effects
+        case .file(let action):
             return action.effects
         }
     }
@@ -148,12 +194,16 @@ public enum ProposedAction: Sendable, Equatable, Codable {
         switch self {
         case .shell(let action):
             return action.resources
+        case .file(let action):
+            return action.resources
         }
     }
 
     public var scope: ActionScope {
         switch self {
         case .shell(let action):
+            return action.scope
+        case .file(let action):
             return action.scope
         }
     }
@@ -162,6 +212,8 @@ public enum ProposedAction: Sendable, Equatable, Codable {
         switch self {
         case .shell(let action):
             return action.gitAction
+        case .file:
+            return nil
         }
     }
 }
