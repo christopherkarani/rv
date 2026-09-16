@@ -1,7 +1,7 @@
 import Foundation
 import RVDomain
 
-public struct ClaudeHostCodec: HostCodec {
+public struct ClaudeHostCodec: HostAskCodec {
     public var host: HookHost { .claude }
 
     public init() {}

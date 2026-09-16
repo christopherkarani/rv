@@ -49,15 +49,6 @@ public struct CodexHostCodec: HostCodec {
             stderr: hookBlockStderr(reason: reason)
         )
     }
-
-    /// Codex has no Ask. Leftover Ask continues the tool — same as deny.
-    public func encodeAsk(
-        reason: String,
-        rule: RuleID? = nil,
-        next: HookVoiceNext = .none
-    ) -> HookWire {
-        encodeDeny(reason: reason, rule: rule, next: next)
-    }
 }
 
 private struct CodexEnvelope: Decodable {

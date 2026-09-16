@@ -89,7 +89,6 @@ import RVDomain
         using: CodexHostCodec(),
         intent: .firstCall(verdict: .deny, unlockCode: nil)
     )
-    #expect(HostNativeAsk.capability(for: .codex) == .denyOrTTY)
     #expect(wire.stdout.isEmpty == false)
     #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
     #expect(wire.stdout.contains("\"permissionDecision\":\"ask\"") == false)
@@ -100,6 +99,38 @@ import RVDomain
     #expect(wire.stderr.isEmpty == false)
     #expect(wire.stderr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
     #expect(wire.stderr.contains(deny.reason) || wire.stderr.contains("RV · Blocked"))
+}
+
+@Test(arguments: HookHost.allCases)
+func productionCodec_matchesPauseProfile(_ host: HookHost) {
+    let codec = makeHostCodec(host)
+    let spendFirst = HostNativeAsk.profile(for: host).pause == .spendFirst
+    #expect((codec is any HostAskCodec) == spendFirst)
+}
+
+@Test(arguments: HookHost.allCases)
+func cannotPauseForcedAsk_doesNotEmitAskJSON(_ host: HookHost) throws {
+    guard HostNativeAsk.profile(for: host).pause != .spendFirst else { return }
+    let command = ShellCommand(rawValue: "git reset --hard")
+    let deny = Deny(
+        ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+        reason: "git reset --hard destroys uncommitted changes"
+    )
+    let result = EvaluationResult(
+        outcome: .deny(deny, matched: nil),
+        matchingView: MatchingView("git reset --hard")
+    )
+    let wire = hookWire(
+        from: result,
+        command: command,
+        using: makeHostCodec(host),
+        intent: .firstCall(verdict: .ask(.hostNative), unlockCode: nil)
+    )
+    #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
+    #expect(wire.stdout.contains("\"permission\":\"ask\"") == false)
+    #expect(wire.stdout.contains("\"permissionDecision\":\"ask\"") == false)
+    #expect(wire.stdout.contains("requireApproval") == false)
+    #expect(wire.stdout.isEmpty == false)
 }
 
 @Test func hookWire_cursorMandatoryHumanIsPermissionDenyNotAsk() throws {
@@ -117,10 +148,6 @@ import RVDomain
         using: CursorHostCodec(),
         intent: .firstCall(verdict: .deny, unlockCode: nil)
     )
-    #expect(HostNativeAsk.capability(for: .cursor) == .denyOrTTY)
-    #expect(HostNativeAsk.capability(for: .pi) == .spendFirst)
-    #expect(HostNativeAsk.capability(for: .opencode) == .spendFirst)
-    #expect(HostNativeAsk.capability(for: .codex) == .denyOrTTY)
     #expect(wire.stdout.isEmpty == false)
     #expect(wire.stdout.contains("\"permission\":\"ask\"") == false)
     #expect(wire.stdout.contains("\"permissionDecision\":\"ask\"") == false)
@@ -172,6 +199,53 @@ func hookWire_firstCallAllowCannotSkipPolicyGate(_ host: HookHost) throws {
         )
         #expect(json["decision"] as? String == "deny")
     }
+}
+
+@Test func hookWire_grokMandatoryHumanIsQuietAllow() throws {
+    let deny = Deny(
+        ruleID: RuleID(pack: PackID(rawValue: "builtin.action"), pattern: "remote-branch-mutation"),
+        reason: "Remote branch mutation requires a human."
+    )
+    let result = EvaluationResult(
+        outcome: .deny(deny, matched: nil),
+        matchingView: MatchingView("git push --force origin topic")
+    )
+    let cwd = try #require(WorkingDirectory(validating: "/tmp/ws"))
+    let wire = hookWire(
+        from: result,
+        command: ShellCommand(rawValue: "git push --force origin topic"),
+        using: GrokHostCodec(),
+        bound: .mandatoryHuman(deny),
+        cwd: cwd
+    )
+    #expect(wire.stdout.isEmpty)
+    #expect(wire.exitCode == 0)
+    #expect(wire.stdout.contains("\"decision\":\"deny\"") == false)
+    #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
+}
+
+@Test func hookWire_grokUnlockableResetHardStaysDeny() throws {
+    let deny = Deny(
+        ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+        reason: "git reset --hard destroys uncommitted changes"
+    )
+    let result = EvaluationResult(
+        outcome: .deny(deny, matched: nil),
+        matchingView: MatchingView("git reset --hard")
+    )
+    let cwd = try #require(WorkingDirectory(validating: "/tmp/ws"))
+    let wire = hookWire(
+        from: result,
+        command: ShellCommand(rawValue: "git reset --hard"),
+        using: GrokHostCodec(),
+        bound: .deny(deny),
+        cwd: cwd
+    )
+    let json = try #require(
+        JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any]
+    )
+    #expect(json["decision"] as? String == "deny")
+    #expect(wire.stdout.isEmpty == false)
 }
 
 @Test func hookWire_leftoverAskBoundDoesNotPermit() throws {

@@ -173,17 +173,26 @@ func codexHonorPath_missingReasonExitTwoWithWhitespaceStderrIsNotEnough(_ missin
     try assertCodexHonorPath(wire, reason: resetHardHostDeny)
 }
 
-@Test func codexEncodeAsk_isNotAskOrLeftoverAskAsPermit() throws {
-    let wire = codec.encodeAsk(
-        reason: resetHardHostDeny,
-        rule: RuleID(pack: .coreGit, pattern: "reset-hard"),
-        next: .ttyHint
+@Test func codexForcedAsk_failClosesToBlockNotLeftoverAsk() throws {
+    let command = ShellCommand(rawValue: "git reset --hard")
+    let deny = Deny(
+        ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+        reason: "git reset --hard destroys uncommitted changes"
     )
-    try assertCodexHonorPath(wire, reason: resetHardHostDeny)
+    let result = EvaluationResult(
+        outcome: .deny(deny, matched: nil),
+        matchingView: MatchingView("git reset --hard")
+    )
+    let wire = hookWire(
+        from: result,
+        command: command,
+        using: CodexHostCodec(),
+        intent: .firstCall(verdict: .ask(.hostNative), unlockCode: nil)
+    )
+    try assertCodexHonorPath(wire, reason: hostDenyLine(command: command, reason: deny.reason))
     #expect(HostNativeAsk.leftoverAskIsPermit == false)
-    #expect(wire.stdout == codec.encodeDeny(reason: resetHardHostDeny).stdout)
-    #expect(wire.stderr == codec.encodeDeny(reason: resetHardHostDeny).stderr)
-    #expect(wire.exitCode == codec.encodeDeny(reason: resetHardHostDeny).exitCode)
+    #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
+    #expect(wire.stdout.contains("\"permissionDecision\":\"ask\"") == false)
 }
 
 @Test func codexHookWire_resetHardIsBlockNotClaudeDeny() throws {
@@ -214,7 +223,7 @@ func codexHonorPath_missingReasonExitTwoWithWhitespaceStderrIsNotEnough(_ missin
     try assertCodexHonorPath(wire, reason: malformedHookSentence(.unreadable))
 }
 
-@Test func codexHookWire_missingPauseIsDenyOrTTYNeverAllow() throws {
+@Test func codexHookWire_mandatoryHumanIsQuietAllow() throws {
     let deny = Deny(
         ruleID: RuleID(pack: PackID(rawValue: "builtin.action"), pattern: "remote-branch-mutation"),
         reason: "Remote branch mutation requires a human."
@@ -230,17 +239,18 @@ func codexHonorPath_missingReasonExitTwoWithWhitespaceStderrIsNotEnough(_ missin
         bound: .mandatoryHuman(deny),
         cwd: wd("/tmp/ws")
     )
-    #expect(HostNativeAsk.capability(for: .codex) == .denyOrTTY)
     #expect(
         HostNativeAsk.hostAskVerdict(
             host: .codex,
             result: result,
             cwd: wd("/tmp/ws"),
             bound: .mandatoryHuman(deny)
-        ) == .deny
+        ) == .allow
     )
-    #expect(wire.stdout.isEmpty == false)
-    try assertCodexHonorPath(wire, reason: hostDenyLine(command: ShellCommand(rawValue: "git push origin feature"), reason: deny.reason))
+    #expect(wire.stdout.isEmpty)
+    #expect(wire.exitCode == 0)
+    #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
+    #expect(wire.stdout.contains("\"decision\":\"block\"") == false)
 }
 
 @Test func codexDecode_readsCwdSessionAndProposedAction() throws {

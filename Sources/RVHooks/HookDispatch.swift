@@ -29,96 +29,16 @@ public func hookWire(
     recordHostAsk: (@Sendable (HookRequest, ProposedAction) async throws -> Void)? = nil,
     clearHostAsk: (@Sendable (HookRequest, ProposedAction) async throws -> Void)? = nil
 ) async -> HookWire {
-    switch host {
-    case .grok:
-        return await hookBody(
-            stdin: stdin,
-            codec: GrokHostCodec(),
-            evaluate: evaluate,
-            evaluateFile: evaluateFile,
-            spendHostAsk: spendHostAsk,
-            mintOnDeny: mintOnDeny,
-            recordHostAsk: recordHostAsk,
-            clearHostAsk: clearHostAsk
-        )
-    case .pi:
-        return await hookBody(
-            stdin: stdin,
-            codec: PiHostCodec(),
-            evaluate: evaluate,
-            evaluateFile: evaluateFile,
-            spendHostAsk: spendHostAsk,
-            mintOnDeny: mintOnDeny,
-            recordHostAsk: recordHostAsk,
-            clearHostAsk: clearHostAsk
-        )
-    case .opencode:
-        return await hookBody(
-            stdin: stdin,
-            codec: OpenCodeHostCodec(),
-            evaluate: evaluate,
-            evaluateFile: evaluateFile,
-            spendHostAsk: spendHostAsk,
-            mintOnDeny: mintOnDeny,
-            recordHostAsk: recordHostAsk,
-            clearHostAsk: clearHostAsk
-        )
-    case .claude:
-        return await hookBody(
-            stdin: stdin,
-            codec: ClaudeHostCodec(),
-            evaluate: evaluate,
-            evaluateFile: evaluateFile,
-            spendHostAsk: spendHostAsk,
-            mintOnDeny: mintOnDeny,
-            recordHostAsk: recordHostAsk,
-            clearHostAsk: clearHostAsk
-        )
-    case .openclaw:
-        return await hookBody(
-            stdin: stdin,
-            codec: OpenClawHostCodec(),
-            evaluate: evaluate,
-            evaluateFile: evaluateFile,
-            spendHostAsk: spendHostAsk,
-            mintOnDeny: mintOnDeny,
-            recordHostAsk: recordHostAsk,
-            clearHostAsk: clearHostAsk
-        )
-    case .hermes:
-        return await hookBody(
-            stdin: stdin,
-            codec: HermesHostCodec(),
-            evaluate: evaluate,
-            evaluateFile: evaluateFile,
-            spendHostAsk: spendHostAsk,
-            mintOnDeny: mintOnDeny,
-            recordHostAsk: recordHostAsk,
-            clearHostAsk: clearHostAsk
-        )
-    case .codex:
-        return await hookBody(
-            stdin: stdin,
-            codec: CodexHostCodec(),
-            evaluate: evaluate,
-            evaluateFile: evaluateFile,
-            spendHostAsk: spendHostAsk,
-            mintOnDeny: mintOnDeny,
-            recordHostAsk: recordHostAsk,
-            clearHostAsk: clearHostAsk
-        )
-    case .cursor:
-        return await hookBody(
-            stdin: stdin,
-            codec: CursorHostCodec(),
-            evaluate: evaluate,
-            evaluateFile: evaluateFile,
-            spendHostAsk: spendHostAsk,
-            mintOnDeny: mintOnDeny,
-            recordHostAsk: recordHostAsk,
-            clearHostAsk: clearHostAsk
-        )
-    }
+    await hookBody(
+        stdin: stdin,
+        codec: makeHostCodec(host),
+        evaluate: evaluate,
+        evaluateFile: evaluateFile,
+        spendHostAsk: spendHostAsk,
+        mintOnDeny: mintOnDeny,
+        recordHostAsk: recordHostAsk,
+        clearHostAsk: clearHostAsk
+    )
 }
 
 private func hookBody<C: HostCodec>(
@@ -274,9 +194,9 @@ private func mintUnlockCodeIfNeeded(
     guard let mintOnDeny else { return nil }
     guard case .deny = result.decision else { return nil }
     switch verdict {
-    case .ask:
+    case .ask, .allow:
         return nil
-    case .allow, .deny:
+    case .deny:
         return await mintOnDeny(result, cwd)
     }
 }

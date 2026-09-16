@@ -209,7 +209,7 @@ func cursorDecode_extractsBeforeShellCommand(_ file: String, expected: String) t
         exitCode: 0
     )
     #expect(isCursorHonorPath(ask, reason: resetHardHostDeny) == false)
-    let live = codec.encodeAsk(reason: resetHardHostDeny)
+    let live = codec.encodeDeny(reason: resetHardHostDeny)
     try assertCursorHonorPath(live, reason: resetHardHostDeny)
 }
 
@@ -221,16 +221,24 @@ func cursorDecode_extractsBeforeShellCommand(_ file: String, expected: String) t
     try assertCursorHonorPath(wire, reason: resetHardHostDeny)
 }
 
-@Test func cursorEncodeAsk_isNotAskOrLeftoverAskAsPermit() throws {
-    let wire = codec.encodeAsk(
-        reason: resetHardHostDeny,
-        rule: RuleID(pack: .coreGit, pattern: "reset-hard"),
-        next: .ttyHint
+@Test func cursorForcedAsk_failClosesToDenyNotLeftoverAsk() throws {
+    let command = ShellCommand(rawValue: "git reset --hard")
+    let deny = Deny(
+        ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+        reason: "git reset --hard destroys uncommitted changes"
     )
-    try assertCursorHonorPath(wire, reason: resetHardHostDeny)
+    let result = EvaluationResult(
+        outcome: .deny(deny, matched: nil),
+        matchingView: MatchingView("git reset --hard")
+    )
+    let wire = hookWire(
+        from: result,
+        command: command,
+        using: CursorHostCodec(),
+        intent: .firstCall(verdict: .ask(.hostNative), unlockCode: nil)
+    )
+    try assertCursorHonorPath(wire, reason: hostDenyLine(command: command, reason: deny.reason))
     #expect(HostNativeAsk.leftoverAskIsPermit == false)
-    #expect(wire.stdout == codec.encodeDeny(reason: resetHardHostDeny).stdout)
-    #expect(wire.exitCode == codec.encodeDeny(reason: resetHardHostDeny).exitCode)
     #expect(wire.stdout.contains("\"permission\":\"ask\"") == false)
     #expect(wire.stdout.contains("\"permissionDecision\":\"ask\"") == false)
 }
@@ -263,7 +271,7 @@ func cursorDecode_extractsBeforeShellCommand(_ file: String, expected: String) t
     try assertCursorHonorPath(wire, reason: malformedHookSentence(.unreadable))
 }
 
-@Test func cursorHookWire_missingPauseIsDenyOrTTYNeverAllow() throws {
+@Test func cursorHookWire_mandatoryHumanIsQuietAllow() throws {
     let deny = Deny(
         ruleID: RuleID(pack: PackID(rawValue: "builtin.action"), pattern: "remote-branch-mutation"),
         reason: "Remote branch mutation requires a human."
@@ -279,26 +287,21 @@ func cursorDecode_extractsBeforeShellCommand(_ file: String, expected: String) t
         bound: .mandatoryHuman(deny),
         cwd: wd("/tmp/ws")
     )
-    #expect(HostNativeAsk.capability(for: .cursor) == .denyOrTTY)
-    #expect(HostNativeAsk.capability(for: .pi) == .spendFirst)
-    #expect(HostNativeAsk.capability(for: .opencode) == .spendFirst)
-    #expect(HostNativeAsk.capability(for: .codex) == .denyOrTTY)
     #expect(
         HostNativeAsk.hostAskVerdict(
             host: .cursor,
             result: result,
             cwd: wd("/tmp/ws"),
             bound: .mandatoryHuman(deny)
-        ) == .deny
+        ) == .allow
     )
-    #expect(wire.stdout.isEmpty == false)
-    try assertCursorHonorPath(
-        wire,
-        reason: hostDenyLine(
-            command: ShellCommand(rawValue: "git push origin feature"),
-            reason: deny.reason
-        )
+    let json = try #require(
+        JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any]
     )
+    #expect(json["permission"] as? String == "allow")
+    #expect(wire.exitCode == 0)
+    #expect(wire.stdout.contains("\"permission\":\"ask\"") == false)
+    #expect(wire.stdout.contains("\"permission\":\"deny\"") == false)
 }
 
 @Test func cursorDecode_readsCwdSessionAndProposedAction() throws {
@@ -393,13 +396,6 @@ func cursorDecode_extractsBeforeShellCommand(_ file: String, expected: String) t
                 command: ShellCommand(rawValue: "git status")
             )
     )
-}
-
-@Test func cursorCapability_isDenyOrTTYOnly() {
-    #expect(HostNativeAsk.capability(for: .cursor) == .denyOrTTY)
-    #expect(HostNativeAsk.capability(for: .pi) == .spendFirst)
-    #expect(HostNativeAsk.capability(for: .opencode) == .spendFirst)
-    #expect(HostNativeAsk.capability(for: .codex) == .denyOrTTY)
 }
 
 private final class CursorEvaluateProbe: @unchecked Sendable {

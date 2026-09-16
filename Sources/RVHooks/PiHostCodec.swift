@@ -2,7 +2,7 @@ import Foundation
 import RVDomain
 
 /// Adapter wire for Pi, not a host protocol.
-public struct PiHostCodec: HostCodec {
+public struct PiHostCodec: HostAskCodec {
     /// The Pi adapter host.
     public var host: HookHost { .pi }
 

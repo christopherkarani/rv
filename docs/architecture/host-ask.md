@@ -2,7 +2,7 @@
 
 Investigation: OPE-267. Build map: [host-ask-plan.md](host-ask-plan.md) (OPE-268, historical). Product law: [02.md](02.md) § Host Ask.
 
-**RV wire today:** Product Ask is `HostNativeAsk.verdict` → `decision:ask` JSON. Adapters honor that only. Spend-first: **Pi, OpenCode, Claude, Hermes** (confirm, then `hostAsk=spend`, then allow only if spend succeeds). Deny-or-TTY: **Grok, Codex, Cursor, OpenClaw**. Official Claude `permissionDecision:ask` and Hermes `{"action":"approve"}` are leftover-ask-as-permit — never the honor path. Missing `rv`, timeout, or crash is a host block (`rv missing` / `rv failed`), never silent allow.
+**RV wire today:** Product Ask is `HostNativeAsk.verdict` → `decision:ask` JSON. Adapters honor that only. The host table is `HostAskProfile`: pause is `spendFirst` (Pi, OpenCode, Claude, Hermes — confirm, then `hostAsk=spend`, then allow only if spend succeeds), `leftoverAskForbidden` (OpenClaw `requireApproval`, Codex/Cursor leftover `ask` — do not emit), or `noPause` (Grok). Gray-area (`mandatoryHuman`) on a host that cannot pause is quiet allow; unlockable pack deny stays deny. Only `HostAskCodec` may encode Ask; a cannot-pause codec with a leftover `.ask` verdict fail-closes to deny. Official Claude `permissionDecision:ask` and Hermes `{"action":"approve"}` are leftover-ask-as-permit — never the honor path. Missing `rv`, timeout, or crash is a host block (`rv missing` / `rv failed`), never silent allow.
 
 **Allow-once is a PolicyGate grant.** TTY `rv allow-once` still mints into `AllowOnceStore`. Host Allow once is plant+spend this turn on that same store. Replay without a live grant asks or denies again.
 
@@ -47,10 +47,21 @@ Official: [hooks](https://docs.openclaw.ai/plugins/hooks), [permission requests]
 
 RV: `rv-guard-openclaw.js.tmpl` + `OpenClawHostCodec`. Matcher `["exec"]`. Live deny: `{ block: true, blockReason }` (operator `{decision,reason}` JSON, exit 1). Tests forbid `requireApproval`. Host-only (OPE-266).
 
-1. **Pause?** Not today. The host can pause on `requireApproval`. RV never returns it.
+1. **Pause?** Not today. `HostAskProfile.pause` is `leftoverAskForbidden`. The host can pause on `requireApproval`. RV never returns it. Not a `HostAskCodec`.
 2. **User sees:** host block reason. No RV Ask UI. Official approval surfaces unused.
 3. **Back to RV?** Official `onResolution` stays in the plugin and does not write `AllowOnceStore`. Today there is no callback. Host `allow-once` would run this call only — still not an RV grant. Allow-once is TTY → next hook consume.
-4. **No pause:** `{ block: true }` or TTY. Never silent allow.
+4. **No pause:** `{ block: true }` or TTY on hard deny. `mandatoryHuman` is quiet allow.
+
+## Grok
+
+Official: [hooks](https://docs.x.ai/build/features/hooks) — `PreToolUse` may `decision: allow | deny | ask`. RV does not emit `ask` (no spend-first pause on this host).
+
+RV: `GrokHostCodec`. Shell aliases `run_terminal_command` / `run_terminal_cmd` / `Bash`. Live deny: `{"decision":"deny","reason"}` + exit 0. Allow is empty stdout + exit 0. `HostNativeAsk.profile(for: .grok).pause` is `noPause`. Not a `HostAskCodec`.
+
+1. **Pause?** No.
+2. **User sees:** deny reason on hard deny. Gray-area (`mandatoryHuman`) is quiet allow.
+3. **Back to RV?** Unlockable pack deny is TTY `rv allow-once`. `mandatoryHuman` does not mint a grant; replay allows again.
+4. **No pause:** hard deny still denies. `mandatoryHuman` does not block.
 
 ## Hermes
 
@@ -73,12 +84,12 @@ Official: [hooks](https://developers.openai.com/codex/hooks) — PreToolUse docu
 
 Exit code `2` also blocks (stderr reason). `permissionDecision: "ask"` is leftover-ask-as-permit: Codex marks the hook failed and continues the tool.
 
-RV: `rv-guard-codex.py.tmpl` + `CodexHostCodec`. Matcher `PreToolUse` / `Bash`. Live deny: official older `{"decision":"block","reason"}` on stdout, the 271 blocking reason on **stderr**, and process exit **2**. Exit 2 without a trimmed non-empty stderr reason fail-opens the tool (empty / whitespace / a bare newline is the same hole). Tests fail Claude `permissionDecision: deny`, stdout-only `block`, and missing-reason whitespace stderr as the honor path. `HostNativeAsk.capability(.codex)` is `denyOrTTY`. Host-only (OPE-269). No Ask.
+RV: `rv-guard-codex.py.tmpl` + `CodexHostCodec`. Matcher `PreToolUse` / `Bash`. Live deny: official older `{"decision":"block","reason"}` on stdout, the 271 blocking reason on **stderr**, and process exit **2**. Exit 2 without a trimmed non-empty stderr reason fail-opens the tool (empty / whitespace / a bare newline is the same hole). Tests fail Claude `permissionDecision: deny`, stdout-only `block`, and missing-reason whitespace stderr as the honor path. `HostNativeAsk.profile(for: .codex).pause` is `leftoverAskForbidden`. Not a `HostAskCodec`. Host-only (OPE-269). No Ask.
 
 1. **Pause?** Not today. Official `"ask"` would fail-open the tool. RV never emits it.
 2. **User sees:** host block reason. No RV Ask UI.
 3. **Back to RV?** Block JSON + exit 2 is one-way. Allow-once is TTY → next hook consume.
-4. **No pause:** official `block` + trimmed non-empty stderr reason + exit 2, or TTY. Never silent allow.
+4. **No pause:** official `block` + trimmed non-empty stderr reason + exit 2, or TTY, on hard deny. `mandatoryHuman` is quiet allow.
 
 ## Cursor
 
@@ -90,12 +101,12 @@ Official: [hooks](https://cursor.com/docs/hooks.md) — `beforeShellExecution` d
 
 Allow is `{"permission":"allow"}`. Exit code `2` is Claude-compat deny, not the honor path. Nested Claude `hookSpecificOutput.permissionDecision` is third-party compat only ([third-party hooks](https://cursor.com/docs/reference/third-party-hooks)). `permission: "ask"` exists on `beforeShellExecution`. Default hook failure is fail-open; setup must set `failClosed: true`.
 
-RV: `rv-guard-cursor.py.tmpl` + `CursorHostCodec`. Event `beforeShellExecution` (also decode `preToolUse` + `Shell`/`Bash` as shell). Live deny: official native `{"permission":"deny","user_message","agent_message"}` on stdout and process exit **0**. Empty / missing / whitespace stdout — including exit 0 — is official deny (`rv failed`), never allow. Tests fail Claude `permissionDecision`, Codex `decision: block` + exit 2, leftover `permission: ask`, and empty stdout + exit 0 as the honor path. `HostNativeAsk.capability(.cursor)` is `denyOrTTY`. Host-only (OPE-270). No Ask. `encodeAsk` equals `encodeDeny`.
+RV: `rv-guard-cursor.py.tmpl` + `CursorHostCodec`. Event `beforeShellExecution` (also decode `preToolUse` + `Shell`/`Bash` as shell). Live deny: official native `{"permission":"deny","user_message","agent_message"}` on stdout and process exit **0**. Empty / missing / whitespace stdout — including exit 0 — is official deny (`rv failed`), never allow. Tests fail Claude `permissionDecision`, Codex `decision: block` + exit 2, leftover `permission: ask`, and empty stdout + exit 0 as the honor path. `HostNativeAsk.profile(for: .cursor).pause` is `leftoverAskForbidden`. Not a `HostAskCodec`. Host-only (OPE-270). No Ask.
 
 1. **Pause?** Not today. Official `"ask"` is leftover-ask-as-permit on this ticket. RV never emits it.
 2. **User sees:** host `user_message` / `agent_message`. No RV Ask UI.
 3. **Back to RV?** Permission deny + exit 0 is one-way. Allow-once is TTY → next hook consume.
-4. **No pause:** official `permission: deny` + exit 0, or TTY. Never silent allow.
+4. **No pause:** official `permission: deny` + exit 0, or TTY, on hard deny. `mandatoryHuman` is quiet allow.
 
 ## Unknowns
 

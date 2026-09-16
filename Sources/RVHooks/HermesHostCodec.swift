@@ -2,7 +2,7 @@ import Foundation
 import RVDomain
 
 /// Adapter wire for Hermes, not a host protocol.
-public struct HermesHostCodec: HostCodec {
+public struct HermesHostCodec: HostAskCodec {
     /// The Hermes adapter host.
     public var host: HookHost { .hermes }
 

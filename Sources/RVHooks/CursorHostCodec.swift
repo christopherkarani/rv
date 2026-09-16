@@ -79,15 +79,6 @@ public struct CursorHostCodec: HostCodec {
             exitCode: host.denyExitCode
         )
     }
-
-    /// Cursor has no Ask. Leftover `permission: ask` is leftover-ask-as-permit.
-    public func encodeAsk(
-        reason: String,
-        rule: RuleID? = nil,
-        next: HookVoiceNext = .none
-    ) -> HookWire {
-        encodeDeny(reason: reason, rule: rule, next: next)
-    }
 }
 
 private enum CursorEventClass {

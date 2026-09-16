@@ -95,13 +95,31 @@ public protocol HostCodec: Sendable {
     func proposedAction(from request: HookRequest) -> ProposedAction
     func encodeAllow() -> HookWire
     func encodeDeny(reason: String, rule: RuleID?, next: HookVoiceNext) -> HookWire
-    func encodeAsk(reason: String, rule: RuleID?, next: HookVoiceNext) -> HookWire
     func encodeEvaluatedDeny(
         from result: EvaluationResult,
         command: ShellCommand,
         unlockCode: AllowOnceUnlockCode?
     ) -> HookWire
     func encodeFileDeny(from result: EvaluationResult) -> HookWire
+}
+
+/// Spend-first pause encoding. Hosts that cannot pause do not conform.
+public protocol HostAskCodec: HostCodec {
+    func encodeAsk(reason: String, rule: RuleID?, next: HookVoiceNext) -> HookWire
+}
+
+/// One switch for production codecs. Spend-first hosts return `HostAskCodec`.
+public func makeHostCodec(_ host: HookHost) -> any HostCodec {
+    switch host {
+    case .grok: GrokHostCodec()
+    case .pi: PiHostCodec()
+    case .opencode: OpenCodeHostCodec()
+    case .claude: ClaudeHostCodec()
+    case .openclaw: OpenClawHostCodec()
+    case .hermes: HermesHostCodec()
+    case .codex: CodexHostCodec()
+    case .cursor: CursorHostCodec()
+    }
 }
 
 extension HostCodec {

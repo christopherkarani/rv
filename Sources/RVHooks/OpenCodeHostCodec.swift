@@ -2,7 +2,7 @@ import Foundation
 import RVDomain
 
 /// Adapter wire for OpenCode, not a host protocol.
-public struct OpenCodeHostCodec: HostCodec {
+public struct OpenCodeHostCodec: HostAskCodec {
     /// The OpenCode adapter host.
     public var host: HookHost { .opencode }
 

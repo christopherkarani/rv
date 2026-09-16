@@ -187,7 +187,7 @@ private func secretsEnvFileDeny() -> EvaluationResult {
     )
 }
 
-private struct LeftoverVoiceCodec: HostCodec {
+private struct LeftoverVoiceCodec: HostAskCodec {
     var host: HookHost { .pi }
 
     func decode(_ stdin: String) -> HookDecodeOutcome {
@@ -225,10 +225,6 @@ private final class EvaluatedDenyDoorSpy: HostCodec, @unchecked Sendable {
         denyCalls += 1
         return HookWire(stdout: "deny\n", exitCode: 9)
     }
-
-    func encodeAsk(reason: String, rule: RuleID?, next: HookVoiceNext) -> HookWire {
-        HookWire(stdout: "ask\n", exitCode: 9)
-    }
 }
 
 private final class FileDenyDoorSpy: HostCodec, @unchecked Sendable {
@@ -248,9 +244,5 @@ private final class FileDenyDoorSpy: HostCodec, @unchecked Sendable {
     func encodeDeny(reason: String, rule: RuleID?, next: HookVoiceNext) -> HookWire {
         denyCalls += 1
         return HookWire(stdout: "deny\n", exitCode: 9)
-    }
-
-    func encodeAsk(reason: String, rule: RuleID?, next: HookVoiceNext) -> HookWire {
-        HookWire(stdout: "ask\n", exitCode: 9)
     }
 }

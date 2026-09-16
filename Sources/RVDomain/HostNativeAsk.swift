@@ -1,12 +1,66 @@
 /// Whether a host may pause for Ask because a same-turn spend callback exists.
-public enum HostAskCapability: Sendable, Equatable {
+public enum HostPause: Sendable, Equatable {
     /// Host confirm or resolution, then PolicyGate spend, then allow.
     /// Pi / OpenCode / Claude / Hermes this slice.
     /// Claude leftover-ask-as-permit is official `permissionDecision: "ask"` JSON,
     /// not this case. Spend-first still must not emit that leftover key.
     case spendFirst
-    /// Grok / OpenClaw / Codex / Cursor: deny or TTY. No first-call Allow.
-    case denyOrTTY
+    /// Host has a pause API that would run the tool without a PolicyGate spend.
+    /// OpenClaw `requireApproval`, Codex/Cursor leftover `ask`. Do not emit it.
+    case leftoverAskForbidden
+    /// No pause RV will use. Grok this slice (native `decision: ask` is unused).
+    case noPause
+}
+
+/// Wire when the host cannot pause. Never `.ask`.
+public enum HostNoPauseFallback: Sendable, Equatable {
+    case allow
+    case deny
+
+    public var verdict: HostAskVerdict {
+        switch self {
+        case .allow: .allow
+        case .deny: .deny
+        }
+    }
+}
+
+/// Per-host Ask table. Pause is independent of the no-pause fallbacks.
+public struct HostAskProfile: Sendable, Equatable {
+    public var pause: HostPause
+    public var grayAreaIfNoPause: HostNoPauseFallback
+    public var unlockableIfNoPause: HostNoPauseFallback
+
+    public init(
+        pause: HostPause,
+        grayAreaIfNoPause: HostNoPauseFallback,
+        unlockableIfNoPause: HostNoPauseFallback
+    ) {
+        self.pause = pause
+        self.grayAreaIfNoPause = grayAreaIfNoPause
+        self.unlockableIfNoPause = unlockableIfNoPause
+    }
+
+    /// Confirm-then-spend. Fallbacks apply only if the continuation cannot pause.
+    public static let spendFirst = HostAskProfile(
+        pause: .spendFirst,
+        grayAreaIfNoPause: .allow,
+        unlockableIfNoPause: .deny
+    )
+
+    /// No pause API RV will use. Gray-area runs; unlockable pack deny stays deny.
+    public static let noPause = HostAskProfile(
+        pause: .noPause,
+        grayAreaIfNoPause: .allow,
+        unlockableIfNoPause: .deny
+    )
+
+    /// Pause API exists and must not be called. Same fallbacks as `noPause`.
+    public static let leftoverAskForbidden = HostAskProfile(
+        pause: .leftoverAskForbidden,
+        grayAreaIfNoPause: .allow,
+        unlockableIfNoPause: .deny
+    )
 }
 
 /// Product Ask on the hook door. Not a `Decision` case.
@@ -52,7 +106,7 @@ public struct HostNativeApprovalBridge: ApprovalBridge {
         case .deny, .createRule:
             return .deny
         case .allowOnce:
-            switch (continuation, HostNativeAsk.capability(for: host)) {
+            switch (continuation, HostNativeAsk.profile(for: host).pause) {
             case (.hostNative, .spendFirst):
                 return .spendThenAllow
             default:
@@ -69,12 +123,14 @@ public enum HostNativeAsk {
         reason: "Ask is not a permit."
     )
 
-    public static func capability(for host: HookHost) -> HostAskCapability {
+    public static func profile(for host: HookHost) -> HostAskProfile {
         switch host {
         case .pi, .opencode, .claude, .hermes:
             return .spendFirst
-        case .grok, .openclaw, .codex, .cursor:
-            return .denyOrTTY
+        case .grok:
+            return .noPause
+        case .openclaw, .codex, .cursor:
+            return .leftoverAskForbidden
         }
     }
 
@@ -90,9 +146,11 @@ public enum HostNativeAsk {
     }
 
     /// Product Ask on the live hook door. Pause only when a spend-first host
-    /// could spend: Unlockable deny or `mandatoryHuman`. Secret-path, builtin
-    /// hard deny, unwrap-limited, protected-path, incomplete evaluate,
-    /// deny-or-TTY, missing cwd, and empty matching view stay deny.
+    /// could spend: Unlockable deny or `mandatoryHuman`. On a host that cannot
+    /// pause, `mandatoryHuman` uses `grayAreaIfNoPause` (quiet allow today).
+    /// Unlockable pack deny uses `unlockableIfNoPause` (deny today). Secret-path,
+    /// builtin hard deny, unwrap-limited, protected-path, incomplete evaluate,
+    /// missing cwd, and empty matching view stay deny.
     public static func hostAskVerdict(
         host: HookHost,
         result: EvaluationResult,
@@ -100,6 +158,7 @@ public enum HostNativeAsk {
         bound: BoundReview,
         continuation: ApprovalContinuation = .hostNative
     ) -> HostAskVerdict {
+        let profile = profile(for: host)
         switch bound {
         case .allow:
             switch result.decision {
@@ -110,19 +169,30 @@ public enum HostNativeAsk {
             }
         case .deny:
             guard UnlockableDeny.matches(result: result, cwd: cwd) else { return .deny }
-            return pauseIfPossible(host: host, continuation: continuation)
-        case .mandatoryHuman:
-            return pauseIfSpendable(
+            return pauseIfPossible(
                 host: host,
                 continuation: continuation,
-                cwd: cwd,
-                matchingView: result.matchingView
+                ifNoPause: profile.unlockableIfNoPause
             )
+        case .mandatoryHuman:
+            switch result.decision {
+            case .indeterminate:
+                return .deny
+            case .allow, .deny:
+                return pauseIfSpendable(
+                    host: host,
+                    continuation: continuation,
+                    cwd: cwd,
+                    matchingView: result.matchingView,
+                    ifNoPause: profile.grayAreaIfNoPause
+                )
+            }
         }
     }
 
-    /// Extra / desktop wait. Same eligibility as spend-first Ask, including
-    /// Grok and Codex, which still encode deny on the host wire.
+    /// Extra / desktop wait. Same eligibility as spend-first Ask. Deny-or-TTY
+    /// hosts already allowed `mandatoryHuman` on the wire; unlockable pack deny
+    /// still blocks there.
     public static func recordsPending(
         result: EvaluationResult,
         cwd: WorkingDirectory?,
@@ -176,21 +246,27 @@ public enum HostNativeAsk {
         host: HookHost,
         continuation: ApprovalContinuation,
         cwd: WorkingDirectory?,
-        matchingView: MatchingView
+        matchingView: MatchingView,
+        ifNoPause: HostNoPauseFallback
     ) -> HostAskVerdict {
         guard cwd != nil, matchingView.isEmpty == false else { return .deny }
-        return pauseIfPossible(host: host, continuation: continuation)
+        return pauseIfPossible(
+            host: host,
+            continuation: continuation,
+            ifNoPause: ifNoPause
+        )
     }
 
     private static func pauseIfPossible(
         host: HookHost,
-        continuation: ApprovalContinuation
+        continuation: ApprovalContinuation,
+        ifNoPause: HostNoPauseFallback
     ) -> HostAskVerdict {
-        switch (capability(for: host), continuation) {
+        switch (profile(for: host).pause, continuation) {
         case (.spendFirst, .hostNative):
             return .ask(.hostNative)
         default:
-            return .deny
+            return ifNoPause.verdict
         }
     }
 }
