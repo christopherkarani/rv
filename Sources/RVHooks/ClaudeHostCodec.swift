@@ -85,7 +85,12 @@ public struct ClaudeHostCodec: HostCodec {
         command: ShellCommand,
         unlockCode: AllowOnceUnlockCode? = nil
     ) -> HookWire {
-        encodeRichDeny(from: result, command: command, unlockCode: unlockCode)
+        switch result.decision {
+        case .allow, .indeterminate:
+            return encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
+        case .deny:
+            return encodeRichDeny(from: result, command: command, unlockCode: unlockCode)
+        }
     }
 
     public func encodeFileDeny(from result: EvaluationResult) -> HookWire {

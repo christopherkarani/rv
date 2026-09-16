@@ -102,6 +102,34 @@ import RVDomain
     #expect(file == leftover)
 }
 
+@Test func encodeEvaluatedDeny_claudeAllowOrIncomplete_isIncompleteDeny() {
+    let codec = ClaudeHostCodec()
+    let command = ShellCommand(rawValue: "git status")
+    let allow = codec.encodeEvaluatedDeny(
+        from: EvaluationResult(outcome: .plain),
+        command: command,
+        unlockCode: nil
+    )
+    let incomplete = codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
+    #expect(allow == incomplete)
+    #expect(allow != codec.encodeAllow())
+
+    let oversize = codec.encodeEvaluatedDeny(
+        from: EvaluationResult(outcome: .indeterminate(.commandTooLarge)),
+        command: command,
+        unlockCode: nil
+    )
+    #expect(oversize == incomplete)
+
+    let live = hookWire(
+        from: EvaluationResult(outcome: .plain),
+        command: command,
+        using: codec,
+        intent: .firstCall(verdict: .deny, unlockCode: nil)
+    )
+    #expect(live == incomplete)
+}
+
 @Test func encodeFileDeny_claudeMatchedDenyIsRichJSON() {
     let wire = ClaudeHostCodec().encodeFileDeny(from: secretsEnvFileDeny())
     #expect(wire.exitCode == 0)
