@@ -1,0 +1,260 @@
+{
+  "schema_version": 1,
+  "source": "all_packs_false_positive_stress",
+  "cases": [
+    {
+      "id": "catalog.quiet.echo-hello",
+      "command": "echo hello",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.quiet.ls",
+      "command": "ls -la",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.quiet.pwd",
+      "command": "pwd",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.quiet.git-status",
+      "command": "git status --short",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.quiet.git-log",
+      "command": "git log --oneline -5",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.quiet.git-diff",
+      "command": "git diff",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.quiet.git-commit-message",
+      "command": "git commit -m \"quiet catalog work\"",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.quiet.cat-readme",
+      "command": "cat README.md",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.quiet.python-print-ok",
+      "command": "python3 -c \"print('ok')\"",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.quiet.node-log-ok",
+      "command": "node -e \"console.log('ok')\"",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.quiet.rg-sources",
+      "command": "rg -n evaluate Sources",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.quiet.find-swift",
+      "command": "find . -name '*.swift'",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.quiet.mkdir-tmp",
+      "command": "mkdir -p /tmp/rv-fp-catalog",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.quiet.redirect-tmp",
+      "command": "echo scratch > /tmp/rv-fp-catalog/out.txt",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.quiet.command-v-git",
+      "command": "command -v git",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.quiet.chmod-plus-x",
+      "command": "chmod +x tools/gate.sh",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.quiet.swift-test",
+      "command": "swift test --filter RVEngineTests",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.quiet.npm-test",
+      "command": "npm test",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.quiet.pip-list",
+      "command": "pip list",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.data.echo-reset",
+      "command": "echo \"git reset --hard\"",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.data.echo-rm-rf",
+      "command": "echo \"rm -rf /\"",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.data.echo-drop-table",
+      "command": "echo \"DROP TABLE users\"",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.data.echo-docker-rm",
+      "command": "echo \"docker rm -f\"",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.data.commit-reset",
+      "command": "git commit -m \"git reset --hard\"",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.data.rg-rm-rf",
+      "command": "rg -n \"rm -rf\"",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.data.git-log-grep-reset",
+      "command": "git log --grep='git reset --hard'",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.data.git-grep-rm-rf",
+      "command": "git grep -n \"rm -rf\"",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.data.python-print-reset",
+      "command": "python3 -c \"print('git reset --hard')\"",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.landmine.checkout-b",
+      "command": "git checkout -b topic",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.landmine.stash-drop",
+      "command": "git stash drop",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.landmine.restore-staged",
+      "command": "git restore . --staged",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.landmine.force-with-lease",
+      "command": "git push --force-with-lease",
+      "expected": "allow",
+      "kind": "skip-strict-git"
+    },
+    {
+      "id": "catalog.landmine.force-with-lease-if-includes",
+      "command": "git push --force-with-lease --force-if-includes",
+      "expected": "allow",
+      "kind": "skip-strict-git"
+    },
+    {
+      "id": "catalog.landmine.branch-name-force",
+      "command": "git push origin feature--force",
+      "expected": "allow",
+      "kind": "skip-strict-git"
+    },
+    {
+      "id": "catalog.landmine.branch-name-f",
+      "command": "git push origin feature-f",
+      "expected": "allow",
+      "kind": "skip-strict-git"
+    },
+    {
+      "id": "catalog.quiet.docker-ps",
+      "command": "docker ps",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.quiet.docker-images",
+      "command": "docker images",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.quiet.kubectl-get-pods",
+      "command": "kubectl get pods",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.quiet.kubectl-describe",
+      "command": "kubectl describe node",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.quiet.terraform-plan",
+      "command": "terraform plan",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.quiet.terraform-validate",
+      "command": "terraform validate",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.quiet.aws-s3-ls",
+      "command": "aws s3 ls",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.quiet.aws-sts",
+      "command": "aws sts get-caller-identity",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.quiet.helm-list",
+      "command": "helm list",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.quiet.systemctl-status",
+      "command": "systemctl status",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.quiet.psql-select",
+      "command": "psql -c 'SELECT 1'",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.quiet.mysql-select",
+      "command": "mysql -e 'SELECT 1'",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.quiet.redis-ping",
+      "command": "redis-cli PING",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.quiet.cargo-test",
+      "command": "cargo test",
+      "expected": "allow"
+    },
+    {
+      "id": "catalog.quiet.gh-pr-view",
+      "command": "gh pr view",
+      "expected": "allow"
+    }
+  ]
+}
