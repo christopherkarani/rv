@@ -8,8 +8,8 @@ public enum HookWireIntent: Sendable, Equatable {
 
 /// Returns the host wire for `intent`.
 ///
-/// First call switches `HostAskVerdict` once. Claude live deny is rich JSON;
-/// other hosts use `encodeDeny`. Adapters honor `decision:ask` only.
+/// First call switches `HostAskVerdict` once. Live deny is
+/// `encodeEvaluatedDeny`. Adapters honor `decision:ask` only.
 /// Claude first-call Ask is short `{decision:ask}` for the wrapper. Official
 /// `permissionDecision: "ask"` is leftover-ask-as-permit and is never emitted.
 public func hookWire<C: HostCodec>(
@@ -117,25 +117,11 @@ private func encodeLiveDeny<C: HostCodec>(
     using codec: C,
     unlockCode: AllowOnceUnlockCode?
 ) -> HookWire {
-    switch result.decision {
-    case .allow:
-        return codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
-    case .indeterminate:
-        return codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
-    case .deny(let deny):
-        if codec.host == .claude {
-            return ClaudeHostCodec().encodeRichDeny(
-                from: result,
-                command: command,
-                unlockCode: unlockCode
-            )
-        }
-        return codec.encodeDeny(
-            reason: hostDenyLine(command: command, reason: deny.reason, unlockCode: unlockCode),
-            rule: deny.ruleID,
-            next: unlockHookVoiceNext(unlockCode)
-        )
-    }
+    codec.encodeEvaluatedDeny(
+        from: result,
+        command: command,
+        unlockCode: unlockCode
+    )
 }
 
 private func encodeAsked<C: HostCodec>(

@@ -96,6 +96,12 @@ public protocol HostCodec: Sendable {
     func encodeAllow() -> HookWire
     func encodeDeny(reason: String, rule: RuleID?, next: HookVoiceNext) -> HookWire
     func encodeAsk(reason: String, rule: RuleID?, next: HookVoiceNext) -> HookWire
+    func encodeEvaluatedDeny(
+        from result: EvaluationResult,
+        command: ShellCommand,
+        unlockCode: AllowOnceUnlockCode?
+    ) -> HookWire
+    func encodeFileDeny(from result: EvaluationResult) -> HookWire
 }
 
 extension HostCodec {
@@ -172,5 +178,41 @@ extension HostCodec {
             ),
             exitCode: host.denyExitCode
         )
+    }
+
+    /// Leftover live deny: `encodeDeny` plus `hostDenyLine` / incomplete sentence.
+    public func encodeEvaluatedDeny(
+        from result: EvaluationResult,
+        command: ShellCommand,
+        unlockCode: AllowOnceUnlockCode? = nil
+    ) -> HookWire {
+        switch result.decision {
+        case .allow:
+            return encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
+        case .indeterminate:
+            return encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
+        case .deny(let deny):
+            return encodeDeny(
+                reason: hostDenyLine(command: command, reason: deny.reason, unlockCode: unlockCode),
+                rule: deny.ruleID,
+                next: unlockHookVoiceNext(unlockCode)
+            )
+        }
+    }
+
+    /// File-tool deny. Allow stays allow; incomplete uses the PLAN sentence.
+    public func encodeFileDeny(from result: EvaluationResult) -> HookWire {
+        switch result.decision {
+        case .allow:
+            return encodeAllow()
+        case .indeterminate:
+            return encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
+        case .deny(let deny):
+            return encodeDeny(
+                reason: hostFileDenyLine(reason: deny.reason),
+                rule: deny.ruleID,
+                next: .none
+            )
+        }
     }
 }
