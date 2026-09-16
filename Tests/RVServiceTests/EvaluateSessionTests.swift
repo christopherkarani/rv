@@ -102,6 +102,30 @@ struct EvaluateSessionTests {
         #expect(result.decision == .indeterminate(.corePacksUnavailable))
     }
 
+    /// Public product door is `evaluateWithSemantics`. Pack-only `evaluate` is
+    /// package-visible so CLI/product callers cannot treat it as the door.
+    @Test func publicProductDoor_isEvaluateWithSemantics() {
+        let session = EvaluateSession()
+        let request = EvaluationRequest(
+            command: ShellCommand(rawValue: "bash -c 'git reset --hard'"),
+            enabledPacks: dayOnePackIDs
+        )
+        let packOnly = session.evaluate(request)
+        let door = session.evaluateWithSemantics(request)
+        guard case .deny(let packDeny) = packOnly.decision else {
+            Issue.record("pack-only evaluate must still deny git reset --hard")
+            return
+        }
+        guard case .deny(let doorDeny) = door.decision else {
+            Issue.record("public product door must deny, got \(door.decision)")
+            return
+        }
+        #expect(packDeny.ruleID == doorDeny.ruleID)
+        #expect(doorDeny.ruleID.rawValue == "core.git:reset-hard")
+        #expect(door.analysis.wrappers == [.bash])
+        #expect(door.analysis.gitAction == .reset(mode: .hard, target: nil))
+    }
+
     @Test func evaluateWithSemantics_unwrapLimited_failClosed() {
         let result = EvaluateSession().evaluateWithSemantics(
             EvaluationRequest(

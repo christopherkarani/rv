@@ -40,6 +40,24 @@ struct EvaluateWithSemanticsTests {
         #expect(result.analysis.gitAction == .reset(mode: .hard, target: nil))
     }
 
+    @Test func wrappedBashResetHard_equalsComposedDeny() throws {
+        let command = "bash -c 'git reset --hard'"
+        let pack = try runPack(command)
+        guard case .deny(let packDeny) = pack.decision else {
+            Issue.record("pack must still see git reset --hard")
+            return
+        }
+        let door = try runDoor(command)
+        guard case .deny(let deny) = door.decision else {
+            Issue.record("door must keep today's composed deny, got \(door.decision)")
+            return
+        }
+        #expect(deny.ruleID == packDeny.ruleID)
+        #expect(deny.ruleID == RuleID(pack: .coreGit, pattern: "reset-hard"))
+        #expect(door.analysis.innermost == .git(.reset(mode: .hard, target: nil)))
+        #expect(door.analysis.wrappers == [.bash])
+    }
+
     @Test func packDeny_staysFloor() throws {
         let command = "sudo env FOO=bar sh -c 'git reset --hard'"
         let result = try runDoor(command)
@@ -217,51 +235,18 @@ struct EvaluateWithSemanticsTests {
     }
 }
 
+private func runPack(_ command: String) throws -> EvaluationResult {
+    try runSemanticsPack(command)
+}
+
 private func runDoor(
     _ command: String,
     gitProbe: (UnwrapOutcome) -> GitAnalysisWorld = { _ in .unprobed },
     filesystemProbe: (UnwrapOutcome) -> FilesystemAnalysisWorld = { _ in .unprobed },
     policy: EffectiveActionPolicy = .empty
 ) throws -> EvaluationResult {
-    let packs = [
-        PackSnapshot(
-            id: .coreFilesystem,
-            name: "fs",
-            description: "fs",
-            keywords: ["rm"],
-            safe: [],
-            destructive: [
-                DestructiveRule(
-                    name: "rm-rf-general",
-                    pattern: #"rm\s+-rf"#,
-                    severity: .high,
-                    reason: "rm -rf is destructive"
-                ),
-            ]
-        ),
-        PackSnapshot(
-            id: .coreGit,
-            name: "git",
-            description: "git",
-            keywords: ["git"],
-            safe: [NamedPattern(name: "checkout-new-branch", pattern: #"git\s+checkout\s+-b\s+"#)],
-            destructive: [
-                DestructiveRule(
-                    name: "reset-hard",
-                    pattern: #"git\s+reset\s+--hard"#,
-                    severity: .critical,
-                    reason: "git reset --hard destroys uncommitted changes"
-                ),
-            ]
-        ),
-    ]
-    let engine = ICUPatternEngine()
-    let compiled = try CompiledPacks<ICUCompiledPattern>.compile(packs: packs, using: engine)
-    return evaluateWithSemantics(
-        EvaluationRequest(command: ShellCommand(rawValue: command), enabledPacks: dayOnePackIDs),
-        packs: packs,
-        engine: engine,
-        compiled: compiled,
+    try runSemanticsDoor(
+        command,
         gitProbe: gitProbe,
         filesystemProbe: filesystemProbe,
         policy: policy

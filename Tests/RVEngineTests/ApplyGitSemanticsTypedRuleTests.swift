@@ -118,13 +118,12 @@ struct ApplyGitSemanticsTypedRuleTests {
             verdict: .deny,
             origin: .machine
         )
-        let composed = applySemantics(
-            pack: pack,
-            command: ShellCommand(rawValue: command),
+        let composed = try runSemanticsDoor(
+            command,
             policy: EffectiveActionPolicy(rules: [rule])
         )
         guard case .deny(let deny) = composed.decision else {
-            Issue.record("applySemantics must forward typed deny, got \(composed.decision)")
+            Issue.record("evaluateWithSemantics must forward typed deny, got \(composed.decision)")
             return
         }
         #expect(deny.ruleID == rule.id)

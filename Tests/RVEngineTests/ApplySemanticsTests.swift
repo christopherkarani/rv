@@ -12,18 +12,8 @@ struct ApplySemanticsTests {
     )
 
     @Test func wrappedGitReset_matchesDirectDecision() throws {
-        let directCommand = "git reset --hard"
-        let wrappedCommand = "bash -c 'git reset --hard'"
-        let directPack = try runSemanticsPack(directCommand)
-        let wrappedPack = try runSemanticsPack(wrappedCommand)
-        let direct = applySemantics(
-            pack: directPack,
-            command: ShellCommand(rawValue: directCommand)
-        )
-        let wrapped = applySemantics(
-            pack: wrappedPack,
-            command: ShellCommand(rawValue: wrappedCommand)
-        )
+        let direct = try runSemanticsDoor("git reset --hard")
+        let wrapped = try runSemanticsDoor("bash -c 'git reset --hard'")
         #expect(direct.decision == wrapped.decision)
         guard case .deny = direct.decision else {
             Issue.record("direct reset --hard must deny")
@@ -40,10 +30,7 @@ struct ApplySemanticsTests {
             Issue.record("sample pack must still see git reset --hard")
             return
         }
-        let composed = applySemantics(
-            pack: pack,
-            command: ShellCommand(rawValue: command)
-        )
+        let composed = try runSemanticsDoor(command)
         guard case .deny(let deny) = composed.decision else {
             Issue.record("composed must keep pack deny")
             return
@@ -54,23 +41,19 @@ struct ApplySemanticsTests {
     }
 
     @Test func echoQuotedRm_staysAllow() throws {
-        let pack = try runSemanticsPack("echo 'rm -rf /'")
-        let composed = applySemantics(
-            pack: pack,
-            command: ShellCommand(rawValue: "echo 'rm -rf /'"),
-            filesystemWorld: repo
+        let composed = try runSemanticsDoor(
+            "echo 'rm -rf /'",
+            filesystemProbe: { _ in repo }
         )
         #expect(composed.decision == .allow)
         #expect(composed.analysis.filesystemAction == nil)
     }
 
     @Test func unwrapLimit_neverAutoAllows() throws {
-        let pack = try runSemanticsPack(#"python -c "mystery(payload)""#)
+        let command = #"python -c "mystery(payload)""#
+        let pack = try runSemanticsPack(command)
         #expect(pack.decision == .allow)
-        let composed = applySemantics(
-            pack: pack,
-            command: ShellCommand(rawValue: #"python -c "mystery(payload)""#)
-        )
+        let composed = try runSemanticsDoor(command)
         guard case .deny(let deny) = composed.decision else {
             Issue.record("unreliable python must fail-closed, got \(composed.decision)")
             return
@@ -83,10 +66,9 @@ struct ApplySemanticsTests {
         let command = "bash -c 'git push --force-with-lease origin main'"
         let pack = try runSemanticsPack(command)
         #expect(pack.decision == .allow)
-        let composed = applySemantics(
-            pack: pack,
-            command: ShellCommand(rawValue: command),
-            gitWorld: .probed(GitAnalysisContext(currentBranch: "main"))
+        let composed = try runSemanticsDoor(
+            command,
+            gitProbe: { _ in .probed(GitAnalysisContext(currentBranch: "main")) }
         )
         guard case .deny(let deny) = composed.decision else {
             Issue.record("wrapped force-with-lease to main must deny")
@@ -100,10 +82,9 @@ struct ApplySemanticsTests {
         let command = "bash -c 'echo hi > ../outside-file'"
         let pack = try runSemanticsPack(command)
         #expect(pack.decision == .allow)
-        let composed = applySemantics(
-            pack: pack,
-            command: ShellCommand(rawValue: command),
-            filesystemWorld: repo
+        let composed = try runSemanticsDoor(
+            command,
+            filesystemProbe: { _ in repo }
         )
         guard case .deny(let deny) = composed.decision else {
             Issue.record("wrapped out-of-repo write must deny, got \(composed.decision)")
@@ -134,10 +115,9 @@ struct ApplySemanticsTests {
                 ]
             )
         )
-        let composed = applySemantics(
-            pack: pack,
-            command: ShellCommand(rawValue: command),
-            filesystemWorld: context
+        let composed = try runSemanticsDoor(
+            command,
+            filesystemProbe: { _ in context }
         )
         guard case .deny(let deny) = composed.decision else {
             Issue.record("protected path via python must deny")
@@ -154,10 +134,7 @@ struct ApplySemanticsTests {
     @Test func unprobedWorld_packAllowWrite_staysAllow() throws {
         let pack = try runSemanticsPack("echo hi > file")
         #expect(pack.decision == .allow)
-        let composed = applySemantics(
-            pack: pack,
-            command: ShellCommand(rawValue: "echo hi > file")
-        )
+        let composed = try runSemanticsDoor("echo hi > file")
         #expect(composed.decision == .allow)
         #expect(composed.analysis.filesystemAction?.operationKind == .write)
     }
@@ -165,10 +142,9 @@ struct ApplySemanticsTests {
     @Test func probedEmptyWorld_packAllowWrite_isFailClosedThroughAnalyze() throws {
         let pack = try runSemanticsPack("echo hi > file")
         #expect(pack.decision == .allow)
-        let composed = applySemantics(
-            pack: pack,
-            command: ShellCommand(rawValue: "echo hi > file"),
-            filesystemWorld: .probed(.empty)
+        let composed = try runSemanticsDoor(
+            "echo hi > file",
+            filesystemProbe: { _ in .probed(.empty) }
         )
         guard case .deny(let deny) = composed.decision else {
             Issue.record(
@@ -186,10 +162,7 @@ struct ApplySemanticsTests {
             Issue.record("unquoted -c still has pack-visible git reset --hard")
             return
         }
-        let composed = applySemantics(
-            pack: pack,
-            command: ShellCommand(rawValue: command)
-        )
+        let composed = try runSemanticsDoor(command)
         guard case .deny(let deny) = composed.decision else {
             Issue.record("unquoted -c must not silent-allow, got \(composed.decision)")
             return
@@ -202,10 +175,7 @@ struct ApplySemanticsTests {
         let command = "bash -c $CMD"
         let pack = try runSemanticsPack(command)
         #expect(pack.decision == .allow)
-        let composed = applySemantics(
-            pack: pack,
-            command: ShellCommand(rawValue: command)
-        )
+        let composed = try runSemanticsDoor(command)
         guard case .deny(let deny) = composed.decision else {
             Issue.record("$ -c must fail-closed, got \(composed.decision)")
             return
@@ -216,11 +186,7 @@ struct ApplySemanticsTests {
 
     @Test func pythonPrintOsSystem_neverAutoAllows() throws {
         let command = #"python -c "print(os.system('git reset --hard'))""#
-        let pack = try runSemanticsPack(command)
-        let composed = applySemantics(
-            pack: pack,
-            command: ShellCommand(rawValue: command)
-        )
+        let composed = try runSemanticsDoor(command)
         guard case .deny = composed.decision else {
             Issue.record("print(os.system) must not silent-allow, got \(composed.decision)")
             return
@@ -229,59 +195,19 @@ struct ApplySemanticsTests {
         #expect(composed.analysis.wrappers == [.python])
     }
 
-    @Test func packIndeterminate_isNotLiftedByLimit() {
-        let pack = EvaluationResult(
-            outcome: .indeterminate(.corePacksUnavailable),
-            matchingView: MatchingView("python -c mystery")
-        )
-        let composed = applySemantics(
-            pack: pack,
-            command: ShellCommand(rawValue: #"python -c "mystery(payload)""#)
+    @Test func packIndeterminate_isNotLiftedByLimit() throws {
+        let engine = ICUPatternEngine()
+        let compiled = try CompiledPacks<ICUCompiledPattern>.compile(packs: [], using: engine)
+        let composed = evaluateWithSemantics(
+            EvaluationRequest(
+                command: ShellCommand(rawValue: #"python -c "mystery(payload)""#),
+                enabledPacks: dayOnePackIDs
+            ),
+            packs: [],
+            engine: engine,
+            compiled: compiled
         )
         #expect(composed.decision == .indeterminate(.corePacksUnavailable))
         #expect(composed.analysis.innermost == .unwrapLimited)
     }
-}
-
-private func runSemanticsPack(_ command: String) throws -> EvaluationResult {
-    let packs = [
-        PackSnapshot(
-            id: .coreFilesystem,
-            name: "fs",
-            description: "fs",
-            keywords: ["rm"],
-            safe: [],
-            destructive: [
-                DestructiveRule(
-                    name: "rm-rf-general",
-                    pattern: #"rm\s+-rf"#,
-                    severity: .high,
-                    reason: "rm -rf is destructive"
-                ),
-            ]
-        ),
-        PackSnapshot(
-            id: .coreGit,
-            name: "git",
-            description: "git",
-            keywords: ["git"],
-            safe: [NamedPattern(name: "checkout-new-branch", pattern: #"git\s+checkout\s+-b\s+"#)],
-            destructive: [
-                DestructiveRule(
-                    name: "reset-hard",
-                    pattern: #"git\s+reset\s+--hard"#,
-                    severity: .critical,
-                    reason: "git reset --hard destroys uncommitted changes"
-                ),
-            ]
-        ),
-    ]
-    let engine = ICUPatternEngine()
-    let compiled = try CompiledPacks<ICUCompiledPattern>.compile(packs: packs, using: engine)
-    return evaluate(
-        EvaluationRequest(command: ShellCommand(rawValue: command), enabledPacks: dayOnePackIDs),
-        packs: packs,
-        engine: engine,
-        compiled: compiled
-    )
 }
