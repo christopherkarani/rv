@@ -57,7 +57,7 @@ public func applyFilesystemSemantics(
             policy: policy
         )
     } else if let typed = ActionPolicyEngine.typedRestriction(
-        filesystemAction: action,
+        .filesystem(action),
         rules: policy.rules
     ) {
         verdict = typed

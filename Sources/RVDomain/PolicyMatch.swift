@@ -1,6 +1,21 @@
+/// Closed subject of a typed rule. A shell is git or filesystem, never both.
+public enum SemanticAction: Sendable, Equatable {
+    case git(GitAction)
+    case filesystem(FilesystemAction)
+}
+
 /// Pure matcher from closed `PolicyPredicate` to a typed Git or filesystem action.
 /// `supportingCommand` is evidence only and is never read.
 public enum PolicyMatch: Sendable {
+    public static func matches(_ predicate: PolicyPredicate, _ action: SemanticAction) -> Bool {
+        switch action {
+        case .git(let git):
+            return matches(predicate, action: git)
+        case .filesystem(let filesystem):
+            return matches(predicate, action: filesystem)
+        }
+    }
+
     public static func matches(_ predicate: PolicyPredicate, action: GitAction) -> Bool {
         switch predicate {
         case .gitPush(let force, let branch):

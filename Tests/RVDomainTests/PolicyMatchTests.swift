@@ -174,6 +174,11 @@ struct PolicyMatchTests {
             PolicyMatch.matches(.gitPush(force: .exactly(.force), branch: "main"), action: delete)
                 == false
         )
+        #expect(PolicyMatch.matches(.filesystemMove, .filesystem(move)))
+        #expect(PolicyMatch.matches(.filesystemMove, .git(forcePush(refspec: "main"))) == false)
+        #expect(
+            PolicyMatch.matches(.gitPush(force: .exactly(.force), branch: "main"), .git(forcePush(refspec: "main")))
+        )
     }
 }
 

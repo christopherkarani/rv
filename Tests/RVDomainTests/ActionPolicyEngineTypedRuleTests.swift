@@ -184,7 +184,7 @@ struct ActionPolicyEngineTypedRuleTests {
             refspec: "main",
             force: .none
         )
-        let matched = ActionPolicyEngine.typedRestriction(gitAction: git, rules: [rule])
+        let matched = ActionPolicyEngine.typedRestriction(.git(git), rules: [rule])
         guard let matched else {
             Issue.record("typed ask must match a non-force push to main")
             return
@@ -197,7 +197,7 @@ struct ActionPolicyEngineTypedRuleTests {
         #expect(deny.reason == "A typed rule requires a human.")
 
         let reset = GitAction.reset(mode: .hard, target: nil)
-        #expect(ActionPolicyEngine.typedRestriction(gitAction: reset, rules: [rule]) == nil)
+        #expect(ActionPolicyEngine.typedRestriction(.git(reset), rules: [rule]) == nil)
     }
 
     @Test func typedDeny_resetSoft_isHardDenyWithTypedRuleID() {
@@ -239,6 +239,12 @@ struct ActionPolicyEngineTypedRuleTests {
             return
         }
         #expect(deny.ruleID == rule.id)
+    }
+
+    @Test func typedRestriction_gitPredicateDoesNotMatchFilesystemAction() {
+        let rule = typedRule(verdict: .deny)
+        let file = inRepoDelete(recursive: false, force: false)
+        #expect(ActionPolicyEngine.typedRestriction(.filesystem(file), rules: [rule]) == nil)
     }
 }
 
