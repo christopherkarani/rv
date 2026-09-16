@@ -19,6 +19,8 @@ Keep these as allow rows. Copying an unbounded `(?:\S+\s+)*` walker onto
 - `git restore file.txt --staged`
 - `echo "git reset --hard"`
 - `rg -n "rm -rf"`
+- `git log --grep='git reset --hard'`
+- `git grep -n "rm -rf"`
 - `git checkout -b`
 
 Do not delete those ids to go green.
