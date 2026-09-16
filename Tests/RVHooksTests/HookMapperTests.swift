@@ -354,13 +354,9 @@ private final class EncodeDenySpy: HostCodec, @unchecked Sendable {
         denyCalls.append((reason, rule, next))
         return HookWire(stdout: "spy\n", exitCode: 9)
     }
-
-    func encodeAsk(reason: String, rule: RuleID?, next: HookVoiceNext) -> HookWire {
-        HookWire(stdout: "spy-ask\n", exitCode: 9)
-    }
 }
 
-private final class EncodeDoorSpy: HostCodec, @unchecked Sendable {
+private final class EncodeDoorSpy: HostAskCodec, @unchecked Sendable {
     let host: HookHost
     private(set) var allowCalls = 0
     private(set) var denyCalls = 0
@@ -404,17 +400,17 @@ private final class EncodeDoorSpy: HostCodec, @unchecked Sendable {
     #expect(spy.askCalls == 0)
 }
 
-@Test func hookWire_boundAllowOnDenyResultDoesNotSilentAllow() {
+@Test func hookWire_firstCallAllowIsWireEvenWhenEvaluateDenied() {
     let deny = Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "x")
-    let spy = EncodeDoorSpy(host: .pi)
+    let spy = EncodeDoorSpy(host: .grok)
     _ = hookWire(
         from: EvaluationResult(outcome: .deny(deny, matched: nil)),
         command: ShellCommand(rawValue: "git reset --hard"),
         using: spy,
         intent: .firstCall(verdict: .allow, unlockCode: nil)
     )
-    #expect(spy.allowCalls == 0)
-    #expect(spy.denyCalls == 1)
+    #expect(spy.allowCalls == 1)
+    #expect(spy.denyCalls == 0)
     #expect(spy.askCalls == 0)
 }
 
@@ -620,20 +616,6 @@ private final class EncodeDoorSpy: HostCodec, @unchecked Sendable {
         command: ShellCommand(rawValue: "git reset --hard"),
         using: spy,
         intent: .firstCall(verdict: .deny, unlockCode: nil)
-    )
-    #expect(spy.allowCalls == 0)
-    #expect(spy.denyCalls == 1)
-    #expect(spy.askCalls == 0)
-}
-
-@Test func hookWire_firstCallIntentAllowOnPackDenyDoesNotSilentAllow() {
-    let deny = Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "x")
-    let spy = EncodeDoorSpy(host: .pi)
-    _ = hookWire(
-        from: EvaluationResult(outcome: .deny(deny, matched: nil)),
-        command: ShellCommand(rawValue: "git reset --hard"),
-        using: spy,
-        intent: .firstCall(verdict: .allow, unlockCode: nil)
     )
     #expect(spy.allowCalls == 0)
     #expect(spy.denyCalls == 1)

@@ -27,7 +27,7 @@ Gate: `tools/gate.sh` (runs `preflight` + filtered tests via `tools/swift-6.3.3`
 
 - Value types only in Domain/Engine/Packs/Presentation. `class` only at XPC/`NSObject` `RVService` edge.
 - Newtypes: `PackID`, `RuleID`, `ShellCommand`. Closed `Decision` enum. No boolean `isDenied`.
-- Small capability protocols (`PatternEngine`, `HostCodec`, `FrameRenderer`). Prefer `some`; `any` only for mixed lists.
+- Small capability protocols (`PatternEngine`, `HostCodec`, `HostAskCodec`, `FrameRenderer`). Prefer `some`; `any` only for mixed lists.
 - Functional core / imperative shell. Pure `evaluate` (no `Date()` / `FileManager` / `ProcessInfo`).
 - Typed errors. `Sendable` + actors for stores. No `try!` / `!` on production paths.
 - TUI: `FrameRenderer.render` → `[String]`.

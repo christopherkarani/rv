@@ -65,17 +65,9 @@ private func encodeFirstCall<C: HostCodec>(
 ) -> HookWire {
     switch verdict {
     case .allow:
-        switch result.decision {
-        case .allow:
-            return codec.encodeAllow()
-        case .deny, .indeterminate:
-            return encodeLiveDeny(
-                from: result,
-                command: command,
-                using: codec,
-                unlockCode: unlockCode
-            )
-        }
+        // HostAskVerdict is the wire decision. Deny-or-TTY maps
+        // `mandatoryHuman` to allow while EvaluationResult may still be deny.
+        return codec.encodeAllow()
     case .ask:
         return encodeAsked(from: result, command: command, using: codec)
     case .deny:
@@ -125,9 +117,17 @@ private func encodeAsked<C: HostCodec>(
     command: ShellCommand,
     using codec: C
 ) -> HookWire {
+    guard let askCodec = codec as? any HostAskCodec else {
+        return encodeLiveDeny(
+            from: result,
+            command: command,
+            using: codec,
+            unlockCode: nil
+        )
+    }
     switch BoundReview.packProjected(from: result) {
     case .deny(let deny), .mandatoryHuman(let deny):
-        return codec.encodeAsk(
+        return askCodec.encodeAsk(
             reason: hostAskLine(command: command, ruleID: deny.ruleID),
             rule: deny.ruleID,
             next: .ttyHint

@@ -25,13 +25,30 @@ struct HostNativeAskTests {
         #expect(decoded != .allow)
     }
 
-    @Test(arguments: [HookHost.pi, .opencode, .claude, .hermes])
-    func spendFirstHostsPauseOnMandatoryHuman(_ host: HookHost) throws {
+    /// Exhaustive: a new `HookHost` must pick pause and fallbacks here.
+    @Test(arguments: HookHost.allCases)
+    func profileTable_coversEveryHost(_ host: HookHost) {
+        let profile = HostNativeAsk.profile(for: host)
+        switch host {
+        case .pi, .opencode, .claude, .hermes:
+            #expect(profile.pause == .spendFirst)
+        case .grok:
+            #expect(profile.pause == .noPause)
+        case .openclaw, .codex, .cursor:
+            #expect(profile.pause == .leftoverAskForbidden)
+        }
+        #expect(profile.grayAreaIfNoPause == .allow)
+        #expect(profile.unlockableIfNoPause == .deny)
+    }
+
+    @Test(arguments: HookHost.allCases)
+    func mandatoryHumanFollowsPauseProfile(_ host: HookHost) throws {
         let cwd = try #require(WorkingDirectory(validating: "/tmp/ws"))
         let result = EvaluationResult(
             outcome: .plain,
             matchingView: MatchingView("git push --force origin topic")
         )
+        let profile = HostNativeAsk.profile(for: host)
         let verdict = HostNativeAsk.hostAskVerdict(
             host: host,
             result: result,
@@ -39,42 +56,13 @@ struct HostNativeAskTests {
             bound: .mandatoryHuman(askDeny),
             continuation: .hostNative
         )
-        #expect(verdict == .ask(.hostNative))
-        #expect(HostNativeAsk.capability(for: host) == .spendFirst)
-    }
-
-    @Test(arguments: [HookHost.grok, .openclaw, .codex, .cursor])
-    func denyOrTTYHostsDoNotPauseOnMandatoryHuman(_ host: HookHost) throws {
-        let cwd = try #require(WorkingDirectory(validating: "/tmp/ws"))
-        let result = EvaluationResult(
-            outcome: .plain,
-            matchingView: MatchingView("git push --force origin topic")
-        )
-        let verdict = HostNativeAsk.hostAskVerdict(
-            host: host,
-            result: result,
-            cwd: cwd,
-            bound: .mandatoryHuman(askDeny),
-            continuation: .hostNative
-        )
-        #expect(verdict == .deny)
-        #expect(HostNativeAsk.capability(for: host) == .denyOrTTY)
-        #expect(
-            HostNativeAsk.recordsPending(result: result, cwd: cwd, bound: .mandatoryHuman(askDeny))
-        )
-    }
-
-    /// Claude leftover-ask-as-permit is official `permissionDecision:ask` JSON,
-    /// not this capability table. Claude and Hermes are spend-first here.
-    @Test func capabilityTable_claudeAndHermesAreSpendFirst_grokCodexCursorOpenClawStayDenyOrTTY() {
-        #expect(HostNativeAsk.capability(for: .pi) == .spendFirst)
-        #expect(HostNativeAsk.capability(for: .opencode) == .spendFirst)
-        #expect(HostNativeAsk.capability(for: .claude) == .spendFirst)
-        #expect(HostNativeAsk.capability(for: .hermes) == .spendFirst)
-        #expect(HostNativeAsk.capability(for: .codex) == .denyOrTTY)
-        #expect(HostNativeAsk.capability(for: .cursor) == .denyOrTTY)
-        #expect(HostNativeAsk.capability(for: .grok) == .denyOrTTY)
-        #expect(HostNativeAsk.capability(for: .openclaw) == .denyOrTTY)
+        switch profile.pause {
+        case .spendFirst:
+            #expect(verdict == .ask(.hostNative))
+        case .noPause, .leftoverAskForbidden:
+            #expect(verdict == profile.grayAreaIfNoPause.verdict)
+            #expect(verdict != .ask(.hostNative))
+        }
     }
 
     @Test func packDecisionDenyStaysDeny() {
@@ -93,22 +81,20 @@ struct HostNativeAskTests {
         #expect(verdict == .deny)
     }
 
-    @Test(arguments: [HookHost.pi, .opencode, .claude, .hermes])
-    func hostNativeBridgeSpendsOnSpendFirstAllowOnce(_ host: HookHost) {
+    @Test(arguments: HookHost.allCases)
+    func hostNativeBridgeAllowOnceFollowsPauseProfile(_ host: HookHost) {
         let bridge = HostNativeApprovalBridge()
-        #expect(
-            bridge.resolve(host: host, continuation: .hostNative, decision: .allowOnce)
-                == .spendThenAllow
+        let resolution = bridge.resolve(
+            host: host,
+            continuation: .hostNative,
+            decision: .allowOnce
         )
-    }
-
-    @Test(arguments: [HookHost.grok, .codex, .cursor, .openclaw])
-    func hostNativeBridgeDenyOrTTYOnAllowOnce(_ host: HookHost) {
-        let bridge = HostNativeApprovalBridge()
-        #expect(
-            bridge.resolve(host: host, continuation: .hostNative, decision: .allowOnce)
-                == .denyOrTTY
-        )
+        switch HostNativeAsk.profile(for: host).pause {
+        case .spendFirst:
+            #expect(resolution == .spendThenAllow)
+        case .noPause, .leftoverAskForbidden:
+            #expect(resolution == .denyOrTTY)
+        }
     }
 
     @Test(arguments: zip(
@@ -122,76 +108,26 @@ struct HostNativeAskTests {
         )
     }
 
-    @Test func doorVerdict_unlockablePackDenyAsksOnSpendFirst() throws {
+    @Test(arguments: HookHost.allCases)
+    func unlockablePackDenyFollowsPauseProfile(_ host: HookHost) throws {
         let cwd = try #require(WorkingDirectory(validating: "/tmp/ws"))
         let result = EvaluationResult(
             outcome: .deny(packDeny, matched: nil),
             matchingView: MatchingView("git reset --hard")
         )
-        #expect(
-            HostNativeAsk.hostAskVerdict(
-                host: .pi,
-                result: result,
-                cwd: cwd,
-                bound: .deny(packDeny)
-            ) == .ask(.hostNative)
+        let profile = HostNativeAsk.profile(for: host)
+        let verdict = HostNativeAsk.hostAskVerdict(
+            host: host,
+            result: result,
+            cwd: cwd,
+            bound: .deny(packDeny)
         )
-        #expect(
-            HostNativeAsk.hostAskVerdict(
-                host: .opencode,
-                result: result,
-                cwd: cwd,
-                bound: .deny(packDeny)
-            ) == .ask(.hostNative)
-        )
-        #expect(
-            HostNativeAsk.hostAskVerdict(
-                host: .claude,
-                result: result,
-                cwd: cwd,
-                bound: .deny(packDeny)
-            ) == .ask(.hostNative)
-        )
-        #expect(
-            HostNativeAsk.hostAskVerdict(
-                host: .hermes,
-                result: result,
-                cwd: cwd,
-                bound: .deny(packDeny)
-            ) == .ask(.hostNative)
-        )
-        #expect(
-            HostNativeAsk.hostAskVerdict(
-                host: .grok,
-                result: result,
-                cwd: cwd,
-                bound: .deny(packDeny)
-            ) == .deny
-        )
-        #expect(
-            HostNativeAsk.hostAskVerdict(
-                host: .codex,
-                result: result,
-                cwd: cwd,
-                bound: .deny(packDeny)
-            ) == .deny
-        )
-        #expect(
-            HostNativeAsk.hostAskVerdict(
-                host: .cursor,
-                result: result,
-                cwd: cwd,
-                bound: .deny(packDeny)
-            ) == .deny
-        )
-        #expect(
-            HostNativeAsk.hostAskVerdict(
-                host: .openclaw,
-                result: result,
-                cwd: cwd,
-                bound: .deny(packDeny)
-            ) == .deny
-        )
+        switch profile.pause {
+        case .spendFirst:
+            #expect(verdict == .ask(.hostNative))
+        case .noPause, .leftoverAskForbidden:
+            #expect(verdict == profile.unlockableIfNoPause.verdict)
+        }
     }
 
     @Test func doorVerdict_missingCwdNeverAsks() {
@@ -289,46 +225,6 @@ struct HostNativeAskTests {
                 result: result,
                 cwd: cwd,
                 bound: .deny(leftover)
-            ) == .deny
-        )
-    }
-
-    @Test func doorVerdict_mandatoryHumanAsksWhenSpendable() throws {
-        let cwd = try #require(WorkingDirectory(validating: "/tmp/ws"))
-        let result = EvaluationResult(
-            outcome: .plain,
-            matchingView: MatchingView("git push --force origin topic")
-        )
-        #expect(
-            HostNativeAsk.hostAskVerdict(
-                host: .pi,
-                result: result,
-                cwd: cwd,
-                bound: .mandatoryHuman(askDeny)
-            ) == .ask(.hostNative)
-        )
-        #expect(
-            HostNativeAsk.hostAskVerdict(
-                host: .claude,
-                result: result,
-                cwd: cwd,
-                bound: .mandatoryHuman(askDeny)
-            ) == .ask(.hostNative)
-        )
-        #expect(
-            HostNativeAsk.hostAskVerdict(
-                host: .hermes,
-                result: result,
-                cwd: cwd,
-                bound: .mandatoryHuman(askDeny)
-            ) == .ask(.hostNative)
-        )
-        #expect(
-            HostNativeAsk.hostAskVerdict(
-                host: .grok,
-                result: result,
-                cwd: cwd,
-                bound: .mandatoryHuman(askDeny)
             ) == .deny
         )
     }
