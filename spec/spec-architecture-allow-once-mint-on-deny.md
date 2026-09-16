@@ -89,7 +89,7 @@ Audience: fresh-context implementer/reviewer subagents. Toolchain: swift-tools 6
 - **REQ-204**: One line. No U+001B, no `═`, no `┌`, no newline in the full reason. If brand + unlock + why would contain those, keep why and put the unlock line only in `next`.
 - **REQ-205**: When mint was skipped or failed, `next` on first-call pack deny may stay nil (today) **or** use `hookUnlockNext` without a code. Do not invent a fake code. Canonical reset-hard why without a code remains `RV · Blocked. Destroys uncommitted changes. Use 'git stash' first.`
 - **REQ-206**: Ask JSON (`encodeAsk`) must not include a 6-hex code. `hostAskLine` is unchanged.
-- **REQ-207**: Post-spend deny (`afterSpend: true`) must not mint and must not print a new code.
+- **REQ-207**: Post-spend deny (`intent: .afterSpend`) must not mint and must not print a new code. Callers use `intent: .afterSpend`; the leftover `afterSpend: Bool` door is closed.
 - **REQ-208**: Codex stderr honor reason and Cursor `user_message` / `agent_message` receive the same reason string as other hosts (brand + unlock + why when a code exists). Do not add extra JSON keys Codex/Cursor will drop or fail-open on.
 - **REQ-209**: `assertHookDenyHasNoBypassOrEssay` (and copies) must **stop** forbidding `allow-once` and `Terminal` on deny **when a code was minted**. They must still forbid `RV_BYPASS`, boxes, ANSI, newlines, and echoing the command `git reset --hard`. Add a dedicated assertion that a minted deny contains `rv allow-once ` followed by exactly six hex digits.
 
@@ -147,9 +147,10 @@ func hookWire<C: HostCodec>(
     using codec: C,
     bound: BoundReview? = nil,
     cwd: WorkingDirectory? = nil,
-    afterSpend: Bool = false,
     unlockCode: String? = nil
 ) -> HookWire
+// Spend callers use hookWire(..., intent: .afterSpend). The leftover
+// afterSpend: Bool = false door is closed.
 ```
 
 `encodeDeny(..., next:)` on first-call unlockable pack deny:

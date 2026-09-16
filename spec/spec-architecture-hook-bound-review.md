@@ -102,7 +102,7 @@ worktrees.
 
 - **REQ-201**: `HostCodec` default `proposedAction(from: HookRequest) -> ProposedAction` matches the existing OpenClaw/Hermes fingerprint (`host:session:cwd:command`, empty effects, cwd on `ActionScope`, command as supporting evidence). OpenClaw/Hermes may keep explicit methods if they stay identical; do not diverge fingerprints.
 - **REQ-202**: `hookBody` first call: `evaluate` then `HostNativeAsk` projection then `hookWire(..., bound:)`. `bound:` is not optional on first call.
-- **REQ-203**: Spend path (`hostAsk == .spend`) unchanged: no BoundReview, `afterSpend: true`.
+- **REQ-203**: Spend path (`hostAsk == .spend`) unchanged: no BoundReview, `intent: .afterSpend`. The leftover `afterSpend: true` Bool door is closed.
 - **REQ-204**: Pack deny (`git reset --hard`) still encodes deny, never allow, never Ask. Pack allow (`git status`) encodes allow, never Ask.
 - **REQ-205**: Existing injected-`bound: .mandatoryHuman` tests stay green (Pi/OpenCode Ask JSON, Claude/Grok deny).
 - **REQ-206**: Claude `encodeAsk` stays rich-deny (`permissionDecision: "deny"`).
