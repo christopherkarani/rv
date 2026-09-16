@@ -475,6 +475,24 @@ private final class EncodeDoorSpy: HostCodec, @unchecked Sendable {
     #expect(spy.askCalls == 1)
 }
 
+@Test func hookWire_convenienceIsFirstCallOnly() {
+    let deny = Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "x")
+    let spy = EncodeDoorSpy(host: .pi)
+    _ = hookWire(
+        from: EvaluationResult(
+            outcome: .deny(deny, matched: nil),
+            matchingView: MatchingView("git reset --hard")
+        ),
+        command: ShellCommand(rawValue: "git reset --hard"),
+        using: spy,
+        cwd: wd("/tmp/ws")
+    )
+    #expect(spy.allowCalls == 0)
+    #expect(spy.denyCalls == 0)
+    #expect(spy.askCalls == 1)
+    // hookWire(..., afterSpend: true) does not compile.
+}
+
 @Test func hookWire_mintedUnlockCodeOnGrokDeny() throws {
     let result = EvaluationResult(
         outcome: .deny(

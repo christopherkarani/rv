@@ -32,19 +32,15 @@ public func hookWire<C: HostCodec>(
     }
 }
 
-/// Convenience: project `HostAskVerdict` then encode. Tests and leftover
-/// `bound:` / `afterSpend:` call sites stay on this door.
+/// Convenience: project `HostAskVerdict` then encode `.firstCall`.
+/// Spend vs first-call is `hookWire(..., intent: HookWireIntent)` only.
 public func hookWire<C: HostCodec>(
     from result: EvaluationResult,
     command: ShellCommand,
     using codec: C,
     bound: BoundReview? = nil,
-    cwd: WorkingDirectory? = nil,
-    afterSpend: Bool = false
+    cwd: WorkingDirectory? = nil
 ) -> HookWire {
-    if afterSpend {
-        return hookWire(from: result, command: command, using: codec, intent: .afterSpend)
-    }
     let bound = bound ?? BoundReview.packProjected(from: result)
     let verdict = HostNativeAsk.hostAskVerdict(
         host: codec.host,

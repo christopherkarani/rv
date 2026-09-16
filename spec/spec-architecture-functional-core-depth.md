@@ -45,7 +45,7 @@ Implementers of rv (Swift 6.3.3, language mode 6, macOS 26, Apple Silicon) using
 - OPE-156 IR / fingerprint construction in every HostCodec.
 - Analyzers (`analyzeGit` / `analyzeFilesystem`).
 - Putting `ActionPolicyEngine` on the live hook door.
-- Closing `hookWire(bound:afterSpend:)` into an enum (Worth exploring; not this spec).
+- Closing `hookWire(bound:afterSpend:)` into an enum (Worth exploring; not this spec). The leftover `afterSpend: Bool` door is closed; spend uses `HookWireIntent.afterSpend`.
 - Typed Codable models for host session JSON (`[String: Any]` stays inside adapters).
 - Folding `ActionReview.decision` + `rationaleCategory` (fail-closed conflict must remain representable).
 - `AllowOnceRecord.kind` + `consumedAt` on-disk schema.
