@@ -37,7 +37,7 @@ rv owns codecs. Do not copy ryk leftover-ask-as-permit. Do not copy DCG fail-ope
 - Deny stdout (exit 0): documented Claude fields only — `systemMessage` branded `RV · Blocked` + short hostDenyText; `hookSpecificOutput` with exactly `hookEventName`, `permissionDecision: "deny"`, rich `permissionDecisionReason`. Pack / rule / severity / remediation live inside the reason text. **No** extra `hookSpecificOutput` keys (`ruleId`, `packId`, `severity`, `remediation`, …): schema-invalid exit-0 JSON is a non-blocking error and the action proceeds. **No** `allowOnceCode` / redeemable code. Indeterminate: deny envelope + incomplete-eval sentence; no pack sections in the reason.
 - Allow: empty stdout, exit 0. First-call Ask is `{decision:ask}` at exit 2 for the wrapper (confirm then spend). Never emit official `permissionDecision: "ask"` (CL-later-ask leftover-ask-as-permit). File-tool aliases `Read` / `Edit` / `Write`. No Grep / MCP matchers (CL-later-mcp).
 
-## OpenClaw (OPE-266; host only, no Ask)
+## OpenClaw (OPE-266 host; spend-first Ask)
 
 - Discover: `~/.openclaw/` exists or `openclaw` on PATH. Linux and macOS only. No Windows path.
 - Setup writes an **exclusive plugin directory** `$HOME/.openclaw/extensions/rv-guard/`:
@@ -60,9 +60,9 @@ rv owns codecs. Do not copy ryk leftover-ask-as-permit. Do not copy DCG fail-ope
   ```
 
   Decode: unreadable JSON → deny. `toolName != "exec"` or `toolKind == "code_mode_exec"` → foreign allow. Exec with missing/empty `params.command` → deny. cwd is `params.workdir` then envelope `cwd`. session is `sessionId` then `sessionKey`.
-- Deny: plugin returns `{ block: true, blockReason }` where `blockReason` is `hostDenyText`. `block: true` is terminal. **No** `requireApproval` (Ask is out of scope). Missing `rv` → `{ block: true, blockReason: "rv missing" }`. Timeout/crash → `{ block: true, blockReason: "rv failed" }`. Operator stdout is short `{decision,reason}` JSON and exit **1**.
+- Deny: plugin returns `{ block: true, blockReason }` where `blockReason` is `hostDenyText`. `block: true` is terminal. Ask is plugin-owned wait (`plugin.approval.request` + `waitDecision`; tests `RV_ASK_CONFIRM`) then PolicyGate spend; allow is no return (the tool runs). Never `{ requireApproval }` (host Allow runs exec). `allowedDecisions` is `allow-once` / `deny` only. Missing `rv` → `{ block: true, blockReason: "rv missing" }`. Timeout/crash / missing gateway / no route / confirm-no → `{ block: true, blockReason }` (`rv failed` or the Ask reason). Operator stdout is short `{decision,reason}` JSON and exit **1**.
 - Session store: per-agent SQLite `$HOME/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`, table `transcript_events (session_id, event_json, created_at)`. `extract(fileURL:data:)` uses **`data`**, never reopens the path. sqlite open / prepare / unreadable bytes **throw**. Empty valid `transcript_events` may return `[]`. Skip non-exec / unparseable rows.
-- Occupied slot: skip + one line. No Ask UI. No AFM / ActionReviewer.
+- Occupied slot: skip + one line. Confirm-then-spend Ask. No AFM / ActionReviewer.
 
 ## Hermes (OPE-265; spend-first Ask)
 

@@ -30,7 +30,7 @@ Pause only for `mandatoryHuman` once that verdict is on the hook door. Pack deny
 
 **Claude (264).** Official pause exists (`permissionDecision: "ask"`) but first-call host Allow runs the tool with no PolicyGate spend — leftover-ask-as-permit (267, CL-later-ask). Do not emit `"ask"` until a callback can spend first, then allow. Until that callback exists: deny or TTY, same as OpenCode. Documented `hookSpecificOutput` keys only if ask is ever emitted (extras fail-open a deny). TTY allow-once remains the RV grant.
 
-**OpenClaw (after 264).** Official pause: `requireApproval`. Hard deny stays `{ block: true }` (`block` wins). `onResolution` allow-once → PolicyGate spend then allow. Host `allow-always` is not this grant and not createRule; this-call-only or deny. Timeout / no route / cancel → block.
+**OpenClaw (after 264).** Official leftover pause `requireApproval` must not be returned (host Allow runs exec). Spend-first wait is plugin-owned `plugin.approval.request` + `waitDecision`, then PolicyGate spend, then allow. Hard deny stays `{ block: true }` (`block` wins). Host `allow-always` is not this grant and not createRule. Timeout / no route / cancel → block.
 
 **Hermes (after OpenClaw).** Official pause exists (`{"action": "approve"}`) but first-call Hermes-gate Allow runs the tool with no PolicyGate spend — leftover-ask-as-permit (267). Do not return `approve` until a callback can spend first, then allow. Until that callback exists: `{ action: "block" }` or TTY. Exceptions still block.
 

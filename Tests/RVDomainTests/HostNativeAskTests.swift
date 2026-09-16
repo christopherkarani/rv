@@ -30,11 +30,11 @@ struct HostNativeAskTests {
     func profileTable_coversEveryHost(_ host: HookHost) {
         let profile = HostNativeAsk.profile(for: host)
         switch host {
-        case .pi, .opencode, .claude, .hermes:
+        case .pi, .opencode, .claude, .hermes, .openclaw:
             #expect(profile.pause == .spendFirst)
         case .grok:
             #expect(profile.pause == .noPause)
-        case .openclaw, .codex, .cursor:
+        case .codex, .cursor:
             #expect(profile.pause == .leftoverAskForbidden)
         }
         #expect(profile.grayAreaIfNoPause == .allow)

@@ -1,12 +1,14 @@
 /// Whether a host may pause for Ask because a same-turn spend callback exists.
 public enum HostPause: Sendable, Equatable {
     /// Host confirm or resolution, then PolicyGate spend, then allow.
-    /// Pi / OpenCode / Claude / Hermes this slice.
+    /// Pi / OpenCode / Claude / Hermes / OpenClaw this slice.
     /// Claude leftover-ask-as-permit is official `permissionDecision: "ask"` JSON,
-    /// not this case. Spend-first still must not emit that leftover key.
+    /// not this case. OpenClaw leftover-ask-as-permit is returning
+    /// `requireApproval` (host Allow runs exec). Spend-first still must not
+    /// emit those leftover keys.
     case spendFirst
     /// Host has a pause API that would run the tool without a PolicyGate spend.
-    /// OpenClaw `requireApproval`, Codex/Cursor leftover `ask`. Do not emit it.
+    /// Codex/Cursor leftover `ask`. Do not emit it.
     case leftoverAskForbidden
     /// No pause RV will use. Grok this slice (native `decision: ask` is unused).
     case noPause
@@ -125,11 +127,11 @@ public enum HostNativeAsk {
 
     public static func profile(for host: HookHost) -> HostAskProfile {
         switch host {
-        case .pi, .opencode, .claude, .hermes:
+        case .pi, .opencode, .claude, .hermes, .openclaw:
             return .spendFirst
         case .grok:
             return .noPause
-        case .openclaw, .codex, .cursor:
+        case .codex, .cursor:
             return .leftoverAskForbidden
         }
     }

@@ -14,7 +14,7 @@ Living board for implement sessions. Do **not** re-grill.
 | Done | C hook T1–T5 | Implemented on `feat/c-hook-pipe` (PR #43). C `rv` pipes `hookEvaluate` to `rvd`; miss execs `rv-cli`. |
 | Done | session scan T1–T10 | `rv scan` / `rv scan sessions` session forensics. Fence: [`specs/phase-4-session-scan.md`](specs/phase-4-session-scan.md). |
 | Done | Claude CL-T1–T5 | Codec, dispatch, settings merge, doctor, MODULES. Spec: [`specs/claude-host.md`](specs/claude-host.md). |
-| Done | OpenClaw host (OPE-266) | Host only, no Ask. `HookHost.openclaw`, `before_tool_call` / `exec`, exclusive `~/.openclaw/extensions/rv-guard/`, fail-closed sqlite scan. |
+| Done | OpenClaw host (OPE-266) | Spend-first Ask. `HookHost.openclaw`, `before_tool_call` / `exec`, exclusive `~/.openclaw/extensions/rv-guard/`, plugin-owned wait then spend. Never `requireApproval`. Fail-closed sqlite scan. |
 | Done | Hermes host (OPE-265) | Spend-first Ask. `HookHost.hermes`, `pre_tool_call` / `terminal`, exclusive `~/.hermes/plugins/rv-guard/`, confirm then spend. Never `action:approve`. |
 | Next | Claude CL-later-ask | Fenced: never emit official `permissionDecision: "ask"` (leftover-ask-as-permit). Host Ask is wrapper confirm-then-spend. |
 | In progress | File-tool secrets | W1 file door landed. W2: `normal`/`strict`, `secret.allow_paths`, denial-only `rv blocks`. Grep / MCP still forbidden. |

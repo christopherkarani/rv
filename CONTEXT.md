@@ -1,6 +1,6 @@
 # rv
 
-Destructive-command guard for coding-agent shell hooks on macOS 26 Apple Silicon and Linux (aarch64/x86_64). Grade is hook, not OS sandbox. Day-one hosts: Pi, Grok, OpenCode. Also: Claude (settings merge, spend-first Ask), OpenClaw (`~/.openclaw/extensions/rv-guard/`, host only, no Ask), Hermes (`~/.hermes/plugins/rv-guard/`, spend-first Ask), Codex (`~/.codex/hooks/rv-guard.py`, host only, official `block` + stderr reason + exit 2, no Ask), and Cursor (`~/.cursor/hooks/rv-guard.py`, host only, official `permission: deny` + exit 0, no Ask). File-tool Read / Edit / Write secret-path: Grok, Claude, Cursor. Pi / OpenCode / OpenClaw / Hermes / Codex are shell-only.
+Destructive-command guard for coding-agent shell hooks on macOS 26 Apple Silicon and Linux (aarch64/x86_64). Grade is hook, not OS sandbox. Day-one hosts: Pi, Grok, OpenCode. Also: Claude (settings merge, spend-first Ask), OpenClaw (`~/.openclaw/extensions/rv-guard/`, spend-first Ask via plugin-owned wait then spend; never `requireApproval`), Hermes (`~/.hermes/plugins/rv-guard/`, spend-first Ask), Codex (`~/.codex/hooks/rv-guard.py`, host only, official `block` + stderr reason + exit 2, no Ask), and Cursor (`~/.cursor/hooks/rv-guard.py`, host only, official `permission: deny` + exit 0, no Ask). File-tool Read / Edit / Write secret-path: Grok, Claude, Cursor. Pi / OpenCode / OpenClaw / Hermes / Codex are shell-only.
 
 ## Language
 
