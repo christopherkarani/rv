@@ -17,6 +17,8 @@ Machine-readable pin: `vendor/parity/PIN`.
 
 Evaluation order: normalize → quick-reject → safe patterns first → destructive → secret-path on allow → default allow. The pin scoreboard is unchanged. Secret-path only fires when that walk would allow.
 
+Pin `evaluate` is the 0.11.0 scoreboard (`skill-table.json`, `deny.json`, `near-miss.json`, `quarantine.json`). `RVCorpusTests` also runs those rows through the product door `evaluateWithSemantics` (unprobed): pack deny / indeterminate is the floor; RV-RR-02 quiet-work near-miss ids stay door allow; other pack allows may tighten only to `builtin.action`. Door-positive canaries (`python -c os.system`, `bash -c $CMD`, `git push --force-with-lease origin feature`) prove the door is not pack `evaluate`.
+
 ## Catalog (T9)
 
 Bundled pack documents: **95** IDs / **26** categories from the pin. The `windows.*` OS packs are excluded. The `careful_company_running_windows` egress category and preset remain; preset members omit `windows.*`. Default-on is `{core.filesystem, core.git, system.disk}`. Remaining catalog stays default-off. Enabling the rest of the catalog by default is Phase 4+, not v1.

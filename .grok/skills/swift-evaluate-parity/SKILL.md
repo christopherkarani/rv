@@ -98,8 +98,10 @@ Extract the 0.11.0 regex. Do not rewrite a walker to make a test green.
 |---|---|
 | `skill-table.json` | Command rows from upstream skill tables. **`expected` = pin `Decision` + `rule_id`.** Never write a marketing Decision here. |
 | `deny.json` | Extra true-positives (wrappers, multi-segment, filesystem bypasses). Bare `git reset --hard` stays in `skill-table.json`. Do not empty this file down to that one command. Marketing “blocked” rows that the pin allows go to `quarantine.json`, never here. |
-| `near-miss.json` | Must **allow** (see landmines). Shrinking this file is a fail. Those landmine ids are required; deleting a row to go green is a fail. |
+| `near-miss.json` | Must **allow** on pack `evaluate` (see landmines). Shrinking this file is a fail. Those landmine ids are required; deleting a row to go green is a fail. |
 | `quarantine.json` | SKILL.md drift + ICU misses. Expected decision stays the pin. |
+
+`RVCorpusTests` runs each command row twice: pack `evaluate` (pin JSON `expected`) and `evaluateWithSemantics` (pack deny is the floor; RV-RR-02 quiet-work near-miss ids stay door allow; other pack allows may tighten only to `builtin.action`). Door-positive canaries (`python -c os.system`, `bash -c $CMD`, `git push --force-with-lease origin feature`) must fail if `door` is pack `evaluate`. Do not drop the pin run to “just use the door.” Do not rewrite JSON `expected` to a door tighten.
 
 Day-one packs only: `core.git` + `core.filesystem`. T9 imports the rest
 default-off.
