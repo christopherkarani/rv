@@ -86,11 +86,8 @@ enum ShadowMissingContext {
         if request.context.repository.currentBranch == nil {
             reasons.append(.currentBranch)
         }
-        switch request.action {
-        case .shell(let shell):
-            if shell.scope.workingDirectory == nil {
-                reasons.append(.workingDirectory)
-            }
+        if request.action.scope.workingDirectory == nil {
+            reasons.append(.workingDirectory)
         }
         return reasons
     }

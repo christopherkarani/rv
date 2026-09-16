@@ -99,12 +99,13 @@ public protocol HostCodec: Sendable {
 }
 
 extension HostCodec {
-    /// Maps a decoded shell or spend request to an empty-effect shell action.
+    /// Maps a decoded request to a proposed action.
     ///
-    /// Fingerprint spelling is `ActionFingerprint.make`. Command text remains
-    /// supporting evidence; nil session and cwd occupy empty field slots.
-    /// File-tool requests are not empty-command shell actions; the file door
-    /// does not call this.
+    /// `.shell` / `.spend` stay empty-effect shell actions. Fingerprint
+    /// spelling is `ActionFingerprint.make`. Command text remains supporting
+    /// evidence; nil session and cwd occupy empty field slots.
+    /// `.file` is a `FileAction` with `resources.path` set; the path never
+    /// becomes `ShellCommand` / `supportingCommand`.
     public func proposedAction(from request: HookRequest) -> ProposedAction {
         switch request {
         case .shell(_, let command, let cwd, let session),
@@ -122,14 +123,17 @@ extension HostCodec {
                 )
             )
         case .file(_, let file, let cwd, let session):
-            return .shell(
-                ShellAction(
+            return .file(
+                FileAction(
                     fingerprint: ActionFingerprint.make(
                         host: host,
                         session: session,
                         cwd: cwd,
-                        command: ShellCommand(rawValue: file.path.rawValue)
+                        file: file
                     ),
+                    file: file,
+                    effects: ActionEffects(),
+                    resources: ActionResources(path: file.path.rawValue),
                     scope: ActionScope(workingDirectory: cwd)
                 )
             )
