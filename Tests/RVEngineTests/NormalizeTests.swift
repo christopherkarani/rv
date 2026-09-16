@@ -71,7 +71,7 @@ import RVDomain
     #expect(applyRoleAwareQuotes("git reset \"--hard\"") == "git reset --hard")
 }
 
-@Test func normalize_masksGitLogGrepAndGitGrepPatterns() {
+@Test func normalize_masksGitSearchAndDocumentationData() {
     let reset = String(repeating: " ", count: 16)
     let rm = String(repeating: " ", count: 6)
     #expect(
@@ -79,6 +79,14 @@ import RVDomain
     )
     #expect(applyRoleAwareQuotes("git grep -n \"rm -rf\"") == "git grep -n " + rm)
     #expect(applyRoleAwareQuotes("git --no-pager grep -n \"rm -rf\"") == "git --no-pager grep -n " + rm)
+    #expect(
+        applyRoleAwareQuotes("git log -S'git reset --hard'") == "git log -S" + reset
+    )
+    #expect(applyRoleAwareQuotes("git log -G\"rm -rf\"") == "git log -G" + rm)
+    #expect(
+        applyRoleAwareQuotes("git rev-list --grep-reflog='git reset --hard' HEAD")
+            == "git rev-list --grep-reflog=" + reset + " HEAD"
+    )
     #expect(
         Normalize.matchingView(of: "git log --grep='git reset --hard'").rawValue.contains("reset")
             == false
@@ -93,7 +101,22 @@ import RVDomain
     #expect(
         Normalize.matchingView(of: "git grep -f \".env\"").rawValue.contains(".env")
     )
+    #expect(Normalize.matchingView(of: "tldr git reset --hard").rawValue.contains("reset") == false)
+    #expect(Normalize.matchingView(of: "man git reset --hard").rawValue.contains("reset") == false)
+    #expect(
+        Normalize.matchingView(of: "echo git reset --hard").rawValue.contains("reset") == false
+    )
     #expect(Normalize.matchingView(of: "git reset --hard") == "git reset --hard")
+    #expect(Normalize.matchingView(of: "git commit -S").rawValue.contains("commit"))
+    #expect(
+        Normalize.matchingView(of: "find . -name '*rm -rf*'").rawValue.contains("rm") == false
+    )
+    #expect(
+        Normalize.matchingView(of: "echo ok; git reset --hard").rawValue.contains("git reset --hard")
+    )
+    #expect(
+        Normalize.matchingView(of: "echo hi > Sources/Foo.swift").rawValue.contains("Sources/Foo.swift")
+    )
 }
 
 @Test func normalize_preservesEmptyQuotedArguments() {
