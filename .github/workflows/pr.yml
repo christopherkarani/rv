@@ -92,6 +92,9 @@ jobs:
       - name: C hook units
         run: Sources/rv-c/tests/run.sh
 
+      - name: Isolated-HOME host attach
+        run: tools/host-attach-proof.sh
+
   # Advertised grade is macOS 26 hook process, not Linux units.
   hook-grade:
     name: macos hook grade
@@ -146,3 +149,9 @@ jobs:
 
       - name: Isolated-HOME oracle
         run: tools/host-oracle.sh
+
+      - name: Isolated-HOME host attach
+        env:
+          RV_C_HOOK_SKIP_RELEASE: "1"
+          RV_RELEASE_STAGE: ${{ github.workspace }}/.build/release-stage
+        run: tools/host-attach-proof.sh

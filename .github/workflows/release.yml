@@ -64,6 +64,12 @@ jobs:
           RV_RELEASE_STAGE: ${{ github.workspace }}/.build/release-stage
         run: tools/c-hook-proof.sh
 
+      - name: Isolated-HOME host attach
+        env:
+          RV_C_HOOK_SKIP_RELEASE: "1"
+          RV_RELEASE_STAGE: ${{ github.workspace }}/.build/release-stage
+        run: tools/host-attach-proof.sh
+
       - uses: actions/upload-artifact@v4
         with:
           name: rv-${{ github.ref_name }}

@@ -19,6 +19,8 @@ by the Swift package.
 | `worktree-cleanup.sh` | Dry-run (default) lists safe stale worktrees; `--apply` prunes only clean detached `/var/folders` temps and clean fully-merged `feat/*`. | Parallel ticket hygiene |
 | `extract-packs/extract_core_packs.py` | One-shot extract of day-one pack JSON from a local v0.11.0 checkout. Does not clone or vendor Rust. | `vendor/parity/PIN`, `docs/dev/PARITY.md` |
 | `release.sh` | `clang -Os` C hook staged as `rv`; SPM product `rv` staged as `rv-cli`; `rvd`; `strip -x`; `*_RVPacks.bundle`. | `docs/dev/SWIFT.md` (Release artifacts) |
+| `host-oracle.sh` | Isolated-HOME `rv test --robot` allow/deny. Does not run `rv setup`. | `docs/architecture/residual-risk.md` |
+| `host-attach-proof.sh` | Isolated-HOME `rv setup`, then play Grok / OpenClaw / Codex adapters as the host. | `.github/workflows/pr.yml` hook-grade + Linux `swift test` |
 
 ## swift-6.3.3
 
