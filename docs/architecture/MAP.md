@@ -320,7 +320,7 @@ rv/
 │   ├── architecture/MAP.md          # ← this file
 │   ├── dev/SWIFT.md                 # compile times, style contract, artifact sizes
 │   ├── dev/PARITY.md                # upstream 0.11.0 scoreboard, catalog drift table
-│   └── factory/{PLAN.md,STATUS.md,specs/,prompts/,reviews/}
+│   └── factory/{PLAN.md,STATUS.md,specs/}
 └── .build/                          # warm ModuleCache (~80 MB Darwin/Foundation), do not wipe to prove compile
 ```
 
