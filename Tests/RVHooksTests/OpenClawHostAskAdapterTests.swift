@@ -34,6 +34,7 @@ private func resetHardEvent() -> [String: Any] {
     #expect(source.contains("plugin.approval.request"))
     #expect(source.contains("plugin.approval.waitDecision"))
     #expect(source.contains("allow-once"))
+    #expect(source.contains("timeoutMs: RV_ASK_HOOK_BUDGET_MS"))
     #expect(source.contains("requireApproval") == false)
     #expect(source.contains("allow-always") == false)
     #expect(source.contains("RV_BYPASS") == false)
@@ -176,6 +177,31 @@ private func resetHardEvent() -> [String: Any] {
     #expect(result.spawnCount == 1)
 }
 
+@Test func openClawHostAskAdapter_registersAskBudgetAboveDefaultToolHook() async throws {
+    let result = try await runOpenClawAdapter(
+        event: resetHardEvent(),
+        stub: .stdout(askResetHardJSON, exit: 1),
+        confirm: "yes",
+        secondStub: .stdout("", exit: 0)
+    )
+    #expect(result.hookTimeoutMs == 135_000)
+    #expect(result.block != true)
+}
+
+@Test func openClawHostAskAdapter_abortedConfirmDoesNotSpend() async throws {
+    let result = try await runOpenClawAdapter(
+        event: resetHardEvent(),
+        stub: .stdout(askResetHardJSON, exit: 1),
+        confirm: "yes",
+        abort: true,
+        secondStub: .stdout("", exit: 0)
+    )
+    #expect(result.block == true)
+    #expect(result.spawnCount == 1)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
+    #expect(result.gatewayCalls.isEmpty)
+}
+
 @Test func openClawHostAskAdapter_denyJSONDoesNotPause() async throws {
     let result = try await runOpenClawAdapter(
         event: resetHardEvent(),
@@ -206,6 +232,7 @@ private struct OpenClawAdapterRun {
     var lastStdin: String?
     var gatewayCalls: [String]
     var requestedAllowAlways: Bool
+    var hookTimeoutMs: Int?
 }
 
 private func runOpenClawAdapter(
@@ -217,6 +244,7 @@ private func runOpenClawAdapter(
     gatewayTimeout: Bool = false,
     gatewayThrow: Bool = false,
     gatewayNoRoute: Bool = false,
+    abort: Bool = false,
     secondStub: StubRV? = nil
 ) async throws -> OpenClawAdapterRun {
     let root = FileManager.default.temporaryDirectory
@@ -295,6 +323,9 @@ private func runOpenClawAdapter(
     if gatewayNoRoute {
         environment["RV_GATEWAY_NO_ROUTE"] = "1"
     }
+    if abort {
+        environment["RV_ABORT"] = "1"
+    }
     if let secondStub {
         switch secondStub {
         case .stdout(let stdout, let exitCode):
@@ -352,13 +383,15 @@ private func runOpenClawAdapter(
         let allowed = params?["allowedDecisions"] as? [String] ?? []
         return allowed.contains("allow-always")
     }
+    let opts = object["opts"] as? [String: Any]
     return OpenClawAdapterRun(
         block: mapped?["block"] as? Bool,
         blockReason: mapped?["blockReason"] as? String,
         spawnCount: spawnCount,
         lastStdin: lastStdin,
         gatewayCalls: methods,
-        requestedAllowAlways: requestedAllowAlways
+        requestedAllowAlways: requestedAllowAlways,
+        hookTimeoutMs: opts?["timeoutMs"] as? Int
     )
 }
 

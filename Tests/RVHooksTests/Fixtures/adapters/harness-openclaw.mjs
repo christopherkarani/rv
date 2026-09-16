@@ -68,6 +68,15 @@ const ctx = {
   turnSourceTo: event.turnSourceTo,
   turnSourceAccountId: event.turnSourceAccountId,
 };
+if (process.env.RV_ABORT === "1") {
+  ctx.abortSignal = { aborted: true };
+}
 const result = await registered[0].fn(event, ctx);
-process.stdout.write(JSON.stringify({ result: result ?? null, gatewayCalls }));
+process.stdout.write(
+  JSON.stringify({
+    result: result ?? null,
+    gatewayCalls,
+    opts: registered[0].opts ?? null,
+  }),
+);
 process.exit(0);

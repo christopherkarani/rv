@@ -515,21 +515,22 @@ private func runHonorHook(
     #expect(wire.exitCode == expected.exit)
 }
 
-@Test func hookOpenClawDenyResetHard_reasonEqualsHostDenyText() async throws {
-    let expected = try hostExpected("openclaw", "deny-git-reset-hard")
+@Test func hookOpenClawResetHard_encodesAsk() async throws {
     let command = ShellCommand(rawValue: "git reset --hard")
-    let result = try await cliEvaluate(command.rawValue)
-    let text = try #require(hostDenyText(from: result, command: command))
     let wire = try await runHook(
         stdin: try hostFixture("openclaw", "deny-git-reset-hard.json"),
         host: .openclaw
     )
-    let json = try denyJSON(wire.stdout)
-    #expect(json["reason"] as? String == text)
+    let json = try #require(
+        JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any]
+    )
+    #expect(json["decision"] as? String == "ask")
+    #expect(json["continuation"] as? String == "hostNative")
     #expect(json["rule"] as? String == "core.git/reset-hard")
-    #expect(wire.exitCode == expected.exit)
+    #expect(json["reason"] as? String == hostAskLine(command: command, ruleID: RuleID(pack: .coreGit, pattern: "reset-hard")))
     #expect(wire.exitCode == 1)
-    #expect(wire.stdout.contains(text))
+    #expect(wire.stdout.contains("\"decision\":\"allow\"") == false)
+    #expect(wire.stdout.contains("requireApproval") == false)
 }
 
 @Test func hookOpenClawAllowGitStatus_emptyStdoutExitZero() async throws {
