@@ -11,7 +11,7 @@ tags: [architecture, cli, refactor]
 
 Deepen `RVCLI` without a new SPM target. Decision stays out of the shell. ArgumentParser, TTY, and setup mutations stay.
 
-This revision matches the tree after `arch-evaluation-door.md`. Do not re-assemble EvaluationWorld. Do not fold CLI hook miss into `HookDoor`.
+Do not re-assemble EvaluationWorld. Do not fold CLI hook miss into `HookDoor`.
 
 Vocabulary: `CONTEXT.md` (EvaluationRoute, EvaluationWorld, Matching view). Graph: `.grok/skills/swift-hexagonal-spm`. No new library. No new executable.
 

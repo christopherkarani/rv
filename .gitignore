@@ -22,3 +22,10 @@ xcuserdata/
 .cursor/
 .ryk/
 .skynex/
+# Agent working dumps — not public product docs
+planning/
+scratch/
+spec/
+docs/factory/prompts/
+docs/factory/reviews/
+docs/factory/HANDOFF.md

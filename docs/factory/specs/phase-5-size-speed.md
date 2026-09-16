@@ -6,7 +6,7 @@ T0–T9 are **done**. This is a maint wave. It does **not** reopen Phase 4+. It 
 
 Repo: `~/CodingProjects/rv`. Never implement inside ryk.
 
-Source of truth: `docs/factory/PLAN.md`. This spec is the T10–T14 implement prompt. Ticket prompts: `docs/factory/prompts/T10.md` … `T14.md`.
+Source of truth: `docs/factory/PLAN.md`. This spec is the T10–T14 implement contract.
 
 Gate: **L1** for T11–T14. **L4-shaped** (temp HOME, relocated binaries) for T10. Corpus stays green (`tools/gate.sh --quiet RVEngineTests RVCorpusTests`) after T11.
 

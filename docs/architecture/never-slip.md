@@ -1,8 +1,6 @@
 # Never-slip
 
-Named 2026-09-13. Overlay on `docs/architecture/02.md`. Not the 0.2 execute queue.
-
-**Execute overlay:** `planning/2026-09-13-guard-maturity-implementable-program.md`. Do not start IR (OPE-156), Host Ask, or live Auto-review from this name.
+Named 2026-09-13. Overlay on `docs/architecture/02.md`. Not the 0.2 execute queue. Do not start IR (OPE-156), Host Ask, or live Auto-review from this name.
 
 Human picture: a short list still denies when wrapped. Quiet agent work stays quiet. Chasing every crafted bypass in `normal` never ships.
 

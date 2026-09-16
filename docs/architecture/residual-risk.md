@@ -1,8 +1,6 @@
 # Residual risk
 
-Named 2026-09-13. Overlay on `docs/architecture/02.md`. Not the 0.2 execute queue.
-
-**Execute overlay:** `planning/2026-09-13-guard-maturity-implementable-program.md`. Do not start IR (OPE-156), Host Ask, or live Auto-review from this name.
+Named 2026-09-13. Overlay on `docs/architecture/02.md`. Not the 0.2 execute queue. Do not start IR (OPE-156), Host Ask, or live Auto-review from this name.
 
 Human picture: named holes in `normal` we will not chase. Quiet agent work stays quiet. A crafted bypass that is not never-slip is residual or `strict` — not a new `normal` regex.
 
@@ -36,7 +34,7 @@ Levels are `normal` (default) and `strict` only. Never-slip still denies at both
 
 ## Operator
 
-The two lists are this page (`RV-RR-*`) and `docs/architecture/never-slip.md`. Operator surface is `rv safety` (effective `normal` / `strict`) and `rv test` (`rv test --robot '<cmd>'` → `rv.test.v1` JSON). Isolated-HOME W3 transcript: `planning/2026-09-13-guard-maturity/oracles.md`; scripted run: `tools/host-oracle.sh`. Not a new CLI. Not 02.md § Order Manual for Ask.
+The two lists are this page (`RV-RR-*`) and `docs/architecture/never-slip.md`. Operator surface is `rv safety` (effective `normal` / `strict`) and `rv test` (`rv test --robot '<cmd>'` → `rv.test.v1` JSON). Scripted isolated-HOME run: `tools/host-oracle.sh`. Not a new CLI. Not 02.md § Order Manual for Ask.
 
 ## Locked
 

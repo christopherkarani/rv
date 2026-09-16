@@ -282,7 +282,6 @@ rv/
 ├── Package.swift                     # 13 libs + rv + rvd, swift-tools 6.3, macOS 26 + Linux graph, SPM bundle for packs
 ├── .swift-version                   # 6.3.3 pin (tools/swift-6.3.3 preferred)
 ├── README.md / AGENTS.md / CONTEXT.md
-├── spec/spec-architecture-c-hook-pipe.md  # T1–T5 C hook pipe spec (supersedes T15 thin Swift)
 ├── vendor/parity/PIN                # pinned 0.11.0 tag 6d4fcaef… commit 2ed7eeef…
 ├── install.sh                       # curl entry: copies rv, rv-cli, rvd + bundles → ~/.local/bin, execs rv setup
 ├── Resources/launchd/dev.rv.evaluate.plist  # KeepAlive false, RunAtLoad false
