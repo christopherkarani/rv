@@ -162,6 +162,7 @@ func applyRoleAwareQuotes(_ text: String) -> String {
     var gitSubcommand: String?
     var pendingGitGlobalArg = false
     var pendingDataFlag = false
+    var gitGrepPatternPending = false
     var wrapperSeek = WrapperSeek.none
     var pendingInterpreterPayload = false
 
@@ -172,6 +173,7 @@ func applyRoleAwareQuotes(_ text: String) -> String {
             commandBase: commandBase,
             gitSubcommand: gitSubcommand,
             pendingDataFlag: pendingDataFlag,
+            gitGrepPatternPending: gitGrepPatternPending,
             pendingInterpreterPayload: pendingInterpreterPayload,
             isOnlyToken: tokens.count == 1
            )
@@ -195,6 +197,7 @@ func applyRoleAwareQuotes(_ text: String) -> String {
             gitSubcommand = nil
             pendingGitGlobalArg = false
             pendingDataFlag = false
+            gitGrepPatternPending = false
             wrapperSeek = .none
             continue
         }
@@ -224,6 +227,7 @@ func applyRoleAwareQuotes(_ text: String) -> String {
             }
             if decoded.hasPrefix("-") == false {
                 gitSubcommand = decoded
+                gitGrepPatternPending = decoded == "grep"
                 continue
             }
         }
@@ -253,12 +257,19 @@ func applyRoleAwareQuotes(_ text: String) -> String {
         }
 
         if decoded.hasPrefix("-") {
+            if gitSubcommand == "grep", decoded == "--" || isGitGrepPatternFileFlag(decoded) {
+                gitGrepPatternPending = false
+                continue
+            }
             if isDataConsumingFlag(
                 command: commandBase,
                 gitSubcommand: gitSubcommand,
                 flag: decoded
             ) {
                 pendingDataFlag = true
+                if gitSubcommand == "grep" {
+                    gitGrepPatternPending = false
+                }
             }
             continue
         }
@@ -267,15 +278,18 @@ func applyRoleAwareQuotes(_ text: String) -> String {
            shouldMaskQuotedData(
             command: commandBase,
             gitSubcommand: gitSubcommand,
-            pendingDataFlag: pendingDataFlag
+            pendingDataFlag: pendingDataFlag,
+            gitGrepPatternPending: gitGrepPatternPending
            )
         {
             tokens[index].decoded = String(repeating: " ", count: max(decoded.count, 1))
             pendingDataFlag = false
+            gitGrepPatternPending = false
             continue
         }
 
         pendingDataFlag = false
+        gitGrepPatternPending = false
     }
     return tokens.lazy.map(\.decoded).joined(separator: " ")
 }
@@ -349,6 +363,7 @@ private func surfacedAnsiC(
     commandBase: String?,
     gitSubcommand: String?,
     pendingDataFlag: Bool,
+    gitGrepPatternPending: Bool,
     pendingInterpreterPayload: Bool,
     isOnlyToken: Bool
 ) -> String? {
@@ -360,7 +375,8 @@ private func surfacedAnsiC(
     if shouldMaskQuotedData(
         command: commandBase,
         gitSubcommand: gitSubcommand,
-        pendingDataFlag: pendingDataFlag
+        pendingDataFlag: pendingDataFlag,
+        gitGrepPatternPending: gitGrepPatternPending
     ) {
         return nil
     }
@@ -511,15 +527,20 @@ private func maskAttachedDataValue(command: String?, token: CommandToken) -> Str
     return nil
 }
 
+private func isGitGrepPatternFileFlag(_ flag: String) -> Bool {
+    flag == "-f" || flag == "--file" || flag.hasPrefix("--file=")
+}
+
 private func shouldMaskQuotedData(
     command: String?,
     gitSubcommand: String?,
-    pendingDataFlag: Bool
+    pendingDataFlag: Bool,
+    gitGrepPatternPending: Bool
 ) -> Bool {
     isAllArgsData(command)
         || isSearchCommand(command)
-        || gitSubcommand == "grep"
         || pendingDataFlag
+        || (gitSubcommand == "grep" && gitGrepPatternPending)
 }
 
 func isInterpreterExecutable(_ head: String) -> Bool {
