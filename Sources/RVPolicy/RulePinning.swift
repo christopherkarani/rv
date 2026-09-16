@@ -231,6 +231,13 @@ public enum RulePinning: Sendable {
             case .block:
                 return "Always block \(target)."
             }
+        case .gitDiscardWorktree, .gitReset, .gitClean, .filesystemDelete, .filesystemMove:
+            switch polarity {
+            case .allow:
+                return "Always allow this typed action. Future matches in this scope will not wait."
+            case .block:
+                return "Always block this typed action."
+            }
         }
     }
 

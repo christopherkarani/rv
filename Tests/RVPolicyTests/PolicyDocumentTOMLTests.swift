@@ -206,6 +206,59 @@ struct PolicyDocumentTOMLTests {
         #expect(try PolicyDocumentTOML.parse(noneRendered) == noneDocument)
     }
 
+    @Test func wave1Predicates_roundTrip() throws {
+        let document = PolicyDocument(
+            rules: [
+                PolicyDocumentRule(
+                    id: RuleID(pack: .typedGit, pattern: "discard"),
+                    verdict: .ask,
+                    predicate: .gitDiscardWorktree(pathspec: nil)
+                ),
+                PolicyDocumentRule(
+                    id: RuleID(pack: .typedGit, pattern: "reset-hard"),
+                    verdict: .deny,
+                    predicate: .gitReset(mode: .hard)
+                ),
+                PolicyDocumentRule(
+                    id: RuleID(pack: .typedGit, pattern: "clean-fd"),
+                    verdict: .ask,
+                    predicate: .gitClean(force: true, directories: true)
+                ),
+                PolicyDocumentRule(
+                    id: RuleID(pack: .coreFilesystem, pattern: "rm-rf"),
+                    verdict: .deny,
+                    predicate: .filesystemDelete(recursive: true, force: true)
+                ),
+                PolicyDocumentRule(
+                    id: RuleID(pack: .coreFilesystem, pattern: "mv"),
+                    verdict: .ask,
+                    predicate: .filesystemMove
+                ),
+            ]
+        )
+        let rendered = PolicyDocumentTOML.render(document)
+        #expect(rendered.contains("predicate = \"gitDiscardWorktree\""))
+        #expect(rendered.contains("flag_force = \"true\""))
+        #expect(rendered.contains("directories = \"true\""))
+        #expect(rendered.contains("recursive = \"true\""))
+        #expect(rendered.contains("predicate = \"filesystemMove\""))
+        #expect(try PolicyDocumentTOML.parse(rendered) == document)
+    }
+
+    @Test func unknownFlagForce_refuses() {
+        let source = """
+        schema_version = 1
+        [[rule]]
+        id = "typed.git:x"
+        verdict = "ask"
+        predicate = "gitClean"
+        flag_force = "yes"
+        """
+        #expect(throws: PolicyDocumentError.invalidFile) {
+            _ = try PolicyDocumentTOML.parse(source)
+        }
+    }
+
     @Test func unknownForce_refuses() {
         let source = """
         schema_version = 1

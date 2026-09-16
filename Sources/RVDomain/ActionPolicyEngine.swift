@@ -178,7 +178,7 @@ public enum ActionPolicyEngine: Sendable {
 
     /// Saved typed rules only. No builtin wall. Nil when nothing matches.
     public static func typedRestriction(
-        gitAction: GitAction,
+        _ action: SemanticAction,
         rules: [TypedRule]
     ) -> ActionPolicyVerdict? {
         guard rules.isEmpty == false else { return nil }
@@ -188,7 +188,11 @@ public enum ActionPolicyEngine: Sendable {
             reason: Builtin.uncovered.reason,
             semanticallyCovered: false
         )
-        let hit = applyTypedRules(uncovered, rules, gitAction: gitAction)
+        let hit = applyTypedRules(
+            uncovered,
+            rules,
+            action: action
+        )
         switch hit.decision {
         case .hardDeny, .mandatoryHuman:
             return ActionPolicyVerdict(
@@ -231,7 +235,11 @@ public enum ActionPolicyEngine: Sendable {
         gitWorld: GitAnalysisWorld
     ) -> ActionPolicyVerdict {
         var hit = builtinHit(shell: shell, context: context, gitWorld: gitWorld)
-        hit = applyTypedRules(hit, policy.rules, gitAction: shell.gitAction)
+        hit = applyTypedRules(
+            hit,
+            policy.rules,
+            action: semanticAction(of: shell)
+        )
         if hit.semanticallyCovered == false {
             hit = applyPackFallback(hit, policy.packFallback)
         }
@@ -258,7 +266,7 @@ public enum ActionPolicyEngine: Sendable {
             reason: Builtin.uncovered.reason,
             semanticallyCovered: false
         )
-        hit = applyTypedRules(hit, policy.rules, gitAction: nil)
+        hit = applyTypedRules(hit, policy.rules, action: nil)
         if hit.semanticallyCovered == false {
             hit = applyPackFallback(hit, policy.packFallback)
         }
@@ -446,16 +454,26 @@ public enum ActionPolicyEngine: Sendable {
         return GitSharedBranch.contains(resources.branchName)
     }
 
+    private static func semanticAction(of shell: ShellAction) -> SemanticAction? {
+        if let git = shell.gitAction {
+            return .git(git)
+        }
+        if let filesystem = shell.filesystemAction {
+            return .filesystem(filesystem)
+        }
+        return nil
+    }
+
     /// Restrict-only. Rank is deny > ask > allow, independent of list order.
     /// Ask beats allow when both match. Typed allow cannot loosen a built-in hit.
     private static func applyTypedRules(
         _ hit: CoreHit,
         _ rules: [TypedRule],
-        gitAction: GitAction?
+        action: SemanticAction?
     ) -> CoreHit {
         var strongest: TypedRule?
         for rule in rules {
-            guard let gitAction, PolicyMatch.matches(rule.predicate, action: gitAction) else {
+            guard let action, PolicyMatch.matches(rule.predicate, action) else {
                 continue
             }
             if let current = strongest {

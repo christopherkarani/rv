@@ -42,22 +42,28 @@ public func applyFilesystemSemantics(
     var result = pack
     result.analysis = analysis
 
-    guard enabledPacks.contains(.coreFilesystem) else {
-        return result
-    }
-
     guard let action = analysis.filesystemAction else {
         return result
     }
 
-    let verdict = ActionPolicyEngine.evaluate(
-        action: action.proposedAction(
-            command: command,
-            workingDirectory: filesystemWorkingDirectory(filesystemWorld)
-        ),
-        context: ReviewContext(repository: RepositoryReviewContext()),
-        policy: policy
-    )
+    let verdict: ActionPolicyVerdict
+    if enabledPacks.contains(.coreFilesystem) {
+        verdict = ActionPolicyEngine.evaluate(
+            action: action.proposedAction(
+                command: command,
+                workingDirectory: filesystemWorkingDirectory(filesystemWorld)
+            ),
+            context: ReviewContext(repository: RepositoryReviewContext()),
+            policy: policy
+        )
+    } else if let typed = ActionPolicyEngine.typedRestriction(
+        .filesystem(action),
+        rules: policy.rules
+    ) {
+        verdict = typed
+    } else {
+        return result
+    }
     switch verdict.decision {
     case .hardAllow, .reviewEligible:
         return result

@@ -5,7 +5,7 @@ import RVDomain
 /// Pack deny / indeterminate is a floor. When `core.git` is enabled, a parsed
 /// high-impact action may still deny if packs allow. Disabled / empty git
 /// packs skip the builtin wall so pack selection stays the product switch.
-/// Saved typed gitPush rules still apply. Unknown syntax keeps the pack verdict.
+/// Saved typed git rules still apply. Unknown syntax keeps the pack verdict.
 public func applyGitSemantics(
     pack: EvaluationResult,
     command: ShellCommand,
@@ -55,7 +55,7 @@ public func applyGitSemantics(
             gitWorld: context
         )
     } else if let typed = ActionPolicyEngine.typedRestriction(
-        gitAction: action,
+        .git(action),
         rules: policy.rules
     ) {
         verdict = typed

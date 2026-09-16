@@ -85,15 +85,43 @@ public enum PolicyDocumentTOML {
             var lines = ["[[rule]]"]
             lines.append("id = \"\(escapeTOMLString(rule.id.rawValue))\"")
             lines.append("verdict = \"\(rule.verdict.rawValue)\"")
-            lines.append("predicate = \"gitPush\"")
             switch rule.predicate {
             case .gitPush(let force, let branch):
+                lines.append("predicate = \"gitPush\"")
                 if case .exactly(let value) = force {
                     lines.append("force = \"\(value.rawValue)\"")
                 }
                 if let branch {
                     lines.append("branch = \"\(escapeTOMLString(branch))\"")
                 }
+            case .gitDiscardWorktree(let pathspec):
+                lines.append("predicate = \"gitDiscardWorktree\"")
+                if let pathspec {
+                    lines.append("pathspec = \"\(escapeTOMLString(pathspec))\"")
+                }
+            case .gitReset(let mode):
+                lines.append("predicate = \"gitReset\"")
+                if let mode {
+                    lines.append("mode = \"\(mode.rawValue)\"")
+                }
+            case .gitClean(let force, let directories):
+                lines.append("predicate = \"gitClean\"")
+                if let force {
+                    lines.append("flag_force = \"\(force)\"")
+                }
+                if let directories {
+                    lines.append("directories = \"\(directories)\"")
+                }
+            case .filesystemDelete(let recursive, let force):
+                lines.append("predicate = \"filesystemDelete\"")
+                if let recursive {
+                    lines.append("recursive = \"\(recursive)\"")
+                }
+                if let force {
+                    lines.append("flag_force = \"\(force)\"")
+                }
+            case .filesystemMove:
+                lines.append("predicate = \"filesystemMove\"")
             }
             if let english = rule.english {
                 lines.append("english = \"\(escapeTOMLString(english))\"")
@@ -167,6 +195,11 @@ public enum PolicyDocumentTOML {
         var predicateRaw: String?
         var forceRaw: String?
         var branchRaw: String?
+        var pathspecRaw: String?
+        var modeRaw: String?
+        var recursiveRaw: String?
+        var directoriesRaw: String?
+        var flagForceRaw: String?
         var englishRaw: String?
         for rawLine in block.split(separator: "\n", omittingEmptySubsequences: false) {
             let line = rawLine.trimmingCharacters(in: .whitespaces)
@@ -199,6 +232,21 @@ public enum PolicyDocumentTOML {
             case "branch":
                 if branchRaw != nil { throw PolicyDocumentError.invalidFile }
                 branchRaw = value
+            case "pathspec":
+                if pathspecRaw != nil { throw PolicyDocumentError.invalidFile }
+                pathspecRaw = value
+            case "mode":
+                if modeRaw != nil { throw PolicyDocumentError.invalidFile }
+                modeRaw = value
+            case "recursive":
+                if recursiveRaw != nil { throw PolicyDocumentError.invalidFile }
+                recursiveRaw = value
+            case "directories":
+                if directoriesRaw != nil { throw PolicyDocumentError.invalidFile }
+                directoriesRaw = value
+            case "flag_force":
+                if flagForceRaw != nil { throw PolicyDocumentError.invalidFile }
+                flagForceRaw = value
             case "english":
                 if englishRaw != nil { throw PolicyDocumentError.invalidFile }
                 englishRaw = value
@@ -215,34 +263,86 @@ public enum PolicyDocumentTOML {
         guard let predicateRaw else {
             throw PolicyDocumentError.invalidFile
         }
-        guard predicateRaw == "gitPush" else {
+        let predicate: PolicyPredicate
+        switch predicateRaw {
+        case "gitPush":
+            let force: GitPushForceConstraint
+            if let forceRaw {
+                guard let parsed = GitPushForce(rawValue: forceRaw) else {
+                    throw PolicyDocumentError.invalidFile
+                }
+                force = .exactly(parsed)
+            } else {
+                force = .any
+            }
+            let branch: String?
+            if let branchRaw {
+                let trimmed = branchRaw.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard trimmed.isEmpty == false else {
+                    throw PolicyDocumentError.invalidFile
+                }
+                branch = trimmed
+            } else {
+                branch = nil
+            }
+            predicate = .gitPush(force: force, branch: branch)
+        case "gitDiscardWorktree":
+            predicate = .gitDiscardWorktree(pathspec: try optionalNonEmpty(pathspecRaw))
+        case "gitReset":
+            if let modeRaw {
+                guard let mode = GitResetMode(rawValue: modeRaw) else {
+                    throw PolicyDocumentError.invalidFile
+                }
+                predicate = .gitReset(mode: mode)
+            } else {
+                predicate = .gitReset(mode: nil)
+            }
+        case "gitClean":
+            predicate = .gitClean(
+                force: try parseFlag(flagForceRaw),
+                directories: try parseFlag(directoriesRaw)
+            )
+        case "filesystemDelete":
+            predicate = .filesystemDelete(
+                recursive: try parseFlag(recursiveRaw),
+                force: try parseFlag(flagForceRaw)
+            )
+        case "filesystemMove":
+            predicate = .filesystemMove
+        default:
             throw PolicyDocumentError.invalidFile
-        }
-        let force: GitPushForceConstraint
-        if let forceRaw {
-            guard let parsed = GitPushForce(rawValue: forceRaw) else {
-                throw PolicyDocumentError.invalidFile
-            }
-            force = .exactly(parsed)
-        } else {
-            force = .any
-        }
-        let branch: String?
-        if let branchRaw {
-            let trimmed = branchRaw.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard trimmed.isEmpty == false else {
-                throw PolicyDocumentError.invalidFile
-            }
-            branch = trimmed
-        } else {
-            branch = nil
         }
         return PolicyDocumentRule(
             id: id,
             verdict: verdict,
-            predicate: .gitPush(force: force, branch: branch),
+            predicate: predicate,
             english: englishRaw
         )
+    }
+
+    private static func optionalNonEmpty(_ raw: String?) throws -> String? {
+        guard let raw else {
+            return nil
+        }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else {
+            throw PolicyDocumentError.invalidFile
+        }
+        return trimmed
+    }
+
+    private static func parseFlag(_ raw: String?) throws -> Bool? {
+        guard let raw else {
+            return nil
+        }
+        switch raw {
+        case "true":
+            return true
+        case "false":
+            return false
+        default:
+            throw PolicyDocumentError.invalidFile
+        }
     }
 
     private static func parseTOMLStringArray(_ raw: String) throws -> [String] {

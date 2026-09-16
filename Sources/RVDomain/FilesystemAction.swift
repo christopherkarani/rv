@@ -225,7 +225,8 @@ public enum FilesystemAction: Sendable, Equatable, Codable {
                 effects: effects,
                 resources: resources,
                 scope: ActionScope(workingDirectory: workingDirectory),
-                supportingCommand: command
+                supportingCommand: command,
+                filesystemAction: self
             )
         )
     }
