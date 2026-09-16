@@ -247,6 +247,46 @@
       "id": "fp.compound.status-and-diff",
       "command": "git status && git diff",
       "expected": "allow"
+    },
+    {
+      "id": "fp.docs.unlink-help",
+      "command": "unlink --help",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.docs.shred-help",
+      "command": "shred --help",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.docs.mkfs-help",
+      "command": "mkfs --help",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.docs.mkswap-version",
+      "command": "mkswap --version",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.docs.wipefs-help",
+      "command": "wipefs --help",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.docs.pvremove-help",
+      "command": "pvremove --help",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.docs.shutdown-help",
+      "command": "shutdown --help",
+      "expected": "allow"
+    },
+    {
+      "id": "fp.docs.dropdb-help",
+      "command": "dropdb --help",
+      "expected": "allow"
     }
   ]
 }
