@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tools/gate.sh — preflight + filtered swift test via tools/swift-6.3.3.
+# tools/gate.sh — preflight + filtered swift test via tools/swift-6.4.
 # Explicit filter wins. Else infer from git-changed Sources/Tests modules;
 # Package.swift or multi-module → union of affected *Tests. Never unfiltered
 # full suite by default.
@@ -10,7 +10,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 PREFLIGHT="$ROOT/tools/preflight.sh"
-SWIFT_WRAP="$ROOT/tools/swift-6.3.3"
+SWIFT_WRAP="$ROOT/tools/swift-6.4"
 QUIET=0
 EXPLICIT=0
 FILTERS=""
@@ -166,7 +166,7 @@ fi
 fail=0
 for filt in $FILTERS; do
   if [[ "$QUIET" -eq 0 ]]; then
-    printf "gate: tools/swift-6.3.3 test --filter %s\n" "$filt"
+    printf "gate: tools/swift-6.4 test --filter %s\n" "$filt"
   fi
   if ! "$SWIFT_WRAP" test --filter "$filt"; then
     fail=1

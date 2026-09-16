@@ -1,5 +1,5 @@
 #if !canImport(SQLite3)
-/// Official Swift 6.3.3 Linux has no `SQLite3` clang module. OpenCode still
+/// Official Swift Linux has no `SQLite3` clang module. OpenCode still
 /// talks system `libsqlite3` (no SPM package) via these C entry points.
 typealias sqlite3_destructor_type = @convention(c) (UnsafeMutableRawPointer?) -> Void
 

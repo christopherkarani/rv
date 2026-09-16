@@ -83,20 +83,23 @@ case "${ID:-}:${VERSION_ID:-}" in
 esac
 
 PLATFORM_DIR="$(printf '%s' "$SWIFT_PLATFORM" | tr -d '.')${OS_ARCH_SUFFIX}"
-TARBALL="swift-${PIN}-RELEASE-${SWIFT_PLATFORM}${OS_ARCH_SUFFIX}.tar.gz"
-URL="https://download.swift.org/swift-${PIN}-release/${PLATFORM_DIR}/swift-${PIN}-RELEASE/${TARBALL}"
+# download.swift.org names the 6.4 RELEASE tarball 6.4.0; --version is still 6.4.
+ARTIFACT_IDS="$PIN"
+case "$PIN" in
+  *.*.*) ;;
+  *.*) ARTIFACT_IDS="$PIN ${PIN}.0" ;;
+esac
 
-DEST="$HOME/.local/share/swift/swift-${PIN}-RELEASE-${SWIFT_PLATFORM}${OS_ARCH_SUFFIX}"
-BIN="$DEST/usr/bin"
 CACHE_DIR="$HOME/.cache/swift"
-TAR_PATH="$CACHE_DIR/$TARBALL"
-SIG_PATH="$TAR_PATH.sig"
-
-log "url=$URL"
-log "dest=$DEST"
+DEST=""
+BIN=""
+URL=""
+TARBALL=""
+TAR_PATH=""
+SIG_PATH=""
 
 already_ok() {
-  [[ -x "$BIN/swift" ]] || return 1
+  [[ -n "$BIN" && -x "$BIN/swift" ]] || return 1
   local ver
   ver="$("$BIN/swift" --version 2>/dev/null | head -n 1 || true)"
   local pin_re
@@ -104,20 +107,62 @@ already_ok() {
   printf '%s\n' "$ver" | grep -Eq "(^|[^0-9])${pin_re}([^0-9]|$)"
 }
 
+bind_artifact() {
+  local id="$1"
+  TARBALL="swift-${id}-RELEASE-${SWIFT_PLATFORM}${OS_ARCH_SUFFIX}.tar.gz"
+  URL="https://download.swift.org/swift-${id}-release/${PLATFORM_DIR}/swift-${id}-RELEASE/${TARBALL}"
+  DEST="$HOME/.local/share/swift/swift-${id}-RELEASE-${SWIFT_PLATFORM}${OS_ARCH_SUFFIX}"
+  BIN="$DEST/usr/bin"
+  TAR_PATH="$CACHE_DIR/$TARBALL"
+  SIG_PATH="$TAR_PATH.sig"
+}
+
+for id in $ARTIFACT_IDS; do
+  bind_artifact "$id"
+  if already_ok; then
+    break
+  fi
+  DEST=""
+  BIN=""
+done
+
+if [[ -z "$BIN" ]]; then
+  bind_artifact "$PIN"
+fi
+
+log "url=$URL"
+log "dest=$DEST"
+
 if already_ok; then
   log "already installed"
   "$BIN/swift" --version >&2 || true
 else
-  mkdir -p "$CACHE_DIR" "$(dirname "$DEST")"
-  if [[ ! -s "$TAR_PATH" ]]; then
-    log "downloading $TARBALL"
-    curl -fL --retry 5 --retry-delay 4 -o "$TAR_PATH.partial" "$URL"
-    mv "$TAR_PATH.partial" "$TAR_PATH"
-  else
-    log "using cached tarball $TAR_PATH"
+  downloaded=0
+  for id in $ARTIFACT_IDS; do
+    bind_artifact "$id"
+    mkdir -p "$CACHE_DIR" "$(dirname "$DEST")"
+    if [[ ! -s "$TAR_PATH" ]]; then
+      log "trying $URL"
+      if ! curl -fL --retry 5 --retry-delay 4 -o "$TAR_PATH.partial" "$URL"; then
+        rm -f "$TAR_PATH.partial"
+        continue
+      fi
+      mv "$TAR_PATH.partial" "$TAR_PATH"
+    else
+      log "using cached tarball $TAR_PATH"
+    fi
+    log "signature=${URL}.sig"
+    if ! curl -fL --retry 5 --retry-delay 4 -o "$SIG_PATH" "${URL}.sig"; then
+      rm -f "$TAR_PATH" "$SIG_PATH"
+      continue
+    fi
+    downloaded=1
+    break
+  done
+  if [[ "$downloaded" -ne 1 ]]; then
+    log "no official tarball for pin $PIN (tried: $ARTIFACT_IDS)"
+    exit 1
   fi
-  log "signature=${URL}.sig"
-  curl -fL --retry 5 --retry-delay 4 -o "$SIG_PATH" "${URL}.sig"
 
   GNUPGHOME="$(mktemp -d "${TMPDIR:-/tmp}/swift-gpg.XXXXXX")"
   export GNUPGHOME

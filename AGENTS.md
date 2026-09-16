@@ -2,7 +2,7 @@
 
 Work only in `~/CodingProjects/rv`. Do not implement in sibling repos. Do not write foreign product names into this tree.
 
-v1 platform: macOS 26 Apple Silicon, and Linux aarch64/x86_64. Darwin `rvd` is XPC; Linux `rvd` is AF_UNIX. Package tools Swift 6.3. Language mode 6.
+v1 platform: macOS 26 Apple Silicon, and Linux aarch64/x86_64. Darwin `rvd` is XPC; Linux `rvd` is AF_UNIX. Package tools Swift 6.4. Language mode 6.
 
 Hexagonal modules; dependency arrows down; a test that needs a TTY to prove a **decision** is in the wrong module.
 
@@ -21,7 +21,7 @@ Skills (project wins on conflict; fixtures/fakes stay in `Tests/`; do not load `
 | Pre-merge review | `.grok/skills/swift-thermo-nuclear-review` |
 | Also | `~/.grok/skills/swift-pr-review`, `swift-concurrency`, `swift-testing-pro`, `swift-api-design-guidelines` |
 
-Gate: `tools/gate.sh` (runs `preflight` + filtered tests via `tools/swift-6.3.3`). Warm `.build`. Do not wipe `.build` or `swift package clean` to prove a compile — clean ~12s is Foundation ModuleCache (6.3.3 has no prebuilt SDK overlays), not type-check. Details: `docs/dev/SWIFT.md`.
+Gate: `tools/gate.sh` (runs `preflight` + filtered tests via `tools/swift-6.4`). Warm `.build`. Do not wipe `.build` or `swift package clean` to prove a compile — clean ~12s is Foundation ModuleCache (standalone toolchains often have no prebuilt SDK overlays), not type-check. Details: `docs/dev/SWIFT.md`.
 
 ## Swift style contract
 

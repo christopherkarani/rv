@@ -31,24 +31,24 @@ Do not invent a module. Do not restyle the graph from memory.
 
 ## Toolchain
 
-Pin is `.swift-version` (`6.3.3`). Language mode 6. Platforms: macOS 26 Apple Silicon, Linux aarch64/x86_64.
+Pin is `.swift-version` (`6.4`). Language mode 6. Platforms: macOS 26 Apple Silicon, Linux aarch64/x86_64.
 
-`/usr/bin/swift` on this machine may be Xcode 6.2. Before any compile claim:
+`/usr/bin/swift` on this machine may be Xcode-skewed. Before any compile claim:
 
 ```bash
-tools/swift-6.3.3 --version   # expect Apple Swift version 6.3.3
+tools/swift-6.4 --version   # expect Apple Swift version 6.4
 ```
 
 If that wrapper fails (missing toolchain), stop and say so. Do not use
-`swiftly run 6.3.3` unless you have just proven that binary.
+`swiftly run 6.4` unless you have just proven that binary.
 
 Do not wipe `.build` or run `swift package clean` to prove a compile. Clean
 `swift build` ~12s is Foundation overlay rebuild in `.build/.../ModuleCache`
-(6.3.3 has no prebuilt SDK modules), not rv type-check. Incremental Engine
+(standalone toolchains often have no prebuilt SDK modules), not rv type-check. Incremental Engine
 edits are <1s. Numbers: `docs/dev/SWIFT.md`.
 
 Gate: `tools/gate.sh <Target>Tests` for the module you touched (preflight +
-filtered test via `tools/swift-6.3.3`), against a warm `.build`.
+filtered test via `tools/swift-6.4`), against a warm `.build`.
 `RVCorpusTests` is the only multi-module test target (Domain + Engine + Packs).
 
 ## Steps
@@ -96,7 +96,7 @@ Do not add more. Do not delete it in a ticket that does not own those files.
 ## Preflight (run on the diff before claiming done)
 
 **Run `tools/gate.sh` for the touched target(s).** It runs `tools/preflight.sh`
-then filtered tests on 6.3.3. Then re-read the remaining list for anything the
+then filtered tests on 6.4. Then re-read the remaining list for anything the
 script can't catch (semantic judgments).
 
 Re-read this list against the staged/unstaged Swift + `Package.swift` diff:
@@ -109,5 +109,5 @@ Re-read this list against the staged/unstaged Swift + `Package.swift` diff:
 - [ ] No `main.swift` / `@main` inside a library target (`RVCLI`, `RVService`, …).
 - [ ] `Package.swift` executable / ArgumentParser edits match one ticket’s
       ownership row — or a written merge plan exists.
-- [ ] `tools/swift-6.3.3 --version` is 6.3.3 and `tools/gate.sh` for the touched
+- [ ] `tools/swift-6.4 --version` is 6.4 and `tools/gate.sh` for the touched
       target is green.
