@@ -1,6 +1,6 @@
 # rv Architecture Map
 
-> **Source version:** `1.0.0` (`rv.ipc.v1`) — `Package.swift` swift-tools 6.3, Swift 6 language mode, macOS 26 Apple Silicon and Linux aarch64/x86_64.
+> **Source version:** `1.0.0` (`rv.ipc.v1`) — `Package.swift` swift-tools 6.4, Swift 6 language mode, macOS 26 Apple Silicon and Linux aarch64/x86_64.
 > **Synthesized:** 2026-08-23 from `Package.swift`, `docs/architecture/MODULES.md`, `docs/dev/SWIFT.md`, `docs/dev/PARITY.md`, `CONTEXT.md`, `docs/factory/PLAN.md`, `Sources/**`, `Sources/rv-c/*`, `Tests/**`, `tools/*` — hand-maintained view, not auto-generated; `docs/architecture/MODULES.md` + `docs/factory/PLAN.md` are arbiters.
 
 ## 1. Overview
@@ -13,7 +13,7 @@
 
 **Day-one win:** `git reset --hard` → `deny core.git:reset-hard`. `git stash drop` → `allow` + match (medium). Oversize / missing core → `indeterminate` → host deny without rule_id.
 **Hosts v1:** Pi (`~/.pi/agent/extensions/rv-guard.ts`), Grok (`~/.grok/hooks/rv.json`), OpenCode (`~/.config/opencode/plugins/rv-guard.js`), Claude (`~/.claude/settings.json` merge, PreToolUse/Bash only). **Also:** OpenClaw (`~/.openclaw/extensions/rv-guard/`, `before_tool_call` / `exec`, spend-first Ask, never `requireApproval`), Hermes (`~/.hermes/plugins/rv-guard/`, `pre_tool_call` / `terminal`, spend-first Ask), Codex (`~/.codex/hooks/rv-guard.py` + `hooks.json` merge, PreToolUse/Bash, official older `decision: block` + stderr reason + exit 2, no Ask), and Cursor (`~/.cursor/hooks/rv-guard.py` + `hooks.json` merge, `beforeShellExecution`, official native `permission: deny` + exit 0, no Ask). Shell/command tools only; no Read/Edit/MCP hooks. Quiet allow; Pi/Grok/OpenCode/OpenClaw/Hermes short deny text; Claude rich deny JSON (`systemMessage` + `hookSpecificOutput`); Codex honor path is `{"decision":"block","reason"}` on stdout + the 271 line on stderr + exit 2 (stdout-only block and Claude `permissionDecision: deny` are not honored). Cursor honor path is `{"permission":"deny","user_message","agent_message"}` on stdout + exit 0 (Claude `permissionDecision` and Codex `decision: block` + exit 2 are not honored). Pi also shows display-only transcript card (`registerMessageRenderer` → `string[]`); OpenCode also shows display-only toast; card/toast never replace `throw`.
-**Platform:** macOS 26 Apple Silicon, Linux aarch64/x86_64, Swift 6.3.3, `clang -Os` for C. No Windows / Intel Mac / macOS 14/15 claim. Config dir `$HOME/.config/rv/` (`HOME` only, no `XDG_CONFIG_HOME`). Grade is *hook*, not OS-enforced. `RV_BYPASS` is forbidden.
+**Platform:** macOS 26 Apple Silicon, Linux aarch64/x86_64, Swift 6.4, `clang -Os` for C. No Windows / Intel Mac / macOS 14/15 claim. Config dir `$HOME/.config/rv/` (`HOME` only, no `XDG_CONFIG_HOME`). Grade is *hook*, not OS-enforced. `RV_BYPASS` is forbidden.
 
 ---
 
@@ -280,7 +280,7 @@ Explain pipeline ↔ IPC `ExplainStage`: `explainSteps(from:)` maps `EvaluationO
 ```
 rv/
 ├── Package.swift                     # 13 libs + rv + rvd, swift-tools 6.3, macOS 26 + Linux graph, SPM bundle for packs
-├── .swift-version                   # 6.3.3 pin (tools/swift-6.3.3 preferred)
+├── .swift-version                   # 6.4 pin (tools/swift-6.4 preferred)
 ├── README.md / AGENTS.md / CONTEXT.md
 ├── vendor/parity/PIN                # pinned 0.11.0 tag 6d4fcaef… commit 2ed7eeef…
 ├── install.sh                       # curl entry: copies rv, rv-cli, rvd + bundles → ~/.local/bin, execs rv setup
@@ -312,8 +312,8 @@ rv/
 │   ├── RVThemeTests/ / RVTUITests/ / RVCLITests/ / RVHistoryTests/ / RVAnalyticsTests/
 │   └── RVCorpusTests/ (corpus agree)
 ├── tools/
-│   ├── gate.sh                      # preflight + swift-6.3.3 test --filter inference (never full suite by default)
-│   ├── preflight.sh / swift-6.3.3 / c-hook-proof.sh / release.sh / worktree-cleanup.sh
+│   ├── gate.sh                      # preflight + swift-6.4 test --filter inference (never full suite by default)
+│   ├── preflight.sh / swift-6.4 / c-hook-proof.sh / release.sh / worktree-cleanup.sh
 │   └── README.md
 ├── docs/
 │   ├── architecture/MODULES.md      # owns/must-not + dependency table
@@ -378,7 +378,7 @@ Build: `clang -Os` + `strip -x`, `otool -L` must not list Foundation/CFNetwork/S
 - `hostDenyText` canonical reset-hard: `RV · Blocked. Destroys uncommitted changes. Use 'git stash' first.`; incomplete: `rv could not finish evaluating this command. Run it in Terminal.` Never a redeemable code.
 - No `RV_BYPASS`, no host Allow UI, no foreign hook writes, no live-HOME tests, no `os_log` command text, no Seatbelt/OS-enforced claim, no Homebrew in v1.
 
-**Performance / Toolchain:** `tools/swift-6.3.3` wrapper; `tools/gate.sh` infers `*Tests` from git diff; `tools/preflight.sh` checks hygiene (no forbidden tokens outside `docs/factory/`, Swift 6 mode). `.build` warm ~80 MB ModuleCache; `swift package clean` wipes it (slow cold ~12 s). Slowest body `tokenizeCommand` ~22 ms.
+**Performance / Toolchain:** `tools/swift-6.4` wrapper; `tools/gate.sh` infers `*Tests` from git diff; `tools/preflight.sh` checks hygiene (no forbidden tokens outside `docs/factory/`, Swift 6 mode). `.build` warm ~80 MB ModuleCache; `swift package clean` wipes it (slow cold ~12 s). Slowest body `tokenizeCommand` ~22 ms.
 
 ---
 

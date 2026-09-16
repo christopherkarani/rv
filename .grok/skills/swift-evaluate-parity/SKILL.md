@@ -40,12 +40,12 @@ Landmines: [references/landmines.md](references/landmines.md).
 2. Keep `evaluate` **pure**. Clock, disk, and `ProcessInfo` stay out.
 3. Preserve evaluation order. Do not “simplify” extracted regexes.
 4. Add or update a corpus row that would fail if the change is wrong.
-5. Prove on 6.3.3 (not `/usr/bin/swift`):
+5. Prove on 6.4 (not `/usr/bin/swift`):
 
    ```bash
-   tools/swift-6.3.3 --version   # expect Apple Swift version 6.3.3
+   tools/swift-6.4 --version   # expect Apple Swift version 6.4
    tools/gate.sh --quiet RVEngineTests RVCorpusTests
-   tools/swift-6.3.3 test --filter packLoad
+   tools/swift-6.4 test --filter packLoad
    ```
 
 6. Run `tools/gate.sh` (or the filters above) before claiming done.
@@ -109,7 +109,7 @@ default-off.
 ## Preflight
 
 **Run `tools/gate.sh --quiet RVEngineTests RVCorpusTests` (and `packLoad` if
-needed).** Gate runs `tools/preflight.sh` then filtered tests on 6.3.3. Then
+needed).** Gate runs `tools/preflight.sh` then filtered tests on 6.4. Then
 re-read the remaining list for semantic judgments.
 
 - [ ] Expected verdict matches `PARITY.md`, not a marketing row.
@@ -122,4 +122,4 @@ re-read the remaining list for semantic judgments.
 - [ ] `near-miss.json` still contains the landmine rows.
 - [ ] `reset-hard` and `fork-bomb` are not in `quarantine.json`.
 - [ ] `evaluate` gained no I/O.
-- [ ] `RVEngineTests` + `RVCorpusTests` + `packLoad` green via `tools/gate.sh` / `tools/swift-6.3.3`.
+- [ ] `RVEngineTests` + `RVCorpusTests` + `packLoad` green via `tools/gate.sh` / `tools/swift-6.4`.

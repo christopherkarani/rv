@@ -351,7 +351,7 @@ public actor AllowOnceStore {
 }
 
 public func generateAllowOnceCode() throws -> AllowOnceUnlockCode {
-    // Linux 6.3.3 has no SystemRandomNumberGenerator.fill; CSPRNG via the generator.
+    // Linux standalone has no SystemRandomNumberGenerator.fill; CSPRNG via the generator.
     var generator = SystemRandomNumberGenerator()
     let bytes = (0..<3).map { _ in UInt8.random(in: 0...255, using: &generator) }
     let raw = bytes.map { String(format: "%02x", $0) }.joined()

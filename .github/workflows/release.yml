@@ -24,14 +24,17 @@ jobs:
       - name: Cache Swift toolchain
         uses: actions/cache@v4
         with:
-          path: ~/Library/Developer/Toolchains/swift-6.3.3-RELEASE.xctoolchain
-          key: swift-6.3.3-RELEASE-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            ~/Library/Developer/Toolchains/swift-6.4-RELEASE.xctoolchain
+            ~/Library/Developer/Toolchains/swift-6.4.0-RELEASE.xctoolchain
+          key: swift-6.4-RELEASE-${{ runner.os }}-${{ runner.arch }}
 
-      - name: Install Swift 6.3.3
+      - name: Install Swift 6.4
         run: |
           pin="$(tr -d '[:space:]' < .swift-version)"
           dest="$HOME/Library/Developer/Toolchains/swift-${pin}-RELEASE.xctoolchain"
-          if [[ -x "$dest/usr/bin/swift" ]]; then
+          dest0="$HOME/Library/Developer/Toolchains/swift-${pin}.0-RELEASE.xctoolchain"
+          if [[ -x "$dest/usr/bin/swift" || -x "$dest0/usr/bin/swift" ]]; then
             exit 0
           fi
           pkg="swift-${pin}-RELEASE-osx.pkg"
@@ -39,11 +42,15 @@ jobs:
             "https://download.swift.org/swift-${pin}-release/xcode/swift-${pin}-RELEASE/${pkg}"
           sudo installer -pkg "$pkg" -target /
           mkdir -p "$HOME/Library/Developer/Toolchains"
-          sys="/Library/Developer/Toolchains/swift-${pin}-RELEASE.xctoolchain"
-          if [[ ! -x "$dest/usr/bin/swift" && -x "$sys/usr/bin/swift" ]]; then
-            rm -f "$dest"
-            cp -R "$sys" "$dest"
-          fi
+          for sys in \
+            "/Library/Developer/Toolchains/swift-${pin}-RELEASE.xctoolchain" \
+            "/Library/Developer/Toolchains/swift-${pin}.0-RELEASE.xctoolchain"; do
+            home_dest="$HOME/Library/Developer/Toolchains/$(basename "$sys")"
+            if [[ ! -x "$home_dest/usr/bin/swift" && -x "$sys/usr/bin/swift" ]]; then
+              rm -f "$home_dest"
+              cp -R "$sys" "$home_dest"
+            fi
+          done
 
       - name: Preflight + module tests
         run: |
@@ -52,8 +59,8 @@ jobs:
             RVHooksTests RVIPCTests RVPresentationTests \
             RVThemeTests RVTUITests RVHistoryTests RVAnalyticsTests \
             RVCorpusTests
-          tools/swift-6.3.3 test --filter RVServiceTests --skip injectedOneSecondIdleFiresWithoutKeepAlive
-          tools/swift-6.3.3 test --filter RVCLITests --skip CHookPipeTests.cHookProof
+          tools/swift-6.4 test --filter RVServiceTests --skip injectedOneSecondIdleFiresWithoutKeepAlive
+          tools/swift-6.4 test --filter RVCLITests --skip CHookPipeTests.cHookProof
 
       - name: Stage release binaries
         run: tools/release.sh

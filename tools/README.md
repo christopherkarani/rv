@@ -13,20 +13,20 @@ by the Swift package.
 | Script | Purpose | Source of truth |
 |---|---|---|
 | `preflight.sh` | Encodes the four grok-skill checklists as 17 exit-code assertions. Run before claiming a ticket is done. | `.grok/skills/*/SKILL.md` preflight sections |
-| `swift-6.3.3` | Puts the `.swift-version` toolchain first on `PATH`, then `exec`s `swift`. Eliminates the `/usr/bin/swift` 6.2.x trap. Linux also looks at the official tarball dest. | `.swift-version`, `docs/dev/SWIFT.md` |
+| `swift-6.4` | Puts the `.swift-version` toolchain first on `PATH`, then `exec`s `swift`. Eliminates the `/usr/bin/swift` Xcode-skew trap. Linux also looks at the official tarball dest. `swift-6.3.3` is a compatibility exec. | `.swift-version`, `docs/dev/SWIFT.md` |
 | `install-official-swift-linux.sh` | Official `download.swift.org` Linux tarball for `.swift-version`. Never apt `swift`. | `.github/workflows/pr.yml` Ubuntu gate |
-| `gate.sh` | `preflight.sh` + filtered `swift test` via `swift-6.3.3`. Explicit filter or infer from git-changed modules (union when multi-module / `Package.swift`). Not the Ubuntu PR gate. | `AGENTS.md` gate |
+| `gate.sh` | `preflight.sh` + filtered `swift test` via `swift-6.4`. Explicit filter or infer from git-changed modules (union when multi-module / `Package.swift`). Not the Ubuntu PR gate. | `AGENTS.md` gate |
 | `worktree-cleanup.sh` | Dry-run (default) lists safe stale worktrees; `--apply` prunes only clean detached `/var/folders` temps and clean fully-merged `feat/*`. | Parallel ticket hygiene |
 | `extract-packs/extract_core_packs.py` | One-shot extract of day-one pack JSON from a local v0.11.0 checkout. Does not clone or vendor Rust. | `vendor/parity/PIN`, `docs/dev/PARITY.md` |
 | `release.sh` | `clang -Os` C hook staged as `rv`; SPM product `rv` staged as `rv-cli`; `rvd`; `strip -x`; `*_RVPacks.bundle`. | `docs/dev/SWIFT.md` (Release artifacts) |
 | `host-oracle.sh` | Isolated-HOME `rv test --robot` allow/deny. Does not run `rv setup`. | `docs/architecture/residual-risk.md` |
 | `host-attach-proof.sh` | Isolated-HOME `rv setup`, then play Grok / OpenClaw / Codex adapters as the host. | `.github/workflows/pr.yml` hook-grade + Linux `swift test` |
 
-## swift-6.3.3
+## swift-6.4
 
 ```sh
-tools/swift-6.3.3 --version          # expect Apple Swift version 6.3.3
-tools/swift-6.3.3 test --filter RVDomainTests
+tools/swift-6.4 --version          # expect Apple Swift version 6.4
+tools/swift-6.4 test --filter RVDomainTests
 ```
 
 Fails with a clear message if the pinned RELEASE toolchain is missing under
@@ -127,4 +127,4 @@ failure count.
 - `--quiet` suppresses passes, keeps failures and warnings (preflight / gate).
 - `--list` documents available checks without running them (preflight).
 - `preflight.sh` does not modify the tree. `worktree-cleanup.sh --apply` is the only mutator here.
-- Prefer `tools/swift-6.3.3` / `tools/gate.sh` over a manual `export PATH=…xctoolchain…`.
+- Prefer `tools/swift-6.4` / `tools/gate.sh` over a manual `export PATH=…xctoolchain…`.

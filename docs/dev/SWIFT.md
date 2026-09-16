@@ -1,12 +1,12 @@
 # Swift
 
-Package tools: Swift 6.3. Language mode 6. Platforms: macOS 26 Apple Silicon, Linux aarch64/x86_64. PR CI Linux is ubuntu-24.04 x86_64 (`swift test` plus C units plus `tools/host-attach-proof.sh`). Darwin `hook-grade` runs C proof, RVServiceTests, RVCLITests, `tools/host-oracle.sh`, and `tools/host-attach-proof.sh`. Linux aarch64 is a supported install target, not a PR job.
+Package tools: Swift 6.4. Language mode 6. Platforms: macOS 26 Apple Silicon, Linux aarch64/x86_64. PR CI Linux is ubuntu-24.04 x86_64 (`swift test` plus C units plus `tools/host-attach-proof.sh`). Darwin `hook-grade` runs C proof, RVServiceTests, RVCLITests, `tools/host-oracle.sh`, and `tools/host-attach-proof.sh`. Linux aarch64 is a supported install target, not a PR job.
 
-Pin: `.swift-version` (`6.3.3`). This machine’s `/usr/bin/swift` may still be Xcode 6.2. Prefer `tools/swift-6.3.3` (or put `~/Library/Developer/Toolchains/swift-6.3.3-RELEASE.xctoolchain/usr/bin` on `PATH` first). `swiftly run 6.3.3 -- swift test` also works if proven.
+Pin: `.swift-version` (`6.4`). `--version` reports `Apple Swift version 6.4`. Swiftly may install the folder `swift-6.4.0-RELEASE.xctoolchain`; `tools/swift-6.4` accepts both names. This machine’s `/usr/bin/swift` may still be Xcode-skewed. Prefer `tools/swift-6.4` (or put the RELEASE xctoolchain `usr/bin` on `PATH` first). `swiftly run 6.4 -- swift test` also works if proven.
 
 ## Compile times
 
-Standalone 6.3.3 has no `prebuilt-modules`. SPM builds Darwin/Foundation overlays into `.build/arm64-apple-macosx/debug/ModuleCache` (~80 MB). `rm -rf .build` and `swift package clean` wipe that cache.
+Standalone 6.4 has no `prebuilt-modules` in the same way Xcode does. SPM builds Darwin/Foundation overlays into `.build/arm64-apple-macosx/debug/ModuleCache` (~80 MB). `rm -rf .build` and `swift package clean` wipe that cache. Numbers below were measured on 6.3.3 (2026-08-18); treat them as order-of-magnitude, not a 6.4 claim.
 
 Measured on this M3 Max / macOS 26 / SDK 26.2 (2026-08-18):
 
@@ -21,7 +21,7 @@ Measured on this M3 Max / macOS 26 / SDK 26.2 (2026-08-18):
 
 Slowest Engine body (`tokenizeCommand`) is ~22 ms. Do not merge modules or rewrite Normalize to “fix” clean builds.
 
-Gate: keep `.build` warm. Prefer `tools/gate.sh <Target>Tests` (or `tools/swift-6.3.3 test --filter <Target>Tests`). A 10s+ clean is ModuleCache unless `-debug-time-function-bodies` shows a hot function.
+Gate: keep `.build` warm. Prefer `tools/gate.sh <Target>Tests` (or `tools/swift-6.4 test --filter <Target>Tests`). A 10s+ clean is ModuleCache unless `-debug-time-function-bodies` shows a hot function.
 
 T2 ArgumentParser is the next real compile bill. Domain public-API edits today rebuild only Engine + Packs (the libraries that `import RVDomain`); filled stubs will fan out.
 

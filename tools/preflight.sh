@@ -14,7 +14,7 @@
 #   tools/preflight.sh --list       # list available checks
 #
 # Does NOT run swift test. Pair with: swift test --filter <Target>Tests
-# Does NOT require 6.3.3 on PATH — that's the caller's job (see docs/dev/SWIFT.md).
+# Does NOT require 6.4 on PATH — that's the caller's job (see docs/dev/SWIFT.md).
 # Requires: bash, grep, find, sed, python3 (for corpus + Package.swift structural checks).
 
 set -euo pipefail

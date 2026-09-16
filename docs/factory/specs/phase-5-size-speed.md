@@ -141,7 +141,7 @@ Installed `rv` / `rvd` on 2026-08-21 were debug (`libswiftSwiftOnoneSupport`). `
 
 ### Do
 
-1. Add `tools/release.sh` (POSIX bash, `tools/swift-6.3.3`):
+1. Add `tools/release.sh` (POSIX bash, `tools/swift-6.4`):
    - `swift build -c release --product rv --product rvd` (do **not** `swift package clean`).
    - `strip -x` the two products.
    - Stage into a directory: `rv`, `rvd`, and the SPM resource bundle(s) that `Bundle.module` needs (`rv_RVPacks.bundle` and `rvd_RVPacks.bundle` if both exist; copy whichever the release products actually emit).

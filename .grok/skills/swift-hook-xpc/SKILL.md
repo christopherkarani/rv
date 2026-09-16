@@ -148,7 +148,7 @@ No command text in `os_log`. History stays off by default.
 ## Preflight
 
 **Run `tools/gate.sh` for the touched hook/XPC/CLI targets.** It runs
-`tools/preflight.sh` then filtered tests on 6.3.3. Then re-read the remaining
+`tools/preflight.sh` then filtered tests on 6.4. Then re-read the remaining
 list for semantic judgments.
 
 - [ ] Encode path switches on `Decision` in CLI; codecs take `encodeDeny(reason:)`.
