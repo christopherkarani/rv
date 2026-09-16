@@ -3,6 +3,7 @@ import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 
 const RV_BINARY = "__RV_BINARY__";
 const RV_HOOK_TIMEOUT_MS = 5000;
+const RV_ASK_TIMEOUT_MS = 120000;
 
 export default definePluginEntry({
   id: "rv-guard",
@@ -28,14 +29,14 @@ export default definePluginEntry({
         const command = params.command;
         const workdir = typeof params.workdir === "string" ? params.workdir : undefined;
         const cwd = pickCwd(workdir);
-        const sessionId =
-          ctx && typeof ctx.sessionId === "string" && ctx.sessionId.length > 0
-            ? ctx.sessionId
-            : undefined;
-        const sessionKey =
-          ctx && typeof ctx.sessionKey === "string" && ctx.sessionKey.length > 0
-            ? ctx.sessionKey
-            : undefined;
+        const sessionId = firstString(
+          ctx && ctx.sessionId,
+          event && event.sessionId,
+        );
+        const sessionKey = firstString(
+          ctx && ctx.sessionKey,
+          event && event.sessionKey,
+        );
         const payload = { toolName: "exec", params: {} };
         if (typeof command === "string") {
           payload.params.command = command;
@@ -56,6 +57,23 @@ export default definePluginEntry({
           payload.toolKind = toolKind;
         }
         const mapped = await consultRv(payload);
+        if (mapped.action === "ask") {
+          const allowed = await confirmAsk(mapped, event, ctx, api);
+          if (!allowed) {
+            return { block: true, blockReason: mapped.reason };
+          }
+          const spent = await consultRvSpend(payload);
+          if (spent.action !== "allow") {
+            const reason =
+              typeof spent.reason === "string" && spent.reason.length > 0
+                ? spent.reason
+                : typeof mapped.reason === "string" && mapped.reason.length > 0
+                  ? mapped.reason
+                  : "rv failed";
+            return { block: true, blockReason: reason };
+          }
+          return;
+        }
         if (mapped.action === "block") {
           return { block: true, blockReason: mapped.reason };
         }
@@ -64,6 +82,13 @@ export default definePluginEntry({
     );
   },
 });
+
+function firstString(...values) {
+  for (const value of values) {
+    if (typeof value === "string" && value.length > 0) return value;
+  }
+  return undefined;
+}
 
 function pickCwd(hostCwd) {
   if (typeof hostCwd === "string" && hostCwd.length > 0) return hostCwd;
@@ -78,6 +103,83 @@ function pickCwd(hostCwd) {
 
 function consultRv(payload) {
   return spawnRvHook("openclaw", JSON.stringify(payload));
+}
+
+function consultRvSpend(payload) {
+  const spend = {
+    toolName: payload.toolName,
+    params: payload.params && typeof payload.params === "object" ? { ...payload.params } : {},
+    hostAsk: "spend",
+  };
+  if (payload.cwd) spend.cwd = payload.cwd;
+  if (payload.sessionId) spend.sessionId = payload.sessionId;
+  if (payload.sessionKey) spend.sessionKey = payload.sessionKey;
+  if (payload.toolKind) spend.toolKind = payload.toolKind;
+  return spawnRvHook("openclaw", JSON.stringify(spend));
+}
+
+async function confirmAsk(mapped, event, ctx, api) {
+  const env = (process.env.RV_ASK_CONFIRM || "").trim().toLowerCase();
+  if (env === "yes") return true;
+  if (env === "no") return false;
+  try {
+    const gateway = api && api.runtime && api.runtime.gateway;
+    if (!gateway || typeof gateway.request !== "function") {
+      return false;
+    }
+    if (typeof gateway.isAvailable === "function") {
+      const available = await gateway.isAvailable();
+      if (available !== true) {
+        return false;
+      }
+    }
+    const reason = typeof mapped.reason === "string" ? mapped.reason : "";
+    const description = reason.length > 0 ? reason.slice(0, 512) : "Allow this exec tool call once?";
+    const requester = ctx && typeof ctx.requester === "object" ? ctx.requester : undefined;
+    const requested = await gateway.request(
+      "plugin.approval.request",
+      {
+        pluginId: "rv-guard",
+        title: "Allow this command once",
+        description,
+        severity: "warning",
+        allowedDecisions: ["allow-once", "deny"],
+        toolName: typeof event.toolName === "string" ? event.toolName : "exec",
+        toolCallId: event && event.toolCallId,
+        agentId: ctx && ctx.agentId,
+        sessionKey: ctx && ctx.sessionKey,
+        timeoutMs: RV_ASK_TIMEOUT_MS,
+        twoPhase: true,
+        turnSourceChannel:
+          (ctx && ctx.turnSourceChannel) || (requester && requester.channel) || undefined,
+        turnSourceTo: ctx && ctx.turnSourceTo,
+        turnSourceAccountId:
+          (ctx && ctx.turnSourceAccountId) || (requester && requester.accountId) || undefined,
+      },
+      { timeoutMs: RV_ASK_TIMEOUT_MS + 10_000 },
+    );
+    if (!requested || typeof requested !== "object") {
+      return false;
+    }
+    if (requested.decision === "allow-once") {
+      return true;
+    }
+    if (typeof requested.decision === "string") {
+      return false;
+    }
+    const id = requested.id;
+    if (typeof id !== "string" || id.length === 0) {
+      return false;
+    }
+    const waited = await gateway.request(
+      "plugin.approval.waitDecision",
+      { id },
+      { timeoutMs: RV_ASK_TIMEOUT_MS + 10_000 },
+    );
+    return Boolean(waited && waited.decision === "allow-once");
+  } catch {
+    return false;
+  }
 }
 
 function spawnRvHook(host, stdin) {
@@ -142,6 +244,12 @@ function mapRvHookResult(value) {
   if (trimmed.length > 0) {
     try {
       const parsed = JSON.parse(trimmed);
+      if (parsed && parsed.decision === "ask") {
+        return {
+          action: "ask",
+          reason: typeof parsed.reason === "string" ? parsed.reason : "",
+        };
+      }
       if (parsed && parsed.decision === "deny") {
         return {
           action: "block",

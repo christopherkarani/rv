@@ -2,7 +2,7 @@
 
 Investigation: OPE-267. Build map: [host-ask-plan.md](host-ask-plan.md) (OPE-268, historical). Product law: [02.md](02.md) § Host Ask.
 
-**RV wire today:** Product Ask is `HostNativeAsk.hostAskVerdict` → `decision:ask` JSON. Adapters honor that only. The host table is `HostAskProfile`: pause is `spendFirst` (Pi, OpenCode, Claude, Hermes — confirm, then `hostAsk=spend`, then allow only if spend succeeds), `leftoverAskForbidden` (OpenClaw `requireApproval`, Codex/Cursor leftover `ask` — do not emit), or `noPause` (Grok). Gray-area (`mandatoryHuman`) on a host that cannot pause is quiet allow; unlockable pack deny stays deny. Only `HostAskCodec` may encode Ask; a cannot-pause codec with a leftover `.ask` verdict fail-closes to deny. Official Claude `permissionDecision:ask` and Hermes `{"action":"approve"}` are leftover-ask-as-permit — never the honor path. Missing `rv`, timeout, or crash is a host block (`rv missing` / `rv failed`), never silent allow.
+**RV wire today:** Product Ask is `HostNativeAsk.hostAskVerdict` → `decision:ask` JSON. Adapters honor that only. The host table is `HostAskProfile`: pause is `spendFirst` (Pi, OpenCode, Claude, Hermes, OpenClaw — confirm, then `hostAsk=spend`, then allow only if spend succeeds), `leftoverAskForbidden` (Codex/Cursor leftover `ask` — do not emit), or `noPause` (Grok). Gray-area (`mandatoryHuman`) on a host that cannot pause is quiet allow; unlockable pack deny stays deny. Only `HostAskCodec` may encode Ask; a cannot-pause codec with a leftover `.ask` verdict fail-closes to deny. Official Claude `permissionDecision:ask`, Hermes `{"action":"approve"}`, and OpenClaw `requireApproval` are leftover-ask-as-permit — never the honor path. Missing `rv`, timeout, or crash is a host block (`rv missing` / `rv failed`), never silent allow.
 
 **Allow-once is a PolicyGate grant.** TTY `rv allow-once` still mints into `AllowOnceStore`. Host Allow once is plant+spend this turn on that same store. Replay without a live grant asks or denies again.
 
@@ -45,12 +45,12 @@ RV: `ClaudeHostCodec` + settings-merge `PreToolUse` / `Bash` + exclusive `~/.cla
 
 Official: [hooks](https://docs.openclaw.ai/plugins/hooks), [permission requests](https://docs.openclaw.ai/plugins/plugin-permission-requests) — `before_tool_call` may `{ block: true, blockReason }` (terminal) or `requireApproval` (pauses; `allow-once` / `allow-always` / `deny` via approval UI or `/approve`; timeout / no route / cancel block). `block: true` wins over `requireApproval`.
 
-RV: `rv-guard-openclaw.js.tmpl` + `OpenClawHostCodec`. Matcher `["exec"]`. Live deny: `{ block: true, blockReason }` (operator `{decision,reason}` JSON, exit 1). Tests forbid `requireApproval`. Host-only (OPE-266).
+RV: `rv-guard-openclaw.js.tmpl` + `OpenClawHostCodec` (`HostAskCodec`). Matcher `["exec"]`. Live deny: `{ block: true, blockReason }` (operator `{decision,reason}` JSON, exit 1). Ask: `decision:ask` → plugin-owned wait (`plugin.approval.request` + `waitDecision`, tests `RV_ASK_CONFIRM`) → `hostAsk=spend` → return only if spend allow. Never return `requireApproval` (host Allow runs exec). `allow-always` is not this grant. Tests forbid `requireApproval`.
 
-1. **Pause?** Not today. `HostAskProfile.pause` is `leftoverAskForbidden`. The host can pause on `requireApproval`. RV never returns it. Not a `HostAskCodec`.
-2. **User sees:** host block reason. No RV Ask UI. Official approval surfaces unused.
-3. **Back to RV?** Official `onResolution` stays in the plugin and does not write `AllowOnceStore`. Today there is no callback. Host `allow-once` would run this call only — still not an RV grant. Allow-once is TTY → next hook consume.
-4. **No pause:** `{ block: true }` or TTY on hard deny. `mandatoryHuman` is quiet allow.
+1. **Pause?** Yes. Confirm then spend. Missing gateway / no route / timeout / confirm-no → block, no spend.
+2. **User sees:** Control UI / chat `/approve` card (Allow once / Deny), then the tool runs once or a block reason.
+3. **Back to RV?** Confirm-yes spends through PolicyGate this turn. Replay without a grant asks again.
+4. **No pause / fail:** `{ block: true }`. Never silent allow. Never leftover `requireApproval`.
 
 ## Grok
 

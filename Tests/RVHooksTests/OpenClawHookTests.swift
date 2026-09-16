@@ -137,3 +137,30 @@ func openClawDecode_extractsExecCommand(_ file: String, expected: String) throws
     }
     #expect(request.session == SessionID(validating: "agent:main"))
 }
+
+@Test func openClawDecode_readsHostAskSpend() {
+    let stdin = """
+    {"toolName":"exec","cwd":"/tmp/ws","params":{"command":"git reset --hard"},"hostAsk":"spend"}
+    """
+    guard case .request(let request) = codec.decode(stdin) else {
+        Issue.record("expected .request for hostAsk spend")
+        return
+    }
+    guard case .spend(_, let command, _, _) = request else {
+        Issue.record("expected .spend for hostAsk spend")
+        return
+    }
+    #expect(command.rawValue == "git reset --hard")
+    #expect(request.cwd?.rawValue == "/tmp/ws")
+}
+
+@Test func openClawEncodeAsk_sameAsHermes() {
+    let reason =
+        "Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once."
+    let openclaw = OpenClawHostCodec().encodeAsk(reason: reason)
+    let hermes = HermesHostCodec().encodeAsk(reason: reason)
+    #expect(openclaw.stdout == hermes.stdout)
+    #expect(openclaw.exitCode == 1)
+    #expect(openclaw.stdout.contains("\"decision\":\"ask\""))
+    #expect(openclaw.stdout.contains("\"continuation\":\"hostNative\""))
+}

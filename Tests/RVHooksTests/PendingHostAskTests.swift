@@ -197,7 +197,7 @@ struct PendingHostAskHookTests {
     }
 
     @Test(
-        arguments: [HookHost.grok, .codex, .cursor, .openclaw]
+        arguments: [HookHost.grok, .codex, .cursor]
     )
     func PendingHostAsk_denyOrTTYNeverRecords(_ host: HookHost) async throws {
         let probe = PendingHostAskProbe()
@@ -214,6 +214,26 @@ struct PendingHostAskHookTests {
         )
         #expect(json["decision"] as? String != "ask")
         #expect(await probe.records.isEmpty)
+    }
+
+    @Test func PendingHostAsk_openClawAskWithSessionRecordsBeforeEncodeAsk() async throws {
+        let probe = PendingHostAskProbe()
+        let wire = await hookWire(
+            host: .openclaw,
+            stdin: denyOrTTYStdin(.openclaw),
+            evaluate: { _, _ in resetHardDeny },
+            recordHostAsk: { request, action in
+                try await probe.record(request, action)
+            }
+        )
+        let json = try askJSON(wire)
+        #expect(json["decision"] as? String == "ask")
+        #expect(wire.exitCode == 1)
+        let records = await probe.records
+        #expect(records.count == 1)
+        #expect(records[0].request.host == .openclaw)
+        #expect(records[0].request.session?.rawValue == "sess-oc")
+        #expect(records[0].action.supportingCommand?.rawValue == "git reset --hard")
     }
 }
 

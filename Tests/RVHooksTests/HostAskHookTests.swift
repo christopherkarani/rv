@@ -26,6 +26,30 @@ import RVDomain
     #expect(wire.exitCode == 1)
 }
 
+@Test func hookWire_openClawMandatoryHumanEncodesAskNotAllow() throws {
+    let deny = Deny(
+        ruleID: RuleID(pack: PackID(rawValue: "builtin.action"), pattern: "remote-branch-mutation"),
+        reason: "Remote branch mutation requires a human."
+    )
+    let result = EvaluationResult(
+        outcome: .deny(deny, matched: nil),
+        matchingView: "git push origin feature"
+    )
+    let wire = hookWire(
+        from: result,
+        command: ShellCommand(rawValue: "git push origin feature"),
+        using: OpenClawHostCodec(),
+        intent: .firstCall(verdict: .ask(.hostNative), unlockCode: nil)
+    )
+    let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
+    #expect(json["decision"] as? String == "ask")
+    #expect(json["continuation"] as? String == "hostNative")
+    #expect(wire.stdout.contains("\"decision\":\"allow\"") == false)
+    #expect(wire.stdout.contains("requireApproval") == false)
+    #expect(wire.stdout.isEmpty == false)
+    #expect(wire.exitCode == 1)
+}
+
 @Test func hookWire_openCodeMandatoryHumanEncodesAskNotAllow() throws {
     let deny = Deny(
         ruleID: RuleID(pack: PackID(rawValue: "builtin.action"), pattern: "remote-branch-mutation"),
