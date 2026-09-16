@@ -84,6 +84,15 @@ import RVDomain
             == false
     )
     #expect(Normalize.matchingView(of: "git grep -n \"rm -rf\"").rawValue.contains("rm") == false)
+    #expect(
+        Normalize.matchingView(of: "git grep password \".env\"").rawValue.contains(".env")
+    )
+    #expect(
+        Normalize.matchingView(of: "git grep -n \"rm -rf\" \".env\"").rawValue.contains(".env")
+    )
+    #expect(
+        Normalize.matchingView(of: "git grep -f \".env\"").rawValue.contains(".env")
+    )
     #expect(Normalize.matchingView(of: "git reset --hard") == "git reset --hard")
 }
 

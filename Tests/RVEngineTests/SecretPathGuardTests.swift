@@ -97,6 +97,9 @@ struct SecretPathGuardTests {
         .init(command: "rg -e foo .env", ruleID: "core.secrets:env"),
         .init(command: "rg -f .env", ruleID: "core.secrets:env"),
         .init(command: "grep -f .env pattern", ruleID: "core.secrets:env"),
+        .init(command: "git grep password \".env\"", ruleID: "core.secrets:env"),
+        .init(command: "git grep -n \"rm -rf\" \".env\"", ruleID: "core.secrets:env"),
+        .init(command: "git grep -f \".env\"", ruleID: "core.secrets:env"),
         .init(command: "rm .env", ruleID: "core.secrets:env"),
         .init(command: "find ~/.ssh -type f", ruleID: "core.secrets:home-ssh"),
         .init(command: "echo hello && cat .env", ruleID: "core.secrets:env"),
@@ -118,6 +121,7 @@ struct SecretPathGuardTests {
         .init(command: "find . -name .env"),
         .init(command: "rg .env"),
         .init(command: "grep .env README.md"),
+        .init(command: "git grep -n \"rm -rf\""),
         .init(command: "git status"),
         .init(command: "cat .env.example.local"),
     ]
