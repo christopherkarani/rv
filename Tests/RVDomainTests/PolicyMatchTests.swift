@@ -101,6 +101,80 @@ struct PolicyMatchTests {
                 == false
         )
     }
+
+    @Test func discardWorktree_matchesDiscardAndWorktreeRestore() {
+        let any = PolicyPredicate.gitDiscardWorktree(pathspec: nil)
+        let file = PolicyPredicate.gitDiscardWorktree(pathspec: "file.swift")
+        let discard = GitAction.discardWorktree(pathspecs: ["file.swift"], source: nil)
+        let restore = GitAction.restore(
+            pathspecs: ["file.swift"],
+            destination: .worktree,
+            source: nil
+        )
+        #expect(PolicyMatch.matches(any, action: discard))
+        #expect(PolicyMatch.matches(file, action: discard))
+        #expect(PolicyMatch.matches(file, action: restore))
+        #expect(
+            PolicyMatch.matches(
+                .gitDiscardWorktree(pathspec: "other.swift"),
+                action: discard
+            ) == false
+        )
+        #expect(
+            PolicyMatch.matches(
+                any,
+                action: GitAction.restore(pathspecs: ["file.swift"], destination: .index, source: nil)
+            ) == false
+        )
+        #expect(PolicyMatch.matches(any, action: GitAction.reset(mode: .hard, target: nil)) == false)
+    }
+
+    @Test func gitReset_matchesMode() {
+        let any = PolicyPredicate.gitReset(mode: nil)
+        let hard = PolicyPredicate.gitReset(mode: .hard)
+        #expect(PolicyMatch.matches(any, action: .reset(mode: .soft, target: nil)))
+        #expect(PolicyMatch.matches(hard, action: .reset(mode: .hard, target: "HEAD")))
+        #expect(PolicyMatch.matches(hard, action: .reset(mode: .soft, target: nil)) == false)
+        #expect(PolicyMatch.matches(any, action: forcePush(refspec: "main")) == false)
+    }
+
+    @Test func gitClean_matchesFlags() {
+        let any = PolicyPredicate.gitClean(force: nil, directories: nil)
+        let force = PolicyPredicate.gitClean(force: true, directories: nil)
+        #expect(PolicyMatch.matches(any, action: .clean(force: false, dryRun: true, directories: false)))
+        #expect(PolicyMatch.matches(force, action: .clean(force: true, dryRun: false, directories: true)))
+        #expect(
+            PolicyMatch.matches(force, action: .clean(force: false, dryRun: false, directories: false))
+                == false
+        )
+    }
+
+    @Test func filesystemDeleteAndMove_matchOnlyThoseActions() {
+        let target = FilesystemTarget(
+            apparent: "file.swift",
+            canonical: "/repo/file.swift",
+            scope: .insideRepository,
+            kind: .sourceCode
+        )
+        let delete = FilesystemAction.delete(targets: [target], recursive: true, force: true)
+        let move = FilesystemAction.move(sources: [target], destination: target)
+        #expect(PolicyMatch.matches(.filesystemDelete(recursive: nil, force: nil), action: delete))
+        #expect(PolicyMatch.matches(.filesystemDelete(recursive: true, force: true), action: delete))
+        #expect(
+            PolicyMatch.matches(.filesystemDelete(recursive: false, force: nil), action: delete)
+                == false
+        )
+        #expect(PolicyMatch.matches(.filesystemMove, action: move))
+        #expect(PolicyMatch.matches(.filesystemMove, action: delete) == false)
+        #expect(
+            PolicyMatch.matches(.filesystemDelete(recursive: nil, force: nil), action: forcePush(refspec: "main"))
+                == false
+        )
+        #expect(
+            PolicyMatch.matches(.gitPush(force: .exactly(.force), branch: "main"), action: delete)
+                == false
+        )
+    }
 }
 
 private func forcePush(refspec: String) -> GitAction {

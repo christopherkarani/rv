@@ -11,6 +11,15 @@ struct PolicyPredicateTests {
         PolicyPredicate.gitPush(force: .exactly(.force), branch: nil),
         PolicyPredicate.gitPush(force: .any, branch: "main"),
         PolicyPredicate.gitPush(force: .any, branch: nil),
+        PolicyPredicate.gitDiscardWorktree(pathspec: nil),
+        PolicyPredicate.gitDiscardWorktree(pathspec: "file.swift"),
+        PolicyPredicate.gitReset(mode: .hard),
+        PolicyPredicate.gitReset(mode: nil),
+        PolicyPredicate.gitClean(force: true, directories: true),
+        PolicyPredicate.gitClean(force: nil, directories: nil),
+        PolicyPredicate.filesystemDelete(recursive: true, force: true),
+        PolicyPredicate.filesystemDelete(recursive: nil, force: nil),
+        PolicyPredicate.filesystemMove,
     ])
     func gitPush_codableRoundTrip(_ predicate: PolicyPredicate) throws {
         let data = try JSONEncoder().encode(predicate)
@@ -58,6 +67,39 @@ struct PolicyPredicateTests {
         let data = try JSONEncoder().encode(PolicyPredicate.gitPush(force: .exactly(.force), branch: "main"))
         let json = try #require(String(data: data, encoding: .utf8))
         #expect(json.contains("supportingCommand") == false)
+    }
+
+    @Test func wave1_decodesFromClosedFormLiterals() throws {
+        #expect(
+            try JSONDecoder().decode(
+                PolicyPredicate.self,
+                from: Data(#"{"gitDiscardWorktree":{}}"#.utf8)
+            ) == .gitDiscardWorktree(pathspec: nil)
+        )
+        #expect(
+            try JSONDecoder().decode(
+                PolicyPredicate.self,
+                from: Data(#"{"gitReset":{"mode":"hard"}}"#.utf8)
+            ) == .gitReset(mode: .hard)
+        )
+        #expect(
+            try JSONDecoder().decode(
+                PolicyPredicate.self,
+                from: Data(#"{"gitClean":{"force":true,"directories":true}}"#.utf8)
+            ) == .gitClean(force: true, directories: true)
+        )
+        #expect(
+            try JSONDecoder().decode(
+                PolicyPredicate.self,
+                from: Data(#"{"filesystemDelete":{"recursive":true,"force":true}}"#.utf8)
+            ) == .filesystemDelete(recursive: true, force: true)
+        )
+        #expect(
+            try JSONDecoder().decode(
+                PolicyPredicate.self,
+                from: Data(#"{"filesystemMove":{}}"#.utf8)
+            ) == .filesystemMove
+        )
     }
 
     @Test(arguments: [

@@ -453,6 +453,29 @@ struct ApplyFilesystemSemanticsTests {
         #expect(action.resources.resourceKind == .sourceCode)
     }
 
+    @Test func typedAsk_inRepoRm_isMandatoryHuman() throws {
+        let pack = try runFilesystemPack("rm file.swift")
+        #expect(pack.decision == .allow)
+        let rule = TypedRule(
+            id: RuleID(pack: .coreFilesystem, pattern: "ask-rm"),
+            predicate: .filesystemDelete(recursive: nil, force: nil),
+            verdict: .ask,
+            origin: .machine
+        )
+        let composed = applyFilesystemSemantics(
+            pack: pack,
+            command: ShellCommand(rawValue: "rm file.swift"),
+            filesystemWorld: repo,
+            policy: EffectiveActionPolicy(rules: [rule])
+        )
+        guard case .deny(let deny) = composed.decision else {
+            Issue.record("typed ask must require a human, got \(composed.decision)")
+            return
+        }
+        #expect(deny.ruleID == rule.id)
+        #expect(composed.boundReview == .mandatoryHuman(deny))
+    }
+
     @Test func gitAnalysis_isNotClobbered() {
         let pack = EvaluationResult(
             outcome: .plain,

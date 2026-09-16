@@ -163,5 +163,15 @@ func predicateText(_ predicate: PolicyPredicate) -> String {
         }
         let branchText = branch ?? "-"
         return "gitPush force=\(forceText) branch=\(branchText)"
+    case .gitDiscardWorktree(let pathspec):
+        return "gitDiscardWorktree pathspec=\(pathspec ?? "-")"
+    case .gitReset(let mode):
+        return "gitReset mode=\(mode?.rawValue ?? "-")"
+    case .gitClean(let force, let directories):
+        return "gitClean force=\(force.map(String.init) ?? "-") directories=\(directories.map(String.init) ?? "-")"
+    case .filesystemDelete(let recursive, let force):
+        return "filesystemDelete recursive=\(recursive.map(String.init) ?? "-") force=\(force.map(String.init) ?? "-")"
+    case .filesystemMove:
+        return "filesystemMove"
     }
 }

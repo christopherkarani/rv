@@ -115,6 +115,8 @@ public struct ShellAction: Sendable, Equatable, Codable {
     public var supportingCommand: ShellCommand?
     /// Analyzed Git operation when this shell action was built from one.
     public var gitAction: GitAction?
+    /// Analyzed filesystem operation when this shell action was built from one.
+    public var filesystemAction: FilesystemAction?
 
     public init(
         fingerprint: ActionFingerprint,
@@ -122,7 +124,8 @@ public struct ShellAction: Sendable, Equatable, Codable {
         resources: ActionResources = ActionResources(),
         scope: ActionScope = ActionScope(),
         supportingCommand: ShellCommand? = nil,
-        gitAction: GitAction? = nil
+        gitAction: GitAction? = nil,
+        filesystemAction: FilesystemAction? = nil
     ) {
         self.fingerprint = fingerprint
         self.effects = effects
@@ -130,6 +133,7 @@ public struct ShellAction: Sendable, Equatable, Codable {
         self.scope = scope
         self.supportingCommand = supportingCommand
         self.gitAction = gitAction
+        self.filesystemAction = filesystemAction
     }
 }
 

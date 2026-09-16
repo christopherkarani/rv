@@ -178,7 +178,8 @@ public enum ActionPolicyEngine: Sendable {
 
     /// Saved typed rules only. No builtin wall. Nil when nothing matches.
     public static func typedRestriction(
-        gitAction: GitAction,
+        gitAction: GitAction? = nil,
+        filesystemAction: FilesystemAction? = nil,
         rules: [TypedRule]
     ) -> ActionPolicyVerdict? {
         guard rules.isEmpty == false else { return nil }
@@ -188,7 +189,12 @@ public enum ActionPolicyEngine: Sendable {
             reason: Builtin.uncovered.reason,
             semanticallyCovered: false
         )
-        let hit = applyTypedRules(uncovered, rules, gitAction: gitAction)
+        let hit = applyTypedRules(
+            uncovered,
+            rules,
+            gitAction: gitAction,
+            filesystemAction: filesystemAction
+        )
         switch hit.decision {
         case .hardDeny, .mandatoryHuman:
             return ActionPolicyVerdict(
@@ -231,7 +237,12 @@ public enum ActionPolicyEngine: Sendable {
         gitWorld: GitAnalysisWorld
     ) -> ActionPolicyVerdict {
         var hit = builtinHit(shell: shell, context: context, gitWorld: gitWorld)
-        hit = applyTypedRules(hit, policy.rules, gitAction: shell.gitAction)
+        hit = applyTypedRules(
+            hit,
+            policy.rules,
+            gitAction: shell.gitAction,
+            filesystemAction: shell.filesystemAction
+        )
         if hit.semanticallyCovered == false {
             hit = applyPackFallback(hit, policy.packFallback)
         }
@@ -258,7 +269,7 @@ public enum ActionPolicyEngine: Sendable {
             reason: Builtin.uncovered.reason,
             semanticallyCovered: false
         )
-        hit = applyTypedRules(hit, policy.rules, gitAction: nil)
+        hit = applyTypedRules(hit, policy.rules, gitAction: nil, filesystemAction: nil)
         if hit.semanticallyCovered == false {
             hit = applyPackFallback(hit, policy.packFallback)
         }
@@ -451,11 +462,21 @@ public enum ActionPolicyEngine: Sendable {
     private static func applyTypedRules(
         _ hit: CoreHit,
         _ rules: [TypedRule],
-        gitAction: GitAction?
+        gitAction: GitAction?,
+        filesystemAction: FilesystemAction? = nil
     ) -> CoreHit {
         var strongest: TypedRule?
         for rule in rules {
-            guard let gitAction, PolicyMatch.matches(rule.predicate, action: gitAction) else {
+            let matched: Bool
+            if let gitAction, PolicyMatch.matches(rule.predicate, action: gitAction) {
+                matched = true
+            } else if let filesystemAction, PolicyMatch.matches(rule.predicate, action: filesystemAction)
+            {
+                matched = true
+            } else {
+                matched = false
+            }
+            guard matched else {
                 continue
             }
             if let current = strongest {

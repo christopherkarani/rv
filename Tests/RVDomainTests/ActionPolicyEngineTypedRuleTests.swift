@@ -199,6 +199,47 @@ struct ActionPolicyEngineTypedRuleTests {
         let reset = GitAction.reset(mode: .hard, target: nil)
         #expect(ActionPolicyEngine.typedRestriction(gitAction: reset, rules: [rule]) == nil)
     }
+
+    @Test func typedDeny_resetSoft_isHardDenyWithTypedRuleID() {
+        let rule = typedRule(
+            id: RuleID(pack: .coreGit, pattern: "deny-reset-soft"),
+            predicate: .gitReset(mode: .soft),
+            verdict: .deny
+        )
+        let git = GitAction.reset(mode: .soft, target: nil)
+        let verdict = ActionPolicyEngine.evaluate(
+            action: proposed(git),
+            context: privateBranch,
+            policy: EffectiveActionPolicy(rules: [rule])
+        )
+        guard case .hardDeny(let deny) = verdict.decision else {
+            Issue.record("expected hardDeny, got \(verdict.decision)")
+            return
+        }
+        #expect(deny.ruleID == rule.id)
+    }
+
+    @Test func typedAsk_inRepoDelete_isMandatoryHuman() {
+        let rule = typedRule(
+            id: RuleID(pack: .coreFilesystem, pattern: "ask-rm"),
+            predicate: .filesystemDelete(recursive: nil, force: nil),
+            verdict: .ask
+        )
+        let file = inRepoDelete(recursive: false, force: false)
+        let verdict = ActionPolicyEngine.evaluate(
+            action: file.proposedAction(
+                command: ShellCommand(rawValue: "rm file.swift"),
+                workingDirectory: WorkingDirectory(validating: "/repo")
+            ),
+            context: privateBranch,
+            policy: EffectiveActionPolicy(rules: [rule])
+        )
+        guard case .mandatoryHuman(let deny) = verdict.decision else {
+            Issue.record("expected mandatoryHuman, got \(verdict.decision)")
+            return
+        }
+        #expect(deny.ruleID == rule.id)
+    }
 }
 
 private func typedRule(
@@ -227,5 +268,20 @@ private func proposed(_ git: GitAction, supportingCommand: String? = nil) -> Pro
     return git.proposedAction(
         command: ShellCommand(rawValue: command),
         workingDirectory: WorkingDirectory(validating: "/tmp/rv")
+    )
+}
+
+private func inRepoDelete(recursive: Bool, force: Bool) -> FilesystemAction {
+    .delete(
+        targets: [
+            FilesystemTarget(
+                apparent: "file.swift",
+                canonical: "/repo/file.swift",
+                scope: .insideRepository,
+                kind: .sourceCode
+            ),
+        ],
+        recursive: recursive,
+        force: force
     )
 }
