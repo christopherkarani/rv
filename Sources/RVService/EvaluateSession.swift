@@ -66,7 +66,8 @@ public struct EvaluateSession: Sendable {
         )
     }
 
-    public func evaluate(
+    /// Pack-only evaluate. Product decisions use `evaluateWithSemantics`.
+    package func evaluate(
         _ request: EvaluationRequest,
         safety: SafetyLevel = .normal,
         allowPaths: SecretAllowPathSet = .empty,

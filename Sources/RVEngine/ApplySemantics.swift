@@ -1,37 +1,10 @@
 import RVDomain
 
-/// Compose wrapper unwrap with Git / filesystem semantic policy.
+/// Compose an already-analyzed unwrap with Git / filesystem semantic policy.
 ///
 /// Pack deny / indeterminate is a floor. Limit / unreliable unwrap never
-/// becomes an auto-allow.
-public func applySemantics(
-    pack: EvaluationResult,
-    command: ShellCommand,
-    gitWorld: GitAnalysisWorld = .unprobed,
-    filesystemWorld: FilesystemAnalysisWorld = .unprobed,
-    enabledPacks: [PackID] = dayOnePackIDs,
-    maxDepth: Int = UnwrapLimits.maxDepth,
-    maxBytes: Int = UnwrapLimits.maxBytes,
-    policy: EffectiveActionPolicy = .empty
-) -> EvaluationResult {
-    let analysis = analyzeSemantics(
-        command,
-        gitWorld: gitWorld,
-        filesystemWorld: filesystemWorld,
-        maxDepth: maxDepth,
-        maxBytes: maxBytes
-    )
-    return applySemantics(
-        pack: pack,
-        analysis: analysis,
-        command: command,
-        gitWorld: gitWorld,
-        filesystemWorld: filesystemWorld,
-        enabledPacks: enabledPacks,
-        policy: policy
-    )
-}
-
+/// becomes an auto-allow. Product callers go through `evaluateWithSemantics`
+/// rather than re-analyzing here.
 public func applySemantics(
     pack: EvaluationResult,
     analysis: SemanticAnalysis,
