@@ -1,8 +1,6 @@
 # English compile (typed rules)
 
-Named 2026-09-04. Not the 0.2 execute queue.
-
-**Execute W1:** `planning/2026-09-04-english-compile/PROMPT.md`. Program: `planning/2026-09-04-english-compile-implementable-program.md`. Do not start Host Ask (OPE-264), companion app, or live Auto-review from this name.
+Named 2026-09-04. Not the 0.2 execute queue. Do not start Host Ask (OPE-264), companion app, or live Auto-review from this name.
 
 Human picture: you type English, rv shows a real rule, you save it, the hook matches that rule with no model. W1 builds the form and the matcher. English and Apple come later.
 
@@ -65,7 +63,7 @@ No new SPM target.
 | `PolicyDocument` / `EnglishCompiler` | RVDomain (shapes); AFM adapter in RVPolicy |
 | `rv policy show` / `draft` / `validate` / `export` / `apply` | RVCLI |
 
-Merge cannot let a repo allow drop a machine deny. Overlay cannot weaken builtin hard deny. Shareable on-disk form is `policy.toml` (see `spec/spec-architecture-policy-document.md`). Legacy `typed-rules.json` is read-compat only.
+Merge cannot let a repo allow drop a machine deny. Overlay cannot weaken builtin hard deny. Shareable on-disk form is `policy.toml`. Legacy `typed-rules.json` is read-compat only.
 
 **Hook evaluate.** `GatedEvaluate.evaluateWithSemantics` loads that saved form (machine `$HOME/.config/rv/policy.toml`, repo `<cwd>/.rv/policy.toml`; legacy `typed-rules.json` if TOML is missing) and passes `EffectiveActionPolicy` into `applySemantics`. Invalid policy file fail-closes (`builtin.action:typed-rules-invalid`). Missing file is empty. Typed hard-bind deny (`boundReview == .deny`) skips PolicyGate on peek/apply (`gated()`) and Host Ask (`spendHostAsk`) and does not mint an unlock code, so a matchingView grant or plant+spend cannot override a typed deny that retagged the shared-branch wall. Pack denials and `mandatoryHuman` still reach PolicyGate. There is still no live Auto-review. `FakeEnglishCompiler` still emits `GitPushForce.force`, which does not match `--force-with-lease`.
 

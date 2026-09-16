@@ -117,5 +117,5 @@ The client Decision from transport and advertised service semver to an Evaluatio
 _Avoid_: isMajorSkew at the client evaluate call site, flipping isMajorSkew true on parse failure, transportPresent Bool
 
 **English compile**:
-You type English, rv shows a typed rule, you save it, the hook matches that form with no model. Shareable file is `policy.toml`. `rv policy draft` uses Apple Intelligence when available and the canned gitPush fixture (`FakeEnglishCompiler`) when it is not. Law: `docs/architecture/english-compile.md`, `spec/spec-architecture-policy-document.md`. Not 02.md § Order. Not live Auto-review.
+You type English, rv shows a typed rule, you save it, the hook matches that form with no model. Shareable file is `policy.toml`. `rv policy draft` uses Apple Intelligence when available and the canned gitPush fixture (`FakeEnglishCompiler`) when it is not. Law: `docs/architecture/english-compile.md`. Not 02.md § Order. Not live Auto-review.
 _Avoid_: saving English as the matcher, importing `scratch/english-review`, live Auto-review on the hook, YAML policy files

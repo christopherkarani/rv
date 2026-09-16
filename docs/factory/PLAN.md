@@ -1,6 +1,6 @@
 # rv — locked plan (product + architecture + agent flow)
 
-Source of truth for factory specs, handoff, and implement prompts.
+Source of truth for factory specs.
 Parity source: [Dicklesworthstone/destructive_command_guard](https://github.com/Dicklesworthstone/destructive_command_guard) **0.11.0**.
 Not ryk. Not line-for-line Rust. Repo: `~/CodingProjects/rv` (`christopherkarani/rv`).
 

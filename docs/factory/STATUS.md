@@ -1,6 +1,6 @@
 # Factory status
 
-Living board for implement sessions. Do **not** re-grill. Do **not** load `docs/factory/reviews/*` to implement.
+Living board for implement sessions. Do **not** re-grill.
 
 **Agent entry:** `AGENTS.md` → this file → relevant skill → `tools/gate.sh`
 
@@ -11,14 +11,14 @@ Living board for implement sessions. Do **not** re-grill. Do **not** load `docs/
 | Done | T0–T9 | Scaffold through catalog + `rv packs`. Allow-once and doctor live. |
 | Done | maint | Operator-surface seams (setup analytics, ceremony snapshot, robot format). |
 | Done | T10–T14 | Merged to `feat/t10-t14-size-speed` (PR #36 draft). One-shot evaluate refuses major-semver-skewed `rvd`. Spec: [`specs/phase-5-size-speed.md`](specs/phase-5-size-speed.md). |
-| Done | C hook T1–T5 | Implemented on `feat/c-hook-pipe` (PR #43). C `rv` pipes `hookEvaluate` to `rvd`; miss execs `rv-cli`. Spec: [`spec/spec-architecture-c-hook-pipe.md`](../../spec/spec-architecture-c-hook-pipe.md). |
-| Done | session scan T1–T10 | `rv scan` / `rv scan sessions` session forensics. Spec: [`spec/spec-architecture-session-scan.md`](../../spec/spec-architecture-session-scan.md). |
+| Done | C hook T1–T5 | Implemented on `feat/c-hook-pipe` (PR #43). C `rv` pipes `hookEvaluate` to `rvd`; miss execs `rv-cli`. |
+| Done | session scan T1–T10 | `rv scan` / `rv scan sessions` session forensics. Fence: [`specs/phase-4-session-scan.md`](specs/phase-4-session-scan.md). |
 | Done | Claude CL-T1–T5 | Codec, dispatch, settings merge, doctor, MODULES. Spec: [`specs/claude-host.md`](specs/claude-host.md). |
 | Done | OpenClaw host (OPE-266) | Host only, no Ask. `HookHost.openclaw`, `before_tool_call` / `exec`, exclusive `~/.openclaw/extensions/rv-guard/`, fail-closed sqlite scan. |
 | Done | Hermes host (OPE-265) | Spend-first Ask. `HookHost.hermes`, `pre_tool_call` / `terminal`, exclusive `~/.hermes/plugins/rv-guard/`, confirm then spend. Never `action:approve`. |
 | Next | Claude CL-later-ask | Fenced: never emit official `permissionDecision: "ask"` (leftover-ask-as-permit). Host Ask is wrapper confirm-then-spend. |
-| In progress | File-tool secrets | Program `planning/2026-09-12-file-tool-secrets-implementable-program.md`. W1 file door landed. W2: `normal`/`strict`, `secret.allow_paths`, denial-only `rv blocks`. Grep / MCP still forbidden. |
-| Overlay | Guard maturity | Program `planning/2026-09-13-guard-maturity-implementable-program.md`. Honor never-slip + residual-risk. Does not start OPE-156. |
+| In progress | File-tool secrets | W1 file door landed. W2: `normal`/`strict`, `secret.allow_paths`, denial-only `rv blocks`. Grep / MCP still forbidden. |
+| Overlay | Guard maturity | Honor [`docs/architecture/never-slip.md`](../architecture/never-slip.md) + [`residual-risk.md`](../architecture/residual-risk.md). Does not start OPE-156. |
 | Next | Claude CL-later-mcp | Fenced: MCP tool-name / args policy. Not started. |
 
 `docs/factory/PLAN.md` wins product-law conflicts. It is a conflict arbiter, not mandatory full session-start reading.
@@ -35,10 +35,9 @@ Living board for implement sessions. Do **not** re-grill. Do **not** load `docs/
 | `specs/phase-2-packs.md` | Landed |
 | `specs/phase-3-allow.md` | Landed |
 | `specs/phase-4-later.md` | Landed (fence only) |
-| `specs/phase-4-session-scan.md` | Implemented (T1–T10). Session forensics `rv scan`. Spec: [`spec/spec-architecture-session-scan.md`](../../spec/spec-architecture-session-scan.md) |
+| `specs/phase-4-session-scan.md` | Implemented (T1–T10). Session forensics `rv scan`. |
 | `specs/phase-5-size-speed.md` | Implementing (T10–T14) |
-| [`spec/spec-architecture-c-hook-pipe.md`](../../spec/spec-architecture-c-hook-pipe.md) | Implemented (T1–T5). C hook pipe + Swift miss. Supersedes the T15 thin-Swift fence. |
-| [`specs/claude-host.md`](specs/claude-host.md) | Implemented (CL-T1–T5). File-tool secrets in progress (this program). Fenced later: CL-later-ask, CL-later-mcp. |
+| [`specs/claude-host.md`](specs/claude-host.md) | Implemented (CL-T1–T5). File-tool secrets in progress. Fenced later: CL-later-ask, CL-later-mcp. |
 | [`specs/cli-thin.md`](specs/cli-thin.md) | Implemented (CL1, CL3, CL4) on `feat/cli-thin` (#150). CL2 withdrawn (`HookRun` gone; do not fold miss into `HookDoor`). |
 
 ## Parallel rules (reminder)
@@ -47,7 +46,5 @@ Living board for implement sessions. Do **not** re-grill. Do **not** load `docs/
 |---|---|---|
 | Done | T0 → T1 serial; T2 ∥ T3; T4 then T5; T6; T7; T8 ∥ T9 | — |
 | Done | T10 ∥ T11 ∥ T12 ∥ T13; then T14 (after T11) | Separate worktrees; exclusive files in the Phase 5 spec |
-| Done | session scan T1; then T2; then T3 ∥ T4 ∥ T5; then T6; then T7; then T8; then T9; then T10 | Exclusive files in `spec/spec-architecture-session-scan.md` § 5b |
-| Done | C-hook T1; then T2 ∥ T3; then T4; then T5 | Exclusive files in `spec/spec-architecture-c-hook-pipe.md` |
-
-Historical factory→T0 handoff: [`HANDOFF.md`](HANDOFF.md) (do not use as session start).
+| Done | session scan T1; then T2; then T3 ∥ T4 ∥ T5; then T6; then T7; then T8; then T9; then T10 | `rv scan` / `rv scan sessions` |
+| Done | C-hook T1; then T2 ∥ T3; then T4; then T5 | C hook pipe + Swift miss |
