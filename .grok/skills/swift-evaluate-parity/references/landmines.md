@@ -18,9 +18,13 @@ Keep these as allow rows. Copying an unbounded `(?:\S+\s+)*` walker onto
 - `git restore . --staged`
 - `git restore file.txt --staged`
 - `echo "git reset --hard"`
+- `echo git reset --hard`
 - `rg -n "rm -rf"`
 - `git log --grep='git reset --hard'`
 - `git grep -n "rm -rf"`
+- `git log -S'git reset --hard'`
+- `tldr git reset --hard`
+- `find . -name '*rm -rf*'`
 - `git checkout -b`
 
 Do not delete those ids to go green.
@@ -37,9 +41,11 @@ Do not delete those ids to go green.
 ## Normalize
 
 Role-aware quotes: strip quote **characters** on argv0 and flags so
-`"git" reset --hard` and `git reset '--hard'` still deny. Mask only
-**data-role** quoted arguments (`echo` / `printf` / `git commit -m`) so
-those stay allow.
+`"git" reset --hard` and `git reset '--hard'` still deny. Mask
+**data-role** arguments so those stay allow: `echo` / `printf` / `man` /
+`tldr` / `whatis` / `apropos` (all operands), `git commit -m`, `git log`
+/`show`/`diff` `--grep` / `-S` / `-G`, `git grep` / `rg` patterns, and
+`find -name`/`-path`/`-regex`.
 
 Do not mask `` `…` `` or `$(…)`. Do not expand `$TMPDIR`.
 

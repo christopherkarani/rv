@@ -1,0 +1,197 @@
+{
+  "schema_version": 1,
+  "source": "agent_parse_stress",
+  "cases": [
+    {
+      "id": "ap.search.git-log-grep-reset",
+      "command": "git log --grep='git reset --hard'",
+      "expected": "allow"
+    },
+    {
+      "id": "ap.search.git-log-grep-equals-rm",
+      "command": "git log --grep='rm -rf' --oneline",
+      "expected": "allow"
+    },
+    {
+      "id": "ap.search.git-grep-rm",
+      "command": "git grep -n \"rm -rf\"",
+      "expected": "allow"
+    },
+    {
+      "id": "ap.search.git-C-grep-rm",
+      "command": "git -C /tmp grep -n \"rm -rf\"",
+      "expected": "allow"
+    },
+    {
+      "id": "ap.search.git-no-pager-grep",
+      "command": "git --no-pager grep -e \"git reset --hard\"",
+      "expected": "allow"
+    },
+    {
+      "id": "ap.search.git-log-pickaxe-S",
+      "command": "git log -S'git reset --hard'",
+      "expected": "allow"
+    },
+    {
+      "id": "ap.search.git-log-pickaxe-G",
+      "command": "git log -G\"rm -rf /\"",
+      "expected": "allow"
+    },
+    {
+      "id": "ap.search.git-rev-list-grep-reflog",
+      "command": "git rev-list --grep-reflog='git reset --hard' HEAD",
+      "expected": "allow"
+    },
+    {
+      "id": "ap.doc.tldr-reset",
+      "command": "tldr git reset --hard",
+      "expected": "allow"
+    },
+    {
+      "id": "ap.doc.man-reset",
+      "command": "man git reset --hard",
+      "expected": "allow"
+    },
+    {
+      "id": "ap.doc.whatis-reset",
+      "command": "whatis git reset --hard",
+      "expected": "allow"
+    },
+    {
+      "id": "ap.doc.apropos-rm",
+      "command": "apropos rm -rf",
+      "expected": "allow"
+    },
+    {
+      "id": "ap.data.echo-unquoted-reset",
+      "command": "echo git reset --hard",
+      "expected": "allow"
+    },
+    {
+      "id": "ap.data.printf-unquoted-rm",
+      "command": "printf rm -rf /",
+      "expected": "allow"
+    },
+    {
+      "id": "ap.data.git-commit-message",
+      "command": "git commit -m \"git reset --hard\"",
+      "expected": "allow"
+    },
+    {
+      "id": "ap.data.rg-quoted-rm",
+      "command": "rg -n \"rm -rf\"",
+      "expected": "allow"
+    },
+    {
+      "id": "ap.data.python-print-reset",
+      "command": "python3 -c \"print('git reset --hard')\"",
+      "expected": "allow"
+    },
+    {
+      "id": "ap.data.node-console-reset",
+      "command": "node -e \"console.log('git reset --hard')\"",
+      "expected": "allow"
+    },
+    {
+      "id": "ap.quiet.git-status",
+      "command": "git status --short",
+      "expected": "allow"
+    },
+    {
+      "id": "ap.quiet.git-log-oneline",
+      "command": "git log --oneline -20",
+      "expected": "allow"
+    },
+    {
+      "id": "ap.quiet.git-diff-cached",
+      "command": "git diff --cached",
+      "expected": "allow"
+    },
+    {
+      "id": "ap.quiet.git-add",
+      "command": "git add -A",
+      "expected": "allow"
+    },
+    {
+      "id": "ap.quiet.git-commit",
+      "command": "git commit -m \"agent parse quiet work\"",
+      "expected": "allow"
+    },
+    {
+      "id": "ap.quiet.git-push-u",
+      "command": "git push -u origin feature",
+      "expected": "allow"
+    },
+    {
+      "id": "ap.quiet.git-switch-c",
+      "command": "git switch -c topic",
+      "expected": "allow"
+    },
+    {
+      "id": "ap.quiet.git-checkout-b",
+      "command": "git checkout -b topic",
+      "expected": "allow"
+    },
+    {
+      "id": "ap.quiet.git-stash-drop",
+      "command": "git stash drop",
+      "expected": "allow",
+      "rule_id": "core.git:stash-drop"
+    },
+    {
+      "id": "ap.quiet.git-help-reset",
+      "command": "git help reset",
+      "expected": "allow"
+    },
+    {
+      "id": "ap.quiet.git-C-status",
+      "command": "git -C /tmp status",
+      "expected": "allow"
+    },
+    {
+      "id": "ap.quiet.swift-test",
+      "command": "swift test --filter RVEngineTests",
+      "expected": "allow"
+    },
+    {
+      "id": "ap.quiet.ls",
+      "command": "ls -la Sources",
+      "expected": "allow"
+    },
+    {
+      "id": "ap.quiet.rm-rf-tmp",
+      "command": "rm -rf /tmp/rv-agent-parse-scratch",
+      "expected": "allow"
+    },
+    {
+      "id": "ap.compound.status-then-echo",
+      "command": "git status && echo \"git reset --hard\"",
+      "expected": "allow"
+    },
+    {
+      "id": "ap.compound.cd-and-status",
+      "command": "cd /tmp && git status",
+      "expected": "allow"
+    },
+    {
+      "id": "ap.search.find-name-rm-rf",
+      "command": "find . -name '*rm -rf*'",
+      "expected": "allow"
+    },
+    {
+      "id": "ap.search.git-show-grep",
+      "command": "git show --grep='git reset --hard'",
+      "expected": "allow"
+    },
+    {
+      "id": "ap.search.git-diff-pickaxe",
+      "command": "git diff -S'rm -rf'",
+      "expected": "allow"
+    },
+    {
+      "id": "ap.landmine.force-with-lease",
+      "command": "git push --force-with-lease origin feature",
+      "expected": "allow"
+    }
+  ]
+}
