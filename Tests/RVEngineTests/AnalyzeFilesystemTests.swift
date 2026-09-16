@@ -331,4 +331,59 @@ struct AnalyzeFilesystemTests {
         #expect(mode == "000")
         #expect(chmodTargets[0].kind == .sourceCode)
     }
+
+    /// Pins helpers that move with the AnalyzeFilesystem split. Existing
+    /// `analyzeFilesystem` tests cover the composition, not these entry points.
+    @Test func lexicalPathAndClassify_pinHomeJoinCollapseAndRepoScope() {
+        let home = HomePath(validating: "/isolated-home")
+        let cwd = WorkingDirectory(validating: "/isolated-home/project")
+        let context = FilesystemAnalysisContext(
+            workingDirectory: cwd,
+            repositoryRoot: RepositoryRoot(validating: "/isolated-home/project"),
+            homeDirectory: home
+        )
+
+        #expect(
+            lexicalFilesystemPath(
+                "~/.ssh/config",
+                workingDirectory: cwd,
+                homeDirectory: home
+            ) == "/isolated-home/.ssh/config"
+        )
+        #expect(
+            lexicalFilesystemPath(
+                "$HOME/.ssh/config",
+                workingDirectory: cwd,
+                homeDirectory: home
+            ) == "/isolated-home/.ssh/config"
+        )
+        #expect(
+            lexicalFilesystemPath(
+                "../outside-file",
+                workingDirectory: cwd,
+                homeDirectory: home
+            ) == "/isolated-home/outside-file"
+        )
+        #expect(
+            lexicalFilesystemPath(
+                "Sources/Foo.swift",
+                workingDirectory: cwd,
+                homeDirectory: home
+            ) == "/isolated-home/project/Sources/Foo.swift"
+        )
+
+        let ssh = classifyFilesystemTarget("~/.ssh/config", context: context)
+        #expect(ssh.canonical == "/isolated-home/.ssh/config")
+        #expect(ssh.scope == .protectedPath(SecretPathMatch(pattern: "home-ssh", category: .ssh)))
+        #expect(ssh.resolution == .lexical)
+
+        let source = classifyFilesystemTarget("Sources/Foo.swift", context: context)
+        #expect(source.canonical == "/isolated-home/project/Sources/Foo.swift")
+        #expect(source.scope == .insideRepository)
+        #expect(source.kind == .sourceCode)
+
+        let outside = classifyFilesystemTarget("../outside-file", context: context)
+        #expect(outside.canonical == "/isolated-home/outside-file")
+        #expect(outside.scope == .outsideRepository)
+    }
 }
