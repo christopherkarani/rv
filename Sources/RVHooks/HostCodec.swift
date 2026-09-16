@@ -108,17 +108,34 @@ public protocol HostAskCodec: HostCodec {
     func encodeAsk(reason: String, rule: RuleID?, next: HookVoiceNext) -> HookWire
 }
 
-/// One switch for production codecs. Spend-first hosts return `HostAskCodec`.
-public func makeHostCodec(_ host: HookHost) -> any HostCodec {
+/// Production codec plus whether it can encode Ask. Spend-first hosts stay
+/// `HostAskCodec` so `hookWire` does not recover Ask with a downcast.
+enum ProductionHostCodec: Sendable {
+    case ask(any HostAskCodec)
+    case denyOnly(any HostCodec)
+}
+
+/// One switch for production codecs.
+func productionHostCodec(_ host: HookHost) -> ProductionHostCodec {
     switch host {
-    case .grok: GrokHostCodec()
-    case .pi: PiHostCodec()
-    case .opencode: OpenCodeHostCodec()
-    case .claude: ClaudeHostCodec()
-    case .openclaw: OpenClawHostCodec()
-    case .hermes: HermesHostCodec()
-    case .codex: CodexHostCodec()
-    case .cursor: CursorHostCodec()
+    case .pi: .ask(PiHostCodec())
+    case .opencode: .ask(OpenCodeHostCodec())
+    case .claude: .ask(ClaudeHostCodec())
+    case .openclaw: .ask(OpenClawHostCodec())
+    case .hermes: .ask(HermesHostCodec())
+    case .grok: .denyOnly(GrokHostCodec())
+    case .codex: .denyOnly(CodexHostCodec())
+    case .cursor: .denyOnly(CursorHostCodec())
+    }
+}
+
+/// Mixed-list factory. Ask encoding uses `productionHostCodec`, not this existential.
+public func makeHostCodec(_ host: HookHost) -> any HostCodec {
+    switch productionHostCodec(host) {
+    case .ask(let codec):
+        codec
+    case .denyOnly(let codec):
+        codec
     }
 }
 

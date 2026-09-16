@@ -12,6 +12,28 @@ public enum HookWireIntent: Sendable, Equatable {
 /// `encodeEvaluatedDeny`. Adapters honor `decision:ask` only.
 /// Claude first-call Ask is short `{decision:ask}` for the wrapper. Official
 /// `permissionDecision: "ask"` is leftover-ask-as-permit and is never emitted.
+/// Ask JSON is this `HostAskCodec` overload only.
+public func hookWire<C: HostAskCodec>(
+    from result: EvaluationResult,
+    command: ShellCommand,
+    using codec: C,
+    intent: HookWireIntent
+) -> HookWire {
+    switch intent {
+    case .afterSpend:
+        return encodePostSpend(from: result, command: command, using: codec)
+    case .firstCall(let verdict, let unlockCode):
+        return encodeFirstCall(
+            from: result,
+            command: command,
+            using: codec,
+            verdict: verdict,
+            unlockCode: unlockCode
+        )
+    }
+}
+
+/// Deny-only first call. A leftover `.ask` verdict is live deny, not Ask JSON.
 public func hookWire<C: HostCodec>(
     from result: EvaluationResult,
     command: ShellCommand,
@@ -34,6 +56,27 @@ public func hookWire<C: HostCodec>(
 
 /// Convenience: project `HostAskVerdict` then encode `.firstCall`.
 /// Spend vs first-call is `hookWire(..., intent: HookWireIntent)` only.
+public func hookWire<C: HostAskCodec>(
+    from result: EvaluationResult,
+    command: ShellCommand,
+    using codec: C,
+    bound: BoundReview? = nil,
+    cwd: WorkingDirectory? = nil
+) -> HookWire {
+    hookWire(
+        from: result,
+        command: command,
+        using: codec,
+        intent: firstCallIntent(
+            from: result,
+            host: codec.host,
+            bound: bound,
+            cwd: cwd
+        )
+    )
+}
+
+/// Convenience for deny-only codecs. Leftover `.ask` is live deny.
 public func hookWire<C: HostCodec>(
     from result: EvaluationResult,
     command: ShellCommand,
@@ -41,22 +84,36 @@ public func hookWire<C: HostCodec>(
     bound: BoundReview? = nil,
     cwd: WorkingDirectory? = nil
 ) -> HookWire {
+    hookWire(
+        from: result,
+        command: command,
+        using: codec,
+        intent: firstCallIntent(
+            from: result,
+            host: codec.host,
+            bound: bound,
+            cwd: cwd
+        )
+    )
+}
+
+private func firstCallIntent(
+    from result: EvaluationResult,
+    host: HookHost,
+    bound: BoundReview?,
+    cwd: WorkingDirectory?
+) -> HookWireIntent {
     let bound = bound ?? BoundReview.packProjected(from: result)
     let verdict = HostNativeAsk.hostAskVerdict(
-        host: codec.host,
+        host: host,
         result: result,
         cwd: cwd,
         bound: bound
     )
-    return hookWire(
-        from: result,
-        command: command,
-        using: codec,
-        intent: .firstCall(verdict: verdict, unlockCode: nil)
-    )
+    return .firstCall(verdict: verdict, unlockCode: nil)
 }
 
-private func encodeFirstCall<C: HostCodec>(
+private func encodeFirstCall<C: HostAskCodec>(
     from result: EvaluationResult,
     command: ShellCommand,
     using codec: C,
@@ -70,6 +127,33 @@ private func encodeFirstCall<C: HostCodec>(
         return codec.encodeAllow()
     case .ask:
         return encodeAsked(from: result, command: command, using: codec)
+    case .deny:
+        return encodeLiveDeny(
+            from: result,
+            command: command,
+            using: codec,
+            unlockCode: unlockCode
+        )
+    }
+}
+
+private func encodeFirstCall<C: HostCodec>(
+    from result: EvaluationResult,
+    command: ShellCommand,
+    using codec: C,
+    verdict: HostAskVerdict,
+    unlockCode: AllowOnceUnlockCode?
+) -> HookWire {
+    switch verdict {
+    case .allow:
+        return codec.encodeAllow()
+    case .ask:
+        return encodeLiveDeny(
+            from: result,
+            command: command,
+            using: codec,
+            unlockCode: nil
+        )
     case .deny:
         return encodeLiveDeny(
             from: result,
@@ -112,22 +196,14 @@ private func encodeLiveDeny<C: HostCodec>(
     )
 }
 
-private func encodeAsked<C: HostCodec>(
+private func encodeAsked<C: HostAskCodec>(
     from result: EvaluationResult,
     command: ShellCommand,
     using codec: C
 ) -> HookWire {
-    guard let askCodec = codec as? any HostAskCodec else {
-        return encodeLiveDeny(
-            from: result,
-            command: command,
-            using: codec,
-            unlockCode: nil
-        )
-    }
     switch BoundReview.packProjected(from: result) {
     case .deny(let deny), .mandatoryHuman(let deny):
-        return askCodec.encodeAsk(
+        return codec.encodeAsk(
             reason: hostAskLine(command: command, ruleID: deny.ruleID),
             rule: deny.ruleID,
             next: .ttyHint
