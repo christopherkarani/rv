@@ -14,7 +14,8 @@ by the Swift package.
 |---|---|---|
 | `preflight.sh` | Encodes the four grok-skill checklists as 17 exit-code assertions. Run before claiming a ticket is done. | `.grok/skills/*/SKILL.md` preflight sections |
 | `swift-6.4` | Puts the `.swift-version` toolchain first on `PATH`, then `exec`s `swift`. Eliminates the `/usr/bin/swift` Xcode-skew trap. Linux also looks at the official tarball dest. `swift-6.3.3` is a compatibility exec. | `.swift-version`, `docs/dev/SWIFT.md` |
-| `install-official-swift-linux.sh` | Official `download.swift.org` Linux tarball for `.swift-version`. Never apt `swift`. | `.github/workflows/pr.yml` Ubuntu gate |
+| `install-official-swift-linux.sh` | Official `download.swift.org` Linux tarball for `.swift-version`. Tries `6.4.0` when the `6.4` URL 404s. Never apt `swift`. | `.github/workflows/pr.yml` Ubuntu gate |
+| `install-official-swift-macos.sh` | Official `download.swift.org` osx.pkg into `~/Library/Developer/Toolchains`. Same `6.4` / `6.4.0` artifact fallback. | `.github/workflows/pr.yml` Darwin hook-grade |
 | `gate.sh` | `preflight.sh` + filtered `swift test` via `swift-6.4`. Explicit filter or infer from git-changed modules (union when multi-module / `Package.swift`). Not the Ubuntu PR gate. | `AGENTS.md` gate |
 | `worktree-cleanup.sh` | Dry-run (default) lists safe stale worktrees; `--apply` prunes only clean detached `/var/folders` temps and clean fully-merged `feat/*`. | Parallel ticket hygiene |
 | `extract-packs/extract_core_packs.py` | One-shot extract of day-one pack JSON from a local v0.11.0 checkout. Does not clone or vendor Rust. | `vendor/parity/PIN`, `docs/dev/PARITY.md` |
@@ -41,8 +42,18 @@ tools/install-official-swift-linux.sh --print-bin
 ```
 
 Ubuntu 22.04/24.04, x86_64 or aarch64. Writes `~/.local/share/swift` and
-`~/.cache/swift`. Does not `apt-get install swift`. The Ubuntu PR job then
+`~/.cache/swift`. Does not `apt-get install swift`. A two-component pin also
+tries the `.0` artifact name (`6.4` → `6.4.0`). The Ubuntu PR job then
 runs unfiltered `swift test` — not `tools/gate.sh --filter`.
+
+## install-official-swift-macos.sh
+
+```sh
+tools/install-official-swift-macos.sh
+```
+
+Darwin CI only. Installs the official osx.pkg and copies the toolchain into
+`$HOME/Library/Developer/Toolchains`. Same `.0` artifact fallback as Linux.
 
 ## gate.sh
 
