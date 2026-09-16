@@ -3,6 +3,6 @@ import Testing
 
 struct RVVersionTests {
     @Test func rvVersion() {
-        #expect(RV.configuration.version == "0.1.2")
+        #expect(RV.configuration.version == "0.1.3")
     }
 }
