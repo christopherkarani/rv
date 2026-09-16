@@ -127,9 +127,13 @@ import RVDomain
 
 @Test(arguments: HookHost.allCases)
 func productionCodec_matchesPauseProfile(_ host: HookHost) {
-    let codec = makeHostCodec(host)
     let spendFirst = HostNativeAsk.profile(for: host).pause == .spendFirst
-    #expect((codec is any HostAskCodec) == spendFirst)
+    switch productionHostCodec(host) {
+    case .ask:
+        #expect(spendFirst)
+    case .denyOnly:
+        #expect(spendFirst == false)
+    }
 }
 
 @Test(arguments: HookHost.allCases)

@@ -29,16 +29,46 @@ public func hookWire(
     recordHostAsk: (@Sendable (HookRequest, ProposedAction) async throws -> Void)? = nil,
     clearHostAsk: (@Sendable (HookRequest, ProposedAction) async throws -> Void)? = nil
 ) async -> HookWire {
-    await hookBody(
-        stdin: stdin,
-        codec: makeHostCodec(host),
-        evaluate: evaluate,
-        evaluateFile: evaluateFile,
-        spendHostAsk: spendHostAsk,
-        mintOnDeny: mintOnDeny,
-        recordHostAsk: recordHostAsk,
-        clearHostAsk: clearHostAsk
-    )
+    switch productionHostCodec(host) {
+    case .ask(let codec):
+        return await hookBody(
+            stdin: stdin,
+            codec: codec,
+            evaluate: evaluate,
+            evaluateFile: evaluateFile,
+            spendHostAsk: spendHostAsk,
+            mintOnDeny: mintOnDeny,
+            recordHostAsk: recordHostAsk,
+            clearHostAsk: clearHostAsk,
+            firstCall: { result, command, verdict, unlockCode in
+                hookWire(
+                    from: result,
+                    command: command,
+                    using: codec,
+                    intent: .firstCall(verdict: verdict, unlockCode: unlockCode)
+                )
+            }
+        )
+    case .denyOnly(let codec):
+        return await hookBody(
+            stdin: stdin,
+            codec: codec,
+            evaluate: evaluate,
+            evaluateFile: evaluateFile,
+            spendHostAsk: spendHostAsk,
+            mintOnDeny: mintOnDeny,
+            recordHostAsk: recordHostAsk,
+            clearHostAsk: clearHostAsk,
+            firstCall: { result, command, verdict, unlockCode in
+                hookWire(
+                    from: result,
+                    command: command,
+                    using: codec,
+                    intent: .firstCall(verdict: verdict, unlockCode: unlockCode)
+                )
+            }
+        )
+    }
 }
 
 private func hookBody<C: HostCodec>(
@@ -49,7 +79,8 @@ private func hookBody<C: HostCodec>(
     spendHostAsk: (@Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult)?,
     mintOnDeny: (@Sendable (EvaluationResult, WorkingDirectory?) async -> AllowOnceUnlockCode?)?,
     recordHostAsk: (@Sendable (HookRequest, ProposedAction) async throws -> Void)?,
-    clearHostAsk: (@Sendable (HookRequest, ProposedAction) async throws -> Void)?
+    clearHostAsk: (@Sendable (HookRequest, ProposedAction) async throws -> Void)?,
+    firstCall: (EvaluationResult, ShellCommand, HostAskVerdict, AllowOnceUnlockCode?) -> HookWire
 ) async -> HookWire {
     switch codec.decode(stdin) {
     case .request(let request):
@@ -104,15 +135,7 @@ private func hookBody<C: HostCodec>(
                     )
                 }
             }
-            return hookWire(
-                from: result,
-                command: command,
-                using: codec,
-                intent: .firstCall(
-                    verdict: verdict,
-                    unlockCode: unlockCode
-                )
-            )
+            return firstCall(result, command, verdict, unlockCode)
         }
     case .foreign:
         return codec.encodeAllow()

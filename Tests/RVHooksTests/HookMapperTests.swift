@@ -304,6 +304,30 @@ func hookWire_samePathHosts_resetHardIsShortDeny(_ host: HookHost) throws {
     #expect(incompleteCodec.denyCalls[0].next == .none)
 }
 
+@Test func hookWire_forcedAskOnDenyOnlyCodecIsLiveDeny() {
+    let deny = Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "x")
+    let spy = EncodeDenySpy()
+    _ = hookWire(
+        from: EvaluationResult(outcome: .deny(deny, matched: nil)),
+        command: ShellCommand(rawValue: "git reset --hard"),
+        using: spy,
+        intent: .firstCall(verdict: .ask(.hostNative), unlockCode: nil)
+    )
+    #expect(spy.denyCalls.count == 1)
+    #expect(spy.denyCalls[0].rule == RuleID(pack: .coreGit, pattern: "reset-hard"))
+}
+
+@Test func hookMapper_doesNotDowncastHostAskCodec() throws {
+    let url = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .appendingPathComponent("Sources/RVHooks/HookMapper.swift")
+    let source = try String(contentsOf: url, encoding: .utf8)
+    #expect(source.contains("as? any HostAskCodec") == false)
+    #expect(source.contains("as? HostAskCodec") == false)
+}
+
 @Test func hookWire_mintedUnlockCodePassesTypedNext() throws {
     let denyCodec = EncodeDenySpy()
     let code: AllowOnceUnlockCode = try mintedUnlock()
