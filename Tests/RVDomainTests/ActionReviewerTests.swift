@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 import RVDomain
 
@@ -260,6 +261,124 @@ struct ActionReviewerTests {
                 hardDecision: .hardDeny(ActionReviewerFixtures.hardDeny),
                 review: .success(allow)
             ) == .deny(ActionReviewerFixtures.hardDeny)
+        )
+    }
+
+    @Test func hardAllow_isNotWeakenedByDenyReview() {
+        let denyReview = ActionReviewerFixtures.review(
+            decision: .deny,
+            confidence: .high,
+            rationaleCategory: .deny
+        )
+        #expect(
+            ReviewBind.apply(hardDecision: .hardAllow, review: .success(denyReview)) == .allow
+        )
+    }
+
+    @Test func reviewerConfidence_mediumAndHighAdvise_lowDoesNot() {
+        #expect(ReviewerConfidence.low.isSufficientToAdvise == false)
+        #expect(ReviewerConfidence.medium.isSufficientToAdvise)
+        #expect(ReviewerConfidence.high.isSufficientToAdvise)
+    }
+
+    @Test func actionReview_conflictingRationale_isSymmetric() {
+        let allowDeny = ActionReviewerFixtures.review(
+            decision: .allow,
+            confidence: .high,
+            rationaleCategory: .deny
+        )
+        let denyAllow = ActionReviewerFixtures.review(
+            decision: .deny,
+            confidence: .high,
+            rationaleCategory: .allow
+        )
+        let aligned = ActionReviewerFixtures.review(
+            decision: .deny,
+            confidence: .high,
+            rationaleCategory: .deny
+        )
+        let abstain = ActionReviewerFixtures.review(
+            decision: .abstain,
+            confidence: .high,
+            rationaleCategory: .uncertain
+        )
+        #expect(allowDeny.hasConflictingRationale)
+        #expect(denyAllow.hasConflictingRationale)
+        #expect(aligned.hasConflictingRationale == false)
+        #expect(abstain.hasConflictingRationale == false)
+    }
+
+    @Test func repositoryReviewContext_sharedBranchIsMainOrMasterOnly() {
+        #expect(RepositoryReviewContext(currentBranch: "main").isSharedBranch)
+        #expect(RepositoryReviewContext(currentBranch: "master").isSharedBranch)
+        #expect(RepositoryReviewContext(currentBranch: "feature").isSharedBranch == false)
+        #expect(RepositoryReviewContext().isSharedBranch == false)
+    }
+
+    @Test func reviewTypes_roundTripCodable() throws {
+        let provider = ReviewerProviderID(rawValue: "stub.codec")
+        #expect(try JSONDecoder().decode(ReviewerProviderID.self, from: JSONEncoder().encode(provider)) == provider)
+
+        let review = ActionReview(
+            decision: .abstain,
+            risk: .critical,
+            confidence: .low,
+            rationale: "not enough context",
+            rationaleCategory: .uncertain
+        )
+        let decodedReview = try JSONDecoder().decode(ActionReview.self, from: JSONEncoder().encode(review))
+        #expect(decodedReview == review)
+        #expect(RiskLevel.low != .medium)
+        #expect(ReviewDecision.allow != .deny)
+
+        let context = ReviewContext(
+            repository: RepositoryReviewContext(name: "rv", currentBranch: "feature"),
+            environment: EnvironmentReviewContext(labels: ["dev"], isCI: true),
+            metadata: ["note": "ok"]
+        )
+        let request = ReviewRequest(action: ActionReviewerFixtures.forcePushAction(), context: context)
+        let decodedRequest = try JSONDecoder().decode(ReviewRequest.self, from: JSONEncoder().encode(request))
+        #expect(decodedRequest == request)
+        #expect(decodedRequest.context.environment.isCI)
+        #expect(decodedRequest.context.repository.isSharedBranch == false)
+    }
+
+    @Test func reviewRequest_fileAction_isSanitizedOnInit() {
+        let dirty = ProposedAction.file(
+            FileAction(
+                fingerprint: ActionFingerprint(rawValue: "file:claude:::read:/tmp/ghp_exampletoken/.env"),
+                file: FileToolAction(
+                    kind: .read,
+                    path: FileToolPath(rawValue: "/tmp/ghp_exampletoken/.env")
+                ),
+                effects: ActionEffects(),
+                resources: ActionResources(path: "/tmp/ghp_exampletoken/.env"),
+                scope: ActionScope(
+                    workingDirectory: WorkingDirectory(validating: "/tmp/ghp_exampletoken")
+                )
+            )
+        )
+        let request = ReviewRequest(
+            action: dirty,
+            context: ReviewContext(repository: RepositoryReviewContext(name: "rv"))
+        )
+        guard case .file(let file) = request.action else {
+            Issue.record("expected file action")
+            return
+        }
+        #expect(file.file.path.rawValue.contains("ghp_exampletoken") == false)
+        #expect(file.scope.workingDirectory?.rawValue == ReviewSanitizer.redactedPlaceholder)
+    }
+
+    @Test func reviewEligible_unalignedDecisionCategory_isAsk() {
+        let unaligned = ActionReviewerFixtures.review(
+            decision: .allow,
+            confidence: .high,
+            rationaleCategory: .abstain
+        )
+        #expect(
+            ReviewBind.apply(hardDecision: eligible, review: .success(unaligned))
+                == .mandatoryHuman(ActionReviewerFixtures.fallbackDeny)
         )
     }
 }
