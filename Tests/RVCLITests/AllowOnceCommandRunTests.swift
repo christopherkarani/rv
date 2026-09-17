@@ -193,14 +193,13 @@ struct AllowOnceCommandRunTests {
     @Test func list_rowsPrettyAndRobot() async throws {
         let home = try isolatedHome()
         let store = AllowOnceCLI.store(home: home)
-        let now = Date(timeIntervalSince1970: 1_700_000_000)
         let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
         _ = try await store.mint(
             matchingView: "git reset --hard",
             cwd: wd("/tmp/a"),
             ruleID: nil,
             tty: tty,
-            now: now
+            now: Date()
         )
         try await withCLIProcess(home: home) {
             var pretty = try AllowOnceList.parse([])

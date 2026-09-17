@@ -31,6 +31,22 @@ struct OperatorCommandRunTests {
                 try await Explain.parse(["echo", "ok"]).run()
             }
         }
+        try await withCLIProcess(
+            home: home,
+            environment: ["TERM": "xterm"],
+            stdinIsTTY: true,
+            stdoutIsTTY: true
+        ) {
+            await #expect(throws: ExitCode(0)) {
+                try await Test.parse(["echo", "ok"]).run()
+            }
+            await #expect(throws: ExitCode(1)) {
+                try await Test.parse(["--explain", "git", "reset", "--hard"]).run()
+            }
+            await #expect(throws: ExitCode(0)) {
+                try await Explain.parse(["echo", "ok"]).run()
+            }
+        }
     }
 
     @Test func safety_missingHomeBadLevelShowAndSet() throws {
@@ -140,6 +156,21 @@ struct OperatorCommandRunTests {
             try Policy.Apply.parse([out.path, "--save", "--repo"]).run()
             try Policy.Export.parse(["--repo"]).run()
         }
+        let machineLock = TypedRuleStore(
+            baseDirectory: RVPolicyPaths.configDirectory(home: home)
+        ).machineFileURL
+            .deletingLastPathComponent()
+            .appendingPathComponent(".policy.lock")
+        if FileManager.default.fileExists(atPath: machineLock.path) {
+            try FileManager.default.removeItem(at: machineLock)
+        }
+        try FileManager.default.createDirectory(at: machineLock, withIntermediateDirectories: true)
+        try withCLIProcess(home: home, workspacePath: workspace.path) {
+            #expect(throws: ExitCode(1)) {
+                try Policy.Apply.parse([out.path, "--save"]).run()
+            }
+        }
+        try FileManager.default.removeItem(at: machineLock)
         try "not-toml".write(to: workspace.appendingPathComponent("bad.toml"), atomically: true, encoding: .utf8)
         try withCLIProcess(home: home, workspacePath: workspace.path) {
             #expect(throws: ExitCode(2)) {
@@ -270,6 +301,19 @@ struct OperatorCommandRunTests {
                 try await ScanSessions.parse([notADirectory.path]).run()
             }
         }
+        let unlistable = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-scan-unlistable-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: unlistable, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: unlistable.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: unlistable.path)
+            try? FileManager.default.removeItem(at: unlistable)
+        }
+        try await withCLIProcess(home: home) {
+            await #expect(throws: ExitCode(1)) {
+                try await ScanSessions.parse([unlistable.path]).run()
+            }
+        }
         try installClaudeScanFixture(into: URL(fileURLWithPath: home.rawValue, isDirectory: true))
         try await withCLIProcess(home: home, environment: ["PATH": "/usr/bin:/bin"]) {
             await #expect(throws: ExitCode(0)) {
@@ -318,6 +362,10 @@ struct OperatorCommandRunTests {
             }
         }
         let home = try isolatedHome()
+        try FileManager.default.createDirectory(
+            at: RVPolicyPaths.configDirectory(home: home),
+            withIntermediateDirectories: true
+        )
         try await withCLIProcess(home: home) {
             do {
                 try await Doctor.parse(["--plain"]).run()
