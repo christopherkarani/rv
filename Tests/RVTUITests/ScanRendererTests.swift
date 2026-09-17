@@ -127,3 +127,74 @@ private func sampleModel(showsCommand: Bool = false) -> ScanViewModel {
     #expect(joined.contains("git reset --hard"))
     #expect(joined.contains("rm -rf ./src"))
 }
+
+@Test func scanPrettyRenderer_singleFindingWordAndColor() {
+    let vm = ScanViewModel(
+        rows: [
+            scanFindingRow(
+                host: .claude,
+                sourcePath: "/tmp/fixture/session.jsonl",
+                ruleID: resetHardRule,
+                packID: .coreGit,
+                matchingView: MatchingView("git reset --hard"),
+                showsCommand: false
+            ),
+        ],
+        filesScanned: 1,
+        eventsExtracted: 1
+    )
+    let off = ScanPrettyRenderer().render(vm, palette: colorOffPalette).joined(separator: "\n")
+    #expect(off.contains("1 files scanned, 1 events, 1 finding"))
+    #expect(off.contains("findings") == false)
+
+    let on = Palette(for: ColorCapability(colorsEnabled: true))
+    let painted = ScanPrettyRenderer().render(vm, palette: on)
+    #expect(painted.contains { $0.contains(on.deny) })
+}
+
+@Test func scanBrowse_helpersAndNoopEventsKeepSelection() {
+    let model = sampleModel()
+    let state = scanBrowseState(model: model, selectedIndex: -3)
+    #expect(state.selectedIndex == 0)
+    #expect(scanBrowseReduce(state, .enter).selectedIndex == 0)
+    #expect(scanBrowseReduce(state, .quit).selectedIndex == 0)
+    #expect(scanBrowseReduce(state, .noop).selectedIndex == 0)
+    #expect(scanBrowseRender(state, palette: colorOffPalette).first == "RV SCAN")
+}
+
+@Test func scanBrowseRender_singleFindingUsesSingularWord() {
+    let vm = ScanViewModel(
+        rows: [
+            scanFindingRow(
+                host: .claude,
+                sourcePath: "/tmp/fixture/session.jsonl",
+                ruleID: resetHardRule,
+                packID: .coreGit,
+                matchingView: MatchingView("git reset --hard"),
+                showsCommand: false
+            ),
+        ],
+        filesScanned: 1,
+        eventsExtracted: 1
+    )
+    let joined = ScanBrowseRenderer().render(ScanBrowseState(model: vm), palette: colorOffPalette)
+        .joined(separator: "\n")
+    #expect(joined.contains("1 files scanned, 1 events, 1 finding"))
+    #expect(joined.contains("findings") == false)
+}
+
+@Test func scanBrowseRender_detailIncludesSessionCountAndColor() {
+    let state = ScanBrowseState(model: sampleModel(), selectedIndex: 0)
+    let off = ScanBrowseRenderer().render(state, palette: colorOffPalette)
+    let joined = off.joined(separator: "\n")
+    #expect(joined.contains("Session"))
+    #expect(joined.contains("sess-1"))
+    #expect(joined.contains("Count"))
+    #expect(joined.contains("3"))
+    #expect(joined.contains("Some hosts are not wired"))
+
+    let on = Palette(for: ColorCapability(colorsEnabled: true))
+    let painted = ScanBrowseRenderer().render(state, palette: on)
+    #expect(painted.contains { $0.contains(on.mark) && $0.contains("›") })
+    #expect(painted.contains { $0.contains(on.deny) })
+}

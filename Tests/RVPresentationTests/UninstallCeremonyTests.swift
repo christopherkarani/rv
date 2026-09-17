@@ -37,6 +37,15 @@ import Testing
     #expect(frames.last?.slots.allSatisfy { $0.kind != .wired } == true)
 }
 
+@Test func uninstallCeremony_removedEmptyOccupied_skipsHooksRemoved() {
+    let frames = uninstallCeremonyFrames(.removed(hosts: [], occupied: [.grok]))
+    #expect(frames.contains { $0.statusLine == uninstallCeremonyHooksRemoved } == false)
+    #expect(frames.last?.statusLine == nil)
+    #expect(frames.last?.closerLines == [uninstallCeremonyCloser])
+    #expect(frames.last?.slots[0].kind == .occupied)
+    #expect(frames.contains { $0.title == uninstallCeremonyRemovingTitle })
+}
+
 @Test func uninstallCeremony_occupiedOnly_alreadyCleanNotComplete() {
     let frames = uninstallCeremonyFrames(
         .alreadyClean(occupied: [.grok])

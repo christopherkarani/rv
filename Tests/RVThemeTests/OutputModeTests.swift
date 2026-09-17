@@ -145,6 +145,71 @@ private struct ModeCase {
     #expect(off.reset.contains("\u{001B}") == false)
 }
 
+@Test func themeProbe_clampsColumnsAndExposesFlags() {
+    let probe = ThemeProbe(
+        stdinIsTTY: false,
+        stdoutIsTTY: true,
+        jsonFlag: false,
+        robotFlag: true,
+        plainFlag: true,
+        noColorFlag: true,
+        ci: false,
+        noColorEnv: false,
+        termDumb: true,
+        columns: 8
+    )
+    #expect(probe.columns == 16)
+    #expect(probe.stdinIsTTY == false)
+    #expect(probe.stdoutIsTTY)
+    #expect(probe.jsonFlag == false)
+    #expect(probe.robotFlag)
+    #expect(probe.plainFlag)
+    #expect(probe.noColorFlag)
+    #expect(probe.ci == false)
+    #expect(probe.noColorEnv == false)
+    #expect(probe.termDumb)
+    #expect(probe.terminal.canCarryColor)
+    #expect(probe.forbid.isBrowseEligible == false)
+    #expect(probe.forbid.canCarryColor == false)
+    #expect(probe.isBrowseEligible == false)
+}
+
+@Test func themeProbe_composedInitAndDeprecatedWrappers() {
+    let terminal = TTYPair(stdinIsTTY: true, stdoutIsTTY: false)
+    let forbid = OutputForbid(
+        json: false,
+        robot: false,
+        plain: false,
+        ci: true,
+        noColor: OutputForbid.NoColor(flag: false, env: false, termDumb: false)
+    )
+    let probe = ThemeProbe(terminal: terminal, forbid: forbid, columns: 120)
+    #expect(probe.columns == 120)
+    #expect(probe.terminal.isBrowseEligible == false)
+    #expect(forbid.canCarryColor == false)
+    #expect(resolveOutputMode(probe: probe, requested: .automatic) == .robot)
+    #expect(colorCapability(probe: probe, mode: .pretty).colorsEnabled == false)
+    #expect(palette(for: ColorCapability(colorsEnabled: false)) == colorOffPalette)
+}
+
+@Test func outputForbid_robotKeepsColorUntilPlainOrCI() {
+    let robot = OutputForbid(
+        json: false,
+        robot: true,
+        plain: false,
+        ci: false,
+        noColor: OutputForbid.NoColor(flag: false, env: false, termDumb: false)
+    )
+    #expect(robot.isBrowseEligible == false)
+    #expect(robot.canCarryColor)
+}
+
+@Test func colorCapability_prettyUsesProbeColor() {
+    let probe = probe()
+    #expect(ColorCapability(probe: probe, mode: .pretty).colorsEnabled)
+    #expect(ColorCapability(probe: probe, mode: .robot).colorsEnabled == false)
+}
+
 @Test func palette_colorOn_usesNamedSlotsOnly() {
     let on = Palette(for: ColorCapability(colorsEnabled: true))
     #expect(on.colorsEnabled)
