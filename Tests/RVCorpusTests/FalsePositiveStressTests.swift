@@ -7,14 +7,14 @@ import RVPacks
 /// Pin `evaluate` over-block net: a deny here is a false-positive block.
 ///
 /// Run:
-/// `tools/gate.sh --quiet RVCorpusTests --filter FalsePositiveStress`
+/// `Scripts/gate.sh --quiet RVCorpusTests --filter FalsePositiveStress`
 ///
 /// Product door (`evaluateWithSemantics`) may tighten a pack allow (Ask / shared
 /// branch). That is not a pin false positive. Data-role never-slip rows must
 /// still allow on the door.
 @Suite("False-positive stress")
 struct FalsePositiveStressTests {
-    /// Landmine commands from `.grok/skills/swift-evaluate-parity/references/landmines.md`.
+    /// Near-miss landmines that must stay allow (force-with-lease, checkout -b, restore, rg).
     static let landmineCommands: [String] = [
         "git push --force-with-lease",
         "git push --force-with-lease --force-if-includes",

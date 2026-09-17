@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tools/gate.sh — preflight + filtered swift test via tools/swift-6.4.
+# Scripts/gate.sh — preflight + filtered swift test via Scripts/swift-6.4.
 # Explicit filter wins. Else infer from git-changed Sources/Tests modules;
 # Package.swift or multi-module → union of affected *Tests. Never unfiltered
 # full suite by default.
@@ -9,8 +9,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-PREFLIGHT="$ROOT/tools/preflight.sh"
-SWIFT_WRAP="$ROOT/tools/swift-6.4"
+PREFLIGHT="$ROOT/Scripts/preflight.sh"
+SWIFT_WRAP="$ROOT/Scripts/swift-6.4"
 QUIET=0
 EXPLICIT=0
 FILTERS=""
@@ -18,7 +18,7 @@ RUN_C_UNITS=0
 
 usage() {
   cat <<'EOF'
-Usage: tools/gate.sh [--quiet] [--filter NAME] [FilterName ...]
+Usage: Scripts/gate.sh [--quiet] [--filter NAME] [FilterName ...]
 
   --quiet           Pass --quiet to preflight; less gate chatter
   --filter NAME     Explicit swift test --filter (repeatable / also positional)
@@ -156,9 +156,9 @@ fi
 # Explicit empty --filter / blank names must not green-exit after preflight alone.
 if [[ -z "$FILTERS" ]]; then
   if [[ "$EXPLICIT" -eq 1 ]]; then
-    printf "gate: empty filter list; pass e.g. tools/gate.sh RVDomainTests\n" >&2
+    printf "gate: empty filter list; pass e.g. Scripts/gate.sh RVDomainTests\n" >&2
   else
-    printf "gate: no test filters inferred; pass e.g. tools/gate.sh RVDomainTests\n" >&2
+    printf "gate: no test filters inferred; pass e.g. Scripts/gate.sh RVDomainTests\n" >&2
   fi
   exit 2
 fi
@@ -166,7 +166,7 @@ fi
 fail=0
 for filt in $FILTERS; do
   if [[ "$QUIET" -eq 0 ]]; then
-    printf "gate: tools/swift-6.4 test --filter %s\n" "$filt"
+    printf "gate: Scripts/swift-6.4 test --filter %s\n" "$filt"
   fi
   if ! "$SWIFT_WRAP" test --filter "$filt"; then
     fail=1

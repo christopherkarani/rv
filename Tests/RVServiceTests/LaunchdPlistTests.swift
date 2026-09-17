@@ -5,8 +5,7 @@ import Testing
 struct LaunchdPlistTests {
     @Test func templateIsOnDemandNotKeepAlive() throws {
         let url = packageRoot()
-            .appendingPathComponent("Resources")
-            .appendingPathComponent("launchd")
+            .appendingPathComponent("Sources/RVCLI/Resources/launchd")
             .appendingPathComponent("dev.rv.evaluate.plist")
         let data = try Data(contentsOf: url)
         let object = try PropertyListSerialization.propertyList(from: data, format: nil)

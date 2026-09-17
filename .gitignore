@@ -3,29 +3,13 @@
 xcuserdata/
 .DS_Store
 .worktrees/
+# Agent / editor leftovers — not product
 .agents/
 .claude-plugin/
-.grok/*
-!.grok/skills/
-!.grok/skills/**
-!.grok/workflows/
-!.grok/workflows/**
-# Global specialist skills (symlinks to ~/.grok/skills) — not repo content
-.grok/skills/swift-functional-architecture
-.grok/skills/swift-type-system-architecture
-.grok/skills/swift-concurrency
-.grok/skills/swift-testing-pro
-.grok/skills/swift-pr-review
-.grok/skills/swift-functional-codebase-evolution
-.grok/skills/swiftify-codebase-architecture
-.grok/skills/swift-api-design-guidelines
+.grok/
 .cursor/
 .ryk/
 .skynex/
-# Agent working dumps — not public product docs
 planning/
 scratch/
 spec/
-docs/factory/prompts/
-docs/factory/reviews/
-docs/factory/HANDOFF.md

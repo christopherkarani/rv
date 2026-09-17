@@ -203,7 +203,7 @@ if [[ "${RV_C_HOOK_SKIP_RELEASE:-0}" == "1" ]] && stage_ok; then
 elif stage_from_debug; then
   printf 'host-attach-proof: staged C rv + existing operator from .build\n'
 else
-  HOME="$LOGIN_HOME" RV_RELEASE_STAGE="$STAGE" bash "$ROOT/tools/release.sh"
+  HOME="$LOGIN_HOME" RV_RELEASE_STAGE="$STAGE" bash "$ROOT/Scripts/release.sh"
   stage_ok || fail "release stage incomplete: $STAGE"
 fi
 

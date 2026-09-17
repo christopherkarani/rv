@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tools/install-official-swift-linux.sh — official Swift Linux tarball only.
+# Scripts/install-official-swift-linux.sh — official Swift Linux tarball only.
 # Never apt-get install swift / swiftlang. Pin is .swift-version.
 # Writes $HOME/.local/share/swift and $HOME/.cache/swift (not the repo).
 set -euo pipefail
@@ -10,7 +10,7 @@ PRINT_BIN=0
 
 usage() {
   cat <<'EOF'
-Usage: tools/install-official-swift-linux.sh [--print-bin]
+Usage: Scripts/install-official-swift-linux.sh [--print-bin]
 
   Install the official Swift RELEASE tarball from download.swift.org for this
   Linux distro/arch. Refuses apt swift. Pin is .swift-version.

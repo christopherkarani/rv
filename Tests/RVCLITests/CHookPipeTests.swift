@@ -8,7 +8,7 @@ import RVTheme
 struct CHookPipeTests {
     @Test func cHookProof_stagedBinariesAndTempHome() throws {
         let root = repoRootURL()
-        let script = root.appendingPathComponent("tools/c-hook-proof.sh")
+        let script = root.appendingPathComponent("Scripts/c-hook-proof.sh")
         #expect(FileManager.default.fileExists(atPath: script.path))
 
         let stage = URL(fileURLWithPath: "/tmp/swift-arch-c8hook21/stage", isDirectory: true)

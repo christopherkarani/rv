@@ -8,7 +8,7 @@ import RVHooks
 struct LinuxCHookTests {
     @Test func cHookClangAndMissReplayDeniesResetHard() throws {
         let root = repoRootURL()
-        let script = root.appendingPathComponent("tools/c-hook-proof.sh")
+        let script = root.appendingPathComponent("Scripts/c-hook-proof.sh")
         #expect(FileManager.default.fileExists(atPath: script.path))
 
         let isolationHome = FileManager.default.temporaryDirectory

@@ -30,32 +30,32 @@ jobs:
           key: swift-6.4-RELEASE-${{ runner.os }}-${{ runner.arch }}
 
       - name: Install Swift 6.4
-        run: tools/install-official-swift-macos.sh
+        run: Scripts/install-official-swift-macos.sh
 
       - name: Preflight + module tests
         run: |
-          tools/gate.sh \
+          Scripts/gate.sh \
             RVDomainTests RVEngineTests RVPacksTests RVPolicyTests \
             RVHooksTests RVIPCTests RVPresentationTests \
             RVThemeTests RVTUITests RVHistoryTests RVAnalyticsTests \
             RVCorpusTests
-          tools/swift-6.4 test --filter RVServiceTests --skip injectedOneSecondIdleFiresWithoutKeepAlive
-          tools/swift-6.4 test --filter RVCLITests --skip CHookPipeTests.cHookProof
+          Scripts/swift-6.4 test --filter RVServiceTests --skip injectedOneSecondIdleFiresWithoutKeepAlive
+          Scripts/swift-6.4 test --filter RVCLITests --skip CHookPipeTests.cHookProof
 
       - name: Stage release binaries
-        run: tools/release.sh
+        run: Scripts/release.sh
 
       - name: C hook process proof
         env:
           RV_C_HOOK_SKIP_RELEASE: "1"
           RV_RELEASE_STAGE: ${{ github.workspace }}/.build/release-stage
-        run: tools/c-hook-proof.sh
+        run: Scripts/c-hook-proof.sh
 
       - name: Isolated-HOME host attach
         env:
           RV_C_HOOK_SKIP_RELEASE: "1"
           RV_RELEASE_STAGE: ${{ github.workspace }}/.build/release-stage
-        run: tools/host-attach-proof.sh
+        run: Scripts/host-attach-proof.sh
 
       - uses: actions/upload-artifact@v4
         with:

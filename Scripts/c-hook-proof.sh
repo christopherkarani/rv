@@ -218,8 +218,8 @@ stage_stale() {
 if [[ "${RV_C_HOOK_SKIP_RELEASE:-0}" == "1" ]] && stage_ok && ! stage_stale; then
   printf 'c-hook-proof: using existing stage %s\n' "$STAGE"
 else
-  # tools/swift-6.4 resolves the pin under $HOME; proof HOME is a fixture.
-  HOME="$LOGIN_HOME" RV_RELEASE_STAGE="$STAGE" bash "$ROOT/tools/release.sh"
+  # Scripts/swift-6.4 resolves the pin under $HOME; proof HOME is a fixture.
+  HOME="$LOGIN_HOME" RV_RELEASE_STAGE="$STAGE" bash "$ROOT/Scripts/release.sh"
   stage_ok || fail "release stage incomplete: $STAGE"
 fi
 
