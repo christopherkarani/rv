@@ -80,9 +80,13 @@ struct SystemctlApplyingTests {
     }
 
     @Test func processLaunchctl_bootoutAcceptsAlreadyUnloadedStatuses() throws {
+        var tools: [URL] = []
+        defer {
+            for tool in tools { try? FileManager.default.removeItem(at: tool) }
+        }
         for status: Int32 in [3, 5, 113] {
             let tool = try fakeProcessTool(exit: status)
-            defer { try? FileManager.default.removeItem(at: tool) }
+            tools.append(tool)
             try ProcessLaunchctl(executableURL: tool).bootout(
                 domain: "user/1",
                 label: "dev.rv.evaluate"
