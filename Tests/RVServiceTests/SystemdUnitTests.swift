@@ -5,8 +5,7 @@ import Testing
 struct SystemdUnitTests {
     @Test func userUnitIsOnDemandNotRestartAlways() throws {
         let url = packageRootForServiceTests()
-            .appendingPathComponent("Resources")
-            .appendingPathComponent("systemd")
+            .appendingPathComponent("Sources/RVCLI/Resources/systemd")
             .appendingPathComponent("dev.rv.evaluate.service")
         let text = try String(contentsOf: url, encoding: .utf8)
         #expect(text.contains("Restart=no"))

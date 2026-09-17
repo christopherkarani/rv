@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tools/install-official-swift-macos.sh — official Swift RELEASE .pkg for Darwin CI.
+# Scripts/install-official-swift-macos.sh — official Swift RELEASE .pkg for Darwin CI.
 # Pin is .swift-version. download.swift.org may name 6.4 as 6.4.0.
 set -euo pipefail
 

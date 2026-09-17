@@ -71,15 +71,15 @@ for rel in rels:
 json.dump(snap, open(dest, "w", encoding="utf-8"), sort_keys=True)
 PY
 
-# Build with the login HOME so tools/swift-6.4 can find the pinned
+# Build with the login HOME so Scripts/swift-6.4 can find the pinned
 # toolchain. Fixture processes use ORACLE_HOME later.
-HOME="$LOGIN_HOME" "$ROOT/tools/swift-6.4" build --product rv
+HOME="$LOGIN_HOME" "$ROOT/Scripts/swift-6.4" build --product rv
 
 RV=""
 if [[ -x "$ROOT/.build/debug/rv" ]]; then
   RV="$ROOT/.build/debug/rv"
 else
-  BIN="$(HOME="$LOGIN_HOME" "$ROOT/tools/swift-6.4" build --product rv --show-bin-path)"
+  BIN="$(HOME="$LOGIN_HOME" "$ROOT/Scripts/swift-6.4" build --product rv --show-bin-path)"
   if [[ -x "$BIN/rv" ]]; then
     RV="$BIN/rv"
   fi

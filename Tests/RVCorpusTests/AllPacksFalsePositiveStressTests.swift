@@ -13,7 +13,7 @@ import RVPacks
 /// Command-name `--help` / `--version` must allow (documentation query).
 ///
 /// Run:
-/// `tools/gate.sh --quiet RVCorpusTests --filter AllPacksFalsePositiveStress`
+/// `Scripts/gate.sh --quiet RVCorpusTests --filter AllPacksFalsePositiveStress`
 @Suite("All-packs false-positive stress")
 struct AllPacksFalsePositiveStressTests {
     static let strictGit = PackID(rawValue: "strict_git")

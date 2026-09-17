@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# tools/swift-6.4 — put the pinned toolchain first on PATH, then exec swift.
-# Eliminates the /usr/bin/swift Xcode-skew trap. See docs/dev/SWIFT.md.
+# Scripts/swift-6.4 — put the pinned toolchain first on PATH, then exec swift.
+# Eliminates the /usr/bin/swift Xcode-skew trap.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -39,7 +39,7 @@ done
 # Escape pin dots so 6.4 cannot match 6<any>4. Token edges still reject 6.40.
 PIN_RE="$(printf '%s' "$PIN" | sed 's/\./\\./g')"
 if [[ -z "$SWIFT" && "$(uname -s)" == "Linux" ]]; then
-  # Official Linux tarball from tools/install-official-swift-linux.sh.
+  # Official Linux tarball from Scripts/install-official-swift-linux.sh.
   for cand in "$HOME/.local/share/swift/swift-${PIN}-RELEASE-"*/usr/bin/swift \
               "$HOME/.local/share/swift/swift-${PIN}.0-RELEASE-"*/usr/bin/swift; do
     [[ -x "$cand" ]] || continue

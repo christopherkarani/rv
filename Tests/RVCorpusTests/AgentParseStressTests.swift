@@ -6,7 +6,7 @@ import RVPacks
 
 /// Agent-shaped command parse net: pin `evaluate` plus the product door.
 ///
-/// Run: `tools/gate.sh --quiet RVCorpusTests --filter AgentParseStress`
+/// Run: `Scripts/gate.sh --quiet RVCorpusTests --filter AgentParseStress`
 ///
 /// Over-block = pin deny on search / docs / echo guts that are not executing
 /// shell. Door unwrap-limited on unquoted / `$` / non-data interpreter

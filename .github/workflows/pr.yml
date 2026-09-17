@@ -17,10 +17,10 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - run: tools/preflight.sh --quiet
+      - run: Scripts/preflight.sh --quiet
 
   # Gate: official Swift 6.4 Linux tarball, then unfiltered `swift test`.
-  # Not apt swift. Not tools/gate.sh --filter. Not swift test --filter
+  # Not apt swift. Not Scripts/gate.sh --filter. Not swift test --filter
   # (SPM --filter still typechecks everything unless --target is used).
   test:
     name: swift test
@@ -68,7 +68,7 @@ jobs:
 
       - name: Install official Swift 6.4 Linux tarball
         run: |
-          bin="$(tools/install-official-swift-linux.sh --print-bin)"
+          bin="$(Scripts/install-official-swift-linux.sh --print-bin)"
           echo "$bin" >> "$GITHUB_PATH"
           echo "Official tarball bin: $bin"
 
@@ -93,7 +93,7 @@ jobs:
         run: Sources/rv-c/tests/run.sh
 
       - name: Isolated-HOME host attach
-        run: tools/host-attach-proof.sh
+        run: Scripts/host-attach-proof.sh
 
   # Advertised grade is macOS 26 hook process, not Linux units.
   hook-grade:
@@ -112,33 +112,33 @@ jobs:
           key: swift-6.4-RELEASE-${{ runner.os }}-${{ runner.arch }}
 
       - name: Install Swift 6.4
-        run: tools/install-official-swift-macos.sh
+        run: Scripts/install-official-swift-macos.sh
 
       - name: C hook units
         run: Sources/rv-c/tests/run.sh
 
       - name: Stage release binaries
-        run: tools/release.sh
+        run: Scripts/release.sh
 
       - name: C hook process proof
         env:
           RV_C_HOOK_SKIP_RELEASE: "1"
           RV_RELEASE_STAGE: ${{ github.workspace }}/.build/release-stage
-        run: tools/c-hook-proof.sh
+        run: Scripts/c-hook-proof.sh
 
       # Linux PR already ran unfiltered swift test. Darwin XPC / LaunchAgent
       # and the isolated-HOME oracle only exist here. Skip the in-process
-      # CHookPipeTests proof — this job already ran tools/c-hook-proof.sh.
+      # CHookPipeTests proof — this job already ran Scripts/c-hook-proof.sh.
       - name: Darwin Swift (XPC / CLI)
         run: |
-          tools/swift-6.4 test --filter RVServiceTests --skip injectedOneSecondIdleFiresWithoutKeepAlive
-          tools/swift-6.4 test --filter RVCLITests --skip CHookPipeTests.cHookProof
+          Scripts/swift-6.4 test --filter RVServiceTests --skip injectedOneSecondIdleFiresWithoutKeepAlive
+          Scripts/swift-6.4 test --filter RVCLITests --skip CHookPipeTests.cHookProof
 
       - name: Isolated-HOME oracle
-        run: tools/host-oracle.sh
+        run: Scripts/host-oracle.sh
 
       - name: Isolated-HOME host attach
         env:
           RV_C_HOOK_SKIP_RELEASE: "1"
           RV_RELEASE_STAGE: ${{ github.workspace }}/.build/release-stage
-        run: tools/host-attach-proof.sh
+        run: Scripts/host-attach-proof.sh

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# tools/release.sh — stage stripped C rv, Swift rv-cli, rvd, and pack bundles.
-# Uses clang -Os for the C hook and tools/swift-6.4 for SPM products.
+# Scripts/release.sh — stage stripped C rv, Swift rv-cli, rvd, and pack bundles.
+# Uses clang -Os for the C hook and Scripts/swift-6.4 for SPM products.
 # Does not run swift package clean or wipe .build.
 # Compatible with macOS /bin/bash 3.2.
 set -euo pipefail
@@ -8,13 +8,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-SWIFT_WRAP="$ROOT/tools/swift-6.4"
+SWIFT_WRAP="$ROOT/Scripts/swift-6.4"
 STAGE="${RV_RELEASE_STAGE:-$ROOT/.build/release-stage}"
 C_SRC="$ROOT/Sources/rv-c"
 
 usage() {
   cat <<'EOF'
-Usage: tools/release.sh
+Usage: Scripts/release.sh
 
   clang -Os the C hook → stage as rv (stripped)
   swift build -c release --product rv → stage as rv-cli (strip -x)

@@ -1,20 +1,14 @@
 #!/usr/bin/env bash
-# rv preflight — encodes the grok skill checklists as exit-code assertions.
-#
-# Sources:
-#   .grok/skills/swift-hexagonal-spm/SKILL.md       (module law, graph, value types)
-#   .grok/skills/swift-evaluate-parity/SKILL.md      (evaluate contract, corpus integrity)
-#   .grok/skills/swift-hook-xpc/SKILL.md             (hook wire, deny path, no bypass)
-#   .grok/skills/swift-thermo-nuclear-review/SKILL.md (maintainability bar)
+# rv preflight — structural checks for the package (value types, evaluate purity, corpus).
 #
 # Usage:
-#   tools/preflight.sh              # run all checks, exit 1 on any failure
-#   tools/preflight.sh --quiet      # only print failures
-#   tools/preflight.sh --check NAME # run one check (see --list)
-#   tools/preflight.sh --list       # list available checks
+#   Scripts/preflight.sh              # run all checks, exit 1 on any failure
+#   Scripts/preflight.sh --quiet      # only print failures
+#   Scripts/preflight.sh --check NAME # run one check (see --list)
+#   Scripts/preflight.sh --list       # list available checks
 #
 # Does NOT run swift test. Pair with: swift test --filter <Target>Tests
-# Does NOT require 6.4 on PATH — that's the caller's job (see docs/dev/SWIFT.md).
+# Does NOT require 6.4 on PATH — that's the caller's job (Scripts/swift-6.4).
 # Requires: bash, grep, find, sed, python3 (for corpus + Package.swift structural checks).
 
 set -euo pipefail
@@ -57,7 +51,7 @@ Available checks:
   no-bypass             No RV_BYPASS or env that skips evaluate
   no-ns-home             No NSHomeDirectory() in Sources or Tests
   no-os-log-cmdtext     No command text written to os_log (structural check)
-  name-hygiene          No leftover dcg/ryk tokens outside docs/factory/ (letter-bounded; rykanv brand/domain allowed)
+  name-hygiene          No leftover dcg/ryk tokens in product files (letter-bounded; rykanv brand/domain allowed)
   one-cli-surface       README/help must not list rv-cli as a command
   no-xctest             Tests use Swift Testing, not XCTest
   no-main-in-library     No main.swift or @main in library targets
@@ -103,8 +97,8 @@ check_empty() {
 check_value_types() {
   # Reference types (class, actor) outside the allowed edges.
   #   class  — only RVService (the XPC/NSObject edge).
-  #   actor  — only RVService, RVPolicy, and RVAnalytics (store modules; AGENTS allows
-  #            "actors for stores"). Domain/Engine/Packs/Presentation are value-only.
+  #   actor  — only RVService, RVPolicy, and RVAnalytics (store modules).
+  #            Domain/Engine/Packs/Presentation are value-only.
   # A leading attribute (@MainActor, @objc, @unchecked Sendable, …) or access
   # modifier (public/internal/…/final) must not hide a declaration, so we match
   # the keyword on a line that may start with any run of those tokens.
@@ -129,7 +123,7 @@ check_no_isdenied() {
 }
 
 check_no_force_unwrap() {
-  # try! and force-unwrap (!) on production paths (AGENTS: "No try! / !").
+  # try! and force-unwrap (!) on production paths.
   # The `!` form excludes != and !== so we catch optional! but not inequality.
   # Uses grep -E (ERE) because the pattern needs alternation + char class.
   local fail=0
@@ -149,7 +143,7 @@ check_no_force_unwrap() {
 }
 
 check_no_exported_import() {
-  # Existing @_exported in RVEngine/RVPacks is documented T1 debt (SKILL.md).
+  # Existing @_exported in RVEngine/RVPacks is documented T1 debt.
   # Flag as warning, not failure. New ones outside those two files WOULD fail.
   local matches
   matches=$(grep -rn '@_exported' "$SOURCES" --include='*.swift' || true)
@@ -219,8 +213,8 @@ check_no_os_log_cmdtext() {
 }
 
 check_name_hygiene() {
-  # PLAN #20: no dcg or ryk tokens outside docs/factory/ in product files.
-  # Product exception (Chris): rykanv / Rykan V / rykanv.com are brand/domain,
+  # No dcg or ryk tokens in product files.
+  # Product exception: rykanv / Rykan V / rykanv.com are brand/domain,
   # not leftover ryk. A line whose only hit is inside those forms is allowed.
   # Bare ryk (CLI/product name), .ryk policy paths, and dcg still FAIL.
   #
@@ -237,8 +231,7 @@ check_name_hygiene() {
   #           worth surfacing so an agent doesn't "clean up" what looks stray.
   #
   # Excludes: .build, .git, .worktrees (worktree copies are not product files),
-  # docs/factory (allowed), tools/preflight.sh (self — must contain the tokens),
-  # tools/README.md (documents the tokens), .gitignore (path reference).
+  # Scripts/preflight.sh (self — must contain the tokens), .gitignore.
   #
   # Uses POSIX grep (not rg) so there is no hidden ripgrep dependency.
   # python3 (already required above) strips the allowed brand/domain forms
@@ -251,8 +244,7 @@ check_name_hygiene() {
     --include='*.swift' --include='*.md' --include='*.json' --include='*.sh' --include='Package.swift' \
     2>/dev/null \
     | grep -v '/.build/' | grep -v '/.git/' | grep -v '/.worktrees/' \
-    | grep -v '/docs/factory/' \
-    | grep -v 'tools/preflight.sh' | grep -v 'tools/README.md' \
+    | grep -v 'Scripts/preflight.sh' \
     | grep -v '/.ryk/' | grep -v '/.claude-plugin/' | grep -v '/.agents/' \
     | grep -v '/.skynex/' \
     | grep -v '\.gitignore' || true)
@@ -307,7 +299,7 @@ for path in sorted(files):
 }
 
 check_one_cli_surface() {
-  # PLAN #25: only user command is rv. On-disk operator name may live in
+  # Only user command is rv. On-disk operator name may live in
   # install/C/doctor internals. README and help catalogs must not tell a
   # human to type rv-cli.
   local matches
@@ -405,7 +397,7 @@ for c in d.get('cases', []):
 
 check_corpus_landmines() {
   # near-miss.json must retain required allow landmine commands.
-  # These are the rows agents keep deleting to go green (SKILL landmines.md).
+  # These are the rows agents keep deleting to go green.
   local nfile="$CORPUS/near-miss.json"
   if [ ! -f "$nfile" ]; then
     printf "  %b✗ near-miss.json missing%b\n" "$RED" "$NC"
@@ -576,7 +568,7 @@ fi
 
 if [ "${1:-}" = "--check" ]; then
   if [ -z "${2:-}" ]; then
-    echo "Usage: tools/preflight.sh --check NAME"
+    echo "Usage: Scripts/preflight.sh --check NAME"
     echo "Run --list for available checks."
     exit 1
   fi
@@ -588,7 +580,7 @@ if [ "${1:-}" = "--quiet" ]; then
   QUIET=1
 elif [ -n "${1:-}" ]; then
   echo "Unknown flag: $1" >&2
-  echo "Usage: tools/preflight.sh [--quiet | --check NAME | --list]" >&2
+  echo "Usage: Scripts/preflight.sh [--quiet | --check NAME | --list]" >&2
   exit 1
 fi
 
