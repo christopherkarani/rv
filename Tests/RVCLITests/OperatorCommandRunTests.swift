@@ -172,11 +172,8 @@ struct OperatorCommandRunTests {
                 try Policy.Apply.parse([out.path, "--save"]).run()
             }
         }
-        let repoFile = workspace.appendingPathComponent("policy.toml")
-        if FileManager.default.fileExists(atPath: repoFile.path) {
-            try FileManager.default.removeItem(at: repoFile)
-        }
-        try FileManager.default.createDirectory(at: repoFile, withIntermediateDirectories: true)
+        let repoFile = TypedRuleStore.repoFileURL(workspace: workspace)
+        try replacePathWithDirectory(repoFile)
         try withCLIProcess(home: home, workspacePath: workspace.path) {
             #expect(throws: ExitCode(1)) {
                 try Policy.Apply.parse([out.path, "--save", "--repo"]).run()
@@ -261,7 +258,7 @@ struct OperatorCommandRunTests {
                 try await ScanSessions.parse([missing]).run()
             }
             await #expect(throws: ExitCode(1)) {
-                try await ScanSessions.parse(["--packs", "zzz.missing", home.rawValue]).run()
+                try await ScanSessions.parse(["--packs", "zzz.missing"]).run()
             }
         }
         let notADirectory = FileManager.default.temporaryDirectory
