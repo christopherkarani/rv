@@ -87,9 +87,6 @@ public struct PostHogSink: AnalyticsSink {
                 ],
             ],
         ]
-        guard JSONSerialization.isValidJSONObject(root) else {
-            throw AnalyticsTransportError.encodingFailed
-        }
         return try JSONSerialization.data(withJSONObject: root)
     }
 }
