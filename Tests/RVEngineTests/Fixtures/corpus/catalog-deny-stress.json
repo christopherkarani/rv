@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "source": "catalog_true_positive_stress",
+  "cases": [
+    {"id": "cat.sqlite.drop-table", "command": "DROP TABLE users", "expected": "deny", "rule_id": "database.sqlite:drop-table"},
+    {"id": "cat.sqlite.delete-without-where", "command": "DELETE FROM users", "expected": "deny", "rule_id": "database.sqlite:delete-without-where"},
+    {"id": "cat.sqlite.sqlite3-stdin", "command": "sqlite3 db.sqlite < wipe.sql", "expected": "deny", "rule_id": "database.sqlite:sqlite3-stdin"},
+    {"id": "cat.disk.mkfs", "command": "mkfs.ext4 /dev/sda", "expected": "deny", "rule_id": "system.disk:mkfs"},
+    {"id": "cat.disk.wipefs", "command": "wipefs /dev/sda", "expected": "deny", "rule_id": "system.disk:wipefs"},
+    {"id": "cat.git.reset-hard", "command": "git reset --hard", "expected": "deny", "rule_id": "core.git:reset-hard"},
+    {"id": "cat.fs.rm-rf-root", "command": "rm -rf /", "expected": "deny", "rule_id": "core.filesystem:rm-rf-root-home"}
+  ]
+}
