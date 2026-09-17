@@ -136,6 +136,82 @@ private let doctorRendererFixture = DoctorViewModel(
     #expect(joined.contains("extras off") == false)
 }
 
+@Test func doctorRenderer_serviceStatesAndWarning() {
+    var down = doctorRendererFixture
+    down.service.state = .down
+    down.service.serviceSemver = nil
+    down.service.warning = "peer closed"
+    let downText = DoctorRenderer().render(down, palette: colorOffPalette).joined(separator: "\n")
+    #expect(downText.contains("down"))
+    #expect(downText.contains("unavailable"))
+    #expect(downText.contains("peer closed"))
+
+    var skew = doctorRendererFixture
+    skew.service.state = .skew
+    skew.service.serviceSemver = "0.9.0"
+    skew.service.warning = ""
+    let skewText = DoctorRenderer().render(skew, palette: colorOffPalette).joined(separator: "\n")
+    #expect(skewText.contains("0.9.0 · rv.ipc.v1"))
+    #expect(skewText.contains("peer closed") == false)
+}
+
+@Test func doctorRenderer_missingDayOneAndSingleExtra() {
+    var missing = doctorRendererFixture
+    missing.packs = DoctorPacksView(enabled: [.coreGit], registry: .ready)
+    #expect(
+        DoctorRenderer().render(missing, palette: colorOffPalette)
+            .joined(separator: "\n")
+            .contains("missing core.filesystem and system.disk")
+    )
+
+    var extra = doctorRendererFixture
+    extra.packs = DoctorPacksView(
+        enabled: dayOnePackIDs + [PackID(rawValue: "core.network")],
+        registry: .ready
+    )
+    #expect(
+        DoctorRenderer().render(extra, palette: colorOffPalette)
+            .joined(separator: "\n")
+            .contains("+1 extra")
+    )
+}
+
+@Test func doctorRenderer_nextActionsCoverHostSets() {
+    var healthy = doctorRendererFixture
+    healthy.hosts = HookHost.setupSlotOrder.map { DoctorHostView(host: $0, state: .wired) }
+    let healthyLines = DoctorRenderer().render(healthy, palette: colorOffPalette)
+    #expect(healthyLines.contains { $0.contains("Next") } == false)
+
+    var one = doctorRendererFixture
+    one.hosts = [DoctorHostView(host: .pi, state: .missing)]
+    #expect(
+        DoctorRenderer().render(one, palette: colorOffPalette)
+            .joined(separator: "\n")
+            .contains("rv setup    Wire Pi")
+    )
+
+    var mixed = doctorRendererFixture
+    mixed.hosts = [
+        DoctorHostView(host: .pi, state: .missing),
+        DoctorHostView(host: .claude, state: .occupied),
+        DoctorHostView(host: .grok, state: .broken),
+    ]
+    let mixedText = DoctorRenderer().render(mixed, palette: colorOffPalette).joined(separator: "\n")
+    #expect(mixedText.contains("rv setup --force    Wire Pi and Grok; replace occupied Claude"))
+    #expect(mixedText.contains("broken"))
+}
+
+@Test func doctorRenderer_colorOn_usesAllowFallbackAndConfigInk() {
+    var fixture = doctorRendererFixture
+    fixture.config = .unreadable
+    fixture.blocksEnabled = false
+    let palette = Palette(for: ColorCapability(colorsEnabled: true))
+    let lines = DoctorRenderer().render(fixture, palette: palette)
+    #expect(lines.contains { $0.contains(palette.allow) })
+    #expect(lines.contains { $0.contains(palette.deny) && $0.contains("unreadable") })
+    #expect(lines.contains { $0.contains("block ledger off") })
+}
+
 @Test func doctorRenderer_colorOffHasNoANSIOrBoxDrawing() {
     let output = DoctorRenderer()
         .render(doctorRendererFixture, palette: colorOffPalette)

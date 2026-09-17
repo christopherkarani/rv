@@ -71,3 +71,38 @@ private func grokWiredFrame() -> SetupCeremonyFrame {
     #expect(body.filter { $0 == "─" }.count == 12)
     #expect(body.contains("█") == false)
 }
+
+@Test func setupRenderer_clampsProgressAndPaintsStatusSpinner() {
+    let palette = Palette(for: ColorCapability(colorsEnabled: true))
+    let over = SetupRenderer().render(
+        SetupCeremonyFrame(title: "", progress: 1.5, statusLine: setupCeremonyDownloadComplete),
+        palette: palette
+    )
+    let full = over.first { $0.contains("━") }!
+    #expect(String(full.dropFirst(SetupRenderer.leadingPad.count)).filter { $0 == "━" }.count == SetupRenderer.progressWidth)
+    #expect(over.contains { $0.contains(palette.allow) && $0.contains("✓") })
+
+    let under = SetupRenderer().render(
+        SetupCeremonyFrame(progress: -1, spinnerIndex: 8, activity: setupCeremonySearchActivity),
+        palette: colorOffPalette
+    )
+    let empty = under.first { $0.contains("─") }!
+    #expect(String(empty.dropFirst(SetupRenderer.leadingPad.count)).filter { $0 == "─" }.count == SetupRenderer.progressWidth)
+    #expect(under.contains { $0.contains("⠹") && $0.contains(setupCeremonySearchActivity) })
+
+    let bare = SetupRenderer().render(
+        SetupCeremonyFrame(
+            statusLine: "",
+            slots: [SetupSlotView(host: .grok, kind: .pending, clause: "")],
+            closerLines: []
+        ),
+        palette: colorOffPalette
+    )
+    #expect(bare.contains(SetupRenderer.leadingPad + "◦  Grok"))
+
+    let check = SetupRenderer().render(
+        SetupCeremonyFrame(statusLine: setupCeremonyDownloadComplete),
+        palette: colorOffPalette
+    )
+    #expect(check.contains(SetupRenderer.leadingPad + setupCeremonyDownloadComplete))
+}

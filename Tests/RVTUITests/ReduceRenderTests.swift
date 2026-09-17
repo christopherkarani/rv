@@ -374,6 +374,124 @@ private func isTreeSpacer(_ line: String) -> Bool {
     #expect(stripCSI(result) == "Result: BLOCKED")
 }
 
+@Test func explainRenderer_allowAndCustomSuggestions() {
+    var vm = explainViewModel(from: EvaluationResult(outcome: .plain), command: ShellCommand(rawValue: "git status"))
+    vm.semantic = ExplainSemanticView(
+        action: "unknown",
+        scope: "wrapper",
+        effect: "none",
+        remote: "origin",
+        ref: "HEAD",
+        pathspec: "file.swift",
+        path: "/tmp/file",
+        kind: "source code",
+        category: "ssh",
+        catalogRule: "core.secrets/id",
+        wrappers: []
+    )
+    vm.suggestions = [
+        ExplainSuggestion(kind: .workflowFix, text: "Ask the operator"),
+        ExplainSuggestion(kind: .documentation, text: "See the handbook", url: "https://example.com/docs"),
+    ]
+    let lines = ExplainRenderer().render(vm, palette: colorOffPalette)
+    let text = lines.joined(separator: "\n")
+    #expect(text.contains("Decision: ALLOW"))
+    #expect(text.contains("Action") && text.contains("unknown"))
+    #expect(text.contains("Effect") && text.contains("none"))
+    #expect(text.contains("Remote") && text.contains("origin"))
+    #expect(text.contains("Ref") && text.contains("HEAD"))
+    #expect(text.contains("Pathspec"))
+    #expect(text.contains("Path") && text.contains("/tmp/file"))
+    #expect(text.contains("Kind") && text.contains("source code"))
+    #expect(text.contains("Category") && text.contains("ssh"))
+    #expect(text.contains("Catalog") && text.contains("core.secrets/id"))
+    #expect(text.contains("Wrappers") == false)
+    #expect(text.contains("Workflow fix: Ask the operator"))
+    #expect(text.contains("See: https://example.com/docs"))
+}
+
+@Test func explainRenderer_emptyExplanationIsOmitted() {
+    var vm = explainViewModel(from: EvaluationResult(outcome: .plain), command: ShellCommand(rawValue: "true"))
+    vm.explanation = "\\ - "
+    let text = ExplainRenderer().render(vm, palette: colorOffPalette).joined(separator: "\n")
+    #expect(text.contains("Explanation") == false)
+}
+
+@Test func testRenderer_allowIncompleteAndEmptyExplanation() {
+    let on = Palette(for: ColorCapability(colorsEnabled: true))
+    let allow = TestRenderer().render(
+        testViewModel(from: EvaluationResult(outcome: .plain), command: ShellCommand(rawValue: "true")),
+        palette: on
+    )
+    #expect(allow.contains { stripCSI($0) == "Result: ALLOWED" && $0.contains(on.allow) })
+
+    let incomplete = TestRenderer().render(
+        testViewModel(
+            from: EvaluationResult(outcome: .indeterminate(.commandTooLarge)),
+            command: ShellCommand(rawValue: "true")
+        ),
+        palette: colorOffPalette
+    )
+    #expect(incomplete.contains("Result: INCOMPLETE"))
+
+    var emptyEssay = testViewModel(
+        from: EvaluationResult(outcome: .plain),
+        command: ShellCommand(rawValue: "true")
+    )
+    emptyEssay.explanation = ""
+    let empty = TestRenderer().render(emptyEssay, palette: colorOffPalette)
+    #expect(empty.contains("Explanation:"))
+}
+
+@Test func testRenderer_windowsLongCommandWithoutSpanAndOverflowLabel() {
+    let long = String(repeating: "x", count: 90)
+    let noSpan = TestViewModel(
+        command: ShellCommand(rawValue: long),
+        resultWord: "ALLOWED",
+        resultTone: .allow
+    )
+    let truncated = TestRenderer().render(noSpan, palette: colorOffPalette)
+    #expect(truncated[0].hasPrefix("Command: "))
+    #expect(truncated[0].hasSuffix("..."))
+    #expect(truncated[0].count <= 80)
+
+    let overflow = TestViewModel(
+        command: ShellCommand(rawValue: "rm -rf ./src"),
+        span: MatchSpan(start: 0, end: 6),
+        matchedLabel: String(repeating: "core.filesystem:rm-rf-general/", count: 6),
+        packDisplay: "core.filesystem",
+        patternName: "rm-rf-general",
+        reason: "rm -rf is destructive",
+        resultWord: "BLOCKED",
+        resultTone: .deny
+    )
+    let lines = TestRenderer().render(overflow, palette: colorOffPalette)
+    #expect(lines.contains { $0.contains("Matched:") })
+    #expect(lines.allSatisfy { $0.count <= 80 })
+}
+
+@Test func testRenderer_previewEmptyRestAndPastEndSpan() {
+    let preview = TestViewModel(
+        command: ShellCommand(rawValue: "rm -rf"),
+        explanation: "intro\n\nPreview leftovers: " + String(repeating: "keep ", count: 20),
+        resultWord: "BLOCKED",
+        resultTone: .deny
+    )
+    let previewLines = TestRenderer().render(preview, palette: colorOffPalette)
+    #expect(previewLines.contains { $0.contains("Preview leftovers:") })
+    #expect(previewLines.contains { $0.hasPrefix("  keep") || $0.contains("keep keep") })
+
+    let pastEnd = TestViewModel(
+        command: ShellCommand(rawValue: "rm"),
+        span: MatchSpan(start: 8, end: 12),
+        matchedLabel: "core.filesystem:rm-rf-general",
+        resultWord: "BLOCKED",
+        resultTone: .deny
+    )
+    let past = TestRenderer().render(pastEnd, palette: colorOffPalette)
+    #expect(past.contains { $0.contains("^") } == false)
+}
+
 @Test func testRenderer_alignsCaretsUnderMatch() {
     let rule = RuleID(pack: .coreFilesystem, pattern: "rm-rf-general")
     let vm = testViewModel(

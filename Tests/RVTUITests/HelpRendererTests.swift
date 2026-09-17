@@ -79,3 +79,31 @@ import RVTheme
     #expect(next?.contains(palette.fact) == true)
     #expect(next?.contains(palette.allow) == false)
 }
+
+@Test func helpRenderer_skipsEmptyChromeAndBareNames() {
+    let empty = HelpRenderer().render(
+        HelpViewModel(title: "", blurb: "", sections: [HelpSection(heading: "Flags", rows: [])]),
+        palette: colorOffPalette
+    )
+    #expect(empty.isEmpty)
+
+    let lines = HelpRenderer().render(
+        HelpViewModel(
+            title: "rv",
+            blurb: "",
+            sections: [
+                HelpSection(heading: "Flags", rows: [
+                    HelpRow(name: "--plain"),
+                    HelpRow(name: "--json", description: "Robot"),
+                ]),
+            ]
+        ),
+        palette: colorOffPalette
+    )
+    #expect(lines.first == "rv")
+    #expect(lines.contains("Flags"))
+    #expect(lines.contains("  --plain"))
+    #expect(lines.contains("  --json   Robot"))
+    #expect(lines.contains("Examples") == false)
+    #expect(lines.contains("Next") == false)
+}
