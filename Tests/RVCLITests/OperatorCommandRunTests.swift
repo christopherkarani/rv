@@ -428,7 +428,11 @@ struct OperatorCommandRunTests {
         )
         #expect(env.home == home)
         #expect(env.touchSystemd == false)
+#if os(Linux)
         #expect(env.supervisor == .systemdUser)
+#else
+        #expect(env.supervisor == .launchd)
+#endif
         #expect(DoctorEnvironment.live(environment: [:]) == nil)
         let doctor = try #require(DoctorEnvironment.live(environment: ["HOME": home.rawValue]))
         #expect(doctor.home == home)
