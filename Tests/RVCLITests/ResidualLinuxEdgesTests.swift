@@ -811,6 +811,157 @@ struct ResidualLinuxEdgesTests {
         }
     }
 
+    @Test func leftoverLinuxEdges_healthMergeAndWrites() throws {
+        let snapshot = DoctorSnapshotReply(
+            serviceSemver: "1.0.0",
+            state: .running,
+            idleExitSeconds: 1,
+            packsEnabled: [.coreGit],
+            checks: [DoctorCheck(id: .packs, status: .ok, message: "ok")]
+        )
+        let reachable = ServiceHealth.inspect(
+            .xpc(snapshot: snapshot, localCorePacksReady: true),
+            launchAgentInstalled: true,
+            launchAgentLoaded: true
+        )
+        #expect(reachable.launchAgent == .loaded)
+
+        let home = try isolatedHome()
+        _ = SetupEnvironment(
+            home: home,
+            pathEntries: [],
+            rvPath: "/tmp/rv",
+            rvdPath: "/tmp/rvd",
+            fileManager: .default,
+            launchctl: RecordingLaunchctl(),
+            systemctl: SilentSystemctl(),
+            touchLaunchd: false,
+            touchSystemd: false,
+            supervisor: .systemdUser,
+            installAnalytics: SilentInstallAnalytics()
+        )
+
+        let unknownPlugin = try OpenCodeConfigMerge.merge(
+            existingData: Data(#"{"plugin":[1]}"#.utf8),
+            pluginPath: "/tmp/rv-ask"
+        )
+        #expect(unknownPlugin.wrote)
+
+        try withTempHome { homeURL, layout, launchctl in
+            try FileManager.default.createDirectory(
+                atPath: layout.openCodeDirectory,
+                withIntermediateDirectories: true
+            )
+            try "[]".write(toFile: layout.openCodeConfig, atomically: true, encoding: .utf8)
+            let outcome = SetupRun.setup(
+                env(home: homeURL, launchctl: launchctl, touchLaunchd: false)
+            )
+            #expect(outcome.exitCode == 0)
+
+            try FileManager.default.createDirectory(
+                atPath: layout.codexDirectory,
+                withIntermediateDirectories: true
+            )
+            try FileManager.default.createDirectory(
+                atPath: layout.cursorDirectory,
+                withIntermediateDirectories: true
+            )
+            try FileManager.default.createDirectory(
+                atPath: layout.claudeDirectory,
+                withIntermediateDirectories: true
+            )
+            try "[]".write(toFile: layout.codexHooksJSON, atomically: true, encoding: .utf8)
+            try "[]".write(toFile: layout.cursorHooksJSON, atomically: true, encoding: .utf8)
+            let files = FileOps(fileManager: .default)
+            let setupEnv = env(home: homeURL, launchctl: launchctl, touchLaunchd: false)
+            #expect(throws: SetupError.hostHookWriteFailed(.codex)) {
+                _ = try SetupRun.writeHost(
+                    .codex,
+                    existingData: nil,
+                    env: setupEnv,
+                    layout: layout,
+                    files: files
+                )
+            }
+            #expect(throws: SetupError.hostHookWriteFailed(.cursor)) {
+                _ = try SetupRun.writeHost(
+                    .cursor,
+                    existingData: nil,
+                    env: setupEnv,
+                    layout: layout,
+                    files: files
+                )
+            }
+
+            #expect(throws: SetupError.hostHookWriteFailed(.claude)) {
+                _ = try SetupRun.writeClaudeSettings(
+                    path: layout.claudeSettings,
+                    rvPath: setupEnv.rvPath,
+                    existingData: Data("[]".utf8),
+                    force: true,
+                    files: files
+                )
+            }
+
+            #expect(
+                try SetupRun.writeClaudeSettings(
+                    path: layout.claudeSettings,
+                    rvPath: setupEnv.rvPath,
+                    existingData: nil,
+                    force: true,
+                    files: files
+                )
+            )
+            #expect(
+                try SetupRun.writeClaudeSettings(
+                    path: layout.claudeSettings,
+                    rvPath: setupEnv.rvPath,
+                    existingData: files.readData(layout.claudeSettings),
+                    force: true,
+                    files: files
+                ) == false
+            )
+
+            try FileManager.default.removeItem(atPath: layout.claudeSettings)
+            try FileManager.default.createDirectory(
+                atPath: layout.claudeSettings,
+                withIntermediateDirectories: true
+            )
+            #expect(throws: SetupError.hostHookWriteFailed(.claude)) {
+                _ = try SetupRun.writeClaudeSettings(
+                    path: layout.claudeSettings,
+                    rvPath: setupEnv.rvPath,
+                    existingData: nil,
+                    force: true,
+                    files: files
+                )
+            }
+        }
+    }
+
+    @Test func uninstall_cursorAndCodexFingerprintOnlyRemovesFile() throws {
+        try withTempHome { home, layout, launchctl in
+            try FileManager.default.createDirectory(
+                atPath: layout.cursorDirectory,
+                withIntermediateDirectories: true
+            )
+            try FileManager.default.createDirectory(
+                atPath: layout.codexDirectory,
+                withIntermediateDirectories: true
+            )
+            let setupEnv = env(home: home, launchctl: launchctl, touchLaunchd: false)
+            #expect(SetupRun.setup(setupEnv).exitCode == 0)
+            try """
+            {"hooks":{"beforeShellExecution":[{"command":"python3 \(layout.cursorHook)"}]}}
+            """.write(toFile: layout.cursorHooksJSON, atomically: true, encoding: .utf8)
+            try """
+            {"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"python3 \(layout.codexHook)","timeout":5}]}]}}
+            """.write(toFile: layout.codexHooksJSON, atomically: true, encoding: .utf8)
+            let outcome = SetupRun.uninstall(setupEnv)
+            #expect(outcome.exitCode == 0)
+        }
+    }
+
     @Test func doctorRun_prettyAndRobotOnIsolatedHome() throws {
         let home = try isolatedHome()
         let environment = DoctorEnvironment(
