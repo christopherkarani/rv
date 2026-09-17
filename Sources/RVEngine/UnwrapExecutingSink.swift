@@ -577,7 +577,7 @@ private func extractProcessSub(_ text: String) -> String? {
     return nil
 }
 
-private func extractHeredoc(_ text: String) -> (header: String, body: String)? {
+func extractHeredoc(_ text: String) -> (header: String, body: String)? {
     var quote: Character?
     var parenDepth = 0
     var inBacktick = false

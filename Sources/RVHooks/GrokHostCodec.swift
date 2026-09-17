@@ -68,6 +68,14 @@ private struct GrokToolInput: Decodable {
     var path: String?
     var targetFile: String?
     var target: String?
+
+    enum CodingKeys: String, CodingKey {
+        case command
+        case filePath = "file_path"
+        case path
+        case targetFile = "target_file"
+        case target
+    }
 }
 
 private func firstNonEmpty(_ values: String?...) -> String? {

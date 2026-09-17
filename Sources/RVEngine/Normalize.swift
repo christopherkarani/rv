@@ -7,7 +7,7 @@ public enum Normalize {
     public static func matchingView(of command: String) -> MatchingView {
         let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return MatchingView("") }
-        var current = applyRoleAwareQuotes(trimmed)
+        var current = applyRoleAwareQuotes(maskNonExecutingHeredocBodies(trimmed))
         var iteration = 0
         while iteration < maxWrapperIterations {
             iteration += 1
@@ -163,6 +163,8 @@ func applyRoleAwareQuotes(_ text: String) -> String {
     var pendingGitGlobalArg = false
     var pendingDataFlag = false
     var gitGrepPatternPending = false
+    var gitConfigValuePending = false
+    var pendingGitConfigArg = false
     var wrapperSeek = WrapperSeek.none
     var pendingInterpreterPayload = false
     let unquotedDataMaskSafe = tokens.contains { tokenHasShellMeta($0.decoded) } == false
@@ -199,6 +201,8 @@ func applyRoleAwareQuotes(_ text: String) -> String {
             pendingGitGlobalArg = false
             pendingDataFlag = false
             gitGrepPatternPending = false
+            gitConfigValuePending = false
+            pendingGitConfigArg = false
             wrapperSeek = .none
             continue
         }
@@ -229,6 +233,7 @@ func applyRoleAwareQuotes(_ text: String) -> String {
             if decoded.hasPrefix("-") == false {
                 gitSubcommand = decoded
                 gitGrepPatternPending = decoded == "grep"
+                gitConfigValuePending = false
                 continue
             }
         }
@@ -266,6 +271,10 @@ func applyRoleAwareQuotes(_ text: String) -> String {
                 gitGrepPatternPending = false
                 continue
             }
+            if gitSubcommand == "config", isGitConfigValueFlag(decoded) {
+                pendingGitConfigArg = true
+                continue
+            }
             if isDataConsumingFlag(
                 command: commandBase,
                 gitSubcommand: gitSubcommand,
@@ -276,6 +285,29 @@ func applyRoleAwareQuotes(_ text: String) -> String {
                     gitGrepPatternPending = false
                 }
             }
+            continue
+        }
+
+        if pendingGitConfigArg {
+            pendingGitConfigArg = false
+            continue
+        }
+
+        if gitSubcommand == "config" {
+            if containsInlineCode(token) == false, let masked = maskGitConfigAssignment(decoded) {
+                tokens[index].decoded = masked
+                gitConfigValuePending = false
+                pendingDataFlag = false
+                continue
+            }
+            if gitConfigValuePending, containsInlineCode(token) == false {
+                tokens[index].decoded = String(repeating: " ", count: max(decoded.count, 1))
+                gitConfigValuePending = false
+                pendingDataFlag = false
+                continue
+            }
+            gitConfigValuePending = true
+            pendingDataFlag = false
             continue
         }
 
@@ -497,7 +529,7 @@ private func decodeAnsiCEscapes(_ inner: String) -> String {
 private func isAllArgsData(_ command: String?) -> Bool {
     guard let command else { return false }
     switch command {
-    case "echo", "printf", "man", "tldr", "whatis", "apropos":
+    case "echo", "printf", "man", "tldr", "whatis", "apropos", "awk", "sed", "jq":
         return true
     default:
         return false
@@ -506,7 +538,12 @@ private func isAllArgsData(_ command: String?) -> Bool {
 
 private func isSearchCommand(_ command: String?) -> Bool {
     guard let command else { return false }
-    return command == "rg" || command == "grep"
+    switch command {
+    case "rg", "grep", "fgrep", "egrep", "ag", "ack", "ripgrep":
+        return true
+    default:
+        return false
+    }
 }
 
 private func isGitGlobalValueFlag(_ flag: String) -> Bool {
@@ -542,9 +579,14 @@ private func isDataConsumingFlag(command: String?, gitSubcommand: String?, flag:
         if isGitSearchSubcommand(gitSubcommand) {
             if flag == "-S" || flag == "-G" { return true }
         }
+        if isGitPrettyFormatFlag(flag) { return true }
+        if flag == "--trailer" || flag.hasPrefix("--trailer=") { return true }
         return flag.hasPrefix("-") && !flag.hasPrefix("--") && flag.contains("m") && flag != "--"
-    case "rg", "grep":
+    case "rg", "grep", "fgrep", "egrep", "ag", "ack", "ripgrep":
         return flag == "-e" || flag == "--regexp" || flag.hasPrefix("--regexp=")
+    case "gh":
+        return flag == "--title" || flag.hasPrefix("--title=")
+            || flag == "--body" || flag.hasPrefix("--body=")
     case "find":
         return flag == "-name" || flag == "-iname"
             || flag == "-path" || flag == "-ipath"
@@ -575,6 +617,18 @@ private func maskAttachedDataValue(
         let valueCount = decoded.dropFirst("--grep=".count).count
         return "--grep=" + String(repeating: " ", count: max(valueCount, 1))
     }
+    if command == "git", decoded.hasPrefix("--pretty=") {
+        let valueCount = decoded.dropFirst("--pretty=".count).count
+        return "--pretty=" + String(repeating: " ", count: max(valueCount, 1))
+    }
+    if command == "git", decoded.hasPrefix("--format=") {
+        let valueCount = decoded.dropFirst("--format=".count).count
+        return "--format=" + String(repeating: " ", count: max(valueCount, 1))
+    }
+    if command == "git", decoded.hasPrefix("--trailer=") {
+        let valueCount = decoded.dropFirst("--trailer=".count).count
+        return "--trailer=" + String(repeating: " ", count: max(valueCount, 1))
+    }
     if command == "git", isGitSearchSubcommand(gitSubcommand) {
         if decoded.hasPrefix("-S"), decoded.count > 2, decoded.hasPrefix("--") == false {
             return "-S" + String(repeating: " ", count: max(decoded.count - 2, 1))
@@ -585,6 +639,16 @@ private func maskAttachedDataValue(
     }
     if command == "git", decoded.hasPrefix("-m"), decoded.count > 2, !decoded.hasPrefix("--") {
         return "-m" + String(repeating: " ", count: max(decoded.count - 2, 1))
+    }
+    if command == "gh" {
+        if decoded.hasPrefix("--title=") {
+            let valueCount = decoded.dropFirst("--title=".count).count
+            return "--title=" + String(repeating: " ", count: max(valueCount, 1))
+        }
+        if decoded.hasPrefix("--body=") {
+            let valueCount = decoded.dropFirst("--body=".count).count
+            return "--body=" + String(repeating: " ", count: max(valueCount, 1))
+        }
     }
     return nil
 }
@@ -605,9 +669,34 @@ private func shouldMaskQuotedData(
         || (gitSubcommand == "grep" && gitGrepPatternPending)
 }
 
+private func isGitPrettyFormatFlag(_ flag: String) -> Bool {
+    flag == "--pretty" || flag.hasPrefix("--pretty=")
+        || flag == "--format" || flag.hasPrefix("--format=")
+}
+
+private func isGitConfigValueFlag(_ flag: String) -> Bool {
+    flag == "--file" || flag.hasPrefix("--file=")
+        || flag == "-f"
+        || flag == "--blob" || flag.hasPrefix("--blob=")
+        || flag == "--default" || flag.hasPrefix("--default=")
+        || flag == "--type" || flag.hasPrefix("--type=")
+}
+
+private func maskGitConfigAssignment(_ decoded: String) -> String? {
+    guard let equals = decoded.firstIndex(of: "=") else { return nil }
+    let prefix = String(decoded[...equals])
+    let valueCount = decoded.distance(from: decoded.index(after: equals), to: decoded.endIndex)
+    return prefix + String(repeating: " ", count: max(valueCount, 1))
+}
+
 func isInterpreterExecutable(_ head: String) -> Bool {
     let folded = head.lowercased()
-    return isPythonExecutable(folded) || isNodeExecutable(folded) || isRubyExecutable(folded)
+    return isPythonExecutable(folded)
+        || isNodeExecutable(folded)
+        || isRubyExecutable(folded)
+        || isPerlExecutable(folded)
+        || isPHPExecutable(folded)
+        || isLuaExecutable(folded)
 }
 
 func isPythonExecutable(_ head: String) -> Bool {
@@ -628,6 +717,24 @@ func isRubyExecutable(_ head: String) -> Bool {
     return head.dropFirst("ruby".count).allSatisfy { $0.isNumber || $0 == "." }
 }
 
+func isPerlExecutable(_ head: String) -> Bool {
+    if head == "perl" { return true }
+    guard head.hasPrefix("perl") else { return false }
+    return head.dropFirst("perl".count).allSatisfy { $0.isNumber || $0 == "." }
+}
+
+func isPHPExecutable(_ head: String) -> Bool {
+    if head == "php" { return true }
+    guard head.hasPrefix("php") else { return false }
+    return head.dropFirst("php".count).allSatisfy { $0.isNumber || $0 == "." }
+}
+
+func isLuaExecutable(_ head: String) -> Bool {
+    if head == "lua" || head == "luajit" { return true }
+    guard head.hasPrefix("lua") else { return false }
+    return head.dropFirst("lua".count).allSatisfy { $0.isNumber || $0 == "." }
+}
+
 private func isInterpreterProgramFlag(command: String?, flag: String) -> Bool {
     guard let command else { return false }
     let folded = command.lowercased()
@@ -637,8 +744,15 @@ private func isInterpreterProgramFlag(command: String?, flag: String) -> Bool {
     if isNodeExecutable(folded) {
         return flag == "-e" || flag == "--eval" || flag == "-p" || flag == "--print"
     }
-    if isRubyExecutable(folded) {
+    if isRubyExecutable(folded) || isLuaExecutable(folded) {
         return flag == "-e"
+    }
+    if isPerlExecutable(folded) {
+        if flag == "-e" || flag == "-E" { return true }
+        return flag.hasPrefix("-") && flag.hasPrefix("--") == false && flag.contains("e")
+    }
+    if isPHPExecutable(folded) {
+        return flag == "-r"
     }
     return false
 }
@@ -646,10 +760,36 @@ private func isInterpreterProgramFlag(command: String?, flag: String) -> Bool {
 private func maskAttachedInterpreterProgram(command: String?, decoded: String) -> String? {
     guard let command else { return nil }
     let folded = command.lowercased()
-    if isRubyExecutable(folded), decoded.hasPrefix("-e"), decoded.count > 2, decoded.hasPrefix("--") == false {
+    if isRubyExecutable(folded) || isLuaExecutable(folded) || isPerlExecutable(folded),
+       decoded.hasPrefix("-e"), decoded.count > 2, decoded.hasPrefix("--") == false
+    {
         return "-e "
     }
+    if isPerlExecutable(folded), decoded.hasPrefix("-E"), decoded.count > 2 {
+        return "-E "
+    }
+    if isPHPExecutable(folded), decoded.hasPrefix("-r"), decoded.count > 2, decoded.hasPrefix("--") == false {
+        return "-r "
+    }
     return nil
+}
+
+/// File-write / print heredocs are data. Executing sinks keep the body so
+/// `cat <<EOF | bash` stays a pin true-positive.
+func maskNonExecutingHeredocBodies(_ text: String) -> String {
+    guard let heredoc = extractHeredoc(text), heredoc.body.isEmpty == false else {
+        return text
+    }
+    if peelExecutingSink(text, workingDirectory: nil) != nil {
+        return text
+    }
+    guard let range = text.range(of: heredoc.body) else {
+        return text
+    }
+    return text.replacingCharacters(
+        in: range,
+        with: String(repeating: " ", count: heredoc.body.count)
+    )
 }
 
 func firstWord(_ text: String) -> (word: String, rest: String) {
