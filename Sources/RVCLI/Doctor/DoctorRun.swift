@@ -4,6 +4,7 @@ import RVHistory
 import RVIPC
 import RVPolicy
 import RVPresentation
+import RVService
 import RVTUI
 
 struct DoctorEnvironment {
@@ -78,7 +79,10 @@ enum DoctorRun {
         )
         return DoctorViewModel(
             service: health.service,
-            packs: health.packs,
+            packs: packsView(
+                homeIDs: Result { try PacksFacade.effectiveIDs(home: environment.home) },
+                packCheckReady: health.packCheckReady
+            ),
             hosts: HookHost.setupSlotOrder.map { host in
                 let installation = installations.installation(for: host)
                 return DoctorHostView(
@@ -99,6 +103,23 @@ enum DoctorRun {
                 inConfigDirectory: URL(fileURLWithPath: paths.configDirectory, isDirectory: true)
             )
         )
+    }
+
+    /// HOME config is the pack enablement source. A failed read is a broken
+    /// registry — never invent IDs from a reachable rvd snapshot.
+    static func packsView(
+        homeIDs: Result<[PackID], any Error>,
+        packCheckReady: Bool
+    ) -> DoctorPacksView {
+        switch homeIDs {
+        case .success(let ids):
+            DoctorPacksView(
+                enabled: ids,
+                registry: packCheckReady ? .ready : .broken
+            )
+        case .failure:
+            DoctorPacksView(enabled: [], registry: .broken)
+        }
     }
 
     /// Doctor consumes inspect state. Miss-path `.wired` already required sibling `rv-cli`.
@@ -139,13 +160,6 @@ extension ServiceHealth {
         case .requestFailed(let failure, let local):
             localService(state: .down, local: local, warning: failure.statusMessage)
         }
-    }
-
-    var packs: DoctorPacksView {
-        DoctorPacksView(
-            enabled: enabledPacks,
-            registry: packCheckReady ? .ready : .broken
-        )
     }
 
     private func serviceView(

@@ -118,7 +118,7 @@ public struct ClaudeHostCodec: HostAskCodec {
     ) -> HookWire {
         switch result.decision {
         case .allow:
-            return encodeAllow()
+            return encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
         case .indeterminate:
             return encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
         case .deny(let deny):

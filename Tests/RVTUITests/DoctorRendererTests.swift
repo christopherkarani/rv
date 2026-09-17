@@ -114,6 +114,41 @@ private let doctorRendererFixture = DoctorViewModel(
 
     #expect(joined.contains("broken"))
     #expect(joined.contains("missing ") == false)
+    #expect(joined.contains("disabled ") == false)
+}
+
+@Test func doctorRenderer_disabledDayOneAsksPacksEnableNotSetup() {
+    var fixture = doctorRendererFixture
+    fixture.packs = DoctorPacksView(enabled: [.coreFilesystem, .systemDisk], registry: .ready)
+    fixture.hosts = HookHost.setupSlotOrder.map {
+        DoctorHostView(host: $0, state: .wired)
+    }
+
+    let lines = DoctorRenderer().render(fixture, palette: colorOffPalette)
+    let joined = lines.joined(separator: "\n")
+
+    #expect(joined.contains("disabled core.git"))
+    #expect(joined.contains("missing ") == false)
+    #expect(joined.contains("→  rv packs enable core.git"))
+    #expect(joined.contains("rv setup") == false)
+}
+
+@Test func doctorRenderer_disabledDayOneListsPacksEnableBeforeOccupiedSetup() throws {
+    var fixture = doctorRendererFixture
+    fixture.packs = DoctorPacksView(enabled: [.coreFilesystem, .systemDisk], registry: .ready)
+    fixture.hosts = [
+        DoctorHostView(host: .grok, state: .wired),
+        DoctorHostView(host: .pi, state: .occupied),
+        DoctorHostView(host: .opencode, state: .wired),
+        DoctorHostView(host: .claude, state: .wired),
+    ]
+
+    let lines = DoctorRenderer().render(fixture, palette: colorOffPalette)
+    let joined = lines.joined(separator: "\n")
+    let enable = try #require(joined.range(of: "→  rv packs enable core.git"))
+    let force = try #require(joined.range(of: "→  rv setup --force    Replace occupied Pi"))
+
+    #expect(enable.lowerBound < force.lowerBound)
 }
 
 @Test func doctorRenderer_extrasAreCountedNotListed() {

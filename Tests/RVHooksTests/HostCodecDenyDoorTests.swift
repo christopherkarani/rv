@@ -130,6 +130,18 @@ import RVDomain
     #expect(live == incomplete)
 }
 
+@Test func encodeRichDeny_claudeAllowIsIncompleteDeny() {
+    let codec = ClaudeHostCodec()
+    let allow = codec.encodeRichDeny(
+        from: EvaluationResult(outcome: .plain),
+        command: ShellCommand(rawValue: "git status"),
+        unlockCode: nil
+    )
+    let incomplete = codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
+    #expect(allow == incomplete)
+    #expect(allow != codec.encodeAllow())
+}
+
 @Test func encodeFileDeny_claudeMatchedDenyIsRichJSON() {
     let wire = ClaudeHostCodec().encodeFileDeny(from: secretsEnvFileDeny())
     #expect(wire.exitCode == 0)

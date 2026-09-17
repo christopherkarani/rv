@@ -458,13 +458,7 @@ public actor ServiceRuntime {
     }
 
     private func listPacks() -> ListPacksReply {
-        if let refreshed = Self.makeCatalog(home: configHome) {
-            catalog = refreshed
-        }
-        analyticsEnabledPackIDs = Self.analyticsEnabledPackIDs(from: catalog)
-        rebuildWhenUncovered(
-            wanted: EvaluationWorld.coverage(catalog: catalog, home: configHome).compiled
-        )
+        refreshCatalogFromDisk()
         let packs = catalog.records.map { PackRecord(id: $0.id, enabled: $0.isEnabled, bundled: $0.isBundled) }
         return ListPacksReply(
             packs: packs,
@@ -474,10 +468,23 @@ public actor ServiceRuntime {
     }
 
     private func doctorSnapshot() -> DoctorSnapshotReply {
-        DoctorSnapshotBuilder.make(
+        refreshCatalogFromDisk()
+        return DoctorSnapshotBuilder.make(
             catalog: catalog,
             corePacksReady: corePacksReady,
             idleExitSeconds: idleExitSeconds
+        )
+    }
+
+    /// Config is the operator switch. Reload before list/doctor so a local
+    /// `rv packs enable` is visible without bouncing rvd.
+    private func refreshCatalogFromDisk() {
+        if let refreshed = Self.makeCatalog(home: configHome) {
+            catalog = refreshed
+        }
+        analyticsEnabledPackIDs = Self.analyticsEnabledPackIDs(from: catalog)
+        rebuildWhenUncovered(
+            wanted: EvaluationWorld.coverage(catalog: catalog, home: configHome).compiled
         )
     }
 
