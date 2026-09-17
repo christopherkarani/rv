@@ -26,12 +26,12 @@ struct PolicyDraftCommand: AsyncParsableCommand {
             FileHandle.standardError.write(Data("rv policy draft: --save requires --english\n".utf8))
             throw ExitCode(1)
         }
-        guard let home = HomeDirectory.process() else {
+        guard let home = CLIProcess.home() else {
             FileHandle.standardError.write(Data("rv policy draft: HOME is not set\n".utf8))
             throw ExitCode(1)
         }
         let workspace = URL(
-            fileURLWithPath: FileManager.default.currentDirectoryPath,
+            fileURLWithPath: CLIProcess.workspacePath(),
             isDirectory: true
         )
         let result: PolicyDraftResult

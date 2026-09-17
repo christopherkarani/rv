@@ -44,9 +44,9 @@ enum ThemeProbeFactory {
             robotFlag: robotFlag,
             plainFlag: plainFlag,
             noColorFlag: noColorFlag,
-            stdinIsTTY: isatty(STDIN_FILENO) != 0,
-            stdoutIsTTY: isatty(STDOUT_FILENO) != 0,
-            environment: ProcessInfo.processInfo.environment
+            stdinIsTTY: CLIProcess.stdinIsTTY(),
+            stdoutIsTTY: CLIProcess.stdoutIsTTY(),
+            environment: CLIProcess.environment()
         )
     }
 }
@@ -59,7 +59,7 @@ private func stdoutColumns(stdoutIsTTY: Bool) -> Int {
 #else
     let request = TIOCGWINSZ
 #endif
-    guard ioctl(STDOUT_FILENO, request, &size) == 0, size.ws_col > 0 else {
+    guard ioctl(CLIProcess.stdoutFileDescriptor(), request, &size) == 0, size.ws_col > 0 else {
         return 80
     }
     return Int(size.ws_col)

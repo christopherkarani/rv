@@ -52,7 +52,7 @@ struct Setup: ParsableCommand {
 
 extension SetupCeremonyKind {
     static func fromInstallEnvironment(
-        environment: [String: String] = ProcessInfo.processInfo.environment
+        environment: [String: String] = CLIProcess.environment()
     ) -> SetupCeremonyKind {
         let raw = environment["RV_FROM_INSTALL"] ?? ""
         if raw == "1" || raw.lowercased() == "true" || raw.lowercased() == "yes" {

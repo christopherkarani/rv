@@ -15,7 +15,7 @@ enum CommandInvocation {
             noColorFlag: format.noColor
         )
         let requested = OutputModeResolver.requested(json: format.json, robot: format.robot)
-        let home = HomeDirectory.process()
+        let home = CLIProcess.home()
         let result = await CommandRun.run(
             kind: kind,
             command: raw,

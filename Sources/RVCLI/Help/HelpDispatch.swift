@@ -62,7 +62,7 @@ public enum HelpDispatch {
         stdoutIsTTY: Bool? = nil
     ) -> Bool {
         guard let topic = topic(arguments: arguments) else { return false }
-        let ttyOut = stdoutIsTTY ?? (isatty(STDOUT_FILENO) != 0)
+        let ttyOut = stdoutIsTTY ?? CLIProcess.stdoutIsTTY()
         let probe = ThemeProbeFactory.make(
             jsonFlag: false,
             robotFlag: false,
@@ -70,7 +70,7 @@ public enum HelpDispatch {
             noColorFlag: false,
             stdinIsTTY: false,
             stdoutIsTTY: ttyOut,
-            environment: environment
+            environment: CLIProcess.context?.environment ?? environment
         )
         let appearance = CLIAppearance.resolve(probe: probe, requested: .automatic)
         let palette: Palette

@@ -15,9 +15,8 @@ struct Hook: AsyncParsableCommand {
     var host: HookHost = .grok
 
     func run() async throws {
-        let data = FileHandle.standardInput.readDataToEndOfFile()
-        let stdin = String(data: data, encoding: .utf8) ?? ""
-        let outcome = await run(stdin: stdin, client: ServiceClient())
+        let stdin = CLIProcess.standardInputText()
+        let outcome = await run(stdin: stdin, client: ServiceClient(home: CLIProcess.home()))
         FileHandle.standardOutput.write(Data(outcome.stdout.utf8))
         if !outcome.stderr.isEmpty {
             FileHandle.standardError.write(Data(outcome.stderr.utf8))

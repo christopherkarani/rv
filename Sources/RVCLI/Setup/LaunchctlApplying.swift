@@ -37,6 +37,12 @@ enum LaunchctlError: Error, Equatable {
 }
 
 struct ProcessLaunchctl: LaunchctlApplying {
+    var executableURL: URL
+
+    init(executableURL: URL = URL(fileURLWithPath: "/bin/launchctl")) {
+        self.executableURL = executableURL
+    }
+
     func bootstrap(domain: String, plist: URL) throws {
         try run(["bootstrap", domain, plist.path])
     }
@@ -60,7 +66,7 @@ struct ProcessLaunchctl: LaunchctlApplying {
 
     private func run(_ arguments: [String], okStatuses: Set<Int32> = [0]) throws {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        process.executableURL = executableURL
         process.arguments = arguments
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
