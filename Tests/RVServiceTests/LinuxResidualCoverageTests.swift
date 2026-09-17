@@ -19,8 +19,10 @@ struct LinuxResidualCoverageTests {
     }
 
     @Test func unixSocketPath_prepareRuntimeRemovesStaleSocket() throws {
+        // Darwin TMPDIR plus a UUID overflows sockaddr_un (108 bytes) in resolve.
+        let token = String(UInt32.random(in: .min ... .max), radix: 16)
         let xdg = FileManager.default.temporaryDirectory
-            .appendingPathComponent("rv-xdg-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("rvx-\(token)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: xdg) }
         let socket = try UnixSocketPath.resolve(xdgRuntimeDir: xdg.path)
         try UnixSocketPath.prepareRuntime(for: socket)
