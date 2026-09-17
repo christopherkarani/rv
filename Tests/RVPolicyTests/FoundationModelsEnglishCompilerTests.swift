@@ -36,6 +36,18 @@ struct FoundationModelsEnglishCompilerTests {
         let compiler = FoundationModelsEnglishCompiler(usesSystemModel: false)
         let result = try await compiler.compile("")
         #expect(result == .refuse(.empty))
+        let whitespace = try await compiler.compile("  \n\t  ")
+        #expect(whitespace == .refuse(.empty))
+    }
+
+    @Test func injectedCompiler_propagatesUnavailable() async {
+        let compiler = FoundationModelsEnglishCompiler(
+            usesSystemModel: true,
+            compiler: UnavailableEnglishCompiler()
+        )
+        await #expect(throws: EnglishCompilerError.unavailable) {
+            _ = try await compiler.compile("never allow force-push to main")
+        }
     }
 
     @Test func injectedCompiler_propagatesCancellation() async {
@@ -77,6 +89,12 @@ struct FoundationModelsEnglishCompilerTests {
 private struct CancelledEnglishCompiler: EnglishCompiler {
     func compile(_: String) async throws -> EnglishCompileResult {
         throw CancellationError()
+    }
+}
+
+private struct UnavailableEnglishCompiler: EnglishCompiler {
+    func compile(_: String) async throws -> EnglishCompileResult {
+        throw EnglishCompilerError.unavailable
     }
 }
 
