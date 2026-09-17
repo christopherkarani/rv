@@ -52,8 +52,13 @@ public struct PlatformSnapshot: Sendable, Equatable {
     }
 
 #if !canImport(Darwin)
-    private static func osReleaseField(_ key: String) -> String? {
-        guard let text = try? String(contentsOfFile: "/etc/os-release", encoding: .utf8) else {
+    /// Reads one `KEY=value` field from an os-release file. Live snapshot uses
+    /// `/etc/os-release` when `uname` does not yield a release string.
+    package static func osReleaseField(
+        _ key: String,
+        filePath: String = "/etc/os-release"
+    ) -> String? {
+        guard let text = try? String(contentsOfFile: filePath, encoding: .utf8) else {
             return nil
         }
         for line in text.split(whereSeparator: \.isNewline) {
