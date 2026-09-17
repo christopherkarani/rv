@@ -584,6 +584,9 @@ private func isDataConsumingFlag(command: String?, gitSubcommand: String?, flag:
         return flag.hasPrefix("-") && !flag.hasPrefix("--") && flag.contains("m") && flag != "--"
     case "rg", "grep", "fgrep", "egrep", "ag", "ack", "ripgrep":
         return flag == "-e" || flag == "--regexp" || flag.hasPrefix("--regexp=")
+    case "gh":
+        return flag == "--title" || flag.hasPrefix("--title=")
+            || flag == "--body" || flag.hasPrefix("--body=")
     case "find":
         return flag == "-name" || flag == "-iname"
             || flag == "-path" || flag == "-ipath"
@@ -636,6 +639,16 @@ private func maskAttachedDataValue(
     }
     if command == "git", decoded.hasPrefix("-m"), decoded.count > 2, !decoded.hasPrefix("--") {
         return "-m" + String(repeating: " ", count: max(decoded.count - 2, 1))
+    }
+    if command == "gh" {
+        if decoded.hasPrefix("--title=") {
+            let valueCount = decoded.dropFirst("--title=".count).count
+            return "--title=" + String(repeating: " ", count: max(valueCount, 1))
+        }
+        if decoded.hasPrefix("--body=") {
+            let valueCount = decoded.dropFirst("--body=".count).count
+            return "--body=" + String(repeating: " ", count: max(valueCount, 1))
+        }
     }
     return nil
 }

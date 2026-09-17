@@ -2,12 +2,869 @@
   "schema_version": 1,
   "source": "catalog_true_positive_stress",
   "cases": [
-    {"id": "cat.sqlite.drop-table", "command": "DROP TABLE users", "expected": "deny", "rule_id": "database.sqlite:drop-table"},
-    {"id": "cat.sqlite.delete-without-where", "command": "DELETE FROM users", "expected": "deny", "rule_id": "database.sqlite:delete-without-where"},
-    {"id": "cat.sqlite.sqlite3-stdin", "command": "sqlite3 db.sqlite < wipe.sql", "expected": "deny", "rule_id": "database.sqlite:sqlite3-stdin"},
-    {"id": "cat.disk.mkfs", "command": "mkfs.ext4 /dev/sda", "expected": "deny", "rule_id": "system.disk:mkfs"},
-    {"id": "cat.disk.wipefs", "command": "wipefs /dev/sda", "expected": "deny", "rule_id": "system.disk:wipefs"},
-    {"id": "cat.git.reset-hard", "command": "git reset --hard", "expected": "deny", "rule_id": "core.git:reset-hard"},
-    {"id": "cat.fs.rm-rf-root", "command": "rm -rf /", "expected": "deny", "rule_id": "core.filesystem:rm-rf-root-home"}
+    {
+      "id": "cat.sqlite.drop-table",
+      "command": "DROP TABLE users",
+      "expected": "deny",
+      "rule_id": "database.sqlite:drop-table"
+    },
+    {
+      "id": "cat.sqlite.delete-without-where",
+      "command": "DELETE FROM users",
+      "expected": "deny",
+      "rule_id": "database.sqlite:delete-without-where"
+    },
+    {
+      "id": "cat.sqlite.sqlite3-stdin",
+      "command": "sqlite3 db.sqlite < wipe.sql",
+      "expected": "deny",
+      "rule_id": "database.sqlite:sqlite3-stdin"
+    },
+    {
+      "id": "cat.disk.mkfs",
+      "command": "mkfs.ext4 /dev/sda",
+      "expected": "deny",
+      "rule_id": "system.disk:mkfs"
+    },
+    {
+      "id": "cat.disk.wipefs",
+      "command": "wipefs /dev/sda",
+      "expected": "deny",
+      "rule_id": "system.disk:wipefs"
+    },
+    {
+      "id": "cat.git.reset-hard",
+      "command": "git reset --hard",
+      "expected": "deny",
+      "rule_id": "core.git:reset-hard"
+    },
+    {
+      "id": "cat.fs.rm-rf-root",
+      "command": "rm -rf /",
+      "expected": "deny",
+      "rule_id": "core.filesystem:rm-rf-root-home"
+    },
+    {
+      "id": "cat.apigateway.kong.kong-admin-delete-services",
+      "command": "curl -X DELETE http://localhost:8001/services",
+      "expected": "deny",
+      "rule_id": "apigateway.kong:kong-admin-delete-services"
+    },
+    {
+      "id": "cat.apigateway.kong.kong-admin-delete-routes",
+      "command": "curl -X DELETE http://localhost:8001/routes",
+      "expected": "deny",
+      "rule_id": "apigateway.kong:kong-admin-delete-routes"
+    },
+    {
+      "id": "cat.apigateway.kong.kong-admin-delete-consumers",
+      "command": "curl -X DELETE http://localhost:8001/consumers",
+      "expected": "deny",
+      "rule_id": "apigateway.kong:kong-admin-delete-consumers"
+    },
+    {
+      "id": "cat.apigateway.kong.kong-admin-delete-upstreams",
+      "command": "curl -X DELETE http://localhost:8001/upstreams",
+      "expected": "deny",
+      "rule_id": "apigateway.kong:kong-admin-delete-upstreams"
+    },
+    {
+      "id": "cat.apigateway.kong.kong-admin-delete-certificates",
+      "command": "curl -X DELETE http://localhost:8001/certificates",
+      "expected": "deny",
+      "rule_id": "apigateway.kong:kong-admin-delete-certificates"
+    },
+    {
+      "id": "cat.apigateway.kong.kong-admin-delete-snis",
+      "command": "curl -X DELETE http://localhost:8001/snis",
+      "expected": "deny",
+      "rule_id": "apigateway.kong:kong-admin-delete-snis"
+    },
+    {
+      "id": "cat.cicd.circleci.circleci-api-delete-envvar",
+      "command": "curl -X DELETE https://circleci.com/api/v2/project/envvar",
+      "expected": "deny",
+      "rule_id": "cicd.circleci:circleci-api-delete-envvar"
+    },
+    {
+      "id": "cat.cicd.github-actions.gh-actions-api-delete-secrets",
+      "command": "gh api -X DELETE repos/o/r/actions/secrets",
+      "expected": "deny",
+      "rule_id": "cicd.github_actions:gh-actions-api-delete-secrets"
+    },
+    {
+      "id": "cat.cicd.gitlab-ci.glab-api-delete-variables",
+      "command": "glab api -X DELETE projects/1/variables",
+      "expected": "deny",
+      "rule_id": "cicd.gitlab_ci:glab-api-delete-variables"
+    },
+    {
+      "id": "cat.cicd.jenkins.jenkins-curl-do-delete",
+      "command": "curl -X POST http://jenkins.local/job/x/doDelete",
+      "expected": "deny",
+      "rule_id": "cicd.jenkins:jenkins-curl-do-delete"
+    },
+    {
+      "id": "cat.cloud.aws.athena-query-string-from-file",
+      "command": "aws athena start-query-execution --query-string file://q.sql",
+      "expected": "deny",
+      "rule_id": "cloud.aws:athena-query-string-from-file"
+    },
+    {
+      "id": "cat.cloud.aws.athena-cli-input-file",
+      "command": "aws athena start-query-execution --cli-input-json file://q.json",
+      "expected": "deny",
+      "rule_id": "cloud.aws:athena-cli-input-file"
+    },
+    {
+      "id": "cat.cloud.azure.blob-delete",
+      "command": "az storage blob delete",
+      "expected": "deny",
+      "rule_id": "cloud.azure:blob-delete"
+    },
+    {
+      "id": "cat.cloud.azure.sql-delete",
+      "command": "az sql server delete",
+      "expected": "deny",
+      "rule_id": "cloud.azure:sql-delete"
+    },
+    {
+      "id": "cat.cloud.azure.keyvault-item-delete-or-purge",
+      "command": "az keyvault key delete",
+      "expected": "deny",
+      "rule_id": "cloud.azure:keyvault-item-delete-or-purge"
+    },
+    {
+      "id": "cat.cloud.gcp.pubsub-delete",
+      "command": "gcloud pubsub topics delete t",
+      "expected": "deny",
+      "rule_id": "cloud.gcp:pubsub-delete"
+    },
+    {
+      "id": "cat.containers.docker.stop-all",
+      "command": "docker stop $(docker ps -q)",
+      "expected": "deny",
+      "rule_id": "containers.docker:stop-all"
+    },
+    {
+      "id": "cat.database.bigquery.bq-rm-transfer-config",
+      "command": "bq rm --transfer_config x",
+      "expected": "deny",
+      "rule_id": "database.bigquery:bq-rm-transfer-config"
+    },
+    {
+      "id": "cat.database.bigquery.bq-rm-reservation",
+      "command": "bq rm --reservation x",
+      "expected": "deny",
+      "rule_id": "database.bigquery:bq-rm-reservation"
+    },
+    {
+      "id": "cat.database.bigquery.bq-load-replace",
+      "command": "bq load --replace t f",
+      "expected": "deny",
+      "rule_id": "database.bigquery:bq-load-replace"
+    },
+    {
+      "id": "cat.database.bigquery.bq-query-replace",
+      "command": "bq query --replace 'select 1'",
+      "expected": "deny",
+      "rule_id": "database.bigquery:bq-query-replace"
+    },
+    {
+      "id": "cat.database.bigquery.bq-cp-force",
+      "command": "bq cp -f a b",
+      "expected": "deny",
+      "rule_id": "database.bigquery:bq-cp-force"
+    },
+    {
+      "id": "cat.database.bigquery.bq-update-time-travel",
+      "command": "bq update --max_time_travel_hours 1 t",
+      "expected": "deny",
+      "rule_id": "database.bigquery:bq-update-time-travel"
+    },
+    {
+      "id": "cat.database.bigquery.bq-update-expiration",
+      "command": "bq update --expiration 1 t",
+      "expected": "deny",
+      "rule_id": "database.bigquery:bq-update-expiration"
+    },
+    {
+      "id": "cat.database.bigquery.alter-set-expiration",
+      "command": "ALTER TABLE t SET OPTIONS (expiration_timestamp=TIMESTAMP '2020-01-01')",
+      "expected": "deny",
+      "rule_id": "database.bigquery:alter-set-expiration"
+    },
+    {
+      "id": "cat.database.bigquery.update-all-rows",
+      "command": "UPDATE t SET x=1 WHERE TRUE",
+      "expected": "deny",
+      "rule_id": "database.bigquery:update-all-rows"
+    },
+    {
+      "id": "cat.database.mongodb.drop-database",
+      "command": "db.dropDatabase()",
+      "expected": "deny",
+      "rule_id": "database.mongodb:drop-database"
+    },
+    {
+      "id": "cat.database.mongodb.drop-collection",
+      "command": "db.x.dropCollection()",
+      "expected": "deny",
+      "rule_id": "database.mongodb:drop-collection"
+    },
+    {
+      "id": "cat.database.mongodb.delete-all",
+      "command": "db.x.deleteMany({})",
+      "expected": "deny",
+      "rule_id": "database.mongodb:delete-all"
+    },
+    {
+      "id": "cat.database.mongodb.collection-drop",
+      "command": "db.users.drop()",
+      "expected": "deny",
+      "rule_id": "database.mongodb:collection-drop"
+    },
+    {
+      "id": "cat.database.mysql.grant-all",
+      "command": "mysql GRANT ALL PRIVILEGES ON *.*",
+      "expected": "deny",
+      "rule_id": "database.mysql:grant-all"
+    },
+    {
+      "id": "cat.database.redis.mass-delete-pipeline",
+      "command": "redis-cli KEYS '*' | xargs redis-cli DEL redis",
+      "expected": "deny",
+      "rule_id": "database.redis:mass-delete-pipeline"
+    },
+    {
+      "id": "cat.database.redis.config-dangerous",
+      "command": "redis CONFIG SET dir /tmp",
+      "expected": "deny",
+      "rule_id": "database.redis:config-dangerous"
+    },
+    {
+      "id": "cat.database.snowflake.cli-object-drop-database",
+      "command": "snow object drop database",
+      "expected": "deny",
+      "rule_id": "database.snowflake:cli-object-drop-database"
+    },
+    {
+      "id": "cat.database.snowflake.cli-spcs-drop",
+      "command": "snow spcs service drop",
+      "expected": "deny",
+      "rule_id": "database.snowflake:cli-spcs-drop"
+    },
+    {
+      "id": "cat.dns.cloudflare.cloudflare-api-delete-dns-record",
+      "command": "curl -X DELETE https://api.cloudflare.com/client/v4/zones/z/dns_records/r",
+      "expected": "deny",
+      "rule_id": "dns.cloudflare:cloudflare-api-delete-dns-record"
+    },
+    {
+      "id": "cat.dns.cloudflare.cloudflare-api-delete-zone",
+      "command": "curl -X DELETE https://api.cloudflare.com/client/v4/zones/z",
+      "expected": "deny",
+      "rule_id": "dns.cloudflare:cloudflare-api-delete-zone"
+    },
+    {
+      "id": "cat.dns.cloudflare.cloudflare-terraform-destroy-record",
+      "command": "cloudflare terraform destroy -target=cloudflare_record.www",
+      "expected": "deny",
+      "rule_id": "dns.cloudflare:cloudflare-terraform-destroy-record"
+    },
+    {
+      "id": "cat.email.mailgun.mailgun-delete-suppression",
+      "command": "curl -X DELETE https://api.mailgun.net/v3/ex.com/bounces/a@b.com",
+      "expected": "deny",
+      "rule_id": "email.mailgun:mailgun-delete-suppression"
+    },
+    {
+      "id": "cat.email.sendgrid.sendgrid-delete-sender",
+      "command": "curl -X DELETE https://api.sendgrid.com/v3/senders/1",
+      "expected": "deny",
+      "rule_id": "email.sendgrid:sendgrid-delete-sender"
+    },
+    {
+      "id": "cat.email.sendgrid.sendgrid-delete-suppression",
+      "command": "curl -X DELETE https://api.sendgrid.com/v3/suppression/bounces",
+      "expected": "deny",
+      "rule_id": "email.sendgrid:sendgrid-delete-suppression"
+    },
+    {
+      "id": "cat.featureflags.launchdarkly.launchdarkly-api-delete-environments",
+      "command": "curl -X DELETE https://app.launchdarkly.com/api/v2/projects/p/environments/e",
+      "expected": "deny",
+      "rule_id": "featureflags.launchdarkly:launchdarkly-api-delete-environments"
+    },
+    {
+      "id": "cat.featureflags.launchdarkly.launchdarkly-api-delete-flags",
+      "command": "curl -X DELETE https://app.launchdarkly.com/api/v2/flags/f",
+      "expected": "deny",
+      "rule_id": "featureflags.launchdarkly:launchdarkly-api-delete-flags"
+    },
+    {
+      "id": "cat.featureflags.launchdarkly.launchdarkly-api-delete-segments",
+      "command": "curl -X DELETE https://app.launchdarkly.com/api/v2/segments/s",
+      "expected": "deny",
+      "rule_id": "featureflags.launchdarkly:launchdarkly-api-delete-segments"
+    },
+    {
+      "id": "cat.featureflags.launchdarkly.launchdarkly-api-delete-projects",
+      "command": "curl -X DELETE https://app.launchdarkly.com/api/v2/projects/p",
+      "expected": "deny",
+      "rule_id": "featureflags.launchdarkly:launchdarkly-api-delete-projects"
+    },
+    {
+      "id": "cat.featureflags.launchdarkly.launchdarkly-api-delete-generic",
+      "command": "curl -X DELETE https://app.launchdarkly.com/api/v2/x",
+      "expected": "deny",
+      "rule_id": "featureflags.launchdarkly:launchdarkly-api-delete-generic"
+    },
+    {
+      "id": "cat.featureflags.split.split-api-delete-splits",
+      "command": "curl -X DELETE https://api.split.io/internal/api/v2/splits/s",
+      "expected": "deny",
+      "rule_id": "featureflags.split:split-api-delete-splits"
+    },
+    {
+      "id": "cat.featureflags.split.split-api-delete-environments",
+      "command": "curl -X DELETE https://api.split.io/internal/api/v2/environments/e",
+      "expected": "deny",
+      "rule_id": "featureflags.split:split-api-delete-environments"
+    },
+    {
+      "id": "cat.featureflags.split.split-api-delete-segments",
+      "command": "curl -X DELETE https://api.split.io/internal/api/v2/segments/s",
+      "expected": "deny",
+      "rule_id": "featureflags.split:split-api-delete-segments"
+    },
+    {
+      "id": "cat.featureflags.split.split-api-delete-generic",
+      "command": "curl -X DELETE https://api.split.io/internal/api/v2/x",
+      "expected": "deny",
+      "rule_id": "featureflags.split:split-api-delete-generic"
+    },
+    {
+      "id": "cat.featureflags.unleash.unleash-api-delete-features",
+      "command": "curl -X DELETE https://unleash/api/admin/projects/p/features/f",
+      "expected": "deny",
+      "rule_id": "featureflags.unleash:unleash-api-delete-features"
+    },
+    {
+      "id": "cat.featureflags.unleash.unleash-api-delete-projects",
+      "command": "curl -X DELETE https://unleash/api/admin/projects/p",
+      "expected": "deny",
+      "rule_id": "featureflags.unleash:unleash-api-delete-projects"
+    },
+    {
+      "id": "cat.featureflags.unleash.unleash-api-delete-generic",
+      "command": "curl -X DELETE https://unleash/api/admin/x",
+      "expected": "deny",
+      "rule_id": "featureflags.unleash:unleash-api-delete-generic"
+    },
+    {
+      "id": "cat.infrastructure.ansible.playbook-all-hosts",
+      "command": "ansible-playbook -i hosts playbook.yaml",
+      "expected": "deny",
+      "rule_id": "infrastructure.ansible:playbook-all-hosts"
+    },
+    {
+      "id": "cat.kubernetes.kubectl.delete-from-stdin",
+      "command": "kubectl delete -f -",
+      "expected": "deny",
+      "rule_id": "kubernetes.kubectl:delete-from-stdin"
+    },
+    {
+      "id": "cat.kubernetes.kustomize.kustomize-delete",
+      "command": "kustomize build . | kubectl delete -f -",
+      "expected": "deny",
+      "rule_id": "kubernetes.kustomize:kustomize-delete"
+    },
+    {
+      "id": "cat.kubernetes.kustomize.kubectl-kustomize-delete",
+      "command": "kubectl kustomize . | kubectl delete -f -",
+      "expected": "deny",
+      "rule_id": "kubernetes.kustomize:kubectl-kustomize-delete"
+    },
+    {
+      "id": "cat.loadbalancer.haproxy.haproxy-socat-disable-server",
+      "command": "echo disable server bk/s1 | socat stdin /tmp/haproxy",
+      "expected": "deny",
+      "rule_id": "loadbalancer.haproxy:haproxy-socat-disable-server"
+    },
+    {
+      "id": "cat.loadbalancer.haproxy.haproxy-socat-shutdown-sessions",
+      "command": "echo shutdown sessions | socat stdin /tmp/haproxy",
+      "expected": "deny",
+      "rule_id": "loadbalancer.haproxy:haproxy-socat-shutdown-sessions"
+    },
+    {
+      "id": "cat.loadbalancer.haproxy.haproxy-socat-disable-frontend",
+      "command": "echo disable frontend fe | socat stdin /tmp/haproxy",
+      "expected": "deny",
+      "rule_id": "loadbalancer.haproxy:haproxy-socat-disable-frontend"
+    },
+    {
+      "id": "cat.loadbalancer.haproxy.haproxy-socat-shutdown-frontend",
+      "command": "echo shutdown frontend fe | socat stdin /tmp/haproxy",
+      "expected": "deny",
+      "rule_id": "loadbalancer.haproxy:haproxy-socat-shutdown-frontend"
+    },
+    {
+      "id": "cat.loadbalancer.traefik.traefik-api-delete",
+      "command": "curl -X DELETE http://traefik/api/http/routers/r",
+      "expected": "deny",
+      "rule_id": "loadbalancer.traefik:traefik-api-delete"
+    },
+    {
+      "id": "cat.monitoring.datadog.datadog-api-delete",
+      "command": "curl -X DELETE https://api.datadoghq.com/api/v1/monitor/1",
+      "expected": "deny",
+      "rule_id": "monitoring.datadog:datadog-api-delete"
+    },
+    {
+      "id": "cat.monitoring.datadog.terraform-datadog-destroy",
+      "command": "datadog terraform destroy datadog_monitor",
+      "expected": "deny",
+      "rule_id": "monitoring.datadog:terraform-datadog-destroy"
+    },
+    {
+      "id": "cat.monitoring.newrelic.newrelic-api-delete",
+      "command": "curl -X DELETE https://api.newrelic.com/v2/alerts_policies/1.json",
+      "expected": "deny",
+      "rule_id": "monitoring.newrelic:newrelic-api-delete"
+    },
+    {
+      "id": "cat.monitoring.newrelic.newrelic-graphql-delete-mutation",
+      "command": "curl https://api.newrelic.com/graphql -d 'mutation { deletePolicy }'",
+      "expected": "deny",
+      "rule_id": "monitoring.newrelic:newrelic-graphql-delete-mutation"
+    },
+    {
+      "id": "cat.monitoring.pagerduty.pagerduty-api-delete-service",
+      "command": "curl -X DELETE https://api.pagerduty.com/services/PXXX",
+      "expected": "deny",
+      "rule_id": "monitoring.pagerduty:pagerduty-api-delete-service"
+    },
+    {
+      "id": "cat.monitoring.pagerduty.pagerduty-api-delete-schedule",
+      "command": "curl -X DELETE https://api.pagerduty.com/schedules/PXXX",
+      "expected": "deny",
+      "rule_id": "monitoring.pagerduty:pagerduty-api-delete-schedule"
+    },
+    {
+      "id": "cat.monitoring.prometheus.prometheus-rules-file-delete",
+      "command": "rm /etc/prometheus/rules.d/alerts.yml",
+      "expected": "deny",
+      "rule_id": "monitoring.prometheus:prometheus-rules-file-delete"
+    },
+    {
+      "id": "cat.monitoring.prometheus.prometheus-tsdb-delete-series",
+      "command": "curl -X POST http://prom/api/v1/admin/tsdb/delete_series",
+      "expected": "deny",
+      "rule_id": "monitoring.prometheus:prometheus-tsdb-delete-series"
+    },
+    {
+      "id": "cat.monitoring.prometheus.kubectl-delete-prometheus-operator-resources",
+      "command": "kubectl delete prometheusrule",
+      "expected": "deny",
+      "rule_id": "monitoring.prometheus:kubectl-delete-prometheus-operator-resources"
+    },
+    {
+      "id": "cat.monitoring.prometheus.grafana-api-delete-dashboard",
+      "command": "curl -X DELETE http://grafana/api/dashboards/uid/x",
+      "expected": "deny",
+      "rule_id": "monitoring.prometheus:grafana-api-delete-dashboard"
+    },
+    {
+      "id": "cat.monitoring.prometheus.grafana-api-delete-datasource",
+      "command": "curl -X DELETE http://grafana/api/datasources/1",
+      "expected": "deny",
+      "rule_id": "monitoring.prometheus:grafana-api-delete-datasource"
+    },
+    {
+      "id": "cat.monitoring.prometheus.grafana-api-delete-alert-notification",
+      "command": "curl -X DELETE http://grafana/api/alert-notifications/1",
+      "expected": "deny",
+      "rule_id": "monitoring.prometheus:grafana-api-delete-alert-notification"
+    },
+    {
+      "id": "cat.monitoring.splunk.splunk-api-delete",
+      "command": "curl -X DELETE https://splunk:8089/services/saved/searches/x",
+      "expected": "deny",
+      "rule_id": "monitoring.splunk:splunk-api-delete"
+    },
+    {
+      "id": "cat.payment.braintree.braintree-api-delete",
+      "command": "curl -X DELETE https://api.braintreegateway.com/merchants/m/customers/c",
+      "expected": "deny",
+      "rule_id": "payment.braintree:braintree-api-delete"
+    },
+    {
+      "id": "cat.payment.square.square-api-delete-catalog-object",
+      "command": "curl -X DELETE https://api.squareup.com/v2/catalog/object/X",
+      "expected": "deny",
+      "rule_id": "payment.square:square-api-delete-catalog-object"
+    },
+    {
+      "id": "cat.payment.square.square-api-batch-delete-catalog-objects",
+      "command": "curl -X POST https://api.squareup.com/v2/catalog/batch-delete",
+      "expected": "deny",
+      "rule_id": "payment.square:square-api-batch-delete-catalog-objects"
+    },
+    {
+      "id": "cat.payment.square.square-api-delete-customer",
+      "command": "curl -X DELETE https://api.squareup.com/v2/customers/X",
+      "expected": "deny",
+      "rule_id": "payment.square:square-api-delete-customer"
+    },
+    {
+      "id": "cat.payment.square.square-api-delete-payment-link",
+      "command": "curl -X DELETE https://api.squareup.com/v2/online-checkout/payment-links/X",
+      "expected": "deny",
+      "rule_id": "payment.square:square-api-delete-payment-link"
+    },
+    {
+      "id": "cat.payment.square.square-api-delete-location",
+      "command": "curl -X DELETE https://api.squareup.com/v2/locations/X",
+      "expected": "deny",
+      "rule_id": "payment.square:square-api-delete-location"
+    },
+    {
+      "id": "cat.payment.square.square-api-delete-webhook-subscription",
+      "command": "curl -X DELETE https://api.squareup.com/v2/webhooks/subscriptions/X",
+      "expected": "deny",
+      "rule_id": "payment.square:square-api-delete-webhook-subscription"
+    },
+    {
+      "id": "cat.payment.stripe.stripe-webhook-endpoints-delete",
+      "command": "stripe webhook_endpoints delete we_x",
+      "expected": "deny",
+      "rule_id": "payment.stripe:stripe-webhook-endpoints-delete"
+    },
+    {
+      "id": "cat.payment.stripe.stripe-api-delete",
+      "command": "curl -X DELETE https://api.stripe.com/v1/customers/cus_x",
+      "expected": "deny",
+      "rule_id": "payment.stripe:stripe-api-delete"
+    },
+    {
+      "id": "cat.platform.github.gh-api-delete-actions-secret",
+      "command": "gh api -X DELETE repos/o/r/actions/secrets/S",
+      "expected": "deny",
+      "rule_id": "platform.github:gh-api-delete-actions-secret"
+    },
+    {
+      "id": "cat.platform.github.gh-api-delete-actions-variable",
+      "command": "gh api -X DELETE repos/o/r/actions/variables/V",
+      "expected": "deny",
+      "rule_id": "platform.github:gh-api-delete-actions-variable"
+    },
+    {
+      "id": "cat.platform.github.gh-api-delete-hook",
+      "command": "gh api -X DELETE repos/o/r/hooks/1",
+      "expected": "deny",
+      "rule_id": "platform.github:gh-api-delete-hook"
+    },
+    {
+      "id": "cat.platform.github.gh-api-delete-deploy-key",
+      "command": "gh api -X DELETE repos/o/r/keys/1",
+      "expected": "deny",
+      "rule_id": "platform.github:gh-api-delete-deploy-key"
+    },
+    {
+      "id": "cat.platform.github.gh-api-delete-release",
+      "command": "gh api -X DELETE repos/o/r/releases/1",
+      "expected": "deny",
+      "rule_id": "platform.github:gh-api-delete-release"
+    },
+    {
+      "id": "cat.platform.github.gh-api-delete-repo",
+      "command": "gh api -X DELETE repos/o/r",
+      "expected": "deny",
+      "rule_id": "platform.github:gh-api-delete-repo"
+    },
+    {
+      "id": "cat.platform.github.gh-api-delete-generic",
+      "command": "gh api -X DELETE user/emails",
+      "expected": "deny",
+      "rule_id": "platform.github:gh-api-delete-generic"
+    },
+    {
+      "id": "cat.platform.gitlab.glab-api-delete-project",
+      "command": "glab api -X DELETE projects/1",
+      "expected": "deny",
+      "rule_id": "platform.gitlab:glab-api-delete-project"
+    },
+    {
+      "id": "cat.platform.gitlab.glab-api-delete-release",
+      "command": "glab api -X DELETE projects/1/releases/v1",
+      "expected": "deny",
+      "rule_id": "platform.gitlab:glab-api-delete-release"
+    },
+    {
+      "id": "cat.platform.gitlab.glab-api-delete-variable",
+      "command": "glab api -X DELETE projects/1/variables/K",
+      "expected": "deny",
+      "rule_id": "platform.gitlab:glab-api-delete-variable"
+    },
+    {
+      "id": "cat.platform.gitlab.glab-api-delete-protected-branch",
+      "command": "glab api -X DELETE projects/1/protected_branches/main",
+      "expected": "deny",
+      "rule_id": "platform.gitlab:glab-api-delete-protected-branch"
+    },
+    {
+      "id": "cat.platform.gitlab.glab-api-delete-hook",
+      "command": "glab api -X DELETE projects/1/hooks/1",
+      "expected": "deny",
+      "rule_id": "platform.gitlab:glab-api-delete-hook"
+    },
+    {
+      "id": "cat.platform.railway.railway-database-variable-set",
+      "command": "railway variable set DATABASE_URL=postgres://x",
+      "expected": "deny",
+      "rule_id": "platform.railway:railway-database-variable-set"
+    },
+    {
+      "id": "cat.platform.railway.railway-database-variable-legacy-set",
+      "command": "railway variable --set DATABASE_URL=postgres://x",
+      "expected": "deny",
+      "rule_id": "platform.railway:railway-database-variable-legacy-set"
+    },
+    {
+      "id": "cat.platform.railway.railway-api-volume-detach",
+      "command": "curl https://backboard.railway.app/graphql -d 'volumeInstanceUpdate serviceId: null'",
+      "expected": "deny",
+      "rule_id": "platform.railway:railway-api-volume-detach"
+    },
+    {
+      "id": "cat.platform.railway.railway-api-variable-collection-replace",
+      "command": "curl https://backboard.railway.app/graphql -d 'variableCollectionUpsert replace: true'",
+      "expected": "deny",
+      "rule_id": "platform.railway:railway-api-variable-collection-replace"
+    },
+    {
+      "id": "cat.remote.scp.scp-to-bin",
+      "command": "scp file root@host:/bin/",
+      "expected": "deny",
+      "rule_id": "remote.scp:scp-to-bin"
+    },
+    {
+      "id": "cat.search.elasticsearch.es-curl-delete-by-query",
+      "command": "curl -X POST http://elastic:9200/logs/_delete_by_query",
+      "expected": "deny",
+      "rule_id": "search.elasticsearch:es-curl-delete-by-query"
+    },
+    {
+      "id": "cat.search.elasticsearch.es-curl-close-index",
+      "command": "curl -X POST http://elastic:9200/logs/_close",
+      "expected": "deny",
+      "rule_id": "search.elasticsearch:es-curl-close-index"
+    },
+    {
+      "id": "cat.search.elasticsearch.es-curl-delete-index",
+      "command": "curl -X DELETE http://elastic:9200/logs",
+      "expected": "deny",
+      "rule_id": "search.elasticsearch:es-curl-delete-index"
+    },
+    {
+      "id": "cat.search.elasticsearch.es-curl-cluster-settings",
+      "command": "curl -X PUT http://elastic:9200/_cluster/settings",
+      "expected": "deny",
+      "rule_id": "search.elasticsearch:es-curl-cluster-settings"
+    },
+    {
+      "id": "cat.search.elasticsearch.es-http-delete-by-query",
+      "command": "http POST http://elastic:9200/logs/_delete_by_query",
+      "expected": "deny",
+      "rule_id": "search.elasticsearch:es-http-delete-by-query"
+    },
+    {
+      "id": "cat.search.elasticsearch.es-http-close-index",
+      "command": "http POST http://elastic:9200/logs/_close",
+      "expected": "deny",
+      "rule_id": "search.elasticsearch:es-http-close-index"
+    },
+    {
+      "id": "cat.search.elasticsearch.es-http-delete-index",
+      "command": "http DELETE http://elastic:9200/logs",
+      "expected": "deny",
+      "rule_id": "search.elasticsearch:es-http-delete-index"
+    },
+    {
+      "id": "cat.search.elasticsearch.es-http-cluster-settings",
+      "command": "http PUT http://elastic:9200/_cluster/settings",
+      "expected": "deny",
+      "rule_id": "search.elasticsearch:es-http-cluster-settings"
+    },
+    {
+      "id": "cat.search.meilisearch.meili-curl-delete-documents",
+      "command": "curl -X DELETE http://meili:7700/indexes/movies/documents",
+      "expected": "deny",
+      "rule_id": "search.meilisearch:meili-curl-delete-documents"
+    },
+    {
+      "id": "cat.search.meilisearch.meili-curl-delete-batch",
+      "command": "curl -X POST http://meili:7700/indexes/movies/documents/delete-batch",
+      "expected": "deny",
+      "rule_id": "search.meilisearch:meili-curl-delete-batch"
+    },
+    {
+      "id": "cat.search.meilisearch.meili-curl-delete-key",
+      "command": "curl -X DELETE http://meili:7700/keys/abc",
+      "expected": "deny",
+      "rule_id": "search.meilisearch:meili-curl-delete-key"
+    },
+    {
+      "id": "cat.search.meilisearch.meili-curl-delete-index",
+      "command": "curl -X DELETE http://meili:7700/indexes/movies",
+      "expected": "deny",
+      "rule_id": "search.meilisearch:meili-curl-delete-index"
+    },
+    {
+      "id": "cat.search.meilisearch.meili-http-delete-documents",
+      "command": "http DELETE http://meili:7700/indexes/movies/documents",
+      "expected": "deny",
+      "rule_id": "search.meilisearch:meili-http-delete-documents"
+    },
+    {
+      "id": "cat.search.meilisearch.meili-http-delete-batch",
+      "command": "http POST http://meili:7700/indexes/movies/documents/delete-batch",
+      "expected": "deny",
+      "rule_id": "search.meilisearch:meili-http-delete-batch"
+    },
+    {
+      "id": "cat.search.meilisearch.meili-http-delete-key",
+      "command": "http DELETE http://meili:7700/keys/abc",
+      "expected": "deny",
+      "rule_id": "search.meilisearch:meili-http-delete-key"
+    },
+    {
+      "id": "cat.search.meilisearch.meili-http-delete-index",
+      "command": "http DELETE http://meili:7700/indexes/movies",
+      "expected": "deny",
+      "rule_id": "search.meilisearch:meili-http-delete-index"
+    },
+    {
+      "id": "cat.search.opensearch.os-curl-delete-by-query",
+      "command": "curl -X POST http://opensearch:9200/logs/_delete_by_query",
+      "expected": "deny",
+      "rule_id": "search.opensearch:os-curl-delete-by-query"
+    },
+    {
+      "id": "cat.search.opensearch.os-curl-close-index",
+      "command": "curl -X POST http://opensearch:9200/logs/_close",
+      "expected": "deny",
+      "rule_id": "search.opensearch:os-curl-close-index"
+    },
+    {
+      "id": "cat.search.opensearch.os-curl-delete-index",
+      "command": "curl -X DELETE http://opensearch:9200/logs",
+      "expected": "deny",
+      "rule_id": "search.opensearch:os-curl-delete-index"
+    },
+    {
+      "id": "cat.search.opensearch.os-http-delete-by-query",
+      "command": "http POST http://opensearch:9200/logs/_delete_by_query",
+      "expected": "deny",
+      "rule_id": "search.opensearch:os-http-delete-by-query"
+    },
+    {
+      "id": "cat.search.opensearch.os-http-close-index",
+      "command": "http POST http://opensearch:9200/logs/_close",
+      "expected": "deny",
+      "rule_id": "search.opensearch:os-http-close-index"
+    },
+    {
+      "id": "cat.search.opensearch.os-http-delete-index",
+      "command": "http DELETE http://opensearch:9200/logs",
+      "expected": "deny",
+      "rule_id": "search.opensearch:os-http-delete-index"
+    },
+    {
+      "id": "cat.strict-git.push-dynamic-argument",
+      "command": "git push origin 'feat*'",
+      "expected": "deny",
+      "rule_id": "strict_git:push-dynamic-argument"
+    },
+    {
+      "id": "cat.strict-git.add-all-dot",
+      "command": "git add .",
+      "expected": "deny",
+      "rule_id": "strict_git:add-all-dot"
+    },
+    {
+      "id": "cat.system.disk.dd-wipe",
+      "command": "dd if=/dev/zero of=/dev/sda",
+      "expected": "deny",
+      "rule_id": "system.disk:dd-wipe"
+    },
+    {
+      "id": "cat.system.disk.fdisk-edit",
+      "command": "fdisk /dev/sda",
+      "expected": "deny",
+      "rule_id": "system.disk:fdisk-edit"
+    },
+    {
+      "id": "cat.system.disk.parted-modify",
+      "command": "parted /dev/sda mkpart",
+      "expected": "deny",
+      "rule_id": "system.disk:parted-modify"
+    },
+    {
+      "id": "cat.system.disk.mount-bind-root",
+      "command": "mount --bind /mnt /",
+      "expected": "deny",
+      "rule_id": "system.disk:mount-bind-root"
+    },
+    {
+      "id": "cat.system.disk.umount-force",
+      "command": "umount -f /dev/sda",
+      "expected": "deny",
+      "rule_id": "system.disk:umount-force"
+    },
+    {
+      "id": "cat.system.disk.nbd-client-connect",
+      "command": "nbd-client host 10809 /dev/nbd0",
+      "expected": "deny",
+      "rule_id": "system.disk:nbd-client-connect"
+    },
+    {
+      "id": "cat.system.disk.diskutil-apfs-delete",
+      "command": "diskutil apfs deleteVolume disk1s1",
+      "expected": "deny",
+      "rule_id": "system.disk:diskutil-apfs-delete"
+    },
+    {
+      "id": "cat.system.permissions.chmod-setuid",
+      "command": "chmod u+s /usr/bin/tool",
+      "expected": "deny",
+      "rule_id": "system.permissions:chmod-setuid"
+    },
+    {
+      "id": "cat.system.permissions.chmod-setgid",
+      "command": "chmod g+s /usr/bin/tool",
+      "expected": "deny",
+      "rule_id": "system.permissions:chmod-setgid"
+    },
+    {
+      "id": "cat.system.permissions.setfacl-all",
+      "command": "setfacl -R /etc",
+      "expected": "deny",
+      "rule_id": "system.permissions:setfacl-all"
+    },
+    {
+      "id": "cat.system.services.service-stop-critical",
+      "command": "service ssh stop",
+      "expected": "deny",
+      "rule_id": "system.services:service-stop-critical"
+    },
+    {
+      "id": "cat.system.services.init-level",
+      "command": "init 0",
+      "expected": "deny",
+      "rule_id": "system.services:init-level"
+    }
   ]
 }

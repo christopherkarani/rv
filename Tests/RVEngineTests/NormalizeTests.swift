@@ -340,6 +340,11 @@ import RVDomain
         Normalize.matchingView(of: "git config --global alias.rh 'reset --hard'")
             .rawValue.contains("reset") == false
     )
+    #expect(Normalize.matchingView(of: "git log -S 'rm -rf'").rawValue.contains("rm") == false)
+    #expect(
+        Normalize.matchingView(of: "gh pr create --title 'fix git reset --hard'")
+            .rawValue.contains("reset") == false
+    )
 }
 
 @Test func normalize_masksHeredocWriteBody_keepsExecutingSink() {

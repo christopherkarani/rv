@@ -264,15 +264,6 @@ private func isStrictGitByDesign(_ command: String) -> Bool {
         || view.contains("worktree remove")
 }
 
-private func uniquePackIDs(_ ids: [PackID]) -> [PackID] {
-    var seen = Set<PackID>()
-    var out: [PackID] = []
-    for id in ids where seen.insert(id).inserted {
-        out.append(id)
-    }
-    return out
-}
-
 private func describe(_ result: EvaluationResult) -> String {
     switch result.decision {
     case .allow:

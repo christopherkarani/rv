@@ -18,6 +18,10 @@ struct FileToolDecodeStressTests {
                 ClaudeHostCodec()
             ),
             (
+                #"{"hookEventName":"pre_tool_use","toolName":"read_file","toolInput":{"path":"/tmp/rv-oracle/src/main.swift"}}"#,
+                GrokHostCodec()
+            ),
+            (
                 #"{"hookEventName":"pre_tool_use","toolName":"Read","toolInput":{"file_path":"/tmp/rv-oracle/src/main.swift"}}"#,
                 GrokHostCodec()
             ),
@@ -57,8 +61,11 @@ struct FileToolDecodeStressTests {
             #"{"hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{"file_path":["/tmp/.env"]}}"#
         #expect(ClaudeHostCodec().decode(claude) == .malformed(.unreadable))
         let grok =
-            #"{"hookEventName":"pre_tool_use","toolName":"Read","toolInput":{"file_path":["/tmp/.env"]}}"#
+            #"{"hookEventName":"pre_tool_use","toolName":"read_file","toolInput":{"path":["/tmp/.env"]}}"#
         #expect(GrokHostCodec().decode(grok) == .malformed(.unreadable))
+        let grokFilePath =
+            #"{"hookEventName":"pre_tool_use","toolName":"Read","toolInput":{"file_path":["/tmp/.env"]}}"#
+        #expect(GrokHostCodec().decode(grokFilePath) == .malformed(.unreadable))
         let cursor =
             #"{"hook_event_name":"preToolUse","tool_name":"Read","tool_input":{"file_path":["/tmp/.env"]}}"#
         #expect(CursorHostCodec().decode(cursor) == .malformed(.unreadable))

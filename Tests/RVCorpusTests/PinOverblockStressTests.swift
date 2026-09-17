@@ -60,6 +60,12 @@ struct PinOverblockStressTests {
             "git interpret-trailers --trailer 'Made-with: git reset --hard'",
             "git config alias.oops 'reset --hard'",
             "git config --global alias.rh 'reset --hard'",
+            "git log -S 'rm -rf'",
+            "git log -G 'git reset --hard'",
+            "git diff -S 'rm -rf'",
+            "gh pr create --title 'fix git reset --hard'",
+            "mkfs --help",
+            "wipefs --help",
         ]
         var overBlocks = 0
         for command in commands {
