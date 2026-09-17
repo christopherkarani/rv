@@ -75,7 +75,7 @@ struct SetupFlow {
 extension SetupEnvironment {
     /// Production construction, consulted by the flow door by default.
     static func live(
-        environment: [String: String] = ProcessInfo.processInfo.environment
+        environment: [String: String] = CLIProcess.environment()
     ) -> SetupEnvironment? {
         guard let home = HomeDirectory(validating: environment["HOME"] ?? "") else { return nil }
         let pathEntries = (environment["PATH"] ?? "").split(separator: ":").map(String.init)

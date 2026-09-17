@@ -85,7 +85,7 @@ struct ScanSessions: AsyncParsableCommand {
     }
 
     func run() async throws {
-        let homePath = ProcessInfo.processInfo.environment["HOME"] ?? ""
+        let homePath = CLIProcess.environment()["HOME"] ?? ""
         guard let scanHome = ScanHome(validating: homePath) else {
             FileHandle.standardError.write(Data("rv scan: HOME is not set\n".utf8))
             throw ExitCode(1)
@@ -129,7 +129,7 @@ struct ScanSessions: AsyncParsableCommand {
         } catch {
             throw error
         }
-        let pathEntries = (ProcessInfo.processInfo.environment["PATH"] ?? "")
+        let pathEntries = (CLIProcess.environment()["PATH"] ?? "")
             .split(separator: ":")
             .map(String.init)
         let setupNudge = scanSetupNudgeRecommended(

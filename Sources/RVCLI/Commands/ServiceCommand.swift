@@ -20,7 +20,7 @@ struct Status: AsyncParsableCommand {
     var format: FormatFlags
 
     func run() async {
-        let report = await ServiceClient().status()
+        let report = await ServiceClient(home: CLIProcess.home()).status()
         let text = ServiceStatusCommand.text(
             report,
             appearance: CLIAppearance.resolve(

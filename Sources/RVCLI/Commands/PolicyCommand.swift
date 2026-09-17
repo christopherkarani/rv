@@ -21,12 +21,12 @@ struct Policy: AsyncParsableCommand {
         var format: FormatFlags
 
         func run() async throws {
-            guard let home = HomeDirectory.process() else {
+            guard let home = CLIProcess.home() else {
                 FileHandle.standardError.write(Data("rv policy show: HOME is not set\n".utf8))
                 throw ExitCode(1)
             }
             let workspace = URL(
-                fileURLWithPath: FileManager.default.currentDirectoryPath,
+                fileURLWithPath: CLIProcess.workspacePath(),
                 isDirectory: true
             )
             let snapshot: PolicyShowSnapshot
@@ -69,7 +69,7 @@ struct Policy: AsyncParsableCommand {
             if let path {
                 target = .file(URL(fileURLWithPath: path))
             } else {
-                guard let home = HomeDirectory.process() else {
+                guard let home = CLIProcess.home() else {
                     FileHandle.standardError.write(Data("rv policy validate: HOME is not set\n".utf8))
                     throw ExitCode(1)
                 }
@@ -97,12 +97,12 @@ struct Policy: AsyncParsableCommand {
         var output: String?
 
         func run() throws {
-            guard let home = HomeDirectory.process() else {
+            guard let home = CLIProcess.home() else {
                 FileHandle.standardError.write(Data("rv policy export: HOME is not set\n".utf8))
                 throw ExitCode(1)
             }
             let workspace = URL(
-                fileURLWithPath: FileManager.default.currentDirectoryPath,
+                fileURLWithPath: CLIProcess.workspacePath(),
                 isDirectory: true
             )
             let store = TypedRuleStore(
@@ -148,12 +148,12 @@ struct Policy: AsyncParsableCommand {
         var repo = false
 
         func run() throws {
-            guard let home = HomeDirectory.process() else {
+            guard let home = CLIProcess.home() else {
                 FileHandle.standardError.write(Data("rv policy apply: HOME is not set\n".utf8))
                 throw ExitCode(1)
             }
             let workspace = URL(
-                fileURLWithPath: FileManager.default.currentDirectoryPath,
+                fileURLWithPath: CLIProcess.workspacePath(),
                 isDirectory: true
             )
             let incoming: PolicyDocument

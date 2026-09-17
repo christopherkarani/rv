@@ -13,7 +13,7 @@ struct DoctorEnvironment {
     var launchAgentLoaded: Bool
 
     static func live(
-        environment: [String: String] = ProcessInfo.processInfo.environment
+        environment: [String: String] = CLIProcess.environment()
     ) -> DoctorEnvironment? {
         guard let home = HomeDirectory(validating: environment["HOME"] ?? "") else { return nil }
         return DoctorEnvironment(
