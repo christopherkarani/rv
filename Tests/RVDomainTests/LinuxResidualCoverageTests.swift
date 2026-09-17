@@ -235,4 +235,195 @@ struct LinuxResidualCoverageTests {
             )
         }
     }
+
+    @Test func hardPolicyDecision_zonesAndCodable() throws {
+        let deny = Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "x")
+        #expect(HardPolicyDecision.hardAllow.zone == .hardAllow)
+        #expect(HardPolicyDecision.hardDeny(deny).zone == .hardDeny)
+        #expect(HardPolicyDecision.mandatoryHuman(deny).zone == .mandatoryHuman)
+        #expect(HardPolicyDecision.reviewEligible(fallback: deny).zone == .reviewEligible)
+        for zone in [ActionPolicyZone.hardAllow, .mandatoryHuman, .hardDeny, .reviewEligible] {
+            let data = try JSONEncoder().encode(zone)
+            #expect(try JSONDecoder().decode(ActionPolicyZone.self, from: data) == zone)
+        }
+        let verdict = HardPolicyDecision.reviewEligible(fallback: deny)
+        #expect(try JSONDecoder().decode(HardPolicyDecision.self, from: JSONEncoder().encode(verdict)) == verdict)
+    }
+
+    @Test func liveEvaluation_failableInitAndWireStripBound() {
+        let deny = Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "x")
+        let unbound = EvaluationResult(outcome: .plain, matchingView: MatchingView("echo"))
+        #expect(LiveEvaluation(unbound) == nil)
+        let bound = EvaluationResult(
+            outcome: .plain,
+            matchingView: MatchingView("echo"),
+            analysis: .unknown,
+            boundReview: .mandatoryHuman(deny)
+        )
+        let live = LiveEvaluation(bound)
+        #expect(live?.bound == .mandatoryHuman(deny))
+        #expect(live?.wire.boundReview == nil)
+        #expect(bound.wire.boundReview == nil)
+    }
+
+    @Test func evaluationOutcome_composingResidualsAndDecodeErrorText() {
+        let match = RuleMatch(
+            ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+            packID: .coreGit,
+            patternName: "reset-hard",
+            severity: .critical,
+            reason: "x"
+        )
+        let safe = SafeMatch(packID: .coreGit, patternName: "keep")
+        #expect(throws: EvaluationResultDecodingError.self) {
+            _ = try EvaluationOutcome.composing(
+                decision: .allow,
+                matched: match,
+                matchedSafe: nil,
+                quickRejected: true
+            )
+        }
+        #expect(throws: EvaluationResultDecodingError.self) {
+            _ = try EvaluationOutcome.composing(
+                decision: .deny(Deny(ruleID: match.ruleID, reason: "x")),
+                matched: match,
+                matchedSafe: safe,
+                quickRejected: false
+            )
+        }
+        #expect(throws: EvaluationResultDecodingError.self) {
+            _ = try EvaluationOutcome.composing(
+                decision: .indeterminate(.commandTooLarge),
+                matched: match,
+                matchedSafe: nil,
+                quickRejected: false
+            )
+        }
+        let error = EvaluationResultDecodingError(
+            decision: .allow,
+            matchedPresent: true,
+            matchedSafePresent: false,
+            quickRejected: true
+        )
+        #expect(error.description.contains("impossible EvaluationResult"))
+        #expect(error.description.contains("matched=true"))
+    }
+
+    @Test func pendingAction_usesFilesystemEffectsWhenGitAbsent() {
+        let fs = FilesystemAction.read(
+            targets: [
+                FilesystemTarget(
+                    apparent: "a",
+                    canonical: "/repo/a",
+                    scope: .insideRepository,
+                    kind: .sourceCode
+                ),
+            ]
+        )
+        let result = EvaluationResult(
+            outcome: .plain,
+            matchingView: MatchingView("cat a"),
+            analysis: .filesystem(fs)
+        )
+        let action = result.pendingAction(
+            host: .pi,
+            session: SessionID(validating: "sess"),
+            cwd: WorkingDirectory(validating: "/tmp/ws"),
+            command: ShellCommand(rawValue: "cat a")
+        )
+        #expect(action.gitAction == nil)
+        #expect(action.effects.kinds.contains(.filesystemRead))
+        #expect(action.resources.filesystemScope == .insideRepository)
+    }
+
+    @Test func englishCompileRefusal_andPackFallbackIndeterminate() throws {
+        for refusal in [
+            EnglishCompileRefusal.empty,
+            .uncompilable,
+            .unsupported,
+            .unsupportedPredicate,
+            .hardStop,
+        ] {
+            let data = try JSONEncoder().encode(refusal)
+            #expect(try JSONDecoder().decode(EnglishCompileRefusal.self, from: data) == refusal)
+        }
+        let incomplete = EvaluationResult(
+            outcome: .indeterminate(.corePacksUnavailable),
+            matchingView: MatchingView("x")
+        )
+        #expect(PackFallback(incomplete) == .deny(ActionPolicyEngine.Builtin.packIncomplete))
+    }
+
+    @Test func filesystemScope_protectedPathAndActionResiduals() {
+        let match = SecretPathMatch(pattern: ".env", category: .environment)
+        let protected = FilesystemScope.protectedPath(match)
+        #expect(protected.rawValue == "protectedPath")
+        #expect(protected.protectedMatch == match)
+        let target = FilesystemTarget(
+            apparent: ".env",
+            canonical: "/tmp/.env",
+            scope: protected,
+            kind: .unknown
+        )
+        #expect(target.protectedMatch == match)
+        let overwrite = FilesystemAction.overwrite(targets: [target])
+        #expect(overwrite.explainAction == "overwrite")
+        #expect(overwrite.effects.kinds.contains(.filesystemOverwrite))
+        let created = FilesystemAction.create(targets: [target])
+        #expect(created.explainAction == "create")
+        #expect(created.effects.kinds.contains(.filesystemCreate))
+    }
+
+    @Test func actionPolicyEngine_filesystemHitResiduals() {
+        let inside = ActionResources(filesystemScope: .insideRepository)
+        let outside = ActionResources(filesystemScope: .outsideRepository)
+        let protected = ActionResources(
+            filesystemScope: .protectedPath(SecretPathMatch(pattern: "id_ed25519", category: .ssh))
+        )
+        let writeInside = ProposedAction.shell(
+            ShellAction(
+                fingerprint: ActionFingerprint(rawValue: "fs-inside"),
+                effects: ActionEffects(kinds: [.filesystemOverwrite]),
+                resources: inside
+            )
+        )
+        #expect(
+            ActionPolicyEngine.evaluate(action: writeInside).decision == .hardAllow
+        )
+        let writeOutside = ProposedAction.shell(
+            ShellAction(
+                fingerprint: ActionFingerprint(rawValue: "fs-out"),
+                effects: ActionEffects(kinds: [.filesystemCreate]),
+                resources: outside
+            )
+        )
+        #expect(
+            ActionPolicyEngine.evaluate(action: writeOutside).decision
+                == .hardDeny(ActionPolicyEngine.Builtin.outsideRepository)
+        )
+        let writeProtected = ProposedAction.shell(
+            ShellAction(
+                fingerprint: ActionFingerprint(rawValue: "fs-prot"),
+                effects: ActionEffects(kinds: [.filesystemDelete]),
+                resources: protected
+            )
+        )
+        #expect(
+            ActionPolicyEngine.evaluate(action: writeProtected).decision
+                == .hardDeny(ActionPolicyEngine.Builtin.protectedPath)
+        )
+        let request = ReviewRequest(
+            action: writeInside,
+            context: ReviewContext(repository: RepositoryReviewContext())
+        )
+        #expect(ActionPolicyEngine.evaluate(request).decision == .hardAllow)
+    }
+
+    @Test func boundReview_packProjectedIndeterminateIsAllow() {
+        let incomplete = EvaluationResult(
+            outcome: .indeterminate(.budgetExhausted),
+            matchingView: MatchingView("huge")
+        )
+        #expect(BoundReview.packProjected(from: incomplete) == .allow)
+    }
 }
