@@ -1,6 +1,6 @@
 #!/bin/sh
 # Install rv (C hook), rv-cli, and rvd into $HOME/.local/bin, then run rv setup.
-# Darwin: macOS 26 + arm64. Linux: aarch64 or x86_64. No Windows.
+# Darwin: macOS 26 or newer + arm64. Linux: aarch64 or x86_64. No Windows.
 # Tests must set HOME to a temp directory.
 # Unset RV_INSTALL_BIN downloads the latest GitHub release trio into a temp
 # dir, then uses the same atomic stage+setup path as a local stage.
@@ -20,10 +20,11 @@ case "$os" in
   Darwin)
     [ "$arch" = "arm64" ] || refuse
     ver="$(sw_vers -productVersion 2>/dev/null || true)"
-    case "$ver" in
-      26.*) ;;
-      *) refuse ;;
+    major="${ver%%.*}"
+    case "$major" in
+      ''|*[!0-9]*) refuse ;;
     esac
+    [ "$major" -ge 26 ] || refuse
     ;;
   Linux)
     case "$arch" in

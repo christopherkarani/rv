@@ -35,7 +35,7 @@ private func writeLinuxShims(in shim: URL, arch: String = "x86_64") throws {
     )
 }
 
-private func writeDarwinShims(in shim: URL) throws {
+private func writeDarwinShims(in shim: URL, productVersion: String = "26.0") throws {
     try FileManager.default.createDirectory(at: shim, withIntermediateDirectories: true)
     try writeExecutable(
         shim.appendingPathComponent("uname"),
@@ -50,8 +50,8 @@ private func writeDarwinShims(in shim: URL) throws {
         shim.appendingPathComponent("sw_vers"),
         contents: """
         #!/bin/sh
-        if [ "$1" = "-productVersion" ]; then echo 26.0; exit 0; fi
-        echo 26.0
+        if [ "$1" = "-productVersion" ]; then echo \(productVersion); exit 0; fi
+        echo \(productVersion)
         """
     )
 }
@@ -192,6 +192,51 @@ private func runInstallScript(
     #expect(err.contains("macOS 26 Apple Silicon, or Linux aarch64/x86_64"))
     #expect(err.localizedCaseInsensitiveContains("windows") == false)
     #expect(FileManager.default.fileExists(atPath: root.path + "/.local/bin/rv") == false)
+}
+
+@Test(arguments: ["26.0", "26.1", "27.0"])
+func installSh_acceptsDarwinMacOS26OrNewer(_ productVersion: String) throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-install-darwin-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let home = root.appendingPathComponent("home", isDirectory: true)
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    let src = root.appendingPathComponent("src", isDirectory: true)
+    try writeDummyTrio(in: src)
+
+    let shim = root.appendingPathComponent("shim", isDirectory: true)
+    try writeDarwinShims(in: shim, productVersion: productVersion)
+
+    let result = try runInstallScript(home: home, src: src, pathPrefix: shim.path)
+    #expect(result.status == 0)
+    #expect(
+        FileManager.default.isExecutableFile(
+            atPath: home.appendingPathComponent(".local/bin/rv").path
+        )
+    )
+}
+
+@Test(arguments: ["15.6", "25.0", ""])
+func installSh_refusesOlderMacOS(_ productVersion: String) throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-install-oldmac-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let home = root.appendingPathComponent("home", isDirectory: true)
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    let src = root.appendingPathComponent("src", isDirectory: true)
+    try writeDummyTrio(in: src)
+
+    let shim = root.appendingPathComponent("shim", isDirectory: true)
+    try writeDarwinShims(in: shim, productVersion: productVersion)
+
+    let result = try runInstallScript(home: home, src: src, pathPrefix: shim.path)
+    #expect(result.status == 1)
+    #expect(result.stderr.contains("macOS 26 Apple Silicon, or Linux aarch64/x86_64"))
+    #expect(FileManager.default.fileExists(atPath: home.path + "/.local/bin/rv") == false)
 }
 
 @Test func installSh_acceptsLinuxX86_64() throws {
