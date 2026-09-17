@@ -6,6 +6,31 @@ import RVPolicy
 @testable import RVService
 
 struct ServiceRuntimeEvaluateTests {
+    @Test func doctorSnapshotReloadsCatalogAfterLocalEnable() async throws {
+        let homeURL = try isolatedHomeDirectory()
+        defer { try? FileManager.default.removeItem(at: homeURL) }
+        let home = try #require(HomeDirectory(validating: homeURL.path))
+        _ = try PacksFacade.disable(home: home, ids: ["core.git"])
+        let runtime = ServiceRuntime(
+            home: home,
+            allowOnceDirectory: try isolatedAllowOnceDirectory()
+        )
+        let before = await runtime.dispatch(IPCRequest(method: .doctorSnapshot))
+        guard case .doctorSnapshot(let stale) = before.result else {
+            Issue.record("expected doctorSnapshot before enable")
+            return
+        }
+        #expect(stale.packsEnabled.contains(.coreGit) == false)
+
+        _ = try PacksFacade.enable(home: home, ids: ["core.git"])
+        let after = await runtime.dispatch(IPCRequest(method: .doctorSnapshot))
+        guard case .doctorSnapshot(let fresh) = after.result else {
+            Issue.record("expected doctorSnapshot after enable")
+            return
+        }
+        #expect(fresh.packsEnabled.contains(.coreGit))
+    }
+
     @Test func coveredRequestedPacksStayOnWarmSession() async throws {
         let homeURL = try isolatedHomeDirectory()
         defer { try? FileManager.default.removeItem(at: homeURL) }

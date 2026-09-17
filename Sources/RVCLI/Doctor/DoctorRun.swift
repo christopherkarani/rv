@@ -4,6 +4,7 @@ import RVHistory
 import RVIPC
 import RVPolicy
 import RVPresentation
+import RVService
 import RVTUI
 
 struct DoctorEnvironment {
@@ -78,7 +79,11 @@ enum DoctorRun {
         )
         return DoctorViewModel(
             service: health.service,
-            packs: health.packs,
+            packs: DoctorPacksView(
+                enabled: (try? PacksFacade.effectiveIDs(home: environment.home))
+                    ?? health.enabledPacks,
+                registry: health.packCheckReady ? .ready : .broken
+            ),
             hosts: HookHost.setupSlotOrder.map { host in
                 let installation = installations.installation(for: host)
                 return DoctorHostView(
@@ -139,13 +144,6 @@ extension ServiceHealth {
         case .requestFailed(let failure, let local):
             localService(state: .down, local: local, warning: failure.statusMessage)
         }
-    }
-
-    var packs: DoctorPacksView {
-        DoctorPacksView(
-            enabled: enabledPacks,
-            registry: packCheckReady ? .ready : .broken
-        )
     }
 
     private func serviceView(

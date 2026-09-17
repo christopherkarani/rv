@@ -90,8 +90,8 @@ public struct DoctorRenderer: FrameRenderer {
         case .broken:
             lines.append("  \(paint("broken", slot: palette.deny, reset: palette.reset))")
         case .ready where packs.areDayOnePacksReady == false:
-            let missing = joinedList(packs.missingDayOne.map(\.rawValue).sorted())
-            lines.append("  \(paint("missing \(missing)", slot: palette.deny, reset: palette.reset))")
+            let disabled = joinedList(packs.missingDayOne.map(\.rawValue).sorted())
+            lines.append("  \(paint("disabled \(disabled)", slot: palette.deny, reset: palette.reset))")
         case .ready:
             // Day-one IDs only — extras scale via count, not a runaway · list.
             let dayOne = packs.dayOneEnabled.map(\.rawValue).joined(separator: " · ")
@@ -127,16 +127,21 @@ public struct DoctorRenderer: FrameRenderer {
     }
 
     private func nextSection(_ model: DoctorViewModel, palette: Palette) -> [String]? {
-        guard let action = nextAction(for: model) else { return nil }
+        let actions = nextActions(for: model)
+        guard actions.isEmpty == false else { return nil }
         let arrow = paint("→  ", slot: palette.silver, reset: palette.reset)
-        return [
-            heading("Next", palette: palette),
-            "\(arrow)\(action)",
-        ]
+        return [heading("Next", palette: palette)] + actions.map { "\(arrow)\($0)" }
     }
 
     /// Occupied is not fixable by plain `rv setup`; `--force` is the one-stop repair.
-    private func nextAction(for model: DoctorViewModel) -> String? {
+    /// Disabled day-one packs are a config flip, not a setup rewrite.
+    private func nextActions(for model: DoctorViewModel) -> [String] {
+        var actions: [String] = []
+        if model.packs.registry == .ready, model.packs.missingDayOne.isEmpty == false {
+            let ids = model.packs.missingDayOne.map(\.rawValue).sorted().joined(separator: " ")
+            actions.append("rv packs enable \(ids)")
+        }
+
         let fixable = model.hosts.filter { hostNeedsSetup($0.state) }
         let occupied = model.hosts.filter { $0.state == .occupied }
         let fixNames = joinedList(fixable.map(\.host.displayName))
@@ -144,14 +149,15 @@ public struct DoctorRenderer: FrameRenderer {
 
         switch (fixable.isEmpty, occupied.isEmpty) {
         case (true, true):
-            return nil
+            break
         case (false, true):
-            return "rv setup    Wire \(fixNames)"
+            actions.append("rv setup    Wire \(fixNames)")
         case (true, false):
-            return "rv setup --force    Replace occupied \(occupiedNames)"
+            actions.append("rv setup --force    Replace occupied \(occupiedNames)")
         case (false, false):
-            return "rv setup --force    Wire \(fixNames); replace occupied \(occupiedNames)"
+            actions.append("rv setup --force    Wire \(fixNames); replace occupied \(occupiedNames)")
         }
+        return actions
     }
 
     private func hostNeedsSetup(_ state: DoctorHostState) -> Bool {

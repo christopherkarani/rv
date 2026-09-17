@@ -526,6 +526,28 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
 
 @Test func doctor_missingDayOnePackExitsOne() throws {
     try withDoctorHome { _, _, environment in
+        try PacksConfigStore.save(
+            PacksConfig(enabled: ["core.filesystem", "system.disk"], disabled: ["core.git"]),
+            home: environment.home
+        )
+        let outcome = DoctorRun.run(
+            environment: environment,
+            diagnostics: .xpc(
+                snapshot: runningDoctorSnapshot(),
+                localCorePacksReady: true
+            ),
+            appearance: .pretty(colorOffPalette)
+        )
+
+        #expect(outcome.exitCode == 1)
+        #expect(outcome.stdout.contains("disabled core.git"))
+        #expect(outcome.stdout.contains("→  rv packs enable core.git"))
+        #expect(outcome.stdout.contains("missing core.git") == false)
+    }
+}
+
+@Test func doctor_staleServiceSnapshotDoesNotHideEnabledDayOne() throws {
+    try withDoctorHome { _, _, environment in
         let outcome = DoctorRun.run(
             environment: environment,
             diagnostics: .xpc(
@@ -535,8 +557,10 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
             appearance: .pretty(colorOffPalette)
         )
 
-        #expect(outcome.exitCode == 1)
-        #expect(outcome.stdout.contains("missing core.filesystem"))
+        #expect(outcome.exitCode == 0)
+        #expect(outcome.stdout.contains("core.filesystem · core.git · system.disk"))
+        #expect(outcome.stdout.contains("disabled core.git") == false)
+        #expect(outcome.stdout.contains("missing core.git") == false)
     }
 }
 
@@ -791,8 +815,9 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
         let packs = try #require(object["packs"] as? [String: Any])
 
         #expect(outcome.exitCode == 1)
-        #expect(packs["enabled"] as? [String] == [])
+        #expect(packs["enabled"] as? [String] == dayOnePackIDs.map(\.rawValue))
         #expect(packs["registry"] as? String == "broken")
+        #expect(packs["day_one_ready"] as? Bool == false)
     }
 }
 
