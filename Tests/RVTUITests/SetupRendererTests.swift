@@ -106,3 +106,19 @@ private func grokWiredFrame() -> SetupCeremonyFrame {
     )
     #expect(check.contains(SetupRenderer.leadingPad + setupCeremonyDownloadComplete))
 }
+
+@Test func setupRenderer_plainStatusAndSpinnerWithoutActivity() {
+    let plain = SetupRenderer().render(
+        SetupCeremonyFrame(statusLine: "Downloading"),
+        palette: colorOffPalette
+    )
+    #expect(plain.contains(SetupRenderer.leadingPad + "Downloading"))
+    #expect(plain.contains { $0.contains("✓") } == false)
+
+    let spinning = SetupRenderer().render(
+        SetupCeremonyFrame(spinnerIndex: 0),
+        palette: colorOffPalette
+    )
+    #expect(spinning.contains { $0.contains("⠋") })
+    #expect(spinning.contains { $0.contains(setupCeremonySearchActivity) } == false)
+}

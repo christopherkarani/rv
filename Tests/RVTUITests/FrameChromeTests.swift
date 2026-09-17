@@ -57,6 +57,8 @@ import RVTheme
     #expect(painted.contains(on.regex.name))
     let wrapped = paintedRegexLines(String(repeating: "x", count: 6), width: 2, palette: on)
     #expect(wrapped.count == 3)
+    let flushed = paintedRegexLines("aa[", width: 2, palette: colorOffPalette)
+    #expect(flushed == ["aa", "["])
 }
 
 @Test func renderTree_coversEmphasisSpacerAndWrap() {
@@ -67,7 +69,7 @@ import RVTheme
         emphasis: .plain,
         children: [
             .leaf(label: "Fact", value: long, emphasis: .fact),
-            .regex(label: "Regex", pattern: String(repeating: "[a-z]", count: 12)),
+            .regex(label: "Regex", pattern: String(repeating: "[a-z]", count: 24)),
             .text("muted", emphasis: .muted),
             .text("deny", emphasis: .deny),
             .text("allow", emphasis: .allow),

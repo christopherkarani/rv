@@ -80,6 +80,23 @@ import RVTheme
     #expect(next?.contains(palette.allow) == false)
 }
 
+@Test func helpRenderer_blurbWithoutTitleStillBrands() {
+    let lines = HelpRenderer().render(
+        HelpViewModel(
+            title: "",
+            blurb: "Block destructive shell commands.",
+            sections: [
+                HelpSection(heading: "Flags", rows: [
+                    HelpRow(name: "--plain", description: "No color"),
+                ]),
+            ]
+        ),
+        palette: colorOffPalette
+    )
+    #expect(lines.first == "  Block destructive shell commands.")
+    #expect(lines.contains("Flags"))
+}
+
 @Test func helpRenderer_skipsEmptyChromeAndBareNames() {
     let empty = HelpRenderer().render(
         HelpViewModel(title: "", blurb: "", sections: [HelpSection(heading: "Flags", rows: [])]),

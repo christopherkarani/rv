@@ -223,6 +223,11 @@ private func renderGrouped(
     #expect(text.contains("more patterns") == false)
 }
 
+@Test func packsRenderer_legacyFlat_emptyRowsIsEmpty() {
+    let lines = PacksRenderer().render(PacksViewModel(rows: []), palette: colorOffPalette)
+    #expect(lines.isEmpty)
+}
+
 @Test func packsRenderer_legacyFlat_padsIdsAndPaintsFlags() {
     let vm = PacksViewModel.make(
         enabled: [.coreGit],

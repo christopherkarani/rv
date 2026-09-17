@@ -162,6 +162,27 @@ private func sampleModel(showsCommand: Bool = false) -> ScanViewModel {
     #expect(scanBrowseRender(state, palette: colorOffPalette).first == "RV SCAN")
 }
 
+@Test func scanBrowseRender_singleFindingUsesSingularWord() {
+    let vm = ScanViewModel(
+        rows: [
+            scanFindingRow(
+                host: .claude,
+                sourcePath: "/tmp/fixture/session.jsonl",
+                ruleID: resetHardRule,
+                packID: .coreGit,
+                matchingView: MatchingView("git reset --hard"),
+                showsCommand: false
+            ),
+        ],
+        filesScanned: 1,
+        eventsExtracted: 1
+    )
+    let joined = ScanBrowseRenderer().render(ScanBrowseState(model: vm), palette: colorOffPalette)
+        .joined(separator: "\n")
+    #expect(joined.contains("1 files scanned, 1 events, 1 finding"))
+    #expect(joined.contains("findings") == false)
+}
+
 @Test func scanBrowseRender_detailIncludesSessionCountAndColor() {
     let state = ScanBrowseState(model: sampleModel(), selectedIndex: 0)
     let off = ScanBrowseRenderer().render(state, palette: colorOffPalette)

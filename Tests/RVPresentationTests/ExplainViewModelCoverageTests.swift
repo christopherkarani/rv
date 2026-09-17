@@ -123,6 +123,41 @@ private let resetHard = ShellCommand(rawValue: "git reset --hard")
     #expect(vm.columns == 16)
 }
 
+@Test func remapMatchSpan_searchHitWithoutInnerTextReturnsNil() {
+    #expect(
+        remapMatchSpan(
+            span: MatchSpan(start: 90, end: 99),
+            matchedText: "nope",
+            searchText: "rm -rf ./src",
+            onto: "rm -rf ./src"
+        ) == nil
+    )
+}
+
+@Test func testViewModel_safeOnlyIsAllowedWithoutPackEssay() {
+    let vm = testViewModel(
+        from: EvaluationResult(
+            outcome: .safeOnly(SafeMatch(packID: .coreGit, patternName: "checkout-new-branch"))
+        ),
+        command: status
+    )
+    #expect(vm.resultWord == "ALLOWED")
+    #expect(vm.deny == nil)
+    #expect(vm.packDisplay == nil)
+    #expect(vm.explanation == nil)
+}
+
+@Test func remapMatchSpan_emptySearchOnEmptyCommandCannotKeepSpan() {
+    #expect(
+        remapMatchSpan(
+            span: MatchSpan(start: 0, end: 1),
+            matchedText: "x",
+            searchText: "",
+            onto: ""
+        ) == nil
+    )
+}
+
 @Test func remapMatchSpan_searchMissFallsBackAndEmptySearchDrops() {
     #expect(
         remapMatchSpan(

@@ -387,7 +387,7 @@ private func isTreeSpacer(_ line: String) -> Bool {
         kind: "source code",
         category: "ssh",
         catalogRule: "core.secrets/id",
-        wrappers: []
+        wrappers: ["sudo", "bash"]
     )
     vm.suggestions = [
         ExplainSuggestion(kind: .workflowFix, text: "Ask the operator"),
@@ -405,7 +405,7 @@ private func isTreeSpacer(_ line: String) -> Bool {
     #expect(text.contains("Kind") && text.contains("source code"))
     #expect(text.contains("Category") && text.contains("ssh"))
     #expect(text.contains("Catalog") && text.contains("core.secrets/id"))
-    #expect(text.contains("Wrappers") == false)
+    #expect(text.contains("Wrappers") && text.contains("sudo → bash"))
     #expect(text.contains("Workflow fix: Ask the operator"))
     #expect(text.contains("See: https://example.com/docs"))
 }
@@ -470,6 +470,19 @@ private func isTreeSpacer(_ line: String) -> Bool {
     #expect(lines.allSatisfy { $0.count <= 80 })
 }
 
+@Test func testRenderer_proseHeadingAndPreviewWithoutBlank() {
+    let vm = TestViewModel(
+        command: ShellCommand(rawValue: "rm -rf"),
+        explanation: "Keep this paragraph long enough to wrap on the test frame by repeating words words words words words words words.\nWhy this is dangerous:\nPlain follow-on prose that also wraps wraps wraps wraps wraps wraps wraps.\nPreview leftovers: keep keep keep keep keep keep keep keep keep keep keep keep",
+        resultWord: "BLOCKED",
+        resultTone: .deny
+    )
+    let lines = TestRenderer().render(vm, palette: colorOffPalette)
+    #expect(lines.contains { $0.contains("Why this is dangerous:") })
+    #expect(lines.contains { $0.contains("Plain follow-on") || $0.hasPrefix("  wraps") })
+    #expect(lines.contains { $0.contains("Preview leftovers:") })
+}
+
 @Test func testRenderer_previewEmptyRestAndPastEndSpan() {
     let preview = TestViewModel(
         command: ShellCommand(rawValue: "rm -rf"),
@@ -490,6 +503,28 @@ private func isTreeSpacer(_ line: String) -> Bool {
     )
     let past = TestRenderer().render(pastEnd, palette: colorOffPalette)
     #expect(past.contains { $0.contains("^") } == false)
+}
+
+@Test func testRenderer_previewTitleOnlyAndPreviewWithoutColon() {
+    let emptyRest = TestViewModel(
+        command: ShellCommand(rawValue: "rm -rf"),
+        explanation: "intro\nPreview leftovers:",
+        resultWord: "BLOCKED",
+        resultTone: .deny
+    )
+    let emptyLines = TestRenderer().render(emptyRest, palette: colorOffPalette)
+    #expect(emptyLines.contains { $0.contains("Preview leftovers:") })
+    #expect(emptyLines.contains { $0.hasPrefix("  Preview leftovers:") })
+
+    let noColon = TestViewModel(
+        command: ShellCommand(rawValue: "rm -rf"),
+        explanation: "intro\nPreview leftovers without a colon",
+        resultWord: "BLOCKED",
+        resultTone: .deny
+    )
+    let noColonLines = TestRenderer().render(noColon, palette: colorOffPalette)
+    #expect(noColonLines.contains { $0.contains("Preview leftovers without a colon") })
+    #expect(noColonLines.contains { $0.hasPrefix("  Preview leftovers without") })
 }
 
 @Test func testRenderer_alignsCaretsUnderMatch() {

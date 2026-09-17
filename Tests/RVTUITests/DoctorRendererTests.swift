@@ -136,6 +136,39 @@ private let doctorRendererFixture = DoctorViewModel(
     #expect(joined.contains("extras off") == false)
 }
 
+@Test func doctorRenderer_emptyHostsAndServiceMetaFallbacks() {
+    var empty = doctorRendererFixture
+    empty.hosts = []
+    let emptyText = DoctorRenderer().render(empty, palette: colorOffPalette).joined(separator: "\n")
+    #expect(emptyText.contains("Hosts"))
+
+    var runningUnknown = doctorRendererFixture
+    runningUnknown.service.serviceSemver = nil
+    #expect(
+        DoctorRenderer().render(runningUnknown, palette: colorOffPalette)
+            .joined(separator: "\n")
+            .contains("unknown · rv.ipc.v1")
+    )
+
+    var skewBare = doctorRendererFixture
+    skewBare.service.state = .skew
+    skewBare.service.serviceSemver = nil
+    #expect(
+        DoctorRenderer().render(skewBare, palette: colorOffPalette)
+            .joined(separator: "\n")
+            .contains("rv.ipc.v1")
+    )
+
+    var downVersioned = doctorRendererFixture
+    downVersioned.service.state = .down
+    downVersioned.service.serviceSemver = "1.2.3"
+    #expect(
+        DoctorRenderer().render(downVersioned, palette: colorOffPalette)
+            .joined(separator: "\n")
+            .contains("1.2.3 · unavailable")
+    )
+}
+
 @Test func doctorRenderer_serviceStatesAndWarning() {
     var down = doctorRendererFixture
     down.service.state = .down

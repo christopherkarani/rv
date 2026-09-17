@@ -1,5 +1,30 @@
 import Testing
+import RVDomain
 @testable import RVPresentation
+
+@Test func setupSlotSnapshot_wiredCodex_usesTrustClause() {
+    let slots = SetupSlotSnapshot(
+        grok: .pending,
+        pi: .pending,
+        openCode: .pending,
+        codex: .wired,
+        wrote: [.codex]
+    )
+    #expect(slots.kind(for: .codex) == .wired)
+    #expect(setupSlotClause(host: .codex, kind: .wired) == setupCodexTrustClause)
+    #expect(slots.slotViews.contains { $0.host == .codex && $0.clause == setupCodexTrustClause })
+}
+
+@Test func hookHost_robotSkipLinesCoverEveryHost() {
+    #expect(HookHost.grok.robotSkipLine.contains("grok"))
+    #expect(HookHost.pi.robotSkipLine.contains("pi"))
+    #expect(HookHost.opencode.robotSkipLine.contains("opencode"))
+    #expect(HookHost.claude.robotSkipLine.contains("claude"))
+    #expect(HookHost.openclaw.robotSkipLine.contains("openclaw"))
+    #expect(HookHost.hermes.robotSkipLine.contains("hermes"))
+    #expect(HookHost.codex.robotSkipLine.contains("codex"))
+    #expect(HookHost.cursor.robotSkipLine.contains("cursor"))
+}
 
 @Test func setupSlotSnapshot_hostless_usesHostlessCloserLines() {
     let slots = SetupSlotSnapshot(grok: .pending, pi: .pending, openCode: .pending, wrote: [])
