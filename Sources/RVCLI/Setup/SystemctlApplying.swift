@@ -15,6 +15,12 @@ enum SystemctlAction: Equatable {
 }
 
 struct ProcessSystemctl: SystemctlApplying {
+    var executableURL: URL
+
+    init(executableURL: URL = URL(fileURLWithPath: "/usr/bin/systemctl")) {
+        self.executableURL = executableURL
+    }
+
     func enableNow(unit: String) throws {
         try run(["daemon-reload"])
         try run(["enable", "--now", unit])
@@ -30,7 +36,7 @@ struct ProcessSystemctl: SystemctlApplying {
 
     private func run(_ arguments: [String], okStatuses: Set<Int32> = [0]) throws {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/systemctl")
+        process.executableURL = executableURL
         process.arguments = ["--user"] + arguments
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice

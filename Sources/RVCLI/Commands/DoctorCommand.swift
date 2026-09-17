@@ -21,7 +21,7 @@ struct Doctor: AsyncParsableCommand {
             plain: format.plain,
             noColor: format.noColor
         )
-        let diagnostics = await ServiceClient().diagnostics()
+        let diagnostics = await ServiceClient(home: CLIProcess.home()).diagnostics()
         let outcome = DoctorRun.run(
             environment: environment,
             diagnostics: diagnostics,

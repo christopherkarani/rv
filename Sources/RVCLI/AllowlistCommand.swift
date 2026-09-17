@@ -25,13 +25,13 @@ enum AllowlistCLI {
     }
 
     static func home(
-        from environment: [String: String] = ProcessInfo.processInfo.environment
+        from environment: [String: String] = CLIProcess.environment()
     ) -> HomeDirectory? {
         HomeDirectory(validating: environment["HOME"] ?? "")
     }
 
     static func requireHome(
-        from environment: [String: String] = ProcessInfo.processInfo.environment
+        from environment: [String: String] = CLIProcess.environment()
     ) throws -> HomeDirectory {
         guard let home = home(from: environment) else {
             FileHandle.standardError.write(Data("rv allowlist: HOME is not set\n".utf8))
@@ -260,7 +260,9 @@ struct AllowlistList: AsyncParsableCommand {
 
     func run() async throws {
         let now = Date()
-        switch AllowlistCLI.store(home: try AllowlistCLI.requireHome()).loadForValidate(workspacePath: nil) {
+        switch AllowlistCLI.store(home: try AllowlistCLI.requireHome()).loadForValidate(
+            workspacePath: CLIProcess.workspacePath()
+        ) {
         case .missing, .symlinkIntoWorkspace:
             if format.json || format.robot {
                 let document = RobotDocument.allowlistList([])
@@ -305,7 +307,9 @@ struct AllowlistValidate: AsyncParsableCommand {
     )
 
     func run() async throws {
-        switch AllowlistCLI.store(home: try AllowlistCLI.requireHome()).loadForValidate(workspacePath: nil) {
+        switch AllowlistCLI.store(home: try AllowlistCLI.requireHome()).loadForValidate(
+            workspacePath: CLIProcess.workspacePath()
+        ) {
         case .missing:
             FileHandle.standardOutput.write(Data("allowlist: missing (ok)\n".utf8))
         case .symlinkIntoWorkspace:

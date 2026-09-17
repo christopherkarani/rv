@@ -26,13 +26,13 @@ enum AllowOnceCLI {
     }
 
     static func home(
-        from environment: [String: String] = ProcessInfo.processInfo.environment
+        from environment: [String: String] = CLIProcess.environment()
     ) -> HomeDirectory? {
         HomeDirectory(validating: environment["HOME"] ?? "")
     }
 
     static func requireHome(
-        from environment: [String: String] = ProcessInfo.processInfo.environment
+        from environment: [String: String] = CLIProcess.environment()
     ) throws -> HomeDirectory {
         guard let home = home(from: environment) else {
             FileHandle.standardError.write(Data("rv allow-once: HOME is not set\n".utf8))

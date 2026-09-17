@@ -13,7 +13,7 @@ import RVPacks
 /// Command-name `--help` / `--version` must allow (documentation query).
 ///
 /// Run:
-/// `tools/gate.sh --quiet RVCorpusTests --filter AllPacksFalsePositiveStress`
+/// `Scripts/gate.sh --quiet RVCorpusTests --filter AllPacksFalsePositiveStress`
 @Suite("All-packs false-positive stress")
 struct AllPacksFalsePositiveStressTests {
     static let strictGit = PackID(rawValue: "strict_git")
@@ -262,15 +262,6 @@ private func isStrictGitByDesign(_ command: String) -> Bool {
         || view.contains("filter-repo")
         || view.contains("reflog expire")
         || view.contains("worktree remove")
-}
-
-private func uniquePackIDs(_ ids: [PackID]) -> [PackID] {
-    var seen = Set<PackID>()
-    var out: [PackID] = []
-    for id in ids where seen.insert(id).inserted {
-        out.append(id)
-    }
-    return out
 }
 
 private func describe(_ result: EvaluationResult) -> String {

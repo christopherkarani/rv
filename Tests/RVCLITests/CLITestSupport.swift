@@ -87,3 +87,108 @@ func cliEvaluate(
 func wd(_ raw: String) -> WorkingDirectory {
     WorkingDirectory(validating: raw)!
 }
+
+@discardableResult
+func withCLIProcess<T>(
+    home: HomeDirectory? = nil,
+    environment: [String: String] = [:],
+    stdinIsTTY: Bool? = false,
+    stdoutIsTTY: Bool? = false,
+    workspacePath: String? = nil,
+    stdoutFileDescriptor: Int32? = nil,
+    stdinText: String? = nil,
+    _ body: () throws -> T
+) throws -> T {
+    let context = CLIProcess.Context(
+        home: home,
+        environment: environment,
+        stdinIsTTY: stdinIsTTY,
+        stdoutIsTTY: stdoutIsTTY,
+        stdoutFileDescriptor: stdoutFileDescriptor,
+        workspacePath: workspacePath,
+        stdinText: stdinText
+    )
+    return try CLIProcess.$context.withValue(context, operation: body)
+}
+
+@discardableResult
+func withCLIProcess<T>(
+    home: HomeDirectory? = nil,
+    environment: [String: String] = [:],
+    stdinIsTTY: Bool? = false,
+    stdoutIsTTY: Bool? = false,
+    workspacePath: String? = nil,
+    stdoutFileDescriptor: Int32? = nil,
+    stdinText: String? = nil,
+    _ body: () async throws -> T
+) async throws -> T {
+    let context = CLIProcess.Context(
+        home: home,
+        environment: environment,
+        stdinIsTTY: stdinIsTTY,
+        stdoutIsTTY: stdoutIsTTY,
+        stdoutFileDescriptor: stdoutFileDescriptor,
+        workspacePath: workspacePath,
+        stdinText: stdinText
+    )
+    return try await CLIProcess.$context.withValue(context, operation: body)
+}
+
+func writeExecutableScript(at url: URL, source: String) throws {
+    try FileManager.default.createDirectory(
+        at: url.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+    )
+    try source.write(to: url, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+}
+
+func fakeProcessTool(exit status: Int32) throws -> URL {
+    let url = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-fake-tool-\(UUID().uuidString)", isDirectory: false)
+    try writeExecutableScript(
+        at: url,
+        source: "#!/bin/sh\nexit \(status)\n"
+    )
+    return url
+}
+
+func allowlistLockURL(home: HomeDirectory) -> URL {
+    RVPolicyPaths.allowlistLockFile(inConfigDir: RVPolicyPaths.configDirectory(home: home))
+}
+
+func allowOnceLockURL(home: HomeDirectory) -> URL {
+    RVPolicyPaths.allowOnceLockFile(inConfigDir: RVPolicyPaths.configDirectory(home: home))
+}
+
+func replacePathWithFile(_ url: URL) throws {
+    if FileManager.default.fileExists(atPath: url.path) {
+        try FileManager.default.removeItem(at: url)
+    } else {
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+    }
+    try Data().write(to: url)
+}
+
+func replacePathWithDirectory(_ url: URL) throws {
+    if FileManager.default.fileExists(atPath: url.path) {
+        try FileManager.default.removeItem(at: url)
+    }
+    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+}
+
+func seedAllowlist(
+    home: HomeDirectory,
+    rule: String = "core.git:reset-hard",
+    reason: String = "reviewed"
+) throws {
+    let store = AllowlistCLI.store(home: home)
+    let ruleID = try #require(parseAllowlistRuleID(rule))
+    try store.add(
+        AllowlistEntry(selector: .rule(ruleID), reason: reason, addedAt: Date()),
+        tty: TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+    )
+}

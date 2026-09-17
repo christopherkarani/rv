@@ -300,6 +300,64 @@ import RVDomain
     #expect(!result.matchingView.rawValue.contains("reset"))
 }
 
+@Test func normalize_masksRemainingSearchAndGitFormatData() {
+    #expect(Normalize.matchingView(of: "awk '/git reset --hard/'").rawValue.contains("reset") == false)
+    #expect(Normalize.matchingView(of: "sed -n '/rm -rf/p'").rawValue.contains("rm") == false)
+    #expect(
+        Normalize.matchingView(of: "perl -ne 'print if /rm -rf/'").rawValue.contains("rm") == false
+    )
+    #expect(
+        Normalize.matchingView(of: #"php -r "echo 'git reset --hard';""#).rawValue.contains("reset")
+            == false
+    )
+    #expect(
+        Normalize.matchingView(of: #"lua -e "print('git reset --hard')""#).rawValue.contains("reset")
+            == false
+    )
+    #expect(
+        Normalize.matchingView(of: #"jq -n '"git reset --hard"'"#).rawValue.contains("reset") == false
+    )
+    #expect(Normalize.matchingView(of: "fgrep 'rm -rf'").rawValue.contains("rm") == false)
+    #expect(Normalize.matchingView(of: "egrep 'rm -rf'").rawValue.contains("rm") == false)
+    #expect(Normalize.matchingView(of: "ag 'rm -rf'").rawValue.contains("rm") == false)
+    #expect(
+        Normalize.matchingView(of: "git show --pretty=format:'git reset --hard'")
+            .rawValue.contains("reset") == false
+    )
+    #expect(
+        Normalize.matchingView(of: "git log --format='git reset --hard'").rawValue.contains("reset")
+            == false
+    )
+    #expect(
+        Normalize.matchingView(of: "git commit --trailer 'Made-with: git reset --hard'")
+            .rawValue.contains("reset") == false
+    )
+    #expect(
+        Normalize.matchingView(of: "git config alias.oops 'reset --hard'").rawValue.contains("reset")
+            == false
+    )
+    #expect(
+        Normalize.matchingView(of: "git config --global alias.rh 'reset --hard'")
+            .rawValue.contains("reset") == false
+    )
+    #expect(Normalize.matchingView(of: "git log -S 'rm -rf'").rawValue.contains("rm") == false)
+    #expect(
+        Normalize.matchingView(of: "gh pr create --title 'fix git reset --hard'")
+            .rawValue.contains("reset") == false
+    )
+}
+
+@Test func normalize_masksHeredocWriteBody_keepsExecutingSink() {
+    let write = Normalize.matchingView(
+        of: "cat > /tmp/note.md << 'EOF'\nSee git reset --hard\nEOF"
+    )
+    #expect(write.rawValue.contains("reset") == false)
+    let executing = Normalize.matchingView(
+        of: "cat <<'EOF' | bash\ngit reset --hard\nEOF"
+    )
+    #expect(executing.rawValue.contains("git reset --hard"))
+}
+
 private func evaluateNormalized(_ command: String) throws -> EvaluationResult {
     let packs = [
         PackSnapshot(

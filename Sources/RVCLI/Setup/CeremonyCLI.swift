@@ -1,9 +1,4 @@
 import ArgumentParser
-#if canImport(Darwin)
-import Darwin
-#elseif canImport(Glibc)
-import Glibc
-#endif
 import Foundation
 
 /// Shared TTY appearance + outcome emission for paced setup / uninstall shows.
@@ -22,7 +17,7 @@ enum CeremonyCLI {
         )
         let animate: Bool
         if case .pretty = appearance {
-            animate = isatty(STDOUT_FILENO) != 0
+            animate = CLIProcess.stdoutIsTTY()
         } else {
             animate = false
         }

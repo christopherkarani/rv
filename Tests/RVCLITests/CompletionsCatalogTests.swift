@@ -9,9 +9,9 @@ import Testing
         .deletingLastPathComponent()
     let names = RV.configuration.subcommands.compactMap { $0.configuration.commandName }
     let files = [
-        root.appendingPathComponent("share/completions/rv.bash"),
-        root.appendingPathComponent("share/completions/rv.zsh"),
-        root.appendingPathComponent("share/completions/rv.fish"),
+        root.appendingPathComponent("Resources/Completions/rv.bash"),
+        root.appendingPathComponent("Resources/Completions/rv.zsh"),
+        root.appendingPathComponent("Resources/Completions/rv.fish"),
     ]
     for file in files {
         let text = try String(contentsOf: file, encoding: .utf8)

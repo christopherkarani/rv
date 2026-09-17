@@ -6,7 +6,12 @@ public enum AnalyticsCredentials: Sendable {
     public static let bundledAPIKey = ""
 
     /// PostHog US ingest host. Invalid only if the constant string is edited badly.
-    public static let defaultHost = URL(string: "https://us.i.posthog.com") ?? URL(fileURLWithPath: "/")
+    public static let defaultHost = ingestURL(from: "https://us.i.posthog.com")
+
+    /// Parses an ingest URL. File-root is the last-resort fallback if `raw` is not a URL.
+    package static func ingestURL(from raw: String) -> URL {
+        URL(string: raw) ?? URL(fileURLWithPath: "/")
+    }
 
     public static func apiKey(
         environment: [String: String] = ProcessInfo.processInfo.environment

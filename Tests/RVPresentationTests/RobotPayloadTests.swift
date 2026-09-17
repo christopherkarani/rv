@@ -68,10 +68,55 @@ private let readyService = DoctorServiceView(
     #expect(json["reason"] as? String == model.fact)
 }
 
+@Test func packsRobotPayload_schemaAndCounts() throws {
+    let payload = packsRobotPayload(
+        rows: [
+            PacksRobotRow(
+                id: .coreGit,
+                name: "Git",
+                category: "core",
+                description: "git",
+                isEnabled: true,
+                safePatternCount: 1,
+                destructivePatternCount: 2
+            )
+        ],
+        enabledCount: 3,
+        totalCount: 95
+    )
+    let json = try object(from: payload)
+    #expect(json["schema"] as? String == RobotSchema.packs)
+    #expect(json["enabled_count"] as? Int == 3)
+    #expect(json["total_count"] as? Int == 95)
+}
+
+@Test func explainRobotPayload_allowAndIncomplete() throws {
+    let allow = try object(
+        from: explainRobotPayload(
+            from: explainViewModel(from: EvaluationResult(outcome: .plain), command: resetHard)
+        )
+    )
+    #expect(allow["decision"] as? String == "allow")
+    #expect(allow["next_action"] == nil)
+
+    let incomplete = try object(
+        from: explainRobotPayload(
+            from: explainViewModel(
+                from: EvaluationResult(outcome: .indeterminate(.commandTooLarge)),
+                command: resetHard
+            )
+        )
+    )
+    #expect(incomplete["decision"] as? String == "indeterminate")
+}
+
 @Test func doctorRobotPayload_fieldSetUnchanged() throws {
     let model = DoctorViewModel(
         service: readyService,
-        packs: DoctorPacksView(enabled: dayOnePackIDs, registry: .ready),
+        packs: DoctorPacksView(
+            enabled: dayOnePackIDs + [PackID(rawValue: "core.network")],
+            registry: .ready
+        ),
         hosts: HookHost.setupSlotOrder.map { DoctorHostView(host: $0, state: .missing) },
         config: .readable
     )
@@ -99,8 +144,8 @@ private let readyService = DoctorServiceView(
     #expect(Set(packs.keys) == ["registry", "day_one_ready", "enabled", "extras_enabled"])
     #expect(packs["registry"] as? String == "ready")
     #expect(packs["day_one_ready"] as? Bool == true)
-    #expect(packs["enabled"] as? [String] == dayOnePackIDs.map(\.rawValue).sorted())
-    #expect(packs["extras_enabled"] as? [String] == [])
+    #expect(packs["enabled"] as? [String] == (dayOnePackIDs + [PackID(rawValue: "core.network")]).map(\.rawValue).sorted())
+    #expect(packs["extras_enabled"] as? [String] == ["core.network"])
 
     #expect(Set(hosts.keys) == ["grok", "pi", "opencode", "claude", "openclaw", "hermes", "codex", "cursor"])
     #expect(hosts["grok"] as? String == "missing")

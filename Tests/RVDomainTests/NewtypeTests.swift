@@ -144,6 +144,21 @@ import Testing
     let root = try #require(RepositoryRoot(validating: "/tmp/repo"))
     #expect(root.rawValue == "/tmp/repo")
     #expect(RepositoryRoot(rawValue: "") == nil)
+    #expect(RepositoryRoot(rawValue: "/tmp/repo") == root)
+}
+
+@Test func repositoryRoot_codableIsJSONStringAndRejectsEmpty() throws {
+    let root = try #require(RepositoryRoot(validating: "/tmp/repo"))
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = .withoutEscapingSlashes
+    let data = try encoder.encode(root)
+    #expect(String(data: data, encoding: .utf8) == "\"/tmp/repo\"")
+    #expect(try JSONDecoder().decode(RepositoryRoot.self, from: data) == root)
+
+    let empty = try JSONEncoder().encode("")
+    #expect(throws: DecodingError.self) {
+        _ = try JSONDecoder().decode(RepositoryRoot.self, from: empty)
+    }
 }
 
 @Test func workingDirectory_codableIsJSONString() throws {

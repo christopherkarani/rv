@@ -25,7 +25,7 @@ struct Safety: AsyncParsableCommand {
     var level: String?
 
     func run() throws {
-        guard let home = HomeDirectory.process() else {
+        guard let home = CLIProcess.home() else {
             FileHandle.standardError.write(Data("rv safety: HOME is not set\n".utf8))
             throw ExitCode(1)
         }
@@ -44,7 +44,7 @@ struct Safety: AsyncParsableCommand {
             return
         }
         let workspace = URL(
-            fileURLWithPath: FileManager.default.currentDirectoryPath,
+            fileURLWithPath: CLIProcess.workspacePath(),
             isDirectory: true
         )
         FileHandle.standardOutput.write(

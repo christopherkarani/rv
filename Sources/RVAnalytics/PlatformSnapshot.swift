@@ -39,23 +39,34 @@ public struct PlatformSnapshot: Sendable, Equatable {
         return String(decoding: buffer.map { UInt8(bitPattern: $0) }.prefix { $0 != 0 }, as: UTF8.self)
 #else
         var systemInfo = utsname()
-        if uname(&systemInfo) == 0 {
-            let release = withUnsafeBytes(of: systemInfo.release) { raw in
+        let unameOK = uname(&systemInfo) == 0
+        let text = unameOK
+            ? withUnsafeBytes(of: systemInfo.release, { raw in
                 String(decoding: raw.prefix { $0 != 0 }, as: UTF8.self)
-            }
-            if release.isEmpty == false {
-                return release
-            }
-        }
-        return osReleaseField("BUILD_ID") ?? osReleaseField("VERSION_ID") ?? "unknown"
+            })
+            : ""
+        let release = text.isEmpty ? nil : text
+        let osText = release == nil
+            ? (try? String(contentsOfFile: "/etc/os-release", encoding: .utf8))
+            : nil
+        return linuxKernelBuild(unameRelease: release, osReleaseText: osText)
 #endif
     }
 
 #if !canImport(Darwin)
-    private static func osReleaseField(_ key: String) -> String? {
-        guard let text = try? String(contentsOfFile: "/etc/os-release", encoding: .utf8) else {
-            return nil
+    /// Prefers `uname` release; otherwise BUILD_ID, VERSION_ID, then `unknown`.
+    package static func linuxKernelBuild(unameRelease: String?, osReleaseText: String?) -> String {
+        if let unameRelease, unameRelease.isEmpty == false {
+            return unameRelease
         }
+        guard let osReleaseText else { return "unknown" }
+        return osReleaseValue(from: osReleaseText, key: "BUILD_ID")
+            ?? osReleaseValue(from: osReleaseText, key: "VERSION_ID")
+            ?? "unknown"
+    }
+
+    /// Parses one `KEY=value` field from os-release text. Quotes are stripped.
+    package static func osReleaseValue(from text: String, key: String) -> String? {
         for line in text.split(whereSeparator: \.isNewline) {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             guard trimmed.hasPrefix("\(key)=") else { continue }
@@ -67,6 +78,18 @@ public struct PlatformSnapshot: Sendable, Equatable {
             return value
         }
         return nil
+    }
+
+    /// Reads one `KEY=value` field from an os-release file. Live snapshot uses
+    /// `/etc/os-release` when `uname` does not yield a release string.
+    package static func osReleaseField(
+        _ key: String,
+        filePath: String = "/etc/os-release"
+    ) -> String? {
+        guard let text = try? String(contentsOfFile: filePath, encoding: .utf8) else {
+            return nil
+        }
+        return osReleaseValue(from: text, key: key)
     }
 #endif
 }
