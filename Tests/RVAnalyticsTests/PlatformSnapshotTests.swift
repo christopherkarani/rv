@@ -38,6 +38,28 @@ struct PlatformSnapshotTests {
         #expect(PlatformSnapshot.osReleaseField("RV_NOT_A_FIELD") == nil)
     }
 
+    @Test func linuxKernelBuildPrefersUnameThenOSRelease() {
+        #expect(PlatformSnapshot.linuxKernelBuild(unameRelease: "6.12.0", osReleaseText: nil) == "6.12.0")
+        #expect(PlatformSnapshot.linuxKernelBuild(unameRelease: "", osReleaseText: nil) == "unknown")
+        #expect(PlatformSnapshot.linuxKernelBuild(unameRelease: nil, osReleaseText: nil) == "unknown")
+        #expect(
+            PlatformSnapshot.linuxKernelBuild(
+                unameRelease: nil,
+                osReleaseText: "BUILD_ID=abc\nVERSION_ID=24.04\n"
+            ) == "abc"
+        )
+        #expect(
+            PlatformSnapshot.linuxKernelBuild(
+                unameRelease: "",
+                osReleaseText: "VERSION_ID=24.04\n"
+            ) == "24.04"
+        )
+        #expect(
+            PlatformSnapshot.linuxKernelBuild(unameRelease: nil, osReleaseText: "NAME=x\n")
+                == "unknown"
+        )
+    }
+
     @Test func osReleaseParsesQuotedAndBareValues() throws {
         let root = try temporaryConfigRoot()
         let file = root.appendingPathComponent("os-release", isDirectory: false)

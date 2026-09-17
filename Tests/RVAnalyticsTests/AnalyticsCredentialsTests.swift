@@ -11,7 +11,16 @@ struct AnalyticsCredentialsTests {
     @Test func defaultHostIsUSIngest() {
         #expect(AnalyticsCredentials.defaultHost.scheme == "https")
         #expect(AnalyticsCredentials.defaultHost.host == "us.i.posthog.com")
-        #expect(AnalyticsCredentials.defaultHost.path.isEmpty || AnalyticsCredentials.defaultHost.path == "")
+        #expect(
+            AnalyticsCredentials.defaultHost
+                == AnalyticsCredentials.ingestURL(from: "https://us.i.posthog.com")
+        )
+    }
+
+    @Test func ingestURLFallsBackToFileRoot() {
+        let fallback = AnalyticsCredentials.ingestURL(from: "")
+        #expect(fallback.isFileURL)
+        #expect(fallback.path == "/")
     }
 
     @Test func apiKeyReadsOverride() {
