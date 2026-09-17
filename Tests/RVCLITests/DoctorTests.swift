@@ -30,6 +30,8 @@ private let localReady = ServiceDiagnosticResult.local(
     ServiceFallbackDiagnostic(cause: .down, corePacksReady: true)
 )
 
+private struct PacksReadFailure: Error {}
+
 private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSnapshotReply {
     DoctorSnapshotReply(
         serviceSemver: "1.0.0",
@@ -544,6 +546,17 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
         #expect(outcome.stdout.contains("→  rv packs enable core.git"))
         #expect(outcome.stdout.contains("missing core.git") == false)
     }
+}
+
+@Test func doctor_homePackIDReadFailureDoesNotUseServiceSnapshot() {
+    let view = DoctorRun.packsView(
+        homeIDs: .failure(PacksReadFailure()),
+        packCheckReady: true
+    )
+
+    #expect(view.enabled.isEmpty)
+    #expect(view.registry == .broken)
+    #expect(view.areDayOnePacksReady == false)
 }
 
 @Test func doctor_staleServiceSnapshotDoesNotHideEnabledDayOne() throws {

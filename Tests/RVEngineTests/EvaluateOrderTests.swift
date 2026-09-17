@@ -195,6 +195,23 @@ private func run(
     #expect(result.decision == .indeterminate(.budgetExhausted))
 }
 
+@Test func evaluate_duplicatePackIDUsesFirstSnapshotAndDoesNotTrap() throws {
+    let emptyDuplicate = PackSnapshot(
+        id: .coreGit,
+        name: "git-dup",
+        description: "empty duplicate",
+        keywords: ["git"],
+        safe: [],
+        destructive: []
+    )
+    let result = try run("git reset --hard", packs: samplePacks() + [emptyDuplicate])
+    guard case .deny(let deny) = result.decision else {
+        Issue.record("first core.git snapshot must still deny reset --hard")
+        return
+    }
+    #expect(deny.ruleID.rawValue == "core.git:reset-hard")
+}
+
 @Test func evaluate_emptyCorePacksAreUnavailable() throws {
     let empty = PackSnapshot(
         id: .coreGit,

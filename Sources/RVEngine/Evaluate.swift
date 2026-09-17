@@ -176,7 +176,11 @@ private func requiredRulesAreCompiled<Compiled: Sendable>(
 }
 
 private func enabledPacks(from packs: [PackSnapshot], enabledIDs: [PackID]) -> [PackSnapshot] {
-    let byID = Dictionary(uniqueKeysWithValues: packs.map { ($0.id, $0) })
+    var byID: [PackID: PackSnapshot] = [:]
+    byID.reserveCapacity(packs.count)
+    for pack in packs where byID[pack.id] == nil {
+        byID[pack.id] = pack
+    }
     return enabledIDs.compactMap { byID[$0] }
 }
 

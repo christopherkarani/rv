@@ -79,10 +79,9 @@ enum DoctorRun {
         )
         return DoctorViewModel(
             service: health.service,
-            packs: DoctorPacksView(
-                enabled: (try? PacksFacade.effectiveIDs(home: environment.home))
-                    ?? health.enabledPacks,
-                registry: health.packCheckReady ? .ready : .broken
+            packs: packsView(
+                homeIDs: Result { try PacksFacade.effectiveIDs(home: environment.home) },
+                packCheckReady: health.packCheckReady
             ),
             hosts: HookHost.setupSlotOrder.map { host in
                 let installation = installations.installation(for: host)
@@ -104,6 +103,23 @@ enum DoctorRun {
                 inConfigDirectory: URL(fileURLWithPath: paths.configDirectory, isDirectory: true)
             )
         )
+    }
+
+    /// HOME config is the pack enablement source. A failed read is a broken
+    /// registry — never invent IDs from a reachable rvd snapshot.
+    static func packsView(
+        homeIDs: Result<[PackID], any Error>,
+        packCheckReady: Bool
+    ) -> DoctorPacksView {
+        switch homeIDs {
+        case .success(let ids):
+            DoctorPacksView(
+                enabled: ids,
+                registry: packCheckReady ? .ready : .broken
+            )
+        case .failure:
+            DoctorPacksView(enabled: [], registry: .broken)
+        }
     }
 
     /// Doctor consumes inspect state. Miss-path `.wired` already required sibling `rv-cli`.
