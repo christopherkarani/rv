@@ -186,6 +186,17 @@ struct PolicyCommandTests {
         }
     }
 
+    @Test func policyCommandSourcesUseWorkspaceNotStore() throws {
+        let show = try String(contentsOf: policyCommandSourceURL(), encoding: .utf8)
+        #expect(show.contains("TypedRuleStore(") == false)
+        #expect(show.contains("mergeLayer") == false)
+        #expect(show.contains("PolicyWorkspace("))
+        #expect(show.contains("loadLayers(builtin:"))
+        #expect(show.contains("mergeIncoming("))
+        #expect(show.contains("loadMachineDocument()"))
+        #expect(show.contains("loadRepoDocument()"))
+    }
+
 }
 
 private func withTempPolicyContext(_ body: (HomeDirectory, URL) throws -> Void) throws {
@@ -199,6 +210,14 @@ private func withTempPolicyContext(_ body: (HomeDirectory, URL) throws -> Void) 
         try? FileManager.default.removeItem(at: workspace)
     }
     try body(home, workspace)
+}
+
+private func policyCommandSourceURL() -> URL {
+    URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .appendingPathComponent("Sources/RVCLI/Commands/PolicyCommand.swift")
 }
 
 private func originSection(_ origin: String, in text: String) -> String? {

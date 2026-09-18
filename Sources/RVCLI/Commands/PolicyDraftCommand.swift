@@ -91,33 +91,16 @@ enum PolicyDraftRun {
         case .preview(let preview):
             var saved = false
             if save, preview.allowedToSave {
-                let store = TypedRuleStore(
-                    baseDirectory: RVPolicyPaths.configDirectory(home: home)
+                try PolicyWorkspace(home: home, workspace: workspace).upsert(
+                    preview.rule,
+                    layer: repo ? .repo : .machine
                 )
-                try upsert(preview.rule, into: store, repo: repo, workspace: workspace)
                 saved = true
             }
             return PolicyDraftResult(
                 text: try render(compiled, robot: robot),
                 outcome: .preview(saved: saved)
             )
-        }
-    }
-
-    private static func upsert(
-        _ rule: PolicyDocumentRule,
-        into store: TypedRuleStore,
-        repo: Bool,
-        workspace: URL
-    ) throws {
-        var document = repo
-            ? try store.loadRepoDocument(workspace: workspace)
-            : try store.loadMachineDocument()
-        document.rules = PolicyDocumentTOML.mergeLayer(existing: document.rules, incoming: [rule])
-        if repo {
-            try store.saveRepo(document, workspace: workspace)
-        } else {
-            try store.saveMachine(document)
         }
     }
 

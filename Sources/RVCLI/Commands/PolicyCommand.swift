@@ -105,14 +105,12 @@ struct Policy: AsyncParsableCommand {
                 fileURLWithPath: CLIProcess.workspacePath(),
                 isDirectory: true
             )
-            let store = TypedRuleStore(
-                baseDirectory: RVPolicyPaths.configDirectory(home: home)
-            )
+            let session = PolicyWorkspace(home: home, workspace: workspace)
             let document: PolicyDocument
             do {
                 document = repo
-                    ? try store.loadRepoDocument(workspace: workspace)
-                    : try store.loadMachineDocument()
+                    ? try session.loadRepoDocument()
+                    : try session.loadMachineDocument()
             } catch {
                 FileHandle.standardError.write(Data("rv policy export: invalid policy file\n".utf8))
                 throw ExitCode(1)
@@ -163,31 +161,21 @@ struct Policy: AsyncParsableCommand {
                 FileHandle.standardError.write(Data("rv policy apply: invalid policy file\n".utf8))
                 throw ExitCode(1)
             }
-            let store = TypedRuleStore(
-                baseDirectory: RVPolicyPaths.configDirectory(home: home)
-            )
-            let existing: PolicyDocument
+            let session = PolicyWorkspace(home: home, workspace: workspace)
+            let layer: PolicyDocumentLayer = repo ? .repo : .machine
+            let merged: PolicyDocument
             do {
-                existing = repo
-                    ? try store.loadRepoDocument(workspace: workspace)
-                    : try store.loadMachineDocument()
+                merged = try session.mergeIncoming(incoming, layer: layer, save: false)
             } catch {
                 FileHandle.standardError.write(Data("rv policy apply: invalid policy file\n".utf8))
                 throw ExitCode(1)
             }
-            let merged = PolicyDocument(
-                rules: PolicyDocumentTOML.mergeLayer(existing: existing.rules, incoming: incoming.rules)
-            )
             let preview = merged.rules.map { "  \(formatDocumentRule($0))" }.joined(separator: "\n")
             let body = preview.isEmpty ? "  (none)" : preview
             FileHandle.standardOutput.write(Data(("apply\n\(body)\n").utf8))
             if save {
                 do {
-                    if repo {
-                        try store.saveRepo(merged, workspace: workspace)
-                    } else {
-                        try store.saveMachine(merged)
-                    }
+                    _ = try session.mergeIncoming(incoming, layer: layer, save: true)
                 } catch {
                     FileHandle.standardError.write(Data("rv policy apply: write failed\n".utf8))
                     throw ExitCode(1)
@@ -197,11 +185,7 @@ struct Policy: AsyncParsableCommand {
     }
 }
 
-struct PolicyShowSnapshot: Equatable, Sendable, Codable {
-    var builtin: [TypedRule]
-    var machine: [TypedRule]
-    var repo: [TypedRule]
-}
+typealias PolicyShowSnapshot = PolicyWorkspace.ShowSnapshot
 
 enum PolicyShowRun {
     static func load(
@@ -209,14 +193,7 @@ enum PolicyShowRun {
         workspace: URL,
         builtin: [TypedRule] = []
     ) throws -> PolicyShowSnapshot {
-        let store = TypedRuleStore(
-            baseDirectory: RVPolicyPaths.configDirectory(home: home)
-        )
-        return PolicyShowSnapshot(
-            builtin: builtin,
-            machine: try store.loadMachine(),
-            repo: try store.loadRepo(workspace: workspace)
-        )
+        try PolicyWorkspace(home: home, workspace: workspace).loadLayers(builtin: builtin)
     }
 
     static func pretty(_ snapshot: PolicyShowSnapshot) -> String {
@@ -259,10 +236,7 @@ enum PolicyValidateRun {
     static func validate(_ target: Target) throws {
         switch target {
         case .machine(let home):
-            let store = TypedRuleStore(
-                baseDirectory: RVPolicyPaths.configDirectory(home: home)
-            )
-            _ = try store.loadMachineDocument()
+            _ = try PolicyWorkspace(home: home).loadMachineDocument()
         case .file(let url):
             guard FileManager.default.fileExists(atPath: url.path) else {
                 return
