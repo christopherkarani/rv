@@ -42,6 +42,26 @@ enum HostCompanionWrite: Equatable, Sendable {
     case cursorHooksJSON(adapterPath: String, hooksPath: String)
 }
 
+/// Inverse of one attach row. The executor folds this; it does not recover
+/// OpenClaw-vs-Codex companion lists from `HookHost`.
+struct HostDetachWrite: Equatable, Sendable {
+    var host: HookHost
+    var remove: [HostDetachOperation]
+    var leaveOccupied: [HostDetachOperation]
+    var alwaysEmptyDirectories: [String]
+    var removedOnlyWhenChanged: Bool
+}
+
+enum HostDetachOperation: Equatable, Sendable {
+    case removeFile(String)
+    case removeClaudeRVHooks(String)
+    case stripClaudeFingerprintLeavingOccupied(String)
+    case removeCodexRVHooks(String)
+    case removeCursorRVHooks(String)
+    case stripOpenCodeAskPlugin
+    case removeEmptyDirectory(String)
+}
+
 /// Exhaustive attach recipe for every `HookHost`. Adding a host is a new row here,
 /// not a new branch in interpret or a per-host strategy type.
 enum HostArtifacts {
@@ -98,6 +118,55 @@ enum HostArtifacts {
         )
     }
 
+    /// Inverse of `attach` for the same row. Adding a host still means one table row.
+    static func detach(host: HookHost, layout: OwnedPaths) -> HostDetachWrite {
+        let destination = layout.hostAdapter(for: host).destination
+        let row = row(for: host, destination: destination)
+        var remove: [HostDetachOperation] = []
+        var leaveOccupied: [HostDetachOperation] = []
+        let removedOnlyWhenChanged: Bool
+        switch row.kind {
+        case .writeOwnedRendered, .applyGrokThenWriteOwned:
+            remove.append(.removeFile(destination))
+            removedOnlyWhenChanged = false
+        case .claudeSettingsMerge:
+            remove.append(.removeClaudeRVHooks(destination))
+            leaveOccupied.append(.stripClaudeFingerprintLeavingOccupied(destination))
+            removedOnlyWhenChanged = true
+        }
+        for companion in row.companions {
+            remove.append(contentsOf: invert(companion, layout: layout))
+        }
+        return HostDetachWrite(
+            host: host,
+            remove: remove,
+            leaveOccupied: leaveOccupied,
+            alwaysEmptyDirectories: row.emptyDirectories,
+            removedOnlyWhenChanged: removedOnlyWhenChanged
+        )
+    }
+
+    private static func invert(
+        _ companion: HostCompanionWrite,
+        layout: OwnedPaths
+    ) -> [HostDetachOperation] {
+        switch companion {
+        case .pluginManifest(let path), .packageManifest(let path), .openCodeTuiPlugin(let path):
+            return [.removeFile(path)]
+        case .openCodeAskPackage:
+            return [
+                .removeFile(layout.openCodeTuiAskPackage + "/package.json"),
+                .removeFile(layout.openCodeTuiAskPackage + "/tui.js"),
+                .stripOpenCodeAskPlugin,
+                .removeEmptyDirectory(layout.openCodeTuiAskPackage),
+            ]
+        case .codexHooksJSON(_, let hooksPath):
+            return [.removeCodexRVHooks(hooksPath)]
+        case .cursorHooksJSON(_, let hooksPath):
+            return [.removeCursorRVHooks(hooksPath)]
+        }
+    }
+
     private enum AdapterKind {
         case writeOwnedRendered
         case applyGrokThenWriteOwned
@@ -108,6 +177,7 @@ enum HostArtifacts {
         var kind: AdapterKind
         var companions: [HostCompanionWrite]
         var forcePrelude: HostAttachPrelude
+        var emptyDirectories: [String]
     }
 
     private static func row(for host: HookHost, destination: String) -> Row {
@@ -117,13 +187,15 @@ enum HostArtifacts {
             return Row(
                 kind: .applyGrokThenWriteOwned,
                 companions: [],
-                forcePrelude: .backupAndClearOwnedPath
+                forcePrelude: .backupAndClearOwnedPath,
+                emptyDirectories: []
             )
         case .pi:
             return Row(
                 kind: .writeOwnedRendered,
                 companions: [],
-                forcePrelude: .backupAndClearOwnedPath
+                forcePrelude: .backupAndClearOwnedPath,
+                emptyDirectories: []
             )
         case .opencode:
             return Row(
@@ -132,13 +204,15 @@ enum HostArtifacts {
                     .openCodeTuiPlugin(path: directory + "/rv-guard-tui.js"),
                     .openCodeAskPackage,
                 ],
-                forcePrelude: .backupAndClearOwnedPath
+                forcePrelude: .backupAndClearOwnedPath,
+                emptyDirectories: []
             )
         case .claude:
             return Row(
                 kind: .claudeSettingsMerge,
                 companions: [],
-                forcePrelude: .occupiedIfDestinationSymlink
+                forcePrelude: .occupiedIfDestinationSymlink,
+                emptyDirectories: []
             )
         case .openclaw:
             return Row(
@@ -147,7 +221,8 @@ enum HostArtifacts {
                     .pluginManifest(path: directory + "/openclaw.plugin.json"),
                     .packageManifest(path: directory + "/package.json"),
                 ],
-                forcePrelude: .backupAndClearOwnedPath
+                forcePrelude: .backupAndClearOwnedPath,
+                emptyDirectories: [directory]
             )
         case .hermes:
             return Row(
@@ -155,7 +230,8 @@ enum HostArtifacts {
                 companions: [
                     .pluginManifest(path: directory + "/plugin.yaml"),
                 ],
-                forcePrelude: .backupAndClearOwnedPath
+                forcePrelude: .backupAndClearOwnedPath,
+                emptyDirectories: [directory]
             )
         case .codex:
             return Row(
@@ -166,7 +242,8 @@ enum HostArtifacts {
                         hooksPath: (directory as NSString).deletingLastPathComponent + "/hooks.json"
                     ),
                 ],
-                forcePrelude: .backupAndClearOwnedPath
+                forcePrelude: .backupAndClearOwnedPath,
+                emptyDirectories: [directory]
             )
         case .cursor:
             return Row(
@@ -177,7 +254,8 @@ enum HostArtifacts {
                         hooksPath: (directory as NSString).deletingLastPathComponent + "/hooks.json"
                     ),
                 ],
-                forcePrelude: .backupAndClearOwnedPath
+                forcePrelude: .backupAndClearOwnedPath,
+                emptyDirectories: [directory]
             )
         }
     }

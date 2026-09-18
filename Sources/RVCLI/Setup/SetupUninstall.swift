@@ -17,58 +17,15 @@ extension SetupRun {
         let files = FileOps(fileManager: env.fileManager)
         let layout = OwnedPaths(home: env.home)
         let installations = try inspectInstallations(layout: layout, env: env)
-
-        var removedHosts: Set<HookHost> = []
-        var occupiedHosts: Set<HookHost> = []
-        var removedPaths: [String] = []
-        var stripOpenCodeAsk = false
-
-        for owned in layout.hostAdapters {
-            switch installations.installation(for: owned.host).uninstallPlan {
-            case .remove:
-                if owned.host == .claude {
-                    if try removeClaudeRVHooks(at: owned.destination, files: files) {
-                        removedHosts.insert(owned.host)
-                    }
-                } else {
-                    removedPaths.append(owned.destination)
-                    if owned.host == .openclaw {
-                        let directory = (owned.destination as NSString).deletingLastPathComponent
-                        removedPaths.append(directory + "/openclaw.plugin.json")
-                        removedPaths.append(directory + "/package.json")
-                    }
-                    if owned.host == .hermes {
-                        let directory = (owned.destination as NSString).deletingLastPathComponent
-                        removedPaths.append(directory + "/plugin.yaml")
-                    }
-                    if owned.host == .codex {
-                        _ = try removeCodexRVHooks(at: layout.codexHooksJSON, files: files)
-                    }
-                    if owned.host == .cursor {
-                        _ = try removeCursorRVHooks(at: layout.cursorHooksJSON, files: files)
-                    }
-                    if owned.host == .opencode {
-                        removedPaths.append(layout.openCodeTuiPlugin)
-                        removedPaths.append(layout.openCodeTuiAskPackage + "/package.json")
-                        removedPaths.append(layout.openCodeTuiAskPackage + "/tui.js")
-                        stripOpenCodeAsk = true
-                    }
-                    removedHosts.insert(owned.host)
-                }
-            case .leaveOccupied:
-                if owned.host == .claude {
-                    if try stripClaudeFingerprintLeavingOccupied(at: owned.destination, files: files) {
-                        removedHosts.insert(owned.host)
-                    } else {
-                        occupiedHosts.insert(owned.host)
-                    }
-                } else {
-                    occupiedHosts.insert(owned.host)
-                }
-            case .skip:
-                break
-            }
-        }
+        let detached = try HostLifecycle.detach(
+            installations: installations,
+            env: env,
+            layout: layout,
+            files: files
+        )
+        let removedHosts = detached.removedHosts
+        let occupiedHosts = detached.occupiedHosts
+        var removedPaths = detached.removedPaths
 
         let servicePath = evaluateServicePath(layout: layout, supervisor: env.supervisor)
         let launchAgentExisted = files.fileExists(servicePath)
@@ -93,22 +50,6 @@ extension SetupRun {
         for path in removedPaths {
             files.removeFile(atPath: path)
         }
-        if stripOpenCodeAsk {
-            try stripOpenCodeAskPlugin(layout: layout, files: files)
-            files.removeDirectoryIfEmpty(atPath: layout.openCodeTuiAskPackage)
-        }
-        files.removeDirectoryIfEmpty(
-            atPath: (layout.openClawPlugin as NSString).deletingLastPathComponent
-        )
-        files.removeDirectoryIfEmpty(
-            atPath: (layout.hermesPlugin as NSString).deletingLastPathComponent
-        )
-        files.removeDirectoryIfEmpty(
-            atPath: (layout.codexHook as NSString).deletingLastPathComponent
-        )
-        files.removeDirectoryIfEmpty(
-            atPath: (layout.cursorHook as NSString).deletingLastPathComponent
-        )
         files.removeDirectoryIfEmpty(atPath: layout.configDirectory)
 
         if env.supervisor == .launchd, env.touchLaunchd {
@@ -149,7 +90,7 @@ extension SetupRun {
     }
 
     /// Removes rv-fingerprinted Cursor handlers only. Returns whether anything changed.
-    private static func removeCursorRVHooks(at path: String, files: FileOps) throws(SetupError) -> Bool {
+    static func removeCursorRVHooks(at path: String, files: FileOps) throws(SetupError) -> Bool {
         if files.isSymbolicLink(path) {
             return false
         }
@@ -176,7 +117,7 @@ extension SetupRun {
     }
 
     /// Removes rv-fingerprinted Codex handlers only. Returns whether anything changed.
-    private static func removeCodexRVHooks(at path: String, files: FileOps) throws(SetupError) -> Bool {
+    static func removeCodexRVHooks(at path: String, files: FileOps) throws(SetupError) -> Bool {
         if files.isSymbolicLink(path) {
             return false
         }
@@ -219,12 +160,12 @@ extension SetupRun {
     }
 
     /// Removes rv-fingerprinted Claude handlers only. Returns whether anything changed.
-    private static func removeClaudeRVHooks(at path: String, files: FileOps) throws(SetupError) -> Bool {
+    static func removeClaudeRVHooks(at path: String, files: FileOps) throws(SetupError) -> Bool {
         try applyClaudeUninstall(at: path, files: files, unreadable: .fail)
     }
 
     /// Occupied foreign/tampered `rv-guard.py` still strips on uninstall.
-    private static func stripClaudeFingerprintLeavingOccupied(
+    static func stripClaudeFingerprintLeavingOccupied(
         at path: String,
         files: FileOps
     ) throws(SetupError) -> Bool {
