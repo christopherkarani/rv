@@ -6,8 +6,8 @@ import RVTheme
 @Test func setupCeremonyPlayer_zeroClock_emitsFinalCloserOnly() {
     let frames = setupCeremonyFrames(
         grok: .wired,
-        pi: .pending,
-        openCode: .pending,
+        pi: .skipped,
+        openCode: .skipped,
         wrote: [.grok],
         kind: .install
     )!

@@ -16,18 +16,18 @@ final class RecordingInstallAnalytics: InstallAnalyticsCapturing, @unchecked Sen
     let slots = SetupSlotSnapshot(
         grok: .wired,
         pi: .occupied,
-        openCode: .pending,
+        openCode: .skipped,
         wrote: [.grok]
     )
     #expect(InstallAnalyticsHosts.from(slots) == [
         "grok": "wired",
         "pi": "occupied",
-        "opencode": "pending",
-        "claude": "pending",
-        "openclaw": "pending",
-            "hermes": "pending",
-            "codex": "pending",
-            "cursor": "pending",
+        "opencode": "skipped",
+        "claude": "skipped",
+        "openclaw": "skipped",
+            "hermes": "skipped",
+            "codex": "skipped",
+            "cursor": "skipped",
         ])
 }
 
@@ -46,13 +46,13 @@ final class RecordingInstallAnalytics: InstallAnalyticsCapturing, @unchecked Sen
         #expect(outcome.exitCode == 0)
         #expect(analytics.captures == [[
             "grok": "wired",
-            "pi": "pending",
-            "opencode": "pending",
-            "claude": "pending",
-            "openclaw": "pending",
-            "hermes": "pending",
-            "codex": "pending",
-            "cursor": "pending",
+            "pi": "skipped",
+            "opencode": "skipped",
+            "claude": "skipped",
+            "openclaw": "skipped",
+            "hermes": "skipped",
+            "codex": "skipped",
+            "cursor": "skipped",
         ]])
         let paths = AnalyticsPaths(
             configDirectory: URL(fileURLWithPath: layout.configDirectory, isDirectory: true)

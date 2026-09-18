@@ -64,11 +64,11 @@ public func setupCeremonyFrames(
     grok: SetupSlotKind,
     pi: SetupSlotKind,
     openCode: SetupSlotKind,
-    claude: SetupSlotKind = .pending,
-    openClaw: SetupSlotKind = .pending,
-    hermes: SetupSlotKind = .pending,
-    codex: SetupSlotKind = .pending,
-    cursor: SetupSlotKind = .pending,
+    claude: SetupSlotKind = .skipped,
+    openClaw: SetupSlotKind = .skipped,
+    hermes: SetupSlotKind = .skipped,
+    codex: SetupSlotKind = .skipped,
+    cursor: SetupSlotKind = .skipped,
     wrote: Set<HookHost>,
     kind: SetupCeremonyKind
 ) -> [SetupCeremonyFrame]? {
@@ -100,7 +100,7 @@ public func setupCeremonyFrames(
     var frames: [SetupCeremonyFrame] = []
 
     let emptySlots = HookHost.setupSlotOrder.map {
-        SetupSlotView(host: $0, kind: .pending)
+        SetupSlotView(host: $0, kind: .skipped)
     }
     for spin in 0..<setupCeremonySpinnerFrames.count {
         frames.append(
@@ -167,7 +167,7 @@ public func setupSlotClause(host: HookHost, kind: SetupSlotKind) -> String? {
         return setupCodexTrustClause
     case .occupied:
         return setupOccupiedClause
-    case .pending, .wired:
+    case .skipped, .wired:
         return nil
     }
 }

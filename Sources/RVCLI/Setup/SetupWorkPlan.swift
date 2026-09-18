@@ -11,8 +11,8 @@ enum SetupWorkStep: Equatable, Sendable {
     case skipLaunchAgent
     case skipUndetected(HookHost)
     case skipOccupied(HookHost)
-    case forceClearThenWrite(HookHost)
-    case write(HookHost, existingData: Data?)
+    case forceClearThenWrite(HostAttachWrite)
+    case write(HostAttachWrite)
 }
 
 enum SetupWorkPlanBuilder {
@@ -31,9 +31,27 @@ enum SetupWorkPlanBuilder {
             case .skipOccupied:
                 steps.append(.skipOccupied(host))
             case .forceClearThenWrite:
-                steps.append(.forceClearThenWrite(host))
+                steps.append(
+                    .forceClearThenWrite(
+                        HostArtifacts.attach(
+                            host: host,
+                            layout: layout,
+                            existingData: nil,
+                            forceClear: true
+                        )
+                    )
+                )
             case .write(let existingData):
-                steps.append(.write(host, existingData: existingData))
+                steps.append(
+                    .write(
+                        HostArtifacts.attach(
+                            host: host,
+                            layout: layout,
+                            existingData: existingData,
+                            forceClear: false
+                        )
+                    )
+                )
             }
         }
         // Hosts before LaunchAgent: a launchctl miss must not skip hook wiring.

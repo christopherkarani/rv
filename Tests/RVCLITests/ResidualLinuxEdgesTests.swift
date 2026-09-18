@@ -180,8 +180,8 @@ struct ResidualLinuxEdgesTests {
         let report = SetupReport(
             grok: .wired,
             pi: .occupied,
-            openCode: .pending,
-            claude: .pending,
+            openCode: .skipped,
+            claude: .skipped,
             openClaw: .occupied,
             hermes: .wired,
             codex: .wired,
@@ -190,8 +190,8 @@ struct ResidualLinuxEdgesTests {
         )
         #expect(report.grok == .wired)
         #expect(report.pi == .occupied)
-        #expect(report.openCode == .pending)
-        #expect(report.claude == .pending)
+        #expect(report.openCode == .skipped)
+        #expect(report.claude == .skipped)
         #expect(report.openClaw == .occupied)
         #expect(report.hermes == .wired)
         #expect(report.codex == .wired)
