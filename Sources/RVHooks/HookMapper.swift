@@ -103,14 +103,13 @@ private func firstCallIntent(
     bound: BoundReview?,
     cwd: WorkingDirectory?
 ) -> HookWireIntent {
-    let bound = bound ?? BoundReview.packProjected(from: result)
-    let verdict = HostNativeAsk.hostAskVerdict(
+    let auth = HookAuthorization.project(
         host: host,
         result: result,
         cwd: cwd,
         bound: bound
     )
-    return .firstCall(verdict: verdict, unlockCode: nil)
+    return .firstCall(verdict: auth.verdict, unlockCode: nil)
 }
 
 private func encodeFirstCall<C: HostAskCodec>(

@@ -34,7 +34,7 @@ public func analyzeSemantics(
         return SemanticAnalysis.unwrapLimited.wrapping(layers)
     case .complete(let unwrapped):
         let git = analyzeGit(
-            unwrapped.command,
+            unwrapped.executing,
             context: gitAnalysisContext(
                 world: gitWorld,
                 workingDirectory: unwrapped.workingDirectory
@@ -44,7 +44,7 @@ public func analyzeSemantics(
             return git.wrapping(unwrapped.layers)
         }
         let filesystem = analyzeFilesystem(
-            unwrapped.command,
+            unwrapped.executing,
             context: filesystemContext(
                 world: filesystemWorld,
                 workingDirectory: unwrapped.workingDirectory

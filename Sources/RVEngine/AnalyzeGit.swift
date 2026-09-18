@@ -2,10 +2,10 @@ import RVDomain
 
 /// Pure Git classifier. Unknown or unsupported syntax is `.unknown`.
 public func analyzeGit(
-    _ command: ShellCommand,
+    _ command: ExecutingCommand,
     context: GitAnalysisContext = .empty
 ) -> SemanticAnalysis {
-    let view = Normalize.matchingView(of: command).rawValue
+    let view = Normalize.matchingView(of: command.rawValue).rawValue
     if view.isEmpty { return .unknown }
     if splitSegments(view).count > 1 { return .unknown }
     let tokens = tokenizeCommand(view).map(\.decoded)
@@ -13,6 +13,13 @@ public func analyzeGit(
         return .unknown
     }
     return .git(parsed)
+}
+
+public func analyzeGit(
+    _ command: ShellCommand,
+    context: GitAnalysisContext = .empty
+) -> SemanticAnalysis {
+    analyzeGit(ExecutingCommand(rawValue: command.rawValue), context: context)
 }
 
 private func parseGitInvocation(

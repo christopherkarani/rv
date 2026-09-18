@@ -310,7 +310,7 @@ public struct GatedEvaluate: Sendable {
         case .allow, .indeterminate:
             finished = result
         case .deny:
-            if Self.skipsPolicyGate(result) {
+            if HookAuthorization.policyGateAccess(for: result) == .skip {
                 finished = result
             } else {
                 let snapshot = allowlist()
@@ -450,15 +450,6 @@ public struct GatedEvaluate: Sendable {
         return TypedRuleStore.merge(builtin: [], machine: [], repo: repo)
     }
 
-    /// Semantic hard bind. Pack denials (`boundReview == nil`) and
-    /// `mandatoryHuman` still reach PolicyGate (peek/apply and Host Ask).
-    private static func skipsPolicyGate(_ result: EvaluationResult) -> Bool {
-        if case .deny = result.boundReview {
-            return true
-        }
-        return false
-    }
-
     /// After apply stayed deny. Not peek. Not Ask. Nil when the deny is not unlockable.
     /// Missing HOME has no durable store `rv allow-once` can redeem, so skip the code.
     public static func mintUnlockCode(
@@ -469,8 +460,9 @@ public struct GatedEvaluate: Sendable {
         home: HomeDirectory?
     ) async -> AllowOnceUnlockCode? {
         guard home != nil else { return nil }
-        if case .deny = result.boundReview { return nil }
-        guard let cwd, UnlockableDeny.matches(result: result, cwd: cwd) else { return nil }
+        guard let cwd, HookAuthorization.shouldMintUnlock(result: result, cwd: cwd) else {
+            return nil
+        }
         guard case .deny(let deny) = result.decision else { return nil }
         return await store.mintFromDeny(
             matchingView: result.matchingView,

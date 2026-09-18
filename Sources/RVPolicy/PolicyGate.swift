@@ -126,7 +126,7 @@ public enum PolicyGate {
             if withoutGrant.override == .allowlist || withoutGrant.override == .rebaseRecovery {
                 return withoutGrant
             }
-            guard UnlockableDeny.matches(result: result, cwd: cwd) else {
+            guard HookAuthorization.isUnlockable(result: result, cwd: cwd) else {
                 return withoutGrant
             }
             switch await HostGrantWriter.plantAndSpend(

@@ -20,14 +20,14 @@ public enum RebaseRecovery: Sendable {
 
     /// Rebase recovery may lift the working-tree-discard pin. Secrets,
     /// protected-path, unwrap-limited, and other hard stops stay denied via
-    /// `UnlockableDeny`.
+    /// `HookAuthorization` pin.
     private static func isUnoverridableHardStop(_ result: EvaluationResult) -> Bool {
         if case .deny(let deny) = result.decision,
            deny.ruleID == ActionPolicyEngine.Builtin.workingTreeDiscard.ruleID
         {
             return false
         }
-        return UnlockableDeny.isPinned(result)
+        return HookAuthorization.isPinned(result)
     }
 
     private static func isNeverEligibleRule(_ ruleID: RuleID) -> Bool {

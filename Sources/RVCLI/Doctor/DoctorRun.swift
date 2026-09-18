@@ -67,28 +67,35 @@ enum DoctorRun {
         diagnostics: ServiceDiagnosticResult
     ) throws -> DoctorViewModel {
         let paths = OwnedPaths(home: environment.home)
-        let installations = try HostAdapterInstallation.inspect(
-            paths: paths,
-            pathEntries: environment.pathEntries,
-            fileManager: environment.fileManager
-        )
-        let health = ServiceHealth.inspect(
-            diagnostics,
-            launchAgentInstalled: environment.fileManager.fileExists(atPath: paths.launchAgent),
-            launchAgentLoaded: environment.launchAgentLoaded
+        let snapshot = OperatorSnapshot.project(
+            OperatorInputs(
+                diagnostics: diagnostics,
+                launchAgent: .observed(
+                    ServiceHealth.launchAgentState(
+                        installed: environment.fileManager.fileExists(atPath: paths.launchAgent),
+                        loaded: environment.launchAgentLoaded
+                    )
+                ),
+                packs: homePacks(home: environment.home),
+                hosts: try HostAdapterInstallation.inspect(
+                    paths: paths,
+                    pathEntries: environment.pathEntries,
+                    fileManager: environment.fileManager
+                )
+            )
         )
         return DoctorViewModel(
-            service: health.service,
+            service: snapshot.health.service,
             packs: packsView(
-                homeIDs: Result { try PacksFacade.effectiveIDs(home: environment.home) },
-                packCheckReady: health.packCheckReady
+                snapshot.packs,
+                packCheckReady: snapshot.health.packCheckReady
             ),
             hosts: HookHost.setupSlotOrder.map { host in
-                let installation = installations.installation(for: host)
+                let installation = snapshot.hosts.installation(for: host)
                 return DoctorHostView(
                     host: host,
                     state: doctorHostState(installation),
-                    fileTools: installations.fileTools(for: host)
+                    fileTools: snapshot.hosts.fileTools(for: host)
                 )
             },
             config: configState(path: paths.configDirectory, fileManager: environment.fileManager),
@@ -108,17 +115,25 @@ enum DoctorRun {
     /// HOME config is the pack enablement source. A failed read is a broken
     /// registry — never invent IDs from a reachable rvd snapshot.
     static func packsView(
-        homeIDs: Result<[PackID], any Error>,
+        _ packs: OperatorPacks,
         packCheckReady: Bool
     ) -> DoctorPacksView {
-        switch homeIDs {
-        case .success(let ids):
+        switch packs {
+        case .home(let ids):
             DoctorPacksView(
                 enabled: ids,
                 registry: packCheckReady ? .ready : .broken
             )
-        case .failure:
+        case .unreadable:
             DoctorPacksView(enabled: [], registry: .broken)
+        }
+    }
+
+    private static func homePacks(home: HomeDirectory) -> OperatorPacks {
+        do {
+            return .home(try PacksFacade.effectiveIDs(home: home))
+        } catch {
+            return .unreadable
         }
     }
 

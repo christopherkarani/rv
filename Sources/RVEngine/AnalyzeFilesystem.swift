@@ -2,10 +2,10 @@ import RVDomain
 
 /// Pure filesystem classifier. Unknown or unsupported syntax is `.unknown`.
 public func analyzeFilesystem(
-    _ command: ShellCommand,
+    _ command: ExecutingCommand,
     context: FilesystemAnalysisContext = .empty
 ) -> SemanticAnalysis {
-    let view = Normalize.matchingView(of: command).rawValue
+    let view = Normalize.matchingView(of: command.rawValue).rawValue
     if view.isEmpty { return .unknown }
     if splitSegments(view).count > 1 { return .unknown }
     let tokens = tokenizeCommand(view).map(\.decoded)
@@ -39,6 +39,13 @@ public func analyzeFilesystem(
     case .read:
         return .filesystem(.read(targets: targets))
     }
+}
+
+public func analyzeFilesystem(
+    _ command: ShellCommand,
+    context: FilesystemAnalysisContext = .empty
+) -> SemanticAnalysis {
+    analyzeFilesystem(ExecutingCommand(rawValue: command.rawValue), context: context)
 }
 
 /// Apparent path operands for a parseable filesystem command. Empty if unsupported.

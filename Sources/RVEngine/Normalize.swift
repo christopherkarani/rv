@@ -5,31 +5,7 @@ public enum Normalize {
     public static let maxWrapperIterations = 32
 
     public static func matchingView(of command: String) -> MatchingView {
-        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return MatchingView("") }
-        var current = applyRoleAwareQuotes(maskNonExecutingHeredocBodies(trimmed))
-        var iteration = 0
-        while iteration < maxWrapperIterations {
-            iteration += 1
-            if let stripped = stripSudo(current) {
-                current = stripped
-                continue
-            }
-            if let stripped = stripEnv(current) {
-                current = stripped
-                continue
-            }
-            if let stripped = stripCommandWrapper(current) {
-                current = stripped
-                continue
-            }
-            if let stripped = stripLeadingBackslash(current) {
-                current = stripped
-                continue
-            }
-            break
-        }
-        return MatchingView(stripAbsolutePathOnArgv0(current))
+        CommandPeelCore.matchingView(of: command)
     }
 
     /// Returns the matching view of `command`.

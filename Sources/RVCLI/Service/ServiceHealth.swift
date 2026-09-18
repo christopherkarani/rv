@@ -34,7 +34,7 @@ enum ServiceHealth: Equatable, Sendable {
 extension ServiceHealth {
     /// Derives health from diagnostics. Down stays down when LaunchAgent is unknown.
     static func inspect(_ diagnostics: ServiceDiagnosticResult) -> ServiceHealth {
-        inspect(diagnostics, launchAgent: .omitted)
+        inspect(diagnostics, launchAgent: .unknown)
     }
 
     /// Derives health from diagnostics and observed LaunchAgent installed/loaded.
@@ -49,6 +49,14 @@ extension ServiceHealth {
                 launchAgentState(installed: launchAgentInstalled, loaded: launchAgentLoaded)
             )
         )
+    }
+
+    /// Derives health from diagnostics and a typed LaunchAgent fact.
+    static func inspect(
+        _ diagnostics: ServiceDiagnosticResult,
+        launchAgent: LaunchAgentFact
+    ) -> ServiceHealth {
+        inspect(diagnostics, input: launchAgent)
     }
 
     var launchAgent: DoctorLaunchAgentState {
@@ -135,12 +143,7 @@ extension ServiceHealth.Source {
 }
 
 extension ServiceHealth {
-    private enum LaunchAgentInput: Equatable {
-        case omitted
-        case observed(DoctorLaunchAgentState)
-    }
-
-    private static func launchAgentState(
+    static func launchAgentState(
         installed: Bool,
         loaded: Bool
     ) -> DoctorLaunchAgentState {
@@ -155,11 +158,11 @@ extension ServiceHealth {
 
     private static func inspect(
         _ diagnostics: ServiceDiagnosticResult,
-        launchAgent: LaunchAgentInput
+        input launchAgent: LaunchAgentFact
     ) -> ServiceHealth {
         let agent: DoctorLaunchAgentState
         switch launchAgent {
-        case .omitted:
+        case .unknown:
             agent = .missing
         case .observed(let observed):
             agent = observed
