@@ -185,9 +185,11 @@ import RVDomain
     let wire = await hookWire(
         host: .claude,
         stdin: stdin,
-        evaluate: { command, cwd in probe.evaluate(command, cwd) },
-        evaluateFile: { action, cwd in probe.evaluateFile(action, cwd) },
-        spendHostAsk: { command, cwd in probe.spend(command, cwd) }
+        world: hookWorld(
+            evaluate: { command, cwd in probe.evaluate(command, cwd) },
+            evaluateFile: { action, cwd in probe.evaluateFile(action, cwd) },
+            spend: { command, cwd in probe.spend(command, cwd) }
+        )
     )
     #expect(probe.commands.isEmpty)
     #expect(probe.spends.isEmpty)

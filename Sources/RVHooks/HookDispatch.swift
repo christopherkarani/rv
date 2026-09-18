@@ -1,45 +1,17 @@
 import RVDomain
 
-/// Live hook door. Production call sites pass `HookEvaluateWorld`.
+/// Live hook door. Production and tests pass `HookEvaluateWorld`.
 public func hookWire(
     host: HookHost,
     stdin: String,
     world: HookEvaluateWorld
-) async -> HookWire {
-    await hookWire(
-        host: host,
-        stdin: stdin,
-        evaluate: world.evaluate,
-        evaluateFile: world.evaluateFile,
-        spendHostAsk: world.spend,
-        mintOnDeny: world.mintOnDeny,
-        recordHostAsk: world.recordHostAsk,
-        clearHostAsk: world.clearHostAsk
-    )
-}
-
-/// Test/legacy adapter. Missing file/spend/mint/record ports fail closed as today.
-public func hookWire(
-    host: HookHost,
-    stdin: String,
-    evaluate: @Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult,
-    evaluateFile: (@Sendable (FileToolAction, WorkingDirectory?) async -> EvaluationResult)? = nil,
-    spendHostAsk: (@Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult)? = nil,
-    mintOnDeny: (@Sendable (EvaluationResult, WorkingDirectory?) async -> AllowOnceUnlockCode?)? = nil,
-    recordHostAsk: (@Sendable (HookRequest, ProposedAction) async throws -> Void)? = nil,
-    clearHostAsk: (@Sendable (HookRequest, ProposedAction) async throws -> Void)? = nil
 ) async -> HookWire {
     switch productionHostCodec(host) {
     case .ask(let codec):
         return await hookBody(
             stdin: stdin,
             codec: codec,
-            evaluate: evaluate,
-            evaluateFile: evaluateFile,
-            spendHostAsk: spendHostAsk,
-            mintOnDeny: mintOnDeny,
-            recordHostAsk: recordHostAsk,
-            clearHostAsk: clearHostAsk,
+            world: world,
             firstCall: { result, command, verdict, unlockCode in
                 hookWire(
                     from: result,
@@ -53,12 +25,7 @@ public func hookWire(
         return await hookBody(
             stdin: stdin,
             codec: codec,
-            evaluate: evaluate,
-            evaluateFile: evaluateFile,
-            spendHostAsk: spendHostAsk,
-            mintOnDeny: mintOnDeny,
-            recordHostAsk: recordHostAsk,
-            clearHostAsk: clearHostAsk,
+            world: world,
             firstCall: { result, command, verdict, unlockCode in
                 hookWire(
                     from: result,
@@ -74,12 +41,7 @@ public func hookWire(
 private func hookBody<C: HostCodec>(
     stdin: String,
     codec: C,
-    evaluate: @Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult,
-    evaluateFile: (@Sendable (FileToolAction, WorkingDirectory?) async -> EvaluationResult)?,
-    spendHostAsk: (@Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult)?,
-    mintOnDeny: (@Sendable (EvaluationResult, WorkingDirectory?) async -> AllowOnceUnlockCode?)?,
-    recordHostAsk: (@Sendable (HookRequest, ProposedAction) async throws -> Void)?,
-    clearHostAsk: (@Sendable (HookRequest, ProposedAction) async throws -> Void)?,
+    world: HookEvaluateWorld,
     firstCall: (EvaluationResult, ShellCommand, HostAskVerdict, AllowOnceUnlockCode?) -> HookWire
 ) async -> HookWire {
     switch codec.decode(stdin) {
@@ -90,40 +52,35 @@ private func hookBody<C: HostCodec>(
                 request: request,
                 file: file,
                 codec: codec,
-                evaluateFile: evaluateFile
+                evaluateFile: world.evaluateFile
             )
         case .spend(_, let command, let cwd, _):
-            guard let spendHostAsk else {
-                return codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
-            }
-            let result = await spendHostAsk(command, cwd)
+            let result = await world.spend(command, cwd)
             let wire = hookWire(
                 from: result,
                 command: command,
                 using: codec,
                 intent: .afterSpend
             )
-            if let clearHostAsk {
-                await ignoreHostAskFailure {
-                    try await clearHostAsk(
-                        request,
-                        pendingAction(from: result, request: request, command: command)
-                    )
-                }
+            await ignoreHostAskFailure {
+                try await world.clearHostAsk(
+                    request,
+                    pendingAction(from: result, request: request, command: command)
+                )
             }
             return wire
         case .shell(_, let command, let cwd, _):
-            let result = await evaluate(command, cwd)
+            let result = await world.evaluate(command, cwd)
             let auth = HookAuthorization.project(host: codec.host, result: result, cwd: cwd)
             let unlockCode = await mintUnlockCodeIfNeeded(
                 result: result,
                 authorization: auth,
                 cwd: cwd,
-                mintOnDeny: mintOnDeny
+                mintOnDeny: world.mintOnDeny
             )
-            if let recordHostAsk, auth.shouldRecordPending {
+            if auth.shouldRecordPending {
                 await ignoreHostAskFailure {
-                    try await recordHostAsk(
+                    try await world.recordHostAsk(
                         request,
                         pendingAction(from: result, request: request, command: command)
                     )
@@ -142,7 +99,7 @@ private func hookFileBody<C: HostCodec>(
     request: HookRequest,
     file: FileToolAction,
     codec: C,
-    evaluateFile: (@Sendable (FileToolAction, WorkingDirectory?) async -> EvaluationResult)?
+    evaluateFile: @Sendable (FileToolAction, WorkingDirectory?) async -> EvaluationResult
 ) async -> HookWire {
     if file.path.isEmpty {
         return codec.encodeDeny(
@@ -150,9 +107,6 @@ private func hookFileBody<C: HostCodec>(
             rule: nil,
             next: .none
         )
-    }
-    guard let evaluateFile else {
-        return codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
     }
     let result = await evaluateFile(file, request.cwd)
     return hookFileWire(from: result, using: codec)
@@ -190,9 +144,8 @@ private func mintUnlockCodeIfNeeded(
     result: EvaluationResult,
     authorization: HookAuthorization,
     cwd: WorkingDirectory?,
-    mintOnDeny: (@Sendable (EvaluationResult, WorkingDirectory?) async -> AllowOnceUnlockCode?)?
+    mintOnDeny: @Sendable (EvaluationResult, WorkingDirectory?) async -> AllowOnceUnlockCode?
 ) async -> AllowOnceUnlockCode? {
-    guard let mintOnDeny else { return nil }
     guard authorization.shouldMintUnlock else { return nil }
     return await mintOnDeny(result, cwd)
 }

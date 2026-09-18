@@ -26,10 +26,12 @@ struct PendingHostAskHookTests {
         let wire = await hookWire(
             host: .pi,
             stdin: piAskStdin(session: "sess-pi", command: command.rawValue),
-            evaluate: { _, _ in result },
-            recordHostAsk: { request, action in
-                try await probe.record(request, action)
-            }
+            world: hookWorld(
+                evaluate: { _, _ in result },
+                recordHostAsk: { request, action in
+                    try await probe.record(request, action)
+                }
+            )
         )
         _ = try askJSON(wire)
         let records = await probe.records
@@ -59,11 +61,13 @@ struct PendingHostAskHookTests {
         let wire = await hookWire(
             host: .pi,
             stdin: piSpendStdin(session: "sess-pi", command: command.rawValue),
-            evaluate: { _, _ in resetHardDeny },
-            spendHostAsk: { _, _ in spent },
-            clearHostAsk: { request, action in
-                try await probe.clear(request, action)
-            }
+            world: hookWorld(
+                evaluate: { _, _ in resetHardDeny },
+                spend: { _, _ in spent },
+                clearHostAsk: { request, action in
+                    try await probe.clear(request, action)
+                }
+            )
         )
         #expect(wire.stdout.isEmpty)
         #expect(wire.exitCode == 0)
@@ -82,10 +86,12 @@ struct PendingHostAskHookTests {
         let wire = await hookWire(
             host: .pi,
             stdin: stdin,
-            evaluate: { _, _ in resetHardDeny },
-            recordHostAsk: { request, action in
-                try await probe.record(request, action)
-            }
+            world: hookWorld(
+                evaluate: { _, _ in resetHardDeny },
+                recordHostAsk: { request, action in
+                    try await probe.record(request, action)
+                }
+            )
         )
         let json = try askJSON(wire)
         #expect(json["decision"] as? String == "ask")
@@ -113,10 +119,12 @@ struct PendingHostAskHookTests {
         let wire = await hookWire(
             host: .pi,
             stdin: stdin,
-            evaluate: { _, _ in resetHardDeny },
-            recordHostAsk: { request, action in
-                try await probe.record(request, action)
-            }
+            world: hookWorld(
+                evaluate: { _, _ in resetHardDeny },
+                recordHostAsk: { request, action in
+                    try await probe.record(request, action)
+                }
+            )
         )
         let json = try askJSON(wire)
         #expect(json["decision"] as? String == "ask")
@@ -131,10 +139,12 @@ struct PendingHostAskHookTests {
         let wire = await hookWire(
             host: .pi,
             stdin: piAskStdin(session: "sess-pi"),
-            evaluate: { _, _ in resetHardDeny },
-            recordHostAsk: { request, action in
-                try await probe.record(request, action)
-            }
+            world: hookWorld(
+                evaluate: { _, _ in resetHardDeny },
+                recordHostAsk: { request, action in
+                    try await probe.record(request, action)
+                }
+            )
         )
         let json = try askJSON(wire)
         #expect(json["decision"] as? String == "ask")
@@ -147,13 +157,15 @@ struct PendingHostAskHookTests {
         let allowSpend = await hookWire(
             host: .pi,
             stdin: piSpendStdin(session: "sess-pi"),
-            evaluate: { _, _ in resetHardDeny },
-            spendHostAsk: { _, _ in
-                EvaluationResult(outcome: .plain, matchingView: MatchingView("git reset --hard"))
-            },
-            clearHostAsk: { request, action in
-                try await probe.clear(request, action)
-            }
+            world: hookWorld(
+                evaluate: { _, _ in resetHardDeny },
+                spend: { _, _ in
+                    EvaluationResult(outcome: .plain, matchingView: MatchingView("git reset --hard"))
+                },
+                clearHostAsk: { request, action in
+                    try await probe.clear(request, action)
+                }
+            )
         )
         #expect(allowSpend.stdout.isEmpty)
         #expect(allowSpend.exitCode == 0)
@@ -163,11 +175,13 @@ struct PendingHostAskHookTests {
         let denySpend = await hookWire(
             host: .pi,
             stdin: piSpendStdin(session: "sess-pi"),
-            evaluate: { _, _ in resetHardDeny },
-            spendHostAsk: { _, _ in resetHardDeny },
-            clearHostAsk: { request, action in
-                try await probe.clear(request, action)
-            }
+            world: hookWorld(
+                evaluate: { _, _ in resetHardDeny },
+                spend: { _, _ in resetHardDeny },
+                clearHostAsk: { request, action in
+                    try await probe.clear(request, action)
+                }
+            )
         )
         let json = try #require(
             JSONSerialization.jsonObject(with: Data(denySpend.stdout.utf8)) as? [String: Any]
@@ -183,13 +197,15 @@ struct PendingHostAskHookTests {
         let wire = await hookWire(
             host: .pi,
             stdin: piSpendStdin(session: "sess-pi"),
-            evaluate: { _, _ in resetHardDeny },
-            spendHostAsk: { _, _ in
-                EvaluationResult(outcome: .plain, matchingView: MatchingView("git reset --hard"))
-            },
-            clearHostAsk: { request, action in
-                try await probe.clear(request, action)
-            }
+            world: hookWorld(
+                evaluate: { _, _ in resetHardDeny },
+                spend: { _, _ in
+                    EvaluationResult(outcome: .plain, matchingView: MatchingView("git reset --hard"))
+                },
+                clearHostAsk: { request, action in
+                    try await probe.clear(request, action)
+                }
+            )
         )
         #expect(wire.stdout.isEmpty)
         #expect(wire.exitCode == 0)
@@ -204,10 +220,12 @@ struct PendingHostAskHookTests {
         let wire = await hookWire(
             host: host,
             stdin: denyOrTTYStdin(host),
-            evaluate: { _, _ in resetHardDeny },
-            recordHostAsk: { request, action in
-                try await probe.record(request, action)
-            }
+            world: hookWorld(
+                evaluate: { _, _ in resetHardDeny },
+                recordHostAsk: { request, action in
+                    try await probe.record(request, action)
+                }
+            )
         )
         let json = try #require(
             JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any]
@@ -221,10 +239,12 @@ struct PendingHostAskHookTests {
         let wire = await hookWire(
             host: .openclaw,
             stdin: denyOrTTYStdin(.openclaw),
-            evaluate: { _, _ in resetHardDeny },
-            recordHostAsk: { request, action in
-                try await probe.record(request, action)
-            }
+            world: hookWorld(
+                evaluate: { _, _ in resetHardDeny },
+                recordHostAsk: { request, action in
+                    try await probe.record(request, action)
+                }
+            )
         )
         let json = try askJSON(wire)
         #expect(json["decision"] as? String == "ask")

@@ -15,30 +15,6 @@ public struct HookDoor: Sendable {
         reply(await hookWire(host: host, stdin: stdin, world: world))
     }
 
-    public static func run(
-        host: HookHost,
-        stdin: String,
-        evaluate: @Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult,
-        evaluateFile: (@Sendable (FileToolAction, WorkingDirectory?) async -> EvaluationResult)? = nil,
-        spendHostAsk: (@Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult)? = nil,
-        mintOnDeny: (@Sendable (EvaluationResult, WorkingDirectory?) async -> AllowOnceUnlockCode?)? = nil,
-        recordHostAsk: (@Sendable (HookRequest, ProposedAction) async throws -> Void)? = nil,
-        clearHostAsk: (@Sendable (HookRequest, ProposedAction) async throws -> Void)? = nil
-    ) async throws -> HookEvaluateReply {
-        reply(
-            await hookWire(
-                host: host,
-                stdin: stdin,
-                evaluate: evaluate,
-                evaluateFile: evaluateFile,
-                spendHostAsk: spendHostAsk,
-                mintOnDeny: mintOnDeny,
-                recordHostAsk: recordHostAsk,
-                clearHostAsk: clearHostAsk
-            )
-        )
-    }
-
     /// Create one awaiting row for a product Ask. Missing session is a no-op.
     package static func recordPending(
         request: HookRequest,

@@ -263,10 +263,10 @@ func cursorDecode_extractsBeforeShellCommand(_ file: String, expected: String) t
 
 @Test func cursorHookWire_malformedDenies() async throws {
     let probe = CursorEvaluateProbe()
-    let wire = await hookWire(host: .cursor, stdin: "not-json") { command, _ in
+    let wire = await hookWire(host: .cursor, stdin: "not-json", world: hookWorld { command, _ in
         probe.record(command)
         return EvaluationResult(outcome: .plain)
-    }
+    })
     #expect(probe.commands.isEmpty)
     try assertCursorHonorPath(wire, reason: malformedHookSentence(.unreadable))
 }

@@ -235,25 +235,27 @@ private func grokDenyObject(_ stdout: String) throws -> GrokDenyObject {
     let wire = await hookWire(
         host: .grok,
         stdin: stdin,
-        evaluate: { _, _ in
-            Issue.record("file event must not evaluate an empty shell command")
-            return EvaluationResult(outcome: .plain)
-        },
-        evaluateFile: { _, _ in
-            let ruleID = RuleID(pack: .coreSecrets, pattern: "env")
-            return EvaluationResult(
-                outcome: .deny(
-                    Deny(ruleID: ruleID, reason: reason),
-                    matched: RuleMatch(
-                        ruleID: ruleID,
-                        packID: .coreSecrets,
-                        patternName: "env",
-                        severity: .high,
-                        reason: reason
+        world: hookWorld(
+            evaluate: { _, _ in
+                Issue.record("file event must not evaluate an empty shell command")
+                return EvaluationResult(outcome: .plain)
+            },
+            evaluateFile: { _, _ in
+                let ruleID = RuleID(pack: .coreSecrets, pattern: "env")
+                return EvaluationResult(
+                    outcome: .deny(
+                        Deny(ruleID: ruleID, reason: reason),
+                        matched: RuleMatch(
+                            ruleID: ruleID,
+                            packID: .coreSecrets,
+                            patternName: "env",
+                            severity: .high,
+                            reason: reason
+                        )
                     )
                 )
-            )
-        }
+            }
+        )
     )
     #expect(wire.stdout.contains(hostFileDenyLine(reason: reason)))
     #expect(wire.stdout.contains("\"decision\":\"deny\""))

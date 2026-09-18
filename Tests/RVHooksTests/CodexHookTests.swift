@@ -215,10 +215,10 @@ func codexHonorPath_missingReasonExitTwoWithWhitespaceStderrIsNotEnough(_ missin
 
 @Test func codexHookWire_malformedDenies() async throws {
     let probe = CodexEvaluateProbe()
-    let wire = await hookWire(host: .codex, stdin: "not-json") { command, _ in
+    let wire = await hookWire(host: .codex, stdin: "not-json", world: hookWorld { command, _ in
         probe.record(command)
         return EvaluationResult(outcome: .plain)
-    }
+    })
     #expect(probe.commands.isEmpty)
     try assertCodexHonorPath(wire, reason: malformedHookSentence(.unreadable))
 }

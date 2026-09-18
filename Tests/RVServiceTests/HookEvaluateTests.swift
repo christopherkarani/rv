@@ -361,9 +361,13 @@ struct HookEvaluateTests {
 
     @Test func hookDoor_replyCopiesWireStderr() async throws {
         let probe = EvaluateCallProbe()
-        let reply = try await HookDoor.run(host: .codex, stdin: "") { command, cwd in
-            await probe.evaluate(command, cwd: cwd)
-        }
+        let reply = try await HookDoor.run(
+            host: .codex,
+            stdin: "",
+            world: hookWorld { command, cwd in
+                await probe.evaluate(command, cwd: cwd)
+            }
+        )
         let wire = CodexHostCodec().encodeDeny(reason: malformedHookSentence(.unreadable))
         #expect(reply.stderr == wire.stderr)
         #expect(reply.stdout == wire.stdout)
@@ -374,9 +378,13 @@ struct HookEvaluateTests {
 
     @Test func emptyStdin_failsClosedWithDenyJSON() async throws {
         let probe = EvaluateCallProbe()
-        let reply = try await HookDoor.run(host: .grok, stdin: "") { command, cwd in
-            await probe.evaluate(command, cwd: cwd)
-        }
+        let reply = try await HookDoor.run(
+            host: .grok,
+            stdin: "",
+            world: hookWorld { command, cwd in
+                await probe.evaluate(command, cwd: cwd)
+            }
+        )
         let object = try JSONSerialization.jsonObject(with: Data(reply.stdout.utf8))
         let json = try #require(object as? [String: Any])
         #expect(json["decision"] as? String == "deny")
@@ -388,9 +396,13 @@ struct HookEvaluateTests {
 
     @Test func missingCommand_failsClosedWithDenyJSONAndDenyExitCode() async throws {
         let probe = EvaluateCallProbe()
-        let reply = try await HookDoor.run(host: .pi, stdin: "{\"toolName\":\"bash\",\"input\":{}}") { command, cwd in
-            await probe.evaluate(command, cwd: cwd)
-        }
+        let reply = try await HookDoor.run(
+            host: .pi,
+            stdin: "{\"toolName\":\"bash\",\"input\":{}}",
+            world: hookWorld { command, cwd in
+                await probe.evaluate(command, cwd: cwd)
+            }
+        )
         let object = try JSONSerialization.jsonObject(with: Data(reply.stdout.utf8))
         let json = try #require(object as? [String: Any])
         #expect(json["decision"] as? String == "deny")
