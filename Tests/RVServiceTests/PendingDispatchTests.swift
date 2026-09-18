@@ -477,6 +477,66 @@ struct PendingDispatchTests {
         #expect(still.result.decision == .allow)
     }
 
+    @Test func fileToolAlwaysAllowFailsClosedWithoutMatchingView() async throws {
+        let allowOnceDirectory = try isolatedAllowOnceDirectory()
+        let homeURL = try isolatedHomeDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: homeURL)
+            try? FileManager.default.removeItem(at: allowOnceDirectory)
+        }
+        let approvals = FakePendingApprovals()
+        let wait = PendingApproval(
+            id: ApprovalID(rawValue: "file-pin"),
+            identity: ApprovalIdentity(
+                session: SessionID(validating: "sess-pi")!,
+                agent: .claude
+            ),
+            action: .file(
+                FileAction(
+                    fingerprint: ActionFingerprint(rawValue: "file:claude:sess-pi:/tmp/ws:read:/tmp/a.md"),
+                    file: FileToolAction(kind: .read, path: FileToolPath(rawValue: "/tmp/a.md")),
+                    effects: ActionEffects(),
+                    resources: ActionResources(path: "/tmp/a.md"),
+                    scope: ActionScope(workingDirectory: wd("/tmp/ws"))
+                )
+            ),
+            reason: .hostAsk,
+            continuation: .hostNative,
+            timeoutPolicy: .keepWaiting,
+            createdAt: now,
+            expiresAt: now.addingTimeInterval(3600),
+            state: .awaitingHuman
+        )
+        await approvals.seed(wait)
+        let runtime = try makeRuntime(
+            approvals: approvals,
+            homeURL: homeURL,
+            allowOnceDirectory: allowOnceDirectory
+        )
+        let preview = await runtime.dispatch(
+            IPCRequest(method: .rulePreview(RulePreviewParams(id: wait.id, polarity: .allow)))
+        )
+        guard case .rulePreview(let reply) = preview.result else {
+            Issue.record("file-tool Always-allow must preview")
+            return
+        }
+        let save = await runtime.dispatch(
+            IPCRequest(
+                method: .ruleSave(
+                    RuleSaveParams(id: wait.id, polarity: .allow, draft: reply.draft)
+                )
+            )
+        )
+        #expect(save.result == .error(.rulePinRequiresMatchingView))
+        #expect(await approvals.resolveCalls.isEmpty)
+        let snap = AllowlistStore(baseDirectory: allowOnceDirectory)
+            .loadUserSnapshot(workspacePath: nil, now: now)
+        #expect(snap.entries.isEmpty)
+        #expect(try TypedRuleStore(baseDirectory: allowOnceDirectory).loadMachine().isEmpty)
+        let listed = try requireList(await runtime.dispatch(IPCRequest(method: .pendingList)))
+        #expect(listed.items.map(\.id) == [wait.id])
+    }
+
     @Test func ruleSaveDraftMismatchWritesNothing() async throws {
         let allowOnceDirectory = try isolatedAllowOnceDirectory()
         let homeURL = try isolatedHomeDirectory()
