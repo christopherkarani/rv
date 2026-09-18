@@ -159,15 +159,22 @@ public enum HookAuthorization: Sendable, Equatable {
             host: host,
             continuation: continuation,
             ifNoPause: ifNoPause,
-            deny: deny
+            deny: deny,
+            noPauseDeny: .pinned
         )
+    }
+
+    private enum NoPauseDeny {
+        case unlockable
+        case pinned
     }
 
     private static func pause(
         host: HookHost,
         continuation: ApprovalContinuation,
         ifNoPause: HostNoPauseFallback,
-        deny: Deny
+        deny: Deny,
+        noPauseDeny: NoPauseDeny = .unlockable
     ) -> HookAuthorization {
         switch (HostNativeAsk.profile(for: host).pause, continuation) {
         case (.spendFirst, .hostNative):
@@ -177,7 +184,12 @@ public enum HookAuthorization: Sendable, Equatable {
             case .allow:
                 return .allow
             case .deny:
-                return .denyUnlockable(deny)
+                switch noPauseDeny {
+                case .unlockable:
+                    return .denyUnlockable(deny)
+                case .pinned:
+                    return .denyPinned(deny)
+                }
             }
         }
     }

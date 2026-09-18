@@ -229,7 +229,7 @@ private let doctorRendererFixture = DoctorViewModel(
     #expect(
         DoctorRenderer().render(missing, palette: colorOffPalette)
             .joined(separator: "\n")
-            .contains("missing core.filesystem and system.disk")
+            .contains("disabled core.filesystem and system.disk")
     )
 
     var extra = doctorRendererFixture

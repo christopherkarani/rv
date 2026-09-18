@@ -30,8 +30,6 @@ private let localReady = ServiceDiagnosticResult.local(
     ServiceFallbackDiagnostic(cause: .down, corePacksReady: true)
 )
 
-private struct PacksReadFailure: Error {}
-
 private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSnapshotReply {
     DoctorSnapshotReply(
         serviceSemver: "1.0.0",
@@ -550,7 +548,7 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
 
 @Test func doctor_homePackIDReadFailureDoesNotUseServiceSnapshot() {
     let view = DoctorRun.packsView(
-        homeIDs: .failure(PacksReadFailure()),
+        .unreadable,
         packCheckReady: true
     )
 

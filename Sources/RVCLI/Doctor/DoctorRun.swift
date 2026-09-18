@@ -129,18 +129,6 @@ enum DoctorRun {
         }
     }
 
-    static func packsView(
-        homeIDs: Result<[PackID], any Error>,
-        packCheckReady: Bool
-    ) -> DoctorPacksView {
-        switch homeIDs {
-        case .success(let ids):
-            packsView(.home(ids), packCheckReady: packCheckReady)
-        case .failure:
-            packsView(.unreadable, packCheckReady: packCheckReady)
-        }
-    }
-
     private static func homePacks(home: HomeDirectory) -> OperatorPacks {
         do {
             return .home(try PacksFacade.effectiveIDs(home: home))

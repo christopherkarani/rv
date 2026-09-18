@@ -72,43 +72,41 @@ struct HookAuthorizationTests {
     }
 
     @Test(arguments: HookHost.allCases)
-    func project_matchesHostAskVerdict(_ host: HookHost) throws {
+    func project_unlockableAndGrayAreaFollowHostProfile(_ host: HookHost) throws {
         let workspace = try #require(cwd)
-        let unlocked = EvaluationResult(
-            outcome: .deny(packDeny, matched: nil),
-            matchingView: MatchingView("git reset --hard")
+        let unlocked = HookAuthorization.project(
+            host: host,
+            result: EvaluationResult(
+                outcome: .deny(packDeny, matched: nil),
+                matchingView: MatchingView("git reset --hard")
+            ),
+            cwd: workspace,
+            bound: .deny(packDeny)
         )
-        let human = EvaluationResult(
-            outcome: .plain,
-            matchingView: MatchingView("git push --force origin topic")
-        )
-        let secretResult = EvaluationResult(
-            outcome: .deny(secret, matched: nil),
-            matchingView: MatchingView("cat ~/.aws/credentials")
+        let gray = HookAuthorization.project(
+            host: host,
+            result: EvaluationResult(
+                outcome: .plain,
+                matchingView: MatchingView("git push --force origin topic")
+            ),
+            cwd: workspace,
+            bound: .mandatoryHuman(ActionPolicyEngine.Builtin.remoteBranchAsk)
         )
 
-        let rows: [(EvaluationResult, BoundReview)] = [
-            (unlocked, .deny(packDeny)),
-            (human, .mandatoryHuman(ActionPolicyEngine.Builtin.remoteBranchAsk)),
-            (secretResult, .deny(secret)),
-            (unlocked, .allow),
-        ]
-        for (result, bound) in rows {
-            let auth = HookAuthorization.project(
-                host: host,
-                result: result,
-                cwd: workspace,
-                bound: bound
-            )
-            #expect(
-                auth.verdict
-                    == HostNativeAsk.hostAskVerdict(
-                        host: host,
-                        result: result,
-                        cwd: workspace,
-                        bound: bound
-                    )
-            )
+        switch HostNativeAsk.profile(for: host).pause {
+        case .spendFirst:
+            #expect(unlocked == .ask(.hostNative))
+            #expect(unlocked.shouldRecordPending)
+            #expect(unlocked.shouldMintUnlock == false)
+            #expect(gray == .ask(.hostNative))
+            #expect(gray.shouldMintUnlock == false)
+        case .noPause, .leftoverAskForbidden:
+            #expect(unlocked == .denyUnlockable(packDeny))
+            #expect(unlocked.shouldMintUnlock)
+            #expect(unlocked.shouldRecordPending == false)
+            #expect(gray == .allow)
+            #expect(gray.shouldMintUnlock == false)
+            #expect(gray.shouldRecordPending == false)
         }
     }
 

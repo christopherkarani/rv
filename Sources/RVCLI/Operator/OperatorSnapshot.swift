@@ -15,17 +15,17 @@ enum LaunchAgentFact: Sendable, Equatable {
 
 /// Already-inspected operator facts. Projection is pure.
 struct OperatorInputs: Sendable {
-    var diagnostics: ServiceDiagnosticResult
-    var launchAgent: LaunchAgentFact
-    var packs: OperatorPacks
-    var hosts: HostAdapterInstallationSnapshot
+    let diagnostics: ServiceDiagnosticResult
+    let launchAgent: LaunchAgentFact
+    let packs: OperatorPacks
+    let hosts: HostAdapterInstallationSnapshot
 }
 
 /// One operator view: service health, HOME packs, Host adapter installation.
 struct OperatorSnapshot: Sendable, Equatable {
-    var health: ServiceHealth
-    var packs: OperatorPacks
-    var hosts: HostAdapterInstallationSnapshot
+    let health: ServiceHealth
+    let packs: OperatorPacks
+    let hosts: HostAdapterInstallationSnapshot
 
     static func project(_ inputs: OperatorInputs) -> OperatorSnapshot {
         OperatorSnapshot(
