@@ -48,8 +48,8 @@ public enum BoundReview: Sendable, Equatable {
 
     /// Pack-door BoundReview when the Evaluate session field is nil.
     /// Pack allow / indeterminate → `.allow`. Pack deny → `.deny`.
-    /// Never runs `ActionPolicyEngine`. Hook door and encode consume
-    /// `EvaluationResult.live`, which calls this once.
+    /// Never runs `ActionPolicyEngine`. When the field is present, returns it.
+    /// Hook door and encode read `EvaluationResult.live.bound`.
     public static func packProjected(from result: EvaluationResult) -> BoundReview {
         if let bound = result.boundReview {
             return bound

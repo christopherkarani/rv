@@ -108,13 +108,18 @@ struct EvaluationResultBoundReviewTests {
         #expect(row.result.boundReview == nil, Comment(rawValue: row.label))
     }
 
-    @Test func live_packDenyKeepsFieldNilForPolicyGate() {
+    @Test func live_packDenyKeepsFieldNilForPolicyGate() throws {
         let result = EvaluationResult(
             outcome: .deny(packDeny, matched: nil),
             matchingView: MatchingView("git reset --hard")
         )
+        let cwd = try #require(WorkingDirectory(validating: "/tmp/ws"))
         #expect(result.boundReview == nil)
+        #expect(result.live.result.boundReview == nil)
         #expect(HookAuthorization.policyGateAccess(for: result) == .consider)
+        #expect(HookAuthorization.policyGateAccess(for: result.live.result) == .consider)
+        #expect(HookAuthorization.shouldMintUnlock(result: result, cwd: cwd))
+        #expect(HookAuthorization.shouldMintUnlock(result: result.live.result, cwd: cwd))
         #expect(result.live.bound == .deny(packDeny))
     }
 }
