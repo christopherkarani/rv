@@ -8,6 +8,8 @@ public struct RulePinStore: Sendable {
         self.baseDirectory = baseDirectory
     }
 
+    /// Exact-command pins require a T1 `matchingView` (Policy does not peel).
+    /// Typed git-push pins ignore it; their identity is the predicate.
     public func save(
         record: PendingApproval,
         polarity: PinnedRulePolarity,
@@ -22,8 +24,8 @@ public struct RulePinStore: Sendable {
         if polarity == .allow, RulePinning.hardStop(in: record.action) != nil {
             throw RulePinError.hardStop
         }
-        let ruleID = RulePinning.ruleID(record: record, polarity: polarity)
         if let predicate = typedPredicate(from: draft) {
+            let ruleID = RulePinning.ruleID(polarity: polarity, predicate: predicate)
             try persistTypedRule(
                 TypedRule(
                     id: ruleID,
@@ -34,10 +36,10 @@ public struct RulePinStore: Sendable {
             )
             return RuleSaveOutcome(ruleID: ruleID)
         }
-        let view = matchingView ?? RulePinning.matchingView(of: record.action)
-        guard let view, view.isEmpty == false else {
+        guard let view = matchingView, view.isEmpty == false else {
             throw RulePinError.missingMatchingView
         }
+        let ruleID = RulePinning.ruleID(polarity: polarity, matchingView: view)
         switch polarity {
         case .allow:
             try AllowlistStore(baseDirectory: baseDirectory).pin(

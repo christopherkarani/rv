@@ -187,27 +187,15 @@ struct LinuxResidualCoverageTests {
         }
     }
 
-    @Test func rulePinning_matchingViewEmptyAndMissingCommand() {
-        let file = ProposedAction.file(
-            FileAction(
-                fingerprint: ActionFingerprint(rawValue: "file:claude:::read:/tmp/a"),
-                file: FileToolAction(kind: .read, path: FileToolPath(rawValue: "/tmp/a"))
-            )
-        )
-        #expect(RulePinning.matchingView(of: file) == nil)
-        let blank = ProposedAction.shell(
-            ShellAction(
-                fingerprint: ActionFingerprint(rawValue: "shell:blank"),
-                supportingCommand: ShellCommand(rawValue: "   ")
-            )
-        )
-        #expect(RulePinning.matchingView(of: blank) == nil)
-        let present = ProposedAction.shell(
-            ShellAction(
-                fingerprint: ActionFingerprint(rawValue: "shell:cmd"),
-                supportingCommand: ShellCommand(rawValue: " git status ")
-            )
-        )
-        #expect(RulePinning.matchingView(of: present)?.rawValue == "git status")
+    @Test func rulePinning_ruleIDUsesMatchingViewOrPredicate() {
+        let view = MatchingView("git status")
+        let fromView = RulePinning.ruleID(polarity: .allow, matchingView: view)
+        #expect(fromView == RulePinning.ruleID(polarity: .allow, matchingView: view))
+        #expect(fromView != RulePinning.ruleID(polarity: .allow, matchingView: MatchingView("sudo git status")))
+        let predicate = PolicyPredicate.gitPush(force: .exactly(.force), branch: "main")
+        let fromPredicate = RulePinning.ruleID(polarity: .block, predicate: predicate)
+        #expect(fromPredicate == RulePinning.ruleID(polarity: .block, predicate: predicate))
+        #expect(fromPredicate.pack.rawValue == "pin.block")
+        #expect(fromView.pack.rawValue == "pin.allow")
     }
 }

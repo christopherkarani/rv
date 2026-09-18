@@ -104,11 +104,45 @@ struct RulePinStoreTests {
             record: record,
             polarity: .allow,
             draft: draft,
-            now: now
+            now: now,
+            matchingView: MatchingView("git reset --hard")
         )
         #expect(try TypedRuleStore(baseDirectory: root).loadMachine().isEmpty)
         let snap = AllowlistStore(baseDirectory: root).loadUserSnapshot(workspacePath: nil, now: now)
         #expect(snap.matches(ruleID: nil, matchingView: "git reset --hard", now: now))
+    }
+
+    @Test func saveTypedBlock_samePredicateDifferentCommand_sameRuleID() throws {
+        let root = try isolatedPinStoreDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bare = forcePushWait(id: "bare", branch: "main")
+        let wrapped = forcePushWait(
+            id: "sudo",
+            branch: "main",
+            command: "sudo git push --force origin main"
+        )
+        let store = RulePinStore(baseDirectory: root)
+        let first = try store.save(
+            record: bare,
+            polarity: .block,
+            draft: RulePinning.draft(record: bare, polarity: .block),
+            now: now
+        )
+        let second = try store.save(
+            record: wrapped,
+            polarity: .block,
+            draft: RulePinning.draft(record: wrapped, polarity: .block),
+            now: now
+        )
+        #expect(first.ruleID == second.ruleID)
+        #expect(
+            first.ruleID
+                == RulePinning.ruleID(
+                    polarity: .block,
+                    predicate: .gitPush(force: .exactly(.force), branch: "main")
+                )
+        )
+        #expect(try TypedRuleStore(baseDirectory: root).loadMachine().count == 1)
     }
 }
 
@@ -138,7 +172,11 @@ private func resetHardWait() -> PendingApproval {
     )
 }
 
-private func forcePushWait(id: String, branch: String) -> PendingApproval {
+private func forcePushWait(
+    id: String,
+    branch: String,
+    command: String? = nil
+) -> PendingApproval {
     let now = Date(timeIntervalSince1970: 1_700_000_000)
     return PendingApproval(
         id: ApprovalID(rawValue: id),
@@ -155,7 +193,9 @@ private func forcePushWait(id: String, branch: String) -> PendingApproval {
                     branchName: branch
                 ),
                 scope: ActionScope(workingDirectory: wd("/tmp/ws")),
-                supportingCommand: ShellCommand(rawValue: "git push --force origin \(branch)"),
+                supportingCommand: ShellCommand(
+                    rawValue: command ?? "git push --force origin \(branch)"
+                ),
                 gitAction: .push(remote: "origin", refspec: branch, force: .force)
             )
         ),

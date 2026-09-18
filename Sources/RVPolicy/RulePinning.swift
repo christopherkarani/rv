@@ -119,20 +119,59 @@ public enum RulePinning: Sendable {
         HookAuthorization.isPinned(result)
     }
 
-    public static func matchingView(of action: ProposedAction) -> MatchingView? {
-        guard let command = action.supportingCommand else { return nil }
-        let raw = command.rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard raw.isEmpty == false else { return nil }
-        return MatchingView(raw)
+    /// Exact-command pin identity. Caller supplies the T1 matching view; Policy does not peel.
+    public static func ruleID(
+        polarity: PinnedRulePolarity,
+        matchingView: MatchingView
+    ) -> RuleID {
+        packedID(polarity: polarity, seed: matchingView.rawValue)
     }
 
+    /// Typed pin identity. Honor is the predicate, not a matching view.
     public static func ruleID(
-        record: PendingApproval,
-        polarity: PinnedRulePolarity
+        polarity: PinnedRulePolarity,
+        predicate: PolicyPredicate
     ) -> RuleID {
+        packedID(polarity: polarity, seed: predicateSeed(predicate))
+    }
+
+    private static func packedID(polarity: PinnedRulePolarity, seed: String) -> RuleID {
         let packName = polarity == .allow ? "pin.allow" : "pin.block"
-        let seed = matchingView(of: record.action)?.rawValue ?? record.fingerprint.rawValue
-        return RuleID(pack: PackID(rawValue: packName), pattern: String(sha256Hex(seed).prefix(16)))
+        return RuleID(
+            pack: PackID(rawValue: packName),
+            pattern: String(sha256Hex(seed).prefix(16))
+        )
+    }
+
+    private static func predicateSeed(_ predicate: PolicyPredicate) -> String {
+        switch predicate {
+        case .gitPush(let force, let branch):
+            return "gitPush|\(forceSeed(force))|\(branch ?? "")"
+        case .gitDiscardWorktree(let pathspec):
+            return "gitDiscardWorktree|\(pathspec ?? "")"
+        case .gitReset(let mode):
+            return "gitReset|\(mode?.rawValue ?? "")"
+        case .gitClean(let force, let directories):
+            return "gitClean|\(boolSeed(force))|\(boolSeed(directories))"
+        case .filesystemDelete(let recursive, let force):
+            return "filesystemDelete|\(boolSeed(recursive))|\(boolSeed(force))"
+        case .filesystemMove:
+            return "filesystemMove"
+        }
+    }
+
+    private static func forceSeed(_ force: GitPushForceConstraint) -> String {
+        switch force {
+        case .any:
+            return "any"
+        case .exactly(let value):
+            return value.rawValue
+        }
+    }
+
+    private static func boolSeed(_ value: Bool?) -> String {
+        guard let value else { return "" }
+        return value ? "true" : "false"
     }
 
     private static func sentence(

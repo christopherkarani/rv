@@ -346,9 +346,50 @@ struct RulePinningTests {
                 now: now
             )
         }
+        #expect(throws: RulePinError.missingMatchingView) {
+            try RulePinStore(baseDirectory: root).save(
+                record: pinOkWait(),
+                polarity: .allow,
+                draft: RulePinning.draft(record: pinOkWait(), polarity: .allow),
+                now: now,
+                matchingView: MatchingView("")
+            )
+        }
         let snap = AllowlistStore(baseDirectory: root).loadUserSnapshot(workspacePath: nil, now: now)
         #expect(snap.entries.isEmpty)
         #expect(snap.blocked.entries.isEmpty)
+    }
+
+    @Test func saveFileToolWithoutMatchingViewWritesNothing() throws {
+        let root = try isolatedPinDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let record = pendingRecord(
+            id: "file-read",
+            action: .file(
+                FileAction(
+                    fingerprint: ActionFingerprint(rawValue: "file:claude:::read:/tmp/a.md"),
+                    file: FileToolAction(kind: .read, path: FileToolPath(rawValue: "/tmp/a.md")),
+                    effects: ActionEffects(),
+                    resources: ActionResources(path: "/tmp/a.md"),
+                    scope: ActionScope(workingDirectory: wd("/tmp/ws"))
+                )
+            )
+        )
+        #expect(record.action.supportingCommand == nil)
+        #expect(RulePinning.hardStop(in: record.action) == nil)
+        let draft = RulePinning.draft(record: record, polarity: .allow)
+        #expect(throws: RulePinError.missingMatchingView) {
+            try RulePinStore(baseDirectory: root).save(
+                record: record,
+                polarity: .allow,
+                draft: draft,
+                now: now
+            )
+        }
+        let snap = AllowlistStore(baseDirectory: root).loadUserSnapshot(workspacePath: nil, now: now)
+        #expect(snap.entries.isEmpty)
+        #expect(snap.blocked.entries.isEmpty)
+        #expect(try TypedRuleStore(baseDirectory: root).loadMachine().isEmpty)
     }
 
     @Test func savePinsCallerMatchingView() throws {
@@ -379,8 +420,20 @@ struct RulePinningTests {
         let record = pinOkWait()
         let draft = RulePinning.draft(record: record, polarity: .allow)
         let store = RulePinStore(baseDirectory: root)
-        let first = try store.save(record: record, polarity: .allow, draft: draft, now: now)
-        let second = try store.save(record: record, polarity: .allow, draft: draft, now: now)
+        let first = try store.save(
+            record: record,
+            polarity: .allow,
+            draft: draft,
+            now: now,
+            matchingView: MatchingView("git reset --hard")
+        )
+        let second = try store.save(
+            record: record,
+            polarity: .allow,
+            draft: draft,
+            now: now,
+            matchingView: MatchingView("git reset --hard")
+        )
         #expect(first.ruleID == second.ruleID)
         #expect(first.ruleID.pack.rawValue == "pin.allow")
         let snap = AllowlistStore(baseDirectory: root).loadUserSnapshot(workspacePath: nil, now: now)
@@ -407,7 +460,8 @@ struct RulePinningTests {
             record: record,
             polarity: .block,
             draft: draft,
-            now: now
+            now: now,
+            matchingView: MatchingView("git reset --hard")
         )
         try AllowlistStore(baseDirectory: root).pin(
             AllowlistEntry(
