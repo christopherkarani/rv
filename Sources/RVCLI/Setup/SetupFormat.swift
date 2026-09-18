@@ -10,11 +10,11 @@ struct SetupReport: Equatable, Sendable {
         grok: SetupSlotKind,
         pi: SetupSlotKind,
         openCode: SetupSlotKind,
-        claude: SetupSlotKind = .pending,
-        openClaw: SetupSlotKind = .pending,
-        hermes: SetupSlotKind = .pending,
-        codex: SetupSlotKind = .pending,
-        cursor: SetupSlotKind = .pending,
+        claude: SetupSlotKind = .skipped,
+        openClaw: SetupSlotKind = .skipped,
+        hermes: SetupSlotKind = .skipped,
+        codex: SetupSlotKind = .skipped,
+        cursor: SetupSlotKind = .skipped,
         wrote: Set<HookHost>
     ) {
         slots = SetupSlotSnapshot(

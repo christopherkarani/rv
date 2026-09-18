@@ -18,8 +18,8 @@ extension HookHost {
 
 /// Outcome of one host slot after `rv setup`.
 public enum SetupSlotKind: Equatable, Sendable {
-    /// Host not detected, or not wired.
-    case pending
+    /// Host not detected, or not written this run.
+    case skipped
     /// Owned file matches the current template.
     case wired
     /// Owned filename exists and is not the current template.
@@ -42,11 +42,11 @@ public struct SetupSlotSnapshot: Equatable, Sendable {
         grok: SetupSlotKind,
         pi: SetupSlotKind,
         openCode: SetupSlotKind,
-        claude: SetupSlotKind = .pending,
-        openClaw: SetupSlotKind = .pending,
-        hermes: SetupSlotKind = .pending,
-        codex: SetupSlotKind = .pending,
-        cursor: SetupSlotKind = .pending,
+        claude: SetupSlotKind = .skipped,
+        openClaw: SetupSlotKind = .skipped,
+        hermes: SetupSlotKind = .skipped,
+        codex: SetupSlotKind = .skipped,
+        cursor: SetupSlotKind = .skipped,
         wrote: Set<HookHost>
     ) {
         self.grok = grok
@@ -78,7 +78,7 @@ public struct SetupSlotSnapshot: Equatable, Sendable {
     }
 
     public var detected: [HookHost] {
-        HookHost.setupSlotOrder.filter { kind(for: $0) != .pending }
+        HookHost.setupSlotOrder.filter { kind(for: $0) != .skipped }
     }
 
     public var isHostless: Bool { detected.isEmpty }

@@ -94,6 +94,24 @@ struct SystemctlApplyingTests {
         }
     }
 
+    @Test func writeExecutableScript_replacesPathAfterProcessExits() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-fake-tool-rewrite-\(UUID().uuidString)", isDirectory: false)
+        defer { try? FileManager.default.removeItem(at: url) }
+        try writeExecutableScript(at: url, source: "#!/bin/sh\nexit 0\n")
+        let first = Process()
+        first.executableURL = url
+        try first.run()
+        first.waitUntilExit()
+        #expect(first.terminationStatus == 0)
+        try writeExecutableScript(at: url, source: "#!/bin/sh\nexit 3\n")
+        let second = Process()
+        second.executableURL = url
+        try second.run()
+        second.waitUntilExit()
+        #expect(second.terminationStatus == 3)
+    }
+
     @Test func launchAgentProbe_missingLaunchctlIsNotLoaded() {
         #expect(LaunchAgentProbe.isLoaded(label: "dev.rv.evaluate") == false)
     }

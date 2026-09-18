@@ -57,7 +57,7 @@ private func occupiedSlots(occupied: Set<HookHost>) -> [SetupSlotView] {
     return HookHost.setupSlotOrder.map { host in
         occupied.contains(host)
             ? SetupSlotView(host: host, kind: .occupied, clause: uninstallOccupiedClause)
-            : SetupSlotView(host: host, kind: .pending)
+            : SetupSlotView(host: host, kind: .skipped)
     }
 }
 
@@ -72,7 +72,7 @@ private func removalAnimation(
         if stillPresent && removed.contains(host) {
             return SetupSlotView(host: host, kind: .wired)
         }
-        return SetupSlotView(host: host, kind: .pending)
+        return SetupSlotView(host: host, kind: .skipped)
     }
 
     var stillPresent = removed
