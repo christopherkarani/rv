@@ -32,6 +32,9 @@ struct SecretAllowPathsTests {
             ["/tmp/machine.env"],
             to: configDir.appendingPathComponent("config.json")
         )
+        try TypedRuleStore(baseDirectory: configDir).saveMachine(
+            PolicyDocument(allowPaths: ["/tmp/machine-doc.env"])
+        )
         let workspace = URL(fileURLWithPath: home.rawValue, isDirectory: true)
             .appendingPathComponent("repo", isDirectory: true)
         try FileManager.default.createDirectory(
@@ -45,8 +48,7 @@ struct SecretAllowPathsTests {
             """.utf8
         ).write(to: workspace.appendingPathComponent(".rv/policy.toml"))
         let set = SecretAllowPaths.loadEffective(home: home, workspace: workspace)
-        #expect(set.literals.contains("/tmp/machine.env"))
-        #expect(set.literals.contains(".env"))
+        #expect(set.literals == ["/tmp/machine.env", "/tmp/machine-doc.env", ".env"])
     }
 
     private func tempHome() throws -> HomeDirectory {

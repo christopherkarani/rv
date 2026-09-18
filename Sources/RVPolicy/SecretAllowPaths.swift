@@ -42,16 +42,8 @@ public enum SecretAllowPaths {
                     from: configDir.appendingPathComponent("config.json", isDirectory: false)
                 )
             )
-            if let document = try? TypedRuleStore(baseDirectory: configDir).loadMachineDocument() {
-                machine.append(contentsOf: document.allowPaths)
-            }
         }
-        var repo: [String] = []
-        if let workspace,
-           let document = try? TypedRuleStore(baseDirectory: workspace).loadRepoDocument(workspace: workspace)
-        {
-            repo.append(contentsOf: document.allowPaths)
-        }
-        return merge(machine: machine, repo: repo)
+        let documents = PolicyWorkspace(home: home, workspace: workspace).documentAllowPaths()
+        return merge(machine: machine, repo: documents.literals)
     }
 }

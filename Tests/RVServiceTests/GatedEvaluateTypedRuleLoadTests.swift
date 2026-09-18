@@ -54,6 +54,30 @@ struct GatedEvaluateTypedRuleLoadTests {
         #expect(deny.reason == "Typed rules could not be loaded.")
     }
 
+    @Test func nilHome_loadsRepoTypedDeny() async throws {
+        let workspace = try isolatedWorkspace()
+        let ruleID = RuleID(pack: .coreGit, pattern: "repo-hook-load-deny")
+        let rule = TypedRule(
+            id: ruleID,
+            predicate: .gitPush(force: .exactly(.forceWithLease), branch: "feature"),
+            verdict: .deny,
+            origin: .repo
+        )
+        try TypedRuleStore(baseDirectory: workspace)
+            .saveRepo([rule], workspace: workspace)
+
+        let result = try await peek(
+            "git push --force-with-lease origin feature",
+            cwd: workspace,
+            home: nil
+        )
+        guard case .deny(let deny) = result.decision else {
+            Issue.record("repo typed deny must apply with nil HOME, got \(result.decision)")
+            return
+        }
+        #expect(deny.ruleID == ruleID)
+    }
+
     @Test func invalidPolicyTOML_failClosedNotAllow() async throws {
         let homeURL = try isolatedHomeDirectory()
         let home = try #require(HomeDirectory(validating: homeURL.path))
@@ -178,7 +202,7 @@ struct GatedEvaluateTypedRuleLoadTests {
 private func peek(
     _ command: String,
     cwd: URL,
-    home: HomeDirectory
+    home: HomeDirectory?
 ) async throws -> EvaluationResult {
     await peek(
         command,
@@ -191,7 +215,7 @@ private func peek(
 private func peek(
     _ command: String,
     cwd: URL,
-    home: HomeDirectory,
+    home: HomeDirectory?,
     store: AllowOnceStore
 ) async -> EvaluationResult {
     await GatedEvaluate().peek(
