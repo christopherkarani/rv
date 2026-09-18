@@ -53,33 +53,7 @@ public struct SafetyStore: Sendable {
         } else {
             machineConfig = .normal
         }
-        let machinePolicy = loadDocumentLevel(
-            home: home,
-            workspace: nil,
-            machine: true
-        )
-        let machine = merge(machine: machineConfig, repo: machinePolicy)
-        let repo = loadDocumentLevel(home: home, workspace: workspace, machine: false)
-        return merge(machine: machine, repo: repo)
-    }
-
-    private static func loadDocumentLevel(
-        home: HomeDirectory?,
-        workspace: URL?,
-        machine: Bool
-    ) -> SafetyLevel? {
-        do {
-            if machine {
-                guard let home else { return nil }
-                return try TypedRuleStore(
-                    baseDirectory: RVPolicyPaths.configDirectory(home: home)
-                ).loadMachineDocument().safetyLevel
-            }
-            guard let workspace else { return nil }
-            return try TypedRuleStore(baseDirectory: workspace)
-                .loadRepoDocument(workspace: workspace).safetyLevel
-        } catch {
-            return nil
-        }
+        let document = PolicyWorkspace(home: home, workspace: workspace).documentSafetyLevel()
+        return merge(machine: machineConfig, repo: document)
     }
 }

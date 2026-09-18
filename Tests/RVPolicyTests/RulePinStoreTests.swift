@@ -20,15 +20,18 @@ struct RulePinStoreTests {
             now: now
         )
 
-        let store = TypedRuleStore(baseDirectory: root)
-        let loaded = try store.loadMachine()
+        let session = PolicyWorkspace(configDirectory: root)
+        let loaded = try session.loadMachineDocument().typedRules(origin: .machine)
         let rule = try #require(loaded.first)
         #expect(loaded.count == 1)
         #expect(rule.id == outcome.ruleID)
         #expect(rule.predicate == .gitPush(force: .exactly(.force), branch: "main"))
         #expect(rule.verdict == .deny)
         #expect(rule.origin == .machine)
-        let json = try String(contentsOf: store.machineFileURL, encoding: .utf8)
+        let json = try String(
+            contentsOf: RVPolicyPaths.policyFile(inConfigDir: root),
+            encoding: .utf8
+        )
         #expect(json.contains("supportingCommand") == false)
         #expect(json.contains("git push") == false)
         #expect(json.contains("english") == false)
