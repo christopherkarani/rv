@@ -278,21 +278,21 @@ func cursorDecode_extractsBeforeShellCommand(_ file: String, expected: String) t
     )
     let result = EvaluationResult(
         outcome: .deny(deny, matched: nil),
-        matchingView: "git push origin feature"
+        matchingView: "git push origin feature",
+        analysis: .unknown,
+        boundReview: .mandatoryHuman(deny)
     )
     let wire = hookWire(
         from: result,
         command: ShellCommand(rawValue: "git push origin feature"),
         using: CursorHostCodec(),
-        bound: .mandatoryHuman(deny),
         cwd: wd("/tmp/ws")
     )
     #expect(
         HostNativeAsk.hostAskVerdict(
             host: .cursor,
             result: result,
-            cwd: wd("/tmp/ws"),
-            bound: .mandatoryHuman(deny)
+            cwd: wd("/tmp/ws")
         ) == .allow
     )
     let json = try #require(

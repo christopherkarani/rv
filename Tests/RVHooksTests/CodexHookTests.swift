@@ -230,21 +230,21 @@ func codexHonorPath_missingReasonExitTwoWithWhitespaceStderrIsNotEnough(_ missin
     )
     let result = EvaluationResult(
         outcome: .deny(deny, matched: nil),
-        matchingView: "git push origin feature"
+        matchingView: "git push origin feature",
+        analysis: .unknown,
+        boundReview: .mandatoryHuman(deny)
     )
     let wire = hookWire(
         from: result,
         command: ShellCommand(rawValue: "git push origin feature"),
         using: CodexHostCodec(),
-        bound: .mandatoryHuman(deny),
         cwd: wd("/tmp/ws")
     )
     #expect(
         HostNativeAsk.hostAskVerdict(
             host: .codex,
             result: result,
-            cwd: wd("/tmp/ws"),
-            bound: .mandatoryHuman(deny)
+            cwd: wd("/tmp/ws")
         ) == .allow
     )
     #expect(wire.stdout.isEmpty)

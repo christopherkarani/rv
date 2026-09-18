@@ -60,19 +60,13 @@ public func hookWire<C: HostAskCodec>(
     from result: EvaluationResult,
     command: ShellCommand,
     using codec: C,
-    bound: BoundReview? = nil,
     cwd: WorkingDirectory? = nil
 ) -> HookWire {
     hookWire(
         from: result,
         command: command,
         using: codec,
-        intent: firstCallIntent(
-            from: result,
-            host: codec.host,
-            bound: bound,
-            cwd: cwd
-        )
+        intent: firstCallIntent(from: result, host: codec.host, cwd: cwd)
     )
 }
 
@@ -81,33 +75,25 @@ public func hookWire<C: HostCodec>(
     from result: EvaluationResult,
     command: ShellCommand,
     using codec: C,
-    bound: BoundReview? = nil,
     cwd: WorkingDirectory? = nil
 ) -> HookWire {
     hookWire(
         from: result,
         command: command,
         using: codec,
-        intent: firstCallIntent(
-            from: result,
-            host: codec.host,
-            bound: bound,
-            cwd: cwd
-        )
+        intent: firstCallIntent(from: result, host: codec.host, cwd: cwd)
     )
 }
 
 private func firstCallIntent(
     from result: EvaluationResult,
     host: HookHost,
-    bound: BoundReview?,
     cwd: WorkingDirectory?
 ) -> HookWireIntent {
     let auth = HookAuthorization.project(
         host: host,
         result: result,
-        cwd: cwd,
-        bound: bound
+        cwd: cwd
     )
     return .firstCall(verdict: auth.verdict, unlockCode: nil)
 }
@@ -200,7 +186,7 @@ private func encodeAsked<C: HostAskCodec>(
     command: ShellCommand,
     using codec: C
 ) -> HookWire {
-    switch BoundReview.packProjected(from: result) {
+    switch result.live.bound {
     case .deny(let deny), .mandatoryHuman(let deny):
         return codec.encodeAsk(
             reason: hostAskLine(command: command, ruleID: deny.ruleID),

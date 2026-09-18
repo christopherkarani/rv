@@ -62,22 +62,16 @@ public func applyGitSemantics(
     } else {
         return result
     }
-    switch verdict.decision {
-    case .hardAllow, .reviewEligible:
+    let bound = HostNativeAsk.hookBound(verdict.decision)
+    switch bound {
+    case .allow:
         return result
-    case .hardDeny(let deny):
+    case .deny(let deny), .mandatoryHuman(let deny):
         return EvaluationResult(
             outcome: .deny(deny, matched: nil),
             matchingView: pack.matchingView,
             analysis: analysis,
-            boundReview: .deny(deny)
-        )
-    case .mandatoryHuman(let deny):
-        return EvaluationResult(
-            outcome: .deny(deny, matched: nil),
-            matchingView: pack.matchingView,
-            analysis: analysis,
-            boundReview: .mandatoryHuman(deny)
+            boundReview: bound
         )
     }
 }

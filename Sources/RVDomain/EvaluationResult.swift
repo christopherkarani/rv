@@ -246,6 +246,13 @@ public struct EvaluationResult: Sendable, Equatable {
         EvaluationResult(outcome: outcome, matchingView: matchingView, analysis: analysis)
     }
 
+    /// Hook-door evaluation. `bound` is always present: the in-process
+    /// field, or the pack projection when the field is nil. `live.result`
+    /// is this session — pack projection does not write the field.
+    public var live: LiveEvaluation {
+        LiveEvaluation(self)
+    }
+
     /// Host-door pending identity. Fingerprint is `ActionFingerprint.make`, never
     /// analyzer `shell:git.*` / `shell:fs.*`. Effects come from analyzed git or
     /// filesystem actions; unknown and unwrap-limited may be empty.
@@ -281,23 +288,23 @@ public struct EvaluationResult: Sendable, Equatable {
     }
 }
 
-/// In-process hook-door evaluation. `bound` is required; IPC decode cannot produce this type.
+/// Hook-door evaluation. `bound` is always present.
+///
+/// The Evaluate session field stays optional so a pack deny can still reach
+/// the Policy gate and mint. Ask and encode read `bound`: the session field
+/// if present, otherwise `BoundReview.packProjected`. `result` is that
+/// session, not a reconstructed bind — pack projection must not skip
+/// allow-once. IPC `wire` still strips the field; `bound` rebuilds pack
+/// projection from the decoded decision.
 public struct LiveEvaluation: Sendable, Equatable {
-    public var outcome: EvaluationOutcome
-    public var matchingView: MatchingView
-    public var analysis: SemanticAnalysis
-    public var bound: BoundReview
+    /// Evaluate session this hook-door view was projected from.
+    public var result: EvaluationResult
 
-    public var decision: Decision { outcome.decision }
-
-    public var result: EvaluationResult {
-        EvaluationResult(
-            outcome: outcome,
-            matchingView: matchingView,
-            analysis: analysis,
-            boundReview: bound
-        )
-    }
+    public var outcome: EvaluationOutcome { result.outcome }
+    public var matchingView: MatchingView { result.matchingView }
+    public var analysis: SemanticAnalysis { result.analysis }
+    public var bound: BoundReview { BoundReview.packProjected(from: result) }
+    public var decision: Decision { result.decision }
 
     /// Codable / IPC projection. Never carries `bound`.
     public var wire: EvaluationResult { result.wire }
@@ -308,20 +315,17 @@ public struct LiveEvaluation: Sendable, Equatable {
         analysis: SemanticAnalysis,
         bound: BoundReview
     ) {
-        self.outcome = outcome
-        self.matchingView = matchingView
-        self.analysis = analysis
-        self.bound = bound
+        self.result = EvaluationResult(
+            outcome: outcome,
+            matchingView: matchingView,
+            analysis: analysis,
+            boundReview: bound
+        )
     }
 
-    public init?(_ result: EvaluationResult) {
-        guard let bound = result.boundReview else { return nil }
-        self.init(
-            outcome: result.outcome,
-            matchingView: result.matchingView,
-            analysis: result.analysis,
-            bound: bound
-        )
+    /// Creates the hook-door evaluation from an Evaluate session result.
+    public init(_ result: EvaluationResult) {
+        self.result = result
     }
 }
 

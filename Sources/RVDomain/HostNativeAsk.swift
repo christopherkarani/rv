@@ -137,7 +137,7 @@ public enum HostNativeAsk {
     }
 
     /// Pack / evaluate `Decision` on the hook door. Cannot Ask.
-    /// Product Ask is `hostAskVerdict(host:result:cwd:bound:)`.
+    /// Product Ask is `hostAskVerdict(host:result:cwd:)`.
     public static func packDoorVerdict(for decision: Decision) -> PackDoorVerdict {
         switch decision {
         case .allow:
@@ -157,14 +157,12 @@ public enum HostNativeAsk {
         host: HookHost,
         result: EvaluationResult,
         cwd: WorkingDirectory?,
-        bound: BoundReview,
         continuation: ApprovalContinuation = .hostNative
     ) -> HostAskVerdict {
         HookAuthorization.project(
             host: host,
             result: result,
             cwd: cwd,
-            bound: bound,
             continuation: continuation
         ).verdict
     }
@@ -174,10 +172,9 @@ public enum HostNativeAsk {
     /// still blocks there.
     public static func recordsPending(
         result: EvaluationResult,
-        cwd: WorkingDirectory?,
-        bound: BoundReview
+        cwd: WorkingDirectory?
     ) -> Bool {
-        switch bound {
+        switch result.live.bound {
         case .allow:
             return false
         case .deny:

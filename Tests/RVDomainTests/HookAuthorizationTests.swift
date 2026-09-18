@@ -80,17 +80,17 @@ struct HookAuthorizationTests {
                 outcome: .deny(packDeny, matched: nil),
                 matchingView: MatchingView("git reset --hard")
             ),
-            cwd: workspace,
-            bound: .deny(packDeny)
+            cwd: workspace
         )
         let gray = HookAuthorization.project(
             host: host,
             result: EvaluationResult(
                 outcome: .plain,
-                matchingView: MatchingView("git push --force origin topic")
+                matchingView: MatchingView("git push --force origin topic"),
+                analysis: .unknown,
+                boundReview: .mandatoryHuman(ActionPolicyEngine.Builtin.remoteBranchAsk)
             ),
-            cwd: workspace,
-            bound: .mandatoryHuman(ActionPolicyEngine.Builtin.remoteBranchAsk)
+            cwd: workspace
         )
 
         switch HostNativeAsk.profile(for: host).pause {
@@ -119,8 +119,7 @@ struct HookAuthorizationTests {
         let auth = HookAuthorization.project(
             host: .pi,
             result: result,
-            cwd: workspace,
-            bound: .deny(packDeny)
+            cwd: workspace
         )
         #expect(auth == .ask(.hostNative))
         #expect(auth.shouldRecordPending)
@@ -136,8 +135,7 @@ struct HookAuthorizationTests {
         let auth = HookAuthorization.project(
             host: .grok,
             result: result,
-            cwd: workspace,
-            bound: .deny(packDeny)
+            cwd: workspace
         )
         #expect(auth == .denyUnlockable(packDeny))
         #expect(auth.shouldMintUnlock)
@@ -154,8 +152,7 @@ struct HookAuthorizationTests {
         let auth = HookAuthorization.project(
             host: .pi,
             result: result,
-            cwd: workspace,
-            bound: .deny(secret)
+            cwd: workspace
         )
         #expect(auth == .denyPinned(secret))
         #expect(auth.shouldMintUnlock == false)
