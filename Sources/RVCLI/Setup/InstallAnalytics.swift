@@ -65,7 +65,7 @@ enum InstallAnalyticsHosts {
 
     private static func status(_ kind: SetupSlotKind) -> String {
         switch kind {
-        case .pending: "pending"
+        case .skipped: "skipped"
         case .wired: "wired"
         case .occupied: "occupied"
         }

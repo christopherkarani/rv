@@ -7,7 +7,7 @@ import RVTheme
 private func hostlessFrame() -> SetupCeremonyFrame {
     SetupCeremonyFrame(
         activity: setupCeremonySearchActivity,
-        slots: HookHost.setupSlotOrder.map { SetupSlotView(host: $0, kind: .pending) },
+        slots: HookHost.setupSlotOrder.map { SetupSlotView(host: $0, kind: .skipped) },
         closerLines: [setupCeremonyHostlessTitle, setupCeremonyHostlessNext]
     )
 }
@@ -17,9 +17,9 @@ private func grokWiredFrame() -> SetupCeremonyFrame {
         title: setupCeremonyWiringTitle,
         slots: [
             SetupSlotView(host: .grok, kind: .wired, clause: setupGrokReloadClause),
-            SetupSlotView(host: .pi, kind: .pending),
-            SetupSlotView(host: .opencode, kind: .pending),
-            SetupSlotView(host: .claude, kind: .pending),
+            SetupSlotView(host: .pi, kind: .skipped),
+            SetupSlotView(host: .opencode, kind: .skipped),
+            SetupSlotView(host: .claude, kind: .skipped),
         ],
         closerLines: [setupCeremonyHooksWired]
     )
@@ -93,7 +93,7 @@ private func grokWiredFrame() -> SetupCeremonyFrame {
     let bare = SetupRenderer().render(
         SetupCeremonyFrame(
             statusLine: "",
-            slots: [SetupSlotView(host: .grok, kind: .pending, clause: "")],
+            slots: [SetupSlotView(host: .grok, kind: .skipped, clause: "")],
             closerLines: []
         ),
         palette: colorOffPalette

@@ -26,7 +26,7 @@ import Testing
     #expect(frames.first?.slots[2].kind == .wired)
 
     let afterGrok = frames.first { frame in
-        frame.slots[0].kind == .pending
+        frame.slots[0].kind == .skipped
             && frame.slots[2].kind == .wired
             && frame.title == uninstallCeremonyRemovingTitle
     }

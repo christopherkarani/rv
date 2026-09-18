@@ -17,14 +17,14 @@ enum HostLifecycle {
         files: FileOps
     ) throws(SetupError) -> SetupReport {
         var slots = SetupSlotSnapshot(
-            grok: .pending,
-            pi: .pending,
-            openCode: .pending,
-            claude: .pending,
-            openClaw: .pending,
-            hermes: .pending,
-            codex: .pending,
-            cursor: .pending,
+            grok: .skipped,
+            pi: .skipped,
+            openCode: .skipped,
+            claude: .skipped,
+            openClaw: .skipped,
+            hermes: .skipped,
+            codex: .skipped,
+            cursor: .skipped,
             wrote: []
         )
 
