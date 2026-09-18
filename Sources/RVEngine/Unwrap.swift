@@ -22,6 +22,10 @@ public struct UnwrappedCommand: Sendable, Equatable {
         self.layers = layers
         self.workingDirectory = workingDirectory
     }
+
+    public var executing: ExecutingCommand {
+        ExecutingCommand(rawValue: command.rawValue)
+    }
 }
 
 /// Result of bounded unwrap. `.limited` is fail-closed, never an allow hint.

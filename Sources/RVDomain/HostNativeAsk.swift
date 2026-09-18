@@ -160,36 +160,13 @@ public enum HostNativeAsk {
         bound: BoundReview,
         continuation: ApprovalContinuation = .hostNative
     ) -> HostAskVerdict {
-        let profile = profile(for: host)
-        switch bound {
-        case .allow:
-            switch result.decision {
-            case .allow:
-                return .allow
-            case .indeterminate, .deny:
-                return .deny
-            }
-        case .deny:
-            guard UnlockableDeny.matches(result: result, cwd: cwd) else { return .deny }
-            return pauseIfPossible(
-                host: host,
-                continuation: continuation,
-                ifNoPause: profile.unlockableIfNoPause
-            )
-        case .mandatoryHuman:
-            switch result.decision {
-            case .indeterminate:
-                return .deny
-            case .allow, .deny:
-                return pauseIfSpendable(
-                    host: host,
-                    continuation: continuation,
-                    cwd: cwd,
-                    matchingView: result.matchingView,
-                    ifNoPause: profile.grayAreaIfNoPause
-                )
-            }
-        }
+        HookAuthorization.project(
+            host: host,
+            result: result,
+            cwd: cwd,
+            bound: bound,
+            continuation: continuation
+        ).verdict
     }
 
     /// Extra / desktop wait. Same eligibility as spend-first Ask. Deny-or-TTY
@@ -204,7 +181,7 @@ public enum HostNativeAsk {
         case .allow:
             return false
         case .deny:
-            return UnlockableDeny.matches(result: result, cwd: cwd)
+            return HookAuthorization.isUnlockable(result: result, cwd: cwd)
         case .mandatoryHuman:
             return cwd != nil && result.matchingView.isEmpty == false
         }
@@ -244,31 +221,4 @@ public enum HostNativeAsk {
     /// A leftover unused ask token is never a permit.
     public static let leftoverAskIsPermit = false
 
-    private static func pauseIfSpendable(
-        host: HookHost,
-        continuation: ApprovalContinuation,
-        cwd: WorkingDirectory?,
-        matchingView: MatchingView,
-        ifNoPause: HostNoPauseFallback
-    ) -> HostAskVerdict {
-        guard cwd != nil, matchingView.isEmpty == false else { return .deny }
-        return pauseIfPossible(
-            host: host,
-            continuation: continuation,
-            ifNoPause: ifNoPause
-        )
-    }
-
-    private static func pauseIfPossible(
-        host: HookHost,
-        continuation: ApprovalContinuation,
-        ifNoPause: HostNoPauseFallback
-    ) -> HostAskVerdict {
-        switch (profile(for: host).pause, continuation) {
-        case (.spendFirst, .hostNative):
-            return .ask(.hostNative)
-        default:
-            return ifNoPause.verdict
-        }
-    }
 }

@@ -21,7 +21,7 @@ enum PendingAllowOncePlanner {
             if case .deny = peek.boundReview {
                 return .refuse
             }
-            guard let cwd, UnlockableDeny.matches(result: peek, cwd: cwd) else {
+            guard let cwd, HookAuthorization.isUnlockable(result: peek, cwd: cwd) else {
                 return .refuse
             }
             return .plant(matchingView: peek.matchingView, cwd: cwd)

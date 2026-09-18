@@ -82,6 +82,14 @@ import Testing
     #expect(request.budget == nil)
 }
 
+@Test func executingCommand_isDistinctFromShellAndMatchingView() {
+    let executing = ExecutingCommand(rawValue: "git reset --hard")
+    let shell = ShellCommand(rawValue: "sudo git reset --hard")
+    let matching = MatchingView("git reset --hard")
+    #expect(executing.rawValue == matching.rawValue)
+    #expect(executing.rawValue != shell.rawValue)
+}
+
 @Test func matchingView_encodesAsJSONStringNotObject() throws {
     let view = MatchingView("git reset --hard")
     let data = try JSONEncoder().encode(view)

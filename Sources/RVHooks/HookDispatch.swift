@@ -114,20 +114,14 @@ private func hookBody<C: HostCodec>(
             return wire
         case .shell(_, let command, let cwd, _):
             let result = await evaluate(command, cwd)
-            let bound = BoundReview.packProjected(from: result)
-            let verdict = HostNativeAsk.hostAskVerdict(
-                host: codec.host,
-                result: result,
-                cwd: cwd,
-                bound: bound
-            )
+            let auth = HookAuthorization.project(host: codec.host, result: result, cwd: cwd)
             let unlockCode = await mintUnlockCodeIfNeeded(
                 result: result,
-                verdict: verdict,
+                authorization: auth,
                 cwd: cwd,
                 mintOnDeny: mintOnDeny
             )
-            if let recordHostAsk, encodesHostAsk(result: result, verdict: verdict) {
+            if let recordHostAsk, auth.shouldRecordPending {
                 await ignoreHostAskFailure {
                     try await recordHostAsk(
                         request,
@@ -135,7 +129,7 @@ private func hookBody<C: HostCodec>(
                     )
                 }
             }
-            return firstCall(result, command, verdict, unlockCode)
+            return firstCall(result, command, auth.verdict, unlockCode)
         }
     case .foreign:
         return codec.encodeAllow()
@@ -184,22 +178,6 @@ private func pendingAction(
     )
 }
 
-/// Matches `encodeAsked`: Ask JSON only for allow/deny results whose product
-/// verdict is `.ask`. Indeterminate stays deny and must not create a wait.
-private func encodesHostAsk(result: EvaluationResult, verdict: HostAskVerdict) -> Bool {
-    switch result.decision {
-    case .indeterminate:
-        return false
-    case .allow, .deny:
-        switch verdict {
-        case .ask:
-            return true
-        case .allow, .deny:
-            return false
-        }
-    }
-}
-
 private func ignoreHostAskFailure(_ body: () async throws -> Void) async {
     do {
         try await body()
@@ -210,16 +188,11 @@ private func ignoreHostAskFailure(_ body: () async throws -> Void) async {
 
 private func mintUnlockCodeIfNeeded(
     result: EvaluationResult,
-    verdict: HostAskVerdict,
+    authorization: HookAuthorization,
     cwd: WorkingDirectory?,
     mintOnDeny: (@Sendable (EvaluationResult, WorkingDirectory?) async -> AllowOnceUnlockCode?)?
 ) async -> AllowOnceUnlockCode? {
     guard let mintOnDeny else { return nil }
-    guard case .deny = result.decision else { return nil }
-    switch verdict {
-    case .ask, .allow:
-        return nil
-    case .deny:
-        return await mintOnDeny(result, cwd)
-    }
+    guard authorization.shouldMintUnlock else { return nil }
+    return await mintOnDeny(result, cwd)
 }

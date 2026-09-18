@@ -116,7 +116,7 @@ public enum RulePinning: Sendable {
     }
 
     public static func blocksAllowOverride(_ result: EvaluationResult) -> Bool {
-        UnlockableDeny.isPinned(result)
+        HookAuthorization.isPinned(result)
     }
 
     public static func matchingView(of action: ProposedAction) -> MatchingView? {

@@ -1,35 +1,12 @@
-/// Deny the Policy gate could spend. Ask, mint, and spend share this.
+/// Deny the Policy gate could spend. Ask, mint, and spend share `HookAuthorization`.
 public enum UnlockableDeny: Sendable {
     /// Yes for an unpinned deny with cwd and a nonempty matching view.
     public static func matches(result: EvaluationResult, cwd: WorkingDirectory?) -> Bool {
-        guard case .deny = result.decision else { return false }
-        guard isPinned(result) == false else { return false }
-        guard cwd != nil else { return false }
-        guard result.matchingView.isEmpty == false else { return false }
-        return true
+        HookAuthorization.isUnlockable(result: result, cwd: cwd)
     }
 
     /// Pin half: secrets, builtin.action, unwrap-limited analysis, protected-path.
-    /// `mandatoryHuman` is Ask/spend, not this pin, unless analysis is already
-    /// unwrap-limited or protected-path.
     public static func isPinned(_ result: EvaluationResult) -> Bool {
-        if result.analysis.innermost == .unwrapLimited {
-            return true
-        }
-        if case .protectedPath? = result.analysis.filesystemAction?.primaryTarget?.scope {
-            return true
-        }
-        if case .mandatoryHuman = result.boundReview {
-            return false
-        }
-        if case .deny(let deny) = result.decision, isPinnedPack(deny) {
-            return true
-        }
-        return false
-    }
-
-    private static func isPinnedPack(_ deny: Deny) -> Bool {
-        deny.ruleID.pack == .coreSecrets
-            || deny.ruleID.pack == ActionPolicyEngine.Builtin.pack
+        HookAuthorization.isPinned(result)
     }
 }
