@@ -102,16 +102,9 @@ public enum HookAuthorization: Sendable, Equatable {
         host: HookHost,
         result: EvaluationResult,
         cwd: WorkingDirectory?,
-        bound: BoundReview? = nil,
         continuation: ApprovalContinuation = .hostNative
     ) -> HookAuthorization {
-        let live = LiveEvaluation(
-            outcome: result.outcome,
-            matchingView: result.matchingView,
-            analysis: result.analysis,
-            bound: bound ?? BoundReview.packProjected(from: result)
-        )
-        return project(host: host, live: live, cwd: cwd, continuation: continuation)
+        project(host: host, live: result.live, cwd: cwd, continuation: continuation)
     }
 
     public var verdict: HostAskVerdict {

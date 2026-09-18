@@ -246,6 +246,12 @@ public struct EvaluationResult: Sendable, Equatable {
         EvaluationResult(outcome: outcome, matchingView: matchingView, analysis: analysis)
     }
 
+    /// Hook-door evaluation. BoundReview is always present: the in-process
+    /// field, or the pack projection when the field is nil.
+    public var live: LiveEvaluation {
+        LiveEvaluation(self)
+    }
+
     /// Host-door pending identity. Fingerprint is `ActionFingerprint.make`, never
     /// analyzer `shell:git.*` / `shell:fs.*`. Effects come from analyzed git or
     /// filesystem actions; unknown and unwrap-limited may be empty.
@@ -281,7 +287,13 @@ public struct EvaluationResult: Sendable, Equatable {
     }
 }
 
-/// In-process hook-door evaluation. `bound` is required; IPC decode cannot produce this type.
+/// Hook-door evaluation. `bound` is always present.
+///
+/// The Evaluate session field stays optional so a pack deny can still reach
+/// the Policy gate. This type is the one BoundReview life for Ask, encode,
+/// and mint: field if present, otherwise `BoundReview.packProjected`.
+/// IPC `wire` still strips the field; `LiveEvaluation` rebuilds pack
+/// projection from the decoded decision.
 public struct LiveEvaluation: Sendable, Equatable {
     public var outcome: EvaluationOutcome
     public var matchingView: MatchingView
@@ -314,13 +326,13 @@ public struct LiveEvaluation: Sendable, Equatable {
         self.bound = bound
     }
 
-    public init?(_ result: EvaluationResult) {
-        guard let bound = result.boundReview else { return nil }
+    /// Creates the hook-door evaluation from an Evaluate session result.
+    public init(_ result: EvaluationResult) {
         self.init(
             outcome: result.outcome,
             matchingView: result.matchingView,
             analysis: result.analysis,
-            bound: bound
+            bound: BoundReview.packProjected(from: result)
         )
     }
 }

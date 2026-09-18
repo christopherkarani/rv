@@ -85,11 +85,10 @@ public func applyFilesystemSemantics(
         }
         return filesystemSemanticDeny(deny, pack: pack, analysis: analysis)
     case .mandatoryHuman(let deny):
-        return EvaluationResult(
-            outcome: .deny(deny, matched: nil),
-            matchingView: pack.matchingView,
-            analysis: analysis,
-            boundReview: .mandatoryHuman(deny)
+        return filesystemBound(
+            HostNativeAsk.hookBound(.mandatoryHuman(deny)),
+            pack: pack,
+            analysis: analysis
         )
     }
 }
@@ -99,12 +98,29 @@ private func filesystemSemanticDeny(
     pack: EvaluationResult,
     analysis: SemanticAnalysis
 ) -> EvaluationResult {
-    EvaluationResult(
-        outcome: .deny(deny, matched: nil),
-        matchingView: pack.matchingView,
-        analysis: analysis,
-        boundReview: .deny(deny)
+    filesystemBound(
+        HostNativeAsk.hookBound(.hardDeny(deny)),
+        pack: pack,
+        analysis: analysis
     )
+}
+
+private func filesystemBound(
+    _ bound: BoundReview,
+    pack: EvaluationResult,
+    analysis: SemanticAnalysis
+) -> EvaluationResult {
+    switch bound {
+    case .allow:
+        return pack
+    case .deny(let deny), .mandatoryHuman(let deny):
+        return EvaluationResult(
+            outcome: .deny(deny, matched: nil),
+            matchingView: pack.matchingView,
+            analysis: analysis,
+            boundReview: bound
+        )
+    }
 }
 
 /// Protected-path and out-of-repo still tighten when unprobed. Unresolved

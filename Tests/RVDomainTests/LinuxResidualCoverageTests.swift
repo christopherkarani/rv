@@ -62,25 +62,32 @@ struct LinuxResidualCoverageTests {
             outcome: .deny(deny, matched: nil),
             matchingView: MatchingView("git reset --hard")
         )
-        #expect(HostNativeAsk.recordsPending(result: denied, cwd: cwd, bound: .allow) == false)
-        #expect(HostNativeAsk.recordsPending(result: denied, cwd: cwd, bound: .deny(deny)))
-        #expect(
-            HostNativeAsk.recordsPending(
-                result: denied,
-                cwd: cwd,
-                bound: .mandatoryHuman(deny)
-            )
+        let allowedBind = EvaluationResult(
+            outcome: .deny(deny, matched: nil),
+            matchingView: MatchingView("git reset --hard"),
+            analysis: .unknown,
+            boundReview: .allow
         )
+        let human = EvaluationResult(
+            outcome: .deny(deny, matched: nil),
+            matchingView: MatchingView("git reset --hard"),
+            analysis: .unknown,
+            boundReview: .mandatoryHuman(deny)
+        )
+        #expect(HostNativeAsk.recordsPending(result: allowedBind, cwd: cwd) == false)
+        #expect(HostNativeAsk.recordsPending(result: denied, cwd: cwd))
+        #expect(HostNativeAsk.recordsPending(result: human, cwd: cwd))
         let indeterminate = EvaluationResult(
             outcome: .indeterminate(.commandTooLarge),
-            matchingView: MatchingView("huge")
+            matchingView: MatchingView("huge"),
+            analysis: .unknown,
+            boundReview: .mandatoryHuman(deny)
         )
         #expect(
             HostNativeAsk.hostAskVerdict(
                 host: .pi,
                 result: indeterminate,
-                cwd: cwd,
-                bound: .mandatoryHuman(deny)
+                cwd: cwd
             ) == .deny
         )
     }
@@ -250,10 +257,10 @@ struct LinuxResidualCoverageTests {
         #expect(try JSONDecoder().decode(HardPolicyDecision.self, from: JSONEncoder().encode(verdict)) == verdict)
     }
 
-    @Test func liveEvaluation_failableInitAndWireStripBound() {
+    @Test func liveEvaluation_attachesPackProjectionAndWireStripBound() {
         let deny = Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "x")
         let unbound = EvaluationResult(outcome: .plain, matchingView: MatchingView("echo"))
-        #expect(LiveEvaluation(unbound) == nil)
+        #expect(LiveEvaluation(unbound).bound == .allow)
         let bound = EvaluationResult(
             outcome: .plain,
             matchingView: MatchingView("echo"),
@@ -261,8 +268,8 @@ struct LinuxResidualCoverageTests {
             boundReview: .mandatoryHuman(deny)
         )
         let live = LiveEvaluation(bound)
-        #expect(live?.bound == .mandatoryHuman(deny))
-        #expect(live?.wire.boundReview == nil)
+        #expect(live.bound == .mandatoryHuman(deny))
+        #expect(live.wire.boundReview == nil)
         #expect(bound.wire.boundReview == nil)
     }
 

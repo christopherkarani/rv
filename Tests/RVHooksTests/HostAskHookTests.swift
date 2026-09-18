@@ -236,14 +236,15 @@ func hookWire_firstCallAllowCannotSkipPolicyGate(_ host: HookHost) throws {
     )
     let result = EvaluationResult(
         outcome: .deny(deny, matched: nil),
-        matchingView: MatchingView("git push --force origin topic")
+        matchingView: MatchingView("git push --force origin topic"),
+        analysis: .unknown,
+        boundReview: .mandatoryHuman(deny)
     )
     let cwd = try #require(WorkingDirectory(validating: "/tmp/ws"))
     let wire = hookWire(
         from: result,
         command: ShellCommand(rawValue: "git push --force origin topic"),
         using: GrokHostCodec(),
-        bound: .mandatoryHuman(deny),
         cwd: cwd
     )
     #expect(wire.stdout.isEmpty)
@@ -266,7 +267,6 @@ func hookWire_firstCallAllowCannotSkipPolicyGate(_ host: HookHost) throws {
         from: result,
         command: ShellCommand(rawValue: "git reset --hard"),
         using: GrokHostCodec(),
-        bound: .deny(deny),
         cwd: cwd
     )
     let json = try #require(

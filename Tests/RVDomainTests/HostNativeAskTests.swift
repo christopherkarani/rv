@@ -46,14 +46,15 @@ struct HostNativeAskTests {
         let cwd = try #require(WorkingDirectory(validating: "/tmp/ws"))
         let result = EvaluationResult(
             outcome: .plain,
-            matchingView: MatchingView("git push --force origin topic")
+            matchingView: MatchingView("git push --force origin topic"),
+            analysis: .unknown,
+            boundReview: .mandatoryHuman(askDeny)
         )
         let profile = HostNativeAsk.profile(for: host)
         let verdict = HostNativeAsk.hostAskVerdict(
             host: host,
             result: result,
             cwd: cwd,
-            bound: .mandatoryHuman(askDeny),
             continuation: .hostNative
         )
         switch profile.pause {
@@ -119,8 +120,7 @@ struct HostNativeAskTests {
         let verdict = HostNativeAsk.hostAskVerdict(
             host: host,
             result: result,
-            cwd: cwd,
-            bound: .deny(packDeny)
+            cwd: cwd
         )
         switch profile.pause {
         case .spendFirst:
@@ -139,16 +139,20 @@ struct HostNativeAskTests {
             HostNativeAsk.hostAskVerdict(
                 host: .pi,
                 result: result,
-                cwd: nil,
-                bound: .deny(packDeny)
+                cwd: nil
             ) == .deny
+        )
+        let human = EvaluationResult(
+            outcome: .deny(packDeny, matched: nil),
+            matchingView: MatchingView("git reset --hard"),
+            analysis: .unknown,
+            boundReview: .mandatoryHuman(askDeny)
         )
         #expect(
             HostNativeAsk.hostAskVerdict(
                 host: .pi,
-                result: result,
-                cwd: nil,
-                bound: .mandatoryHuman(askDeny)
+                result: human,
+                cwd: nil
             ) == .deny
         )
     }
@@ -160,17 +164,20 @@ struct HostNativeAskTests {
             HostNativeAsk.hostAskVerdict(
                 host: .pi,
                 result: packResult,
-                cwd: cwd,
-                bound: .deny(packDeny)
+                cwd: cwd
             ) == .deny
         )
-        let humanResult = EvaluationResult(outcome: .plain)
+        let humanResult = EvaluationResult(
+            outcome: .plain,
+            matchingView: MatchingView(""),
+            analysis: .unknown,
+            boundReview: .mandatoryHuman(askDeny)
+        )
         #expect(
             HostNativeAsk.hostAskVerdict(
                 host: .pi,
                 result: humanResult,
-                cwd: cwd,
-                bound: .mandatoryHuman(askDeny)
+                cwd: cwd
             ) == .deny
         )
     }
@@ -186,8 +193,7 @@ struct HostNativeAskTests {
             HostNativeAsk.hostAskVerdict(
                 host: .pi,
                 result: result,
-                cwd: cwd,
-                bound: .deny(packDeny)
+                cwd: cwd
             ) == .deny
         )
     }
@@ -206,8 +212,7 @@ struct HostNativeAskTests {
             HostNativeAsk.hostAskVerdict(
                 host: .pi,
                 result: result,
-                cwd: cwd,
-                bound: .deny(secret)
+                cwd: cwd
             ) == .deny
         )
     }
@@ -223,8 +228,7 @@ struct HostNativeAskTests {
             HostNativeAsk.hostAskVerdict(
                 host: .pi,
                 result: result,
-                cwd: cwd,
-                bound: .deny(leftover)
+                cwd: cwd
             ) == .deny
         )
     }
@@ -233,14 +237,15 @@ struct HostNativeAskTests {
         let cwd = try #require(WorkingDirectory(validating: "/tmp/ws"))
         let result = EvaluationResult(
             outcome: .deny(packDeny, matched: nil),
-            matchingView: MatchingView("git reset --hard")
+            matchingView: MatchingView("git reset --hard"),
+            analysis: .unknown,
+            boundReview: .allow
         )
         #expect(
             HostNativeAsk.hostAskVerdict(
                 host: .pi,
                 result: result,
-                cwd: cwd,
-                bound: .allow
+                cwd: cwd
             ) == .deny
         )
     }

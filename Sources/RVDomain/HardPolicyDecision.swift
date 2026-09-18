@@ -46,9 +46,10 @@ public enum BoundReview: Sendable, Equatable {
         }
     }
 
-    /// BoundReview for hook mapping when the Evaluate session did not bind.
+    /// Pack-door BoundReview when the Evaluate session field is nil.
     /// Pack allow / indeterminate → `.allow`. Pack deny → `.deny`.
-    /// Never runs `ActionPolicyEngine`.
+    /// Never runs `ActionPolicyEngine`. Hook door and encode consume
+    /// `EvaluationResult.live`, which calls this once.
     public static func packProjected(from result: EvaluationResult) -> BoundReview {
         if let bound = result.boundReview {
             return bound
