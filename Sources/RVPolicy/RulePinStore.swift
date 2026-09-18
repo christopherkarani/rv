@@ -82,13 +82,13 @@ public struct RulePinStore: Sendable {
     }
 
     private func persistTypedRule(_ rule: TypedRule) throws {
-        let store = TypedRuleStore(baseDirectory: baseDirectory)
-        var rules = try store.loadMachine()
-        if let index = rules.firstIndex(where: { $0.predicate == rule.predicate }) {
-            rules[index] = rule
-        } else {
-            rules.append(rule)
-        }
-        try store.saveMachine(rules)
+        try PolicyWorkspace(configDirectory: baseDirectory).upsert(
+            PolicyDocumentRule(
+                id: rule.id,
+                verdict: rule.verdict,
+                predicate: rule.predicate
+            ),
+            layer: .machine
+        )
     }
 }

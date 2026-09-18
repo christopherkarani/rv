@@ -437,17 +437,8 @@ public struct GatedEvaluate: Sendable {
         cwd: WorkingDirectory?,
         home: HomeDirectory?
     ) throws -> [TypedRule] {
-        let workspace = cwd.map { URL(fileURLWithPath: $0.rawValue, isDirectory: true) }
-        if let home {
-            return try TypedRuleStore(
-                baseDirectory: RVPolicyPaths.configDirectory(home: home)
-            ).loadEffective(builtin: [], workspace: workspace)
-        }
-        guard let workspace else {
-            return []
-        }
-        let repo = try TypedRuleStore(baseDirectory: workspace).loadRepo(workspace: workspace)
-        return TypedRuleStore.merge(builtin: [], machine: [], repo: repo)
+        try PolicyWorkspace(home: home, workspace: workspaceURL(cwd: cwd))
+            .loadEffectiveRules(builtin: [])
     }
 
     /// After apply stayed deny. Not peek. Not Ask. Nil when the deny is not unlockable.

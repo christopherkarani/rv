@@ -41,6 +41,20 @@ struct SafetyStoreTests {
         #expect(analytics?["enabled"] as? Bool == false)
     }
 
+    @Test func machinePolicyDocument_raisesEffectiveLevel() throws {
+        let home = try tempHome()
+        defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
+        let store = TypedRuleStore(baseDirectory: RVPolicyPaths.configDirectory(home: home))
+        try store.saveMachine(PolicyDocument(safetyLevel: .strict))
+        #expect(SafetyStore.loadEffective(home: home, workspace: nil) == .strict)
+        #expect(
+            FileManager.default.fileExists(
+                atPath: RVPolicyPaths.configDirectory(home: home)
+                    .appendingPathComponent("config.json", isDirectory: false).path
+            ) == false
+        )
+    }
+
     @Test func repoPolicy_raisesEffectiveLevel() throws {
         let home = try tempHome()
         defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
