@@ -379,8 +379,20 @@ struct RulePinningTests {
         let record = pinOkWait()
         let draft = RulePinning.draft(record: record, polarity: .allow)
         let store = RulePinStore(baseDirectory: root)
-        let first = try store.save(record: record, polarity: .allow, draft: draft, now: now)
-        let second = try store.save(record: record, polarity: .allow, draft: draft, now: now)
+        let first = try store.save(
+            record: record,
+            polarity: .allow,
+            draft: draft,
+            now: now,
+            matchingView: MatchingView("git reset --hard")
+        )
+        let second = try store.save(
+            record: record,
+            polarity: .allow,
+            draft: draft,
+            now: now,
+            matchingView: MatchingView("git reset --hard")
+        )
         #expect(first.ruleID == second.ruleID)
         #expect(first.ruleID.pack.rawValue == "pin.allow")
         let snap = AllowlistStore(baseDirectory: root).loadUserSnapshot(workspacePath: nil, now: now)
@@ -407,7 +419,8 @@ struct RulePinningTests {
             record: record,
             polarity: .block,
             draft: draft,
-            now: now
+            now: now,
+            matchingView: MatchingView("git reset --hard")
         )
         try AllowlistStore(baseDirectory: root).pin(
             AllowlistEntry(

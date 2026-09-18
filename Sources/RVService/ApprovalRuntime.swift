@@ -1,6 +1,5 @@
 import Foundation
 import RVDomain
-import RVEngine
 import RVIPC
 import RVPolicy
 
@@ -92,13 +91,12 @@ actor ApprovalRuntime {
         do {
             let now = clock()
             let record = try await pendingApprovals.load(id: params.id, now: now)
-            let commandText = record.action.supportingCommand?.rawValue ?? ""
             let outcome = try RulePinStore(baseDirectory: allowOnce.baseDirectory).save(
                 record: record,
                 polarity: polarity,
                 draft: params.draft,
                 now: now,
-                matchingView: Normalize.matchingView(of: commandText)
+                matchingView: record.action.supportingCommand.map(EvaluationWorld.matchingView(of:))
             )
             let decision: ApprovalDecision = polarity == .allow ? .createRule : .deny
             do {

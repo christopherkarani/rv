@@ -437,13 +437,21 @@ struct PendingDispatchTests {
                 )
             )
         )
-        guard case .ruleSave = save.result else {
+        guard case .ruleSave(let saved) = save.result else {
             Issue.record("wrapper Always-allow must save, got \(save.result)")
             return
         }
+        let command = ShellCommand(rawValue: "sudo git reset --hard")
+        let view = EvaluationWorld.matchingView(of: command)
+        #expect(view.rawValue == "git reset --hard")
+        #expect(saved.ruleID == RulePinning.ruleID(polarity: .allow, matchingView: view))
+        let snap = AllowlistStore(baseDirectory: allowOnceDirectory)
+            .loadUserSnapshot(workspacePath: nil, now: now)
+        #expect(snap.matches(ruleID: nil, matchingView: view, now: now))
+        #expect(snap.matches(ruleID: nil, matchingView: "sudo git reset --hard", now: now) == false)
 
         let request = EvaluationRequest(
-            command: ShellCommand(rawValue: "sudo git reset --hard"),
+            command: command,
             enabledPacks: dayOnePackIDs
         )
         let first = await runtime.dispatch(
@@ -454,6 +462,7 @@ struct PendingDispatchTests {
             return
         }
         #expect(allowed.result.decision == .allow)
+        #expect(allowed.result.matchingView == view)
         let unwrapped = EvaluationRequest(
             command: ShellCommand(rawValue: "git reset --hard"),
             enabledPacks: dayOnePackIDs
