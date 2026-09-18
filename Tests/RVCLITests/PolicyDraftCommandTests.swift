@@ -159,6 +159,10 @@ struct PolicyDraftCommandTests {
         #expect(body.components(separatedBy: "PolicyDraftRun.execute").count == 2)
         #expect(body.contains("catch is EnglishCompilerError") == false)
         #expect(body.contains("FakeEnglishCompiler(") == false)
+        #expect(source.contains("TypedRuleStore(") == false)
+        #expect(source.contains("mergeLayer") == false)
+        #expect(source.contains("PolicyWorkspace("))
+        #expect(source.contains(".upsert("))
     }
 
     @Test func unavailablePrimary_fixtureEnglish_previewsCannedGitPushDeny() async throws {
@@ -288,17 +292,14 @@ struct PolicyDocumentCommandTests {
         let home = try isolatedHome()
         let homeURL = URL(fileURLWithPath: home.rawValue, isDirectory: true)
         defer { try? FileManager.default.removeItem(at: homeURL) }
-        let store = TypedRuleStore(baseDirectory: RVPolicyPaths.configDirectory(home: home))
-        try store.saveMachine(
-            PolicyDocument(
-                rules: [
-                    PolicyDocumentRule(
-                        id: RuleID(pack: .typedGit, pattern: "allow"),
-                        verdict: .allow,
-                        predicate: .gitPush(force: .exactly(.force), branch: "main")
-                    ),
-                ]
-            )
+        let session = PolicyWorkspace(home: home)
+        try session.upsert(
+            PolicyDocumentRule(
+                id: RuleID(pack: .typedGit, pattern: "allow"),
+                verdict: .allow,
+                predicate: .gitPush(force: .exactly(.force), branch: "main")
+            ),
+            layer: .machine
         )
         let incoming = PolicyDocument(
             rules: [
@@ -309,16 +310,12 @@ struct PolicyDocumentCommandTests {
                 ),
             ]
         )
-        let merged = PolicyDocument(
-            rules: PolicyDocumentTOML.mergeLayer(
-                existing: try store.loadMachineDocument().rules,
-                incoming: incoming.rules
-            )
-        )
-        try store.saveMachine(merged)
-        let loaded = try store.loadMachine()
-        #expect(loaded.count == 1)
-        #expect(loaded[0].verdict == .deny)
+        let merged = try session.mergeIncoming(incoming, layer: .machine, save: true)
+        #expect(merged.rules.count == 1)
+        #expect(merged.rules[0].verdict == .deny)
+        let loaded = try session.loadMachineDocument()
+        #expect(loaded.rules.count == 1)
+        #expect(loaded.rules[0].verdict == .deny)
     }
 
     @Test func validate_missingFile_isOK() throws {
