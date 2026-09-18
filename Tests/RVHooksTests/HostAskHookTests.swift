@@ -314,9 +314,9 @@ func hookWire_firstCallAllowCannotSkipPolicyGate(_ host: HookHost) throws {
     let stdin = """
     {"toolName":"bash","cwd":"/tmp/ws","input":{"command":"git reset --hard"},"hostAsk":"spend"}
     """
-    let wire = await hookWire(host: .pi, stdin: stdin) { _, _ in
+    let wire = await hookWire(host: .pi, stdin: stdin, world: hookWorld { _, _ in
         EvaluationResult(outcome: .plain)
-    }
+    })
     let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
     #expect(json["decision"] as? String == "deny")
     #expect(wire.stdout.isEmpty == false)
@@ -331,18 +331,18 @@ func hookWire_firstCallAllowCannotSkipPolicyGate(_ host: HookHost) throws {
         reason: "x"
     )
     let leftover = HostNativeAsk.leftoverAskDeny
-    let denyWire = await hookWire(host: .opencode, stdin: stdin) { _, _ in
+    let denyWire = await hookWire(host: .opencode, stdin: stdin, world: hookWorld { _, _ in
         EvaluationResult(
             outcome: .deny(deny, matched: nil),
             matchingView: MatchingView("git reset --hard")
         )
-    }
-    let leftoverWire = await hookWire(host: .opencode, stdin: stdin) { _, _ in
+    })
+    let leftoverWire = await hookWire(host: .opencode, stdin: stdin, world: hookWorld { _, _ in
         EvaluationResult(
             outcome: .deny(leftover, matched: nil),
             matchingView: MatchingView("git reset --hard")
         )
-    }
+    })
     let denyJSON = try #require(
         JSONSerialization.jsonObject(with: Data(denyWire.stdout.utf8)) as? [String: Any]
     )
@@ -359,9 +359,9 @@ func hookWire_firstCallAllowCannotSkipPolicyGate(_ host: HookHost) throws {
     let stdin = """
     {"tool":"bash","cwd":"/tmp/ws","args":{"command":"git reset --hard"},"hostAsk":"spend"}
     """
-    let wire = await hookWire(host: .opencode, stdin: stdin) { _, _ in
+    let wire = await hookWire(host: .opencode, stdin: stdin, world: hookWorld { _, _ in
         EvaluationResult(outcome: .plain)
-    }
+    })
     let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
     #expect(json["decision"] as? String == "deny")
     #expect(wire.stdout.isEmpty == false)
@@ -371,9 +371,9 @@ func hookWire_firstCallAllowCannotSkipPolicyGate(_ host: HookHost) throws {
     let stdin = """
     {"hook_event_name":"PreToolUse","cwd":"/tmp/ws","tool_name":"Bash","tool_input":{"command":"git reset --hard"},"hostAsk":"spend"}
     """
-    let wire = await hookWire(host: .claude, stdin: stdin) { _, _ in
+    let wire = await hookWire(host: .claude, stdin: stdin, world: hookWorld { _, _ in
         EvaluationResult(outcome: .plain)
-    }
+    })
     #expect(wire.stdout.isEmpty == false)
     #expect(wire.stdout.contains("\"permissionDecision\":\"ask\"") == false)
     #expect(wire.stdout.contains("\"permissionDecision\":\"deny\""))
@@ -413,12 +413,12 @@ func hookWire_firstCallAllowCannotSkipPolicyGate(_ host: HookHost) throws {
         ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
         reason: "git reset --hard destroys uncommitted changes"
     )
-    let wire = await hookWire(host: .pi, stdin: stdin) { _, _ in
+    let wire = await hookWire(host: .pi, stdin: stdin, world: hookWorld { _, _ in
         EvaluationResult(
             outcome: .deny(deny, matched: nil),
             matchingView: MatchingView("git reset --hard")
         )
-    }
+    })
     let json = try #require(
         JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any]
     )
@@ -437,12 +437,12 @@ func hookWire_firstCallAllowCannotSkipPolicyGate(_ host: HookHost) throws {
         ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
         reason: "git reset --hard destroys uncommitted changes"
     )
-    let wire = await hookWire(host: .pi, stdin: stdin) { _, _ in
+    let wire = await hookWire(host: .pi, stdin: stdin, world: hookWorld { _, _ in
         EvaluationResult(
             outcome: .deny(deny, matched: nil),
             matchingView: MatchingView("git reset --hard")
         )
-    }
+    })
     let json = try #require(
         JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any]
     )
@@ -459,12 +459,12 @@ func hookWire_firstCallAllowCannotSkipPolicyGate(_ host: HookHost) throws {
         ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
         reason: "git reset --hard destroys uncommitted changes"
     )
-    let wire = await hookWire(host: .grok, stdin: stdin) { _, _ in
+    let wire = await hookWire(host: .grok, stdin: stdin, world: hookWorld { _, _ in
         EvaluationResult(
             outcome: .deny(deny, matched: nil),
             matchingView: MatchingView("git reset --hard")
         )
-    }
+    })
     let json = try #require(
         JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any]
     )
@@ -476,12 +476,12 @@ func hookWire_firstCallAllowCannotSkipPolicyGate(_ host: HookHost) throws {
     let stdin = """
     {"toolName":"bash","cwd":"/tmp/ws","input":{"command":"git push --force origin feature"}}
     """
-    let wire = await hookWire(host: .pi, stdin: stdin) { _, _ in
+    let wire = await hookWire(host: .pi, stdin: stdin, world: hookWorld { _, _ in
         EvaluationResult(
             outcome: .plain,
             matchingView: MatchingView("git push --force origin feature")
         )
-    }
+    })
     #expect(wire.stdout.isEmpty)
     #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
     #expect(wire.exitCode == 0)
@@ -491,9 +491,9 @@ func hookWire_firstCallAllowCannotSkipPolicyGate(_ host: HookHost) throws {
     let stdin = """
     {"toolName":"bash","cwd":"/tmp/ws","input":{"command":"git status"}}
     """
-    let wire = await hookWire(host: .pi, stdin: stdin) { _, _ in
+    let wire = await hookWire(host: .pi, stdin: stdin, world: hookWorld { _, _ in
         EvaluationResult(outcome: .plain, matchingView: MatchingView("git status"))
-    }
+    })
     #expect(wire.stdout.isEmpty)
     #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
     #expect(wire.exitCode == 0)
@@ -504,14 +504,14 @@ func hookWire_firstCallAllowCannotSkipPolicyGate(_ host: HookHost) throws {
     let stdin = """
     {"toolName":"bash","cwd":"/tmp/ws","input":{"command":"git push --force origin feature"}}
     """
-    let wire = await hookWire(host: .pi, stdin: stdin) { _, _ in
+    let wire = await hookWire(host: .pi, stdin: stdin, world: hookWorld { _, _ in
         EvaluationResult(
             outcome: .deny(deny, matched: nil),
             matchingView: MatchingView("git push --force origin feature"),
             analysis: .unknown,
             boundReview: .mandatoryHuman(deny)
         )
-    }
+    })
     let json = try #require(
         JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any]
     )
@@ -526,14 +526,14 @@ func hookWire_firstCallAllowCannotSkipPolicyGate(_ host: HookHost) throws {
     let stdin = """
     {"tool":"bash","cwd":"/tmp/ws","args":{"command":"git push --force origin feature"}}
     """
-    let wire = await hookWire(host: .opencode, stdin: stdin) { _, _ in
+    let wire = await hookWire(host: .opencode, stdin: stdin, world: hookWorld { _, _ in
         EvaluationResult(
             outcome: .deny(deny, matched: nil),
             matchingView: MatchingView("git push --force origin feature"),
             analysis: .unknown,
             boundReview: .mandatoryHuman(deny)
         )
-    }
+    })
     let json = try #require(
         JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any]
     )
@@ -548,12 +548,12 @@ func hookWire_firstCallAllowCannotSkipPolicyGate(_ host: HookHost) throws {
     let stdin = """
     {"toolName":"bash","cwd":"/tmp/ws","input":{"command":"git push --force origin feature"}}
     """
-    let wire = await hookWire(host: .pi, stdin: stdin) { _, _ in
+    let wire = await hookWire(host: .pi, stdin: stdin, world: hookWorld { _, _ in
         EvaluationResult(
             outcome: .deny(deny, matched: nil),
             matchingView: MatchingView("git push --force origin feature")
         )
-    }
+    })
     let json = try #require(
         JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any]
     )
@@ -570,12 +570,12 @@ func hookWire_firstCallAllowCannotSkipPolicyGate(_ host: HookHost) throws {
         ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
         reason: "git reset --hard destroys uncommitted changes"
     )
-    let wire = await hookWire(host: .claude, stdin: stdin) { _, _ in
+    let wire = await hookWire(host: .claude, stdin: stdin, world: hookWorld { _, _ in
         EvaluationResult(
             outcome: .deny(deny, matched: nil),
             matchingView: MatchingView("git reset --hard")
         )
-    }
+    })
     let json = try #require(
         JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any]
     )

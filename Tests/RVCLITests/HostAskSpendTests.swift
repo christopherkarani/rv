@@ -58,12 +58,14 @@ struct HostAskSpendTests {
         let wire = await hookWire(
             host: .pi,
             stdin: stdin,
-            evaluate: { command, cwd in
-                await client.evaluateResult(command: command, cwd: cwd)
-            },
-            spendHostAsk: { command, cwd in
-                await client.spendHostAsk(command: command, cwd: cwd)
-            }
+            world: hookWorld(
+                evaluate: { command, cwd in
+                    await client.evaluateResult(command: command, cwd: cwd)
+                },
+                spend: { command, cwd in
+                    await client.spendHostAsk(command: command, cwd: cwd)
+                }
+            )
         )
         #expect(wire.stdout.isEmpty)
         #expect(wire.exitCode == 0)
@@ -82,9 +84,9 @@ struct HostAskSpendTests {
         let stdin = """
         {"toolName":"bash","cwd":"/tmp/ws","input":{"command":"git reset --hard"},"hostAsk":"spend"}
         """
-        let wire = await hookWire(host: .pi, stdin: stdin) { _, _ in
+        let wire = await hookWire(host: .pi, stdin: stdin, world: hookWorld { _, _ in
             EvaluationResult(outcome: .plain)
-        }
+        })
         #expect(wire.stdout.isEmpty == false)
         let json = try #require(
             JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any]
@@ -101,9 +103,9 @@ struct HostAskSpendTests {
         let firstCall = """
         {"tool":"session.shell","cwd":"/tmp/ws","args":{"command":"git reset --hard"}}
         """
-        let firstWire = await hookWire(host: .opencode, stdin: firstCall) { command, cwd in
+        let firstWire = await hookWire(host: .opencode, stdin: firstCall, world: hookWorld { command, cwd in
             await client.evaluateResult(command: command, cwd: cwd)
-        }
+        })
         #expect(firstWire.stdout.isEmpty == false)
         #expect(firstWire.stdout.contains("\"decision\":\"ask\""))
         #expect(firstWire.stdout.contains("\"decision\":\"allow\"") == false)
@@ -111,12 +113,14 @@ struct HostAskSpendTests {
         let wire = await hookWire(
             host: .opencode,
             stdin: stdin,
-            evaluate: { command, cwd in
-                await client.evaluateResult(command: command, cwd: cwd)
-            },
-            spendHostAsk: { command, cwd in
-                await client.spendHostAsk(command: command, cwd: cwd)
-            }
+            world: hookWorld(
+                evaluate: { command, cwd in
+                    await client.evaluateResult(command: command, cwd: cwd)
+                },
+                spend: { command, cwd in
+                    await client.spendHostAsk(command: command, cwd: cwd)
+                }
+            )
         )
         #expect(wire.stdout.isEmpty)
         #expect(wire.exitCode == 0)
@@ -140,12 +144,14 @@ struct HostAskSpendTests {
         let wire = await hookWire(
             host: .opencode,
             stdin: stdin,
-            evaluate: { command, cwd in
-                await client.evaluateResult(command: command, cwd: cwd)
-            },
-            spendHostAsk: { command, cwd in
-                await client.spendHostAsk(command: command, cwd: cwd)
-            }
+            world: hookWorld(
+                evaluate: { command, cwd in
+                    await client.evaluateResult(command: command, cwd: cwd)
+                },
+                spend: { command, cwd in
+                    await client.spendHostAsk(command: command, cwd: cwd)
+                }
+            )
         )
         #expect(wire.stdout.isEmpty)
         #expect(wire.exitCode == 0)
@@ -169,12 +175,14 @@ struct HostAskSpendTests {
         let wire = await hookWire(
             host: .claude,
             stdin: stdin,
-            evaluate: { command, cwd in
-                await client.evaluateResult(command: command, cwd: cwd)
-            },
-            spendHostAsk: { command, cwd in
-                await client.spendHostAsk(command: command, cwd: cwd)
-            }
+            world: hookWorld(
+                evaluate: { command, cwd in
+                    await client.evaluateResult(command: command, cwd: cwd)
+                },
+                spend: { command, cwd in
+                    await client.spendHostAsk(command: command, cwd: cwd)
+                }
+            )
         )
         #expect(wire.stdout.isEmpty)
         #expect(wire.exitCode == 0)
@@ -194,9 +202,9 @@ struct HostAskSpendTests {
         let stdin = """
         {"tool":"bash","cwd":"/tmp/ws","args":{"command":"git reset --hard"},"hostAsk":"spend"}
         """
-        let wire = await hookWire(host: .opencode, stdin: stdin) { _, _ in
+        let wire = await hookWire(host: .opencode, stdin: stdin, world: hookWorld { _, _ in
             EvaluationResult(outcome: .plain)
-        }
+        })
         #expect(wire.stdout.isEmpty == false)
         let json = try #require(
             JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any]
@@ -208,9 +216,9 @@ struct HostAskSpendTests {
         let stdin = """
         {"hook_event_name":"PreToolUse","cwd":"/tmp/ws","tool_name":"Bash","tool_input":{"command":"git reset --hard"},"hostAsk":"spend"}
         """
-        let wire = await hookWire(host: .claude, stdin: stdin) { _, _ in
+        let wire = await hookWire(host: .claude, stdin: stdin, world: hookWorld { _, _ in
             EvaluationResult(outcome: .plain)
-        }
+        })
         #expect(wire.stdout.isEmpty == false)
         #expect(wire.stdout.contains("\"permissionDecision\":\"ask\"") == false)
         #expect(wire.stdout.contains("\"permissionDecision\":\"deny\""))
@@ -221,9 +229,9 @@ struct HostAskSpendTests {
         let stdin = """
         {"hookEventName":"pre_tool_use","cwd":"/tmp/ws","toolName":"run_terminal_command","toolInput":{"command":"git reset --hard"}}
         """
-        let wire = await hookWire(host: .grok, stdin: stdin) { command, cwd in
+        let wire = await hookWire(host: .grok, stdin: stdin, world: hookWorld { command, cwd in
             await client.evaluateResult(command: command, cwd: cwd)
-        }
+        })
         #expect(wire.stdout.isEmpty == false)
         let json = try #require(
             JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any]
@@ -239,12 +247,14 @@ struct HostAskSpendTests {
         let wire = await hookWire(
             host: .grok,
             stdin: stdin,
-            evaluate: { command, cwd in
-                await client.evaluateResult(command: command, cwd: cwd)
-            },
-            spendHostAsk: { command, cwd in
-                await client.spendHostAsk(command: command, cwd: cwd)
-            }
+            world: hookWorld(
+                evaluate: { command, cwd in
+                    await client.evaluateResult(command: command, cwd: cwd)
+                },
+                spend: { command, cwd in
+                    await client.spendHostAsk(command: command, cwd: cwd)
+                }
+            )
         )
         #expect(wire.stdout.isEmpty == false)
         let json = try #require(

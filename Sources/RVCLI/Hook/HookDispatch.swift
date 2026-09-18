@@ -6,6 +6,7 @@ import Glibc
 #endif
 import Foundation
 import RVDomain
+import RVHooks
 
 /// Fast-path for `rv hook` that skips the full ArgumentParser command tree.
 public enum HookDispatch {
@@ -36,13 +37,14 @@ public enum HookDispatch {
         try Hook.parse(arguments)
     }
 
-    /// In-process hook run for tests: same host parse, injected evaluate, no process exit.
+    /// In-process hook run for tests: same host parse, injected world, no process exit.
     static func run(
         arguments: [String],
         stdin: String,
-        evaluate: @Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult
+        world: HookEvaluateWorld
     ) async throws -> (stdout: String, stderr: String, exitCode: Int32) {
         let hook = try parse(arguments)
-        return await hook.run(stdin: stdin, evaluate: evaluate)
+        let wire = await hookWire(host: hook.host, stdin: stdin, world: world)
+        return (wire.stdout, wire.stderr, wire.exitCode)
     }
 }

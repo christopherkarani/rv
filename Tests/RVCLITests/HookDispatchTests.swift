@@ -62,7 +62,7 @@ import RVTheme
         _ = try await HookDispatch.run(
             arguments: ["--host", "unknown"],
             stdin: grokBashStdin("git reset --hard"),
-            evaluate: { command, _ in
+            world: hookWorld { command, _ in
                 probe.record(command)
             }
         )
@@ -74,7 +74,7 @@ import RVTheme
     let outcome = try await HookDispatch.run(
         arguments: ["--host", "grok"],
         stdin: grokBashStdin("git reset --hard"),
-        evaluate: inProcessEvaluate
+        world: hookWorld(evaluate: inProcessEvaluate)
     )
     let json = try dispatchDenyJSON(outcome.stdout)
     #expect(json["decision"] as? String == "deny")
@@ -99,7 +99,7 @@ import RVTheme
     let outcome = try await HookDispatch.run(
         arguments: [],
         stdin: grokBashStdin("git stash drop"),
-        evaluate: inProcessEvaluate
+        world: hookWorld(evaluate: inProcessEvaluate)
     )
     #expect(outcome.stdout.isEmpty)
     #expect(outcome.exitCode == 0)
@@ -111,7 +111,7 @@ import RVTheme
     let outcome = try await HookDispatch.run(
         arguments: ["--host=grok"],
         stdin: grokBashStdin("git stash drop"),
-        evaluate: inProcessEvaluate
+        world: hookWorld(evaluate: inProcessEvaluate)
     )
     #expect(outcome.stdout.isEmpty)
     #expect(outcome.exitCode == 0)

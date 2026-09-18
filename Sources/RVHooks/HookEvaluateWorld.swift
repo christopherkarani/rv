@@ -1,7 +1,6 @@
 import RVDomain
 
-/// Required ports for a live hook door. Production builds one value;
-/// tests may still call the seven-argument `hookWire` adapter.
+/// Required ports for a live hook door. Production and tests build one value.
 public struct HookEvaluateWorld: Sendable {
     public var evaluate: @Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult
     public var evaluateFile: @Sendable (FileToolAction, WorkingDirectory?) async -> EvaluationResult

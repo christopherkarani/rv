@@ -96,11 +96,12 @@ private func runHook(
     try await withTempHome { _ in
         var hook = Hook()
         hook.host = host
-        let outcome = await hook.run(
+        let wire = await hookWire(
+            host: hook.host,
             stdin: stdin,
-            evaluate: evaluate ?? inProcessEvaluate
+            world: hookWorld(evaluate: evaluate ?? inProcessEvaluate)
         )
-        return HookWire(stdout: outcome.stdout, exitCode: outcome.exitCode, stderr: outcome.stderr)
+        return wire
     }
 }
 
@@ -350,15 +351,13 @@ private func runHonorHook(
         var hook = Hook()
         hook.host = .grok
         let expected = try grokExpected("deny-git-reset-hard")
-        let outcome = await hook.run(
+        let wire = await hookWire(
+            host: hook.host,
             stdin: try grokFixture("deny-git-reset-hard.json"),
-            evaluate: inProcessEvaluate
+            world: hookWorld(evaluate: inProcessEvaluate)
         )
-        try expectResetHardMapperDeny(
-            HookWire(stdout: outcome.stdout, exitCode: outcome.exitCode),
-            exit: expected.exit
-        )
-        #expect(outcome.stderr.isEmpty)
+        try expectResetHardMapperDeny(wire, exit: expected.exit)
+        #expect(wire.stderr.isEmpty)
         #expect(FileManager.default.fileExists(atPath: home.appendingPathComponent(".grok").path) == false)
     }
 }
@@ -427,12 +426,13 @@ private func runHonorHook(
     try await withTempHome { home in
         var hook = Hook()
         hook.host = .claude
-        let outcome = await hook.run(
+        let wire = await hookWire(
+            host: hook.host,
             stdin: try hostFixture("claude", "deny-git-reset-hard.json"),
-            evaluate: inProcessEvaluate
+            world: hookWorld(evaluate: inProcessEvaluate)
         )
-        try assertClaudeAskWire(stdout: outcome.stdout, exitCode: outcome.exitCode)
-        #expect(outcome.stderr.isEmpty)
+        try assertClaudeAskWire(stdout: wire.stdout, exitCode: wire.exitCode)
+        #expect(wire.stderr.isEmpty)
         #expect(FileManager.default.fileExists(atPath: home.appendingPathComponent(".claude").path) == false)
     }
 }
@@ -639,17 +639,18 @@ private func runHonorHook(
         let command = ShellCommand(rawValue: "git reset --hard")
         let result = try await cliEvaluate(command.rawValue)
         let text = try #require(hostDenyText(from: result, command: command))
-        let outcome = await hook.run(
+        let wire = await hookWire(
+            host: hook.host,
             stdin: try hostFixture("codex", "deny-git-reset-hard.json"),
-            evaluate: inProcessEvaluate
+            world: hookWorld(evaluate: inProcessEvaluate)
         )
-        #expect(outcome.exitCode == 2)
-        #expect(outcome.stdout.contains("\"decision\":\"block\""))
-        #expect(outcome.stdout.contains("\"permissionDecision\":\"deny\"") == false)
-        #expect(outcome.stderr.isEmpty == false)
-        #expect(outcome.stderr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
-        #expect(outcome.stderr.trimmingCharacters(in: .whitespacesAndNewlines) == text)
-        #expect(outcome.stderr.contains(text))
+        #expect(wire.exitCode == 2)
+        #expect(wire.stdout.contains("\"decision\":\"block\""))
+        #expect(wire.stdout.contains("\"permissionDecision\":\"deny\"") == false)
+        #expect(wire.stderr.isEmpty == false)
+        #expect(wire.stderr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+        #expect(wire.stderr.trimmingCharacters(in: .whitespacesAndNewlines) == text)
+        #expect(wire.stderr.contains(text))
     }
 }
 
@@ -819,29 +820,25 @@ private func runHonorHook(
         var pi = Hook()
         pi.host = .pi
         let expected = try hostExpected("pi", "deny-git-reset-hard")
-        let outcome = await pi.run(
+        let wire = await hookWire(
+            host: pi.host,
             stdin: try hostFixture("pi", "deny-git-reset-hard.json"),
-            evaluate: inProcessEvaluate
+            world: hookWorld(evaluate: inProcessEvaluate)
         )
-        try expectResetHardMapperDeny(
-            HookWire(stdout: outcome.stdout, exitCode: outcome.exitCode),
-            exit: expected.exit
-        )
-        #expect(outcome.stderr.isEmpty)
+        try expectResetHardMapperDeny(wire, exit: expected.exit)
+        #expect(wire.stderr.isEmpty)
         #expect(FileManager.default.fileExists(atPath: home.appendingPathComponent(".pi").path) == false)
 
         var openCode = Hook()
         openCode.host = .opencode
         let openExpected = try hostExpected("opencode", "deny-git-reset-hard")
-        let openOutcome = await openCode.run(
+        let openWire = await hookWire(
+            host: openCode.host,
             stdin: try hostFixture("opencode", "deny-git-reset-hard.json"),
-            evaluate: inProcessEvaluate
+            world: hookWorld(evaluate: inProcessEvaluate)
         )
-        try expectResetHardMapperDeny(
-            HookWire(stdout: openOutcome.stdout, exitCode: openOutcome.exitCode),
-            exit: openExpected.exit
-        )
-        #expect(openOutcome.stderr.isEmpty)
+        try expectResetHardMapperDeny(openWire, exit: openExpected.exit)
+        #expect(openWire.stderr.isEmpty)
         #expect(
             FileManager.default.fileExists(
                 atPath: home.appendingPathComponent(".config").appendingPathComponent("opencode").path

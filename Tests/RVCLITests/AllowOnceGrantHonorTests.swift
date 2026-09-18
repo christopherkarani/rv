@@ -42,10 +42,11 @@ struct AllowOnceGrantHonorTests {
         """
         let wire = await hookWire(
             host: .grok,
-            stdin: stdin
-        ) { command, cwd in
-            await client.evaluateResult(command: command, cwd: cwd)
-        }
+            stdin: stdin,
+            world: hookWorld { command, cwd in
+                await client.evaluateResult(command: command, cwd: cwd)
+            }
+        )
         #expect(wire.stdout.isEmpty == false)
         let object = try JSONSerialization.jsonObject(with: Data(wire.stdout.utf8))
         let json = try #require(object as? [String: Any])
@@ -68,10 +69,11 @@ struct AllowOnceGrantHonorTests {
         """
         let wire = await hookWire(
             host: .grok,
-            stdin: stdin
-        ) { command, cwd in
-            await client.evaluateResult(command: command, cwd: cwd)
-        }
+            stdin: stdin,
+            world: hookWorld { command, cwd in
+                await client.evaluateResult(command: command, cwd: cwd)
+            }
+        )
         #expect(wire.stdout.isEmpty)
         #expect(wire.exitCode == 0)
         #expect(wire.stdout.contains("\"decision\":\"deny\"") == false)
