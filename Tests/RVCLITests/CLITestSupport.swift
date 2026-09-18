@@ -135,12 +135,23 @@ func withCLIProcess<T>(
 }
 
 func writeExecutableScript(at url: URL, source: String) throws {
-    try FileManager.default.createDirectory(
+    let files = FileManager.default
+    try files.createDirectory(
         at: url.deletingLastPathComponent(),
         withIntermediateDirectories: true
     )
-    try source.write(to: url, atomically: true, encoding: .utf8)
-    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+    // Linux ETXTBSY: do not atomically replace a path that may still be mapped
+    // from a just-finished Process. Stage, chmod, unlink dest, then rename.
+    let staged = url.appendingPathExtension("new")
+    if files.fileExists(atPath: staged.path) {
+        try files.removeItem(at: staged)
+    }
+    try Data(source.utf8).write(to: staged, options: .withoutOverwriting)
+    try files.setAttributes([.posixPermissions: 0o755], ofItemAtPath: staged.path)
+    if files.fileExists(atPath: url.path) {
+        try files.removeItem(at: url)
+    }
+    try files.moveItem(at: staged, to: url)
 }
 
 func fakeProcessTool(exit status: Int32) throws -> URL {
