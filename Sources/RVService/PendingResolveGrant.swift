@@ -28,3 +28,34 @@ enum PendingAllowOncePlanner {
         }
     }
 }
+
+/// Pause plan, then grant plan only on `spendThenAllow`.
+enum HostAskResolvePlan: Equatable, Sendable {
+    case spend(PendingAllowOncePlan)
+    case ledgerDeny
+    case denyOrTTY
+}
+
+enum HostAskResolve {
+    static func plan(
+        host: HookHost,
+        continuation: ApprovalContinuation,
+        decision: ApprovalDecision,
+        peek: EvaluationResult?,
+        cwd: WorkingDirectory?
+    ) -> HostAskResolvePlan {
+        switch HostNativeAsk.resolve(
+            host: host,
+            continuation: continuation,
+            decision: decision
+        ) {
+        case .deny:
+            return .ledgerDeny
+        case .denyOrTTY:
+            return .denyOrTTY
+        case .spendThenAllow:
+            guard let peek else { return .spend(.refuse) }
+            return .spend(PendingAllowOncePlanner.plan(peek: peek, cwd: cwd))
+        }
+    }
+}
