@@ -7,8 +7,14 @@ enum HostAttachOutcome: Equatable, Sendable {
     case wired(wrote: Bool)
 }
 
-/// Applies an executable attach plan. Write policy lives on the plan steps;
-/// this type folds them.
+struct UninstallHostResult: Equatable, Sendable {
+    var removedHosts: Set<HookHost>
+    var occupiedHosts: Set<HookHost>
+    var removedPaths: [String]
+}
+
+/// Applies an executable attach or detach plan. Artifact policy lives on the
+/// table; this type folds it.
 enum HostLifecycle {
     static func attach(
         _ plan: SetupWorkPlan,
@@ -123,6 +129,103 @@ enum HostLifecycle {
             files: files
         )
         return .wired(wrote: wrote)
+    }
+
+    static func detach(
+        installations: HostAdapterInstallationSnapshot,
+        env _: SetupEnvironment,
+        layout: OwnedPaths,
+        files: FileOps
+    ) throws(SetupError) -> UninstallHostResult {
+        var removedHosts: Set<HookHost> = []
+        var occupiedHosts: Set<HookHost> = []
+        var removedPaths: [String] = []
+        var stripOpenCodeAsk = false
+        var emptyDirectories: [String] = []
+
+        for owned in layout.hostAdapters {
+            let write = HostArtifacts.detach(host: owned.host, layout: layout)
+            emptyDirectories.append(contentsOf: write.alwaysEmptyDirectories)
+            switch installations.installation(for: owned.host).uninstallPlan {
+            case .remove:
+                let enacted = try enact(write.remove, files: files)
+                removedPaths.append(contentsOf: enacted.removedPaths)
+                emptyDirectories.append(contentsOf: enacted.emptyDirectories)
+                stripOpenCodeAsk = stripOpenCodeAsk || enacted.stripOpenCodeAsk
+                if write.removedOnlyWhenChanged == false || enacted.changed {
+                    removedHosts.insert(owned.host)
+                }
+            case .leaveOccupied:
+                let enacted = try enact(write.leaveOccupied, files: files)
+                removedPaths.append(contentsOf: enacted.removedPaths)
+                emptyDirectories.append(contentsOf: enacted.emptyDirectories)
+                stripOpenCodeAsk = stripOpenCodeAsk || enacted.stripOpenCodeAsk
+                if write.removedOnlyWhenChanged {
+                    if enacted.changed {
+                        removedHosts.insert(owned.host)
+                    } else {
+                        occupiedHosts.insert(owned.host)
+                    }
+                } else {
+                    occupiedHosts.insert(owned.host)
+                }
+            case .skip:
+                break
+            }
+        }
+
+        for path in removedPaths {
+            files.removeFile(atPath: path)
+        }
+        if stripOpenCodeAsk {
+            try SetupRun.stripOpenCodeAskPlugin(layout: layout, files: files)
+        }
+        for directory in emptyDirectories {
+            files.removeDirectoryIfEmpty(atPath: directory)
+        }
+
+        return UninstallHostResult(
+            removedHosts: removedHosts,
+            occupiedHosts: occupiedHosts,
+            removedPaths: removedPaths
+        )
+    }
+
+    private struct DetachEnactment {
+        var removedPaths: [String] = []
+        var emptyDirectories: [String] = []
+        var stripOpenCodeAsk = false
+        var changed = false
+    }
+
+    private static func enact(
+        _ operations: [HostDetachOperation],
+        files: FileOps
+    ) throws(SetupError) -> DetachEnactment {
+        var enacted = DetachEnactment()
+        for operation in operations {
+            switch operation {
+            case .removeFile(let path):
+                enacted.removedPaths.append(path)
+            case .removeClaudeRVHooks(let path):
+                if try SetupRun.removeClaudeRVHooks(at: path, files: files) {
+                    enacted.changed = true
+                }
+            case .stripClaudeFingerprintLeavingOccupied(let path):
+                if try SetupRun.stripClaudeFingerprintLeavingOccupied(at: path, files: files) {
+                    enacted.changed = true
+                }
+            case .removeCodexRVHooks(let path):
+                _ = try SetupRun.removeCodexRVHooks(at: path, files: files)
+            case .removeCursorRVHooks(let path):
+                _ = try SetupRun.removeCursorRVHooks(at: path, files: files)
+            case .stripOpenCodeAskPlugin:
+                enacted.stripOpenCodeAsk = true
+            case .removeEmptyDirectory(let path):
+                enacted.emptyDirectories.append(path)
+            }
+        }
+        return enacted
     }
 }
 
