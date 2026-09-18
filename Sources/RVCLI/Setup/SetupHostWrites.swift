@@ -32,9 +32,10 @@ extension SetupRun {
         layout: OwnedPaths,
         files: FileOps
     ) throws(SetupError) -> Bool {
+        let wroteAdapter: Bool
         switch write.adapter {
         case .claudeSettingsMerge(let force):
-            return try writeClaudeSettings(
+            wroteAdapter = try writeClaudeSettings(
                 path: write.destination,
                 rvPath: env.rvPath,
                 existingData: existingData,
@@ -42,13 +43,23 @@ extension SetupRun {
                 files: files
             )
         case .writeOwnedRendered, .applyGrokThenWriteOwned:
-            return try writeOwnedHost(
+            wroteAdapter = try writeOwnedHost(
                 write,
                 existingData: existingData,
                 env: env,
+                files: files
+            )
+        }
+        do {
+            let wroteCompanions = try writeCompanions(
+                write.companions,
+                host: write.host,
                 layout: layout,
                 files: files
             )
+            return wroteAdapter || wroteCompanions
+        } catch {
+            throw SetupError.hostHookWriteFailed(write.host)
         }
     }
 
@@ -56,7 +67,6 @@ extension SetupRun {
         _ write: HostAttachWrite,
         existingData: Data?,
         env: SetupEnvironment,
-        layout: OwnedPaths,
         files: FileOps
     ) throws(SetupError) -> Bool {
         let adapter: HostAdapterResource
@@ -66,7 +76,6 @@ extension SetupRun {
             throw SetupError(adapterResourceFailure: error)
         }
         do {
-            let wroteAdapter: Bool
             if case .applyGrokThenWriteOwned = write.adapter {
                 let applied = HostWiring.applyGrok(
                     existing: existingData,
@@ -75,27 +84,19 @@ extension SetupRun {
                 guard let contents = String(data: applied.data, encoding: .utf8) else {
                     throw SetupError.hostHookWriteFailed(.grok)
                 }
-                wroteAdapter = try writeOwned(
+                return try writeOwned(
                     path: write.destination,
                     contents: contents,
                     existingData: existingData,
                     files: files
                 )
-            } else {
-                wroteAdapter = try writeOwned(
-                    path: write.destination,
-                    contents: adapter.rendered(rvPath: env.rvPath),
-                    existingData: existingData,
-                    files: files
-                )
             }
-            let wroteCompanions = try writeCompanions(
-                write.companions,
-                host: write.host,
-                layout: layout,
+            return try writeOwned(
+                path: write.destination,
+                contents: adapter.rendered(rvPath: env.rvPath),
+                existingData: existingData,
                 files: files
             )
-            return wroteAdapter || wroteCompanions
         } catch {
             throw SetupError.hostHookWriteFailed(write.host)
         }

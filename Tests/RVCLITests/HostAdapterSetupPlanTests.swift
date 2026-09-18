@@ -291,3 +291,32 @@ import Testing
     #expect(grok.prelude == .backupAndClearOwnedPath)
     #expect(grok.adapter == .applyGrokThenWriteOwned)
 }
+
+@Test func hostArtifacts_writeArtifacts_foldsCompanionsOnClaudeSettingsMerge() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(
+            atPath: layout.claudeDirectory,
+            withIntermediateDirectories: true
+        )
+        let companionPath = home.appendingPathComponent("extra-companion.js").path
+        let write = HostAttachWrite(
+            host: .claude,
+            destination: layout.claudeSettings,
+            existing: .use(nil),
+            prelude: .none,
+            adapter: .claudeSettingsMerge(force: false),
+            companions: [.openCodeTuiPlugin(path: companionPath)]
+        )
+        let files = FileOps(fileManager: .default)
+        let wrote = try SetupRun.writeArtifacts(
+            write,
+            existingData: nil,
+            env: env(home: home, launchctl: launchctl, touchLaunchd: false),
+            layout: layout,
+            files: files
+        )
+        #expect(wrote)
+        #expect(FileManager.default.fileExists(atPath: companionPath))
+        #expect(FileManager.default.fileExists(atPath: layout.claudeSettings))
+    }
+}
