@@ -188,18 +188,35 @@ actor ApprovalRuntime {
         guard let command = record.action.supportingCommand else {
             return .error(.pendingAllowOnceNotUnlockable)
         }
-        let peeked = await peekPendingCommand(command, cwd: cwd, now: now, peek: peek)
-        switch PendingAllowOncePlanner.plan(peek: peeked, cwd: cwd) {
-        case .refuse:
+        let pause = HostNativeAsk.resolve(
+            host: record.identity.agent,
+            continuation: record.continuation,
+            decision: .allowOnce
+        )
+        let peeked: EvaluationResult?
+        switch pause {
+        case .spendThenAllow:
+            peeked = await peekPendingCommand(command, cwd: cwd, now: now, peek: peek)
+        case .deny, .denyOrTTY:
+            peeked = nil
+        }
+        switch HostAskResolve.plan(
+            host: record.identity.agent,
+            continuation: record.continuation,
+            decision: .allowOnce,
+            peek: peeked,
+            cwd: cwd
+        ) {
+        case .denyOrTTY, .ledgerDeny, .spend(.refuse):
             return .error(.pendingAllowOnceNotUnlockable)
-        case .resolveWithoutGrant:
+        case .spend(.resolveWithoutGrant):
             return await resolvePendingDecision(
                 params,
                 decision: .allowOnce,
                 store: store,
                 now: now
             )
-        case .plant(let matchingView, let grantCwd):
+        case .spend(.plant(let matchingView, let grantCwd)):
             let resolved = await resolvePendingDecision(
                 params,
                 decision: .allowOnce,

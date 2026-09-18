@@ -83,9 +83,8 @@ struct HostNativeAskTests {
     }
 
     @Test(arguments: HookHost.allCases)
-    func hostNativeBridgeAllowOnceFollowsPauseProfile(_ host: HookHost) {
-        let bridge = HostNativeApprovalBridge()
-        let resolution = bridge.resolve(
+    func resolve_allowOnceFollowsPauseProfile(_ host: HookHost) {
+        let resolution = HostNativeAsk.resolve(
             host: host,
             continuation: .hostNative,
             decision: .allowOnce
@@ -102,10 +101,20 @@ struct HostNativeAskTests {
         [HookHost.claude, .hermes, .claude, .hermes],
         [ApprovalDecision.deny, .deny, .createRule, .createRule]
     ))
-    func hostNativeBridgeDenyAndCreateRuleStayDeny(_ host: HookHost, _ decision: ApprovalDecision) {
-        let bridge = HostNativeApprovalBridge()
+    func resolve_denyAndCreateRuleStayDeny(_ host: HookHost, _ decision: ApprovalDecision) {
         #expect(
-            bridge.resolve(host: host, continuation: .hostNative, decision: decision) == .deny
+            HostNativeAsk.resolve(host: host, continuation: .hostNative, decision: decision) == .deny
+        )
+    }
+
+    @Test(arguments: [
+        ApprovalContinuation.resume(ApprovalResumeToken(rawValue: "tok")),
+        .retry(ActionFingerprint(rawValue: "shell:x")),
+    ])
+    func resolve_nonHostNativeAllowOnceIsDenyOrTTY(_ continuation: ApprovalContinuation) {
+        #expect(
+            HostNativeAsk.resolve(host: .pi, continuation: continuation, decision: .allowOnce)
+                == .denyOrTTY
         )
     }
 

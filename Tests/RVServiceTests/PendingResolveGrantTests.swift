@@ -239,6 +239,92 @@ struct PendingResolveGrantTests {
         )
         #expect(PendingAllowOncePlanner.plan(peek: allowed, cwd: wd("/tmp/ws")) == .resolveWithoutGrant)
     }
+
+    @Test(arguments: HookHost.allCases)
+    func HostAskResolve_allowOnceUnlockablePeekFollowsPause(_ host: HookHost) {
+        let plan = HostAskResolve.plan(
+            host: host,
+            continuation: .hostNative,
+            decision: .allowOnce,
+            peek: resetHardPackDeny,
+            cwd: wd("/tmp/ws")
+        )
+        switch HostNativeAsk.profile(for: host).pause {
+        case .spendFirst:
+            #expect(
+                plan == .spend(
+                    .plant(matchingView: MatchingView("git reset --hard"), cwd: wd("/tmp/ws"))
+                )
+            )
+        case .noPause, .leftoverAskForbidden:
+            #expect(plan == .denyOrTTY)
+        }
+    }
+
+    @Test(arguments: HookHost.allCases)
+    func HostAskResolve_denyIsLedgerDeny(_ host: HookHost) {
+        #expect(
+            HostAskResolve.plan(
+                host: host,
+                continuation: .hostNative,
+                decision: .deny,
+                peek: resetHardPackDeny,
+                cwd: wd("/tmp/ws")
+            ) == .ledgerDeny
+        )
+    }
+
+    @Test func HostAskResolve_createRuleIsLedgerDeny() {
+        #expect(
+            HostAskResolve.plan(
+                host: .pi,
+                continuation: .hostNative,
+                decision: .createRule,
+                peek: resetHardPackDeny,
+                cwd: wd("/tmp/ws")
+            ) == .ledgerDeny
+        )
+    }
+
+    @Test func HostAskResolve_spendFirstMissingPeekRefuses() {
+        #expect(
+            HostAskResolve.plan(
+                host: .pi,
+                continuation: .hostNative,
+                decision: .allowOnce,
+                peek: nil,
+                cwd: wd("/tmp/ws")
+            ) == .spend(.refuse)
+        )
+    }
+
+    @Test func HostAskResolve_resumeAllowOnceIsDenyOrTTY() {
+        #expect(
+            HostAskResolve.plan(
+                host: .pi,
+                continuation: .resume(ApprovalResumeToken(rawValue: "tok")),
+                decision: .allowOnce,
+                peek: resetHardPackDeny,
+                cwd: wd("/tmp/ws")
+            ) == .denyOrTTY
+        )
+    }
+
+    @Test(arguments: [HookHost.grok, .codex, .cursor])
+    func PendingResolveGrant_nonSpendFirstAllowOnceDoesNotPlant(_ host: HookHost) async throws {
+        let env = try IsolatedPendingResolve()
+        defer { env.tearDown() }
+        let created = try await env.seed(command: "git reset --hard", cwd: wd("/tmp/ws"), host: host)
+
+        let resolved = await env.runtime.dispatch(
+            IPCRequest(method: .pendingResolve(env.resolveParams(created, decision: .allowOnce)))
+        )
+        #expect(resolved.result == .error(.pendingAllowOnceNotUnlockable))
+        #expect(try await env.grantedCount() == 0)
+        #expect(try await env.pending.list(now: now).map(\.id) == [created.id])
+        let loaded = try await env.pending.load(id: created.id, now: now)
+        #expect(loaded.state == .awaitingHuman)
+    }
 }
 
 private let resetHardPackDeny = EvaluationResult(
@@ -279,19 +365,24 @@ private struct IsolatedPendingResolve {
         try await seed(command: "git reset --hard", cwd: wd("/tmp/ws"))
     }
 
-    func seed(command: String, cwd: WorkingDirectory) async throws -> PendingApproval {
+    func seed(
+        command: String,
+        cwd: WorkingDirectory,
+        host: HookHost = .pi,
+        continuation: ApprovalContinuation = .hostNative
+    ) async throws -> PendingApproval {
         let shell = ShellCommand(rawValue: command)
         return try await pending.create(
             PendingApprovalRequest(
                 id: PendingApprovalStore.makeID(),
                 identity: ApprovalIdentity(
                     session: SessionID(validating: "sess-pi")!,
-                    agent: .pi
+                    agent: host
                 ),
                 action: .shell(
                     ShellAction(
                         fingerprint: ActionFingerprint.make(
-                            host: .pi,
+                            host: host,
                             session: SessionID(validating: "sess-pi"),
                             cwd: cwd,
                             command: shell
@@ -301,7 +392,7 @@ private struct IsolatedPendingResolve {
                     )
                 ),
                 reason: .hostAsk,
-                continuation: .hostNative,
+                continuation: continuation,
                 timeoutPolicy: .keepWaiting
             ),
             now: now

@@ -78,44 +78,13 @@ public enum PackDoorVerdict: Sendable, Equatable {
     case deny
 }
 
-/// Resolution after a human Allow once / Deny on a host-native continuation.
+/// Pause-plan after a human Allow once / Deny / create-rule.
+/// Grant peek stays on the service edge.
 public enum HostAskBridgeResolution: Sendable, Equatable {
     /// Caller must plant+spend via PolicyGate, then allow only if that spend succeeds.
     case spendThenAllow
     case deny
     case denyOrTTY
-}
-
-/// Service-edge protocol. Allow once / Deny resolve through PolicyGate, not a second ledger.
-public protocol ApprovalBridge: Sendable {
-    func resolve(
-        host: HookHost,
-        continuation: ApprovalContinuation,
-        decision: ApprovalDecision
-    ) -> HostAskBridgeResolution
-}
-
-/// Shared `ApprovalContinuation.hostNative` bridge. Pure; no store I/O.
-public struct HostNativeApprovalBridge: ApprovalBridge {
-    public init() {}
-
-    public func resolve(
-        host: HookHost,
-        continuation: ApprovalContinuation,
-        decision: ApprovalDecision
-    ) -> HostAskBridgeResolution {
-        switch decision {
-        case .deny, .createRule:
-            return .deny
-        case .allowOnce:
-            switch (continuation, HostNativeAsk.profile(for: host).pause) {
-            case (.hostNative, .spendFirst):
-                return .spendThenAllow
-            default:
-                return .denyOrTTY
-            }
-        }
-    }
 }
 
 /// Host-native Ask mapping. Leftover unused ask is never a permit.
@@ -144,6 +113,25 @@ public enum HostNativeAsk {
             return .allow
         case .indeterminate, .deny:
             return .deny
+        }
+    }
+
+    /// Pause plan. Grant peek is not this function.
+    public static func resolve(
+        host: HookHost,
+        continuation: ApprovalContinuation,
+        decision: ApprovalDecision
+    ) -> HostAskBridgeResolution {
+        switch decision {
+        case .deny, .createRule:
+            return .deny
+        case .allowOnce:
+            switch (continuation, profile(for: host).pause) {
+            case (.hostNative, .spendFirst):
+                return .spendThenAllow
+            default:
+                return .denyOrTTY
+            }
         }
     }
 
