@@ -10,16 +10,64 @@ extension SetupRun {
         layout: OwnedPaths,
         files: FileOps
     ) throws(SetupError) -> Bool {
+        try writeArtifacts(
+            HostArtifacts.attach(
+                host: host,
+                layout: layout,
+                existingData: existingData,
+                forceClear: false
+            ),
+            existingData: existingData,
+            env: env,
+            layout: layout,
+            files: files
+        )
+    }
+
+    /// Executes adapter + companion writes already named on the plan step.
+    static func writeArtifacts(
+        _ write: HostAttachWrite,
+        existingData: Data?,
+        env: SetupEnvironment,
+        layout: OwnedPaths,
+        files: FileOps
+    ) throws(SetupError) -> Bool {
+        switch write.adapter {
+        case .claudeSettingsMerge(let force):
+            return try writeClaudeSettings(
+                path: write.destination,
+                rvPath: env.rvPath,
+                existingData: existingData,
+                force: force,
+                files: files
+            )
+        case .writeOwnedRendered, .applyGrokThenWriteOwned:
+            return try writeOwnedHost(
+                write,
+                existingData: existingData,
+                env: env,
+                layout: layout,
+                files: files
+            )
+        }
+    }
+
+    private static func writeOwnedHost(
+        _ write: HostAttachWrite,
+        existingData: Data?,
+        env: SetupEnvironment,
+        layout: OwnedPaths,
+        files: FileOps
+    ) throws(SetupError) -> Bool {
         let adapter: HostAdapterResource
         do {
-            adapter = try HostAdapterResources.load(for: host)
+            adapter = try HostAdapterResources.load(for: write.host)
         } catch {
             throw SetupError(adapterResourceFailure: error)
         }
         do {
-            let destination = layout.hostAdapter(for: host).destination
             let wroteAdapter: Bool
-            if host == .grok {
+            if case .applyGrokThenWriteOwned = write.adapter {
                 let applied = HostWiring.applyGrok(
                     existing: existingData,
                     rendered: Data(adapter.rendered(rvPath: env.rvPath).utf8)
@@ -28,90 +76,85 @@ extension SetupRun {
                     throw SetupError.hostHookWriteFailed(.grok)
                 }
                 wroteAdapter = try writeOwned(
-                    path: destination,
+                    path: write.destination,
                     contents: contents,
                     existingData: existingData,
                     files: files
                 )
             } else {
                 wroteAdapter = try writeOwned(
-                    path: destination,
+                    path: write.destination,
                     contents: adapter.rendered(rvPath: env.rvPath),
                     existingData: existingData,
                     files: files
                 )
             }
             let wroteCompanions = try writeCompanions(
-                host,
-                directory: (destination as NSString).deletingLastPathComponent,
+                write.companions,
+                host: write.host,
                 layout: layout,
                 files: files
             )
             return wroteAdapter || wroteCompanions
         } catch {
-            throw SetupError.hostHookWriteFailed(host)
+            throw SetupError.hostHookWriteFailed(write.host)
         }
     }
 
     private static func writeCompanions(
-        _ host: HookHost,
-        directory: String,
+        _ companions: [HostCompanionWrite],
+        host: HookHost,
         layout: OwnedPaths,
         files: FileOps
     ) throws -> Bool {
-        switch host {
-        case .openclaw:
-            let pluginJSON = try HostAdapterResources.loadPluginManifest(for: host)
-            let packageJSON = try HostAdapterResources.loadPackageManifest(for: host)
-            let pluginPath = directory + "/openclaw.plugin.json"
-            let packagePath = directory + "/package.json"
-            let wrotePlugin = try writeOwned(
-                path: pluginPath,
-                contents: pluginJSON,
-                existingData: files.readData(pluginPath),
-                files: files
-            )
-            let wrotePackage = try writeOwned(
-                path: packagePath,
-                contents: packageJSON,
-                existingData: files.readData(packagePath),
-                files: files
-            )
-            return wrotePlugin || wrotePackage
-        case .hermes:
-            let pluginYAML = try HostAdapterResources.loadPluginManifest(for: host)
-            let pluginPath = directory + "/plugin.yaml"
-            return try writeOwned(
-                path: pluginPath,
-                contents: pluginYAML,
-                existingData: files.readData(pluginPath),
-                files: files
-            )
-        case .opencode:
-            let tui = try HostAdapterResources.loadOpenCodeTuiPlugin()
-            let wroteTui = try writeOwned(
-                path: directory + "/rv-guard-tui.js",
-                contents: tui,
-                existingData: files.readData(directory + "/rv-guard-tui.js"),
-                files: files
-            )
-            let wroteAsk = try writeOpenCodeTuiAskPackage(layout: layout, files: files)
-            return wroteTui || wroteAsk
-        case .codex:
-            return try writeCodexHooksJSON(
-                adapterPath: directory + "/rv-guard.py",
-                hooksPath: (directory as NSString).deletingLastPathComponent + "/hooks.json",
-                files: files
-            )
-        case .cursor:
-            return try writeCursorHooksJSON(
-                adapterPath: directory + "/rv-guard.py",
-                hooksPath: (directory as NSString).deletingLastPathComponent + "/hooks.json",
-                files: files
-            )
-        case .grok, .pi, .claude:
-            return false
+        var wroteAny = false
+        for companion in companions {
+            let wrote: Bool
+            switch companion {
+            case .pluginManifest(let path):
+                let pluginJSON = try HostAdapterResources.loadPluginManifest(for: host)
+                wrote = try writeOwned(
+                    path: path,
+                    contents: pluginJSON,
+                    existingData: files.readData(path),
+                    files: files
+                )
+            case .packageManifest(let path):
+                let packageJSON = try HostAdapterResources.loadPackageManifest(for: host)
+                wrote = try writeOwned(
+                    path: path,
+                    contents: packageJSON,
+                    existingData: files.readData(path),
+                    files: files
+                )
+            case .openCodeTuiPlugin(let path):
+                let tui = try HostAdapterResources.loadOpenCodeTuiPlugin()
+                wrote = try writeOwned(
+                    path: path,
+                    contents: tui,
+                    existingData: files.readData(path),
+                    files: files
+                )
+            case .openCodeAskPackage:
+                wrote = try writeOpenCodeTuiAskPackage(layout: layout, files: files)
+            case .codexHooksJSON(let adapterPath, let hooksPath):
+                wrote = try writeCodexHooksJSON(
+                    adapterPath: adapterPath,
+                    hooksPath: hooksPath,
+                    files: files
+                )
+            case .cursorHooksJSON(let adapterPath, let hooksPath):
+                wrote = try writeCursorHooksJSON(
+                    adapterPath: adapterPath,
+                    hooksPath: hooksPath,
+                    files: files
+                )
+            }
+            if wrote {
+                wroteAny = true
+            }
         }
+        return wroteAny
     }
 
     private static func writeOpenCodeTuiAskPackage(layout: OwnedPaths, files: FileOps) throws -> Bool {
