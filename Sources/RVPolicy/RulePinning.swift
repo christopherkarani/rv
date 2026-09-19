@@ -318,7 +318,7 @@ private struct TypedPinDraft: Codable, Equatable {
 /// Catalog match on a path already stored on the action. Does not tokenize
 /// `supportingCommand`.
 private func secretPathOnStoredAction(_ action: ProposedAction) -> Bool {
-    if action.resources.protectedMatch != nil {
+    if action.resources.filesystemScope?.protectedMatch != nil {
         return true
     }
     guard let path = action.resources.path, path.isEmpty == false else {

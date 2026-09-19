@@ -341,6 +341,11 @@ struct LinuxResidualCoverageTests {
         #expect(action.gitAction == nil)
         #expect(action.effects.kinds.contains(.filesystemRead))
         #expect(action.resources.filesystemScope == .insideRepository)
+        guard case .shell(let shell) = action else {
+            Issue.record("expected shell pending action")
+            return
+        }
+        #expect(shell.filesystemAction == fs)
     }
 
     @Test func englishCompileRefusal_andPackFallbackIndeterminate() throws {

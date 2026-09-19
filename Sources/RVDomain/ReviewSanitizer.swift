@@ -13,18 +13,13 @@ public enum ReviewSanitizer: Sendable {
     }
 
     public static func sanitize(_ shell: ShellAction) -> ShellAction {
-        ShellAction(
+        let analysis = shell.analysis.map(sanitize)
+        return ShellAction(
             fingerprint: ActionFingerprint(
                 rawValue: redactCredentials(in: shell.fingerprint.rawValue)
             ),
             effects: shell.effects,
-            resources: ActionResources(
-                remoteName: sanitizeField(shell.resources.remoteName),
-                branchName: sanitizeField(shell.resources.branchName),
-                path: sanitizeField(shell.resources.path),
-                filesystemScope: shell.resources.filesystemScope,
-                resourceKind: shell.resources.resourceKind
-            ),
+            resources: resources(for: analysis, fallback: shell.resources),
             scope: ActionScope(
                 workingDirectory: shell.scope.workingDirectory.flatMap { directory in
                     WorkingDirectory(rawValue: redactCredentials(in: directory.rawValue))
@@ -32,7 +27,8 @@ public enum ReviewSanitizer: Sendable {
             ),
             supportingCommand: shell.supportingCommand.map { command in
                 ShellCommand(rawValue: redactCredentials(in: command.rawValue))
-            }
+            },
+            analysis: analysis
         )
     }
 
@@ -106,8 +102,119 @@ public enum ReviewSanitizer: Sendable {
         return result
     }
 
+    private static func resources(
+        for analysis: SemanticAction?,
+        fallback: ActionResources
+    ) -> ActionResources {
+        switch analysis {
+        case .git(let git):
+            return git.resources
+        case .filesystem(let filesystem):
+            return filesystem.resources
+        case nil:
+            return ActionResources(
+                remoteName: sanitizeField(fallback.remoteName),
+                branchName: sanitizeField(fallback.branchName),
+                path: sanitizeField(fallback.path),
+                filesystemScope: fallback.filesystemScope,
+                resourceKind: fallback.resourceKind
+            )
+        }
+    }
+
+    private static func sanitize(_ analysis: SemanticAction) -> SemanticAction {
+        switch analysis {
+        case .git(let git):
+            return .git(sanitize(git))
+        case .filesystem(let filesystem):
+            return .filesystem(sanitize(filesystem))
+        }
+    }
+
+    private static func sanitize(_ action: GitAction) -> GitAction {
+        switch action {
+        case .createBranch(let name, let startPoint, let force):
+            return .createBranch(
+                name: sanitizeText(name),
+                startPoint: startPoint.map(sanitizeText),
+                force: force
+            )
+        case .switchBranch(let name, let force):
+            return .switchBranch(name: sanitizeText(name), force: force)
+        case .discardWorktree(let pathspecs, let source):
+            return .discardWorktree(
+                pathspecs: pathspecs.map(sanitizeText),
+                source: source.map(sanitizeText)
+            )
+        case .restore(let pathspecs, let destination, let source):
+            return .restore(
+                pathspecs: pathspecs.map(sanitizeText),
+                destination: destination,
+                source: source.map(sanitizeText)
+            )
+        case .reset(let mode, let target):
+            return .reset(mode: mode, target: target.map(sanitizeText))
+        case .clean:
+            return action
+        case .push(let remote, let refspec, let force):
+            return .push(
+                remote: remote.map(sanitizeText),
+                refspec: refspec.map(sanitizeText),
+                force: force
+            )
+        case .deleteRemoteRef(let remote, let refspec):
+            return .deleteRemoteRef(
+                remote: remote.map(sanitizeText),
+                refspec: refspec.map(sanitizeText)
+            )
+        case .deleteBranch(let name, let force):
+            return .deleteBranch(name: sanitizeText(name), force: force)
+        case .deleteTag(let name, let remote):
+            return .deleteTag(name: sanitizeText(name), remote: remote.map(sanitizeText))
+        case .stash:
+            return action
+        case .rebase(let verb, let onto):
+            return .rebase(verb: verb, onto: onto.map(sanitizeText))
+        }
+    }
+
+    private static func sanitize(_ action: FilesystemAction) -> FilesystemAction {
+        switch action {
+        case .delete(let targets, let recursive, let force):
+            return .delete(targets: targets.map(sanitize), recursive: recursive, force: force)
+        case .move(let sources, let destination):
+            return .move(sources: sources.map(sanitize), destination: sanitize(destination))
+        case .overwrite(let targets):
+            return .overwrite(targets: targets.map(sanitize))
+        case .chmod(let targets, let mode, let recursive):
+            return .chmod(
+                targets: targets.map(sanitize),
+                mode: mode.map(sanitizeText),
+                recursive: recursive
+            )
+        case .create(let targets):
+            return .create(targets: targets.map(sanitize))
+        case .read(let targets):
+            return .read(targets: targets.map(sanitize))
+        }
+    }
+
+    private static func sanitize(_ target: FilesystemTarget) -> FilesystemTarget {
+        FilesystemTarget(
+            apparent: sanitizeText(target.apparent),
+            canonical: sanitizeText(target.canonical),
+            scope: target.scope,
+            kind: target.kind,
+            followedSymlink: target.followedSymlink,
+            resolution: target.resolution
+        )
+    }
+
     private static func sanitizeField(_ value: String?) -> String? {
-        guard let value else { return nil }
+        value.map(sanitizeText)
+    }
+
+    private static func sanitizeText(_ value: String) -> String {
         if looksLikeSecretValue(value) {
             return redactedPlaceholder
         }

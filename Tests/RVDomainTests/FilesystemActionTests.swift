@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 import RVDomain
 
@@ -50,7 +51,7 @@ struct FilesystemActionTests {
         #expect(action.explainScope == "protected path")
         #expect(action.explainCategory == "ssh")
         #expect(action.explainCatalogRule == "core.secrets/home-ssh")
-        #expect(action.resources.protectedMatch == match)
+        #expect(action.resources.filesystemScope?.protectedMatch == match)
         #expect(target.protectedMatch == match)
         let proposed = action.proposedAction(
             command: ShellCommand(rawValue: "rm link"),
@@ -58,7 +59,7 @@ struct FilesystemActionTests {
         )
         #expect(proposed.effects.kinds.contains(.protectedPathMutation))
         #expect(proposed.resources.filesystemScope == .protectedPath(match))
-        #expect(proposed.resources.protectedMatch == match)
+        #expect(proposed.resources.filesystemScope?.protectedMatch == match)
     }
 
     @Test func uncertainProtected_doesNotAddExtraDenyEffect() {
@@ -73,7 +74,7 @@ struct FilesystemActionTests {
         #expect(action.effects.kinds.contains(.protectedPathMutation) == false)
         #expect(action.effects.kinds.contains(.unresolvedFilesystem))
         #expect(action.primaryTarget?.scope == .unknown)
-        #expect(action.resources.protectedMatch == nil)
+        #expect(action.resources.filesystemScope?.protectedMatch == nil)
     }
 
     @Test func operations_areDistinguished() {
@@ -150,7 +151,31 @@ struct FilesystemActionTests {
         #expect(sshFirst.explainCategory == "cloud")
         #expect(sshFirst.explainCatalogRule == "core.secrets/home-aws")
         #expect(sshFirst.resources.resourceKind == .sourceCode)
-        #expect(sshFirst.resources.protectedMatch?.category == .cloud)
+        #expect(sshFirst.resources.filesystemScope?.protectedMatch?.category == .cloud)
+    }
+
+    @Test func actionResources_encodeOmitsProtectedMatchAndDecodeIgnoresLegacyKey() throws {
+        let match = SecretPathMatch(pattern: "home-ssh", category: .ssh)
+        let target = FilesystemTarget(
+            apparent: "link",
+            canonical: "/home/.ssh/id_rsa",
+            scope: .protectedPath(match),
+            kind: .unknown
+        )
+        let action = FilesystemAction.delete(targets: [target], recursive: false, force: false)
+        #expect(action.resources.filesystemScope?.protectedMatch == match)
+        let encoded = try JSONEncoder().encode(action.resources)
+        let object = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        #expect(object["protectedMatch"] == nil)
+
+        var legacy = object
+        legacy["protectedMatch"] = ["pattern": "home-ssh", "category": "ssh"]
+        let decoded = try JSONDecoder().decode(
+            ActionResources.self,
+            from: try JSONSerialization.data(withJSONObject: legacy)
+        )
+        #expect(decoded.filesystemScope?.protectedMatch == match)
+        #expect(decoded.path == "/home/.ssh/id_rsa")
     }
 
     @Test func outsideWrite_addsIndependentEffect() {

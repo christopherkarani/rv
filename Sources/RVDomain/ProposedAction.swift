@@ -78,22 +78,19 @@ public struct ActionResources: Sendable, Equatable, Codable {
     public var path: String?
     public var filesystemScope: FilesystemScope?
     public var resourceKind: FilesystemResourceKind?
-    public var protectedMatch: SecretPathMatch?
 
     public init(
         remoteName: String? = nil,
         branchName: String? = nil,
         path: String? = nil,
         filesystemScope: FilesystemScope? = nil,
-        resourceKind: FilesystemResourceKind? = nil,
-        protectedMatch: SecretPathMatch? = nil
+        resourceKind: FilesystemResourceKind? = nil
     ) {
         self.remoteName = remoteName
         self.branchName = branchName
         self.path = path
         self.filesystemScope = filesystemScope
         self.resourceKind = resourceKind
-        self.protectedMatch = protectedMatch
     }
 }
 
@@ -105,7 +102,13 @@ public struct ActionScope: Sendable, Equatable, Codable {
     }
 }
 
-/// Semantic shell action. The raw command, if present, is supporting evidence only.
+/// Semantic shell action whose closed subject is git or filesystem, never both.
+///
+/// The raw command, if present, is supporting evidence only.
+///
+/// Codable keeps the XOR labels `gitAction` and `filesystemAction`, omits the
+/// unused key (does not write null), and never encodes `analysis`. Decode fails
+/// if both keys have values.
 public struct ShellAction: Sendable, Equatable, Codable {
     public var fingerprint: ActionFingerprint
     public var effects: ActionEffects
@@ -113,27 +116,140 @@ public struct ShellAction: Sendable, Equatable, Codable {
     public var scope: ActionScope
     /// Supporting evidence only. Never the primary review input.
     public var supportingCommand: ShellCommand?
-    /// Analyzed Git operation when this shell action was built from one.
-    public var gitAction: GitAction?
-    /// Analyzed filesystem operation when this shell action was built from one.
-    public var filesystemAction: FilesystemAction?
+    /// Closed git ⊕ filesystem subject. Nil means unknown, stripped, or unanalyzed.
+    /// This is storage; `gitAction` and `filesystemAction` are projections.
+    public var analysis: SemanticAction?
 
+    /// Git projection of `analysis`.
+    public var gitAction: GitAction? {
+        if case .git(let action) = analysis {
+            return action
+        }
+        return nil
+    }
+
+    /// Filesystem projection of `analysis`.
+    public var filesystemAction: FilesystemAction? {
+        if case .filesystem(let action) = analysis {
+            return action
+        }
+        return nil
+    }
+
+    /// Creates a shell action storing `analysis` as the closed subject.
     public init(
         fingerprint: ActionFingerprint,
         effects: ActionEffects = ActionEffects(),
         resources: ActionResources = ActionResources(),
         scope: ActionScope = ActionScope(),
         supportingCommand: ShellCommand? = nil,
-        gitAction: GitAction? = nil,
-        filesystemAction: FilesystemAction? = nil
+        analysis: SemanticAction? = nil
     ) {
         self.fingerprint = fingerprint
         self.effects = effects
         self.resources = resources
         self.scope = scope
         self.supportingCommand = supportingCommand
-        self.gitAction = gitAction
-        self.filesystemAction = filesystemAction
+        self.analysis = analysis
+    }
+
+    /// Creates a shell action whose subject is `gitAction`.
+    public init(
+        fingerprint: ActionFingerprint,
+        effects: ActionEffects = ActionEffects(),
+        resources: ActionResources = ActionResources(),
+        scope: ActionScope = ActionScope(),
+        supportingCommand: ShellCommand? = nil,
+        gitAction: GitAction
+    ) {
+        self.init(
+            fingerprint: fingerprint,
+            effects: effects,
+            resources: resources,
+            scope: scope,
+            supportingCommand: supportingCommand,
+            analysis: .git(gitAction)
+        )
+    }
+
+    /// Creates a shell action whose subject is `filesystemAction`.
+    public init(
+        fingerprint: ActionFingerprint,
+        effects: ActionEffects = ActionEffects(),
+        resources: ActionResources = ActionResources(),
+        scope: ActionScope = ActionScope(),
+        supportingCommand: ShellCommand? = nil,
+        filesystemAction: FilesystemAction
+    ) {
+        self.init(
+            fingerprint: fingerprint,
+            effects: effects,
+            resources: resources,
+            scope: scope,
+            supportingCommand: supportingCommand,
+            analysis: .filesystem(filesystemAction)
+        )
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case fingerprint
+        case effects
+        case resources
+        case scope
+        case supportingCommand
+        case gitAction
+        case filesystemAction
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        fingerprint = try container.decode(ActionFingerprint.self, forKey: .fingerprint)
+        effects = try container.decodeIfPresent(ActionEffects.self, forKey: .effects)
+            ?? ActionEffects()
+        resources = try container.decodeIfPresent(ActionResources.self, forKey: .resources)
+            ?? ActionResources()
+        scope = try container.decodeIfPresent(ActionScope.self, forKey: .scope) ?? ActionScope()
+        supportingCommand = try container.decodeIfPresent(
+            ShellCommand.self,
+            forKey: .supportingCommand
+        )
+        let git = try container.decodeIfPresent(GitAction.self, forKey: .gitAction)
+        let filesystem = try container.decodeIfPresent(
+            FilesystemAction.self,
+            forKey: .filesystemAction
+        )
+        if git != nil, filesystem != nil {
+            throw DecodingError.dataCorrupted(
+                DecodingError.Context(
+                    codingPath: container.codingPath,
+                    debugDescription: "ShellAction cannot decode both gitAction and filesystemAction"
+                )
+            )
+        }
+        if let git {
+            analysis = .git(git)
+        } else if let filesystem {
+            analysis = .filesystem(filesystem)
+        } else {
+            analysis = nil
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(fingerprint, forKey: .fingerprint)
+        try container.encode(effects, forKey: .effects)
+        try container.encode(resources, forKey: .resources)
+        try container.encode(scope, forKey: .scope)
+        try container.encodeIfPresent(supportingCommand, forKey: .supportingCommand)
+        switch analysis {
+        case .git(let git):
+            try container.encode(git, forKey: .gitAction)
+        case .filesystem(let filesystem):
+            try container.encode(filesystem, forKey: .filesystemAction)
+        case nil:
+            break
+        }
     }
 }
 

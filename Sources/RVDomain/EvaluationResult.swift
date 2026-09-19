@@ -262,13 +262,14 @@ public struct EvaluationResult: Sendable, Equatable {
         cwd: WorkingDirectory?,
         command: ShellCommand
     ) -> ProposedAction {
-        let analyzed: (ActionEffects, ActionResources)
-        if let git = analysis.gitAction {
-            analyzed = (git.effects, git.resources)
-        } else if let filesystem = analysis.filesystemAction {
-            analyzed = (filesystem.effects, filesystem.resources)
-        } else {
-            analyzed = (ActionEffects(), ActionResources())
+        let analyzed: (ActionEffects, ActionResources, SemanticAction?)
+        switch analysis.innermost {
+        case .git(let git):
+            analyzed = (git.effects, git.resources, .git(git))
+        case .filesystem(let filesystem):
+            analyzed = (filesystem.effects, filesystem.resources, .filesystem(filesystem))
+        case .wrapper, .unwrapLimited, .unknown:
+            analyzed = (ActionEffects(), ActionResources(), nil)
         }
         return .shell(
             ShellAction(
@@ -282,7 +283,7 @@ public struct EvaluationResult: Sendable, Equatable {
                 resources: analyzed.1,
                 scope: ActionScope(workingDirectory: cwd),
                 supportingCommand: command,
-                gitAction: analysis.gitAction
+                analysis: analyzed.2
             )
         )
     }
