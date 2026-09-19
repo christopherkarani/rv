@@ -780,7 +780,7 @@ struct RulePinningTests {
                     ),
                     scope: ActionScope(workingDirectory: wd("/tmp/ws")),
                     supportingCommand: ShellCommand(rawValue: command),
-                    gitAction: gitAction
+                    analysis: gitAction.map { .git($0) }
                 )
             ),
             reason: .hostAsk,

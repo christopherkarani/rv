@@ -455,13 +455,7 @@ public enum ActionPolicyEngine: Sendable {
     }
 
     private static func semanticAction(of shell: ShellAction) -> SemanticAction? {
-        if let git = shell.gitAction {
-            return .git(git)
-        }
-        if let filesystem = shell.filesystemAction {
-            return .filesystem(filesystem)
-        }
-        return nil
+        shell.analysis
     }
 
     /// Restrict-only. Rank is deny > ask > allow, independent of list order.

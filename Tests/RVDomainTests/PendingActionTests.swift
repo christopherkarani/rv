@@ -48,6 +48,12 @@ struct PendingActionTests {
         #expect(action.resources.branchName == "feature")
         #expect(action.scope.workingDirectory == cwd)
         #expect(action.supportingCommand == command)
+        #expect(action.gitAction == git)
+        guard case .shell(let shell) = action else {
+            Issue.record("expected shell pending action")
+            return
+        }
+        #expect(shell.filesystemAction == nil)
     }
 
     @Test func wrappedGit_stillTakesInnermostGitEffects() throws {
@@ -80,6 +86,10 @@ struct PendingActionTests {
                 == ActionFingerprint.make(host: host, session: session, cwd: cwd, command: command)
         )
         #expect(action.effects.kinds.contains(.remoteSharedBranchMutation))
+        #expect(
+            action.gitAction
+                == GitAction.push(remote: "origin", refspec: "feature", force: .force)
+        )
     }
 
     @Test func filesystemAnalysis_copiesEffectsAndResources() throws {
@@ -112,6 +122,13 @@ struct PendingActionTests {
         #expect(action.effects == filesystem.effects)
         #expect(action.resources == filesystem.resources)
         #expect(action.fingerprint.rawValue.hasPrefix("shell:fs") == false)
+        #expect(action.gitAction == nil)
+        guard case .shell(let shell) = action else {
+            Issue.record("expected shell pending action")
+            return
+        }
+        #expect(shell.filesystemAction == filesystem)
+        #expect(shell.gitAction == nil)
     }
 
     @Test(arguments: [SemanticAnalysis.unknown, .unwrapLimited])
@@ -145,6 +162,12 @@ struct PendingActionTests {
         #expect(action.effects.kinds.isEmpty)
         #expect(action.resources.path == nil)
         #expect(action.fingerprint.rawValue.hasPrefix("shell:") == false)
+        #expect(action.gitAction == nil)
+        guard case .shell(let shell) = action else {
+            Issue.record("expected shell pending action")
+            return
+        }
+        #expect(shell.filesystemAction == nil)
     }
 
     @Test func oldEmptyEffectPendingJSON_stillDecodes() throws {
@@ -181,5 +204,86 @@ struct PendingActionTests {
         #expect(decoded.action.resources.path == nil)
         #expect(decoded.action.supportingCommand?.rawValue == "git reset --hard")
         #expect(decoded.state == .awaitingHuman)
+        #expect(decoded.action.gitAction == nil)
+        guard case .shell(let shell) = decoded.action else {
+            Issue.record("expected shell pending action")
+            return
+        }
+        #expect(shell.filesystemAction == nil)
+    }
+
+    @Test func sanitize_keepsGitPushAnalysis() {
+        let push = GitAction.push(remote: "origin", refspec: "feature", force: .force)
+        let shell = ShellAction(
+            fingerprint: ActionFingerprint(rawValue: "host:sess:/tmp:git push --force origin feature"),
+            effects: push.effects,
+            resources: push.resources,
+            supportingCommand: ShellCommand(rawValue: "git push --force origin feature"),
+            gitAction: push
+        )
+        let sanitized = ReviewSanitizer.sanitize(shell)
+        #expect(sanitized.gitAction == push)
+        #expect(sanitized.filesystemAction == nil)
+    }
+
+    @Test func sanitize_keepsFilesystemAnalysis() {
+        let filesystem = FilesystemAction.delete(
+            targets: [
+                FilesystemTarget(
+                    apparent: "Sources/Foo.swift",
+                    canonical: "/repo/Sources/Foo.swift",
+                    scope: .insideRepository,
+                    kind: .sourceCode
+                ),
+            ],
+            recursive: false,
+            force: false
+        )
+        let shell = ShellAction(
+            fingerprint: ActionFingerprint(rawValue: "host::/repo:rm Sources/Foo.swift"),
+            effects: filesystem.effects,
+            resources: filesystem.resources,
+            supportingCommand: ShellCommand(rawValue: "rm Sources/Foo.swift"),
+            filesystemAction: filesystem
+        )
+        let sanitized = ReviewSanitizer.sanitize(shell)
+        #expect(sanitized.filesystemAction == filesystem)
+        #expect(sanitized.gitAction == nil)
+    }
+
+    @Test func shellAction_decodeRejectsBothGitAndFilesystemKeys() throws {
+        let git = GitAction.push(remote: "origin", refspec: "main", force: .none)
+        let filesystem = FilesystemAction.delete(
+            targets: [
+                FilesystemTarget(
+                    apparent: "a",
+                    canonical: "/repo/a",
+                    scope: .insideRepository,
+                    kind: .sourceCode
+                ),
+            ],
+            recursive: false,
+            force: false
+        )
+        let gitShell = ShellAction(
+            fingerprint: ActionFingerprint(rawValue: "fp-git"),
+            gitAction: git
+        )
+        let filesystemShell = ShellAction(
+            fingerprint: ActionFingerprint(rawValue: "fp-fs"),
+            filesystemAction: filesystem
+        )
+        var object = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(gitShell)) as? [String: Any]
+        )
+        let filesystemObject = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(filesystemShell))
+                as? [String: Any]
+        )
+        object["filesystemAction"] = filesystemObject["filesystemAction"]
+        let data = try JSONSerialization.data(withJSONObject: object)
+        #expect(throws: DecodingError.self) {
+            _ = try JSONDecoder().decode(ShellAction.self, from: data)
+        }
     }
 }

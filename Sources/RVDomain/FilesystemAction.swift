@@ -150,8 +150,7 @@ public enum FilesystemAction: Sendable, Equatable, Codable {
         return ActionResources(
             path: target?.canonical,
             filesystemScope: target?.scope,
-            resourceKind: target?.kind,
-            protectedMatch: target?.protectedMatch
+            resourceKind: target?.kind
         )
     }
 

@@ -241,6 +241,44 @@ struct ActionPolicyEngineTypedRuleTests {
         #expect(deny.ruleID == rule.id)
     }
 
+    @Test func typedAsk_pendingFilesystemDelete_matchesTypedRule() {
+        let rule = typedRule(
+            id: RuleID(pack: .coreFilesystem, pattern: "ask-pending-rm"),
+            predicate: .filesystemDelete(recursive: nil, force: nil),
+            verdict: .ask
+        )
+        let file = inRepoDelete(recursive: false, force: false)
+        let command = ShellCommand(rawValue: "rm file.swift")
+        let cwd = WorkingDirectory(validating: "/repo")
+        let result = EvaluationResult(
+            outcome: .plain,
+            matchingView: MatchingView(command.rawValue),
+            analysis: .filesystem(file)
+        )
+        let action = result.pendingAction(
+            host: .grok,
+            session: nil,
+            cwd: cwd,
+            command: command
+        )
+        guard case .shell(let shell) = action else {
+            Issue.record("expected shell pending action")
+            return
+        }
+        #expect(shell.filesystemAction == file)
+        #expect(shell.gitAction == nil)
+        let verdict = ActionPolicyEngine.evaluate(
+            action: action,
+            context: privateBranch,
+            policy: EffectiveActionPolicy(rules: [rule])
+        )
+        guard case .mandatoryHuman(let deny) = verdict.decision else {
+            Issue.record("expected mandatoryHuman, got \(verdict.decision)")
+            return
+        }
+        #expect(deny.ruleID == rule.id)
+    }
+
     @Test func typedRestriction_gitPredicateDoesNotMatchFilesystemAction() {
         let rule = typedRule(verdict: .deny)
         let file = inRepoDelete(recursive: false, force: false)

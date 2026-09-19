@@ -32,7 +32,8 @@ public enum ReviewSanitizer: Sendable {
             ),
             supportingCommand: shell.supportingCommand.map { command in
                 ShellCommand(rawValue: redactCredentials(in: command.rawValue))
-            }
+            },
+            analysis: shell.analysis
         )
     }
 
