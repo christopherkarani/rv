@@ -139,7 +139,7 @@ public struct ActionReview: Sendable, Equatable, Codable {
     public var risk: RiskLevel
     public var confidence: ReviewerConfidence
     public var rationale: String
-    public var body: ActionReviewBody
+    public let body: ActionReviewBody
 
     public var decision: ReviewDecision {
         switch body {
@@ -157,6 +157,8 @@ public struct ActionReview: Sendable, Equatable, Codable {
         }
     }
 
+    /// Creates a review whose `body` is reclassified so a forged aligned
+    /// pair such as `.aligned(.allow, category: .deny)` cannot persist.
     public init(
         risk: RiskLevel,
         confidence: ReviewerConfidence,
@@ -166,7 +168,11 @@ public struct ActionReview: Sendable, Equatable, Codable {
         self.risk = risk
         self.confidence = confidence
         self.rationale = rationale
-        self.body = body
+        switch body {
+        case .aligned(let decision, category: let category),
+             .conflicting(decision: let decision, category: let category):
+            self.body = Self.classifiedBody(decision: decision, rationaleCategory: category)
+        }
     }
 
     public init(

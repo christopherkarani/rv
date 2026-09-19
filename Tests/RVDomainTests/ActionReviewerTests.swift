@@ -368,6 +368,23 @@ struct ActionReviewerTests {
         #expect(bound != .allow)
     }
 
+    @Test func actionReview_initBody_forgedAlignedAllowDeny_isConflictingAndCannotBindAllow() {
+        let review = ActionReview(
+            risk: .low,
+            confidence: .high,
+            rationale: "forged aligned allow with deny category",
+            body: .aligned(.allow, category: .deny)
+        )
+        #expect(review.hasConflictingRationale)
+        #expect(review.body == .conflicting(decision: .allow, category: .deny))
+        let bound = ReviewBind.apply(
+            hardDecision: .reviewEligible(fallback: ActionReviewerFixtures.fallbackDeny),
+            review: .success(review)
+        )
+        #expect(bound == .mandatoryHuman(ActionReviewerFixtures.fallbackDeny))
+        #expect(bound != .allow)
+    }
+
     @Test func actionReview_codable_usesDecisionAndCategoryKeys_notBody() throws {
         let review = ActionReview.make(
             decision: .allow,
