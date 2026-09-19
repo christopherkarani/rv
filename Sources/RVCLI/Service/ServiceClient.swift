@@ -149,38 +149,28 @@ public struct ServiceClient: Sendable {
             return await inProcessRoute()
         }
         do {
-            let evaluationRequest = GatedEvaluate.makeRequest(command: command, home: home)
-            let request = IPCRequest(
-                method: .evaluate(
-                    EvaluateParams(
-                        request: evaluationRequest,
+            let reply = try await send(
+                EvaluateCall(
+                    params: EvaluateParams(
+                        request: GatedEvaluate.makeRequest(command: command, home: home),
                         cwd: cwd,
                         clientSemver: ProtocolVersion.serviceSemver
                     )
-                )
+                ),
+                using: transport,
+                timeoutMs: transport.oneShotEvaluateTimeoutMs
             )
-            let body = try IPCJSON.encode(request)
-            let data = try await transport.send(body, timeoutMs: transport.oneShotEvaluateTimeoutMs)
-            let response = try IPCJSON.decode(IPCResponse.self, from: data)
-            guard response.id == request.id,
-                  response.protocolName == request.protocolName
-            else {
+            switch EvaluationRoute.path(for: .reply(
+                clientSemver: ProtocolVersion.serviceSemver,
+                advertisedServiceSemver: reply.serviceSemver
+            )) {
+            case .service:
+                return RoutedEvaluation(result: reply.result, path: .service)
+            case .inProcess:
                 transport.invalidate()
                 return await inProcessRoute()
             }
-            // Decode already requires EvaluateReply.via == .service; anything else falls back.
-            if case .evaluate(let reply) = response.result {
-                switch EvaluationRoute.path(for: .reply(
-                    clientSemver: ProtocolVersion.serviceSemver,
-                    advertisedServiceSemver: reply.serviceSemver
-                )) {
-                case .service:
-                    return RoutedEvaluation(result: reply.result, path: .service)
-                case .inProcess:
-                    transport.invalidate()
-                    return await inProcessRoute()
-                }
-            }
+        } catch is IPCCallError {
             transport.invalidate()
             return await inProcessRoute()
         } catch {
@@ -190,6 +180,38 @@ public struct ServiceClient: Sendable {
 
     public func evaluateResult(command: ShellCommand, cwd: WorkingDirectory? = nil) async -> EvaluationResult {
         await evaluate(command: command, cwd: cwd).result
+    }
+
+    private enum IPCCallError: Error, Sendable, Equatable {
+        case identityMismatch
+        case unexpectedResult
+        case service(IPCError)
+    }
+
+    private func send<C: IPCCall>(
+        _ call: C,
+        using transport: any ServiceTransport,
+        timeoutMs: Int? = nil
+    ) async throws -> C.Reply {
+        let request = IPCRequest(method: call.method)
+        let body = try IPCJSON.encode(request)
+        let data: Data
+        if let timeoutMs {
+            data = try await transport.send(body, timeoutMs: timeoutMs)
+        } else {
+            data = try await transport.send(body)
+        }
+        let response = try IPCJSON.decode(IPCResponse.self, from: data)
+        guard response.id == request.id, response.protocolName == request.protocolName else {
+            throw IPCCallError.identityMismatch
+        }
+        if case .error(let error) = response.result {
+            throw IPCCallError.service(error)
+        }
+        guard let reply = C.extract(response.result) else {
+            throw IPCCallError.unexpectedResult
+        }
+        return reply
     }
 
     /// Maps host stdin through IPC `hookEvaluate`, or in-process `hookWire` on miss.
@@ -210,36 +232,28 @@ public struct ServiceClient: Sendable {
             return await inProcessWire()
         }
         do {
-            let request = IPCRequest(
-                method: .hookEvaluate(
-                    HookEvaluateParams(
+            let reply = try await send(
+                HookEvaluateCall(
+                    params: HookEvaluateParams(
                         host: host,
                         stdin: stdin,
                         clientSemver: ProtocolVersion.serviceSemver
                     )
-                )
+                ),
+                using: transport,
+                timeoutMs: transport.oneShotEvaluateTimeoutMs
             )
-            let body = try IPCJSON.encode(request)
-            let data = try await transport.send(body, timeoutMs: transport.oneShotEvaluateTimeoutMs)
-            let response = try IPCJSON.decode(IPCResponse.self, from: data)
-            guard response.id == request.id,
-                  response.protocolName == request.protocolName
-            else {
+            switch EvaluationRoute.path(for: .reply(
+                clientSemver: ProtocolVersion.serviceSemver,
+                advertisedServiceSemver: reply.serviceSemver
+            )) {
+            case .service:
+                return HookWire(stdout: reply.stdout, exitCode: reply.exitCode, stderr: reply.stderr)
+            case .inProcess:
                 transport.invalidate()
                 return await inProcessWire()
             }
-            if case .hookEvaluate(let reply) = response.result {
-                switch EvaluationRoute.path(for: .reply(
-                    clientSemver: ProtocolVersion.serviceSemver,
-                    advertisedServiceSemver: reply.serviceSemver
-                )) {
-                case .service:
-                    return HookWire(stdout: reply.stdout, exitCode: reply.exitCode, stderr: reply.stderr)
-                case .inProcess:
-                    transport.invalidate()
-                    return await inProcessWire()
-                }
-            }
+        } catch is IPCCallError {
             transport.invalidate()
             return await inProcessWire()
         } catch {
@@ -264,44 +278,37 @@ public struct ServiceClient: Sendable {
         let localCorePacksReady = door.corePacksReady
         switch await route() {
         case .xpc(let transport, let serviceSemver):
-            let request = IPCRequest(method: .doctorSnapshot)
             do {
-                let data = try await transport.send(IPCJSON.encode(request))
-                let response = try IPCJSON.decode(IPCResponse.self, from: data)
-                guard response.id == request.id,
-                      response.protocolName == ProtocolVersion.name
-                else {
-                    return localDiagnostic(
-                        cause: .requestFailed(.invalidResponse),
-                        corePacksReady: localCorePacksReady,
-                        serviceSemver: serviceSemver
-                    )
-                }
-                switch response.result {
-                case .doctorSnapshot(let snapshot):
-                    return .xpc(
-                        snapshot: snapshot,
-                        localCorePacksReady: localCorePacksReady
-                    )
-                case .error(.protocolSkew):
+                let snapshot = try await send(DoctorSnapshotCall(), using: transport)
+                return .xpc(
+                    snapshot: snapshot,
+                    localCorePacksReady: localCorePacksReady
+                )
+            } catch IPCCallError.identityMismatch {
+                return localDiagnostic(
+                    cause: .requestFailed(.invalidResponse),
+                    corePacksReady: localCorePacksReady,
+                    serviceSemver: serviceSemver
+                )
+            } catch IPCCallError.unexpectedResult {
+                return localDiagnostic(
+                    cause: .requestFailed(.unexpectedResponse),
+                    corePacksReady: localCorePacksReady,
+                    serviceSemver: serviceSemver
+                )
+            } catch let IPCCallError.service(error) {
+                if case .protocolSkew = error {
                     return localDiagnostic(
                         cause: .skew(.protocolMismatch),
                         corePacksReady: localCorePacksReady,
                         serviceSemver: serviceSemver
                     )
-                case .error(let error):
-                    return localDiagnostic(
-                        cause: .requestFailed(.service(error)),
-                        corePacksReady: localCorePacksReady,
-                        serviceSemver: serviceSemver
-                    )
-                default:
-                    return localDiagnostic(
-                        cause: .requestFailed(.unexpectedResponse),
-                        corePacksReady: localCorePacksReady,
-                        serviceSemver: serviceSemver
-                    )
                 }
+                return localDiagnostic(
+                    cause: .requestFailed(.service(error)),
+                    corePacksReady: localCorePacksReady,
+                    serviceSemver: serviceSemver
+                )
             } catch {
                 return localDiagnostic(
                     cause: .requestFailed(Self.diagnosticFailure(from: error)),
