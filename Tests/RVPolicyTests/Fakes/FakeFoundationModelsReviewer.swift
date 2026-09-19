@@ -84,7 +84,7 @@ enum ShadowReviewFixtures {
         rationaleCategory: ReviewRationaleCategory,
         rationale: String = "shadow-stub"
     ) -> ActionReview {
-        ActionReview(
+        ActionReview.make(
             decision: decision,
             risk: .high,
             confidence: confidence,

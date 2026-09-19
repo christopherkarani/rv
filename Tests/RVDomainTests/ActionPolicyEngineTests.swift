@@ -439,7 +439,7 @@ private enum ActionPolicyFixtures {
         )
     )
 
-    static let qualifiedAllow = ActionReview(
+    static let qualifiedAllow = ActionReview.make(
         decision: .allow,
         risk: .low,
         confidence: .high,
