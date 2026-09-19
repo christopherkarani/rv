@@ -150,7 +150,7 @@ enum FoundationModelsReviewClient: Sendable {
     }
 
     private static func makeReview(_ output: FoundationModelsReviewOutput) -> ActionReview {
-        ActionReview(
+        ActionReview.make(
             decision: reviewDecision(output.decision),
             risk: riskLevel(output.risk),
             confidence: reviewerConfidence(output.confidence),

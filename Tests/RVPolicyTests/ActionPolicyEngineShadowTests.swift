@@ -85,7 +85,7 @@ private enum ActionPolicyEngineShadowFixtures {
         )
     )
 
-    static let allowReview = ActionReview(
+    static let allowReview = ActionReview.make(
         decision: .allow,
         risk: .low,
         confidence: .high,
@@ -93,7 +93,7 @@ private enum ActionPolicyEngineShadowFixtures {
         rationaleCategory: .allow
     )
 
-    static let denyReview = ActionReview(
+    static let denyReview = ActionReview.make(
         decision: .deny,
         risk: .high,
         confidence: .high,

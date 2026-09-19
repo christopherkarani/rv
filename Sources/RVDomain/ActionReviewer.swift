@@ -130,12 +130,50 @@ public struct ReviewRequest: Sendable, Equatable, Codable {
     }
 }
 
+public enum ActionReviewBody: Sendable, Equatable, Codable {
+    case aligned(ReviewDecision, category: ReviewRationaleCategory)
+    case conflicting(decision: ReviewDecision, category: ReviewRationaleCategory)
+}
+
 public struct ActionReview: Sendable, Equatable, Codable {
-    public var decision: ReviewDecision
     public var risk: RiskLevel
     public var confidence: ReviewerConfidence
     public var rationale: String
-    public var rationaleCategory: ReviewRationaleCategory
+    public let body: ActionReviewBody
+
+    public var decision: ReviewDecision {
+        switch body {
+        case .aligned(let decision, category: _),
+             .conflicting(decision: let decision, category: _):
+            return decision
+        }
+    }
+
+    public var rationaleCategory: ReviewRationaleCategory {
+        switch body {
+        case .aligned(_, category: let category),
+             .conflicting(decision: _, category: let category):
+            return category
+        }
+    }
+
+    /// Creates a review whose `body` is reclassified so a forged aligned
+    /// pair such as `.aligned(.allow, category: .deny)` cannot persist.
+    public init(
+        risk: RiskLevel,
+        confidence: ReviewerConfidence,
+        rationale: String,
+        body: ActionReviewBody
+    ) {
+        self.risk = risk
+        self.confidence = confidence
+        self.rationale = rationale
+        switch body {
+        case .aligned(let decision, category: let category),
+             .conflicting(decision: let decision, category: let category):
+            self.body = Self.classifiedBody(decision: decision, rationaleCategory: category)
+        }
+    }
 
     public init(
         decision: ReviewDecision,
@@ -144,20 +182,85 @@ public struct ActionReview: Sendable, Equatable, Codable {
         rationale: String,
         rationaleCategory: ReviewRationaleCategory
     ) {
-        self.decision = decision
-        self.risk = risk
-        self.confidence = confidence
-        self.rationale = rationale
-        self.rationaleCategory = rationaleCategory
+        self = .make(
+            decision: decision,
+            risk: risk,
+            confidence: confidence,
+            rationale: rationale,
+            rationaleCategory: rationaleCategory
+        )
+    }
+
+    public static func make(
+        decision: ReviewDecision,
+        risk: RiskLevel,
+        confidence: ReviewerConfidence,
+        rationale: String,
+        rationaleCategory: ReviewRationaleCategory
+    ) -> ActionReview {
+        ActionReview(
+            risk: risk,
+            confidence: confidence,
+            rationale: rationale,
+            body: classifiedBody(decision: decision, rationaleCategory: rationaleCategory)
+        )
     }
 
     public var hasConflictingRationale: Bool {
-        switch (decision, rationaleCategory) {
-        case (.allow, .deny), (.deny, .allow):
+        switch body {
+        case .conflicting:
             return true
-        default:
+        case .aligned:
             return false
         }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decision = try container.decode(ReviewDecision.self, forKey: .decision)
+        let risk = try container.decode(RiskLevel.self, forKey: .risk)
+        let confidence = try container.decode(ReviewerConfidence.self, forKey: .confidence)
+        let rationale = try container.decode(String.self, forKey: .rationale)
+        let rationaleCategory = try container.decode(
+            ReviewRationaleCategory.self,
+            forKey: .rationaleCategory
+        )
+        self = .make(
+            decision: decision,
+            risk: risk,
+            confidence: confidence,
+            rationale: rationale,
+            rationaleCategory: rationaleCategory
+        )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(decision, forKey: .decision)
+        try container.encode(risk, forKey: .risk)
+        try container.encode(confidence, forKey: .confidence)
+        try container.encode(rationale, forKey: .rationale)
+        try container.encode(rationaleCategory, forKey: .rationaleCategory)
+    }
+
+    private static func classifiedBody(
+        decision: ReviewDecision,
+        rationaleCategory: ReviewRationaleCategory
+    ) -> ActionReviewBody {
+        switch (decision, rationaleCategory) {
+        case (.allow, .deny), (.deny, .allow):
+            return .conflicting(decision: decision, category: rationaleCategory)
+        default:
+            return .aligned(decision, category: rationaleCategory)
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case decision
+        case risk
+        case confidence
+        case rationale
+        case rationaleCategory
     }
 }
 

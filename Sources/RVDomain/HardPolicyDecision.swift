@@ -93,15 +93,14 @@ public enum ReviewBind: Sendable {
             guard actionReview.confidence.isSufficientToAdvise else {
                 return .mandatoryHuman(fallback)
             }
-            guard actionReview.hasConflictingRationale == false else {
+            switch actionReview.body {
+            case .conflicting:
                 return .mandatoryHuman(fallback)
-            }
-            switch (actionReview.decision, actionReview.rationaleCategory) {
-            case (.allow, .allow):
+            case .aligned(.allow, category: .allow):
                 return .allow
-            case (.deny, .deny):
+            case .aligned(.deny, category: .deny):
                 return .deny(fallback)
-            default:
+            case .aligned:
                 return .mandatoryHuman(fallback)
             }
         }

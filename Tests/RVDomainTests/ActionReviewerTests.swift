@@ -308,6 +308,120 @@ struct ActionReviewerTests {
         #expect(abstain.hasConflictingRationale == false)
     }
 
+    @Test(arguments: [
+        (ReviewDecision.allow, ReviewRationaleCategory.deny, true),
+        (.deny, .allow, true),
+        (.allow, .allow, false),
+        (.deny, .deny, false),
+        (.abstain, .uncertain, false),
+        (.allow, .abstain, false),
+        (.deny, .uncertain, false),
+        (.abstain, .allow, false),
+    ])
+    func actionReview_make_classifiesBody(
+        decision: ReviewDecision,
+        category: ReviewRationaleCategory,
+        isConflict: Bool
+    ) {
+        let review = ActionReview.make(
+            decision: decision,
+            risk: .medium,
+            confidence: .high,
+            rationale: "classify",
+            rationaleCategory: category
+        )
+        #expect(review.hasConflictingRationale == isConflict)
+        #expect(review.decision == decision)
+        #expect(review.rationaleCategory == category)
+        if isConflict {
+            #expect(review.body == .conflicting(decision: decision, category: category))
+        } else {
+            #expect(review.body == .aligned(decision, category: category))
+        }
+    }
+
+    @Test func actionReview_make_allowDeny_hasConflictingRationale() {
+        let review = ActionReview.make(
+            decision: .allow,
+            risk: .high,
+            confidence: .high,
+            rationale: "looks destructive",
+            rationaleCategory: .deny
+        )
+        #expect(review.hasConflictingRationale)
+        #expect(review.body == .conflicting(decision: .allow, category: .deny))
+    }
+
+    @Test func reviewBind_conflictingAllow_isMandatoryHumanNotAllow() {
+        let conflictingAllow = ActionReview.make(
+            decision: .allow,
+            risk: .low,
+            confidence: .high,
+            rationale: "allow with deny rationale",
+            rationaleCategory: .deny
+        )
+        let bound = ReviewBind.apply(
+            hardDecision: .reviewEligible(fallback: ActionReviewerFixtures.fallbackDeny),
+            review: .success(conflictingAllow)
+        )
+        #expect(bound == .mandatoryHuman(ActionReviewerFixtures.fallbackDeny))
+        #expect(bound != .allow)
+    }
+
+    @Test func actionReview_initBody_forgedAlignedAllowDeny_isConflictingAndCannotBindAllow() {
+        let review = ActionReview(
+            risk: .low,
+            confidence: .high,
+            rationale: "forged aligned allow with deny category",
+            body: .aligned(.allow, category: .deny)
+        )
+        #expect(review.hasConflictingRationale)
+        #expect(review.body == .conflicting(decision: .allow, category: .deny))
+        let bound = ReviewBind.apply(
+            hardDecision: .reviewEligible(fallback: ActionReviewerFixtures.fallbackDeny),
+            review: .success(review)
+        )
+        #expect(bound == .mandatoryHuman(ActionReviewerFixtures.fallbackDeny))
+        #expect(bound != .allow)
+    }
+
+    @Test func actionReview_codable_usesDecisionAndCategoryKeys_notBody() throws {
+        let review = ActionReview.make(
+            decision: .allow,
+            risk: .low,
+            confidence: .high,
+            rationale: "ok",
+            rationaleCategory: .deny
+        )
+        let data = try JSONEncoder().encode(review)
+        let object = try JSONSerialization.jsonObject(with: data)
+        let keys = try #require(object as? [String: Any])
+        #expect(keys["decision"] as? String == "allow")
+        #expect(keys["rationaleCategory"] as? String == "deny")
+        #expect(keys["risk"] as? String == "low")
+        #expect(keys["confidence"] as? String == "high")
+        #expect(keys["rationale"] as? String == "ok")
+        #expect(keys["body"] == nil)
+
+        let decoded = try JSONDecoder().decode(ActionReview.self, from: data)
+        #expect(decoded == review)
+        #expect(decoded.hasConflictingRationale)
+        #expect(decoded.body == .conflicting(decision: .allow, category: .deny))
+    }
+
+    @Test func actionReview_decode_legacyParallelKeys_goThroughFactory() throws {
+        let json = Data(
+            """
+            {"decision":"deny","risk":"high","confidence":"medium","rationale":"legacy","rationaleCategory":"allow"}
+            """.utf8
+        )
+        let decoded = try JSONDecoder().decode(ActionReview.self, from: json)
+        #expect(decoded.decision == .deny)
+        #expect(decoded.rationaleCategory == .allow)
+        #expect(decoded.hasConflictingRationale)
+        #expect(decoded.body == .conflicting(decision: .deny, category: .allow))
+    }
+
     @Test func repositoryReviewContext_sharedBranchIsMainOrMasterOnly() {
         #expect(RepositoryReviewContext(currentBranch: "main").isSharedBranch)
         #expect(RepositoryReviewContext(currentBranch: "master").isSharedBranch)
@@ -319,7 +433,7 @@ struct ActionReviewerTests {
         let provider = ReviewerProviderID(rawValue: "stub.codec")
         #expect(try JSONDecoder().decode(ReviewerProviderID.self, from: JSONEncoder().encode(provider)) == provider)
 
-        let review = ActionReview(
+        let review = ActionReview.make(
             decision: .abstain,
             risk: .critical,
             confidence: .low,
