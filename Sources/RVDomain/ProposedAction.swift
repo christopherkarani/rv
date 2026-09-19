@@ -102,8 +102,13 @@ public struct ActionScope: Sendable, Equatable, Codable {
     }
 }
 
-/// Semantic shell action. The raw command, if present, is supporting evidence only.
-/// Analysis is git or filesystem, never both.
+/// Semantic shell action whose closed subject is git or filesystem, never both.
+///
+/// The raw command, if present, is supporting evidence only.
+///
+/// Codable keeps the XOR labels `gitAction` and `filesystemAction`, omits the
+/// unused key (does not write null), and never encodes `analysis`. Decode fails
+/// if both keys have values.
 public struct ShellAction: Sendable, Equatable, Codable {
     public var fingerprint: ActionFingerprint
     public var effects: ActionEffects
@@ -111,9 +116,11 @@ public struct ShellAction: Sendable, Equatable, Codable {
     public var scope: ActionScope
     /// Supporting evidence only. Never the primary review input.
     public var supportingCommand: ShellCommand?
-    /// Closed git ⊕ filesystem analysis. Nil means unknown, stripped, or unanalyzed.
+    /// Closed git ⊕ filesystem subject. Nil means unknown, stripped, or unanalyzed.
+    /// This is storage; `gitAction` and `filesystemAction` are projections.
     public var analysis: SemanticAction?
 
+    /// Git projection of `analysis`.
     public var gitAction: GitAction? {
         if case .git(let action) = analysis {
             return action
@@ -121,6 +128,7 @@ public struct ShellAction: Sendable, Equatable, Codable {
         return nil
     }
 
+    /// Filesystem projection of `analysis`.
     public var filesystemAction: FilesystemAction? {
         if case .filesystem(let action) = analysis {
             return action
@@ -128,6 +136,7 @@ public struct ShellAction: Sendable, Equatable, Codable {
         return nil
     }
 
+    /// Creates a shell action storing `analysis` as the closed subject.
     public init(
         fingerprint: ActionFingerprint,
         effects: ActionEffects = ActionEffects(),
@@ -144,6 +153,7 @@ public struct ShellAction: Sendable, Equatable, Codable {
         self.analysis = analysis
     }
 
+    /// Creates a shell action whose subject is `gitAction`.
     public init(
         fingerprint: ActionFingerprint,
         effects: ActionEffects = ActionEffects(),
@@ -162,6 +172,7 @@ public struct ShellAction: Sendable, Equatable, Codable {
         )
     }
 
+    /// Creates a shell action whose subject is `filesystemAction`.
     public init(
         fingerprint: ActionFingerprint,
         effects: ActionEffects = ActionEffects(),
