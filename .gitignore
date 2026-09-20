@@ -13,3 +13,5 @@ xcuserdata/
 planning/
 scratch/
 spec/
+# Agent planning and phase handoffs — keep locally for other sessions
+docs/rv-agent/
