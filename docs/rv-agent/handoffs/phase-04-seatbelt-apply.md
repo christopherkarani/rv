@@ -648,7 +648,7 @@ Implemented
 
 ## Implementation Summary
 
-Added `RVIsolation` with `IsolationBackend` so a compiled `IsolationPlan` can be applied. Contained plans are prepared into a first-slice Seatbelt profile (allow-default + deny `file-write*` outside the POSIX-`realpath` workspace) and, on Darwin, run under `/usr/bin/sandbox-exec -p`. `EstablishedIsolation.contained` is minted only after `Process.run()` starts that sandboxed child. Contained without a backend (`unavailable()`, non-Darwin `platform()`, missing `sandbox-exec`) is `backendUnavailable` — never rewritten to observed/mediated. Observed/mediated establish family `.none` and exec the inner command directly. `IsolationPlan.mode` stays intended. No Landlock, no `rv agent`/`opencode` CLI, no executor, no `decide` from apply.
+Added `RVIsolation` with `IsolationBackend` so a compiled `IsolationPlan` can be applied. Contained plans are prepared into a first-slice Seatbelt profile (allow-default + deny `file-write*` outside the POSIX-`realpath` workspace) and, on Darwin, run under `/usr/bin/sandbox-exec -p`. `EstablishedIsolation.contained` is minted only after `Process.run()` starts that sandboxed child. Contained without a backend (`unavailable()`, non-Darwin `platform()`, missing `sandbox-exec`) is `backendUnavailable` — never rewritten to observed/mediated. Observed/mediated establish family `.none` and exec the inner command directly. `IsolationPlan.mode` stays intended. Production callers use `IsolationBackends.apply`, which selects the unsandboxed path for observed/mediated and `platform()` for contained so Darwin launch does not have to pick a factory by mode. `IsolatedCommand` cannot represent a relative executable. `spawn` takes only a prepared `IsolatedLaunchRequest`, so contained argv is always `sandbox-exec`. No Landlock, no `rv agent`/`opencode` CLI, no executor, no `decide` from apply.
 
 ## Files Changed
 
@@ -685,6 +685,10 @@ Added `RVIsolation` with `IsolationBackend` so a compiled `IsolationPlan` can be
 - Nonexistent compile fixtures (`/workspace`, `/ws`) fall back to the URL path so portable profile-shape tests stay filesystem-free.
 - `unavailable().prepare(.contained)` is `backendUnavailable` before any process starts.
 - `platform()` is `#if os(macOS)` `seatbelt()` else `unavailable()`.
+- `IsolationBackends.apply` is the production door: observed/mediated → `unavailable()`, contained → `platform()`. Factories stay for tests and injection.
+- `IsolatedCommand.init?` / `make` reject empty and relative executables. `IsolatedLaunchRequest.Launch` is `seatbelt(profile)` or `unsandboxed` so a nil profile cannot pair with `.seatbelt`.
+- `spawn` is `fileprivate` and takes `IsolatedLaunchRequest` only. It cannot mint contained from a raw inner argv.
+- Existing directories that `realpath` cannot resolve fail prepare as `workspacePathUnresolvable`. URL fallback stays compile-only for missing fixtures.
 - Production inits for request / profile / established / run result / backend are `internal`.
 - `RVIsolationTests` depends on `RVIsolation` only (preflight one-dep). Tests `import RVDomain` as a same-package transitive module. No new `@_exported` (preflight fails those outside RVEngine/RVPacks).
 - Added `commandExecutableMustBeAbsolute` (handoff-preferred distinct case).
@@ -695,7 +699,7 @@ Profile resolve uses POSIX `realpath` instead of only `URL.resolvingSymlinksInPa
 
 ## Tests Added / Updated
 
-`IsolationApply` (12) and `SeatbeltContainment` (5):
+`IsolationApply` (18) and `SeatbeltContainment` (5):
 
 1. `compileSeatbeltProfile_contained_isAllowDefaultWriteLimit_noDenyDefaultOrNetworkDeny` — edge 1
 2. `compileSeatbeltProfile_contained_writeLimitIsWorkspaceNotRepositoryRoot` — edge 2
@@ -713,7 +717,7 @@ Profile resolve uses POSIX `realpath` instead of only `URL.resolvingSymlinksInPa
 14. `seatbelt_writeUnderRepositoryRootOutsideWorkspace_isBlocked` — Darwin edge 14
 15. `platform_contained_prepare_isBackendUnavailable_onNonDarwin` — edge 15 (Darwin asserts `platform().family == .seatbelt`)
 
-Also: `isolationBackendFamily_hasExactlyNoneAndSeatbelt`; `isolationApply_operatorProbe_printsEstablishedModes`.
+Also: `isolationBackendFamily_hasExactlyNoneAndSeatbelt`; `isolationApply_operatorProbe_printsEstablishedModes`; `isolatedCommand_rejectsEmptyAndRelativeExecutable`; `apply_observedAndMediated_doNotRequireCallerToPickUnavailable`; `apply_contained_withoutUsableWorkspaceOrBackend_failsClosed`; `seatbelt_prepare_observed_returnsProfileNotApplicable`; `compileSeatbeltProfile_newlineWorkspace_returnsWorkspacePathUnsafe`; `seatbelt_prepare_launchArguments_areSandboxExecProfileAndInnerArgv`.
 
 ## Verification Performed
 

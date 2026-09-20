@@ -55,9 +55,36 @@ public func compileSeatbeltProfile(
 /// current Darwin keeps `/var` and can rewrite `/private/tmp` back to `/tmp`,
 /// which does not match sandbox-exec. POSIX `realpath` does (`/tmp` →
 /// `/private/tmp`). Nonexistent compile fixtures fall back to the URL path.
+/// Prepare / spawn never use this fallback: an existing directory that
+/// `realpath` cannot resolve is `workspacePathUnresolvable`.
 func resolvedWorkspacePath(_ workspace: WorkingDirectory) -> String {
     posixRealpath(workspace.rawValue)
         ?? URL(fileURLWithPath: workspace.rawValue).resolvingSymlinksInPath().path
+}
+
+func existingResolvedWorkspacePath(
+    _ workspace: WorkingDirectory
+) -> Result<String, IsolationApplyError> {
+    if let resolved = posixRealpath(workspace.rawValue) {
+        var isDirectory: ObjCBool = false
+        let exists = FileManager.default.fileExists(atPath: resolved, isDirectory: &isDirectory)
+        guard exists, isDirectory.boolValue else {
+            return .failure(.workspaceDoesNotExist)
+        }
+        if resolved.contains("\n") || resolved.contains("\0") {
+            return .failure(.workspacePathUnsafe)
+        }
+        return .success(resolved)
+    }
+    var isDirectory: ObjCBool = false
+    let exists = FileManager.default.fileExists(
+        atPath: workspace.rawValue,
+        isDirectory: &isDirectory
+    )
+    if exists, isDirectory.boolValue {
+        return .failure(.workspacePathUnresolvable)
+    }
+    return .failure(.workspaceDoesNotExist)
 }
 
 func posixRealpath(_ path: String) -> String? {

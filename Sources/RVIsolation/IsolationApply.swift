@@ -20,63 +20,90 @@ public enum IsolationApplyError: Error, Sendable, Equatable {
 }
 
 /// Absolute argv the backend starts (the inner command, not `sandbox-exec`).
+/// Empty and relative executables are unrepresentable.
 public struct IsolatedCommand: Sendable, Equatable {
     public let executable: String
     public let arguments: [String]
 
-    public init(executable: String, arguments: [String] = []) {
+    public init?(executable: String, arguments: [String] = []) {
+        guard IsolatedCommand.isAbsoluteExecutable(executable) else {
+            return nil
+        }
         self.executable = executable
         self.arguments = arguments
+    }
+
+    public static func make(
+        executable: String,
+        arguments: [String] = []
+    ) -> Result<IsolatedCommand, IsolationApplyError> {
+        guard let command = IsolatedCommand(executable: executable, arguments: arguments) else {
+            return .failure(.commandExecutableMustBeAbsolute)
+        }
+        return .success(command)
+    }
+
+    static func isAbsoluteExecutable(_ executable: String) -> Bool {
+        executable.isEmpty == false && executable.hasPrefix("/")
     }
 }
 
 /// Prepared launch. Not established. Production construction is `prepare`.
 public struct IsolatedLaunchRequest: Sendable, Equatable {
+    fileprivate enum Launch: Sendable, Equatable {
+        case seatbelt(SeatbeltProfile)
+        case unsandboxed
+    }
+
     public let plan: IsolationPlan
     public let command: IsolatedCommand
     public let family: IsolationBackendFamily
-    let seatbeltProfile: SeatbeltProfile?
+    fileprivate let launch: Launch
 
-    init?(
-        plan: IsolationPlan,
-        command: IsolatedCommand,
-        family: IsolationBackendFamily,
-        seatbeltProfile: SeatbeltProfile?
-    ) {
-        switch (family, seatbeltProfile, plan.mode) {
-        case (.seatbelt, .some, .contained):
-            break
-        case (.none, .none, .observed), (.none, .none, .mediated):
-            break
-        default:
+    var seatbeltProfile: SeatbeltProfile? {
+        switch launch {
+        case .seatbelt(let profile):
+            return profile
+        case .unsandboxed:
+            return nil
+        }
+    }
+
+    fileprivate init?(plan: IsolationPlan, command: IsolatedCommand, launch: Launch) {
+        switch (launch, plan.mode) {
+        case (.seatbelt, .contained):
+            self.family = .seatbelt
+        case (.unsandboxed, .observed), (.unsandboxed, .mediated):
+            self.family = .none
+        case (.seatbelt, .observed), (.seatbelt, .mediated), (.unsandboxed, .contained):
             return nil
         }
         self.plan = plan
         self.command = command
-        self.family = family
-        self.seatbeltProfile = seatbeltProfile
+        self.launch = launch
     }
 
     /// Executable `run` will start. Observed / mediated never use `sandbox-exec`.
     var launchExecutable: String {
-        switch family {
+        switch launch {
         case .seatbelt:
             return IsolationBackends.sandboxExecPath
-        case .none:
+        case .unsandboxed:
             return command.executable
         }
     }
 
     var launchArguments: [String] {
-        switch family {
-        case .seatbelt:
-            guard let profile = seatbeltProfile else {
-                return command.arguments
-            }
+        switch launch {
+        case .seatbelt(let profile):
             return ["-p", profile.source, command.executable] + command.arguments
-        case .none:
+        case .unsandboxed:
             return command.arguments
         }
+    }
+
+    fileprivate var establishedIsolation: EstablishedIsolation? {
+        EstablishedIsolation(mode: plan.mode, family: family)
     }
 }
 
@@ -124,6 +151,13 @@ public struct IsolationBackend: Sendable {
         self.prepare = prepare
         self.run = run
     }
+
+    public func apply(
+        _ plan: IsolationPlan,
+        command: IsolatedCommand
+    ) -> Result<IsolatedRunResult, IsolationApplyError> {
+        prepare(plan, command).flatMap(run)
+    }
 }
 
 public enum IsolationBackends {
@@ -152,31 +186,27 @@ public enum IsolationBackends {
         unavailable()
         #endif
     }
-}
 
-private func requireAbsoluteCommand(
-    _ command: IsolatedCommand
-) -> IsolationApplyError? {
-    if command.executable.isEmpty || command.executable.hasPrefix("/") == false {
-        return .commandExecutableMustBeAbsolute
+    /// Production door. Observed / mediated always establish family `.none`
+    /// without `sandbox-exec`. Contained uses `platform()` and fails closed
+    /// when that backend cannot establish it. `IsolationPlan.mode` is unchanged.
+    public static func apply(
+        _ plan: IsolationPlan,
+        command: IsolatedCommand
+    ) -> Result<IsolatedRunResult, IsolationApplyError> {
+        switch plan.mode {
+        case .observed, .mediated:
+            return unavailable().apply(plan, command: command)
+        case .contained:
+            return platform().apply(plan, command: command)
+        }
     }
-    return nil
-}
-
-private func workspaceDirectoryExists(_ workspace: WorkingDirectory) -> Bool {
-    let resolved = resolvedWorkspacePath(workspace)
-    var isDirectory: ObjCBool = false
-    let exists = FileManager.default.fileExists(atPath: resolved, isDirectory: &isDirectory)
-    return exists && isDirectory.boolValue
 }
 
 func prepareSeatbelt(
     _ plan: IsolationPlan,
     _ command: IsolatedCommand
 ) -> Result<IsolatedLaunchRequest, IsolationApplyError> {
-    if let error = requireAbsoluteCommand(command) {
-        return .failure(error)
-    }
     switch plan.mode {
     case .observed, .mediated:
         return .failure(.profileNotApplicable)
@@ -188,15 +218,17 @@ func prepareSeatbelt(
             guard let workspace = plan.workspace else {
                 return .failure(.containedGuaranteesUnsupported)
             }
-            guard workspaceDirectoryExists(workspace) else {
-                return .failure(.workspaceDoesNotExist)
+            switch existingResolvedWorkspacePath(workspace) {
+            case .failure(let error):
+                return .failure(error)
+            case .success:
+                break
             }
             guard
                 let request = IsolatedLaunchRequest(
                     plan: plan,
                     command: command,
-                    family: .seatbelt,
-                    seatbeltProfile: profile
+                    launch: .seatbelt(profile)
                 )
             else {
                 return .failure(.containedGuaranteesUnsupported)
@@ -210,9 +242,6 @@ func prepareUnavailable(
     _ plan: IsolationPlan,
     _ command: IsolatedCommand
 ) -> Result<IsolatedLaunchRequest, IsolationApplyError> {
-    if let error = requireAbsoluteCommand(command) {
-        return .failure(error)
-    }
     switch plan.mode {
     case .contained:
         return .failure(.backendUnavailable)
@@ -221,8 +250,7 @@ func prepareUnavailable(
             let request = IsolatedLaunchRequest(
                 plan: plan,
                 command: command,
-                family: .none,
-                seatbeltProfile: nil
+                launch: .unsandboxed
             )
         else {
             return .failure(.backendMismatch)
@@ -238,19 +266,10 @@ func runSeatbelt(
         return .failure(.backendMismatch)
     }
     #if os(macOS)
-    guard let profile = request.seatbeltProfile else {
-        return .failure(.backendMismatch)
-    }
     guard FileManager.default.isExecutableFile(atPath: IsolationBackends.sandboxExecPath) else {
         return .failure(.backendUnavailable)
     }
-    return spawn(
-        executable: IsolationBackends.sandboxExecPath,
-        arguments: ["-p", profile.source, request.command.executable] + request.command.arguments,
-        workspace: request.plan.workspace,
-        mode: request.plan.mode,
-        family: .seatbelt
-    )
+    return spawn(request)
     #else
     return .failure(.backendUnavailable)
     #endif
@@ -266,30 +285,33 @@ func runUnavailable(
     case .contained:
         return .failure(.backendUnavailable)
     case .observed, .mediated:
-        return spawn(
-            executable: request.command.executable,
-            arguments: request.command.arguments,
-            workspace: request.plan.workspace,
-            mode: request.plan.mode,
-            family: .none
-        )
+        return spawn(request)
     }
 }
 
-/// Starts the process, then mints `EstablishedIsolation`. A spawn failure
-/// produces no established record. A non-zero child exit is still success.
-func spawn(
-    executable: String,
-    arguments: [String],
-    workspace: WorkingDirectory?,
-    mode: EnforcementMode,
-    family: IsolationBackendFamily
+/// Starts the process described by a prepared request, then returns
+/// `EstablishedIsolation`. A spawn failure produces no established record.
+/// A non-zero child exit is still success. Contained is always
+/// `/usr/bin/sandbox-exec` because `Launch.seatbelt` is the only contained
+/// request.
+private func spawn(
+    _ request: IsolatedLaunchRequest
 ) -> Result<IsolatedRunResult, IsolationApplyError> {
+    guard let established = request.establishedIsolation else {
+        return .failure(.backendMismatch)
+    }
     let process = Process()
-    process.executableURL = URL(fileURLWithPath: executable)
-    process.arguments = arguments
-    if let workspace, workspaceDirectoryExists(workspace) {
-        process.currentDirectoryURL = URL(fileURLWithPath: resolvedWorkspacePath(workspace))
+    process.executableURL = URL(fileURLWithPath: request.launchExecutable)
+    process.arguments = request.launchArguments
+    if let workspace = request.plan.workspace,
+        let resolved = posixRealpath(workspace.rawValue)
+    {
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: resolved, isDirectory: &isDirectory),
+            isDirectory.boolValue
+        {
+            process.currentDirectoryURL = URL(fileURLWithPath: resolved)
+        }
     }
     process.standardOutput = FileHandle.nullDevice
     process.standardError = FileHandle.nullDevice
@@ -297,11 +319,6 @@ func spawn(
         try process.run()
     } catch {
         return .failure(.processSpawnFailed)
-    }
-    guard let established = EstablishedIsolation(mode: mode, family: family) else {
-        process.terminate()
-        process.waitUntilExit()
-        return .failure(.backendMismatch)
     }
     process.waitUntilExit()
     return .success(IsolatedRunResult(established: established, exitStatus: process.terminationStatus))

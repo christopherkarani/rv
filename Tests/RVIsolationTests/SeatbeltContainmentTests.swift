@@ -11,8 +11,8 @@ import Testing
 ///     `exitStatus != 0`, file absent, established still `.contained` / `.seatbelt`
 /// 12. contained + `seatbelt()`: `/bin/sh -c '/usr/bin/touch OUTSIDE'` → same as 11
 ///     (inheritance)
-/// 13. observed + workspace + `unavailable()`: `touch` outside succeeds (control:
-///     observed is not secretly sandboxed)
+/// 13. observed + workspace + `IsolationBackends.apply`: `touch` outside succeeds
+///     (control: the production door does not secretly sandbox observed)
 /// 14. contained + differing `RepositoryRoot`: write under the repo root but
 ///     outside the workspace is blocked
 /// Missing `/usr/bin/sandbox-exec` must fail these tests — do not skip.
@@ -26,10 +26,9 @@ struct SeatbeltContainmentTests {
         defer { tree.tearDown() }
 
         let inside = tree.workspaceURL.appendingPathComponent("inside.txt").path
-        let result = apply(
-            plan: tree.contained,
-            command: IsolatedCommand(executable: "/usr/bin/touch", arguments: [inside]),
-            backend: IsolationBackends.seatbelt()
+        let result = IsolationBackends.seatbelt().apply(
+            tree.contained,
+            command: IsolatedCommand(executable: "/usr/bin/touch", arguments: [inside])!
         )
         switch result {
         case .success(let run):
@@ -47,10 +46,9 @@ struct SeatbeltContainmentTests {
 
         let outside = tree.siblingURL.appendingPathComponent("outside.txt").path
         #expect(FileManager.default.fileExists(atPath: outside) == false)
-        let result = apply(
-            plan: tree.contained,
-            command: IsolatedCommand(executable: "/usr/bin/touch", arguments: [outside]),
-            backend: IsolationBackends.seatbelt()
+        let result = IsolationBackends.seatbelt().apply(
+            tree.contained,
+            command: IsolatedCommand(executable: "/usr/bin/touch", arguments: [outside])!
         )
         switch result {
         case .success(let run):
@@ -67,13 +65,12 @@ struct SeatbeltContainmentTests {
         defer { tree.tearDown() }
 
         let outside = tree.siblingURL.appendingPathComponent("child-outside.txt").path
-        let result = apply(
-            plan: tree.contained,
+        let result = IsolationBackends.seatbelt().apply(
+            tree.contained,
             command: IsolatedCommand(
                 executable: "/bin/sh",
                 arguments: ["-c", "/usr/bin/touch \(outside)"]
-            ),
-            backend: IsolationBackends.seatbelt()
+            )!
         )
         switch result {
         case .success(let run):
@@ -90,10 +87,9 @@ struct SeatbeltContainmentTests {
         defer { tree.tearDown() }
 
         let outside = tree.siblingURL.appendingPathComponent("observed-outside.txt").path
-        let result = apply(
-            plan: tree.observed,
-            command: IsolatedCommand(executable: "/usr/bin/touch", arguments: [outside]),
-            backend: IsolationBackends.unavailable()
+        let result = IsolationBackends.apply(
+            tree.observed,
+            command: IsolatedCommand(executable: "/usr/bin/touch", arguments: [outside])!
         )
         switch result {
         case .success(let run):
@@ -123,10 +119,9 @@ struct SeatbeltContainmentTests {
         defer { tree.tearDown() }
 
         let leak = tree.repositoryURL.appendingPathComponent("leak.txt").path
-        let result = apply(
-            plan: tree.containedDifferingRoot,
-            command: IsolatedCommand(executable: "/usr/bin/touch", arguments: [leak]),
-            backend: IsolationBackends.seatbelt()
+        let result = IsolationBackends.seatbelt().apply(
+            tree.containedDifferingRoot,
+            command: IsolatedCommand(executable: "/usr/bin/touch", arguments: [leak])!
         )
         switch result {
         case .success(let run):
@@ -207,19 +202,6 @@ private func requirePlan(_ request: IsolationCompileRequest) throws -> Isolation
             Issue.record("containment fixture compile must not fail containedRequiresWorkspace")
             throw error
         }
-    }
-}
-
-private func apply(
-    plan: IsolationPlan,
-    command: IsolatedCommand,
-    backend: IsolationBackend
-) -> Result<IsolatedRunResult, IsolationApplyError> {
-    switch backend.prepare(plan, command) {
-    case .success(let request):
-        return backend.run(request)
-    case .failure(let error):
-        return .failure(error)
     }
 }
 

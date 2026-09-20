@@ -24,6 +24,14 @@ import Testing
 /// 11. `platform()` contained prepare on non-Darwin is `backendUnavailable`
 /// 15. non-Darwin `platform()` contained → `backendUnavailable` (same portable
 ///     assertion as 11, plus Darwin `platform().family == .seatbelt`)
+/// 16. `IsolatedCommand` rejects empty / relative executables
+/// 17. `IsolationBackends.apply` establishes observed / mediated without the
+///     caller picking `unavailable()`
+/// 18. `IsolationBackends.apply` of contained without a usable backend/workspace
+///     fails closed
+/// 19. `seatbelt().prepare(observed)` is `profileNotApplicable`
+/// 20. newline workspace compile is `workspacePathUnsafe`
+/// 21. Seatbelt `launchArguments` are `-p` + profile + inner argv
 @Suite("IsolationApply")
 struct IsolationApplyTests {
     @Test func compileSeatbeltProfile_contained_isAllowDefaultWriteLimit_noDenyDefaultOrNetworkDeny()
@@ -276,6 +284,178 @@ struct IsolationApplyTests {
         }
     }
 
+    @Test func isolatedCommand_rejectsEmptyAndRelativeExecutable() {
+        #expect(IsolatedCommand(executable: "") == nil)
+        #expect(IsolatedCommand(executable: "touch") == nil)
+        #expect(IsolatedCommand(executable: "/usr/bin/true") != nil)
+        switch IsolatedCommand.make(executable: "touch") {
+        case .success:
+            Issue.record("relative IsolatedCommand.make must fail")
+        case .failure(let error):
+            switch error {
+            case .commandExecutableMustBeAbsolute:
+                break
+            case .backendUnavailable,
+                .backendMismatch,
+                .workspaceMustBeAbsolute,
+                .workspaceDoesNotExist,
+                .workspacePathUnresolvable,
+                .workspacePathUnsafe,
+                .containedGuaranteesUnsupported,
+                .profileNotApplicable,
+                .processSpawnFailed:
+                Issue.record("relative command must be commandExecutableMustBeAbsolute, got \(error)")
+            }
+        }
+    }
+
+    @Test func apply_observedAndMediated_doNotRequireCallerToPickUnavailable() throws {
+        let workspace = try requireWorkspace("/workspace")
+        let observed = try requirePlan(
+            IsolationCompileRequest(requested: .observed, workspace: workspace)
+        )
+        let mediated = try requirePlan(
+            IsolationCompileRequest(requested: .mediated, workspace: workspace)
+        )
+        switch IsolationBackends.apply(observed, command: trueCommand) {
+        case .success(let result):
+            expectEstablished(result.established, mode: .observed, family: .none)
+            #expect(result.exitStatus == 0)
+        case .failure(let error):
+            recordUnexpectedApplyError(error, expected: "apply observed without picking a factory")
+        }
+        switch IsolationBackends.apply(mediated, command: trueCommand) {
+        case .success(let result):
+            expectEstablished(result.established, mode: .mediated, family: .none)
+            #expect(result.exitStatus == 0)
+        case .failure(let error):
+            recordUnexpectedApplyError(error, expected: "apply mediated without picking a factory")
+        }
+    }
+
+    @Test func apply_contained_withoutUsableWorkspaceOrBackend_failsClosed() throws {
+        let missing = "/no/such/rv-isolation-apply-\(UUID().uuidString)"
+        let workspace = try requireWorkspace(missing)
+        let plan = try requirePlan(
+            IsolationCompileRequest(requested: .contained, workspace: workspace)
+        )
+        switch IsolationBackends.apply(plan, command: trueCommand) {
+        case .success:
+            Issue.record("contained apply without a usable workspace/backend must fail closed")
+        case .failure(let error):
+            #if os(macOS)
+            switch error {
+            case .workspaceDoesNotExist:
+                break
+            case .backendUnavailable,
+                .backendMismatch,
+                .workspaceMustBeAbsolute,
+                .workspacePathUnresolvable,
+                .workspacePathUnsafe,
+                .containedGuaranteesUnsupported,
+                .profileNotApplicable,
+                .processSpawnFailed,
+                .commandExecutableMustBeAbsolute:
+                Issue.record(
+                    "Darwin contained apply of a missing workspace must be workspaceDoesNotExist, got \(error)"
+                )
+            }
+            #else
+            switch error {
+            case .backendUnavailable:
+                break
+            case .backendMismatch,
+                .workspaceMustBeAbsolute,
+                .workspaceDoesNotExist,
+                .workspacePathUnresolvable,
+                .workspacePathUnsafe,
+                .containedGuaranteesUnsupported,
+                .profileNotApplicable,
+                .processSpawnFailed,
+                .commandExecutableMustBeAbsolute:
+                Issue.record(
+                    "non-Darwin contained apply must be backendUnavailable, got \(error)"
+                )
+            }
+            #endif
+        }
+    }
+
+    @Test func seatbelt_prepare_observed_returnsProfileNotApplicable() throws {
+        let workspace = try requireWorkspace("/workspace")
+        let plan = try requirePlan(
+            IsolationCompileRequest(requested: .observed, workspace: workspace)
+        )
+        switch IsolationBackends.seatbelt().prepare(plan, trueCommand) {
+        case .success:
+            Issue.record("seatbelt prepare of observed must not succeed")
+        case .failure(let error):
+            switch error {
+            case .profileNotApplicable:
+                break
+            case .backendUnavailable,
+                .backendMismatch,
+                .workspaceMustBeAbsolute,
+                .workspaceDoesNotExist,
+                .workspacePathUnresolvable,
+                .workspacePathUnsafe,
+                .containedGuaranteesUnsupported,
+                .processSpawnFailed,
+                .commandExecutableMustBeAbsolute:
+                Issue.record("seatbelt observed prepare must be profileNotApplicable, got \(error)")
+            }
+        }
+    }
+
+    @Test func compileSeatbeltProfile_newlineWorkspace_returnsWorkspacePathUnsafe() throws {
+        let workspace = try requireWorkspace("/workspace\noutside")
+        let plan = try requirePlan(
+            IsolationCompileRequest(requested: .contained, workspace: workspace)
+        )
+        switch compileSeatbeltProfile(plan) {
+        case .success:
+            Issue.record("newline workspace must not compile a Seatbelt profile")
+        case .failure(let error):
+            switch error {
+            case .workspacePathUnsafe:
+                break
+            case .backendUnavailable,
+                .backendMismatch,
+                .workspaceMustBeAbsolute,
+                .workspaceDoesNotExist,
+                .workspacePathUnresolvable,
+                .containedGuaranteesUnsupported,
+                .profileNotApplicable,
+                .processSpawnFailed,
+                .commandExecutableMustBeAbsolute:
+                Issue.record("newline workspace must be workspacePathUnsafe, got \(error)")
+            }
+        }
+    }
+
+    @Test func seatbelt_prepare_launchArguments_areSandboxExecProfileAndInnerArgv() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-isolation-launch-argv-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = try requireWorkspace(root.resolvingSymlinksInPath().path)
+        let plan = try requirePlan(
+            IsolationCompileRequest(requested: .contained, workspace: workspace)
+        )
+        switch IsolationBackends.seatbelt().prepare(plan, trueCommand) {
+        case .success(let request):
+            #expect(request.launchExecutable == IsolationBackends.sandboxExecPath)
+            #expect(request.launchExecutable.contains("sandbox-exec"))
+            guard let profile = request.seatbeltProfile else {
+                Issue.record("seatbelt prepare must attach a profile")
+                return
+            }
+            #expect(request.launchArguments == ["-p", profile.source, trueCommand.executable])
+        case .failure(let error):
+            recordUnexpectedApplyError(error, expected: "prepared seatbelt launch argv")
+        }
+    }
+
     @Test func platform_contained_prepare_isBackendUnavailable_onNonDarwin() throws {
         let workspace = try requireWorkspace("/workspace")
         let plan = try requirePlan(
@@ -335,7 +515,7 @@ struct IsolationApplyTests {
     }
 }
 
-private let trueCommand = IsolatedCommand(executable: "/usr/bin/true")
+private let trueCommand = IsolatedCommand(executable: "/usr/bin/true")!
 
 private func requireWorkspace(_ path: String) throws -> WorkingDirectory {
     try #require(WorkingDirectory(validating: path))
@@ -482,33 +662,22 @@ private struct ProbeFixture {
         let inside = resolvedWorkspace.appendingPathComponent("inside").path
         let outside = root.resolvingSymlinksInPath().appendingPathComponent("outside").path
         let childOutside = root.resolvingSymlinksInPath().appendingPathComponent("child-outside").path
-        containedInside = apply(
-            plan: contained,
-            command: touchCommand(inside),
-            backend: IsolationBackends.platform()
-        )
-        containedOutside = apply(
-            plan: contained,
-            command: touchCommand(outside),
-            backend: IsolationBackends.platform()
-        )
-        containedChildOutside = apply(
-            plan: contained,
+        containedInside = IsolationBackends.apply(contained, command: touchCommand(inside))
+        containedOutside = IsolationBackends.apply(contained, command: touchCommand(outside))
+        containedChildOutside = IsolationBackends.apply(
+            contained,
             command: IsolatedCommand(
                 executable: "/bin/sh",
                 arguments: ["-c", "/usr/bin/touch \(childOutside)"]
-            ),
-            backend: IsolationBackends.platform()
+            )!
         )
-        observedOutside = apply(
-            plan: observed,
-            command: touchCommand(outside + "-observed"),
-            backend: IsolationBackends.unavailable()
+        observedOutside = IsolationBackends.apply(
+            observed,
+            command: touchCommand(outside + "-observed")
         )
-        containedUnavailable = apply(
-            plan: contained,
-            command: touchCommand(inside),
-            backend: IsolationBackends.unavailable()
+        containedUnavailable = IsolationBackends.unavailable().apply(
+            contained,
+            command: touchCommand(inside)
         )
     }
 
@@ -518,20 +687,7 @@ private struct ProbeFixture {
 }
 
 private func touchCommand(_ path: String) -> IsolatedCommand {
-    IsolatedCommand(executable: "/usr/bin/touch", arguments: [path])
-}
-
-private func apply(
-    plan: IsolationPlan,
-    command: IsolatedCommand,
-    backend: IsolationBackend
-) -> Result<IsolatedRunResult, IsolationApplyError> {
-    switch backend.prepare(plan, command) {
-    case .success(let request):
-        return backend.run(request)
-    case .failure(let error):
-        return .failure(error)
-    }
+    IsolatedCommand(executable: "/usr/bin/touch", arguments: [path])!
 }
 
 private func probeLine(
