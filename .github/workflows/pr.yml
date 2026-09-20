@@ -133,6 +133,7 @@ jobs:
         run: |
           Scripts/swift-6.4 test --filter RVServiceTests --skip injectedOneSecondIdleFiresWithoutKeepAlive
           Scripts/swift-6.4 test --filter RVCLITests --skip CHookPipeTests.cHookProof
+          Scripts/swift-6.4 test --filter RVIsolationTests
 
       - name: Isolated-HOME oracle
         run: Scripts/host-oracle.sh
