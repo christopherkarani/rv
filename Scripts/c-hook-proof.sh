@@ -338,6 +338,7 @@ reason = obj.get("reason")
 why = canonical[len("RV · Blocked. "):] if canonical.startswith("RV · Blocked. ") else canonical
 minted = re.compile(
     r"^RV · Blocked\. Paste in Terminal to allow once: rv allow-once [0-9a-f]{6}\. "
+    r"This unlocks only this exact command\. "
     + re.escape(why)
     + r"$"
 )
