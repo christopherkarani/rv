@@ -12,7 +12,7 @@
 
 ## 2. Status
 
-Implemented
+Complete
 
 ## 3. Objective
 
@@ -585,3 +585,28 @@ Unchanged from §14. This phase still provides no enforcement.
 ## Acceptance Criteria Final State
 
 All §17 checkboxes are marked done by this implementation. The next planning session still verifies independently.
+
+---
+
+# Planning Verification
+
+## Verification Date
+
+2026-09-20
+
+## Result
+
+Complete
+
+## Verified Against
+
+- implementation
+- tests
+- architecture constraints
+- security invariants
+- enforcement guarantees
+- acceptance criteria
+
+## Notes
+
+Independent planning review of `Sources/RVDomain/AgentRequest.swift`, `AgentNormalization.swift`, `Sources/RVEngine/NormalizeAgentRequest.swift`, `Sources/RVHooks/AgentRequestBridge.swift`, and the three new test files. Focused suites passed on this tree: `AgentRequest` (16), `NormalizeAgentRequest` (7), `OpenCode AgentRequest` (7). `normalizeAgentRequest` calls only `analyzeSemantics`. File/spend/foreign cannot enter `AgentRequest`. Unwrap-limited produces no `ProposedAction` on the agent path. Hook `pendingAction` still drops unwrap-limited via shared `hostDoorShell`. No `ExecutableAction`, isolation backend, CLI launcher, pack evaluate, or `PolicyGate` wiring. Coding-agent deviations (`command` as `String?`, `internal` rather than `package` init, shared helper) preserve the invariants. Status string `Implemented` was not a planning-complete state; this verification is the Complete mark.
