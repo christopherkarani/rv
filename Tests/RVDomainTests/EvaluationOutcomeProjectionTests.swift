@@ -4,8 +4,6 @@ import Testing
 struct EvaluationOutcomeProjectionTests {
     private let gitMatch = RuleMatch(
         ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
-        packID: .coreGit,
-        patternName: "reset-hard",
         severity: .critical,
         reason: "destroys uncommitted changes"
     )

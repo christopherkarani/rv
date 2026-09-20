@@ -321,7 +321,6 @@ private func scanFindingRow(from finding: ScanFinding, showCommand: Bool) -> Sca
         sourcePath: finding.sourcePath,
         occurredAt: finding.occurredAt,
         ruleID: finding.ruleID,
-        packID: finding.packID,
         matchingView: finding.matchingView,
         count: finding.count,
         lastSeen: finding.lastSeen,

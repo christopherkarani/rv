@@ -27,8 +27,6 @@ private func denyResult(
             Deny(ruleID: rule, reason: reason),
             matched: RuleMatch(
                 ruleID: rule,
-                packID: rule.pack,
-                patternName: pattern,
                 severity: .critical,
                 reason: reason
             )
@@ -42,8 +40,6 @@ private func mediumAllow() -> EvaluationResult {
         outcome: .hit(
             RuleMatch(
                 ruleID: rule,
-                packID: .coreGit,
-                patternName: "stash-drop",
                 severity: .medium,
                 reason: "git stash drop deletes a single stash"
             ),
@@ -105,8 +101,6 @@ private func mediumAllow() -> EvaluationResult {
             Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: reason),
             matched: RuleMatch(
                 ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
-                packID: .coreGit,
-                patternName: "reset-hard",
                 severity: .critical,
                 reason: reason,
                 explanation: resetHardExplanation,
@@ -228,8 +222,6 @@ private func mediumAllow() -> EvaluationResult {
                 Deny(ruleID: rule, reason: reason),
                 matched: RuleMatch(
                     ruleID: rule,
-                    packID: .coreGit,
-                    patternName: "reset-hard",
                     severity: .critical,
                     reason: reason,
                     explanation: essay,
@@ -379,8 +371,6 @@ private func mediumAllow() -> EvaluationResult {
                 leftover,
                 matched: RuleMatch(
                     ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
-                    packID: .coreGit,
-                    patternName: "reset-hard",
                     severity: .critical,
                     reason: leftover.reason
                 )

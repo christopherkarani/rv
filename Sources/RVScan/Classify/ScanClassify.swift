@@ -87,7 +87,6 @@ public struct ScanClassify: Sendable {
                     sourcePath: event.sourcePath,
                     occurredAt: event.occurredAt,
                     ruleID: deny.ruleID,
-                    packID: deny.ruleID.pack,
                     matchingView: result.matchingView,
                     count: 1,
                     lastSeen: event.occurredAt

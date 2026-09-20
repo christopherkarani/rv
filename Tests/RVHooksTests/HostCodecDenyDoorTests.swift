@@ -7,8 +7,6 @@ import RVDomain
     let command = ShellCommand(rawValue: "git reset --hard")
     let match = RuleMatch(
         ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
-        packID: .coreGit,
-        patternName: "reset-hard",
         severity: .critical,
         reason: "git reset --hard destroys uncommitted changes. Use 'git stash' first.",
         explanation: "Discards every uncommitted change."
@@ -189,8 +187,6 @@ private func secretsEnvFileDeny() -> EvaluationResult {
     let ruleID = RuleID(pack: .coreSecrets, pattern: "env")
     let matched = RuleMatch(
         ruleID: ruleID,
-        packID: .coreSecrets,
-        patternName: "env",
         severity: .high,
         reason: reason
     )

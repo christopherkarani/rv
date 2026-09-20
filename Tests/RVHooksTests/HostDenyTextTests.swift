@@ -54,8 +54,6 @@ func assertMintedHookUnlock(_ text: String, why: String = resetHardHostDeny) thr
         outcome: .hit(
             RuleMatch(
                 ruleID: rule,
-                packID: .coreGit,
-                patternName: "stash-drop",
                 severity: .medium,
                 reason: "git stash drop deletes a single stash"
             ),

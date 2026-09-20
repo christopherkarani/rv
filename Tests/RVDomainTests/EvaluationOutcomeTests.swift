@@ -25,8 +25,6 @@ private enum GoldenFrame {
 
 private let goldenMatch = RuleMatch(
     ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
-    packID: .coreGit,
-    patternName: "reset-hard",
     severity: .critical,
     reason: "git reset --hard destroys uncommitted changes",
     explanation: "Discards every uncommitted change.",
@@ -197,6 +195,57 @@ struct EvaluationResultWireTests {
             #expect(throws: EvaluationResultDecodingError.self) {
                 try decode(frame)
             }
+        }
+    }
+
+    @Test("RuleMatch decode throws when packID disagrees with ruleID")
+    func ruleMatchDecodeRejectsDisagreeingPackID() {
+        let frame =
+            #"{"ruleID":"core.git:reset-hard","packID":"core.filesystem","patternName":"reset-hard","severity":"critical","reason":"x"}"#
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(RuleMatch.self, from: Data(frame.utf8))
+        }
+    }
+
+    @Test("RuleMatch decode throws when patternName disagrees with ruleID")
+    func ruleMatchDecodeRejectsDisagreeingPatternName() {
+        let frame =
+            #"{"ruleID":"core.git:reset-hard","packID":"core.git","patternName":"rm-rf","severity":"critical","reason":"x"}"#
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(RuleMatch.self, from: Data(frame.utf8))
+        }
+    }
+
+    @Test("RuleMatch init projects pack and pattern from ruleID")
+    func ruleMatchInitProjectsIdentityFromRuleID() {
+        let ruleID = RuleID(pack: .coreGit, pattern: "reset-hard")
+        let match = RuleMatch(
+            ruleID: ruleID,
+            severity: .critical,
+            reason: "destroys uncommitted changes"
+        )
+        #expect(match.packID == ruleID.pack)
+        #expect(match.patternName == ruleID.pattern)
+        #expect(match.packID == .coreGit)
+        #expect(match.patternName == "reset-hard")
+    }
+
+    @Test("golden hit and deny frames keep agreeing identity keys")
+    func goldenFramesKeepAgreeingIdentityKeys() throws {
+        for frame in [GoldenFrame.hitWithSafe, GoldenFrame.deny] {
+            let decoded = try decode(frame)
+            let match = try #require(decoded.outcome.matched)
+            #expect(match.packID == match.ruleID.pack)
+            #expect(match.patternName == match.ruleID.pattern)
+            #expect(match.ruleID.rawValue == "core.git:reset-hard")
+            #expect(match.packID == .coreGit)
+            #expect(match.patternName == "reset-hard")
+
+            let encoded = try JSONEncoder().encode(match)
+            let object = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+            #expect(object["ruleID"] as? String == "core.git:reset-hard")
+            #expect(object["packID"] as? String == "core.git")
+            #expect(object["patternName"] as? String == "reset-hard")
         }
     }
 

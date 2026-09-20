@@ -42,8 +42,6 @@ enum SecretPathGuard {
                 let ruleID = RuleID(pack: .coreSecrets, pattern: rule.pattern)
                 return RuleMatch(
                     ruleID: ruleID,
-                    packID: .coreSecrets,
-                    patternName: rule.pattern,
                     severity: .high,
                     reason: rule.reason,
                     regex: nil,

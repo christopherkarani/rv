@@ -40,8 +40,6 @@ private func pinnedSecretDeny(
     let ruleID = RuleID(pack: .coreSecrets, pattern: pattern)
     let matched = RuleMatch(
         ruleID: ruleID,
-        packID: .coreSecrets,
-        patternName: pattern,
         severity: .high,
         reason: catalogReason,
         regex: nil,

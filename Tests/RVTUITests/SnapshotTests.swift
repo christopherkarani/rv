@@ -37,8 +37,6 @@ private func resetHardTest() -> TestViewModel {
                 Deny(ruleID: rule, reason: reason),
                 matched: RuleMatch(
                     ruleID: rule,
-                    packID: .coreGit,
-                    patternName: "reset-hard",
                     severity: .critical,
                     reason: reason,
                     explanation: resetHardPackExplanation,
@@ -61,8 +59,6 @@ private func rmRfTest() -> TestViewModel {
                 Deny(ruleID: rule, reason: reason),
                 matched: RuleMatch(
                     ruleID: rule,
-                    packID: .coreFilesystem,
-                    patternName: "rm-rf-general",
                     severity: .high,
                     reason: reason,
                     explanation: rmRfPackExplanation,
@@ -137,8 +133,6 @@ git reset --hard discards ALL uncommitted changes in your working directory \\ A
                 ),
                 matched: RuleMatch(
                     ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
-                    packID: .coreGit,
-                    patternName: "reset-hard",
                     severity: .critical,
                     reason: "git reset --hard destroys uncommitted changes. Use 'git stash' first.",
                     explanation: resetHardPackExplanation,

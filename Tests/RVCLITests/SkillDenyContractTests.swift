@@ -46,8 +46,6 @@ private func cannedDenyResult(command: String, ruleID: RuleID, reason: String) -
             Deny(ruleID: ruleID, reason: reason),
             matched: RuleMatch(
                 ruleID: ruleID,
-                packID: ruleID.pack,
-                patternName: ruleID.pattern,
                 severity: .critical,
                 reason: reason,
                 span: MatchSpan(start: 0, end: command.count),

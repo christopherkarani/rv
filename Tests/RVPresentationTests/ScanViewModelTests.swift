@@ -16,7 +16,6 @@ private func sampleRow(
         sourcePath: "/tmp/fixture/session.jsonl",
         occurredAt: Date(timeIntervalSince1970: 1_724_000_000),
         ruleID: resetHardRule,
-        packID: .coreGit,
         matchingView: MatchingView(command),
         count: count,
         lastSeen: Date(timeIntervalSince1970: 1_724_100_000),
@@ -34,6 +33,8 @@ private func sampleRow(
 @Test func scanFindingRow_redactsByDefault() {
     let row = sampleRow()
     #expect(row.ruleLabel == "core.git:reset-hard")
+    #expect(row.packID == row.ruleID.pack)
+    #expect(row.packID == .coreGit)
     #expect(row.commandDisplay == "git …")
     #expect(row.host == .claude)
     #expect(row.count == 1)
