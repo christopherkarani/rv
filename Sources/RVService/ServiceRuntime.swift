@@ -241,7 +241,10 @@ public actor ServiceRuntime {
             if Self.isMajorSkewed(params.clientSemver) {
                 result = .error(.protocolSkew(.majorVersion))
             } else {
-                result = await makeHookEvaluateResult(params)
+                switch await makeHookEvaluateResult(params) {
+                case .success(let reply): result = .hookEvaluate(reply)
+                case .failure(let error): result = .error(error)
+                }
             }
         case .explain(let params):
             result = .explain(await explain(params))
@@ -250,26 +253,44 @@ public actor ServiceRuntime {
         case .listPacks:
             result = .listPacks(listPacks())
         case .setPackEnabled(let params):
-            result = setPackEnabled(params)
+            switch setPackEnabled(params) {
+            case .success(let reply): result = .setPackEnabled(reply)
+            case .failure(let error): result = .error(error)
+            }
         case .doctorSnapshot:
             result = .doctorSnapshot(doctorSnapshot())
         case .pendingList:
-            result = await approvals.pendingListResult()
+            switch await approvals.pendingListResult() {
+            case .success(let reply): result = .pendingList(reply)
+            case .failure(let error): result = .error(error)
+            }
         case .pendingWatch(let params):
-            result = await approvals.pendingWatchResult(afterGeneration: params.afterGeneration)
+            switch await approvals.pendingWatchResult(afterGeneration: params.afterGeneration) {
+            case .success(let reply): result = .pendingWatch(reply)
+            case .failure(let error): result = .error(error)
+            }
         case .pendingResolve(let params):
-            result = await approvals.pendingResolveResult(
+            switch await approvals.pendingResolveResult(
                 params,
                 peek: ApprovalRuntime.livePeek(
                     home: configHome,
                     store: allowOnce,
                     gated: { await self.currentGated() }
                 )
-            )
+            ) {
+            case .success(let reply): result = .pendingResolve(reply)
+            case .failure(let error): result = .error(error)
+            }
         case .rulePreview(let params):
-            result = await approvals.rulePreviewResult(params)
+            switch await approvals.rulePreviewResult(params) {
+            case .success(let reply): result = .rulePreview(reply)
+            case .failure(let error): result = .error(error)
+            }
         case .ruleSave(let params):
-            result = await approvals.ruleSaveResult(params)
+            switch await approvals.ruleSaveResult(params) {
+            case .success(let reply): result = .ruleSave(reply)
+            case .failure(let error): result = .error(error)
+            }
         }
         logIfNeeded(request: request, result: result, started: started)
         return IPCResponse(id: request.id, result: result)
@@ -283,7 +304,9 @@ public actor ServiceRuntime {
         EvaluateReply(result: await runEvaluate(request, cwd: cwd))
     }
 
-    private func makeHookEvaluateResult(_ params: HookEvaluateParams) async -> IPCResult {
+    private func makeHookEvaluateResult(
+        _ params: HookEvaluateParams
+    ) async -> Result<HookEvaluateReply, IPCError> {
         do {
             rebuildWhenUncovered(wanted: EvaluationWorld.walkedPackIDs(home: configHome))
             let reply = try await HookDoor.run(
@@ -297,11 +320,11 @@ public actor ServiceRuntime {
                     recordDecision: analyticsRecorder()
                 )
             )
-            return .hookEvaluate(reply)
+            return .success(reply)
         } catch let error as IPCError {
-            return .error(error)
+            return .failure(error)
         } catch {
-            return .error(.hookEvaluateFailed)
+            return .failure(.hookEvaluateFailed)
         }
     }
 
@@ -422,9 +445,9 @@ public actor ServiceRuntime {
         return ClassifyReply(result: result, suggestions: suggestions)
     }
 
-    private func setPackEnabled(_ params: SetPackEnabledParams) -> IPCResult {
+    private func setPackEnabled(_ params: SetPackEnabledParams) -> Result<SetPackEnabledReply, IPCError> {
         guard let configHome else {
-            return .error(.packEnableFailed)
+            return .failure(.packEnableFailed)
         }
         do {
             if params.enabled {
@@ -434,7 +457,7 @@ public actor ServiceRuntime {
             }
             catalog = try PacksFacade.makeCatalog(home: configHome)
             guard let updated = catalog.records.first(where: { $0.id == params.id }) else {
-                return .error(.packNotFound(params.id))
+                return .failure(.packNotFound(params.id))
             }
             rebuildGated()
             lastUncoveredWanted = []
@@ -445,15 +468,15 @@ public actor ServiceRuntime {
                     await analytics.noteEnabledPacks(packs)
                 }
             }
-            return .setPackEnabled(
+            return .success(
                 SetPackEnabledReply(
                     pack: PackRecord(id: updated.id, enabled: updated.isEnabled, bundled: updated.isBundled)
                 )
             )
         } catch PacksCommandError.unknownID {
-            return .error(.packNotFound(params.id))
+            return .failure(.packNotFound(params.id))
         } catch {
-            return .error(.packEnableFailed)
+            return .failure(.packEnableFailed)
         }
     }
 
