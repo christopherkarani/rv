@@ -41,29 +41,29 @@ actor ApprovalRuntime {
         }
     }
 
-    func pendingListResult() async -> IPCResult {
+    func pendingListResult() async -> Result<PendingListReply, IPCError> {
         do {
-            return .pendingList(try await makePendingListReply())
+            return .success(try await makePendingListReply())
         } catch {
-            return .error(PendingListProjection.ipcError(from: error))
+            return .failure(PendingListProjection.ipcError(from: error))
         }
     }
 
-    func pendingWatchResult(afterGeneration: UInt64) async -> IPCResult {
+    func pendingWatchResult(afterGeneration: UInt64) async -> Result<PendingWatchReply, IPCError> {
         do {
             let reply = try await makePendingListReply()
             if afterGeneration == reply.generation {
-                return .pendingWatch(PendingListReply(generation: reply.generation, items: []))
+                return .success(PendingWatchReply(generation: reply.generation, items: []))
             }
-            return .pendingWatch(reply)
+            return .success(reply)
         } catch {
-            return .error(PendingListProjection.ipcError(from: error))
+            return .failure(PendingListProjection.ipcError(from: error))
         }
     }
 
-    func rulePreviewResult(_ params: RulePreviewParams) async -> IPCResult {
+    func rulePreviewResult(_ params: RulePreviewParams) async -> Result<RulePreviewReply, IPCError> {
         guard let pendingApprovals else {
-            return .error(PendingListProjection.coordinatorUnavailable)
+            return .failure(PendingListProjection.coordinatorUnavailable)
         }
         do {
             let record = try await pendingApprovals.load(id: params.id, now: clock())
@@ -71,7 +71,7 @@ actor ApprovalRuntime {
                 record: record,
                 polarity: pinnedPolarity(params.polarity)
             )
-            return .rulePreview(
+            return .success(
                 RulePreviewReply(
                     sentence: preview.sentence,
                     draft: preview.draft,
@@ -79,13 +79,13 @@ actor ApprovalRuntime {
                 )
             )
         } catch {
-            return .error(PendingListProjection.ipcError(from: error))
+            return .failure(PendingListProjection.ipcError(from: error))
         }
     }
 
-    func ruleSaveResult(_ params: RuleSaveParams) async -> IPCResult {
+    func ruleSaveResult(_ params: RuleSaveParams) async -> Result<RuleSaveReply, IPCError> {
         guard let pendingApprovals else {
-            return .error(PendingListProjection.coordinatorUnavailable)
+            return .failure(PendingListProjection.coordinatorUnavailable)
         }
         let polarity = pinnedPolarity(params.polarity)
         do {
@@ -114,36 +114,36 @@ actor ApprovalRuntime {
                 case .resolved, .consumed, .expired, .canceled, .timedOut:
                     terminal = true
                 }
-                return .ruleSave(RuleSaveReply(ruleID: outcome.ruleID, waitResolved: terminal))
+                return .success(RuleSaveReply(ruleID: outcome.ruleID, waitResolved: terminal))
             } catch let error as PendingApprovalError {
                 switch error {
                 case .alreadyResolved, .alreadyConsumed, .expired, .canceled, .timedOut:
-                    return .ruleSave(RuleSaveReply(ruleID: outcome.ruleID, waitResolved: true))
+                    return .success(RuleSaveReply(ruleID: outcome.ruleID, waitResolved: true))
                 case .notFound, .invalidRequest, .duplicateID, .fingerprintMismatch, .identityMismatch,
                     .continuationMismatch, .notResolved, .encodeFailed, .lockFailed:
-                    return .error(PendingListProjection.ipcError(from: error))
+                    return .failure(PendingListProjection.ipcError(from: error))
                 }
             }
         } catch let error as RulePinError {
             switch error {
             case .draftMismatch:
-                return .error(.ruleDraftMismatch)
+                return .failure(.ruleDraftMismatch)
             case .hardStop:
-                return .error(.ruleHardStop)
+                return .failure(.ruleHardStop)
             case .missingMatchingView:
-                return .error(.rulePinRequiresMatchingView)
+                return .failure(.rulePinRequiresMatchingView)
             }
         } catch {
-            return .error(PendingListProjection.ipcError(from: error))
+            return .failure(PendingListProjection.ipcError(from: error))
         }
     }
 
     func pendingResolveResult(
         _ params: PendingResolveParams,
         peek: @escaping @Sendable (ShellCommand, WorkingDirectory?, Date) async -> EvaluationResult
-    ) async -> IPCResult {
+    ) async -> Result<PendingResolveReply, IPCError> {
         guard let pendingApprovals else {
-            return .error(PendingListProjection.coordinatorUnavailable)
+            return .failure(PendingListProjection.coordinatorUnavailable)
         }
         switch params.decision {
         case .allowOnce:
@@ -161,22 +161,22 @@ actor ApprovalRuntime {
         _ params: PendingResolveParams,
         store: any PendingApprovalCoordinating,
         peek: @escaping @Sendable (ShellCommand, WorkingDirectory?, Date) async -> EvaluationResult
-    ) async -> IPCResult {
+    ) async -> Result<PendingResolveReply, IPCError> {
         let now = clock()
         let record: PendingApproval
         do {
             record = try await store.load(id: params.id, now: now)
         } catch {
-            return .error(PendingListProjection.ipcError(from: error))
+            return .failure(PendingListProjection.ipcError(from: error))
         }
         switch record.state {
         case .awaitingHuman:
             break
         case .resolved, .consumed, .expired, .canceled, .timedOut:
-            return .error(.pendingAlreadyTerminal)
+            return .failure(.pendingAlreadyTerminal)
         }
         guard record.fingerprint == params.fingerprint, record.identity == params.identity else {
-            return .error(
+            return .failure(
                 PendingListProjection.ipcError(
                     from: record.fingerprint == params.fingerprint
                         ? PendingApprovalError.identityMismatch
@@ -186,7 +186,7 @@ actor ApprovalRuntime {
         }
         let cwd = record.action.scope.workingDirectory
         guard let command = record.action.supportingCommand else {
-            return .error(.pendingAllowOnceNotUnlockable)
+            return .failure(.pendingAllowOnceNotUnlockable)
         }
         let pause = HostNativeAsk.resolve(
             host: record.identity.agent,
@@ -208,7 +208,7 @@ actor ApprovalRuntime {
             cwd: cwd
         ) {
         case .denyOrTTY, .ledgerDeny, .spend(.refuse):
-            return .error(.pendingAllowOnceNotUnlockable)
+            return .failure(.pendingAllowOnceNotUnlockable)
         case .spend(.resolveWithoutGrant):
             return await resolvePendingDecision(
                 params,
@@ -217,14 +217,17 @@ actor ApprovalRuntime {
                 now: now
             )
         case .spend(.plant(let matchingView, let grantCwd)):
-            let resolved = await resolvePendingDecision(
+            let reply: PendingResolveReply
+            switch await resolvePendingDecision(
                 params,
                 decision: .allowOnce,
                 store: store,
                 now: now
-            )
-            guard case .pendingResolve = resolved else {
-                return resolved
+            ) {
+            case .success(let resolved):
+                reply = resolved
+            case .failure(let error):
+                return .failure(error)
             }
             do {
                 try await allowOnce.insertGranted(
@@ -239,7 +242,7 @@ actor ApprovalRuntime {
                     identity: params.identity,
                     now: now
                 )
-                return .error(.pendingAllowOnceNotUnlockable)
+                return .failure(.pendingAllowOnceNotUnlockable)
             }
             do {
                 _ = try await store.consume(
@@ -249,9 +252,9 @@ actor ApprovalRuntime {
                     now: now
                 )
             } catch {
-                return .error(PendingListProjection.ipcError(from: error))
+                return .failure(PendingListProjection.ipcError(from: error))
             }
-            return resolved
+            return .success(reply)
         }
     }
 
@@ -260,7 +263,7 @@ actor ApprovalRuntime {
         decision: ApprovalDecision,
         store: any PendingApprovalCoordinating,
         now: Date? = nil
-    ) async -> IPCResult {
+    ) async -> Result<PendingResolveReply, IPCError> {
         do {
             let resolved = try await store.resolve(
                 id: params.id,
@@ -269,11 +272,11 @@ actor ApprovalRuntime {
                 identity: params.identity,
                 now: now ?? clock()
             )
-            return .pendingResolve(
+            return .success(
                 PendingResolveReply(id: resolved.id, terminal: isTerminal(resolved.state))
             )
         } catch {
-            return .error(PendingListProjection.ipcError(from: error))
+            return .failure(PendingListProjection.ipcError(from: error))
         }
     }
 
