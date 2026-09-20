@@ -247,8 +247,6 @@ private func grokDenyObject(_ stdout: String) throws -> GrokDenyObject {
                         Deny(ruleID: ruleID, reason: reason),
                         matched: RuleMatch(
                             ruleID: ruleID,
-                            packID: .coreSecrets,
-                            patternName: "env",
                             severity: .high,
                             reason: reason
                         )

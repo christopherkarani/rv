@@ -63,8 +63,6 @@ struct ExplainPipelineTests {
                     outcome: .hit(
                         RuleMatch(
                             ruleID: rule,
-                            packID: .coreGit,
-                            patternName: "stash-drop",
                             severity: .medium,
                             reason: "git stash drop deletes a single stash"
                         ),
@@ -90,8 +88,6 @@ struct ExplainPipelineTests {
                     outcome: .hit(
                         RuleMatch(
                             ruleID: match,
-                            packID: .coreGit,
-                            patternName: "stash-drop",
                             severity: .medium,
                             reason: "git stash drop deletes a single stash"
                         ),
@@ -129,8 +125,6 @@ struct ExplainPipelineTests {
                     Deny(ruleID: rule, reason: "blocked"),
                     matched: RuleMatch(
                         ruleID: rule,
-                        packID: .coreGit,
-                        patternName: "reset-hard",
                         severity: .critical,
                         reason: "blocked"
                     )

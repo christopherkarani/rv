@@ -81,8 +81,6 @@ import RVDomain
 func hookWire_samePathHosts_resetHardIsShortDeny(_ host: HookHost) throws {
     let match = RuleMatch(
         ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
-        packID: .coreGit,
-        patternName: "reset-hard",
         severity: .critical,
         reason: "git reset --hard destroys uncommitted changes. Use 'git stash' first.",
         explanation: "Discards every uncommitted change."
@@ -208,8 +206,6 @@ func hookWire_samePathHosts_resetHardIsShortDeny(_ host: HookHost) throws {
     let resetHard = ShellCommand(rawValue: "git reset --hard")
     let match = RuleMatch(
         ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
-        packID: .coreGit,
-        patternName: "reset-hard",
         severity: .critical,
         reason: "git reset --hard destroys uncommitted changes. Use 'git stash' first.",
         explanation: "Discards every uncommitted change."
@@ -543,8 +539,6 @@ private final class EncodeDoorSpy: HostAskCodec, @unchecked Sendable {
 @Test func hookWire_mintedUnlockCodeOnClaudeCodexCursorDeny() throws {
     let match = RuleMatch(
         ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
-        packID: .coreGit,
-        patternName: "reset-hard",
         severity: .critical,
         reason: "git reset --hard destroys uncommitted changes. Use 'git stash' first.",
         explanation: "Discards every uncommitted change."

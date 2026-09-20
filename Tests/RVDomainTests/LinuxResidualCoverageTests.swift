@@ -276,8 +276,6 @@ struct LinuxResidualCoverageTests {
     @Test func evaluationOutcome_composingResidualsAndDecodeErrorText() {
         let match = RuleMatch(
             ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
-            packID: .coreGit,
-            patternName: "reset-hard",
             severity: .critical,
             reason: "x"
         )

@@ -8,7 +8,7 @@ public struct ScanFinding: Sendable, Equatable {
     public var sourcePath: String
     public var occurredAt: Date?
     public var ruleID: RuleID
-    public var packID: PackID
+    public var packID: PackID { ruleID.pack }
     public var matchingView: MatchingView
     public var count: Int
     public var lastSeen: Date?
@@ -19,7 +19,6 @@ public struct ScanFinding: Sendable, Equatable {
         sourcePath: String,
         occurredAt: Date? = nil,
         ruleID: RuleID,
-        packID: PackID,
         matchingView: MatchingView,
         count: Int = 1,
         lastSeen: Date? = nil
@@ -29,7 +28,6 @@ public struct ScanFinding: Sendable, Equatable {
         self.sourcePath = sourcePath
         self.occurredAt = occurredAt
         self.ruleID = ruleID
-        self.packID = packID
         self.matchingView = matchingView
         self.count = count
         self.lastSeen = lastSeen

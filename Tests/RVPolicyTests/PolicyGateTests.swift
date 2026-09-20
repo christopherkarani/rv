@@ -282,8 +282,6 @@ private func resetHardDenyWithMatch() -> EvaluationResult {
             Deny(ruleID: ruleID, reason: "git reset --hard destroys uncommitted changes"),
             matched: RuleMatch(
                 ruleID: ruleID,
-                packID: .coreGit,
-                patternName: "reset-hard",
                 severity: .critical,
                 reason: "git reset --hard destroys uncommitted changes"
             )

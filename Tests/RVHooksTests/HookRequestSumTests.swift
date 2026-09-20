@@ -221,8 +221,6 @@ private final class DoorProbe: @unchecked Sendable {
                     Deny(ruleID: ruleID, reason: rule.reason),
                     matched: RuleMatch(
                         ruleID: ruleID,
-                        packID: .coreSecrets,
-                        patternName: rule.pattern,
                         severity: .high,
                         reason: rule.reason
                     )

@@ -247,8 +247,6 @@ private func evaluateSingle<E: PatternEngine>(
             )
             let match = RuleMatch(
                 ruleID: RuleID(pack: pack.snapshot.id, pattern: rule.rule.name),
-                packID: pack.snapshot.id,
-                patternName: rule.rule.name,
                 severity: rule.rule.severity,
                 reason: rule.rule.reason,
                 explanation: rule.rule.explanation,

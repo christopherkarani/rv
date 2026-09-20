@@ -128,8 +128,20 @@ public struct ClassifyReply: Sendable, Equatable, Codable {
         let siblingPackID = try container.decodeIfPresent(PackID.self, forKey: .packID)
         switch decision {
         case .allow:
-            ruleID = siblingRuleID
-            packID = siblingPackID
+            if let siblingRuleID {
+                if let siblingPackID, siblingPackID != siblingRuleID.pack {
+                    throw DecodingError.dataCorruptedError(
+                        forKey: .packID,
+                        in: container,
+                        debugDescription: "ClassifyReply packID must equal ruleID.pack"
+                    )
+                }
+                ruleID = siblingRuleID
+                packID = siblingRuleID.pack
+            } else {
+                ruleID = nil
+                packID = siblingPackID
+            }
         case .deny(let deny):
             ruleID = deny.ruleID
             packID = deny.ruleID.pack

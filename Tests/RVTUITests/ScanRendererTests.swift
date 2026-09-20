@@ -15,7 +15,6 @@ private func sampleModel(showsCommand: Bool = false) -> ScanViewModel {
                 sessionID: "sess-1",
                 sourcePath: "/tmp/fixture/session.jsonl",
                 ruleID: resetHardRule,
-                packID: .coreGit,
                 matchingView: MatchingView("git reset --hard"),
                 count: 3,
                 showsCommand: showsCommand
@@ -24,7 +23,6 @@ private func sampleModel(showsCommand: Bool = false) -> ScanViewModel {
                 host: .pi,
                 sourcePath: "/tmp/pi/session.jsonl",
                 ruleID: RuleID(pack: .coreFilesystem, pattern: "rm-rf-general"),
-                packID: .coreFilesystem,
                 matchingView: MatchingView("rm -rf ./src"),
                 showsCommand: showsCommand
             ),
@@ -135,7 +133,6 @@ private func sampleModel(showsCommand: Bool = false) -> ScanViewModel {
                 host: .claude,
                 sourcePath: "/tmp/fixture/session.jsonl",
                 ruleID: resetHardRule,
-                packID: .coreGit,
                 matchingView: MatchingView("git reset --hard"),
                 showsCommand: false
             ),
@@ -169,7 +166,6 @@ private func sampleModel(showsCommand: Bool = false) -> ScanViewModel {
                 host: .claude,
                 sourcePath: "/tmp/fixture/session.jsonl",
                 ruleID: resetHardRule,
-                packID: .coreGit,
                 matchingView: MatchingView("git reset --hard"),
                 showsCommand: false
             ),

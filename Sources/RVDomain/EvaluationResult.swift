@@ -10,8 +10,8 @@ public struct MatchSpan: Sendable, Equatable, Codable {
 
 public struct RuleMatch: Sendable, Equatable, Codable {
     public var ruleID: RuleID
-    public var packID: PackID
-    public var patternName: String
+    public var packID: PackID { ruleID.pack }
+    public var patternName: String { ruleID.pattern }
     public var severity: Severity
     public var reason: String
     public var explanation: String?
@@ -22,8 +22,6 @@ public struct RuleMatch: Sendable, Equatable, Codable {
 
     public init(
         ruleID: RuleID,
-        packID: PackID,
-        patternName: String,
         severity: Severity,
         reason: String,
         explanation: String? = nil,
@@ -33,8 +31,6 @@ public struct RuleMatch: Sendable, Equatable, Codable {
         searchText: String? = nil
     ) {
         self.ruleID = ruleID
-        self.packID = packID
-        self.patternName = patternName
         self.severity = severity
         self.reason = reason
         self.explanation = explanation
@@ -42,6 +38,63 @@ public struct RuleMatch: Sendable, Equatable, Codable {
         self.span = span
         self.matchedText = matchedText
         self.searchText = searchText
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case ruleID
+        case packID
+        case patternName
+        case severity
+        case reason
+        case explanation
+        case regex
+        case span
+        case matchedText
+        case searchText
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        ruleID = try container.decode(RuleID.self, forKey: .ruleID)
+        if let packID = try container.decodeIfPresent(PackID.self, forKey: .packID),
+           packID != ruleID.pack
+        {
+            throw DecodingError.dataCorruptedError(
+                forKey: .packID,
+                in: container,
+                debugDescription: "RuleMatch packID must equal ruleID.pack"
+            )
+        }
+        if let patternName = try container.decodeIfPresent(String.self, forKey: .patternName),
+           patternName != ruleID.pattern
+        {
+            throw DecodingError.dataCorruptedError(
+                forKey: .patternName,
+                in: container,
+                debugDescription: "RuleMatch patternName must equal ruleID.pattern"
+            )
+        }
+        severity = try container.decode(Severity.self, forKey: .severity)
+        reason = try container.decode(String.self, forKey: .reason)
+        explanation = try container.decodeIfPresent(String.self, forKey: .explanation)
+        regex = try container.decodeIfPresent(String.self, forKey: .regex)
+        span = try container.decodeIfPresent(MatchSpan.self, forKey: .span)
+        matchedText = try container.decodeIfPresent(String.self, forKey: .matchedText)
+        searchText = try container.decodeIfPresent(String.self, forKey: .searchText)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(ruleID, forKey: .ruleID)
+        try container.encode(packID, forKey: .packID)
+        try container.encode(patternName, forKey: .patternName)
+        try container.encode(severity, forKey: .severity)
+        try container.encode(reason, forKey: .reason)
+        try container.encodeIfPresent(explanation, forKey: .explanation)
+        try container.encodeIfPresent(regex, forKey: .regex)
+        try container.encodeIfPresent(span, forKey: .span)
+        try container.encodeIfPresent(matchedText, forKey: .matchedText)
+        try container.encodeIfPresent(searchText, forKey: .searchText)
     }
 }
 

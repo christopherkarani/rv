@@ -54,8 +54,6 @@ private func stripCSI(_ text: String) -> String {
                 Deny(ruleID: rule, reason: "git reset --hard destroys uncommitted changes"),
                 matched: RuleMatch(
                     ruleID: rule,
-                    packID: .coreGit,
-                    patternName: "reset-hard",
                     severity: .critical,
                     reason: "git reset --hard destroys uncommitted changes",
                     span: MatchSpan(start: 0, end: 16),
@@ -94,8 +92,6 @@ git reset --hard discards ALL uncommitted changes in your working directory \\ A
                 Deny(ruleID: rule, reason: reason),
                 matched: RuleMatch(
                     ruleID: rule,
-                    packID: .coreGit,
-                    patternName: "reset-hard",
                     severity: .critical,
                     reason: reason,
                     explanation: resetHardExplanation,
@@ -158,8 +154,6 @@ private func isTreeSpacer(_ line: String) -> Bool {
                 Deny(ruleID: rule, reason: "git reset --hard destroys uncommitted changes"),
                 matched: RuleMatch(
                     ruleID: rule,
-                    packID: .coreGit,
-                    patternName: "reset-hard",
                     severity: .critical,
                     reason: "git reset --hard destroys uncommitted changes",
                     explanation: resetHardExplanation
@@ -199,8 +193,6 @@ private func isTreeSpacer(_ line: String) -> Bool {
                 Deny(ruleID: rule, reason: "git reset --hard destroys uncommitted changes"),
                 matched: RuleMatch(
                     ruleID: rule,
-                    packID: .coreGit,
-                    patternName: "reset-hard",
                     severity: .critical,
                     reason: "git reset --hard destroys uncommitted changes",
                     regex: regex
@@ -261,8 +253,6 @@ private func isTreeSpacer(_ line: String) -> Bool {
                 Deny(ruleID: rule, reason: "rm -rf is destructive and requires human approval."),
                 matched: RuleMatch(
                     ruleID: rule,
-                    packID: .coreFilesystem,
-                    patternName: "rm-rf-general",
                     severity: .high,
                     reason: "rm -rf is destructive and requires human approval.",
                     span: MatchSpan(start: command.count - 12, end: command.count - 6),
@@ -289,8 +279,6 @@ private func isTreeSpacer(_ line: String) -> Bool {
                 Deny(ruleID: rule, reason: "git reset --hard destroys uncommitted changes"),
                 matched: RuleMatch(
                     ruleID: rule,
-                    packID: .coreGit,
-                    patternName: "reset-hard",
                     severity: .critical,
                     reason: "git reset --hard destroys uncommitted changes",
                     span: MatchSpan(start: 0, end: command.count),
@@ -319,8 +307,6 @@ private func isTreeSpacer(_ line: String) -> Bool {
                 Deny(ruleID: rule, reason: reason),
                 matched: RuleMatch(
                     ruleID: rule,
-                    packID: .coreFilesystem,
-                    patternName: "rm-rf-general",
                     severity: .high,
                     reason: reason,
                     explanation: "Why this is dangerous: \\ - Gone",
@@ -346,8 +332,6 @@ private func isTreeSpacer(_ line: String) -> Bool {
                 Deny(ruleID: rule, reason: "git reset --hard destroys uncommitted changes"),
                 matched: RuleMatch(
                     ruleID: rule,
-                    packID: .coreGit,
-                    patternName: "reset-hard",
                     severity: .critical,
                     reason: "git reset --hard destroys uncommitted changes",
                     explanation: "intro\n\n\\ Why this is dangerous:",
@@ -535,8 +519,6 @@ private func isTreeSpacer(_ line: String) -> Bool {
                 Deny(ruleID: rule, reason: "rm -rf is destructive and requires human approval."),
                 matched: RuleMatch(
                     ruleID: rule,
-                    packID: .coreFilesystem,
-                    patternName: "rm-rf-general",
                     severity: .high,
                     reason: "rm -rf is destructive and requires human approval.",
                     span: MatchSpan(start: 0, end: 6),

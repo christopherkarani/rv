@@ -29,8 +29,6 @@ private final class EvaluateProbe: @unchecked Sendable {
             let ruleID = RuleID(pack: .coreSecrets, pattern: rule.pattern)
             let matched = RuleMatch(
                 ruleID: ruleID,
-                packID: .coreSecrets,
-                patternName: rule.pattern,
                 severity: .high,
                 reason: rule.reason
             )

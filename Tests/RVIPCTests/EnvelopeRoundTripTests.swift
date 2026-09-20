@@ -169,8 +169,6 @@ struct EnvelopeRoundTripTests {
         )
         let match = RuleMatch(
             ruleID: deny.ruleID,
-            packID: .coreGit,
-            patternName: "reset-hard",
             severity: .high,
             reason: deny.reason
         )
@@ -182,8 +180,6 @@ struct EnvelopeRoundTripTests {
         for severity in severities {
             let matched = RuleMatch(
                 ruleID: match.ruleID,
-                packID: match.packID,
-                patternName: match.patternName,
                 severity: severity,
                 reason: match.reason
             )
@@ -249,6 +245,39 @@ struct EnvelopeRoundTripTests {
         #expect(reply.risk == .safe)
         #expect(reply.ruleID == nil)
         #expect(reply.packID == .coreGit)
+    }
+
+    @Test func classifyReplyAllowDecodeRejectsDisagreeingRuleAndPack() {
+        let frame =
+            #"{"decision":{"decision":"allow"},"risk":"safe","ruleID":"core.git:reset-hard","packID":"core.filesystem","reasons":[],"suggestions":[]}"#
+        #expect(throws: DecodingError.self) {
+            try IPCJSON.decode(ClassifyReply.self, from: Data(frame.utf8))
+        }
+    }
+
+    @Test func classifyReplyAllowDecodeDerivesPackFromRuleID() throws {
+        let frame =
+            #"{"decision":{"decision":"allow"},"risk":"safe","ruleID":"core.git:reset-hard","reasons":[],"suggestions":[]}"#
+        let decoded = try IPCJSON.decode(ClassifyReply.self, from: Data(frame.utf8))
+        #expect(decoded.ruleID == RuleID(pack: .coreGit, pattern: "reset-hard"))
+        #expect(decoded.packID == .coreGit)
+        #expect(decoded.packID == decoded.ruleID?.pack)
+    }
+
+    @Test func classifyReplyAllowDecodeKeepsPackWhenRuleIDIsAbsent() throws {
+        let frame =
+            #"{"decision":{"decision":"allow"},"risk":"safe","packID":"core.git","reasons":[],"suggestions":[]}"#
+        let decoded = try IPCJSON.decode(ClassifyReply.self, from: Data(frame.utf8))
+        #expect(decoded.ruleID == nil)
+        #expect(decoded.packID == .coreGit)
+    }
+
+    @Test func classifyReplyAllowDecodeAgreesWhenBothNameTheSamePack() throws {
+        let frame =
+            #"{"decision":{"decision":"allow"},"risk":"safe","ruleID":"core.git:reset-hard","packID":"core.git","reasons":[],"suggestions":[]}"#
+        let decoded = try IPCJSON.decode(ClassifyReply.self, from: Data(frame.utf8))
+        #expect(decoded.ruleID == RuleID(pack: .coreGit, pattern: "reset-hard"))
+        #expect(decoded.packID == .coreGit)
     }
 
     @Test func classifyReplyDecodeIgnoresLyingSiblingIdentity() throws {

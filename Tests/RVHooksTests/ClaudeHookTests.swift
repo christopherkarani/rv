@@ -23,8 +23,6 @@ private func claudeExpected(_ stem: String) throws -> (stdout: String, exit: Int
 
 private let resetHardMatch = RuleMatch(
     ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
-    packID: .coreGit,
-    patternName: "reset-hard",
     severity: .critical,
     reason: "git reset --hard destroys uncommitted changes. Use 'git stash' first.",
     explanation: "Discards every uncommitted change."

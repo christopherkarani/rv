@@ -62,7 +62,6 @@ public enum ScanDedupe {
             sourcePath: latest.sourcePath,
             occurredAt: latest.occurredAt,
             ruleID: latest.ruleID,
-            packID: latest.packID,
             matchingView: latest.matchingView,
             count: count,
             lastSeen: lastSeen

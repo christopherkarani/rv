@@ -24,7 +24,6 @@ import RVDomain
         sourcePath: "/tmp/session.jsonl",
         occurredAt: occurred,
         ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
-        packID: .coreGit,
         matchingView: MatchingView("git reset --hard"),
         count: 3,
         lastSeen: lastSeen
@@ -32,11 +31,12 @@ import RVDomain
     #expect(finding.lastSeen == lastSeen)
     #expect(finding.occurredAt == occurred)
     #expect(finding.count == 3)
+    #expect(finding.packID == finding.ruleID.pack)
+    #expect(finding.packID == .coreGit)
     #expect(ScanFinding(
         host: .grok,
         sourcePath: "/tmp/other.jsonl",
         ruleID: RuleID(pack: .coreFilesystem, pattern: "rm-rf"),
-        packID: .coreFilesystem,
         matchingView: MatchingView("rm -rf /")
     ).lastSeen == nil)
 }
@@ -439,7 +439,6 @@ import RVDomain
         host: .opencode,
         sourcePath: "/tmp/s.jsonl",
         ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
-        packID: .coreGit,
         matchingView: MatchingView("git reset --hard"),
         lastSeen: Date(timeIntervalSince1970: 1)
     )
