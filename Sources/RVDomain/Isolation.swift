@@ -31,13 +31,14 @@ public enum DescentContainment: Sendable, Equatable {
 /// Concrete restrictions a later launch would have to establish.
 ///
 /// Production `.contained` values come from `compileIsolationPlan` or
-/// `firstSliceContained`. The memberwise initializer is a `@testable` seam.
+/// `firstSliceContained`. The memberwise initializer is fileprivate so
+/// other Domain files cannot mint “contained but unrestricted.”
 public struct IsolationGuarantees: Sendable, Equatable {
     public let filesystem: FilesystemContainment
     public let network: NetworkContainment
     public let descent: DescentContainment
 
-    init(
+    fileprivate init(
         filesystem: FilesystemContainment,
         network: NetworkContainment,
         descent: DescentContainment
@@ -94,14 +95,15 @@ public enum IsolationCompileError: Error, Sendable, Equatable {
 /// guarantees for a later launch, not a claim that any agent is sandboxed.
 ///
 /// Production construction is `compileIsolationPlan`. The memberwise
-/// initializer is a `@testable` seam.
+/// initializer is fileprivate so requested and mode cannot diverge
+/// outside this file.
 public struct IsolationPlan: Sendable, Equatable {
     public let requested: RequestedIsolation
     public let workspace: WorkingDirectory?
     public let repositoryRoot: RepositoryRoot?
     public let mode: EnforcementMode
 
-    init(
+    fileprivate init(
         requested: RequestedIsolation,
         workspace: WorkingDirectory?,
         repositoryRoot: RepositoryRoot?,

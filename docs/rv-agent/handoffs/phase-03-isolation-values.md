@@ -10,7 +10,7 @@
 
 ## 2. Status
 
-Implemented
+Complete
 
 ## 3. Objective
 
@@ -83,7 +83,7 @@ Must not reuse / must not touch:
 - `PolicyGate`
 - `SafetyLevel`
 - Hook codecs, CLI, `RVService` process launch
-- ryk Seatbelt/Landlock code — do not copy implementations into this repo this phase
+- external Seatbelt/Landlock implementations — do not copy them into this repo this phase
 
 ## 7. Architecture for this phase
 
@@ -215,7 +215,7 @@ struct IsolationPlan {
   - if `.contained(guarantees)` and `writesLimited(to: dir)`, then `workspace == dir`
   - `requested == .observed` ↔ `mode == .observed` (no contained associated value)
   - `requested == .mediated` ↔ `mode == .mediated`
-- **Who constructs:** `compileIsolationPlan` only (internal init).
+- **Who constructs:** `compileIsolationPlan` only (fileprivate init).
 - **Who consumes:** tests; later launch.
 
 ### `IsolationCompileError`
@@ -572,7 +572,7 @@ Added a pure Domain `compileIsolationPlan` that turns `IsolationCompileRequest` 
 - Compile is a free function: values in, `Result` out. No effects, no `#if os`, no `Process`.
 - `EnforcementMode` is exactly `observed | mediated | contained(IsolationGuarantees)`. No `stronglyIsolated`, no `contained: Bool`, no `established` field.
 - `NetworkContainment` is `.unrestricted` only so later code cannot assume “contained ⇒ no network.”
-- `IsolationGuarantees.init` and `IsolationPlan.init` are `internal` (not `package`) so `RVEngine` / `RVHooks` cannot mint contained+unrestricted. `@testable` Domain tests pin the seam, matching `AllowedAction`.
+- `IsolationGuarantees.init` and `IsolationPlan.init` are `fileprivate` so other Domain files cannot mint contained+unrestricted. `@testable` can still call internal `firstSliceContained`.
 - First-slice factory `IsolationGuarantees.firstSliceContained(workspace:)` is the only production guarantee constructor; compile uses it.
 - Workspace is `WorkingDirectory?`. Empty string is already unrepresentable; no `String` bypass was added.
 - Isolation compile does not call `AgentAuthorization.decide`.
@@ -581,7 +581,7 @@ Added a pure Domain `compileIsolationPlan` that turns `IsolationCompileRequest` 
 
 None on the type model or compile table. `containedRequiresWriteLimitAndInheritance` was not added because insufficient `.contained` is not a compile input; the first-slice factory does not accept a guarantee bag.
 
-Adversarial nits left unfixed (not blockers/majors): same-module memberwise inits can still hold unrestricted/notInherited for `@testable`; operator probe `mode=contained` does not print the write-limit path (assertions still pin it).
+Adversarial nits left unfixed (not blockers/majors): operator probe `mode=contained` does not print the write-limit path (assertions still pin it).
 
 ## Tests Added / Updated
 
@@ -689,11 +689,11 @@ Independent `code-reviewer` sub-agent (did not write `Isolation.swift`). Verdict
 - Reads outside the workspace are not in the first-slice contract.
 - Semantic deny/allow still happens only in `AgentAuthorization`.
 - Current product remains hook-grade until Phase 2 launch + later adapter.
-- `@testable` can still mint `IsolationGuarantees` / `IsolationPlan` via internal inits.
+- `@testable` can still call internal `firstSliceContained`. Memberwise inits are fileprivate.
 
 ## Technical Debt Introduced
 
-- Internal memberwise inits are the same `@testable` seam as `AllowedAction`. Do not widen them to `package` or `public`.
+- Memberwise inits are fileprivate. Do not widen them to `internal`, `package`, or `public`. Keep `firstSliceContained` internal.
 - Operator probe `mode=contained` does not print the write-limit path; assertions do.
 
 ## Important Context for Next Phase
@@ -710,3 +710,28 @@ Independent `code-reviewer` sub-agent (did not write `Isolation.swift`). Verdict
 
 Coding-agent checkboxes in §17 are marked done.
 Completion is independently verified by the next planning session.
+
+---
+
+# Planning Verification
+
+## Verification Date
+
+2026-09-20
+
+## Result
+
+Complete
+
+## Verified Against
+
+- implementation
+- tests
+- architecture constraints
+- security invariants
+- enforcement guarantees
+- acceptance criteria
+
+## Notes
+
+Independent planning review of `Sources/RVDomain/Isolation.swift` and `Tests/RVDomainTests/IsolationPlanTests.swift` on `feat/agent-isolation-values` (`b908714`). Focused suites passed on this tree: `IsolationPlan` (13), `AgentAuthorization` (23). `compileIsolationPlan` is a pure `Result` — no `Process`, no `#if os`, no `decide`. Observed / mediated never produce `.contained`. Contained without `WorkingDirectory` is `.containedRequiresWorkspace`; `RepositoryRoot` cannot substitute. First-slice contained guarantees are `writesLimited(to: workspace)` + `.inherited` + network `.unrestricted`. Memberwise inits are `fileprivate`; production door is compile / internal `firstSliceContained`. `rg` over `Sources` has no `sandbox-exec`, `sandbox_init`, `landlock`, or `IsolationBackend`. `RV.swift` still has no `agent` / `opencode` command. Coding-agent PR summary is accurate: this is a typed isolation compile, not a sandbox. Status string `Implemented` was not a planning-complete state; this verification is the Complete mark.
