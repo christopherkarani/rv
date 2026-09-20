@@ -315,28 +315,13 @@ public struct EvaluationResult: Sendable, Equatable {
         cwd: WorkingDirectory?,
         command: ShellCommand
     ) -> ProposedAction {
-        let analyzed: (ActionEffects, ActionResources, SemanticAction?)
-        switch analysis.innermost {
-        case .git(let git):
-            analyzed = (git.effects, git.resources, .git(git))
-        case .filesystem(let filesystem):
-            analyzed = (filesystem.effects, filesystem.resources, .filesystem(filesystem))
-        case .wrapper, .unwrapLimited, .unknown:
-            analyzed = (ActionEffects(), ActionResources(), nil)
-        }
         return .shell(
-            ShellAction(
-                fingerprint: ActionFingerprint.make(
-                    host: host,
-                    session: session,
-                    cwd: cwd,
-                    command: command
-                ),
-                effects: analyzed.0,
-                resources: analyzed.1,
-                scope: ActionScope(workingDirectory: cwd),
-                supportingCommand: command,
-                analysis: analyzed.2
+            ProposedAction.hostDoorShell(
+                host: host,
+                session: session,
+                cwd: cwd,
+                command: command,
+                analysis: analysis
             )
         )
     }
