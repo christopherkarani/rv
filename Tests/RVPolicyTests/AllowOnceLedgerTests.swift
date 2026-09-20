@@ -6,7 +6,7 @@ struct AllowOnceLedgerTests {
     private static let epoch = Date(timeIntervalSince1970: 1_700_000_000)
     private static let createdAt = Date(timeIntervalSince1970: 1_699_999_990)
 
-    @Test func mintFreshHashPrunesExpiredAndAppendsPending() throws {
+    @Test func mintFreshHashPrunesExpiredAndReusesSameCommandPending() throws {
         let stalePending = Self.record(kind: .pending, hash: "stale", expiresAt: Self.epoch.addingTimeInterval(-1))
         let staleGranted = Self.record(kind: .granted, hash: "oldg", expiresAt: Self.epoch.addingTimeInterval(-1))
         let oldConsumed = Self.record(kind: .consumed, hash: "spent", expiresAt: Self.epoch.addingTimeInterval(-1))
@@ -21,17 +21,47 @@ struct AllowOnceLedgerTests {
             now: Self.epoch,
             ttl: 3600
         )
-        #expect(out.map(\.codeHash) == ["spent", "live", "fresh"])
-        #expect(out.first?.kind == .consumed)
-        #expect(out.last?.kind == .pending)
-        #expect(out.last?.createdAt == Self.epoch)
-        #expect(out.last?.expiresAt == Self.epoch.addingTimeInterval(3600))
-        #expect(out.last?.commandFingerprint == "fp")
-        #expect(out.last?.cwd == wd("/tmp/ws"))
+        guard case .reused(let records) = out else {
+            Issue.record("same command+cwd must reuse the live pending")
+            return
+        }
+        #expect(records.map(\.codeHash) == ["spent", "live"])
+        #expect(records.first?.kind == .consumed)
+        #expect(records.last?.kind == .pending)
+        #expect(records.last?.codeHash == "live")
+        #expect(records.last?.commandFingerprint == "fp")
+        #expect(records.last?.cwd == wd("/tmp/ws"))
+    }
+
+    @Test func mintDifferentFingerprintStillAppends() throws {
+        let livePending = Self.record(kind: .pending, hash: "live", expiresAt: Self.epoch.addingTimeInterval(60))
+        let out = try AllowOnceLedger.mint(
+            records: [livePending],
+            codeHash: "fresh",
+            fingerprint: "other-fp",
+            redacted: "gh …",
+            cwd: wd("/tmp/ws"),
+            ruleID: nil,
+            now: Self.epoch,
+            ttl: 3600
+        )
+        guard case .appended(let records) = out else {
+            Issue.record("a different command must mint a new pending")
+            return
+        }
+        #expect(records.map(\.codeHash) == ["live", "fresh"])
+        #expect(records.last?.commandFingerprint == "other-fp")
+        #expect(records.last?.createdAt == Self.epoch)
+        #expect(records.last?.expiresAt == Self.epoch.addingTimeInterval(3600))
     }
 
     @Test func mintCollidesWithLivePendingSameHash() {
-        let twin = Self.record(kind: .pending, hash: "dup", expiresAt: Self.epoch.addingTimeInterval(60))
+        let twin = Self.record(
+            kind: .pending,
+            hash: "dup",
+            fingerprint: "other-fp",
+            expiresAt: Self.epoch.addingTimeInterval(60)
+        )
         #expect(throws: AllowOnceError.collision) {
             _ = try AllowOnceLedger.mint(
                 records: [twin],
@@ -58,9 +88,13 @@ struct AllowOnceLedgerTests {
             now: Self.epoch,
             ttl: 3600
         )
-        #expect(out.map(\.kind) == [.pending])
-        #expect(out.map(\.codeHash) == ["dup"])
-        #expect(out.first?.expiresAt == Self.epoch.addingTimeInterval(3600))
+        guard case .appended(let records) = out else {
+            Issue.record("expired pending must not block a remint")
+            return
+        }
+        #expect(records.map(\.kind) == [.pending])
+        #expect(records.map(\.codeHash) == ["dup"])
+        #expect(records.first?.expiresAt == Self.epoch.addingTimeInterval(3600))
     }
 
     @Test func redeemGrantsPendingAndPrunesStaleSiblings() throws {
@@ -244,9 +278,15 @@ struct AllowOnceLedgerTests {
 
     @Test func exactNowIsStillLive() throws {
         let pending = Self.record(kind: .pending, hash: "p", expiresAt: Self.epoch)
+        let other = Self.record(
+            kind: .pending,
+            hash: "p",
+            fingerprint: "other-fp",
+            expiresAt: Self.epoch
+        )
         #expect(throws: AllowOnceError.collision) {
             _ = try AllowOnceLedger.mint(
-                records: [pending],
+                records: [other],
                 codeHash: "p",
                 fingerprint: "fp",
                 redacted: "git …",
@@ -256,6 +296,21 @@ struct AllowOnceLedgerTests {
                 ttl: 3600
             )
         }
+        let reused = try AllowOnceLedger.mint(
+            records: [pending],
+            codeHash: "fresh",
+            fingerprint: "fp",
+            redacted: "git …",
+            cwd: wd("/tmp/ws"),
+            ruleID: nil,
+            now: Self.epoch,
+            ttl: 3600
+        )
+        guard case .reused(let records) = reused else {
+            Issue.record("exact-now pending for the same command must be reused")
+            return
+        }
+        #expect(records.map(\.codeHash) == ["p"])
         switch try AllowOnceLedger.redeem(records: [pending], codeHash: "p", now: Self.epoch) {
         case let .granted(records, _):
             #expect(records.map(\.kind) == [.granted])

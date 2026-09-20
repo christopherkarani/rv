@@ -16,13 +16,22 @@ public enum HookVoiceNext: Sendable, Equatable {
     case none
     case ttyHint
     case minted(AllowOnceUnlockCode)
+    case earlierPending
 }
 
 /// Returns the minted allow-once paste line for `code`.
 /// Code goes first so truncated host cards still show the paste.
 public func unlockLine(for code: AllowOnceUnlockCode) -> String {
-    "Paste in Terminal to allow once: rv allow-once \(code.rawValue)."
+    "Paste in Terminal to allow once: rv allow-once \(code.rawValue). This unlocks only this exact command."
 }
+
+/// Repeat deny of the same command+cwd. Do not mint a second code.
+public let earlierPendingUnlockLine =
+    "A one-shot unlock is already pending for this exact command. Paste the earlier rv allow-once code in Terminal."
+
+/// Cursor `agent_message` on deny. User paste stays in `user_message`.
+public let cursorAgentStopLine =
+    "RV blocked this command. Do not retry. Do not rewrite the command. Wait for the human."
 
 func hookVoiceNextSentence(_ next: HookVoiceNext) -> String? {
     switch next {
@@ -32,14 +41,20 @@ func hookVoiceNextSentence(_ next: HookVoiceNext) -> String? {
         return ttyUnlockHint
     case .minted(let code):
         return unlockLine(for: code)
+    case .earlierPending:
+        return earlierPendingUnlockLine
     }
 }
 
-func unlockHookVoiceNext(_ code: AllowOnceUnlockCode?, fallback: HookVoiceNext = .none) -> HookVoiceNext {
-    if let code {
+func unlockHookVoiceNext(_ mint: AllowOnceUnlockMint?, fallback: HookVoiceNext = .none) -> HookVoiceNext {
+    switch mint {
+    case .code(let code):
         return .minted(code)
+    case .earlierPending:
+        return .earlierPending
+    case nil:
+        return fallback
     }
-    return fallback
 }
 
 /// First `rv allow-once <6hex>` in `text`, if present.
@@ -50,8 +65,15 @@ public func allowOnceUnlockCode(in text: String) -> AllowOnceUnlockCode? {
     return AllowOnceUnlockCode(validating: code)
 }
 
-func mintedUnlockNext(_ code: AllowOnceUnlockCode?) -> String? {
-    code.map { unlockLine(for: $0) }
+func mintedUnlockNext(_ mint: AllowOnceUnlockMint?) -> String? {
+    switch mint {
+    case .code(let code):
+        return unlockLine(for: code)
+    case .earlierPending:
+        return earlierPendingUnlockLine
+    case nil:
+        return nil
+    }
 }
 
 /// Hook-voice deny sentence for a payload addressed to this host that could not
@@ -178,18 +200,26 @@ public func hostDenyLine(
     reason: String,
     unlockCode: AllowOnceUnlockCode? = nil
 ) -> String {
-    wrappedHostDeny(why: hostDenyWhy(reason, command: command), unlockCode: unlockCode)
+    hostDenyLine(command: command, reason: reason, unlock: unlockCode.map { .code($0) })
+}
+
+public func hostDenyLine(
+    command: ShellCommand,
+    reason: String,
+    unlock: AllowOnceUnlockMint?
+) -> String {
+    wrappedHostDeny(why: hostDenyWhy(reason, command: command), unlock: unlock)
 }
 
 /// File-tool deny sentence. Does not preview an empty `ShellCommand`.
 public func hostFileDenyLine(reason: String, unlockCode: AllowOnceUnlockCode? = nil) -> String {
-    wrappedHostDeny(why: hostDenyWhy(reason, command: nil), unlockCode: unlockCode)
+    wrappedHostDeny(why: hostDenyWhy(reason, command: nil), unlock: unlockCode.map { .code($0) })
 }
 
-private func wrappedHostDeny(why: String, unlockCode: AllowOnceUnlockCode?) -> String {
+private func wrappedHostDeny(why: String, unlock: AllowOnceUnlockMint?) -> String {
     let blocked = "RV · Blocked."
     let withoutCode = why.isEmpty ? blocked : "\(blocked) \(why)"
-    guard let unlock = mintedUnlockNext(unlockCode) else {
+    guard let unlock = mintedUnlockNext(unlock) else {
         return withoutCode
     }
     let combined = why.isEmpty ? "\(blocked) \(unlock)" : "\(blocked) \(unlock) \(why)"

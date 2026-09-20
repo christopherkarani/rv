@@ -98,7 +98,7 @@ public protocol HostCodec: Sendable {
     func encodeEvaluatedDeny(
         from result: EvaluationResult,
         command: ShellCommand,
-        unlockCode: AllowOnceUnlockCode?
+        unlockCode: AllowOnceUnlockMint?
     ) -> HookWire
     func encodeFileDeny(from result: EvaluationResult) -> HookWire
 }
@@ -223,7 +223,7 @@ extension HostCodec {
     public func encodeEvaluatedDeny(
         from result: EvaluationResult,
         command: ShellCommand,
-        unlockCode: AllowOnceUnlockCode? = nil
+        unlockCode: AllowOnceUnlockMint? = nil
     ) -> HookWire {
         switch result.decision {
         case .allow:
@@ -232,7 +232,7 @@ extension HostCodec {
             return encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
         case .deny(let deny):
             return encodeDeny(
-                reason: hostDenyLine(command: command, reason: deny.reason, unlockCode: unlockCode),
+                reason: hostDenyLine(command: command, reason: deny.reason, unlock: unlockCode),
                 rule: deny.ruleID,
                 next: unlockHookVoiceNext(unlockCode)
             )

@@ -83,7 +83,7 @@ public struct ClaudeHostCodec: HostAskCodec {
     public func encodeEvaluatedDeny(
         from result: EvaluationResult,
         command: ShellCommand,
-        unlockCode: AllowOnceUnlockCode? = nil
+        unlockCode: AllowOnceUnlockMint? = nil
     ) -> HookWire {
         switch result.decision {
         case .allow, .indeterminate:
@@ -114,7 +114,7 @@ public struct ClaudeHostCodec: HostAskCodec {
     public func encodeRichDeny(
         from result: EvaluationResult,
         command: ShellCommand,
-        unlockCode: AllowOnceUnlockCode? = nil
+        unlockCode: AllowOnceUnlockMint? = nil
     ) -> HookWire {
         switch result.decision {
         case .allow:
@@ -125,7 +125,7 @@ public struct ClaudeHostCodec: HostAskCodec {
             let hostDenyText = hostDenyLine(
                 command: command,
                 reason: deny.reason,
-                unlockCode: unlockCode
+                unlock: unlockCode
             )
             guard case .deny(_, let matched?) = result.outcome else {
                 return encodeDeny(

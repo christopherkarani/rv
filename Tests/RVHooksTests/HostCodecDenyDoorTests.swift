@@ -59,7 +59,7 @@ import RVDomain
     let mintedEvaluated = codec.encodeEvaluatedDeny(
         from: result,
         command: command,
-        unlockCode: code
+        unlockCode: .code(code)
     )
     let mintedLeftover = codec.encodeDeny(
         reason: hostDenyLine(command: command, reason: deny.reason, unlockCode: code),
@@ -223,7 +223,7 @@ private final class EvaluatedDenyDoorSpy: HostCodec, @unchecked Sendable {
     func encodeEvaluatedDeny(
         from result: EvaluationResult,
         command: ShellCommand,
-        unlockCode: AllowOnceUnlockCode?
+        unlockCode: AllowOnceUnlockMint?
     ) -> HookWire {
         evaluatedCalls += 1
         return HookWire(stdout: "evaluated\n", exitCode: 7)

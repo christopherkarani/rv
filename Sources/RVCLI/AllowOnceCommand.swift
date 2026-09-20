@@ -196,6 +196,11 @@ struct AllowOnceMint: AsyncParsableCommand {
         } catch AllowOnceError.emptyCommand {
             FileHandle.standardError.write(Data("rv allow-once mint: missing command\n".utf8))
             throw ExitCode(2)
+        } catch AllowOnceError.alreadyPending {
+            FileHandle.standardError.write(
+                Data("rv allow-once mint: a pending unlock already exists for this command\n".utf8)
+            )
+            throw ExitCode(2)
         } catch AllowOnceError.lockFailed, AllowOnceError.encodeFailed, AllowOnceError.collision {
             FileHandle.standardError.write(Data("rv allow-once mint: store unavailable\n".utf8))
             throw ExitCode(2)

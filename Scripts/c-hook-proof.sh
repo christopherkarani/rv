@@ -338,10 +338,17 @@ reason = obj.get("reason")
 why = canonical[len("RV · Blocked. "):] if canonical.startswith("RV · Blocked. ") else canonical
 minted = re.compile(
     r"^RV · Blocked\. Paste in Terminal to allow once: rv allow-once [0-9a-f]{6}\. "
+    r"This unlocks only this exact command\. "
     + re.escape(why)
     + r"$"
 )
-if minted.match(reason or "") is None:
+earlier = re.compile(
+    r"^RV · Blocked\. A one-shot unlock is already pending for this exact command\. "
+    r"Paste the earlier rv allow-once code in Terminal\. "
+    + re.escape(why)
+    + r"$"
+)
+if minted.match(reason or "") is None and earlier.match(reason or "") is None:
     raise SystemExit("reason=%r" % (reason,))
 if "git reset --hard" in (reason or ""):
     raise SystemExit("reason echoes command")
@@ -354,7 +361,7 @@ expect_json() {
   local stdout_file="$1"
   local expect_decision="$2"
   if [[ "$expect_decision" != "deny" ]]; then
-    fail "expect_json only covers minted pack deny (got $expect_decision)"
+    fail "expect_json only covers minted or already-pending pack deny (got $expect_decision)"
   fi
   minted_reset_hard_deny_ok "$stdout_file"
 }

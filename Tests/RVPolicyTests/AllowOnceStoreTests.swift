@@ -291,7 +291,7 @@ struct AllowOnceStoreTests {
             ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
             now: now
         )
-        let minted = try #require(code)
+        let minted = try #require(code?.code)
         #expect(AllowOnceUnlockCode.isValid(minted.rawValue))
         #expect(minted.rawValue == minted.rawValue.lowercased())
         let rows = await store.list(now: now)
@@ -302,6 +302,76 @@ struct AllowOnceStoreTests {
         #expect(disk.contains(minted.rawValue) == false)
         #expect(disk.contains("\"kind\":\"pending\""))
         #expect(disk.contains("consumed_at") == false)
+    }
+
+    @Test func mintFromDeny_sameCommandReusesCodeInSameStore() async throws {
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let first = try #require(
+            await store.mintFromDeny(
+                matchingView: "git reset --hard",
+                cwd: wd("/tmp/ws"),
+                ruleID: nil,
+                now: now
+            )?.code
+        )
+        let second = await store.mintFromDeny(
+            matchingView: "git reset --hard",
+            cwd: wd("/tmp/ws"),
+            ruleID: nil,
+            now: now
+        )
+        #expect(second == .code(first))
+        #expect((await store.list(now: now)).count == 1)
+        let disk = try String(contentsOf: jsonl(store), encoding: .utf8)
+        #expect(disk.contains(first.rawValue) == false)
+    }
+
+    @Test func mintFromDeny_sameCommandNewStoreDoesNotMintAnotherPending() async throws {
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let first = try #require(
+            await store.mintFromDeny(
+                matchingView: "git reset --hard",
+                cwd: wd("/tmp/ws"),
+                ruleID: nil,
+                now: now
+            )?.code
+        )
+        let other = AllowOnceStore(baseDirectory: store.baseDirectory)
+        let second = await other.mintFromDeny(
+            matchingView: "git reset --hard",
+            cwd: wd("/tmp/ws"),
+            ruleID: nil,
+            now: now
+        )
+        #expect(second == .earlierPending)
+        #expect((await other.list(now: now)).count == 1)
+        let disk = try String(contentsOf: jsonl(store), encoding: .utf8)
+        #expect(disk.contains(first.rawValue) == false)
+    }
+
+    @Test func mintFromDeny_differentCwdStillMints() async throws {
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let first = try #require(
+            await store.mintFromDeny(
+                matchingView: "git reset --hard",
+                cwd: wd("/tmp/a"),
+                ruleID: nil,
+                now: now
+            )?.code
+        )
+        let second = try #require(
+            await store.mintFromDeny(
+                matchingView: "git reset --hard",
+                cwd: wd("/tmp/b"),
+                ruleID: nil,
+                now: now
+            )?.code
+        )
+        #expect(first != second)
+        #expect((await store.list(now: now)).count == 2)
     }
 
     @Test func mintFromDeny_emptyMatchingViewIsNil() async throws {
@@ -341,7 +411,7 @@ struct AllowOnceStoreTests {
                 cwd: wd("/tmp/ws"),
                 ruleID: nil,
                 now: now
-            )
+            )?.code
         )
         await #expect(throws: AllowOnceError.ttyRequired) {
             try await store.redeem(

@@ -37,6 +37,7 @@ public enum AllowOnceError: Error, Sendable, Equatable {
     case expired
     case alreadySpent
     case collision
+    case alreadyPending
     case encodeFailed
     case lockFailed
     case emptyCommand

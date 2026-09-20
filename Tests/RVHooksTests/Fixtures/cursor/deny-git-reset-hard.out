@@ -1,1 +1,1 @@
-{"permission":"deny","user_message":"RV · Blocked. Destroys uncommitted changes. Use 'git stash' first.","agent_message":"RV · Blocked. Destroys uncommitted changes. Use 'git stash' first."}
+{"permission":"deny","user_message":"RV · Blocked. Destroys uncommitted changes. Use 'git stash' first.","agent_message":"RV blocked this command. Do not retry. Do not rewrite the command. Wait for the human."}

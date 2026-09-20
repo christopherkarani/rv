@@ -30,7 +30,7 @@ private func isCursorHonorPath(_ wire: HookWire, reason: String) -> Bool {
     guard let json = try? JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any],
           json["permission"] as? String == "deny",
           json["user_message"] as? String == trimmedReason,
-          json["agent_message"] as? String == trimmedReason
+          json["agent_message"] as? String == cursorAgentStopLine
     else { return false }
     if json["permissionDecision"] != nil { return false }
     if json["hookSpecificOutput"] != nil { return false }
@@ -46,7 +46,7 @@ private func assertCursorHonorPath(_ wire: HookWire, reason: String) throws {
     let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
     #expect(json["permission"] as? String == "deny")
     #expect(json["user_message"] as? String == reason)
-    #expect(json["agent_message"] as? String == reason)
+    #expect(json["agent_message"] as? String == cursorAgentStopLine)
     #expect(json["permissionDecision"] == nil)
     #expect(json["hookSpecificOutput"] == nil)
     #expect(json["decision"] == nil)

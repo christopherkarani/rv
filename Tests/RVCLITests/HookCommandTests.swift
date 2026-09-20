@@ -710,7 +710,7 @@ private func runHonorHook(
     let json = try denyJSON(wire.stdout)
     #expect(json["permission"] as? String == "deny")
     #expect(json["user_message"] as? String == text)
-    #expect(json["agent_message"] as? String == text)
+    #expect(json["agent_message"] as? String == cursorAgentStopLine)
     #expect(json["permissionDecision"] == nil)
     #expect(json["decision"] == nil)
     #expect(wire.stdout.contains("\"permissionDecision\":\"deny\"") == false)

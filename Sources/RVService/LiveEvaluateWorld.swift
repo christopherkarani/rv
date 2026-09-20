@@ -135,7 +135,7 @@ package struct LiveEvaluateWorld: Sendable {
     package func mintUnlockCode(
         for result: EvaluationResult,
         cwd: WorkingDirectory?
-    ) async -> AllowOnceUnlockCode? {
+    ) async -> AllowOnceUnlockMint? {
         await GatedEvaluate.mintUnlockCode(
             for: result,
             cwd: cwd,

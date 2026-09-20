@@ -223,7 +223,10 @@ func assertMintedHookUnlock(_ text: String, why: String = resetHardHostDeny) thr
     #expect(AllowOnceUnlockCode(validating: "abc") == nil)
     #expect(AllowOnceUnlockCode(validating: "ABCDEF") == nil)
     let code = try mintedUnlock()
-    #expect(unlockLine(for: code) == "Paste in Terminal to allow once: rv allow-once a1b2c3.")
+    #expect(
+        unlockLine(for: code)
+            == "Paste in Terminal to allow once: rv allow-once a1b2c3. This unlocks only this exact command."
+    )
     #expect(allowOnceUnlockCode(in: ttyUnlockHint) == nil)
     #expect(allowOnceUnlockCode(in: unlockLine(for: code)) == code)
 }
@@ -243,9 +246,11 @@ func assertMintedHookUnlock(_ text: String, why: String = resetHardHostDeny) thr
     #expect(hookVoiceNextSentence(.ttyHint) == ttyUnlockHint)
     let code = try mintedUnlock()
     #expect(hookVoiceNextSentence(.minted(code)) == unlockLine(for: code))
-    #expect(unlockHookVoiceNext(nil) == .none)
-    #expect(unlockHookVoiceNext(nil, fallback: .ttyHint) == .ttyHint)
-    #expect(unlockHookVoiceNext(code) == .minted(code))
+    #expect(unlockHookVoiceNext(Optional<AllowOnceUnlockMint>.none) == .none)
+    #expect(unlockHookVoiceNext(nil as AllowOnceUnlockMint?, fallback: .ttyHint) == .ttyHint)
+    #expect(unlockHookVoiceNext(.code(code)) == .minted(code))
+    #expect(hookVoiceNextSentence(.earlierPending) == earlierPendingUnlockLine)
+    #expect(unlockHookVoiceNext(.earlierPending) == .earlierPending)
 }
 
 @Test func hostFileDenyLine_doesNotPreviewEmptyShellCommand() {
