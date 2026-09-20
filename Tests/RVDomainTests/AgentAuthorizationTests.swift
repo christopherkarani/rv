@@ -6,6 +6,13 @@ struct AgentAuthorizationTests {
     private let shared = ActionPolicyFixtures.sharedContext
     private let privateBranch = ActionPolicyFixtures.privateContext
     private let allowReview = ActionPolicyFixtures.qualifiedAllow
+    private let qualifiedDenyReview = ActionReview.make(
+        decision: .deny,
+        risk: .medium,
+        confidence: .high,
+        rationale: "stub deny",
+        rationaleCategory: .deny
+    )
 
     @Test func inRepoWrite_isAllowedWithInRepositoryExplanation() {
         let write = ActionPolicyFixtures.filesystem(
@@ -124,19 +131,12 @@ struct AgentAuthorizationTests {
 
     @Test func uncovered_qualifiedDenyReview_isDenied() {
         let action = ActionPolicyFixtures.uncovered(supportingCommand: "echo hello")
-        let denyReview = ActionReview.make(
-            decision: .deny,
-            risk: .medium,
-            confidence: .high,
-            rationale: "stub deny",
-            rationaleCategory: .deny
-        )
         expectDenied(
             AgentAuthorization.decide(
                 action: action,
                 context: shared,
                 gitWorld: .unprobed,
-                review: .success(denyReview)
+                review: .success(qualifiedDenyReview)
             ),
             action: action,
             deny: ActionPolicyEngine.Builtin.uncovered
@@ -176,6 +176,104 @@ struct AgentAuthorizationTests {
             ),
             action: action,
             deny: ActionPolicyEngine.Builtin.remoteSharedBranch
+        )
+    }
+
+    @Test func inRepoWrite_stubDenyReview_staysAllowed() {
+        let write = ActionPolicyFixtures.filesystem(
+            effects: [.filesystemOverwrite],
+            path: "/repo/Sources/Foo.swift",
+            scope: .insideRepository
+        )
+        expectAllowed(
+            AgentAuthorization.decide(
+                action: write,
+                context: shared,
+                gitWorld: .unprobed,
+                review: .success(qualifiedDenyReview)
+            ),
+            action: write,
+            ruleID: ActionPolicyEngine.Builtin.inRepository
+        )
+    }
+
+    @Test func forcePushTopic_stubReview_staysPendingMandatoryHuman() {
+        let action = ActionPolicyFixtures.forcePush(branchName: "topic")
+        expectPending(
+            AgentAuthorization.decide(
+                action: action,
+                context: privateBranch,
+                gitWorld: .unprobed,
+                review: .success(allowReview)
+            ),
+            action: action,
+            reason: .mandatoryHuman,
+            deny: ActionPolicyEngine.Builtin.remoteBranchAsk
+        )
+        expectPending(
+            AgentAuthorization.decide(
+                action: action,
+                context: privateBranch,
+                gitWorld: .unprobed,
+                review: .success(qualifiedDenyReview)
+            ),
+            action: action,
+            reason: .mandatoryHuman,
+            deny: ActionPolicyEngine.Builtin.remoteBranchAsk
+        )
+    }
+
+    @Test func map_hardDenyBoundAllow_staysDenied() {
+        let action = ActionPolicyFixtures.forcePush()
+        let deny = ActionPolicyEngine.Builtin.remoteSharedBranch
+        expectDenied(
+            AgentAuthorization.map(
+                action: action,
+                hardDecision: .hardDeny(deny),
+                explanation: explanation(zone: .hardDeny, deny: deny),
+                bound: .allow
+            ),
+            action: action,
+            deny: deny
+        )
+    }
+
+    @Test func map_mandatoryHumanBoundDeny_staysPending() {
+        let action = ActionPolicyFixtures.forcePush(branchName: "topic")
+        let deny = ActionPolicyEngine.Builtin.remoteBranchAsk
+        expectPending(
+            AgentAuthorization.map(
+                action: action,
+                hardDecision: .mandatoryHuman(deny),
+                explanation: explanation(zone: .mandatoryHuman, deny: deny),
+                bound: .deny(deny)
+            ),
+            action: action,
+            reason: .mandatoryHuman,
+            deny: deny
+        )
+    }
+
+    @Test func map_hardAllowBoundDeny_staysAllowed() {
+        let write = ActionPolicyFixtures.filesystem(
+            effects: [.filesystemOverwrite],
+            path: "/repo/Sources/Foo.swift",
+            scope: .insideRepository
+        )
+        let deny = ActionPolicyEngine.Builtin.uncovered
+        expectAllowed(
+            AgentAuthorization.map(
+                action: write,
+                hardDecision: .hardAllow,
+                explanation: ActionPolicyExplanation(
+                    zone: .hardAllow,
+                    ruleID: ActionPolicyEngine.Builtin.inRepository,
+                    reason: ActionPolicyEngine.Builtin.inRepositoryReason
+                ),
+                bound: .deny(deny)
+            ),
+            action: write,
+            ruleID: ActionPolicyEngine.Builtin.inRepository
         )
     }
 
@@ -373,6 +471,10 @@ enum AgentAuthorizationReviewStub: Sendable {
             return .failure(.timeout)
         }
     }
+}
+
+private func explanation(zone: ActionPolicyZone, deny: Deny) -> ActionPolicyExplanation {
+    ActionPolicyExplanation(zone: zone, ruleID: deny.ruleID, reason: deny.reason)
 }
 
 private func expectAllowed(

@@ -493,7 +493,7 @@ Implemented
 
 - Runtime door is `evaluate(..., gitWorld:)` with default `.unprobed`, then `ReviewBind.apply`, then a pure map. `ActionPolicyEngine.bind` and the probed convenience `evaluate` overload are not used.
 - `BoundReview.decision` is not the runtime case. Ask stays `.pending`.
-- Hard deny is unliftable at the map layer: if the hard zone is `.hardDeny`, the result is `.denied` even if `BoundReview` were somehow allow/ask.
+- Hard zones are bind-proof at the map layer: `.hardDeny` is always denied, `.mandatoryHuman` is always pending `.mandatoryHuman`, and `.hardAllow` is always allowed, even if `BoundReview` disagrees. Review can change only `.reviewEligible`.
 - `AllowedAction` / `DeniedAction` / `PendingAuthorization` stored properties are `let`. Inits are `internal` (not `package`) so `RVEngine` cannot mint payloads; `@testable` Domain tests pin the seam.
 - Pending reasons are only `.mandatoryHuman` (hard `mandatoryHuman`) and `.reviewAsk` (`reviewEligible` without a sufficient allow). `.hostAsk` is never emitted.
 - No Engine authorize wrapper. Composition is `normalizeAgentRequest` then `AgentAuthorization.decide`.
@@ -507,7 +507,7 @@ Implemented
 
 ## Tests Added / Updated
 
-- `AgentAuthorizationTests` (18): in-repo write/create allowed; force-push `main` denied; force-push `topic` pending `.mandatoryHuman`; working-tree discard / out-of-repo / protected-path denied; uncovered default/weak/conflict/timeout pending `.reviewAsk`; qualified allow → allowed; qualified deny → denied; stub allow cannot lift hard deny; `BoundReview.decision` pack-deny stays `.pending`; `hookBound` quiet-allow vs decide pending; implicit unprobed vs probed overload; overlay allow on protected path; no packs; internal-init seam; exhaustive switches on the result
+- `AgentAuthorizationTests` (23): in-repo write/create allowed; force-push `main` denied; force-push `topic` pending `.mandatoryHuman`; working-tree discard / out-of-repo / protected-path denied; uncovered default/weak/conflict/timeout pending `.reviewAsk`; qualified allow → allowed; qualified deny → denied; stub allow cannot lift hard deny; stub deny cannot sink hard allow; stub review cannot change topic pending; `BoundReview.decision` pack-deny stays `.pending`; `hookBound` quiet-allow vs decide pending; implicit unprobed vs probed overload; overlay allow on protected path; no packs; internal-init seam; map pins hardDeny+allow, mandatoryHuman+deny, hardAllow+deny; exhaustive switches on the result
 - `NormalizeThenAuthorizeTests` (6): `git reset --hard` denied working-tree discard; `echo hello` / `git status` pending `.reviewAsk`; probed `echo hi > file` allowed `inRepository`; `env -C /tmp/.ssh rm config` denied protected path; unwrap-limited produces no `ProposedAction`; compose without packs
 - `ActionPolicyEngineTests`: assertions unchanged; fixtures moved only
 

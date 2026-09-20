@@ -1,7 +1,9 @@
-/// A proposal that hard policy authorized. Not a permit to spawn a process.
+/// A proposal that policy authorized. Not a permit to spawn a process.
 ///
-/// Only `AgentAuthorization.decide` constructs this in production. The
-/// memberwise initializer is a `@testable` seam, like `AgentProcessRequest`.
+/// Produced for `hardAllow`, or for `reviewEligible` after a sufficient
+/// aligned allow review. Only `AgentAuthorization.decide` constructs this
+/// in production. The memberwise initializer is a `@testable` seam, like
+/// `AgentProcessRequest`.
 public struct AllowedAction: Sendable, Equatable {
     public let action: ProposedAction
     public let explanation: ActionPolicyExplanation
@@ -12,7 +14,10 @@ public struct AllowedAction: Sendable, Equatable {
     }
 }
 
-/// A proposal that hard policy rejected. No `AllowedAction` exists for this decision.
+/// A proposal that policy rejected. No `AllowedAction` exists for this decision.
+///
+/// Produced for `hardDeny`, or for `reviewEligible` after a sufficient
+/// aligned deny review.
 public struct DeniedAction: Sendable, Equatable {
     public let action: ProposedAction
     public let deny: Deny
@@ -26,6 +31,9 @@ public struct DeniedAction: Sendable, Equatable {
 }
 
 /// ASK intent. Human approval is required before an allowed value can exist.
+///
+/// Produced for `mandatoryHuman`, or for `reviewEligible` without a sufficient
+/// review. `reason` is never `.hostAsk`.
 ///
 /// Not a `PendingApproval` ledger row: no clock, store identity, or expiry.
 public struct PendingAuthorization: Sendable, Equatable {
@@ -65,6 +73,19 @@ public enum AgentAuthorization: Sendable, Equatable {
     ///
     /// Always calls `evaluate(action:context:policy:gitWorld:)`. Default
     /// `gitWorld` is `.unprobed`, matching the Engine door.
+    ///
+    /// Hard zones ignore `BoundReview`. `.hardDeny` is always denied,
+    /// `.mandatoryHuman` is always pending `.mandatoryHuman`, and
+    /// `.hardAllow` is always allowed. Review can change only
+    /// `.reviewEligible`.
+    ///
+    /// - Parameters:
+    ///   - action: Proposal to authorize. Holding one is not a capability.
+    ///   - context: Repository and environment facts. Empty by default.
+    ///   - policy: Overlay, pack fallback, and typed rules. Empty by default.
+    ///   - gitWorld: Whether git facts were injected. Default `.unprobed`.
+    ///   - review: Advisory review. Default is that no reviewer ran.
+    /// - Returns: An exhaustive allowed, pending, or denied outcome.
     public static func decide(
         action: ProposedAction,
         context: ReviewContext = ReviewContext(repository: RepositoryReviewContext()),
@@ -90,50 +111,50 @@ public enum AgentAuthorization: Sendable, Equatable {
         )
     }
 
-    private static func map(
+    /// Hard zones win. `bound` is consulted only for `reviewEligible`.
+    ///
+    /// Internal so `@testable` tests can pin inconsistent pairs `ReviewBind`
+    /// does not currently construct.
+    static func map(
         action: ProposedAction,
         hardDecision: HardPolicyDecision,
         explanation: ActionPolicyExplanation,
         bound: BoundReview
     ) -> AgentAuthorization {
-        if case .hardDeny(let deny) = hardDecision {
+        switch hardDecision {
+        case .hardDeny(let deny):
             return .denied(
                 DeniedAction(action: action, deny: deny, explanation: explanation)
             )
-        }
-        switch bound {
-        case .allow:
-            if case .mandatoryHuman(let deny) = hardDecision {
+        case .mandatoryHuman(let deny):
+            return .pending(
+                PendingAuthorization(
+                    action: action,
+                    reason: .mandatoryHuman,
+                    deny: deny,
+                    explanation: explanation
+                )
+            )
+        case .hardAllow:
+            return .allowed(AllowedAction(action: action, explanation: explanation))
+        case .reviewEligible:
+            switch bound {
+            case .allow:
+                return .allowed(AllowedAction(action: action, explanation: explanation))
+            case .deny(let deny):
+                return .denied(
+                    DeniedAction(action: action, deny: deny, explanation: explanation)
+                )
+            case .mandatoryHuman(let deny):
                 return .pending(
                     PendingAuthorization(
                         action: action,
-                        reason: .mandatoryHuman,
+                        reason: .reviewAsk,
                         deny: deny,
                         explanation: explanation
                     )
                 )
             }
-            return .allowed(AllowedAction(action: action, explanation: explanation))
-        case .deny(let deny):
-            return .denied(
-                DeniedAction(action: action, deny: deny, explanation: explanation)
-            )
-        case .mandatoryHuman(let deny):
-            let reason: ApprovalReason
-            switch hardDecision {
-            case .reviewEligible:
-                reason = .reviewAsk
-            case .mandatoryHuman, .hardAllow, .hardDeny:
-                reason = .mandatoryHuman
-            }
-            return .pending(
-                PendingAuthorization(
-                    action: action,
-                    reason: reason,
-                    deny: deny,
-                    explanation: explanation
-                )
-            )
         }
     }
 }
