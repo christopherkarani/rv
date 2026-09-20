@@ -2,6 +2,18 @@ import Foundation
 import RVDomain
 
 enum AllowOnceLedger {
+    enum MintResult: Equatable, Sendable {
+        case appended([AllowOnceRecord])
+        case reused([AllowOnceRecord])
+
+        var records: [AllowOnceRecord] {
+            switch self {
+            case .appended(let records), .reused(let records):
+                return records
+            }
+        }
+    }
+
     enum RedeemOutcome: Equatable, Sendable {
         case granted(records: [AllowOnceRecord], row: AllowOnceListRow)
         case expired(records: [AllowOnceRecord])
@@ -23,14 +35,10 @@ enum AllowOnceLedger {
         ruleID: RuleID?,
         now: Date,
         ttl: TimeInterval
-    ) throws(AllowOnceError) -> [AllowOnceRecord] {
-        var updated = records.filter { record in
-            switch record.lifecycle {
-            case .consumed:
-                return true
-            case .pending, .granted:
-                return record.expiresAt >= now
-            }
+    ) throws(AllowOnceError) -> MintResult {
+        let updated = prepare(records, now: now)
+        if existingPending(in: updated, fingerprint: fingerprint, cwd: cwd) != nil {
+            return .reused(updated)
         }
         if updated.contains(where: { record in
             guard case .pending = record.lifecycle else { return false }
@@ -38,7 +46,8 @@ enum AllowOnceLedger {
         }) {
             throw AllowOnceError.collision
         }
-        updated.append(
+        var appended = updated
+        appended.append(
             AllowOnceRecord(
                 schemaVersion: 1,
                 lifecycle: .pending,
@@ -51,7 +60,29 @@ enum AllowOnceLedger {
                 expiresAt: now.addingTimeInterval(ttl)
             )
         )
-        return updated
+        return .appended(appended)
+    }
+
+    static func prepare(_ records: [AllowOnceRecord], now: Date) -> [AllowOnceRecord] {
+        records.filter { record in
+            switch record.lifecycle {
+            case .consumed:
+                return true
+            case .pending, .granted:
+                return record.expiresAt >= now
+            }
+        }
+    }
+
+    static func existingPending(
+        in records: [AllowOnceRecord],
+        fingerprint: String,
+        cwd: WorkingDirectory
+    ) -> AllowOnceRecord? {
+        records.first { record in
+            guard case .pending = record.lifecycle else { return false }
+            return record.commandFingerprint == fingerprint && record.cwd == cwd
+        }
     }
 
     static func redeem(

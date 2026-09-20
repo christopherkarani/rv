@@ -8,6 +8,7 @@ import RVDomain
 
 public actor AllowOnceStore {
     nonisolated public let baseDirectory: URL
+    private var liveUnlockCodes: [UnlockCacheKey: AllowOnceUnlockCode] = [:]
 
     public init(baseDirectory: URL) {
         self.baseDirectory = baseDirectory
@@ -41,25 +42,36 @@ public actor AllowOnceStore {
         let trimmed = matchingView.rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty == false else { throw AllowOnceError.emptyCommand }
         let view = MatchingView(trimmed)
+        let fingerprint = commandFingerprint(view)
+        let cacheKey = UnlockCacheKey(fingerprint: fingerprint, cwd: cwd.rawValue)
         var lastError: AllowOnceError = .collision
         for _ in 0..<8 {
             let code = try generateAllowOnceCode()
             let hash = sha256Hex(code.rawValue)
             do {
-                try withFileLock {
-                    let fresh = try AllowOnceLedger.mint(
+                return try withFileLock {
+                    switch try AllowOnceLedger.mint(
                         records: loadRecords(),
                         codeHash: hash,
-                        fingerprint: commandFingerprint(view),
+                        fingerprint: fingerprint,
                         redacted: redactCommand(view),
                         cwd: cwd,
                         ruleID: ruleID,
                         now: now,
                         ttl: ttl
-                    )
-                    try writeRecords(fresh)
+                    ) {
+                    case let .reused(records):
+                        try writeRecords(records)
+                        if let cached = liveUnlockCodes[cacheKey] {
+                            return cached
+                        }
+                        throw AllowOnceError.alreadyPending
+                    case let .appended(records):
+                        try writeRecords(records)
+                        liveUnlockCodes[cacheKey] = code
+                        return code
+                    }
                 }
-                return code
             } catch let error as AllowOnceError where error == .collision {
                 lastError = error
                 continue
@@ -68,18 +80,21 @@ public actor AllowOnceStore {
         throw lastError
     }
 
-    /// Hook deny mint. Not TTY-gated. Returns a six-hex code or nil.
-    /// Writes `kind: .pending` only. Never plants a granted row.
+    /// Hook deny mint. Not TTY-gated. Returns a six-hex code, `earlierPending`, or nil.
+    /// Writes `kind: .pending` only. Never plants a granted row. A live pending
+    /// for the same command+cwd is reused instead of minting a new code.
     package func mintFromDeny(
         matchingView: MatchingView,
         cwd: WorkingDirectory,
         ruleID: RuleID?,
         now: Date,
         ttl: TimeInterval = 24 * 60 * 60
-    ) async -> AllowOnceUnlockCode? {
+    ) async -> AllowOnceUnlockMint? {
         let trimmed = matchingView.rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty == false else { return nil }
         let view = MatchingView(trimmed)
+        let fingerprint = commandFingerprint(view)
+        let cacheKey = UnlockCacheKey(fingerprint: fingerprint, cwd: cwd.rawValue)
         for _ in 0..<8 {
             let code: AllowOnceUnlockCode
             do {
@@ -89,20 +104,29 @@ public actor AllowOnceStore {
             }
             let hash = sha256Hex(code.rawValue)
             do {
-                try withFileLock(nonBlocking: true) {
-                    let fresh = try AllowOnceLedger.mint(
+                return try withFileLock(nonBlocking: true) {
+                    switch try AllowOnceLedger.mint(
                         records: loadRecords(),
                         codeHash: hash,
-                        fingerprint: commandFingerprint(view),
+                        fingerprint: fingerprint,
                         redacted: redactCommand(view),
                         cwd: cwd,
                         ruleID: ruleID,
                         now: now,
                         ttl: ttl
-                    )
-                    try writeRecords(fresh)
+                    ) {
+                    case let .reused(records):
+                        try writeRecords(records)
+                        if let cached = liveUnlockCodes[cacheKey] {
+                            return .code(cached)
+                        }
+                        return .earlierPending
+                    case let .appended(records):
+                        try writeRecords(records)
+                        liveUnlockCodes[cacheKey] = code
+                        return .code(code)
+                    }
                 }
-                return code
             } catch let error as AllowOnceError where error == .collision {
                 continue
             } catch {
@@ -258,12 +282,18 @@ public actor AllowOnceStore {
     public func clear(tty: TTYCapability, now: Date) async throws {
         guard allowsInteractiveAllowOnce(tty) else { throw AllowOnceError.ttyRequired }
         try withFileLock {
+            liveUnlockCodes.removeAll()
             try writeRecords(AllowOnceLedger.keepConsumed(records: loadRecords(), now: now))
         }
     }
 
     private var fileURL: URL {
         RVPolicyPaths.allowOnceFile(inConfigDir: baseDirectory)
+    }
+
+    private struct UnlockCacheKey: Hashable, Sendable {
+        var fingerprint: String
+        var cwd: String
     }
 
     private func loadRecords() -> [AllowOnceRecord] {

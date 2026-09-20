@@ -35,7 +35,11 @@ func hookPermissionAllowJSON() -> String {
 
 func hookPermissionDenyJSON(reason: String) -> String {
     let text = hookBlockReason(reason)
-    return "{\"permission\":\"deny\",\"user_message\":\(jsonQuoted(text)),\"agent_message\":\(jsonQuoted(text))}\n"
+    return hookPermissionDenyJSON(userMessage: text, agentMessage: cursorAgentStopLine)
+}
+
+func hookPermissionDenyJSON(userMessage: String, agentMessage: String) -> String {
+    "{\"permission\":\"deny\",\"user_message\":\(jsonQuoted(hookBlockReason(userMessage))),\"agent_message\":\(jsonQuoted(hookBlockReason(agentMessage)))}\n"
 }
 
 /// Official Codex older PreToolUse honor path (`decision: block` + process exit 2).

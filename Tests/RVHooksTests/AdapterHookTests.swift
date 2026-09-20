@@ -242,6 +242,30 @@ func codexWrapper_missingReasonDoesNotExitTwoWithWhitespaceStderr(_ stubStdout: 
     #expect(source.contains("if exit_code == 0") == false)
 }
 
+@Test func cursorWrapper_preservesSplitUserAndAgentMessages() async throws {
+    let user = "RV · Blocked. Paste in Terminal to allow once: rv allow-once a1b2c3. This unlocks only this exact command."
+    let agent = cursorAgentStopLine
+    let result = try await runCursorWrapper(
+        event: [
+            "hook_event_name": "beforeShellExecution",
+            "command": "git reset --hard",
+            "cwd": "/tmp/ws",
+        ],
+        stub: .stdout(
+            "{\"permission\":\"deny\",\"user_message\":\"\(user)\",\"agent_message\":\"\(agent)\"}\n",
+            exit: 0
+        )
+    )
+    let json = try #require(
+        JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any]
+    )
+    #expect(json["permission"] as? String == "deny")
+    #expect(json["user_message"] as? String == user)
+    #expect(json["agent_message"] as? String == agent)
+    #expect(json["user_message"] as? String != json["agent_message"] as? String)
+    #expect(result.exitCode == 0)
+}
+
 @Test func cursorWrapper_resetHardWritesPermissionDenyAndExitsZero() async throws {
     let reason = resetHardReason
     let result = try await runCursorWrapper(

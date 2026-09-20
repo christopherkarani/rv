@@ -7,7 +7,7 @@ func hookWorld(
     evaluate: @escaping @Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult,
     evaluateFile: (@Sendable (FileToolAction, WorkingDirectory?) async -> EvaluationResult)? = nil,
     spend: (@Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult)? = nil,
-    mintOnDeny: (@Sendable (EvaluationResult, WorkingDirectory?) async -> AllowOnceUnlockCode?)? =
+    mintOnDeny: (@Sendable (EvaluationResult, WorkingDirectory?) async -> AllowOnceUnlockMint?)? =
         nil,
     recordHostAsk: (@Sendable (HookRequest, ProposedAction) async throws -> Void)? = nil,
     clearHostAsk: (@Sendable (HookRequest, ProposedAction) async throws -> Void)? = nil

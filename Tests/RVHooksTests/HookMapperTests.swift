@@ -137,7 +137,7 @@ func hookWire_samePathHosts_resetHardIsShortDeny(_ host: HookHost) throws {
         let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
         #expect(json["permission"] as? String == "deny")
         #expect(json["user_message"] as? String == resetHardHostDeny)
-        #expect(json["agent_message"] as? String == resetHardHostDeny)
+        #expect(json["agent_message"] as? String == cursorAgentStopLine)
         #expect(json["permissionDecision"] == nil)
         #expect(json["hookSpecificOutput"] == nil)
         #expect(json["decision"] == nil)
@@ -336,7 +336,7 @@ func hookWire_samePathHosts_resetHardIsShortDeny(_ host: HookHost) throws {
         ),
         command: ShellCommand(rawValue: "git reset --hard"),
         using: denyCodec,
-        intent: .firstCall(verdict: .deny, unlockCode: code)
+        intent: .firstCall(verdict: .deny, unlockCode: .code(code))
     )
     #expect(denyCodec.denyCalls.count == 1)
     #expect(denyCodec.denyCalls[0].rule == RuleID(pack: .coreGit, pattern: "reset-hard"))
@@ -524,7 +524,7 @@ private final class EncodeDoorSpy: HostAskCodec, @unchecked Sendable {
         from: result,
         command: ShellCommand(rawValue: "git reset --hard"),
         using: GrokHostCodec(),
-        intent: .firstCall(verdict: .deny, unlockCode: try mintedUnlock())
+        intent: .firstCall(verdict: .deny, unlockCode: .code(try mintedUnlock()))
     )
     let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
     #expect(json["decision"] as? String == "deny")
@@ -553,7 +553,7 @@ private final class EncodeDoorSpy: HostAskCodec, @unchecked Sendable {
     let command = ShellCommand(rawValue: "git reset --hard")
     let unlock = try mintedUnlock()
     let expected = mintedResetHardHostDeny(unlock)
-    let intent = HookWireIntent.firstCall(verdict: .deny, unlockCode: unlock)
+    let intent = HookWireIntent.firstCall(verdict: .deny, unlockCode: .code(unlock))
 
     let claude = hookWire(
         from: result,
@@ -586,7 +586,7 @@ private final class EncodeDoorSpy: HostAskCodec, @unchecked Sendable {
     let cursorJSON = try #require(JSONSerialization.jsonObject(with: Data(cursor.stdout.utf8)) as? [String: Any])
     #expect(cursorJSON["permission"] as? String == "deny")
     #expect(cursorJSON["user_message"] as? String == expected)
-    #expect(cursorJSON["agent_message"] as? String == expected)
+    #expect(cursorJSON["agent_message"] as? String == cursorAgentStopLine)
     #expect(cursor.exitCode == 0)
 }
 
@@ -599,7 +599,7 @@ private final class EncodeDoorSpy: HostAskCodec, @unchecked Sendable {
         ),
         command: ShellCommand(rawValue: "git reset --hard"),
         using: PiHostCodec(),
-        intent: .firstCall(verdict: .ask(.hostNative), unlockCode: try mintedUnlock())
+        intent: .firstCall(verdict: .ask(.hostNative), unlockCode: .code(try mintedUnlock()))
     )
     let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
     #expect(json["decision"] as? String == "ask")

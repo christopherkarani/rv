@@ -24,7 +24,11 @@ def main():
         raw = sys.stdin.read()
         mapped = _guard(raw)
         if mapped["action"] == "block":
-            _emit_deny(mapped["reason"])
+            _emit_deny(
+                mapped["reason"],
+                user_message=mapped.get("user_message"),
+                agent_message=mapped.get("agent_message"),
+            )
         else:
             _emit_allow()
         return
@@ -93,11 +97,13 @@ def _map_rv_hook_result(stdout):
                 if permission == "ask":
                     return {"action": "block", "reason": "rv failed"}
                 if permission == "deny":
+                    user = parsed.get("user_message")
+                    agent = parsed.get("agent_message")
                     return {
                         "action": "block",
-                        "reason": _blocking_reason(
-                            parsed.get("user_message") or parsed.get("agent_message")
-                        ),
+                        "reason": _blocking_reason(user or agent),
+                        "user_message": user,
+                        "agent_message": agent,
                     }
                 decision = parsed.get("decision")
                 if decision in ("block", "deny"):
@@ -124,14 +130,15 @@ def _emit_allow():
     sys.exit(0)
 
 
-def _emit_deny(reason):
-    text = _blocking_reason(reason)
+def _emit_deny(reason, user_message=None, agent_message=None):
+    user = _blocking_reason(user_message or reason)
+    agent = _blocking_reason(agent_message or user)
     sys.stdout.write(
         json.dumps(
             {
                 "permission": "deny",
-                "user_message": text,
-                "agent_message": text,
+                "user_message": user,
+                "agent_message": agent,
             },
             separators=(",", ":"),
         )

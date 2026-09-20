@@ -162,6 +162,54 @@ struct AllowOnceGrantHonorTests {
         }
     }
 
+    @Test func grokHookEvaluate_sameCommandReusesUnlockCode() async throws {
+        let directory = try isolatedAllowOnceDirectory()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let client = ServiceClient(
+            transport: nil,
+            allowOnceDirectory: directory,
+            home: try isolatedHome(),
+            clock: { now }
+        )
+        let stdin = """
+        {"hookEventName":"pre_tool_use","cwd":"/tmp/ws","toolName":"run_terminal_command","toolInput":{"command":"git reset --hard"}}
+        """
+        let first = await client.hookEvaluate(host: .grok, stdin: stdin)
+        let firstJSON = try #require(JSONSerialization.jsonObject(with: Data(first.stdout.utf8)) as? [String: Any])
+        let firstReason = try #require(firstJSON["reason"] as? String)
+        let code = try #require(allowOnceUnlockCode(in: firstReason))
+        #expect(firstJSON["next"] as? String == unlockLine(for: code))
+
+        let second = await client.hookEvaluate(host: .grok, stdin: stdin)
+        let secondJSON = try #require(JSONSerialization.jsonObject(with: Data(second.stdout.utf8)) as? [String: Any])
+        let secondReason = try #require(secondJSON["reason"] as? String)
+        #expect(allowOnceUnlockCode(in: secondReason) == code)
+        #expect(secondJSON["next"] as? String == unlockLine(for: code))
+        #expect((await AllowOnceStore(baseDirectory: directory).list(now: now)).count == 1)
+    }
+
+    @Test func cursorHookEvaluate_agentMessageTellsAgentNotToRetry() async throws {
+        let directory = try isolatedAllowOnceDirectory()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let client = ServiceClient(
+            transport: nil,
+            allowOnceDirectory: directory,
+            home: try isolatedHome(),
+            clock: { now }
+        )
+        let stdin = """
+        {"hook_event_name":"beforeShellExecution","cwd":"/tmp/ws","command":"git reset --hard"}
+        """
+        let wire = await client.hookEvaluate(host: .cursor, stdin: stdin)
+        let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
+        #expect(json["permission"] as? String == "deny")
+        let user = try #require(json["user_message"] as? String)
+        #expect(allowOnceUnlockCode(in: user) != nil)
+        #expect(user.contains("This unlocks only this exact command."))
+        #expect(json["agent_message"] as? String == cursorAgentStopLine)
+        #expect(allowOnceUnlockCode(in: json["agent_message"] as? String ?? "") == nil)
+    }
+
     @Test func grokHookEvaluateMissingCwdDoesNotMint() async throws {
         let directory = try isolatedAllowOnceDirectory()
         let now = Date(timeIntervalSince1970: 1_700_000_000)

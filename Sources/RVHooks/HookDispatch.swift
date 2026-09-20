@@ -42,7 +42,7 @@ private func hookBody<C: HostCodec>(
     stdin: String,
     codec: C,
     world: HookEvaluateWorld,
-    firstCall: (EvaluationResult, ShellCommand, HostAskVerdict, AllowOnceUnlockCode?) -> HookWire
+    firstCall: (EvaluationResult, ShellCommand, HostAskVerdict, AllowOnceUnlockMint?) -> HookWire
 ) async -> HookWire {
     switch codec.decode(stdin) {
     case .request(let request):
@@ -144,8 +144,8 @@ private func mintUnlockCodeIfNeeded(
     result: EvaluationResult,
     authorization: HookAuthorization,
     cwd: WorkingDirectory?,
-    mintOnDeny: @Sendable (EvaluationResult, WorkingDirectory?) async -> AllowOnceUnlockCode?
-) async -> AllowOnceUnlockCode? {
+    mintOnDeny: @Sendable (EvaluationResult, WorkingDirectory?) async -> AllowOnceUnlockMint?
+) async -> AllowOnceUnlockMint? {
     guard authorization.shouldMintUnlock else { return nil }
     return await mintOnDeny(result, cwd)
 }

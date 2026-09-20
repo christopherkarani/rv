@@ -449,7 +449,7 @@ public struct GatedEvaluate: Sendable {
         store: AllowOnceStore,
         now: Date,
         home: HomeDirectory?
-    ) async -> AllowOnceUnlockCode? {
+    ) async -> AllowOnceUnlockMint? {
         guard home != nil else { return nil }
         guard let cwd, HookAuthorization.shouldMintUnlock(result: result, cwd: cwd) else {
             return nil
