@@ -15,7 +15,7 @@ public func applyGitSemantics(
 ) -> EvaluationResult {
     applyGitSemantics(
         pack: pack,
-        analysis: analyzeGit(command, context: gitAnalysisContext(context)),
+        analysis: analyzeSemantics(command, gitWorld: context, filesystemWorld: .unprobed),
         command: command,
         context: context,
         enabledPacks: enabledPacks,

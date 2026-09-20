@@ -15,7 +15,7 @@ public func applyFilesystemSemantics(
 ) -> EvaluationResult {
     applyFilesystemSemantics(
         pack: pack,
-        analysis: analyzeFilesystem(command, context: filesystemAnalysisContext(filesystemWorld)),
+        analysis: analyzeSemantics(command, gitWorld: .unprobed, filesystemWorld: filesystemWorld),
         command: command,
         filesystemWorld: filesystemWorld,
         enabledPacks: enabledPacks,
@@ -54,7 +54,8 @@ public func applyFilesystemSemantics(
                 workingDirectory: filesystemWorkingDirectory(filesystemWorld)
             ),
             context: ReviewContext(repository: RepositoryReviewContext()),
-            policy: policy
+            policy: policy,
+            gitWorld: .unprobed
         )
     } else if let typed = ActionPolicyEngine.typedRestriction(
         .filesystem(action),
@@ -120,17 +121,6 @@ private func filesystemBound(
             analysis: analysis,
             boundReview: bound
         )
-    }
-}
-
-/// Protected-path and out-of-repo still tighten when unprobed. Unresolved
-/// must not mask those hits on a mixed-target command.
-private func filesystemAnalysisContext(_ world: FilesystemAnalysisWorld) -> FilesystemAnalysisContext {
-    switch world {
-    case .unprobed:
-        return .empty
-    case .probed(let context):
-        return context
     }
 }
 
