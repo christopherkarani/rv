@@ -26,6 +26,7 @@ let scanLinkerSettings: [LinkerSetting] = []
 
 let coreLibraryTargets: [Target] = [
     .target(name: "RVDomain"),
+    .target(name: "RVIsolation", dependencies: ["RVDomain"]),
     .target(name: "RVTheme"),
     .target(name: "RVEngine", dependencies: ["RVDomain"]),
     .target(
@@ -56,6 +57,7 @@ let coreLibraryTargets: [Target] = [
 
 let coreProducts: [Product] = [
     .library(name: "RVDomain", targets: ["RVDomain"]),
+    .library(name: "RVIsolation", targets: ["RVIsolation"]),
     .library(name: "RVEngine", targets: ["RVEngine"]),
     .library(name: "RVPacks", targets: ["RVPacks"]),
     .library(name: "RVScan", targets: ["RVScan"]),
@@ -71,6 +73,7 @@ let coreProducts: [Product] = [
 
 let coreTestTargets: [Target] = [
     .testTarget(name: "RVDomainTests", dependencies: ["RVDomain"]),
+    .testTarget(name: "RVIsolationTests", dependencies: ["RVIsolation"]),
     .testTarget(
         name: "RVEngineTests",
         dependencies: ["RVEngine"],

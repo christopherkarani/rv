@@ -38,7 +38,7 @@ jobs:
             RVDomainTests RVEngineTests RVPacksTests RVPolicyTests \
             RVHooksTests RVIPCTests RVPresentationTests \
             RVThemeTests RVTUITests RVHistoryTests RVAnalyticsTests \
-            RVCorpusTests
+            RVCorpusTests RVIsolationTests
           Scripts/swift-6.4 test --filter RVServiceTests --skip injectedOneSecondIdleFiresWithoutKeepAlive
           Scripts/swift-6.4 test --filter RVCLITests --skip CHookPipeTests.cHookProof
 
