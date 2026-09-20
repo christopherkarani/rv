@@ -86,7 +86,7 @@ let coreTestTargets: [Target] = [
     .testTarget(name: "RVPolicyTests", dependencies: ["RVPolicy"]),
     .testTarget(
         name: "RVHooksTests",
-        dependencies: ["RVHooks"],
+        dependencies: ["RVHooks", "RVEngine"],
         exclude: ["Fixtures"]
     ),
     .testTarget(name: "RVIPCTests", dependencies: ["RVIPC"]),
