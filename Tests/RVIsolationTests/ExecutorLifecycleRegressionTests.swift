@@ -122,7 +122,7 @@ struct ExecutorLifecycleRegressionTests {
         defer { tree.tearDown() }
         let started = tree.workspaceURL.appendingPathComponent("started")
         let pidFile = tree.workspaceURL.appendingPathComponent("sleep.pid")
-        let script = "printf started > \"$1\"; /bin/sleep 20 & printf %s \"$!\" > \"$2\"; wait"
+        let script = "printf started > \"$1\"; /bin/sleep 20 & printf '%s\\n' \"$!\" > \"$2.tmp\" && mv \"$2.tmp\" \"$2\"; wait"
         let executable = try lifecycleExecutable(
             plan: tree.contained,
             marker: started,
@@ -132,17 +132,25 @@ struct ExecutorLifecycleRegressionTests {
         let executor = LocalExecutor()
         let task = Task { try await lifecycleRun(executor, executable) }
         let deadline = Date().addingTimeInterval(5)
-        while FileManager.default.fileExists(atPath: pidFile.path) == false, Date() < deadline {
+        var sleepPID: Int32?
+        while Date() < deadline {
+            if let text = try? String(contentsOf: pidFile, encoding: .utf8) {
+                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let pid = Int32(trimmed), pid > 1, kill(pid, 0) == 0 {
+                    sleepPID = pid
+                    break
+                }
+            }
             try await Task.sleep(nanoseconds: 20_000_000)
         }
-        let pidText = try String(contentsOf: pidFile, encoding: .utf8)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let pid = try #require(Int32(pidText))
+        let pid = try #require(sleepPID)
         task.cancel()
         let result = try await task.value
         #expect(result == .failure(.cancelled))
-        #expect(kill(pid, 0) == -1)
-        #expect(errno == ESRCH)
+        let probe = kill(pid, 0)
+        let probeError = errno
+        #expect(probe == -1)
+        #expect(probeError == ESRCH)
         #endif
     }
 }

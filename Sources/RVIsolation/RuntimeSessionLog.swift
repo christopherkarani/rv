@@ -95,14 +95,58 @@ enum RuntimeSessionLog {
             return .failure(.sessionRecordFailed)
         }
         defer { close(fd) }
-        let wrote = data.withUnsafeBytes { buffer -> Int in
-            guard let base = buffer.baseAddress else { return -1 }
-            return write(fd, base, buffer.count)
-        }
-        guard wrote == data.count, fsync(fd) == 0 else {
+        guard writeAll(fd, data), sync(fd) else {
             return .failure(.sessionRecordFailed)
         }
         return .success(())
+    }
+
+    /// Writes `data` in full. A short write is finished or closed with a newline
+    /// so the next append cannot be concatenated onto a partial JSON line.
+    private static func writeAll(_ fd: Int32, _ data: Data) -> Bool {
+        let bytes = [UInt8](data)
+        var offset = 0
+        var interrupts = 0
+        while offset < bytes.count {
+            var writeError: Int32 = 0
+            let count = bytes.withUnsafeBytes { buffer -> Int in
+                guard let base = buffer.baseAddress else { return -1 }
+                let wrote = write(fd, base.advanced(by: offset), bytes.count - offset)
+                if wrote < 0 {
+                    writeError = errno
+                }
+                return wrote
+            }
+            if count > 0 {
+                offset += count
+                interrupts = 0
+                continue
+            }
+            if count < 0, writeError == EINTR, interrupts < 16 {
+                interrupts += 1
+                continue
+            }
+            if offset > 0 {
+                var newline = UInt8(ascii: "\n")
+                _ = withUnsafePointer(to: &newline) { pointer in
+                    write(fd, pointer, 1)
+                }
+            }
+            return false
+        }
+        return true
+    }
+
+    private static func sync(_ fd: Int32) -> Bool {
+        for _ in 0..<16 {
+            if fsync(fd) == 0 {
+                return true
+            }
+            if errno != EINTR {
+                return false
+            }
+        }
+        return false
     }
 
     static func records(at url: URL) -> [RuntimeSessionRecord] {

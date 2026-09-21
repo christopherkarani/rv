@@ -170,9 +170,13 @@ func superviseSeatbelt(
     guard spawnResult == 0, pid > 1 else {
         return .failure(.processSpawnFailed)
     }
+    // The wait loop polls this fd. A blocking read would ignore cancellation
+    // until the child writes or exits, so a failed flag change cannot continue.
     let flagsNow = fcntl(readEnd, F_GETFL)
-    if flagsNow >= 0 {
-        _ = fcntl(readEnd, F_SETFL, flagsNow | O_NONBLOCK)
+    guard flagsNow >= 0, fcntl(readEnd, F_SETFL, flagsNow | O_NONBLOCK) >= 0 else {
+        terminateSession(pgid: pid, also: [pid])
+        _ = waitUntilSessionIsDead(pgid: pid, also: [pid])
+        return .failure(.lifetimeBoundaryFailed)
     }
 
     let pgid = getpgid(pid)
@@ -402,7 +406,10 @@ private struct SpawnPointers {
     ) -> T {
         var values = storage
         return values.withUnsafeMutableBufferPointer { buffer in
-            body(buffer.baseAddress!)
+            guard let base = buffer.baseAddress else {
+                preconditionFailure("spawn argument vector is empty")
+            }
+            return body(base)
         }
     }
 

@@ -95,6 +95,33 @@ struct LaunchBoundaryRegressionTests {
         #endif
     }
 
+    @Test func appendedSessionRecordsStayIndependent() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let log = tree.rootURL.appendingPathComponent("sessions.jsonl")
+        let workspace = try #require(WorkingDirectory(validating: tree.workspaceURL.path))
+        var ids: [UUID] = []
+        for _ in 0..<2 {
+            let session = RuntimeSession(
+                id: RuntimeSessionID(),
+                host: .opencode,
+                workspace: workspace,
+                mode: tree.contained.mode,
+                backend: .seatbelt,
+                startedAt: Date(),
+                child: nil
+            )
+            ids.append(session.id.rawValue)
+            switch RuntimeSessionLog.append(session, to: log) {
+            case .success:
+                break
+            case .failure(let error):
+                Issue.record("session append failed: \(error)")
+            }
+        }
+        #expect(RuntimeSessionLog.records(at: log).map(\.id) == ids)
+    }
+
     @Test func sessionRecordFailureDoesNotExecuteInnerCommand() throws {
         #if os(macOS)
         let tree = try ContainmentTree()

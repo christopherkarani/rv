@@ -416,15 +416,7 @@ private func assertProbeCannotSurvive(_ tree: ContainmentTree, executable: Strin
         #expect(run.session != nil)
         #expect(run.established.family == .seatbelt)
     case .failure(let error):
-        switch error {
-        case .lifetimeBoundaryFailed, .seatbeltNotEstablished, .cancelled:
-            break
-        case .sessionRecordFailed, .backendUnavailable, .backendMismatch, .workspaceMustBeAbsolute,
-            .workspaceDoesNotExist, .workspacePathUnresolvable, .workspacePathUnsafe,
-            .workspaceContainsInodeAlias, .containedGuaranteesUnsupported, .profileNotApplicable,
-            .processSpawnFailed, .commandContainsNUL, .commandExecutableMustBeAbsolute:
-            Issue.record("probe must be contained or fail closed on lifetime, got \(error)")
-        }
+        Issue.record("probe must run under Seatbelt, got \(error)")
     }
 }
 
