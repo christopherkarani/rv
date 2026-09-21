@@ -108,6 +108,8 @@ struct SeatbeltContainmentTests {
                 break
             case .seatbelt:
                 Issue.record("observed control must not use family seatbelt")
+            case .landlock:
+                Issue.record("observed control must not use family landlock")
             }
         case .failure(let error):
             recordUnexpectedContainmentError(error, expected: "unsandboxed observed outside touch")
@@ -216,6 +218,11 @@ private func expectContainedSeatbelt(
         break
     case .none:
         Issue.record("Darwin contained establish must be family seatbelt", sourceLocation: sourceLocation)
+    case .landlock:
+        Issue.record(
+            "Darwin contained establish must be family seatbelt, not landlock",
+            sourceLocation: sourceLocation
+        )
     }
     switch established.mode {
     case .contained(let guarantees):
