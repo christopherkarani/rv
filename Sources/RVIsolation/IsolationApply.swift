@@ -20,6 +20,13 @@ public enum IsolationApplyError: Error, Sendable, Equatable {
     case commandExecutableMustBeAbsolute
 }
 
+/// Child stdio. `discard` is `/dev/null` (apply / perform / probes).
+/// `inherit` is the host-launch door.
+public enum IsolatedIO: Sendable, Equatable {
+    case discard
+    case inherit
+}
+
 /// Absolute argv the backend starts (the inner command, not `sandbox-exec`).
 /// Empty and relative executables are unrepresentable.
 public struct IsolatedCommand: Sendable, Equatable {
@@ -61,6 +68,7 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
     public let command: IsolatedCommand
     public let family: IsolationBackendFamily
     let launch: Launch
+    let io: IsolatedIO
 
     var seatbeltProfile: SeatbeltProfile? {
         switch launch {
@@ -80,7 +88,12 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
         }
     }
 
-    init?(plan: IsolationPlan, command: IsolatedCommand, launch: Launch) {
+    init?(
+        plan: IsolationPlan,
+        command: IsolatedCommand,
+        launch: Launch,
+        io: IsolatedIO = .discard
+    ) {
         switch (launch, plan.mode) {
         case (.seatbelt, .contained):
             self.family = .seatbelt
@@ -96,6 +109,19 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
         self.plan = plan
         self.command = command
         self.launch = launch
+        self.io = io
+    }
+
+    func withIO(_ io: IsolatedIO) -> IsolatedLaunchRequest {
+        IsolatedLaunchRequest(copying: self, io: io)
+    }
+
+    private init(copying request: IsolatedLaunchRequest, io: IsolatedIO) {
+        self.plan = request.plan
+        self.command = request.command
+        self.family = request.family
+        self.launch = request.launch
+        self.io = io
     }
 
     /// Executable `run` will start. Observed / mediated never use a helper.
@@ -179,9 +205,12 @@ public struct IsolationBackend: Sendable {
 
     public func apply(
         _ plan: IsolationPlan,
-        command: IsolatedCommand
+        command: IsolatedCommand,
+        io: IsolatedIO = .discard
     ) -> Result<IsolatedRunResult, IsolationApplyError> {
-        prepare(plan, command).flatMap(run)
+        prepare(plan, command).flatMap { request in
+            run(request.withIO(io))
+        }
     }
 }
 
@@ -225,13 +254,14 @@ public enum IsolationBackends {
     /// establish it. `IsolationPlan.mode` is unchanged.
     public static func apply(
         _ plan: IsolationPlan,
-        command: IsolatedCommand
+        command: IsolatedCommand,
+        io: IsolatedIO = .discard
     ) -> Result<IsolatedRunResult, IsolationApplyError> {
         switch plan.mode {
         case .observed, .mediated:
-            return unavailable().apply(plan, command: command)
+            return unavailable().apply(plan, command: command, io: io)
         case .contained:
-            return platform().apply(plan, command: command)
+            return platform().apply(plan, command: command, io: io)
         }
     }
 }
@@ -366,8 +396,16 @@ func spawn(
             process.currentDirectoryURL = URL(fileURLWithPath: resolved)
         }
     }
-    process.standardOutput = FileHandle.nullDevice
-    process.standardError = FileHandle.nullDevice
+    switch request.io {
+    case .discard:
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+    case .inherit:
+        process.standardInput = FileHandle.standardInput
+        process.standardOutput = FileHandle.standardOutput
+        process.standardError = FileHandle.standardError
+    }
     do {
         try process.run()
     } catch {
