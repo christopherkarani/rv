@@ -1,0 +1,72 @@
+import Foundation
+import RVDomain
+import Testing
+
+/// Temp `root/repo/ws` + sibling used by Seatbelt, Landlock, and conformance.
+struct ContainmentTree {
+    let rootURL: URL
+    let workspaceURL: URL
+    let siblingURL: URL
+    let repositoryURL: URL
+    let contained: IsolationPlan
+    let observed: IsolationPlan
+    let containedDifferingRoot: IsolationPlan
+
+    init() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-containment-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let repository = root.appendingPathComponent("repo", isDirectory: true)
+        let workspace = repository.appendingPathComponent("ws", isDirectory: true)
+        let sibling = root.appendingPathComponent("sibling", isDirectory: true)
+        try FileManager.default.createDirectory(at: repository, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: sibling, withIntermediateDirectories: true)
+
+        rootURL = root.resolvingSymlinksInPath()
+        workspaceURL = workspace.resolvingSymlinksInPath()
+        siblingURL = sibling.resolvingSymlinksInPath()
+        repositoryURL = repository.resolvingSymlinksInPath()
+
+        let workspaceDir = try Self.requireWorkspace(workspaceURL.path)
+        let repoRoot = try Self.requireRepositoryRoot(repositoryURL.path)
+        contained = try Self.requirePlan(
+            IsolationCompileRequest(requested: .contained, workspace: workspaceDir)
+        )
+        observed = try Self.requirePlan(
+            IsolationCompileRequest(requested: .observed, workspace: workspaceDir)
+        )
+        containedDifferingRoot = try Self.requirePlan(
+            IsolationCompileRequest(
+                requested: .contained,
+                workspace: workspaceDir,
+                repositoryRoot: repoRoot
+            )
+        )
+    }
+
+    func tearDown() {
+        try? FileManager.default.removeItem(at: rootURL)
+    }
+
+    static func requireWorkspace(_ path: String) throws -> WorkingDirectory {
+        try #require(WorkingDirectory(validating: path))
+    }
+
+    static func requireRepositoryRoot(_ path: String) throws -> RepositoryRoot {
+        try #require(RepositoryRoot(validating: path))
+    }
+
+    static func requirePlan(_ request: IsolationCompileRequest) throws -> IsolationPlan {
+        switch compileIsolationPlan(request) {
+        case .success(let plan):
+            return plan
+        case .failure(let error):
+            switch error {
+            case .containedRequiresWorkspace:
+                Issue.record("containment fixture compile must not fail containedRequiresWorkspace")
+                throw error
+            }
+        }
+    }
+}
