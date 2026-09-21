@@ -464,7 +464,7 @@ private func runHoleNet(verdict: IsolationConformanceVerdict) throws -> String {
         case .backendUnavailable, .backendMismatch, .workspaceMustBeAbsolute,
             .workspaceDoesNotExist, .workspacePathUnresolvable, .workspacePathUnsafe,
             .workspaceContainsInodeAlias, .profileNotApplicable, .processSpawnFailed,
-            .commandContainsNUL, .commandExecutableMustBeAbsolute:
+            .commandContainsNUL, .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
             recordUnexpectedConformanceError(
                 error,
                 id: .holeNet,
@@ -513,7 +513,7 @@ private func runHoleRead(verdict: IsolationConformanceVerdict) throws -> String 
         case .backendUnavailable, .backendMismatch, .workspaceMustBeAbsolute,
             .workspaceDoesNotExist, .workspacePathUnresolvable, .workspacePathUnsafe,
             .workspaceContainsInodeAlias, .profileNotApplicable, .processSpawnFailed,
-            .commandContainsNUL, .commandExecutableMustBeAbsolute:
+            .commandContainsNUL, .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
             recordUnexpectedConformanceError(
                 error,
                 id: .holeRead,
@@ -583,7 +583,7 @@ private func runFCUnavailable(verdict: IsolationConformanceVerdict) throws -> St
             .profileNotApplicable,
             .processSpawnFailed,
             .commandContainsNUL,
-            .commandExecutableMustBeAbsolute:
+            .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
             Issue.record(
                 "id=FC-UNAVAILABLE must be backendUnavailable, got \(isolationApplyErrorName(error))"
             )
@@ -618,7 +618,7 @@ private func runFCLandlockDarwin(verdict: IsolationConformanceVerdict) throws ->
                 .profileNotApplicable,
                 .processSpawnFailed,
                 .commandContainsNUL,
-                .commandExecutableMustBeAbsolute:
+                .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
                 Issue.record(
                     "id=FC-LANDLOCK-DARWIN must be backendUnavailable, got \(isolationApplyErrorName(error))"
                 )
@@ -632,7 +632,7 @@ private func runFCLandlockDarwin(verdict: IsolationConformanceVerdict) throws ->
         case .backendUnavailable, .backendMismatch, .workspaceMustBeAbsolute,
             .workspaceDoesNotExist, .workspacePathUnresolvable, .workspacePathUnsafe,
             .workspaceContainsInodeAlias, .profileNotApplicable, .processSpawnFailed,
-            .commandContainsNUL, .commandExecutableMustBeAbsolute:
+            .commandContainsNUL, .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
             recordUnexpectedConformanceError(
                 error,
                 id: .fcLandlockDarwin,
@@ -838,7 +838,7 @@ private func expectWorkspacePathUnsafe(_ error: IsolationApplyError, stage: Stri
         .profileNotApplicable,
         .processSpawnFailed,
         .commandContainsNUL,
-        .commandExecutableMustBeAbsolute:
+        .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
         Issue.record(
             "id=FC-ROOT-WS \(stage) must be workspacePathUnsafe, got \(isolationApplyErrorName(error))"
         )
@@ -883,6 +883,14 @@ private func isolationApplyErrorName(_ error: IsolationApplyError) -> String {
         return "commandContainsNUL"
     case .commandExecutableMustBeAbsolute:
         return "commandExecutableMustBeAbsolute"
+    case .sessionRecordFailed:
+        return "sessionRecordFailed"
+    case .seatbeltNotEstablished:
+        return "seatbeltNotEstablished"
+    case .lifetimeBoundaryFailed:
+        return "lifetimeBoundaryFailed"
+    case .cancelled:
+        return "cancelled"
     }
 }
 

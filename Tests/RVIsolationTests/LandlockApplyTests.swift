@@ -53,7 +53,7 @@ struct IsolationApplyLandlockTests {
             case .backendUnavailable, .backendMismatch, .workspaceMustBeAbsolute,
                 .workspaceDoesNotExist, .workspacePathUnresolvable, .workspacePathUnsafe,
                 .workspaceContainsInodeAlias, .profileNotApplicable, .processSpawnFailed,
-                .commandContainsNUL, .commandExecutableMustBeAbsolute:
+                .commandContainsNUL, .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
                 Issue.record("valid workspace must be containedGuaranteesUnsupported, got \(error)")
             }
         }
@@ -93,7 +93,7 @@ struct IsolationApplyLandlockTests {
                 .containedGuaranteesUnsupported,
                 .processSpawnFailed,
                 .commandContainsNUL,
-                .commandExecutableMustBeAbsolute:
+                .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
                 Issue.record("landlock observed prepare must be profileNotApplicable, got \(error)")
             }
         }
@@ -118,7 +118,7 @@ struct IsolationApplyLandlockTests {
             case .backendUnavailable, .backendMismatch, .workspaceMustBeAbsolute,
                 .workspaceDoesNotExist, .workspacePathUnresolvable, .workspacePathUnsafe,
                 .workspaceContainsInodeAlias, .profileNotApplicable, .processSpawnFailed,
-                .commandContainsNUL, .commandExecutableMustBeAbsolute:
+                .commandContainsNUL, .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
                 Issue.record("existing workspace must be containedGuaranteesUnsupported, got \(error)")
             }
         }
@@ -147,7 +147,7 @@ struct IsolationApplyLandlockTests {
             case .backendUnavailable, .backendMismatch, .workspaceMustBeAbsolute,
                 .workspaceDoesNotExist, .workspacePathUnresolvable, .workspacePathUnsafe,
                 .workspaceContainsInodeAlias, .profileNotApplicable, .processSpawnFailed,
-                .commandContainsNUL, .commandExecutableMustBeAbsolute:
+                .commandContainsNUL, .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
                 Issue.record("missing helper must still refuse before launch, got \(error)")
             }
         }
@@ -185,7 +185,7 @@ struct IsolationApplyLandlockTests {
                     .profileNotApplicable,
                     .processSpawnFailed,
                     .commandContainsNUL,
-                    .commandExecutableMustBeAbsolute:
+                    .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
                     Issue.record("exit 125 must be backendUnavailable, got \(error)")
                 }
             }
@@ -214,7 +214,7 @@ struct IsolationApplyLandlockTests {
                     .containedGuaranteesUnsupported,
                     .profileNotApplicable,
                     .commandContainsNUL,
-                    .commandExecutableMustBeAbsolute:
+                    .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
                     Issue.record("exit 126 must be processSpawnFailed, got \(error)")
                 }
             }
@@ -605,7 +605,7 @@ struct IsolationApplyLandlockTests {
             case .backendUnavailable, .backendMismatch, .workspaceMustBeAbsolute,
                 .workspaceDoesNotExist, .workspacePathUnresolvable, .workspacePathUnsafe,
                 .workspaceContainsInodeAlias, .profileNotApplicable, .processSpawnFailed,
-                .commandContainsNUL, .commandExecutableMustBeAbsolute:
+                .commandContainsNUL, .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
                 Issue.record("Darwin landlock prepare must refuse the strict plan, got \(error)")
             }
         }
@@ -808,7 +808,7 @@ private func expectProfileNotApplicable(
             .containedGuaranteesUnsupported,
             .processSpawnFailed,
             .commandContainsNUL,
-            .commandExecutableMustBeAbsolute:
+            .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
             Issue.record(
                 "observed/mediated ruleset compile must be profileNotApplicable, got \(error)",
                 sourceLocation: sourceLocation
@@ -851,7 +851,7 @@ private func recordUnexpectedApplyError(
         Issue.record("expected \(expected), got processSpawnFailed", sourceLocation: sourceLocation)
     case .commandContainsNUL:
         Issue.record("unexpected NUL command rejection")
-    case .commandExecutableMustBeAbsolute:
+    case .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
         Issue.record(
             "expected \(expected), got commandExecutableMustBeAbsolute",
             sourceLocation: sourceLocation

@@ -23,7 +23,14 @@ struct RuntimeAdversarialTests {
         let script = "printf ran > \(quote(inside.path)); printf escaped > \(quote(outside.path))"
         let run: IsolatedRunResult
         if launcher == .xargs {
-            run = try runShell(tree.contained, "printf '%s\\n' fixture | \(quote(executable)) /bin/sh -c \(quote(script))")
+            // posix_spawn is denied so a utility cannot leave RV's process group.
+            _ = try runShell(
+                tree.contained,
+                "printf '%s\\n' fixture | \(quote(executable)) /bin/sh -c \(quote(script))"
+            )
+            #expect(!exists(inside))
+            #expect(!exists(outside))
+            return
         } else {
             run = try runIsolated(
                 tree.contained,
@@ -160,7 +167,7 @@ struct RuntimeAdversarialTests {
             case .backendUnavailable, .backendMismatch, .workspaceMustBeAbsolute,
                 .workspaceDoesNotExist, .workspacePathUnresolvable, .workspacePathUnsafe,
                 .containedGuaranteesUnsupported, .profileNotApplicable, .processSpawnFailed,
-                .commandContainsNUL, .commandExecutableMustBeAbsolute:
+                .commandContainsNUL, .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
                 Issue.record("preexisting hardlink must be workspaceContainsInodeAlias, got \(error)")
             }
         }
@@ -234,22 +241,41 @@ struct RuntimeAdversarialTests {
         #expect(!exists(secondAttack))
     }
 
-    @Test func knownGapChildOutlivesImmediateParentWithWriteAuthority() throws {
+    @Test func backgroundChildCannotRetainWorkspaceAuthorityAfterReturn() throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
-        let marker = tree.workspaceURL.appendingPathComponent("after-session")
-        let gate = tree.workspaceURL.appendingPathComponent("parent-returned")
-        let outside = tree.siblingURL.appendingPathComponent("escaped")
-        let child = "count=0; while [ ! -f \(quote(gate.path)) ] && [ \"$count\" -lt 100 ]; do /bin/sleep 0.02; count=$((count + 1)); done; [ -f \(quote(gate.path)) ] || exit 70; printf escaped > \(quote(outside.path)); result=$?; printf %s \"$result\" > \(quote(marker.path))"
-        let run = try runShell(tree.contained, "/bin/sh -c \(quote(child)) & exit 0")
-        #expect(run.exitStatus == 0)
-        try Data("parent-has-returned".utf8).write(to: gate)
-        let deadline = Date().addingTimeInterval(3)
-        while !exists(marker) && Date() < deadline { Thread.sleep(forTimeInterval: 0.02) }
-        #expect(exists(marker))
-        #expect(try String(contentsOf: marker, encoding: .utf8) != "0")
-        #expect(!exists(outside))
-        print("adversarial technique=background-session-end child-retains-write-authority=true security=NOT-SATISFIED")
+        try assertNoSurvivingWriter(
+            tree,
+            script: "/bin/sh -c \(quote(survivingWriter(tree))) & exit 0"
+        )
+    }
+
+    @Test func nestedShellBackgroundChildCannotRetainWorkspaceAuthorityAfterReturn() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let inner = "/bin/sh -c \(quote(survivingWriter(tree))) & exit 0"
+        try assertNoSurvivingWriter(tree, script: "/bin/sh -c \(quote(inner))")
+    }
+
+    @Test func setsidProbeCannotRetainWorkspaceAuthorityAfterReturn() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let probe = try compileProbe(setsidProbeSource, named: "setsid-probe", in: tree.workspaceURL)
+        try assertProbeCannotSurvive(tree, executable: probe.path)
+    }
+
+    @Test func doubleForkProbeCannotRetainWorkspaceAuthorityAfterReturn() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let probe = try compileProbe(doubleForkProbeSource, named: "double-fork-probe", in: tree.workspaceURL)
+        try assertProbeCannotSurvive(tree, executable: probe.path)
+    }
+
+    @Test func posixSpawnSetsidProbeCannotRetainWorkspaceAuthorityAfterReturn() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let probe = try compileProbe(posixSpawnSetsidProbeSource, named: "spawn-setsid-probe", in: tree.workspaceURL)
+        try assertProbeCannotSurvive(tree, executable: probe.path)
     }
 
     @Test func knownGapCanSignalSyntheticUnrelatedProcess() throws {
@@ -356,4 +382,134 @@ private func writeExecutable(_ source: String, to url: URL) throws {
     try Data(source.utf8).write(to: url)
     try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: url.path)
 }
+
+private func survivingWriter(_ tree: ContainmentTree) -> String {
+    let marker = tree.workspaceURL.appendingPathComponent("after-session").path
+    let gate = tree.workspaceURL.appendingPathComponent("parent-returned").path
+    let outside = tree.siblingURL.appendingPathComponent("escaped").path
+    return "count=0; while [ ! -f \(quote(gate)) ] && [ \"$count\" -lt 150 ]; do /bin/sleep 0.02; count=$((count + 1)); done; printf alive > \(quote(marker)); printf escaped > \(quote(outside))"
+}
+
+private func assertNoSurvivingWriter(_ tree: ContainmentTree, script: String) throws {
+    let marker = tree.workspaceURL.appendingPathComponent("after-session")
+    let gate = tree.workspaceURL.appendingPathComponent("parent-returned")
+    let outside = tree.siblingURL.appendingPathComponent("escaped")
+    let run = try runShell(tree.contained, script)
+    #expect(run.exitStatus == 0)
+    #expect(run.session != nil)
+    try Data("parent-has-returned".utf8).write(to: gate)
+    Thread.sleep(forTimeInterval: 0.5)
+    #expect(!exists(marker))
+    #expect(!exists(outside))
+}
+
+private func assertProbeCannotSurvive(_ tree: ContainmentTree, executable: String) throws {
+    let marker = tree.workspaceURL.appendingPathComponent("after-session")
+    let gate = tree.workspaceURL.appendingPathComponent("parent-returned")
+    let command = try #require(IsolatedCommand(executable: executable, arguments: [marker.path, gate.path]))
+    let result = IsolationBackends.apply(tree.contained, command: command)
+    try Data("parent-has-returned".utf8).write(to: gate)
+    Thread.sleep(forTimeInterval: 0.5)
+    #expect(!exists(marker))
+    switch result {
+    case .success(let run):
+        #expect(run.session != nil)
+        #expect(run.established.family == .seatbelt)
+    case .failure(let error):
+        Issue.record("probe must run under Seatbelt, got \(error)")
+    }
+}
+
+private func compileProbe(_ source: String, named name: String, in workspace: URL) throws -> URL {
+    let file = workspace.appendingPathComponent("\(name).c")
+    let binary = workspace.appendingPathComponent(name)
+    try Data(source.utf8).write(to: file)
+    let compile = Process()
+    compile.executableURL = URL(fileURLWithPath: "/usr/bin/clang")
+    compile.arguments = ["-O2", "-o", binary.path, file.path]
+    compile.standardOutput = FileHandle.nullDevice
+    compile.standardError = FileHandle.nullDevice
+    try compile.run()
+    compile.waitUntilExit()
+    try #require(compile.terminationStatus == 0)
+    return binary
+}
+
+private let setsidProbeSource = """
+#include <fcntl.h>
+#include <unistd.h>
+int main(int argc, char **argv) {
+    if (argc < 3) return 2;
+    pid_t pid = fork();
+    if (pid < 0) return 3;
+    if (pid > 0) _exit(0);
+    setsid();
+    for (int i = 0; i < 400; i++) {
+        if (access(argv[2], F_OK) == 0) break;
+        usleep(10000);
+    }
+    int fd = open(argv[1], O_CREAT | O_WRONLY | O_TRUNC, 0644);
+    if (fd >= 0) {
+        write(fd, "alive\\n", 6);
+        close(fd);
+    }
+    return 0;
+}
+"""
+
+private let doubleForkProbeSource = """
+#include <fcntl.h>
+#include <unistd.h>
+int main(int argc, char **argv) {
+    if (argc < 3) return 2;
+    pid_t first = fork();
+    if (first < 0) return 3;
+    if (first > 0) _exit(0);
+    pid_t second = fork();
+    if (second < 0) return 4;
+    if (second > 0) _exit(0);
+    setsid();
+    for (int i = 0; i < 400; i++) {
+        if (access(argv[2], F_OK) == 0) break;
+        usleep(10000);
+    }
+    int fd = open(argv[1], O_CREAT | O_WRONLY | O_TRUNC, 0644);
+    if (fd >= 0) {
+        write(fd, "alive\\n", 6);
+        close(fd);
+    }
+    return 0;
+}
+"""
+
+private let posixSpawnSetsidProbeSource = """
+#include <spawn.h>
+#include <string.h>
+#include <unistd.h>
+#include <fcntl.h>
+extern char **environ;
+int main(int argc, char **argv) {
+    if (argc > 1 && strcmp(argv[1], "wait") == 0) {
+        if (argc < 4) return 2;
+        for (int i = 0; i < 400; i++) {
+            if (access(argv[3], F_OK) == 0) break;
+            usleep(10000);
+        }
+        int fd = open(argv[2], O_CREAT | O_WRONLY | O_TRUNC, 0644);
+        if (fd >= 0) {
+            write(fd, "alive\\n", 6);
+            close(fd);
+        }
+        return 0;
+    }
+    if (argc < 3) return 2;
+    posix_spawnattr_t attr;
+    posix_spawnattr_init(&attr);
+    posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETSID);
+    pid_t child = 0;
+    char *childArgv[] = {argv[0], "wait", argv[1], argv[2], NULL};
+    posix_spawn(&child, argv[0], NULL, &attr, childArgv, environ);
+    _exit(0);
+}
+"""
 #endif

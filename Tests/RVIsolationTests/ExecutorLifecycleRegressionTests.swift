@@ -2,6 +2,9 @@ import Foundation
 import RVDomain
 import Testing
 @testable import RVIsolation
+#if canImport(Darwin)
+import Darwin
+#endif
 
 @Suite("Executor lifecycle regressions")
 struct ExecutorLifecycleRegressionTests {
@@ -112,6 +115,44 @@ struct ExecutorLifecycleRegressionTests {
         }.count == 1)
         #expect(try String(contentsOf: marker, encoding: .utf8) == "x")
     }
+
+    @Test func cancellationTerminatesOwnedProcessesBeforeReturn() async throws {
+        #if os(macOS)
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let started = tree.workspaceURL.appendingPathComponent("started")
+        let pidFile = tree.workspaceURL.appendingPathComponent("sleep.pid")
+        let script = "printf started > \"$1\"; /bin/sleep 20 & printf '%s\\n' \"$!\" > \"$2.tmp\" && mv \"$2.tmp\" \"$2\"; wait"
+        let executable = try lifecycleExecutable(
+            plan: tree.contained,
+            marker: started,
+            script: script,
+            arguments: [started.path, pidFile.path]
+        )
+        let executor = LocalExecutor()
+        let task = Task { try await lifecycleRun(executor, executable) }
+        let deadline = Date().addingTimeInterval(5)
+        var sleepPID: Int32?
+        while Date() < deadline {
+            if let text = try? String(contentsOf: pidFile, encoding: .utf8) {
+                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let pid = Int32(trimmed), pid > 1, kill(pid, 0) == 0 {
+                    sleepPID = pid
+                    break
+                }
+            }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        let pid = try #require(sleepPID)
+        task.cancel()
+        let result = try await task.value
+        #expect(result == .failure(.cancelled))
+        let probe = kill(pid, 0)
+        let probeError = errno
+        #expect(probe == -1)
+        #expect(probeError == ESRCH)
+        #endif
+    }
 }
 
 private enum ExecutorLifecycleFixtureError: Error {
@@ -124,7 +165,9 @@ private enum ExecutorLifecycleFixtureError: Error {
 private func lifecycleExecutable(
     plan: IsolationPlan,
     marker: URL,
-    exitStatus: Int32 = 0
+    exitStatus: Int32 = 0,
+    script: String? = nil,
+    arguments: [String]? = nil
 ) throws -> ExecutableAction {
     let action = ProposedAction.shell(
         ShellAction(
@@ -143,7 +186,8 @@ private func lifecycleExecutable(
     let command = try #require(
         IsolatedCommand(
             executable: "/bin/sh",
-            arguments: ["-c", "printf x >> \"$1\"; exit \(exitStatus)", "sh", marker.path]
+            arguments: arguments.map { ["-c", script ?? "", "sh"] + $0 }
+                ?? ["-c", "printf x >> \"$1\"; exit \(exitStatus)", "sh", marker.path]
         )
     )
     return ExecutableAction(allowed: allowed, command: command, plan: plan)

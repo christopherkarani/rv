@@ -22,7 +22,13 @@ public func launchContainedHost(
     case .observed, .mediated:
         return .failure(.planNotContained)
     case .contained:
-        switch IsolationBackends.apply(plan, command: command, io: .inherit) {
+        switch IsolationBackends.applyLaunch(
+            plan,
+            command: command,
+            io: .inherit,
+            host: host,
+            sessionStore: .production
+        ) {
         case .success(let result):
             return .success(result)
         case .failure(let error):

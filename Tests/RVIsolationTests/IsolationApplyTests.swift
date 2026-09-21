@@ -50,6 +50,9 @@ struct IsolationApplyTests {
             #expect(profile.source.contains("file-write*"))
             #expect(profile.source.contains("(allow signal (target same-sandbox))"))
             #expect(profile.source.contains("(allow signal (target self))") == false)
+            #expect(profile.source.contains("(deny syscall-unix (syscall-number 82))"))
+            #expect(profile.source.contains("(deny syscall-unix (syscall-number 147))"))
+            #expect(profile.source.contains("(deny syscall-unix (syscall-number 244))"))
             #expect(profile.source.contains("subpath \"\(escapeSBPL(resolved))\""))
             let again = try #require(try? compileSeatbeltProfile(plan).get())
             #expect(profile.source == again.source)
@@ -122,7 +125,7 @@ struct IsolationApplyTests {
                 .profileNotApplicable,
                 .processSpawnFailed,
                 .commandContainsNUL,
-                .commandExecutableMustBeAbsolute:
+                .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
                 Issue.record("unavailable contained prepare must be backendUnavailable, got \(error)")
             }
         }
@@ -224,7 +227,7 @@ struct IsolationApplyTests {
                 .profileNotApplicable,
                 .processSpawnFailed,
                 .commandContainsNUL,
-                .commandExecutableMustBeAbsolute:
+                .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
                 Issue.record("relative workspace must be workspaceMustBeAbsolute, got \(error)")
             }
         }
@@ -254,7 +257,7 @@ struct IsolationApplyTests {
                 .profileNotApplicable,
                 .processSpawnFailed,
                 .commandContainsNUL,
-                .commandExecutableMustBeAbsolute:
+                .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
                 Issue.record("missing directory must be workspaceDoesNotExist, got \(error)")
             }
         }
@@ -316,6 +319,8 @@ struct IsolationApplyTests {
                 Issue.record("unexpected NUL command rejection")
             case .commandExecutableMustBeAbsolute:
                 break
+            case .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
+                Issue.record("relative command must be commandExecutableMustBeAbsolute, got \(error)")
             case .backendUnavailable,
                 .backendMismatch,
                 .workspaceMustBeAbsolute,
@@ -379,7 +384,7 @@ struct IsolationApplyTests {
                 .profileNotApplicable,
                 .processSpawnFailed,
                 .commandContainsNUL,
-                .commandExecutableMustBeAbsolute:
+                .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
                 Issue.record(
                     "Darwin contained apply of a missing workspace must be workspaceDoesNotExist, got \(error)"
                 )
@@ -398,7 +403,7 @@ struct IsolationApplyTests {
                 .profileNotApplicable,
                 .processSpawnFailed,
                 .commandContainsNUL,
-                .commandExecutableMustBeAbsolute:
+                .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
                 Issue.record(
                     "Linux contained apply of a missing workspace must be workspaceDoesNotExist, got \(error)"
                 )
@@ -417,7 +422,7 @@ struct IsolationApplyTests {
                 .profileNotApplicable,
                 .processSpawnFailed,
                 .commandContainsNUL,
-                .commandExecutableMustBeAbsolute:
+                .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
                 Issue.record(
                     "non-Darwin contained apply must be backendUnavailable, got \(error)"
                 )
@@ -448,7 +453,7 @@ struct IsolationApplyTests {
                 .containedGuaranteesUnsupported,
                 .processSpawnFailed,
                 .commandContainsNUL,
-                .commandExecutableMustBeAbsolute:
+                .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
                 Issue.record("seatbelt observed prepare must be profileNotApplicable, got \(error)")
             }
         }
@@ -476,7 +481,7 @@ struct IsolationApplyTests {
                 .profileNotApplicable,
                 .processSpawnFailed,
                 .commandContainsNUL,
-                .commandExecutableMustBeAbsolute:
+                .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
                 Issue.record("filesystem-root workspace must be workspacePathUnsafe, got \(error)")
             }
         }
@@ -504,7 +509,7 @@ struct IsolationApplyTests {
                 .profileNotApplicable,
                 .processSpawnFailed,
                 .commandContainsNUL,
-                .commandExecutableMustBeAbsolute:
+                .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
                 Issue.record("newline workspace must be workspacePathUnsafe, got \(error)")
             }
         }
@@ -610,7 +615,7 @@ struct IsolationApplyTests {
                 .profileNotApplicable,
                 .processSpawnFailed,
                 .commandContainsNUL,
-                .commandExecutableMustBeAbsolute:
+                .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
                 Issue.record(
                     "unknown platform() contained must be backendUnavailable, got \(error)"
                 )
@@ -690,7 +695,7 @@ private func expectProfileNotApplicable(
             .containedGuaranteesUnsupported,
             .processSpawnFailed,
             .commandContainsNUL,
-            .commandExecutableMustBeAbsolute:
+            .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
             Issue.record(
                 "observed/mediated profile compile must be profileNotApplicable, got \(error)",
                 sourceLocation: sourceLocation
@@ -759,7 +764,7 @@ private func recordUnexpectedApplyError(
         Issue.record("expected \(expected), got processSpawnFailed", sourceLocation: sourceLocation)
     case .commandContainsNUL:
         Issue.record("unexpected NUL command rejection")
-    case .commandExecutableMustBeAbsolute:
+    case .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
         Issue.record(
             "expected \(expected), got commandExecutableMustBeAbsolute",
             sourceLocation: sourceLocation
@@ -891,5 +896,13 @@ private func describeError(_ error: IsolationApplyError) -> String {
         return "commandContainsNUL"
     case .commandExecutableMustBeAbsolute:
         return "commandExecutableMustBeAbsolute"
+    case .sessionRecordFailed:
+        return "sessionRecordFailed"
+    case .seatbeltNotEstablished:
+        return "seatbeltNotEstablished"
+    case .lifetimeBoundaryFailed:
+        return "lifetimeBoundaryFailed"
+    case .cancelled:
+        return "cancelled"
     }
 }

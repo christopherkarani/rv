@@ -35,6 +35,8 @@ public actor LocalExecutor {
         switch IsolationBackends.apply(executable.plan, command: executable.command) {
         case .success(let result):
             return result
+        case .failure(.cancelled):
+            throw LocalExecutorError.cancelled
         case .failure(let error):
             throw LocalExecutorError.applyFailed(error)
         }
