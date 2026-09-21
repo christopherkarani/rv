@@ -9,8 +9,9 @@ import RVPacks
 /// Run: `Scripts/gate.sh --quiet RVCorpusTests --filter AgentParseStress`
 ///
 /// Over-block = pin deny on search / docs / echo guts that are not executing
-/// shell. Door unwrap-limited on unquoted / `$` / non-data interpreter
-/// payloads is fail-closed never-slip, not a pin false positive.
+/// shell. Door unwrap-limited on unquoted / `$` interpreter payloads is
+/// fail-closed never-slip: the inner program is unknown. A quoted `-c`/`-e`
+/// body rv captured is known source and pack-grades like a script file.
 @Suite("Agent parse stress")
 struct AgentParseStressTests {
     static let requiredNearMissIDs: [String] = [
@@ -49,8 +50,11 @@ struct AgentParseStressTests {
         "rg -n \"rm -rf\"",
         "python3 -c \"print('git reset --hard')\"",
         "python -c \"print('git reset --hard')\"",
+        "python3 -c \"x = 1\"",
         "node -e \"console.log('git reset --hard')\"",
+        "node -e \"const x = 1\"",
         "ruby -e \"puts 'git reset --hard'\"",
+        "ruby -e \"x = 1\"",
         "bash -c 'git status'",
         "bash -lc 'git status --short'",
         "sh -c 'ls -la'",
@@ -62,13 +66,15 @@ struct AgentParseStressTests {
         "ls -la",
     ]
 
-    /// Door deny here is unwrap-limited never-slip, not a pin over-block.
+    /// Door deny here is unwrap-limited never-slip: inner program unknown.
     static let doorUnwrapLimited: [String] = [
         "bash -c $CMD",
         "bash -c git status",
         "bash -c $'git status'",
-        "python3 -c \"x = 1\"",
-        "node -e \"const x = 1\"",
+        "python3 -c $CMD",
+        "python3 -c \"$CMD\"",
+        "python3 -c git status",
+        "node -e $CMD",
     ]
 
     static let tokenizerMustSurvive: [String] = [

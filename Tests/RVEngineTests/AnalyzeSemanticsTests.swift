@@ -116,6 +116,24 @@ struct AnalyzeSemanticsTests {
         #expect(analysis != .unknown)
     }
 
+    @Test func capturedPythonAssignment_isNotUnwrapLimited() {
+        let analysis = analyzeSemantics(ShellCommand(rawValue: #"python3 -c "x = 1""#))
+        #expect(analysis.innermost != .unwrapLimited)
+        #expect(analysis.wrappers.isEmpty)
+    }
+
+    @Test func pythonDollarPayload_isUnwrapLimited() {
+        let analysis = analyzeSemantics(ShellCommand(rawValue: #"python3 -c "$CMD""#))
+        #expect(analysis.innermost == .unwrapLimited)
+        #expect(analysis != .unknown)
+    }
+
+    @Test func unquotedPythonDashC_isUnwrapLimited() {
+        let analysis = analyzeSemantics(ShellCommand(rawValue: "python3 -c git status"))
+        #expect(analysis.innermost == .unwrapLimited)
+        #expect(analysis != .unknown)
+    }
+
     @Test func unquotedBashDashC_isUnwrapLimited() {
         let analysis = analyzeSemantics(ShellCommand(rawValue: "bash -c git reset --hard"))
         #expect(analysis.innermost == .unwrapLimited)

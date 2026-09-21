@@ -146,12 +146,22 @@ struct UnwrapTests {
     }
 
     @Test func unknownPython_isLimited() {
-        let outcome = unwrapCommand(ShellCommand(rawValue: #"python -c "mystery(payload)""#))
+        let outcome = unwrapCommand(ShellCommand(rawValue: #"python3 -c "$CMD""#))
         guard case .limited(let layers) = outcome else {
             Issue.record("expected limited, got \(outcome)")
             return
         }
         #expect(layers == [.python])
+    }
+
+    @Test func capturedPythonAssignment_isNotWrapper() {
+        let outcome = unwrapCommand(ShellCommand(rawValue: #"python3 -c "x = 1""#))
+        guard case .complete(let unwrapped) = outcome else {
+            Issue.record("expected complete, got \(outcome)")
+            return
+        }
+        #expect(unwrapped.layers.isEmpty)
+        #expect(unwrapped.command.rawValue == #"python3 -c "x = 1""#)
     }
 
     @Test func unquotedBashDashC_isLimited() {

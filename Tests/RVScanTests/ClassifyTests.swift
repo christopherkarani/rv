@@ -35,7 +35,7 @@ import RVDomain
         ExtractedEvent(
             host: .claude,
             sourcePath: "/tmp/fixture/session.jsonl",
-            command: ShellCommand(rawValue: #"python -c "mystery(payload)""#)
+            command: ShellCommand(rawValue: #"python3 -c "$CMD""#)
         ),
     ]
     let findings = try ScanClassify().classify(events)

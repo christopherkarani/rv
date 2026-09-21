@@ -53,6 +53,22 @@ struct GatedEvaluateWrapperSemanticsTests {
         #expect(result.analysis.wrappers.isEmpty)
     }
 
+    @Test func capturedPythonAssignment_isAllowed() async throws {
+        let result = try await peek(#"python3 -c "x = 1""#)
+        #expect(result.decision == .allow)
+        #expect(result.analysis.innermost != .unwrapLimited)
+    }
+
+    @Test func pythonDollarPayload_isUnwrapLimited() async throws {
+        let result = try await peek(#"python3 -c "$CMD""#)
+        guard case .deny(let deny) = result.decision else {
+            Issue.record("python -c $ payload must deny, got \(result.decision)")
+            return
+        }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.unwrapLimited.ruleID)
+        #expect(result.analysis.innermost == .unwrapLimited)
+    }
+
     @Test func pythonQuotedHeredocOsSystem_isDenied() async throws {
         let result = try await peek("python3 <<'PY'\nimport os\nos.system('git reset --hard')\nPY")
         guard case .deny(let deny) = result.decision else {
