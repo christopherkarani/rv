@@ -485,18 +485,26 @@ func spawn(
 /// Symlink entries are not followed. A scan failure refuses the launch.
 func rejectWorkspaceInodeAlias(_ root: String) -> Result<Void, IsolationApplyError> {
     let rootURL = URL(fileURLWithPath: root, isDirectory: true)
+    // FileManager calls this handler synchronously on the scanning thread.
+    let scan = InodeAliasScan()
     guard
         let enumerator = FileManager.default.enumerator(
             at: rootURL,
             includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey, .linkCountKey],
             options: [],
-            errorHandler: { _, _ in false }
+            errorHandler: { _, _ in
+                scan.failed = true
+                return false
+            }
         )
     else {
         return .failure(.workspaceContainsInodeAlias)
     }
     let keys: Set<URLResourceKey> = [.isRegularFileKey, .isSymbolicLinkKey, .linkCountKey]
     for case let url as URL in enumerator {
+        if scan.failed {
+            return .failure(.workspaceContainsInodeAlias)
+        }
         do {
             let values = try url.resourceValues(forKeys: keys)
             if values.isSymbolicLink == true {
@@ -509,5 +517,13 @@ func rejectWorkspaceInodeAlias(_ root: String) -> Result<Void, IsolationApplyErr
             return .failure(.workspaceContainsInodeAlias)
         }
     }
+    if scan.failed {
+        return .failure(.workspaceContainsInodeAlias)
+    }
     return .success(())
+}
+
+/// Mutable flag for `rejectWorkspaceInodeAlias`. The directory walk is synchronous.
+private final class InodeAliasScan: @unchecked Sendable {
+    var failed = false
 }

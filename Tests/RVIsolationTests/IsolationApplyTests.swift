@@ -48,7 +48,8 @@ struct IsolationApplyTests {
             #expect(profile.source.contains("(allow default)") == false)
             #expect(profile.source.contains("(allow network") == false)
             #expect(profile.source.contains("file-write*"))
-            #expect(profile.source.contains("(allow signal (target self))"))
+            #expect(profile.source.contains("(allow signal (target same-sandbox))"))
+            #expect(profile.source.contains("(allow signal (target self))") == false)
             #expect(profile.source.contains("subpath \"\(escapeSBPL(resolved))\""))
             let again = try #require(try? compileSeatbeltProfile(plan).get())
             #expect(profile.source == again.source)
@@ -507,6 +508,33 @@ struct IsolationApplyTests {
                 Issue.record("newline workspace must be workspacePathUnsafe, got \(error)")
             }
         }
+    }
+
+    @Test func rejectWorkspaceInodeAlias_unreadableDirectory_refusesHiddenAlias() throws {
+        let tree = try ContainmentTree()
+        let blocked = tree.workspaceURL.appendingPathComponent("blocked", isDirectory: true)
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o755],
+                ofItemAtPath: blocked.path
+            )
+            tree.tearDown()
+        }
+        try FileManager.default.createDirectory(at: blocked, withIntermediateDirectories: false)
+        let outside = tree.siblingURL.appendingPathComponent("source")
+        try Data("original".utf8).write(to: outside)
+        try FileManager.default.linkItem(at: outside, to: blocked.appendingPathComponent("alias"))
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: blocked.path)
+        let root = try #require(posixRealpath(tree.workspaceURL.path))
+        switch rejectWorkspaceInodeAlias(root) {
+        case .failure(.workspaceContainsInodeAlias):
+            break
+        case .success:
+            Issue.record("an unreadable directory must refuse the alias scan")
+        case .failure(let error):
+            Issue.record("expected workspaceContainsInodeAlias, got \(error)")
+        }
+        #expect(try String(contentsOf: outside, encoding: .utf8) == "original")
     }
 
     @Test func seatbelt_prepare_launchArguments_areSandboxExecProfileAndInnerArgv() throws {

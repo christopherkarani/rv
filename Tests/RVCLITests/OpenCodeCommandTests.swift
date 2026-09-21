@@ -26,7 +26,7 @@ struct OpenCodeCommandTests {
             "--", "-c", script, "sh", "value with --help and spaces", inside.path, outside.path,
         ])
 
-        try await command.run()
+        guard try await launchedOrRefusedOnLinux(&command, absent: [inside, outside]) else { return }
 
         #expect(try String(contentsOf: inside, encoding: .utf8) == "value with --help and spaces")
         #expect(FileManager.default.fileExists(atPath: outside.path) == false)
@@ -44,6 +44,12 @@ struct OpenCodeCommandTests {
             Issue.record("the child exit status must propagate")
         } catch let error as ExitCode {
             #expect(error.rawValue == 37)
+        } catch let error as ValidationError {
+            #if os(Linux)
+            #expect(String(describing: error).contains("containedGuaranteesUnsupported"))
+            #else
+            Issue.record("launch failed before the child could exit: \(error)")
+            #endif
         }
     }
 
@@ -92,11 +98,13 @@ struct OpenCodeCommandTests {
             environment: ["PATH": "relative:\(bin.path)"],
             workspacePath: fixture.workspace.path
         )
-        try await CLIProcess.$context.withValue(context) {
+        let marker = fixture.workspace.appendingPathComponent("marker")
+        let launched = try await CLIProcess.$context.withValue(context) {
             var command = try openCodeCommand([])
-            try await command.run()
+            return try await launchedOrRefusedOnLinux(&command, absent: [marker])
         }
-        #expect(try String(contentsOf: fixture.workspace.appendingPathComponent("marker"), encoding: .utf8) == "installed")
+        guard launched else { return }
+        #expect(try String(contentsOf: marker, encoding: .utf8) == "installed")
     }
 
     @Test func launch_relativePATHDoesNotResolveExecutable() async throws {
@@ -115,6 +123,31 @@ struct OpenCodeCommandTests {
                 // Agent executable lookup never searches the current directory.
             }
         }
+    }
+}
+
+private func launchedOrRefusedOnLinux(
+    _ command: inout any AsyncParsableCommand,
+    absent: [URL]
+) async throws -> Bool {
+    do {
+        try await command.run()
+        #if os(Linux)
+        Issue.record("Linux rv opencode must refuse the contained launch")
+        return false
+        #else
+        return true
+        #endif
+    } catch let error as ValidationError {
+        #if os(Linux)
+        #expect(String(describing: error).contains("containedGuaranteesUnsupported"))
+        for url in absent {
+            #expect(FileManager.default.fileExists(atPath: url.path) == false)
+        }
+        return false
+        #else
+        throw error
+        #endif
     }
 }
 

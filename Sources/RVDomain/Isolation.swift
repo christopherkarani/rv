@@ -22,7 +22,8 @@ public enum NetworkContainment: Sendable, Equatable {
 }
 
 /// Signals and other host-process interaction. Contained plans deny signals
-/// to processes that are not the agent itself.
+/// to processes outside the sandbox. Descendants in that sandbox can still
+/// signal each other.
 public enum ProcessContainment: Sendable, Equatable {
     case unrestricted
     case hostSignalsDenied
@@ -61,9 +62,9 @@ public struct IsolationGuarantees: Sendable, Equatable {
         self.descent = descent
     }
 
-    /// Workspace read/write, no network, no signals to other processes,
-    /// children inherit. A backend that cannot establish every field must
-    /// refuse the launch.
+    /// Workspace read/write, no network, no signals to processes outside the
+    /// sandbox, children inherit. A backend that cannot establish every field
+    /// must refuse the launch.
     static func firstSliceContained(workspace: WorkingDirectory) -> IsolationGuarantees {
         IsolationGuarantees(
             filesystem: .workspaceScoped(workspace),

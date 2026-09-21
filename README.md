@@ -19,7 +19,7 @@
 
 **Control what your agent can do.** rv's **hook-grade** guard blocks destructive shell (and Read / Edit / Write secret-path on Grok, Claude, and Cursor) when the host calls `rv`. Hook evaluation requires the host to invoke it.
 
-`rv opencode` also launches OpenCode with an inherited OS workspace write fence. This is **not a secure agent isolation boundary**: reads, network, host process access, pre-existing hardlink aliases, and background-process lifetime remain unresolved. See the [release acceptance audit](docs/security/runtime-acceptance.md).
+`rv opencode` launches OpenCode under a macOS Seatbelt that starts from deny-default. The process may read and write the workspace, and it may read the system locations needed to execute programs. Network is denied. It can signal processes inside its sandbox, not other host processes. A workspace that already contains a hard link is refused; a link created after that scan is not. A background child can keep writing in the workspace after its parent returns. Mach service lookup is not filtered. Linux refuses the launch instead of applying a weaker sandbox. This is not a finished agent isolation boundary. See the [release acceptance audit](docs/security/runtime-acceptance.md).
 
 Site: [rykanv.com](https://rykanv.com) · Docs: [rykanv.com/docs/introduction](https://rykanv.com/docs/introduction) · Discord: [discord.gg/uZn9MDUYKx](https://discord.gg/uZn9MDUYKx)
 
@@ -39,7 +39,7 @@ To launch the currently supported agent from a writable workspace:
 rv opencode --workspace /absolute/repo -- run 'describe this project'
 ```
 
-RV searches absolute `PATH` directories for OpenCode, or accepts `--executable /absolute/opencode`. The child receives a minimal environment with `HOME` and `TMPDIR` set to the workspace and `PATH=/usr/bin:/bin`; credentials and custom runtime paths are not forwarded. On macOS the process and its children may read and write only that workspace, plus the system locations needed to execute `/usr` and `/bin` programs. Network connections and signals to other processes are denied. A workspace that already contains a hard link to another file is refused. Linux refuses this launch until its backend enforces the same limits; a write-only sandbox is not used instead. Other host integrations remain hook based.
+RV searches absolute `PATH` directories for OpenCode, or accepts `--executable /absolute/opencode`. The child receives a minimal environment with `HOME` and `TMPDIR` set to the workspace and `PATH=/usr/bin:/bin`; credentials and custom runtime paths are not forwarded. On macOS the process and its children may read and write only that workspace, plus the system locations needed to execute `/usr` and `/bin` programs. Network connections are denied. Signals to processes outside the sandbox are denied. A workspace that already contains a hard link to another file is refused. Linux refuses this launch until its backend enforces the same limits; a write-only sandbox is not used instead. Other host integrations remain hook based.
 
 ## What it does
 

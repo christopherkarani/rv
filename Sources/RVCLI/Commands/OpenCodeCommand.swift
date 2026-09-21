@@ -31,7 +31,7 @@ enum OpenCodeLaunchError: Error, Sendable, Equatable {
 
 enum OpenCodeRun {
     static let isolationNotice =
-        "rv opencode: reads and writes stay in the workspace. Network and signals to other processes are denied. On Linux this launch is refused until the kernel backend enforces those limits.\n"
+        "rv opencode: writes stay in the workspace. Reads include that workspace and the system locations needed to start programs. Network is denied. Signals to processes outside the sandbox are denied. On Linux this launch is refused until the kernel backend enforces those limits.\n"
 
     static func run(
         executable: String?,

@@ -24,6 +24,16 @@ struct ExecutorLifecycleRegressionTests {
             return
         }
 
+        #if os(Linux)
+        do {
+            _ = try await executor.run(executable)
+            Issue.record("Linux retry must refuse the contained launch")
+        } catch let error as LocalExecutorError {
+            #expect(error == .applyFailed(.containedGuaranteesUnsupported))
+        }
+        #expect(FileManager.default.fileExists(atPath: marker.path) == false)
+        return
+        #endif
         let retry = try await executor.run(executable)
         #expect(retry.exitStatus == 0)
         #expect(try String(contentsOf: marker, encoding: .utf8) == "x")
@@ -56,14 +66,18 @@ struct ExecutorLifecycleRegressionTests {
 
         let first = try await lifecycleRun(executor, executable)
         #if os(Linux)
-        #expect(first == .failure(.applyFailed(.backendUnavailable)))
-        #else
+        #expect(first == .failure(.applyFailed(.containedGuaranteesUnsupported)))
+        #expect(FileManager.default.fileExists(atPath: marker.path) == false)
+        let refusedSecond = try await lifecycleRun(executor, executable)
+        #expect(refusedSecond == .failure(.alreadyExecuted(executable.allowed.action.fingerprint)))
+        #expect(FileManager.default.fileExists(atPath: marker.path) == false)
+        return
+        #endif
         guard case .success(let result) = first else {
             Issue.record("the contained child must execute before its reserved exit")
             return
         }
         #expect(result.exitStatus == 125)
-        #endif
         #expect(try String(contentsOf: marker, encoding: .utf8) == "x")
 
         let second = try await lifecycleRun(executor, executable)
@@ -81,6 +95,17 @@ struct ExecutorLifecycleRegressionTests {
         async let first = lifecycleRun(executor, executable)
         async let second = lifecycleRun(executor, executable)
         let outcomes = try await [first, second]
+        #if os(Linux)
+        #expect(outcomes.filter { if case .success = $0 { true } else { false } }.count == 0)
+        #expect(outcomes.filter {
+            $0 == .failure(.alreadyExecuted(executable.allowed.action.fingerprint))
+        }.count == 1)
+        #expect(outcomes.filter {
+            $0 == .failure(.applyFailed(.containedGuaranteesUnsupported))
+        }.count == 1)
+        #expect(FileManager.default.fileExists(atPath: marker.path) == false)
+        return
+        #endif
         #expect(outcomes.filter { if case .success = $0 { true } else { false } }.count == 1)
         #expect(outcomes.filter {
             $0 == .failure(.alreadyExecuted(executable.allowed.action.fingerprint))

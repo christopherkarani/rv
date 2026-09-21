@@ -18,6 +18,16 @@ struct LaunchBoundaryRegressionTests {
         let command = try #require(IsolatedCommand(
             executable: "/bin/sh", arguments: ["-c", "/usr/bin/env > environment"]
         ))
+        #if os(Linux)
+        switch IsolationBackends.apply(tree.contained, command: command) {
+        case .failure(let error):
+            #expect(error == .containedGuaranteesUnsupported)
+        case .success(let run):
+            Issue.record("Linux contained launch must be refused, got exit \(run.exitStatus)")
+        }
+        #expect(FileManager.default.fileExists(atPath: output.path) == false)
+        return
+        #endif
         let run = try IsolationBackends.apply(tree.contained, command: command).get()
         #expect(run.exitStatus == 0)
         let lines = try String(contentsOf: output, encoding: .utf8).split(separator: "\n")
@@ -44,6 +54,17 @@ struct LaunchBoundaryRegressionTests {
         let plan = try compileIsolationPlan(.init(requested: .contained, workspace: workspace)).get()
         let command = try #require(IsolatedCommand(executable: "/bin/sh", arguments: ["-c", "printf ran > marker"]))
         let backend = IsolationBackends.platform()
+        #if os(Linux)
+        switch backend.prepare(plan, command) {
+        case .failure(let error):
+            #expect(error == .containedGuaranteesUnsupported)
+        case .success:
+            Issue.record("Linux prepare must refuse a contained plan")
+        }
+        #expect(FileManager.default.fileExists(atPath: tree.workspaceURL.appendingPathComponent("marker").path) == false)
+        #expect(FileManager.default.fileExists(atPath: tree.siblingURL.appendingPathComponent("marker").path) == false)
+        return
+        #endif
         let request = try backend.prepare(plan, command).get()
         try FileManager.default.removeItem(at: alias)
         try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: tree.siblingURL)

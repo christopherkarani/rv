@@ -154,7 +154,7 @@ func compileFirstSliceProfile(
     (deny default)
     (allow process-exec*)
     (allow process-fork)
-    (allow signal (target self))
+    (allow signal (target same-sandbox))
     (allow sysctl-read)
     (allow mach-lookup)
     (allow file-read-data (literal "/"))

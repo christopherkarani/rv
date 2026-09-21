@@ -231,7 +231,9 @@ struct LocalExecutorTests {
             fingerprint: "shell:local-executor:contained-in",
             plan: tree.contained
         )
-        let result = try await LocalExecutor().run(executable)
+        guard let result = try await runContainedOrRefuseOnLinux(executable, absentPath: inside) else {
+            return
+        }
         #expect(result.exitStatus == 0)
         #expect(FileManager.default.fileExists(atPath: inside))
         expectContainedPlatform(result.established, matching: tree.contained)
@@ -251,7 +253,9 @@ struct LocalExecutorTests {
             fingerprint: "shell:local-executor:contained-out",
             plan: tree.contained
         )
-        let result = try await LocalExecutor().run(executable)
+        guard let result = try await runContainedOrRefuseOnLinux(executable, absentPath: outside) else {
+            return
+        }
         #expect(result.exitStatus != 0)
         #expect(FileManager.default.fileExists(atPath: outside) == false)
         expectContainedPlatform(result.established, matching: tree.contained)
@@ -300,6 +304,27 @@ struct LocalExecutorTests {
             plan: tree.contained
         )
         let executor = LocalExecutor()
+        #if os(Linux)
+        do {
+            _ = try await executor.run(executable)
+            Issue.record("Linux first run must refuse the contained launch")
+        } catch let error as LocalExecutorError {
+            #expect(error == .applyFailed(.containedGuaranteesUnsupported))
+        }
+        #expect(FileManager.default.fileExists(atPath: inside) == false)
+        do {
+            _ = try await executor.run(executable)
+            Issue.record("second run of the same fingerprint must throw alreadyExecuted")
+        } catch let error as LocalExecutorError {
+            switch error {
+            case .alreadyExecuted(let fingerprint):
+                #expect(fingerprint == executable.allowed.action.fingerprint)
+            case .cancelled, .applyFailed:
+                Issue.record("expected alreadyExecuted, got \(error)")
+            }
+        }
+        return
+        #endif
         let first = try await executor.run(executable)
         #expect(first.exitStatus == 0)
         #expect(FileManager.default.fileExists(atPath: inside))
@@ -345,7 +370,10 @@ struct LocalExecutorTests {
         } catch {
             Issue.record("observed first run must throw LocalExecutorError, got \(error)")
         }
-        let result = try await executor.run(contained)
+        guard let result = try await runContainedOrRefuseOnLinux(contained, executor: executor, absentPath: inside)
+        else {
+            return
+        }
         #expect(result.exitStatus == 0)
         #expect(FileManager.default.fileExists(atPath: inside))
         expectContainedPlatform(result.established, matching: tree.contained)
@@ -369,10 +397,36 @@ struct LocalExecutorTests {
         let pending = try requirePendingReviewAsk(action)
         let allowed = try requireResolvedAllowOnce(pending)
         let executable = try requireExecutable(allowed, plan: tree.contained)
-        let result = try await LocalExecutor().run(executable)
+        guard let result = try await runContainedOrRefuseOnLinux(executable, absentPath: inside) else {
+            return
+        }
         #expect(result.exitStatus == 0)
         #expect(FileManager.default.fileExists(atPath: inside))
         expectContainedPlatform(result.established, matching: tree.contained)
+    }
+}
+
+private func runContainedOrRefuseOnLinux(
+    _ executable: ExecutableAction,
+    executor: LocalExecutor = LocalExecutor(),
+    absentPath: String
+) async throws -> IsolatedRunResult? {
+    do {
+        let result = try await executor.run(executable)
+        #if os(Linux)
+        Issue.record("Linux contained launch must be refused, got exit \(result.exitStatus)")
+        return nil
+        #else
+        return result
+        #endif
+    } catch let error as LocalExecutorError {
+        #if os(Linux)
+        #expect(error == .applyFailed(.containedGuaranteesUnsupported))
+        #expect(FileManager.default.fileExists(atPath: absentPath) == false)
+        return nil
+        #else
+        throw error
+        #endif
     }
 }
 

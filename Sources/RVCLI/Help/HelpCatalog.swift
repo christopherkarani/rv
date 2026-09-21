@@ -35,7 +35,7 @@ enum HelpCatalog {
             HelpSection(
                 heading: "Get started",
                 rows: [
-                    HelpRow(name: "opencode", description: "Launch OpenCode with workspace write containment"),
+                    HelpRow(name: "opencode", description: "Launch OpenCode in a workspace sandbox"),
                     HelpRow(name: "setup", description: "Wire host hooks and start rvd"),
                     HelpRow(name: "test", description: "Try a command before it runs"),
                     HelpRow(name: "doctor", description: "Check service, packs, and hosts"),
@@ -94,8 +94,8 @@ enum HelpCatalog {
                 HelpRow(name: "--", description: "Pass all following arguments to OpenCode, including --help"),
             ]),
             HelpSection(heading: "Isolation", rows: [
-                HelpRow(name: "files", description: "Read and write limited to the workspace, inherited by child processes"),
-                HelpRow(name: "limits", description: "Network and signals to other processes are denied. Linux refuses launch until it can enforce the same limits"),
+                HelpRow(name: "files", description: "Workspace read and write, plus the system locations needed to start programs. Children inherit those rules"),
+                HelpRow(name: "limits", description: "Network is denied. Signals outside the sandbox are denied. Linux refuses launch until it can enforce the same limits"),
                 HelpRow(name: "failure", description: "Sandbox initialization failure stops execution; no unrestricted fallback"),
             ]),
         ],

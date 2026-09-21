@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import RVDomain
 import Testing
@@ -270,6 +271,18 @@ struct RuntimeAdversarialTests {
         Thread.sleep(forTimeInterval: 0.3)
         #expect(victim.isRunning)
     }
+
+    @Test func containedShellCanSignalItsOwnChild() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let marker = tree.workspaceURL.appendingPathComponent("child-signaled")
+        let run = try runShell(
+            tree.contained,
+            "sleep 20 & pid=$!; sleep 0.2; kill \"$pid\" || exit 41; wait \"$pid\"; printf killed > \(quote(marker.path))"
+        )
+        #expect(run.exitStatus == 0)
+        #expect(try String(contentsOf: marker, encoding: .utf8) == "killed")
+    }
 }
 
 enum AdversarialLauncher: String, CaseIterable, Sendable {
@@ -343,3 +356,4 @@ private func writeExecutable(_ source: String, to url: URL) throws {
     try Data(source.utf8).write(to: url)
     try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: url.path)
 }
+#endif
