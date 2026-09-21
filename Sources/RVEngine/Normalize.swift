@@ -26,7 +26,16 @@ func tokenizeCommand(_ text: String) -> [CommandToken] {
     var index = utf8.startIndex
 
     while index < utf8.endIndex {
+        var emittedNewline = false
         while index < utf8.endIndex {
+            if let width = newlineWidth(utf8, at: index) {
+                if emittedNewline == false {
+                    tokens.append(CommandToken(decoded: "\n", wasQuoted: false))
+                    emittedNewline = true
+                }
+                index = utf8.index(index, offsetBy: width)
+                continue
+            }
             let width = whitespaceLength(utf8, at: index)
             if width == 0 { break }
             index = utf8.index(index, offsetBy: width)
@@ -314,7 +323,7 @@ func applyRoleAwareQuotes(_ text: String) -> String {
         pendingDataFlag = false
         gitGrepPatternPending = false
     }
-    return tokens.lazy.map(\.decoded).joined(separator: " ")
+    return joinDecodedTokens(tokens)
 }
 
 private enum WrapperSeek {
@@ -372,7 +381,7 @@ private func consumeWrapper(decoded: String, seek: inout WrapperSeek) -> String?
 }
 
 private func isShellSeparator(_ token: String) -> Bool {
-    token == "&&" || token == "||" || token == ";" || token == "|"
+    token == "&&" || token == "||" || token == ";" || token == "|" || token == "\n"
 }
 
 private func containsInlineCode(_ token: CommandToken) -> Bool {
@@ -928,10 +937,55 @@ func splitSegments(_ text: String) -> [String] {
             segmentStart = index
             continue
         }
+        if byte == UInt8(ascii: "\n") || byte == UInt8(ascii: "\r") {
+            flush(upTo: index)
+            utf8.formIndex(after: &index)
+            if byte == UInt8(ascii: "\r"),
+               index < utf8.endIndex,
+               utf8[index] == UInt8(ascii: "\n")
+            {
+                utf8.formIndex(after: &index)
+            }
+            segmentStart = index
+            continue
+        }
         index = nextScalarIndex(utf8, index)
     }
     flush(upTo: utf8.endIndex)
     return segments
+}
+
+private func joinDecodedTokens(_ tokens: [CommandToken]) -> String {
+    var out = ""
+    var lastWasNewline = true
+    for token in tokens {
+        if token.decoded == "\n" {
+            out.append("\n")
+            lastWasNewline = true
+            continue
+        }
+        if lastWasNewline == false {
+            out.append(" ")
+        }
+        out.append(token.decoded)
+        lastWasNewline = false
+    }
+    return out
+}
+
+/// Unquoted `\n` / `\r\n` / `\r` width. Quoted newlines stay inside the token.
+private func newlineWidth(_ utf8: String.UTF8View, at index: String.Index) -> Int? {
+    guard index < utf8.endIndex else { return nil }
+    let byte = utf8[index]
+    if byte == UInt8(ascii: "\n") { return 1 }
+    if byte == UInt8(ascii: "\r") {
+        let next = utf8.index(after: index)
+        if next < utf8.endIndex, utf8[next] == UInt8(ascii: "\n") {
+            return 2
+        }
+        return 1
+    }
+    return nil
 }
 
 private func whitespaceLength(_ utf8: String.UTF8View, at index: String.Index) -> Int {
