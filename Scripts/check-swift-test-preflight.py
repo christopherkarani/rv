@@ -12,14 +12,17 @@ PACKAGE = ROOT / "Package.swift"
 ALLOWED = {"RVIsolation", "rv-isolation-exec"}
 
 
-def isolation_test_dependencies(text: str) -> list[str]:
-    matches = re.findall(
+def isolation_test_dependency_blocks(text: str) -> list[str]:
+    return re.findall(
         r"let isolationTestDependencies: \[Target\.Dependency\] = \[(.*?)\]",
         text,
         flags=re.S,
     )
+
+
+def isolation_test_dependencies(blocks: list[str]) -> list[str]:
     deps: list[str] = []
-    for raw in matches:
+    for raw in blocks:
         deps.extend(re.findall(r'"([^"]+)"', raw))
     return deps
 
@@ -29,7 +32,20 @@ def main() -> int:
         print("check-swift-test-preflight: Package.swift missing", file=sys.stderr)
         return 1
     text = PACKAGE.read_text()
-    deps = isolation_test_dependencies(text)
+    blocks = isolation_test_dependency_blocks(text)
+    if len(blocks) == 0:
+        print(
+            "check-swift-test-preflight: isolationTestDependencies assignment not found",
+            file=sys.stderr,
+        )
+        return 1
+    deps = isolation_test_dependencies(blocks)
+    if len(deps) == 0:
+        print(
+            "check-swift-test-preflight: isolationTestDependencies parsed no modules",
+            file=sys.stderr,
+        )
+        return 1
     extra = [dep for dep in deps if dep not in ALLOWED]
     unique = list(dict.fromkeys(deps))
     if extra:

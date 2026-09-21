@@ -60,6 +60,7 @@ Available checks:
   corpus-landmines      near-miss.json retains required landmine commands
   corpus-structure      All corpus files have valid schema (cases array)
   test-target-isolation Only RVCorpusTests may list 3+ module deps
+  isolation-test-modules RVIsolationTests may depend on RVIsolation and rv-isolation-exec only
 EOF
 }
 
@@ -515,6 +516,20 @@ for m in re.finditer(pattern, content):
   return $fail
 }
 
+check_isolation_test_modules() {
+  # RVIsolationTests uses `dependencies: isolationTestDependencies`, which
+  # test-target-isolation cannot see (it only parses literal arrays).
+  local output
+  if output=$(python3 "$ROOT/Scripts/check-swift-test-preflight.py" 2>&1); then
+    if [ "$QUIET" -eq 0 ]; then printf "  %b✓%b %s\n" "$GREEN" "$NC" "RVIsolationTests deps ok"; fi
+    return 0
+  else
+    printf "  %b✗ RVIsolationTests extra Swift modules%b\n" "$RED" "$NC"
+    echo "$output" | indent
+    return 1
+  fi
+}
+
 # ─── Check registry ──────────────────────────────────────────────────────────
 
 ALL_CHECKS=(
@@ -535,6 +550,7 @@ ALL_CHECKS=(
   corpus-landmines
   corpus-structure
   test-target-isolation
+  isolation-test-modules
 )
 
 run_check() {
@@ -556,6 +572,7 @@ run_check() {
     corpus-landmines)       check_corpus_landmines ;;
     corpus-structure)       check_corpus_structure ;;
     test-target-isolation)  check_test_target_isolation ;;
+    isolation-test-modules) check_isolation_test_modules ;;
     *) echo "Unknown check: $1"; return 1 ;;
   esac
 }
