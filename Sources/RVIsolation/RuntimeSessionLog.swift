@@ -5,6 +5,7 @@ import Glibc
 #endif
 import Foundation
 import RVDomain
+import Synchronization
 
 /// One persisted start record. The launch path writes this before spawn.
 struct RuntimeSessionRecord: Equatable, Sendable {
@@ -89,16 +90,82 @@ enum RuntimeSessionLog {
             return .failure(.sessionRecordFailed)
         }
         let fd = url.path.withCString { path in
-            open(path, O_CREAT | O_APPEND | O_WRONLY | O_CLOEXEC, 0o600)
+            open(path, O_CREAT | O_APPEND | O_RDWR | O_CLOEXEC, 0o600)
         }
         guard fd >= 0 else {
             return .failure(.sessionRecordFailed)
         }
         defer { close(fd) }
-        guard writeAll(fd, data), sync(fd) else {
-            return .failure(.sessionRecordFailed)
+        // macOS `flock` is per process, so the in-process gate has to be first.
+        return AppendLock.shared.withLock {
+            guard lock(fd) else {
+                return .failure(.sessionRecordFailed)
+            }
+            defer { _ = flock(fd, LOCK_UN) }
+            // A crashed earlier append can leave a partial JSON line with no newline.
+            guard closeTornLine(fd), writeAll(fd, data), sync(fd) else {
+                return .failure(.sessionRecordFailed)
+            }
+            return .success(())
         }
-        return .success(())
+    }
+
+    /// Threads in this process. macOS `flock` does not block them.
+    private final class AppendLock: Sendable {
+        static let shared = AppendLock()
+        private let mutex = Mutex<Void>(())
+
+        func withLock<T: Sendable>(_ body: () -> T) -> T {
+            mutex.withLock { _ in body() }
+        }
+    }
+
+    /// Excludes other processes. Callers already hold `AppendLock`.
+    private static func lock(_ fd: Int32) -> Bool {
+        for _ in 0..<16 {
+            if flock(fd, LOCK_EX) == 0 {
+                return true
+            }
+            if errno != EINTR {
+                return false
+            }
+        }
+        return false
+    }
+
+    /// If the log does not end on a record boundary, close that partial line.
+    private static func closeTornLine(_ fd: Int32) -> Bool {
+        let end = lseek(fd, 0, SEEK_END)
+        if end < 0 {
+            return false
+        }
+        if end == 0 {
+            return true
+        }
+        var last = UInt8(0)
+        var interrupts = 0
+        while true {
+            var readError: Int32 = 0
+            let count = withUnsafeMutablePointer(to: &last) { pointer -> Int in
+                let read = pread(fd, pointer, 1, end - 1)
+                if read < 0 {
+                    readError = errno
+                }
+                return read
+            }
+            if count == 1 {
+                break
+            }
+            if count < 0, readError == EINTR, interrupts < 16 {
+                interrupts += 1
+                continue
+            }
+            return false
+        }
+        if last == UInt8(ascii: "\n") {
+            return true
+        }
+        return writeAll(fd, Data([UInt8(ascii: "\n")]))
     }
 
     /// Writes `data` in full. A short write is finished or closed with a newline

@@ -1,4 +1,5 @@
 #if os(macOS)
+import Darwin
 import Foundation
 import RVDomain
 import Testing
@@ -244,17 +245,31 @@ struct RuntimeAdversarialTests {
     @Test func backgroundChildCannotRetainWorkspaceAuthorityAfterReturn() throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
-        try assertNoSurvivingWriter(
-            tree,
-            script: "/bin/sh -c \(quote(survivingWriter(tree))) & exit 0"
-        )
+        try assertNoSurvivingWriter(tree, script: backgroundAndExit(tree))
     }
 
     @Test func nestedShellBackgroundChildCannotRetainWorkspaceAuthorityAfterReturn() throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
-        let inner = "/bin/sh -c \(quote(survivingWriter(tree))) & exit 0"
+        let inner = backgroundAndExit(tree)
         try assertNoSurvivingWriter(tree, script: "/bin/sh -c \(quote(inner))")
+    }
+
+    @Test func lifetimeSyscallsAreDeniedInsideSeatbelt() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let probe = try compileProbe(lifetimeSyscallProbeSource, named: "lifetime-syscalls", in: tree.workspaceURL)
+        let report = tree.workspaceURL.appendingPathComponent("syscalls")
+        let command = try #require(IsolatedCommand(executable: probe.path, arguments: [report.path]))
+        let run = try IsolationBackends.apply(tree.contained, command: command).get()
+        #expect(run.exitStatus == 0)
+        #expect(run.session != nil)
+        let text = try String(contentsOf: report, encoding: .utf8)
+        let lines = Set(text.split(whereSeparator: \.isNewline).map(String.init))
+        #expect(lines.contains("fork 0"))
+        #expect(lines.contains("setsid 1"))
+        #expect(lines.contains("setpgid 1"))
+        #expect(lines.contains("posix_spawn 1"))
     }
 
     @Test func setsidProbeCannotRetainWorkspaceAuthorityAfterReturn() throws {
@@ -390,13 +405,26 @@ private func survivingWriter(_ tree: ContainmentTree) -> String {
     return "count=0; while [ ! -f \(quote(gate)) ] && [ \"$count\" -lt 150 ]; do /bin/sleep 0.02; count=$((count + 1)); done; printf alive > \(quote(marker)); printf escaped > \(quote(outside))"
 }
 
+private func backgroundAndExit(_ tree: ContainmentTree) -> String {
+    let pid = tree.workspaceURL.appendingPathComponent("child.pid").path
+    return "/bin/sh -c \(quote(survivingWriter(tree))) & printf %s \"$!\" > \(quote(pid)); exit 0"
+}
+
 private func assertNoSurvivingWriter(_ tree: ContainmentTree, script: String) throws {
     let marker = tree.workspaceURL.appendingPathComponent("after-session")
     let gate = tree.workspaceURL.appendingPathComponent("parent-returned")
     let outside = tree.siblingURL.appendingPathComponent("escaped")
+    let pidFile = tree.workspaceURL.appendingPathComponent("child.pid")
     let run = try runShell(tree.contained, script)
     #expect(run.exitStatus == 0)
     #expect(run.session != nil)
+    let pidText = try String(contentsOf: pidFile, encoding: .utf8)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    let pid = try #require(Int32(pidText))
+    let liveness = kill(pid, 0)
+    let livenessError = errno
+    #expect(liveness == -1)
+    #expect(livenessError == ESRCH)
     try Data("parent-has-returned".utf8).write(to: gate)
     Thread.sleep(forTimeInterval: 0.5)
     #expect(!exists(marker))
@@ -510,6 +538,51 @@ int main(int argc, char **argv) {
     char *childArgv[] = {argv[0], "wait", argv[1], argv[2], NULL};
     posix_spawn(&child, argv[0], NULL, &attr, childArgv, environ);
     _exit(0);
+}
+"""
+
+private let lifetimeSyscallProbeSource = """
+#include <errno.h>
+#include <fcntl.h>
+#include <spawn.h>
+#include <stdio.h>
+#include <sys/wait.h>
+#include <unistd.h>
+extern char **environ;
+int main(int argc, char **argv) {
+    if (argc < 2) return 2;
+    int fd = open(argv[1], O_CREAT | O_WRONLY | O_TRUNC, 0644);
+    if (fd < 0) return 3;
+    pid_t child = fork();
+    if (child < 0) {
+        dprintf(fd, "fork %d\\n", errno);
+        return 4;
+    }
+    if (child == 0) {
+        char buf[128];
+        errno = 0;
+        pid_t sid = setsid();
+        int setsidErrno = sid < 0 ? errno : 0;
+        errno = 0;
+        int pg = setpgid(0, 0);
+        int setpgidErrno = pg == 0 ? 0 : errno;
+        posix_spawnattr_t attr;
+        posix_spawnattr_init(&attr);
+        posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETSID);
+        pid_t spawned = 0;
+        char *av[] = {"/usr/bin/true", NULL};
+        int spawnedCode = posix_spawn(&spawned, "/usr/bin/true", NULL, &attr, av, environ);
+        int n = snprintf(
+            buf, sizeof buf, "fork 0\\nsetsid %d\\nsetpgid %d\\nposix_spawn %d\\n",
+            setsidErrno, setpgidErrno, spawnedCode
+        );
+        if (n > 0) write(fd, buf, (size_t)n);
+        _exit(0);
+    }
+    int status = 0;
+    waitpid(child, &status, 0);
+    close(fd);
+    return 0;
 }
 """
 #endif
