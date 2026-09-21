@@ -4,9 +4,9 @@ import Testing
 @testable import RVIsolation
 
 /// Host-launch edges this suite encodes before production code:
-/// 1. `.pi` / `.claude` + contained plan + `/usr/bin/true` → `hostUnsupported`; no spawn
-/// 2. `.opencode` + observed plan → `planNotContained`; no spawn
-/// 3. `.opencode` + mediated plan → `planNotContained`; no spawn
+/// 1. `.pi` / `.claude` + contained isolation + `/usr/bin/true` → `hostUnsupported`; no spawn
+/// 2. Observed plan `containedIsolation()` is `.notContained`; launch is not called
+/// 3. Mediated plan `containedIsolation()` is `.notContained`; launch is not called
 /// 4. `.opencode` + contained + `/usr/bin/true` (or `/bin/true`) → established
 ///    `.contained`, platform family, exit 0
 /// 5. `.opencode` + contained + absolute `touch` inside `ContainmentTree` →
@@ -20,44 +20,40 @@ struct HostLaunchTests {
         defer { tree.tearDown() }
         let command = try requireTrueCommand()
 
+        let isolation = try tree.requireContainedIsolation()
         expectHostUnsupported(
-            launchContainedHost(host: .pi, command: command, plan: tree.contained)
+            launchContainedHost(host: .pi, command: command, plan: isolation)
         )
         expectHostUnsupported(
-            launchContainedHost(host: .claude, command: command, plan: tree.contained)
+            launchContainedHost(host: .claude, command: command, plan: isolation)
         )
     }
 
-    @Test func launch_observedPlan_fails() throws {
+    @Test func observedPlan_containedIsolation_fails() throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
-        let command = try requireTrueCommand()
-        expectPlanNotContained(
-            launchContainedHost(host: .opencode, command: command, plan: tree.observed)
-        )
+        #expect(tree.observed.containedIsolation() == .failure(.notContained))
     }
 
-    @Test func launch_mediatedPlan_fails() throws {
+    @Test func mediatedPlan_containedIsolation_fails() throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
-        let command = try requireTrueCommand()
         let workspace = try #require(tree.contained.workspace)
         let mediated = try ContainmentTree.requirePlan(
             IsolationCompileRequest(requested: .mediated, workspace: workspace)
         )
-        expectPlanNotContained(
-            launchContainedHost(host: .opencode, command: command, plan: mediated)
-        )
+        #expect(mediated.containedIsolation() == .failure(.notContained))
     }
 
     @Test func launch_containedTrue_establishes() throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
         let command = try requireTrueCommand()
-        switch launchContainedHost(host: .opencode, command: command, plan: tree.contained) {
+        let isolation = try tree.requireContainedIsolation()
+        switch launchContainedHost(host: .opencode, command: command, plan: isolation) {
         case .success(let run):
             #expect(run.exitStatus == 0)
-            expectContainedPlatform(run.established, matching: tree.contained)
+            expectContainedPlatform(run.established, matching: isolation.plan)
         case .failure(let error):
             recordUnexpectedHostLaunchError(error, expected: "contained true establish")
         }
@@ -68,11 +64,12 @@ struct HostLaunchTests {
         defer { tree.tearDown() }
         let inside = tree.workspaceURL.appendingPathComponent("inside.txt").path
         let command = try requireTouchCommand(arguments: [inside])
-        switch launchContainedHost(host: .opencode, command: command, plan: tree.contained) {
+        let isolation = try tree.requireContainedIsolation()
+        switch launchContainedHost(host: .opencode, command: command, plan: isolation) {
         case .success(let run):
             #expect(run.exitStatus == 0)
             #expect(FileManager.default.fileExists(atPath: inside))
-            expectContainedPlatform(run.established, matching: tree.contained)
+            expectContainedPlatform(run.established, matching: isolation.plan)
         case .failure(let error):
             recordUnexpectedHostLaunchError(error, expected: "in-workspace touch")
         }
@@ -84,11 +81,12 @@ struct HostLaunchTests {
         let outside = tree.siblingURL.appendingPathComponent("outside.txt").path
         #expect(FileManager.default.fileExists(atPath: outside) == false)
         let command = try requireTouchCommand(arguments: [outside])
-        switch launchContainedHost(host: .opencode, command: command, plan: tree.contained) {
+        let isolation = try tree.requireContainedIsolation()
+        switch launchContainedHost(host: .opencode, command: command, plan: isolation) {
         case .success(let run):
             #expect(run.exitStatus != 0)
             #expect(FileManager.default.fileExists(atPath: outside) == false)
-            expectContainedPlatform(run.established, matching: tree.contained)
+            expectContainedPlatform(run.established, matching: isolation.plan)
         case .failure(let error):
             recordUnexpectedHostLaunchError(
                 error,
@@ -136,11 +134,6 @@ private func expectHostUnsupported(
     switch result {
     case .failure(.hostUnsupported):
         break
-    case .failure(.planNotContained):
-        Issue.record(
-            "non-OpenCode contained launch must be hostUnsupported, not planNotContained",
-            sourceLocation: sourceLocation
-        )
     case .failure(.apply(let error)):
         Issue.record(
             "non-OpenCode contained launch must not apply, got \(error)",
@@ -148,31 +141,6 @@ private func expectHostUnsupported(
         )
     case .success:
         Issue.record("non-OpenCode contained launch must not spawn", sourceLocation: sourceLocation)
-    }
-}
-
-private func expectPlanNotContained(
-    _ result: Result<IsolatedRunResult, HostLaunchError>,
-    sourceLocation: SourceLocation = #_sourceLocation
-) {
-    switch result {
-    case .failure(.planNotContained):
-        break
-    case .failure(.hostUnsupported):
-        Issue.record(
-            "OpenCode observed/mediated launch must be planNotContained, not hostUnsupported",
-            sourceLocation: sourceLocation
-        )
-    case .failure(.apply(let error)):
-        Issue.record(
-            "OpenCode observed/mediated launch must not apply, got \(error)",
-            sourceLocation: sourceLocation
-        )
-    case .success:
-        Issue.record(
-            "OpenCode observed/mediated launch must not spawn",
-            sourceLocation: sourceLocation
-        )
     }
 }
 
@@ -227,8 +195,6 @@ private func recordUnexpectedHostLaunchError(
     switch error {
     case .hostUnsupported:
         Issue.record("expected \(expected), got hostUnsupported", sourceLocation: sourceLocation)
-    case .planNotContained:
-        Issue.record("expected \(expected), got planNotContained", sourceLocation: sourceLocation)
     case .apply(let apply):
         recordUnexpectedApplyError(apply, expected: expected, sourceLocation: sourceLocation)
     }

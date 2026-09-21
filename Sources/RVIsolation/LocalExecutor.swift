@@ -7,8 +7,8 @@ public enum LocalExecutorError: Error, Sendable, Equatable {
 
 /// Runs a compiled `ExecutableAction` once per fingerprint.
 ///
-/// Spawn is only `IsolationBackends.apply`. Observed and mediated plans
-/// fail closed here so this door cannot start an unsandboxed process.
+/// Spawn is only `IsolationBackends.apply` of `executable.isolation.plan`.
+/// Observed and mediated plans are not representable on this door.
 public actor LocalExecutor {
     private var executed: Set<ActionFingerprint> = []
 
@@ -19,13 +19,7 @@ public actor LocalExecutor {
         if executed.contains(fingerprint) {
             throw LocalExecutorError.alreadyExecuted(fingerprint)
         }
-        switch executable.plan.mode {
-        case .observed, .mediated:
-            throw LocalExecutorError.applyFailed(.backendUnavailable)
-        case .contained:
-            break
-        }
-        switch IsolationBackends.apply(executable.plan, command: executable.command) {
+        switch IsolationBackends.apply(executable.isolation.plan, command: executable.command) {
         case .success(let result):
             executed.insert(fingerprint)
             return result
@@ -41,12 +35,12 @@ public actor LocalExecutor {
     /// before compile + run.
     public func perform(
         _ authorization: AgentAuthorization,
-        plan: IsolationPlan,
+        plan isolation: ContainedIsolation,
         approval: Result<ApprovalDecision, AgentApprovalError>? = nil
     ) -> Result<AgentTurn, AgentTurnError> {
         switch authorization {
         case .allowed(let allowed):
-            return compileAndRun(allowed: allowed, plan: plan)
+            return compileAndRun(allowed: allowed, isolation: isolation)
         case .denied(let denied):
             return .success(.denied(denied))
         case .pending(let pending):
@@ -59,16 +53,16 @@ public actor LocalExecutor {
             case .success(.denied(let denied)):
                 return .success(.denied(denied))
             case .success(.allowed(let allowed)):
-                return compileAndRun(allowed: allowed, plan: plan)
+                return compileAndRun(allowed: allowed, isolation: isolation)
             }
         }
     }
 
     private func compileAndRun(
         allowed: AllowedAction,
-        plan: IsolationPlan
+        isolation: ContainedIsolation
     ) -> Result<AgentTurn, AgentTurnError> {
-        switch compileExecutable(allowed: allowed, plan: plan) {
+        switch compileExecutable(allowed: allowed, isolation: isolation) {
         case .failure(let error):
             return .failure(.compile(error))
         case .success(let executable):
