@@ -319,7 +319,8 @@ private func runDenyAppend(verdict: IsolationConformanceVerdict) throws -> Strin
     let result = applyContained(tree.contained, command: command)
     #if os(Linux)
     return try expectLinuxContainedRefusal(result, id: .fsAppendOut, verdict: verdict) {
-        #expect(try String(contentsOfFile: path, encoding: .utf8) == "keep\n")
+        let remaining = try String(contentsOfFile: path, encoding: .utf8)
+        #expect(remaining == "keep\n")
     }
     #else
     switch result {
@@ -534,7 +535,8 @@ private func runHoleSymlink(verdict: IsolationConformanceVerdict) throws -> Stri
     let result = applyContained(tree.contained, command: command)
     #if os(Linux)
     return try expectLinuxContainedRefusal(result, id: .holeSymlink, verdict: verdict) {
-        #expect(try String(contentsOfFile: outside, encoding: .utf8) == "before\n")
+        let remaining = try String(contentsOfFile: outside, encoding: .utf8)
+        #expect(remaining == "before\n")
     }
     #else
     switch result {
