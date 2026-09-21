@@ -265,10 +265,11 @@ struct RuntimeAdversarialTests {
         #expect(run.exitStatus == 0)
         #expect(run.session != nil)
         let text = try String(contentsOf: report, encoding: .utf8)
-        #expect(text.contains("fork 0"))
-        #expect(text.contains("setsid 1"))
-        #expect(text.contains("setpgid 1"))
-        #expect(text.contains("posix_spawn 1"))
+        let lines = Set(text.split(whereSeparator: \.isNewline).map(String.init))
+        #expect(lines.contains("fork 0"))
+        #expect(lines.contains("setsid 1"))
+        #expect(lines.contains("setpgid 1"))
+        #expect(lines.contains("posix_spawn 1"))
     }
 
     @Test func setsidProbeCannotRetainWorkspaceAuthorityAfterReturn() throws {

@@ -1,5 +1,6 @@
 import Foundation
 import RVDomain
+import Synchronization
 import Testing
 @testable import RVIsolation
 
@@ -148,6 +149,44 @@ struct LaunchBoundaryRegressionTests {
         #expect(records.first?.host == HookHost.opencode.rawValue)
     }
 
+    @Test func concurrentAppendsKeepEveryRecordReadable() async throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let log = tree.rootURL.appendingPathComponent("sessions.jsonl")
+        try Data("{\"torn\"".utf8).write(to: log)
+        let workspace = try #require(WorkingDirectory(validating: tree.workspaceURL.path))
+        let mode = tree.contained.mode
+        let bag = SessionIDBag()
+        let attempts = 32
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for _ in 0..<attempts {
+                group.addTask {
+                    let session = RuntimeSession(
+                        id: RuntimeSessionID(),
+                        host: .opencode,
+                        workspace: workspace,
+                        mode: mode,
+                        backend: .seatbelt,
+                        startedAt: Date(timeIntervalSince1970: 1_700_000_000),
+                        child: nil
+                    )
+                    switch RuntimeSessionLog.append(session, to: log) {
+                    case .success:
+                        bag.add(session.id.rawValue)
+                    case .failure:
+                        bag.fail()
+                    }
+                }
+            }
+            try await group.waitForAll()
+        }
+        let saved = bag.snapshot()
+        #expect(saved.failures == 0)
+        let records = RuntimeSessionLog.records(at: log)
+        #expect(records.count == attempts)
+        #expect(Set(records.map(\.id)) == Set(saved.ids))
+    }
+
     @Test func unwritableSessionLogDoesNotExecute() throws {
         #if os(macOS)
         let tree = try ContainmentTree()
@@ -229,5 +268,27 @@ struct LaunchBoundaryRegressionTests {
             Issue.record("invalid Seatbelt profile must not establish isolation")
         }
         #endif
+    }
+}
+
+/// `Mutex` cannot be captured by a task. The box can.
+private final class SessionIDBag: Sendable {
+    private struct State: Sendable {
+        var ids: [UUID] = []
+        var failures = 0
+    }
+
+    private let state = Mutex(State())
+
+    func add(_ id: UUID) {
+        state.withLock { $0.ids.append(id) }
+    }
+
+    func fail() {
+        state.withLock { $0.failures += 1 }
+    }
+
+    func snapshot() -> (ids: [UUID], failures: Int) {
+        state.withLock { ($0.ids, $0.failures) }
     }
 }
