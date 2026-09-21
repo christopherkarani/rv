@@ -5,9 +5,9 @@ import Testing
 
 /// Isolation apply edges this suite encodes before production code:
 /// 1. `compileSeatbeltProfile` on a compiled contained `/workspace` plan contains
-///    `(version 1)`, `(allow default)`, `file-write*`, `require-not`, and `subpath`
-///    with the resolved workspace; does not contain `deny default`; does not
-///    contain a network deny
+///    `(version 1)`, `(deny default)`, workspace `file-write*`, and `subpath`
+///    with the resolved workspace; does not contain `(allow default)` or an
+///    `(allow network` rule
 /// 2. contained workspace `/ws` + `RepositoryRoot` `/repo` → profile subpath is
 ///    `/ws` (resolved), not `/repo`
 /// 3. `compileSeatbeltProfile` on observed (and mediated) → `profileNotApplicable`
@@ -33,7 +33,7 @@ import Testing
 /// 21. Seatbelt `launchArguments` are `-p` + profile + inner argv
 @Suite("IsolationApply")
 struct IsolationApplyTests {
-    @Test func compileSeatbeltProfile_contained_isAllowDefaultWriteLimit_noDenyDefaultOrNetworkDeny()
+    @Test func compileSeatbeltProfile_contained_isDenyDefaultWorkspaceScope()
         throws
     {
         let workspace = try requireWorkspace("/workspace")
@@ -44,12 +44,14 @@ struct IsolationApplyTests {
         switch compileSeatbeltProfile(plan) {
         case .success(let profile):
             #expect(profile.source.contains("(version 1)"))
-            #expect(profile.source.contains("(allow default)"))
+            #expect(profile.source.contains("(deny default)"))
+            #expect(profile.source.contains("(allow default)") == false)
+            #expect(profile.source.contains("(allow network") == false)
             #expect(profile.source.contains("file-write*"))
-            #expect(profile.source.contains("require-not"))
+            #expect(profile.source.contains("(allow signal (target self))"))
             #expect(profile.source.contains("subpath \"\(escapeSBPL(resolved))\""))
-            #expect(profile.source.contains("deny default") == false)
-            #expect(profile.source.contains("network") == false)
+            let again = try #require(try? compileSeatbeltProfile(plan).get())
+            #expect(profile.source == again.source)
         case .failure(let error):
             recordUnexpectedApplyError(error, expected: "compiled first-slice Seatbelt profile")
         }
@@ -114,9 +116,11 @@ struct IsolationApplyTests {
                 .workspaceDoesNotExist,
                 .workspacePathUnresolvable,
                 .workspacePathUnsafe,
+                .workspaceContainsInodeAlias,
                 .containedGuaranteesUnsupported,
                 .profileNotApplicable,
                 .processSpawnFailed,
+                .commandContainsNUL,
                 .commandExecutableMustBeAbsolute:
                 Issue.record("unavailable contained prepare must be backendUnavailable, got \(error)")
             }
@@ -214,9 +218,11 @@ struct IsolationApplyTests {
                 .workspaceDoesNotExist,
                 .workspacePathUnresolvable,
                 .workspacePathUnsafe,
+                .workspaceContainsInodeAlias,
                 .containedGuaranteesUnsupported,
                 .profileNotApplicable,
                 .processSpawnFailed,
+                .commandContainsNUL,
                 .commandExecutableMustBeAbsolute:
                 Issue.record("relative workspace must be workspaceMustBeAbsolute, got \(error)")
             }
@@ -242,9 +248,11 @@ struct IsolationApplyTests {
                 .workspaceMustBeAbsolute,
                 .workspacePathUnresolvable,
                 .workspacePathUnsafe,
+                .workspaceContainsInodeAlias,
                 .containedGuaranteesUnsupported,
                 .profileNotApplicable,
                 .processSpawnFailed,
+                .commandContainsNUL,
                 .commandExecutableMustBeAbsolute:
                 Issue.record("missing directory must be workspaceDoesNotExist, got \(error)")
             }
@@ -303,6 +311,8 @@ struct IsolationApplyTests {
             Issue.record("relative IsolatedCommand.make must fail")
         case .failure(let error):
             switch error {
+            case .commandContainsNUL:
+                Issue.record("unexpected NUL command rejection")
             case .commandExecutableMustBeAbsolute:
                 break
             case .backendUnavailable,
@@ -311,6 +321,7 @@ struct IsolationApplyTests {
                 .workspaceDoesNotExist,
                 .workspacePathUnresolvable,
                 .workspacePathUnsafe,
+                .workspaceContainsInodeAlias,
                 .containedGuaranteesUnsupported,
                 .profileNotApplicable,
                 .processSpawnFailed:
@@ -362,9 +373,11 @@ struct IsolationApplyTests {
                 .workspaceMustBeAbsolute,
                 .workspacePathUnresolvable,
                 .workspacePathUnsafe,
+                .workspaceContainsInodeAlias,
                 .containedGuaranteesUnsupported,
                 .profileNotApplicable,
                 .processSpawnFailed,
+                .commandContainsNUL,
                 .commandExecutableMustBeAbsolute:
                 Issue.record(
                     "Darwin contained apply of a missing workspace must be workspaceDoesNotExist, got \(error)"
@@ -379,9 +392,11 @@ struct IsolationApplyTests {
                 .workspaceMustBeAbsolute,
                 .workspacePathUnresolvable,
                 .workspacePathUnsafe,
+                .workspaceContainsInodeAlias,
                 .containedGuaranteesUnsupported,
                 .profileNotApplicable,
                 .processSpawnFailed,
+                .commandContainsNUL,
                 .commandExecutableMustBeAbsolute:
                 Issue.record(
                     "Linux contained apply of a missing workspace must be workspaceDoesNotExist, got \(error)"
@@ -396,9 +411,11 @@ struct IsolationApplyTests {
                 .workspaceDoesNotExist,
                 .workspacePathUnresolvable,
                 .workspacePathUnsafe,
+                .workspaceContainsInodeAlias,
                 .containedGuaranteesUnsupported,
                 .profileNotApplicable,
                 .processSpawnFailed,
+                .commandContainsNUL,
                 .commandExecutableMustBeAbsolute:
                 Issue.record(
                     "non-Darwin contained apply must be backendUnavailable, got \(error)"
@@ -426,8 +443,10 @@ struct IsolationApplyTests {
                 .workspaceDoesNotExist,
                 .workspacePathUnresolvable,
                 .workspacePathUnsafe,
+                .workspaceContainsInodeAlias,
                 .containedGuaranteesUnsupported,
                 .processSpawnFailed,
+                .commandContainsNUL,
                 .commandExecutableMustBeAbsolute:
                 Issue.record("seatbelt observed prepare must be profileNotApplicable, got \(error)")
             }
@@ -451,9 +470,11 @@ struct IsolationApplyTests {
                 .workspaceMustBeAbsolute,
                 .workspaceDoesNotExist,
                 .workspacePathUnresolvable,
+                .workspaceContainsInodeAlias,
                 .containedGuaranteesUnsupported,
                 .profileNotApplicable,
                 .processSpawnFailed,
+                .commandContainsNUL,
                 .commandExecutableMustBeAbsolute:
                 Issue.record("filesystem-root workspace must be workspacePathUnsafe, got \(error)")
             }
@@ -477,9 +498,11 @@ struct IsolationApplyTests {
                 .workspaceMustBeAbsolute,
                 .workspaceDoesNotExist,
                 .workspacePathUnresolvable,
+                .workspaceContainsInodeAlias,
                 .containedGuaranteesUnsupported,
                 .profileNotApplicable,
                 .processSpawnFailed,
+                .commandContainsNUL,
                 .commandExecutableMustBeAbsolute:
                 Issue.record("newline workspace must be workspacePathUnsafe, got \(error)")
             }
@@ -554,9 +577,11 @@ struct IsolationApplyTests {
                 .workspaceDoesNotExist,
                 .workspacePathUnresolvable,
                 .workspacePathUnsafe,
+                .workspaceContainsInodeAlias,
                 .containedGuaranteesUnsupported,
                 .profileNotApplicable,
                 .processSpawnFailed,
+                .commandContainsNUL,
                 .commandExecutableMustBeAbsolute:
                 Issue.record(
                     "unknown platform() contained must be backendUnavailable, got \(error)"
@@ -633,8 +658,10 @@ private func expectProfileNotApplicable(
             .workspaceDoesNotExist,
             .workspacePathUnresolvable,
             .workspacePathUnsafe,
+            .workspaceContainsInodeAlias,
             .containedGuaranteesUnsupported,
             .processSpawnFailed,
+            .commandContainsNUL,
             .commandExecutableMustBeAbsolute:
             Issue.record(
                 "observed/mediated profile compile must be profileNotApplicable, got \(error)",
@@ -691,6 +718,8 @@ private func recordUnexpectedApplyError(
         )
     case .workspacePathUnsafe:
         Issue.record("expected \(expected), got workspacePathUnsafe", sourceLocation: sourceLocation)
+    case .workspaceContainsInodeAlias:
+        Issue.record("expected \(expected), got workspaceContainsInodeAlias", sourceLocation: sourceLocation)
     case .containedGuaranteesUnsupported:
         Issue.record(
             "expected \(expected), got containedGuaranteesUnsupported",
@@ -700,6 +729,8 @@ private func recordUnexpectedApplyError(
         Issue.record("expected \(expected), got profileNotApplicable", sourceLocation: sourceLocation)
     case .processSpawnFailed:
         Issue.record("expected \(expected), got processSpawnFailed", sourceLocation: sourceLocation)
+    case .commandContainsNUL:
+        Issue.record("unexpected NUL command rejection")
     case .commandExecutableMustBeAbsolute:
         Issue.record(
             "expected \(expected), got commandExecutableMustBeAbsolute",
@@ -820,12 +851,16 @@ private func describeError(_ error: IsolationApplyError) -> String {
         return "workspacePathUnresolvable"
     case .workspacePathUnsafe:
         return "workspacePathUnsafe"
+    case .workspaceContainsInodeAlias:
+        return "workspaceContainsInodeAlias"
     case .containedGuaranteesUnsupported:
         return "containedGuaranteesUnsupported"
     case .profileNotApplicable:
         return "profileNotApplicable"
     case .processSpawnFailed:
         return "processSpawnFailed"
+    case .commandContainsNUL:
+        return "commandContainsNUL"
     case .commandExecutableMustBeAbsolute:
         return "commandExecutableMustBeAbsolute"
     }

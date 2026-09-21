@@ -17,7 +17,7 @@ import Testing
 /// 10. contained outside `touch` stays contained, file absent, exit != 0
 /// 11. observed plan `run` throws `applyFailed(.backendUnavailable)`
 /// 12. second `run` of the same fingerprint throws `alreadyExecuted`
-/// 13. apply failure does not consume the fingerprint
+/// 13. rejected non-contained intent does not dispatch or consume the fingerprint
 /// 14. uncovered in-workspace `touch` (empty effects → reviewAsk) →
 ///     resolve(allowOnce) → compileExecutable → contained run creates the file
 /// `compileExecutable(allowed:plan:)` takes `AllowedAction` only.
@@ -310,6 +310,8 @@ struct LocalExecutorTests {
             switch error {
             case .alreadyExecuted(let fingerprint):
                 #expect(fingerprint == executable.allowed.action.fingerprint)
+            case .cancelled:
+                Issue.record("expected alreadyExecuted, got cancelled")
             case .applyFailed(let apply):
                 recordUnexpectedApplyError(apply, expected: "alreadyExecuted")
             }
@@ -318,7 +320,7 @@ struct LocalExecutorTests {
         }
     }
 
-    @Test func localExecutor_applyFailure_allowsRetry() async throws {
+    @Test func localExecutor_nonContainedRejection_allowsRetry() async throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
 
@@ -614,6 +616,8 @@ private func expectApplyFailedBackendUnavailable(
     switch error {
     case .applyFailed(.backendUnavailable):
         break
+    case .cancelled:
+        Issue.record("expected applyFailed(backendUnavailable), got cancelled", sourceLocation: sourceLocation)
     case .alreadyExecuted(let fingerprint):
         Issue.record(
             "expected applyFailed(backendUnavailable), got alreadyExecuted \(fingerprint.rawValue)",
@@ -634,6 +638,8 @@ private func recordUnexpectedApplyError(
     sourceLocation: SourceLocation = #_sourceLocation
 ) {
     switch error {
+    case .commandContainsNUL:
+        Issue.record("expected \(expected), got commandContainsNUL", sourceLocation: sourceLocation)
     case .backendUnavailable:
         Issue.record("expected \(expected), got backendUnavailable", sourceLocation: sourceLocation)
     case .backendMismatch:
@@ -649,6 +655,8 @@ private func recordUnexpectedApplyError(
         )
     case .workspacePathUnsafe:
         Issue.record("expected \(expected), got workspacePathUnsafe", sourceLocation: sourceLocation)
+    case .workspaceContainsInodeAlias:
+        Issue.record("expected \(expected), got workspaceContainsInodeAlias", sourceLocation: sourceLocation)
     case .containedGuaranteesUnsupported:
         Issue.record(
             "expected \(expected), got containedGuaranteesUnsupported",

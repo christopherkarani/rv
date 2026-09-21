@@ -1,0 +1,345 @@
+import Foundation
+import RVDomain
+import Testing
+@testable import RVIsolation
+
+/// Effect-based acceptance probes for the implemented write fence.
+/// `knownGap` tests reproduce missing guarantees; their success is evidence of
+/// a release blocker, never evidence that the requested isolation is secure.
+/// Every resource and signal target belongs to this test, including fake secrets.
+@Suite("RuntimeAdversarial", .serialized)
+struct RuntimeAdversarialTests {
+    @Test(arguments: AdversarialLauncher.allCases)
+    func descendantsCannotWriteOutsideWorkspace(_ launcher: AdversarialLauncher) throws {
+        guard let executable = launcher.installedExecutable, launcher.runsUnderBaseline(executable) else {
+            print("adversarial technique=\(launcher.rawValue) coverage=NOT-TESTED reason=outside-baseline-or-stub")
+            return
+        }
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let inside = tree.workspaceURL.appendingPathComponent("ran")
+        let outside = tree.siblingURL.appendingPathComponent("escaped")
+        let script = "printf ran > \(quote(inside.path)); printf escaped > \(quote(outside.path))"
+        let run: IsolatedRunResult
+        if launcher == .xargs {
+            run = try runShell(tree.contained, "printf '%s\\n' fixture | \(quote(executable)) /bin/sh -c \(quote(script))")
+        } else {
+            run = try runIsolated(
+                tree.contained,
+                executable: executable,
+                arguments: launcher.arguments(script: script)
+            )
+        }
+        #expect(try String(contentsOf: inside, encoding: .utf8) == "ran")
+        #expect(run.exitStatus != 0)
+        #expect(!exists(outside))
+        print("adversarial technique=\(launcher.rawValue) executable=\(executable) verdict=WRITE-DENIED")
+    }
+
+    @Test(arguments: ["nested", "exec", "background-wait", "env-shebang", "path-replacement", "executable-replacement"])
+    func shellIndirectionCannotRemoveWriteFence(_ technique: String) throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let inside = tree.workspaceURL.appendingPathComponent("ran")
+        let outside = tree.siblingURL.appendingPathComponent("escaped")
+        let payload = "printf ran > \(quote(inside.path)); printf escaped > \(quote(outside.path))"
+        let scriptURL = tree.workspaceURL.appendingPathComponent("payload")
+        let script: String
+        switch technique {
+        case "nested":
+            script = (0..<4).reduce(payload) { result, _ in "/bin/sh -c \(quote(result))" }
+        case "exec":
+            script = "exec /bin/sh -c \(quote(payload))"
+        case "background-wait":
+            script = "/bin/sh -c \(quote(payload)) & child=$!; wait \"$child\""
+        case "env-shebang":
+            try writeExecutable("#!/usr/bin/env sh\n\(payload)\n", to: scriptURL)
+            script = quote(scriptURL.path)
+        case "path-replacement":
+            let tool = tree.workspaceURL.appendingPathComponent("rv-adversarial-tool")
+            try writeExecutable("#!/bin/sh\n\(payload)\n", to: tool)
+            script = "PATH=\(quote(tree.workspaceURL.path)); export PATH; rv-adversarial-tool"
+        case "executable-replacement":
+            try writeExecutable("#!/bin/sh\nexit 0\n", to: scriptURL)
+            script = "printf %s \(quote("#!/bin/sh\n" + payload + "\n")) > \(quote(scriptURL.path)); exec \(quote(scriptURL.path))"
+        default:
+            Issue.record("unknown indirection fixture \(technique)")
+            return
+        }
+        let run = try runShell(tree.contained, script)
+        #expect(try String(contentsOf: inside, encoding: .utf8) == "ran")
+        #expect(run.exitStatus != 0)
+        #expect(!exists(outside))
+        print("adversarial technique=\(technique) verdict=WRITE-DENIED")
+    }
+
+    @Test(arguments: ["../outside", "../../sibling/outside", "./nested/../../outside"])
+    func relativeTraversalCannotWriteOutsideWorkspace(_ target: String) throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        try FileManager.default.createDirectory(
+            at: tree.workspaceURL.appendingPathComponent("nested"), withIntermediateDirectories: true
+        )
+        let run = try runShell(tree.contained, "printf ran > inside; printf escaped > \(quote(target))")
+        #expect(exists(tree.workspaceURL.appendingPathComponent("inside")))
+        #expect(run.exitStatus != 0)
+        #expect(!exists(tree.repositoryURL.appendingPathComponent("outside")))
+        #expect(!exists(tree.siblingURL.appendingPathComponent("outside")))
+    }
+
+    @Test(arguments: [false, true])
+    func symlinkChainsCannotWriteOutsideWorkspace(_ createdByAgent: Bool) throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let first = tree.workspaceURL.appendingPathComponent("first")
+        let second = tree.workspaceURL.appendingPathComponent("second")
+        let outside = tree.siblingURL.appendingPathComponent("escaped")
+        var script = ""
+        if createdByAgent {
+            script = "/bin/ln -s \(quote(tree.siblingURL.path)) \(quote(second.path)) && /bin/ln -s second \(quote(first.path)) && "
+        } else {
+            try FileManager.default.createSymbolicLink(at: second, withDestinationURL: tree.siblingURL)
+            try FileManager.default.createSymbolicLink(atPath: first.path, withDestinationPath: "second")
+        }
+        script += "printf ran > inside; printf escaped > \(quote(first.appendingPathComponent("escaped").path))"
+        let run = try runShell(tree.contained, script)
+        #expect(exists(tree.workspaceURL.appendingPathComponent("inside")))
+        #expect(run.exitStatus != 0)
+        #expect(!exists(outside))
+    }
+
+    @Test func renameCannotMoveAcrossWriteBoundary() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let inside = tree.workspaceURL.appendingPathComponent("inside")
+        let outside = tree.siblingURL.appendingPathComponent("outside")
+        try Data("inside-original".utf8).write(to: inside)
+        try Data("outside-original".utf8).write(to: outside)
+        let export = try runShell(tree.contained, "/bin/mv \(quote(inside.path)) \(quote(outside.path))")
+        #expect(export.exitStatus != 0)
+        #expect(try String(contentsOf: inside, encoding: .utf8) == "inside-original")
+        #expect(try String(contentsOf: outside, encoding: .utf8) == "outside-original")
+        let imported = tree.workspaceURL.appendingPathComponent("imported")
+        let importAttempt = try runShell(tree.contained, "/bin/mv \(quote(outside.path)) \(quote(imported.path))")
+        #expect(importAttempt.exitStatus != 0)
+        #expect(try String(contentsOf: outside, encoding: .utf8) == "outside-original")
+    }
+
+    @Test func agentCannotCreateAnOutsideHardlinkOrMutateOutsideSource() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let outside = tree.siblingURL.appendingPathComponent("source")
+        let link = tree.workspaceURL.appendingPathComponent("alias")
+        try Data("original".utf8).write(to: outside)
+        let run = try runShell(
+            tree.contained,
+            "/bin/ln \(quote(outside.path)) \(quote(link.path)) && printf changed > \(quote(link.path))"
+        )
+        #expect(run.exitStatus != 0)
+        #expect(try String(contentsOf: outside, encoding: .utf8) == "original")
+    }
+
+    @Test func knownGapPreexistingHardlinkAliasIsReported() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let outside = tree.siblingURL.appendingPathComponent("source")
+        let alias = tree.workspaceURL.appendingPathComponent("alias")
+        try Data("original".utf8).write(to: outside)
+        try FileManager.default.linkItem(at: outside, to: alias)
+        let command = try #require(
+            IsolatedCommand(executable: "/bin/sh", arguments: ["-c", "printf changed > \(quote(alias.path))"])
+        )
+        switch IsolationBackends.apply(tree.contained, command: command) {
+        case .success:
+            Issue.record("preexisting hardlink must refuse launch")
+        case .failure(let error):
+            switch error {
+            case .workspaceContainsInodeAlias:
+                break
+            case .backendUnavailable, .backendMismatch, .workspaceMustBeAbsolute,
+                .workspaceDoesNotExist, .workspacePathUnresolvable, .workspacePathUnsafe,
+                .containedGuaranteesUnsupported, .profileNotApplicable, .processSpawnFailed,
+                .commandContainsNUL, .commandExecutableMustBeAbsolute:
+                Issue.record("preexisting hardlink must be workspaceContainsInodeAlias, got \(error)")
+            }
+        }
+        #expect(try String(contentsOf: outside, encoding: .utf8) == "original")
+    }
+
+    @Test func knownGapSyntheticCredentialsAreReadableButCannotBeOverwritten() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let home = tree.siblingURL.appendingPathComponent("fake-home")
+        let paths = [
+            ".ssh/id_ed25519", ".ssh/config", ".aws/credentials", ".config/gcloud/credentials.db",
+            ".env", ".git-credentials", ".bash_history", ".zsh_history", ".zshrc",
+            "Library/Keychains/login.keychain-db", "Library/Application Support/Browser/Cookies",
+            ".config/rv/policy.toml", ".local/bin/rv",
+        ]
+        for (index, relative) in paths.enumerated() {
+            let secret = home.appendingPathComponent(relative)
+            try FileManager.default.createDirectory(at: secret.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let synthetic = "RV-SYNTHETIC-NOT-A-SECRET-\(index)"
+            try Data(synthetic.utf8).write(to: secret)
+            let copy = tree.workspaceURL.appendingPathComponent("read-\(index)")
+            let read = try runShell(tree.contained, "/bin/cat \(quote(secret.path)) > \(quote(copy.path))")
+            #expect(read.exitStatus != 0)
+            if exists(copy) {
+                #expect(try String(contentsOf: copy, encoding: .utf8) != synthetic)
+            }
+            let write = try runShell(tree.contained, "printf overwritten > \(quote(secret.path))")
+            #expect(write.exitStatus != 0)
+            #expect(try String(contentsOf: secret, encoding: .utf8) == synthetic)
+        }
+    }
+
+    @Test func knownGapWorkspaceGitHooksAndRVConfigurationRemainWritable() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        for relative in [".git/hooks/pre-commit", ".rv/policy.toml", ".config/rv/policy.toml", ".zshrc"] {
+            let target = tree.workspaceURL.appendingPathComponent(relative)
+            try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let run = try runShell(tree.contained, "printf modified > \(quote(target.path))")
+            #expect(run.exitStatus == 0)
+            #expect(try String(contentsOf: target, encoding: .utf8) == "modified")
+        }
+        print("adversarial technique=workspace-control-files security=NOT-SATISFIED reason=no-protected-subpaths")
+    }
+
+    @Test func concurrentWorkspacesCannotAcquireEachOthersWriteAuthority() async throws {
+        let first = try ContainmentTree()
+        let second = try ContainmentTree()
+        defer { first.tearDown(); second.tearDown() }
+        let firstOwn = first.workspaceURL.appendingPathComponent("own")
+        let secondOwn = second.workspaceURL.appendingPathComponent("own")
+        let firstAttack = second.workspaceURL.appendingPathComponent("from-first")
+        let secondAttack = first.workspaceURL.appendingPathComponent("from-second")
+        let jobs = [
+            (first.contained, firstOwn.path, firstAttack.path),
+            (second.contained, secondOwn.path, secondAttack.path),
+        ]
+        try await withThrowingTaskGroup(of: Int32.self) { group in
+            for (plan, own, attack) in jobs {
+                group.addTask {
+                    let run = try runShell(plan, "printf own > \(quote(own)); /bin/sleep 0.1; printf stolen > \(quote(attack))")
+                    return run.exitStatus
+                }
+            }
+            for try await status in group { #expect(status != 0) }
+        }
+        #expect(exists(firstOwn))
+        #expect(exists(secondOwn))
+        #expect(!exists(firstAttack))
+        #expect(!exists(secondAttack))
+    }
+
+    @Test func knownGapChildOutlivesImmediateParentWithWriteAuthority() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let marker = tree.workspaceURL.appendingPathComponent("after-session")
+        let gate = tree.workspaceURL.appendingPathComponent("parent-returned")
+        let outside = tree.siblingURL.appendingPathComponent("escaped")
+        let child = "count=0; while [ ! -f \(quote(gate.path)) ] && [ \"$count\" -lt 100 ]; do /bin/sleep 0.02; count=$((count + 1)); done; [ -f \(quote(gate.path)) ] || exit 70; printf escaped > \(quote(outside.path)); result=$?; printf %s \"$result\" > \(quote(marker.path))"
+        let run = try runShell(tree.contained, "/bin/sh -c \(quote(child)) & exit 0")
+        #expect(run.exitStatus == 0)
+        try Data("parent-has-returned".utf8).write(to: gate)
+        let deadline = Date().addingTimeInterval(3)
+        while !exists(marker) && Date() < deadline { Thread.sleep(forTimeInterval: 0.02) }
+        #expect(exists(marker))
+        #expect(try String(contentsOf: marker, encoding: .utf8) != "0")
+        #expect(!exists(outside))
+        print("adversarial technique=background-session-end child-retains-write-authority=true security=NOT-SATISFIED")
+    }
+
+    @Test func knownGapCanSignalSyntheticUnrelatedProcess() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let victim = Process()
+        victim.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        victim.arguments = ["5"]
+        victim.standardInput = FileHandle.nullDevice
+        victim.standardOutput = FileHandle.nullDevice
+        victim.standardError = FileHandle.nullDevice
+        try victim.run()
+        defer {
+            if victim.isRunning { victim.terminate() }
+            victim.waitUntilExit()
+        }
+        let run = try runShell(tree.contained, "kill -TERM \(victim.processIdentifier)")
+        #expect(run.exitStatus != 0)
+        Thread.sleep(forTimeInterval: 0.3)
+        #expect(victim.isRunning)
+    }
+}
+
+enum AdversarialLauncher: String, CaseIterable, Sendable {
+    case sh, bash, zsh, env, xargs, python, ruby, node
+
+    var installedExecutable: String? {
+        let names: [String]
+        switch self {
+        case .python: names = ["python3"]
+        default: names = [rawValue]
+        }
+        for directory in ["/bin", "/usr/bin", "/usr/local/bin", "/opt/homebrew/bin"] {
+            for name in names {
+                let path = directory + "/" + name
+                if FileManager.default.isExecutableFile(atPath: path) { return path }
+            }
+        }
+        return nil
+    }
+
+    /// Interpreters outside `/bin` and `/usr/bin`, and the Xcode `python3` stub,
+    /// are not part of the execution baseline. A payload that never starts is
+    /// not a denial result.
+    func runsUnderBaseline(_ path: String) -> Bool {
+        if path == "/usr/bin/python3" {
+            return false
+        }
+        return path.hasPrefix("/bin/") || path.hasPrefix("/usr/bin/")
+    }
+
+    func arguments(script: String) -> [String] {
+        switch self {
+        case .sh, .bash, .zsh: return ["-c", script]
+        case .env: return ["/bin/sh", "-c", script]
+        case .xargs: return ["/bin/sh", "-c", script]
+        case .python:
+            return ["-c", "import subprocess,sys; sys.exit(subprocess.call(['/bin/sh','-c',sys.argv[1]]))", script]
+        case .ruby:
+            return ["-e", "exec('/bin/sh', '-c', ARGV.fetch(0))", script]
+        case .node:
+            return ["-e", "process.exit(require('child_process').spawnSync('/bin/sh',['-c',process.argv[1]]).status)", script]
+        }
+    }
+}
+
+private func runShell(_ plan: IsolationPlan, _ script: String) throws -> IsolatedRunResult {
+    try runIsolated(plan, executable: "/bin/sh", arguments: ["-c", script])
+}
+
+private func runIsolated(
+    _ plan: IsolationPlan,
+    executable: String,
+    arguments: [String]
+) throws -> IsolatedRunResult {
+    let command = try #require(IsolatedCommand(executable: executable, arguments: arguments))
+    let run = try IsolationBackends.apply(plan, command: command).get()
+    #expect(run.established.mode == plan.mode)
+    #expect(run.established.family != .none)
+    return run
+}
+
+private func exists(_ url: URL) -> Bool {
+    FileManager.default.fileExists(atPath: url.path)
+}
+
+private func quote(_ value: String) -> String {
+    "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+}
+
+private func writeExecutable(_ source: String, to url: URL) throws {
+    try Data(source.utf8).write(to: url)
+    try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: url.path)
+}

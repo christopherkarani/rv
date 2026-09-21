@@ -1,0 +1,20 @@
+Building for debugging...
+[Constructing 106 / 193]
+[33 / 61] RVDomain
+[35 / 61] RVDomain
+[44 / 61] RVDomain
+[46 / 61] RVDomain
+[47 / 61] RVDomain
+[52 / 71] RVIsolation
+[62 / 71] RVIsolation
+[66 / 74] Probe-product
+[77 / 77] Probe-product
+Build complete! (3.45 secs)
+Building for debugging...
+Build complete! (0.26 secs)
+PASS kernel-executable-helper-resolution argv0=/tmp/rv-probe/.build/out/Products/Debug-linux-aarch64/Probe
+PASS sanitized-helper-environment constructor-marker=false
+PASS unsupported-kernel inner-marker=false result=failure(RVIsolation.IsolationApplyError.backendUnavailable)
+PASS kernel-executable-helper-resolution argv0=rv-relative-argv0
+PASS sanitized-helper-environment constructor-marker=false
+PASS unsupported-kernel inner-marker=false result=failure(RVIsolation.IsolationApplyError.backendUnavailable)

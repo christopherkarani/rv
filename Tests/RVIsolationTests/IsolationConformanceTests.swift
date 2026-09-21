@@ -367,27 +367,32 @@ private func runHoleNet(verdict: IsolationConformanceVerdict) throws -> String {
     defer { tree.tearDown() }
     switch compileSeatbeltProfile(tree.contained) {
     case .success(let profile):
-        #expect(profile.source.contains("network") == false)
+        #expect(profile.source.contains("(deny default)"))
+        #expect(profile.source.contains("(allow network") == false)
     case .failure(let error):
         recordUnexpectedConformanceError(
             error,
             id: .holeNet,
-            expected: "compiled Seatbelt profile without a network rule"
+            expected: "compiled Seatbelt profile that does not allow network"
         )
     }
     switch compileLandlockRuleset(tree.contained) {
-    case .success(let ruleset):
-        let netBindTCP: UInt64 = 1 << 16
-        let netConnectTCP: UInt64 = 1 << 17
-        #expect(ruleset.handledWriteAccess & (netBindTCP | netConnectTCP) == 0)
-        #expect(ruleset.handledWriteAccess & LandlockAccessFS.readFile == 0)
-        #expect(ruleset.handledWriteAccess & LandlockAccessFS.execute == 0)
+    case .success:
+        Issue.record("id=HOLE-NET Landlock must not compile a weaker ruleset")
     case .failure(let error):
-        recordUnexpectedConformanceError(
-            error,
-            id: .holeNet,
-            expected: "compiled Landlock ruleset without net bits"
-        )
+        switch error {
+        case .containedGuaranteesUnsupported:
+            break
+        case .backendUnavailable, .backendMismatch, .workspaceMustBeAbsolute,
+            .workspaceDoesNotExist, .workspacePathUnresolvable, .workspacePathUnsafe,
+            .workspaceContainsInodeAlias, .profileNotApplicable, .processSpawnFailed,
+            .commandContainsNUL, .commandExecutableMustBeAbsolute:
+            recordUnexpectedConformanceError(
+                error,
+                id: .holeNet,
+                expected: "Landlock refusal of a network-denied plan"
+            )
+        }
     }
     let command = try requireCommand(executable: "/usr/bin/true")
     switch applyContained(tree.contained, command: command) {
@@ -410,17 +415,28 @@ private func runHoleRead(verdict: IsolationConformanceVerdict) throws -> String 
     let secret = tree.siblingURL.appendingPathComponent("secret.txt").path
     try "secret\n".write(toFile: secret, atomically: true, encoding: .utf8)
     let command = try requireCommand(executable: "/bin/cat", arguments: [secret])
-    switch applyContained(tree.contained, command: command) {
+    let result = applyContained(tree.contained, command: command)
+    let unchanged = (try? String(contentsOfFile: secret, encoding: .utf8)) == "secret\n"
+    #expect(unchanged)
+    switch result {
     case .success(let run):
-        #expect(run.exitStatus == 0)
+        #expect(run.exitStatus != 0)
         expectFirstSliceContained(run.established, matching: tree.contained, id: .holeRead)
         return formatProbe(id: .holeRead, verdict: verdict, run: run)
     case .failure(let error):
-        recordUnexpectedConformanceError(
-            error,
-            id: .holeRead,
-            expected: "contained cat of a host-created outside file"
-        )
+        switch error {
+        case .containedGuaranteesUnsupported:
+            break
+        case .backendUnavailable, .backendMismatch, .workspaceMustBeAbsolute,
+            .workspaceDoesNotExist, .workspacePathUnresolvable, .workspacePathUnsafe,
+            .workspaceContainsInodeAlias, .profileNotApplicable, .processSpawnFailed,
+            .commandContainsNUL, .commandExecutableMustBeAbsolute:
+            recordUnexpectedConformanceError(
+                error,
+                id: .holeRead,
+                expected: "denied read or refused launch"
+            )
+        }
         return formatProbe(id: .holeRead, verdict: verdict, error: error)
     }
 }
@@ -471,9 +487,11 @@ private func runFCUnavailable(verdict: IsolationConformanceVerdict) throws -> St
             .workspaceDoesNotExist,
             .workspacePathUnresolvable,
             .workspacePathUnsafe,
+            .workspaceContainsInodeAlias,
             .containedGuaranteesUnsupported,
             .profileNotApplicable,
             .processSpawnFailed,
+            .commandContainsNUL,
             .commandExecutableMustBeAbsolute:
             Issue.record(
                 "id=FC-UNAVAILABLE must be backendUnavailable, got \(isolationApplyErrorName(error))"
@@ -504,9 +522,11 @@ private func runFCLandlockDarwin(verdict: IsolationConformanceVerdict) throws ->
                 .workspaceDoesNotExist,
                 .workspacePathUnresolvable,
                 .workspacePathUnsafe,
+                .workspaceContainsInodeAlias,
                 .containedGuaranteesUnsupported,
                 .profileNotApplicable,
                 .processSpawnFailed,
+                .commandContainsNUL,
                 .commandExecutableMustBeAbsolute:
                 Issue.record(
                     "id=FC-LANDLOCK-DARWIN must be backendUnavailable, got \(isolationApplyErrorName(error))"
@@ -515,12 +535,20 @@ private func runFCLandlockDarwin(verdict: IsolationConformanceVerdict) throws ->
             return formatProbe(id: .fcLandlockDarwin, verdict: verdict, error: error)
         }
     case .failure(let error):
-        recordUnexpectedConformanceError(
-            error,
-            id: .fcLandlockDarwin,
-            expected: "Darwin landlock prepare of contained"
-        )
-        return formatProbe(id: .fcLandlockDarwin, verdict: verdict, error: error)
+        switch error {
+        case .containedGuaranteesUnsupported:
+            return formatProbe(id: .fcLandlockDarwin, verdict: verdict, error: error)
+        case .backendUnavailable, .backendMismatch, .workspaceMustBeAbsolute,
+            .workspaceDoesNotExist, .workspacePathUnresolvable, .workspacePathUnsafe,
+            .workspaceContainsInodeAlias, .profileNotApplicable, .processSpawnFailed,
+            .commandContainsNUL, .commandExecutableMustBeAbsolute:
+            recordUnexpectedConformanceError(
+                error,
+                id: .fcLandlockDarwin,
+                expected: "Darwin landlock refusal of a strict contained plan"
+            )
+            return formatProbe(id: .fcLandlockDarwin, verdict: verdict, error: error)
+        }
     }
 }
 #endif
@@ -603,11 +631,11 @@ private func expectFirstSliceContained(
     switch established.mode {
     case .contained(let guarantees):
         switch guarantees.filesystem {
-        case .writesLimited(let limitedTo):
+        case .workspaceScoped(let limitedTo):
             #expect(limitedTo == plan.workspace, sourceLocation: sourceLocation)
         case .unrestricted:
             Issue.record(
-                "id=\(id.rawValue) established contained must keep first-slice write limit",
+                "id=\(id.rawValue) established contained must keep workspace scope",
                 sourceLocation: sourceLocation
             )
         }
@@ -621,8 +649,22 @@ private func expectFirstSliceContained(
             )
         }
         switch guarantees.network {
-        case .unrestricted:
+        case .denied:
             break
+        case .unrestricted:
+            Issue.record(
+                "id=\(id.rawValue) established contained must keep denied network",
+                sourceLocation: sourceLocation
+            )
+        }
+        switch guarantees.process {
+        case .hostSignalsDenied:
+            break
+        case .unrestricted:
+            Issue.record(
+                "id=\(id.rawValue) established contained must keep host signal denial",
+                sourceLocation: sourceLocation
+            )
         }
     case .observed:
         Issue.record(
@@ -700,9 +742,11 @@ private func expectWorkspacePathUnsafe(_ error: IsolationApplyError, stage: Stri
         .workspaceMustBeAbsolute,
         .workspaceDoesNotExist,
         .workspacePathUnresolvable,
+        .workspaceContainsInodeAlias,
         .containedGuaranteesUnsupported,
         .profileNotApplicable,
         .processSpawnFailed,
+        .commandContainsNUL,
         .commandExecutableMustBeAbsolute:
         Issue.record(
             "id=FC-ROOT-WS \(stage) must be workspacePathUnsafe, got \(isolationApplyErrorName(error))"
@@ -736,12 +780,16 @@ private func isolationApplyErrorName(_ error: IsolationApplyError) -> String {
         return "workspacePathUnresolvable"
     case .workspacePathUnsafe:
         return "workspacePathUnsafe"
+        case .workspaceContainsInodeAlias:
+            return "workspaceContainsInodeAlias"
     case .containedGuaranteesUnsupported:
         return "containedGuaranteesUnsupported"
     case .profileNotApplicable:
         return "profileNotApplicable"
     case .processSpawnFailed:
         return "processSpawnFailed"
+    case .commandContainsNUL:
+        return "commandContainsNUL"
     case .commandExecutableMustBeAbsolute:
         return "commandExecutableMustBeAbsolute"
     }

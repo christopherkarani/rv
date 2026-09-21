@@ -29,30 +29,10 @@ func prepareLandlock(
         return .failure(.profileNotApplicable)
     case .contained:
         switch compileLandlockRuleset(plan) {
+        case .success:
+            return .failure(.containedGuaranteesUnsupported)
         case .failure(let error):
             return .failure(error)
-        case .success(let ruleset):
-            guard let workspace = plan.workspace else {
-                return .failure(.containedGuaranteesUnsupported)
-            }
-            switch existingResolvedWorkspacePath(workspace) {
-            case .failure(let error):
-                return .failure(error)
-            case .success(let resolved):
-                guard ruleset.workspacePath == resolved else {
-                    return .failure(.workspacePathUnresolvable)
-                }
-            }
-            guard
-                let request = IsolatedLaunchRequest(
-                    plan: plan,
-                    command: command,
-                    launch: .landlock(ruleset)
-                )
-            else {
-                return .failure(.containedGuaranteesUnsupported)
-            }
-            return .success(request)
         }
     }
 }
@@ -103,6 +83,16 @@ func resolvedIsolationExecPath(override: URL?, workspacePath: String) -> String?
     if let override {
         return usableIsolationExecPath(override.path, workspacePath: workspacePath)
     }
+    #if os(Linux)
+    // argv[0] is caller-controlled and may be just `rv` when the installed
+    // C front door execs rv-cli. Locate the sibling of the kernel's actual
+    // executable, independent of PATH and the spelling of argv[0].
+    guard let executable = posixRealpath("/proc/self/exe") else { return nil }
+    let sibling = URL(fileURLWithPath: executable)
+        .deletingLastPathComponent()
+        .appendingPathComponent(IsolationBackends.isolationExecName).path
+    return usableIsolationExecPath(sibling, workspacePath: workspacePath)
+    #else
     if let argv0 = CommandLine.arguments.first,
         IsolatedCommand.isAbsoluteExecutable(argv0)
     {
@@ -124,6 +114,7 @@ func resolvedIsolationExecPath(override: URL?, workspacePath: String) -> String?
         }
     }
     return nil
+    #endif
 }
 
 func usableIsolationExecPath(_ path: String, workspacePath: String) -> String? {

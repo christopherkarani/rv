@@ -478,6 +478,8 @@ private func expectApplyFailedBackendUnavailable(
     switch error {
     case .applyFailed(.backendUnavailable):
         break
+    case .cancelled:
+        Issue.record("expected applyFailed(backendUnavailable), got cancelled", sourceLocation: sourceLocation)
     case .alreadyExecuted(let fingerprint):
         Issue.record(
             "expected applyFailed(backendUnavailable), got alreadyExecuted \(fingerprint.rawValue)",
@@ -513,6 +515,8 @@ private func recordUnexpectedApplyError(
     sourceLocation: SourceLocation = #_sourceLocation
 ) {
     switch error {
+    case .commandContainsNUL:
+        Issue.record("expected \(expected), got commandContainsNUL", sourceLocation: sourceLocation)
     case .backendUnavailable:
         Issue.record("expected \(expected), got backendUnavailable", sourceLocation: sourceLocation)
     case .backendMismatch:
@@ -528,6 +532,8 @@ private func recordUnexpectedApplyError(
         )
     case .workspacePathUnsafe:
         Issue.record("expected \(expected), got workspacePathUnsafe", sourceLocation: sourceLocation)
+    case .workspaceContainsInodeAlias:
+        Issue.record("expected \(expected), got workspaceContainsInodeAlias", sourceLocation: sourceLocation)
     case .containedGuaranteesUnsupported:
         Issue.record(
             "expected \(expected), got containedGuaranteesUnsupported",

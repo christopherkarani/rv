@@ -1,22 +1,26 @@
 import RVDomain
 
 public enum LocalExecutorError: Error, Sendable, Equatable {
+    case cancelled
     case alreadyExecuted(ActionFingerprint)
     case applyFailed(IsolationApplyError)
 }
 
-/// Runs a compiled `ExecutableAction` once per fingerprint.
+/// Dispatches a compiled `ExecutableAction` at most once per fingerprint.
 ///
 /// Spawn is only `IsolationBackends.apply`. Observed and mediated plans
 /// fail closed here so this door cannot start an unsandboxed process.
 public actor LocalExecutor {
-    private var executed: Set<ActionFingerprint> = []
+    private var dispatched: Set<ActionFingerprint> = []
 
     public init() {}
 
     public func run(_ executable: ExecutableAction) throws -> IsolatedRunResult {
+        guard Task.isCancelled == false else {
+            throw LocalExecutorError.cancelled
+        }
         let fingerprint = executable.allowed.action.fingerprint
-        if executed.contains(fingerprint) {
+        if dispatched.contains(fingerprint) {
             throw LocalExecutorError.alreadyExecuted(fingerprint)
         }
         switch executable.plan.mode {
@@ -25,9 +29,11 @@ public actor LocalExecutor {
         case .contained:
             break
         }
+        // Apply can fail after the child has produced effects. Never make the
+        // same authorization reusable based on an ambiguous backend result.
+        dispatched.insert(fingerprint)
         switch IsolationBackends.apply(executable.plan, command: executable.command) {
         case .success(let result):
-            executed.insert(fingerprint)
             return result
         case .failure(let error):
             throw LocalExecutorError.applyFailed(error)

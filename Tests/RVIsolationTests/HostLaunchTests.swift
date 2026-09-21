@@ -255,6 +255,8 @@ private func recordUnexpectedApplyError(
         )
     case .workspacePathUnsafe:
         Issue.record("expected \(expected), got workspacePathUnsafe", sourceLocation: sourceLocation)
+    case .workspaceContainsInodeAlias:
+        Issue.record("expected \(expected), got workspaceContainsInodeAlias", sourceLocation: sourceLocation)
     case .containedGuaranteesUnsupported:
         Issue.record(
             "expected \(expected), got containedGuaranteesUnsupported",
@@ -264,6 +266,8 @@ private func recordUnexpectedApplyError(
         Issue.record("expected \(expected), got profileNotApplicable", sourceLocation: sourceLocation)
     case .processSpawnFailed:
         Issue.record("expected \(expected), got processSpawnFailed", sourceLocation: sourceLocation)
+    case .commandContainsNUL:
+        Issue.record("unexpected NUL command rejection")
     case .commandExecutableMustBeAbsolute:
         Issue.record(
             "expected \(expected), got commandExecutableMustBeAbsolute",

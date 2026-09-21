@@ -13,6 +13,41 @@ private func installScriptURL() -> URL {
     repoRootURL().appendingPathComponent("install.sh")
 }
 
+@Test func installSh_linuxStagesRequiredIsolationHelper() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("rv-helper-install-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let src = root.appendingPathComponent("src")
+    try writeDummyTrio(in: src)
+    let helper = "#!/bin/sh\n# isolation-helper-fixture\nexit 125\n"
+    try writeExecutable(src.appendingPathComponent("rv-isolation-exec"), contents: helper)
+    let shim = root.appendingPathComponent("shim")
+    try writeLinuxShims(in: shim)
+    let home = root.appendingPathComponent("home")
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    let result = try runInstallScript(home: home, src: src, pathPrefix: shim.path)
+    #expect(result.status == 0)
+    let installed = home.appendingPathComponent(".local/bin/rv-isolation-exec")
+    #expect(FileManager.default.isExecutableFile(atPath: installed.path))
+    #expect(try String(contentsOf: installed, encoding: .utf8) == helper)
+}
+
+@Test func installSh_linuxMissingIsolationHelperPreservesPreviousInstall() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("rv-helper-missing-\(UUID())")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let src = root.appendingPathComponent("src")
+    try writeDummyTrio(in: src)
+    let sourceHelper = src.appendingPathComponent("rv-isolation-exec")
+    if FileManager.default.fileExists(atPath: sourceHelper.path) { try FileManager.default.removeItem(at: sourceHelper) }
+    let shim = root.appendingPathComponent("shim")
+    try writeLinuxShims(in: shim)
+    let home = root.appendingPathComponent("home")
+    let previous = home.appendingPathComponent(".local/bin/rv")
+    try writeExecutable(previous, contents: "#!/bin/sh\n# previous-install\nexit 0\n")
+    let result = try runInstallScript(home: home, src: src, pathPrefix: shim.path)
+    #expect(result.status != 0)
+    #expect(try String(contentsOf: previous, encoding: .utf8).contains("previous-install"))
+}
+
 private func writeExecutable(_ url: URL, contents: String) throws {
     try FileManager.default.createDirectory(
         at: url.deletingLastPathComponent(),
@@ -58,7 +93,7 @@ private func writeDarwinShims(in shim: URL, productVersion: String = "26.0") thr
 
 private func writeDummyTrio(in src: URL) throws {
     let dummy = "#!/bin/sh\n# installed-dummy\nexit 0\n"
-    for name in ["rv", "rv-cli", "rvd"] {
+    for name in ["rv", "rv-cli", "rvd", "rv-isolation-exec"] {
         try writeExecutable(src.appendingPathComponent(name), contents: dummy)
     }
 }
@@ -88,6 +123,10 @@ private func findSwiftRVExecutable() -> URL? {
 
 /// C-hook shaped `rv` plus Swift `rv-cli`. Dummy `rv` that exits 0 hides setup.
 private func writeLinuxSetupTrio(in src: URL, swiftRV: URL) throws {
+    try writeExecutable(
+        src.appendingPathComponent("rv-isolation-exec"),
+        contents: "#!/bin/sh\n# install-fixture-only\nexit 125\n"
+    )
     try writeExecutable(
         src.appendingPathComponent("rv"),
         contents: """

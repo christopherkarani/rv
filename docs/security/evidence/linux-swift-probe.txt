@@ -1,0 +1,34 @@
+set -eu
+mkdir -p /tmp/rv-probe/Sources/Probe /tmp/rv-probe-workspace
+cp -R /source/Sources/RVDomain /source/Sources/RVIsolation /source/Sources/rv-isolation-exec /tmp/rv-probe/Sources/
+cat > /tmp/rv-probe/Package.swift <<'SWIFT'
+// swift-tools-version: 6.4
+import PackageDescription
+let package = Package(name: "BoundaryProbe", products: [.executable(name: "Probe", targets: ["Probe"]), .executable(name: "rv-isolation-exec", targets: ["rv-isolation-exec"])], targets: [.target(name: "RVDomain"), .target(name: "RVIsolation", dependencies: ["RVDomain"], exclude: ["landlock_apply.c", "include"]), .executableTarget(name: "rv-isolation-exec", cSettings: [.headerSearchPath("../RVIsolation/include")]), .executableTarget(name: "Probe", dependencies: ["RVDomain", "RVIsolation"])])
+SWIFT
+cat > /tmp/rv-probe/Sources/Probe/main.swift <<'SWIFT'
+import Foundation
+import RVDomain
+@testable import RVIsolation
+let workspace = WorkingDirectory(validating: "/tmp/rv-probe-workspace")!
+let helper = resolvedIsolationExecPath(override: nil, workspacePath: workspace.rawValue)
+guard helper?.hasSuffix("/rv-isolation-exec") == true else { fatalError("kernel executable helper lookup failed") }
+let plan = try compileIsolationPlan(.init(requested: .contained, workspace: workspace)).get()
+let command = IsolatedCommand(executable: "/usr/bin/touch", arguments: ["/tmp/rv-probe-workspace/inner-marker"])!
+let result = IsolationBackends.apply(plan, command: command)
+if case .success = result { fatalError("this kernel has no Landlock; must refuse") }
+guard !FileManager.default.fileExists(atPath: "/tmp/rv-swift-loader-marker"), !FileManager.default.fileExists(atPath: "/tmp/rv-probe-workspace/inner-marker") else { fatalError("pre-isolation loader or inner command executed") }
+print("PASS kernel-executable-helper-resolution argv0=\(CommandLine.arguments[0])")
+print("PASS sanitized-helper-environment constructor-marker=false")
+print("PASS unsupported-kernel inner-marker=false result=\(result)")
+SWIFT
+cd /tmp/rv-probe
+swift build --product Probe -j 4
+swift build --product rv-isolation-exec -j 4
+clang -shared -fPIC '-DMARKER="/tmp/rv-swift-loader-marker"' /evidence/linux/postfix/loader-constructor.c -o /tmp/rv-loader-probe.so
+bin=$(swift build --show-bin-path)
+LD_PRELOAD=/tmp/rv-loader-probe.so "$bin/Probe"
+python3 - "$bin/Probe" <<'PY'
+import os, sys
+os.execve(sys.argv[1], ["rv-relative-argv0"], {"PATH":"/usr/bin:/bin", "LD_PRELOAD":"/tmp/rv-loader-probe.so"})
+PY
