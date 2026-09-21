@@ -122,6 +122,61 @@ struct LaunchBoundaryRegressionTests {
         #expect(RuntimeSessionLog.records(at: log).map(\.id) == ids)
     }
 
+    @Test func tornSessionLineDoesNotHideTheNextRecord() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let log = tree.rootURL.appendingPathComponent("sessions.jsonl")
+        try Data("{\"torn\"".utf8).write(to: log)
+        let workspace = try #require(WorkingDirectory(validating: tree.workspaceURL.path))
+        let session = RuntimeSession(
+            id: RuntimeSessionID(),
+            host: .opencode,
+            workspace: workspace,
+            mode: tree.contained.mode,
+            backend: .seatbelt,
+            startedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            child: nil
+        )
+        switch RuntimeSessionLog.append(session, to: log) {
+        case .success:
+            break
+        case .failure(let error):
+            Issue.record("append after a torn line must succeed, got \(error)")
+        }
+        let records = RuntimeSessionLog.records(at: log)
+        #expect(records.map(\.id) == [session.id.rawValue])
+        #expect(records.first?.host == HookHost.opencode.rawValue)
+    }
+
+    @Test func unwritableSessionLogDoesNotExecute() throws {
+        #if os(macOS)
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let marker = tree.workspaceURL.appendingPathComponent("must-not-run")
+        let blocker = tree.rootURL.appendingPathComponent("not-a-directory")
+        try Data("x".utf8).write(to: blocker)
+        let command = try #require(IsolatedCommand(executable: "/bin/sh", arguments: [
+            "-c", "printf ran > must-not-run",
+        ]))
+        let result = IsolationBackends.applyLaunch(
+            tree.contained,
+            command: command,
+            io: .discard,
+            host: nil,
+            sessionStore: .file(blocker.appendingPathComponent("sessions.jsonl"))
+        )
+        switch result {
+        case .failure(.sessionRecordFailed):
+            break
+        case .failure(let error):
+            Issue.record("unwritable session log must be sessionRecordFailed, got \(error)")
+        case .success:
+            Issue.record("unwritable session log must not launch")
+        }
+        #expect(FileManager.default.fileExists(atPath: marker.path) == false)
+        #endif
+    }
+
     @Test func sessionRecordFailureDoesNotExecuteInnerCommand() throws {
         #if os(macOS)
         let tree = try ContainmentTree()
