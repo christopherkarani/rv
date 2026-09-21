@@ -392,7 +392,12 @@ private func peelInterpreter(
         let token = tokens[index].decoded
         if flags.contains(token) {
             guard index + 1 < tokens.count else { return .limited(kind) }
-            return interpreterPeel(extract(tokens[index + 1].decoded), kind: kind, cwd: workingDirectory)
+            return peelCapturedInterpreterPayload(
+                tokens[index + 1],
+                kind: kind,
+                extract: extract,
+                cwd: workingDirectory
+            )
         }
         if kind == .ruby, token.hasPrefix("-e"), token.count > 2 {
             return interpreterPeel(
@@ -415,6 +420,23 @@ private func peelInterpreter(
         return .notWrapper
     }
     return .notWrapper
+}
+
+/// Quoted `-c`/`-e` with no `$` / backtick is a captured program. Unquoted
+/// or expanding payloads are an unknown inner program (never-slip).
+private func peelCapturedInterpreterPayload(
+    _ payload: CommandToken,
+    kind: WrapperKind,
+    extract: (String) -> InterpreterExtract,
+    cwd: WorkingDirectory?
+) -> Peel {
+    if payload.wasQuoted == false {
+        return .limited(kind)
+    }
+    if payload.decoded.contains("$") {
+        return .limited(kind)
+    }
+    return interpreterPeel(extract(payload.decoded), kind: kind, cwd: cwd)
 }
 
 private func interpreterPeel(
@@ -440,24 +462,33 @@ private enum InterpreterExtract: Equatable {
 
 private func extractPython(_ code: String) -> InterpreterExtract {
     let folded = code.trimmingCharacters(in: .whitespacesAndNewlines)
+    if folded.isEmpty { return .limited }
     if let command = pythonShellCommand(folded) {
         return .command(command)
     }
-    if looksLikePythonDataOnly(folded) {
-        return .dataOnly
+    if looksLikePythonSpawn(folded) {
+        return .limited
     }
-    return .limited
+    return .dataOnly
 }
 
-private func looksLikePythonDataOnly(_ code: String) -> Bool {
-    splitTopLevel(code, separator: ";").allSatisfy { part in
-        let trimmed = part.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return true }
-        if trimmed.hasPrefix("import ") || trimmed.hasPrefix("from ") { return true }
-        return trimmed.hasPrefix("print(") || trimmed.hasPrefix("print (")
-            || trimmed.hasPrefix("pprint(") || trimmed.hasPrefix("pprint (")
-    }
+private func looksLikePythonSpawn(_ code: String) -> Bool {
+    pythonSpawnMarkers.contains { code.contains($0) }
 }
+
+private let pythonSpawnMarkers: [String] = [
+    "os.system(", "os.system (",
+    "os.popen(", "os.popen (",
+    "subprocess.run(", "subprocess.run (",
+    "subprocess.call(", "subprocess.call (",
+    "subprocess.Popen(", "subprocess.Popen (",
+    "subprocess.check_call(", "subprocess.check_call (",
+    "subprocess.check_output(", "subprocess.check_output (",
+    "shutil.rmtree(", "shutil.rmtree (",
+    "os.remove(", "os.remove (",
+    "os.unlink(", "os.unlink (",
+    "__import__('os').system(", #"__import__("os").system("#,
+]
 
 private func pythonShellCommand(_ code: String) -> String? {
     if let command = callStringArgument(code, names: ["os.system", "os.popen"]) {
@@ -501,24 +532,28 @@ private func subprocessCommand(_ code: String) -> String? {
 
 private func extractNode(_ code: String) -> InterpreterExtract {
     let folded = code.trimmingCharacters(in: .whitespacesAndNewlines)
+    if folded.isEmpty { return .limited }
     if let command = nodeShellCommand(folded) {
         return .command(command)
     }
-    if looksLikeNodeDataOnly(folded) {
-        return .dataOnly
+    if looksLikeNodeSpawn(folded) {
+        return .limited
     }
-    return .limited
+    return .dataOnly
 }
 
-private func looksLikeNodeDataOnly(_ code: String) -> Bool {
-    splitTopLevel(code, separator: ";").allSatisfy { part in
-        let trimmed = part.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return true }
-        return trimmed.hasPrefix("console.log(") || trimmed.hasPrefix("console.info(")
-            || trimmed.hasPrefix("console.debug(") || trimmed.hasPrefix("console.warn(")
-            || trimmed.hasPrefix("console.error(")
-    }
+private func looksLikeNodeSpawn(_ code: String) -> Bool {
+    nodeSpawnMarkers.contains { code.contains($0) }
 }
+
+private let nodeSpawnMarkers: [String] = [
+    "child_process.exec",
+    "child_process.execSync",
+    "fs.unlinkSync(", "fs.unlinkSync (",
+    "fs.rmdirSync(", "fs.rmdirSync (",
+    "fs.rmSync(", "fs.rmSync (",
+    "fs.rm(", "fs.rm (",
+]
 
 private func nodeShellCommand(_ code: String) -> String? {
     let execNames = [
@@ -547,28 +582,31 @@ private func nodeShellCommand(_ code: String) -> String? {
 
 private func extractRuby(_ code: String) -> InterpreterExtract {
     let folded = code.trimmingCharacters(in: .whitespacesAndNewlines)
+    if folded.isEmpty { return .limited }
     if let command = rubyShellCommand(folded) {
         return .command(command)
     }
-    if looksLikeRubyDataOnly(folded) {
-        return .dataOnly
+    if looksLikeRubySpawn(folded) {
+        return .limited
     }
-    return .limited
+    return .dataOnly
 }
 
-private func looksLikeRubyDataOnly(_ code: String) -> Bool {
+private func looksLikeRubySpawn(_ code: String) -> Bool {
     if code.contains("`") || code.contains("%x") {
-        return false
+        return true
     }
-    return splitTopLevel(code, separator: ";").allSatisfy { part in
-        let trimmed = part.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return true }
-        return trimmed.hasPrefix("puts ") || trimmed.hasPrefix("puts(")
-            || trimmed.hasPrefix("print ") || trimmed.hasPrefix("print(")
-            || trimmed.hasPrefix("p ") || trimmed.hasPrefix("p(")
-            || trimmed.hasPrefix("pp ") || trimmed.hasPrefix("pp(")
-    }
+    return rubySpawnMarkers.contains { code.contains($0) }
 }
+
+private let rubySpawnMarkers: [String] = [
+    "system(", "system (",
+    "exec(", "exec (",
+    "File.delete(", "File.delete (",
+    "File.unlink(", "File.unlink (",
+    "FileUtils.rm_rf(", "FileUtils.rm_rf (",
+    "FileUtils.remove_entry_secure(", "FileUtils.remove_entry_secure (",
+]
 
 private func rubyShellCommand(_ code: String) -> String? {
     if let command = callStringArgument(code, names: ["system", "exec"]) {

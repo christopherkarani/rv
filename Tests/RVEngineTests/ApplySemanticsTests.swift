@@ -50,7 +50,7 @@ struct ApplySemanticsTests {
     }
 
     @Test func unwrapLimit_neverAutoAllows() throws {
-        let command = #"python -c "mystery(payload)""#
+        let command = #"python3 -c "$CMD""#
         let pack = try runSemanticsPack(command)
         #expect(pack.decision == .allow)
         let composed = try runSemanticsDoor(command)
@@ -200,7 +200,7 @@ struct ApplySemanticsTests {
         let compiled = try CompiledPacks<ICUCompiledPattern>.compile(packs: [], using: engine)
         let composed = evaluateWithSemantics(
             EvaluationRequest(
-                command: ShellCommand(rawValue: #"python -c "mystery(payload)""#),
+                command: ShellCommand(rawValue: #"python3 -c "$CMD""#),
                 enabledPacks: dayOnePackIDs
             ),
             packs: [],

@@ -71,13 +71,25 @@ struct EvaluateWithSemanticsTests {
     }
 
     @Test func unwrapLimited_failClosed() throws {
-        let result = try runDoor(#"python -c "mystery(payload)""#)
+        let result = try runDoor(#"python3 -c "$CMD""#)
         guard case .deny(let deny) = result.decision else {
-            Issue.record("unreliable python must fail-closed, got \(result.decision)")
+            Issue.record("unknown python -c payload must fail-closed, got \(result.decision)")
             return
         }
         #expect(deny.ruleID == ActionPolicyEngine.Builtin.unwrapLimited.ruleID)
         #expect(result.analysis.innermost == .unwrapLimited)
+    }
+
+    @Test func capturedPythonAssignment_allows() throws {
+        let result = try runDoor(#"python3 -c "x = 1""#)
+        #expect(result.decision == .allow)
+        #expect(result.analysis.innermost != .unwrapLimited)
+    }
+
+    @Test func capturedPythonMystery_allows() throws {
+        let result = try runDoor(#"python -c "mystery(payload)""#)
+        #expect(result.decision == .allow)
+        #expect(result.analysis.innermost != .unwrapLimited)
     }
 
     @Test func indeterminate_staysFloor() throws {
