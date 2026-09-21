@@ -129,14 +129,13 @@ private func expectAllowed(
 
 private func expectPending(
     _ authorization: AgentAuthorization,
-    reason: ApprovalReason,
+    reason: RuntimeAskReason,
     deny: Deny,
     sourceLocation: SourceLocation = #_sourceLocation
 ) {
     switch authorization {
     case .pending(let pending):
         #expect(pending.reason == reason, sourceLocation: sourceLocation)
-        #expect(pending.reason != .hostAsk, sourceLocation: sourceLocation)
         #expect(pending.deny == deny, sourceLocation: sourceLocation)
     case .allowed:
         Issue.record("expected pending, got allowed", sourceLocation: sourceLocation)

@@ -433,8 +433,8 @@ public enum RuntimeAdmissionGate {
                 requestID: requestID,
                 fingerprint: action.fingerprint.rawValue,
                 authorization: .pending,
-                response: .pending(pending.reason),
-                result: pending.reason.rawValue
+                response: .pending(pending.reason.ledgerReason),
+                result: pending.reason.ledgerReason.rawValue
             )
         case .approvalFailed:
             return make(
