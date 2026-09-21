@@ -222,8 +222,6 @@ public enum GitAction: Sendable, Equatable, Codable {
         .shell(
             ShellAction(
                 fingerprint: ActionFingerprint(rawValue: fingerprint),
-                effects: effects,
-                resources: resources,
                 scope: ActionScope(workingDirectory: workingDirectory),
                 supportingCommand: command,
                 gitAction: self
