@@ -18,6 +18,8 @@ import Testing
 /// 11. observed plan `run` throws `applyFailed(.backendUnavailable)`
 /// 12. second `run` of the same fingerprint throws `alreadyExecuted`
 /// 13. apply failure does not consume the fingerprint
+/// 14. uncovered in-workspace `touch` (empty effects → reviewAsk) →
+///     resolve(allowOnce) → compileExecutable → contained run creates the file
 /// `compileExecutable(allowed:plan:)` takes `AllowedAction` only.
 /// `LocalExecutor.run` takes `ExecutableAction` only.
 /// There is no `PendingAuthorization` or `DeniedAction` overload.
@@ -346,6 +348,30 @@ struct LocalExecutorTests {
         #expect(FileManager.default.fileExists(atPath: inside))
         expectContainedPlatform(result.established, matching: tree.contained)
     }
+
+    @Test func localExecutor_askResolve_containedInWorkspaceTouch() async throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+
+        let workspace = try #require(tree.contained.workspace)
+        let inside = tree.workspaceURL.appendingPathComponent("ask-resolve.txt").path
+        let touch = try requireTouchExecutable()
+        let action = ProposedAction.shell(
+            ShellAction(
+                fingerprint: ActionFingerprint(rawValue: "shell:local-executor:ask-resolve"),
+                effects: ActionEffects(),
+                scope: ActionScope(workingDirectory: workspace),
+                supportingCommand: ShellCommand(rawValue: "\(touch) \(inside)")
+            )
+        )
+        let pending = try requirePendingReviewAsk(action)
+        let allowed = try requireResolvedAllowOnce(pending)
+        let executable = try requireExecutable(allowed, plan: tree.contained)
+        let result = try await LocalExecutor().run(executable)
+        #expect(result.exitStatus == 0)
+        #expect(FileManager.default.fileExists(atPath: inside))
+        expectContainedPlatform(result.established, matching: tree.contained)
+    }
 }
 
 private let qualifiedAllow = ActionReview.make(
@@ -360,6 +386,7 @@ private let safeTouchExecutables = ["/usr/bin/touch", "/bin/touch"]
 
 private enum LocalExecutorFixtureError: Error {
     case expectedAllowed
+    case expectedPending
     case missingTouch
     case compileFailed
 }
@@ -383,6 +410,35 @@ private func inRepoWrite(
             supportingCommand: supportingCommand.map(ShellCommand.init(rawValue:))
         )
     )
+}
+
+private func requirePendingReviewAsk(_ action: ProposedAction) throws -> PendingAuthorization {
+    switch AgentAuthorization.decide(action: action) {
+    case .pending(let pending):
+        #expect(pending.reason == .reviewAsk)
+        return pending
+    case .allowed:
+        Issue.record("empty-effect uncovered must stay pending reviewAsk")
+        throw LocalExecutorFixtureError.expectedPending
+    case .denied(let denied):
+        Issue.record("empty-effect uncovered must stay pending, got denied \(denied.deny.ruleID)")
+        throw LocalExecutorFixtureError.expectedPending
+    }
+}
+
+private func requireResolvedAllowOnce(_ pending: PendingAuthorization) throws -> AllowedAction {
+    switch AgentAuthorization.resolve(pending, approval: .success(.allowOnce)) {
+    case .success(.allowed(let allowed)):
+        #expect(allowed.action == pending.action)
+        #expect(allowed.action.fingerprint == pending.action.fingerprint)
+        return allowed
+    case .success(.denied):
+        Issue.record("allowOnce on reviewAsk must produce AllowedAction")
+        throw LocalExecutorFixtureError.expectedAllowed
+    case .failure(let error):
+        Issue.record("allowOnce on reviewAsk must not fail: \(error)")
+        throw LocalExecutorFixtureError.expectedAllowed
+    }
 }
 
 private func requireAllowed(

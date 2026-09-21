@@ -1,9 +1,9 @@
 /// A proposal that policy authorized. Not a permit to spawn a process.
 ///
-/// Produced for `hardAllow`, or for `reviewEligible` after a sufficient
-/// aligned allow review. Only `AgentAuthorization.decide` constructs this
-/// in production. The memberwise initializer is a `@testable` seam, like
-/// `AgentProcessRequest`.
+/// Produced for `hardAllow`, for `reviewEligible` after a sufficient
+/// aligned allow review, or by `resolve` after a human `allowOnce`.
+/// `decide` and `resolve` construct this in production. The memberwise
+/// initializer is a `@testable` seam, like `AgentProcessRequest`.
 public struct AllowedAction: Sendable, Equatable {
     public let action: ProposedAction
     public let explanation: ActionPolicyExplanation
@@ -16,8 +16,8 @@ public struct AllowedAction: Sendable, Equatable {
 
 /// A proposal that policy rejected. No `AllowedAction` exists for this decision.
 ///
-/// Produced for `hardDeny`, or for `reviewEligible` after a sufficient
-/// aligned deny review.
+/// Produced for `hardDeny`, for `reviewEligible` after a sufficient
+/// aligned deny review, or by `resolve` after a human `deny`.
 public struct DeniedAction: Sendable, Equatable {
     public let action: ProposedAction
     public let deny: Deny
@@ -57,7 +57,8 @@ public struct PendingAuthorization: Sendable, Equatable {
 
 /// Exhaustive runtime policy outcome. Ask is a case, not pack `Decision.deny`.
 ///
-/// Produced by `decide`. This door must not use `HostNativeAsk.hookBound`
+/// Produced by `decide`. Human approval of pending is `resolve`, not a
+/// second `decide`. This door must not use `HostNativeAsk.hookBound`
 /// (quiet-allows `reviewEligible`) or `ActionPolicyEngine.bind` (probed git).
 /// `BoundReview.decision` collapses Ask to deny and is not the runtime case.
 public enum AgentAuthorization: Sendable, Equatable {
@@ -157,4 +158,73 @@ public enum AgentAuthorization: Sendable, Equatable {
             }
         }
     }
+
+    /// Turns ASK intent into a capability or a denial. Does not re-run `decide`.
+    ///
+    /// Human `allowOnce` lifts `mandatoryHuman` and `reviewAsk`. `createRule`
+    /// is unsupported. Channel failure produces no `AllowedAction`.
+    /// `hostAsk` is not a runtime Ask reason and fails closed.
+    ///
+    /// - Parameters:
+    ///   - pending: ASK intent from `decide`. Holding one is not a capability.
+    ///   - approval: Human click, or a channel error. Timeout and transport
+    ///     failures map to `approvalUnavailable` at the caller.
+    /// - Returns: Allowed or denied, or a typed approval-channel error.
+    public static func resolve(
+        _ pending: PendingAuthorization,
+        approval: Result<ApprovalDecision, AgentApprovalError>
+    ) -> Result<ResolvedAuthorization, AgentApprovalError> {
+        switch approval {
+        case .failure(let error):
+            return .failure(error)
+        case .success(let decision):
+            switch pending.reason {
+            case .hostAsk:
+                return .failure(.hostAskUnsupported)
+            case .mandatoryHuman, .reviewAsk:
+                switch decision {
+                case .allowOnce:
+                    return .success(
+                        .allowed(
+                            AllowedAction(
+                                action: pending.action,
+                                explanation: pending.explanation
+                            )
+                        )
+                    )
+                case .deny:
+                    return .success(
+                        .denied(
+                            DeniedAction(
+                                action: pending.action,
+                                deny: pending.deny,
+                                explanation: pending.explanation
+                            )
+                        )
+                    )
+                case .createRule:
+                    return .failure(.ruleCreationUnsupported)
+                }
+            }
+        }
+    }
+}
+
+/// Human-resolved ASK. Pending is unrepresentable.
+public enum ResolvedAuthorization: Sendable, Equatable {
+    case allowed(AllowedAction)
+    case denied(DeniedAction)
+}
+
+/// Fail-closed approval-channel and unsupported-click errors.
+///
+/// Channel-down maps to `approvalUnavailable` at the caller. This type
+/// is not a ledger timeout and does not mint a rule.
+public enum AgentApprovalError: Error, Sendable, Equatable {
+    /// The approval channel did not return a human decision.
+    case approvalUnavailable
+    /// `createRule` is not `allowOnce` and does not mint a rule this slice.
+    case ruleCreationUnsupported
+    /// `hostAsk` is not a runtime Ask reason. Fail closed.
+    case hostAskUnsupported
 }
