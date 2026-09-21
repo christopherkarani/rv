@@ -292,6 +292,12 @@ struct IsolationApplyTests {
         #expect(IsolatedCommand(executable: "") == nil)
         #expect(IsolatedCommand(executable: "touch") == nil)
         #expect(IsolatedCommand(executable: "/usr/bin/true") != nil)
+        switch IsolatedCommand.make(executable: "/usr/bin/true") {
+        case .success(let command):
+            #expect(command.executable == "/usr/bin/true")
+        case .failure(let error):
+            recordUnexpectedApplyError(error, expected: "absolute IsolatedCommand.make")
+        }
         switch IsolatedCommand.make(executable: "touch") {
         case .success:
             Issue.record("relative IsolatedCommand.make must fail")
@@ -424,6 +430,32 @@ struct IsolationApplyTests {
                 .processSpawnFailed,
                 .commandExecutableMustBeAbsolute:
                 Issue.record("seatbelt observed prepare must be profileNotApplicable, got \(error)")
+            }
+        }
+    }
+
+    @Test func compileSeatbeltProfile_filesystemRoot_returnsWorkspacePathUnsafe() throws {
+        let workspace = try requireWorkspace("/")
+        let plan = try requirePlan(
+            IsolationCompileRequest(requested: .contained, workspace: workspace)
+        )
+        switch compileSeatbeltProfile(plan) {
+        case .success:
+            Issue.record("filesystem-root workspace must not compile a Seatbelt profile")
+        case .failure(let error):
+            switch error {
+            case .workspacePathUnsafe:
+                break
+            case .backendUnavailable,
+                .backendMismatch,
+                .workspaceMustBeAbsolute,
+                .workspaceDoesNotExist,
+                .workspacePathUnresolvable,
+                .containedGuaranteesUnsupported,
+                .profileNotApplicable,
+                .processSpawnFailed,
+                .commandExecutableMustBeAbsolute:
+                Issue.record("filesystem-root workspace must be workspacePathUnsafe, got \(error)")
             }
         }
     }

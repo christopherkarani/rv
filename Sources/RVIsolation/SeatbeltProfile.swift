@@ -71,7 +71,7 @@ func existingResolvedWorkspacePath(
         guard exists, isDirectory.boolValue else {
             return .failure(.workspaceDoesNotExist)
         }
-        if resolved.contains("\n") || resolved.contains("\0") {
+        if isUnsafeResolvedWorkspace(resolved) {
             return .failure(.workspacePathUnsafe)
         }
         return .success(resolved)
@@ -111,7 +111,7 @@ func compileFirstSliceProfile(
     if resolved.isEmpty {
         return .failure(.workspacePathUnresolvable)
     }
-    if resolved.contains("\n") || resolved.contains("\0") {
+    if isUnsafeResolvedWorkspace(resolved) {
         return .failure(.workspacePathUnsafe)
     }
     let escaped = escapeSeatbeltSubpath(resolved)
@@ -122,6 +122,24 @@ func compileFirstSliceProfile(
         (require-not (subpath "\(escaped)")))
     """
     return .success(SeatbeltProfile(source: source))
+}
+
+/// POSIX `/` as the write root applies the first-slice limit to the entire
+/// tree (Landlock `PATH_BENEATH /`, Seatbelt `subpath "/"`).
+func isFilesystemRoot(_ path: String) -> Bool {
+    path == "/"
+}
+
+func isUnsafeResolvedWorkspace(_ path: String) -> Bool {
+    path.contains("\n") || path.contains("\0") || isFilesystemRoot(path)
+}
+
+func isResolvedPath(_ path: String, atOrBeneath ancestor: String) -> Bool {
+    if path == ancestor {
+        return true
+    }
+    let prefix = ancestor.hasSuffix("/") ? ancestor : ancestor + "/"
+    return path.hasPrefix(prefix)
 }
 
 func escapeSeatbeltSubpath(_ path: String) -> String {

@@ -13,6 +13,10 @@ import Testing
 /// 12. observed `apply`: outside `touch` succeeds (not secretly jailed)
 /// 13. write under `RepositoryRoot` but outside workspace is blocked
 /// 14. trampoline apply failure exits 125 and does not exec
+/// 15. outside truncate is denied (ABI ≥ 3 write-class) and still established
+/// 16. trampoline argv lock and filesystem-root workspace exit 125
+/// 17. missing inner after apply exits 126 and does not mint establishment
+/// 18. `landlock(executable: /usr/bin/true)` does not establish
 /// Missing Landlock / missing trampoline must fail these tests — do not skip.
 @Suite("LandlockContainment")
 struct LandlockContainmentTests {
@@ -156,6 +160,97 @@ struct LandlockContainmentTests {
         #expect(process.terminationStatus == IsolationBackends.isolationExecCouldNotEstablishExit)
         #expect(FileManager.default.fileExists(atPath: marker) == false)
     }
+
+    @Test func landlock_truncateOutsideWorkspace_isBlockedFileUnchanged_stillEstablished() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+
+        let outside = tree.siblingURL.appendingPathComponent("seed.txt").path
+        try "keep-me\n".write(toFile: outside, atomically: true, encoding: .utf8)
+        let python = python3Executable()
+        let result = IsolationBackends.apply(
+            tree.contained,
+            command: IsolatedCommand(
+                executable: python,
+                arguments: ["-c", "import os,sys; os.truncate(sys.argv[1], 0)", outside]
+            )!
+        )
+        switch result {
+        case .success(let run):
+            #expect(run.exitStatus != 0)
+            #expect(run.exitStatus != IsolationBackends.isolationExecCouldNotEstablishExit)
+            #expect(run.exitStatus != IsolationBackends.isolationExecExecFailedExit)
+            let remaining = try String(contentsOfFile: outside, encoding: .utf8)
+            #expect(remaining == "keep-me\n")
+            expectContainedLandlock(run.established, matching: tree.contained)
+        case .failure(let error):
+            recordUnexpectedContainmentError(
+                error,
+                expected: "blocked outside truncate with established contained"
+            )
+        }
+    }
+
+    @Test func trampoline_argvLock_exits125_andDoesNotExec() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let exec = try requireIsolationExec()
+        let marker = tree.siblingURL.appendingPathComponent("argv-must-not-exec").path
+        let cases: [[String]] = [
+            [],
+            ["--workspace"],
+            ["--workspace", tree.workspaceURL.path],
+            ["--not-workspace", tree.workspaceURL.path, "--", "/usr/bin/touch", marker],
+            ["--workspace", "relative-ws", "--", "/usr/bin/touch", marker],
+            ["--workspace", "/", "--", "/usr/bin/touch", marker],
+            ["--workspace", tree.workspaceURL.path, "--"],
+            ["--workspace", tree.workspaceURL.path, "--", "touch", marker],
+        ]
+        for arguments in cases {
+            let status = try runIsolationExec(exec, arguments: arguments)
+            #expect(status == IsolationBackends.isolationExecCouldNotEstablishExit)
+            #expect(FileManager.default.fileExists(atPath: marker) == false)
+        }
+    }
+
+    @Test func trampoline_missingInnerAfterApply_exits126() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let exec = try requireIsolationExec()
+        let missingInner = "/no/such/rv-isolation-inner-\(UUID().uuidString)"
+        let status = try runIsolationExec(
+            exec,
+            arguments: ["--workspace", tree.workspaceURL.path, "--", missingInner]
+        )
+        #expect(status == IsolationBackends.isolationExecExecFailedExit)
+    }
+
+    @Test func landlock_overrideTrue_doesNotEstablishContained() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let backend = IsolationBackends.landlock(
+            executable: URL(fileURLWithPath: "/usr/bin/true")
+        )
+        switch backend.apply(tree.contained, command: trueCommand) {
+        case .success:
+            Issue.record("/usr/bin/true must not mint contained+landlock")
+        case .failure(let error):
+            switch error {
+            case .backendUnavailable:
+                break
+            case .backendMismatch,
+                .workspaceMustBeAbsolute,
+                .workspaceDoesNotExist,
+                .workspacePathUnresolvable,
+                .workspacePathUnsafe,
+                .containedGuaranteesUnsupported,
+                .profileNotApplicable,
+                .processSpawnFailed,
+                .commandExecutableMustBeAbsolute:
+                Issue.record("true override must be backendUnavailable, got \(error)")
+            }
+        }
+    }
 }
 
 private struct ContainmentTree {
@@ -251,6 +346,28 @@ private func requireIsolationExec() throws -> URL {
     }
     Issue.record("rv-isolation-exec must be built next to the test process")
     throw IsolationApplyError.backendUnavailable
+}
+
+private let trueCommand = IsolatedCommand(executable: "/usr/bin/true")!
+
+private func python3Executable() -> String {
+    let candidates = ["/usr/bin/python3", "/usr/bin/python3.12", "/usr/bin/python3.11"]
+    for path in candidates where FileManager.default.isExecutableFile(atPath: path) {
+        return path
+    }
+    Issue.record("python3 is required to prove outside truncate is denied")
+    return "/usr/bin/python3"
+}
+
+private func runIsolationExec(_ exec: URL, arguments: [String]) throws -> Int32 {
+    let process = Process()
+    process.executableURL = exec
+    process.arguments = arguments
+    process.standardOutput = FileHandle.nullDevice
+    process.standardError = FileHandle.nullDevice
+    try process.run()
+    process.waitUntilExit()
+    return process.terminationStatus
 }
 
 private func expectContainedLandlock(

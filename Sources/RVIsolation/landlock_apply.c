@@ -9,6 +9,7 @@
 #include <fcntl.h>
 #include <linux/landlock.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/prctl.h>
 #include <sys/syscall.h>
@@ -24,17 +25,29 @@
 #define O_PATH 010000000
 #endif
 
+#ifndef O_NOFOLLOW
+#define O_NOFOLLOW 0400000
+#endif
+
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
+
+#ifndef LANDLOCK_ACCESS_FS_TRUNCATE
+#define LANDLOCK_ACCESS_FS_TRUNCATE (1ULL << 14)
+#endif
+
 /*
  * Write-class FS bits only. Keep in sync with LandlockAccessFS.writeClass.
- * Do not handle READ_*, EXECUTE, or net.
+ * Do not handle READ_*, EXECUTE, or net. TRUNCATE is required (ABI 3).
  */
-#define RV_LANDLOCK_WRITE_CLASS_BASE                                   \
+#define RV_LANDLOCK_WRITE_CLASS                                        \
     (LANDLOCK_ACCESS_FS_WRITE_FILE | LANDLOCK_ACCESS_FS_REMOVE_DIR     \
         | LANDLOCK_ACCESS_FS_REMOVE_FILE | LANDLOCK_ACCESS_FS_MAKE_CHAR \
         | LANDLOCK_ACCESS_FS_MAKE_DIR | LANDLOCK_ACCESS_FS_MAKE_REG     \
         | LANDLOCK_ACCESS_FS_MAKE_SOCK | LANDLOCK_ACCESS_FS_MAKE_FIFO   \
         | LANDLOCK_ACCESS_FS_MAKE_BLOCK | LANDLOCK_ACCESS_FS_MAKE_SYM   \
-        | LANDLOCK_ACCESS_FS_REFER)
+        | LANDLOCK_ACCESS_FS_REFER | LANDLOCK_ACCESS_FS_TRUNCATE)
 
 static int rv_sys_landlock_create_ruleset(
     const struct landlock_ruleset_attr *attr,
@@ -65,8 +78,15 @@ int rv_landlock_restrict_self_to_workspace(const char *workspace) {
     int parent_fd;
     struct landlock_path_beneath_attr beneath;
     int restrict_status;
+    char canonical[PATH_MAX];
 
     if (workspace == NULL || workspace[0] != '/') {
+        return -1;
+    }
+    if (realpath(workspace, canonical) == NULL) {
+        return -1;
+    }
+    if (canonical[0] != '/' || canonical[1] == '\0') {
         return -1;
     }
 
@@ -75,20 +95,15 @@ int rv_landlock_restrict_self_to_workspace(const char *workspace) {
     }
 
     abi = rv_sys_landlock_create_ruleset(NULL, 0, LANDLOCK_CREATE_RULESET_VERSION);
-    if (abi < 2) {
+    if (abi < 3) {
         return -1;
     }
 
-    handled = RV_LANDLOCK_WRITE_CLASS_BASE;
-#ifdef LANDLOCK_ACCESS_FS_TRUNCATE
-    if (abi >= 3) {
-        handled |= LANDLOCK_ACCESS_FS_TRUNCATE;
-    }
-#endif
+    handled = RV_LANDLOCK_WRITE_CLASS;
 
     /*
-     * Pass only handled_access_fs so ABI 2 kernels accept the size.
-     * Network stays unrestricted (handled_access_net is not supplied).
+     * Pass only handled_access_fs. Network stays unrestricted
+     * (handled_access_net is not supplied).
      */
     memset(&attr, 0, sizeof(attr));
     attr.handled_access_fs = handled;
@@ -101,7 +116,7 @@ int rv_landlock_restrict_self_to_workspace(const char *workspace) {
         return -1;
     }
 
-    parent_fd = open(workspace, O_PATH | O_DIRECTORY | O_CLOEXEC);
+    parent_fd = open(canonical, O_PATH | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
     if (parent_fd < 0) {
         close(ruleset_fd);
         return -1;

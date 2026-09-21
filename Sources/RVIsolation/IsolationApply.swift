@@ -99,7 +99,8 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
     }
 
     /// Executable `run` will start. Observed / mediated never use a helper.
-    /// Landlock's path is resolved at `run` (trampoline); this is the basename.
+    /// Landlock's path is resolved at `run` to an absolute `rv-isolation-exec`
+    /// outside the workspace; this is only the basename until then.
     var launchExecutable: String {
         switch launch {
         case .seatbelt:
@@ -189,6 +190,8 @@ public enum IsolationBackends {
     static let isolationExecName = "rv-isolation-exec"
     /// Trampoline reserved exit: apply failed, inner was not exec'd.
     static let isolationExecCouldNotEstablishExit: Int32 = 125
+    /// Trampoline reserved exit: Landlock applied, then `execve` failed.
+    static let isolationExecExecFailedExit: Int32 = 126
 
     public static func seatbelt() -> IsolationBackend {
         IsolationBackend(
@@ -322,8 +325,8 @@ func runUnavailable(
 /// Starts the process described by a prepared request, then returns
 /// `EstablishedIsolation`. A spawn failure produces no established record.
 /// A non-zero child exit is still success unless the Landlock trampoline
-/// exits 125 (could not establish; inner was not exec'd). The executable
-/// path must be absolute — Landlock never falls back to the inner command.
+/// exits 125 (could not establish) or 126 (`execve` failed after apply).
+/// Landlock never falls back to the inner command or an untyped absolute.
 func spawn(
     _ request: IsolatedLaunchRequest,
     executablePath: String? = nil
@@ -331,9 +334,24 @@ func spawn(
     guard let established = request.establishedIsolation else {
         return .failure(.backendMismatch)
     }
-    let path = executablePath ?? request.launchExecutable
-    guard IsolatedCommand.isAbsoluteExecutable(path) else {
-        return .failure(.backendUnavailable)
+    let candidate = executablePath ?? request.launchExecutable
+    let path: String
+    switch request.family {
+    case .landlock:
+        guard let ruleset = request.landlockRuleset,
+            let verified = usableIsolationExecPath(
+                candidate,
+                workspacePath: ruleset.workspacePath
+            )
+        else {
+            return .failure(.backendUnavailable)
+        }
+        path = verified
+    case .none, .seatbelt:
+        guard IsolatedCommand.isAbsoluteExecutable(candidate) else {
+            return .failure(.backendUnavailable)
+        }
+        path = candidate
     }
     let process = Process()
     process.executableURL = URL(fileURLWithPath: path)

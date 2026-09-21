@@ -5,6 +5,8 @@
  *
  * Argv lock: rv-isolation-exec --workspace RESOLVED -- INNER...
  * Apply failure or bad argv exits 125 and does not exec.
+ * Successful apply then failed execve exits 126 and does not claim
+ * the inner ran.
  *
  * SwiftPM cannot compile C into the RVIsolation Swift target, so this
  * translation unit includes the shim from Sources/RVIsolation.
@@ -19,6 +21,9 @@
 
 #ifndef RV_ISOLATION_EXEC_ESTABLISH_FAILED
 #define RV_ISOLATION_EXEC_ESTABLISH_FAILED 125
+#endif
+#ifndef RV_ISOLATION_EXEC_EXEC_FAILED
+#define RV_ISOLATION_EXEC_EXEC_FAILED 126
 #endif
 
 extern char **environ;
@@ -43,5 +48,5 @@ int main(int argc, char **argv) {
         return RV_ISOLATION_EXEC_ESTABLISH_FAILED;
     }
     execve(argv[4], &argv[4], environ);
-    return RV_ISOLATION_EXEC_ESTABLISH_FAILED;
+    return RV_ISOLATION_EXEC_EXEC_FAILED;
 }

@@ -21,8 +21,8 @@ enum LandlockAccessFS {
     static let truncate: UInt64 = 1 << 14
 
     /// Write-class bits this slice handles. Not read, execute, or net.
-    /// `refer` (ABI 2) is required so ABI 1 cannot establish.
-    /// `truncate` is intended; the trampoline applies it only when ABI ≥ 3.
+    /// `refer` (ABI 2) and `truncate` (ABI 3) are required so older ABIs
+    /// cannot establish. The trampoline fail-closes when ABI < 3.
     static let writeClass: UInt64 =
         writeFile | removeDir | removeFile | makeChar | makeDir | makeReg
         | makeSock | makeFifo | makeBlock | makeSym | refer | truncate
@@ -89,7 +89,7 @@ func compileFirstSliceLandlock(
     if resolved.isEmpty {
         return .failure(.workspacePathUnresolvable)
     }
-    if resolved.contains("\n") || resolved.contains("\0") {
+    if isUnsafeResolvedWorkspace(resolved) {
         return .failure(.workspacePathUnsafe)
     }
     return .success(

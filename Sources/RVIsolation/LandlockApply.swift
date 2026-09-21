@@ -4,8 +4,11 @@ import RVDomain
 extension IsolationBackends {
     /// Landlock backend. `run` applies via `rv-isolation-exec` on Linux.
     /// Darwin `run` is `backendUnavailable` (prepare may still succeed).
-    /// `executable` is a test seam: an absolute existing trampoline, or
-    /// fail closed without searching.
+    ///
+    /// `executable` is a test seam: an absolute regular file whose last
+    /// path component is `rv-isolation-exec` and whose realpath is not
+    /// at or under the workspace. Other paths fail closed. Production
+    /// `apply()` does not read `RV_ISOLATION_EXEC`.
     public static func landlock(executable: URL? = nil) -> IsolationBackend {
         IsolationBackend(
             family: .landlock,
@@ -35,8 +38,10 @@ func prepareLandlock(
             switch existingResolvedWorkspacePath(workspace) {
             case .failure(let error):
                 return .failure(error)
-            case .success:
-                break
+            case .success(let resolved):
+                guard ruleset.workspacePath == resolved else {
+                    return .failure(.workspacePathUnresolvable)
+                }
             }
             guard
                 let request = IsolatedLaunchRequest(
@@ -60,7 +65,13 @@ func runLandlock(
         return .failure(.backendMismatch)
     }
     #if os(Linux)
-    guard let path = resolvedIsolationExecPath(override: executable) else {
+    guard let ruleset = request.landlockRuleset else {
+        return .failure(.backendMismatch)
+    }
+    guard let path = resolvedIsolationExecPath(
+        override: executable,
+        workspacePath: ruleset.workspacePath
+    ) else {
         return .failure(.backendUnavailable)
     }
     return spawn(request, executablePath: path)
@@ -69,7 +80,9 @@ func runLandlock(
     #endif
 }
 
-/// Exit 125 means the trampoline did not exec the inner command.
+/// Exit 125 means the trampoline did not apply Landlock or rejected argv.
+/// Exit 126 means apply succeeded then `execve` failed — not established,
+/// and not a successful inner exit.
 func interpretIsolationExecExit(
     _ status: Int32,
     established: EstablishedIsolation
@@ -77,26 +90,27 @@ func interpretIsolationExecExit(
     if status == IsolationBackends.isolationExecCouldNotEstablishExit {
         return .failure(.backendUnavailable)
     }
+    if status == IsolationBackends.isolationExecExecFailedExit {
+        return .failure(.processSpawnFailed)
+    }
     return .success(IsolatedRunResult(established: established, exitStatus: status))
 }
 
-/// Locate `rv-isolation-exec`. Never a relative guess.
-/// Override (test seam) that is not an absolute executable fails closed.
-func resolvedIsolationExecPath(override: URL?) -> String? {
+/// Locate `rv-isolation-exec`. Never a relative argv0 guess, never an env
+/// override, never a helper at or under the workspace (including a
+/// workspace symlink whose target is outside).
+func resolvedIsolationExecPath(override: URL?, workspacePath: String) -> String? {
     if let override {
-        return usableIsolationExecPath(override.path)
+        return usableIsolationExecPath(override.path, workspacePath: workspacePath)
     }
-    if let env = ProcessInfo.processInfo.environment["RV_ISOLATION_EXEC"],
-        let path = usableIsolationExecPath(env)
+    if let argv0 = CommandLine.arguments.first,
+        IsolatedCommand.isAbsoluteExecutable(argv0)
     {
-        return path
-    }
-    if let argv0 = CommandLine.arguments.first {
         let sibling = URL(fileURLWithPath: argv0)
             .deletingLastPathComponent()
             .appendingPathComponent(IsolationBackends.isolationExecName)
             .path
-        if let path = usableIsolationExecPath(sibling) {
+        if let path = usableIsolationExecPath(sibling, workspacePath: workspacePath) {
             return path
         }
     }
@@ -105,18 +119,59 @@ func resolvedIsolationExecPath(override: URL?) -> String? {
             .deletingLastPathComponent()
             .appendingPathComponent(IsolationBackends.isolationExecName)
             .path
-        if let path = usableIsolationExecPath(sibling) {
+        if let path = usableIsolationExecPath(sibling, workspacePath: workspacePath) {
             return path
         }
     }
     return nil
 }
 
-private func usableIsolationExecPath(_ path: String) -> String? {
-    guard IsolatedCommand.isAbsoluteExecutable(path),
-        FileManager.default.isExecutableFile(atPath: path)
+func usableIsolationExecPath(_ path: String, workspacePath: String) -> String? {
+    guard IsolatedCommand.isAbsoluteExecutable(path) else {
+        return nil
+    }
+    let name = URL(fileURLWithPath: path).lastPathComponent
+    guard name == IsolationBackends.isolationExecName else {
+        return nil
+    }
+    guard FileManager.default.isExecutableFile(atPath: path) else {
+        return nil
+    }
+    guard let resolved = posixRealpath(path) else {
+        return nil
+    }
+    guard IsolatedCommand.isAbsoluteExecutable(resolved),
+        isFilesystemRoot(resolved) == false,
+        URL(fileURLWithPath: resolved).lastPathComponent == IsolationBackends.isolationExecName
     else {
         return nil
     }
-    return path
+    var isDirectory: ObjCBool = false
+    let exists = FileManager.default.fileExists(atPath: resolved, isDirectory: &isDirectory)
+    guard exists, isDirectory.boolValue == false else {
+        return nil
+    }
+    let canonicalWorkspace = posixRealpath(workspacePath) ?? workspacePath
+    if isFilesystemRoot(canonicalWorkspace)
+        || isLookupInsideWorkspace(path, workspace: canonicalWorkspace)
+        || isResolvedPath(resolved, atOrBeneath: canonicalWorkspace)
+    {
+        return nil
+    }
+    return resolved
+}
+
+/// True when the lookup lives in the workspace, even if the last component
+/// is a symlink to an outside file named `rv-isolation-exec`.
+func isLookupInsideWorkspace(_ path: String, workspace: String) -> Bool {
+    if isResolvedPath(path, atOrBeneath: workspace) {
+        return true
+    }
+    let parent = URL(fileURLWithPath: path).deletingLastPathComponent().path
+    guard let parentReal = posixRealpath(parent),
+        isFilesystemRoot(parentReal) == false
+    else {
+        return false
+    }
+    return isResolvedPath(parentReal, atOrBeneath: workspace)
 }
