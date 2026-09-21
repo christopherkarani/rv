@@ -12,14 +12,16 @@ Sources: **RA** = [RuntimeAdversarialTests.swift](../../Tests/RVIsolationTests/R
 |---|---|---|
 | `/bin/sh`, `/bin/bash`, `/bin/zsh` | Inside marker created, outside marker absent: DENIED outside write on macOS. | RA `descendantsCannotWriteOutsideWorkspace` |
 | `/usr/bin/env` → shell | Same DENIED outside write. | RA `descendantsCannotWriteOutsideWorkspace(.env)` |
-| `xargs` → shell | Fixture now supplies input, verifies inner marker and outside denial. Original RED artifact lacked input and therefore did not execute the payload; corrected test passes in `focused-final.log`. | RA `.xargs` |
+| `xargs` → shell | Inside and outside markers stay absent. The contained profile denies `posix_spawn`, which is how `xargs` starts its utility, so the payload does not run. | RA `.xargs` |
 | Python/Ruby/Node → shell | `/usr/bin/ruby` ran and outside write was DENIED. `/usr/bin/python3` is the Xcode stub and is NOT TESTED. Node outside `/bin` or `/usr/bin` is NOT TESTED. A missing or out-of-baseline runtime is not coverage. | RA `descendantsCannotWriteOutsideWorkspace` |
 | Four nested shells | Inside marker created; outside marker absent: DENIED. | RA `shellIndirectionCannotRemoveWriteFence("nested")` |
 | `exec /bin/sh` | Write fence retained: DENIED. | RA `"exec"` |
 | Background child with parent waiting | Write fence retained: DENIED. | RA `"background-wait"` |
-| Background child after parent exits | Outside write still DENIED; child writes inside after parent returned: GAP in capability lifetime. | RA `knownGapChildOutlivesImmediateParentWithWriteAuthority` |
-| Supervisor SIGKILL | Owned RV supervisor exits -9; child writes inside workspace afterward: GAP. | CLI `supervisor-SIGKILL-cleanup` |
-| Detached daemon / setsid / double-fork | NOT TESTED. Background-child and supervisor-death evidence do not establish complete daemon cleanup. | Explicit omission |
+| Background child after parent exits | After RV returns, the child is dead and a delayed workspace write does not appear. | RA `backgroundChildCannotRetainWorkspaceAuthorityAfterReturn` |
+| Nested shell background child | Same: no delayed workspace write after return. | RA `nestedShellBackgroundChildCannotRetainWorkspaceAuthorityAfterReturn` |
+| `setsid()` and double-fork | The descendant stays in RV's process group (`setsid` is denied) and is dead before return. A delayed marker does not appear. | RA `setsidProbeCannotRetainWorkspaceAuthorityAfterReturn`, `doubleForkProbeCannotRetainWorkspaceAuthorityAfterReturn` |
+| `posix_spawn` + `POSIX_SPAWN_SETSID` | The spawn syscall is denied. The detached child is not created, and the marker does not appear. | RA `posixSpawnSetsidProbeCannotRetainWorkspaceAuthorityAfterReturn` |
+| Supervisor SIGKILL | Owned RV supervisor exits -9; cleanup runs only on RV's return path, so a child can still write inside the workspace afterward: GAP. | CLI `supervisor-SIGKILL-cleanup` |
 | launchctl service submission | Exit 1 and no outside marker; cause inconclusive, NOT TESTED as a kernel denial guarantee. | CLI `launchctl-service-write-escape` |
 | `#!/usr/bin/env sh` and `#!/bin/sh` scripts | Payload runs with inherited outside-write denial. | RA `"env-shebang"`, `"path-replacement"`, `"executable-replacement"` |
 | `$PATH` manipulation inside agent | Workspace replacement tool executes; outside write DENIED. | RA `"path-replacement"` |
@@ -75,7 +77,7 @@ Sources: **RA** = [RuntimeAdversarialTests.swift](../../Tests/RVIsolationTests/R
 | Child exits reserved helper status after effects | Same authorization cannot replay effects. Linux interpretation branch needs actual Linux run. | EL `reservedChildExit_cannotReplayCompletedSideEffect` |
 | Cancel before dispatch | No marker; later authorized dispatch succeeds once. | EL `cancelledBeforeDispatch_doesNotExecuteOrConsumeAuthorization` |
 | Cancel after dispatch / runtime crash | NOT TESTED as cleanup guarantees and not implemented as supervised-tree lifecycle. Supervisor SIGKILL gap is tested above. | Boundary review |
-| Malformed Seatbelt profile | No marker and nonzero wrapper exit; RV can incorrectly report established containment: GAP in attestation, DENIED execution. | LB `invalidSeatbeltProfileDoesNotExecuteInnerCommand` |
+| Malformed Seatbelt profile | No marker. The result is `seatbeltNotEstablished`, not `EstablishedIsolation`. | LB `invalidSeatbeltProfileDoesNotExecuteInnerCommand` |
 | Linux unavailable kernel | Real helper exits 125; marker absent: fail closed. | LINUX `actual-unsupported-kernel-fails-closed` |
 | Inject descriptor-cleanup or workspace-open failure | Exit 125; marker absent, with Landlock stubbed: fail-closed C setup evidence only. | LINUX `C-unit-descriptor-cleanup-error-fails-closed`, `C-unit-path-open-error-fails-closed` |
 | Policy parser / logging / child-tracker failure | NOT TESTED: launcher has no runtime policy parser, mandatory audit sink or child tracker to inject. These are missing required boundaries. | CLI policy-parser omission / boundary review |

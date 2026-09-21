@@ -125,6 +125,53 @@ struct HostLaunchTests {
             )
         }
     }
+
+    @Test func launch_containedSessionsAreDistinctFromHookSessionID() throws {
+        #if os(macOS)
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let command = try requireTrueCommand()
+        let hook = try #require(SessionID(validating: "hook-session-must-not-be-runtime-id"))
+        let first = try #require(
+            launchContainedHost(host: .opencode, command: command, plan: tree.contained).get().session
+        )
+        let second = try #require(
+            launchContainedHost(host: .opencode, command: command, plan: tree.contained).get().session
+        )
+        #expect(first.id != second.id)
+        #expect(first.id.rawValue.uuidString != hook.rawValue)
+        #expect(second.id.rawValue.uuidString != hook.rawValue)
+        #expect(first.host == .opencode)
+        #expect(second.host == .opencode)
+        #expect(first.backend == .seatbelt)
+        #expect((first.child?.pid ?? 0) > 1)
+        #endif
+    }
+
+    @Test func launch_persistsSessionBeforeExecution() throws {
+        #if os(macOS)
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let log = tree.rootURL.appendingPathComponent("sessions.jsonl")
+        let command = try requireTrueCommand()
+        let run = try IsolationBackends.applyLaunch(
+            tree.contained,
+            command: command,
+            io: .discard,
+            host: .opencode,
+            sessionStore: .file(log)
+        ).get()
+        let session = try #require(run.session)
+        let canonical = try #require(posixRealpath(tree.workspaceURL.path))
+        let records = RuntimeSessionLog.records(at: log)
+        let match = try #require(records.first { $0.id == session.id.rawValue })
+        #expect(match.host == HookHost.opencode.rawValue)
+        #expect(match.backend == RuntimeIsolationBackend.seatbelt.rawValue)
+        #expect(match.workspace == canonical)
+        #expect(match.workspace == session.workspace.rawValue)
+        #expect(abs(match.startedAt.timeIntervalSince(session.startedAt)) < 0.001)
+        #endif
+    }
 }
 
 private enum HostLaunchFixtureError: Error {
@@ -297,7 +344,7 @@ private func recordUnexpectedApplyError(
         Issue.record("expected \(expected), got processSpawnFailed", sourceLocation: sourceLocation)
     case .commandContainsNUL:
         Issue.record("unexpected NUL command rejection")
-    case .commandExecutableMustBeAbsolute:
+    case .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
         Issue.record(
             "expected \(expected), got commandExecutableMustBeAbsolute",
             sourceLocation: sourceLocation

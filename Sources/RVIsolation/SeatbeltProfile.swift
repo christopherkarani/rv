@@ -6,6 +6,18 @@ import Glibc
 import Foundation
 import RVDomain
 
+/// Darwin syscalls that can leave the process group RV owns.
+///
+/// `posix_spawn` is included because `POSIX_SPAWN_SETSID` and
+/// `POSIX_SPAWN_SETPGROUP` create a new session or group inside that syscall.
+/// A userspace scan cannot reliably observe that child before its parent exits
+/// and it is reparented. `fork` and `execve` stay allowed.
+enum SeatbeltLifetimeSyscall {
+    static let setpgid = 82
+    static let setsid = 147
+    static let posixSpawn = 244
+}
+
 /// SBPL text compiled from a contained `IsolationPlan`. Production construction
 /// is `compileSeatbeltProfile` only.
 public struct SeatbeltProfile: Sendable, Equatable {
@@ -172,6 +184,9 @@ func compileFirstSliceProfile(
         (subpath "\(escaped)"))
     (allow file-write*
         (subpath "\(escaped)"))
+    (deny syscall-unix (syscall-number \(SeatbeltLifetimeSyscall.setpgid)))
+    (deny syscall-unix (syscall-number \(SeatbeltLifetimeSyscall.setsid)))
+    (deny syscall-unix (syscall-number \(SeatbeltLifetimeSyscall.posixSpawn)))
     """
     return .success(SeatbeltProfile(source: source, workspacePath: resolved))
 }

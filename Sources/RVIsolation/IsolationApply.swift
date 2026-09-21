@@ -23,6 +23,14 @@ public enum IsolationApplyError: Error, Sendable, Equatable {
     case processSpawnFailed
     case commandExecutableMustBeAbsolute
     case commandContainsNUL
+    /// The session record was not written. The contained command was not started.
+    case sessionRecordFailed
+    /// The Seatbelt profile was not shown to be in force before the inner command.
+    case seatbeltNotEstablished
+    /// The owned process group could not be created or was not empty at return.
+    case lifetimeBoundaryFailed
+    /// The caller cancelled. The owned process group was signalled before return.
+    case cancelled
 }
 
 /// Child stdio. `discard` is `/dev/null` (apply / perform / probes).
@@ -198,10 +206,25 @@ public struct EstablishedIsolation: Sendable, Equatable {
 public struct IsolatedRunResult: Sendable, Equatable {
     public let established: EstablishedIsolation
     public let exitStatus: Int32
+    /// Set for a contained Seatbelt run that reached establishment.
+    /// Unenforced runs and the Landlock exit interpreter do not carry one.
+    /// Production Linux contained launch never returns this value.
+    public let session: RuntimeSession?
 
-    init(established: EstablishedIsolation, exitStatus: Int32) {
+    init(
+        established: EstablishedIsolation,
+        exitStatus: Int32,
+        session: RuntimeSession? = nil
+    ) {
+        if established.family == .seatbelt {
+            precondition(
+                session?.backend == .seatbelt,
+                "Seatbelt establishment requires the runtime session that reached it"
+            )
+        }
         self.established = established
         self.exitStatus = exitStatus
+        self.session = session
     }
 }
 
@@ -277,11 +300,34 @@ public enum IsolationBackends {
         command: IsolatedCommand,
         io: IsolatedIO = .discard
     ) -> Result<IsolatedRunResult, IsolationApplyError> {
+        applyLaunch(plan, command: command, io: io, host: nil, sessionStore: .production)
+    }
+
+    static func applyLaunch(
+        _ plan: IsolationPlan,
+        command: IsolatedCommand,
+        io: IsolatedIO,
+        host: HookHost?,
+        sessionStore: RuntimeSessionStore
+    ) -> Result<IsolatedRunResult, IsolationApplyError> {
         switch plan.mode {
         case .observed, .mediated:
             return unavailable().apply(plan, command: command, io: io)
         case .contained:
-            return platform().apply(plan, command: command, io: io)
+            switch platform().prepare(plan, command) {
+            case .failure(let error):
+                return .failure(error)
+            case .success(let request):
+                let prepared = request.withIO(io)
+                switch prepared.family {
+                case .seatbelt:
+                    return runSeatbeltLaunch(prepared, host: host, sessionStore: sessionStore)
+                case .landlock:
+                    return runLandlock(prepared, executable: nil)
+                case .none:
+                    return .failure(.backendMismatch)
+                }
+            }
         }
     }
 }
@@ -354,6 +400,14 @@ func prepareUnavailable(
 func runSeatbelt(
     _ request: IsolatedLaunchRequest
 ) -> Result<IsolatedRunResult, IsolationApplyError> {
+    runSeatbeltLaunch(request, host: nil, sessionStore: .production)
+}
+
+func runSeatbeltLaunch(
+    _ request: IsolatedLaunchRequest,
+    host: HookHost?,
+    sessionStore: RuntimeSessionStore
+) -> Result<IsolatedRunResult, IsolationApplyError> {
     guard request.family == .seatbelt else {
         return .failure(.backendMismatch)
     }
@@ -361,7 +415,7 @@ func runSeatbelt(
     guard FileManager.default.isExecutableFile(atPath: IsolationBackends.sandboxExecPath) else {
         return .failure(.backendUnavailable)
     }
-    return spawn(request)
+    return spawn(request, host: host, sessionStore: sessionStore)
     #else
     return .failure(.backendUnavailable)
     #endif
@@ -381,15 +435,25 @@ func runUnavailable(
     }
 }
 
-/// Starts the process described by a prepared request, then returns
-/// `EstablishedIsolation`. A spawn failure produces no established record.
-/// A non-zero child exit is still success unless the Landlock trampoline
-/// exits 125 (could not establish) or 126 (`execve` failed after apply).
+/// Starts the process described by a prepared request.
+/// Seatbelt calls `superviseSeatbelt` and does not treat spawn itself as
+/// establishment. Other families wait for the immediate child. A non-zero
+/// child exit is still success unless the Landlock trampoline exits 125
+/// (could not establish) or 126 (`execve` failed after apply).
 /// Landlock never falls back to the inner command or an untyped absolute.
 func spawn(
     _ request: IsolatedLaunchRequest,
-    executablePath: String? = nil
+    executablePath: String? = nil,
+    host: HookHost? = nil,
+    sessionStore: RuntimeSessionStore = .production
 ) -> Result<IsolatedRunResult, IsolationApplyError> {
+    if request.family == .seatbelt {
+        #if os(macOS)
+        return superviseSeatbelt(request, host: host, sessionStore: sessionStore)
+        #else
+        return .failure(.backendUnavailable)
+        #endif
+    }
     guard let established = request.establishedIsolation else {
         return .failure(.backendMismatch)
     }
@@ -472,10 +536,12 @@ func spawn(
     switch request.family {
     case .landlock:
         return interpretIsolationExecExit(process.terminationStatus, established: established)
-    case .none, .seatbelt:
+    case .none:
         return .success(
             IsolatedRunResult(established: established, exitStatus: process.terminationStatus)
         )
+    case .seatbelt:
+        return .failure(.backendMismatch)
     }
 }
 

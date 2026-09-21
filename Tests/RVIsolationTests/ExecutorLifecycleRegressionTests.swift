@@ -2,6 +2,9 @@ import Foundation
 import RVDomain
 import Testing
 @testable import RVIsolation
+#if canImport(Darwin)
+import Darwin
+#endif
 
 @Suite("Executor lifecycle regressions")
 struct ExecutorLifecycleRegressionTests {
@@ -112,6 +115,36 @@ struct ExecutorLifecycleRegressionTests {
         }.count == 1)
         #expect(try String(contentsOf: marker, encoding: .utf8) == "x")
     }
+
+    @Test func cancellationTerminatesOwnedProcessesBeforeReturn() async throws {
+        #if os(macOS)
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let started = tree.workspaceURL.appendingPathComponent("started")
+        let pidFile = tree.workspaceURL.appendingPathComponent("sleep.pid")
+        let script = "printf started > \"$1\"; /bin/sleep 20 & printf %s \"$!\" > \"$2\"; wait"
+        let executable = try lifecycleExecutable(
+            plan: tree.contained,
+            marker: started,
+            script: script,
+            arguments: [started.path, pidFile.path]
+        )
+        let executor = LocalExecutor()
+        let task = Task { try await lifecycleRun(executor, executable) }
+        let deadline = Date().addingTimeInterval(5)
+        while FileManager.default.fileExists(atPath: pidFile.path) == false, Date() < deadline {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        let pidText = try String(contentsOf: pidFile, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let pid = try #require(Int32(pidText))
+        task.cancel()
+        let result = try await task.value
+        #expect(result == .failure(.cancelled))
+        #expect(kill(pid, 0) == -1)
+        #expect(errno == ESRCH)
+        #endif
+    }
 }
 
 private enum ExecutorLifecycleFixtureError: Error {
@@ -124,7 +157,9 @@ private enum ExecutorLifecycleFixtureError: Error {
 private func lifecycleExecutable(
     plan: IsolationPlan,
     marker: URL,
-    exitStatus: Int32 = 0
+    exitStatus: Int32 = 0,
+    script: String? = nil,
+    arguments: [String]? = nil
 ) throws -> ExecutableAction {
     let action = ProposedAction.shell(
         ShellAction(
@@ -143,7 +178,8 @@ private func lifecycleExecutable(
     let command = try #require(
         IsolatedCommand(
             executable: "/bin/sh",
-            arguments: ["-c", "printf x >> \"$1\"; exit \(exitStatus)", "sh", marker.path]
+            arguments: arguments.map { ["-c", script ?? "", "sh"] + $0 }
+                ?? ["-c", "printf x >> \"$1\"; exit \(exitStatus)", "sh", marker.path]
         )
     )
     return ExecutableAction(allowed: allowed, command: command, plan: plan)

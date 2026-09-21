@@ -227,7 +227,7 @@ struct LandlockContainmentTests {
                 .profileNotApplicable,
                 .processSpawnFailed,
                 .commandContainsNUL,
-                .commandExecutableMustBeAbsolute:
+                .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
                 Issue.record("true override must be backendUnavailable, got \(error)")
             }
         }
@@ -293,7 +293,7 @@ private func expectContainedRefused(
     case .backendUnavailable, .backendMismatch, .workspaceMustBeAbsolute,
         .workspaceDoesNotExist, .workspacePathUnresolvable, .workspacePathUnsafe,
         .workspaceContainsInodeAlias, .profileNotApplicable, .processSpawnFailed,
-        .commandContainsNUL, .commandExecutableMustBeAbsolute:
+        .commandContainsNUL, .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
         Issue.record(
             "strict contained plan must be containedGuaranteesUnsupported, got \(error)",
             sourceLocation: sourceLocation
@@ -397,7 +397,7 @@ private func recordUnexpectedContainmentError(
         Issue.record("expected \(expected), got processSpawnFailed", sourceLocation: sourceLocation)
     case .commandContainsNUL:
         Issue.record("unexpected NUL command rejection")
-    case .commandExecutableMustBeAbsolute:
+    case .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
         Issue.record(
             "expected \(expected), got commandExecutableMustBeAbsolute",
             sourceLocation: sourceLocation

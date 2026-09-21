@@ -720,7 +720,7 @@ private func recordUnexpectedApplyError(
         Issue.record("expected \(expected), got profileNotApplicable", sourceLocation: sourceLocation)
     case .processSpawnFailed:
         Issue.record("expected \(expected), got processSpawnFailed", sourceLocation: sourceLocation)
-    case .commandExecutableMustBeAbsolute:
+    case .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
         Issue.record(
             "expected \(expected), got commandExecutableMustBeAbsolute",
             sourceLocation: sourceLocation

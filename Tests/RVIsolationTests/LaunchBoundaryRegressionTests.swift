@@ -95,6 +95,33 @@ struct LaunchBoundaryRegressionTests {
         #endif
     }
 
+    @Test func sessionRecordFailureDoesNotExecuteInnerCommand() throws {
+        #if os(macOS)
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let marker = tree.workspaceURL.appendingPathComponent("must-not-run")
+        let command = try #require(IsolatedCommand(executable: "/bin/sh", arguments: [
+            "-c", "printf ran > must-not-run",
+        ]))
+        let result = IsolationBackends.applyLaunch(
+            tree.contained,
+            command: command,
+            io: .discard,
+            host: nil,
+            sessionStore: .failing(.sessionRecordFailed)
+        )
+        switch result {
+        case .failure(.sessionRecordFailed):
+            break
+        case .failure(let error):
+            Issue.record("failed session record must be sessionRecordFailed, got \(error)")
+        case .success:
+            Issue.record("failed session record must not launch")
+        }
+        #expect(FileManager.default.fileExists(atPath: marker.path) == false)
+        #endif
+    }
+
     @Test func invalidSeatbeltProfileDoesNotExecuteInnerCommand() throws {
         #if os(macOS)
         let tree = try ContainmentTree()
@@ -108,15 +135,16 @@ struct LaunchBoundaryRegressionTests {
             plan: tree.contained, command: command,
             launch: .seatbelt(SeatbeltProfile(source: "(invalid-profile", workspacePath: workspace))
         ))
-        // The OS refuses the invalid profile before executing the command.
-        // Wrapper exit still cannot attest establishment; keep that gap visible.
-        let result = IsolationBackends.seatbelt().run(request)
+        let log = tree.rootURL.appendingPathComponent("sessions.jsonl")
+        let result = runSeatbeltLaunch(request, host: nil, sessionStore: .file(log))
         #expect(!FileManager.default.fileExists(atPath: marker.path))
         switch result {
-        case .failure: break
-        case .success(let run):
-            #expect(run.exitStatus != 0)
-            print("security-gap=seatbelt-startup-attestation reported-established=true command-executed=false")
+        case .failure(.seatbeltNotEstablished):
+            break
+        case .failure(let error):
+            Issue.record("invalid Seatbelt profile must be seatbeltNotEstablished, got \(error)")
+        case .success:
+            Issue.record("invalid Seatbelt profile must not establish isolation")
         }
         #endif
     }
