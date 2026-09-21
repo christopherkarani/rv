@@ -24,9 +24,39 @@ let policyTargetDependencies: [Target.Dependency] = [
 let scanLinkerSettings: [LinkerSetting] = []
 #endif
 
+// Landlock trampoline: restrict_self + exec in a fresh process. Never
+// Landlock the Swift caller (tests / later rvd). Linux-only.
+#if os(Linux)
+let isolationExecProducts: [Product] = [
+    .executable(name: "rv-isolation-exec", targets: ["rv-isolation-exec"]),
+]
+let isolationExecTargets: [Target] = [
+    .executableTarget(
+        name: "rv-isolation-exec",
+        cSettings: [
+            .headerSearchPath("../RVIsolation/include"),
+        ]
+    ),
+]
+let isolationTestDependencies: [Target.Dependency] = ["RVIsolation", "rv-isolation-exec"]
+#else
+let isolationExecProducts: [Product] = []
+let isolationExecTargets: [Target] = []
+let isolationTestDependencies: [Target.Dependency] = ["RVIsolation"]
+#endif
+
 let coreLibraryTargets: [Target] = [
     .target(name: "RVDomain"),
-    .target(name: "RVIsolation", dependencies: ["RVDomain"]),
+    .target(
+        name: "RVIsolation",
+        dependencies: ["RVDomain"],
+        // SwiftPM rejects mixed-language targets. The C shim is compiled
+        // only into Linux `rv-isolation-exec`.
+        exclude: [
+            "landlock_apply.c",
+            "include",
+        ]
+    ),
     .target(name: "RVTheme"),
     .target(name: "RVEngine", dependencies: ["RVDomain"]),
     .target(
@@ -73,7 +103,7 @@ let coreProducts: [Product] = [
 
 let coreTestTargets: [Target] = [
     .testTarget(name: "RVDomainTests", dependencies: ["RVDomain"]),
-    .testTarget(name: "RVIsolationTests", dependencies: ["RVIsolation"]),
+    .testTarget(name: "RVIsolationTests", dependencies: isolationTestDependencies),
     .testTarget(
         name: "RVEngineTests",
         dependencies: ["RVEngine"],
@@ -167,11 +197,11 @@ let package = Package(
     platforms: [
         .macOS(.v26),
     ],
-    products: coreProducts + serviceProducts + cliProducts,
+    products: coreProducts + isolationExecProducts + serviceProducts + cliProducts,
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.7.0"),
     ] + extraPackageDependencies,
-    targets: coreLibraryTargets + serviceLibraryAndDaemon + cliTargets
+    targets: coreLibraryTargets + isolationExecTargets + serviceLibraryAndDaemon + cliTargets
         + coreTestTargets + serviceTestTargets + cliTestTargets,
     swiftLanguageModes: [.v6]
 )

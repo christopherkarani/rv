@@ -21,9 +21,8 @@ import Testing
 /// 9. `EstablishedIsolation` factory rejects contained+`.none` and observed+`.seatbelt`
 /// 10. apply / prepare / run do not call `AgentAuthorization.decide` (no Domain
 ///     coupling; comment + verification `rg` only)
-/// 11. `platform()` contained prepare on non-Darwin is `backendUnavailable`
-/// 15. non-Darwin `platform()` contained → `backendUnavailable` (same portable
-///     assertion as 11, plus Darwin `platform().family == .seatbelt`)
+/// 11. `platform()` family is `.seatbelt` on Darwin and `.landlock` on Linux
+/// 15. Darwin `platform().family == .seatbelt`; Linux `platform().family == .landlock`
 /// 16. `IsolatedCommand` rejects empty / relative executables
 /// 17. `IsolationBackends.apply` establishes observed / mediated without the
 ///     caller picking `unavailable()`
@@ -266,19 +265,24 @@ struct IsolationApplyTests {
             #expect(EstablishedIsolation(mode: .contained(guarantees), family: .none) == nil)
             #expect(EstablishedIsolation(mode: .observed, family: .seatbelt) == nil)
             #expect(EstablishedIsolation(mode: .mediated, family: .seatbelt) == nil)
+            #expect(EstablishedIsolation(mode: .observed, family: .landlock) == nil)
+            #expect(EstablishedIsolation(mode: .mediated, family: .landlock) == nil)
             #expect(EstablishedIsolation(mode: .observed, family: .none) != nil)
             #expect(EstablishedIsolation(mode: .mediated, family: .none) != nil)
             #expect(EstablishedIsolation(mode: .contained(guarantees), family: .seatbelt) != nil)
+            #expect(EstablishedIsolation(mode: .contained(guarantees), family: .landlock) != nil)
         }
     }
 
-    @Test func isolationBackendFamily_hasExactlyNoneAndSeatbelt() {
-        let families: [IsolationBackendFamily] = [.none, .seatbelt]
+    @Test func isolationBackendFamily_hasExactlyNoneSeatbeltAndLandlock() {
+        let families: [IsolationBackendFamily] = [.none, .seatbelt, .landlock]
         for family in families {
             switch family {
             case .none:
                 break
             case .seatbelt:
+                break
+            case .landlock:
                 break
             }
         }
@@ -358,6 +362,23 @@ struct IsolationApplyTests {
                 .commandExecutableMustBeAbsolute:
                 Issue.record(
                     "Darwin contained apply of a missing workspace must be workspaceDoesNotExist, got \(error)"
+                )
+            }
+            #elseif os(Linux)
+            switch error {
+            case .workspaceDoesNotExist:
+                break
+            case .backendUnavailable,
+                .backendMismatch,
+                .workspaceMustBeAbsolute,
+                .workspacePathUnresolvable,
+                .workspacePathUnsafe,
+                .containedGuaranteesUnsupported,
+                .profileNotApplicable,
+                .processSpawnFailed,
+                .commandExecutableMustBeAbsolute:
+                Issue.record(
+                    "Linux contained apply of a missing workspace must be workspaceDoesNotExist, got \(error)"
                 )
             }
             #else
@@ -456,11 +477,7 @@ struct IsolationApplyTests {
         }
     }
 
-    @Test func platform_contained_prepare_isBackendUnavailable_onNonDarwin() throws {
-        let workspace = try requireWorkspace("/workspace")
-        let plan = try requirePlan(
-            IsolationCompileRequest(requested: .contained, workspace: workspace)
-        )
+    @Test func platform_family_isSeatbeltOnDarwin_landlockOnLinux() throws {
         let backend = IsolationBackends.platform()
         #if os(macOS)
         switch backend.family {
@@ -468,17 +485,34 @@ struct IsolationApplyTests {
             break
         case .none:
             Issue.record("Darwin platform() must be family seatbelt")
+        case .landlock:
+            Issue.record("Darwin platform() must be family seatbelt, not landlock")
+        }
+        #elseif os(Linux)
+        switch backend.family {
+        case .landlock:
+            break
+        case .none:
+            Issue.record("Linux platform() must be family landlock")
+        case .seatbelt:
+            Issue.record("Linux platform() must be family landlock, not seatbelt")
         }
         #else
         switch backend.family {
         case .none:
             break
         case .seatbelt:
-            Issue.record("non-Darwin platform() must be family none")
+            Issue.record("unknown platform() must be family none")
+        case .landlock:
+            Issue.record("unknown platform() must be family none, not landlock")
         }
+        let workspace = try requireWorkspace("/workspace")
+        let plan = try requirePlan(
+            IsolationCompileRequest(requested: .contained, workspace: workspace)
+        )
         switch backend.prepare(plan, trueCommand) {
         case .success:
-            Issue.record("non-Darwin platform() contained prepare must fail closed")
+            Issue.record("unknown platform() contained prepare must fail closed")
         case .failure(let error):
             switch error {
             case .backendUnavailable:
@@ -493,7 +527,7 @@ struct IsolationApplyTests {
                 .processSpawnFailed,
                 .commandExecutableMustBeAbsolute:
                 Issue.record(
-                    "non-Darwin platform() contained must be backendUnavailable, got \(error)"
+                    "unknown platform() contained must be backendUnavailable, got \(error)"
                 )
             }
         }
@@ -587,13 +621,18 @@ private func expectEstablished(
     #expect(established.mode == mode, sourceLocation: sourceLocation)
     #expect(established.family == family, sourceLocation: sourceLocation)
     switch (established.mode, established.family) {
-    case (.contained, .seatbelt), (.observed, .none), (.mediated, .none):
+    case (.contained, .seatbelt), (.contained, .landlock), (.observed, .none), (.mediated, .none):
         break
     case (.contained, .none):
         Issue.record("established contained + family none is illegal", sourceLocation: sourceLocation)
     case (.observed, .seatbelt), (.mediated, .seatbelt):
         Issue.record(
             "established observed/mediated + family seatbelt is illegal",
+            sourceLocation: sourceLocation
+        )
+    case (.observed, .landlock), (.mediated, .landlock):
+        Issue.record(
+            "established observed/mediated + family landlock is illegal",
             sourceLocation: sourceLocation
         )
     }
@@ -730,6 +769,8 @@ private func describeFamily(_ family: IsolationBackendFamily) -> String {
         return "none"
     case .seatbelt:
         return "seatbelt"
+    case .landlock:
+        return "landlock"
     }
 }
 

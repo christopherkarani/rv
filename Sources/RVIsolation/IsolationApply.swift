@@ -4,6 +4,7 @@ import RVDomain
 public enum IsolationBackendFamily: Sendable, Equatable {
     case none
     case seatbelt
+    case landlock
 }
 
 public enum IsolationApplyError: Error, Sendable, Equatable {
@@ -50,32 +51,46 @@ public struct IsolatedCommand: Sendable, Equatable {
 
 /// Prepared launch. Not established. Production construction is `prepare`.
 public struct IsolatedLaunchRequest: Sendable, Equatable {
-    fileprivate enum Launch: Sendable, Equatable {
+    enum Launch: Sendable, Equatable {
         case seatbelt(SeatbeltProfile)
+        case landlock(LandlockRuleset)
         case unsandboxed
     }
 
     public let plan: IsolationPlan
     public let command: IsolatedCommand
     public let family: IsolationBackendFamily
-    fileprivate let launch: Launch
+    let launch: Launch
 
     var seatbeltProfile: SeatbeltProfile? {
         switch launch {
         case .seatbelt(let profile):
             return profile
-        case .unsandboxed:
+        case .landlock, .unsandboxed:
             return nil
         }
     }
 
-    fileprivate init?(plan: IsolationPlan, command: IsolatedCommand, launch: Launch) {
+    var landlockRuleset: LandlockRuleset? {
+        switch launch {
+        case .landlock(let ruleset):
+            return ruleset
+        case .seatbelt, .unsandboxed:
+            return nil
+        }
+    }
+
+    init?(plan: IsolationPlan, command: IsolatedCommand, launch: Launch) {
         switch (launch, plan.mode) {
         case (.seatbelt, .contained):
             self.family = .seatbelt
+        case (.landlock, .contained):
+            self.family = .landlock
         case (.unsandboxed, .observed), (.unsandboxed, .mediated):
             self.family = .none
-        case (.seatbelt, .observed), (.seatbelt, .mediated), (.unsandboxed, .contained):
+        case (.seatbelt, .observed), (.seatbelt, .mediated),
+            (.landlock, .observed), (.landlock, .mediated),
+            (.unsandboxed, .contained):
             return nil
         }
         self.plan = plan
@@ -83,11 +98,14 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
         self.launch = launch
     }
 
-    /// Executable `run` will start. Observed / mediated never use `sandbox-exec`.
+    /// Executable `run` will start. Observed / mediated never use a helper.
+    /// Landlock's path is resolved at `run` (trampoline); this is the basename.
     var launchExecutable: String {
         switch launch {
         case .seatbelt:
             return IsolationBackends.sandboxExecPath
+        case .landlock:
+            return IsolationBackends.isolationExecName
         case .unsandboxed:
             return command.executable
         }
@@ -97,6 +115,9 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
         switch launch {
         case .seatbelt(let profile):
             return ["-p", profile.source, command.executable] + command.arguments
+        case .landlock(let ruleset):
+            return ["--workspace", ruleset.workspacePath, "--", command.executable]
+                + command.arguments
         case .unsandboxed:
             return command.arguments
         }
@@ -115,10 +136,13 @@ public struct EstablishedIsolation: Sendable, Equatable {
 
     init?(mode: EnforcementMode, family: IsolationBackendFamily) {
         switch (mode, family) {
-        case (.contained, .seatbelt), (.observed, .none), (.mediated, .none):
+        case (.contained, .seatbelt), (.contained, .landlock),
+            (.observed, .none), (.mediated, .none):
             self.mode = mode
             self.family = family
-        case (.contained, .none), (.observed, .seatbelt), (.mediated, .seatbelt):
+        case (.contained, .none),
+            (.observed, .seatbelt), (.mediated, .seatbelt),
+            (.observed, .landlock), (.mediated, .landlock):
             return nil
         }
     }
@@ -162,6 +186,9 @@ public struct IsolationBackend: Sendable {
 
 public enum IsolationBackends {
     static let sandboxExecPath = "/usr/bin/sandbox-exec"
+    static let isolationExecName = "rv-isolation-exec"
+    /// Trampoline reserved exit: apply failed, inner was not exec'd.
+    static let isolationExecCouldNotEstablishExit: Int32 = 125
 
     public static func seatbelt() -> IsolationBackend {
         IsolationBackend(
@@ -182,14 +209,17 @@ public enum IsolationBackends {
     public static func platform() -> IsolationBackend {
         #if os(macOS)
         seatbelt()
+        #elseif os(Linux)
+        landlock()
         #else
         unavailable()
         #endif
     }
 
     /// Production door. Observed / mediated always establish family `.none`
-    /// without `sandbox-exec`. Contained uses `platform()` and fails closed
-    /// when that backend cannot establish it. `IsolationPlan.mode` is unchanged.
+    /// without a sandbox helper. Contained uses `platform()` (Seatbelt on
+    /// macOS, Landlock on Linux) and fails closed when that backend cannot
+    /// establish it. `IsolationPlan.mode` is unchanged.
     public static func apply(
         _ plan: IsolationPlan,
         command: IsolatedCommand
@@ -291,17 +321,22 @@ func runUnavailable(
 
 /// Starts the process described by a prepared request, then returns
 /// `EstablishedIsolation`. A spawn failure produces no established record.
-/// A non-zero child exit is still success. Contained is always
-/// `/usr/bin/sandbox-exec` because `Launch.seatbelt` is the only contained
-/// request.
-private func spawn(
-    _ request: IsolatedLaunchRequest
+/// A non-zero child exit is still success unless the Landlock trampoline
+/// exits 125 (could not establish; inner was not exec'd). The executable
+/// path must be absolute — Landlock never falls back to the inner command.
+func spawn(
+    _ request: IsolatedLaunchRequest,
+    executablePath: String? = nil
 ) -> Result<IsolatedRunResult, IsolationApplyError> {
     guard let established = request.establishedIsolation else {
         return .failure(.backendMismatch)
     }
+    let path = executablePath ?? request.launchExecutable
+    guard IsolatedCommand.isAbsoluteExecutable(path) else {
+        return .failure(.backendUnavailable)
+    }
     let process = Process()
-    process.executableURL = URL(fileURLWithPath: request.launchExecutable)
+    process.executableURL = URL(fileURLWithPath: path)
     process.arguments = request.launchArguments
     if let workspace = request.plan.workspace,
         let resolved = posixRealpath(workspace.rawValue)
@@ -321,5 +356,12 @@ private func spawn(
         return .failure(.processSpawnFailed)
     }
     process.waitUntilExit()
-    return .success(IsolatedRunResult(established: established, exitStatus: process.terminationStatus))
+    switch request.family {
+    case .landlock:
+        return interpretIsolationExecExit(process.terminationStatus, established: established)
+    case .none, .seatbelt:
+        return .success(
+            IsolatedRunResult(established: established, exitStatus: process.terminationStatus)
+        )
+    }
 }
