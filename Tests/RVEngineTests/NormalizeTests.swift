@@ -223,6 +223,25 @@ import RVDomain
     ])
 }
 
+@Test func splitSegments_unquotedNewlineIsCommandSeparator() {
+    #expect(splitSegments("echo a\ngit status") == ["echo a", "git status"])
+    #expect(splitSegments("echo a\r\ngit status") == ["echo a", "git status"])
+    #expect(splitSegments("echo 'a\nb'") == ["echo 'a\nb'"])
+    #expect(splitSegments(#"echo "a\#nb""#) == [#"echo "a\#nb""#])
+    #expect(splitSegments("printf x | cat\nprintf y") == ["printf x", "cat", "printf y"])
+}
+
+@Test func matchingView_preservesUnquotedNewlineBetweenCommands() {
+    let echoed = Normalize.matchingView(of: "echo a\ngit status").rawValue
+    #expect(echoed.contains("\n"))
+    #expect(echoed.contains("git status"))
+    #expect(
+        Normalize.matchingView(of: "echo x | /bin/cat\nprintf '%s' '/tmp/rv-oracle/.env'")
+            .rawValue
+            .contains("\n")
+    )
+}
+
 @Test func evaluate_gluedQuotedRmFlags_denyAsRmRf() throws {
     for command in ["rm -r'f' /", "rm -'r'f /"] {
         let result = try evaluateNormalized(command)

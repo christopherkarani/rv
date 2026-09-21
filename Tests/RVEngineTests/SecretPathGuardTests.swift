@@ -103,6 +103,8 @@ struct SecretPathGuardTests {
         .init(command: "rm .env", ruleID: "core.secrets:env"),
         .init(command: "find ~/.ssh -type f", ruleID: "core.secrets:home-ssh"),
         .init(command: "echo hello && cat .env", ruleID: "core.secrets:env"),
+        .init(command: "true | echo hi\ncat .env", ruleID: "core.secrets:env"),
+        .init(command: "echo x | /bin/cat\ncat /tmp/rv-oracle/.env", ruleID: "core.secrets:env"),
         .init(command: "git stash drop .env", ruleID: "core.secrets:env"),
         .init(command: "rm -rf /tmp/.env", ruleID: "core.secrets:env"),
         .init(command: "cat ~/.gnupg/secring.gpg", ruleID: "core.secrets:home-gnupg"),
@@ -113,6 +115,15 @@ struct SecretPathGuardTests {
     static let allowRows: [AllowRow] = [
         .init(command: "echo .env"),
         .init(command: "printf .env"),
+        .init(command: "echo x | /bin/cat\nprintf '%s' '/tmp/rv-oracle/.env'"),
+        .init(
+            command: """
+            echo doctor
+            /usr/bin/true
+            printf '%s' '{"hookEventName":"pre_tool_use","toolName":"read_file","toolInput":{"target_file":"/tmp/ok"}}' | /usr/bin/true
+            printf '%s' '{"hookEventName":"pre_tool_use","toolName":"read_file","toolInput":{"target_file":"/tmp/rv-oracle/.env"}}'
+            """
+        ),
         .init(command: "cat .gitignore"),
         .init(command: "cat .env.example"),
         .init(command: "cat .env.sample"),
