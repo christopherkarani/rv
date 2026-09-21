@@ -43,7 +43,7 @@ WARNINGS=0
 print_list() {
   cat <<'EOF'
 Available checks:
-  value-types           No class/actor outside RVService/RVPolicy/RVAnalytics (store modules)
+  value-types           No class/actor outside RVService/RVPolicy/RVAnalytics/RVIsolation
   no-isdenied           No boolean isDenied anywhere in Sources
   no-force-unwrap       No try! or force-unwrap (!) on production paths
   no-exported-import    No new @_exported import (existing T1 debt is known)
@@ -60,6 +60,7 @@ Available checks:
   corpus-landmines      near-miss.json retains required landmine commands
   corpus-structure      All corpus files have valid schema (cases array)
   test-target-isolation Only RVCorpusTests may list 3+ module deps
+  isolation-test-modules RVIsolationTests may depend on RVIsolation and rv-isolation-exec only
 EOF
 }
 
@@ -97,7 +98,7 @@ check_empty() {
 check_value_types() {
   # Reference types (class, actor) outside the allowed edges.
   #   class  — only RVService (the XPC/NSObject edge).
-  #   actor  — only RVService, RVPolicy, and RVAnalytics (store modules).
+  #   actor  — RVService, RVPolicy, RVAnalytics, and RVIsolation (LocalExecutor).
   #            Domain/Engine/Packs/Presentation are value-only.
   # A leading attribute (@MainActor, @objc, @unchecked Sendable, …) or access
   # modifier (public/internal/…/final) must not hide a declaration, so we match
@@ -105,14 +106,15 @@ check_value_types() {
   local pat='^\s*(@[A-Za-z][A-Za-z0-9_ ]*\s)?(public |internal |private |fileprivate |open |final )*(class|actor) '
   local matches
   matches=$(grep -rnE "$pat" "$SOURCES" --include='*.swift' \
-    | grep -v 'Sources/RVService/' | grep -v 'Sources/RVPolicy/' | grep -v 'Sources/RVAnalytics/' || true)
+    | grep -v 'Sources/RVService/' | grep -v 'Sources/RVPolicy/' | grep -v 'Sources/RVAnalytics/' \
+    | grep -v 'Sources/RVIsolation/' || true)
   local count
   count=$(echo "$matches" | grep -c . || true)
   if [ "$count" -eq 0 ]; then
-    if [ "$QUIET" -eq 0 ]; then printf "  %b✓%b %s\n" "$GREEN" "$NC" "No class/actor outside RVService/RVPolicy/RVAnalytics"; fi
+    if [ "$QUIET" -eq 0 ]; then printf "  %b✓%b %s\n" "$GREEN" "$NC" "No class/actor outside RVService/RVPolicy/RVAnalytics/RVIsolation"; fi
     return 0
   else
-    printf "  %b✗ class/actor outside RVService/RVPolicy/RVAnalytics%b (%d)\n" "$RED" "$NC" "$count"
+    printf "  %b✗ class/actor outside RVService/RVPolicy/RVAnalytics/RVIsolation%b (%d)\n" "$RED" "$NC" "$count"
     echo "$matches" | head -15 | indent
     return 1
   fi
@@ -514,6 +516,20 @@ for m in re.finditer(pattern, content):
   return $fail
 }
 
+check_isolation_test_modules() {
+  # RVIsolationTests uses `dependencies: isolationTestDependencies`, which
+  # test-target-isolation cannot see (it only parses literal arrays).
+  local output
+  if output=$(python3 "$ROOT/Scripts/check-swift-test-preflight.py" 2>&1); then
+    if [ "$QUIET" -eq 0 ]; then printf "  %b✓%b %s\n" "$GREEN" "$NC" "RVIsolationTests deps ok"; fi
+    return 0
+  else
+    printf "  %b✗ RVIsolationTests extra Swift modules%b\n" "$RED" "$NC"
+    echo "$output" | indent
+    return 1
+  fi
+}
+
 # ─── Check registry ──────────────────────────────────────────────────────────
 
 ALL_CHECKS=(
@@ -534,6 +550,7 @@ ALL_CHECKS=(
   corpus-landmines
   corpus-structure
   test-target-isolation
+  isolation-test-modules
 )
 
 run_check() {
@@ -555,6 +572,7 @@ run_check() {
     corpus-landmines)       check_corpus_landmines ;;
     corpus-structure)       check_corpus_structure ;;
     test-target-isolation)  check_test_target_isolation ;;
+    isolation-test-modules) check_isolation_test_modules ;;
     *) echo "Unknown check: $1"; return 1 ;;
   esac
 }
