@@ -6,8 +6,8 @@ import Testing
 /// 2. `.contained` + `RepositoryRoot` only (workspace nil) → same failure
 /// 3. `.observed` + workspace `/repo` → `.observed`, workspace recorded, not `.contained`
 /// 4. `.mediated` + workspace `/repo` → `.mediated`, not `.contained`
-/// 5. `.contained` + workspace `/repo` → writesLimited(`/repo`), descent `.inherited`,
-///    network `.unrestricted`, `plan.workspace == /repo`
+/// 5. `.contained` + workspace `/repo` → workspaceScoped(`/repo`), descent `.inherited`,
+///    network `.denied`, process `.hostSignalsDenied`, `plan.workspace == /repo`
 /// 6. `.contained` + workspace `/ws` + repositoryRoot `/repo` → write limit is `/ws`
 /// 7. Empty-string workspace is unrepresentable as `WorkingDirectory` (no String bypass)
 /// 8. Observed / mediated never carry `IsolationGuarantees` on `EnforcementMode`
@@ -69,7 +69,7 @@ struct IsolationPlanTests {
         )
     }
 
-    @Test func contained_withWorkspace_writesLimitedInheritedNetworkUnrestricted() throws {
+    @Test func contained_withWorkspace_isWorkspaceScopedDeniedNetwork() throws {
         let workspace = try requireWorkspace("/repo")
         let result = compileIsolationPlan(
             IsolationCompileRequest(requested: .contained, workspace: workspace)
@@ -128,7 +128,7 @@ struct IsolationPlanTests {
 
         let factory = IsolationGuarantees.firstSliceContained(workspace: workspace)
         switch factory.filesystem {
-        case .writesLimited(let limitedTo):
+        case .workspaceScoped(let limitedTo):
             #expect(limitedTo == workspace)
         case .unrestricted:
             Issue.record("first-slice factory must not mint unrestricted filesystem")
@@ -140,8 +140,16 @@ struct IsolationPlanTests {
             Issue.record("first-slice factory must not mint notInherited descent")
         }
         switch factory.network {
-        case .unrestricted:
+        case .denied:
             break
+        case .unrestricted:
+            Issue.record("first-slice factory must not mint unrestricted network")
+        }
+        switch factory.process {
+        case .hostSignalsDenied:
+            break
+        case .unrestricted:
+            Issue.record("first-slice factory must not mint unrestricted process interaction")
         }
     }
 
@@ -316,7 +324,7 @@ private func expectContainedFirstSlice(
             Issue.record("contained compile must not be mediated", sourceLocation: sourceLocation)
         case .contained(let guarantees):
             switch guarantees.filesystem {
-            case .writesLimited(let limitedTo):
+            case .workspaceScoped(let limitedTo):
                 #expect(limitedTo == workspace, sourceLocation: sourceLocation)
                 #expect(plan.workspace == limitedTo, sourceLocation: sourceLocation)
             case .unrestricted:
@@ -335,8 +343,22 @@ private func expectContainedFirstSlice(
                 )
             }
             switch guarantees.network {
-            case .unrestricted:
+            case .denied:
                 break
+            case .unrestricted:
+                Issue.record(
+                    "contained first-slice must not use unrestricted network",
+                    sourceLocation: sourceLocation
+                )
+            }
+            switch guarantees.process {
+            case .hostSignalsDenied:
+                break
+            case .unrestricted:
+                Issue.record(
+                    "contained first-slice must not use unrestricted process interaction",
+                    sourceLocation: sourceLocation
+                )
             }
         }
     case .failure(let error):

@@ -27,6 +27,7 @@ public enum HelpTopic: Equatable, Sendable {
     case allowlist
     case safety
     case blocks
+    case opencode
 }
 
 /// Intercepts help argv before ArgumentParser so passthrough commands still get help.
@@ -88,6 +89,8 @@ public enum HelpDispatch {
         guard let head = path.first else { return .root }
         let rest = Array(path.dropFirst())
         switch head {
+        case "opencode":
+            return isOpenCodePath(rest) ? .opencode : nil
         case "test":
             return rest.allSatisfy(isTestFlag) ? .test : nil
         case "explain":
@@ -129,6 +132,23 @@ public enum HelpDispatch {
 
     private static func isHelpFlag(_ token: String) -> Bool {
         token == "-h" || token == "--help"
+    }
+
+    private static func isOpenCodePath(_ tokens: [String]) -> Bool {
+        var index = tokens.startIndex
+        while index < tokens.endIndex {
+            let token = tokens[index]
+            if token == "--executable" || token == "--workspace" {
+                let value = tokens.index(after: index)
+                guard value < tokens.endIndex else { return false }
+                index = tokens.index(after: value)
+            } else if token.hasPrefix("--executable=") || token.hasPrefix("--workspace=") {
+                index = tokens.index(after: index)
+            } else {
+                return false
+            }
+        }
+        return true
     }
 
     private static func isFormatFlag(_ token: String) -> Bool {

@@ -10,15 +10,37 @@ import RVDomain
 /// is `compileSeatbeltProfile` only.
 public struct SeatbeltProfile: Sendable, Equatable {
     public let source: String
+    public let workspacePath: String
 
-    init(source: String) {
+    init(source: String, workspacePath: String) {
         self.source = source
+        self.workspacePath = workspacePath
+    }
+
+    /// The granted executable may live outside the workspace. Allow reading
+    /// and mapping that one file, including its realpath when the caller path
+    /// and the kernel path differ (`/var` versus `/private/var`). This does
+    /// not allow neighboring files.
+    func allowingExecutable(_ executable: String) -> SeatbeltProfile {
+        var paths = [executable]
+        if let resolved = posixRealpath(executable), resolved != executable {
+            paths.append(resolved)
+        }
+        let literals = paths.map { "(literal \"\(escapeSeatbeltSubpath($0))\")" }
+            .joined(separator: "\n        ")
+        let addition = """
+
+        (allow file-read* file-map-executable
+            \(literals))
+        """
+        return SeatbeltProfile(source: source + addition, workspacePath: workspacePath)
     }
 }
 
-/// First-slice Seatbelt profile: allow-default + deny writes outside the
-/// resolved workspace. Not a jail. Network stays unrestricted (no network rule).
-/// Observed / mediated plans are not applicable.
+/// Seatbelt profile for a workspace-scoped contained plan.
+/// `(deny default)` plus the execution baseline. No network allow.
+/// Observed / mediated plans are not applicable. A contained plan with any
+/// broader filesystem, network, or process guarantee is rejected.
 public func compileSeatbeltProfile(
     _ plan: IsolationPlan
 ) -> Result<SeatbeltProfile, IsolationApplyError> {
@@ -30,10 +52,22 @@ public func compileSeatbeltProfile(
             return .failure(.containedGuaranteesUnsupported)
         }
         switch guarantees.filesystem {
-        case .writesLimited(let limitedTo):
+        case .workspaceScoped(let limitedTo):
             guard limitedTo == workspace else {
                 return .failure(.containedGuaranteesUnsupported)
             }
+        case .unrestricted:
+            return .failure(.containedGuaranteesUnsupported)
+        }
+        switch guarantees.network {
+        case .denied:
+            break
+        case .unrestricted:
+            return .failure(.containedGuaranteesUnsupported)
+        }
+        switch guarantees.process {
+        case .hostSignalsDenied:
+            break
         case .unrestricted:
             return .failure(.containedGuaranteesUnsupported)
         }
@@ -42,10 +76,6 @@ public func compileSeatbeltProfile(
             break
         case .notInherited:
             return .failure(.containedGuaranteesUnsupported)
-        }
-        switch guarantees.network {
-        case .unrestricted:
-            break
         }
         return compileFirstSliceProfile(workspace: workspace)
     }
@@ -115,13 +145,35 @@ func compileFirstSliceProfile(
         return .failure(.workspacePathUnsafe)
     }
     let escaped = escapeSeatbeltSubpath(resolved)
+    // `file-read-data` of `/` is the root directory inode, not every file.
+    // Metadata on the walk prefixes lets tools resolve paths. Content outside
+    // the workspace and the system prefixes below stays denied.
+    // `mach-lookup` is an unfiltered baseline; it is not a grant of host files.
     let source = """
     (version 1)
-    (allow default)
-    (deny file-write*
-        (require-not (subpath "\(escaped)")))
+    (deny default)
+    (allow process-exec*)
+    (allow process-fork)
+    (allow signal (target same-sandbox))
+    (allow sysctl-read)
+    (allow mach-lookup)
+    (allow file-read-data (literal "/"))
+    (allow file-read-metadata
+        (subpath "/private")
+        (subpath "/tmp")
+        (subpath "/var")
+        (subpath "/Users"))
+    (allow file-map-executable file-read* file-ioctl
+        (subpath "/usr")
+        (subpath "/bin")
+        (subpath "/System")
+        (subpath "/Library")
+        (subpath "/dev")
+        (subpath "\(escaped)"))
+    (allow file-write*
+        (subpath "\(escaped)"))
     """
-    return .success(SeatbeltProfile(source: source))
+    return .success(SeatbeltProfile(source: source, workspacePath: resolved))
 }
 
 /// POSIX `/` as the write root applies the first-slice limit to the entire

@@ -14,10 +14,15 @@ public enum IsolationApplyError: Error, Sendable, Equatable {
     case workspaceDoesNotExist
     case workspacePathUnresolvable
     case workspacePathUnsafe
+    /// A regular file inside the workspace shares its inode with another name.
+    /// Seatbelt authorizes the path, so that alias can mutate the other file.
+    /// Refuse the launch. This does not close a hardlink created after the check.
+    case workspaceContainsInodeAlias
     case containedGuaranteesUnsupported
     case profileNotApplicable
     case processSpawnFailed
     case commandExecutableMustBeAbsolute
+    case commandContainsNUL
 }
 
 /// Child stdio. `discard` is `/dev/null` (apply / perform / probes).
@@ -34,7 +39,9 @@ public struct IsolatedCommand: Sendable, Equatable {
     public let arguments: [String]
 
     public init?(executable: String, arguments: [String] = []) {
-        guard IsolatedCommand.isAbsoluteExecutable(executable) else {
+        guard IsolatedCommand.isAbsoluteExecutable(executable),
+            !executable.contains("\0"), !arguments.contains(where: { $0.contains("\0") })
+        else {
             return nil
         }
         self.executable = executable
@@ -45,6 +52,9 @@ public struct IsolatedCommand: Sendable, Equatable {
         executable: String,
         arguments: [String] = []
     ) -> Result<IsolatedCommand, IsolationApplyError> {
+        guard !executable.contains("\0"), !arguments.contains(where: { $0.contains("\0") }) else {
+            return .failure(.commandContainsNUL)
+        }
         guard let command = IsolatedCommand(executable: executable, arguments: arguments) else {
             return .failure(.commandExecutableMustBeAbsolute)
         }
@@ -85,6 +95,16 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
             return ruleset
         case .seatbelt, .unsandboxed:
             return nil
+        }
+    }
+
+    /// Canonical path used by the prepared OS rules, never a second grant
+    /// derived from a retargeted caller path.
+    var containedWorkspacePath: String? {
+        switch launch {
+        case .seatbelt(let profile): profile.workspacePath
+        case .landlock(let ruleset): ruleset.workspacePath
+        case .unsandboxed: nil
         }
     }
 
@@ -277,15 +297,24 @@ func prepareSeatbelt(
         switch compileSeatbeltProfile(plan) {
         case .failure(let error):
             return .failure(error)
-        case .success(let profile):
+        case .success(let compiled):
+            let profile = compiled.allowingExecutable(command.executable)
             guard let workspace = plan.workspace else {
                 return .failure(.containedGuaranteesUnsupported)
             }
             switch existingResolvedWorkspacePath(workspace) {
             case .failure(let error):
                 return .failure(error)
-            case .success:
-                break
+            case .success(let resolved):
+                guard profile.workspacePath == resolved else {
+                    return .failure(.workspacePathUnresolvable)
+                }
+                switch rejectWorkspaceInodeAlias(resolved) {
+                case .failure(let error):
+                    return .failure(error)
+                case .success:
+                    break
+                }
             }
             guard
                 let request = IsolatedLaunchRequest(
@@ -386,7 +415,35 @@ func spawn(
     let process = Process()
     process.executableURL = URL(fileURLWithPath: path)
     process.arguments = request.launchArguments
-    if let workspace = request.plan.workspace,
+    if let preparedPath = request.containedWorkspacePath {
+        guard let workspace = request.plan.workspace else {
+            return .failure(.containedGuaranteesUnsupported)
+        }
+        switch existingResolvedWorkspacePath(workspace) {
+        case .failure(let error):
+            return .failure(error)
+        case .success(let resolved):
+            guard resolved == preparedPath else {
+                return .failure(.workspacePathUnresolvable)
+            }
+        }
+        if request.family == .seatbelt {
+            switch rejectWorkspaceInodeAlias(preparedPath) {
+            case .failure(let error):
+                return .failure(error)
+            case .success:
+                break
+            }
+        }
+        process.currentDirectoryURL = URL(fileURLWithPath: preparedPath)
+        // The security helper's loader runs before its main/apply function.
+        // Never forward ambient credentials, loader/interpreter hooks, sockets,
+        // or a caller-controlled search path across that pre-isolation boundary.
+        process.environment = [
+            "PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C",
+            "HOME": preparedPath, "TMPDIR": preparedPath,
+        ]
+    } else if let workspace = request.plan.workspace,
         let resolved = posixRealpath(workspace.rawValue)
     {
         var isDirectory: ObjCBool = false
@@ -420,4 +477,53 @@ func spawn(
             IsolatedRunResult(established: established, exitStatus: process.terminationStatus)
         )
     }
+}
+
+/// Regular files with more than one link can point at an inode outside the
+/// workspace while their path stays inside the Seatbelt write allow.
+/// Directories have a link count above one without being aliases.
+/// Symlink entries are not followed. A scan failure refuses the launch.
+func rejectWorkspaceInodeAlias(_ root: String) -> Result<Void, IsolationApplyError> {
+    let rootURL = URL(fileURLWithPath: root, isDirectory: true)
+    // FileManager calls this handler synchronously on the scanning thread.
+    let scan = InodeAliasScan()
+    guard
+        let enumerator = FileManager.default.enumerator(
+            at: rootURL,
+            includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey, .linkCountKey],
+            options: [],
+            errorHandler: { _, _ in
+                scan.failed = true
+                return false
+            }
+        )
+    else {
+        return .failure(.workspaceContainsInodeAlias)
+    }
+    let keys: Set<URLResourceKey> = [.isRegularFileKey, .isSymbolicLinkKey, .linkCountKey]
+    for case let url as URL in enumerator {
+        if scan.failed {
+            return .failure(.workspaceContainsInodeAlias)
+        }
+        do {
+            let values = try url.resourceValues(forKeys: keys)
+            if values.isSymbolicLink == true {
+                continue
+            }
+            if values.isRegularFile == true, let count = values.linkCount, count > 1 {
+                return .failure(.workspaceContainsInodeAlias)
+            }
+        } catch {
+            return .failure(.workspaceContainsInodeAlias)
+        }
+    }
+    if scan.failed {
+        return .failure(.workspaceContainsInodeAlias)
+    }
+    return .success(())
+}
+
+/// Mutable flag for `rejectWorkspaceInodeAlias`. The directory walk is synchronous.
+private final class InodeAliasScan: @unchecked Sendable {
+    var failed = false
 }

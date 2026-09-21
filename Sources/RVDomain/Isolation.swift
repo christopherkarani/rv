@@ -5,17 +5,28 @@ public enum RequestedIsolation: Sendable, Equatable {
     case contained
 }
 
-/// Filesystem restriction a backend would have to establish. First-slice contained
-/// compile uses `writesLimited`; `unrestricted` exists so observed/mediated stay honest.
+/// Filesystem restriction a backend would have to establish.
+/// `unrestricted` exists so observed and mediated plans stay honest.
+/// `workspaceScoped` is read and write of that directory only. It is not an
+/// ambient read with a write fence.
 public enum FilesystemContainment: Sendable, Equatable {
     case unrestricted
-    case writesLimited(to: WorkingDirectory)
+    case workspaceScoped(WorkingDirectory)
 }
 
-/// Network restriction. A single case documents that this slice does not promise
-/// a block. Do not infer “contained ⇒ no network.”
+/// Network restriction. Contained plans use `denied`, including loopback,
+/// DNS, and Unix sockets. `unrestricted` is not a contained plan.
 public enum NetworkContainment: Sendable, Equatable {
     case unrestricted
+    case denied
+}
+
+/// Signals and other host-process interaction. Contained plans deny signals
+/// to processes outside the sandbox. Descendants in that sandbox can still
+/// signal each other.
+public enum ProcessContainment: Sendable, Equatable {
+    case unrestricted
+    case hostSignalsDenied
 }
 
 /// Whether child processes inherit the same OS ruleset.
@@ -36,23 +47,29 @@ public enum DescentContainment: Sendable, Equatable {
 public struct IsolationGuarantees: Sendable, Equatable {
     public let filesystem: FilesystemContainment
     public let network: NetworkContainment
+    public let process: ProcessContainment
     public let descent: DescentContainment
 
     fileprivate init(
         filesystem: FilesystemContainment,
         network: NetworkContainment,
+        process: ProcessContainment,
         descent: DescentContainment
     ) {
         self.filesystem = filesystem
         self.network = network
+        self.process = process
         self.descent = descent
     }
 
-    /// Write-limit + inherit only. Network stays unrestricted.
+    /// Workspace read/write, no network, no signals to processes outside the
+    /// sandbox, children inherit. A backend that cannot establish every field
+    /// must refuse the launch.
     static func firstSliceContained(workspace: WorkingDirectory) -> IsolationGuarantees {
         IsolationGuarantees(
-            filesystem: .writesLimited(to: workspace),
-            network: .unrestricted,
+            filesystem: .workspaceScoped(workspace),
+            network: .denied,
+            process: .hostSignalsDenied,
             descent: .inherited
         )
     }

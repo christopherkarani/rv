@@ -159,11 +159,11 @@ private func expectContainedSeatbelt(
     switch established.mode {
     case .contained(let guarantees):
         switch guarantees.filesystem {
-        case .writesLimited(let limitedTo):
+        case .workspaceScoped(let limitedTo):
             #expect(limitedTo == plan.workspace, sourceLocation: sourceLocation)
         case .unrestricted:
             Issue.record(
-                "established contained must keep first-slice write limit",
+                "established contained must keep workspace scope",
                 sourceLocation: sourceLocation
             )
         }
@@ -177,8 +177,22 @@ private func expectContainedSeatbelt(
             )
         }
         switch guarantees.network {
-        case .unrestricted:
+        case .denied:
             break
+        case .unrestricted:
+            Issue.record(
+                "established contained must keep denied network",
+                sourceLocation: sourceLocation
+            )
+        }
+        switch guarantees.process {
+        case .hostSignalsDenied:
+            break
+        case .unrestricted:
+            Issue.record(
+                "established contained must keep host signal denial",
+                sourceLocation: sourceLocation
+            )
         }
     case .observed:
         Issue.record("Darwin contained establish must not be observed", sourceLocation: sourceLocation)
@@ -208,6 +222,8 @@ private func recordUnexpectedContainmentError(
         )
     case .workspacePathUnsafe:
         Issue.record("expected \(expected), got workspacePathUnsafe", sourceLocation: sourceLocation)
+    case .workspaceContainsInodeAlias:
+        Issue.record("expected \(expected), got workspaceContainsInodeAlias", sourceLocation: sourceLocation)
     case .containedGuaranteesUnsupported:
         Issue.record(
             "expected \(expected), got containedGuaranteesUnsupported",
@@ -217,6 +233,8 @@ private func recordUnexpectedContainmentError(
         Issue.record("expected \(expected), got profileNotApplicable", sourceLocation: sourceLocation)
     case .processSpawnFailed:
         Issue.record("expected \(expected), got processSpawnFailed", sourceLocation: sourceLocation)
+    case .commandContainsNUL:
+        Issue.record("unexpected NUL command rejection")
     case .commandExecutableMustBeAbsolute:
         Issue.record(
             "expected \(expected), got commandExecutableMustBeAbsolute",

@@ -81,6 +81,7 @@ struct AgentTurnTests {
             fingerprint: "shell:agent-turn:allowed-in"
         )
         let turn = await LocalExecutor().perform(authorization, plan: tree.contained)
+        if linuxRefusedContainedTurn(turn, absentPath: inside) { return }
         try expectExecutedContained(turn, matching: tree.contained)
         #expect(FileManager.default.fileExists(atPath: inside))
     }
@@ -104,6 +105,7 @@ struct AgentTurnTests {
             plan: tree.contained,
             approval: .success(.allowOnce)
         )
+        if linuxRefusedContainedTurn(turn, absentPath: inside) { return }
         try expectExecutedContained(turn, matching: tree.contained)
         #expect(FileManager.default.fileExists(atPath: inside))
     }
@@ -235,6 +237,23 @@ struct AgentTurnTests {
         let allowed = try requireAllowed(authorization)
         let executor = LocalExecutor()
         let first = await executor.perform(authorization, plan: tree.contained)
+        #if os(Linux)
+        #expect(linuxRefusedContainedTurn(first, absentPath: inside))
+        let refusedSecond = await executor.perform(authorization, plan: tree.contained)
+        switch refusedSecond {
+        case .failure(.execute(.alreadyExecuted(let fingerprint))):
+            #expect(fingerprint == allowed.action.fingerprint)
+        case .failure(let error):
+            recordUnexpectedTurnError(error, expected: "alreadyExecuted")
+        case .success(.executed):
+            Issue.record("second perform of the same fingerprint must not execute")
+        case .success(.awaitingApproval):
+            Issue.record("second perform must not await approval")
+        case .success(.denied):
+            Issue.record("second perform must not deny")
+        }
+        return
+        #endif
         try expectExecutedContained(first, matching: tree.contained)
         #expect(FileManager.default.fileExists(atPath: inside))
         let second = await executor.perform(authorization, plan: tree.contained)
@@ -384,6 +403,32 @@ private func requireTouchExecutable() throws -> String {
     throw AgentTurnFixtureError.missingTouch
 }
 
+private func linuxRefusedContainedTurn(
+    _ turn: Result<AgentTurn, AgentTurnError>,
+    absentPath: String
+) -> Bool {
+    #if os(Linux)
+    switch turn {
+    case .failure(.execute(.applyFailed(.containedGuaranteesUnsupported))):
+        #expect(FileManager.default.fileExists(atPath: absentPath) == false)
+        return true
+    case .success(.executed(let result)):
+        Issue.record("Linux contained launch must be refused, got exit \(result.exitStatus)")
+        return true
+    case .failure(let error):
+        recordUnexpectedTurnError(error, expected: "execute(applyFailed(containedGuaranteesUnsupported))")
+        return true
+    case .success:
+        Issue.record("Linux contained launch must be refused")
+        return true
+    }
+    #else
+    _ = turn
+    _ = absentPath
+    return false
+    #endif
+}
+
 private func expectExecutedContained(
     _ turn: Result<AgentTurn, AgentTurnError>,
     matching plan: IsolationPlan,
@@ -478,6 +523,8 @@ private func expectApplyFailedBackendUnavailable(
     switch error {
     case .applyFailed(.backendUnavailable):
         break
+    case .cancelled:
+        Issue.record("expected applyFailed(backendUnavailable), got cancelled", sourceLocation: sourceLocation)
     case .alreadyExecuted(let fingerprint):
         Issue.record(
             "expected applyFailed(backendUnavailable), got alreadyExecuted \(fingerprint.rawValue)",
@@ -513,6 +560,8 @@ private func recordUnexpectedApplyError(
     sourceLocation: SourceLocation = #_sourceLocation
 ) {
     switch error {
+    case .commandContainsNUL:
+        Issue.record("expected \(expected), got commandContainsNUL", sourceLocation: sourceLocation)
     case .backendUnavailable:
         Issue.record("expected \(expected), got backendUnavailable", sourceLocation: sourceLocation)
     case .backendMismatch:
@@ -528,6 +577,8 @@ private func recordUnexpectedApplyError(
         )
     case .workspacePathUnsafe:
         Issue.record("expected \(expected), got workspacePathUnsafe", sourceLocation: sourceLocation)
+    case .workspaceContainsInodeAlias:
+        Issue.record("expected \(expected), got workspaceContainsInodeAlias", sourceLocation: sourceLocation)
     case .containedGuaranteesUnsupported:
         Issue.record(
             "expected \(expected), got containedGuaranteesUnsupported",

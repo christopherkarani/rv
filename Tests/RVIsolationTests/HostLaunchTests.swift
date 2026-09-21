@@ -56,9 +56,18 @@ struct HostLaunchTests {
         let command = try requireTrueCommand()
         switch launchContainedHost(host: .opencode, command: command, plan: tree.contained) {
         case .success(let run):
+            #if os(Linux)
+            Issue.record("Linux contained launch must be refused, got exit \(run.exitStatus)")
+            #else
             #expect(run.exitStatus == 0)
             expectContainedPlatform(run.established, matching: tree.contained)
+            #endif
         case .failure(let error):
+            #if os(Linux)
+            if case .apply(.containedGuaranteesUnsupported) = error {
+                break
+            }
+            #endif
             recordUnexpectedHostLaunchError(error, expected: "contained true establish")
         }
     }
@@ -70,10 +79,20 @@ struct HostLaunchTests {
         let command = try requireTouchCommand(arguments: [inside])
         switch launchContainedHost(host: .opencode, command: command, plan: tree.contained) {
         case .success(let run):
+            #if os(Linux)
+            Issue.record("Linux contained launch must be refused, got exit \(run.exitStatus)")
+            #else
             #expect(run.exitStatus == 0)
             #expect(FileManager.default.fileExists(atPath: inside))
             expectContainedPlatform(run.established, matching: tree.contained)
+            #endif
         case .failure(let error):
+            #if os(Linux)
+            if case .apply(.containedGuaranteesUnsupported) = error {
+                #expect(FileManager.default.fileExists(atPath: inside) == false)
+                break
+            }
+            #endif
             recordUnexpectedHostLaunchError(error, expected: "in-workspace touch")
         }
     }
@@ -86,10 +105,20 @@ struct HostLaunchTests {
         let command = try requireTouchCommand(arguments: [outside])
         switch launchContainedHost(host: .opencode, command: command, plan: tree.contained) {
         case .success(let run):
+            #if os(Linux)
+            Issue.record("Linux contained launch must be refused, got exit \(run.exitStatus)")
+            #else
             #expect(run.exitStatus != 0)
             #expect(FileManager.default.fileExists(atPath: outside) == false)
             expectContainedPlatform(run.established, matching: tree.contained)
+            #endif
         case .failure(let error):
+            #if os(Linux)
+            if case .apply(.containedGuaranteesUnsupported) = error {
+                #expect(FileManager.default.fileExists(atPath: outside) == false)
+                break
+            }
+            #endif
             recordUnexpectedHostLaunchError(
                 error,
                 expected: "blocked outside touch with established contained"
@@ -255,6 +284,8 @@ private func recordUnexpectedApplyError(
         )
     case .workspacePathUnsafe:
         Issue.record("expected \(expected), got workspacePathUnsafe", sourceLocation: sourceLocation)
+    case .workspaceContainsInodeAlias:
+        Issue.record("expected \(expected), got workspaceContainsInodeAlias", sourceLocation: sourceLocation)
     case .containedGuaranteesUnsupported:
         Issue.record(
             "expected \(expected), got containedGuaranteesUnsupported",
@@ -264,6 +295,8 @@ private func recordUnexpectedApplyError(
         Issue.record("expected \(expected), got profileNotApplicable", sourceLocation: sourceLocation)
     case .processSpawnFailed:
         Issue.record("expected \(expected), got processSpawnFailed", sourceLocation: sourceLocation)
+    case .commandContainsNUL:
+        Issue.record("unexpected NUL command rejection")
     case .commandExecutableMustBeAbsolute:
         Issue.record(
             "expected \(expected), got commandExecutableMustBeAbsolute",
