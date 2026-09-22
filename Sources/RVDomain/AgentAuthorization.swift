@@ -208,6 +208,42 @@ public enum AgentAuthorization: Sendable, Equatable {
             }
         }
     }
+
+    /// Same allow / ask / deny split `LocalExecutor` and runtime admission use.
+    ///
+    /// Pending without an approval stays pending. `resolve` failure, including
+    /// `createRule` and `hostAsk`, is not an `AllowedAction`.
+    public static func step(
+        _ authorization: AgentAuthorization,
+        approval: Result<ApprovalDecision, AgentApprovalError>? = nil
+    ) -> AuthorizationStep {
+        switch authorization {
+        case .allowed(let allowed):
+            return .execute(allowed)
+        case .denied(let denied):
+            return .denied(denied)
+        case .pending(let pending):
+            guard let approval else {
+                return .awaitingApproval(pending)
+            }
+            switch resolve(pending, approval: approval) {
+            case .failure(let error):
+                return .approvalFailed(error)
+            case .success(.denied(let denied)):
+                return .denied(denied)
+            case .success(.allowed(let allowed)):
+                return .execute(allowed)
+            }
+        }
+    }
+}
+
+/// What an already-decided authorization may do next. Ask is not execution.
+public enum AuthorizationStep: Sendable, Equatable {
+    case execute(AllowedAction)
+    case denied(DeniedAction)
+    case awaitingApproval(PendingAuthorization)
+    case approvalFailed(AgentApprovalError)
 }
 
 /// Human-resolved ASK. Pending is unrepresentable.

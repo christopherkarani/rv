@@ -103,7 +103,10 @@ let coreProducts: [Product] = [
 
 let coreTestTargets: [Target] = [
     .testTarget(name: "RVDomainTests", dependencies: ["RVDomain"]),
-    .testTarget(name: "RVIsolationTests", dependencies: isolationTestDependencies),
+    .testTarget(
+        name: "RVIsolationTests",
+        dependencies: isolationTestDependencies + ["RVEngine"]
+    ),
     .testTarget(
         name: "RVEngineTests",
         dependencies: ["RVEngine"],

@@ -8,8 +8,12 @@ import RVDomain
 import Testing
 @testable import RVIsolation
 
+/// Stdio plus the admission pipes. Handshake fd 3 is closed before exec.
+private let grantedPayloadDescriptors: [Int32] = [0, 1, 2, 4, 5]
+
 /// Effect tests for contained descriptor inheritance. A path denial is not
 /// enough: the child must see `EBADF` on a descriptor the parent still holds.
+/// The payload keeps stdio and fds 4 and 5. Every other parent descriptor stays closed.
 @Suite("DescriptorHygiene", .serialized)
 struct DescriptorHygieneTests {
     @Test func ambientOutsideFileDescriptorIsNotWritable() throws {
@@ -74,7 +78,7 @@ struct DescriptorHygieneTests {
         report.expectClosed("pipe")
         report.expectClosed("handshake", errno: EBADF)
         let forbidden = file.identities() + socket.identities() + pipe.identities()
-        #expect(report.openFDs == [0, 1, 2])
+        #expect(report.openFDs == grantedPayloadDescriptors)
         #expect(report.openIdentities().contains(where: { forbidden.contains($0) }) == false)
         #expect(try String(contentsOf: outside, encoding: .utf8) == "PARENT")
     }
@@ -91,7 +95,7 @@ struct DescriptorHygieneTests {
         #expect(report.stdoutWrite == 1)
         #expect(report.stderrWrite == 1)
         report.expectClosed("handshake", errno: EBADF)
-        #expect(report.openFDs == [0, 1, 2])
+        #expect(report.openFDs == grantedPayloadDescriptors)
     }
 
     @Test func discardedStandardIOIsNullDevice() throws {
@@ -113,7 +117,7 @@ struct DescriptorHygieneTests {
         if parent[1] != nullIdentity {
             #expect(report.stdio[1] != parent[1])
         }
-        #expect(report.openFDs == [0, 1, 2])
+        #expect(report.openFDs == grantedPayloadDescriptors)
     }
 
     @Test func innerExecutableDoesNotKeepHandshakeDescriptor() throws {
@@ -277,6 +281,13 @@ private struct ProbeReport {
         let matches = checks.filter { $0.label == label }
         #expect(matches.isEmpty == false, "probe report has no \(label) check\n\(text)")
         for check in matches {
+            // Fds 4 and 5 are the admission pipes. A parent descriptor that
+            // happened to use one of those numbers is a different object.
+            if check.fd == RuntimeAdmissionDescriptors.request
+                || check.fd == RuntimeAdmissionDescriptors.response
+            {
+                continue
+            }
             #expect(check.closed, "\(label) fd \(check.fd) stayed open\n\(text)")
             if let expected {
                 #expect(check.errno == expected, "\(label) errno \(check.errno), want \(expected)\n\(text)")
