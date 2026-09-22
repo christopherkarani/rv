@@ -105,6 +105,7 @@ struct LaunchBoundaryRegressionTests {
         for _ in 0..<2 {
             let session = RuntimeSession(
                 id: RuntimeSessionID(),
+                workspaceSessionID: WorkspaceSessionID(),
                 host: .opencode,
                 workspace: workspace,
                 backend: .seatbelt,
@@ -130,6 +131,7 @@ struct LaunchBoundaryRegressionTests {
         let workspace = try #require(WorkingDirectory(validating: tree.workspaceURL.path))
         let session = RuntimeSession(
             id: RuntimeSessionID(),
+            workspaceSessionID: WorkspaceSessionID(),
             host: .opencode,
             workspace: workspace,
             backend: .seatbelt,
@@ -160,6 +162,7 @@ struct LaunchBoundaryRegressionTests {
                 group.addTask {
                     let session = RuntimeSession(
                         id: RuntimeSessionID(),
+                        workspaceSessionID: WorkspaceSessionID(),
                         host: .opencode,
                         workspace: workspace,
                         backend: .seatbelt,

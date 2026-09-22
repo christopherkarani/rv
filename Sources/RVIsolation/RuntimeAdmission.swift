@@ -386,7 +386,8 @@ final class RuntimeAdmissionSession {
                 fingerprint: event.fingerprint,
                 authorization: .rejected,
                 executionAttempted: false,
-                result: RuntimeAdmissionRejection.inactiveSession.rawValue
+                result: RuntimeAdmissionRejection.inactiveSession.rawValue,
+                workspace: event.workspace
             )
         )
     }

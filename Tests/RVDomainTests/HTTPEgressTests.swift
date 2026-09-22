@@ -558,6 +558,7 @@ private func httpSubject() throws -> RuntimeAdmissionSubject {
     let workspace = try #require(WorkingDirectory(validating: "/tmp/rv-http"))
     let session = RuntimeSession(
         id: RuntimeSessionID(),
+        workspaceSessionID: WorkspaceSessionID(),
         host: .opencode,
         workspace: workspace,
         backend: .seatbelt,
@@ -591,6 +592,7 @@ private struct HTTPAdmissionFixture {
         let workspace = WorkingDirectory(validating: "/tmp/rv-http")!
         let session = RuntimeSession(
             id: RuntimeSessionID(),
+            workspaceSessionID: WorkspaceSessionID(),
             host: .opencode,
             workspace: workspace,
             backend: .seatbelt,

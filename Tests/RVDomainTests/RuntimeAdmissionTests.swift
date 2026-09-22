@@ -224,6 +224,7 @@ private struct AdmissionFixture {
         let workspace = WorkingDirectory(validating: "/tmp/rv-admission")!
         let session = RuntimeSession(
             id: RuntimeSessionID(),
+            workspaceSessionID: WorkspaceSessionID(),
             host: .opencode,
             workspace: workspace,
             backend: .seatbelt,

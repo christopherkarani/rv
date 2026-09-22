@@ -2,6 +2,7 @@
 import Darwin
 import Foundation
 import RVDomain
+import Synchronization
 
 private let seatbeltHandshakeScript =
     "printf %s \"$1\" >&3 || exit 127; exec 3>&- || exit 127; shift; exec \"$@\""
@@ -60,39 +61,20 @@ func superviseSeatbelt(
     guard profile.source.contains("(deny file-link)") else {
         return .failure(.seatbeltNotEstablished)
     }
-    let started = RuntimeSession(
-        id: RuntimeSessionID(),
-        host: host,
-        workspace: directory,
-        backend: .seatbelt,
-        startedAt: Date(),
-        child: nil
-    )
-    switch sessionStore.append(started) {
+    let supervisor: WorkspaceSessionSupervisor
+    switch WorkspaceSessionSupervisor.open(directory) {
     case .failure(let error):
-        return .failure(error)
-    case .success:
-        break
+        return .failure(WorkspaceSessionFailure.isolation(error))
+    case .success(let opened):
+        supervisor = opened
     }
-    if Task.isCancelled {
-        return .failure(.cancelled)
-    }
-    let boundary: WorkspaceInodeBoundary
-    switch establishWorkspaceInodeBoundary(at: workspace) {
-    case .failure(let error):
-        return .failure(error)
-    case .success(let established):
-        boundary = established
-    }
-    let mounted = launchSeatbeltChild(
+    let mounted = supervisor.runSingleRuntime(
         request,
-        workspace: workspace,
-        profile: profile,
-        boundary: boundary,
-        started: started,
+        host: host,
+        sessionStore: sessionStore,
         admission: admission
     )
-    let teardown = mounted.publish ? boundary.publishAndRestore() : boundary.discardAndRestore()
+    let teardown = supervisor.finishSingleRuntime(publish: mounted.publish)
     return containedLaunchResult(child: mounted.result, teardown: teardown)
 }
 
@@ -111,24 +93,153 @@ func containedLaunchResult(
     }
 }
 
-private struct MountedSeatbeltOutcome {
+struct MountedSeatbeltOutcome {
     var result: Result<IsolatedRunResult, IsolationApplyError>
     /// Copy the volume back only after the in-sandbox handshake succeeded.
+    /// The workspace owner reads this. A child exit does not publish.
     var publish: Bool
 }
 
-private func launchSeatbeltChild(
+/// Cooperative stop for one runtime. The watch loop polls it.
+final class RuntimeCancellation: @unchecked Sendable {
+    private let flag = Mutex(false)
+
+    func request() {
+        flag.withLock { $0 = true }
+    }
+
+    var isRequested: Bool {
+        flag.withLock { $0 }
+    }
+}
+
+private final class AdmissionReply: @unchecked Sendable {
+    private let value = Mutex<RuntimeAdmissionDecision?>(nil)
+
+    func store(_ decision: RuntimeAdmissionDecision) {
+        value.withLock { $0 = decision }
+    }
+
+    func current() -> RuntimeAdmissionDecision? {
+        value.withLock { $0 }
+    }
+}
+
+/// One Seatbelt process after `posix_spawn`. The watch loop owns its lifetime.
+final class LiveSeatbeltChild: @unchecked Sendable {
+    let session: RuntimeSession
+    let capability: RuntimeCapability
+    let pid: pid_t
+    let nonce: String
+    let admission: RuntimeAdmissionSession
+    /// Parent-side descriptors that must not appear in the child.
+    let parentDescriptors: [Int32]
+    var handshakeRead: Int32
+    private let established = Mutex(false)
+    private let watchStarted = Mutex(false)
+    private let terminal = Mutex<IsolationApplyError?>(nil)
+    private struct PendingFrame: Sendable {
+        var frame: RuntimeActionFrame
+        var reply: AdmissionReply
+    }
+    private let pending = Mutex<PendingFrame?>(nil)
+
+    init(
+        session: RuntimeSession,
+        capability: RuntimeCapability,
+        pid: pid_t,
+        nonce: String,
+        admission: RuntimeAdmissionSession,
+        parentDescriptors: [Int32],
+        handshakeRead: Int32
+    ) {
+        self.session = session
+        self.capability = capability
+        self.pid = pid
+        self.nonce = nonce
+        self.admission = admission
+        self.parentDescriptors = parentDescriptors
+        self.handshakeRead = handshakeRead
+    }
+
+    var isEstablished: Bool { established.withLock { $0 } }
+
+    func markEstablished() {
+        established.withLock { $0 = true }
+    }
+
+    func markWatchStarted() {
+        watchStarted.withLock { $0 = true }
+    }
+
+    func recordTerminal(_ error: IsolationApplyError?) {
+        terminal.withLock { $0 = error }
+    }
+
+    var terminalError: IsolationApplyError? {
+        terminal.withLock { $0 }
+    }
+
+    /// Ask the watch thread to run one frame. Returns nil if a frame is
+    /// already waiting or the watch does not answer.
+    func submit(_ frame: RuntimeActionFrame) -> RuntimeAdmissionDecision? {
+        let reply = AdmissionReply()
+        let posted = pending.withLock { current -> Bool in
+            guard current == nil else { return false }
+            current = PendingFrame(frame: frame, reply: reply)
+            return true
+        }
+        guard posted else { return nil }
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline {
+            if let decision = reply.current() { return decision }
+            usleep(5_000)
+        }
+        return nil
+    }
+
+    /// Called only from the watch thread.
+    func drainPending() {
+        let job = pending.withLock { current -> PendingFrame? in
+            defer { current = nil }
+            return current
+        }
+        guard let job else { return }
+        job.reply.store(admission.submit(.success(job.frame)))
+    }
+
+    deinit {
+        let started = watchStarted.withLock { $0 }
+        if started == false {
+            if handshakeRead >= 0 {
+                close(handshakeRead)
+                handshakeRead = -1
+            }
+            admission.finish()
+            terminateSession(pgid: pid, also: [pid])
+            _ = waitUntilSessionIsDead(pgid: pid, also: [pid])
+        }
+    }
+}
+
+func spawnSeatbeltProcess(
     _ request: IsolatedLaunchRequest,
     workspace: String,
     profile: SeatbeltProfile,
     boundary: WorkspaceInodeBoundary,
     started: RuntimeSession,
     admission: RuntimeAdmissionConfiguration
-) -> MountedSeatbeltOutcome {
+) -> Result<LiveSeatbeltChild, IsolationApplyError> {
+    guard profile.source.contains("(deny file-link)") else {
+        return .failure(.seatbeltNotEstablished)
+    }
+    guard boundary.remainsEstablished() else {
+        return .failure(.workspaceInodeBoundaryFailed)
+    }
 
     var admissionPipes = RuntimeAdmissionPipes()
     guard admissionPipes.open() else {
-        return MountedSeatbeltOutcome(result: .failure(.processSpawnFailed), publish: false)
+        return .failure(.processSpawnFailed)
     }
     defer { admissionPipes.closeRemaining() }
     var admissionSession: RuntimeAdmissionSession?
@@ -141,9 +252,9 @@ private func launchSeatbeltChild(
         return pipe(base)
     }
     guard pipeResult == 0 else {
-        return MountedSeatbeltOutcome(result: .failure(.processSpawnFailed), publish: false)
+        return .failure(.processSpawnFailed)
     }
-    let readEnd = pipeFDs[0]
+    var readEnd = pipeFDs[0]
     var writeEnd = pipeFDs[1]
     var nullFD: Int32 = -1
     defer {
@@ -154,12 +265,18 @@ private func launchSeatbeltChild(
     guard fcntl(readEnd, F_SETFD, FD_CLOEXEC) >= 0,
         fcntl(writeEnd, F_SETFD, FD_CLOEXEC) >= 0
     else {
-        return MountedSeatbeltOutcome(result: .failure(.processSpawnFailed), publish: false)
+        return .failure(.processSpawnFailed)
+    }
+    if readEnd < 16 {
+        let moved = fcntl(readEnd, F_DUPFD_CLOEXEC, 16)
+        guard moved >= 0 else { return .failure(.processSpawnFailed) }
+        close(readEnd)
+        readEnd = moved
     }
 
     var attributes: posix_spawnattr_t?
     guard posix_spawnattr_init(&attributes) == 0 else {
-        return MountedSeatbeltOutcome(result: .failure(.lifetimeBoundaryFailed), publish: false)
+        return .failure(.lifetimeBoundaryFailed)
     }
     defer { posix_spawnattr_destroy(&attributes) }
     // Every parent descriptor is close-on-exec unless a file action grants it.
@@ -167,19 +284,19 @@ private func launchSeatbeltChild(
     guard posix_spawnattr_setflags(&attributes, flags) == 0,
         posix_spawnattr_setpgroup(&attributes, 0) == 0
     else {
-        return MountedSeatbeltOutcome(result: .failure(.lifetimeBoundaryFailed), publish: false)
+        return .failure(.lifetimeBoundaryFailed)
     }
 
     var actions: posix_spawn_file_actions_t?
     guard posix_spawn_file_actions_init(&actions) == 0 else {
-        return MountedSeatbeltOutcome(result: .failure(.processSpawnFailed), publish: false)
+        return .failure(.processSpawnFailed)
     }
     defer { posix_spawn_file_actions_destroy(&actions) }
     let chdirResult = workspace.withCString { path in
         posix_spawn_file_actions_addchdir(&actions, path)
     }
     guard chdirResult == 0 else {
-        return MountedSeatbeltOutcome(result: .failure(.processSpawnFailed), publish: false)
+        return .failure(.processSpawnFailed)
     }
     guard installGrantedDescriptorActions(
         &actions,
@@ -188,10 +305,10 @@ private func launchSeatbeltChild(
         writeEnd: writeEnd,
         nullFD: &nullFD
     ), installAdmissionDescriptors(&actions, pipes: admissionPipes) else {
-        return MountedSeatbeltOutcome(result: .failure(.processSpawnFailed), publish: false)
+        return .failure(.processSpawnFailed)
     }
     guard boundary.remainsEstablished() else {
-        return MountedSeatbeltOutcome(result: .failure(.workspaceInodeBoundaryFailed), publish: false)
+        return .failure(.workspaceInodeBoundaryFailed)
     }
 
     var arguments = [
@@ -250,7 +367,7 @@ private func launchSeatbeltChild(
         admissionPipes.responseRead = -1
     }
     guard spawnResult == 0, pid > 1 else {
-        return MountedSeatbeltOutcome(result: .failure(.processSpawnFailed), publish: false)
+        return .failure(.processSpawnFailed)
     }
     // The wait loop polls this fd. A blocking read would ignore cancellation
     // until the child writes or exits, so a failed flag change cannot continue.
@@ -262,7 +379,7 @@ private func launchSeatbeltChild(
     else {
         terminateSession(pgid: pid, also: [pid])
         _ = waitUntilSessionIsDead(pgid: pid, also: [pid])
-        return MountedSeatbeltOutcome(result: .failure(.lifetimeBoundaryFailed), publish: false)
+        return .failure(.lifetimeBoundaryFailed)
     }
 
     let pgid = getpgid(pid)
@@ -271,54 +388,100 @@ private func launchSeatbeltChild(
         if alreadyExited == false {
             terminateSession(pgid: pid, also: [pid])
             _ = waitUntilSessionIsDead(pgid: pid, also: [pid])
-            return MountedSeatbeltOutcome(result: .failure(.lifetimeBoundaryFailed), publish: false)
+            return .failure(.lifetimeBoundaryFailed)
         }
     }
 
+    let capability = RuntimeCapability()
+    let parentRead = admissionPipes.requestRead
+    let parentWrite = admissionPipes.responseWrite
+    let running = started.withChild(pid: pid)
     let admitted = RuntimeAdmissionSession(
-        binding: RuntimeChannelBinding(session: started, capability: RuntimeCapability()),
+        binding: RuntimeChannelBinding(session: running, capability: capability),
         configuration: admission,
         launch: AdmittedLaunchContext(
             plan: compileContainedPlan(
-                workspace: request.plan.workspace ?? started.workspace,
+                workspace: request.plan.workspace ?? running.workspace,
                 repositoryRoot: request.plan.repositoryRoot
             ),
             profileSource: profile.source,
             workspacePath: workspace,
             sessionLeader: pid
         ),
-        requestRead: admissionPipes.requestRead,
-        responseWrite: admissionPipes.responseWrite
+        requestRead: parentRead,
+        responseWrite: parentWrite
     )
     admissionPipes.requestRead = -1
     admissionPipes.responseWrite = -1
-    admissionSession = admitted
+    admissionSession = nil
     admitted.sendGrant()
+    let ownedRead = readEnd
+    readEnd = -1
+    return .success(
+        LiveSeatbeltChild(
+            session: running,
+            capability: capability,
+            pid: pid,
+            nonce: nonce,
+            admission: admitted,
+            parentDescriptors: [ownedRead, parentRead, parentWrite],
+            handshakeRead: ownedRead
+        )
+    )
+}
+
+func watchSeatbeltProcess(
+    _ live: LiveSeatbeltChild,
+    stop: RuntimeCancellation
+) -> MountedSeatbeltOutcome {
+    live.markWatchStarted()
     let outcome = waitForSeatbeltSession(
-        root: pid,
-        readEnd: readEnd,
-        nonce: nonce,
-        admission: admitted
+        root: live.pid,
+        readEnd: live.handshakeRead,
+        nonce: live.nonce,
+        admission: live.admission,
+        stop: stop,
+        onEstablished: { live.markEstablished() },
+        drain: { live.drainPending() }
     )
-    let dead = waitUntilSessionIsDead(pgid: pid, also: outcome.recordedPIDs.union([pid]))
-    guard dead else {
-        return MountedSeatbeltOutcome(result: .failure(.lifetimeBoundaryFailed), publish: false)
-    }
-    if outcome.cancelled {
-        return MountedSeatbeltOutcome(result: .failure(.cancelled), publish: outcome.established)
-    }
-    guard outcome.established, let status = outcome.status else {
-        return MountedSeatbeltOutcome(result: .failure(.seatbeltNotEstablished), publish: false)
-    }
-    return MountedSeatbeltOutcome(
-        result: .success(
-            IsolatedRunResult(
-                established: .seatbelt(started.withChild(pid: pid)),
-                exitStatus: status
-            )
-        ),
-        publish: true
+    let dead = waitUntilSessionIsDead(
+        pgid: live.pid,
+        also: outcome.recordedPIDs.union([live.pid])
     )
+    let mounted: MountedSeatbeltOutcome
+    if dead == false {
+        mounted = MountedSeatbeltOutcome(result: .failure(.lifetimeBoundaryFailed), publish: false)
+    } else if outcome.cancelled {
+        mounted = MountedSeatbeltOutcome(
+            result: .failure(.cancelled),
+            publish: outcome.established
+        )
+    } else if outcome.established, let status = outcome.status {
+        mounted = MountedSeatbeltOutcome(
+            result: .success(
+                IsolatedRunResult(
+                    established: .seatbelt(live.session),
+                    exitStatus: status
+                )
+            ),
+            publish: true
+        )
+    } else {
+        mounted = MountedSeatbeltOutcome(
+            result: .failure(.seatbeltNotEstablished),
+            publish: false
+        )
+    }
+    if case .failure(let error) = mounted.result {
+        live.recordTerminal(error)
+    } else {
+        live.recordTerminal(nil)
+    }
+    if live.handshakeRead >= 0 {
+        close(live.handshakeRead)
+        live.handshakeRead = -1
+    }
+    return mounted
 }
 
 private struct SeatbeltWaitOutcome {
@@ -332,14 +495,17 @@ private func waitForSeatbeltSession(
     root: pid_t,
     readEnd: Int32,
     nonce: String,
-    admission: RuntimeAdmissionSession
+    admission: RuntimeAdmissionSession,
+    stop: RuntimeCancellation,
+    onEstablished: () -> Void,
+    drain: () -> Void
 ) -> SeatbeltWaitOutcome {
     var outcome = SeatbeltWaitOutcome()
     var handshake = Data()
     let expected = Data(nonce.utf8)
     var recorded: Set<pid_t> = [root]
     while true {
-        if Task.isCancelled {
+        if Task.isCancelled || stop.isRequested {
             outcome.cancelled = true
             admission.finish()
         }
@@ -347,8 +513,10 @@ private func waitForSeatbeltSession(
             handshake.append(contentsOf: readAvailable(readEnd, limit: expected.count))
             if handshake.starts(with: expected), handshake.count >= expected.count {
                 outcome.established = true
+                onEstablished()
             }
         }
+        drain()
         recorded.formUnion(visibleSessionPIDs(root: root))
         var status: Int32 = 0
         let waited = waitpid(root, &status, WNOHANG)
@@ -364,6 +532,7 @@ private func waitForSeatbeltSession(
                 handshake.append(contentsOf: readAvailable(readEnd, limit: expected.count))
                 if handshake.starts(with: expected), handshake.count >= expected.count {
                     outcome.established = true
+                    onEstablished()
                 }
             }
             if outcome.status == nil {
@@ -512,12 +681,12 @@ private func waitUntilSessionIsDead(pgid: pid_t, also pids: Set<pid_t>) -> Bool 
     return processGroupIsEmpty(pgid) && pids.allSatisfy { processIsGone($0) }
 }
 
-private func processGroupIsEmpty(_ pgid: pid_t) -> Bool {
+func processGroupIsEmpty(_ pgid: pid_t) -> Bool {
     guard pgid > 1 else { return false }
     return kill(-pgid, 0) == -1 && errno == ESRCH
 }
 
-private func processIsGone(_ pid: pid_t) -> Bool {
+func processIsGone(_ pid: pid_t) -> Bool {
     guard pid > 1 else { return true }
     if kill(pid, 0) == 0 {
         return false

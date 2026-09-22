@@ -24,6 +24,8 @@ public struct RuntimeChildIdentity: Hashable, Sendable, Equatable {
 /// RVIsolation.
 public struct RuntimeSession: Sendable, Equatable {
     public let id: RuntimeSessionID
+    /// Workspace that owns the protected filesystem this runtime runs in.
+    public let workspaceSessionID: WorkspaceSessionID
     public let host: HookHost?
     public let workspace: WorkingDirectory
     public let backend: RuntimeIsolationBackend
@@ -32,6 +34,7 @@ public struct RuntimeSession: Sendable, Equatable {
 
     public init(
         id: RuntimeSessionID,
+        workspaceSessionID: WorkspaceSessionID,
         host: HookHost?,
         workspace: WorkingDirectory,
         backend: RuntimeIsolationBackend,
@@ -39,6 +42,7 @@ public struct RuntimeSession: Sendable, Equatable {
         child: RuntimeChildIdentity?
     ) {
         self.id = id
+        self.workspaceSessionID = workspaceSessionID
         self.host = host
         self.workspace = workspace
         self.backend = backend
@@ -49,6 +53,7 @@ public struct RuntimeSession: Sendable, Equatable {
     public func withChild(pid: Int32) -> RuntimeSession {
         RuntimeSession(
             id: id,
+            workspaceSessionID: workspaceSessionID,
             host: host,
             workspace: workspace,
             backend: backend,

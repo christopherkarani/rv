@@ -14,6 +14,8 @@ struct RuntimeSessionRecord: Equatable, Sendable {
     let workspace: String
     let backend: String
     let startedAt: Date
+    /// Parent workspace. Absent on records written before workspace ownership.
+    let workspaceSession: UUID?
 }
 
 /// Append-only start log for contained launches.
@@ -48,6 +50,7 @@ enum RuntimeSessionLog {
         var workspace: String
         var backend: String
         var startedAt: Double
+        var workspaceSession: UUID?
     }
 
     /// `$HOME/.config/rv/runtime-sessions.jsonl`. Ignores `XDG_CONFIG_HOME`.
@@ -72,7 +75,8 @@ enum RuntimeSessionLog {
             host: session.host?.rawValue,
             workspace: session.workspace.rawValue,
             backend: session.backend.rawValue,
-            startedAt: session.startedAt.timeIntervalSince1970
+            startedAt: session.startedAt.timeIntervalSince1970,
+            workspaceSession: session.workspaceSessionID.rawValue
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
@@ -80,6 +84,15 @@ enum RuntimeSessionLog {
             return .failure(.sessionRecordFailed)
         }
         data.append(UInt8(ascii: "\n"))
+        return appendExclusiveLine(data, to: url)
+    }
+
+    /// One fsynced JSON line. The in-process mutex is taken before `flock`
+    /// because macOS `flock` does not exclude another thread in this process.
+    static func appendExclusiveLine(
+        _ data: Data,
+        to url: URL
+    ) -> Result<Void, IsolationApplyError> {
         let directory = url.deletingLastPathComponent()
         do {
             try FileManager.default.createDirectory(
@@ -96,13 +109,11 @@ enum RuntimeSessionLog {
             return .failure(.sessionRecordFailed)
         }
         defer { close(fd) }
-        // macOS `flock` is per process, so the in-process gate has to be first.
         return AppendLock.shared.withLock {
             guard lock(fd) else {
                 return .failure(.sessionRecordFailed)
             }
             defer { _ = flock(fd, LOCK_UN) }
-            // A crashed earlier append can leave a partial JSON line with no newline.
             guard closeTornLine(fd), writeAll(fd, data), sync(fd) else {
                 return .failure(.sessionRecordFailed)
             }
@@ -234,7 +245,8 @@ enum RuntimeSessionLog {
                     host: record.host,
                     workspace: record.workspace,
                     backend: record.backend,
-                    startedAt: Date(timeIntervalSince1970: record.startedAt)
+                    startedAt: Date(timeIntervalSince1970: record.startedAt),
+                    workspaceSession: record.workspaceSession
                 )
             )
         }
