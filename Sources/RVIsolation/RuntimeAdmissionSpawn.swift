@@ -200,16 +200,11 @@ func runAdmittedSeatbeltCommand(
     guard FileManager.default.isExecutableFile(atPath: IsolationBackends.sandboxExecPath) else {
         return .failure(.unavailable)
     }
-    switch launch.plan.containedIsolation() {
+    switch compileExecutable(allowed: allowed, plan: launch.plan) {
     case .failure:
         return .failure(.compileFailed)
-    case .success(let isolation):
-        switch compileExecutable(allowed: allowed, isolation: isolation) {
-        case .failure:
-            return .failure(.compileFailed)
-        case .success(let executable):
-            return spawnAdmittedCommand(executable.command, launch: launch)
-        }
+    case .success(let executable):
+        return spawnAdmittedCommand(executable.command, launch: launch)
     }
     #else
     _ = allowed

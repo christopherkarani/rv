@@ -31,7 +31,7 @@ struct AgentTurnTests {
             )
         )
         let pending = try requirePendingReviewAsk(authorization)
-        let turn = await LocalExecutor().perform(authorization, plan: try tree.requireContainedIsolation())
+        let turn = await LocalExecutor().perform(authorization, plan: try tree.containedPlan())
         switch turn {
         case .success(.awaitingApproval(let waiting)):
             #expect(waiting == pending)
@@ -54,8 +54,8 @@ struct AgentTurnTests {
         )
         let denied = try requireDenied(authorization)
         let workspace = try #require(WorkingDirectory(validating: "/tmp/rv"))
-        let isolation = try requireContainedIsolation(workspace: workspace)
-        let turn = await LocalExecutor().perform(authorization, plan: isolation)
+        let plan = requireContainedPlan(workspace: workspace)
+        let turn = await LocalExecutor().perform(authorization, plan: plan)
         switch turn {
         case .success(.denied(let result)):
             #expect(result == denied)
@@ -80,7 +80,7 @@ struct AgentTurnTests {
             workingDirectory: workspace,
             fingerprint: "shell:agent-turn:allowed-in"
         )
-        let turn = await LocalExecutor().perform(authorization, plan: try tree.requireContainedIsolation())
+        let turn = await LocalExecutor().perform(authorization, plan: try tree.containedPlan())
         if linuxRefusedContainedTurn(turn, absentPath: inside) { return }
         try expectExecutedContained(turn, matching: tree.contained)
         #expect(FileManager.default.fileExists(atPath: inside))
@@ -102,7 +102,7 @@ struct AgentTurnTests {
         _ = try requirePendingReviewAsk(authorization)
         let turn = await LocalExecutor().perform(
             authorization,
-            plan: try tree.requireContainedIsolation(),
+            plan: try tree.containedPlan(),
             approval: .success(.allowOnce)
         )
         if linuxRefusedContainedTurn(turn, absentPath: inside) { return }
@@ -126,7 +126,7 @@ struct AgentTurnTests {
         let pending = try requirePendingReviewAsk(authorization)
         let turn = await LocalExecutor().perform(
             authorization,
-            plan: try tree.requireContainedIsolation(),
+            plan: try tree.containedPlan(),
             approval: .success(.deny)
         )
         switch turn {
@@ -159,7 +159,7 @@ struct AgentTurnTests {
         _ = try requirePendingReviewAsk(authorization)
         let turn = await LocalExecutor().perform(
             authorization,
-            plan: try tree.requireContainedIsolation(),
+            plan: try tree.containedPlan(),
             approval: .failure(.approvalUnavailable)
         )
         expectApprovalFailure(turn, .approvalUnavailable)
@@ -182,7 +182,7 @@ struct AgentTurnTests {
         _ = try requirePendingReviewAsk(authorization)
         let turn = await LocalExecutor().perform(
             authorization,
-            plan: try tree.requireContainedIsolation(),
+            plan: try tree.containedPlan(),
             approval: .success(.createRule)
         )
         expectApprovalFailure(turn, .ruleCreationUnsupported)
@@ -213,11 +213,10 @@ struct AgentTurnTests {
         )
         let allowed = try requireAllowed(authorization)
         let executor = LocalExecutor()
-        let isolation = try tree.requireContainedIsolation()
-        let first = await executor.perform(authorization, plan: isolation)
+        let first = await executor.perform(authorization, plan: try tree.containedPlan())
         #if os(Linux)
         #expect(linuxRefusedContainedTurn(first, absentPath: inside))
-        let refusedSecond = await executor.perform(authorization, plan: isolation)
+        let refusedSecond = await executor.perform(authorization, plan: try tree.containedPlan())
         switch refusedSecond {
         case .failure(.execute(.alreadyExecuted(let fingerprint))):
             #expect(fingerprint == allowed.action.fingerprint)
@@ -234,7 +233,7 @@ struct AgentTurnTests {
         #endif
         try expectExecutedContained(first, matching: tree.contained)
         #expect(FileManager.default.fileExists(atPath: inside))
-        let second = await executor.perform(authorization, plan: try tree.requireContainedIsolation())
+        let second = await executor.perform(authorization, plan: try tree.containedPlan())
         switch second {
         case .failure(.execute(.alreadyExecuted(let fingerprint))):
             #expect(fingerprint == allowed.action.fingerprint)
@@ -360,22 +359,8 @@ private func requireDenied(_ authorization: AgentAuthorization) throws -> Denied
     }
 }
 
-private func requireContainedIsolation(workspace: WorkingDirectory) throws -> ContainedIsolation {
-    switch compileContainedIsolation(
-        IsolationCompileRequest(requested: .contained, workspace: workspace)
-    ) {
-    case .success(let isolation):
-        return isolation
-    case .failure(let error):
-        switch error {
-        case .containedRequiresWorkspace:
-            Issue.record("fixture compile must not fail containedRequiresWorkspace")
-            throw error
-        case .notContainedRequest:
-            Issue.record("fixture compile must not fail notContainedRequest")
-            throw error
-        }
-    }
+private func requireContainedPlan(workspace: WorkingDirectory) -> ContainedPlan {
+    compileContainedPlan(workspace: workspace)
 }
 
 private func requireTouchExecutable() throws -> String {

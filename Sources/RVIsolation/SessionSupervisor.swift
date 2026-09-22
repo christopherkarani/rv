@@ -279,7 +279,10 @@ private func launchSeatbeltChild(
         binding: RuntimeChannelBinding(session: started, capability: RuntimeCapability()),
         configuration: admission,
         launch: AdmittedLaunchContext(
-            plan: request.plan,
+            plan: compileContainedPlan(
+                workspace: request.plan.workspace ?? started.workspace,
+                repositoryRoot: request.plan.repositoryRoot
+            ),
             profileSource: profile.source,
             workspacePath: workspace,
             sessionLeader: pid

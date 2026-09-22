@@ -42,8 +42,9 @@ public enum DescentContainment: Sendable, Equatable {
 /// Concrete restrictions a later launch would have to establish.
 ///
 /// Production `.contained` values come from `compileIsolationPlan`,
-/// `compileContainedIsolation`, or `firstSliceContained`. The memberwise
-/// initializer is fileprivate so other Domain files cannot mint
+/// `compileContainedIsolation`, `compileContainedPlan`, or
+/// `firstSliceContained`. The memberwise initializer is fileprivate so
+/// other Domain files cannot mint
 /// “contained but unrestricted.”
 public struct IsolationGuarantees: Sendable, Equatable {
     public let filesystem: FilesystemContainment
@@ -114,9 +115,9 @@ public enum IsolationCompileError: Error, Sendable, Equatable {
 /// Compiled isolation intent. A successful `.contained` mode is intended
 /// guarantees for a later launch, not a claim that any agent is sandboxed.
 ///
-/// Production construction is `compileIsolationPlan`. The memberwise
-/// initializer is fileprivate so requested and mode cannot diverge
-/// outside this file.
+/// Production construction is `compileIsolationPlan` or
+/// `ContainedPlan.isolationPlan()`. The memberwise initializer is
+/// fileprivate so requested and mode cannot diverge outside this file.
 public struct IsolationPlan: Sendable, Equatable {
     public let requested: RequestedIsolation
     public let workspace: WorkingDirectory?
@@ -279,4 +280,37 @@ private func isFirstSliceContained(
     limitingWritesTo workspace: WorkingDirectory
 ) -> Bool {
     guarantees == IsolationGuarantees.firstSliceContained(workspace: workspace)
+}
+
+/// Isolation intent for the contained spawn doors. Workspace is required.
+/// Guarantees are the first-slice contained set. Observed and mediated
+/// plans are not this type.
+public struct ContainedPlan: Sendable, Equatable {
+    public let workspace: WorkingDirectory
+    public let repositoryRoot: RepositoryRoot?
+    public let guarantees: IsolationGuarantees
+
+    public init(workspace: WorkingDirectory, repositoryRoot: RepositoryRoot? = nil) {
+        self.workspace = workspace
+        self.repositoryRoot = repositoryRoot
+        self.guarantees = IsolationGuarantees.firstSliceContained(workspace: workspace)
+    }
+
+    /// `IsolationPlan` for `IsolationBackends.apply`. Contained doors convert only at that call.
+    public func isolationPlan() -> IsolationPlan {
+        IsolationPlan(
+            requested: .contained,
+            workspace: workspace,
+            repositoryRoot: repositoryRoot,
+            mode: .contained(guarantees)
+        )
+    }
+}
+
+/// Pure compile of a contained plan. Does not authorize, launch, or establish.
+public func compileContainedPlan(
+    workspace: WorkingDirectory,
+    repositoryRoot: RepositoryRoot? = nil
+) -> ContainedPlan {
+    ContainedPlan(workspace: workspace, repositoryRoot: repositoryRoot)
 }

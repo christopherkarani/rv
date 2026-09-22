@@ -8,8 +8,8 @@ public enum LocalExecutorError: Error, Sendable, Equatable {
 
 /// Dispatches a compiled `ExecutableAction` at most once per fingerprint.
 ///
-/// Spawn is only `IsolationBackends.apply` of `executable.isolation.plan`.
-/// Observed and mediated plans are not representable on this door.
+/// Spawn is only `IsolationBackends.apply`. The contained plan is converted
+/// to `IsolationPlan` at that call.
 public actor LocalExecutor {
     private var dispatched: Set<ActionFingerprint> = []
 
@@ -26,7 +26,7 @@ public actor LocalExecutor {
         // Apply can fail after the child has produced effects. Never make the
         // same authorization reusable based on an ambiguous backend result.
         dispatched.insert(fingerprint)
-        switch IsolationBackends.apply(executable.isolation.plan, command: executable.command) {
+        switch IsolationBackends.apply(executable.plan.isolationPlan(), command: executable.command) {
         case .success(let result):
             return result
         case .failure(.cancelled):
@@ -43,12 +43,12 @@ public actor LocalExecutor {
     /// which maps the ledger click through `humanDecision` before `resolve`.
     public func perform(
         _ authorization: AgentAuthorization,
-        plan isolation: ContainedIsolation,
+        plan: ContainedPlan,
         approval: Result<ApprovalDecision, AgentApprovalError>? = nil
     ) -> Result<AgentTurn, AgentTurnError> {
         switch AgentAuthorization.step(authorization, approval: approval) {
         case .execute(let allowed):
-            return compileAndRun(allowed: allowed, isolation: isolation)
+            return compileAndRun(allowed: allowed, plan: plan)
         case .denied(let denied):
             return .success(.denied(denied))
         case .awaitingApproval(let pending):
@@ -60,9 +60,9 @@ public actor LocalExecutor {
 
     private func compileAndRun(
         allowed: AllowedAction,
-        isolation: ContainedIsolation
+        plan: ContainedPlan
     ) -> Result<AgentTurn, AgentTurnError> {
-        switch compileExecutable(allowed: allowed, isolation: isolation) {
+        switch compileExecutable(allowed: allowed, plan: plan) {
         case .failure(let error):
             return .failure(.compile(error))
         case .success(let executable):

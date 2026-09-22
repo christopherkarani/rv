@@ -94,7 +94,7 @@ public struct RuntimeAdmissionConfiguration: Sendable {
 
 /// Plan and profile RV already compiled for this launch.
 struct AdmittedLaunchContext: Sendable, Equatable {
-    var plan: IsolationPlan
+    var plan: ContainedPlan
     var profileSource: String
     var workspacePath: String
     /// Process that owns this runtime. `-1` when the caller is not a session.
@@ -127,7 +127,7 @@ final class RuntimeAdmissionSession {
         self.configuration = configuration
         self.subject = RuntimeAdmissionSubject(
             session: binding.session,
-            policyWorkspace: subjectWorkspace(launch: launch, session: binding.session)
+            policyWorkspace: launch.plan.workspace
         )
         self.launch = launch
         self.requestRead = requestRead
@@ -298,9 +298,3 @@ final class RuntimeAdmissionSession {
     }
 }
 
-private func subjectWorkspace(
-    launch: AdmittedLaunchContext,
-    session: RuntimeSession
-) -> WorkingDirectory {
-    launch.plan.workspace ?? session.workspace
-}

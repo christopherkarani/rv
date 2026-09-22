@@ -8,7 +8,6 @@ enum OpenCodeLaunchError: Error, Sendable, Equatable {
     case executableMustBeAbsolute
     case executableUnavailable
     case workspaceMustBeAbsolute
-    case compile(IsolationCompileError)
     case command(IsolationApplyError)
     case launch(HostLaunchError)
 
@@ -20,8 +19,6 @@ enum OpenCodeLaunchError: Error, Sendable, Equatable {
             "OpenCode executable unavailable; supply --executable or an absolute PATH directory."
         case .workspaceMustBeAbsolute:
             "--workspace must be an absolute path without NUL bytes."
-        case .compile(let error):
-            "isolation compilation failed: \(error)."
         case .command(let error):
             "invalid agent command: \(error)."
         case .launch(let error):
@@ -50,13 +47,7 @@ enum OpenCodeRun {
         else {
             return .failure(.workspaceMustBeAbsolute)
         }
-        let isolation: ContainedIsolation
-        switch compileContainedIsolation(
-            IsolationCompileRequest(requested: .contained, workspace: directory)
-        ) {
-        case .success(let compiled): isolation = compiled
-        case .failure(let error): return .failure(.compile(error))
-        }
+        let plan = compileContainedPlan(workspace: directory)
         let command: IsolatedCommand
         switch IsolatedCommand.make(executable: path, arguments: arguments) {
         case .success(let validated): command = validated
@@ -65,7 +56,7 @@ enum OpenCodeRun {
         return launchContainedHost(
             host: .opencode,
             command: command,
-            plan: isolation,
+            plan: plan,
             admission: OpenCodeRun.admission
         )
         .map(\.exitStatus)
