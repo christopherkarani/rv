@@ -36,8 +36,13 @@ public func resolveHTTPHost(_ name: String) -> Result<[HTTPIPAddress], HTTPResol
     var hints = addrinfo()
     hints.ai_flags = AI_ADDRCONFIG
     hints.ai_family = AF_UNSPEC
+    #if canImport(Darwin)
     hints.ai_socktype = SOCK_STREAM
     hints.ai_protocol = IPPROTO_TCP
+    #else
+    hints.ai_socktype = Int32(SOCK_STREAM.rawValue)
+    hints.ai_protocol = Int32(IPPROTO_TCP)
+    #endif
     var info: UnsafeMutablePointer<addrinfo>?
     let code = getaddrinfo(name, nil, &hints, &info)
     guard code == 0, let info else { return .failure(.failed) }
