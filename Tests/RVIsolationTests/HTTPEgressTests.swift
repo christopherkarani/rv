@@ -269,7 +269,9 @@ private final class HTTPSpy: @unchecked Sendable {
     }
 }
 
-private struct HTTPHarness {
+/// The cancellation test shares this with one worker thread and joins it
+/// before the harness is released.
+private struct HTTPHarness: @unchecked Sendable {
     let runtime: RuntimeSession
     let spy: HTTPSpy
     let session: RuntimeAdmissionSession
