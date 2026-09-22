@@ -1,0 +1,93 @@
+Base: 854e69103333a65e86deacac853f915adc450868; uncommitted source manifest: source-sha256.json
+Host: Darwin 27.0.0 arm64; Apple Swift 6.4 (swiftlang-6.4.0.34.1)
+Release gate: NOT SATISFIED. Regression-green is not acceptance-green.
+Raw logs retained under .build/security-audit/ (local, ignored).
+
+Scripts/swift-6.4 test --filter LaunchBoundaryRegression
+  exit=1; 4 tests / 7 issues before fixes
+  artifact=launch-red.log
+
+Scripts/swift-6.4 test --filter ExecutorLifecycleRegression
+  exit=1; 4 tests / 4 issues before fixes
+  artifact=executor-red.log
+
+Scripts/swift-6.4 test --filter OpenCodeCommandTests
+  exit=1; 5 tests / 7 issues before registration
+  artifact=cli-red.log
+
+Scripts/swift-6.4 test --filter 'installSh_linux'
+  exit=1; 2 tests / 4 issues before packaging fix
+  artifact=installer-red.log
+
+Sources/rv-c/tests/run.sh
+  exit=1; PATH invocation did not select sibling before fix
+  artifact=c-path-red.log
+
+Scripts/swift-6.4 test --filter 'RVIsolationTests|IsolationPlanTests|OpenCodeCommandTests|installSh_'
+  exit=0; 102 isolation + 13 isolation-plan + 27 CLI/installer = 142 passed
+  artifact=focused-final.log
+
+Scripts/swift-6.4 test --filter 'RVIsolationTests|RVDomainTests|RVCLITests' --skip CHookPipeTests.cHookProof
+  exit=1; 652 tests / 3 existing CLI failures; C front door covered separately; no full-suite pass claim
+  artifact=swift-gate.log
+
+pristine git archive HEAD; swift test --filter 'launchAgentProbe_missingLaunchctlIsNotLoaded|companionPresence_linuxFilesystemProbe|policyDraft_runEdges'
+  exit=1; Same 3 failures reproduced in unchanged 854e691 checkout
+  artifact=baseline-existing-failures.log
+
+Scripts/gate.sh RVIsolationTests RVDomainTests RVCLITests
+  exit=1; Preflight name hygiene rejects preexisting ignored phase-05 handoff; tests not reached
+  artifact=gate.log
+
+Scripts/preflight.sh in snapshot of git ls-files -co --exclude-standard
+  exit=0; 0 failed / 2 known warnings; no modified checks
+  artifact=preflight-product.log
+
+Sources/rv-c/tests/run.sh on Darwin
+  exit=0; Includes PATH, forged argv0, HOME impostor and existing C units
+  artifact=c-path-green.log
+
+Sources/rv-c/tests/run.sh in Docker Linux
+  exit=0; Same C front-door tests on Linux; not Landlock enforcement
+  artifact=c-linux.log
+
+python3 -B Scripts/runtime-cli-proof.py --cli .build/security-audit/stage/rv
+  exit=2; 9 PASS / 10 GAP / 5 NOT-TESTED / 0 FAIL
+  artifact=cli-proof-final.jsonl
+
+python3 Scripts/isolation-linux-adversarial.py --output .build/security-audit/linux/reviewed
+  exit=2; 6 PASS / 3 GAP / 0 FAIL; C units explicitly stubbed; real kernel unavailable
+  artifact=linux/reviewed/probe.log
+
+Docker rv-security-audit:swift-6.4-python bash .build/security-audit/linux-swift.sh
+  exit=0; Real RVIsolation compiled; helper environment stripped; /proc executable discovery works with forged relative argv0; unsupported Landlock no inner effect
+  artifact=linux-swift.log
+
+staged rv opencode --workspace <disposable> -- --version
+  exit=0; Real installed OpenCode 1.18.31, version-only startup
+  artifact=opencode-smoke.json
+
+Effect evidence from focused-final.log:
+security-gap=seatbelt-startup-attestation reported-established=true command-executed=false
+adversarial technique=sh executable=/bin/sh verdict=WRITE-DENIED
+adversarial technique=bash executable=/bin/bash verdict=WRITE-DENIED
+adversarial technique=zsh executable=/bin/zsh verdict=WRITE-DENIED
+adversarial technique=env executable=/usr/bin/env verdict=WRITE-DENIED
+adversarial technique=xargs executable=/usr/bin/xargs verdict=WRITE-DENIED
+adversarial technique=python executable=/usr/bin/python3 verdict=WRITE-DENIED
+adversarial technique=ruby executable=/usr/bin/ruby verdict=WRITE-DENIED
+adversarial technique=node executable=/usr/local/bin/node verdict=WRITE-DENIED
+adversarial technique=nested verdict=WRITE-DENIED
+adversarial technique=exec verdict=WRITE-DENIED
+adversarial technique=background-wait verdict=WRITE-DENIED
+adversarial technique=env-shebang verdict=WRITE-DENIED
+adversarial technique=path-replacement verdict=WRITE-DENIED
+adversarial technique=executable-replacement verdict=WRITE-DENIED
+adversarial technique=preexisting-hardlink outside-mutated=true security=NOT-SATISFIED
+adversarial technique=synthetic-home-secrets outside-read=ALLOWED outside-write=DENIED security=NOT-SATISFIED count=13
+adversarial technique=workspace-control-files security=NOT-SATISFIED reason=no-protected-subpaths
+adversarial technique=background-session-end child-retains-write-authority=true security=NOT-SATISFIED
+adversarial technique=signal-test-owned-process signal-delivered=true security=NOT-SATISFIED
+􁁛  Test run with 102 tests in 10 suites passed after 2.577 seconds.
+􁁛  Test run with 13 tests in 1 suite passed after 0.001 seconds.
+􁁛  Test run with 27 tests in 1 suite passed after 2.985 seconds.

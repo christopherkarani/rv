@@ -15,6 +15,7 @@
 
 #include "../RVIsolation/landlock_apply.c"
 
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -42,6 +43,12 @@ int main(int argc, char **argv) {
         return RV_ISOLATION_EXEC_ESTABLISH_FAILED;
     }
     if (argv[4] == NULL || argv[4][0] != '/') {
+        return RV_ISOLATION_EXEC_ESTABLISH_FAILED;
+    }
+    /* Landlock cannot revoke access through descriptors opened beforehand.
+     * Only the deliberately supplied stdio descriptors survive the boundary.
+     * A blocked or unsupported close_range must not run the inner command. */
+    if (syscall(SYS_close_range, 3u, UINT_MAX, 0u) != 0) {
         return RV_ISOLATION_EXEC_ESTABLISH_FAILED;
     }
     if (rv_landlock_restrict_self_to_workspace(argv[2]) != 0) {

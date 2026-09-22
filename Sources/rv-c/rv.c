@@ -19,6 +19,7 @@
 #include <sys/wait.h>
 #ifdef __APPLE__
 #include <dispatch/dispatch.h>
+#include <mach-o/dyld.h>
 #include <xpc/xpc.h>
 #else
 #include <sys/socket.h>
@@ -236,22 +237,27 @@ static int parse_hook_argv(int argc, char **argv, const char **host_out) {
 
 static char g_cli_path[PATH_MAX];
 
-static const char *find_rv_cli(const char *argv0) {
+static const char *find_rv_cli(void) {
+    char executable[PATH_MAX];
     char resolved[PATH_MAX];
-    if (argv0 != NULL && realpath(argv0, resolved) != NULL) {
+    /* argv[0], PATH and HOME are not an authority for locating trusted code. */
+#ifdef __APPLE__
+    uint32_t capacity = sizeof executable;
+    if (_NSGetExecutablePath(executable, &capacity) != 0) {
+        return NULL;
+    }
+#else
+    ssize_t size = readlink("/proc/self/exe", executable, sizeof executable - 1);
+    if (size < 0 || size >= (ssize_t)sizeof executable - 1) {
+        return NULL;
+    }
+    executable[size] = '\0';
+#endif
+    if (realpath(executable, resolved) != NULL) {
         char *slash = strrchr(resolved, '/');
         if (slash != NULL) {
             *slash = '\0';
             int n = snprintf(g_cli_path, sizeof g_cli_path, "%s/rv-cli", resolved);
-            if (n > 0 && n < (int)sizeof g_cli_path && access(g_cli_path, X_OK) == 0) {
-                return g_cli_path;
-            }
-        }
-    }
-    {
-        const char *home = getenv("HOME");
-        if (home != NULL && home[0] != '\0') {
-            int n = snprintf(g_cli_path, sizeof g_cli_path, "%s/.local/bin/rv-cli", home);
             if (n > 0 && n < (int)sizeof g_cli_path && access(g_cli_path, X_OK) == 0) {
                 return g_cli_path;
             }
@@ -266,7 +272,7 @@ static void last_resort(void) {
 }
 
 static void exec_same_argv(char **argv) {
-    const char *cli = find_rv_cli(argv[0]);
+    const char *cli = find_rv_cli();
     if (cli == NULL) {
         /*
          * Operator argv (doctor, packs, status, help) must not die silently:
@@ -275,7 +281,7 @@ static void exec_same_argv(char **argv) {
          * they keep the silent last_resort deny.
          */
         fprintf(stderr,
-                "rv: rv-cli not found next to %s or at $HOME/.local/bin/rv-cli\n",
+                "rv: rv-cli not found next to the running executable (%s)\n",
                 argv[0] != NULL ? argv[0] : "rv");
         _exit(2);
     }
@@ -299,7 +305,7 @@ static void miss_replay_with_tail(
     struct ByteBuf out;
     int st;
 
-    cli = find_rv_cli(argv[0]);
+    cli = find_rv_cli();
     if (cli == NULL) {
         last_resort();
     }

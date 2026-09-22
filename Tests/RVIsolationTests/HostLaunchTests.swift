@@ -56,9 +56,18 @@ struct HostLaunchTests {
         let command = try requireTrueCommand()
         switch launchContainedHost(host: .opencode, command: command, plan: tree.contained) {
         case .success(let run):
+            #if os(Linux)
+            Issue.record("Linux contained launch must be refused, got exit \(run.exitStatus)")
+            #else
             #expect(run.exitStatus == 0)
             expectContainedPlatform(run.established, matching: tree.contained)
+            #endif
         case .failure(let error):
+            #if os(Linux)
+            if case .apply(.containedGuaranteesUnsupported) = error {
+                break
+            }
+            #endif
             recordUnexpectedHostLaunchError(error, expected: "contained true establish")
         }
     }
@@ -70,10 +79,20 @@ struct HostLaunchTests {
         let command = try requireTouchCommand(arguments: [inside])
         switch launchContainedHost(host: .opencode, command: command, plan: tree.contained) {
         case .success(let run):
+            #if os(Linux)
+            Issue.record("Linux contained launch must be refused, got exit \(run.exitStatus)")
+            #else
             #expect(run.exitStatus == 0)
             #expect(FileManager.default.fileExists(atPath: inside))
             expectContainedPlatform(run.established, matching: tree.contained)
+            #endif
         case .failure(let error):
+            #if os(Linux)
+            if case .apply(.containedGuaranteesUnsupported) = error {
+                #expect(FileManager.default.fileExists(atPath: inside) == false)
+                break
+            }
+            #endif
             recordUnexpectedHostLaunchError(error, expected: "in-workspace touch")
         }
     }
@@ -86,15 +105,72 @@ struct HostLaunchTests {
         let command = try requireTouchCommand(arguments: [outside])
         switch launchContainedHost(host: .opencode, command: command, plan: tree.contained) {
         case .success(let run):
+            #if os(Linux)
+            Issue.record("Linux contained launch must be refused, got exit \(run.exitStatus)")
+            #else
             #expect(run.exitStatus != 0)
             #expect(FileManager.default.fileExists(atPath: outside) == false)
             expectContainedPlatform(run.established, matching: tree.contained)
+            #endif
         case .failure(let error):
+            #if os(Linux)
+            if case .apply(.containedGuaranteesUnsupported) = error {
+                #expect(FileManager.default.fileExists(atPath: outside) == false)
+                break
+            }
+            #endif
             recordUnexpectedHostLaunchError(
                 error,
                 expected: "blocked outside touch with established contained"
             )
         }
+    }
+
+    @Test func launch_containedSessionsAreDistinctFromHookSessionID() throws {
+        #if os(macOS)
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let command = try requireTrueCommand()
+        let hook = try #require(SessionID(validating: "hook-session-must-not-be-runtime-id"))
+        let first = try #require(
+            launchContainedHost(host: .opencode, command: command, plan: tree.contained).get().session
+        )
+        let second = try #require(
+            launchContainedHost(host: .opencode, command: command, plan: tree.contained).get().session
+        )
+        #expect(first.id != second.id)
+        #expect(first.id.rawValue.uuidString != hook.rawValue)
+        #expect(second.id.rawValue.uuidString != hook.rawValue)
+        #expect(first.host == .opencode)
+        #expect(second.host == .opencode)
+        #expect(first.backend == .seatbelt)
+        #expect((first.child?.pid ?? 0) > 1)
+        #endif
+    }
+
+    @Test func launch_persistsSessionBeforeExecution() throws {
+        #if os(macOS)
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let log = tree.rootURL.appendingPathComponent("sessions.jsonl")
+        let command = try requireTrueCommand()
+        let run = try IsolationBackends.applyLaunch(
+            tree.contained,
+            command: command,
+            io: .discard,
+            host: .opencode,
+            sessionStore: .file(log)
+        ).get()
+        let session = try #require(run.session)
+        let canonical = try #require(posixRealpath(tree.workspaceURL.path))
+        let records = RuntimeSessionLog.records(at: log)
+        let match = try #require(records.first { $0.id == session.id.rawValue })
+        #expect(match.host == HookHost.opencode.rawValue)
+        #expect(match.backend == RuntimeIsolationBackend.seatbelt.rawValue)
+        #expect(match.workspace == canonical)
+        #expect(match.workspace == session.workspace.rawValue)
+        #expect(abs(match.startedAt.timeIntervalSince(session.startedAt)) < 0.001)
+        #endif
     }
 }
 
@@ -255,6 +331,8 @@ private func recordUnexpectedApplyError(
         )
     case .workspacePathUnsafe:
         Issue.record("expected \(expected), got workspacePathUnsafe", sourceLocation: sourceLocation)
+    case .workspaceContainsInodeAlias, .workspaceInodeBoundaryFailed:
+        Issue.record("expected \(expected), got workspaceContainsInodeAlias", sourceLocation: sourceLocation)
     case .containedGuaranteesUnsupported:
         Issue.record(
             "expected \(expected), got containedGuaranteesUnsupported",
@@ -264,7 +342,9 @@ private func recordUnexpectedApplyError(
         Issue.record("expected \(expected), got profileNotApplicable", sourceLocation: sourceLocation)
     case .processSpawnFailed:
         Issue.record("expected \(expected), got processSpawnFailed", sourceLocation: sourceLocation)
-    case .commandExecutableMustBeAbsolute:
+    case .commandContainsNUL:
+        Issue.record("unexpected NUL command rejection")
+    case .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
         Issue.record(
             "expected \(expected), got commandExecutableMustBeAbsolute",
             sourceLocation: sourceLocation

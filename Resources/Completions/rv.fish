@@ -1,4 +1,5 @@
 complete -c rv -f
+complete -c rv -n "__fish_use_subcommand" -a "opencode" -d "Launch OpenCode with workspace write containment"
 complete -c rv -n "__fish_use_subcommand" -a "test" -d "Evaluate a command"
 complete -c rv -n "__fish_use_subcommand" -a "explain" -d "Explain a decision"
 complete -c rv -n "__fish_use_subcommand" -a "packs" -d "List and enable packs"

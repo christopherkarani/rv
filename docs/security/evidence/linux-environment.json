@@ -1,0 +1,11 @@
+{
+  "kernel": "6.10.14-linuxkit",
+  "machine": "aarch64",
+  "landlock_abi": -1,
+  "landlock_errno": 38,
+  "swift": "Swift version 6.4 (swift-6.4-RELEASE)\nTarget: aarch64-unknown-linux-gnu",
+  "environment_boundary": "Docker default seccomp/namespaces; network none; RV adds Landlock only",
+  "landlock_kernel_config": [
+    "# CONFIG_SECURITY_LANDLOCK is not set"
+  ]
+}

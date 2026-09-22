@@ -1,0 +1,96 @@
+{
+  "summary": {
+    "PASS": 6,
+    "FAIL": 0,
+    "GAP": 3
+  },
+  "probes": [
+    {
+      "name": "landlock-abi-at-least-3",
+      "status": "GAP",
+      "evidence": {
+        "kernel": "6.10.14-linuxkit",
+        "machine": "aarch64",
+        "landlock_abi": -1,
+        "landlock_errno": 38,
+        "swift": "Swift version 6.4 (swift-6.4-RELEASE)\nTarget: aarch64-unknown-linux-gnu",
+        "environment_boundary": "Docker default seccomp/namespaces; network none; RV adds Landlock only",
+        "landlock_kernel_config": [
+          "# CONFIG_SECURITY_LANDLOCK is not set"
+        ]
+      }
+    },
+    {
+      "name": "C-unit-launch-control",
+      "status": "PASS",
+      "evidence": {
+        "exit": 0,
+        "marker": true,
+        "layer": "Landlock syscalls stubbed; proves untrusted command actually executes"
+      }
+    },
+    {
+      "name": "C-unit-inherited-fd-closed",
+      "status": "PASS",
+      "evidence": {
+        "exit": 0,
+        "contents": "original",
+        "child": {
+          "errno": 9,
+          "executed": true,
+          "wrote": false
+        },
+        "layer": "Landlock syscalls stubbed; descriptor cleanup is real"
+      }
+    },
+    {
+      "name": "C-unit-canonical-retarget-rejected",
+      "status": "PASS",
+      "evidence": {
+        "exit": 125,
+        "marker": false,
+        "layer": "Landlock syscalls stubbed; path resolution is real"
+      }
+    },
+    {
+      "name": "C-unit-descriptor-cleanup-error-fails-closed",
+      "status": "PASS",
+      "evidence": {
+        "exit": 125,
+        "marker": false,
+        "layer": "Injected setup failure; no real Landlock enforcement"
+      }
+    },
+    {
+      "name": "C-unit-path-open-error-fails-closed",
+      "status": "PASS",
+      "evidence": {
+        "exit": 125,
+        "marker": false,
+        "layer": "Injected setup failure; no real Landlock enforcement"
+      }
+    },
+    {
+      "name": "direct-helper-loader-environment",
+      "status": "GAP",
+      "evidence": {
+        "exit": 125,
+        "constructor_executed_before_landlock": true,
+        "scope": "Direct helper witness; Swift spawn sanitization requires separate integration test"
+      }
+    },
+    {
+      "name": "actual-unsupported-kernel-fails-closed",
+      "status": "PASS",
+      "evidence": {
+        "exit": 125,
+        "marker": false
+      }
+    },
+    {
+      "name": "linux-kernel-adversarial-coverage",
+      "status": "GAP",
+      "evidence": "Actual Landlock enforcement probes unavailable; no substituted sandbox claims. Run this suite on a Landlock ABI >= 3 host."
+    }
+  ]
+}

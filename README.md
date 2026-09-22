@@ -17,7 +17,9 @@
 
 # rv (Rykan V)
 
-**Control what your agent can do.** rv is a **hook-grade** guard: it blocks destructive shell (and Read / Edit / Write secret-path on Grok, Claude, and Cursor) when the host actually calls `rv`. It is not an OS sandbox. A host that never invokes the hook is not blocked.
+**Control what your agent can do.** rv's **hook-grade** guard blocks destructive shell (and Read / Edit / Write secret-path on Grok, Claude, and Cursor) when the host calls `rv`. Hook evaluation requires the host to invoke it.
+
+`rv opencode` launches OpenCode under a macOS Seatbelt that starts from deny-default. The process may read and write the workspace, and it may read the system locations needed to execute programs. Network is denied. It can signal processes inside its sandbox, not other host processes. A workspace that already contains a hard link is refused. Before the agent runs, macOS mounts that workspace path on a fresh volume so a later hard link to an outside file fails with a cross-device error. A same-user force-unmount of that volume is not covered. RV kills the owned process group before it returns. Mach service lookup is not filtered. Linux refuses the launch instead of applying a weaker sandbox. This is not a finished agent isolation boundary. See the [release acceptance audit](docs/security/runtime-acceptance.md).
 
 Site: [rykanv.com](https://rykanv.com) · Docs: [rykanv.com/docs/introduction](https://rykanv.com/docs/introduction) · Discord: [discord.gg/uZn9MDUYKx](https://discord.gg/uZn9MDUYKx)
 
@@ -30,6 +32,14 @@ Agents delete the wrong tree. rv sits on the host's pre-tool hook and denies the
 ```sh
 curl -fsSL https://rykanv.com/install | sh
 ```
+
+To launch the currently supported agent from a writable workspace:
+
+```sh
+rv opencode --workspace /absolute/repo -- run 'describe this project'
+```
+
+RV searches absolute `PATH` directories for OpenCode, or accepts `--executable /absolute/opencode`. The child receives a minimal environment with `HOME` and `TMPDIR` set to the workspace and `PATH=/usr/bin:/bin`; credentials and custom runtime paths are not forwarded. On macOS the process and its children may read and write only that workspace, plus the system locations needed to execute `/usr` and `/bin` programs. Network connections are denied. Signals to processes outside the sandbox are denied. A workspace that already contains a hard link to another file is refused, and the running workspace path is a separate volume so a new hard link cannot name an outside inode. Linux refuses this launch until its backend enforces the same limits; a write-only sandbox is not used instead. Other host integrations remain hook based.
 
 ## What it does
 

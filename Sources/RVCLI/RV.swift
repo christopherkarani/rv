@@ -7,6 +7,7 @@ public struct RV: AsyncParsableCommand {
         abstract: "Block destructive shell commands.",
         version: ProductVersion.semver,
         subcommands: [
+            OpenCode.self,
             Test.self,
             Explain.self,
             Packs.self,

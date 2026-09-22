@@ -14,10 +14,27 @@ public enum IsolationApplyError: Error, Sendable, Equatable {
     case workspaceDoesNotExist
     case workspacePathUnresolvable
     case workspacePathUnsafe
+    /// A regular file inside the workspace shares its inode with another name.
+    /// Seatbelt authorizes the path, so that alias can mutate the other file.
+    /// Refuse the launch before the command runs.
+    case workspaceContainsInodeAlias
+    /// The workspace is not mounted on a filesystem that rejects hard links to
+    /// outside inodes, or publishing results would write an unexpected inode.
+    /// When this is returned before spawn, the command was not executed.
+    case workspaceInodeBoundaryFailed
     case containedGuaranteesUnsupported
     case profileNotApplicable
     case processSpawnFailed
     case commandExecutableMustBeAbsolute
+    case commandContainsNUL
+    /// The session record was not written. The contained command was not started.
+    case sessionRecordFailed
+    /// The Seatbelt profile was not shown to be in force before the inner command.
+    case seatbeltNotEstablished
+    /// The owned process group could not be created or was not empty at return.
+    case lifetimeBoundaryFailed
+    /// The caller cancelled. The owned process group was signalled before return.
+    case cancelled
 }
 
 /// Child stdio. `discard` is `/dev/null` (apply / perform / probes).
@@ -34,7 +51,9 @@ public struct IsolatedCommand: Sendable, Equatable {
     public let arguments: [String]
 
     public init?(executable: String, arguments: [String] = []) {
-        guard IsolatedCommand.isAbsoluteExecutable(executable) else {
+        guard IsolatedCommand.isAbsoluteExecutable(executable),
+            !executable.contains("\0"), !arguments.contains(where: { $0.contains("\0") })
+        else {
             return nil
         }
         self.executable = executable
@@ -45,6 +64,9 @@ public struct IsolatedCommand: Sendable, Equatable {
         executable: String,
         arguments: [String] = []
     ) -> Result<IsolatedCommand, IsolationApplyError> {
+        guard !executable.contains("\0"), !arguments.contains(where: { $0.contains("\0") }) else {
+            return .failure(.commandContainsNUL)
+        }
         guard let command = IsolatedCommand(executable: executable, arguments: arguments) else {
             return .failure(.commandExecutableMustBeAbsolute)
         }
@@ -85,6 +107,16 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
             return ruleset
         case .seatbelt, .unsandboxed:
             return nil
+        }
+    }
+
+    /// Canonical path used by the prepared OS rules, never a second grant
+    /// derived from a retargeted caller path.
+    var containedWorkspacePath: String? {
+        switch launch {
+        case .seatbelt(let profile): profile.workspacePath
+        case .landlock(let ruleset): ruleset.workspacePath
+        case .unsandboxed: nil
         }
     }
 
@@ -156,18 +188,19 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
 }
 
 /// What was actually applied after a successful spawn. Factory rejects
-/// contained+none and observed/mediated+seatbelt.
+/// contained+none, contained+landlock, and observed or mediated paired with
+/// a sandbox family. A write-class Landlock helper is not this value.
 public struct EstablishedIsolation: Sendable, Equatable {
     public let mode: EnforcementMode
     public let family: IsolationBackendFamily
 
     init?(mode: EnforcementMode, family: IsolationBackendFamily) {
         switch (mode, family) {
-        case (.contained, .seatbelt), (.contained, .landlock),
+        case (.contained, .seatbelt),
             (.observed, .none), (.mediated, .none):
             self.mode = mode
             self.family = family
-        case (.contained, .none),
+        case (.contained, .none), (.contained, .landlock),
             (.observed, .seatbelt), (.mediated, .seatbelt),
             (.observed, .landlock), (.mediated, .landlock):
             return nil
@@ -178,10 +211,28 @@ public struct EstablishedIsolation: Sendable, Equatable {
 public struct IsolatedRunResult: Sendable, Equatable {
     public let established: EstablishedIsolation
     public let exitStatus: Int32
+    /// Set for a contained Seatbelt run that reached establishment.
+    /// Observed and mediated runs do not carry one. Landlock cannot
+    /// construct `EstablishedIsolation`, so it cannot construct this value.
+    public let session: RuntimeSession?
 
-    init(established: EstablishedIsolation, exitStatus: Int32) {
+    init(
+        established: EstablishedIsolation,
+        exitStatus: Int32,
+        session: RuntimeSession? = nil
+    ) {
+        if established.family == .landlock {
+            preconditionFailure("Landlock cannot be reported as established containment")
+        }
+        if established.family == .seatbelt {
+            precondition(
+                session?.backend == .seatbelt,
+                "Seatbelt establishment requires the runtime session that reached it"
+            )
+        }
         self.established = established
         self.exitStatus = exitStatus
+        self.session = session
     }
 }
 
@@ -255,13 +306,50 @@ public enum IsolationBackends {
     public static func apply(
         _ plan: IsolationPlan,
         command: IsolatedCommand,
-        io: IsolatedIO = .discard
+        io: IsolatedIO = .discard,
+        admission: RuntimeAdmissionConfiguration = .failClosed
+    ) -> Result<IsolatedRunResult, IsolationApplyError> {
+        applyLaunch(
+            plan,
+            command: command,
+            io: io,
+            host: nil,
+            sessionStore: .production,
+            admission: admission
+        )
+    }
+
+    static func applyLaunch(
+        _ plan: IsolationPlan,
+        command: IsolatedCommand,
+        io: IsolatedIO,
+        host: HookHost?,
+        sessionStore: RuntimeSessionStore,
+        admission: RuntimeAdmissionConfiguration = .failClosed
     ) -> Result<IsolatedRunResult, IsolationApplyError> {
         switch plan.mode {
         case .observed, .mediated:
             return unavailable().apply(plan, command: command, io: io)
         case .contained:
-            return platform().apply(plan, command: command, io: io)
+            switch platform().prepare(plan, command) {
+            case .failure(let error):
+                return .failure(error)
+            case .success(let request):
+                let prepared = request.withIO(io)
+                switch prepared.family {
+                case .seatbelt:
+                    return runSeatbeltLaunch(
+                        prepared,
+                        host: host,
+                        sessionStore: sessionStore,
+                        admission: admission
+                    )
+                case .landlock:
+                    return runLandlock(prepared, executable: nil)
+                case .none:
+                    return .failure(.backendMismatch)
+                }
+            }
         }
     }
 }
@@ -277,15 +365,24 @@ func prepareSeatbelt(
         switch compileSeatbeltProfile(plan) {
         case .failure(let error):
             return .failure(error)
-        case .success(let profile):
+        case .success(let compiled):
+            let profile = compiled.allowingExecutable(command.executable)
             guard let workspace = plan.workspace else {
                 return .failure(.containedGuaranteesUnsupported)
             }
             switch existingResolvedWorkspacePath(workspace) {
             case .failure(let error):
                 return .failure(error)
-            case .success:
-                break
+            case .success(let resolved):
+                guard profile.workspacePath == resolved else {
+                    return .failure(.workspacePathUnresolvable)
+                }
+                switch rejectWorkspaceInodeAlias(resolved) {
+                case .failure(let error):
+                    return .failure(error)
+                case .success:
+                    break
+                }
             }
             guard
                 let request = IsolatedLaunchRequest(
@@ -325,6 +422,15 @@ func prepareUnavailable(
 func runSeatbelt(
     _ request: IsolatedLaunchRequest
 ) -> Result<IsolatedRunResult, IsolationApplyError> {
+    runSeatbeltLaunch(request, host: nil, sessionStore: .production)
+}
+
+func runSeatbeltLaunch(
+    _ request: IsolatedLaunchRequest,
+    host: HookHost?,
+    sessionStore: RuntimeSessionStore,
+    admission: RuntimeAdmissionConfiguration = .failClosed
+) -> Result<IsolatedRunResult, IsolationApplyError> {
     guard request.family == .seatbelt else {
         return .failure(.backendMismatch)
     }
@@ -332,7 +438,7 @@ func runSeatbelt(
     guard FileManager.default.isExecutableFile(atPath: IsolationBackends.sandboxExecPath) else {
         return .failure(.backendUnavailable)
     }
-    return spawn(request)
+    return spawn(request, host: host, sessionStore: sessionStore, admission: admission)
     #else
     return .failure(.backendUnavailable)
     #endif
@@ -352,41 +458,64 @@ func runUnavailable(
     }
 }
 
-/// Starts the process described by a prepared request, then returns
-/// `EstablishedIsolation`. A spawn failure produces no established record.
-/// A non-zero child exit is still success unless the Landlock trampoline
-/// exits 125 (could not establish) or 126 (`execve` failed after apply).
-/// Landlock never falls back to the inner command or an untyped absolute.
+/// Starts the process described by a prepared request.
+/// Seatbelt calls `superviseSeatbelt` and does not treat spawn itself as
+/// establishment. Observed and mediated runs wait for the immediate child.
+/// Landlock is refused before exec: a helper exit is not contained establishment.
 func spawn(
     _ request: IsolatedLaunchRequest,
-    executablePath: String? = nil
+    executablePath: String? = nil,
+    host: HookHost? = nil,
+    sessionStore: RuntimeSessionStore = .production,
+    admission: RuntimeAdmissionConfiguration = .failClosed
 ) -> Result<IsolatedRunResult, IsolationApplyError> {
+    if request.family == .seatbelt {
+        #if os(macOS)
+        return superviseSeatbelt(
+            request,
+            host: host,
+            sessionStore: sessionStore,
+            admission: admission
+        )
+        #else
+        return .failure(.backendUnavailable)
+        #endif
+    }
+    if request.family == .landlock {
+        return refuseLandlockSpawn(request, executablePath: executablePath)
+    }
     guard let established = request.establishedIsolation else {
         return .failure(.backendMismatch)
     }
     let candidate = executablePath ?? request.launchExecutable
-    let path: String
-    switch request.family {
-    case .landlock:
-        guard let ruleset = request.landlockRuleset,
-            let verified = usableIsolationExecPath(
-                candidate,
-                workspacePath: ruleset.workspacePath
-            )
-        else {
-            return .failure(.backendUnavailable)
-        }
-        path = verified
-    case .none, .seatbelt:
-        guard IsolatedCommand.isAbsoluteExecutable(candidate) else {
-            return .failure(.backendUnavailable)
-        }
-        path = candidate
+    guard IsolatedCommand.isAbsoluteExecutable(candidate) else {
+        return .failure(.backendUnavailable)
     }
+    let path = candidate
     let process = Process()
     process.executableURL = URL(fileURLWithPath: path)
     process.arguments = request.launchArguments
-    if let workspace = request.plan.workspace,
+    if let preparedPath = request.containedWorkspacePath {
+        guard let workspace = request.plan.workspace else {
+            return .failure(.containedGuaranteesUnsupported)
+        }
+        switch existingResolvedWorkspacePath(workspace) {
+        case .failure(let error):
+            return .failure(error)
+        case .success(let resolved):
+            guard resolved == preparedPath else {
+                return .failure(.workspacePathUnresolvable)
+            }
+        }
+        process.currentDirectoryURL = URL(fileURLWithPath: preparedPath)
+        // The security helper's loader runs before its main/apply function.
+        // Never forward ambient credentials, loader/interpreter hooks, sockets,
+        // or a caller-controlled search path across that pre-isolation boundary.
+        process.environment = [
+            "PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C",
+            "HOME": preparedPath, "TMPDIR": preparedPath,
+        ]
+    } else if let workspace = request.plan.workspace,
         let resolved = posixRealpath(workspace.rawValue)
     {
         var isDirectory: ObjCBool = false
@@ -413,11 +542,60 @@ func spawn(
     }
     process.waitUntilExit()
     switch request.family {
-    case .landlock:
-        return interpretIsolationExecExit(process.terminationStatus, established: established)
-    case .none, .seatbelt:
+    case .none:
         return .success(
             IsolatedRunResult(established: established, exitStatus: process.terminationStatus)
         )
+    case .landlock, .seatbelt:
+        return .failure(.backendMismatch)
     }
+}
+
+/// Regular files with more than one link can point at an inode outside the
+/// workspace while their path stays inside the Seatbelt write allow.
+/// Directories have a link count above one without being aliases.
+/// Symlink entries are not followed. A scan failure refuses the launch.
+func rejectWorkspaceInodeAlias(_ root: String) -> Result<Void, IsolationApplyError> {
+    let rootURL = URL(fileURLWithPath: root, isDirectory: true)
+    // FileManager calls this handler synchronously on the scanning thread.
+    let scan = InodeAliasScan()
+    guard
+        let enumerator = FileManager.default.enumerator(
+            at: rootURL,
+            includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey, .linkCountKey],
+            options: [],
+            errorHandler: { _, _ in
+                scan.failed = true
+                return false
+            }
+        )
+    else {
+        return .failure(.workspaceContainsInodeAlias)
+    }
+    let keys: Set<URLResourceKey> = [.isRegularFileKey, .isSymbolicLinkKey, .linkCountKey]
+    for case let url as URL in enumerator {
+        if scan.failed {
+            return .failure(.workspaceContainsInodeAlias)
+        }
+        do {
+            let values = try url.resourceValues(forKeys: keys)
+            if values.isSymbolicLink == true {
+                continue
+            }
+            if values.isRegularFile == true, let count = values.linkCount, count > 1 {
+                return .failure(.workspaceContainsInodeAlias)
+            }
+        } catch {
+            return .failure(.workspaceContainsInodeAlias)
+        }
+    }
+    if scan.failed {
+        return .failure(.workspaceContainsInodeAlias)
+    }
+    return .success(())
+}
+
+/// Mutable flag for `rejectWorkspaceInodeAlias`. The directory walk is synchronous.
+private final class InodeAliasScan: @unchecked Sendable {
+    var failed = false
 }

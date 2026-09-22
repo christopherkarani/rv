@@ -3,6 +3,7 @@
 _rv() {
   local -a commands
   commands=(
+    'opencode:Launch OpenCode with workspace write containment'
     'test:Evaluate a command'
     'explain:Explain a decision'
     'packs:List and enable packs'

@@ -27,6 +27,18 @@ def isolation_test_dependencies(blocks: list[str]) -> list[str]:
     return deps
 
 
+def isolation_test_target_expression(text: str) -> str | None:
+    """The dependency expression on the RVIsolationTests target, not the array."""
+    match = re.search(
+        r'\.testTarget\(\s*name:\s*"RVIsolationTests"\s*,\s*dependencies:\s*(.*?)\)',
+        text,
+        flags=re.S,
+    )
+    if match is None:
+        return None
+    return " ".join(match.group(1).split())
+
+
 def main() -> int:
     if PACKAGE.is_file() is False:
         print("check-swift-test-preflight: Package.swift missing", file=sys.stderr)
@@ -58,6 +70,14 @@ def main() -> int:
         print(
             "check-swift-test-preflight: RVIsolationTests has "
             f"{len(unique)} Swift modules: {unique}",
+            file=sys.stderr,
+        )
+        return 1
+    expression = isolation_test_target_expression(text)
+    if expression != "isolationTestDependencies":
+        print(
+            "check-swift-test-preflight: RVIsolationTests dependencies must be "
+            f"isolationTestDependencies, found {expression!r}",
             file=sys.stderr,
         )
         return 1

@@ -168,7 +168,7 @@ let cliTargets: [Target] = [
         dependencies: [
             "RVDomain", "RVEngine", "RVPolicy", "RVHooks", "RVIPC",
             "RVPresentation", "RVScan", "RVTheme", "RVTUI", "RVService", "RVHistory",
-            "RVAnalytics",
+            "RVAnalytics", "RVIsolation",
             .product(name: "ArgumentParser", package: "swift-argument-parser"),
         ],
         resources: [
