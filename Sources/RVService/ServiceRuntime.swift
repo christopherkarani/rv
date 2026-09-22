@@ -98,16 +98,16 @@ public actor ServiceRuntime {
 
     public func acknowledge(_ hello: Hello) -> HelloAck {
         if hello.protocolName != ProtocolVersion.name {
-            return HelloAck(status: .skew(.protocolSkew))
+            return HelloAck(status: .skew(HelloSkewReason.protocolSkew))
         }
         if ProtocolVersion.isMajorSkew(
             clientSemver: hello.clientSemver,
             serviceSemver: ProtocolVersion.serviceSemver
         ) {
-            return HelloAck(status: .skew(.majorVersion))
+            return HelloAck(status: .skew(HelloSkewReason.majorVersion))
         }
         if !corePacksReady {
-            return HelloAck(status: .skew(.corePacksUnavailable))
+            return HelloAck(status: .skew(HelloSkewReason.corePacksUnavailable))
         }
         return HelloAck(status: .ok)
     }
@@ -181,7 +181,7 @@ public actor ServiceRuntime {
             case .skew(let reason):
                 let response = IPCResponse(
                     id: overlaid.id,
-                    result: .error(.protocolSkew(reason))
+                    result: .error(.protocolSkew(Self.ipcSkewReason(reason)))
                 )
                 return IncomingReply(
                     frame: (try? IPCJSON.encode(response)) ?? Data(),
@@ -210,6 +210,17 @@ public actor ServiceRuntime {
     ) throws -> IPCRequest {
         guard let stdinOverlay else { return request }
         return try request.applyingHookStdinOverlay(stdinOverlay)
+    }
+
+    private static func ipcSkewReason(_ reason: HelloSkewReason) -> SkewReason {
+        switch reason {
+        case .protocolSkew:
+            return .protocolSkew
+        case .majorVersion:
+            return .majorVersion
+        case .corePacksUnavailable:
+            return .corePacksUnavailable
+        }
     }
 
     private func implicitHelloSemver(_ method: IPCMethod) -> String? {

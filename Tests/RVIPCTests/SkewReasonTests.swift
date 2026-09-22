@@ -23,24 +23,35 @@ struct SkewReasonTests {
     }
 
     @Test func rawValuesAreTheLegacyWireStrings() {
+        #expect(HelloSkewReason.protocolSkew.rawValue == "protocol")
+        #expect(HelloSkewReason.majorVersion.rawValue == "major version")
+        #expect(HelloSkewReason.corePacksUnavailable.rawValue == "core packs unavailable")
         #expect(SkewReason.protocolSkew.rawValue == "protocol")
         #expect(SkewReason.majorVersion.rawValue == "major version")
         #expect(SkewReason.corePacksUnavailable.rawValue == "core packs unavailable")
         #expect(SkewReason.handshakeRequired.rawValue == "handshake required")
     }
 
-    @Test func bothCasesRoundTrip() throws {
+    @Test func helloSkewReasonsRoundTrip() throws {
         for reason in [
-            SkewReason.protocolSkew,
+            HelloSkewReason.protocolSkew,
             .majorVersion,
             .corePacksUnavailable,
-            .handshakeRequired,
         ] {
             let ack = HelloAck(status: .skew(reason))
             #expect(try IPCJSON.decode(HelloAck.self, from: IPCJSON.encode(ack)) == ack)
         }
         let healthy = HelloAck(status: .ok)
         #expect(try IPCJSON.decode(HelloAck.self, from: IPCJSON.encode(healthy)) == healthy)
+    }
+
+    @Test func handshakeRequiredFailsHelloDecode() {
+        let data = Data(
+            #"{"ok":false,"protocol":"rv.ipc.v1","serviceSemver":"1.0.0","skewReason":"handshake required"}"#.utf8
+        )
+        #expect(throws: DecodingError.self) {
+            try IPCJSON.decode(HelloAck.self, from: data)
+        }
     }
 
     @Test func unknownReasonStringFailsDecodeInsteadOfYieldingNil() throws {

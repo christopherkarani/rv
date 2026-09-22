@@ -18,7 +18,7 @@ public struct Hello: Sendable, Equatable, Codable {
 
 public enum HandshakeStatus: Sendable, Equatable {
     case ok
-    case skew(SkewReason)
+    case skew(HelloSkewReason)
 }
 
 public struct HelloAck: Sendable, Equatable, Codable {
@@ -71,7 +71,7 @@ public struct HelloAck: Sendable, Equatable, Codable {
             }
             status = .ok
         } else {
-            let reason = try container.decode(SkewReason.self, forKey: .skewReason)
+            let reason = try container.decode(HelloSkewReason.self, forKey: .skewReason)
             status = .skew(reason)
         }
     }
