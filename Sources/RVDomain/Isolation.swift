@@ -41,9 +41,10 @@ public enum DescentContainment: Sendable, Equatable {
 
 /// Concrete restrictions a later launch would have to establish.
 ///
-/// Production `.contained` values come from `compileIsolationPlan` or
-/// `firstSliceContained`. The memberwise initializer is fileprivate so
-/// other Domain files cannot mint “contained but unrestricted.”
+/// Production `.contained` values come from `compileIsolationPlan`,
+/// `compileContainedIsolation`, or `firstSliceContained`. The memberwise
+/// initializer is fileprivate so other Domain files cannot mint
+/// “contained but unrestricted.”
 public struct IsolationGuarantees: Sendable, Equatable {
     public let filesystem: FilesystemContainment
     public let network: NetworkContainment
@@ -106,6 +107,8 @@ public struct IsolationCompileRequest: Sendable, Equatable {
 public enum IsolationCompileError: Error, Sendable, Equatable {
     /// `.contained` requires `WorkingDirectory`. `RepositoryRoot` cannot substitute.
     case containedRequiresWorkspace
+    /// `compileContainedIsolation` was asked for `.observed` or `.mediated`.
+    case notContainedRequest
 }
 
 /// Compiled isolation intent. A successful `.contained` mode is intended
@@ -130,6 +133,75 @@ public struct IsolationPlan: Sendable, Equatable {
         self.workspace = workspace
         self.repositoryRoot = repositoryRoot
         self.mode = mode
+    }
+}
+
+/// Compiled contained plan. Spawn and executable compile take this value.
+/// `IsolationBackends.apply` still takes `plan`.
+///
+/// Production construction is `compileContainedIsolation` or
+/// `IsolationPlan.containedIsolation()`. The memberwise initializer is
+/// fileprivate so a contained value cannot carry an observed mode.
+public struct ContainedIsolation: Sendable, Equatable {
+    public let workspace: WorkingDirectory
+    public let repositoryRoot: RepositoryRoot?
+    public let guarantees: IsolationGuarantees
+
+    public var plan: IsolationPlan {
+        IsolationPlan(
+            requested: .contained,
+            workspace: workspace,
+            repositoryRoot: repositoryRoot,
+            mode: .contained(guarantees)
+        )
+    }
+
+    fileprivate init(
+        workspace: WorkingDirectory,
+        repositoryRoot: RepositoryRoot?,
+        guarantees: IsolationGuarantees
+    ) {
+        self.workspace = workspace
+        self.repositoryRoot = repositoryRoot
+        self.guarantees = guarantees
+    }
+}
+
+public enum ContainedIsolationError: Error, Sendable, Equatable {
+    case notContained
+    case missingWorkspace
+    case guaranteesMismatch
+}
+
+extension IsolationPlan {
+    /// Narrows a compiled plan to the contained spawn door.
+    /// Observed, mediated, a missing workspace, and guarantees other than
+    /// the first-slice write limit fail closed.
+    public func containedIsolation() -> Result<ContainedIsolation, ContainedIsolationError> {
+        switch requested {
+        case .observed, .mediated:
+            return .failure(.notContained)
+        case .contained:
+            break
+        }
+        guard let workspace else {
+            return .failure(.missingWorkspace)
+        }
+        switch mode {
+        case .observed, .mediated:
+            return .failure(.notContained)
+        case .contained(let guarantees):
+            guard isFirstSliceContained(guarantees, limitingWritesTo: workspace) else {
+                return .failure(.guaranteesMismatch)
+            }
+            return .success(
+                ContainedIsolation(
+                    workspace: workspace,
+                    repositoryRoot: repositoryRoot,
+                    guarantees: guarantees
+                )
+            )
+        }
     }
 }
 
@@ -161,12 +233,50 @@ public func compileIsolationPlan(
             return .failure(.containedRequiresWorkspace)
         }
         return .success(
-            IsolationPlan(
-                requested: .contained,
+            makeContainedIsolation(
                 workspace: workspace,
-                repositoryRoot: request.repositoryRoot,
-                mode: .contained(IsolationGuarantees.firstSliceContained(workspace: workspace))
+                repositoryRoot: request.repositoryRoot
+            ).plan
+        )
+    }
+}
+
+/// Contained spawn compile. Observed and mediated requests fail with
+/// `notContainedRequest`. Contained without a workspace stays
+/// `containedRequiresWorkspace`.
+public func compileContainedIsolation(
+    _ request: IsolationCompileRequest
+) -> Result<ContainedIsolation, IsolationCompileError> {
+    switch request.requested {
+    case .observed, .mediated:
+        return .failure(.notContainedRequest)
+    case .contained:
+        guard let workspace = request.workspace else {
+            return .failure(.containedRequiresWorkspace)
+        }
+        return .success(
+            makeContainedIsolation(
+                workspace: workspace,
+                repositoryRoot: request.repositoryRoot
             )
         )
     }
+}
+
+private func makeContainedIsolation(
+    workspace: WorkingDirectory,
+    repositoryRoot: RepositoryRoot?
+) -> ContainedIsolation {
+    ContainedIsolation(
+        workspace: workspace,
+        repositoryRoot: repositoryRoot,
+        guarantees: IsolationGuarantees.firstSliceContained(workspace: workspace)
+    )
+}
+
+private func isFirstSliceContained(
+    _ guarantees: IsolationGuarantees,
+    limitingWritesTo workspace: WorkingDirectory
+) -> Bool {
+    guarantees == IsolationGuarantees.firstSliceContained(workspace: workspace)
 }

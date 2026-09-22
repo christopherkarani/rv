@@ -10,26 +10,26 @@ public enum ExecutableCompileError: Error, Sendable, Equatable {
     case workspaceMismatch
 }
 
-/// Capability plus compiled argv plus isolation intent. Not a spawn.
+/// Capability plus compiled argv plus contained isolation. Not a spawn.
 ///
 /// Production construction is `compileExecutable`. The memberwise
 /// initializer is a `@testable` seam, like `AllowedAction`.
 public struct ExecutableAction: Sendable, Equatable {
     public let allowed: AllowedAction
     public let command: IsolatedCommand
-    public let plan: IsolationPlan
+    public let isolation: ContainedIsolation
 
-    init(allowed: AllowedAction, command: IsolatedCommand, plan: IsolationPlan) {
+    init(allowed: AllowedAction, command: IsolatedCommand, isolation: ContainedIsolation) {
         self.allowed = allowed
         self.command = command
-        self.plan = plan
+        self.isolation = isolation
     }
 }
 
 /// Compiles an authorized proposal into argv. Does not decide and does not spawn.
 public func compileExecutable(
     allowed: AllowedAction,
-    plan: IsolationPlan
+    isolation: ContainedIsolation
 ) -> Result<ExecutableAction, ExecutableCompileError> {
     switch allowed.action {
     case .file:
@@ -39,7 +39,7 @@ public func compileExecutable(
         case .failure(let error):
             return .failure(error)
         case .success(let command):
-            return bindWorkspace(allowed: allowed, command: command, plan: plan)
+            return bindWorkspace(allowed: allowed, command: command, isolation: isolation)
         }
     }
 }
@@ -105,14 +105,13 @@ private func isRegularFile(at path: String) -> Bool {
 private func bindWorkspace(
     allowed: AllowedAction,
     command: IsolatedCommand,
-    plan: IsolationPlan
+    isolation: ContainedIsolation
 ) -> Result<ExecutableAction, ExecutableCompileError> {
-    guard let actionCwd = allowed.action.scope.workingDirectory, let planWorkspace = plan.workspace
-    else {
+    guard let actionCwd = allowed.action.scope.workingDirectory else {
         return .failure(.workingDirectoryRequired)
     }
-    guard actionCwd == planWorkspace else {
+    guard actionCwd == isolation.workspace else {
         return .failure(.workspaceMismatch)
     }
-    return .success(ExecutableAction(allowed: allowed, command: command, plan: plan))
+    return .success(ExecutableAction(allowed: allowed, command: command, isolation: isolation))
 }

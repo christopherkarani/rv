@@ -50,9 +50,11 @@ enum OpenCodeRun {
         else {
             return .failure(.workspaceMustBeAbsolute)
         }
-        let plan: IsolationPlan
-        switch compileIsolationPlan(IsolationCompileRequest(requested: .contained, workspace: directory)) {
-        case .success(let compiled): plan = compiled
+        let isolation: ContainedIsolation
+        switch compileContainedIsolation(
+            IsolationCompileRequest(requested: .contained, workspace: directory)
+        ) {
+        case .success(let compiled): isolation = compiled
         case .failure(let error): return .failure(.compile(error))
         }
         let command: IsolatedCommand
@@ -63,7 +65,7 @@ enum OpenCodeRun {
         return launchContainedHost(
             host: .opencode,
             command: command,
-            plan: plan,
+            plan: isolation,
             admission: OpenCodeRun.admission
         )
         .map(\.exitStatus)

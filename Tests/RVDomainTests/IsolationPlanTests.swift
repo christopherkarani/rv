@@ -13,6 +13,12 @@ import Testing
 /// 8. Observed / mediated never carry `IsolationGuarantees` on `EnforcementMode`
 /// 9. Contained first-slice must not use `filesystem == .unrestricted` or
 ///    `descent == .notInherited`
+/// 10. Observed / mediated `containedIsolation()` is `.notContained`
+/// 11. `compileContainedIsolation` of observed / mediated is `.notContainedRequest`
+/// 12. `compileContainedIsolation` of contained + nil workspace is
+///     `.containedRequiresWorkspace`, not `.notContainedRequest`
+/// 13. `compileContainedIsolation` of contained + workspace matches
+///     `compileIsolationPlan`, and `plan.mode` is `.contained` workspaceScoped to it
 @Suite("IsolationPlan")
 struct IsolationPlanTests {
     @Test func contained_withoutWorkspace_failsContainedRequiresWorkspace() {
@@ -209,8 +215,93 @@ struct IsolationPlanTests {
             switch error {
             case .containedRequiresWorkspace:
                 Issue.record("contained with workspace must succeed via compile")
+            case .notContainedRequest:
+                Issue.record("contained with workspace must not fail notContainedRequest")
             }
         }
+    }
+
+    @Test func observedAndMediated_containedIsolation_failsNotContained() throws {
+        let workspace = try requireWorkspace("/repo")
+        let observed = try compileIsolationPlan(
+            IsolationCompileRequest(requested: .observed, workspace: workspace)
+        ).get()
+        let mediated = try compileIsolationPlan(
+            IsolationCompileRequest(requested: .mediated, workspace: workspace)
+        ).get()
+        let observedMissingWorkspace = try compileIsolationPlan(
+            IsolationCompileRequest(requested: .observed)
+        ).get()
+        let mediatedMissingWorkspace = try compileIsolationPlan(
+            IsolationCompileRequest(requested: .mediated)
+        ).get()
+        #expect(observed.containedIsolation() == .failure(.notContained))
+        #expect(mediated.containedIsolation() == .failure(.notContained))
+        #expect(observedMissingWorkspace.containedIsolation() == .failure(.notContained))
+        #expect(mediatedMissingWorkspace.containedIsolation() == .failure(.notContained))
+    }
+
+    @Test func compileContainedIsolation_observedAndMediated_failNotContainedRequest() throws {
+        let workspace = try requireWorkspace("/repo")
+        #expect(
+            compileContainedIsolation(
+                IsolationCompileRequest(requested: .observed, workspace: workspace)
+            ) == .failure(.notContainedRequest)
+        )
+        #expect(
+            compileContainedIsolation(
+                IsolationCompileRequest(requested: .mediated, workspace: workspace)
+            ) == .failure(.notContainedRequest)
+        )
+        #expect(
+            compileContainedIsolation(IsolationCompileRequest(requested: .observed))
+                == .failure(.notContainedRequest)
+        )
+    }
+
+    @Test func compileContainedIsolation_withoutWorkspace_failsContainedRequiresWorkspace() throws {
+        #expect(
+            compileContainedIsolation(IsolationCompileRequest(requested: .contained))
+                == .failure(.containedRequiresWorkspace)
+        )
+        let root = try requireRepositoryRoot("/repo")
+        #expect(
+            compileContainedIsolation(
+                IsolationCompileRequest(
+                    requested: .contained,
+                    workspace: nil,
+                    repositoryRoot: root
+                )
+            ) == .failure(.containedRequiresWorkspace)
+        )
+    }
+
+    @Test func compileContainedIsolation_withWorkspace_matchesContainedPlan() throws {
+        let workspace = try requireWorkspace("/repo")
+        let request = IsolationCompileRequest(requested: .contained, workspace: workspace)
+        let isolation = try compileContainedIsolation(request).get()
+        let plan = try compileIsolationPlan(request).get()
+        #expect(isolation.workspace == workspace)
+        #expect(isolation.repositoryRoot == nil)
+        #expect(isolation.plan == plan)
+        #expect(plan.containedIsolation() == .success(isolation))
+        expectContainedGuarantees(isolation, workspace: workspace)
+    }
+
+    @Test func compileContainedIsolation_differingRepositoryRoot_limitsWritesToWorkspace() throws {
+        let workspace = try requireWorkspace("/ws")
+        let root = try requireRepositoryRoot("/repo")
+        let request = IsolationCompileRequest(
+            requested: .contained,
+            workspace: workspace,
+            repositoryRoot: root
+        )
+        let isolation = try compileContainedIsolation(request).get()
+        let plan = try compileIsolationPlan(request).get()
+        #expect(isolation.workspace == workspace)
+        #expect(isolation.repositoryRoot == root)
+        #expect(isolation.plan == plan)
+        expectContainedGuarantees(isolation, workspace: workspace)
     }
 }
 
@@ -220,6 +311,57 @@ private func requireWorkspace(_ path: String) throws -> WorkingDirectory {
 
 private func requireRepositoryRoot(_ path: String) throws -> RepositoryRoot {
     try #require(RepositoryRoot(validating: path))
+}
+
+private func expectContainedGuarantees(
+    _ isolation: ContainedIsolation,
+    workspace: WorkingDirectory,
+    sourceLocation: SourceLocation = #_sourceLocation
+) {
+    switch isolation.plan.mode {
+    case .contained(let guarantees):
+        #expect(guarantees == isolation.guarantees, sourceLocation: sourceLocation)
+        switch guarantees.filesystem {
+        case .workspaceScoped(let limitedTo):
+            #expect(limitedTo == workspace, sourceLocation: sourceLocation)
+        case .unrestricted:
+            Issue.record(
+                "contained isolation must limit writes to the workspace",
+                sourceLocation: sourceLocation
+            )
+        }
+        switch guarantees.descent {
+        case .inherited:
+            break
+        case .notInherited:
+            Issue.record(
+                "contained isolation must inherit descent",
+                sourceLocation: sourceLocation
+            )
+        }
+        switch guarantees.network {
+        case .denied:
+            break
+        case .unrestricted:
+            Issue.record(
+                "contained isolation must deny network",
+                sourceLocation: sourceLocation
+            )
+        }
+        switch guarantees.process {
+        case .hostSignalsDenied:
+            break
+        case .unrestricted:
+            Issue.record(
+                "contained isolation must deny signals outside the sandbox",
+                sourceLocation: sourceLocation
+            )
+        }
+    case .observed:
+        Issue.record("contained isolation plan must not be observed", sourceLocation: sourceLocation)
+    case .mediated:
+        Issue.record("contained isolation plan must not be mediated", sourceLocation: sourceLocation)
+    }
 }
 
 private func expectContainedRequiresWorkspace(
@@ -236,6 +378,11 @@ private func expectContainedRequiresWorkspace(
         switch error {
         case .containedRequiresWorkspace:
             break
+        case .notContainedRequest:
+            Issue.record(
+                "contained without workspace must be containedRequiresWorkspace, not notContainedRequest",
+                sourceLocation: sourceLocation
+            )
         }
     }
 }
@@ -269,6 +416,11 @@ private func expectObserved(
                 "observed compile must not fail containedRequiresWorkspace",
                 sourceLocation: sourceLocation
             )
+        case .notContainedRequest:
+            Issue.record(
+                "observed compile must not fail notContainedRequest",
+                sourceLocation: sourceLocation
+            )
         }
     }
 }
@@ -300,6 +452,11 @@ private func expectMediated(
         case .containedRequiresWorkspace:
             Issue.record(
                 "mediated compile must not fail containedRequiresWorkspace",
+                sourceLocation: sourceLocation
+            )
+        case .notContainedRequest:
+            Issue.record(
+                "mediated compile must not fail notContainedRequest",
                 sourceLocation: sourceLocation
             )
         }
@@ -368,6 +525,11 @@ private func expectContainedFirstSlice(
                 "contained with workspace must not fail containedRequiresWorkspace",
                 sourceLocation: sourceLocation
             )
+        case .notContainedRequest:
+            Issue.record(
+                "contained with workspace must not fail notContainedRequest",
+                sourceLocation: sourceLocation
+            )
         }
     }
 }
@@ -392,6 +554,8 @@ private func probeLine(
         switch error {
         case .containedRequiresWorkspace:
             return "requested=\(requestedLabel) mode=none error=containedRequiresWorkspace"
+        case .notContainedRequest:
+            return "requested=\(requestedLabel) mode=none error=notContainedRequest"
         }
     }
 }

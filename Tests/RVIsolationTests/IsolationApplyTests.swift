@@ -719,6 +719,9 @@ private func requirePlan(_ request: IsolationCompileRequest) throws -> Isolation
         case .containedRequiresWorkspace:
             Issue.record("fixture compile must not fail containedRequiresWorkspace")
             throw error
+        case .notContainedRequest:
+            Issue.record("fixture compile must not fail notContainedRequest")
+            throw error
         }
     }
 }

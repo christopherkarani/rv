@@ -197,7 +197,10 @@ private func lifecycleExecutable(
                 ?? ["-c", "printf x >> \"$1\"; exit \(exitStatus)", "sh", marker.path]
         )
     )
-    return ExecutableAction(allowed: allowed, command: command, plan: plan)
+    guard case .success(let isolation) = plan.containedIsolation() else {
+        throw ExecutorLifecycleFixtureError.expectedAllowed
+    }
+    return ExecutableAction(allowed: allowed, command: command, isolation: isolation)
 }
 
 private func lifecycleRun(

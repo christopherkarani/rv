@@ -12,7 +12,7 @@ import Testing
 /// 5. pending + `deny` is denied and does not spawn
 /// 6. pending + `approvalUnavailable` is `.failure(.approval)`; file absent
 /// 7. pending + `createRule` is `.approval(.ruleCreationUnsupported)`
-/// 8. allowed + observed plan is `.execute(.applyFailed(.backendUnavailable))`
+/// 8. observed plan `containedIsolation()` is `.notContained`, so perform cannot take it
 /// 9. second `perform` of the same allowed fingerprint is `.alreadyExecuted`
 /// Authorizations are built through `decide`. Spawn is only `perform`.
 @Suite("AgentTurn")
@@ -31,7 +31,7 @@ struct AgentTurnTests {
             )
         )
         let pending = try requirePendingReviewAsk(authorization)
-        let turn = await LocalExecutor().perform(authorization, plan: tree.contained)
+        let turn = await LocalExecutor().perform(authorization, plan: try tree.requireContainedIsolation())
         switch turn {
         case .success(.awaitingApproval(let waiting)):
             #expect(waiting == pending)
@@ -54,8 +54,8 @@ struct AgentTurnTests {
         )
         let denied = try requireDenied(authorization)
         let workspace = try #require(WorkingDirectory(validating: "/tmp/rv"))
-        let plan = try requireContainedPlan(workspace: workspace)
-        let turn = await LocalExecutor().perform(authorization, plan: plan)
+        let isolation = try requireContainedIsolation(workspace: workspace)
+        let turn = await LocalExecutor().perform(authorization, plan: isolation)
         switch turn {
         case .success(.denied(let result)):
             #expect(result == denied)
@@ -80,7 +80,7 @@ struct AgentTurnTests {
             workingDirectory: workspace,
             fingerprint: "shell:agent-turn:allowed-in"
         )
-        let turn = await LocalExecutor().perform(authorization, plan: tree.contained)
+        let turn = await LocalExecutor().perform(authorization, plan: try tree.requireContainedIsolation())
         if linuxRefusedContainedTurn(turn, absentPath: inside) { return }
         try expectExecutedContained(turn, matching: tree.contained)
         #expect(FileManager.default.fileExists(atPath: inside))
@@ -102,7 +102,7 @@ struct AgentTurnTests {
         _ = try requirePendingReviewAsk(authorization)
         let turn = await LocalExecutor().perform(
             authorization,
-            plan: tree.contained,
+            plan: try tree.requireContainedIsolation(),
             approval: .success(.allowOnce)
         )
         if linuxRefusedContainedTurn(turn, absentPath: inside) { return }
@@ -126,7 +126,7 @@ struct AgentTurnTests {
         let pending = try requirePendingReviewAsk(authorization)
         let turn = await LocalExecutor().perform(
             authorization,
-            plan: tree.contained,
+            plan: try tree.requireContainedIsolation(),
             approval: .success(.deny)
         )
         switch turn {
@@ -159,7 +159,7 @@ struct AgentTurnTests {
         _ = try requirePendingReviewAsk(authorization)
         let turn = await LocalExecutor().perform(
             authorization,
-            plan: tree.contained,
+            plan: try tree.requireContainedIsolation(),
             approval: .failure(.approvalUnavailable)
         )
         expectApprovalFailure(turn, .approvalUnavailable)
@@ -182,45 +182,22 @@ struct AgentTurnTests {
         _ = try requirePendingReviewAsk(authorization)
         let turn = await LocalExecutor().perform(
             authorization,
-            plan: tree.contained,
+            plan: try tree.requireContainedIsolation(),
             approval: .success(.createRule)
         )
         expectApprovalFailure(turn, .ruleCreationUnsupported)
         #expect(FileManager.default.fileExists(atPath: inside) == false)
     }
 
-    @Test func perform_observedAllowed_executeFails() async throws {
+    @Test func observedPlan_containedIsolation_fails() throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
-
+        #expect(tree.observed.containedIsolation() == .failure(.notContained))
         let workspace = try #require(tree.observed.workspace)
-        let inside = tree.workspaceURL.appendingPathComponent("observed.txt").path
-        let authorization = try decideAllowedInRepoTouch(
-            path: inside,
-            workingDirectory: workspace,
-            fingerprint: "shell:agent-turn:observed"
+        let mediated = try ContainmentTree.requirePlan(
+            IsolationCompileRequest(requested: .mediated, workspace: workspace)
         )
-        let turn = await LocalExecutor().perform(authorization, plan: tree.observed)
-        switch turn {
-        case .failure(.execute(let error)):
-            expectApplyFailedBackendUnavailable(error)
-        case .failure(let error):
-            recordUnexpectedTurnError(error, expected: "execute(applyFailed(backendUnavailable))")
-        case .success(.executed(let result)):
-            switch result.established.mode {
-            case .contained:
-                Issue.record("observed plan must not establish contained")
-            case .observed, .mediated:
-                Issue.record(
-                    "observed plan must fail applyFailed, not establish \(result.established.mode)"
-                )
-            }
-        case .success(.awaitingApproval):
-            Issue.record("allowed observed must not await approval")
-        case .success(.denied):
-            Issue.record("allowed observed must not deny")
-        }
-        #expect(FileManager.default.fileExists(atPath: inside) == false)
+        #expect(mediated.containedIsolation() == .failure(.notContained))
     }
 
     @Test func perform_sameFingerprint_secondTurnFails() async throws {
@@ -236,10 +213,11 @@ struct AgentTurnTests {
         )
         let allowed = try requireAllowed(authorization)
         let executor = LocalExecutor()
-        let first = await executor.perform(authorization, plan: tree.contained)
+        let isolation = try tree.requireContainedIsolation()
+        let first = await executor.perform(authorization, plan: isolation)
         #if os(Linux)
         #expect(linuxRefusedContainedTurn(first, absentPath: inside))
-        let refusedSecond = await executor.perform(authorization, plan: tree.contained)
+        let refusedSecond = await executor.perform(authorization, plan: isolation)
         switch refusedSecond {
         case .failure(.execute(.alreadyExecuted(let fingerprint))):
             #expect(fingerprint == allowed.action.fingerprint)
@@ -256,7 +234,7 @@ struct AgentTurnTests {
         #endif
         try expectExecutedContained(first, matching: tree.contained)
         #expect(FileManager.default.fileExists(atPath: inside))
-        let second = await executor.perform(authorization, plan: tree.contained)
+        let second = await executor.perform(authorization, plan: try tree.requireContainedIsolation())
         switch second {
         case .failure(.execute(.alreadyExecuted(let fingerprint))):
             #expect(fingerprint == allowed.action.fingerprint)
@@ -382,14 +360,19 @@ private func requireDenied(_ authorization: AgentAuthorization) throws -> Denied
     }
 }
 
-private func requireContainedPlan(workspace: WorkingDirectory) throws -> IsolationPlan {
-    switch compileIsolationPlan(IsolationCompileRequest(requested: .contained, workspace: workspace)) {
-    case .success(let plan):
-        return plan
+private func requireContainedIsolation(workspace: WorkingDirectory) throws -> ContainedIsolation {
+    switch compileContainedIsolation(
+        IsolationCompileRequest(requested: .contained, workspace: workspace)
+    ) {
+    case .success(let isolation):
+        return isolation
     case .failure(let error):
         switch error {
         case .containedRequiresWorkspace:
             Issue.record("fixture compile must not fail containedRequiresWorkspace")
+            throw error
+        case .notContainedRequest:
+            Issue.record("fixture compile must not fail notContainedRequest")
             throw error
         }
     }
@@ -516,29 +499,6 @@ private func expectContainedPlatform(
     #endif
 }
 
-private func expectApplyFailedBackendUnavailable(
-    _ error: LocalExecutorError,
-    sourceLocation: SourceLocation = #_sourceLocation
-) {
-    switch error {
-    case .applyFailed(.backendUnavailable):
-        break
-    case .cancelled:
-        Issue.record("expected applyFailed(backendUnavailable), got cancelled", sourceLocation: sourceLocation)
-    case .alreadyExecuted(let fingerprint):
-        Issue.record(
-            "expected applyFailed(backendUnavailable), got alreadyExecuted \(fingerprint.rawValue)",
-            sourceLocation: sourceLocation
-        )
-    case .applyFailed(let apply):
-        recordUnexpectedApplyError(
-            apply,
-            expected: "applyFailed(backendUnavailable)",
-            sourceLocation: sourceLocation
-        )
-    }
-}
-
 private func recordUnexpectedTurnError(
     _ error: AgentTurnError,
     expected: String,
@@ -554,44 +514,3 @@ private func recordUnexpectedTurnError(
     }
 }
 
-private func recordUnexpectedApplyError(
-    _ error: IsolationApplyError,
-    expected: String,
-    sourceLocation: SourceLocation = #_sourceLocation
-) {
-    switch error {
-    case .commandContainsNUL:
-        Issue.record("expected \(expected), got commandContainsNUL", sourceLocation: sourceLocation)
-    case .backendUnavailable:
-        Issue.record("expected \(expected), got backendUnavailable", sourceLocation: sourceLocation)
-    case .backendMismatch:
-        Issue.record("expected \(expected), got backendMismatch", sourceLocation: sourceLocation)
-    case .workspaceMustBeAbsolute:
-        Issue.record("expected \(expected), got workspaceMustBeAbsolute", sourceLocation: sourceLocation)
-    case .workspaceDoesNotExist:
-        Issue.record("expected \(expected), got workspaceDoesNotExist", sourceLocation: sourceLocation)
-    case .workspacePathUnresolvable:
-        Issue.record(
-            "expected \(expected), got workspacePathUnresolvable",
-            sourceLocation: sourceLocation
-        )
-    case .workspacePathUnsafe:
-        Issue.record("expected \(expected), got workspacePathUnsafe", sourceLocation: sourceLocation)
-    case .workspaceContainsInodeAlias, .workspaceInodeBoundaryFailed:
-        Issue.record("expected \(expected), got workspaceContainsInodeAlias", sourceLocation: sourceLocation)
-    case .containedGuaranteesUnsupported:
-        Issue.record(
-            "expected \(expected), got containedGuaranteesUnsupported",
-            sourceLocation: sourceLocation
-        )
-    case .profileNotApplicable:
-        Issue.record("expected \(expected), got profileNotApplicable", sourceLocation: sourceLocation)
-    case .processSpawnFailed:
-        Issue.record("expected \(expected), got processSpawnFailed", sourceLocation: sourceLocation)
-    case .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
-        Issue.record(
-            "expected \(expected), got commandExecutableMustBeAbsolute",
-            sourceLocation: sourceLocation
-        )
-    }
-}
