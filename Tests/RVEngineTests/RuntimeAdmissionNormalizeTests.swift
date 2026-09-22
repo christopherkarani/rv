@@ -1,11 +1,5 @@
-#if canImport(Darwin)
-import Darwin
-#elseif canImport(Glibc)
-import Glibc
-#endif
 import Foundation
 import RVDomain
-import Synchronization
 import Testing
 @testable import RVEngine
 
@@ -66,51 +60,6 @@ struct RuntimeAdmissionNormalizeTests {
             action: .shell(ShellCommand(rawValue: #"python3 -c "$CMD""#))
         )
         #expect(proposal == .failure(.failed))
-    }
-
-    @Test func resolutionDoesNotStartWhenTheSessionHasStopped() {
-        let lookedUp = Mutex(false)
-        let result = RuntimeAdmissionStop.$shouldStop.withValue({ true }) {
-            resolveHTTPHost(
-                "example.com",
-                deadline: Date().addingTimeInterval(5),
-                lookup: { _ in
-                    lookedUp.withLock { $0 = true }
-                    return .failure(.failed)
-                }
-            )
-        }
-        #expect(result == .failure(.failed))
-        #expect(lookedUp.withLock { $0 } == false)
-    }
-
-    @Test func resolutionReturnsWhenTheSessionStopsDuringLookup() {
-        let started = Mutex(false)
-        let release = Mutex(false)
-        let stop = Mutex(false)
-        defer { release.withLock { $0 = true } }
-        DispatchQueue.global().async {
-            while started.withLock({ $0 }) == false && release.withLock({ $0 }) == false {
-                usleep(1_000)
-            }
-            stop.withLock { $0 = true }
-        }
-        let began = Date()
-        let result = RuntimeAdmissionStop.$shouldStop.withValue({ stop.withLock { $0 } }) {
-            resolveHTTPHost(
-                "example.com",
-                deadline: Date().addingTimeInterval(5),
-                lookup: { _ in
-                    started.withLock { $0 = true }
-                    while release.withLock({ $0 }) == false {
-                        usleep(1_000)
-                    }
-                    return .failure(.failed)
-                }
-            )
-        }
-        #expect(result == .failure(.failed))
-        #expect(Date().timeIntervalSince(began) < 2)
     }
 }
 

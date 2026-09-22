@@ -1,20 +1,4 @@
 import Foundation
-import Synchronization
-
-/// Cooperative cancel for one HTTPS GET. `finish` on the runtime sets it.
-public final class HTTPCancellation: @unchecked Sendable {
-    private let state = Mutex(false)
-
-    public init() {}
-
-    public func cancel() {
-        state.withLock { $0 = true }
-    }
-
-    public var isCancelled: Bool {
-        state.withLock { $0 }
-    }
-}
 
 /// No socket was opened.
 public enum HTTPNotOpened: String, Sendable, Equatable, Codable {

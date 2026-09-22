@@ -3,9 +3,7 @@ import Darwin
 #elseif canImport(Glibc)
 import Glibc
 #endif
-import Foundation
 import RVDomain
-import Synchronization
 
 /// Normalizes one admitted action against the runtime RV launched.
 ///
@@ -32,56 +30,9 @@ public func normalizeRuntimeAdmission(
 /// Resolves one HTTPS name to the addresses `getaddrinfo` returns.
 ///
 /// Literal addresses do not come through here. An empty or failed lookup
-/// produces no HTTP action. `getaddrinfo` runs off the session thread. The
-/// caller waits at most one request budget and returns earlier when the
-/// session has stopped, so the reaper can still kill the process group.
+/// produces no HTTP action. This call blocks. Contained launch uses
+/// `resolveAdmittedHTTPHost`, which keeps the session reaper running.
 public func resolveHTTPHost(_ name: String) -> Result<[HTTPIPAddress], HTTPResolutionError> {
-    resolveHTTPHost(
-        name,
-        deadline: Date().addingTimeInterval(
-            TimeInterval(HTTPEgressLimits.requestTimeoutMilliseconds) / 1_000
-        ),
-        lookup: blockingResolveHTTPHost
-    )
-}
-
-func resolveHTTPHost(
-    _ name: String,
-    deadline: Date,
-    lookup: @escaping @Sendable (String) -> Result<[HTTPIPAddress], HTTPResolutionError>
-) -> Result<[HTTPIPAddress], HTTPResolutionError> {
-    if RuntimeAdmissionStop.shouldStop() || Task.isCancelled {
-        return .failure(.failed)
-    }
-    let flight = DNSLookup()
-    DispatchQueue.global(qos: .utility).async {
-        flight.store(lookup(name))
-    }
-    while Date() < deadline {
-        if let result = flight.current() { return result }
-        if RuntimeAdmissionStop.shouldStop() || Task.isCancelled {
-            return .failure(.failed)
-        }
-        usleep(10_000)
-    }
-    return .failure(.failed)
-}
-
-final class DNSLookup: Sendable {
-    private let result = Mutex<Result<[HTTPIPAddress], HTTPResolutionError>?>(nil)
-
-    func store(_ value: Result<[HTTPIPAddress], HTTPResolutionError>) {
-        result.withLock { $0 = value }
-    }
-
-    func current() -> Result<[HTTPIPAddress], HTTPResolutionError>? {
-        result.withLock { $0 }
-    }
-}
-
-private func blockingResolveHTTPHost(
-    _ name: String
-) -> Result<[HTTPIPAddress], HTTPResolutionError> {
     var hints = addrinfo()
     hints.ai_flags = AI_ADDRCONFIG
     hints.ai_family = AF_UNSPEC

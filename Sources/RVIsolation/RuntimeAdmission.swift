@@ -52,6 +52,21 @@ public enum RuntimeAdmissionExecutor: Sendable {
     case effect(@Sendable (AllowedAction) -> Result<Int32, RuntimeAdmissionExecutorError>)
 }
 
+/// Cooperative cancel for one HTTPS GET. `finish` on the runtime sets it.
+public final class HTTPCancellation: Sendable {
+    private let state = Mutex(false)
+
+    public init() {}
+
+    public func cancel() {
+        state.withLock { $0 = true }
+    }
+
+    public var isCancelled: Bool {
+        state.withLock { $0 }
+    }
+}
+
 /// How an authorized HTTPS GET is performed. The contained agent is not a case.
 public enum RuntimeHTTPExecutor: Sendable {
     /// No socket and no HTTP exchange.
@@ -427,6 +442,52 @@ private func admissionResponse(
         }
         return .httpFailed(failure)
     }
+}
+
+/// Resolves a name without blocking the session reaper.
+///
+/// `lookup` runs on another thread. This returns when the budget ends or
+/// `RuntimeAdmissionStop.shouldStop` is set, so a stuck resolver cannot
+/// keep the contained process group alive.
+public func resolveAdmittedHTTPHost(
+    _ name: String,
+    budgetMilliseconds: Int,
+    lookup: @escaping @Sendable (String) -> Result<[HTTPIPAddress], HTTPResolutionError>
+) -> Result<[HTTPIPAddress], HTTPResolutionError> {
+    if RuntimeAdmissionStop.shouldStop() || Task.isCancelled {
+        return .failure(.failed)
+    }
+    let flight = AdmittedDNSLookup()
+    DispatchQueue.global(qos: .utility).async {
+        flight.store(lookup(name))
+    }
+    let deadline = monotonicMilliseconds() + Int64(max(budgetMilliseconds, 0))
+    while monotonicMilliseconds() < deadline {
+        if let result = flight.current() { return result }
+        if RuntimeAdmissionStop.shouldStop() || Task.isCancelled {
+            return .failure(.failed)
+        }
+        usleep(10_000)
+    }
+    return .failure(.failed)
+}
+
+private final class AdmittedDNSLookup: Sendable {
+    private let result = Mutex<Result<[HTTPIPAddress], HTTPResolutionError>?>(nil)
+
+    func store(_ value: Result<[HTTPIPAddress], HTTPResolutionError>) {
+        result.withLock { $0 = value }
+    }
+
+    func current() -> Result<[HTTPIPAddress], HTTPResolutionError>? {
+        result.withLock { $0 }
+    }
+}
+
+private func monotonicMilliseconds() -> Int64 {
+    var time = timespec()
+    clock_gettime(CLOCK_MONOTONIC, &time)
+    return Int64(time.tv_sec) * 1_000 + Int64(time.tv_nsec) / 1_000_000
 }
 
 private func httpFailureName(_ failure: HTTPOpenFailure) -> String {

@@ -84,7 +84,25 @@ enum OpenCodeRun {
 
     /// Shell requests from the contained agent use `AgentAuthorization`, not the hook gate.
     static var admission: RuntimeAdmissionConfiguration { RuntimeAdmissionConfiguration(
-        normalize: normalizeRuntimeAdmission,
+        normalize: { subject, action in
+            switch action {
+            case .http(let method, let url):
+                return normalizeRuntimeHTTP(
+                    subject: subject,
+                    method: method,
+                    url: url,
+                    resolve: { name in
+                        resolveAdmittedHTTPHost(
+                            name,
+                            budgetMilliseconds: HTTPEgressLimits.requestTimeoutMilliseconds,
+                            lookup: resolveHTTPHost
+                        )
+                    }
+                )
+            case .shell:
+                return normalizeRuntimeAdmission(subject: subject, action: action)
+            }
+        },
         executor: .containedCommand,
         http: .direct,
         approval: { _ in nil },
