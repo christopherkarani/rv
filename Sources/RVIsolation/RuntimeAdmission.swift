@@ -458,9 +458,13 @@ public func resolveAdmittedHTTPHost(
         return .failure(.failed)
     }
     let flight = AdmittedDNSLookup()
-    DispatchQueue.global(qos: .utility).async {
+    // A dedicated thread, not the shared queue. The test process and a busy
+    // runtime can stall that queue long enough to miss the request budget.
+    let worker = Thread {
         flight.store(lookup(name))
     }
+    worker.name = "rv.http.resolve"
+    worker.start()
     let deadline = monotonicMilliseconds() + Int64(max(budgetMilliseconds, 0))
     while monotonicMilliseconds() < deadline {
         if let result = flight.current() { return result }
