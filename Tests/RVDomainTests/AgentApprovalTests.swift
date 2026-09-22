@@ -36,11 +36,11 @@ struct AgentApprovalTests {
         )
     }
 
-    @Test func resolve_createRule_fails() throws {
-        let pending = try requireTopicForcePushPending()
-        expectResolveFailure(
-            AgentAuthorization.resolve(pending, approval: .success(.createRule)),
-            .ruleCreationUnsupported
+    @Test func humanDecision_mapsLedgerDecision() {
+        #expect(AgentAuthorization.humanDecision(.allowOnce) == .success(.allowOnce))
+        #expect(AgentAuthorization.humanDecision(.deny) == .success(.deny))
+        #expect(
+            AgentAuthorization.humanDecision(.createRule) == .failure(.ruleCreationUnsupported)
         )
     }
 
@@ -49,20 +49,6 @@ struct AgentApprovalTests {
         expectResolveFailure(
             AgentAuthorization.resolve(pending, approval: .failure(.approvalUnavailable)),
             .approvalUnavailable
-        )
-    }
-
-    @Test func resolve_hostAsk_fails() throws {
-        let decided = try requireUncoveredPending()
-        let pending = PendingAuthorization(
-            action: decided.action,
-            reason: .hostAsk,
-            deny: decided.deny,
-            explanation: decided.explanation
-        )
-        expectResolveFailure(
-            AgentAuthorization.resolve(pending, approval: .success(.allowOnce)),
-            .hostAskUnsupported
         )
     }
 
@@ -140,13 +126,12 @@ private func requireUncoveredPending() throws -> PendingAuthorization {
 
 private func requirePending(
     _ authorization: AgentAuthorization,
-    reason: ApprovalReason,
+    reason: RuntimeAskReason,
     sourceLocation: SourceLocation = #_sourceLocation
 ) throws -> PendingAuthorization {
     switch authorization {
     case .pending(let pending):
         #expect(pending.reason == reason, sourceLocation: sourceLocation)
-        #expect(pending.reason != .hostAsk, sourceLocation: sourceLocation)
         return pending
     case .allowed:
         Issue.record(

@@ -235,14 +235,11 @@ private struct HTTPHarness {
         exchange: HTTPHarnessExchange = .empty
     ) throws {
         let workspace = try #require(WorkingDirectory(validating: "/tmp/rv-http-admission"))
-        let plan = try compileIsolationPlan(
-            IsolationCompileRequest(requested: .contained, workspace: workspace)
-        ).get()
+        let plan = compileContainedPlan(workspace: workspace)
         let runtime = RuntimeSession(
             id: RuntimeSessionID(),
             host: .opencode,
             workspace: workspace,
-            mode: plan.mode,
             backend: .seatbelt,
             startedAt: Date(timeIntervalSince1970: 0),
             child: nil
@@ -346,14 +343,10 @@ private final class TransferState: @unchecked Sendable {
 #if os(macOS)
 private func loopbackAction() throws -> HTTPAction {
     let workspace = try #require(WorkingDirectory(validating: "/tmp/rv-http-admission"))
-    let plan = try compileIsolationPlan(
-        IsolationCompileRequest(requested: .contained, workspace: workspace)
-    ).get()
     let session = RuntimeSession(
         id: RuntimeSessionID(),
         host: .opencode,
         workspace: workspace,
-        mode: plan.mode,
         backend: .seatbelt,
         startedAt: Date(timeIntervalSince1970: 0),
         child: nil

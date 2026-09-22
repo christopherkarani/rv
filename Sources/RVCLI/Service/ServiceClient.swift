@@ -402,7 +402,7 @@ public struct ServiceClient: Sendable {
             return .corePacksUnavailable
         case .skew(.majorVersion):
             return .majorVersionMismatch
-        case .skew(.protocolSkew), .skew(.handshakeRequired):
+        case .skew(.protocolSkew):
             return .rejected
         }
     }

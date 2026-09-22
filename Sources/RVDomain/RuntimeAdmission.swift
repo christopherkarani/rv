@@ -117,6 +117,14 @@ public struct RuntimeAdmissionSubject: Sendable, Equatable {
     }
 }
 
+/// Polled by name lookup while `getaddrinfo` runs on another thread.
+///
+/// The session loop sets this around normalize. A stuck resolver then cannot
+/// keep the contained process group alive after the leader exits.
+public enum RuntimeAdmissionStop {
+    @TaskLocal public static var shouldStop: @Sendable () -> Bool = { false }
+}
+
 /// What the agent asked for. This is not a canonical HTTP action and not a permit.
 public enum RuntimeRequestedAction: Sendable, Equatable {
     case shell(ShellCommand)
@@ -460,8 +468,8 @@ public enum RuntimeAdmissionGate {
                 requestID: requestID,
                 fingerprint: action.fingerprint.rawValue,
                 authorization: .pending,
-                response: .pending(pending.reason),
-                result: pending.reason.rawValue,
+                response: .pending(pending.reason.ledgerReason),
+                result: pending.reason.ledgerReason.rawValue,
                 http: http
             )
         case .approvalFailed:

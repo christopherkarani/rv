@@ -173,6 +173,9 @@ extension HTTPAddressClass {
         if prefixMatch(bytes, [0x20, 0x01, 0x0d, 0xb8], 32) { return .documentation }
         if prefixMatch(bytes, [0x20, 0x01, 0x00, 0x10], 28) { return .reserved }
         if prefixMatch(bytes, [0x20, 0x01, 0x00, 0x02, 0x00, 0x00], 48) { return .reserved }
+        // Teredo (2001::/32) and 6to4 (2002::/16) embed an IPv4 address.
+        if prefixMatch(bytes, [0x20, 0x01, 0x00, 0x00], 32) { return .reserved }
+        if prefixMatch(bytes, [0x20, 0x02], 16) { return .reserved }
         if bytes[0] & 0xfe == 0xfc { return .uniqueLocal }
         if bytes[0] == 0xfe && bytes[1] & 0xc0 == 0x80 { return .linkLocal }
         if bytes[0] == 0xfe && bytes[1] & 0xc0 == 0xc0 { return .uniqueLocal }
@@ -240,7 +243,7 @@ extension HTTPAddressClass {
         }
         let rest = bits % 8
         if rest == 0 { return true }
-        let mask = UInt8(0xff << (8 - rest))
+        let mask = UInt8(0xff) << (8 - rest)
         return bytes[whole] & mask == prefix[whole] & mask
     }
 }

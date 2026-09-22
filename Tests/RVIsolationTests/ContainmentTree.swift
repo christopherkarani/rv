@@ -57,6 +57,10 @@ struct ContainmentTree {
         try #require(RepositoryRoot(validating: path))
     }
 
+    func containedPlan() throws -> ContainedPlan {
+        compileContainedPlan(workspace: try #require(contained.workspace))
+    }
+
     static func requirePlan(_ request: IsolationCompileRequest) throws -> IsolationPlan {
         switch compileIsolationPlan(request) {
         case .success(let plan):
@@ -66,7 +70,27 @@ struct ContainmentTree {
             case .containedRequiresWorkspace:
                 Issue.record("containment fixture compile must not fail containedRequiresWorkspace")
                 throw error
+            case .notContainedRequest:
+                Issue.record("containment fixture compile must not fail notContainedRequest")
+                throw error
             }
+        }
+    }
+
+    func requireContainedIsolation() throws -> ContainedIsolation {
+        switch contained.containedIsolation() {
+        case .success(let isolation):
+            return isolation
+        case .failure(let error):
+            switch error {
+            case .notContained:
+                Issue.record("contained fixture must narrow")
+            case .missingWorkspace:
+                Issue.record("contained fixture must include a workspace")
+            case .guaranteesMismatch:
+                Issue.record("contained fixture guarantees must match the first slice")
+            }
+            throw error
         }
     }
 }

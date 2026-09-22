@@ -147,6 +147,7 @@ private func openAndExchange(
         address: address,
         port: action.destination.port,
         deadline: connectDeadline,
+        writeDeadline: deadline,
         shouldStop: shouldStop
     ) {
     case .failure(let failure):
@@ -181,6 +182,7 @@ private final class PinnedTLSConnection: @unchecked Sendable {
         address: HTTPIPAddress,
         port: Int,
         deadline: Date,
+        writeDeadline: Date,
         shouldStop: @escaping @Sendable () -> Bool
     ) -> Result<HTTPTransfer, HTTPEgressFailure> {
         let connection = NWConnection(to: endpoint, using: parameters)
@@ -217,7 +219,9 @@ private final class PinnedTLSConnection: @unchecked Sendable {
                     }
                     let pinned = PinnedTLSConnection(connection)
                     pinned.startReceive()
-                    return .success(pinned.transfer())
+                    return .success(
+                        pinned.transfer(deadline: writeDeadline, shouldStop: shouldStop)
+                    )
                 case .failed:
                     connection.cancel()
                     return .failure(.opened(.transport))
@@ -231,10 +235,13 @@ private final class PinnedTLSConnection: @unchecked Sendable {
         return .failure(.opened(.timedOut))
     }
 
-    func transfer() -> HTTPTransfer {
+    func transfer(
+        deadline: Date,
+        shouldStop: @escaping @Sendable () -> Bool
+    ) -> HTTPTransfer {
         HTTPTransfer(
             write: { [self] data in
-                self.write(data)
+                self.write(data, deadline: deadline, shouldStop: shouldStop)
             },
             read: { [self] maximum, wait in
                 self.read(maximumBytes: maximum, waitMilliseconds: wait)
@@ -245,16 +252,30 @@ private final class PinnedTLSConnection: @unchecked Sendable {
         )
     }
 
-    private func write(_ data: Data) -> Result<Void, HTTPTransferFault> {
-        if stopped { return .failure(.failed) }
+    private func write(
+        _ data: Data,
+        deadline: Date,
+        shouldStop: @escaping @Sendable () -> Bool
+    ) -> Result<Void, HTTPTransferFault> {
+        if stopped || shouldStop() { return .failure(.cancelled) }
         let semaphore = DispatchSemaphore(value: 0)
-        let outcome = Mutex(false)
+        let outcome = Mutex<Bool?>(nil)
         connection.send(content: data, completion: .contentProcessed { error in
             outcome.withLock { $0 = error == nil }
             semaphore.signal()
         })
-        semaphore.wait()
-        return outcome.withLock { $0 } ? .success(()) : .failure(.failed)
+        let slice = DispatchTimeInterval.milliseconds(HTTPEgressLimits.readSliceMilliseconds)
+        while Date() < deadline {
+            if semaphore.wait(timeout: .now() + slice) == .success {
+                return outcome.withLock { $0 == true } ? .success(()) : .failure(.failed)
+            }
+            if stopped || shouldStop() {
+                connection.cancel()
+                return .failure(.cancelled)
+            }
+        }
+        connection.cancel()
+        return .failure(.timedOut)
     }
 
     private func read(maximumBytes: Int, waitMilliseconds: Int) -> Result<HTTPTransferRead, HTTPTransferFault> {

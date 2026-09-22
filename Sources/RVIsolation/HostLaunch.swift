@@ -2,15 +2,15 @@ import RVDomain
 
 public enum HostLaunchError: Error, Sendable, Equatable {
     case hostUnsupported
-    case planNotContained
     case apply(IsolationApplyError)
 }
 
 /// RV-owned host spawn door. Not `LocalExecutor.perform`.
+/// Observed and mediated plans cannot be passed here.
 public func launchContainedHost(
     host: HookHost,
     command: IsolatedCommand,
-    plan: IsolationPlan,
+    plan: ContainedPlan,
     admission: RuntimeAdmissionConfiguration = .failClosed
 ) -> Result<IsolatedRunResult, HostLaunchError> {
     switch host {
@@ -19,22 +19,17 @@ public func launchContainedHost(
     case .grok, .pi, .claude, .openclaw, .hermes, .codex, .cursor:
         return .failure(.hostUnsupported)
     }
-    switch plan.mode {
-    case .observed, .mediated:
-        return .failure(.planNotContained)
-    case .contained:
-        switch IsolationBackends.applyLaunch(
-            plan,
-            command: command,
-            io: .inherit,
-            host: host,
-            sessionStore: .production,
-            admission: admission
-        ) {
-        case .success(let result):
-            return .success(result)
-        case .failure(let error):
-            return .failure(.apply(error))
-        }
+    switch IsolationBackends.applyLaunch(
+        plan.isolationPlan(),
+        command: command,
+        io: .inherit,
+        host: host,
+        sessionStore: .production,
+        admission: admission
+    ) {
+    case .success(let result):
+        return .success(result)
+    case .failure(let error):
+        return .failure(.apply(error))
     }
 }

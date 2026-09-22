@@ -15,22 +15,37 @@ public enum ReviewSanitizer: Sendable {
     }
 
     public static func sanitize(_ shell: ShellAction) -> ShellAction {
-        let analysis = shell.analysis.map(sanitize)
+        let fingerprint = ActionFingerprint(
+            rawValue: redactCredentials(in: shell.fingerprint.rawValue)
+        )
+        let scope = ActionScope(
+            workingDirectory: shell.scope.workingDirectory.flatMap { directory in
+                WorkingDirectory(rawValue: redactCredentials(in: directory.rawValue))
+            }
+        )
+        let supportingCommand = shell.supportingCommand.map { command in
+            ShellCommand(rawValue: redactCredentials(in: command.rawValue))
+        }
+        if let analysis = shell.analysis.map(sanitize) {
+            return ShellAction(
+                fingerprint: fingerprint,
+                scope: scope,
+                supportingCommand: supportingCommand,
+                analysis: analysis
+            )
+        }
         return ShellAction(
-            fingerprint: ActionFingerprint(
-                rawValue: redactCredentials(in: shell.fingerprint.rawValue)
-            ),
+            fingerprint: fingerprint,
             effects: shell.effects,
-            resources: resources(for: analysis, fallback: shell.resources),
-            scope: ActionScope(
-                workingDirectory: shell.scope.workingDirectory.flatMap { directory in
-                    WorkingDirectory(rawValue: redactCredentials(in: directory.rawValue))
-                }
+            resources: ActionResources(
+                remoteName: sanitizeField(shell.resources.remoteName),
+                branchName: sanitizeField(shell.resources.branchName),
+                path: sanitizeField(shell.resources.path),
+                filesystemScope: shell.resources.filesystemScope,
+                resourceKind: shell.resources.resourceKind
             ),
-            supportingCommand: shell.supportingCommand.map { command in
-                ShellCommand(rawValue: redactCredentials(in: command.rawValue))
-            },
-            analysis: analysis
+            scope: scope,
+            supportingCommand: supportingCommand
         )
     }
 
@@ -102,26 +117,6 @@ public enum ReviewSanitizer: Sendable {
             result[key] = redactCredentials(in: value)
         }
         return result
-    }
-
-    private static func resources(
-        for analysis: SemanticAction?,
-        fallback: ActionResources
-    ) -> ActionResources {
-        switch analysis {
-        case .git(let git):
-            return git.resources
-        case .filesystem(let filesystem):
-            return filesystem.resources
-        case nil:
-            return ActionResources(
-                remoteName: sanitizeField(fallback.remoteName),
-                branchName: sanitizeField(fallback.branchName),
-                path: sanitizeField(fallback.path),
-                filesystemScope: fallback.filesystemScope,
-                resourceKind: fallback.resourceKind
-            )
-        }
     }
 
     private static func sanitize(_ analysis: SemanticAction) -> SemanticAction {

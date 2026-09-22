@@ -97,6 +97,8 @@ public struct HTTPExchangeLimits: Sendable, Equatable {
 
 public enum HTTPTransferFault: Error, Sendable, Equatable {
     case failed
+    case cancelled
+    case timedOut
 }
 
 public enum HTTPTransferRead: Sendable, Equatable {
@@ -163,9 +165,16 @@ public enum HTTPExchange {
             return .failure(.notOpened(.cancelled))
         }
         switch transfer.write(HTTPRequestMessage.bytes(for: destination)) {
-        case .failure:
+        case .failure(let fault):
             transfer.stop()
-            return .failure(.opened(.transport))
+            switch fault {
+            case .failed:
+                return .failure(.opened(.transport))
+            case .cancelled:
+                return .failure(.opened(.cancelled))
+            case .timedOut:
+                return .failure(.opened(.timedOut))
+            }
         case .success:
             break
         }

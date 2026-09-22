@@ -124,6 +124,35 @@ struct HTTPEgressTests {
         #expect(classify6("ff02::1") == .multicast)
         #expect(classify6("2001:db8::1") == .documentation)
         #expect(classify6("2001:4860:4860::8888") == .publicGlobal)
+        #expect(classify6("2002:a9fe:a9fe::") == .reserved)
+        #expect(classify6("2002:7f00:1::") == .reserved)
+        #expect(classify6("2001:0:4136:e378:8000:63bf:3fff:fdd2") == .reserved)
+        #expect(classify6("2001:10::") == .reserved)
+    }
+
+    @Test func embeddedIPv4TunnelsAreDenied() throws {
+        let tunnel = try httpAction(url: "https://[2002:a9fe:a9fe::]/")
+        guard case .denied = AgentAuthorization.decide(action: .http(tunnel), policy: .empty) else {
+            Issue.record("6to4 metadata address must be denied")
+            return
+        }
+    }
+
+    @Test func cancelledWriteDoesNotReadTheResponse() throws {
+        let transfer = HTTPTransfer(
+            write: { _ in .failure(.cancelled) },
+            read: { _, _ in
+                Issue.record("read must not run after a cancelled write")
+                return .success(.end)
+            },
+            stop: {}
+        )
+        let result = HTTPExchange.perform(
+            destination: try httpAction(url: "https://example.com/").destination,
+            transfer: transfer,
+            deadline: Date().addingTimeInterval(2)
+        )
+        #expect(result == .failure(.opened(.cancelled)))
     }
 
     @Test func blockedNamesAreNotResolved() throws {
@@ -531,7 +560,6 @@ private func httpSubject() throws -> RuntimeAdmissionSubject {
         id: RuntimeSessionID(),
         host: .opencode,
         workspace: workspace,
-        mode: .contained(IsolationGuarantees.firstSliceContained(workspace: workspace)),
         backend: .seatbelt,
         startedAt: Date(timeIntervalSince1970: 0),
         child: nil
@@ -565,7 +593,6 @@ private struct HTTPAdmissionFixture {
             id: RuntimeSessionID(),
             host: .opencode,
             workspace: workspace,
-            mode: .contained(IsolationGuarantees.firstSliceContained(workspace: workspace)),
             backend: .seatbelt,
             startedAt: Date(timeIntervalSince1970: 0),
             child: nil

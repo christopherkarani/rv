@@ -190,11 +190,6 @@ private func forcePushWait(
         action: .shell(
             ShellAction(
                 fingerprint: ActionFingerprint(rawValue: "fp-\(id)"),
-                effects: ActionEffects(kinds: [.remoteSharedBranchMutation]),
-                resources: ActionResources(
-                    remoteName: "origin",
-                    branchName: branch
-                ),
                 scope: ActionScope(workingDirectory: wd("/tmp/ws")),
                 supportingCommand: ShellCommand(
                     rawValue: command ?? "git push --force origin \(branch)"

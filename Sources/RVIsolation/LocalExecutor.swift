@@ -8,8 +8,8 @@ public enum LocalExecutorError: Error, Sendable, Equatable {
 
 /// Dispatches a compiled `ExecutableAction` at most once per fingerprint.
 ///
-/// Spawn is only `IsolationBackends.apply`. Observed and mediated plans
-/// fail closed here so this door cannot start an unsandboxed process.
+/// Spawn is only `IsolationBackends.apply`. The contained plan is converted
+/// to `IsolationPlan` at that call.
 public actor LocalExecutor {
     private var dispatched: Set<ActionFingerprint> = []
 
@@ -23,16 +23,10 @@ public actor LocalExecutor {
         if dispatched.contains(fingerprint) {
             throw LocalExecutorError.alreadyExecuted(fingerprint)
         }
-        switch executable.plan.mode {
-        case .observed, .mediated:
-            throw LocalExecutorError.applyFailed(.backendUnavailable)
-        case .contained:
-            break
-        }
         // Apply can fail after the child has produced effects. Never make the
         // same authorization reusable based on an ambiguous backend result.
         dispatched.insert(fingerprint)
-        switch IsolationBackends.apply(executable.plan, command: executable.command) {
+        switch IsolationBackends.apply(executable.plan.isolationPlan(), command: executable.command) {
         case .success(let result):
             return result
         case .failure(.cancelled):
@@ -45,11 +39,11 @@ public actor LocalExecutor {
     /// Dispatches an already-decided authorization. Does not call `decide`.
     ///
     /// Allowed compiles and runs. Denied returns without spawn. Pending
-    /// without approval waits. Pending with approval goes through `resolve`
-    /// before compile + run.
+    /// without approval waits. Pending with approval goes through `step`,
+    /// which maps the ledger click through `humanDecision` before `resolve`.
     public func perform(
         _ authorization: AgentAuthorization,
-        plan: IsolationPlan,
+        plan: ContainedPlan,
         approval: Result<ApprovalDecision, AgentApprovalError>? = nil
     ) -> Result<AgentTurn, AgentTurnError> {
         switch AgentAuthorization.step(authorization, approval: approval) {
@@ -66,7 +60,7 @@ public actor LocalExecutor {
 
     private func compileAndRun(
         allowed: AllowedAction,
-        plan: IsolationPlan
+        plan: ContainedPlan
     ) -> Result<AgentTurn, AgentTurnError> {
         switch compileExecutable(allowed: allowed, plan: plan) {
         case .failure(let error):

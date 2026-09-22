@@ -127,8 +127,12 @@ struct DescriptorHygieneTests {
         let report = try runProbe(tree, io: .discard, checks: ["handshake:3"])
         report.expectClosed("handshake", errno: EBADF)
         #expect(report.openFDs.contains(3) == false)
-        #expect(report.run.established.family == .seatbelt)
-        #expect(report.run.session != nil)
+        switch report.run.established {
+        case .seatbelt(let session):
+            #expect(report.run.session?.id == session.id)
+        case .observed, .mediated:
+            Issue.record("probe must establish seatbelt")
+        }
     }
 
     @Test func failedLaunchesDoNotAccumulateDescriptors() throws {
@@ -187,11 +191,32 @@ struct DescriptorHygieneTests {
         }
         #endif
         let after = openDescriptors()
-        // Other suites share this process and can close their own descriptors
-        // while this test refuses launch. A refused launch must not keep a
-        // new descriptor, and this test's sentinel must stay open.
-        #expect(after.subtracting(before).isEmpty)
+        // Other suites share this process and open or close descriptors
+        // while this test refuses launch. A new fd counts only when its
+        // path is this tree or an isolation mount. The sentinel must stay open.
+        let leaked = after.subtracting(before).compactMap { fd -> String? in
+            guard let path = descriptorPath(fd),
+                refusedLaunchKeptPath(path, root: tree.rootURL.path)
+            else { return nil }
+            return "\(fd) \(path)"
+        }
+        #expect(leaked.isEmpty)
         #expect(after.contains(sentinel))
+    }
+
+    @Test func refusedLaunchPathAttributionIgnoresOtherSuites() {
+        let root = "/tmp/rv-containment-abc"
+        #expect(refusedLaunchKeptPath("\(root)/ws/sentinel", root: root))
+        #expect(refusedLaunchKeptPath(root, root: root))
+        #expect(refusedLaunchKeptPath("\(root)-other/file", root: root) == false)
+        #expect(refusedLaunchKeptPath("/tmp/other-suite/file", root: root) == false)
+        #expect(refusedLaunchKeptPath("/dev/null", root: root) == false)
+        #expect(refusedLaunchKeptPath("pipe:[12]", root: root) == false)
+        #expect(refusedLaunchKeptPath("socket:[12]", root: root) == false)
+        #expect(refusedLaunchKeptPath("anon_inode:[eventfd]", root: root) == false)
+        #expect(refusedLaunchKeptPath("/dev/disk2", root: root))
+        #expect(refusedLaunchKeptPath("/private/tmp/rv-inode-1", root: root))
+        #expect(refusedLaunchKeptPath("/private/tmp/.rv-saved-ws", root: root))
     }
 
     @Test func cancellationClosesLaunchDescriptors() async throws {
@@ -451,7 +476,12 @@ private func runProbe(
     )
     let run = try result.get()
     #expect(run.exitStatus == 0)
-    #expect(run.established.family == .seatbelt)
+    switch run.established {
+    case .seatbelt:
+        break
+    case .observed, .mediated:
+        Issue.record("probe must establish seatbelt")
+    }
     let text = try String(contentsOf: reportURL, encoding: .utf8)
     return try parseProbeReport(text, run: run)
 }
@@ -527,6 +557,42 @@ private func fileIdentity(_ fd: Int32) -> FileIdentity? {
     // `dev_t` is signed. A socket can report -1, and `UInt64.init` traps on that.
     let device = UInt64(bitPattern: Int64(info.st_dev))
     return FileIdentity(device: device, inode: UInt64(info.st_ino))
+}
+
+/// Path of an open descriptor, when the kernel reports one.
+/// Darwin `F_GETPATH` fails for pipes and sockets. Linux `readlink`
+/// reports those as `pipe:`, `socket:`, or `anon_inode:`.
+private func descriptorPath(_ fd: Int32) -> String? {
+    #if os(Linux)
+    return "/proc/self/fd/\(fd)".withCString { link in
+        var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
+        let count = buffer.withUnsafeMutableBufferPointer { raw -> Int in
+            guard let base = raw.baseAddress else { return -1 }
+            return readlink(link, base, raw.count - 1)
+        }
+        guard count > 0 else { return nil }
+        return String(decoding: buffer.prefix(count).map { UInt8(bitPattern: $0) }, as: UTF8.self)
+    }
+    #else
+    var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
+    guard fcntl(fd, F_GETPATH, &buffer) == 0 else { return nil }
+    let count = buffer.firstIndex(of: 0) ?? buffer.count
+    return String(decoding: buffer[..<count].map { UInt8(bitPattern: $0) }, as: UTF8.self)
+    #endif
+}
+
+/// A refused launch kept this path when it is the test tree or a mount
+/// artifact. Named files outside the tree belong to other suites.
+private func refusedLaunchKeptPath(_ path: String, root: String) -> Bool {
+    if path.hasPrefix("pipe:") || path.hasPrefix("socket:") || path.hasPrefix("anon_inode:") {
+        return false
+    }
+    if path == root || path.hasPrefix(root + "/") {
+        return true
+    }
+    return path.hasPrefix("/dev/disk")
+        || path.contains("rv-inode-")
+        || path.contains(".rv-saved-")
 }
 
 private func openDescriptors() -> Set<Int32> {

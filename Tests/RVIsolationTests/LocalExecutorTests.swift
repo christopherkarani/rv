@@ -11,16 +11,16 @@ import Testing
 /// 4. bare `touch` resolves only `/usr/bin` then `/bin`
 /// 5. unknown bare name is `executableNotResolved`
 /// 6. allowed cwd `/a` + plan workspace `/b` is `workspaceMismatch`
-/// 7. nil action cwd or nil plan workspace is `workingDirectoryRequired`
+/// 7. nil action cwd is `workingDirectoryRequired`. Contained plans always have a workspace.
 /// 8. absolute `/usr/bin/touch` or `/bin/touch` + matching contained plan compiles
 /// 9. contained in-workspace `touch` establishes platform contained, exit 0, file exists
 /// 10. contained outside `touch` stays contained, file absent, exit != 0
-/// 11. observed plan `run` throws `applyFailed(.backendUnavailable)`
+/// 11. observed and mediated plans fail `containedIsolation()` with `.notContained`
 /// 12. second `run` of the same fingerprint throws `alreadyExecuted`
-/// 13. rejected non-contained intent does not dispatch or consume the fingerprint
+/// 13. a contained apply failure consumes the fingerprint
 /// 14. uncovered in-workspace `touch` (empty effects → reviewAsk) →
 ///     resolve(allowOnce) → compileExecutable → contained run creates the file
-/// `compileExecutable(allowed:plan:)` takes `AllowedAction` only.
+/// `compileExecutable(allowed:plan:)` takes `AllowedAction` and `ContainedPlan`.
 /// `LocalExecutor.run` takes `ExecutableAction` only.
 /// There is no `PendingAuthorization` or `DeniedAction` overload.
 /// A decide → pending fixture has no call path into `run`.
@@ -35,7 +35,7 @@ struct LocalExecutorTests {
                 fingerprint: "shell:local-executor:redirect"
             )
         )
-        let plan = try requireContainedPlan(workspace: workspace)
+        let plan = requireContainedPlan(workspace: workspace)
         expectCompileError(
             compileExecutable(allowed: allowed, plan: plan),
             .commandNotSimpleArgv,
@@ -62,7 +62,7 @@ struct LocalExecutorTests {
             )
         )
         let allowed = try requireAllowed(action, review: .success(qualifiedAllow))
-        let plan = try requireContainedPlan(workspace: workspace)
+        let plan = requireContainedPlan(workspace: workspace)
         expectCompileError(
             compileExecutable(allowed: allowed, plan: plan),
             .fileActionUnsupported,
@@ -79,7 +79,7 @@ struct LocalExecutorTests {
                 fingerprint: "shell:local-executor:missing-command"
             )
         )
-        let plan = try requireContainedPlan(workspace: workspace)
+        let plan = requireContainedPlan(workspace: workspace)
         expectCompileError(
             compileExecutable(allowed: allowed, plan: plan),
             .missingCommand,
@@ -97,7 +97,7 @@ struct LocalExecutorTests {
                 fingerprint: "shell:local-executor:bare-touch"
             )
         )
-        let plan = try requireContainedPlan(workspace: workspace)
+        let plan = requireContainedPlan(workspace: workspace)
         switch compileExecutable(allowed: allowed, plan: plan) {
         case .success(let executable):
             #expect(safeTouchExecutables.contains(executable.command.executable))
@@ -118,7 +118,7 @@ struct LocalExecutorTests {
                 fingerprint: "shell:local-executor:unresolved"
             )
         )
-        let plan = try requireContainedPlan(workspace: workspace)
+        let plan = requireContainedPlan(workspace: workspace)
         expectCompileError(
             compileExecutable(allowed: allowed, plan: plan),
             .executableNotResolved,
@@ -137,7 +137,7 @@ struct LocalExecutorTests {
                 fingerprint: "shell:local-executor:workspace-mismatch"
             )
         )
-        let plan = try requireContainedPlan(workspace: planWorkspace)
+        let plan = requireContainedPlan(workspace: planWorkspace)
         expectCompileError(
             compileExecutable(allowed: allowed, plan: plan),
             .workspaceMismatch,
@@ -154,25 +154,11 @@ struct LocalExecutorTests {
                 fingerprint: "shell:local-executor:missing-action-cwd"
             )
         )
-        let contained = try requireContainedPlan(workspace: workspace)
+        let contained = requireContainedPlan(workspace: workspace)
         expectCompileError(
             compileExecutable(allowed: allowedWithoutCwd, plan: contained),
             .workingDirectoryRequired,
             expected: "workingDirectoryRequired for nil action cwd"
-        )
-
-        let allowedWithCwd = try requireAllowed(
-            inRepoWrite(
-                supportingCommand: "touch ok.txt",
-                workingDirectory: workspace,
-                fingerprint: "shell:local-executor:missing-plan-workspace"
-            )
-        )
-        let observedWithoutWorkspace = try requireObservedPlan(workspace: nil)
-        expectCompileError(
-            compileExecutable(allowed: allowedWithCwd, plan: observedWithoutWorkspace),
-            .workingDirectoryRequired,
-            expected: "workingDirectoryRequired for nil plan workspace"
         )
     }
 
@@ -187,7 +173,7 @@ struct LocalExecutorTests {
                 fingerprint: "shell:local-executor:absolute-touch"
             )
         )
-        let plan = try requireContainedPlan(workspace: workspace)
+        let plan = requireContainedPlan(workspace: workspace)
         switch compileExecutable(allowed: allowed, plan: plan) {
         case .success(let executable):
             #expect(executable.command.executable == touch)
@@ -229,7 +215,7 @@ struct LocalExecutorTests {
             workingDirectory: workspace,
             path: inside,
             fingerprint: "shell:local-executor:contained-in",
-            plan: tree.contained
+            plan: try tree.containedPlan()
         )
         guard let result = try await runContainedOrRefuseOnLinux(executable, absentPath: inside) else {
             return
@@ -251,7 +237,7 @@ struct LocalExecutorTests {
             workingDirectory: workspace,
             path: outside,
             fingerprint: "shell:local-executor:contained-out",
-            plan: tree.contained
+            plan: try tree.containedPlan()
         )
         guard let result = try await runContainedOrRefuseOnLinux(executable, absentPath: outside) else {
             return
@@ -261,33 +247,16 @@ struct LocalExecutorTests {
         expectContainedPlatform(result.established, matching: tree.contained)
     }
 
-    @Test func localExecutor_observedPlan_applyFails() async throws {
-        let tree = try ContainmentTree()
-        defer { tree.tearDown() }
-
-        let workspace = try #require(tree.observed.workspace)
-        let inside = tree.workspaceURL.appendingPathComponent("observed.txt").path
-        let executable = try requireExecutable(
-            supportingCommand: "\(try requireTouchExecutable()) \(inside)",
-            workingDirectory: workspace,
-            path: inside,
-            fingerprint: "shell:local-executor:observed",
-            plan: tree.observed
+    @Test func observedAndMediated_containedIsolation_fails() throws {
+        let workspace = try requireWorkspace("/tmp/rv")
+        let observed = try requireObservedPlan(workspace: workspace)
+        let observedMissingWorkspace = try requireObservedPlan(workspace: nil)
+        let mediated = try requirePlan(
+            IsolationCompileRequest(requested: .mediated, workspace: workspace)
         )
-        do {
-            let run = try await LocalExecutor().run(executable)
-            switch run.established.mode {
-            case .contained:
-                Issue.record("observed plan must not establish contained")
-            case .observed, .mediated:
-                Issue.record("observed plan must throw applyFailed, not establish \(run.established.mode)")
-            }
-        } catch let error as LocalExecutorError {
-            expectApplyFailedBackendUnavailable(error)
-        } catch {
-            Issue.record("observed plan must throw LocalExecutorError, got \(error)")
-        }
-        #expect(FileManager.default.fileExists(atPath: inside) == false)
+        #expect(observed.containedIsolation() == .failure(.notContained))
+        #expect(observedMissingWorkspace.containedIsolation() == .failure(.notContained))
+        #expect(mediated.containedIsolation() == .failure(.notContained))
     }
 
     @Test func localExecutor_sameFingerprint_secondRunFails() async throws {
@@ -301,7 +270,7 @@ struct LocalExecutorTests {
             workingDirectory: workspace,
             path: inside,
             fingerprint: "shell:local-executor:once",
-            plan: tree.contained
+            plan: try tree.containedPlan()
         )
         let executor = LocalExecutor()
         #if os(Linux)
@@ -345,7 +314,7 @@ struct LocalExecutorTests {
         }
     }
 
-    @Test func localExecutor_nonContainedRejection_allowsRetry() async throws {
+    @Test func localExecutor_applyFailure_consumesFingerprint() async throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
 
@@ -359,24 +328,31 @@ struct LocalExecutorTests {
                 fingerprint: "shell:local-executor:retry"
             )
         )
-        let observed = try requireExecutable(allowed, plan: tree.observed)
-        let contained = try requireExecutable(allowed, plan: tree.contained)
+        let contained = try requireExecutable(allowed, plan: try tree.containedPlan())
+        try FileManager.default.removeItem(at: tree.workspaceURL)
         let executor = LocalExecutor()
         do {
-            _ = try await executor.run(observed)
-            Issue.record("observed first run must throw so the fingerprint stays free")
+            _ = try await executor.run(contained)
+            Issue.record("missing workspace must throw")
         } catch let error as LocalExecutorError {
-            expectApplyFailedBackendUnavailable(error)
+            expectApplyFailed(error, .workspaceDoesNotExist)
         } catch {
-            Issue.record("observed first run must throw LocalExecutorError, got \(error)")
+            Issue.record("missing workspace must throw LocalExecutorError, got \(error)")
         }
-        guard let result = try await runContainedOrRefuseOnLinux(contained, executor: executor, absentPath: inside)
-        else {
-            return
+        do {
+            _ = try await executor.run(contained)
+            Issue.record("failed contained apply must not be reusable")
+        } catch let error as LocalExecutorError {
+            switch error {
+            case .alreadyExecuted(let fingerprint):
+                #expect(fingerprint == contained.allowed.action.fingerprint)
+            case .cancelled, .applyFailed:
+                Issue.record("expected alreadyExecuted, got \(error)")
+            }
+        } catch {
+            Issue.record("second run must throw LocalExecutorError, got \(error)")
         }
-        #expect(result.exitStatus == 0)
-        #expect(FileManager.default.fileExists(atPath: inside))
-        expectContainedPlatform(result.established, matching: tree.contained)
+        #expect(FileManager.default.fileExists(atPath: inside) == false)
     }
 
     @Test func localExecutor_askResolve_containedInWorkspaceTouch() async throws {
@@ -396,7 +372,7 @@ struct LocalExecutorTests {
         )
         let pending = try requirePendingReviewAsk(action)
         let allowed = try requireResolvedAllowOnce(pending)
-        let executable = try requireExecutable(allowed, plan: tree.contained)
+        let executable = try requireExecutable(allowed, plan: try tree.containedPlan())
         guard let result = try await runContainedOrRefuseOnLinux(executable, absentPath: inside) else {
             return
         }
@@ -517,8 +493,8 @@ private func requireWorkspace(_ path: String) throws -> WorkingDirectory {
     try #require(WorkingDirectory(validating: path))
 }
 
-private func requireContainedPlan(workspace: WorkingDirectory) throws -> IsolationPlan {
-    try requirePlan(IsolationCompileRequest(requested: .contained, workspace: workspace))
+private func requireContainedPlan(workspace: WorkingDirectory) -> ContainedPlan {
+    compileContainedPlan(workspace: workspace)
 }
 
 private func requireObservedPlan(workspace: WorkingDirectory?) throws -> IsolationPlan {
@@ -534,6 +510,9 @@ private func requirePlan(_ request: IsolationCompileRequest) throws -> Isolation
         case .containedRequiresWorkspace:
             Issue.record("fixture compile must not fail containedRequiresWorkspace")
             throw error
+        case .notContainedRequest:
+            Issue.record("fixture compile must not fail notContainedRequest")
+            throw error
         }
     }
 }
@@ -543,7 +522,7 @@ private func requireExecutable(
     workingDirectory: WorkingDirectory,
     path: String,
     fingerprint: String,
-    plan: IsolationPlan
+    plan: ContainedPlan
 ) throws -> ExecutableAction {
     let allowed = try requireAllowed(
         inRepoWrite(
@@ -558,7 +537,7 @@ private func requireExecutable(
 
 private func requireExecutable(
     _ allowed: AllowedAction,
-    plan: IsolationPlan
+    plan: ContainedPlan
 ) throws -> ExecutableAction {
     switch compileExecutable(allowed: allowed, plan: plan) {
     case .success(let executable):
@@ -627,62 +606,59 @@ private func expectContainedPlatform(
     matching plan: IsolationPlan,
     sourceLocation: SourceLocation = #_sourceLocation
 ) {
-    #expect(established.mode == plan.mode, sourceLocation: sourceLocation)
-    switch established.mode {
+    switch plan.mode {
     case .contained:
         break
+    case .observed:
+        Issue.record("contained run must match a contained plan, not observed", sourceLocation: sourceLocation)
+    case .mediated:
+        Issue.record("contained run must match a contained plan, not mediated", sourceLocation: sourceLocation)
+    }
+    #if os(macOS)
+    switch established {
+    case .seatbelt(let session):
+        #expect(session.backend == .seatbelt, sourceLocation: sourceLocation)
     case .observed:
         Issue.record("contained run must not establish observed", sourceLocation: sourceLocation)
     case .mediated:
         Issue.record("contained run must not establish mediated", sourceLocation: sourceLocation)
     }
-    #if os(macOS)
-    switch established.family {
-    case .seatbelt:
-        break
-    case .none:
-        Issue.record("Darwin contained establish must be family seatbelt", sourceLocation: sourceLocation)
-    case .landlock:
-        Issue.record(
-            "Darwin contained establish must be family seatbelt, not landlock",
-            sourceLocation: sourceLocation
-        )
-    }
     #elseif os(Linux)
-    switch established.family {
-    case .landlock:
-        break
-    case .none:
-        Issue.record("Linux contained establish must be family landlock", sourceLocation: sourceLocation)
-    case .seatbelt:
+    switch established {
+    case .observed, .mediated, .seatbelt:
         Issue.record(
-            "Linux contained establish must be family landlock, not seatbelt",
+            "Linux contained success must not mint IsolatedRunResult",
             sourceLocation: sourceLocation
         )
     }
     #else
     Issue.record("first-slice LocalExecutor requires Darwin or Linux", sourceLocation: sourceLocation)
+    switch established {
+    case .observed, .mediated, .seatbelt:
+        break
+    }
     #endif
 }
 
-private func expectApplyFailedBackendUnavailable(
+private func expectApplyFailed(
     _ error: LocalExecutorError,
+    _ expected: IsolationApplyError,
     sourceLocation: SourceLocation = #_sourceLocation
 ) {
     switch error {
-    case .applyFailed(.backendUnavailable):
+    case .applyFailed(let apply) where apply == expected:
         break
     case .cancelled:
         Issue.record("expected applyFailed(backendUnavailable), got cancelled", sourceLocation: sourceLocation)
     case .alreadyExecuted(let fingerprint):
         Issue.record(
-            "expected applyFailed(backendUnavailable), got alreadyExecuted \(fingerprint.rawValue)",
+            "expected applyFailed(\(expected)), got alreadyExecuted \(fingerprint.rawValue)",
             sourceLocation: sourceLocation
         )
     case .applyFailed(let apply):
         recordUnexpectedApplyError(
             apply,
-            expected: "applyFailed(backendUnavailable)",
+            expected: "applyFailed(\(expected))",
             sourceLocation: sourceLocation
         )
     }

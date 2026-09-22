@@ -7,9 +7,10 @@ public enum AgentNormalizationError: Error, Sendable, Equatable {
 extension ProposedAction {
     /// Host-door process proposal from already-run semantic analysis.
     ///
-    /// Unwrap-limited fails closed. Git and filesystem copy effects from the
-    /// innermost action. Unknown is an empty-effect shell proposal. Fingerprint
-    /// is `ActionFingerprint.make`, never semantic `shell:git.*` / `shell:fs.*`.
+    /// Unwrap-limited fails closed. Git and filesystem shells derive effects
+    /// and resources from the innermost subject. Unknown is an empty-effect
+    /// shell proposal. Fingerprint is `ActionFingerprint.make`, never semantic
+    /// `shell:git.*` / `shell:fs.*`.
     public static func process(
         host: HookHost,
         session: SessionID?,
@@ -44,27 +45,36 @@ extension ProposedAction {
         command: ShellCommand,
         analysis: SemanticAnalysis
     ) -> ShellAction {
-        let analyzed: (ActionEffects, ActionResources, SemanticAction?)
+        let fingerprint = ActionFingerprint.make(
+            host: host,
+            session: session,
+            cwd: cwd,
+            command: command
+        )
+        let scope = ActionScope(workingDirectory: cwd)
         switch analysis.innermost {
         case .git(let git):
-            analyzed = (git.effects, git.resources, .git(git))
+            return ShellAction(
+                fingerprint: fingerprint,
+                scope: scope,
+                supportingCommand: command,
+                analysis: .git(git)
+            )
         case .filesystem(let filesystem):
-            analyzed = (filesystem.effects, filesystem.resources, .filesystem(filesystem))
+            return ShellAction(
+                fingerprint: fingerprint,
+                scope: scope,
+                supportingCommand: command,
+                analysis: .filesystem(filesystem)
+            )
         case .wrapper, .unwrapLimited, .unknown:
-            analyzed = (ActionEffects(), ActionResources(), nil)
+            return ShellAction(
+                fingerprint: fingerprint,
+                effects: ActionEffects(),
+                resources: ActionResources(),
+                scope: scope,
+                supportingCommand: command
+            )
         }
-        return ShellAction(
-            fingerprint: ActionFingerprint.make(
-                host: host,
-                session: session,
-                cwd: cwd,
-                command: command
-            ),
-            effects: analyzed.0,
-            resources: analyzed.1,
-            scope: ActionScope(workingDirectory: cwd),
-            supportingCommand: command,
-            analysis: analyzed.2
-        )
     }
 }

@@ -112,7 +112,7 @@ public struct RuntimeAdmissionConfiguration: Sendable {
 
 /// Plan and profile RV already compiled for this launch.
 struct AdmittedLaunchContext: Sendable, Equatable {
-    var plan: IsolationPlan
+    var plan: ContainedPlan
     var profileSource: String
     var workspacePath: String
     /// Process that owns this runtime. `-1` when the caller is not a session.
@@ -146,7 +146,7 @@ final class RuntimeAdmissionSession {
         self.configuration = configuration
         self.subject = RuntimeAdmissionSubject(
             session: binding.session,
-            policyWorkspace: subjectWorkspace(launch: launch, session: binding.session)
+            policyWorkspace: launch.plan.workspace
         )
         self.launch = launch
         self.requestRead = requestRead
@@ -188,13 +188,21 @@ final class RuntimeAdmissionSession {
         _ frame: Result<RuntimeActionFrame, RuntimeAdmissionDecodeError>
     ) -> RuntimeAdmissionDecision {
         var binding = self.binding
+        let leader = launch.sessionLeader
         let decision = RuntimeAdmissionGate.submit(
             binding: &binding,
             frame: frame,
             policy: configuration.policy(subject.session),
             approvalFor: configuration.approval,
             propose: { [configuration, subject] accepted in
-                configuration.normalize(subject, accepted.action)
+                RuntimeAdmissionStop.$shouldStop.withValue({
+                    #if os(macOS)
+                    if sessionLeaderHasExited(leader) { return true }
+                    #endif
+                    return Task.isCancelled
+                }) {
+                    configuration.normalize(subject, accepted.action)
+                }
             }
         )
         flight.withLock { state in
@@ -440,11 +448,4 @@ private func httpFailureName(_ failure: HTTPOpenFailure) -> String {
     case .tooManyHeaders:
         return "tooManyHeaders"
     }
-}
-
-private func subjectWorkspace(
-    launch: AdmittedLaunchContext,
-    session: RuntimeSession
-) -> WorkingDirectory {
-    launch.plan.workspace ?? session.workspace
 }

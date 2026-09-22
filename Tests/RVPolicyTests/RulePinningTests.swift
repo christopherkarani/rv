@@ -769,18 +769,14 @@ struct RulePinningTests {
                 agent: .pi
             ),
             action: .shell(
-                ShellAction(
-                    fingerprint: ActionFingerprint(rawValue: "fp-\(id)"),
-                    effects: ActionEffects(kinds: effects),
-                    resources: ActionResources(
-                        remoteName: "origin",
-                        branchName: branchName,
-                        path: path,
-                        filesystemScope: scope
-                    ),
-                    scope: ActionScope(workingDirectory: wd("/tmp/ws")),
-                    supportingCommand: ShellCommand(rawValue: command),
-                    analysis: gitAction.map { .git($0) }
+                shellAction(
+                    id: id,
+                    command: command,
+                    effects: effects,
+                    branchName: branchName,
+                    path: path,
+                    scope: scope,
+                    gitAction: gitAction
                 )
             ),
             reason: .hostAsk,
@@ -789,6 +785,41 @@ struct RulePinningTests {
             createdAt: now,
             expiresAt: now.addingTimeInterval(3600),
             state: .awaitingHuman
+        )
+    }
+
+    /// Analyzed subjects derive their bag. Effect-only waits keep the stored bag.
+    private func shellAction(
+        id: String,
+        command: String,
+        effects: [ActionEffectKind],
+        branchName: String?,
+        path: String?,
+        scope: FilesystemScope?,
+        gitAction: GitAction?
+    ) -> ShellAction {
+        let fingerprint = ActionFingerprint(rawValue: "fp-\(id)")
+        let actionScope = ActionScope(workingDirectory: wd("/tmp/ws"))
+        let supportingCommand = ShellCommand(rawValue: command)
+        if let gitAction {
+            return ShellAction(
+                fingerprint: fingerprint,
+                scope: actionScope,
+                supportingCommand: supportingCommand,
+                analysis: .git(gitAction)
+            )
+        }
+        return ShellAction(
+            fingerprint: fingerprint,
+            effects: ActionEffects(kinds: effects),
+            resources: ActionResources(
+                remoteName: "origin",
+                branchName: branchName,
+                path: path,
+                filesystemScope: scope
+            ),
+            scope: actionScope,
+            supportingCommand: supportingCommand
         )
     }
 }

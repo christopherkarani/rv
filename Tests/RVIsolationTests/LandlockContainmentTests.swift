@@ -81,21 +81,13 @@ struct LandlockContainmentTests {
         case .success(let run):
             #expect(run.exitStatus == 0)
             #expect(FileManager.default.fileExists(atPath: outside))
-            switch run.established.mode {
+            switch run.established {
             case .observed:
-                break
+                #expect(run.session == nil)
             case .mediated:
                 Issue.record("observed control must not establish mediated")
-            case .contained:
-                Issue.record("observed control must not establish contained")
-            }
-            switch run.established.family {
-            case .none:
-                break
             case .seatbelt:
-                Issue.record("observed control must not use family seatbelt")
-            case .landlock:
-                Issue.record("observed control must not use family landlock")
+                Issue.record("observed control must not establish seatbelt")
             }
         case .failure(let error):
             recordUnexpectedContainmentError(error, expected: "unsandboxed observed outside touch")
@@ -296,19 +288,14 @@ private func expectContainedLandlock(
     matching plan: IsolationPlan,
     sourceLocation: SourceLocation = #_sourceLocation
 ) {
-    #expect(established.mode == plan.mode, sourceLocation: sourceLocation)
-    switch established.family {
-    case .landlock:
-        break
-    case .none:
-        Issue.record("Linux contained establish must be family landlock", sourceLocation: sourceLocation)
-    case .seatbelt:
+    switch established {
+    case .observed, .mediated, .seatbelt:
         Issue.record(
-            "Linux contained establish must be family landlock, not seatbelt",
+            "Landlock cannot be a successful IsolatedRunResult",
             sourceLocation: sourceLocation
         )
     }
-    switch established.mode {
+    switch plan.mode {
     case .contained(let guarantees):
         switch guarantees.filesystem {
         case .workspaceScoped(let limitedTo):
@@ -347,9 +334,9 @@ private func expectContainedLandlock(
             )
         }
     case .observed:
-        Issue.record("Linux contained establish must not be observed", sourceLocation: sourceLocation)
+        Issue.record("matching plan must be contained, not observed", sourceLocation: sourceLocation)
     case .mediated:
-        Issue.record("Linux contained establish must not be mediated", sourceLocation: sourceLocation)
+        Issue.record("matching plan must be contained, not mediated", sourceLocation: sourceLocation)
     }
 }
 

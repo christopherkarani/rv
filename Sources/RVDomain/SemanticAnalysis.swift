@@ -65,6 +65,26 @@ public enum SemanticAnalysis: Sendable, Equatable, Codable {
     }
 }
 
+extension SemanticAction {
+    public var effects: ActionEffects {
+        switch self {
+        case .git(let action):
+            return action.effects
+        case .filesystem(let action):
+            return action.effects
+        }
+    }
+
+    public var resources: ActionResources {
+        switch self {
+        case .git(let action):
+            return action.resources
+        case .filesystem(let action):
+            return action.resources
+        }
+    }
+}
+
 /// Shared-by-name set used by `GitAnalysisContext.isSharedBranch` and
 /// `ActionPolicyEngine`.
 enum GitSharedBranch {

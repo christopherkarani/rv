@@ -104,11 +104,15 @@ public struct ActionScope: Sendable, Equatable, Codable {
 
 /// Semantic shell action whose closed subject is git or filesystem, never both.
 ///
+/// Effect-only values store `effects` and `resources` and leave `analysis` nil.
+/// Analyzed values derive both bags from `analysis`.
+///
 /// The raw command, if present, is supporting evidence only.
 ///
 /// Codable keeps the XOR labels `gitAction` and `filesystemAction`, omits the
 /// unused key (does not write null), and never encodes `analysis`. Decode fails
-/// if both keys have values.
+/// if both keys have values, or if a subject is present and a stored bag
+/// disagrees with that subject's projection. Absent bag keys use the projection.
 public struct ShellAction: Sendable, Equatable, Codable {
     public var fingerprint: ActionFingerprint
     public var effects: ActionEffects
@@ -136,55 +140,61 @@ public struct ShellAction: Sendable, Equatable, Codable {
         return nil
     }
 
-    /// Creates a shell action storing `analysis` as the closed subject.
+    /// Effect-only shell. `analysis` stays nil and the effects bag is stored.
     public init(
         fingerprint: ActionFingerprint,
         effects: ActionEffects = ActionEffects(),
         resources: ActionResources = ActionResources(),
         scope: ActionScope = ActionScope(),
-        supportingCommand: ShellCommand? = nil,
-        analysis: SemanticAction? = nil
+        supportingCommand: ShellCommand? = nil
     ) {
         self.fingerprint = fingerprint
         self.effects = effects
         self.resources = resources
         self.scope = scope
         self.supportingCommand = supportingCommand
+        self.analysis = nil
+    }
+
+    /// Analyzed shell. Effects and resources are the projection of `analysis`.
+    public init(
+        fingerprint: ActionFingerprint,
+        scope: ActionScope = ActionScope(),
+        supportingCommand: ShellCommand? = nil,
+        analysis: SemanticAction
+    ) {
+        self.fingerprint = fingerprint
+        self.effects = analysis.effects
+        self.resources = analysis.resources
+        self.scope = scope
+        self.supportingCommand = supportingCommand
         self.analysis = analysis
     }
 
-    /// Creates a shell action whose subject is `gitAction`.
+    /// Analyzed shell whose subject is `gitAction`. Effects and resources come from that action.
     public init(
         fingerprint: ActionFingerprint,
-        effects: ActionEffects = ActionEffects(),
-        resources: ActionResources = ActionResources(),
         scope: ActionScope = ActionScope(),
         supportingCommand: ShellCommand? = nil,
         gitAction: GitAction
     ) {
         self.init(
             fingerprint: fingerprint,
-            effects: effects,
-            resources: resources,
             scope: scope,
             supportingCommand: supportingCommand,
             analysis: .git(gitAction)
         )
     }
 
-    /// Creates a shell action whose subject is `filesystemAction`.
+    /// Analyzed shell whose subject is `filesystemAction`. Effects and resources come from that action.
     public init(
         fingerprint: ActionFingerprint,
-        effects: ActionEffects = ActionEffects(),
-        resources: ActionResources = ActionResources(),
         scope: ActionScope = ActionScope(),
         supportingCommand: ShellCommand? = nil,
         filesystemAction: FilesystemAction
     ) {
         self.init(
             fingerprint: fingerprint,
-            effects: effects,
-            resources: resources,
             scope: scope,
             supportingCommand: supportingCommand,
             analysis: .filesystem(filesystemAction)
@@ -204,10 +214,6 @@ public struct ShellAction: Sendable, Equatable, Codable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         fingerprint = try container.decode(ActionFingerprint.self, forKey: .fingerprint)
-        effects = try container.decodeIfPresent(ActionEffects.self, forKey: .effects)
-            ?? ActionEffects()
-        resources = try container.decodeIfPresent(ActionResources.self, forKey: .resources)
-            ?? ActionResources()
         scope = try container.decodeIfPresent(ActionScope.self, forKey: .scope) ?? ActionScope()
         supportingCommand = try container.decodeIfPresent(
             ShellCommand.self,
@@ -226,11 +232,35 @@ public struct ShellAction: Sendable, Equatable, Codable {
                 )
             )
         }
+        let subject: SemanticAction?
         if let git {
-            analysis = .git(git)
+            subject = .git(git)
         } else if let filesystem {
-            analysis = .filesystem(filesystem)
+            subject = .filesystem(filesystem)
         } else {
+            subject = nil
+        }
+        if let subject {
+            effects = try Self.projectedBag(
+                ActionEffects.self,
+                key: .effects,
+                in: container,
+                projection: subject.effects,
+                disagreement: "ShellAction effects disagree with the analyzed subject"
+            )
+            resources = try Self.projectedBag(
+                ActionResources.self,
+                key: .resources,
+                in: container,
+                projection: subject.resources,
+                disagreement: "ShellAction resources disagree with the analyzed subject"
+            )
+            analysis = subject
+        } else {
+            effects = try container.decodeIfPresent(ActionEffects.self, forKey: .effects)
+                ?? ActionEffects()
+            resources = try container.decodeIfPresent(ActionResources.self, forKey: .resources)
+                ?? ActionResources()
             analysis = nil
         }
     }
@@ -238,8 +268,13 @@ public struct ShellAction: Sendable, Equatable, Codable {
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(fingerprint, forKey: .fingerprint)
-        try container.encode(effects, forKey: .effects)
-        try container.encode(resources, forKey: .resources)
+        if let analysis {
+            try container.encode(analysis.effects, forKey: .effects)
+            try container.encode(analysis.resources, forKey: .resources)
+        } else {
+            try container.encode(effects, forKey: .effects)
+            try container.encode(resources, forKey: .resources)
+        }
         try container.encode(scope, forKey: .scope)
         try container.encodeIfPresent(supportingCommand, forKey: .supportingCommand)
         switch analysis {
@@ -250,6 +285,29 @@ public struct ShellAction: Sendable, Equatable, Codable {
         case nil:
             break
         }
+    }
+
+    /// A present bag must equal the subject projection. A missing key uses it.
+    private static func projectedBag<T: Decodable & Equatable>(
+        _: T.Type,
+        key: CodingKeys,
+        in container: KeyedDecodingContainer<CodingKeys>,
+        projection: T,
+        disagreement: String
+    ) throws -> T {
+        guard container.contains(key) else {
+            return projection
+        }
+        let decoded = try container.decodeIfPresent(T.self, forKey: key)
+        guard let decoded, decoded == projection else {
+            throw DecodingError.dataCorrupted(
+                DecodingError.Context(
+                    codingPath: container.codingPath,
+                    debugDescription: disagreement
+                )
+            )
+        }
+        return projection
     }
 }
 
