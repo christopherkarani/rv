@@ -18,7 +18,7 @@ import Testing
 /// 12. `compileContainedIsolation` of contained + nil workspace is
 ///     `.containedRequiresWorkspace`, not `.notContainedRequest`
 /// 13. `compileContainedIsolation` of contained + workspace matches
-///     `compileIsolationPlan`, and `plan.mode` is `.contained` writesLimited to it
+///     `compileIsolationPlan`, and `plan.mode` is `.contained` workspaceScoped to it
 @Suite("IsolationPlan")
 struct IsolationPlanTests {
     @Test func contained_withoutWorkspace_failsContainedRequiresWorkspace() {
@@ -322,7 +322,7 @@ private func expectContainedGuarantees(
     case .contained(let guarantees):
         #expect(guarantees == isolation.guarantees, sourceLocation: sourceLocation)
         switch guarantees.filesystem {
-        case .writesLimited(let limitedTo):
+        case .workspaceScoped(let limitedTo):
             #expect(limitedTo == workspace, sourceLocation: sourceLocation)
         case .unrestricted:
             Issue.record(
@@ -340,8 +340,22 @@ private func expectContainedGuarantees(
             )
         }
         switch guarantees.network {
-        case .unrestricted:
+        case .denied:
             break
+        case .unrestricted:
+            Issue.record(
+                "contained isolation must deny network",
+                sourceLocation: sourceLocation
+            )
+        }
+        switch guarantees.process {
+        case .hostSignalsDenied:
+            break
+        case .unrestricted:
+            Issue.record(
+                "contained isolation must deny signals outside the sandbox",
+                sourceLocation: sourceLocation
+            )
         }
     case .observed:
         Issue.record("contained isolation plan must not be observed", sourceLocation: sourceLocation)

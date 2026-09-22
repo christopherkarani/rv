@@ -278,12 +278,5 @@ private func isFirstSliceContained(
     _ guarantees: IsolationGuarantees,
     limitingWritesTo workspace: WorkingDirectory
 ) -> Bool {
-    switch (guarantees.filesystem, guarantees.descent, guarantees.network) {
-    case (.writesLimited(let limitedTo), .inherited, .unrestricted):
-        return limitedTo == workspace
-    case (.writesLimited, .notInherited, .unrestricted),
-        (.unrestricted, .inherited, .unrestricted),
-        (.unrestricted, .notInherited, .unrestricted):
-        return false
-    }
+    guarantees == IsolationGuarantees.firstSliceContained(workspace: workspace)
 }
