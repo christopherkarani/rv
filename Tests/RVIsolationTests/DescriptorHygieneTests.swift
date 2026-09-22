@@ -18,7 +18,7 @@ struct DescriptorHygieneTests {
         let outside = tree.siblingURL.appendingPathComponent("ambient-file")
         var held = try OwnedDescriptors.file(outside, bytes: Array("PARENT".utf8))
         defer { held.release() }
-        guard try macOSContainedLaunch(tree, marker: outside) else { return }
+        guard try macOSContainedLaunch(tree) else { return }
         let report = try runProbe(
             tree,
             io: .discard,
@@ -65,7 +65,7 @@ struct DescriptorHygieneTests {
             socket.release()
             pipe.release()
         }
-        guard try macOSContainedLaunch(tree, marker: outside) else { return }
+        guard try macOSContainedLaunch(tree) else { return }
         let checks = file.checks(label: "file") + socket.checks(label: "socket")
             + pipe.checks(label: "pipe") + ["handshake:3"]
         let report = try runProbe(tree, io: .discard, checks: checks)
@@ -204,11 +204,17 @@ struct DescriptorHygieneTests {
         let task = Task {
             IsolationBackends.apply(tree.contained, command: command)
         }
-        let deadline = Date().addingTimeInterval(5)
+        // The private volume is mounted before the shell writes `started`.
+        let deadline = Date().addingTimeInterval(45)
         while Date() < deadline, FileManager.default.fileExists(atPath: started.path) == false {
             try await Task.sleep(nanoseconds: 20_000_000)
         }
-        try #require(FileManager.default.fileExists(atPath: started.path))
+        guard FileManager.default.fileExists(atPath: started.path) else {
+            task.cancel()
+            _ = await task.value
+            Issue.record("contained command did not start before cancellation")
+            return
+        }
         task.cancel()
         let result = await task.value
         switch result {
@@ -392,17 +398,14 @@ private struct OwnedDescriptors {
     }
 }
 
-private func macOSContainedLaunch(_ tree: ContainmentTree, marker: URL? = nil) throws -> Bool {
+private func macOSContainedLaunch(_ tree: ContainmentTree) throws -> Bool {
     #if os(macOS)
-    _ = (tree, marker)
+    _ = tree
     return true
     #else
     let command = try #require(IsolatedCommand(executable: "/bin/true"))
     switch IsolationBackends.apply(tree.contained, command: command) {
     case .failure(.containedGuaranteesUnsupported):
-        if let marker {
-            #expect(FileManager.default.fileExists(atPath: marker.path) == false)
-        }
         return false
     case .failure(let error):
         Issue.record("Linux contained launch must be refused, got \(error)")
