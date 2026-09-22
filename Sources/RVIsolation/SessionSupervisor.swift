@@ -90,14 +90,21 @@ func superviseSeatbelt(
         started: started
     )
     let teardown = mounted.publish ? boundary.publishAndRestore() : boundary.discardAndRestore()
-    switch mounted.result {
+    return containedLaunchResult(child: mounted.result, teardown: teardown)
+}
+
+/// The workspace is back at its original path only when teardown succeeds.
+/// A failed detach or rename is the result the caller has to act on, including
+/// when the child already failed or the task was cancelled.
+func containedLaunchResult(
+    child: Result<IsolatedRunResult, IsolationApplyError>,
+    teardown: Result<Void, IsolationApplyError>
+) -> Result<IsolatedRunResult, IsolationApplyError> {
+    switch teardown {
+    case .failure(let error):
+        return .failure(error)
     case .success:
-        if case .failure(let error) = teardown {
-            return .failure(error)
-        }
-        return mounted.result
-    case .failure:
-        return mounted.result
+        return child
     }
 }
 

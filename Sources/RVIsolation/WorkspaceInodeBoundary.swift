@@ -25,15 +25,40 @@ enum WorkspacePublishDecision: Equatable, Sendable {
     case remove
     /// A name the snapshot does not own. Do not unlink it.
     case leave
-    /// The saved name is a different inode, or its link count changed.
+    /// The saved name is a different inode, or a file's link count changed.
     case reject
+}
+
+/// Whether copy-back may treat `live` as the captured inode.
+///
+/// A directory's link count is the number of names inside it. On APFS that
+/// includes files and symlinks, not only subdirectories. Publish adds and
+/// removes those names, so the count is not directory identity. A regular
+/// file or symlink whose link count changed has another name, and writing
+/// or unlinking it would touch that other name.
+func workspaceInodeAcceptableForPublish(
+    captured: WorkspaceInodeStamp,
+    live: WorkspaceInodeStamp
+) -> Bool {
+    guard captured.device == live.device,
+        captured.inode == live.inode,
+        captured.kind == live.kind
+    else {
+        return false
+    }
+    switch captured.kind {
+    case .directory:
+        return true
+    case .regular, .symlink:
+        return captured.linkCount == live.linkCount
+    }
 }
 
 /// Publishing rule for one relative path.
 ///
-/// `saved == snapshot` is the whole authority check: device, inode, link count,
-/// and kind. A hard link planted on the hidden original tree fails this and
-/// must not be written or unlinked.
+/// `workspaceInodeAcceptableForPublish` is the authority check. A hard link
+/// planted on the hidden original tree fails it and must not be written or
+/// unlinked.
 func workspacePublishDecision(
     snapshot: WorkspaceInodeStamp?,
     saved: WorkspaceInodeStamp?,
@@ -41,7 +66,8 @@ func workspacePublishDecision(
 ) -> WorkspacePublishDecision {
     if onVolume {
         switch (snapshot, saved) {
-        case (let captured?, let live?) where captured == live:
+        case (let captured?, let live?)
+            where workspaceInodeAcceptableForPublish(captured: captured, live: live):
             return .update
         case (nil, nil):
             return .create
@@ -50,12 +76,13 @@ func workspacePublishDecision(
         }
     }
     switch (snapshot, saved) {
-        case (let captured?, let live?) where captured == live:
-            return .remove
-        case (nil, .some), (nil, nil):
-            return .leave
-        default:
-            return .reject
+    case (let captured?, let live?)
+        where workspaceInodeAcceptableForPublish(captured: captured, live: live):
+        return .remove
+    case (nil, .some), (nil, nil):
+        return .leave
+    default:
+        return .reject
     }
 }
 
@@ -65,8 +92,9 @@ func workspacePublishDecision(
 /// name is a hard link to an inode outside it. Hard links cannot cross devices.
 /// A same-user `link` into this mount fails with `EXDEV`, including links
 /// created after the preflight scan. Results are copied back only through a
-/// file descriptor whose device, inode, and link count still match the
-/// pre-launch snapshot.
+/// file descriptor whose device, inode, and kind still match the pre-launch
+/// snapshot. Regular files and symlinks must also keep their link count.
+/// Directory link count changes as children are published.
 ///
 /// A same-user `diskutil unmount force` can tear this mount down. Polite
 /// unmount is blocked by a directory descriptor held until the process group
@@ -251,7 +279,7 @@ final class WorkspaceInodeBoundary {
             guard let fd = openSaved(relative, directory: true), fd >= 0 else { return false }
             defer { close(fd) }
             var status = stat()
-            guard fstat(fd, &status) == 0, stamp(of: status) == captured else { return false }
+            guard fstat(fd, &status) == 0, acceptableSavedInode(captured, status) else { return false }
             return fchmod(fd, entry.mode) == 0
         case .regular:
             guard let source = openVolume(relative, directory: false), source >= 0 else { return false }
@@ -261,7 +289,7 @@ final class WorkspaceInodeBoundary {
             }
             defer { close(dest) }
             var status = stat()
-            guard fstat(dest, &status) == 0, stamp(of: status) == captured else { return false }
+            guard fstat(dest, &status) == 0, acceptableSavedInode(captured, status) else { return false }
             guard ftruncate(dest, 0) == 0 else { return false }
             guard fcopyfile(source, dest, nil, copyfile_flags_t(COPYFILE_DATA | COPYFILE_XATTR)) == 0
             else { return false }
@@ -274,7 +302,7 @@ final class WorkspaceInodeBoundary {
             let matched = parent.name.withCString { name in
                 fstatat(parent.fd, name, &status, AT_SYMLINK_NOFOLLOW) == 0
             }
-            guard matched, stamp(of: status) == captured else { return false }
+            guard matched, acceptableSavedInode(captured, status) else { return false }
             let removed = parent.name.withCString { name in
                 unlinkat(parent.fd, name, 0) == 0
             }
@@ -329,7 +357,7 @@ final class WorkspaceInodeBoundary {
         let matched = parent.name.withCString { name in
             fstatat(parent.fd, name, &status, AT_SYMLINK_NOFOLLOW) == 0
         }
-        guard matched, stamp(of: status) == captured else { return false }
+        guard matched, acceptableSavedInode(captured, status) else { return false }
         let flags = captured.kind == .directory ? AT_REMOVEDIR : 0
         return parent.name.withCString { name in
             unlinkat(parent.fd, name, flags) == 0
@@ -369,7 +397,7 @@ final class WorkspaceInodeBoundary {
                 return nil
             }
             if let captured = snapshot[walked] {
-                guard stamp(of: status) == captured else {
+                guard acceptableSavedInode(captured, status) else {
                     close(next)
                     return nil
                 }
@@ -779,6 +807,11 @@ private func entryName(_ entry: UnsafeMutablePointer<dirent>) -> String {
             String(cString: bytes)
         }
     }
+}
+
+private func acceptableSavedInode(_ captured: WorkspaceInodeStamp, _ status: stat) -> Bool {
+    guard let live = stamp(of: status) else { return false }
+    return workspaceInodeAcceptableForPublish(captured: captured, live: live)
 }
 
 private func stamp(of status: stat) -> WorkspaceInodeStamp? {

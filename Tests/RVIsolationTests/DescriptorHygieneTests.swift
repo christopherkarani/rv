@@ -516,7 +516,15 @@ private func fileIdentity(_ fd: Int32) -> FileIdentity? {
 private func openDescriptors() -> Set<Int32> {
     var limit = rlimit()
     let cap: Int32
-    if getrlimit(RLIMIT_NOFILE, &limit) == 0, limit.rlim_cur < 4096 {
+    // Linux Swift imports `RLIMIT_NOFILE` as `__rlimit_resource`. `getrlimit`
+    // takes `__rlimit_resource_t` (`Int32`). glibc's value is 7. Darwin's
+    // macro is already that integer.
+    #if os(Linux)
+    let nofileLimit: Int32 = 7
+    #else
+    let nofileLimit = RLIMIT_NOFILE
+    #endif
+    if getrlimit(nofileLimit, &limit) == 0, limit.rlim_cur < 4096 {
         cap = Int32(limit.rlim_cur)
     } else {
         cap = 4096

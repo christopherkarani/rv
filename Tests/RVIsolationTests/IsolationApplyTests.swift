@@ -78,6 +78,47 @@ struct IsolationApplyTests {
         #expect(workspacePublishDecision(snapshot: original, saved: original, onVolume: false) == .remove)
         #expect(workspacePublishDecision(snapshot: original, saved: outside, onVolume: false) == .reject)
         #expect(workspacePublishDecision(snapshot: nil, saved: outside, onVolume: false) == .leave)
+        let directory = WorkspaceInodeStamp(device: 1, inode: 4, linkCount: 3, kind: .directory)
+        var directoryAfterChild = directory
+        directoryAfterChild.linkCount = 4
+        #expect(
+            workspacePublishDecision(snapshot: directory, saved: directoryAfterChild, onVolume: true)
+                == .update
+        )
+        #expect(
+            workspacePublishDecision(snapshot: directory, saved: directoryAfterChild, onVolume: false)
+                == .remove
+        )
+        var replacedDirectory = directory
+        replacedDirectory.inode = 5
+        #expect(
+            workspacePublishDecision(snapshot: directory, saved: replacedDirectory, onVolume: true)
+                == .reject
+        )
+        let link = WorkspaceInodeStamp(device: 1, inode: 8, linkCount: 1, kind: .symlink)
+        var linkedTwice = link
+        linkedTwice.linkCount = 2
+        #expect(workspacePublishDecision(snapshot: link, saved: linkedTwice, onVolume: true) == .reject)
+    }
+
+    @Test func containedLaunchResult_reportsTeardownFailure() throws {
+        let established = try #require(EstablishedIsolation(mode: .observed, family: .none))
+        let success = Result<IsolatedRunResult, IsolationApplyError>.success(
+            IsolatedRunResult(established: established, exitStatus: 0)
+        )
+        let childFailure = Result<IsolatedRunResult, IsolationApplyError>.failure(.processSpawnFailed)
+        let restored = Result<Void, IsolationApplyError>.success(())
+        let restoreFailure = Result<Void, IsolationApplyError>.failure(.workspaceInodeBoundaryFailed)
+        #expect(containedLaunchResult(child: success, teardown: restored) == success)
+        #expect(containedLaunchResult(child: childFailure, teardown: restored) == childFailure)
+        #expect(
+            containedLaunchResult(child: success, teardown: restoreFailure)
+                == .failure(.workspaceInodeBoundaryFailed)
+        )
+        #expect(
+            containedLaunchResult(child: childFailure, teardown: restoreFailure)
+                == .failure(.workspaceInodeBoundaryFailed)
+        )
     }
     #endif
 

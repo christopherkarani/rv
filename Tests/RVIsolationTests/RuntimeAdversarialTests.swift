@@ -246,6 +246,40 @@ struct RuntimeAdversarialTests {
         #expect(try String(contentsOf: seed, encoding: .utf8) == "seed-updated\n")
     }
 
+    /// APFS counts every child in a directory's link count. Publish must still
+    /// accept two new names under an existing directory, a file inside a new
+    /// subdirectory, an edit of an existing file, and removal of a non-empty
+    /// directory.
+    @Test func nestedDirectoryEditsPublishAfterLinkCountChanges() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let src = tree.workspaceURL.appendingPathComponent("src")
+        let old = src.appendingPathComponent("old")
+        try FileManager.default.createDirectory(at: old, withIntermediateDirectories: true)
+        try Data("main\n".utf8).write(to: src.appendingPathComponent("main.swift"))
+        try Data("gone\n".utf8).write(to: old.appendingPathComponent("gone.swift"))
+        let outside = tree.siblingURL.appendingPathComponent("outside.txt")
+        try Data("original\n".utf8).write(to: outside)
+        let run = try runShell(
+            tree.contained,
+            """
+            printf 'a\\n' > src/a.txt
+            printf 'b\\n' > src/b.txt
+            mkdir -p src/nested
+            printf 'c\\n' > src/nested/c.txt
+            rm -rf src/old
+            printf 'main2\\n' > src/main.swift
+            """
+        )
+        #expect(run.exitStatus == 0)
+        #expect(try String(contentsOf: src.appendingPathComponent("a.txt"), encoding: .utf8) == "a\n")
+        #expect(try String(contentsOf: src.appendingPathComponent("b.txt"), encoding: .utf8) == "b\n")
+        #expect(try String(contentsOf: src.appendingPathComponent("nested/c.txt"), encoding: .utf8) == "c\n")
+        #expect(try String(contentsOf: src.appendingPathComponent("main.swift"), encoding: .utf8) == "main2\n")
+        #expect(FileManager.default.fileExists(atPath: old.path) == false)
+        #expect(try String(contentsOf: outside, encoding: .utf8) == "original\n")
+    }
+
     @Test func knownGapSyntheticCredentialsAreReadableButCannotBeOverwritten() throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
