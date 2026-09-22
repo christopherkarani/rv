@@ -183,8 +183,10 @@ struct DescriptorHygieneTests {
         }
         #endif
         let after = openDescriptors()
+        // Other suites share this process and can close their own descriptors
+        // while this test refuses launch. A refused launch must not keep a
+        // new descriptor, and this test's sentinel must stay open.
         #expect(after.subtracting(before).isEmpty)
-        #expect(before.subtracting(after).isEmpty)
         #expect(after.contains(sentinel))
     }
 
