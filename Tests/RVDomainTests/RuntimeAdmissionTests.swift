@@ -240,15 +240,13 @@ private struct AdmissionFixture {
             command: "touch marker",
             workspace: workspace,
             session: session,
-            scope: .insideRepository,
-            effects: [.filesystemCreate]
+            scope: .insideRepository
         )
         outside = Self.shell(
             command: "touch /tmp/outside",
             workspace: workspace,
             session: session,
-            scope: .outsideRepository,
-            effects: [.filesystemOverwrite, .outsideRepositoryMutation]
+            scope: .outsideRepository
         )
         uncovered = ProposedAction.shell(
             ShellAction(
@@ -280,8 +278,7 @@ private struct AdmissionFixture {
         command: String,
         workspace: WorkingDirectory,
         session: RuntimeSession,
-        scope: FilesystemScope,
-        effects: [ActionEffectKind]
+        scope: FilesystemScope
     ) -> ProposedAction {
         let path = scope == .insideRepository ? "\(workspace.rawValue)/marker" : "/tmp/outside"
         let target = FilesystemTarget(
@@ -295,8 +292,6 @@ private struct AdmissionFixture {
                 fingerprint: ActionFingerprint(
                     rawValue: "runtime:\(session.id.rawValue.uuidString):\(workspace.rawValue):\(command)"
                 ),
-                effects: ActionEffects(kinds: effects),
-                resources: ActionResources(path: path, filesystemScope: scope, resourceKind: .unknown),
                 scope: ActionScope(workingDirectory: workspace),
                 supportingCommand: ShellCommand(rawValue: command),
                 filesystemAction: .create(targets: [target])
