@@ -201,7 +201,10 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
             usleep(10_000)
         }
         let discard = state.withLock { state -> Bool in
-            guard state.finishedClose == nil, state.lifecycle != .closed, boundary.isReleased == false else {
+            // A close that never reached `.closed` leaves the volume mounted.
+            // Dropping the supervisor puts the original directory back once
+            // every child is gone. A successful close has already released it.
+            guard state.lifecycle != .closed, boundary.isReleased == false else {
                 return false
             }
             return children.allSatisfy { $0.watchFinished && $0.isProcessGone }
@@ -488,7 +491,13 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
         case .lead(let publish):
             let result = performFinish(publish: publish)
             state.withLock { state in
-                state.finishedClose = result
+                if case .failure(.childTeardownFailed) = result {
+                    // The children may die after this wait. A later close has
+                    // to be able to publish; caching this failure would not.
+                    state.closeLeader = false
+                } else {
+                    state.finishedClose = result
+                }
             }
             return result
         }
@@ -541,7 +550,18 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
     private func waitForLeader() -> Result<Void, WorkspaceSessionError> {
         let deadline = Date().addingTimeInterval(60)
         while Date() < deadline {
-            if let finished = state.withLock({ $0.finishedClose }) {
+            let finished = state.withLock { state -> Result<Void, WorkspaceSessionError>? in
+                if let finished = state.finishedClose {
+                    return finished
+                }
+                // The leader stopped without publishing. Concurrent waiters
+                // must observe that failure instead of waiting out the timeout.
+                if state.closeLeader == false, state.lifecycle == .closing {
+                    return .failure(.childTeardownFailed)
+                }
+                return nil
+            }
+            if let finished {
                 return finished
             }
             usleep(10_000)

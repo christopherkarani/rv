@@ -555,6 +555,9 @@ private func waitForSeatbeltSession(
 /// caller after this returns, so a `/dev/null` close cannot drop them.
 /// The handshake is installed first so a later `/dev/null` dup cannot overwrite
 /// a pipe end on 0, 1, or 2 before it is copied to fd 3.
+/// `/dev/null` itself is moved to fd 16 or above. If that open stayed on fd 3,
+/// the close of the extra `/dev/null` descriptor would drop the handshake
+/// write end just installed there.
 /// `POSIX_SPAWN_CLOEXEC_DEFAULT` closes every descriptor these file actions
 /// do not grant, including the log and any socket the parent still holds.
 private func installGrantedDescriptorActions(
@@ -592,14 +595,18 @@ private func installGrantedDescriptorActions(
         let opened = open("/dev/null", O_RDWR | O_CLOEXEC)
         guard opened >= 0 else { return false }
         nullFD = opened
+        if nullFD < 16 {
+            let moved = fcntl(nullFD, F_DUPFD_CLOEXEC, 16)
+            guard moved >= 0 else { return false }
+            close(nullFD)
+            nullFD = moved
+        }
         guard posix_spawn_file_actions_adddup2(&actions, nullFD, STDIN_FILENO) == 0,
             posix_spawn_file_actions_adddup2(&actions, nullFD, STDOUT_FILENO) == 0,
-            posix_spawn_file_actions_adddup2(&actions, nullFD, STDERR_FILENO) == 0
+            posix_spawn_file_actions_adddup2(&actions, nullFD, STDERR_FILENO) == 0,
+            posix_spawn_file_actions_addclose(&actions, nullFD) == 0
         else {
             return false
-        }
-        if nullFD > STDERR_FILENO {
-            return posix_spawn_file_actions_addclose(&actions, nullFD) == 0
         }
         return true
     }

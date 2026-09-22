@@ -120,6 +120,39 @@ struct DescriptorHygieneTests {
         #expect(report.openFDs == grantedPayloadDescriptors)
     }
 
+    /// Discarded stdio opens `/dev/null` in the parent. If that open receives
+    /// fd 3, closing it in the child must not drop the handshake write end.
+    @Test func discardedLaunchEstablishesWhenDescriptorThreeIsFree() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let marker = tree.workspaceURL.appendingPathComponent("fd3-free")
+        let command = try #require(IsolatedCommand(
+            executable: "/bin/sh",
+            arguments: ["-c", "printf ok > fd3-free"]
+        ))
+        #if os(macOS)
+        let parked = vacateDescriptor(3)
+        defer { parked.restore() }
+        switch IsolationBackends.apply(tree.contained, command: command) {
+        case .success(let run):
+            #expect(run.exitStatus == 0)
+            #expect(try String(contentsOf: marker, encoding: .utf8) == "ok")
+        case .failure(let error):
+            Issue.record("discarded launch must establish with fd 3 free, got \(error)")
+        }
+        #else
+        switch IsolationBackends.apply(tree.contained, command: command) {
+        case .failure(.containedGuaranteesUnsupported):
+            break
+        case .failure(let error):
+            Issue.record("Linux contained launch must be refused, got \(error)")
+        case .success(let run):
+            Issue.record("Linux contained launch must be refused, got exit \(run.exitStatus)")
+        }
+        #expect(FileManager.default.fileExists(atPath: marker.path) == false)
+        #endif
+    }
+
     @Test func innerExecutableDoesNotKeepHandshakeDescriptor() throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
@@ -434,6 +467,31 @@ private struct OwnedDescriptors {
         _ = fcntl(parked, F_SETFD, flags & ~FD_CLOEXEC)
         return parked
     }
+}
+
+/// Moves `fd` aside so a later `open` can receive that number. Restores it
+/// on `restore()`. A descriptor that was already closed stays closed.
+private struct VacatedDescriptor {
+    var original: Int32
+    var parked: Int32
+
+    func restore() {
+        guard parked >= 0 else { return }
+        _ = dup2(parked, original)
+        _ = close(parked)
+    }
+}
+
+private func vacateDescriptor(_ fd: Int32) -> VacatedDescriptor {
+    guard fcntl(fd, F_GETFD) >= 0 else {
+        return VacatedDescriptor(original: fd, parked: -1)
+    }
+    let parked = fcntl(fd, F_DUPFD_CLOEXEC, 100)
+    guard parked >= 0 else {
+        return VacatedDescriptor(original: fd, parked: -1)
+    }
+    _ = close(fd)
+    return VacatedDescriptor(original: fd, parked: parked)
 }
 
 private func macOSContainedLaunch(_ tree: ContainmentTree) throws -> Bool {
