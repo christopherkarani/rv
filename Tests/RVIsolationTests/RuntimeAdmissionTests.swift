@@ -304,9 +304,7 @@ private struct AdmissionHarness {
             .appendingPathComponent("rv-admission-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let workspace = try #require(WorkingDirectory(validating: root.path))
-        let plan = try compileIsolationPlan(
-            IsolationCompileRequest(requested: .contained, workspace: workspace)
-        ).get()
+        let plan = compileContainedPlan(workspace: workspace)
         let runtime = RuntimeSession(
             id: RuntimeSessionID(),
             host: .opencode,
