@@ -272,7 +272,7 @@ private struct AdmissionFixture {
             requestID: RuntimeActionRequestID(validating: id.uuidString)!,
             capability: capability ?? self.capability,
             claimedSession: RuntimeSessionClaim(validating: (claim ?? session.id.rawValue).uuidString)!,
-            command: ShellCommand(rawValue: command)
+            action: .shell(ShellCommand(rawValue: command))
         )
     }
 

@@ -52,22 +52,38 @@ public enum RuntimeAdmissionExecutor: Sendable {
     case effect(@Sendable (AllowedAction) -> Result<Int32, RuntimeAdmissionExecutorError>)
 }
 
+/// How an authorized HTTPS GET is performed. The contained agent is not a case.
+public enum RuntimeHTTPExecutor: Sendable {
+    /// No socket and no HTTP exchange.
+    case refuse
+    /// Caller-supplied transfer. Invoked only after authorization.
+    case effect(
+        @Sendable (
+            HTTPAction, HTTPCancellation, @escaping @Sendable () -> Bool
+        ) -> Result<HTTPExecutionReceipt, HTTPEgressFailure>
+    )
+    /// Dial the pinned public address from RV, with no proxy and no cookies.
+    case direct
+}
+
 public struct RuntimeAdmissionConfiguration: Sendable {
     public var normalize:
-        @Sendable (RuntimeAdmissionSubject, ShellCommand) -> Result<
+        @Sendable (RuntimeAdmissionSubject, RuntimeRequestedAction) -> Result<
             ProposedAction, RuntimeAdmissionEvaluationError
         >
     public var executor: RuntimeAdmissionExecutor
+    public var http: RuntimeHTTPExecutor
     public var approval:
         @Sendable (PendingAuthorization) -> Result<ApprovalDecision, AgentApprovalError>?
     public var policy: @Sendable (RuntimeSession) -> EffectiveActionPolicy
     public var evidence: RuntimeAdmissionEvidence
 
     public init(
-        normalize: @escaping @Sendable (RuntimeAdmissionSubject, ShellCommand) -> Result<
+        normalize: @escaping @Sendable (RuntimeAdmissionSubject, RuntimeRequestedAction) -> Result<
             ProposedAction, RuntimeAdmissionEvaluationError
         >,
         executor: RuntimeAdmissionExecutor,
+        http: RuntimeHTTPExecutor = .refuse,
         approval: @escaping @Sendable (PendingAuthorization) -> Result<
             ApprovalDecision, AgentApprovalError
         >?,
@@ -76,6 +92,7 @@ public struct RuntimeAdmissionConfiguration: Sendable {
     ) {
         self.normalize = normalize
         self.executor = executor
+        self.http = http
         self.approval = approval
         self.policy = policy
         self.evidence = evidence
@@ -85,6 +102,7 @@ public struct RuntimeAdmissionConfiguration: Sendable {
         RuntimeAdmissionConfiguration(
             normalize: { _, _ in .failure(.failed) },
             executor: .refuse,
+            http: .refuse,
             approval: { _ in nil },
             policy: { _ in .empty },
             evidence: RuntimeAdmissionEvidence()
@@ -115,6 +133,7 @@ final class RuntimeAdmissionSession {
     private var buffer = Data()
     private var requestRead: Int32
     private var responseWrite: Int32
+    private let flight = Mutex(HTTPFlight())
 
     init(
         binding: RuntimeChannelBinding,
@@ -175,10 +194,15 @@ final class RuntimeAdmissionSession {
             policy: configuration.policy(subject.session),
             approvalFor: configuration.approval,
             propose: { [configuration, subject] accepted in
-                configuration.normalize(subject, accepted.command)
+                configuration.normalize(subject, accepted.action)
             }
         )
-        self.binding = binding
+        flight.withLock { state in
+            if state.stop {
+                binding?.phase = .finished
+            }
+            self.binding = binding
+        }
         guard let allowed = decision.execute, binding?.phase == .active else {
             if decision.execute != nil {
                 let inactive = inactiveDecision(binding: binding, event: decision.event)
@@ -190,19 +214,7 @@ final class RuntimeAdmissionSession {
         }
         let performed = perform(allowed)
         var event = decision.event
-        let response: RuntimeAdmissionResponse
-        switch performed {
-        case .success(let status):
-            event.authorization = .allowed
-            event.executionAttempted = true
-            event.result = "exit:\(status)"
-            response = .executed(exitStatus: status)
-        case .failure(let error):
-            event.authorization = .executorFailed
-            event.executionAttempted = true
-            event.result = error.rawValue
-            response = .executorFailed(error)
-        }
+        let response = admissionResponse(performed, event: &event)
         configuration.evidence.record(event)
         return RuntimeAdmissionDecision(
             binding: binding,
@@ -213,9 +225,21 @@ final class RuntimeAdmissionSession {
     }
 
     func finish() {
-        if var binding {
-            binding.phase = .finished
-            self.binding = binding
+        let token = flight.withLock { state -> HTTPCancellation? in
+            state.stop = true
+            if var binding {
+                binding.phase = .finished
+                self.binding = binding
+            }
+            return state.token
+        }
+        token?.cancel()
+        let deadline = Date().addingTimeInterval(
+            TimeInterval(HTTPEgressLimits.requestTimeoutMilliseconds) / 1_000 + 2
+        )
+        while Date() < deadline {
+            if flight.withLock({ $0.token == nil }) { break }
+            usleep(1_000)
         }
         buffer.removeAll()
         if requestRead >= 0 {
@@ -266,17 +290,64 @@ final class RuntimeAdmissionSession {
         _ = admissionWriteAll(responseWrite, frame)
     }
 
-    private func perform(
-        _ allowed: AllowedAction
-    ) -> Result<Int32, RuntimeAdmissionExecutorError> {
-        switch configuration.executor {
-        case .refuse:
-            return .failure(.unavailable)
-        case .effect(let body):
-            return body(allowed)
-        case .containedCommand:
-            return runAdmittedSeatbeltCommand(allowed: allowed, launch: launch)
+    private func perform(_ allowed: AllowedAction) -> AdmissionPerformResult {
+        switch allowed.action {
+        case .file:
+            return .shell(.failure(.compileFailed))
+        case .shell:
+            switch configuration.executor {
+            case .refuse:
+                return .shell(.failure(.unavailable))
+            case .effect(let body):
+                return .shell(body(allowed))
+            case .containedCommand:
+                return .shell(runAdmittedSeatbeltCommand(allowed: allowed, launch: launch))
+            }
+        case .http(let http):
+            guard let token = beginHTTP() else {
+                return .http(.failure(.notOpened(.cancelled)))
+            }
+            defer { endHTTP() }
+            #if os(macOS)
+            let leader = launch.sessionLeader
+            let shouldStop: @Sendable () -> Bool = {
+                token.isCancelled || Task.isCancelled || sessionLeaderHasExited(leader)
+            }
+            #else
+            let shouldStop: @Sendable () -> Bool = {
+                token.isCancelled || Task.isCancelled
+            }
+            #endif
+            switch configuration.http {
+            case .refuse:
+                return .http(.failure(.notOpened(.unavailable)))
+            case .effect(let body):
+                return .http(body(http, token, shouldStop))
+            case .direct:
+                return .http(
+                    HTTPDirectExecutor.perform(
+                        http,
+                        cancellation: token,
+                        shouldStop: shouldStop
+                    )
+                )
+            }
         }
+    }
+
+    private func beginHTTP() -> HTTPCancellation? {
+        flight.withLock { state in
+            guard state.stop == false, state.token == nil, binding?.phase == .active else {
+                return nil
+            }
+            let token = HTTPCancellation()
+            state.token = token
+            return token
+        }
+    }
+
+    private func endHTTP() {
+        flight.withLock { $0.token = nil }
     }
 
     private func inactiveDecision(
@@ -295,6 +366,79 @@ final class RuntimeAdmissionSession {
                 result: RuntimeAdmissionRejection.inactiveSession.rawValue
             )
         )
+    }
+}
+
+private struct HTTPFlight: Sendable {
+    var token: HTTPCancellation?
+    var stop = false
+}
+
+private enum AdmissionPerformResult {
+    case shell(Result<Int32, RuntimeAdmissionExecutorError>)
+    case http(Result<HTTPExecutionReceipt, HTTPEgressFailure>)
+}
+
+private func admissionResponse(
+    _ performed: AdmissionPerformResult,
+    event: inout RuntimeAdmissionEvent
+) -> RuntimeAdmissionResponse {
+    switch performed {
+    case .shell(.success(let status)):
+        event.authorization = .allowed
+        event.executionAttempted = true
+        event.result = "exit:\(status)"
+        return .executed(exitStatus: status)
+    case .shell(.failure(let error)):
+        event.authorization = .executorFailed
+        event.executionAttempted = true
+        event.result = error.rawValue
+        return .executorFailed(error)
+    case .http(.success(let receipt)):
+        event.authorization = .allowed
+        event.executionAttempted = true
+        event.result = "http:\(receipt.status)"
+        event.httpStatus = receipt.status
+        return .http(receipt)
+    case .http(.failure(.notOpened(let reason))):
+        event.authorization = .executorFailed
+        event.executionAttempted = false
+        event.result = reason.rawValue
+        switch reason {
+        case .cancelled:
+            return .executorFailed(.cancelled)
+        case .unavailable, .forbiddenDestination:
+            return .executorFailed(.unavailable)
+        }
+    case .http(.failure(.opened(let failure))):
+        event.authorization = .executorFailed
+        event.executionAttempted = true
+        event.result = httpFailureName(failure)
+        if case .redirect(let status, _) = failure {
+            event.httpStatus = status
+        }
+        return .httpFailed(failure)
+    }
+}
+
+private func httpFailureName(_ failure: HTTPOpenFailure) -> String {
+    switch failure {
+    case .redirect:
+        return "redirect"
+    case .responseTooLarge:
+        return "responseTooLarge"
+    case .timedOut:
+        return "timedOut"
+    case .cancelled:
+        return "cancelled"
+    case .transport:
+        return "transport"
+    case .malformedResponse:
+        return "malformedResponse"
+    case .unsupportedTransfer:
+        return "unsupportedTransfer"
+    case .tooManyHeaders:
+        return "tooManyHeaders"
     }
 }
 

@@ -62,6 +62,14 @@ public enum ReviewPromptBuilder: Sendable {
             if let cwd = file.scope.workingDirectory {
                 lines.append("scope.workingDirectory: \(cwd.rawValue)")
             }
+        case .http(let http):
+            lines.append("kind: http")
+            lines.append("method: \(http.method.rawValue)")
+            lines.append("destination: \(http.destination.auditedResource)")
+            lines.append("classification: \(http.destination.classification.rawValue)")
+            if let address = http.destination.address {
+                lines.append("address: \(address.presentation)")
+            }
         }
     }
 

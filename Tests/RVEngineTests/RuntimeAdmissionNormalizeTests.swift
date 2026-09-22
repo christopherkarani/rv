@@ -15,7 +15,7 @@ struct RuntimeAdmissionNormalizeTests {
 
         let inside = try normalizeRuntimeAdmission(
             subject: subject,
-            command: ShellCommand(rawValue: "touch marker")
+            action: .shell(ShellCommand(rawValue: "touch marker"))
         ).get()
         guard case .allowed = AgentAuthorization.decide(action: inside, policy: .empty) else {
             Issue.record("inside touch must be allowed")
@@ -26,7 +26,7 @@ struct RuntimeAdmissionNormalizeTests {
             .appendingPathComponent("rv-admission-outside-\(UUID().uuidString)")
         let outside = try normalizeRuntimeAdmission(
             subject: subject,
-            command: ShellCommand(rawValue: "touch \(outsideURL.path)")
+            action: .shell(ShellCommand(rawValue: "touch \(outsideURL.path)"))
         ).get()
         guard case .denied = AgentAuthorization.decide(action: outside, policy: .empty) else {
             Issue.record("outside touch must be denied")
@@ -38,7 +38,7 @@ struct RuntimeAdmissionNormalizeTests {
         let workspace = try #require(WorkingDirectory(validating: "/tmp/rv-admission-norm"))
         let proposal = try normalizeRuntimeAdmission(
             subject: try admissionSubject(workspace),
-            command: ShellCommand(rawValue: "echo hello")
+            action: .shell(ShellCommand(rawValue: "echo hello"))
         ).get()
         guard case .pending(let pending) = AgentAuthorization.decide(action: proposal, policy: .empty) else {
             Issue.record("echo must stay pending")
@@ -47,11 +47,17 @@ struct RuntimeAdmissionNormalizeTests {
         #expect(pending.reason == .reviewAsk)
     }
 
+    @Test func localhostLookupIsNotAPublicAddress() throws {
+        let answers = try resolveHTTPHost("localhost").get()
+        #expect(answers.isEmpty == false)
+        #expect(answers.allSatisfy { $0.isPublicGlobal == false })
+    }
+
     @Test func unwrapLimitedCommandProducesNoProposal() throws {
         let workspace = try #require(WorkingDirectory(validating: "/tmp/rv-admission-norm"))
         let proposal = normalizeRuntimeAdmission(
             subject: try admissionSubject(workspace),
-            command: ShellCommand(rawValue: #"python3 -c "$CMD""#)
+            action: .shell(ShellCommand(rawValue: #"python3 -c "$CMD""#))
         )
         #expect(proposal == .failure(.failed))
     }

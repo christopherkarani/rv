@@ -93,6 +93,7 @@ enum OpenCodeRun {
     static var admission: RuntimeAdmissionConfiguration { RuntimeAdmissionConfiguration(
         normalize: normalizeRuntimeAdmission,
         executor: .containedCommand,
+        http: .direct,
         approval: { _ in nil },
         policy: { _ in .empty },
         evidence: RuntimeAdmissionEvidence(appendingTo: RuntimeAdmissionEvidence.productionFile())

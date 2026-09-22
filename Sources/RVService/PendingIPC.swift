@@ -108,6 +108,8 @@ enum PendingListProjection {
                 base = "\(file.file.kind.ledgerName.lowercased()) file"
             case .shell:
                 base = "shell"
+            case .http:
+                base = "https get"
             }
         } else {
             base = labels.joined(separator: ", ")
