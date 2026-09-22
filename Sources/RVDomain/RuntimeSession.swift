@@ -26,7 +26,6 @@ public struct RuntimeSession: Sendable, Equatable {
     public let id: RuntimeSessionID
     public let host: HookHost?
     public let workspace: WorkingDirectory
-    public let mode: EnforcementMode
     public let backend: RuntimeIsolationBackend
     public let startedAt: Date
     public let child: RuntimeChildIdentity?
@@ -35,7 +34,6 @@ public struct RuntimeSession: Sendable, Equatable {
         id: RuntimeSessionID,
         host: HookHost?,
         workspace: WorkingDirectory,
-        mode: EnforcementMode,
         backend: RuntimeIsolationBackend,
         startedAt: Date,
         child: RuntimeChildIdentity?
@@ -43,7 +41,6 @@ public struct RuntimeSession: Sendable, Equatable {
         self.id = id
         self.host = host
         self.workspace = workspace
-        self.mode = mode
         self.backend = backend
         self.startedAt = startedAt
         self.child = child
@@ -54,7 +51,6 @@ public struct RuntimeSession: Sendable, Equatable {
             id: id,
             host: host,
             workspace: workspace,
-            mode: mode,
             backend: backend,
             startedAt: startedAt,
             child: RuntimeChildIdentity(pid: pid)

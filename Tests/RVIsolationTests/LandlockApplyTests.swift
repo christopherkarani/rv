@@ -9,8 +9,8 @@ import Testing
 /// 2. compile of observed / mediated → `profileNotApplicable`
 /// 3. `IsolationBackendFamily` is exactly none / seatbelt / landlock
 ///    (exhaustive switch lives in IsolationApply)
-/// 4. `EstablishedIsolation` rejects contained+landlock, observed+landlock,
-///    and contained+none (IsolationApply)
+/// 4. Landlock stays a prepared-request family and cannot be a successful
+///    `IsolatedRunResult` (IsolationApply)
 /// 5. `landlock().prepare(observed)` → `profileNotApplicable`
 /// 6. A strict contained plan does not prepare a Landlock launch.
 ///    `prepare` returns `containedGuaranteesUnsupported` for a real directory.
@@ -623,17 +623,10 @@ struct IsolationApplyLandlockTests {
         switch IsolationBackends.apply(plan, command: trueCommand) {
         case .success(let result):
             #expect(result.exitStatus == 0)
-            switch result.established.family {
-            case .seatbelt:
-                break
-            case .none:
-                Issue.record("Darwin apply(contained) must be family seatbelt")
-            case .landlock:
-                Issue.record("Darwin apply(contained) must stay family seatbelt, not landlock")
-            }
-            switch result.established.mode {
-            case .contained:
-                break
+            switch result.established {
+            case .seatbelt(let session):
+                #expect(session.backend == .seatbelt)
+                #expect(result.session?.id == session.id)
             case .observed:
                 Issue.record("Darwin apply(contained) must not establish observed")
             case .mediated:

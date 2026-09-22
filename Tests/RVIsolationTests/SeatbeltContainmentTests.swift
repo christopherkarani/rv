@@ -95,21 +95,13 @@ struct SeatbeltContainmentTests {
         case .success(let run):
             #expect(run.exitStatus == 0)
             #expect(FileManager.default.fileExists(atPath: outside))
-            switch run.established.mode {
+            switch run.established {
             case .observed:
-                break
+                #expect(run.session == nil)
             case .mediated:
                 Issue.record("observed control must not establish mediated")
-            case .contained:
-                Issue.record("observed control must not establish contained")
-            }
-            switch run.established.family {
-            case .none:
-                break
             case .seatbelt:
-                Issue.record("observed control must not use family seatbelt")
-            case .landlock:
-                Issue.record("observed control must not use family landlock")
+                Issue.record("observed control must not establish seatbelt")
             }
         case .failure(let error):
             recordUnexpectedContainmentError(error, expected: "unsandboxed observed outside touch")
@@ -144,19 +136,21 @@ private func expectContainedSeatbelt(
     matching plan: IsolationPlan,
     sourceLocation: SourceLocation = #_sourceLocation
 ) {
-    #expect(established.mode == plan.mode, sourceLocation: sourceLocation)
-    switch established.family {
-    case .seatbelt:
-        break
-    case .none:
-        Issue.record("Darwin contained establish must be family seatbelt", sourceLocation: sourceLocation)
-    case .landlock:
+    switch established {
+    case .seatbelt(let session):
+        #expect(session.backend == .seatbelt, sourceLocation: sourceLocation)
+    case .observed:
         Issue.record(
-            "Darwin contained establish must be family seatbelt, not landlock",
+            "Darwin contained establish must be seatbelt, not observed",
+            sourceLocation: sourceLocation
+        )
+    case .mediated:
+        Issue.record(
+            "Darwin contained establish must be seatbelt, not mediated",
             sourceLocation: sourceLocation
         )
     }
-    switch established.mode {
+    switch plan.mode {
     case .contained(let guarantees):
         switch guarantees.filesystem {
         case .workspaceScoped(let limitedTo):
@@ -195,9 +189,9 @@ private func expectContainedSeatbelt(
             )
         }
     case .observed:
-        Issue.record("Darwin contained establish must not be observed", sourceLocation: sourceLocation)
+        Issue.record("matching plan must be contained, not observed", sourceLocation: sourceLocation)
     case .mediated:
-        Issue.record("Darwin contained establish must not be mediated", sourceLocation: sourceLocation)
+        Issue.record("matching plan must be contained, not mediated", sourceLocation: sourceLocation)
     }
 }
 

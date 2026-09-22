@@ -311,7 +311,6 @@ private struct AdmissionHarness {
             id: RuntimeSessionID(),
             host: .opencode,
             workspace: workspace,
-            mode: plan.mode,
             backend: .seatbelt,
             startedAt: Date(),
             child: nil

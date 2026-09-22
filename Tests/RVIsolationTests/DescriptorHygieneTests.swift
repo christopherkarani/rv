@@ -127,8 +127,12 @@ struct DescriptorHygieneTests {
         let report = try runProbe(tree, io: .discard, checks: ["handshake:3"])
         report.expectClosed("handshake", errno: EBADF)
         #expect(report.openFDs.contains(3) == false)
-        #expect(report.run.established.family == .seatbelt)
-        #expect(report.run.session != nil)
+        switch report.run.established {
+        case .seatbelt(let session):
+            #expect(report.run.session?.id == session.id)
+        case .observed, .mediated:
+            Issue.record("probe must establish seatbelt")
+        }
     }
 
     @Test func failedLaunchesDoNotAccumulateDescriptors() throws {
@@ -451,7 +455,12 @@ private func runProbe(
     )
     let run = try result.get()
     #expect(run.exitStatus == 0)
-    #expect(run.established.family == .seatbelt)
+    switch run.established {
+    case .seatbelt:
+        break
+    case .observed, .mediated:
+        Issue.record("probe must establish seatbelt")
+    }
     let text = try String(contentsOf: reportURL, encoding: .utf8)
     return try parseProbeReport(text, run: run)
 }

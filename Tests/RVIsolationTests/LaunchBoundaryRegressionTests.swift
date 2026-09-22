@@ -107,7 +107,6 @@ struct LaunchBoundaryRegressionTests {
                 id: RuntimeSessionID(),
                 host: .opencode,
                 workspace: workspace,
-                mode: tree.contained.mode,
                 backend: .seatbelt,
                 startedAt: Date(),
                 child: nil
@@ -133,7 +132,6 @@ struct LaunchBoundaryRegressionTests {
             id: RuntimeSessionID(),
             host: .opencode,
             workspace: workspace,
-            mode: tree.contained.mode,
             backend: .seatbelt,
             startedAt: Date(timeIntervalSince1970: 1_700_000_000),
             child: nil
@@ -155,7 +153,6 @@ struct LaunchBoundaryRegressionTests {
         let log = tree.rootURL.appendingPathComponent("sessions.jsonl")
         try Data("{\"torn\"".utf8).write(to: log)
         let workspace = try #require(WorkingDirectory(validating: tree.workspaceURL.path))
-        let mode = tree.contained.mode
         let bag = SessionIDBag()
         let attempts = 32
         try await withThrowingTaskGroup(of: Void.self) { group in
@@ -165,7 +162,6 @@ struct LaunchBoundaryRegressionTests {
                         id: RuntimeSessionID(),
                         host: .opencode,
                         workspace: workspace,
-                        mode: mode,
                         backend: .seatbelt,
                         startedAt: Date(timeIntervalSince1970: 1_700_000_000),
                         child: nil
