@@ -4,20 +4,10 @@ import RVDomain
 import Testing
 @testable import RVIsolation
 
-/// Linux kernel edges this suite encodes before production code:
-/// 9. contained + landlock: `touch` inside → exit 0, file exists, established
-///    contained + `.landlock`
-/// 10. `touch` outside (sibling) → exit != 0 and != 125, file absent,
-///     established still contained + `.landlock`
-/// 11. `/bin/sh -c touch OUTSIDE` → same (inheritance)
-/// 12. observed `apply`: outside `touch` succeeds (not secretly jailed)
-/// 13. write under `RepositoryRoot` but outside workspace is blocked
-/// 14. trampoline apply failure exits 125 and does not exec
-/// 15. outside truncate is denied (ABI ≥ 3 write-class) and still established
-/// 16. trampoline argv lock and filesystem-root workspace exit 125
-/// 17. missing inner after apply exits 126 and does not mint establishment
-/// 18. `landlock(executable: /usr/bin/true)` does not establish
-/// Missing Landlock / missing trampoline must fail these tests — do not skip.
+/// Linux contained launch refuses before exec. These tests prove a strict
+/// plan does not run the inner command and does not mint contained+landlock.
+/// Observed apply is still unsandboxed. Filesystem-root and helper-identity
+/// failures stay typed. A write-class helper is not a successful contained run.
 @Suite("LandlockContainment")
 struct LandlockContainmentTests {
     @Test func landlock_touchInsideWorkspace_succeedsAndEstablishesContained() throws {
@@ -223,7 +213,7 @@ struct LandlockContainmentTests {
                 .workspaceDoesNotExist,
                 .workspacePathUnresolvable,
                 .workspacePathUnsafe,
-                .workspaceContainsInodeAlias,
+                .workspaceContainsInodeAlias, .workspaceInodeBoundaryFailed,
                 .profileNotApplicable,
                 .processSpawnFailed,
                 .commandContainsNUL,
@@ -292,7 +282,7 @@ private func expectContainedRefused(
         break
     case .backendUnavailable, .backendMismatch, .workspaceMustBeAbsolute,
         .workspaceDoesNotExist, .workspacePathUnresolvable, .workspacePathUnsafe,
-        .workspaceContainsInodeAlias, .profileNotApplicable, .processSpawnFailed,
+        .workspaceContainsInodeAlias, .workspaceInodeBoundaryFailed, .profileNotApplicable, .processSpawnFailed,
         .commandContainsNUL, .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
         Issue.record(
             "strict contained plan must be containedGuaranteesUnsupported, got \(error)",
@@ -384,7 +374,7 @@ private func recordUnexpectedContainmentError(
         )
     case .workspacePathUnsafe:
         Issue.record("expected \(expected), got workspacePathUnsafe", sourceLocation: sourceLocation)
-    case .workspaceContainsInodeAlias:
+    case .workspaceContainsInodeAlias, .workspaceInodeBoundaryFailed:
         Issue.record("expected \(expected), got workspaceContainsInodeAlias", sourceLocation: sourceLocation)
     case .containedGuaranteesUnsupported:
         Issue.record(

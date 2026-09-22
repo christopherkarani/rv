@@ -9,8 +9,8 @@ import Testing
 /// 2. compile of observed / mediated → `profileNotApplicable`
 /// 3. `IsolationBackendFamily` is exactly none / seatbelt / landlock
 ///    (exhaustive switch lives in IsolationApply)
-/// 4. `EstablishedIsolation` accepts contained+landlock; rejects
-///    observed+landlock and contained+none (IsolationApply)
+/// 4. `EstablishedIsolation` rejects contained+landlock, observed+landlock,
+///    and contained+none (IsolationApply)
 /// 5. `landlock().prepare(observed)` → `profileNotApplicable`
 /// 6. A strict contained plan does not prepare a Landlock launch.
 ///    `prepare` returns `containedGuaranteesUnsupported` for a real directory.
@@ -21,8 +21,9 @@ import Testing
 /// 16. Exit 126 maps to `processSpawnFailed` (not established)
 /// 17. Compile / prepare reject filesystem-root and symlink-to-root workspaces
 /// 18. `rv-isolation-exec` identity: basename, regular file, not under workspace
-/// 19. `spawn` of `/usr/bin/true` or a workspace-local helper does not
-///     mint contained+landlock
+/// 19. `spawn` of `/usr/bin/true`, a workspace-local helper, or an
+///     identity-valid helper does not mint contained+landlock. A valid helper
+///     is refused before it executes.
 @Suite("IsolationApply")
 struct IsolationApplyLandlockTests {
     @Test func compileLandlockRuleset_contained_writeRootIsResolvedWorkspaceNotRepositoryRoot()
@@ -52,7 +53,7 @@ struct IsolationApplyLandlockTests {
                 #expect(resolvedWorkspace != resolvedRepo)
             case .backendUnavailable, .backendMismatch, .workspaceMustBeAbsolute,
                 .workspaceDoesNotExist, .workspacePathUnresolvable, .workspacePathUnsafe,
-                .workspaceContainsInodeAlias, .profileNotApplicable, .processSpawnFailed,
+                .workspaceContainsInodeAlias, .workspaceInodeBoundaryFailed, .profileNotApplicable, .processSpawnFailed,
                 .commandContainsNUL, .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
                 Issue.record("valid workspace must be containedGuaranteesUnsupported, got \(error)")
             }
@@ -89,7 +90,7 @@ struct IsolationApplyLandlockTests {
                 .workspaceDoesNotExist,
                 .workspacePathUnresolvable,
                 .workspacePathUnsafe,
-                .workspaceContainsInodeAlias,
+                .workspaceContainsInodeAlias, .workspaceInodeBoundaryFailed,
                 .containedGuaranteesUnsupported,
                 .processSpawnFailed,
                 .commandContainsNUL,
@@ -117,7 +118,7 @@ struct IsolationApplyLandlockTests {
                 break
             case .backendUnavailable, .backendMismatch, .workspaceMustBeAbsolute,
                 .workspaceDoesNotExist, .workspacePathUnresolvable, .workspacePathUnsafe,
-                .workspaceContainsInodeAlias, .profileNotApplicable, .processSpawnFailed,
+                .workspaceContainsInodeAlias, .workspaceInodeBoundaryFailed, .profileNotApplicable, .processSpawnFailed,
                 .commandContainsNUL, .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
                 Issue.record("existing workspace must be containedGuaranteesUnsupported, got \(error)")
             }
@@ -146,7 +147,7 @@ struct IsolationApplyLandlockTests {
                 break
             case .backendUnavailable, .backendMismatch, .workspaceMustBeAbsolute,
                 .workspaceDoesNotExist, .workspacePathUnresolvable, .workspacePathUnsafe,
-                .workspaceContainsInodeAlias, .profileNotApplicable, .processSpawnFailed,
+                .workspaceContainsInodeAlias, .workspaceInodeBoundaryFailed, .profileNotApplicable, .processSpawnFailed,
                 .commandContainsNUL, .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
                 Issue.record("missing helper must still refuse before launch, got \(error)")
             }
@@ -159,79 +160,81 @@ struct IsolationApplyLandlockTests {
             IsolationCompileRequest(requested: .contained, workspace: workspace)
         )
         switch contained.mode {
-        case .observed:
-            Issue.record("compiled contained plan must not be observed")
-        case .mediated:
-            Issue.record("compiled contained plan must not be mediated")
-        case .contained(let guarantees):
-            let established = try #require(
-                EstablishedIsolation(mode: .contained(guarantees), family: .landlock)
-            )
-            #expect(IsolationBackends.isolationExecCouldNotEstablishExit == 125)
-            switch interpretIsolationExecExit(125, established: established) {
-            case .success:
-                Issue.record("exit 125 must not mint IsolatedRunResult")
-            case .failure(let error):
-                switch error {
-                case .backendUnavailable:
-                    break
-                case .backendMismatch,
-                    .workspaceMustBeAbsolute,
-                    .workspaceDoesNotExist,
-                    .workspacePathUnresolvable,
-                    .workspacePathUnsafe,
-                    .workspaceContainsInodeAlias,
-                    .containedGuaranteesUnsupported,
-                    .profileNotApplicable,
-                    .processSpawnFailed,
-                    .commandContainsNUL,
-                    .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
-                    Issue.record("exit 125 must be backendUnavailable, got \(error)")
-                }
+        case .contained:
+            break
+        case .observed, .mediated:
+            Issue.record("compiled contained plan must stay contained")
+        }
+        #expect(IsolationBackends.isolationExecCouldNotEstablishExit == 125)
+        switch interpretIsolationExecExit(125) {
+        case .success:
+            Issue.record("exit 125 must not mint IsolatedRunResult")
+        case .failure(let error):
+            switch error {
+            case .backendUnavailable:
+                break
+            case .backendMismatch,
+                .workspaceMustBeAbsolute,
+                .workspaceDoesNotExist,
+                .workspacePathUnresolvable,
+                .workspacePathUnsafe,
+                .workspaceContainsInodeAlias, .workspaceInodeBoundaryFailed,
+                .containedGuaranteesUnsupported,
+                .profileNotApplicable,
+                .processSpawnFailed,
+                .commandContainsNUL,
+                .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
+                Issue.record("exit 125 must be backendUnavailable, got \(error)")
             }
-            #expect(IsolationBackends.isolationExecExecFailedExit == 126)
-            switch interpretIsolationExecExit(0, established: established) {
-            case .success(let result):
-                #expect(result.exitStatus == 0)
-                #expect(result.established.family == .landlock)
-            case .failure(let error):
-                recordUnexpectedApplyError(error, expected: "established contained with inner exit 0")
+        }
+        #expect(IsolationBackends.isolationExecExecFailedExit == 126)
+        switch interpretIsolationExecExit(0) {
+        case .success:
+            Issue.record("exit 0 must not mint contained Landlock establishment")
+        case .failure(let error):
+            switch error {
+            case .containedGuaranteesUnsupported:
+                break
+            case .backendUnavailable, .backendMismatch, .workspaceMustBeAbsolute,
+                .workspaceDoesNotExist, .workspacePathUnresolvable, .workspacePathUnsafe,
+                .workspaceContainsInodeAlias, .workspaceInodeBoundaryFailed, .profileNotApplicable, .processSpawnFailed,
+                .commandContainsNUL, .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
+                Issue.record("exit 0 must be containedGuaranteesUnsupported, got \(error)")
             }
-            switch interpretIsolationExecExit(126, established: established) {
-            case .success:
-                Issue.record("exit 126 must not mint IsolatedRunResult")
-            case .failure(let error):
-                switch error {
-                case .processSpawnFailed:
-                    break
-                case .backendUnavailable,
-                    .backendMismatch,
-                    .workspaceMustBeAbsolute,
-                    .workspaceDoesNotExist,
-                    .workspacePathUnresolvable,
-                    .workspacePathUnsafe,
-                    .workspaceContainsInodeAlias,
-                    .containedGuaranteesUnsupported,
-                    .profileNotApplicable,
-                    .commandContainsNUL,
-                    .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
-                    Issue.record("exit 126 must be processSpawnFailed, got \(error)")
-                }
+        }
+        switch interpretIsolationExecExit(126) {
+        case .success:
+            Issue.record("exit 126 must not mint IsolatedRunResult")
+        case .failure(let error):
+            switch error {
+            case .processSpawnFailed:
+                break
+            case .backendUnavailable,
+                .backendMismatch,
+                .workspaceMustBeAbsolute,
+                .workspaceDoesNotExist,
+                .workspacePathUnresolvable,
+                .workspacePathUnsafe,
+                .workspaceContainsInodeAlias, .workspaceInodeBoundaryFailed,
+                .containedGuaranteesUnsupported,
+                .profileNotApplicable,
+                .commandContainsNUL,
+                .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
+                Issue.record("exit 126 must be processSpawnFailed, got \(error)")
             }
-            switch interpretIsolationExecExit(1, established: established) {
-            case .success(let result):
-                #expect(result.exitStatus == 1)
-                #expect(result.established.family == .landlock)
-                switch result.established.mode {
-                case .contained:
-                    break
-                case .observed:
-                    Issue.record("inner deny must stay established contained")
-                case .mediated:
-                    Issue.record("inner deny must stay established contained")
-                }
-            case .failure(let error):
-                recordUnexpectedApplyError(error, expected: "established contained with inner exit 1")
+        }
+        switch interpretIsolationExecExit(1) {
+        case .success:
+            Issue.record("exit 1 must not mint contained Landlock establishment")
+        case .failure(let error):
+            switch error {
+            case .containedGuaranteesUnsupported:
+                break
+            case .backendUnavailable, .backendMismatch, .workspaceMustBeAbsolute,
+                .workspaceDoesNotExist, .workspacePathUnresolvable, .workspacePathUnsafe,
+                .workspaceContainsInodeAlias, .workspaceInodeBoundaryFailed, .profileNotApplicable, .processSpawnFailed,
+                .commandContainsNUL, .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
+                Issue.record("exit 1 must be containedGuaranteesUnsupported, got \(error)")
             }
         }
     }
@@ -536,23 +539,20 @@ struct IsolationApplyLandlockTests {
                 .backendUnavailable,
                 because: "spawn of a helper not named rv-isolation-exec"
             )
-            switch spawn(request, executablePath: tree.outsideHelper.path) {
-            case .success(let result):
-                #expect(result.exitStatus == 0)
-                switch result.established.family {
-                case .landlock:
-                    break
-                case .none:
-                    Issue.record("identity-valid helper spawn must stay family landlock")
-                case .seatbelt:
-                    Issue.record("identity-valid helper spawn must stay family landlock")
-                }
-            case .failure(let error):
-                recordUnexpectedApplyError(
-                    error,
-                    expected: "spawn of identity-valid rv-isolation-exec outside the workspace"
-                )
-            }
+            let marker = tree.rootURL.appendingPathComponent("helper-ran")
+            let quoted = marker.path.replacingOccurrences(of: "'", with: "'\\''")
+            try "#!/bin/sh\nprintf ran > '\(quoted)'\nexit 0\n".write(
+                to: tree.outsideHelper, atomically: true, encoding: .utf8
+            )
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o755], ofItemAtPath: tree.outsideHelper.path
+            )
+            expectApplyFailure(
+                spawn(request, executablePath: tree.outsideHelper.path),
+                .containedGuaranteesUnsupported,
+                because: "identity-valid helper must not exec or establish containment"
+            )
+            #expect(FileManager.default.fileExists(atPath: marker.path) == false)
             expectApplyFailure(
                 runUnavailable(request),
                 .backendMismatch,
@@ -604,7 +604,7 @@ struct IsolationApplyLandlockTests {
                 break
             case .backendUnavailable, .backendMismatch, .workspaceMustBeAbsolute,
                 .workspaceDoesNotExist, .workspacePathUnresolvable, .workspacePathUnsafe,
-                .workspaceContainsInodeAlias, .profileNotApplicable, .processSpawnFailed,
+                .workspaceContainsInodeAlias, .workspaceInodeBoundaryFailed, .profileNotApplicable, .processSpawnFailed,
                 .commandContainsNUL, .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
                 Issue.record("Darwin landlock prepare must refuse the strict plan, got \(error)")
             }
@@ -804,7 +804,7 @@ private func expectProfileNotApplicable(
             .workspaceDoesNotExist,
             .workspacePathUnresolvable,
             .workspacePathUnsafe,
-            .workspaceContainsInodeAlias,
+            .workspaceContainsInodeAlias, .workspaceInodeBoundaryFailed,
             .containedGuaranteesUnsupported,
             .processSpawnFailed,
             .commandContainsNUL,
@@ -838,7 +838,7 @@ private func recordUnexpectedApplyError(
         )
     case .workspacePathUnsafe:
         Issue.record("expected \(expected), got workspacePathUnsafe", sourceLocation: sourceLocation)
-    case .workspaceContainsInodeAlias:
+    case .workspaceContainsInodeAlias, .workspaceInodeBoundaryFailed:
         Issue.record("expected \(expected), got workspaceContainsInodeAlias", sourceLocation: sourceLocation)
     case .containedGuaranteesUnsupported:
         Issue.record(

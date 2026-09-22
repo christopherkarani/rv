@@ -148,15 +148,19 @@ struct RuntimeAdversarialTests {
         #expect(try String(contentsOf: outside, encoding: .utf8) == "original")
     }
 
-    @Test func knownGapPreexistingHardlinkAliasIsReported() throws {
+    @Test func preexistingHardlinkAliasRefusesLaunchBeforeExecution() throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
         let outside = tree.siblingURL.appendingPathComponent("source")
         let alias = tree.workspaceURL.appendingPathComponent("alias")
+        let marker = tree.workspaceURL.appendingPathComponent("executed")
         try Data("original".utf8).write(to: outside)
         try FileManager.default.linkItem(at: outside, to: alias)
         let command = try #require(
-            IsolatedCommand(executable: "/bin/sh", arguments: ["-c", "printf changed > \(quote(alias.path))"])
+            IsolatedCommand(
+                executable: "/bin/sh",
+                arguments: ["-c", "printf ran > \(quote(marker.path)); printf changed > \(quote(alias.path))"]
+            )
         )
         switch IsolationBackends.apply(tree.contained, command: command) {
         case .success:
@@ -168,11 +172,78 @@ struct RuntimeAdversarialTests {
             case .backendUnavailable, .backendMismatch, .workspaceMustBeAbsolute,
                 .workspaceDoesNotExist, .workspacePathUnresolvable, .workspacePathUnsafe,
                 .containedGuaranteesUnsupported, .profileNotApplicable, .processSpawnFailed,
-                .commandContainsNUL, .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
+                .commandContainsNUL, .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled, .workspaceInodeBoundaryFailed:
                 Issue.record("preexisting hardlink must be workspaceContainsInodeAlias, got \(error)")
             }
         }
+        #expect(!exists(marker))
         #expect(try String(contentsOf: outside, encoding: .utf8) == "original")
+    }
+
+    /// The alias is created only after the contained process has written `ready`,
+    /// so the preflight scan has already returned. A same-user process outside
+    /// the sandbox plants the link.
+    @Test func hardlinkCreatedAfterPreflightCannotMutateOutsideInode() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let outside = tree.siblingURL.appendingPathComponent("important.txt")
+        let seed = tree.workspaceURL.appendingPathComponent("seed")
+        let alias = tree.workspaceURL.appendingPathComponent("alias")
+        let ready = tree.workspaceURL.appendingPathComponent("ready")
+        let trigger = tree.workspaceURL.appendingPathComponent("trigger")
+        let inside = tree.workspaceURL.appendingPathComponent("inside")
+        try Data("original\n".utf8).write(to: outside)
+        try Data("seed\n".utf8).write(to: seed)
+        let script = """
+        printf go > \(quote(ready.path))
+        count=0
+        while [ ! -f \(quote(trigger.path)) ] && [ "$count" -lt 400 ]; do
+          /bin/sleep 0.05
+          count=$((count + 1))
+        done
+        printf 'changed\\n' > \(quote(alias.path))
+        printf 'seed-updated\\n' > \(quote(seed.path))
+        printf ok > \(quote(inside.path))
+        """
+        let plan = tree.contained
+        let box = HardlinkRaceBox()
+        let runner = Thread {
+            guard let command = IsolatedCommand(executable: "/bin/sh", arguments: ["-c", script]) else {
+                box.result = .failure(.commandExecutableMustBeAbsolute)
+                return
+            }
+            box.result = IsolationBackends.apply(plan, command: command)
+        }
+        runner.start()
+        let readyDeadline = Date().addingTimeInterval(45)
+        while exists(ready) == false, Date() < readyDeadline {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        #expect(exists(ready))
+        let linkResult = outside.path.withCString { source in
+            alias.path.withCString { destination in
+                link(source, destination)
+            }
+        }
+        let linkError = errno
+        try Data("go\n".utf8).write(to: trigger)
+        let joinDeadline = Date().addingTimeInterval(45)
+        while runner.isExecuting, Date() < joinDeadline {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        #expect(runner.isExecuting == false)
+        if linkResult == 0 {
+            Issue.record("same-user hardlink after ready succeeded; boundary did not reject it")
+        } else {
+            #expect(linkError == EXDEV)
+        }
+        let outsideBytes = FileManager.default.contents(atPath: outside.path)
+        let outsideText = outsideBytes.flatMap { String(decoding: $0, as: UTF8.self) } ?? "<missing \(outside.path)>"
+        #expect(outsideText == "original\n")
+        let run = try #require(box.result).get()
+        #expect(run.exitStatus == 0)
+        #expect(try String(contentsOf: inside, encoding: .utf8) == "ok")
+        #expect(try String(contentsOf: seed, encoding: .utf8) == "seed-updated\n")
     }
 
     @Test func knownGapSyntheticCredentialsAreReadableButCannotBeOverwritten() throws {
@@ -367,6 +438,10 @@ enum AdversarialLauncher: String, CaseIterable, Sendable {
             return ["-e", "process.exit(require('child_process').spawnSync('/bin/sh',['-c',process.argv[1]]).status)", script]
         }
     }
+}
+
+private final class HardlinkRaceBox: @unchecked Sendable {
+    var result: Result<IsolatedRunResult, IsolationApplyError>?
 }
 
 private func runShell(_ plan: IsolationPlan, _ script: String) throws -> IsolatedRunResult {

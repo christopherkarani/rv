@@ -2,8 +2,9 @@ import Foundation
 import RVDomain
 
 extension IsolationBackends {
-    /// Landlock backend. `run` applies via `rv-isolation-exec` on Linux.
-    /// Darwin `run` is `backendUnavailable` (prepare may still succeed).
+    /// Landlock backend. Contained `prepare` returns
+    /// `containedGuaranteesUnsupported` and does not exec. Darwin `run` is
+    /// `backendUnavailable`. A hand-built landlock request is refused before exec.
     ///
     /// `executable` is a test seam: an absolute regular file whose last
     /// path component is `rv-isolation-exec` and whose realpath is not
@@ -61,11 +62,12 @@ func runLandlock(
 }
 
 /// Exit 125 means the trampoline did not apply Landlock or rejected argv.
-/// Exit 126 means apply succeeded then `execve` failed — not established,
-/// and not a successful inner exit.
+/// Exit 126 means apply succeeded then `execve` failed.
+/// Any other status, including 0, is not contained establishment.
+/// Production launch does not exec the helper; this mapping stays for the
+/// helper's own exit codes and must not mint `IsolatedRunResult`.
 func interpretIsolationExecExit(
-    _ status: Int32,
-    established: EstablishedIsolation
+    _ status: Int32
 ) -> Result<IsolatedRunResult, IsolationApplyError> {
     if status == IsolationBackends.isolationExecCouldNotEstablishExit {
         return .failure(.backendUnavailable)
@@ -73,7 +75,25 @@ func interpretIsolationExecExit(
     if status == IsolationBackends.isolationExecExecFailedExit {
         return .failure(.processSpawnFailed)
     }
-    return .success(IsolatedRunResult(established: established, exitStatus: status))
+    return .failure(.containedGuaranteesUnsupported)
+}
+
+/// Write-class Landlock does not meet a contained plan. Check helper identity,
+/// then refuse before exec so a zero exit cannot be reported as establishment.
+func refuseLandlockSpawn(
+    _ request: IsolatedLaunchRequest,
+    executablePath: String?
+) -> Result<IsolatedRunResult, IsolationApplyError> {
+    guard let ruleset = request.landlockRuleset else {
+        return .failure(.backendMismatch)
+    }
+    guard usableIsolationExecPath(
+        executablePath ?? request.launchExecutable,
+        workspacePath: ruleset.workspacePath
+    ) != nil else {
+        return .failure(.backendUnavailable)
+    }
+    return .failure(.containedGuaranteesUnsupported)
 }
 
 /// Locate `rv-isolation-exec`. Never a relative argv0 guess, never an env

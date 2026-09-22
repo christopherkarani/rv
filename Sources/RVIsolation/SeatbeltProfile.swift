@@ -161,6 +161,10 @@ func compileFirstSliceProfile(
     // Metadata on the walk prefixes lets tools resolve paths. Content outside
     // the workspace and the system prefixes below stays denied.
     // `mach-lookup` is an unfiltered baseline; it is not a grant of host files.
+    // `file-write*` does not include `file-link` or `file-clone` on this OS.
+    // Deny them explicitly so a later wildcard change cannot create aliases.
+    // Path rules still cannot see a hard link planted by another process.
+    // `WorkspaceInodeBoundary` mounts a separate volume before spawn.
     let source = """
     (version 1)
     (deny default)
@@ -184,6 +188,8 @@ func compileFirstSliceProfile(
         (subpath "\(escaped)"))
     (allow file-write*
         (subpath "\(escaped)"))
+    (deny file-link)
+    (deny file-clone)
     (deny syscall-unix (syscall-number \(SeatbeltLifetimeSyscall.setpgid)))
     (deny syscall-unix (syscall-number \(SeatbeltLifetimeSyscall.setsid)))
     (deny syscall-unix (syscall-number \(SeatbeltLifetimeSyscall.posixSpawn)))
