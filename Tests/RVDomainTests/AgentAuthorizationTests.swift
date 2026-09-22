@@ -395,14 +395,12 @@ struct AgentAuthorizationTests {
         )
         switch uncovered {
         case .pending(let pending):
-            #expect(pending.reason != .hostAsk)
             #expect(pending.reason == .reviewAsk)
         case .allowed, .denied:
             Issue.record("uncovered default review must be pending")
         }
         switch topic {
         case .pending(let pending):
-            #expect(pending.reason != .hostAsk)
             #expect(pending.reason == .mandatoryHuman)
         case .allowed, .denied:
             Issue.record("topic force-push must be pending")
@@ -512,7 +510,7 @@ private func expectAllowed(
 private func expectPending(
     _ authorization: AgentAuthorization,
     action: ProposedAction,
-    reason: ApprovalReason,
+    reason: RuntimeAskReason,
     deny: Deny,
     sourceLocation: SourceLocation = #_sourceLocation
 ) {
@@ -520,7 +518,6 @@ private func expectPending(
     case .pending(let pending):
         #expect(pending.action == action, sourceLocation: sourceLocation)
         #expect(pending.reason == reason, sourceLocation: sourceLocation)
-        #expect(pending.reason != .hostAsk, sourceLocation: sourceLocation)
         #expect(pending.deny == deny, sourceLocation: sourceLocation)
     case .allowed:
         Issue.record("expected pending, got allowed", sourceLocation: sourceLocation)

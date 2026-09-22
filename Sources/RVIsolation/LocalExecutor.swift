@@ -39,8 +39,8 @@ public actor LocalExecutor {
     /// Dispatches an already-decided authorization. Does not call `decide`.
     ///
     /// Allowed compiles and runs. Denied returns without spawn. Pending
-    /// without approval waits. Pending with approval goes through `resolve`
-    /// before compile + run.
+    /// without approval waits. Pending with approval goes through `step`,
+    /// which maps the ledger click through `humanDecision` before `resolve`.
     public func perform(
         _ authorization: AgentAuthorization,
         plan isolation: ContainedIsolation,

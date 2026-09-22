@@ -30,21 +30,43 @@ public struct DeniedAction: Sendable, Equatable {
     }
 }
 
+/// Why `decide` asked a human. Ledger `ApprovalReason.hostAsk` is not a case.
+public enum RuntimeAskReason: Sendable, Equatable {
+    case mandatoryHuman
+    case reviewAsk
+
+    /// Ledger spelling for the admission wire. `hostAsk` is not representable.
+    var ledgerReason: ApprovalReason {
+        switch self {
+        case .mandatoryHuman:
+            .mandatoryHuman
+        case .reviewAsk:
+            .reviewAsk
+        }
+    }
+}
+
+/// Human click the agent door can apply. Ledger `ApprovalDecision.createRule` is not a case.
+public enum AgentHumanDecision: Sendable, Equatable {
+    case allowOnce
+    case deny
+}
+
 /// ASK intent. Human approval is required before an allowed value can exist.
 ///
 /// Produced for `mandatoryHuman`, or for `reviewEligible` without a sufficient
-/// review. `reason` is never `.hostAsk`.
+/// review. `reason` is a runtime ask, not ledger `hostAsk`.
 ///
 /// Not a `PendingApproval` ledger row: no clock, store identity, or expiry.
 public struct PendingAuthorization: Sendable, Equatable {
     public let action: ProposedAction
-    public let reason: ApprovalReason
+    public let reason: RuntimeAskReason
     public let deny: Deny
     public let explanation: ActionPolicyExplanation
 
     init(
         action: ProposedAction,
-        reason: ApprovalReason,
+        reason: RuntimeAskReason,
         deny: Deny,
         explanation: ActionPolicyExplanation
     ) {
@@ -159,60 +181,67 @@ public enum AgentAuthorization: Sendable, Equatable {
         }
     }
 
+    /// Maps a ledger click onto the agent alphabet.
+    ///
+    /// `allowOnce` and `deny` succeed. `createRule` does not mint a rule on
+    /// this door.
+    public static func humanDecision(
+        _ decision: ApprovalDecision
+    ) -> Result<AgentHumanDecision, AgentApprovalError> {
+        switch decision {
+        case .allowOnce:
+            return .success(.allowOnce)
+        case .deny:
+            return .success(.deny)
+        case .createRule:
+            return .failure(.ruleCreationUnsupported)
+        }
+    }
+
     /// Turns ASK intent into a capability or a denial. Does not re-run `decide`.
     ///
-    /// Human `allowOnce` lifts `mandatoryHuman` and `reviewAsk`. `createRule`
-    /// is unsupported. Channel failure produces no `AllowedAction`.
-    /// `hostAsk` is not a runtime Ask reason and fails closed.
+    /// `allowOnce` lifts `mandatoryHuman` and `reviewAsk`. `deny` keeps the
+    /// pending denial. Channel failure produces no `AllowedAction`. Ledger
+    /// `createRule` never reaches this function; `humanDecision` rejects it.
     ///
     /// - Parameters:
     ///   - pending: ASK intent from `decide`. Holding one is not a capability.
-    ///   - approval: Human click, or a channel error. Timeout and transport
-    ///     failures map to `approvalUnavailable` at the caller.
+    ///   - approval: Human allow-once or deny, or a channel error. Timeout and
+    ///     transport failures map to `approvalUnavailable` at the caller.
     /// - Returns: Allowed or denied, or a typed approval-channel error.
     public static func resolve(
         _ pending: PendingAuthorization,
-        approval: Result<ApprovalDecision, AgentApprovalError>
+        approval: Result<AgentHumanDecision, AgentApprovalError>
     ) -> Result<ResolvedAuthorization, AgentApprovalError> {
         switch approval {
         case .failure(let error):
             return .failure(error)
-        case .success(let decision):
-            switch pending.reason {
-            case .hostAsk:
-                return .failure(.hostAskUnsupported)
-            case .mandatoryHuman, .reviewAsk:
-                switch decision {
-                case .allowOnce:
-                    return .success(
-                        .allowed(
-                            AllowedAction(
-                                action: pending.action,
-                                explanation: pending.explanation
-                            )
-                        )
+        case .success(.allowOnce):
+            return .success(
+                .allowed(
+                    AllowedAction(
+                        action: pending.action,
+                        explanation: pending.explanation
                     )
-                case .deny:
-                    return .success(
-                        .denied(
-                            DeniedAction(
-                                action: pending.action,
-                                deny: pending.deny,
-                                explanation: pending.explanation
-                            )
-                        )
+                )
+            )
+        case .success(.deny):
+            return .success(
+                .denied(
+                    DeniedAction(
+                        action: pending.action,
+                        deny: pending.deny,
+                        explanation: pending.explanation
                     )
-                case .createRule:
-                    return .failure(.ruleCreationUnsupported)
-                }
-            }
+                )
+            )
         }
     }
 
     /// Same allow / ask / deny split `LocalExecutor` and runtime admission use.
     ///
-    /// Pending without an approval stays pending. `resolve` failure, including
-    /// `createRule` and `hostAsk`, is not an `AllowedAction`.
+    /// Pending without an approval stays pending. Ledger `createRule` fails in
+    /// `humanDecision` before `resolve`, so it is not an `AllowedAction`.
     public static func step(
         _ authorization: AgentAuthorization,
         approval: Result<ApprovalDecision, AgentApprovalError>? = nil
@@ -226,7 +255,7 @@ public enum AgentAuthorization: Sendable, Equatable {
             guard let approval else {
                 return .awaitingApproval(pending)
             }
-            switch resolve(pending, approval: approval) {
+            switch resolve(pending, approval: approval.flatMap({ humanDecision($0) })) {
             case .failure(let error):
                 return .approvalFailed(error)
             case .success(.denied(let denied)):
@@ -254,13 +283,12 @@ public enum ResolvedAuthorization: Sendable, Equatable {
 
 /// Fail-closed approval-channel and unsupported-click errors.
 ///
-/// Channel-down maps to `approvalUnavailable` at the caller. This type
-/// is not a ledger timeout and does not mint a rule.
+/// Channel-down maps to `approvalUnavailable` at the caller. `createRule`
+/// maps to `ruleCreationUnsupported` in `humanDecision`. This type is not
+/// a ledger timeout and does not mint a rule.
 public enum AgentApprovalError: Error, Sendable, Equatable {
     /// The approval channel did not return a human decision.
     case approvalUnavailable
     /// `createRule` is not `allowOnce` and does not mint a rule this slice.
     case ruleCreationUnsupported
-    /// `hostAsk` is not a runtime Ask reason. Fail closed.
-    case hostAskUnsupported
 }
