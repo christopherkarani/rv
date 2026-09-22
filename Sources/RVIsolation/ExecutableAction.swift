@@ -3,6 +3,7 @@ import RVDomain
 
 public enum ExecutableCompileError: Error, Sendable, Equatable {
     case fileActionUnsupported
+    case httpActionUnsupported
     case missingCommand
     case commandNotSimpleArgv
     case executableNotResolved
@@ -34,6 +35,8 @@ public func compileExecutable(
     switch allowed.action {
     case .file:
         return .failure(.fileActionUnsupported)
+    case .http:
+        return .failure(.httpActionUnsupported)
     case .shell(let shell):
         switch compileSimpleArgv(shell.supportingCommand) {
         case .failure(let error):

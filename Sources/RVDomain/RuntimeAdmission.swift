@@ -117,26 +117,40 @@ public struct RuntimeAdmissionSubject: Sendable, Equatable {
     }
 }
 
+/// Polled by name lookup while `getaddrinfo` runs on another thread.
+///
+/// The session loop sets this around normalize. A stuck resolver then cannot
+/// keep the contained process group alive after the leader exits.
+public enum RuntimeAdmissionStop {
+    @TaskLocal public static var shouldStop: @Sendable () -> Bool = { false }
+}
+
+/// What the agent asked for. This is not a canonical HTTP action and not a permit.
+public enum RuntimeRequestedAction: Sendable, Equatable {
+    case shell(ShellCommand)
+    case http(method: String, url: String)
+}
+
 /// Untrusted action after a successful decode. Holding one is not authority.
 public struct RuntimeActionFrame: Sendable, Equatable {
     public var version: Int
     public var requestID: RuntimeActionRequestID
     public var capability: RuntimeCapability
     public var claimedSession: RuntimeSessionClaim
-    public var command: ShellCommand
+    public var action: RuntimeRequestedAction
 
     public init(
         version: Int,
         requestID: RuntimeActionRequestID,
         capability: RuntimeCapability,
         claimedSession: RuntimeSessionClaim,
-        command: ShellCommand
+        action: RuntimeRequestedAction
     ) {
         self.version = version
         self.requestID = requestID
         self.capability = capability
         self.claimedSession = claimedSession
-        self.command = command
+        self.action = action
     }
 }
 
@@ -177,6 +191,8 @@ public enum RuntimeAdmissionResponse: Sendable, Equatable {
     case evaluationFailed
     case approvalUnavailable
     case executorFailed(RuntimeAdmissionExecutorError)
+    case http(HTTPExecutionReceipt)
+    case httpFailed(HTTPOpenFailure)
 }
 
 public enum RuntimeAdmissionAuthorization: String, Sendable, Equatable, Codable {
@@ -197,6 +213,12 @@ public struct RuntimeAdmissionEvent: Sendable, Equatable, Codable {
     public var authorization: RuntimeAdmissionAuthorization
     public var executionAttempted: Bool
     public var result: String
+    /// Present for an HTTP attempt. The query string is not stored.
+    public var httpMethod: String?
+    public var httpDestination: String?
+    public var httpAddress: String?
+    public var httpQueryPresent: Bool?
+    public var httpStatus: Int?
 
     public init(
         session: String?,
@@ -204,7 +226,12 @@ public struct RuntimeAdmissionEvent: Sendable, Equatable, Codable {
         fingerprint: String?,
         authorization: RuntimeAdmissionAuthorization,
         executionAttempted: Bool,
-        result: String
+        result: String,
+        httpMethod: String? = nil,
+        httpDestination: String? = nil,
+        httpAddress: String? = nil,
+        httpQueryPresent: Bool? = nil,
+        httpStatus: Int? = nil
     ) {
         self.session = session
         self.requestID = requestID
@@ -212,6 +239,11 @@ public struct RuntimeAdmissionEvent: Sendable, Equatable, Codable {
         self.authorization = authorization
         self.executionAttempted = executionAttempted
         self.result = result
+        self.httpMethod = httpMethod
+        self.httpDestination = httpDestination
+        self.httpAddress = httpAddress
+        self.httpQueryPresent = httpQueryPresent
+        self.httpStatus = httpStatus
     }
 }
 
@@ -387,6 +419,7 @@ public enum RuntimeAdmissionGate {
         case .success(let proposed):
             action = proposed
         }
+        let http = httpAudit(of: action)
         let authorization = AgentAuthorization.decide(
             action: action,
             policy: policy
@@ -416,7 +449,8 @@ public enum RuntimeAdmissionGate {
                 authorization: .allowed,
                 response: .executed(exitStatus: -1),
                 result: "authorized",
-                execute: allowed
+                execute: allowed,
+                http: http
             )
         case .denied(let denied):
             return make(
@@ -425,7 +459,8 @@ public enum RuntimeAdmissionGate {
                 fingerprint: action.fingerprint.rawValue,
                 authorization: .denied,
                 response: .denied(denied.deny),
-                result: denied.deny.ruleID.rawValue
+                result: denied.deny.ruleID.rawValue,
+                http: http
             )
         case .awaitingApproval(let pending):
             return make(
@@ -434,7 +469,8 @@ public enum RuntimeAdmissionGate {
                 fingerprint: action.fingerprint.rawValue,
                 authorization: .pending,
                 response: .pending(pending.reason.ledgerReason),
-                result: pending.reason.ledgerReason.rawValue
+                result: pending.reason.ledgerReason.rawValue,
+                http: http
             )
         case .approvalFailed:
             return make(
@@ -443,9 +479,20 @@ public enum RuntimeAdmissionGate {
                 fingerprint: action.fingerprint.rawValue,
                 authorization: .approvalUnavailable,
                 response: .approvalUnavailable,
-                result: "approvalUnavailable"
+                result: "approvalUnavailable",
+                http: http
             )
         }
+    }
+
+    private static func httpAudit(of action: ProposedAction) -> HTTPAuditStamp? {
+        guard case .http(let http) = action else { return nil }
+        return HTTPAuditStamp(
+            method: http.method.rawValue,
+            destination: http.destination.auditedResource,
+            address: http.destination.address?.presentation,
+            queryPresent: http.destination.query != nil
+        )
     }
 
     private static func reject(
@@ -472,7 +519,8 @@ public enum RuntimeAdmissionGate {
         authorization: RuntimeAdmissionAuthorization,
         response: RuntimeAdmissionResponse,
         result: String,
-        execute: AllowedAction? = nil
+        execute: AllowedAction? = nil,
+        http: HTTPAuditStamp? = nil
     ) -> RuntimeAdmissionDecision {
         RuntimeAdmissionDecision(
             binding: binding,
@@ -483,11 +531,22 @@ public enum RuntimeAdmissionGate {
                 fingerprint: fingerprint,
                 authorization: authorization,
                 executionAttempted: false,
-                result: result
+                result: result,
+                httpMethod: http?.method,
+                httpDestination: http?.destination,
+                httpAddress: http?.address,
+                httpQueryPresent: http?.queryPresent
             ),
             execute: execute
         )
     }
+}
+
+private struct HTTPAuditStamp {
+    var method: String
+    var destination: String
+    var address: String?
+    var queryPresent: Bool
 }
 
 private extension Result {

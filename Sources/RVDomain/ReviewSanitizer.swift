@@ -9,6 +9,8 @@ public enum ReviewSanitizer: Sendable {
             return .shell(sanitize(shell))
         case .file(let file):
             return .file(sanitize(file))
+        case .http(let http):
+            return .http(http.redactingQuery())
         }
     }
 

@@ -583,6 +583,8 @@ private func recordUnexpectedCompileError(
     switch error {
     case .fileActionUnsupported:
         Issue.record("expected \(expected), got fileActionUnsupported", sourceLocation: sourceLocation)
+    case .httpActionUnsupported:
+        Issue.record("expected \(expected), got httpActionUnsupported", sourceLocation: sourceLocation)
     case .missingCommand:
         Issue.record("expected \(expected), got missingCommand", sourceLocation: sourceLocation)
     case .commandNotSimpleArgv:

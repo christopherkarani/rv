@@ -135,6 +135,16 @@ public enum ActionPolicyEngine: Sendable {
             ruleID: RuleID(pack: pack, pattern: "unwrap-limited"),
             reason: "Wrapper or interpreter nesting could not be analyzed safely."
         )
+
+        public static let publicHTTPSGet = RuleID(pack: pack, pattern: "public-https-get")
+
+        public static let publicHTTPSGetReason =
+            "A public HTTPS GET is allowed by built-in policy."
+
+        public static let forbiddenHTTPDestination = Deny(
+            ruleID: RuleID(pack: pack, pattern: "forbidden-http-destination"),
+            reason: "This HTTP destination is not a public HTTPS target."
+        )
     }
 
     /// ReviewContext-only door: repository facts were supplied, so treat them
@@ -173,6 +183,8 @@ public enum ActionPolicyEngine: Sendable {
             )
         case .file(let file):
             return evaluateFile(file, policy: policy)
+        case .http(let http):
+            return evaluateHTTP(http, policy: policy)
         }
     }
 
@@ -256,6 +268,39 @@ public enum ActionPolicyEngine: Sendable {
 
     /// Catalog-only file tools. Do not run the git/filesystem builtin wall.
     /// Empty effects follow the uncovered → pack fallback → overlay path.
+    /// Public HTTPS GET is a built-in allow. Every other HTTP target is a hard deny.
+    /// Overlay can tighten the allow. It cannot loosen a forbidden destination.
+    private static func evaluateHTTP(
+        _ http: HTTPAction,
+        policy: EffectiveActionPolicy
+    ) -> ActionPolicyVerdict {
+        let hit: CoreHit
+        if http.destination.isPublicPinned && http.method == .get {
+            hit = CoreHit(
+                decision: .hardAllow,
+                ruleID: Builtin.publicHTTPSGet,
+                reason: Builtin.publicHTTPSGetReason,
+                semanticallyCovered: true
+            )
+        } else {
+            hit = CoreHit(
+                decision: .hardDeny(Builtin.forbiddenHTTPDestination),
+                ruleID: Builtin.forbiddenHTTPDestination.ruleID,
+                reason: Builtin.forbiddenHTTPDestination.reason,
+                semanticallyCovered: true
+            )
+        }
+        let tightened = applyOverlay(hit, policy.overlay)
+        return ActionPolicyVerdict(
+            decision: tightened.decision,
+            explanation: ActionPolicyExplanation(
+                zone: tightened.decision.zone,
+                ruleID: tightened.ruleID,
+                reason: tightened.reason
+            )
+        )
+    }
+
     private static func evaluateFile(
         _: FileAction,
         policy: EffectiveActionPolicy

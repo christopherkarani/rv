@@ -338,12 +338,15 @@ public struct FileAction: Sendable, Equatable, Codable {
 public enum ProposedAction: Sendable, Equatable, Codable {
     case shell(ShellAction)
     case file(FileAction)
+    case http(HTTPAction)
 
     public var fingerprint: ActionFingerprint {
         switch self {
         case .shell(let action):
             return action.fingerprint
         case .file(let action):
+            return action.fingerprint
+        case .http(let action):
             return action.fingerprint
         }
     }
@@ -354,7 +357,7 @@ public enum ProposedAction: Sendable, Equatable, Codable {
         switch self {
         case .shell(let action):
             return action.supportingCommand
-        case .file:
+        case .file, .http:
             return nil
         }
     }
@@ -365,6 +368,8 @@ public enum ProposedAction: Sendable, Equatable, Codable {
             return action.effects
         case .file(let action):
             return action.effects
+        case .http(let action):
+            return action.effects
         }
     }
 
@@ -373,6 +378,8 @@ public enum ProposedAction: Sendable, Equatable, Codable {
         case .shell(let action):
             return action.resources
         case .file(let action):
+            return action.resources
+        case .http(let action):
             return action.resources
         }
     }
@@ -383,6 +390,8 @@ public enum ProposedAction: Sendable, Equatable, Codable {
             return action.scope
         case .file(let action):
             return action.scope
+        case .http(let action):
+            return action.scope
         }
     }
 
@@ -390,7 +399,7 @@ public enum ProposedAction: Sendable, Equatable, Codable {
         switch self {
         case .shell(let action):
             return action.gitAction
-        case .file:
+        case .file, .http:
             return nil
         }
     }

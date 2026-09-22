@@ -398,7 +398,7 @@ private func waitForAdmittedPayload(
 /// `WNOWAIT` observes the leader without reaping it. The session loop still
 /// owns that `waitpid`. A zombie is enough: `kill(pid, 0)` stays true until
 /// the leader is reaped, which cannot happen while this wait is running.
-private func sessionLeaderHasExited(_ pid: pid_t) -> Bool {
+func sessionLeaderHasExited(_ pid: pid_t) -> Bool {
     guard pid > 1 else { return false }
     var info = siginfo_t()
     memset(&info, 0, MemoryLayout<siginfo_t>.size)

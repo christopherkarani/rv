@@ -352,7 +352,7 @@ private struct AdmissionHarness {
             requestID: RuntimeActionRequestID(validating: (id ?? requestID).uuidString)!,
             capability: capability ?? self.capability,
             claimedSession: RuntimeSessionClaim(validating: (claim ?? runtime.id.rawValue).uuidString)!,
-            command: ShellCommand(rawValue: command)
+            action: .shell(ShellCommand(rawValue: command))
         )
     }
 
@@ -373,8 +373,11 @@ private extension RuntimeAdmissionEvent {
 /// shell substitutions produce no proposal. Anything else stays pending.
 private func isolationAdmissionNormalize(
     subject: RuntimeAdmissionSubject,
-    command: ShellCommand
+    action: RuntimeRequestedAction
 ) -> Result<ProposedAction, RuntimeAdmissionEvaluationError> {
+    guard case .shell(let command) = action else {
+        return .failure(.failed)
+    }
     let raw = command.rawValue
     if raw.contains("$") || raw.contains("`") || raw.contains("\"") || raw.contains("'") {
         return .failure(.failed)
@@ -423,9 +426,12 @@ private func isolationAdmissionNormalize(
 /// stays in RVEngine; this only lets a lifetime probe reach the spawner.
 private func allowAdmittedCommand(
     subject: RuntimeAdmissionSubject,
-    command: ShellCommand
+    action: RuntimeRequestedAction
 ) -> Result<ProposedAction, RuntimeAdmissionEvaluationError> {
-    .success(
+    guard case .shell(let command) = action else {
+        return .failure(.failed)
+    }
+    return .success(
         .shell(
             ShellAction(
                 fingerprint: ActionFingerprint(rawValue: "runtime:lifetime:\(command.rawValue)"),
