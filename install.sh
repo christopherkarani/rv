@@ -47,6 +47,7 @@ tmp_fetch=""
 tmp_rv=""
 tmp_cli=""
 tmp_rvd=""
+tmp_isolation=""
 
 # Download progress. Same glyphs/width as Sources/RVTUI/SetupRenderer.swift.
 progress_width=24
@@ -62,6 +63,7 @@ cleanup() {
   [ -n "${tmp_rv:-}" ] && rm -f "$tmp_rv"
   [ -n "${tmp_cli:-}" ] && rm -f "$tmp_cli"
   [ -n "${tmp_rvd:-}" ] && rm -f "$tmp_rvd"
+  [ -n "${tmp_isolation:-}" ] && rm -f "$tmp_isolation"
   [ -n "${tmp_fetch:-}" ] && rm -rf "$tmp_fetch"
   :
 }
@@ -266,6 +268,11 @@ else
   size_packs="$(normalize_size "$(content_length "$release_base/rv_RVPacks.bundle.tar.gz")")"
 
   progress_total=$((size_rv + size_cli + size_rvd + size_packs))
+  size_isolation=0
+  if [ "$os" = "Linux" ]; then
+    size_isolation="$(normalize_size "$(content_length "$release_base/rv-isolation-exec")")"
+    progress_total=$((progress_total + size_isolation))
+  fi
   progress_base=0
   progress_have=0
   progress_start
@@ -274,6 +281,10 @@ else
   download_release_asset "$tmp_fetch" "rv-cli" "$size_cli"
   download_release_asset "$tmp_fetch" "rvd" "$size_rvd"
   chmod 755 "$tmp_fetch/rv" "$tmp_fetch/rv-cli" "$tmp_fetch/rvd"
+  if [ "$os" = "Linux" ]; then
+    download_release_asset "$tmp_fetch" "rv-isolation-exec" "$size_isolation"
+    chmod 755 "$tmp_fetch/rv-isolation-exec"
+  fi
   fetch_pack_bundles "$tmp_fetch" "$size_packs"
   progress_finish
 
@@ -284,7 +295,12 @@ else
   }
 fi
 
-# Stage all three copies before touching any destination: a copy failure
+if [ "$os" = "Linux" ] && [ ! -x "$src/rv-isolation-exec" ]; then
+  echo "rv: Linux installation requires executable rv-isolation-exec" >&2
+  exit 1
+fi
+
+# Stage all required copies before touching any destination: a copy failure
 # must leave the previous install intact, never a torn trio (new C rv with
 # no rv-cli sibling makes doctor unreachable and hooks deny-only).
 tmp_rv="$bin/.rv.installing"
@@ -295,6 +311,12 @@ cp "$src/rv" "$tmp_rv"
 cp "$src/rv-cli" "$tmp_cli"
 cp "$src/rvd" "$tmp_rvd"
 chmod 755 "$tmp_rv" "$tmp_cli" "$tmp_rvd"
+if [ "$os" = "Linux" ]; then
+  tmp_isolation="$bin/.rv-isolation-exec.installing"
+  rm -f "$tmp_isolation"
+  cp "$src/rv-isolation-exec" "$tmp_isolation"
+  chmod 755 "$tmp_isolation"
+fi
 
 # Unlink dest first: BSD cp writes through an existing dest symlink. Same
 # directory rename after a successful staging is metadata-only.
@@ -302,6 +324,11 @@ rm -f "$bin/rv" "$bin/rv-cli" "$bin/rvd"
 mv -f "$tmp_rv" "$bin/rv"
 mv -f "$tmp_cli" "$bin/rv-cli"
 mv -f "$tmp_rvd" "$bin/rvd"
+if [ "$os" = "Linux" ]; then
+  rm -f "$bin/rv-isolation-exec"
+  mv -f "$tmp_isolation" "$bin/rv-isolation-exec"
+  tmp_isolation=""
+fi
 tmp_rv=""
 tmp_cli=""
 tmp_rvd=""

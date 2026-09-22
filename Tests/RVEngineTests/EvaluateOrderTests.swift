@@ -152,6 +152,23 @@ private func run(
     #expect(result.decision == .allow)
 }
 
+@Test func evaluate_allowsCapturedPythonAssignment() throws {
+    let result = try run(#"python3 -c "x = 1""#)
+    #expect(result.decision == .allow)
+}
+
+@Test func evaluate_allowsCapturedPythonPathlibRead() throws {
+    let result = try run(
+        #"python3 -c "from pathlib import Path; p=Path('README.md'); print(p.read_text())""#
+    )
+    #expect(result.decision == .allow)
+}
+
+@Test func evaluate_allowsCapturedNodeAssignment() throws {
+    let result = try run(#"node -e "const x = 1""#)
+    #expect(result.decision == .allow)
+}
+
 @Test func evaluate_deniesBashHeredocReset() throws {
     let result = try run("bash <<'EOF'\ngit reset --hard\nEOF")
     guard case .deny(let deny) = result.decision else {

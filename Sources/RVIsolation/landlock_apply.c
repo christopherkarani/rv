@@ -8,6 +8,7 @@
 
 #include <fcntl.h>
 #include <linux/landlock.h>
+#include <linux/openat2.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -76,6 +77,7 @@ int rv_landlock_restrict_self_to_workspace(const char *workspace) {
     struct landlock_ruleset_attr attr;
     int ruleset_fd;
     int parent_fd;
+    struct open_how workspace_open;
     struct landlock_path_beneath_attr beneath;
     int restrict_status;
     char canonical[PATH_MAX];
@@ -87,6 +89,11 @@ int rv_landlock_restrict_self_to_workspace(const char *workspace) {
         return -1;
     }
     if (canonical[0] != '/' || canonical[1] == '\0') {
+        return -1;
+    }
+    /* Swift supplies the canonical grant path. Never silently reinterpret it
+     * as a different directory after a symlink was changed before launch. */
+    if (strcmp(workspace, canonical) != 0) {
         return -1;
     }
 
@@ -116,7 +123,15 @@ int rv_landlock_restrict_self_to_workspace(const char *workspace) {
         return -1;
     }
 
-    parent_fd = open(canonical, O_PATH | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+    /* Resolve every component without symlinks atomically. O_NOFOLLOW alone
+     * covers only the final component, leaving ancestor replacement races.
+     * ABI >= 3 kernels support openat2; denied setup remains fail-closed. */
+    memset(&workspace_open, 0, sizeof(workspace_open));
+    workspace_open.flags = O_PATH | O_DIRECTORY | O_CLOEXEC;
+    workspace_open.resolve = RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS;
+    parent_fd = (int)syscall(
+        SYS_openat2, AT_FDCWD, canonical, &workspace_open, sizeof(workspace_open)
+    );
     if (parent_fd < 0) {
         close(ruleset_fd);
         return -1;

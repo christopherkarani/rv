@@ -81,6 +81,7 @@ struct AgentTurnTests {
             fingerprint: "shell:agent-turn:allowed-in"
         )
         let turn = await LocalExecutor().perform(authorization, plan: try tree.requireContainedIsolation())
+        if linuxRefusedContainedTurn(turn, absentPath: inside) { return }
         try expectExecutedContained(turn, matching: tree.contained)
         #expect(FileManager.default.fileExists(atPath: inside))
     }
@@ -104,6 +105,7 @@ struct AgentTurnTests {
             plan: try tree.requireContainedIsolation(),
             approval: .success(.allowOnce)
         )
+        if linuxRefusedContainedTurn(turn, absentPath: inside) { return }
         try expectExecutedContained(turn, matching: tree.contained)
         #expect(FileManager.default.fileExists(atPath: inside))
     }
@@ -211,7 +213,25 @@ struct AgentTurnTests {
         )
         let allowed = try requireAllowed(authorization)
         let executor = LocalExecutor()
-        let first = await executor.perform(authorization, plan: try tree.requireContainedIsolation())
+        let isolation = try tree.requireContainedIsolation()
+        let first = await executor.perform(authorization, plan: isolation)
+        #if os(Linux)
+        #expect(linuxRefusedContainedTurn(first, absentPath: inside))
+        let refusedSecond = await executor.perform(authorization, plan: isolation)
+        switch refusedSecond {
+        case .failure(.execute(.alreadyExecuted(let fingerprint))):
+            #expect(fingerprint == allowed.action.fingerprint)
+        case .failure(let error):
+            recordUnexpectedTurnError(error, expected: "alreadyExecuted")
+        case .success(.executed):
+            Issue.record("second perform of the same fingerprint must not execute")
+        case .success(.awaitingApproval):
+            Issue.record("second perform must not await approval")
+        case .success(.denied):
+            Issue.record("second perform must not deny")
+        }
+        return
+        #endif
         try expectExecutedContained(first, matching: tree.contained)
         #expect(FileManager.default.fileExists(atPath: inside))
         let second = await executor.perform(authorization, plan: try tree.requireContainedIsolation())
@@ -364,6 +384,32 @@ private func requireTouchExecutable() throws -> String {
     }
     Issue.record("neither /usr/bin/touch nor /bin/touch exists")
     throw AgentTurnFixtureError.missingTouch
+}
+
+private func linuxRefusedContainedTurn(
+    _ turn: Result<AgentTurn, AgentTurnError>,
+    absentPath: String
+) -> Bool {
+    #if os(Linux)
+    switch turn {
+    case .failure(.execute(.applyFailed(.containedGuaranteesUnsupported))):
+        #expect(FileManager.default.fileExists(atPath: absentPath) == false)
+        return true
+    case .success(.executed(let result)):
+        Issue.record("Linux contained launch must be refused, got exit \(result.exitStatus)")
+        return true
+    case .failure(let error):
+        recordUnexpectedTurnError(error, expected: "execute(applyFailed(containedGuaranteesUnsupported))")
+        return true
+    case .success:
+        Issue.record("Linux contained launch must be refused")
+        return true
+    }
+    #else
+    _ = turn
+    _ = absentPath
+    return false
+    #endif
 }
 
 private func expectExecutedContained(

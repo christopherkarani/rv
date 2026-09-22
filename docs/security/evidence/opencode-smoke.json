@@ -1,0 +1,8 @@
+{
+  "command": "staged rv opencode --workspace <disposable> -- --version",
+  "executable": "/Users/chriskarani/.opencode/bin/opencode",
+  "exit": 0,
+  "stdout": "1.18.31",
+  "stderr": "rv opencode: isolation limits workspace writes only; reads, network, and host process access remain unrestricted.",
+  "scope": "version-only real installed OpenCode startup; no interactive workload or credentials"
+}

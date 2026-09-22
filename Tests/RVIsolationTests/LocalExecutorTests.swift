@@ -17,7 +17,7 @@ import Testing
 /// 10. contained outside `touch` stays contained, file absent, exit != 0
 /// 11. observed and mediated plans fail `containedIsolation()` with `.notContained`
 /// 12. second `run` of the same fingerprint throws `alreadyExecuted`
-/// 13. apply failure does not consume the fingerprint
+/// 13. a contained apply failure consumes the fingerprint
 /// 14. uncovered in-workspace `touch` (empty effects → reviewAsk) →
 ///     resolve(allowOnce) → compileExecutable → contained run creates the file
 /// `compileExecutable(allowed:isolation:)` takes `AllowedAction` and `ContainedIsolation` only.
@@ -217,7 +217,9 @@ struct LocalExecutorTests {
             fingerprint: "shell:local-executor:contained-in",
             isolation: try tree.requireContainedIsolation()
         )
-        let result = try await LocalExecutor().run(executable)
+        guard let result = try await runContainedOrRefuseOnLinux(executable, absentPath: inside) else {
+            return
+        }
         #expect(result.exitStatus == 0)
         #expect(FileManager.default.fileExists(atPath: inside))
         expectContainedPlatform(result.established, matching: tree.contained)
@@ -237,7 +239,9 @@ struct LocalExecutorTests {
             fingerprint: "shell:local-executor:contained-out",
             isolation: try tree.requireContainedIsolation()
         )
-        let result = try await LocalExecutor().run(executable)
+        guard let result = try await runContainedOrRefuseOnLinux(executable, absentPath: outside) else {
+            return
+        }
         #expect(result.exitStatus != 0)
         #expect(FileManager.default.fileExists(atPath: outside) == false)
         expectContainedPlatform(result.established, matching: tree.contained)
@@ -269,6 +273,27 @@ struct LocalExecutorTests {
             isolation: try tree.requireContainedIsolation()
         )
         let executor = LocalExecutor()
+        #if os(Linux)
+        do {
+            _ = try await executor.run(executable)
+            Issue.record("Linux first run must refuse the contained launch")
+        } catch let error as LocalExecutorError {
+            #expect(error == .applyFailed(.containedGuaranteesUnsupported))
+        }
+        #expect(FileManager.default.fileExists(atPath: inside) == false)
+        do {
+            _ = try await executor.run(executable)
+            Issue.record("second run of the same fingerprint must throw alreadyExecuted")
+        } catch let error as LocalExecutorError {
+            switch error {
+            case .alreadyExecuted(let fingerprint):
+                #expect(fingerprint == executable.allowed.action.fingerprint)
+            case .cancelled, .applyFailed:
+                Issue.record("expected alreadyExecuted, got \(error)")
+            }
+        }
+        return
+        #endif
         let first = try await executor.run(executable)
         #expect(first.exitStatus == 0)
         #expect(FileManager.default.fileExists(atPath: inside))
@@ -279,6 +304,8 @@ struct LocalExecutorTests {
             switch error {
             case .alreadyExecuted(let fingerprint):
                 #expect(fingerprint == executable.allowed.action.fingerprint)
+            case .cancelled:
+                Issue.record("expected alreadyExecuted, got cancelled")
             case .applyFailed(let apply):
                 recordUnexpectedApplyError(apply, expected: "alreadyExecuted")
             }
@@ -287,7 +314,7 @@ struct LocalExecutorTests {
         }
     }
 
-    @Test func localExecutor_applyFailure_allowsRetry() async throws {
+    @Test func localExecutor_applyFailure_consumesFingerprint() async throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
 
@@ -306,17 +333,26 @@ struct LocalExecutorTests {
         let executor = LocalExecutor()
         do {
             _ = try await executor.run(contained)
-            Issue.record("missing workspace must throw so the fingerprint stays free")
+            Issue.record("missing workspace must throw")
         } catch let error as LocalExecutorError {
             expectApplyFailed(error, .workspaceDoesNotExist)
         } catch {
             Issue.record("missing workspace must throw LocalExecutorError, got \(error)")
         }
-        try FileManager.default.createDirectory(at: tree.workspaceURL, withIntermediateDirectories: true)
-        let result = try await executor.run(contained)
-        #expect(result.exitStatus == 0)
-        #expect(FileManager.default.fileExists(atPath: inside))
-        expectContainedPlatform(result.established, matching: tree.contained)
+        do {
+            _ = try await executor.run(contained)
+            Issue.record("failed contained apply must not be reusable")
+        } catch let error as LocalExecutorError {
+            switch error {
+            case .alreadyExecuted(let fingerprint):
+                #expect(fingerprint == contained.allowed.action.fingerprint)
+            case .cancelled, .applyFailed:
+                Issue.record("expected alreadyExecuted, got \(error)")
+            }
+        } catch {
+            Issue.record("second run must throw LocalExecutorError, got \(error)")
+        }
+        #expect(FileManager.default.fileExists(atPath: inside) == false)
     }
 
     @Test func localExecutor_askResolve_containedInWorkspaceTouch() async throws {
@@ -337,10 +373,36 @@ struct LocalExecutorTests {
         let pending = try requirePendingReviewAsk(action)
         let allowed = try requireResolvedAllowOnce(pending)
         let executable = try requireExecutable(allowed, isolation: try tree.requireContainedIsolation())
-        let result = try await LocalExecutor().run(executable)
+        guard let result = try await runContainedOrRefuseOnLinux(executable, absentPath: inside) else {
+            return
+        }
         #expect(result.exitStatus == 0)
         #expect(FileManager.default.fileExists(atPath: inside))
         expectContainedPlatform(result.established, matching: tree.contained)
+    }
+}
+
+private func runContainedOrRefuseOnLinux(
+    _ executable: ExecutableAction,
+    executor: LocalExecutor = LocalExecutor(),
+    absentPath: String
+) async throws -> IsolatedRunResult? {
+    do {
+        let result = try await executor.run(executable)
+        #if os(Linux)
+        Issue.record("Linux contained launch must be refused, got exit \(result.exitStatus)")
+        return nil
+        #else
+        return result
+        #endif
+    } catch let error as LocalExecutorError {
+        #if os(Linux)
+        #expect(error == .applyFailed(.containedGuaranteesUnsupported))
+        #expect(FileManager.default.fileExists(atPath: absentPath) == false)
+        return nil
+        #else
+        throw error
+        #endif
     }
 }
 
@@ -602,6 +664,8 @@ private func expectApplyFailed(
     switch error {
     case .applyFailed(let apply) where apply == expected:
         break
+    case .cancelled:
+        Issue.record("expected applyFailed(backendUnavailable), got cancelled", sourceLocation: sourceLocation)
     case .alreadyExecuted(let fingerprint):
         Issue.record(
             "expected applyFailed(\(expected)), got alreadyExecuted \(fingerprint.rawValue)",
@@ -622,6 +686,8 @@ private func recordUnexpectedApplyError(
     sourceLocation: SourceLocation = #_sourceLocation
 ) {
     switch error {
+    case .commandContainsNUL:
+        Issue.record("expected \(expected), got commandContainsNUL", sourceLocation: sourceLocation)
     case .backendUnavailable:
         Issue.record("expected \(expected), got backendUnavailable", sourceLocation: sourceLocation)
     case .backendMismatch:
@@ -637,6 +703,8 @@ private func recordUnexpectedApplyError(
         )
     case .workspacePathUnsafe:
         Issue.record("expected \(expected), got workspacePathUnsafe", sourceLocation: sourceLocation)
+    case .workspaceContainsInodeAlias, .workspaceInodeBoundaryFailed:
+        Issue.record("expected \(expected), got workspaceContainsInodeAlias", sourceLocation: sourceLocation)
     case .containedGuaranteesUnsupported:
         Issue.record(
             "expected \(expected), got containedGuaranteesUnsupported",
@@ -646,7 +714,7 @@ private func recordUnexpectedApplyError(
         Issue.record("expected \(expected), got profileNotApplicable", sourceLocation: sourceLocation)
     case .processSpawnFailed:
         Issue.record("expected \(expected), got processSpawnFailed", sourceLocation: sourceLocation)
-    case .commandExecutableMustBeAbsolute:
+    case .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
         Issue.record(
             "expected \(expected), got commandExecutableMustBeAbsolute",
             sourceLocation: sourceLocation

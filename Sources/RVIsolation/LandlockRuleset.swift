@@ -40,8 +40,9 @@ public struct LandlockRuleset: Sendable, Equatable {
     }
 }
 
-/// First-slice Landlock ruleset: write-class handled accesses under the
-/// resolved workspace. Network stays unrestricted (no net handled bits).
+/// Landlock cannot yet enforce a workspace-scoped contained plan.
+/// Path checks still run. A valid workspace is `containedGuaranteesUnsupported`
+/// rather than a write-only ruleset that would leave reads and network open.
 /// Observed / mediated plans are not applicable.
 public func compileLandlockRuleset(
     _ plan: IsolationPlan
@@ -54,10 +55,22 @@ public func compileLandlockRuleset(
             return .failure(.containedGuaranteesUnsupported)
         }
         switch guarantees.filesystem {
-        case .writesLimited(let limitedTo):
+        case .workspaceScoped(let limitedTo):
             guard limitedTo == workspace else {
                 return .failure(.containedGuaranteesUnsupported)
             }
+        case .unrestricted:
+            return .failure(.containedGuaranteesUnsupported)
+        }
+        switch guarantees.network {
+        case .denied:
+            break
+        case .unrestricted:
+            return .failure(.containedGuaranteesUnsupported)
+        }
+        switch guarantees.process {
+        case .hostSignalsDenied:
+            break
         case .unrestricted:
             return .failure(.containedGuaranteesUnsupported)
         }
@@ -67,11 +80,20 @@ public func compileLandlockRuleset(
         case .notInherited:
             return .failure(.containedGuaranteesUnsupported)
         }
-        switch guarantees.network {
-        case .unrestricted:
-            break
+        switch compileFirstSliceLandlock(workspace: workspace) {
+        case .failure(let error):
+            return .failure(error)
+        case .success(let ruleset):
+            switch existingResolvedWorkspacePath(workspace) {
+            case .failure(let error):
+                return .failure(error)
+            case .success(let resolved):
+                guard resolved == ruleset.workspacePath else {
+                    return .failure(.workspacePathUnresolvable)
+                }
+                return .failure(.containedGuaranteesUnsupported)
+            }
         }
-        return compileFirstSliceLandlock(workspace: workspace)
     }
 }
 

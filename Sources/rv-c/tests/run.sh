@@ -96,6 +96,24 @@ exit 17
 EOF
 chmod 755 "$PROBE/rv-cli"
 
+# The installed front door must locate its real sibling even when argv[0]
+# comes from PATH or is deliberately forged. HOME is never a code locator.
+for invocation in path forged; do
+  log="$OUT/$invocation.argv"
+  set +e
+  if [[ "$invocation" == "path" ]]; then
+    PATH="$PROBE:/usr/bin:/bin" HOME="$PROBE" RV_C_ARGV_LOG="$log" rv opencode < /dev/null
+  else
+    HOME="$PROBE" RV_C_ARGV_LOG="$log" /bin/bash -c 'exec -a untrusted-argv-zero "$1" opencode' _ "$PROBE/rv" < /dev/null
+  fi
+  st=$?
+  set -e
+  if [[ "$st" -ne 17 || ! -f "$log" ]]; then
+    printf 'rv-c tests: %s invocation did not execute the installed sibling (exit %s)\n' "$invocation" "$st" >&2
+    exit 1
+  fi
+done
+
 expect_exec() {
   local name="$1"
   shift
@@ -253,6 +271,9 @@ fi
 EMPTY="$OUT/empty-home"
 rm -rf "$EMPTY"
 mkdir -p "$EMPTY"
+mkdir -p "$EMPTY/.local/bin"
+printf '#!/bin/sh\nexit 19\n' > "$EMPTY/.local/bin/rv-cli"
+chmod 755 "$EMPTY/.local/bin/rv-cli"
 set +e
 HOME="$EMPTY" "$OUT/rv" hook --help
 miss_st=$?

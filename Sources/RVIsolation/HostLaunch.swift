@@ -10,7 +10,8 @@ public enum HostLaunchError: Error, Sendable, Equatable {
 public func launchContainedHost(
     host: HookHost,
     command: IsolatedCommand,
-    plan isolation: ContainedIsolation
+    plan isolation: ContainedIsolation,
+    admission: RuntimeAdmissionConfiguration = .failClosed
 ) -> Result<IsolatedRunResult, HostLaunchError> {
     switch host {
     case .opencode:
@@ -18,7 +19,14 @@ public func launchContainedHost(
     case .grok, .pi, .claude, .openclaw, .hermes, .codex, .cursor:
         return .failure(.hostUnsupported)
     }
-    switch IsolationBackends.apply(isolation.plan, command: command, io: .inherit) {
+    switch IsolationBackends.applyLaunch(
+        isolation.plan,
+        command: command,
+        io: .inherit,
+        host: host,
+        sessionStore: .production,
+        admission: admission
+    ) {
     case .success(let result):
         return .success(result)
     case .failure(let error):

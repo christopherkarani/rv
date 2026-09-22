@@ -4,20 +4,10 @@ import RVDomain
 import Testing
 @testable import RVIsolation
 
-/// Linux kernel edges this suite encodes before production code:
-/// 9. contained + landlock: `touch` inside → exit 0, file exists, established
-///    contained + `.landlock`
-/// 10. `touch` outside (sibling) → exit != 0 and != 125, file absent,
-///     established still contained + `.landlock`
-/// 11. `/bin/sh -c touch OUTSIDE` → same (inheritance)
-/// 12. observed `apply`: outside `touch` succeeds (not secretly jailed)
-/// 13. write under `RepositoryRoot` but outside workspace is blocked
-/// 14. trampoline apply failure exits 125 and does not exec
-/// 15. outside truncate is denied (ABI ≥ 3 write-class) and still established
-/// 16. trampoline argv lock and filesystem-root workspace exit 125
-/// 17. missing inner after apply exits 126 and does not mint establishment
-/// 18. `landlock(executable: /usr/bin/true)` does not establish
-/// Missing Landlock / missing trampoline must fail these tests — do not skip.
+/// Linux contained launch refuses before exec. These tests prove a strict
+/// plan does not run the inner command and does not mint contained+landlock.
+/// Observed apply is still unsandboxed. Filesystem-root and helper-identity
+/// failures stay typed. A write-class helper is not a successful contained run.
 @Suite("LandlockContainment")
 struct LandlockContainmentTests {
     @Test func landlock_touchInsideWorkspace_succeedsAndEstablishesContained() throws {
@@ -30,12 +20,11 @@ struct LandlockContainmentTests {
             command: IsolatedCommand(executable: "/usr/bin/touch", arguments: [inside])!
         )
         switch result {
-        case .success(let run):
-            #expect(run.exitStatus == 0)
-            #expect(FileManager.default.fileExists(atPath: inside))
-            expectContainedLandlock(run.established, matching: tree.contained)
+        case .success:
+            Issue.record("strict plan must not launch a write-only Landlock sandbox")
         case .failure(let error):
-            recordUnexpectedContainmentError(error, expected: "in-workspace touch")
+            expectContainedRefused(error)
+            #expect(FileManager.default.fileExists(atPath: inside) == false)
         }
     }
 
@@ -50,16 +39,11 @@ struct LandlockContainmentTests {
             command: IsolatedCommand(executable: "/usr/bin/touch", arguments: [outside])!
         )
         switch result {
-        case .success(let run):
-            #expect(run.exitStatus != 0)
-            #expect(run.exitStatus != IsolationBackends.isolationExecCouldNotEstablishExit)
-            #expect(FileManager.default.fileExists(atPath: outside) == false)
-            expectContainedLandlock(run.established, matching: tree.contained)
+        case .success:
+            Issue.record("strict plan must not launch before an outside write")
         case .failure(let error):
-            recordUnexpectedContainmentError(
-                error,
-                expected: "blocked outside touch with established contained"
-            )
+            expectContainedRefused(error)
+            #expect(FileManager.default.fileExists(atPath: outside) == false)
         }
     }
 
@@ -76,13 +60,11 @@ struct LandlockContainmentTests {
             )!
         )
         switch result {
-        case .success(let run):
-            #expect(run.exitStatus != 0)
-            #expect(run.exitStatus != IsolationBackends.isolationExecCouldNotEstablishExit)
-            #expect(FileManager.default.fileExists(atPath: outside) == false)
-            expectContainedLandlock(run.established, matching: tree.contained)
+        case .success:
+            Issue.record("strict plan must not launch a child shell")
         case .failure(let error):
-            recordUnexpectedContainmentError(error, expected: "inherited write deny for /bin/sh child")
+            expectContainedRefused(error)
+            #expect(FileManager.default.fileExists(atPath: outside) == false)
         }
     }
 
@@ -130,16 +112,11 @@ struct LandlockContainmentTests {
             command: IsolatedCommand(executable: "/usr/bin/touch", arguments: [leak])!
         )
         switch result {
-        case .success(let run):
-            #expect(run.exitStatus != 0)
-            #expect(run.exitStatus != IsolationBackends.isolationExecCouldNotEstablishExit)
-            #expect(FileManager.default.fileExists(atPath: leak) == false)
-            expectContainedLandlock(run.established, matching: tree.containedDifferingRoot)
+        case .success:
+            Issue.record("strict plan must not launch a repository write")
         case .failure(let error):
-            recordUnexpectedContainmentError(
-                error,
-                expected: "blocked write under repositoryRoot outside workspace"
-            )
+            expectContainedRefused(error)
+            #expect(FileManager.default.fileExists(atPath: leak) == false)
         }
     }
 
@@ -176,18 +153,11 @@ struct LandlockContainmentTests {
             )!
         )
         switch result {
-        case .success(let run):
-            #expect(run.exitStatus != 0)
-            #expect(run.exitStatus != IsolationBackends.isolationExecCouldNotEstablishExit)
-            #expect(run.exitStatus != IsolationBackends.isolationExecExecFailedExit)
-            let remaining = try String(contentsOfFile: outside, encoding: .utf8)
-            #expect(remaining == "keep-me\n")
-            expectContainedLandlock(run.established, matching: tree.contained)
+        case .success:
+            Issue.record("strict plan must not launch a truncate")
         case .failure(let error):
-            recordUnexpectedContainmentError(
-                error,
-                expected: "blocked outside truncate with established contained"
-            )
+            expectContainedRefused(error)
+            #expect(try String(contentsOfFile: outside, encoding: .utf8) == "keep-me\n")
         }
     }
 
@@ -236,17 +206,18 @@ struct LandlockContainmentTests {
             Issue.record("/usr/bin/true must not mint contained+landlock")
         case .failure(let error):
             switch error {
-            case .backendUnavailable:
+            case .containedGuaranteesUnsupported:
                 break
-            case .backendMismatch,
+            case .backendUnavailable, .backendMismatch,
                 .workspaceMustBeAbsolute,
                 .workspaceDoesNotExist,
                 .workspacePathUnresolvable,
                 .workspacePathUnsafe,
-                .containedGuaranteesUnsupported,
+                .workspaceContainsInodeAlias, .workspaceInodeBoundaryFailed,
                 .profileNotApplicable,
                 .processSpawnFailed,
-                .commandExecutableMustBeAbsolute:
+                .commandContainsNUL,
+                .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
                 Issue.record("true override must be backendUnavailable, got \(error)")
             }
         }
@@ -302,6 +273,24 @@ private func runIsolationExec(_ exec: URL, arguments: [String]) throws -> Int32 
     return process.terminationStatus
 }
 
+private func expectContainedRefused(
+    _ error: IsolationApplyError,
+    sourceLocation: SourceLocation = #_sourceLocation
+) {
+    switch error {
+    case .containedGuaranteesUnsupported:
+        break
+    case .backendUnavailable, .backendMismatch, .workspaceMustBeAbsolute,
+        .workspaceDoesNotExist, .workspacePathUnresolvable, .workspacePathUnsafe,
+        .workspaceContainsInodeAlias, .workspaceInodeBoundaryFailed, .profileNotApplicable, .processSpawnFailed,
+        .commandContainsNUL, .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
+        Issue.record(
+            "strict contained plan must be containedGuaranteesUnsupported, got \(error)",
+            sourceLocation: sourceLocation
+        )
+    }
+}
+
 private func expectContainedLandlock(
     _ established: EstablishedIsolation,
     matching plan: IsolationPlan,
@@ -322,11 +311,11 @@ private func expectContainedLandlock(
     switch established.mode {
     case .contained(let guarantees):
         switch guarantees.filesystem {
-        case .writesLimited(let limitedTo):
+        case .workspaceScoped(let limitedTo):
             #expect(limitedTo == plan.workspace, sourceLocation: sourceLocation)
         case .unrestricted:
             Issue.record(
-                "established contained must keep first-slice write limit",
+                "established contained must keep workspace scope",
                 sourceLocation: sourceLocation
             )
         }
@@ -340,8 +329,22 @@ private func expectContainedLandlock(
             )
         }
         switch guarantees.network {
-        case .unrestricted:
+        case .denied:
             break
+        case .unrestricted:
+            Issue.record(
+                "established contained must keep denied network",
+                sourceLocation: sourceLocation
+            )
+        }
+        switch guarantees.process {
+        case .hostSignalsDenied:
+            break
+        case .unrestricted:
+            Issue.record(
+                "established contained must keep host signal denial",
+                sourceLocation: sourceLocation
+            )
         }
     case .observed:
         Issue.record("Linux contained establish must not be observed", sourceLocation: sourceLocation)
@@ -371,6 +374,8 @@ private func recordUnexpectedContainmentError(
         )
     case .workspacePathUnsafe:
         Issue.record("expected \(expected), got workspacePathUnsafe", sourceLocation: sourceLocation)
+    case .workspaceContainsInodeAlias, .workspaceInodeBoundaryFailed:
+        Issue.record("expected \(expected), got workspaceContainsInodeAlias", sourceLocation: sourceLocation)
     case .containedGuaranteesUnsupported:
         Issue.record(
             "expected \(expected), got containedGuaranteesUnsupported",
@@ -380,7 +385,9 @@ private func recordUnexpectedContainmentError(
         Issue.record("expected \(expected), got profileNotApplicable", sourceLocation: sourceLocation)
     case .processSpawnFailed:
         Issue.record("expected \(expected), got processSpawnFailed", sourceLocation: sourceLocation)
-    case .commandExecutableMustBeAbsolute:
+    case .commandContainsNUL:
+        Issue.record("unexpected NUL command rejection")
+    case .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
         Issue.record(
             "expected \(expected), got commandExecutableMustBeAbsolute",
             sourceLocation: sourceLocation

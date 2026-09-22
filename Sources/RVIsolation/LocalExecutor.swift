@@ -1,28 +1,36 @@
 import RVDomain
 
 public enum LocalExecutorError: Error, Sendable, Equatable {
+    case cancelled
     case alreadyExecuted(ActionFingerprint)
     case applyFailed(IsolationApplyError)
 }
 
-/// Runs a compiled `ExecutableAction` once per fingerprint.
+/// Dispatches a compiled `ExecutableAction` at most once per fingerprint.
 ///
 /// Spawn is only `IsolationBackends.apply` of `executable.isolation.plan`.
 /// Observed and mediated plans are not representable on this door.
 public actor LocalExecutor {
-    private var executed: Set<ActionFingerprint> = []
+    private var dispatched: Set<ActionFingerprint> = []
 
     public init() {}
 
     public func run(_ executable: ExecutableAction) throws -> IsolatedRunResult {
+        guard Task.isCancelled == false else {
+            throw LocalExecutorError.cancelled
+        }
         let fingerprint = executable.allowed.action.fingerprint
-        if executed.contains(fingerprint) {
+        if dispatched.contains(fingerprint) {
             throw LocalExecutorError.alreadyExecuted(fingerprint)
         }
+        // Apply can fail after the child has produced effects. Never make the
+        // same authorization reusable based on an ambiguous backend result.
+        dispatched.insert(fingerprint)
         switch IsolationBackends.apply(executable.isolation.plan, command: executable.command) {
         case .success(let result):
-            executed.insert(fingerprint)
             return result
+        case .failure(.cancelled):
+            throw LocalExecutorError.cancelled
         case .failure(let error):
             throw LocalExecutorError.applyFailed(error)
         }
@@ -38,23 +46,15 @@ public actor LocalExecutor {
         plan isolation: ContainedIsolation,
         approval: Result<ApprovalDecision, AgentApprovalError>? = nil
     ) -> Result<AgentTurn, AgentTurnError> {
-        switch authorization {
-        case .allowed(let allowed):
+        switch AgentAuthorization.step(authorization, approval: approval) {
+        case .execute(let allowed):
             return compileAndRun(allowed: allowed, isolation: isolation)
         case .denied(let denied):
             return .success(.denied(denied))
-        case .pending(let pending):
-            guard let approval else {
-                return .success(.awaitingApproval(pending))
-            }
-            switch AgentAuthorization.resolve(pending, approval: approval) {
-            case .failure(let error):
-                return .failure(.approval(error))
-            case .success(.denied(let denied)):
-                return .success(.denied(denied))
-            case .success(.allowed(let allowed)):
-                return compileAndRun(allowed: allowed, isolation: isolation)
-            }
+        case .awaitingApproval(let pending):
+            return .success(.awaitingApproval(pending))
+        case .approvalFailed(let error):
+            return .failure(.approval(error))
         }
     }
 

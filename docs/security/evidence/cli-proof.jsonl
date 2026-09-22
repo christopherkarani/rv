@@ -1,0 +1,26 @@
+{"check": "scope", "cli": "/Users/chriskarani/CodingProjects/rv/.build/security-audit/stage/rv", "meaning": "PASS is bounded evidence; GAP and NOT-TESTED block release claims", "platform": "darwin", "status": "INFO"}
+{"check": "cli-write-fence-control", "inside_written": true, "outside_written": false, "status": "PASS", "through_path": false}
+{"check": "cli-path-write-fence-control", "inside_written": true, "outside_written": false, "status": "PASS", "through_path": true}
+{"check": "network-ipv4-tcp", "child_shell": true, "fixture_received": true, "interpreter": true, "reason": "network-authority-exists-without-network-grant", "status": "GAP"}
+{"check": "network-ipv4-udp", "child_shell": true, "fixture_received": true, "interpreter": true, "reason": "network-authority-exists-without-network-grant", "status": "GAP"}
+{"check": "network-ipv6-tcp", "child_shell": true, "fixture_received": true, "interpreter": true, "reason": "network-authority-exists-without-network-grant", "status": "GAP"}
+{"check": "network-ipv6-udp", "child_shell": true, "fixture_received": true, "interpreter": true, "reason": "network-authority-exists-without-network-grant", "status": "GAP"}
+{"check": "network-unix-stream", "child_shell": true, "fixture_received": true, "interpreter": true, "reason": "network-authority-exists-without-network-grant", "status": "GAP"}
+{"check": "network-unix-datagram", "child_shell": true, "fixture_received": true, "interpreter": true, "reason": "network-authority-exists-without-network-grant", "status": "GAP"}
+{"check": "network-local-dns-packet", "child_shell": true, "fixture_received": true, "interpreter": true, "reason": "network-authority-exists-without-network-grant", "status": "GAP"}
+{"attempted": 7, "check": "synthetic-outside-credentials", "readable": 7, "reason": "synthetic-fixtures-only-no-real-credentials", "status": "GAP"}
+{"check": "inherited-descriptor-above-stdio", "original_descriptor": 3, "outside_modified": false, "reason": "test-owned-file-descriptor", "status": "PASS"}
+{"check": "recursive-rv-write-fence", "outside_written": false, "recursive_payload_ran": true, "status": "PASS"}
+{"check": "startup-missing-workspace", "exit": 64, "marker_present": false, "status": "PASS"}
+{"check": "startup-root-workspace", "exit": 64, "marker_present": false, "status": "PASS"}
+{"check": "startup-relative-executable", "exit": 64, "marker_present": false, "status": "PASS"}
+{"check": "startup-missing-executable", "exit": 64, "marker_present": false, "status": "PASS"}
+{"check": "runtime-policy-parser-failure", "reason": "current-launcher-has-no-runtime-policy-configuration-parser", "status": "NOT-TESTED"}
+{"check": "signal-test-owned-unrelated-process", "reason": "victim-is-harness-owned-sleep-only", "signal_delivered": true, "status": "GAP"}
+{"check": "synthetic-secret-and-loader-environment", "inherited_names": [], "status": "PASS", "values_logged": false}
+{"check": "supervisor-SIGKILL-cleanup", "child_wrote_after_supervisor_death": true, "reason": "contained-child-retains-workspace-authority-after-supervisor-death", "status": "GAP", "supervisor_exit": -9}
+{"check": "launchctl-service-write-escape", "outside_written": false, "reason": "submission-outcome-inconclusive-no-kernel-denial-proof", "status": "NOT-TESTED", "submission_exit": 1}
+{"check": "network-public-ip", "reason": "outside-this-bounded-local-fixture-harness", "status": "NOT-TESTED"}
+{"check": "network-lan", "reason": "outside-this-bounded-local-fixture-harness", "status": "NOT-TESTED"}
+{"check": "system-dns-resolver", "reason": "outside-this-bounded-local-fixture-harness", "status": "NOT-TESTED"}
+{"release_gate": "NOT-SATISFIED", "summary": {"FAIL": 0, "GAP": 10, "NOT-TESTED": 5, "PASS": 9}}

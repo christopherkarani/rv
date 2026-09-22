@@ -127,6 +127,14 @@ cp "$BIN_DIR/rv" "$STAGE/rv-cli"
 chmod 755 "$STAGE/rv-cli"
 strip -x "$STAGE/rv-cli"
 
+# Contained Linux launches require this trusted sibling before any agent work.
+if [[ "$OS" == "Linux" ]]; then
+  "$SWIFT_WRAP" build -c release --product rv-isolation-exec
+  cp "$BIN_DIR/rv-isolation-exec" "$STAGE/rv-isolation-exec"
+  chmod 755 "$STAGE/rv-isolation-exec"
+  strip "$STAGE/rv-isolation-exec"
+fi
+
 copied=0
 # Darwin SPM emits *_RVPacks.bundle; Linux SPM emits *_RVPacks.resources.
 # Bundle.module looks next to the relocated binary, then a baked .build path.

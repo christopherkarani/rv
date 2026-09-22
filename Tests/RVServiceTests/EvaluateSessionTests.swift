@@ -129,7 +129,7 @@ struct EvaluateSessionTests {
     @Test func evaluateWithSemantics_unwrapLimited_failClosed() {
         let result = EvaluateSession().evaluateWithSemantics(
             EvaluationRequest(
-                command: ShellCommand(rawValue: #"python -c "mystery(payload)""#),
+                command: ShellCommand(rawValue: #"python3 -c "$CMD""#),
                 enabledPacks: dayOnePackIDs
             )
         )

@@ -24,6 +24,7 @@ enum HelpCatalog {
         case .allowlist: allowlist
         case .safety: safety
         case .blocks: blocks
+        case .opencode: opencode
         }
     }
 
@@ -34,6 +35,7 @@ enum HelpCatalog {
             HelpSection(
                 heading: "Get started",
                 rows: [
+                    HelpRow(name: "opencode", description: "Launch OpenCode in a workspace sandbox"),
                     HelpRow(name: "setup", description: "Wire host hooks and start rvd"),
                     HelpRow(name: "test", description: "Try a command before it runs"),
                     HelpRow(name: "doctor", description: "Check service, packs, and hosts"),
@@ -77,6 +79,27 @@ enum HelpCatalog {
                 HelpRow(name: "rv help service status"),
             ]),
         ]
+    )
+
+    static let opencode = HelpViewModel(
+        title: "",
+        blurb: "",
+        sections: [
+            HelpSection(heading: "Usage", rows: [
+                HelpRow(name: "rv opencode [--executable <absolute-path>] [--workspace <absolute-path>] [--] <agent-arguments>"),
+            ]),
+            HelpSection(heading: "Flags", rows: [
+                HelpRow(name: "--executable", description: "Absolute executable; default searches absolute PATH directories"),
+                HelpRow(name: "--workspace", description: "Writable workspace; default is the current directory"),
+                HelpRow(name: "--", description: "Pass all following arguments to OpenCode, including --help"),
+            ]),
+            HelpSection(heading: "Isolation", rows: [
+                HelpRow(name: "files", description: "Workspace read and write, plus the system locations needed to start programs. Children inherit those rules"),
+                HelpRow(name: "limits", description: "Network is denied. Signals outside the sandbox are denied. Linux refuses launch until it can enforce the same limits"),
+                HelpRow(name: "failure", description: "Sandbox initialization failure stops execution; no unrestricted fallback"),
+            ]),
+        ],
+        examples: ["rv opencode", "rv opencode --workspace /path/to/repo -- run 'describe this project'"]
     )
 
     static let test = HelpViewModel(
