@@ -280,7 +280,7 @@ private func launchSeatbeltChild(
         configuration: admission,
         launch: AdmittedLaunchContext(
             plan: compileContainedPlan(
-                workspace: request.plan.workspace ?? directory,
+                workspace: request.plan.workspace ?? started.workspace,
                 repositoryRoot: request.plan.repositoryRoot
             ),
             profileSource: profile.source,
