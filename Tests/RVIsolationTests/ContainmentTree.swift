@@ -57,6 +57,10 @@ struct ContainmentTree {
         try #require(RepositoryRoot(validating: path))
     }
 
+    func containedPlan() throws -> ContainedPlan {
+        compileContainedPlan(workspace: try #require(contained.workspace))
+    }
+
     static func requirePlan(_ request: IsolationCompileRequest) throws -> IsolationPlan {
         switch compileIsolationPlan(request) {
         case .success(let plan):

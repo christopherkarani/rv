@@ -204,7 +204,11 @@ func runAdmittedSeatbeltCommand(
     case .failure:
         return .failure(.compileFailed)
     case .success(let isolation):
-        switch compileExecutable(allowed: allowed, isolation: isolation) {
+        let contained = compileContainedPlan(
+            workspace: isolation.workspace,
+            repositoryRoot: isolation.repositoryRoot
+        )
+        switch compileExecutable(allowed: allowed, plan: contained) {
         case .failure:
             return .failure(.compileFailed)
         case .success(let executable):

@@ -11,8 +11,8 @@ import Testing
 /// 4. bare `touch` resolves only `/usr/bin` then `/bin`
 /// 5. unknown bare name is `executableNotResolved`
 /// 6. allowed cwd `/a` + plan workspace `/b` is `workspaceMismatch`
-/// 7. nil action cwd is `workingDirectoryRequired`. Contained isolation always has a workspace.
-/// 8. absolute `/usr/bin/touch` or `/bin/touch` + matching contained isolation compiles
+/// 7. nil action cwd is `workingDirectoryRequired`. Contained plans always have a workspace.
+/// 8. absolute `/usr/bin/touch` or `/bin/touch` + matching contained plan compiles
 /// 9. contained in-workspace `touch` establishes platform contained, exit 0, file exists
 /// 10. contained outside `touch` stays contained, file absent, exit != 0
 /// 11. observed and mediated plans fail `containedIsolation()` with `.notContained`
@@ -20,7 +20,7 @@ import Testing
 /// 13. a contained apply failure consumes the fingerprint
 /// 14. uncovered in-workspace `touch` (empty effects → reviewAsk) →
 ///     resolve(allowOnce) → compileExecutable → contained run creates the file
-/// `compileExecutable(allowed:isolation:)` takes `AllowedAction` and `ContainedIsolation` only.
+/// `compileExecutable(allowed:plan:)` takes `AllowedAction` and `ContainedPlan`.
 /// `LocalExecutor.run` takes `ExecutableAction` only.
 /// There is no `PendingAuthorization` or `DeniedAction` overload.
 /// A decide → pending fixture has no call path into `run`.
@@ -35,9 +35,9 @@ struct LocalExecutorTests {
                 fingerprint: "shell:local-executor:redirect"
             )
         )
-        let plan = try requireContainedIsolation(workspace: workspace)
+        let plan = requireContainedPlan(workspace: workspace)
         expectCompileError(
-            compileExecutable(allowed: allowed, isolation: plan),
+            compileExecutable(allowed: allowed, plan: plan),
             .commandNotSimpleArgv,
             expected: "commandNotSimpleArgv"
         )
@@ -62,9 +62,9 @@ struct LocalExecutorTests {
             )
         )
         let allowed = try requireAllowed(action, review: .success(qualifiedAllow))
-        let plan = try requireContainedIsolation(workspace: workspace)
+        let plan = requireContainedPlan(workspace: workspace)
         expectCompileError(
-            compileExecutable(allowed: allowed, isolation: plan),
+            compileExecutable(allowed: allowed, plan: plan),
             .fileActionUnsupported,
             expected: "fileActionUnsupported"
         )
@@ -79,9 +79,9 @@ struct LocalExecutorTests {
                 fingerprint: "shell:local-executor:missing-command"
             )
         )
-        let plan = try requireContainedIsolation(workspace: workspace)
+        let plan = requireContainedPlan(workspace: workspace)
         expectCompileError(
-            compileExecutable(allowed: allowed, isolation: plan),
+            compileExecutable(allowed: allowed, plan: plan),
             .missingCommand,
             expected: "missingCommand"
         )
@@ -97,13 +97,13 @@ struct LocalExecutorTests {
                 fingerprint: "shell:local-executor:bare-touch"
             )
         )
-        let plan = try requireContainedIsolation(workspace: workspace)
-        switch compileExecutable(allowed: allowed, isolation: plan) {
+        let plan = requireContainedPlan(workspace: workspace)
+        switch compileExecutable(allowed: allowed, plan: plan) {
         case .success(let executable):
             #expect(safeTouchExecutables.contains(executable.command.executable))
             #expect(executable.command.arguments == ["ok.txt"])
             #expect(executable.allowed == allowed)
-            #expect(executable.isolation == plan)
+            #expect(executable.plan == plan)
         case .failure(let error):
             recordUnexpectedCompileError(error, expected: "resolved bare touch")
         }
@@ -118,9 +118,9 @@ struct LocalExecutorTests {
                 fingerprint: "shell:local-executor:unresolved"
             )
         )
-        let plan = try requireContainedIsolation(workspace: workspace)
+        let plan = requireContainedPlan(workspace: workspace)
         expectCompileError(
-            compileExecutable(allowed: allowed, isolation: plan),
+            compileExecutable(allowed: allowed, plan: plan),
             .executableNotResolved,
             expected: "executableNotResolved"
         )
@@ -137,9 +137,9 @@ struct LocalExecutorTests {
                 fingerprint: "shell:local-executor:workspace-mismatch"
             )
         )
-        let plan = try requireContainedIsolation(workspace: planWorkspace)
+        let plan = requireContainedPlan(workspace: planWorkspace)
         expectCompileError(
-            compileExecutable(allowed: allowed, isolation: plan),
+            compileExecutable(allowed: allowed, plan: plan),
             .workspaceMismatch,
             expected: "workspaceMismatch"
         )
@@ -154,9 +154,9 @@ struct LocalExecutorTests {
                 fingerprint: "shell:local-executor:missing-action-cwd"
             )
         )
-        let contained = try requireContainedIsolation(workspace: workspace)
+        let contained = requireContainedPlan(workspace: workspace)
         expectCompileError(
-            compileExecutable(allowed: allowedWithoutCwd, isolation: contained),
+            compileExecutable(allowed: allowedWithoutCwd, plan: contained),
             .workingDirectoryRequired,
             expected: "workingDirectoryRequired for nil action cwd"
         )
@@ -173,13 +173,13 @@ struct LocalExecutorTests {
                 fingerprint: "shell:local-executor:absolute-touch"
             )
         )
-        let plan = try requireContainedIsolation(workspace: workspace)
-        switch compileExecutable(allowed: allowed, isolation: plan) {
+        let plan = requireContainedPlan(workspace: workspace)
+        switch compileExecutable(allowed: allowed, plan: plan) {
         case .success(let executable):
             #expect(executable.command.executable == touch)
             #expect(executable.command.arguments == ["ok.txt"])
             #expect(executable.allowed == allowed)
-            #expect(executable.isolation == plan)
+            #expect(executable.plan == plan)
         case .failure(let error):
             recordUnexpectedCompileError(error, expected: "absolute touch ExecutableAction")
         }
@@ -215,7 +215,7 @@ struct LocalExecutorTests {
             workingDirectory: workspace,
             path: inside,
             fingerprint: "shell:local-executor:contained-in",
-            isolation: try tree.requireContainedIsolation()
+            plan: try tree.containedPlan()
         )
         guard let result = try await runContainedOrRefuseOnLinux(executable, absentPath: inside) else {
             return
@@ -237,7 +237,7 @@ struct LocalExecutorTests {
             workingDirectory: workspace,
             path: outside,
             fingerprint: "shell:local-executor:contained-out",
-            isolation: try tree.requireContainedIsolation()
+            plan: try tree.containedPlan()
         )
         guard let result = try await runContainedOrRefuseOnLinux(executable, absentPath: outside) else {
             return
@@ -270,7 +270,7 @@ struct LocalExecutorTests {
             workingDirectory: workspace,
             path: inside,
             fingerprint: "shell:local-executor:once",
-            isolation: try tree.requireContainedIsolation()
+            plan: try tree.containedPlan()
         )
         let executor = LocalExecutor()
         #if os(Linux)
@@ -328,7 +328,7 @@ struct LocalExecutorTests {
                 fingerprint: "shell:local-executor:retry"
             )
         )
-        let contained = try requireExecutable(allowed, isolation: try tree.requireContainedIsolation())
+        let contained = try requireExecutable(allowed, plan: try tree.containedPlan())
         try FileManager.default.removeItem(at: tree.workspaceURL)
         let executor = LocalExecutor()
         do {
@@ -372,7 +372,7 @@ struct LocalExecutorTests {
         )
         let pending = try requirePendingReviewAsk(action)
         let allowed = try requireResolvedAllowOnce(pending)
-        let executable = try requireExecutable(allowed, isolation: try tree.requireContainedIsolation())
+        let executable = try requireExecutable(allowed, plan: try tree.containedPlan())
         guard let result = try await runContainedOrRefuseOnLinux(executable, absentPath: inside) else {
             return
         }
@@ -493,22 +493,8 @@ private func requireWorkspace(_ path: String) throws -> WorkingDirectory {
     try #require(WorkingDirectory(validating: path))
 }
 
-private func requireContainedIsolation(workspace: WorkingDirectory) throws -> ContainedIsolation {
-    switch compileContainedIsolation(
-        IsolationCompileRequest(requested: .contained, workspace: workspace)
-    ) {
-    case .success(let isolation):
-        return isolation
-    case .failure(let error):
-        switch error {
-        case .containedRequiresWorkspace:
-            Issue.record("fixture compile must not fail containedRequiresWorkspace")
-            throw error
-        case .notContainedRequest:
-            Issue.record("fixture compile must not fail notContainedRequest")
-            throw error
-        }
-    }
+private func requireContainedPlan(workspace: WorkingDirectory) -> ContainedPlan {
+    compileContainedPlan(workspace: workspace)
 }
 
 private func requireObservedPlan(workspace: WorkingDirectory?) throws -> IsolationPlan {
@@ -536,7 +522,7 @@ private func requireExecutable(
     workingDirectory: WorkingDirectory,
     path: String,
     fingerprint: String,
-    isolation: ContainedIsolation
+    plan: ContainedPlan
 ) throws -> ExecutableAction {
     let allowed = try requireAllowed(
         inRepoWrite(
@@ -546,14 +532,14 @@ private func requireExecutable(
             fingerprint: fingerprint
         )
     )
-    return try requireExecutable(allowed, isolation: isolation)
+    return try requireExecutable(allowed, plan: plan)
 }
 
 private func requireExecutable(
     _ allowed: AllowedAction,
-    isolation: ContainedIsolation
+    plan: ContainedPlan
 ) throws -> ExecutableAction {
-    switch compileExecutable(allowed: allowed, isolation: isolation) {
+    switch compileExecutable(allowed: allowed, plan: plan) {
     case .success(let executable):
         return executable
     case .failure(let error):

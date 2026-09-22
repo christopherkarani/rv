@@ -12,7 +12,7 @@ struct ExecutorLifecycleRegressionTests {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
         let marker = tree.workspaceURL.appendingPathComponent("cancelled-marker")
-        let executable = try lifecycleExecutable(plan: tree.contained, marker: marker)
+        let executable = try lifecycleExecutable(plan: try tree.containedPlan(), marker: marker)
         let executor = LocalExecutor()
 
         let cancelled = Task {
@@ -46,7 +46,7 @@ struct ExecutorLifecycleRegressionTests {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
         let marker = tree.workspaceURL.appendingPathComponent("retry-marker")
-        let executable = try lifecycleExecutable(plan: tree.contained, marker: marker)
+        let executable = try lifecycleExecutable(plan: try tree.containedPlan(), marker: marker)
         let executor = LocalExecutor()
 
         try FileManager.default.removeItem(at: tree.workspaceURL)
@@ -64,7 +64,7 @@ struct ExecutorLifecycleRegressionTests {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
         let marker = tree.workspaceURL.appendingPathComponent("reserved-exit-marker")
-        let executable = try lifecycleExecutable(plan: tree.contained, marker: marker, exitStatus: 125)
+        let executable = try lifecycleExecutable(plan: try tree.containedPlan(), marker: marker, exitStatus: 125)
         let executor = LocalExecutor()
 
         let first = try await lifecycleRun(executor, executable)
@@ -92,7 +92,7 @@ struct ExecutorLifecycleRegressionTests {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
         let marker = tree.workspaceURL.appendingPathComponent("concurrent-marker")
-        let executable = try lifecycleExecutable(plan: tree.contained, marker: marker)
+        let executable = try lifecycleExecutable(plan: try tree.containedPlan(), marker: marker)
         let executor = LocalExecutor()
 
         async let first = lifecycleRun(executor, executable)
@@ -124,7 +124,7 @@ struct ExecutorLifecycleRegressionTests {
         let pidFile = tree.workspaceURL.appendingPathComponent("sleep.pid")
         let script = "printf started > \"$1\"; /bin/sleep 20 & printf '%s\\n' \"$!\" > \"$2.tmp\" && mv \"$2.tmp\" \"$2\"; wait"
         let executable = try lifecycleExecutable(
-            plan: tree.contained,
+            plan: try tree.containedPlan(),
             marker: started,
             script: script,
             arguments: [started.path, pidFile.path]
@@ -170,7 +170,7 @@ private enum ExecutorLifecycleFixtureError: Error {
 /// Authorization is real; the internal executable initializer supplies shell argv
 /// directly so these tests exercise dispatch rather than simple-command parsing.
 private func lifecycleExecutable(
-    plan: IsolationPlan,
+    plan: ContainedPlan,
     marker: URL,
     exitStatus: Int32 = 0,
     script: String? = nil,
@@ -197,10 +197,7 @@ private func lifecycleExecutable(
                 ?? ["-c", "printf x >> \"$1\"; exit \(exitStatus)", "sh", marker.path]
         )
     )
-    guard case .success(let isolation) = plan.containedIsolation() else {
-        throw ExecutorLifecycleFixtureError.expectedAllowed
-    }
-    return ExecutableAction(allowed: allowed, command: command, isolation: isolation)
+    return ExecutableAction(allowed: allowed, command: command, plan: plan)
 }
 
 private func lifecycleRun(

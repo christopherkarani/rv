@@ -4,7 +4,7 @@ import Testing
 @testable import RVIsolation
 
 /// Host-launch edges this suite encodes before production code:
-/// 1. `.pi` / `.claude` + contained isolation + `/usr/bin/true` → `hostUnsupported`; no spawn
+/// 1. `.pi` / `.claude` + contained plan + `/usr/bin/true` → `hostUnsupported`; no spawn
 /// 2. Observed plan `containedIsolation()` is `.notContained`; launch is not called
 /// 3. Mediated plan `containedIsolation()` is `.notContained`; launch is not called
 /// 4. `.opencode` + contained + `/usr/bin/true` (or `/bin/true`) → established
@@ -19,13 +19,12 @@ struct HostLaunchTests {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
         let command = try requireTrueCommand()
-
-        let isolation = try tree.requireContainedIsolation()
+        let plan = try tree.containedPlan()
         expectHostUnsupported(
-            launchContainedHost(host: .pi, command: command, plan: isolation)
+            launchContainedHost(host: .pi, command: command, plan: plan)
         )
         expectHostUnsupported(
-            launchContainedHost(host: .claude, command: command, plan: isolation)
+            launchContainedHost(host: .claude, command: command, plan: plan)
         )
     }
 
@@ -49,14 +48,14 @@ struct HostLaunchTests {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
         let command = try requireTrueCommand()
-        let isolation = try tree.requireContainedIsolation()
-        switch launchContainedHost(host: .opencode, command: command, plan: isolation) {
+        let plan = try tree.containedPlan()
+        switch launchContainedHost(host: .opencode, command: command, plan: plan) {
         case .success(let run):
             #if os(Linux)
             Issue.record("Linux contained launch must be refused, got exit \(run.exitStatus)")
             #else
             #expect(run.exitStatus == 0)
-            expectContainedPlatform(run.established, matching: isolation.plan)
+            expectContainedPlatform(run.established, matching: plan.isolationPlan())
             #endif
         case .failure(let error):
             #if os(Linux)
@@ -73,15 +72,15 @@ struct HostLaunchTests {
         defer { tree.tearDown() }
         let inside = tree.workspaceURL.appendingPathComponent("inside.txt").path
         let command = try requireTouchCommand(arguments: [inside])
-        let isolation = try tree.requireContainedIsolation()
-        switch launchContainedHost(host: .opencode, command: command, plan: isolation) {
+        let plan = try tree.containedPlan()
+        switch launchContainedHost(host: .opencode, command: command, plan: plan) {
         case .success(let run):
             #if os(Linux)
             Issue.record("Linux contained launch must be refused, got exit \(run.exitStatus)")
             #else
             #expect(run.exitStatus == 0)
             #expect(FileManager.default.fileExists(atPath: inside))
-            expectContainedPlatform(run.established, matching: isolation.plan)
+            expectContainedPlatform(run.established, matching: plan.isolationPlan())
             #endif
         case .failure(let error):
             #if os(Linux)
@@ -100,15 +99,15 @@ struct HostLaunchTests {
         let outside = tree.siblingURL.appendingPathComponent("outside.txt").path
         #expect(FileManager.default.fileExists(atPath: outside) == false)
         let command = try requireTouchCommand(arguments: [outside])
-        let isolation = try tree.requireContainedIsolation()
-        switch launchContainedHost(host: .opencode, command: command, plan: isolation) {
+        let plan = try tree.containedPlan()
+        switch launchContainedHost(host: .opencode, command: command, plan: plan) {
         case .success(let run):
             #if os(Linux)
             Issue.record("Linux contained launch must be refused, got exit \(run.exitStatus)")
             #else
             #expect(run.exitStatus != 0)
             #expect(FileManager.default.fileExists(atPath: outside) == false)
-            expectContainedPlatform(run.established, matching: isolation.plan)
+            expectContainedPlatform(run.established, matching: plan.isolationPlan())
             #endif
         case .failure(let error):
             #if os(Linux)
@@ -129,13 +128,13 @@ struct HostLaunchTests {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
         let command = try requireTrueCommand()
-        let isolation = try tree.requireContainedIsolation()
+        let plan = try tree.containedPlan()
         let hook = try #require(SessionID(validating: "hook-session-must-not-be-runtime-id"))
         let first = try #require(
-            launchContainedHost(host: .opencode, command: command, plan: isolation).get().session
+            launchContainedHost(host: .opencode, command: command, plan: plan).get().session
         )
         let second = try #require(
-            launchContainedHost(host: .opencode, command: command, plan: isolation).get().session
+            launchContainedHost(host: .opencode, command: command, plan: plan).get().session
         )
         #expect(first.id != second.id)
         #expect(first.id.rawValue.uuidString != hook.rawValue)

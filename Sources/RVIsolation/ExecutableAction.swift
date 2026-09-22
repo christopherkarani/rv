@@ -17,19 +17,19 @@ public enum ExecutableCompileError: Error, Sendable, Equatable {
 public struct ExecutableAction: Sendable, Equatable {
     public let allowed: AllowedAction
     public let command: IsolatedCommand
-    public let isolation: ContainedIsolation
+    public let plan: ContainedPlan
 
-    init(allowed: AllowedAction, command: IsolatedCommand, isolation: ContainedIsolation) {
+    init(allowed: AllowedAction, command: IsolatedCommand, plan: ContainedPlan) {
         self.allowed = allowed
         self.command = command
-        self.isolation = isolation
+        self.plan = plan
     }
 }
 
 /// Compiles an authorized proposal into argv. Does not decide and does not spawn.
 public func compileExecutable(
     allowed: AllowedAction,
-    isolation: ContainedIsolation
+    plan: ContainedPlan
 ) -> Result<ExecutableAction, ExecutableCompileError> {
     switch allowed.action {
     case .file:
@@ -39,7 +39,7 @@ public func compileExecutable(
         case .failure(let error):
             return .failure(error)
         case .success(let command):
-            return bindWorkspace(allowed: allowed, command: command, isolation: isolation)
+            return bindWorkspace(allowed: allowed, command: command, plan: plan)
         }
     }
 }
@@ -105,13 +105,13 @@ private func isRegularFile(at path: String) -> Bool {
 private func bindWorkspace(
     allowed: AllowedAction,
     command: IsolatedCommand,
-    isolation: ContainedIsolation
+    plan: ContainedPlan
 ) -> Result<ExecutableAction, ExecutableCompileError> {
     guard let actionCwd = allowed.action.scope.workingDirectory else {
         return .failure(.workingDirectoryRequired)
     }
-    guard actionCwd == isolation.workspace else {
+    guard actionCwd == plan.workspace else {
         return .failure(.workspaceMismatch)
     }
-    return .success(ExecutableAction(allowed: allowed, command: command, isolation: isolation))
+    return .success(ExecutableAction(allowed: allowed, command: command, plan: plan))
 }

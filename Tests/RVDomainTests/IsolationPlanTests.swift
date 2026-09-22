@@ -195,6 +195,51 @@ struct IsolationPlanTests {
         print(probeLine(requested: .contained, result: containedMissingWorkspace))
     }
 
+    @Test func compileContainedPlan_isFirstSliceAndNotObserved() throws {
+        let workspace = try requireWorkspace("/ws")
+        let root = try requireRepositoryRoot("/repo")
+        let contained = compileContainedPlan(workspace: workspace, repositoryRoot: root)
+        #expect(contained.workspace == workspace)
+        #expect(contained.repositoryRoot == root)
+        #expect(contained.guarantees == IsolationGuarantees.firstSliceContained(workspace: workspace))
+        #expect(compileContainedPlan(workspace: workspace).repositoryRoot == nil)
+
+        let compiled = compileIsolationPlan(
+            IsolationCompileRequest(
+                requested: .contained,
+                workspace: workspace,
+                repositoryRoot: root
+            )
+        )
+        switch compiled {
+        case .success(let plan):
+            #expect(contained.isolationPlan() == plan)
+        case .failure(let error):
+            switch error {
+            case .containedRequiresWorkspace:
+                Issue.record("contained compile with workspace must succeed")
+            case .notContainedRequest:
+                Issue.record("contained compile with workspace must not fail notContainedRequest")
+            }
+        }
+
+        let observed = compileIsolationPlan(
+            IsolationCompileRequest(requested: .observed, workspace: workspace)
+        )
+        switch observed {
+        case .success(let plan):
+            #expect(plan.requested == .observed)
+            #expect(plan != contained.isolationPlan())
+        case .failure(let error):
+            switch error {
+            case .containedRequiresWorkspace:
+                Issue.record("observed compile must succeed")
+            case .notContainedRequest:
+                Issue.record("observed compile must not fail notContainedRequest")
+            }
+        }
+    }
+
     @Test func isolationPlan_productionConstruction_isCompileOrInternalFactory() throws {
         let workspace = try requireWorkspace("/repo")
         let compiled = compileIsolationPlan(
