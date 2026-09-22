@@ -97,6 +97,9 @@ struct AdmittedLaunchContext: Sendable, Equatable {
     var plan: IsolationPlan
     var profileSource: String
     var workspacePath: String
+    /// Process that owns this runtime. `-1` when the caller is not a session.
+    /// An admitted command stops if this process has exited.
+    var sessionLeader: pid_t = -1
 }
 
 /// One runtime's admission state.

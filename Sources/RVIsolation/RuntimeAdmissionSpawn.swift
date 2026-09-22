@@ -87,6 +87,7 @@ struct RuntimeAdmissionPipes {
     }
 }
 
+#if os(macOS)
 func installAdmissionDescriptors(
     _ actions: inout posix_spawn_file_actions_t?,
     pipes: RuntimeAdmissionPipes
@@ -115,6 +116,7 @@ func installAdmissionDescriptors(
     }
     return true
 }
+#endif
 
 private let admissionAppendLock = Mutex<Void>(())
 
@@ -323,7 +325,12 @@ private func spawnAdmittedCommand(
         _ = waitAdmittedDead(pid)
         return .failure(.spawnFailed)
     }
-    return waitForAdmittedPayload(root: pid, readEnd: readEnd, nonce: nonce)
+    return waitForAdmittedPayload(
+        root: pid,
+        readEnd: readEnd,
+        nonce: nonce,
+        sessionLeader: launch.sessionLeader
+    )
 }
 
 private func moveAdmittedDescriptor(_ fd: inout Int32, floor: Int32) -> Bool {
@@ -339,7 +346,8 @@ private func moveAdmittedDescriptor(_ fd: inout Int32, floor: Int32) -> Bool {
 private func waitForAdmittedPayload(
     root: pid_t,
     readEnd: Int32,
-    nonce: String
+    nonce: String,
+    sessionLeader: pid_t
 ) -> Result<Int32, RuntimeAdmissionExecutorError> {
     let expected = Data(nonce.utf8)
     var handshake = Data()
@@ -376,8 +384,27 @@ private func waitForAdmittedPayload(
             guard established, let status else { return .failure(.notEstablished) }
             return .success(status)
         }
+        // This wait blocks the session reaper. Stop when the contained process
+        // has exited so its group can be killed without waiting out the command.
+        if sessionLeaderHasExited(sessionLeader) {
+            killAdmitted(root)
+            guard waitAdmittedDead(root) else { return .failure(.spawnFailed) }
+            return .failure(.cancelled)
+        }
         usleep(10_000)
     }
+}
+
+/// `WNOWAIT` observes the leader without reaping it. The session loop still
+/// owns that `waitpid`. A zombie is enough: `kill(pid, 0)` stays true until
+/// the leader is reaped, which cannot happen while this wait is running.
+private func sessionLeaderHasExited(_ pid: pid_t) -> Bool {
+    guard pid > 1 else { return false }
+    var info = siginfo_t()
+    memset(&info, 0, MemoryLayout<siginfo_t>.size)
+    let result = waitid(P_PID, id_t(pid), &info, WEXITED | WNOHANG | WNOWAIT)
+    if result != 0 { return false }
+    return info.si_pid == pid
 }
 
 private func killAdmitted(_ pid: pid_t) {

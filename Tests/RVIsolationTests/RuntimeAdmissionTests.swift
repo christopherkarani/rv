@@ -5,7 +5,6 @@ import Glibc
 #endif
 import Foundation
 import RVDomain
-import RVEngine
 import Testing
 @testable import RVIsolation
 
@@ -189,7 +188,7 @@ struct RuntimeAdmissionIsolationTests {
         let marker = tree.workspaceURL.appendingPathComponent("admitted-marker")
         let evidence = RuntimeAdmissionEvidence()
         let configuration = RuntimeAdmissionConfiguration(
-            normalize: normalizeRuntimeAdmission,
+            normalize: isolationAdmissionNormalize,
             executor: .containedCommand,
             approval: { _ in nil },
             policy: { _ in .empty },
@@ -220,6 +219,45 @@ struct RuntimeAdmissionIsolationTests {
         #expect(attempted.first?.authorization == .allowed)
         let rejected = evidence.snapshot().filter { $0.eventExecutionWasRejected }
         #expect(rejected.allSatisfy { $0.executionAttempted == false })
+    }
+
+    @Test func admittedCommandStopsWhenContainedProcessExits() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let sleeper = try compileC(
+            admissionSleeperSource,
+            named: "admission-sleeper",
+            in: tree.workspaceURL
+        )
+        let client = try compileC(
+            admissionLifetimeClientSource,
+            named: "admission-lifetime",
+            in: tree.workspaceURL
+        )
+        let escaped = tree.workspaceURL.appendingPathComponent("escaped")
+        let started = tree.workspaceURL.appendingPathComponent("command-started")
+        let command = try #require(
+            IsolatedCommand(executable: client.path, arguments: [sleeper.path])
+        )
+        let configuration = RuntimeAdmissionConfiguration(
+            normalize: allowAdmittedCommand,
+            executor: .containedCommand,
+            approval: { _ in nil },
+            policy: { _ in .empty },
+            evidence: RuntimeAdmissionEvidence()
+        )
+        let result = IsolationBackends.applyLaunch(
+            tree.contained,
+            command: command,
+            io: .discard,
+            host: .opencode,
+            sessionStore: .file(tree.rootURL.appendingPathComponent("sessions.jsonl")),
+            admission: configuration
+        )
+        let run = try result.get()
+        #expect(run.exitStatus == 0)
+        #expect(FileManager.default.fileExists(atPath: started.path))
+        #expect(FileManager.default.fileExists(atPath: escaped.path) == false)
     }
     #endif
 }
@@ -282,7 +320,7 @@ private struct AdmissionHarness {
         let effect = AdmissionEffect()
         let evidence = RuntimeAdmissionEvidence(appendingTo: evidenceFile)
         let configuration = RuntimeAdmissionConfiguration(
-            normalize: normalizeRuntimeAdmission,
+            normalize: isolationAdmissionNormalize,
             executor: .effect(effect.run),
             approval: approval,
             policy: { _ in .empty },
@@ -333,14 +371,93 @@ private extension RuntimeAdmissionEvent {
     }
 }
 
+/// Classifies the fixture commands without linking RVEngine.
+/// Inside `touch` is allowed, an absolute `touch` is an outside write, and
+/// shell substitutions produce no proposal. Anything else stays pending.
+private func isolationAdmissionNormalize(
+    subject: RuntimeAdmissionSubject,
+    command: ShellCommand
+) -> Result<ProposedAction, RuntimeAdmissionEvaluationError> {
+    let raw = command.rawValue
+    if raw.contains("$") || raw.contains("`") || raw.contains("\"") || raw.contains("'") {
+        return .failure(.failed)
+    }
+    let fingerprint = ActionFingerprint(
+        rawValue: "runtime:\(subject.session.id.rawValue.uuidString):\(subject.policyWorkspace.rawValue):\(raw)"
+    )
+    let tokens = raw.split(whereSeparator: \.isWhitespace).map(String.init)
+    if tokens.count == 2, tokens[0] == "touch" {
+        let inside = tokens[1].hasPrefix("/") == false
+        let scope: FilesystemScope = inside ? .insideRepository : .outsideRepository
+        let kinds: [ActionEffectKind] = inside
+            ? [.filesystemCreate]
+            : [.filesystemOverwrite, .outsideRepositoryMutation]
+        return .success(
+            .shell(
+                ShellAction(
+                    fingerprint: fingerprint,
+                    effects: ActionEffects(kinds: kinds),
+                    resources: ActionResources(
+                        path: tokens[1],
+                        filesystemScope: scope,
+                        resourceKind: .unknown
+                    ),
+                    scope: ActionScope(workingDirectory: subject.policyWorkspace),
+                    supportingCommand: command
+                )
+            )
+        )
+    }
+    return .success(
+        .shell(
+            ShellAction(
+                fingerprint: fingerprint,
+                effects: ActionEffects(),
+                resources: ActionResources(),
+                scope: ActionScope(workingDirectory: subject.policyWorkspace),
+                supportingCommand: command
+            )
+        )
+    )
+}
+
+#if os(macOS)
+/// Test double that authorizes the requested argv. Production normalization
+/// stays in RVEngine; this only lets a lifetime probe reach the spawner.
+private func allowAdmittedCommand(
+    subject: RuntimeAdmissionSubject,
+    command: ShellCommand
+) -> Result<ProposedAction, RuntimeAdmissionEvaluationError> {
+    .success(
+        .shell(
+            ShellAction(
+                fingerprint: ActionFingerprint(rawValue: "runtime:lifetime:\(command.rawValue)"),
+                effects: ActionEffects(kinds: [.filesystemCreate]),
+                resources: ActionResources(
+                    path: "command-started",
+                    filesystemScope: .insideRepository,
+                    resourceKind: .unknown
+                ),
+                scope: ActionScope(workingDirectory: subject.policyWorkspace),
+                supportingCommand: command
+            )
+        )
+    )
+}
+#endif
+
 #if os(macOS)
 private func compileAdmissionClient(in workspace: URL) throws -> URL {
-    let source = workspace.appendingPathComponent("admission-client.c")
-    let binary = workspace.appendingPathComponent("admission-client")
-    try Data(admissionClientSource.utf8).write(to: source)
+    try compileC(admissionClientSource, named: "admission-client", in: workspace)
+}
+
+private func compileC(_ source: String, named name: String, in workspace: URL) throws -> URL {
+    let file = workspace.appendingPathComponent("\(name).c")
+    let binary = workspace.appendingPathComponent(name)
+    try Data(source.utf8).write(to: file)
     let compile = Process()
     compile.executableURL = URL(fileURLWithPath: "/usr/bin/clang")
-    compile.arguments = ["-O2", "-o", binary.path, source.path]
+    compile.arguments = ["-O2", "-o", binary.path, file.path]
     compile.standardOutput = FileHandle.nullDevice
     compile.standardError = FileHandle.nullDevice
     try compile.run()
@@ -456,6 +573,123 @@ int main(int argc, char **argv) {
     if (exchange(4, 5, body, reply) != 0) return 9;
     fclose(reply);
     return 0;
+}
+"""#
+
+private let admissionSleeperSource = #"""
+#include <fcntl.h>
+#include <unistd.h>
+
+int main(void) {
+    int started = open("command-started", O_WRONLY | O_CREAT | O_EXCL, 0644);
+    if (started < 0) return 2;
+    close(started);
+    sleep(20);
+    return 0;
+}
+"""#
+
+private let admissionLifetimeClientSource = #"""
+#include <errno.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+
+static int read_full(int fd, void *buffer, size_t count) {
+    unsigned char *bytes = buffer;
+    size_t got = 0;
+    while (got < count) {
+        ssize_t n = read(fd, bytes + got, count - got);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) return -1;
+        got += (size_t)n;
+    }
+    return 0;
+}
+
+static int write_full(int fd, const void *buffer, size_t count) {
+    const unsigned char *bytes = buffer;
+    size_t sent = 0;
+    while (sent < count) {
+        ssize_t n = write(fd, bytes + sent, count - sent);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) return -1;
+        sent += (size_t)n;
+    }
+    return 0;
+}
+
+static int read_frame(int fd, char *body, size_t cap) {
+    unsigned char header[4];
+    if (read_full(fd, header, 4) != 0) return -1;
+    size_t length = ((size_t)header[0] << 24) | ((size_t)header[1] << 16)
+        | ((size_t)header[2] << 8) | (size_t)header[3];
+    if (length == 0 || length + 1 > cap) return -1;
+    if (read_full(fd, body, length) != 0) return -1;
+    body[length] = 0;
+    return (int)length;
+}
+
+static int write_frame(int fd, const char *body) {
+    size_t length = strlen(body);
+    unsigned char header[4] = {
+        (unsigned char)((length >> 24) & 0xff),
+        (unsigned char)((length >> 16) & 0xff),
+        (unsigned char)((length >> 8) & 0xff),
+        (unsigned char)(length & 0xff),
+    };
+    if (write_full(fd, header, 4) != 0) return -1;
+    return write_full(fd, body, length);
+}
+
+static int extract(const char *json, const char *key, char *out, size_t cap) {
+    char pattern[64];
+    snprintf(pattern, sizeof pattern, "\"%s\":\"", key);
+    const char *found = strstr(json, pattern);
+    if (found == NULL) return -1;
+    found += strlen(pattern);
+    size_t used = 0;
+    while (found[used] != 0 && found[used] != '"' && used + 1 < cap) {
+        out[used] = found[used];
+        used++;
+    }
+    if (found[used] != '"') return -1;
+    out[used] = 0;
+    return 0;
+}
+
+int main(int argc, char **argv) {
+    if (argc != 2) return 2;
+    pid_t child = fork();
+    if (child < 0) return 3;
+    if (child == 0) {
+        for (int attempt = 0; attempt < 400; attempt++) {
+            if (access("command-started", F_OK) == 0) break;
+            usleep(50000);
+        }
+        sleep(8);
+        int escaped = open("escaped", O_WRONLY | O_CREAT | O_EXCL, 0644);
+        if (escaped >= 0) close(escaped);
+        _exit(0);
+    }
+    char grant[8192];
+    if (read_frame(5, grant, sizeof grant) < 0) return 4;
+    char capability[80];
+    char session[80];
+    if (extract(grant, "capability", capability, sizeof capability) != 0) return 5;
+    if (extract(grant, "session", session, sizeof session) != 0) return 5;
+    char body[2048];
+    int wrote = snprintf(body, sizeof body,
+        "{\"v\":1,\"id\":\"dddddddd-dddd-dddd-dddd-dddddddddddd\",\"capability\":\"%s\",\"session\":\"%s\",\"command\":\"%s\"}",
+        capability, session, argv[1]);
+    if (wrote < 0 || (size_t)wrote >= sizeof body) return 6;
+    if (write_frame(4, body) != 0) return 7;
+    for (int attempt = 0; attempt < 200; attempt++) {
+        if (access("command-started", F_OK) == 0) _exit(0);
+        usleep(50000);
+    }
+    return 8;
 }
 """#
 #endif

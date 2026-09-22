@@ -282,7 +282,8 @@ private func launchSeatbeltChild(
         launch: AdmittedLaunchContext(
             plan: request.plan,
             profileSource: profile.source,
-            workspacePath: workspace
+            workspacePath: workspace,
+            sessionLeader: pid
         ),
         requestRead: admissionPipes.requestRead,
         responseWrite: admissionPipes.responseWrite
