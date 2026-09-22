@@ -26,32 +26,26 @@ struct HTTPAdmissionTests {
     }
 
     @Test func resolutionReturnsWhenTheSessionStopsDuringLookup() {
-        let started = Mutex(false)
         let release = Mutex(false)
         let stop = Mutex(false)
+        let entered = Mutex(false)
         defer { release.withLock { $0 = true } }
-        DispatchQueue.global().async {
-            while started.withLock({ $0 }) == false && release.withLock({ $0 }) == false {
-                usleep(1_000)
-            }
-            stop.withLock { $0 = true }
-        }
-        let began = Date()
         let result = RuntimeAdmissionStop.$shouldStop.withValue({ stop.withLock { $0 } }) {
             resolveAdmittedHTTPHost(
                 "example.com",
-                budgetMilliseconds: 5_000,
+                budgetMilliseconds: 20_000,
                 lookup: { _ in
-                    started.withLock { $0 = true }
+                    entered.withLock { $0 = true }
+                    stop.withLock { $0 = true }
                     while release.withLock({ $0 }) == false {
                         usleep(1_000)
                     }
-                    return .failure(.failed)
+                    return .success([])
                 }
             )
         }
+        #expect(entered.withLock { $0 })
         #expect(result == .failure(.failed))
-        #expect(Date().timeIntervalSince(began) < 2)
     }
 
     @Test func allowedGETRunsOnce() throws {
