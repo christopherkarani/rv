@@ -307,6 +307,7 @@ private struct AdmissionHarness {
         let plan = compileContainedPlan(workspace: workspace)
         let runtime = RuntimeSession(
             id: RuntimeSessionID(),
+            workspaceSessionID: WorkspaceSessionID(),
             host: .opencode,
             workspace: workspace,
             backend: .seatbelt,

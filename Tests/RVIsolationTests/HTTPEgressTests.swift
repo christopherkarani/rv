@@ -280,6 +280,7 @@ private struct HTTPHarness: @unchecked Sendable {
         let plan = compileContainedPlan(workspace: workspace)
         let runtime = RuntimeSession(
             id: RuntimeSessionID(),
+            workspaceSessionID: WorkspaceSessionID(),
             host: .opencode,
             workspace: workspace,
             backend: .seatbelt,
@@ -387,6 +388,7 @@ private func loopbackAction() throws -> HTTPAction {
     let workspace = try #require(WorkingDirectory(validating: "/tmp/rv-http-admission"))
     let session = RuntimeSession(
         id: RuntimeSessionID(),
+        workspaceSessionID: WorkspaceSessionID(),
         host: .opencode,
         workspace: workspace,
         backend: .seatbelt,

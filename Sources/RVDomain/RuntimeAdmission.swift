@@ -219,6 +219,8 @@ public struct RuntimeAdmissionEvent: Sendable, Equatable, Codable {
     public var httpAddress: String?
     public var httpQueryPresent: Bool?
     public var httpStatus: Int?
+    /// Parent workspace RV recorded for this runtime. The agent does not supply it.
+    public var workspace: String?
 
     public init(
         session: String?,
@@ -231,7 +233,8 @@ public struct RuntimeAdmissionEvent: Sendable, Equatable, Codable {
         httpDestination: String? = nil,
         httpAddress: String? = nil,
         httpQueryPresent: Bool? = nil,
-        httpStatus: Int? = nil
+        httpStatus: Int? = nil,
+        workspace: String? = nil
     ) {
         self.session = session
         self.requestID = requestID
@@ -244,6 +247,7 @@ public struct RuntimeAdmissionEvent: Sendable, Equatable, Codable {
         self.httpAddress = httpAddress
         self.httpQueryPresent = httpQueryPresent
         self.httpStatus = httpStatus
+        self.workspace = workspace
     }
 }
 
@@ -535,7 +539,8 @@ public enum RuntimeAdmissionGate {
                 httpMethod: http?.method,
                 httpDestination: http?.destination,
                 httpAddress: http?.address,
-                httpQueryPresent: http?.queryPresent
+                httpQueryPresent: http?.queryPresent,
+                workspace: binding?.session.workspaceSessionID.rawValue.uuidString
             ),
             execute: execute
         )

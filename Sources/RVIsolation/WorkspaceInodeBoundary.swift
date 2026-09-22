@@ -148,6 +148,57 @@ final class WorkspaceInodeBoundary {
         return device(of: status) == volumeDevice
     }
 
+    var volumeDeviceIdentifier: UInt64 { volumeDevice }
+    var diskIdentifier: String { disk }
+    var isReleased: Bool { released }
+
+    /// Directory descriptors RV holds for the mount and the hidden original.
+    /// Callers compare these identities with a child's open files.
+    func heldDescriptors() -> [Int32] {
+        [volumeFD, savedFD].filter { $0 >= 0 }
+    }
+
+    /// Move the mount and saved directory descriptors above the granted
+    /// stdio and admission slots so a later `dup2` onto 0...5 cannot publish
+    /// them into a runtime.
+    func relocateHeldDescriptors(atLeast floor: Int32) -> Bool {
+        moveDescriptor(&volumeFD, floor) && moveDescriptor(&savedFD, floor)
+    }
+
+    /// Bytes of one file in the hidden original tree. Nil when that name is
+    /// not there. This does not read the mounted volume.
+    func savedFileData(_ relative: String) -> Data? {
+        guard released == false, let fd = openSaved(relative, directory: false), fd >= 0 else {
+            return nil
+        }
+        defer { close(fd) }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while true {
+            let count = buffer.withUnsafeMutableBytes { raw -> Int in
+                guard let base = raw.baseAddress else { return -1 }
+                return read(fd, base, raw.count)
+            }
+            if count > 0 {
+                data.append(buffer, count: count)
+                continue
+            }
+            if count == 0 { return data }
+            if errno == EINTR { continue }
+            return nil
+        }
+    }
+
+    private func moveDescriptor(_ fd: inout Int32, _ floor: Int32) -> Bool {
+        guard fd >= 0 else { return false }
+        if fd >= floor { return true }
+        let moved = fcntl(fd, F_DUPFD_CLOEXEC, floor)
+        guard moved >= 0 else { return false }
+        close(fd)
+        fd = moved
+        return true
+    }
+
     /// Copy volume contents onto the original inodes, then put that directory
     /// back at the workspace path and release the volume.
     func publishAndRestore() -> Result<Void, IsolationApplyError> {
@@ -568,6 +619,10 @@ func establishWorkspaceInodeBoundary(
         savedFD: savedFD,
         snapshot: captured.mapValues(\.stamp)
     )
+    guard boundary.relocateHeldDescriptors(atLeast: 16) else {
+        _ = boundary.discardAndRestore()
+        return .failure(.workspaceInodeBoundaryFailed)
+    }
     return .success(boundary)
 }
 

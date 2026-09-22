@@ -66,6 +66,7 @@ struct RuntimeAdmissionNormalizeTests {
 private func admissionSubject(_ workspace: WorkingDirectory) -> RuntimeAdmissionSubject {
     let session = RuntimeSession(
         id: RuntimeSessionID(),
+        workspaceSessionID: WorkspaceSessionID(),
         host: .opencode,
         workspace: workspace,
         backend: .seatbelt,
