@@ -216,14 +216,14 @@ struct PendingActionTests {
         let push = GitAction.push(remote: "origin", refspec: "feature", force: .force)
         let shell = ShellAction(
             fingerprint: ActionFingerprint(rawValue: "host:sess:/tmp:git push --force origin feature"),
-            effects: push.effects,
-            resources: push.resources,
             supportingCommand: ShellCommand(rawValue: "git push --force origin feature"),
             gitAction: push
         )
         let sanitized = ReviewSanitizer.sanitize(shell)
         #expect(sanitized.gitAction == push)
         #expect(sanitized.filesystemAction == nil)
+        #expect(sanitized.effects == push.effects)
+        #expect(sanitized.resources == push.resources)
     }
 
     @Test func sanitize_keepsFilesystemAnalysis() {
@@ -241,14 +241,14 @@ struct PendingActionTests {
         )
         let shell = ShellAction(
             fingerprint: ActionFingerprint(rawValue: "host::/repo:rm Sources/Foo.swift"),
-            effects: filesystem.effects,
-            resources: filesystem.resources,
             supportingCommand: ShellCommand(rawValue: "rm Sources/Foo.swift"),
             filesystemAction: filesystem
         )
         let sanitized = ReviewSanitizer.sanitize(shell)
         #expect(sanitized.filesystemAction == filesystem)
         #expect(sanitized.gitAction == nil)
+        #expect(sanitized.effects == filesystem.effects)
+        #expect(sanitized.resources == filesystem.resources)
     }
 
     @Test func sanitize_redactsCredentialShapedGitPushAnalysis() throws {
@@ -259,8 +259,6 @@ struct PendingActionTests {
         )
         let shell = ShellAction(
             fingerprint: ActionFingerprint(rawValue: "host:sess:/tmp:git push --force"),
-            effects: push.effects,
-            resources: push.resources,
             supportingCommand: ShellCommand(rawValue: "git push --force origin main"),
             gitAction: push
         )
@@ -274,6 +272,7 @@ struct PendingActionTests {
         #expect(remote?.contains("ghp_") == false)
         #expect(refspec?.contains("ghp_") == false)
         #expect(sanitized.resources.remoteName?.contains("ghp_") == false)
+        #expect(sanitized.effects == sanitized.gitAction?.effects)
         #expect(sanitized.resources == sanitized.gitAction?.resources)
 
         let sanitizedJSON = String(decoding: try JSONEncoder().encode(sanitized), as: UTF8.self)
@@ -319,8 +318,6 @@ struct PendingActionTests {
         )
         let shell = ShellAction(
             fingerprint: ActionFingerprint(rawValue: "host::/tmp:rm ghp_exampletoken"),
-            effects: filesystem.effects,
-            resources: filesystem.resources,
             supportingCommand: ShellCommand(rawValue: "rm ghp_exampletoken"),
             filesystemAction: filesystem
         )
@@ -337,6 +334,7 @@ struct PendingActionTests {
         #expect(target.apparent.contains("ghp_") == false)
         #expect(target.canonical.contains("ghp_") == false)
         #expect(sanitized.resources.path?.contains("ghp_") == false)
+        #expect(sanitized.effects == sanitized.filesystemAction?.effects)
         #expect(sanitized.resources == sanitized.filesystemAction?.resources)
 
         let sanitizedJSON = String(decoding: try JSONEncoder().encode(sanitized), as: UTF8.self)

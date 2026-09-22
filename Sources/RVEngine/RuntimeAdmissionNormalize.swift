@@ -21,30 +21,46 @@ public func normalizeRuntimeAdmission(
             )
         )
     )
-    let analyzed: (ActionEffects, ActionResources, SemanticAction?)
+    let fingerprint = ActionFingerprint(
+        rawValue: "runtime:\(subject.session.id.rawValue.uuidString):\(subject.policyWorkspace.rawValue):\(command.rawValue)"
+    )
+    let scope = ActionScope(workingDirectory: subject.policyWorkspace)
     switch analysis.innermost {
     case .unwrapLimited:
         return .failure(.failed)
     case .git(let git):
-        analyzed = (git.effects, git.resources, .git(git))
-    case .filesystem(let filesystem):
-        analyzed = (filesystem.effects, filesystem.resources, .filesystem(filesystem))
-    case .wrapper, .unknown:
-        analyzed = (ActionEffects(), ActionResources(), nil)
-    }
-    let fingerprint = ActionFingerprint(
-        rawValue: "runtime:\(subject.session.id.rawValue.uuidString):\(subject.policyWorkspace.rawValue):\(command.rawValue)"
-    )
-    return .success(
-        .shell(
-            ShellAction(
-                fingerprint: fingerprint,
-                effects: analyzed.0,
-                resources: analyzed.1,
-                scope: ActionScope(workingDirectory: subject.policyWorkspace),
-                supportingCommand: command,
-                analysis: analyzed.2
+        return .success(
+            .shell(
+                ShellAction(
+                    fingerprint: fingerprint,
+                    scope: scope,
+                    supportingCommand: command,
+                    analysis: .git(git)
+                )
             )
         )
-    )
+    case .filesystem(let filesystem):
+        return .success(
+            .shell(
+                ShellAction(
+                    fingerprint: fingerprint,
+                    scope: scope,
+                    supportingCommand: command,
+                    analysis: .filesystem(filesystem)
+                )
+            )
+        )
+    case .wrapper, .unknown:
+        return .success(
+            .shell(
+                ShellAction(
+                    fingerprint: fingerprint,
+                    effects: ActionEffects(),
+                    resources: ActionResources(),
+                    scope: scope,
+                    supportingCommand: command
+                )
+            )
+        )
+    }
 }
