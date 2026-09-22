@@ -463,7 +463,7 @@ private func runHoleNet(verdict: IsolationConformanceVerdict) throws -> String {
             break
         case .backendUnavailable, .backendMismatch, .workspaceMustBeAbsolute,
             .workspaceDoesNotExist, .workspacePathUnresolvable, .workspacePathUnsafe,
-            .workspaceContainsInodeAlias, .profileNotApplicable, .processSpawnFailed,
+            .workspaceContainsInodeAlias, .workspaceInodeBoundaryFailed, .profileNotApplicable, .processSpawnFailed,
             .commandContainsNUL, .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
             recordUnexpectedConformanceError(
                 error,
@@ -512,7 +512,7 @@ private func runHoleRead(verdict: IsolationConformanceVerdict) throws -> String 
             break
         case .backendUnavailable, .backendMismatch, .workspaceMustBeAbsolute,
             .workspaceDoesNotExist, .workspacePathUnresolvable, .workspacePathUnsafe,
-            .workspaceContainsInodeAlias, .profileNotApplicable, .processSpawnFailed,
+            .workspaceContainsInodeAlias, .workspaceInodeBoundaryFailed, .profileNotApplicable, .processSpawnFailed,
             .commandContainsNUL, .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
             recordUnexpectedConformanceError(
                 error,
@@ -578,7 +578,7 @@ private func runFCUnavailable(verdict: IsolationConformanceVerdict) throws -> St
             .workspaceDoesNotExist,
             .workspacePathUnresolvable,
             .workspacePathUnsafe,
-            .workspaceContainsInodeAlias,
+            .workspaceContainsInodeAlias, .workspaceInodeBoundaryFailed,
             .containedGuaranteesUnsupported,
             .profileNotApplicable,
             .processSpawnFailed,
@@ -613,7 +613,7 @@ private func runFCLandlockDarwin(verdict: IsolationConformanceVerdict) throws ->
                 .workspaceDoesNotExist,
                 .workspacePathUnresolvable,
                 .workspacePathUnsafe,
-                .workspaceContainsInodeAlias,
+                .workspaceContainsInodeAlias, .workspaceInodeBoundaryFailed,
                 .containedGuaranteesUnsupported,
                 .profileNotApplicable,
                 .processSpawnFailed,
@@ -631,7 +631,7 @@ private func runFCLandlockDarwin(verdict: IsolationConformanceVerdict) throws ->
             return formatProbe(id: .fcLandlockDarwin, verdict: verdict, error: error)
         case .backendUnavailable, .backendMismatch, .workspaceMustBeAbsolute,
             .workspaceDoesNotExist, .workspacePathUnresolvable, .workspacePathUnsafe,
-            .workspaceContainsInodeAlias, .profileNotApplicable, .processSpawnFailed,
+            .workspaceContainsInodeAlias, .workspaceInodeBoundaryFailed, .profileNotApplicable, .processSpawnFailed,
             .commandContainsNUL, .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
             recordUnexpectedConformanceError(
                 error,
@@ -833,7 +833,7 @@ private func expectWorkspacePathUnsafe(_ error: IsolationApplyError, stage: Stri
         .workspaceMustBeAbsolute,
         .workspaceDoesNotExist,
         .workspacePathUnresolvable,
-        .workspaceContainsInodeAlias,
+        .workspaceContainsInodeAlias, .workspaceInodeBoundaryFailed,
         .containedGuaranteesUnsupported,
         .profileNotApplicable,
         .processSpawnFailed,
@@ -873,6 +873,8 @@ private func isolationApplyErrorName(_ error: IsolationApplyError) -> String {
         return "workspacePathUnsafe"
         case .workspaceContainsInodeAlias:
             return "workspaceContainsInodeAlias"
+        case .workspaceInodeBoundaryFailed:
+            return "workspaceInodeBoundaryFailed"
     case .containedGuaranteesUnsupported:
         return "containedGuaranteesUnsupported"
     case .profileNotApplicable:

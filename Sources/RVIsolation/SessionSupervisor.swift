@@ -4,11 +4,15 @@ import Foundation
 import RVDomain
 
 private let seatbeltHandshakeScript =
-    "printf %s \"$1\" >&3 || exit 127; exec 3>&-; shift; exec \"$@\""
+    "printf %s \"$1\" >&3 || exit 127; exec 3>&- || exit 127; shift; exec \"$@\""
 
 /// Seatbelt launch: persist the session, spawn into an RV process group,
 /// read a handshake byte string that only the in-sandbox wrapper can write,
 /// then signal the group and wait until it is empty.
+///
+/// The child receives no descriptor the file actions did not grant.
+/// Those grants are stdin/stdout/stderr for the selected IO mode, and the
+/// handshake write end on fd 3. The wrapper closes fd 3 before exec.
 func superviseSeatbelt(
     _ request: IsolatedLaunchRequest,
     host: HookHost?,
@@ -48,6 +52,11 @@ func superviseSeatbelt(
     if Task.isCancelled {
         return .failure(.cancelled)
     }
+    // Hand-built profiles that are not the contained compiler output never
+    // mount or execute. Production profiles include this deny.
+    guard profile.source.contains("(deny file-link)") else {
+        return .failure(.seatbeltNotEstablished)
+    }
     let started = RuntimeSession(
         id: RuntimeSessionID(),
         host: host,
@@ -66,64 +75,111 @@ func superviseSeatbelt(
     if Task.isCancelled {
         return .failure(.cancelled)
     }
+    let boundary: WorkspaceInodeBoundary
+    switch establishWorkspaceInodeBoundary(at: workspace) {
+    case .failure(let error):
+        return .failure(error)
+    case .success(let established):
+        boundary = established
+    }
+    let mounted = launchSeatbeltChild(
+        request,
+        workspace: workspace,
+        profile: profile,
+        boundary: boundary,
+        started: started
+    )
+    let teardown = mounted.publish ? boundary.publishAndRestore() : boundary.discardAndRestore()
+    return containedLaunchResult(child: mounted.result, teardown: teardown)
+}
+
+/// The workspace is back at its original path only when teardown succeeds.
+/// A failed detach or rename is the result the caller has to act on, including
+/// when the child already failed or the task was cancelled.
+func containedLaunchResult(
+    child: Result<IsolatedRunResult, IsolationApplyError>,
+    teardown: Result<Void, IsolationApplyError>
+) -> Result<IsolatedRunResult, IsolationApplyError> {
+    switch teardown {
+    case .failure(let error):
+        return .failure(error)
+    case .success:
+        return child
+    }
+}
+
+private struct MountedSeatbeltOutcome {
+    var result: Result<IsolatedRunResult, IsolationApplyError>
+    /// Copy the volume back only after the in-sandbox handshake succeeded.
+    var publish: Bool
+}
+
+private func launchSeatbeltChild(
+    _ request: IsolatedLaunchRequest,
+    workspace: String,
+    profile: SeatbeltProfile,
+    boundary: WorkspaceInodeBoundary,
+    started: RuntimeSession
+) -> MountedSeatbeltOutcome {
 
     let nonce = UUID().uuidString.replacingOccurrences(of: "-", with: "")
-    var pipeFDs: [Int32] = [0, 0]
-    let pipeResult = pipeFDs.withUnsafeMutableBufferPointer { buffer in
-        pipe(buffer.baseAddress)
+    var pipeFDs: [Int32] = [-1, -1]
+    let pipeResult = pipeFDs.withUnsafeMutableBufferPointer { buffer -> Int32 in
+        guard let base = buffer.baseAddress else { return -1 }
+        return pipe(base)
     }
     guard pipeResult == 0 else {
-        return .failure(.processSpawnFailed)
+        return MountedSeatbeltOutcome(result: .failure(.processSpawnFailed), publish: false)
     }
     let readEnd = pipeFDs[0]
-    let writeEnd = pipeFDs[1]
-    defer { close(readEnd) }
+    var writeEnd = pipeFDs[1]
+    var nullFD: Int32 = -1
+    defer {
+        if readEnd >= 0 { close(readEnd) }
+        if writeEnd >= 0 { close(writeEnd) }
+        if nullFD >= 0 { close(nullFD) }
+    }
+    guard fcntl(readEnd, F_SETFD, FD_CLOEXEC) >= 0,
+        fcntl(writeEnd, F_SETFD, FD_CLOEXEC) >= 0
+    else {
+        return MountedSeatbeltOutcome(result: .failure(.processSpawnFailed), publish: false)
+    }
 
     var attributes: posix_spawnattr_t?
     guard posix_spawnattr_init(&attributes) == 0 else {
-        close(writeEnd)
-        return .failure(.lifetimeBoundaryFailed)
+        return MountedSeatbeltOutcome(result: .failure(.lifetimeBoundaryFailed), publish: false)
     }
     defer { posix_spawnattr_destroy(&attributes) }
-    let flags = Int16(POSIX_SPAWN_SETPGROUP)
+    // Every parent descriptor is close-on-exec unless a file action grants it.
+    let flags = Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT)
     guard posix_spawnattr_setflags(&attributes, flags) == 0,
         posix_spawnattr_setpgroup(&attributes, 0) == 0
     else {
-        close(writeEnd)
-        return .failure(.lifetimeBoundaryFailed)
+        return MountedSeatbeltOutcome(result: .failure(.lifetimeBoundaryFailed), publish: false)
     }
 
     var actions: posix_spawn_file_actions_t?
     guard posix_spawn_file_actions_init(&actions) == 0 else {
-        close(writeEnd)
-        return .failure(.processSpawnFailed)
+        return MountedSeatbeltOutcome(result: .failure(.processSpawnFailed), publish: false)
     }
     defer { posix_spawn_file_actions_destroy(&actions) }
     let chdirResult = workspace.withCString { path in
         posix_spawn_file_actions_addchdir(&actions, path)
     }
     guard chdirResult == 0 else {
-        close(writeEnd)
-        return .failure(.processSpawnFailed)
+        return MountedSeatbeltOutcome(result: .failure(.processSpawnFailed), publish: false)
     }
-    var nullFD: Int32 = -1
-    if request.io == .discard {
-        nullFD = open("/dev/null", O_RDWR | O_CLOEXEC)
-        guard nullFD >= 0,
-            posix_spawn_file_actions_adddup2(&actions, nullFD, STDIN_FILENO) == 0,
-            posix_spawn_file_actions_adddup2(&actions, nullFD, STDOUT_FILENO) == 0,
-            posix_spawn_file_actions_adddup2(&actions, nullFD, STDERR_FILENO) == 0,
-            posix_spawn_file_actions_addclose(&actions, nullFD) == 0
-        else {
-            if nullFD >= 0 { close(nullFD) }
-            close(writeEnd)
-            return .failure(.processSpawnFailed)
-        }
+    guard installGrantedDescriptorActions(
+        &actions,
+        io: request.io,
+        readEnd: readEnd,
+        writeEnd: writeEnd,
+        nullFD: &nullFD
+    ) else {
+        return MountedSeatbeltOutcome(result: .failure(.processSpawnFailed), publish: false)
     }
-    guard installHandshakeActions(&actions, readEnd: readEnd, writeEnd: writeEnd) else {
-        if nullFD >= 0 { close(nullFD) }
-        close(writeEnd)
-        return .failure(.processSpawnFailed)
+    guard boundary.remainsEstablished() else {
+        return MountedSeatbeltOutcome(result: .failure(.workspaceInodeBoundaryFailed), publish: false)
     }
 
     var arguments = [
@@ -165,10 +221,16 @@ func superviseSeatbelt(
             )
         }
     }
-    if nullFD >= 0 { close(nullFD) }
-    close(writeEnd)
+    if nullFD >= 0 {
+        close(nullFD)
+        nullFD = -1
+    }
+    if writeEnd >= 0 {
+        close(writeEnd)
+        writeEnd = -1
+    }
     guard spawnResult == 0, pid > 1 else {
-        return .failure(.processSpawnFailed)
+        return MountedSeatbeltOutcome(result: .failure(.processSpawnFailed), publish: false)
     }
     // The wait loop polls this fd. A blocking read would ignore cancellation
     // until the child writes or exits, so a failed flag change cannot continue.
@@ -176,7 +238,7 @@ func superviseSeatbelt(
     guard flagsNow >= 0, fcntl(readEnd, F_SETFL, flagsNow | O_NONBLOCK) >= 0 else {
         terminateSession(pgid: pid, also: [pid])
         _ = waitUntilSessionIsDead(pgid: pid, also: [pid])
-        return .failure(.lifetimeBoundaryFailed)
+        return MountedSeatbeltOutcome(result: .failure(.lifetimeBoundaryFailed), publish: false)
     }
 
     let pgid = getpgid(pid)
@@ -185,30 +247,33 @@ func superviseSeatbelt(
         if alreadyExited == false {
             terminateSession(pgid: pid, also: [pid])
             _ = waitUntilSessionIsDead(pgid: pid, also: [pid])
-            return .failure(.lifetimeBoundaryFailed)
+            return MountedSeatbeltOutcome(result: .failure(.lifetimeBoundaryFailed), publish: false)
         }
     }
 
     let outcome = waitForSeatbeltSession(root: pid, readEnd: readEnd, nonce: nonce)
     let dead = waitUntilSessionIsDead(pgid: pid, also: outcome.recordedPIDs.union([pid]))
     guard dead else {
-        return .failure(.lifetimeBoundaryFailed)
+        return MountedSeatbeltOutcome(result: .failure(.lifetimeBoundaryFailed), publish: false)
     }
     if outcome.cancelled {
-        return .failure(.cancelled)
+        return MountedSeatbeltOutcome(result: .failure(.cancelled), publish: outcome.established)
     }
     guard outcome.established, let status = outcome.status else {
-        return .failure(.seatbeltNotEstablished)
+        return MountedSeatbeltOutcome(result: .failure(.seatbeltNotEstablished), publish: false)
     }
     guard let established = EstablishedIsolation(mode: request.plan.mode, family: .seatbelt) else {
-        return .failure(.backendMismatch)
+        return MountedSeatbeltOutcome(result: .failure(.backendMismatch), publish: false)
     }
-    return .success(
-        IsolatedRunResult(
-            established: established,
-            exitStatus: status,
-            session: started.withChild(pid: pid)
-        )
+    return MountedSeatbeltOutcome(
+        result: .success(
+            IsolatedRunResult(
+                established: established,
+                exitStatus: status,
+                session: started.withChild(pid: pid)
+            )
+        ),
+        publish: true
     )
 }
 
@@ -267,12 +332,23 @@ private func waitForSeatbeltSession(
     }
 }
 
-private func installHandshakeActions(
+/// Grants only stdio and the handshake write end. The handshake is installed
+/// first so a later `/dev/null` dup cannot overwrite a pipe end on 0, 1, or 2
+/// before it is copied to fd 3. `POSIX_SPAWN_CLOEXEC_DEFAULT` closes every
+/// descriptor this function does not grant, including the log and any socket
+/// the parent still holds.
+private func installGrantedDescriptorActions(
     _ actions: inout posix_spawn_file_actions_t?,
+    io: IsolatedIO,
     readEnd: Int32,
-    writeEnd: Int32
+    writeEnd: Int32,
+    nullFD: inout Int32
 ) -> Bool {
-    if writeEnd != 3 {
+    if writeEnd == 3 {
+        guard posix_spawn_file_actions_addinherit_np(&actions, writeEnd) == 0 else {
+            return false
+        }
+    } else {
         guard posix_spawn_file_actions_adddup2(&actions, writeEnd, 3) == 0 else {
             return false
         }
@@ -287,7 +363,26 @@ private func installHandshakeActions(
             return false
         }
     }
-    return true
+    switch io {
+    case .inherit:
+        return posix_spawn_file_actions_addinherit_np(&actions, STDIN_FILENO) == 0
+            && posix_spawn_file_actions_addinherit_np(&actions, STDOUT_FILENO) == 0
+            && posix_spawn_file_actions_addinherit_np(&actions, STDERR_FILENO) == 0
+    case .discard:
+        let opened = open("/dev/null", O_RDWR | O_CLOEXEC)
+        guard opened >= 0 else { return false }
+        nullFD = opened
+        guard posix_spawn_file_actions_adddup2(&actions, nullFD, STDIN_FILENO) == 0,
+            posix_spawn_file_actions_adddup2(&actions, nullFD, STDOUT_FILENO) == 0,
+            posix_spawn_file_actions_adddup2(&actions, nullFD, STDERR_FILENO) == 0
+        else {
+            return false
+        }
+        if nullFD > STDERR_FILENO {
+            return posix_spawn_file_actions_addclose(&actions, nullFD) == 0
+        }
+        return true
+    }
 }
 
 private func readAvailable(_ fd: Int32, limit: Int) -> Data {

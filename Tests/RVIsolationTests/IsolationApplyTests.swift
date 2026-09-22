@@ -18,7 +18,8 @@ import Testing
 ///    family `.none`
 /// 7. contained + relative workspace (`"repo"`) → `workspaceMustBeAbsolute`
 /// 8. contained + absolute workspace that does not exist → `workspaceDoesNotExist`
-/// 9. `EstablishedIsolation` factory rejects contained+`.none` and observed+`.seatbelt`
+/// 9. `EstablishedIsolation` factory rejects contained+`.none`, contained+`.landlock`,
+///    and observed+`.seatbelt`
 /// 10. apply / prepare / run do not call `AgentAuthorization.decide` (no Domain
 ///     coupling; comment + verification `rg` only)
 /// 11. `platform()` family is `.seatbelt` on Darwin and `.landlock` on Linux
@@ -50,6 +51,8 @@ struct IsolationApplyTests {
             #expect(profile.source.contains("file-write*"))
             #expect(profile.source.contains("(allow signal (target same-sandbox))"))
             #expect(profile.source.contains("(allow signal (target self))") == false)
+            #expect(profile.source.contains("(deny file-link)"))
+            #expect(profile.source.contains("(deny file-clone)"))
             #expect(profile.source.contains("(deny syscall-unix (syscall-number 82))"))
             #expect(profile.source.contains("(deny syscall-unix (syscall-number 147))"))
             #expect(profile.source.contains("(deny syscall-unix (syscall-number 244))"))
@@ -60,6 +63,64 @@ struct IsolationApplyTests {
             recordUnexpectedApplyError(error, expected: "compiled first-slice Seatbelt profile")
         }
     }
+
+    #if os(macOS)
+    @Test func workspacePublishDecision_rejectsForeignInodeAndLinkCountChange() {
+        let original = WorkspaceInodeStamp(device: 1, inode: 10, linkCount: 1, kind: .regular)
+        var extraLink = original
+        extraLink.linkCount = 2
+        let outside = WorkspaceInodeStamp(device: 1, inode: 99, linkCount: 2, kind: .regular)
+        #expect(workspacePublishDecision(snapshot: original, saved: original, onVolume: true) == .update)
+        #expect(workspacePublishDecision(snapshot: original, saved: extraLink, onVolume: true) == .reject)
+        #expect(workspacePublishDecision(snapshot: original, saved: outside, onVolume: true) == .reject)
+        #expect(workspacePublishDecision(snapshot: nil, saved: nil, onVolume: true) == .create)
+        #expect(workspacePublishDecision(snapshot: nil, saved: outside, onVolume: true) == .reject)
+        #expect(workspacePublishDecision(snapshot: original, saved: original, onVolume: false) == .remove)
+        #expect(workspacePublishDecision(snapshot: original, saved: outside, onVolume: false) == .reject)
+        #expect(workspacePublishDecision(snapshot: nil, saved: outside, onVolume: false) == .leave)
+        let directory = WorkspaceInodeStamp(device: 1, inode: 4, linkCount: 3, kind: .directory)
+        var directoryAfterChild = directory
+        directoryAfterChild.linkCount = 4
+        #expect(
+            workspacePublishDecision(snapshot: directory, saved: directoryAfterChild, onVolume: true)
+                == .update
+        )
+        #expect(
+            workspacePublishDecision(snapshot: directory, saved: directoryAfterChild, onVolume: false)
+                == .remove
+        )
+        var replacedDirectory = directory
+        replacedDirectory.inode = 5
+        #expect(
+            workspacePublishDecision(snapshot: directory, saved: replacedDirectory, onVolume: true)
+                == .reject
+        )
+        let link = WorkspaceInodeStamp(device: 1, inode: 8, linkCount: 1, kind: .symlink)
+        var linkedTwice = link
+        linkedTwice.linkCount = 2
+        #expect(workspacePublishDecision(snapshot: link, saved: linkedTwice, onVolume: true) == .reject)
+    }
+
+    @Test func containedLaunchResult_reportsTeardownFailure() throws {
+        let established = try #require(EstablishedIsolation(mode: .observed, family: .none))
+        let success = Result<IsolatedRunResult, IsolationApplyError>.success(
+            IsolatedRunResult(established: established, exitStatus: 0)
+        )
+        let childFailure = Result<IsolatedRunResult, IsolationApplyError>.failure(.processSpawnFailed)
+        let restored = Result<Void, IsolationApplyError>.success(())
+        let restoreFailure = Result<Void, IsolationApplyError>.failure(.workspaceInodeBoundaryFailed)
+        #expect(containedLaunchResult(child: success, teardown: restored) == success)
+        #expect(containedLaunchResult(child: childFailure, teardown: restored) == childFailure)
+        #expect(
+            containedLaunchResult(child: success, teardown: restoreFailure)
+                == .failure(.workspaceInodeBoundaryFailed)
+        )
+        #expect(
+            containedLaunchResult(child: childFailure, teardown: restoreFailure)
+                == .failure(.workspaceInodeBoundaryFailed)
+        )
+    }
+    #endif
 
     @Test func compileSeatbeltProfile_contained_writeLimitIsWorkspaceNotRepositoryRoot() throws {
         let workspace = try requireWorkspace("/ws")
@@ -120,7 +181,7 @@ struct IsolationApplyTests {
                 .workspaceDoesNotExist,
                 .workspacePathUnresolvable,
                 .workspacePathUnsafe,
-                .workspaceContainsInodeAlias,
+                .workspaceContainsInodeAlias, .workspaceInodeBoundaryFailed,
                 .containedGuaranteesUnsupported,
                 .profileNotApplicable,
                 .processSpawnFailed,
@@ -222,7 +283,7 @@ struct IsolationApplyTests {
                 .workspaceDoesNotExist,
                 .workspacePathUnresolvable,
                 .workspacePathUnsafe,
-                .workspaceContainsInodeAlias,
+                .workspaceContainsInodeAlias, .workspaceInodeBoundaryFailed,
                 .containedGuaranteesUnsupported,
                 .profileNotApplicable,
                 .processSpawnFailed,
@@ -252,7 +313,7 @@ struct IsolationApplyTests {
                 .workspaceMustBeAbsolute,
                 .workspacePathUnresolvable,
                 .workspacePathUnsafe,
-                .workspaceContainsInodeAlias,
+                .workspaceContainsInodeAlias, .workspaceInodeBoundaryFailed,
                 .containedGuaranteesUnsupported,
                 .profileNotApplicable,
                 .processSpawnFailed,
@@ -282,7 +343,7 @@ struct IsolationApplyTests {
             #expect(EstablishedIsolation(mode: .observed, family: .none) != nil)
             #expect(EstablishedIsolation(mode: .mediated, family: .none) != nil)
             #expect(EstablishedIsolation(mode: .contained(guarantees), family: .seatbelt) != nil)
-            #expect(EstablishedIsolation(mode: .contained(guarantees), family: .landlock) != nil)
+            #expect(EstablishedIsolation(mode: .contained(guarantees), family: .landlock) == nil)
         }
     }
 
@@ -327,7 +388,7 @@ struct IsolationApplyTests {
                 .workspaceDoesNotExist,
                 .workspacePathUnresolvable,
                 .workspacePathUnsafe,
-                .workspaceContainsInodeAlias,
+                .workspaceContainsInodeAlias, .workspaceInodeBoundaryFailed,
                 .containedGuaranteesUnsupported,
                 .profileNotApplicable,
                 .processSpawnFailed:
@@ -379,7 +440,7 @@ struct IsolationApplyTests {
                 .workspaceMustBeAbsolute,
                 .workspacePathUnresolvable,
                 .workspacePathUnsafe,
-                .workspaceContainsInodeAlias,
+                .workspaceContainsInodeAlias, .workspaceInodeBoundaryFailed,
                 .containedGuaranteesUnsupported,
                 .profileNotApplicable,
                 .processSpawnFailed,
@@ -398,7 +459,7 @@ struct IsolationApplyTests {
                 .workspaceMustBeAbsolute,
                 .workspacePathUnresolvable,
                 .workspacePathUnsafe,
-                .workspaceContainsInodeAlias,
+                .workspaceContainsInodeAlias, .workspaceInodeBoundaryFailed,
                 .containedGuaranteesUnsupported,
                 .profileNotApplicable,
                 .processSpawnFailed,
@@ -417,7 +478,7 @@ struct IsolationApplyTests {
                 .workspaceDoesNotExist,
                 .workspacePathUnresolvable,
                 .workspacePathUnsafe,
-                .workspaceContainsInodeAlias,
+                .workspaceContainsInodeAlias, .workspaceInodeBoundaryFailed,
                 .containedGuaranteesUnsupported,
                 .profileNotApplicable,
                 .processSpawnFailed,
@@ -449,7 +510,7 @@ struct IsolationApplyTests {
                 .workspaceDoesNotExist,
                 .workspacePathUnresolvable,
                 .workspacePathUnsafe,
-                .workspaceContainsInodeAlias,
+                .workspaceContainsInodeAlias, .workspaceInodeBoundaryFailed,
                 .containedGuaranteesUnsupported,
                 .processSpawnFailed,
                 .commandContainsNUL,
@@ -476,7 +537,7 @@ struct IsolationApplyTests {
                 .workspaceMustBeAbsolute,
                 .workspaceDoesNotExist,
                 .workspacePathUnresolvable,
-                .workspaceContainsInodeAlias,
+                .workspaceContainsInodeAlias, .workspaceInodeBoundaryFailed,
                 .containedGuaranteesUnsupported,
                 .profileNotApplicable,
                 .processSpawnFailed,
@@ -504,7 +565,7 @@ struct IsolationApplyTests {
                 .workspaceMustBeAbsolute,
                 .workspaceDoesNotExist,
                 .workspacePathUnresolvable,
-                .workspaceContainsInodeAlias,
+                .workspaceContainsInodeAlias, .workspaceInodeBoundaryFailed,
                 .containedGuaranteesUnsupported,
                 .profileNotApplicable,
                 .processSpawnFailed,
@@ -610,7 +671,7 @@ struct IsolationApplyTests {
                 .workspaceDoesNotExist,
                 .workspacePathUnresolvable,
                 .workspacePathUnsafe,
-                .workspaceContainsInodeAlias,
+                .workspaceContainsInodeAlias, .workspaceInodeBoundaryFailed,
                 .containedGuaranteesUnsupported,
                 .profileNotApplicable,
                 .processSpawnFailed,
@@ -691,7 +752,7 @@ private func expectProfileNotApplicable(
             .workspaceDoesNotExist,
             .workspacePathUnresolvable,
             .workspacePathUnsafe,
-            .workspaceContainsInodeAlias,
+            .workspaceContainsInodeAlias, .workspaceInodeBoundaryFailed,
             .containedGuaranteesUnsupported,
             .processSpawnFailed,
             .commandContainsNUL,
@@ -713,10 +774,15 @@ private func expectEstablished(
     #expect(established.mode == mode, sourceLocation: sourceLocation)
     #expect(established.family == family, sourceLocation: sourceLocation)
     switch (established.mode, established.family) {
-    case (.contained, .seatbelt), (.contained, .landlock), (.observed, .none), (.mediated, .none):
+    case (.contained, .seatbelt), (.observed, .none), (.mediated, .none):
         break
     case (.contained, .none):
         Issue.record("established contained + family none is illegal", sourceLocation: sourceLocation)
+    case (.contained, .landlock):
+        Issue.record(
+            "established contained + family landlock is illegal",
+            sourceLocation: sourceLocation
+        )
     case (.observed, .seatbelt), (.mediated, .seatbelt):
         Issue.record(
             "established observed/mediated + family seatbelt is illegal",
@@ -751,7 +817,7 @@ private func recordUnexpectedApplyError(
         )
     case .workspacePathUnsafe:
         Issue.record("expected \(expected), got workspacePathUnsafe", sourceLocation: sourceLocation)
-    case .workspaceContainsInodeAlias:
+    case .workspaceContainsInodeAlias, .workspaceInodeBoundaryFailed:
         Issue.record("expected \(expected), got workspaceContainsInodeAlias", sourceLocation: sourceLocation)
     case .containedGuaranteesUnsupported:
         Issue.record(
@@ -886,6 +952,8 @@ private func describeError(_ error: IsolationApplyError) -> String {
         return "workspacePathUnsafe"
     case .workspaceContainsInodeAlias:
         return "workspaceContainsInodeAlias"
+    case .workspaceInodeBoundaryFailed:
+        return "workspaceInodeBoundaryFailed"
     case .containedGuaranteesUnsupported:
         return "containedGuaranteesUnsupported"
     case .profileNotApplicable:

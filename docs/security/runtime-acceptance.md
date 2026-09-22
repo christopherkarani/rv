@@ -65,12 +65,12 @@ Command: `Scripts/swift-6.4 test --filter 'IsolationApplyTests|HostLaunchTests|I
 | 2.2, 3.4, 3.13, 3.14 | PARTIAL | macOS denies the tested outside reads. Linux does not enforce them; it refuses the launch. `/usr`, `/bin`, `/System`, `/Library`, and `/dev` remain readable so programs can start. `file-read-metadata` on `/Users`, `/private`, `/tmp`, and `/var` allows path walks, not file contents in the tests. |
 | 2.3, 4.1–4.5 | PARTIAL | macOS kernel denials above, including a child shell. No host/domain allowlist exists. Linux is refusal, not a tested network namespace. |
 | 2.4, 5.1 | PARTIAL | macOS `kill -TERM` of a harness-owned `sleep` fails and the process remains. Debugger attachment, Mach/XPC delegation, and `/usr/bin/osascript` were not accepted as proof. `mach-lookup` is still an unfiltered Seatbelt allow. |
-| 3.5, 3.9 | PARTIAL | Ordinary outside writes stay denied. A preexisting hard link makes `prepare`/`spawn` return `workspaceContainsInodeAlias` and leaves the outside file unchanged. That is a scan, not a kernel inode rule. A link created after the scan is not covered. |
+| 3.5, 3.9 | PARTIAL | Ordinary outside writes stay denied. A preexisting hard link makes launch return `workspaceContainsInodeAlias` before the command runs. The workspace path is then a separate volume: a same-user hard link created after preflight fails with `EXDEV` and does not change the outside file. A same-user force-unmount of that volume is not covered. |
 | 3.1, 3.2 | PARTIAL | Workspace read and write work on macOS. They are the contained plan, not an extra grant. Linux does not launch. |
 | 11.1–11.5, 11.9 | PARTIAL / PASS as before for writes | The profile is `(deny default)` and is applied by `/usr/bin/sandbox-exec` before the payload. Invalid profiles still do not run the payload. Determinism is same-input source equality in `compileSeatbeltProfile_contained_isDenyDefaultWorkspaceScope`. |
 | 12.1, 12.6, 12.9 | FAIL for positive enforcement | `compileLandlockRuleset` returns `containedGuaranteesUnsupported` for a real directory after path checks. The write-only helper is not used as a fallback. Direct helper tests of bad argv still exist. No supported-kernel Landlock run was available here. |
 | 1.1, 1.6–1.8, 7.*, 8.2–8.4, 9.5–9.6, 9.11, 13.* | FAIL | Unchanged. Descendants do not re-enter `LocalExecutor`. No runtime identity, audit sink, or session revocation. A background child can still write inside the workspace after its parent returns. |
-| 16.A–16.C | PARTIAL on macOS | A, B, and the tested interpreter/shell wrappers hold on this Mac for ordinary paths. Linux and the hardlink race do not. |
+| 16.A–16.C | PARTIAL on macOS | A, B, and the tested interpreter/shell wrappers hold on this Mac for ordinary paths. The hardlink alias race is closed while the workspace volume stays mounted. Linux does not enforce this launch. |
 | 16.D | PASS for tested init failures | Bad Seatbelt profile, missing workspace, and unsupported Landlock guarantees do not run the payload. |
 | 16.E | PARTIAL | Separate workspaces cannot write each other. Outside reads are denied by the same profile. There is no identity separating two agents beyond their workspace paths. |
 | 16.F, 16.G | FAIL | No runtime identity and no structured launch audit. |
@@ -110,13 +110,13 @@ Command: `Scripts/swift-6.4 test --filter 'IsolationApplyTests|HostLaunchTests|I
 |---|---|---|---|
 | 3.1 | Allowed read works | PARTIAL | RA copies files successfully, but reads are ambient rather than explicitly granted; D has no read-grant type. |
 | 3.2 | Allowed write works | PARTIAL | IT host/executor/Seatbelt inside markers, RA positive controls and CP write fence pass on macOS. Actual L inside-write enforcement not proven. |
-| 3.3 | Read-only cannot mutate | FAIL | Ordinary outside writes denied, but RA preexisting hardlink alias mutates outside source. No typed read-only grants. |
+| 3.3 | Read-only cannot mutate | FAIL | Ordinary outside writes denied, and a workspace hard link no longer mutates an outside inode. No typed read-only grants. |
 | 3.4 | Outside read denied | FAIL | RA/CP fake secret content successfully copied. S/L deliberately do not restrict read. |
-| 3.5 | Outside write denied | FAIL | Ordinary paths blocked, but RA `knownGapPreexistingHardlinkAliasIsReported` mutates outside inode. Inherited stdio and path races also unresolved. |
+| 3.5 | Outside write denied | PARTIAL | Ordinary paths blocked. A preexisting hard link refuses launch. A post-preflight hard link does not change the outside inode while the workspace volume is mounted. Inherited stdio remains a capability. |
 | 3.6 | Parent traversal denied | PARTIAL | RA `relativeTraversalCannotWriteOutsideWorkspace` tests three paths and absent markers on macOS. Read traversal unrestricted; Linux unproven. |
 | 3.7 | Relative escape denied | PARTIAL | Same RA relative-write effects and fixed contained cwd; relative reads remain unrestricted. |
 | 3.8 | Symlink escape denied | PARTIAL | RA new/preexisting chains deny outside writes; LB rejects prepared alias retarget. Reads and final launch races remain outside proof. |
-| 3.9 | Hardlinks cannot bypass | FAIL | RA agent-created link denied, host-preexisting alias outside mutation succeeds on macOS. |
+| 3.9 | Hardlinks cannot bypass | PARTIAL | Agent-created links are denied. A preexisting alias refuses launch before exec. A same-user link after preflight fails with `EXDEV`. Force-unmount of the volume is not covered. |
 | 3.10 | Rename/move cannot escape | PARTIAL | RA `renameCannotMoveAcrossWriteBoundary` preserves both sources across export/import attempts on macOS; no actual Linux run. |
 | 3.11 | Deliberate temporary permissions | PARTIAL | A sets TMPDIR to canonical write root; LB verifies value. No private session temp directory, mode/cleanup or revocation guarantee. |
 | 3.12 | Home not implicitly granted | FAIL | A replaces HOME with workspace but absolute original-home paths remain readable; RA fake-home reads prove access model. |

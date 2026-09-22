@@ -577,7 +577,7 @@ private func recordUnexpectedApplyError(
         )
     case .workspacePathUnsafe:
         Issue.record("expected \(expected), got workspacePathUnsafe", sourceLocation: sourceLocation)
-    case .workspaceContainsInodeAlias:
+    case .workspaceContainsInodeAlias, .workspaceInodeBoundaryFailed:
         Issue.record("expected \(expected), got workspaceContainsInodeAlias", sourceLocation: sourceLocation)
     case .containedGuaranteesUnsupported:
         Issue.record(

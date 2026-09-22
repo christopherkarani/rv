@@ -131,7 +131,9 @@ struct ExecutorLifecycleRegressionTests {
         )
         let executor = LocalExecutor()
         let task = Task { try await lifecycleRun(executor, executable) }
-        let deadline = Date().addingTimeInterval(5)
+        // Mounting the private workspace volume runs before the shell. Under a
+        // parallel CI load that mount can take longer than a few seconds.
+        let deadline = Date().addingTimeInterval(45)
         var sleepPID: Int32?
         while Date() < deadline {
             if let text = try? String(contentsOf: pidFile, encoding: .utf8) {
@@ -143,7 +145,12 @@ struct ExecutorLifecycleRegressionTests {
             }
             try await Task.sleep(nanoseconds: 20_000_000)
         }
-        let pid = try #require(sleepPID)
+        guard let pid = sleepPID else {
+            task.cancel()
+            let result = try await task.value
+            Issue.record("contained sleep pid did not appear; launch returned \(result)")
+            return
+        }
         task.cancel()
         let result = try await task.value
         #expect(result == .failure(.cancelled))
