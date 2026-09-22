@@ -718,8 +718,8 @@ private func expectFirstSliceContained(
     id: IsolationConformanceID,
     sourceLocation: SourceLocation = #_sourceLocation
 ) {
-    expectPlatformContainedFamily(established.family, id: id, sourceLocation: sourceLocation)
-    switch established.mode {
+    expectPlatformContainedFamily(established, id: id, sourceLocation: sourceLocation)
+    switch plan.mode {
     case .contained(let guarantees):
         switch guarantees.filesystem {
         case .workspaceScoped(let limitedTo):
@@ -759,49 +759,42 @@ private func expectFirstSliceContained(
         }
     case .observed:
         Issue.record(
-            "id=\(id.rawValue) must not establish observed",
+            "id=\(id.rawValue) matching plan must be contained, not observed",
             sourceLocation: sourceLocation
         )
     case .mediated:
         Issue.record(
-            "id=\(id.rawValue) must not establish mediated",
+            "id=\(id.rawValue) matching plan must be contained, not mediated",
             sourceLocation: sourceLocation
         )
     }
 }
 
 private func expectPlatformContainedFamily(
-    _ family: IsolationBackendFamily,
+    _ established: EstablishedIsolation,
     id: IsolationConformanceID,
     sourceLocation: SourceLocation = #_sourceLocation
 ) {
     #if os(macOS)
-    switch family {
-    case .seatbelt:
-        break
-    case .none:
+    switch established {
+    case .seatbelt(let session):
+        #expect(session.backend == .seatbelt, sourceLocation: sourceLocation)
+    case .observed:
         Issue.record(
-            "id=\(id.rawValue) Darwin deny/allow-in must be family seatbelt",
+            "id=\(id.rawValue) Darwin deny/allow-in must be seatbelt, not observed",
             sourceLocation: sourceLocation
         )
-    case .landlock:
+    case .mediated:
         Issue.record(
-            "id=\(id.rawValue) Darwin deny/allow-in must be family seatbelt, not landlock",
+            "id=\(id.rawValue) Darwin deny/allow-in must be seatbelt, not mediated",
             sourceLocation: sourceLocation
         )
     }
     #elseif os(Linux)
-    switch family {
-    case .landlock:
-        break
-    case .none:
+    switch established {
+    case .observed, .mediated, .seatbelt:
         Issue.record(
-            "id=\(id.rawValue) Linux deny/allow-in must be family landlock",
-            sourceLocation: sourceLocation
-        )
-    case .seatbelt:
-        Issue.record(
-            "id=\(id.rawValue) Linux deny/allow-in must be family landlock, not seatbelt",
+            "id=\(id.rawValue) Linux contained success must not mint IsolatedRunResult",
             sourceLocation: sourceLocation
         )
     }
@@ -810,13 +803,17 @@ private func expectPlatformContainedFamily(
         "id=\(id.rawValue) first-slice conformance requires Darwin or Linux",
         sourceLocation: sourceLocation
     )
+    switch established {
+    case .observed, .mediated, .seatbelt:
+        break
+    }
     #endif
 }
 
 private func recordMintedContained(id: IsolationConformanceID, established: EstablishedIsolation) {
-    switch established.mode {
-    case .contained:
-        Issue.record("id=\(id.rawValue) fail-closed must not mint EstablishedIsolation.contained")
+    switch established {
+    case .seatbelt:
+        Issue.record("id=\(id.rawValue) fail-closed must not mint seatbelt establishment")
     case .observed:
         Issue.record("id=\(id.rawValue) fail-closed must be Result.failure, got observed")
     case .mediated:
@@ -903,22 +900,17 @@ private func formatProbe(
     effect: String? = nil
 ) -> String {
     let established: String
-    switch run.established.mode {
-    case .contained:
-        established = "contained"
+    let family: String
+    switch run.established {
     case .observed:
         established = "observed"
+        family = "none"
     case .mediated:
         established = "mediated"
-    }
-    let family: String
-    switch run.established.family {
-    case .none:
         family = "none"
     case .seatbelt:
+        established = "seatbelt"
         family = "seatbelt"
-    case .landlock:
-        family = "landlock"
     }
     return formatProbe(
         id: id,

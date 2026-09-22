@@ -12,14 +12,14 @@ import Testing
 ///    `/ws` (resolved), not `/repo`
 /// 3. `compileSeatbeltProfile` on observed (and mediated) → `profileNotApplicable`
 /// 4. `unavailable().prepare(contained)` → `backendUnavailable` (not observed)
-/// 5. `unavailable().prepare(observed)` then `run` → established `.observed`,
-///    family `.none`, no `sandbox-exec` in the argv
-/// 6. `unavailable().prepare(mediated)` then `run` → established `.mediated`,
-///    family `.none`
+/// 5. `unavailable().prepare(observed)` then `run` → established `.observed`
+///    with no session, and no `sandbox-exec` in the argv
+/// 6. `unavailable().prepare(mediated)` then `run` → established `.mediated`
+///    with no session
 /// 7. contained + relative workspace (`"repo"`) → `workspaceMustBeAbsolute`
 /// 8. contained + absolute workspace that does not exist → `workspaceDoesNotExist`
-/// 9. `EstablishedIsolation` factory rejects contained+`.none`, contained+`.landlock`,
-///    and observed+`.seatbelt`
+/// 9. Successful establishment is `.observed`, `.mediated`, or `.seatbelt`.
+///    Landlock is not an `IsolatedRunResult`
 /// 10. apply / prepare / run do not call `AgentAuthorization.decide` (no Domain
 ///     coupling; comment + verification `rg` only)
 /// 11. `platform()` family is `.seatbelt` on Darwin and `.landlock` on Linux
@@ -102,9 +102,8 @@ struct IsolationApplyTests {
     }
 
     @Test func containedLaunchResult_reportsTeardownFailure() throws {
-        let established = try #require(EstablishedIsolation(mode: .observed, family: .none))
         let success = Result<IsolatedRunResult, IsolationApplyError>.success(
-            IsolatedRunResult(established: established, exitStatus: 0)
+            IsolatedRunResult(established: .observed, exitStatus: 0)
         )
         let childFailure = Result<IsolatedRunResult, IsolationApplyError>.failure(.processSpawnFailed)
         let restored = Result<Void, IsolationApplyError>.success(())
@@ -216,11 +215,8 @@ struct IsolationApplyTests {
             }
             switch backend.run(request) {
             case .success(let result):
-                expectEstablished(
-                    result.established,
-                    mode: .observed,
-                    family: .none
-                )
+                #expect(result.established == .observed)
+                #expect(result.session == nil)
                 #expect(result.exitStatus == 0)
             case .failure(let error):
                 recordUnexpectedApplyError(error, expected: "established observed run")
@@ -251,11 +247,8 @@ struct IsolationApplyTests {
             }
             switch backend.run(request) {
             case .success(let result):
-                expectEstablished(
-                    result.established,
-                    mode: .mediated,
-                    family: .none
-                )
+                #expect(result.established == .mediated)
+                #expect(result.session == nil)
                 #expect(result.exitStatus == 0)
             case .failure(let error):
                 recordUnexpectedApplyError(error, expected: "established mediated run")
@@ -324,29 +317,6 @@ struct IsolationApplyTests {
         }
     }
 
-    @Test func establishedIsolation_rejectsContainedNoneAndObservedSeatbelt() throws {
-        let workspace = try requireWorkspace("/workspace")
-        let contained = try requirePlan(
-            IsolationCompileRequest(requested: .contained, workspace: workspace)
-        )
-        switch contained.mode {
-        case .observed:
-            Issue.record("compiled contained plan must not be observed")
-        case .mediated:
-            Issue.record("compiled contained plan must not be mediated")
-        case .contained(let guarantees):
-            #expect(EstablishedIsolation(mode: .contained(guarantees), family: .none) == nil)
-            #expect(EstablishedIsolation(mode: .observed, family: .seatbelt) == nil)
-            #expect(EstablishedIsolation(mode: .mediated, family: .seatbelt) == nil)
-            #expect(EstablishedIsolation(mode: .observed, family: .landlock) == nil)
-            #expect(EstablishedIsolation(mode: .mediated, family: .landlock) == nil)
-            #expect(EstablishedIsolation(mode: .observed, family: .none) != nil)
-            #expect(EstablishedIsolation(mode: .mediated, family: .none) != nil)
-            #expect(EstablishedIsolation(mode: .contained(guarantees), family: .seatbelt) != nil)
-            #expect(EstablishedIsolation(mode: .contained(guarantees), family: .landlock) == nil)
-        }
-    }
-
     @Test func isolationBackendFamily_hasExactlyNoneSeatbeltAndLandlock() {
         let families: [IsolationBackendFamily] = [.none, .seatbelt, .landlock]
         for family in families {
@@ -407,14 +377,16 @@ struct IsolationApplyTests {
         )
         switch IsolationBackends.apply(observed, command: trueCommand) {
         case .success(let result):
-            expectEstablished(result.established, mode: .observed, family: .none)
+            #expect(result.established == .observed)
+            #expect(result.session == nil)
             #expect(result.exitStatus == 0)
         case .failure(let error):
             recordUnexpectedApplyError(error, expected: "apply observed without picking a factory")
         }
         switch IsolationBackends.apply(mediated, command: trueCommand) {
         case .success(let result):
-            expectEstablished(result.established, mode: .mediated, family: .none)
+            #expect(result.established == .mediated)
+            #expect(result.session == nil)
             #expect(result.exitStatus == 0)
         case .failure(let error):
             recordUnexpectedApplyError(error, expected: "apply mediated without picking a factory")
@@ -768,37 +740,6 @@ private func expectProfileNotApplicable(
     }
 }
 
-private func expectEstablished(
-    _ established: EstablishedIsolation,
-    mode: EnforcementMode,
-    family: IsolationBackendFamily,
-    sourceLocation: SourceLocation = #_sourceLocation
-) {
-    #expect(established.mode == mode, sourceLocation: sourceLocation)
-    #expect(established.family == family, sourceLocation: sourceLocation)
-    switch (established.mode, established.family) {
-    case (.contained, .seatbelt), (.observed, .none), (.mediated, .none):
-        break
-    case (.contained, .none):
-        Issue.record("established contained + family none is illegal", sourceLocation: sourceLocation)
-    case (.contained, .landlock):
-        Issue.record(
-            "established contained + family landlock is illegal",
-            sourceLocation: sourceLocation
-        )
-    case (.observed, .seatbelt), (.mediated, .seatbelt):
-        Issue.record(
-            "established observed/mediated + family seatbelt is illegal",
-            sourceLocation: sourceLocation
-        )
-    case (.observed, .landlock), (.mediated, .landlock):
-        Issue.record(
-            "established observed/mediated + family landlock is illegal",
-            sourceLocation: sourceLocation
-        )
-    }
-}
-
 private func recordUnexpectedApplyError(
     _ error: IsolationApplyError,
     expected: String,
@@ -909,33 +850,24 @@ private func probeLine(
     }
     switch result {
     case .success(let run):
+        let established: String
+        let family: String
+        switch run.established {
+        case .observed:
+            established = "observed"
+            family = "none"
+        case .mediated:
+            established = "mediated"
+            family = "none"
+        case .seatbelt:
+            established = "seatbelt"
+            family = "seatbelt"
+        }
         return
-            "requested=\(requestedLabel) established=\(describeMode(run.established.mode)) family=\(describeFamily(run.established.family)) exit=\(run.exitStatus) error=none"
+            "requested=\(requestedLabel) established=\(established) family=\(family) exit=\(run.exitStatus) error=none"
     case .failure(let error):
         return
             "requested=\(requestedLabel) established=none family=none exit=none error=\(describeError(error))"
-    }
-}
-
-private func describeMode(_ mode: EnforcementMode) -> String {
-    switch mode {
-    case .observed:
-        return "observed"
-    case .mediated:
-        return "mediated"
-    case .contained:
-        return "contained"
-    }
-}
-
-private func describeFamily(_ family: IsolationBackendFamily) -> String {
-    switch family {
-    case .none:
-        return "none"
-    case .seatbelt:
-        return "seatbelt"
-    case .landlock:
-        return "landlock"
     }
 }
 

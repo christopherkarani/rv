@@ -64,7 +64,6 @@ func superviseSeatbelt(
         id: RuntimeSessionID(),
         host: host,
         workspace: directory,
-        mode: request.plan.mode,
         backend: .seatbelt,
         startedAt: Date(),
         child: nil
@@ -308,15 +307,11 @@ private func launchSeatbeltChild(
     guard outcome.established, let status = outcome.status else {
         return MountedSeatbeltOutcome(result: .failure(.seatbeltNotEstablished), publish: false)
     }
-    guard let established = EstablishedIsolation(mode: request.plan.mode, family: .seatbelt) else {
-        return MountedSeatbeltOutcome(result: .failure(.backendMismatch), publish: false)
-    }
     return MountedSeatbeltOutcome(
         result: .success(
             IsolatedRunResult(
-                established: established,
-                exitStatus: status,
-                session: started.withChild(pid: pid)
+                established: .seatbelt(started.withChild(pid: pid)),
+                exitStatus: status
             )
         ),
         publish: true

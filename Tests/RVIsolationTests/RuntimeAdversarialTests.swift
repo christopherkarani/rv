@@ -489,8 +489,18 @@ private func runIsolated(
 ) throws -> IsolatedRunResult {
     let command = try #require(IsolatedCommand(executable: executable, arguments: arguments))
     let run = try IsolationBackends.apply(plan, command: command).get()
-    #expect(run.established.mode == plan.mode)
-    #expect(run.established.family != .none)
+    switch run.established {
+    case .seatbelt(let session):
+        #expect(session.backend == .seatbelt)
+        switch plan.mode {
+        case .contained:
+            break
+        case .observed, .mediated:
+            Issue.record("contained run must use a contained plan")
+        }
+    case .observed, .mediated:
+        Issue.record("contained run must establish seatbelt")
+    }
     return run
 }
 
@@ -550,8 +560,12 @@ private func assertProbeCannotSurvive(_ tree: ContainmentTree, executable: Strin
     #expect(!exists(marker))
     switch result {
     case .success(let run):
-        #expect(run.session != nil)
-        #expect(run.established.family == .seatbelt)
+        switch run.established {
+        case .seatbelt(let session):
+            #expect(run.session?.id == session.id)
+        case .observed, .mediated:
+            Issue.record("probe must establish seatbelt")
+        }
     case .failure(let error):
         Issue.record("probe must run under Seatbelt, got \(error)")
     }

@@ -8,10 +8,10 @@ import Testing
 /// 2. Observed plan `containedIsolation()` is `.notContained`; launch is not called
 /// 3. Mediated plan `containedIsolation()` is `.notContained`; launch is not called
 /// 4. `.opencode` + contained + `/usr/bin/true` (or `/bin/true`) → established
-///    `.contained`, platform family, exit 0
+///    `.seatbelt`, exit 0
 /// 5. `.opencode` + contained + absolute `touch` inside `ContainmentTree` →
-///    file exists, contained
-/// 6. `.opencode` + contained + `touch` sibling path → contained established,
+///    file exists, seatbelt
+/// 6. `.opencode` + contained + `touch` sibling path → seatbelt established,
 ///    file absent, exit ≠ 0
 @Suite("HostLaunch")
 struct HostLaunchTests {
@@ -226,41 +226,37 @@ private func expectContainedPlatform(
     matching plan: IsolationPlan,
     sourceLocation: SourceLocation = #_sourceLocation
 ) {
-    #expect(established.mode == plan.mode, sourceLocation: sourceLocation)
-    switch established.mode {
+    switch plan.mode {
     case .contained:
         break
+    case .observed:
+        Issue.record("contained run must match a contained plan, not observed", sourceLocation: sourceLocation)
+    case .mediated:
+        Issue.record("contained run must match a contained plan, not mediated", sourceLocation: sourceLocation)
+    }
+    #if os(macOS)
+    switch established {
+    case .seatbelt(let session):
+        #expect(session.backend == .seatbelt, sourceLocation: sourceLocation)
     case .observed:
         Issue.record("contained run must not establish observed", sourceLocation: sourceLocation)
     case .mediated:
         Issue.record("contained run must not establish mediated", sourceLocation: sourceLocation)
     }
-    #if os(macOS)
-    switch established.family {
-    case .seatbelt:
-        break
-    case .none:
-        Issue.record("Darwin contained establish must be family seatbelt", sourceLocation: sourceLocation)
-    case .landlock:
-        Issue.record(
-            "Darwin contained establish must be family seatbelt, not landlock",
-            sourceLocation: sourceLocation
-        )
-    }
     #elseif os(Linux)
-    switch established.family {
-    case .landlock:
-        break
-    case .none:
-        Issue.record("Linux contained establish must be family landlock", sourceLocation: sourceLocation)
-    case .seatbelt:
+    switch established {
+    case .observed, .mediated, .seatbelt:
         Issue.record(
-            "Linux contained establish must be family landlock, not seatbelt",
+            "Linux contained success must not mint IsolatedRunResult",
             sourceLocation: sourceLocation
         )
     }
     #else
     Issue.record("first-slice host launch requires Darwin or Linux", sourceLocation: sourceLocation)
+    switch established {
+    case .observed, .mediated, .seatbelt:
+        break
+    }
     #endif
 }
 

@@ -182,57 +182,47 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
         }
     }
 
+    /// Observed and mediated unsandboxed launches. Seatbelt success is built
+    /// in `superviseSeatbelt`. Landlock stays a prepared request.
     fileprivate var establishedIsolation: EstablishedIsolation? {
-        EstablishedIsolation(mode: plan.mode, family: family)
-    }
-}
-
-/// What was actually applied after a successful spawn. Factory rejects
-/// contained+none, contained+landlock, and observed or mediated paired with
-/// a sandbox family. A write-class Landlock helper is not this value.
-public struct EstablishedIsolation: Sendable, Equatable {
-    public let mode: EnforcementMode
-    public let family: IsolationBackendFamily
-
-    init?(mode: EnforcementMode, family: IsolationBackendFamily) {
-        switch (mode, family) {
-        case (.contained, .seatbelt),
-            (.observed, .none), (.mediated, .none):
-            self.mode = mode
-            self.family = family
-        case (.contained, .none), (.contained, .landlock),
-            (.observed, .seatbelt), (.mediated, .seatbelt),
-            (.observed, .landlock), (.mediated, .landlock):
+        switch launch {
+        case .unsandboxed:
+            switch plan.mode {
+            case .observed:
+                return .observed
+            case .mediated:
+                return .mediated
+            case .contained:
+                return nil
+            }
+        case .seatbelt, .landlock:
             return nil
         }
     }
 }
 
+/// What a successful run established. Seatbelt carries the runtime session
+/// that reached establishment. Observed and mediated do not. Landlock is not
+/// an establishment.
+public enum EstablishedIsolation: Sendable, Equatable {
+    case observed
+    case mediated
+    case seatbelt(RuntimeSession)
+}
+
 public struct IsolatedRunResult: Sendable, Equatable {
     public let established: EstablishedIsolation
     public let exitStatus: Int32
-    /// Set for a contained Seatbelt run that reached establishment.
-    /// Observed and mediated runs do not carry one. Landlock cannot
-    /// construct `EstablishedIsolation`, so it cannot construct this value.
-    public let session: RuntimeSession?
 
-    init(
-        established: EstablishedIsolation,
-        exitStatus: Int32,
-        session: RuntimeSession? = nil
-    ) {
-        if established.family == .landlock {
-            preconditionFailure("Landlock cannot be reported as established containment")
-        }
-        if established.family == .seatbelt {
-            precondition(
-                session?.backend == .seatbelt,
-                "Seatbelt establishment requires the runtime session that reached it"
-            )
-        }
+    /// The session carried by `.seatbelt`. Observed and mediated runs have none.
+    public var session: RuntimeSession? {
+        if case .seatbelt(let session) = established { return session }
+        return nil
+    }
+
+    init(established: EstablishedIsolation, exitStatus: Int32) {
         self.established = established
         self.exitStatus = exitStatus
-        self.session = session
     }
 }
 
