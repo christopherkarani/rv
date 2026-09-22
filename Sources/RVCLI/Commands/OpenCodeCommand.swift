@@ -1,6 +1,7 @@
 import ArgumentParser
 import Foundation
 import RVDomain
+import RVEngine
 import RVIsolation
 
 enum OpenCodeLaunchError: Error, Sendable, Equatable {
@@ -59,9 +60,14 @@ enum OpenCodeRun {
         case .success(let validated): command = validated
         case .failure(let error): return .failure(.command(error))
         }
-        return launchContainedHost(host: .opencode, command: command, plan: plan)
-            .map(\.exitStatus)
-            .mapError(OpenCodeLaunchError.launch)
+        return launchContainedHost(
+            host: .opencode,
+            command: command,
+            plan: plan,
+            admission: OpenCodeRun.admission
+        )
+        .map(\.exitStatus)
+        .mapError(OpenCodeLaunchError.launch)
     }
 
     private static func resolveExecutable(
@@ -82,6 +88,15 @@ enum OpenCodeRun {
         }
         return .failure(.executableUnavailable)
     }
+
+    /// Shell requests from the contained agent use `AgentAuthorization`, not the hook gate.
+    static var admission: RuntimeAdmissionConfiguration { RuntimeAdmissionConfiguration(
+        normalize: normalizeRuntimeAdmission,
+        executor: .containedCommand,
+        approval: { _ in nil },
+        policy: { _ in .empty },
+        evidence: RuntimeAdmissionEvidence(appendingTo: RuntimeAdmissionEvidence.productionFile())
+    )}
 
     private static func usableExecutable(_ path: String) -> String? {
         var isDirectory: ObjCBool = false

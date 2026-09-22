@@ -306,9 +306,17 @@ public enum IsolationBackends {
     public static func apply(
         _ plan: IsolationPlan,
         command: IsolatedCommand,
-        io: IsolatedIO = .discard
+        io: IsolatedIO = .discard,
+        admission: RuntimeAdmissionConfiguration = .failClosed
     ) -> Result<IsolatedRunResult, IsolationApplyError> {
-        applyLaunch(plan, command: command, io: io, host: nil, sessionStore: .production)
+        applyLaunch(
+            plan,
+            command: command,
+            io: io,
+            host: nil,
+            sessionStore: .production,
+            admission: admission
+        )
     }
 
     static func applyLaunch(
@@ -316,7 +324,8 @@ public enum IsolationBackends {
         command: IsolatedCommand,
         io: IsolatedIO,
         host: HookHost?,
-        sessionStore: RuntimeSessionStore
+        sessionStore: RuntimeSessionStore,
+        admission: RuntimeAdmissionConfiguration = .failClosed
     ) -> Result<IsolatedRunResult, IsolationApplyError> {
         switch plan.mode {
         case .observed, .mediated:
@@ -329,7 +338,12 @@ public enum IsolationBackends {
                 let prepared = request.withIO(io)
                 switch prepared.family {
                 case .seatbelt:
-                    return runSeatbeltLaunch(prepared, host: host, sessionStore: sessionStore)
+                    return runSeatbeltLaunch(
+                        prepared,
+                        host: host,
+                        sessionStore: sessionStore,
+                        admission: admission
+                    )
                 case .landlock:
                     return runLandlock(prepared, executable: nil)
                 case .none:
@@ -414,7 +428,8 @@ func runSeatbelt(
 func runSeatbeltLaunch(
     _ request: IsolatedLaunchRequest,
     host: HookHost?,
-    sessionStore: RuntimeSessionStore
+    sessionStore: RuntimeSessionStore,
+    admission: RuntimeAdmissionConfiguration = .failClosed
 ) -> Result<IsolatedRunResult, IsolationApplyError> {
     guard request.family == .seatbelt else {
         return .failure(.backendMismatch)
@@ -423,7 +438,7 @@ func runSeatbeltLaunch(
     guard FileManager.default.isExecutableFile(atPath: IsolationBackends.sandboxExecPath) else {
         return .failure(.backendUnavailable)
     }
-    return spawn(request, host: host, sessionStore: sessionStore)
+    return spawn(request, host: host, sessionStore: sessionStore, admission: admission)
     #else
     return .failure(.backendUnavailable)
     #endif
@@ -451,11 +466,17 @@ func spawn(
     _ request: IsolatedLaunchRequest,
     executablePath: String? = nil,
     host: HookHost? = nil,
-    sessionStore: RuntimeSessionStore = .production
+    sessionStore: RuntimeSessionStore = .production,
+    admission: RuntimeAdmissionConfiguration = .failClosed
 ) -> Result<IsolatedRunResult, IsolationApplyError> {
     if request.family == .seatbelt {
         #if os(macOS)
-        return superviseSeatbelt(request, host: host, sessionStore: sessionStore)
+        return superviseSeatbelt(
+            request,
+            host: host,
+            sessionStore: sessionStore,
+            admission: admission
+        )
         #else
         return .failure(.backendUnavailable)
         #endif

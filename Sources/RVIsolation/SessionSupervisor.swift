@@ -11,12 +11,15 @@ private let seatbeltHandshakeScript =
 /// then signal the group and wait until it is empty.
 ///
 /// The child receives no descriptor the file actions did not grant.
-/// Those grants are stdin/stdout/stderr for the selected IO mode, and the
-/// handshake write end on fd 3. The wrapper closes fd 3 before exec.
+/// Those grants are stdin/stdout/stderr for the selected IO mode, the
+/// handshake write end on fd 3, and the admission pipes on fds 4 and 5.
+/// The wrapper closes fd 3 before exec. Fds 4 and 5 stay open for the payload.
+/// They are pipes RV created. The profile does not gain a socket or network allow.
 func superviseSeatbelt(
     _ request: IsolatedLaunchRequest,
     host: HookHost?,
-    sessionStore: RuntimeSessionStore
+    sessionStore: RuntimeSessionStore,
+    admission: RuntimeAdmissionConfiguration = .failClosed
 ) -> Result<IsolatedRunResult, IsolationApplyError> {
     guard request.family == .seatbelt, let profile = request.seatbeltProfile else {
         return .failure(.backendMismatch)
@@ -87,7 +90,8 @@ func superviseSeatbelt(
         workspace: workspace,
         profile: profile,
         boundary: boundary,
-        started: started
+        started: started,
+        admission: admission
     )
     let teardown = mounted.publish ? boundary.publishAndRestore() : boundary.discardAndRestore()
     return containedLaunchResult(child: mounted.result, teardown: teardown)
@@ -119,8 +123,17 @@ private func launchSeatbeltChild(
     workspace: String,
     profile: SeatbeltProfile,
     boundary: WorkspaceInodeBoundary,
-    started: RuntimeSession
+    started: RuntimeSession,
+    admission: RuntimeAdmissionConfiguration
 ) -> MountedSeatbeltOutcome {
+
+    var admissionPipes = RuntimeAdmissionPipes()
+    guard admissionPipes.open() else {
+        return MountedSeatbeltOutcome(result: .failure(.processSpawnFailed), publish: false)
+    }
+    defer { admissionPipes.closeRemaining() }
+    var admissionSession: RuntimeAdmissionSession?
+    defer { admissionSession?.finish() }
 
     let nonce = UUID().uuidString.replacingOccurrences(of: "-", with: "")
     var pipeFDs: [Int32] = [-1, -1]
@@ -175,7 +188,7 @@ private func launchSeatbeltChild(
         readEnd: readEnd,
         writeEnd: writeEnd,
         nullFD: &nullFD
-    ) else {
+    ), installAdmissionDescriptors(&actions, pipes: admissionPipes) else {
         return MountedSeatbeltOutcome(result: .failure(.processSpawnFailed), publish: false)
     }
     guard boundary.remainsEstablished() else {
@@ -229,13 +242,25 @@ private func launchSeatbeltChild(
         close(writeEnd)
         writeEnd = -1
     }
+    if admissionPipes.requestWrite >= 0 {
+        close(admissionPipes.requestWrite)
+        admissionPipes.requestWrite = -1
+    }
+    if admissionPipes.responseRead >= 0 {
+        close(admissionPipes.responseRead)
+        admissionPipes.responseRead = -1
+    }
     guard spawnResult == 0, pid > 1 else {
         return MountedSeatbeltOutcome(result: .failure(.processSpawnFailed), publish: false)
     }
     // The wait loop polls this fd. A blocking read would ignore cancellation
     // until the child writes or exits, so a failed flag change cannot continue.
     let flagsNow = fcntl(readEnd, F_GETFL)
-    guard flagsNow >= 0, fcntl(readEnd, F_SETFL, flagsNow | O_NONBLOCK) >= 0 else {
+    let admissionFlags = fcntl(admissionPipes.requestRead, F_GETFL)
+    guard flagsNow >= 0, fcntl(readEnd, F_SETFL, flagsNow | O_NONBLOCK) >= 0,
+        admissionFlags >= 0,
+        fcntl(admissionPipes.requestRead, F_SETFL, admissionFlags | O_NONBLOCK) >= 0
+    else {
         terminateSession(pgid: pid, also: [pid])
         _ = waitUntilSessionIsDead(pgid: pid, also: [pid])
         return MountedSeatbeltOutcome(result: .failure(.lifetimeBoundaryFailed), publish: false)
@@ -251,7 +276,28 @@ private func launchSeatbeltChild(
         }
     }
 
-    let outcome = waitForSeatbeltSession(root: pid, readEnd: readEnd, nonce: nonce)
+    let admitted = RuntimeAdmissionSession(
+        binding: RuntimeChannelBinding(session: started, capability: RuntimeCapability()),
+        configuration: admission,
+        launch: AdmittedLaunchContext(
+            plan: request.plan,
+            profileSource: profile.source,
+            workspacePath: workspace,
+            sessionLeader: pid
+        ),
+        requestRead: admissionPipes.requestRead,
+        responseWrite: admissionPipes.responseWrite
+    )
+    admissionPipes.requestRead = -1
+    admissionPipes.responseWrite = -1
+    admissionSession = admitted
+    admitted.sendGrant()
+    let outcome = waitForSeatbeltSession(
+        root: pid,
+        readEnd: readEnd,
+        nonce: nonce,
+        admission: admitted
+    )
     let dead = waitUntilSessionIsDead(pgid: pid, also: outcome.recordedPIDs.union([pid]))
     guard dead else {
         return MountedSeatbeltOutcome(result: .failure(.lifetimeBoundaryFailed), publish: false)
@@ -287,7 +333,8 @@ private struct SeatbeltWaitOutcome {
 private func waitForSeatbeltSession(
     root: pid_t,
     readEnd: Int32,
-    nonce: String
+    nonce: String,
+    admission: RuntimeAdmissionSession
 ) -> SeatbeltWaitOutcome {
     var outcome = SeatbeltWaitOutcome()
     var handshake = Data()
@@ -296,6 +343,7 @@ private func waitForSeatbeltSession(
     while true {
         if Task.isCancelled {
             outcome.cancelled = true
+            admission.finish()
         }
         if outcome.established == false {
             handshake.append(contentsOf: readAvailable(readEnd, limit: expected.count))
@@ -311,6 +359,7 @@ private func waitForSeatbeltSession(
         }
         let rootGone = waited == root || (waited < 0 && errno == ECHILD && outcome.status != nil)
         if outcome.cancelled || rootGone {
+            admission.finish()
             recorded.formUnion(visibleSessionPIDs(root: root))
             terminateSession(pgid: root, also: recorded)
             if outcome.established == false {
@@ -328,15 +377,19 @@ private func waitForSeatbeltSession(
             outcome.recordedPIDs = recorded
             return outcome
         }
+        if outcome.established {
+            admission.service()
+        }
         usleep(10_000)
     }
 }
 
-/// Grants only stdio and the handshake write end. The handshake is installed
-/// first so a later `/dev/null` dup cannot overwrite a pipe end on 0, 1, or 2
-/// before it is copied to fd 3. `POSIX_SPAWN_CLOEXEC_DEFAULT` closes every
-/// descriptor this function does not grant, including the log and any socket
-/// the parent still holds.
+/// Grants stdio and the handshake write end. Admission fds are added by the
+/// caller after this returns, so a `/dev/null` close cannot drop them.
+/// The handshake is installed first so a later `/dev/null` dup cannot overwrite
+/// a pipe end on 0, 1, or 2 before it is copied to fd 3.
+/// `POSIX_SPAWN_CLOEXEC_DEFAULT` closes every descriptor these file actions
+/// do not grant, including the log and any socket the parent still holds.
 private func installGrantedDescriptorActions(
     _ actions: inout posix_spawn_file_actions_t?,
     io: IsolatedIO,

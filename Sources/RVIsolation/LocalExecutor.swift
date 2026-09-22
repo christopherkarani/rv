@@ -52,23 +52,15 @@ public actor LocalExecutor {
         plan: IsolationPlan,
         approval: Result<ApprovalDecision, AgentApprovalError>? = nil
     ) -> Result<AgentTurn, AgentTurnError> {
-        switch authorization {
-        case .allowed(let allowed):
+        switch AgentAuthorization.step(authorization, approval: approval) {
+        case .execute(let allowed):
             return compileAndRun(allowed: allowed, plan: plan)
         case .denied(let denied):
             return .success(.denied(denied))
-        case .pending(let pending):
-            guard let approval else {
-                return .success(.awaitingApproval(pending))
-            }
-            switch AgentAuthorization.resolve(pending, approval: approval) {
-            case .failure(let error):
-                return .failure(.approval(error))
-            case .success(.denied(let denied)):
-                return .success(.denied(denied))
-            case .success(.allowed(let allowed)):
-                return compileAndRun(allowed: allowed, plan: plan)
-            }
+        case .awaitingApproval(let pending):
+            return .success(.awaitingApproval(pending))
+        case .approvalFailed(let error):
+            return .failure(.approval(error))
         }
     }
 

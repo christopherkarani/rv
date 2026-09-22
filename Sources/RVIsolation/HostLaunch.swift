@@ -10,7 +10,8 @@ public enum HostLaunchError: Error, Sendable, Equatable {
 public func launchContainedHost(
     host: HookHost,
     command: IsolatedCommand,
-    plan: IsolationPlan
+    plan: IsolationPlan,
+    admission: RuntimeAdmissionConfiguration = .failClosed
 ) -> Result<IsolatedRunResult, HostLaunchError> {
     switch host {
     case .opencode:
@@ -27,7 +28,8 @@ public func launchContainedHost(
             command: command,
             io: .inherit,
             host: host,
-            sessionStore: .production
+            sessionStore: .production,
+            admission: admission
         ) {
         case .success(let result):
             return .success(result)
