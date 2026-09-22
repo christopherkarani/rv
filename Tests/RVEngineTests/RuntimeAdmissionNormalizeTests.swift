@@ -11,7 +11,7 @@ struct RuntimeAdmissionNormalizeTests {
         defer { try? FileManager.default.removeItem(at: workspaceURL) }
         try FileManager.default.createDirectory(at: workspaceURL, withIntermediateDirectories: true)
         let workspace = try #require(WorkingDirectory(validating: workspaceURL.path))
-        let subject = try admissionSubject(workspace)
+        let subject = admissionSubject(workspace)
 
         let inside = try normalizeRuntimeAdmission(
             subject: subject,
@@ -37,7 +37,7 @@ struct RuntimeAdmissionNormalizeTests {
     @Test func uncoveredCommandStaysPending() throws {
         let workspace = try #require(WorkingDirectory(validating: "/tmp/rv-admission-norm"))
         let proposal = try normalizeRuntimeAdmission(
-            subject: try admissionSubject(workspace),
+            subject: admissionSubject(workspace),
             command: ShellCommand(rawValue: "echo hello")
         ).get()
         guard case .pending(let pending) = AgentAuthorization.decide(action: proposal, policy: .empty) else {
@@ -50,22 +50,18 @@ struct RuntimeAdmissionNormalizeTests {
     @Test func unwrapLimitedCommandProducesNoProposal() throws {
         let workspace = try #require(WorkingDirectory(validating: "/tmp/rv-admission-norm"))
         let proposal = normalizeRuntimeAdmission(
-            subject: try admissionSubject(workspace),
+            subject: admissionSubject(workspace),
             command: ShellCommand(rawValue: #"python3 -c "$CMD""#)
         )
         #expect(proposal == .failure(.failed))
     }
 }
 
-private func admissionSubject(_ workspace: WorkingDirectory) throws -> RuntimeAdmissionSubject {
-    let plan = try compileIsolationPlan(
-        IsolationCompileRequest(requested: .contained, workspace: workspace)
-    ).get()
+private func admissionSubject(_ workspace: WorkingDirectory) -> RuntimeAdmissionSubject {
     let session = RuntimeSession(
         id: RuntimeSessionID(),
         host: .opencode,
         workspace: workspace,
-        mode: plan.mode,
         backend: .seatbelt,
         startedAt: Date(timeIntervalSince1970: 0),
         child: nil

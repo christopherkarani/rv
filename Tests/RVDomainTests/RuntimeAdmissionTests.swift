@@ -226,7 +226,6 @@ private struct AdmissionFixture {
             id: RuntimeSessionID(),
             host: .opencode,
             workspace: workspace,
-            mode: .contained(IsolationGuarantees.firstSliceContained(workspace: workspace)),
             backend: .seatbelt,
             startedAt: Date(timeIntervalSince1970: 0),
             child: nil

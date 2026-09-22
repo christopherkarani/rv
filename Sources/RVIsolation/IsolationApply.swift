@@ -221,6 +221,12 @@ public struct IsolatedRunResult: Sendable, Equatable {
     }
 
     init(established: EstablishedIsolation, exitStatus: Int32) {
+        if case .seatbelt(let session) = established {
+            precondition(
+                session.backend == .seatbelt,
+                "Seatbelt establishment requires a seatbelt runtime session"
+            )
+        }
         self.established = established
         self.exitStatus = exitStatus
     }
