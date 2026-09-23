@@ -15,16 +15,16 @@ import Testing
 ///    file absent, exit ≠ 0
 @Suite("HostLaunch")
 struct HostLaunchTests {
-    @Test func launch_nonOpenCode_fails() throws {
+    @Test func launch_nonOpenCode_fails() async throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
         let command = try requireTrueCommand()
         let plan = try tree.containedPlan()
         expectHostUnsupported(
-            launchContainedHost(host: .pi, command: command, plan: plan)
+            await launchContainedHostOffPool(host: .pi, command: command, plan: plan)
         )
         expectHostUnsupported(
-            launchContainedHost(host: .claude, command: command, plan: plan)
+            await launchContainedHostOffPool(host: .claude, command: command, plan: plan)
         )
     }
 
@@ -44,12 +44,12 @@ struct HostLaunchTests {
         #expect(mediated.containedIsolation() == .failure(.notContained))
     }
 
-    @Test func launch_containedTrue_establishes() throws {
+    @Test func launch_containedTrue_establishes() async throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
         let command = try requireTrueCommand()
         let plan = try tree.containedPlan()
-        switch launchContainedHost(host: .opencode, command: command, plan: plan) {
+        switch await launchContainedHostOffPool(host: .opencode, command: command, plan: plan) {
         case .success(let run):
             #if os(Linux)
             Issue.record("Linux contained launch must be refused, got exit \(run.exitStatus)")
@@ -67,13 +67,13 @@ struct HostLaunchTests {
         }
     }
 
-    @Test func launch_containedInWorkspaceTouch_succeeds() throws {
+    @Test func launch_containedInWorkspaceTouch_succeeds() async throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
         let inside = tree.workspaceURL.appendingPathComponent("inside.txt").path
         let command = try requireTouchCommand(arguments: [inside])
         let plan = try tree.containedPlan()
-        switch launchContainedHost(host: .opencode, command: command, plan: plan) {
+        switch await launchContainedHostOffPool(host: .opencode, command: command, plan: plan) {
         case .success(let run):
             #if os(Linux)
             Issue.record("Linux contained launch must be refused, got exit \(run.exitStatus)")
@@ -93,14 +93,14 @@ struct HostLaunchTests {
         }
     }
 
-    @Test func launch_containedOutsideTouch_deniedByKernel() throws {
+    @Test func launch_containedOutsideTouch_deniedByKernel() async throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
         let outside = tree.siblingURL.appendingPathComponent("outside.txt").path
         #expect(FileManager.default.fileExists(atPath: outside) == false)
         let command = try requireTouchCommand(arguments: [outside])
         let plan = try tree.containedPlan()
-        switch launchContainedHost(host: .opencode, command: command, plan: plan) {
+        switch await launchContainedHostOffPool(host: .opencode, command: command, plan: plan) {
         case .success(let run):
             #if os(Linux)
             Issue.record("Linux contained launch must be refused, got exit \(run.exitStatus)")
@@ -123,19 +123,25 @@ struct HostLaunchTests {
         }
     }
 
-    @Test func launch_containedSessionsAreDistinctFromHookSessionID() throws {
+    @Test func launch_containedSessionsAreDistinctFromHookSessionID() async throws {
         #if os(macOS)
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
         let command = try requireTrueCommand()
         let plan = try tree.containedPlan()
         let hook = try #require(SessionID(validating: "hook-session-must-not-be-runtime-id"))
-        let first = try #require(
-            launchContainedHost(host: .opencode, command: command, plan: plan).get().session
-        )
-        let second = try #require(
-            launchContainedHost(host: .opencode, command: command, plan: plan).get().session
-        )
+        let firstSession = try await launchContainedHostOffPool(
+            host: .opencode,
+            command: command,
+            plan: plan
+        ).get().session
+        let secondSession = try await launchContainedHostOffPool(
+            host: .opencode,
+            command: command,
+            plan: plan
+        ).get().session
+        let first = try #require(firstSession)
+        let second = try #require(secondSession)
         #expect(first.id != second.id)
         #expect(first.id.rawValue.uuidString != hook.rawValue)
         #expect(second.id.rawValue.uuidString != hook.rawValue)
@@ -146,13 +152,13 @@ struct HostLaunchTests {
         #endif
     }
 
-    @Test func launch_persistsSessionBeforeExecution() throws {
+    @Test func launch_persistsSessionBeforeExecution() async throws {
         #if os(macOS)
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
         let log = tree.rootURL.appendingPathComponent("sessions.jsonl")
         let command = try requireTrueCommand()
-        let run = try IsolationBackends.applyLaunch(
+        let run = try await IsolationBackends.applyLaunchOffPool(
             tree.contained,
             command: command,
             io: .discard,

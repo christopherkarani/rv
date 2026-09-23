@@ -9,7 +9,7 @@ import Testing
 /// A tool that exits before the operation is not a denial.
 @Suite("SeatbeltCapability", .serialized)
 struct SeatbeltCapabilityTests {
-    @Test func containedProcessCannotConnectOrResolve() throws {
+    @Test func containedProcessCannotConnectOrResolve() async throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
         let binary = try compileConnectClient(in: tree.workspaceURL)
@@ -50,7 +50,7 @@ struct SeatbeltCapabilityTests {
                 ]
             )
         )
-        let sandboxed = try IsolationBackends.apply(tree.contained, command: command).get()
+        let sandboxed = try await IsolationBackends.applyOffPool(tree.contained, command: command).get()
         let captured = try String(contentsOf: netOut, encoding: .utf8)
         #expect(sandboxed.exitStatus == 0)
         #expect(captured.contains("tcp4 errno=1"))
@@ -74,7 +74,7 @@ struct SeatbeltCapabilityTests {
                 ]
             )
         )
-        _ = try IsolationBackends.apply(tree.contained, command: child).get()
+        _ = try await IsolationBackends.applyOffPool(tree.contained, command: child).get()
         let childOut = try String(
             contentsOf: tree.workspaceURL.appendingPathComponent("child.out"),
             encoding: .utf8
@@ -83,7 +83,7 @@ struct SeatbeltCapabilityTests {
         #expect(tcp4.received == nil)
     }
 
-    @Test func containedProcessCannotReadSiblingFile() throws {
+    @Test func containedProcessCannotReadSiblingFile() async throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
         let secret = tree.siblingURL.appendingPathComponent("secret.txt")
@@ -95,7 +95,7 @@ struct SeatbeltCapabilityTests {
                 arguments: ["-c", "/bin/cat \(quote(secret.path)) > \(quote(copy.path))"]
             )
         )
-        let run = try IsolationBackends.apply(tree.contained, command: command).get()
+        let run = try await IsolationBackends.applyOffPool(tree.contained, command: command).get()
         #expect(run.exitStatus != 0)
         let copied = (try? String(contentsOf: copy, encoding: .utf8)) ?? ""
         #expect(copied.contains("synthetic-secret") == false)

@@ -391,6 +391,55 @@ public enum IsolationBackends {
             }
         }
     }
+
+    /// Same door as `apply`, off the cooperative pool.
+    public static func applyOffPool(
+        _ plan: IsolationPlan,
+        command: IsolatedCommand,
+        io: IsolatedIO = .discard,
+        admission: RuntimeAdmissionConfiguration = .failClosed
+    ) async -> Result<IsolatedRunResult, IsolationApplyError> {
+        await IsolationBlockingWork.perform {
+            apply(plan, command: command, io: io, admission: admission)
+        }
+    }
+
+    static func applyLaunchOffPool(
+        _ plan: IsolationPlan,
+        command: IsolatedCommand,
+        io: IsolatedIO,
+        host: HookHost?,
+        sessionStore: RuntimeSessionStore,
+        admission: RuntimeAdmissionConfiguration = .failClosed
+    ) async -> Result<IsolatedRunResult, IsolationApplyError> {
+        await IsolationBlockingWork.perform {
+            applyLaunch(
+                plan,
+                command: command,
+                io: io,
+                host: host,
+                sessionStore: sessionStore,
+                admission: admission
+            )
+        }
+    }
+}
+
+extension IsolationBackend {
+    /// Same as `apply`, off the cooperative pool.
+    func applyOffPool(
+        _ plan: IsolationPlan,
+        command: IsolatedCommand,
+        io: IsolatedIO = .discard
+    ) async -> Result<IsolatedRunResult, IsolationApplyError> {
+        let prepare = self.prepare
+        let run = self.run
+        return await IsolationBlockingWork.perform {
+            prepare(plan, command).flatMap { request in
+                run(request.withIO(io))
+            }
+        }
+    }
 }
 
 func prepareSeatbelt(
@@ -481,6 +530,22 @@ func runSeatbeltLaunch(
     #else
     return .failure(.backendUnavailable)
     #endif
+}
+
+func runSeatbeltLaunchOffPool(
+    _ request: IsolatedLaunchRequest,
+    host: HookHost?,
+    sessionStore: RuntimeSessionStore,
+    admission: RuntimeAdmissionConfiguration = .failClosed
+) async -> Result<IsolatedRunResult, IsolationApplyError> {
+    await IsolationBlockingWork.perform {
+        runSeatbeltLaunch(
+            request,
+            host: host,
+            sessionStore: sessionStore,
+            admission: admission
+        )
+    }
 }
 
 func runUnavailable(

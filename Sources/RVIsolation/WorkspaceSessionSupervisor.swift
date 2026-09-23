@@ -328,6 +328,7 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
         let children = state.withLock { Array($0.children.values) }
         for child in children {
             child.stop.request()
+            _ = stopOwnedSession(leader: child.live.pid, reap: false)
         }
         let deadline = Date().addingTimeInterval(5)
         while Date() < deadline, children.contains(where: { $0.watchFinished == false }) {
@@ -474,6 +475,7 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
         }
         guard let child else { return .failure(.unknownRuntime(runtime)) }
         child.stop.request()
+        _ = stopOwnedSession(leader: child.live.pid, reap: false)
         guard waitForChildren([child], seconds: 45) else {
             return .failure(.childTeardownFailed)
         }
@@ -656,6 +658,7 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
         while Date() < deadline {
             if blockingWorkIsCancelled() {
                 child.stop.request()
+                _ = stopOwnedSession(leader: child.live.pid, reap: false)
             }
             if child.live.isEstablished {
                 return .success(
@@ -673,6 +676,7 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
             usleep(10_000)
         }
         child.stop.request()
+        _ = stopOwnedSession(leader: child.live.pid, reap: false)
         _ = waitForChildren([child], seconds: 45)
         return .failure(.apply(child.live.terminalError ?? .seatbeltNotEstablished))
     }
@@ -727,6 +731,7 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
         let children = state.withLock { Array($0.children.values) }
         for child in children {
             child.stop.request()
+            _ = stopOwnedSession(leader: child.live.pid, reap: false)
         }
         guard waitForChildren(children, seconds: 45) else {
             return .failure(.childTeardownFailed)
@@ -876,7 +881,7 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
     func subscribeTerminal(
         runtime: UUID,
         client: UUID,
-        emit: @escaping @Sendable (TerminalNotice) -> Void
+        emit: @escaping @Sendable (TerminalNotice) -> Bool
     ) -> Result<Void, WorkspaceControlCode> {
         guard let terminal = terminal(runtime) else {
             return .failure(terminalMissing(runtime))
@@ -957,6 +962,7 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
         case .busy: .terminalBusy
         case .limit: .terminalLimit
         case .invalid: .invalidRequest
+        case .prefixCommitted: .terminalPrefixCommitted
         }
     }
 

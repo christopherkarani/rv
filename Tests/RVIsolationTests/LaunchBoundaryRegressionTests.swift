@@ -12,7 +12,7 @@ struct LaunchBoundaryRegressionTests {
         #expect(IsolatedCommand.make(executable: "/bin/true\0ignored") == .failure(.commandContainsNUL))
     }
 
-    @Test func containedEnvironmentContainsOnlyDeliberateValues() throws {
+    @Test func containedEnvironmentContainsOnlyDeliberateValues() async throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
         let output = tree.workspaceURL.appendingPathComponent("environment")
@@ -20,7 +20,7 @@ struct LaunchBoundaryRegressionTests {
             executable: "/bin/sh", arguments: ["-c", "/usr/bin/env > environment"]
         ))
         #if os(Linux)
-        switch IsolationBackends.apply(tree.contained, command: command) {
+        switch await IsolationBackends.applyOffPool(tree.contained, command: command) {
         case .failure(let error):
             #expect(error == .containedGuaranteesUnsupported)
         case .success(let run):
@@ -29,7 +29,7 @@ struct LaunchBoundaryRegressionTests {
         #expect(FileManager.default.fileExists(atPath: output.path) == false)
         return
         #endif
-        let run = try IsolationBackends.apply(tree.contained, command: command).get()
+        let run = try await IsolationBackends.applyOffPool(tree.contained, command: command).get()
         #expect(run.exitStatus == 0)
         let lines = try String(contentsOf: output, encoding: .utf8).split(separator: "\n")
         var values: [String: String] = [:]
@@ -76,7 +76,7 @@ struct LaunchBoundaryRegressionTests {
     }
 
     @Test(arguments: ["quote\"name", "slash\\name", "close\") (allow default) ;", "tab\tname", "carriage\rname"])
-    func seatbeltPathEncodingCannotBroadenWriteScope(_ name: String) throws {
+    func seatbeltPathEncodingCannotBroadenWriteScope(_ name: String) async throws {
         #if os(macOS)
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
@@ -89,7 +89,7 @@ struct LaunchBoundaryRegressionTests {
         let command = try #require(IsolatedCommand(executable: "/bin/sh", arguments: [
             "-c", "printf yes > \"$1\"; printf escaped > \"$2\"", "probe", inside, outside,
         ]))
-        let run = try IsolationBackends.apply(plan, command: command).get()
+        let run = try await IsolationBackends.applyOffPool(plan, command: command).get()
         #expect(run.exitStatus != 0)
         #expect(FileManager.default.fileExists(atPath: inside))
         #expect(!FileManager.default.fileExists(atPath: outside))
@@ -196,7 +196,7 @@ struct LaunchBoundaryRegressionTests {
         let command = try #require(IsolatedCommand(executable: "/bin/sh", arguments: [
             "-c", "printf ran > must-not-run",
         ]))
-        let result = IsolationBackends.applyLaunch(
+        let result = await IsolationBackends.applyLaunchOffPool(
             tree.contained,
             command: command,
             io: .discard,
@@ -223,7 +223,7 @@ struct LaunchBoundaryRegressionTests {
         let command = try #require(IsolatedCommand(executable: "/bin/sh", arguments: [
             "-c", "printf ran > must-not-run",
         ]))
-        let result = IsolationBackends.applyLaunch(
+        let result = await IsolationBackends.applyLaunchOffPool(
             tree.contained,
             command: command,
             io: .discard,
@@ -256,7 +256,7 @@ struct LaunchBoundaryRegressionTests {
             launch: .seatbelt(SeatbeltProfile(source: "(invalid-profile", workspacePath: workspace))
         ))
         let log = tree.rootURL.appendingPathComponent("sessions.jsonl")
-        let result = runSeatbeltLaunch(request, host: nil, sessionStore: .file(log))
+        let result = await runSeatbeltLaunchOffPool(request, host: nil, sessionStore: .file(log))
         #expect(!FileManager.default.fileExists(atPath: marker.path))
         switch result {
         case .failure(.seatbeltNotEstablished):

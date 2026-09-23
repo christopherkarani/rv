@@ -395,6 +395,14 @@ final class WorkspaceInodeBoundary {
     }
 
     private func detachVolume() {
+        if blockingWorkIsCancelled() {
+            _ = runTool(
+                ["/usr/bin/hdiutil", "detach", "-force", "-quiet", disk],
+                honorCancellation: true,
+                deadline: 1
+            )
+            return
+        }
         for _ in 0..<8 {
             let result = runTool(
                 ["/usr/bin/hdiutil", "detach", "-force", "-quiet", disk],
@@ -1325,7 +1333,21 @@ private func runTool(
         }
         usleep(10_000)
     }
-    process.waitUntilExit()
+    if interrupted {
+        let reapDeadline = Date().addingTimeInterval(0.25)
+        while process.isRunning, Date() < reapDeadline {
+            stdout.append(readToolPipe(outFD))
+            stderr.append(readToolPipe(errFD))
+            usleep(10_000)
+        }
+        if process.isRunning {
+            UnreapedToolProcesses.park(process)
+        } else {
+            process.waitUntilExit()
+        }
+    } else {
+        process.waitUntilExit()
+    }
     stdout.append(readToolPipe(outFD))
     stderr.append(readToolPipe(errFD))
     try? output.fileHandleForReading.close()
@@ -1364,6 +1386,20 @@ private func readToolPipe(_ fd: Int32) -> Data {
         }
         if count < 0, errno == EINTR { continue }
         return bytes
+    }
+}
+
+/// Foundation `Process.deinit` calls `waitUntilExit`. A helper stuck in
+/// disk I/O after SIGKILL must stay referenced so that deinit cannot block
+/// the caller.
+private enum UnreapedToolProcesses {
+    private static let lock = NSLock()
+    private static var processes: [Process] = []
+
+    static func park(_ process: Process) {
+        lock.lock()
+        processes.append(process)
+        lock.unlock()
     }
 }
 #endif

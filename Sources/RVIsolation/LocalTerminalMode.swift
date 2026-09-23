@@ -21,8 +21,11 @@ public final class LocalTerminalRestorer: @unchecked Sendable {
     }
 
     /// Puts `fd` in raw mode when it is a terminal. Returns nil otherwise.
+    /// A second engage while the signal handler is live returns nil and does
+    /// not replace the termios that handler will restore.
     public static func engage(_ fd: Int32, signals: Bool = true) -> LocalTerminalRestorer? {
         guard isatty(fd) == 1 else { return nil }
+        if signals, LocalTerminalSignal.isArmed { return nil }
         var original = termios()
         guard tcgetattr(fd, &original) == 0 else { return nil }
         var raw = original
@@ -50,7 +53,7 @@ public final class LocalTerminalRestorer: @unchecked Sendable {
 
     public func restore() {
         guard active else { return }
-        applySavedTermios(saved, fd: fd)
+        guard applySavedTermios(saved, fd: fd) else { return }
         active = false
         if installSignals {
             LocalTerminalSignal.disarm(fd: fd)
@@ -67,22 +70,22 @@ public final class LocalTerminalRestorer: @unchecked Sendable {
     }
 }
 
-/// Writes `saved` back, then clears `PENDIN` when the kernel set it.
-///
-/// Leaving raw mode for the saved canonical mode makes `tcgetattr` report
-/// `PENDIN` (`0x20000000`) even though that bit was not in the saved flags.
-/// It is a one-shot retype state, not part of the mode. A second
-/// `tcsetattr` of the already-canonical attributes drops it, so a later
-/// `tcgetattr` matches the mode `engage` captured.
-private func applySavedTermios(_ saved: termios, fd: Int32) {
+/// Writes `saved` twice. The second `tcsetattr` drops `PENDIN`
+/// (`0x20000000`), which the kernel sets when leaving raw mode. Both writes
+/// are the already-copied attributes. There is no `tcgetattr`, so the signal
+/// handler can use the same sequence.
+private func applySavedTermios(_ saved: termios, fd: Int32) -> Bool {
     var copy = saved
-    guard tcsetattr(fd, TCSANOW, &copy) == 0 else { return }
-    var applied = termios()
-    guard tcgetattr(fd, &applied) == 0 else { return }
-    let pending = tcflag_t(PENDIN)
-    guard (applied.c_lflag & pending) != 0, (saved.c_lflag & pending) == 0 else { return }
-    applied.c_lflag &= ~pending
-    _ = tcsetattr(fd, TCSANOW, &applied)
+    guard writeTermios(fd, &copy) else { return false }
+    var again = saved
+    return writeTermios(fd, &again)
+}
+
+private func writeTermios(_ fd: Int32, _ term: inout termios) -> Bool {
+    while true {
+        if tcsetattr(fd, TCSANOW, &term) == 0 { return true }
+        if errno != EINTR { return false }
+    }
 }
 
 public struct LocalTerminalWindow: Sendable, Equatable {
@@ -103,16 +106,23 @@ public struct LocalTerminalWindow: Sendable, Equatable {
 private enum LocalTerminalSignal {
     nonisolated(unsafe) static var saved = termios()
     nonisolated(unsafe) static var fd: Int32 = -1
-    nonisolated(unsafe) static var armed: Int32 = 0
+    nonisolated(unsafe) static var armed: sig_atomic_t = 0
+    nonisolated(unsafe) static var previousINT = sigaction()
+    nonisolated(unsafe) static var previousTERM = sigaction()
+    nonisolated(unsafe) static var previousHUP = sigaction()
+    nonisolated(unsafe) static var previousQUIT = sigaction()
+
+    static var isArmed: Bool { armed != 0 }
 
     static func arm(fd: Int32, saved: termios) {
+        if armed != 0 { return }
         self.fd = fd
         self.saved = saved
         armed = 1
-        install(SIGINT)
-        install(SIGTERM)
-        install(SIGHUP)
-        install(SIGQUIT)
+        previousINT = install(SIGINT)
+        previousTERM = install(SIGTERM)
+        previousHUP = install(SIGHUP)
+        previousQUIT = install(SIGQUIT)
         // Swift blocks these on the threads it creates. Leave them unblocked
         // on the thread that armed the handler so the signal can be delivered.
         var set = sigset_t()
@@ -128,18 +138,17 @@ private enum LocalTerminalSignal {
         guard self.fd == fd else { return }
         armed = 0
         self.fd = -1
-        signal(SIGINT, SIG_DFL)
-        signal(SIGTERM, SIG_DFL)
-        signal(SIGHUP, SIG_DFL)
-        signal(SIGQUIT, SIG_DFL)
-        signal(SIGINT, SIG_DFL)
+        restoreAction(SIGINT, previousINT)
+        restoreAction(SIGTERM, previousTERM)
+        restoreAction(SIGHUP, previousHUP)
+        restoreAction(SIGQUIT, previousQUIT)
     }
 
-    /// Same termios restore the signal handler runs before it exits.
+    /// Restores the saved mode without exiting. The signal handler does not
+    /// call this: it only `tcsetattr`s the copied termios.
     static func restoreArmedTerminal() {
         guard armed != 0 else { return }
-        applySavedTermios(saved, fd: fd)
-        armed = 0
+        _ = applySavedTermios(saved, fd: fd)
     }
 
     /// The stdin reader blocks in `read`. A handler that calls `tcsetattr` on
@@ -155,16 +164,29 @@ private enum LocalTerminalSignal {
         pthread_sigmask(SIG_BLOCK, &set, nil)
     }
 
-    private static func install(_ number: Int32) {
+    private static func install(_ number: Int32) -> sigaction {
         var action = sigaction()
+        var previous = sigaction()
         action.__sigaction_u.__sa_handler = handle
         sigemptyset(&action.sa_mask)
         action.sa_flags = 0
-        sigaction(number, &action, nil)
+        sigaction(number, &action, &previous)
+        return previous
     }
 
+    private static func restoreAction(_ number: Int32, _ previous: sigaction) {
+        var copy = previous
+        sigaction(number, &copy, nil)
+    }
+
+    /// Only `tcsetattr` of the termios copied at `arm`. No `tcgetattr`.
     private static let handle: @convention(c) (Int32) -> Void = { _ in
-        restoreArmedTerminal()
+        if armed != 0, fd >= 0 {
+            var copy = saved
+            while tcsetattr(fd, TCSANOW, &copy) != 0 && errno == EINTR {}
+            var again = saved
+            while tcsetattr(fd, TCSANOW, &again) != 0 && errno == EINTR {}
+        }
         _exit(1)
     }
 }
@@ -186,6 +208,11 @@ public enum WorkspaceTerminalDriver {
         output: FileHandle,
         restorer: LocalTerminalRestorer?
     ) throws {
+        let previousPipe = ignoreSIGPIPE()
+        defer {
+            restorer?.restore()
+            restoreSIGPIPE(previousPipe)
+        }
         let bridge = TerminalStdinBridge(client: client, runtime: runtime, input: input)
         bridge.start()
         var currentRows = rows
@@ -214,7 +241,9 @@ public enum WorkspaceTerminalDriver {
                 guard event.runtime == runtime else { continue }
                 switch event.body {
                 case .replay(_, let bytes), .output(_, let bytes):
-                    output.write(bytes)
+                    guard writeOutput(output.fileDescriptor, bytes) else {
+                        throw WorkspaceTerminalDriveError.client(.disconnected)
+                    }
                 case .exited(let status):
                     restorer?.restore()
                     _ = client.detach()
@@ -229,6 +258,32 @@ public enum WorkspaceTerminalDriver {
             }
         }
     }
+
+    private static func writeOutput(_ fd: Int32, _ bytes: Data) -> Bool {
+        let raw = [UInt8](bytes)
+        var offset = 0
+        while offset < raw.count {
+            let count = raw.withUnsafeBytes { buffer -> Int in
+                guard let base = buffer.baseAddress else { return -1 }
+                return Darwin.write(fd, base.advanced(by: offset), raw.count - offset)
+            }
+            if count > 0 {
+                offset += count
+                continue
+            }
+            if count < 0, errno == EINTR { continue }
+            return false
+        }
+        return true
+    }
+}
+
+private func ignoreSIGPIPE() -> sig_t {
+    signal(SIGPIPE, SIG_IGN)
+}
+
+private func restoreSIGPIPE(_ previous: sig_t) {
+    _ = signal(SIGPIPE, previous)
 }
 
 private final class TerminalStdinBridge: @unchecked Sendable {

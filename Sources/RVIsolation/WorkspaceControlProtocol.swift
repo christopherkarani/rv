@@ -35,6 +35,7 @@ public enum WorkspaceControlCode: String, Error, Sendable, Equatable, Codable {
     case terminalUnavailable
     case terminalBusy
     case terminalLimit
+    case terminalPrefixCommitted
 }
 
 public enum WorkspaceControlOp: String, Sendable, Equatable {

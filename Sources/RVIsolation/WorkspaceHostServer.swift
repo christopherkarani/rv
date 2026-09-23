@@ -595,7 +595,7 @@ final class WorkspaceHostServer: @unchecked Sendable {
         }
         let client = connection.id
         switch supervisor.subscribeTerminal(runtime: runtime, client: client, emit: { notice in
-            _ = connection.send(workspaceTerminalMessage(notice, runtime: runtime))
+            connection.send(workspaceTerminalMessage(notice, runtime: runtime))
         }) {
         case .failure(let code):
             return Reply(message: failure(message, code))

@@ -162,12 +162,12 @@ struct RuntimeAdmissionIsolationTests {
     }
 
     #if os(Linux)
-    @Test func containedLaunchStaysUnsupported() throws {
+    @Test func containedLaunchStaysUnsupported() async throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
         let marker = tree.workspaceURL.appendingPathComponent("must-not-run")
         let command = try #require(IsolatedCommand(executable: "/bin/touch", arguments: ["must-not-run"]))
-        switch IsolationBackends.apply(tree.contained, command: command) {
+        switch await IsolationBackends.applyOffPool(tree.contained, command: command) {
         case .failure(.containedGuaranteesUnsupported):
             break
         case .failure(let error):
@@ -180,7 +180,7 @@ struct RuntimeAdmissionIsolationTests {
     #endif
 
     #if os(macOS)
-    @Test func containedClientUsesTheGrantedPipes() throws {
+    @Test func containedClientUsesTheGrantedPipes() async throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
         let client = try compileAdmissionClient(in: tree.workspaceURL)
@@ -208,7 +208,7 @@ struct RuntimeAdmissionIsolationTests {
             IsolatedCommand(executable: client.path, arguments: [reply.path])
         )
         let log = tree.rootURL.appendingPathComponent("sessions.jsonl")
-        let result = IsolationBackends.applyLaunch(
+        let result = await IsolationBackends.applyLaunchOffPool(
             tree.contained,
             command: command,
             io: .discard,
@@ -240,7 +240,7 @@ struct RuntimeAdmissionIsolationTests {
         #expect(rejected.allSatisfy { $0.executionAttempted == false })
     }
 
-    @Test func ptyRuntimeStillAdmitsShellCommands() throws {
+    @Test func ptyRuntimeStillAdmitsShellCommands() async throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
         let client = try compileAdmissionClient(in: tree.workspaceURL)
@@ -268,7 +268,7 @@ struct RuntimeAdmissionIsolationTests {
             IsolatedCommand(executable: client.path, arguments: [reply.path])
         )
         let log = tree.rootURL.appendingPathComponent("pty-sessions.jsonl")
-        let result = IsolationBackends.applyLaunch(
+        let result = await IsolationBackends.applyLaunchOffPool(
             tree.contained,
             command: command,
             io: .pseudoTerminal(rows: 24, columns: 80),
@@ -290,7 +290,7 @@ struct RuntimeAdmissionIsolationTests {
         #expect(FileManager.default.fileExists(atPath: "/tmp/rv-pty-deny-marker") == false)
     }
 
-    @Test func admittedCommandStopsWhenContainedProcessExits() throws {
+    @Test func admittedCommandStopsWhenContainedProcessExits() async throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
         let sleeper = try compileC(
@@ -315,7 +315,7 @@ struct RuntimeAdmissionIsolationTests {
             policy: { _ in .empty },
             evidence: RuntimeAdmissionEvidence()
         )
-        let result = IsolationBackends.applyLaunch(
+        let result = await IsolationBackends.applyLaunchOffPool(
             tree.contained,
             command: command,
             io: .discard,

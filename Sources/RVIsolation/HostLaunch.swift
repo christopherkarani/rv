@@ -33,3 +33,15 @@ public func launchContainedHost(
         return .failure(.apply(error))
     }
 }
+
+/// Same door as `launchContainedHost`, off the cooperative pool.
+public func launchContainedHostOffPool(
+    host: HookHost,
+    command: IsolatedCommand,
+    plan: ContainedPlan,
+    admission: RuntimeAdmissionConfiguration = .failClosed
+) async -> Result<IsolatedRunResult, HostLaunchError> {
+    await IsolationBlockingWork.perform {
+        launchContainedHost(host: host, command: command, plan: plan, admission: admission)
+    }
+}

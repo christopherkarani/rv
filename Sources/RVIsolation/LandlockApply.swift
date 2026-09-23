@@ -38,6 +38,15 @@ func prepareLandlock(
     }
 }
 
+func runLandlockOffPool(
+    _ request: IsolatedLaunchRequest,
+    executable: URL?
+) async -> Result<IsolatedRunResult, IsolationApplyError> {
+    await IsolationBlockingWork.perform {
+        runLandlock(request, executable: executable)
+    }
+}
+
 func runLandlock(
     _ request: IsolatedLaunchRequest,
     executable: URL?

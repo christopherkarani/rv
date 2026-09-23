@@ -9,15 +9,19 @@ import Darwin
 @Test func terminalReplayDropsTheOldestBytes() {
     var buffer = TerminalReplayBuffer()
     var written = Data()
+    var next = Int64(1)
     for index in 0..<20 {
         let chunk = Data(repeating: UInt8(index), count: 4_000)
         written.append(chunk)
-        buffer.append(sequence: Int64(index + 1), bytes: chunk, limit: 10_000)
+        let sequence = next
+        next += 1
+        buffer.append(sequence: sequence, bytes: chunk, limit: 10_000, nextSequence: &next)
     }
     #expect(buffer.byteCount <= 10_000)
     let retained = buffer.chunks.reduce(into: Data()) { $0.append($1.bytes) }
     #expect(written.suffix(retained.count) == retained)
-    #expect(buffer.chunks.map(\.sequence) == buffer.chunks.map(\.sequence).sorted())
+    #expect(buffer.chunks.first?.sequence != 1)
+    #expect(Set(buffer.chunks.map(\.sequence)).count == buffer.chunks.count)
 }
 
 @Test func terminalBytesRoundTripThroughBase64() {
@@ -47,11 +51,11 @@ import Darwin
 }
 
 #if os(Linux)
-@Test func linuxContainedPTYStaysUnsupported() throws {
+@Test func linuxContainedPTYStaysUnsupported() async throws {
     let tree = try ContainmentTree()
     defer { tree.tearDown() }
     let command = try #require(IsolatedCommand(executable: "/bin/true"))
-    let result = IsolationBackends.apply(
+    let result = await IsolationBackends.applyOffPool(
         tree.contained,
         command: command,
         io: .pseudoTerminal(rows: 24, columns: 80)
@@ -160,7 +164,7 @@ struct RuntimeTerminalTests {
         let expected = Data([0x01]) + payload
         #expect(waitUntil(seconds: 5) { slow.sawOverflow && healthy.bytes == expected })
         #expect(waitUntil(seconds: 2) {
-            if case .success = terminal.subscribe(client: slowID, emit: { _ in }) {
+            if case .success = terminal.subscribe(client: slowID, emit: { _ in true }) {
                 terminal.detach(client: slowID)
                 return true
             }
@@ -170,6 +174,56 @@ struct RuntimeTerminalTests {
         #expect(healthy.bytes == expected)
         #expect(terminal.replayByteCount <= TerminalStreamLimits.replayBytes)
         #expect(healthy.exitStatus == nil)
+    }
+
+    @Test func detachWaitsUntilFlushLeavesEmit() throws {
+        let terminal = try #require(RuntimeTerminal.open(rows: 24, columns: 80))
+        let slave = try openSlave(terminal.slavePath)
+        defer {
+            close(slave)
+            terminal.shutdownMaster()
+        }
+        terminal.startReader()
+        let slow = BlockingBox()
+        let id = UUID()
+        #expect(terminal.subscribe(client: id, emit: slow.append).isSuccess)
+        terminal.activate(client: id)
+        #expect(writeAll(fd: slave, bytes: Data([0x01])))
+        #expect(waitUntil(seconds: 2) { slow.isBlocked })
+        let finished = FinishedFlag()
+        let thread = Thread {
+            terminal.detach(client: id)
+            finished.set()
+        }
+        thread.name = "rv-detach-wait"
+        thread.start()
+        Thread.sleep(forTimeInterval: 0.1)
+        #expect(finished.isSet == false)
+        slow.unblock()
+        #expect(waitUntil(seconds: 2) { finished.isSet })
+        #expect(terminal.subscribe(client: id, emit: { _ in true }).isSuccess)
+        terminal.detach(client: id)
+    }
+
+    @Test func failedSendDropsTheSubscriberAfterOneOverflow() throws {
+        let terminal = try #require(RuntimeTerminal.open(rows: 24, columns: 80))
+        let slave = try openSlave(terminal.slavePath)
+        defer {
+            close(slave)
+            terminal.shutdownMaster()
+        }
+        terminal.startReader()
+        let failed = FailSendBox()
+        let id = UUID()
+        #expect(terminal.subscribe(client: id, emit: failed.append).isSuccess)
+        terminal.activate(client: id)
+        #expect(terminal.acquireInput(client: id).isSuccess)
+        #expect(writeAll(fd: slave, bytes: Data([0x02])))
+        #expect(waitUntil(seconds: 2) { failed.sawOverflow })
+        #expect(failed.calls >= 2)
+        #expect(terminal.hasInputOwner == false)
+        #expect(terminal.subscribe(client: id, emit: { _ in true }).isSuccess)
+        terminal.detach(client: id)
     }
 
     @Test func resizeUpdatesTheSlaveWindowAndRejectsBounds() throws {
@@ -205,7 +259,7 @@ struct RuntimeTerminalTests {
         #expect(try termFlags(slave) == original)
     }
 
-    @Test func containedPTYIsAForegroundSessionAndAdmissionStaysOnFourAndFive() throws {
+    @Test func containedPTYIsAForegroundSessionAndAdmissionStaysOnFourAndFive() async throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
         let probe = try compileProbe(in: tree.workspaceURL)
@@ -235,7 +289,7 @@ struct RuntimeTerminalTests {
             executable: probe.path,
             arguments: ["admit", report.path, outside.path, deny.path]
         ))
-        let result = IsolationBackends.applyLaunch(
+        let result = await IsolationBackends.applyLaunchOffPool(
             tree.contained,
             command: command,
             io: .pseudoTerminal(rows: 24, columns: 80),
@@ -1044,10 +1098,11 @@ private final class NoticeBox: @unchecked Sendable {
     private let lock = NSLock()
     private var notices: [TerminalNotice] = []
 
-    func append(_ notice: TerminalNotice) {
+    func append(_ notice: TerminalNotice) -> Bool {
         lock.lock()
         notices.append(notice)
         lock.unlock()
+        return true
     }
 
     var bytes: Data {
@@ -1098,13 +1153,59 @@ private final class NoticeBox: @unchecked Sendable {
     }
 }
 
+private final class FinishedFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+
+    func set() {
+        lock.lock()
+        value = true
+        lock.unlock()
+    }
+
+    var isSet: Bool {
+        lock.lock()
+        let copy = value
+        lock.unlock()
+        return copy
+    }
+}
+
+private final class FailSendBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var overflow = false
+    private var count = 0
+
+    func append(_ notice: TerminalNotice) -> Bool {
+        lock.lock()
+        count += 1
+        if case .overflow = notice { overflow = true }
+        lock.unlock()
+        return false
+    }
+
+    var sawOverflow: Bool {
+        lock.lock()
+        let value = overflow
+        lock.unlock()
+        return value
+    }
+
+    var calls: Int {
+        lock.lock()
+        let value = count
+        lock.unlock()
+        return value
+    }
+}
+
 private final class BlockingBox: @unchecked Sendable {
     private let lock = NSLock()
     private var blocked = false
     private var overflow = false
     private let release = DispatchSemaphore(value: 0)
 
-    func append(_ notice: TerminalNotice) {
+    func append(_ notice: TerminalNotice) -> Bool {
         var wait = false
         lock.lock()
         if case .overflow = notice { overflow = true }
@@ -1114,6 +1215,7 @@ private final class BlockingBox: @unchecked Sendable {
         }
         lock.unlock()
         if wait { release.wait() }
+        return true
     }
 
     var isBlocked: Bool {

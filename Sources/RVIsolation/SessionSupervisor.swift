@@ -146,6 +146,9 @@ final class LiveSeatbeltChild: @unchecked Sendable {
     private let retainedDescriptors: [Int32]
     let pty: RuntimeTerminal?
     var handshakeRead: Int32
+    /// Nonce bytes already read while proving a dead leader. The watch
+    /// must still see them; a pipe read is consuming.
+    var handshakePreface = Data()
     private let established = Mutex(false)
     private let watchStarted = Mutex(false)
     private let terminal = Mutex<IsolationApplyError?>(nil)
@@ -506,10 +509,16 @@ func spawnSeatbeltProcess(
     // does not call TIOCSPGRP. A live child that never becomes its own
     // foreground group is killed. A command that has already exited may
     // pass only when the handshake pipe shows the post-claim shell ran.
+    var claimPreface = Data()
     if let terminal {
-        switch proveForegroundGroup(terminal, pid: pid, handshake: readEnd) {
-        case .claimed:
-            break
+        switch proveForegroundGroup(
+            terminal,
+            pid: pid,
+            handshake: readEnd,
+            nonce: Data(nonce.utf8)
+        ) {
+        case .claimed(let preface):
+            claimPreface = preface
         case .cancelled:
             terminateSession(pgid: pid, also: [pid])
             _ = waitUntilSessionIsDead(pgid: pid, also: [pid])
@@ -556,6 +565,7 @@ func spawnSeatbeltProcess(
         handshakeRead: ownedRead,
         terminal: terminal
     )
+    child.handshakePreface = claimPreface
     terminal?.startReader()
     handedOff = true
     return .success(child)
@@ -584,6 +594,7 @@ func watchSeatbeltProcess(
         root: live.pid,
         readEnd: live.handshakeRead,
         nonce: live.nonce,
+        preface: live.handshakePreface,
         admission: live.admission,
         stop: stop,
         onEstablished: { live.markEstablished() },
@@ -641,13 +652,14 @@ private func waitForSeatbeltSession(
     root: pid_t,
     readEnd: Int32,
     nonce: String,
+    preface: Data = Data(),
     admission: RuntimeAdmissionSession,
     stop: RuntimeCancellation,
     onEstablished: () -> Void,
     drain: () -> Void
 ) -> SeatbeltWaitOutcome {
     var outcome = SeatbeltWaitOutcome()
-    var handshake = Data()
+    var handshake = preface
     let expected = Data(nonce.utf8)
     var recorded: Set<pid_t> = [root]
     while true {
@@ -682,10 +694,7 @@ private func waitForSeatbeltSession(
                 }
             }
             if outcome.status == nil {
-                var late: Int32 = 0
-                if waitpid(root, &late, WNOHANG) == root {
-                    outcome.status = exitStatus(late)
-                }
+                outcome.status = reapLeaderStatus(root)
             }
             outcome.recordedPIDs = recorded
             return outcome
@@ -840,22 +849,48 @@ private func terminateSession(pgid: pid_t, also pids: Set<pid_t>) {
     }
 }
 
-private func waitUntilSessionIsDead(pgid: pid_t, also pids: Set<pid_t>) -> Bool {
-    for _ in 0..<200 {
+/// After SIGKILL, poll `waitpid(WNOHANG)` for a short bound. A blocking
+/// `waitpid` does not return when the leader is stuck in disk I/O.
+private func reapLeaderStatus(_ pid: pid_t) -> Int32? {
+    let deadline = Date().addingTimeInterval(0.25)
+    while Date() < deadline {
         var status: Int32 = 0
-        _ = waitpid(pgid, &status, WNOHANG)
+        let waited = waitpid(pid, &status, WNOHANG)
+        if waited == pid {
+            return exitStatus(status)
+        }
+        if waited < 0, errno == ECHILD {
+            return nil
+        }
+        usleep(10_000)
+    }
+    return nil
+}
+
+private func waitUntilSessionIsDead(pgid: pid_t, also pids: Set<pid_t>, reap: Bool = true) -> Bool {
+    for _ in 0..<200 {
+        if reap {
+            var status: Int32 = 0
+            _ = waitpid(pgid, &status, WNOHANG)
+        }
         terminateSession(pgid: pgid, also: pids)
-        if processGroupIsEmpty(pgid), pids.allSatisfy({ processIsGone($0) }) {
+        let gone = pids.allSatisfy { processIsGone($0) || (reap == false && sessionLeaderHasExited($0)) }
+        if processGroupIsEmpty(pgid), gone {
             return true
         }
         usleep(10_000)
     }
-    return processGroupIsEmpty(pgid) && pids.allSatisfy { processIsGone($0) }
+    let gone = pids.allSatisfy { processIsGone($0) || (reap == false && sessionLeaderHasExited($0)) }
+    return processGroupIsEmpty(pgid) && gone
 }
 
-/// SIGKILL the session leader's group and wait until those processes are gone.
-func stopOwnedSession(leader: pid_t) -> Bool {
+/// SIGKILL the session leader's group.
+/// `reap: false` does not `waitpid`, so the watch thread still collects the status.
+func stopOwnedSession(leader: pid_t, reap: Bool = true) -> Bool {
     terminateSession(pgid: leader, also: [leader])
+    if reap == false {
+        return sessionLeaderHasExited(leader) || processIsGone(leader)
+    }
     return waitUntilSessionIsDead(pgid: leader, also: visibleSessionPIDs(root: leader).union([leader]))
 }
 
@@ -873,7 +908,7 @@ func processIsGone(_ pid: pid_t) -> Bool {
 }
 
 private enum ForegroundProof {
-    case claimed
+    case claimed(Data)
     case cancelled
     case failed
 }
@@ -885,41 +920,30 @@ private enum ForegroundProof {
 private func proveForegroundGroup(
     _ terminal: RuntimeTerminal,
     pid: pid_t,
-    handshake: Int32
+    handshake: Int32,
+    nonce: Data
 ) -> ForegroundProof {
     let deadline = Date().addingTimeInterval(2)
     while true {
         if blockingWorkIsCancelled() {
             return .cancelled
         }
-        if foregroundGroupIsLeader(terminal, pid: pid) {
-            return .claimed
+        let exited = sessionLeaderHasExited(pid) || processIsGone(pid)
+        if exited == false, foregroundGroupIsLeader(terminal, pid: pid) {
+            return .claimed(Data())
         }
-        if sessionLeaderHasExited(pid) || processIsGone(pid) {
-            if foregroundGroupIsLeader(terminal, pid: pid) {
-                return .claimed
+        if exited {
+            let queued = readAvailable(handshake, limit: max(nonce.count, 1))
+            if deadLeaderClaimedByHandshake(queued: queued, nonce: nonce) {
+                return .claimed(queued)
             }
-            // The handshake is written only by the shell after rv-pty-claim
-            // execs sandbox-exec. An empty pipe means the leader died first.
-            return handshakeBytesAreWaiting(handshake) ? .claimed : .failed
+            return .failed
         }
         if Date() >= deadline {
             return .failed
         }
         usleep(1_000)
     }
-}
-
-/// Bytes queued on the handshake pipe. `poll` is the imported readiness
-/// check; `FIONREAD` is a macro the Swift overlay does not import.
-/// `POLLIN` means the post-claim shell wrote. `POLLHUP` alone means the
-/// leader died first.
-private func handshakeBytesAreWaiting(_ fd: Int32) -> Bool {
-    guard fd >= 0 else { return false }
-    var state = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
-    let ready = poll(&state, 1, 0)
-    guard ready > 0 else { return false }
-    return (state.revents & Int16(POLLIN)) != 0
 }
 
 private let ptyClaimExecutableName = "rv-pty-claim"

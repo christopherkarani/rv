@@ -7,10 +7,18 @@ struct TerminalStreamTests {
     @Test func replayKeepsTheNewestBoundedBytes() {
         var buffer = TerminalReplayBuffer()
         var expected = Data()
+        var next = Int64(1)
         for index in 0..<20 {
             let chunk = Data(repeating: UInt8(index), count: 4_000)
             expected.append(chunk)
-            buffer.append(sequence: Int64(index + 1), bytes: chunk, limit: TerminalStreamLimits.replayBytes)
+            let sequence = next
+            next += 1
+            buffer.append(
+                sequence: sequence,
+                bytes: chunk,
+                limit: TerminalStreamLimits.replayBytes,
+                nextSequence: &next
+            )
         }
         #expect(buffer.byteCount <= TerminalStreamLimits.replayBytes)
         #expect(buffer.byteCount == TerminalStreamLimits.replayBytes)
@@ -21,11 +29,41 @@ struct TerminalStreamTests {
 
     @Test func replayTrimsInsideTheOldestChunk() {
         var buffer = TerminalReplayBuffer()
-        buffer.append(sequence: 1, bytes: Data([1, 2, 3, 4]), limit: 6)
-        buffer.append(sequence: 2, bytes: Data([5, 6, 7, 8]), limit: 6)
+        var next = Int64(3)
+        buffer.append(sequence: 1, bytes: Data([1, 2, 3, 4]), limit: 6, nextSequence: &next)
+        buffer.append(sequence: 2, bytes: Data([5, 6, 7, 8]), limit: 6, nextSequence: &next)
         #expect(buffer.byteCount == 6)
         #expect(buffer.chunks.first?.bytes == Data([3, 4]))
+        #expect(buffer.chunks.first?.sequence != 1)
+        #expect(buffer.chunks.first?.sequence != 2)
         #expect(buffer.chunks.last?.bytes == Data([5, 6, 7, 8]))
+        #expect(buffer.chunks.last?.sequence == 2)
+    }
+
+    @Test func terminalRulesKeepTheNonceDrainAndPartialWrite() {
+        #expect(terminalDrainShouldContinue(.data))
+        #expect(terminalDrainShouldContinue(.interrupted))
+        #expect(terminalDrainShouldContinue(.wouldBlock) == false)
+        #expect(terminalDrainShouldContinue(.end) == false)
+        let nonce = Data("nonce".utf8)
+        #expect(deadLeaderClaimedByHandshake(queued: nonce + Data([1]), nonce: nonce))
+        #expect(deadLeaderClaimedByHandshake(queued: Data("no".utf8), nonce: nonce) == false)
+        #expect(deadLeaderClaimedByHandshake(queued: Data("xnonce".utf8), nonce: nonce) == false)
+        #expect(terminalWriteOutcome(written: 0, hardFailure: false) == .flushed)
+        #expect(terminalWriteOutcome(written: 4, hardFailure: true) == .prefixCommitted)
+        #expect(terminalWriteOutcome(written: 0, hardFailure: true) == .failed)
+        #expect(admitClientTerminalBytes(queued: 100, incoming: 20, limit: 128) == .accept(queued: 120))
+        #expect(admitClientTerminalBytes(queued: 100, incoming: 40, limit: 128) == .overflow)
+        #expect(releaseInflight(queued: 70_000, inflight: 65_536) == 4_464)
+        #expect(
+            planClientTerminalFrame(queued: 65_536, incoming: 1, limit: 65_536) == .overflow
+        )
+        #expect(
+            planClientTerminalFrame(queued: 65_536, incoming: 0, limit: 65_536) == .store(queued: 65_536)
+        )
+        #expect(
+            TerminalQueue.decide(queued: 65_536, incoming: 1, limit: 65_536) == .overflow
+        )
     }
 
     @Test func subscriberQueueOverflowsAboveTheBound() {
@@ -94,12 +132,12 @@ struct TerminalStreamTests {
     }
 
     #if os(Linux)
-    @Test func linuxContainedTerminalLaunchStaysRefused() throws {
+    @Test func linuxContainedTerminalLaunchStaysRefused() async throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
         let marker = tree.workspaceURL.appendingPathComponent("must-not-run")
         let command = try #require(IsolatedCommand(executable: "/bin/true"))
-        switch IsolationBackends.apply(
+        switch await IsolationBackends.applyOffPool(
             tree.contained,
             command: command,
             io: .pseudoTerminal(rows: 24, columns: 80)

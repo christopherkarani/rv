@@ -34,6 +34,20 @@ struct LocalTerminalRestoreTests {
         #expect(try terminalFlags(quiet.slave) == quietBefore)
     }
 
+    @Test func secondEngageDoesNotReplaceTheArmedSavedMode() throws {
+        let first = try OpenedPTY()
+        defer { first.close() }
+        let before = try terminalFlags(first.slave)
+        let restorer = try #require(LocalTerminalRestorer.engage(first.slave, signals: true))
+        let second = try OpenedPTY()
+        defer { second.close() }
+        let secondBefore = try terminalFlags(second.slave)
+        #expect(LocalTerminalRestorer.engage(second.slave, signals: true) == nil)
+        #expect(try terminalFlags(second.slave) == secondBefore)
+        restorer.restore()
+        #expect(try terminalFlags(first.slave) == before)
+    }
+
     @Test func workspaceRunRestoresOnExitCloseDisconnectAndStdinEOF() throws {
         let host = try PTYWorkspaceHost()
         defer { host.close() }

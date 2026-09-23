@@ -16,14 +16,14 @@ private let grantedPayloadDescriptors: [Int32] = [0, 1, 2, 4, 5]
 /// The payload keeps stdio and fds 4 and 5. Every other parent descriptor stays closed.
 @Suite("DescriptorHygiene", .serialized)
 struct DescriptorHygieneTests {
-    @Test func ambientOutsideFileDescriptorIsNotWritable() throws {
+    @Test func ambientOutsideFileDescriptorIsNotWritable() async throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
         let outside = tree.siblingURL.appendingPathComponent("ambient-file")
         var held = try OwnedDescriptors.file(outside, bytes: Array("PARENT".utf8))
         defer { held.release() }
-        guard try macOSContainedLaunch(tree) else { return }
-        let report = try runProbe(
+        guard try await macOSContainedLaunch(tree) else { return }
+        let report = try await runProbe(
             tree,
             io: .discard,
             checks: held.checks(label: "file") + ["handshake:3"]
@@ -33,31 +33,31 @@ struct DescriptorHygieneTests {
         #expect(try String(contentsOf: outside, encoding: .utf8) == "PARENT")
     }
 
-    @Test func ambientSocketpairIsNotUsable() throws {
+    @Test func ambientSocketpairIsNotUsable() async throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
         var held = try OwnedDescriptors.makeSocketPair()
         defer { held.release() }
         try held.proveParentCanTransfer("Z")
-        guard try macOSContainedLaunch(tree) else { return }
-        let report = try runProbe(tree, io: .discard, checks: held.checks(label: "socket"))
+        guard try await macOSContainedLaunch(tree) else { return }
+        let report = try await runProbe(tree, io: .discard, checks: held.checks(label: "socket"))
         report.expectClosed("socket")
         #expect(held.peerReceived("C") == false)
     }
 
-    @Test func ambientPipeIsNotUsable() throws {
+    @Test func ambientPipeIsNotUsable() async throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
         var held = try OwnedDescriptors.makePipe()
         defer { held.release() }
         try held.proveParentCanTransfer("Z")
-        guard try macOSContainedLaunch(tree) else { return }
-        let report = try runProbe(tree, io: .discard, checks: held.checks(label: "pipe"))
+        guard try await macOSContainedLaunch(tree) else { return }
+        let report = try await runProbe(tree, io: .discard, checks: held.checks(label: "pipe"))
         report.expectClosed("pipe")
         #expect(held.peerReceived("C") == false)
     }
 
-    @Test func containedProcessListsOnlyGrantedDescriptors() throws {
+    @Test func containedProcessListsOnlyGrantedDescriptors() async throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
         let outside = tree.siblingURL.appendingPathComponent("listed-file")
@@ -69,10 +69,10 @@ struct DescriptorHygieneTests {
             socket.release()
             pipe.release()
         }
-        guard try macOSContainedLaunch(tree) else { return }
+        guard try await macOSContainedLaunch(tree) else { return }
         let checks = file.checks(label: "file") + socket.checks(label: "socket")
             + pipe.checks(label: "pipe") + ["handshake:3"]
-        let report = try runProbe(tree, io: .discard, checks: checks)
+        let report = try await runProbe(tree, io: .discard, checks: checks)
         report.expectClosed("file")
         report.expectClosed("socket")
         report.expectClosed("pipe")
@@ -83,12 +83,12 @@ struct DescriptorHygieneTests {
         #expect(try String(contentsOf: outside, encoding: .utf8) == "PARENT")
     }
 
-    @Test func inheritedStandardIOMatchesParent() throws {
+    @Test func inheritedStandardIOMatchesParent() async throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
-        guard try macOSContainedLaunch(tree) else { return }
+        guard try await macOSContainedLaunch(tree) else { return }
         let parent = try stdioIdentities()
-        let report = try runProbe(tree, io: .inherit, checks: ["handshake:3"])
+        let report = try await runProbe(tree, io: .inherit, checks: ["handshake:3"])
         #expect(report.stdio[0] == parent[0])
         #expect(report.stdio[1] == parent[1])
         #expect(report.stdio[2] == parent[2])
@@ -98,16 +98,16 @@ struct DescriptorHygieneTests {
         #expect(report.openFDs == grantedPayloadDescriptors)
     }
 
-    @Test func discardedStandardIOIsNullDevice() throws {
+    @Test func discardedStandardIOIsNullDevice() async throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
-        guard try macOSContainedLaunch(tree) else { return }
+        guard try await macOSContainedLaunch(tree) else { return }
         let nullFD = open("/dev/null", O_RDWR | O_CLOEXEC)
         try #require(nullFD >= 0)
         defer { close(nullFD) }
         let nullIdentity = try #require(fileIdentity(nullFD))
         let parent = try stdioIdentities()
-        let report = try runProbe(tree, io: .discard, checks: ["handshake:3"])
+        let report = try await runProbe(tree, io: .discard, checks: ["handshake:3"])
         #expect(report.stdio[0] == nullIdentity)
         #expect(report.stdio[1] == nullIdentity)
         #expect(report.stdio[2] == nullIdentity)
@@ -121,10 +121,10 @@ struct DescriptorHygieneTests {
         #expect(report.tty == [0, 0, 0])
     }
 
-    @Test func pseudoTerminalStandardIOIsTheSlaveAndDoesNotLeakParentDescriptors() throws {
+    @Test func pseudoTerminalStandardIOIsTheSlaveAndDoesNotLeakParentDescriptors() async throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
-        guard try macOSContainedLaunch(tree) else { return }
+        guard try await macOSContainedLaunch(tree) else { return }
         let outside = tree.siblingURL.appendingPathComponent("pty-ambient")
         var held = try OwnedDescriptors.file(outside, bytes: Array("PARENT".utf8))
         var fillers: [Int32] = []
@@ -143,7 +143,7 @@ struct DescriptorHygieneTests {
             if copied >= 0 { fillers.append(copied) }
         }
         let nullIdentity = try #require(fileIdentity(nullFD))
-        let report = try runProbe(
+        let report = try await runProbe(
             tree,
             io: .pseudoTerminal(rows: 24, columns: 80),
             checks: held.checks(label: "file") + ["handshake:3"]
@@ -158,11 +158,11 @@ struct DescriptorHygieneTests {
         #expect(try String(contentsOf: outside, encoding: .utf8) == "PARENT")
     }
 
-    @Test func innerExecutableDoesNotKeepHandshakeDescriptor() throws {
+    @Test func innerExecutableDoesNotKeepHandshakeDescriptor() async throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
-        guard try macOSContainedLaunch(tree) else { return }
-        let report = try runProbe(tree, io: .discard, checks: ["handshake:3"])
+        guard try await macOSContainedLaunch(tree) else { return }
+        let report = try await runProbe(tree, io: .discard, checks: ["handshake:3"])
         report.expectClosed("handshake", errno: EBADF)
         #expect(report.openFDs.contains(3) == false)
         switch report.run.established {
@@ -173,7 +173,7 @@ struct DescriptorHygieneTests {
         }
     }
 
-    @Test func failedLaunchesDoNotAccumulateDescriptors() throws {
+    @Test func failedLaunchesDoNotAccumulateDescriptors() async throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
         let sentinel = open(tree.workspaceURL.appendingPathComponent("sentinel").path, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
@@ -191,7 +191,7 @@ struct DescriptorHygieneTests {
                 launch: .seatbelt(SeatbeltProfile(source: "(invalid-profile", workspacePath: workspace))
             ))
             let log = tree.rootURL.appendingPathComponent("sessions.jsonl")
-            switch runSeatbeltLaunch(request, host: nil, sessionStore: .file(log)) {
+            switch await runSeatbeltLaunchOffPool(request, host: nil, sessionStore: .file(log)) {
             case .failure(.seatbeltNotEstablished):
                 break
             case .failure(let error):
@@ -199,7 +199,7 @@ struct DescriptorHygieneTests {
             case .success:
                 Issue.record("invalid Seatbelt profile must not establish isolation")
             }
-            switch IsolationBackends.applyLaunch(
+            switch await IsolationBackends.applyLaunchOffPool(
                 tree.contained,
                 command: command,
                 io: .discard,
@@ -218,7 +218,7 @@ struct DescriptorHygieneTests {
         #else
         let command = try #require(IsolatedCommand(executable: "/bin/true"))
         for _ in 0..<12 {
-            switch IsolationBackends.apply(tree.contained, command: command) {
+            switch await IsolationBackends.applyOffPool(tree.contained, command: command) {
             case .failure(.containedGuaranteesUnsupported):
                 break
             case .failure(let error):
@@ -273,7 +273,7 @@ struct DescriptorHygieneTests {
         ))
         let before = openDescriptors()
         let task = Task {
-            IsolationBackends.apply(tree.contained, command: command)
+            await IsolationBackends.applyOffPool(tree.contained, command: command)
         }
         // The private volume is mounted before the shell writes `started`.
         let deadline = Date().addingTimeInterval(45)
@@ -309,7 +309,7 @@ struct DescriptorHygieneTests {
         #expect(after.contains(sentinel))
         #else
         let command = try #require(IsolatedCommand(executable: "/bin/sleep", arguments: ["30"]))
-        switch IsolationBackends.apply(tree.contained, command: command) {
+        switch await IsolationBackends.applyOffPool(tree.contained, command: command) {
         case .failure(.containedGuaranteesUnsupported):
             break
         case .failure(let error):
@@ -473,13 +473,13 @@ private struct OwnedDescriptors {
     }
 }
 
-private func macOSContainedLaunch(_ tree: ContainmentTree) throws -> Bool {
+private func macOSContainedLaunch(_ tree: ContainmentTree) async throws -> Bool {
     #if os(macOS)
     _ = tree
     return true
     #else
     let command = try #require(IsolatedCommand(executable: "/bin/true"))
-    switch IsolationBackends.apply(tree.contained, command: command) {
+    switch await IsolationBackends.applyOffPool(tree.contained, command: command) {
     case .failure(.containedGuaranteesUnsupported):
         return false
     case .failure(let error):
@@ -496,7 +496,7 @@ private func runProbe(
     _ tree: ContainmentTree,
     io: IsolatedIO,
     checks: [String]
-) throws -> ProbeReport {
+) async throws -> ProbeReport {
     let binary = try compileDescriptorProbe(in: tree.workspaceURL)
     let reportURL = tree.workspaceURL.appendingPathComponent("descriptor-report-\(UUID().uuidString)")
     let mode: String
@@ -513,7 +513,7 @@ private func runProbe(
         arguments: [reportURL.path, mode] + checks
     ))
     let log = tree.rootURL.appendingPathComponent("sessions.jsonl")
-    let result = IsolationBackends.applyLaunch(
+    let result = await IsolationBackends.applyLaunchOffPool(
         tree.contained,
         command: command,
         io: io,

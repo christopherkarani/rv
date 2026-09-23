@@ -417,6 +417,7 @@ enum WorkspaceCommandRun {
         case .terminalUnavailable: "runtime has no terminal"
         case .terminalBusy: "terminal input is owned by another client"
         case .terminalLimit: "terminal subscriber limit reached"
+        case .terminalPrefixCommitted: "terminal input was partially written"
         }
     }
 

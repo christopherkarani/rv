@@ -368,7 +368,7 @@ struct IsolationApplyTests {
         }
     }
 
-    @Test func apply_observedAndMediated_doNotRequireCallerToPickUnavailable() throws {
+    @Test func apply_observedAndMediated_doNotRequireCallerToPickUnavailable() async throws {
         let workspace = try requireWorkspace("/workspace")
         let observed = try requirePlan(
             IsolationCompileRequest(requested: .observed, workspace: workspace)
@@ -376,7 +376,7 @@ struct IsolationApplyTests {
         let mediated = try requirePlan(
             IsolationCompileRequest(requested: .mediated, workspace: workspace)
         )
-        switch IsolationBackends.apply(observed, command: trueCommand) {
+        switch await IsolationBackends.applyOffPool(observed, command: trueCommand) {
         case .success(let result):
             #expect(result.established == .observed)
             #expect(result.session == nil)
@@ -384,7 +384,7 @@ struct IsolationApplyTests {
         case .failure(let error):
             recordUnexpectedApplyError(error, expected: "apply observed without picking a factory")
         }
-        switch IsolationBackends.apply(mediated, command: trueCommand) {
+        switch await IsolationBackends.applyOffPool(mediated, command: trueCommand) {
         case .success(let result):
             #expect(result.established == .mediated)
             #expect(result.session == nil)
@@ -394,13 +394,13 @@ struct IsolationApplyTests {
         }
     }
 
-    @Test func apply_contained_withoutUsableWorkspaceOrBackend_failsClosed() throws {
+    @Test func apply_contained_withoutUsableWorkspaceOrBackend_failsClosed() async throws {
         let missing = "/no/such/rv-isolation-apply-\(UUID().uuidString)"
         let workspace = try requireWorkspace(missing)
         let plan = try requirePlan(
             IsolationCompileRequest(requested: .contained, workspace: workspace)
         )
-        switch IsolationBackends.apply(plan, command: trueCommand) {
+        switch await IsolationBackends.applyOffPool(plan, command: trueCommand) {
         case .success:
             Issue.record("contained apply without a usable workspace/backend must fail closed")
         case .failure(let error):
@@ -661,8 +661,8 @@ struct IsolationApplyTests {
     // apply / prepare / run do not call AgentAuthorization.decide — Isolation
     // apply consumes IsolationPlan only. Verification: `rg` over Sources/RVIsolation.
 
-    @Test func isolationApply_operatorProbe_printsEstablishedModes() throws {
-        let fixture = try ProbeFixture()
+    @Test func isolationApply_operatorProbe_printsEstablishedModes() async throws {
+        let fixture = try await ProbeFixture()
         defer { fixture.tearDown() }
 
         print(probeLine(requested: .contained, result: fixture.containedInside))
@@ -791,7 +791,7 @@ private struct ProbeFixture {
     let containedUnavailable: Result<IsolatedRunResult, IsolationApplyError>
     private let root: URL
 
-    init() throws {
+    init() async throws {
         root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-isolation-probe-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -808,20 +808,20 @@ private struct ProbeFixture {
         let inside = resolvedWorkspace.appendingPathComponent("inside").path
         let outside = root.resolvingSymlinksInPath().appendingPathComponent("outside").path
         let childOutside = root.resolvingSymlinksInPath().appendingPathComponent("child-outside").path
-        containedInside = IsolationBackends.apply(contained, command: touchCommand(inside))
-        containedOutside = IsolationBackends.apply(contained, command: touchCommand(outside))
-        containedChildOutside = IsolationBackends.apply(
+        containedInside = await IsolationBackends.applyOffPool(contained, command: touchCommand(inside))
+        containedOutside = await IsolationBackends.applyOffPool(contained, command: touchCommand(outside))
+        containedChildOutside = await IsolationBackends.applyOffPool(
             contained,
             command: IsolatedCommand(
                 executable: "/bin/sh",
                 arguments: ["-c", "/usr/bin/touch \(childOutside)"]
             )!
         )
-        observedOutside = IsolationBackends.apply(
+        observedOutside = await IsolationBackends.applyOffPool(
             observed,
             command: touchCommand(outside + "-observed")
         )
-        containedUnavailable = IsolationBackends.unavailable().apply(
+        containedUnavailable = await IsolationBackends.unavailable().applyOffPool(
             contained,
             command: touchCommand(inside)
         )
