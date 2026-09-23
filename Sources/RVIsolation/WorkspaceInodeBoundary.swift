@@ -107,10 +107,15 @@ final class WorkspaceInodeBoundary {
     private let disk: String
     private let volumeDevice: UInt64
     private let savedDevice: UInt64
+    private let savedInode: UInt64
+    private let mountSource: String
+    private let imageDevice: UInt64?
+    private let imageInode: UInt64?
     private var volumeFD: Int32
     private var savedFD: Int32
     private let snapshot: [String: WorkspaceInodeStamp]
     private var released = false
+    private var didDetach = false
 
     init(
         workspacePath: String,
@@ -120,6 +125,10 @@ final class WorkspaceInodeBoundary {
         disk: String,
         volumeDevice: UInt64,
         savedDevice: UInt64,
+        savedInode: UInt64,
+        mountSource: String,
+        imageDevice: UInt64?,
+        imageInode: UInt64?,
         volumeFD: Int32,
         savedFD: Int32,
         snapshot: [String: WorkspaceInodeStamp]
@@ -131,6 +140,10 @@ final class WorkspaceInodeBoundary {
         self.disk = disk
         self.volumeDevice = volumeDevice
         self.savedDevice = savedDevice
+        self.savedInode = savedInode
+        self.mountSource = mountSource
+        self.imageDevice = imageDevice
+        self.imageInode = imageInode
         self.volumeFD = volumeFD
         self.savedFD = savedFD
         self.snapshot = snapshot
@@ -204,7 +217,7 @@ final class WorkspaceInodeBoundary {
     func publishAndRestore() -> Result<Void, IsolationApplyError> {
         let published: Result<Void, IsolationApplyError>
         if remainsEstablished() {
-            published = publishIntoSaved()
+            published = publishIntoSaved(writing: true)
         } else {
             published = .failure(.workspaceInodeBoundaryFailed)
         }
@@ -217,12 +230,80 @@ final class WorkspaceInodeBoundary {
         }
     }
 
+    func snapshotStamps() -> [String: WorkspaceInodeStamp] {
+        snapshot
+    }
+
+    func recoveryIdentity(
+        lockPath: String,
+        lockDevice: UInt64,
+        lockInode: UInt64,
+        ownerToken: UUID,
+        snapshotPath: String,
+        snapshotDevice: UInt64,
+        snapshotInode: UInt64
+    ) -> WorkspaceDurableIdentity {
+        WorkspaceDurableIdentity(
+            savedPath: savedPath,
+            savedDevice: savedDevice,
+            savedInode: savedInode,
+            quarantinePath: quarantinePath,
+            volumeDevice: volumeDevice,
+            disk: disk,
+            mountSource: mountSource,
+            imagePath: imagePath,
+            imageDevice: imageDevice,
+            imageInode: imageInode,
+            lockPath: lockPath,
+            lockDevice: lockDevice,
+            lockInode: lockInode,
+            ownerToken: ownerToken,
+            snapshotPath: snapshotPath,
+            snapshotDevice: snapshotDevice,
+            snapshotInode: snapshotInode
+        )
+    }
+
+    /// The publish rules reject the saved tree. The mount is left in place.
+    func preflightPublish() -> Result<Void, IsolationApplyError> {
+        publishIntoSaved(writing: false)
+    }
+
+    /// Copy the volume onto the hidden original. Does not unmount.
+    func publishPreservingMount() -> Result<Void, IsolationApplyError> {
+        publishIntoSaved(writing: true)
+    }
+
+    /// Detach this volume only when the mount source and device still match.
+    func detachOwnedMount() -> Result<Void, IsolationApplyError> {
+        if released || didDetach { return .success(()) }
+        guard mountedIdentityMatches() else { return .failure(.workspaceInodeBoundaryFailed) }
+        if volumeFD >= 0 {
+            close(volumeFD)
+            volumeFD = -1
+        }
+        detachVolume()
+        if currentDevice(workspacePath) == volumeDevice {
+            return .failure(.workspaceInodeBoundaryFailed)
+        }
+        didDetach = true
+        return .success(())
+    }
+
+    private func mountedIdentityMatches() -> Bool {
+        guard let device = currentDevice(workspacePath), device == volumeDevice else { return false }
+        guard let facts = workspaceMountFacts(workspacePath), facts.source == mountSource else {
+            return false
+        }
+        return true
+    }
+
     /// Drop the volume without copying. The original directory returns unchanged.
     func discardAndRestore() -> Result<Void, IsolationApplyError> {
         restoreOriginalDirectory()
     }
 
-    private func publishIntoSaved() -> Result<Void, IsolationApplyError> {
+    private func publishIntoSaved(writing: Bool) -> Result<Void, IsolationApplyError> {
         guard remainsEstablished(), savedFD >= 0 else {
             return .failure(.workspaceInodeBoundaryFailed)
         }
@@ -240,11 +321,11 @@ final class WorkspaceInodeBoundary {
             )
             switch decision {
             case .update:
-                if updateSaved(relative, from: entry) == false {
+                if writing, updateSaved(relative, from: entry) == false {
                     rejected = true
                 }
             case .create:
-                if createSaved(relative, from: entry) == false {
+                if writing, createSaved(relative, from: entry) == false {
                     rejected = true
                 }
             case .remove, .leave, .reject:
@@ -261,7 +342,7 @@ final class WorkspaceInodeBoundary {
             )
             switch decision {
             case .remove:
-                if removeSaved(relative) == false {
+                if writing, removeSaved(relative) == false {
                     rejected = true
                 }
             case .leave:
@@ -506,6 +587,127 @@ final class WorkspaceInodeBoundary {
         guard count >= 0, count < buffer.count - 1 else { return nil }
         return String(decoding: buffer.prefix(count).map { UInt8(bitPattern: $0) }, as: UTF8.self)
     }
+
+    static func reattach(
+        project: String,
+        identity: WorkspaceDurableIdentity,
+        snapshot: [String: WorkspaceInodeStamp]
+    ) -> Result<WorkspaceInodeBoundary, IsolationApplyError> {
+        guard RVIsolationMount.observe(
+            project: project,
+            savedPath: identity.savedPath,
+            savedDevice: identity.savedDevice,
+            savedInode: identity.savedInode,
+            volumeDevice: identity.volumeDevice,
+            mountSource: identity.mountSource
+        ) == .ownedMount else {
+            return .failure(.workspaceInodeBoundaryFailed)
+        }
+        let savedFD = identity.savedPath.withCString { open($0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC) }
+        let volumeFD = project.withCString { open($0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC) }
+        guard savedFD >= 0, volumeFD >= 0 else {
+            if savedFD >= 0 { close(savedFD) }
+            if volumeFD >= 0 { close(volumeFD) }
+            return .failure(.workspaceInodeBoundaryFailed)
+        }
+        var savedStatus = stat()
+        var volumeStatus = stat()
+        guard fstat(savedFD, &savedStatus) == 0,
+            fstat(volumeFD, &volumeStatus) == 0,
+            device(of: savedStatus) == identity.savedDevice,
+            UInt64(savedStatus.st_ino) == identity.savedInode,
+            device(of: volumeStatus) == identity.volumeDevice
+        else {
+            close(savedFD)
+            close(volumeFD)
+            return .failure(.workspaceInodeBoundaryFailed)
+        }
+        return .success(
+            WorkspaceInodeBoundary(
+                workspacePath: project,
+                savedPath: identity.savedPath,
+                quarantinePath: identity.quarantinePath,
+                imagePath: identity.imagePath,
+                disk: identity.disk,
+                volumeDevice: identity.volumeDevice,
+                savedDevice: identity.savedDevice,
+                savedInode: identity.savedInode,
+                mountSource: identity.mountSource,
+                imageDevice: identity.imageDevice,
+                imageInode: identity.imageInode,
+                volumeFD: volumeFD,
+                savedFD: savedFD,
+                snapshot: snapshot
+            )
+        )
+    }
+
+    /// Put the hidden original back when this workspace's volume is already gone.
+    static func restoreHiddenOriginal(
+        project: String,
+        identity: WorkspaceDurableIdentity
+    ) -> Result<Void, IsolationApplyError> {
+        let observation = RVIsolationMount.observe(
+            project: project,
+            savedPath: identity.savedPath,
+            savedDevice: identity.savedDevice,
+            savedInode: identity.savedInode,
+            volumeDevice: identity.volumeDevice,
+            mountSource: identity.mountSource
+        )
+        switch observation {
+        case .originalRestored:
+            return removeOwnedImage(identity)
+        case .missingMount:
+            break
+        case .ownedMount, .unrelatedMount, .savedTreeMismatch, .ambiguous:
+            return .failure(.workspaceInodeBoundaryFailed)
+        }
+        if FileManager.default.fileExists(atPath: project) {
+            if FileManager.default.fileExists(atPath: identity.quarantinePath) {
+                return .failure(.workspaceInodeBoundaryFailed)
+            }
+            guard renamePath(project, identity.quarantinePath) else {
+                return .failure(.workspaceInodeBoundaryFailed)
+            }
+        }
+        guard renamePath(identity.savedPath, project) else {
+            return .failure(.workspaceInodeBoundaryFailed)
+        }
+        guard let restored = workspacePathIdentity(project),
+            restored.device == identity.savedDevice,
+            restored.inode == identity.savedInode,
+            restored.isDirectory
+        else {
+            return .failure(.workspaceInodeBoundaryFailed)
+        }
+        _ = inodeCheckedDelete(identity.quarantinePath)
+        return removeOwnedImage(identity)
+    }
+
+    private static func removeOwnedImage(
+        _ identity: WorkspaceDurableIdentity
+    ) -> Result<Void, IsolationApplyError> {
+        guard let imagePath = identity.imagePath,
+            let imageDevice = identity.imageDevice,
+            let imageInode = identity.imageInode
+        else {
+            return .success(())
+        }
+        var status = stat()
+        let exists = imagePath.withCString { lstat($0, &status) == 0 }
+        if exists == false { return .success(()) }
+        guard device(of: status) == imageDevice,
+            UInt64(status.st_ino) == imageInode,
+            (status.st_mode & S_IFMT) == S_IFREG
+        else {
+            return .success(())
+        }
+        guard imagePath.withCString({ unlink($0) == 0 }) else {
+            return .failure(.workspaceInodeBoundaryFailed)
+        }
+        return .success(())
+    }
 }
 
 func establishWorkspaceInodeBoundary(
@@ -607,6 +809,25 @@ func establishWorkspaceInodeBoundary(
         if let image = mounted.imagePath { unlink(image) }
         return .failure(.workspaceInodeBoundaryFailed)
     }
+    guard let mountSource = workspaceMountSource(workspacePath), mountSource.isEmpty == false else {
+        close(savedFD)
+        close(volumeFD)
+        _ = runTool(["/usr/bin/hdiutil", "detach", "-force", "-quiet", mounted.disk])
+        rmdir(workspacePath)
+        _ = renamePath(savedPath, workspacePath)
+        if let image = mounted.imagePath { unlink(image) }
+        return .failure(.workspaceInodeBoundaryFailed)
+    }
+    let imageIdentity = mounted.imagePath.flatMap(workspacePathIdentity)
+    if mounted.imagePath != nil, imageIdentity?.isDirectory != false {
+        close(savedFD)
+        close(volumeFD)
+        _ = runTool(["/usr/bin/hdiutil", "detach", "-force", "-quiet", mounted.disk])
+        rmdir(workspacePath)
+        _ = renamePath(savedPath, workspacePath)
+        if let image = mounted.imagePath { unlink(image) }
+        return .failure(.workspaceInodeBoundaryFailed)
+    }
     let boundary = WorkspaceInodeBoundary(
         workspacePath: workspacePath,
         savedPath: savedPath,
@@ -615,6 +836,10 @@ func establishWorkspaceInodeBoundary(
         disk: mounted.disk,
         volumeDevice: volumeDevice,
         savedDevice: originalDevice,
+        savedInode: UInt64(savedStatus.st_ino),
+        mountSource: mountSource,
+        imageDevice: imageIdentity?.device,
+        imageInode: imageIdentity?.inode,
         volumeFD: volumeFD,
         savedFD: savedFD,
         snapshot: captured.mapValues(\.stamp)
@@ -836,6 +1061,12 @@ private func copyTree(from source: Int32, to destination: Int32, expectDevice: U
 private func directoryNames(_ dirfd: Int32) -> [String]? {
     let copy = dup(dirfd)
     guard copy >= 0 else { return nil }
+    // `dup` shares the directory offset. A previous listing leaves it at the
+    // end, so rewind before reading or the next publish sees an empty tree.
+    if lseek(copy, 0, SEEK_SET) < 0 {
+        close(copy)
+        return nil
+    }
     guard let dir = fdopendir(copy) else {
         close(copy)
         return nil
@@ -900,6 +1131,47 @@ private func currentDevice(_ path: String) -> UInt64? {
     var status = stat()
     guard path.withCString({ lstat($0, &status) == 0 }) else { return nil }
     return device(of: status)
+}
+
+struct WorkspacePathIdentity: Equatable {
+    var device: UInt64
+    var inode: UInt64
+    var isDirectory: Bool
+}
+
+func workspacePathIdentity(_ path: String) -> WorkspacePathIdentity? {
+    var status = stat()
+    guard path.withCString({ lstat($0, &status) == 0 }) else { return nil }
+    return WorkspacePathIdentity(
+        device: device(of: status),
+        inode: UInt64(status.st_ino),
+        isDirectory: (status.st_mode & S_IFMT) == S_IFDIR
+    )
+}
+
+struct WorkspaceMountFacts: Equatable {
+    var source: String
+    var point: String
+}
+
+func workspaceMountFacts(_ path: String) -> WorkspaceMountFacts? {
+    var info = statfs()
+    guard path.withCString({ statfs($0, &info) == 0 }) else { return nil }
+    let source = withUnsafePointer(to: info.f_mntfromname) {
+        $0.withMemoryRebound(to: CChar.self, capacity: MemoryLayout.size(ofValue: info.f_mntfromname)) {
+            String(cString: $0)
+        }
+    }
+    let point = withUnsafePointer(to: info.f_mntonname) {
+        $0.withMemoryRebound(to: CChar.self, capacity: MemoryLayout.size(ofValue: info.f_mntonname)) {
+            String(cString: $0)
+        }
+    }
+    return WorkspaceMountFacts(source: source, point: point)
+}
+
+func workspaceMountSource(_ path: String) -> String? {
+    workspaceMountFacts(path)?.source
 }
 
 /// Names a fresh HFS volume creates at its root. They are not workspace

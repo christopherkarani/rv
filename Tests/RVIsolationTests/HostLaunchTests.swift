@@ -306,7 +306,7 @@ private func recordUnexpectedApplyError(
         Issue.record("expected \(expected), got processSpawnFailed", sourceLocation: sourceLocation)
     case .commandContainsNUL:
         Issue.record("unexpected NUL command rejection")
-    case .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
+    case .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled, .workspaceUnresolved:
         Issue.record(
             "expected \(expected), got commandExecutableMustBeAbsolute",
             sourceLocation: sourceLocation

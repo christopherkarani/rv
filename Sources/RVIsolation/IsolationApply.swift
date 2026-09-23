@@ -35,6 +35,9 @@ public enum IsolationApplyError: Error, Sendable, Equatable {
     case lifetimeBoundaryFailed
     /// The caller cancelled. The owned process group was signalled before return.
     case cancelled
+    /// This project still has an unresolved protected workspace.
+    /// No second workspace was created and no host file was overwritten.
+    case workspaceUnresolved(String)
 }
 
 /// Child stdio. `discard` is `/dev/null` (apply / perform / probes).

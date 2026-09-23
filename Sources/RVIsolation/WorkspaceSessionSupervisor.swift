@@ -19,6 +19,12 @@ public enum WorkspaceSessionError: Error, Sendable, Equatable {
     case cleanupFailed(IsolationApplyError)
     case alreadyClosed
     case unknownRuntime(RuntimeSessionID)
+    /// Another live RV process holds this project. No second workspace was created.
+    case ownedByLiveProcess(UUID?)
+    /// Recovery is already running for this project.
+    case recoveryInProgress(UUID)
+    /// The previous workspace cannot be reclaimed automatically.
+    case unresolvedWorkspace(WorkspaceRecoveryBlock)
 }
 
 enum WorkspaceSessionFailure {
@@ -30,6 +36,12 @@ enum WorkspaceSessionFailure {
             .lifetimeBoundaryFailed
         case .notAcceptingRuntime, .alreadyClosed, .unknownRuntime:
             .workspaceInodeBoundaryFailed
+        case .ownedByLiveProcess:
+            .workspaceUnresolved("liveOwner")
+        case .recoveryInProgress:
+            .workspaceUnresolved("recoveryInProgress")
+        case .unresolvedWorkspace(let block):
+            .workspaceUnresolved(block.reason.rawValue)
         }
     }
 }
@@ -67,6 +79,7 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
         var publishCount = 0
         var finishedClose: Result<Void, WorkspaceSessionError>?
         var recordError: IsolationApplyError?
+        var abandoned = false
     }
 
     private enum CloseRole {
@@ -81,6 +94,7 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
     private let createdAt: Date
     private let boundary: WorkspaceInodeBoundary
     private let lifecycleLog: WorkspaceLifecycleStore
+    private let ownerLock: WorkspaceOwnerLock
     private let state: Mutex<State>
 
     private init(
@@ -89,7 +103,8 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
         protected: WorkingDirectory,
         createdAt: Date,
         boundary: WorkspaceInodeBoundary,
-        lifecycleLog: WorkspaceLifecycleStore
+        lifecycleLog: WorkspaceLifecycleStore,
+        ownerLock: WorkspaceOwnerLock
     ) {
         self.id = id
         self.original = original
@@ -97,6 +112,7 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
         self.createdAt = createdAt
         self.boundary = boundary
         self.lifecycleLog = lifecycleLog
+        self.ownerLock = ownerLock
         self.state = Mutex(State(lifecycle: .creating))
     }
     #endif
@@ -117,7 +133,8 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
     #if os(macOS)
     static func open(
         _ workspace: WorkingDirectory,
-        lifecycleLog: WorkspaceLifecycleStore
+        lifecycleLog: WorkspaceLifecycleStore,
+        runtimeLog: URL? = nil
     ) -> Result<WorkspaceSessionSupervisor, WorkspaceSessionError> {
         let resolved: String
         switch existingResolvedWorkspacePath(workspace) {
@@ -129,45 +146,113 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
         guard let directory = WorkingDirectory(validating: resolved) else {
             return .failure(.apply(.workspacePathUnresolvable))
         }
+        guard let lifeURL = lifecycleLog.file else {
+            return .failure(.apply(.sessionRecordFailed))
+        }
+        let sessions = runtimeLog ?? RuntimeSessionLog.productionURL()
+        guard let sessions else {
+            return .failure(.apply(.sessionRecordFailed))
+        }
+        let ownerLock: WorkspaceOwnerLock
+        switch WorkspaceRecovery.admit(
+            canonicalPath: resolved,
+            lifecycleLog: lifeURL,
+            runtimeLog: sessions
+        ) {
+        case .failure(let error):
+            return .failure(error)
+        case .success(let lock):
+            ownerLock = lock
+        }
+        func releaseAdmission(owner: UUID?) {
+            if let owner {
+                WorkspaceOwnerRegistry.remove(path: resolved, owner: owner)
+            } else {
+                WorkspaceOwnerRegistry.cancelOpening(resolved)
+            }
+            ownerLock.release()
+        }
         switch rejectWorkspaceInodeAlias(resolved) {
         case .failure(let error):
+            releaseAdmission(owner: nil)
             return .failure(.apply(error))
         case .success:
             break
         }
         if Task.isCancelled {
+            releaseAdmission(owner: nil)
             return .failure(.apply(.cancelled))
         }
         let boundary: WorkspaceInodeBoundary
         switch establishWorkspaceInodeBoundary(at: resolved) {
         case .failure(let error):
+            releaseAdmission(owner: nil)
             return .failure(.apply(error))
         case .success(let established):
             boundary = established
         }
         guard boundary.remainsEstablished() else {
             _ = boundary.discardAndRestore()
+            releaseAdmission(owner: nil)
             return .failure(.apply(.workspaceInodeBoundaryFailed))
         }
         let id = WorkspaceSessionID()
+        guard WorkspaceOwnerRegistry.adopt(resolved, owner: id.rawValue) else {
+            _ = boundary.discardAndRestore()
+            WorkspaceOwnerRegistry.cancelOpening(resolved)
+            ownerLock.release()
+            return .failure(.apply(.workspaceInodeBoundaryFailed))
+        }
         let createdAt = Date()
+        let snapshotFile = WorkspaceRecovery.snapshotURL(
+            directory: lifeURL.deletingLastPathComponent(),
+            id: id.rawValue
+        )
+        let snapshotIdentity: (device: UInt64, inode: UInt64)
+        switch WorkspaceRecovery.writeSnapshot(boundary.snapshotStamps(), to: snapshotFile) {
+        case .failure:
+            _ = boundary.discardAndRestore()
+            releaseAdmission(owner: id.rawValue)
+            return .failure(.apply(.sessionRecordFailed))
+        case .success(let identity):
+            snapshotIdentity = identity
+        }
+        guard let token = ownerLock.token else {
+            _ = boundary.discardAndRestore()
+            _ = removeSnapshot(snapshotFile.path, device: snapshotIdentity.device, inode: snapshotIdentity.inode)
+            releaseAdmission(owner: id.rawValue)
+            return .failure(.apply(.sessionRecordFailed))
+        }
+        let durable = boundary.recoveryIdentity(
+            lockPath: ownerLock.path,
+            lockDevice: ownerLock.device,
+            lockInode: ownerLock.inode,
+            ownerToken: token,
+            snapshotPath: snapshotFile.path,
+            snapshotDevice: snapshotIdentity.device,
+            snapshotInode: snapshotIdentity.inode
+        )
         let recorded = lifecycleLog.append(
             WorkspaceLifecycleRecord(
                 kind: .created,
                 workspace: id.rawValue,
                 originalPath: directory.rawValue,
                 protectedPath: directory.rawValue,
-                volumeDevice: boundary.volumeDeviceIdentifier,
-                disk: boundary.diskIdentifier,
+                volumeDevice: durable.volumeDevice,
+                disk: durable.disk,
                 runtime: nil,
-                recordedAt: createdAt
+                recordedAt: createdAt,
+                identity: durable
             )
         )
         if case .failure(let error) = recorded {
+            _ = removeSnapshot(snapshotFile.path, device: snapshotIdentity.device, inode: snapshotIdentity.inode)
             switch boundary.discardAndRestore() {
             case .failure(let cleanup):
+                releaseAdmission(owner: id.rawValue)
                 return .failure(.cleanupFailed(cleanup))
             case .success:
+                releaseAdmission(owner: id.rawValue)
                 return .failure(.apply(error))
             }
         }
@@ -177,7 +262,8 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
             protected: directory,
             createdAt: createdAt,
             boundary: boundary,
-            lifecycleLog: lifecycleLog
+            lifecycleLog: lifecycleLog,
+            ownerLock: ownerLock
         )
         let activated = supervisor.state.withLock { state -> Bool in
             guard let active = state.lifecycle.transition(.becameActive) else { return false }
@@ -185,13 +271,48 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
             return true
         }
         guard activated else {
-            _ = boundary.discardAndRestore()
+            switch boundary.discardAndRestore() {
+            case .success:
+                _ = lifecycleLog.append(
+                    WorkspaceLifecycleRecord(
+                        kind: .closed,
+                        workspace: id.rawValue,
+                        originalPath: directory.rawValue,
+                        protectedPath: directory.rawValue,
+                        volumeDevice: durable.volumeDevice,
+                        disk: durable.disk,
+                        runtime: nil,
+                        recordedAt: Date(),
+                        identity: durable
+                    )
+                )
+            case .failure:
+                break
+            }
+            releaseAdmission(owner: id.rawValue)
             return .failure(.apply(.workspaceInodeBoundaryFailed))
         }
         return .success(supervisor)
     }
 
+    /// Drop the kernel lock without publishing. Tests use this to simulate process death.
+    func abandonForCrashSimulation() {
+        state.withLock { $0.abandoned = true }
+        WorkspaceOwnerRegistry.remove(path: original.rawValue, owner: id.rawValue)
+        ownerLock.release()
+    }
+
     deinit {
+        let abandoned = state.withLock { $0.abandoned }
+        if abandoned {
+            let children = state.withLock { Array($0.children.values) }
+            let deadline = Date().addingTimeInterval(5)
+            while Date() < deadline, children.contains(where: { $0.watchFinished == false }) {
+                usleep(10_000)
+            }
+            ownerLock.release()
+            return
+        }
         let children = state.withLock { Array($0.children.values) }
         for child in children {
             child.stop.request()
@@ -212,6 +333,8 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
         if discard {
             _ = boundary.discardAndRestore()
         }
+        WorkspaceOwnerRegistry.remove(path: original.rawValue, owner: id.rawValue)
+        ownerLock.release()
     }
 
     public var snapshot: RVWorkspaceSession {
@@ -342,7 +465,10 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
 
     /// Stop every runtime, publish once, and remove the private volume.
     public func close() -> Result<Void, WorkspaceSessionError> {
-        finish(publish: true)
+        if state.withLock({ $0.abandoned }) {
+            return .failure(.alreadyClosed)
+        }
+        return finish(publish: true)
     }
 
     func savedFile(_ relative: String) -> Data? {
@@ -400,7 +526,7 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
             case .failure(let error):
                 return .failure(.apply(error))
             case .success:
-                break
+                slot.logged = session
             }
             switch spawnSeatbeltProcess(
                 request,
@@ -423,13 +549,66 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
         }
         switch result {
         case .failure(let error):
+            if slot.child == nil, let session = slot.logged {
+                noteRuntimeEnded(session)
+            }
             return .failure(error)
         case .success:
             guard let child = slot.child else {
                 return .failure(.apply(.processSpawnFailed))
             }
-            return .success(child)
+            switch recordProcessGroup(child) {
+            case .failure(let error):
+                retireUnrecorded(child)
+                return .failure(error)
+            case .success:
+                return .success(child)
+            }
         }
+    }
+
+    private func recordProcessGroup(
+        _ child: WorkspaceChild
+    ) -> Result<Void, WorkspaceSessionError> {
+        guard let fact = ProcessGroupRecovery.capture(pid: child.live.pid) else {
+            return .failure(.apply(.lifetimeBoundaryFailed))
+        }
+        let recorded = lifecycleLog.append(
+            WorkspaceLifecycleRecord(
+                kind: .runtimeStarted,
+                workspace: id.rawValue,
+                originalPath: original.rawValue,
+                protectedPath: protected.rawValue,
+                volumeDevice: boundary.volumeDeviceIdentifier,
+                disk: boundary.diskIdentifier,
+                runtime: child.live.session.id.rawValue,
+                recordedAt: Date(),
+                processGroup: Int64(fact.pgid),
+                processStartSeconds: fact.startSeconds,
+                processStartMicroseconds: fact.startMicroseconds
+            )
+        )
+        if case .failure(let error) = recorded {
+            return .failure(.apply(error))
+        }
+        return .success(())
+    }
+
+    private func retireUnrecorded(_ child: WorkspaceChild) {
+        let session = child.live.session
+        let pid = child.live.pid
+        state.withLock { state in
+            state.children[session.id] = nil
+        }
+        if pid > 1 {
+            _ = kill(-pid, SIGKILL)
+        }
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline {
+            if processGroupIsEmpty(pid), processIsGone(pid) { break }
+            usleep(10_000)
+        }
+        noteRuntimeEnded(session)
     }
 
     private func waitUntilEstablished(
@@ -461,6 +640,9 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
     }
 
     private func finish(publish: Bool) -> Result<Void, WorkspaceSessionError> {
+        if state.withLock({ $0.abandoned }) {
+            return .failure(.alreadyClosed)
+        }
         let role: CloseRole = state.withLock { state in
             if let finished = state.finishedClose {
                 return .finished(finished)
@@ -541,6 +723,8 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
         if case .failure(let error) = logged {
             return .failure(.apply(error))
         }
+        WorkspaceOwnerRegistry.remove(path: original.rawValue, owner: id.rawValue)
+        ownerLock.release()
         if let recordError = state.withLock({ $0.recordError }) {
             return .failure(.apply(recordError))
         }
@@ -616,6 +800,14 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
 #if os(macOS)
 private final class WorkspaceChildSlot: @unchecked Sendable {
     var child: WorkspaceChild?
+    var logged: RuntimeSession?
+}
+
+private func removeSnapshot(_ path: String, device: UInt64, inode: UInt64) -> Bool {
+    var status = stat()
+    guard path.withCString({ lstat($0, &status) == 0 }) else { return true }
+    guard UInt64(status.st_dev) == device, UInt64(status.st_ino) == inode else { return false }
+    return path.withCString { unlink($0) == 0 }
 }
 
 private final class WorkspaceChild: @unchecked Sendable {
