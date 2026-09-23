@@ -422,7 +422,7 @@ struct RuntimeAdversarialTests {
         """
         let run = try await runShell(tree.contained, script)
         #expect(run.exitStatus == 0)
-        Thread.sleep(forTimeInterval: 0.3)
+        try await Task.sleep(for: .milliseconds(300))
         #expect(victim.isRunning)
     }
 
@@ -553,7 +553,7 @@ private func assertNoSurvivingWriter(_ tree: ContainmentTree, script: String) as
     #expect(liveness == -1)
     #expect(livenessError == ESRCH)
     try Data("parent-has-returned".utf8).write(to: gate)
-    Thread.sleep(forTimeInterval: 0.5)
+    try await Task.sleep(for: .milliseconds(500))
     #expect(!exists(marker))
     #expect(!exists(outside))
 }
@@ -564,7 +564,7 @@ private func assertProbeCannotSurvive(_ tree: ContainmentTree, executable: Strin
     let command = try #require(IsolatedCommand(executable: executable, arguments: [marker.path, gate.path]))
     let result = await IsolationBackends.applyOffPool(tree.contained, command: command)
     try Data("parent-has-returned".utf8).write(to: gate)
-    Thread.sleep(forTimeInterval: 0.5)
+    try await Task.sleep(for: .milliseconds(500))
     #expect(!exists(marker))
     switch result {
     case .success(let run):

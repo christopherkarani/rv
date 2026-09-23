@@ -95,6 +95,33 @@ jobs:
       - name: Isolated-HOME host attach
         run: Scripts/host-attach-proof.sh
 
+  # Darwin isolation only. Parallel with hook grade so a silent suite hang
+  # dies at 15 minutes. Compile this test target before anything else; do not
+  # stage release binaries or run the CLI suite in this job.
+  macos-isolation:
+    name: macos isolation
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Swift toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Developer/Toolchains/swift-6.4-RELEASE.xctoolchain
+            ~/Library/Developer/Toolchains/swift-6.4.0-RELEASE.xctoolchain
+          key: swift-6.4-RELEASE-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install Swift 6.4
+        run: Scripts/install-official-swift-macos.sh
+
+      - name: Compile RVIsolationTests
+        run: Scripts/swift-6.4 build --target RVIsolationTests
+
+      - name: Run RVIsolationTests
+        run: Scripts/swift-6.4 test --skip-build --test-product RVIsolationTests --filter RVIsolationTests
+
   # Advertised grade is macOS 26 hook process, not Linux units.
   hook-grade:
     name: macos hook grade
@@ -127,13 +154,13 @@ jobs:
         run: Scripts/c-hook-proof.sh
 
       # Linux PR already ran unfiltered swift test. Darwin XPC / LaunchAgent
-      # and the isolated-HOME oracle only exist here. Skip the in-process
-      # CHookPipeTests proof — this job already ran Scripts/c-hook-proof.sh.
+      # and the isolated-HOME oracle only exist here. RVIsolationTests run in
+      # the parallel macos isolation job. Skip the in-process CHookPipeTests
+      # proof — this job already ran Scripts/c-hook-proof.sh.
       - name: Darwin Swift (XPC / CLI)
         run: |
           Scripts/swift-6.4 test --filter RVServiceTests --skip injectedOneSecondIdleFiresWithoutKeepAlive
           Scripts/swift-6.4 test --filter RVCLITests --skip CHookPipeTests.cHookProof
-          Scripts/swift-6.4 test --filter RVIsolationTests
 
       - name: Isolated-HOME oracle
         run: Scripts/host-oracle.sh
