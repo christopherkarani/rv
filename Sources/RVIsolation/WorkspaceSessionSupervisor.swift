@@ -19,6 +19,9 @@ public enum WorkspaceSessionError: Error, Sendable, Equatable {
     case cleanupFailed(IsolationApplyError)
     case alreadyClosed
     case unknownRuntime(RuntimeSessionID)
+    /// The workspace is active, and the concurrent running-runtime cap is full.
+    /// No process was spawned.
+    case runtimeLimit
     /// Another live RV process holds this project. No second workspace was created.
     case ownedByLiveProcess(UUID?)
     /// Recovery is already running for this project.
@@ -34,7 +37,7 @@ enum WorkspaceSessionFailure {
             error
         case .childTeardownFailed:
             .lifetimeBoundaryFailed
-        case .notAcceptingRuntime, .alreadyClosed, .unknownRuntime:
+        case .notAcceptingRuntime, .alreadyClosed, .unknownRuntime, .runtimeLimit:
             .workspaceInodeBoundaryFailed
         case .ownedByLiveProcess:
             .workspaceUnresolved("liveOwner")
@@ -390,7 +393,8 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
         plan: ContainedPlan,
         io: IsolatedIO,
         admission: RuntimeAdmissionConfiguration,
-        sessionStore: RuntimeSessionStore
+        sessionStore: RuntimeSessionStore,
+        runningLimit: Int? = nil
     ) -> Result<RunningRuntime, WorkspaceSessionError> {
         let request: IsolatedLaunchRequest
         switch prepareSeatbelt(plan.isolationPlan(), command) {
@@ -407,7 +411,8 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
             host: host,
             sessionStore: sessionStore,
             admission: admission,
-            register: true
+            register: true,
+            runningLimit: runningLimit
         )
         switch spawned {
         case .failure(let error):
@@ -416,6 +421,8 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
             let session = child.live.session
             child.start {
                 self.noteRuntimeEnded(session)
+            } settled: {
+                self.pruneFinishedRuntimes(limit: WorkspaceControlLimits.maxRuntimes)
             }
             return waitUntilEstablished(child)
         }
@@ -510,7 +517,8 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
         host: HookHost?,
         sessionStore: RuntimeSessionStore,
         admission: RuntimeAdmissionConfiguration,
-        register: Bool
+        register: Bool,
+        runningLimit: Int? = nil
     ) -> Result<WorkspaceChild, WorkspaceSessionError> {
         guard let profile = request.seatbeltProfile,
             let workspace = request.containedWorkspacePath
@@ -521,6 +529,12 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
         let result: Result<Void, WorkspaceSessionError> = state.withLock { state in
             guard state.closeAccepted == false, state.lifecycle.acceptsRuntime else {
                 return .failure(.notAcceptingRuntime(state.lifecycle))
+            }
+            if let runningLimit {
+                let running = state.children.values.filter { $0.watchFinished == false }.count
+                if running >= runningLimit {
+                    return .failure(.runtimeLimit)
+                }
             }
             let session = RuntimeSession(
                 id: RuntimeSessionID(),
@@ -803,6 +817,74 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
         }
     }
 
+    func ownerCredential() -> WorkspaceOwnerCredential? {
+        guard let token = ownerLock.token else { return nil }
+        return WorkspaceOwnerCredential(
+            token: token,
+            lockPath: ownerLock.path,
+            lockDevice: ownerLock.device,
+            lockInode: ownerLock.inode
+        )
+    }
+
+    /// Drops the oldest finished runtimes until what remains fits in `limit`.
+    /// Running runtimes stay. The cap is the control protocol's report bound.
+    func pruneFinishedRuntimes(limit: Int) {
+        state.withLock { state in
+            let entries = state.children.map { id, child in
+                RuntimeRetention.Entry(
+                    id: id.rawValue,
+                    startedAt: child.live.session.startedAt,
+                    running: child.watchFinished == false
+                )
+            }
+            let drop = RuntimeRetention.finishedIDsToDrop(entries, limit: limit)
+            guard drop.isEmpty == false else { return }
+            for id in state.children.keys where drop.contains(id.rawValue) {
+                state.children[id] = nil
+            }
+        }
+    }
+
+    /// Runtimes this workspace owns. No capability, pid, or process group.
+    func runtimeFacts() -> [WorkspaceRuntimeFact] {
+        state.withLock { state in
+            state.children.map { _, child in
+                WorkspaceRuntimeFact(
+                    id: child.live.session.id.rawValue,
+                    hookHost: child.live.session.host?.rawValue,
+                    running: child.watchFinished == false
+                )
+            }
+            .sorted { $0.id.uuidString < $1.id.uuidString }
+        }
+    }
+
+    func cancel(runtime rawValue: UUID) -> Result<Void, WorkspaceSessionError> {
+        let named = RuntimeSessionID(rawValue: rawValue)
+        let known = state.withLock { $0.children[named] != nil }
+        guard known else { return .failure(.unknownRuntime(named)) }
+        return cancel(named)
+    }
+
+    func recordHostStarted(_ host: UUID) -> Bool {
+        let recorded = lifecycleLog.append(
+            WorkspaceLifecycleRecord(
+                kind: .hostStarted,
+                workspace: id.rawValue,
+                originalPath: original.rawValue,
+                protectedPath: protected.rawValue,
+                volumeDevice: boundary.volumeDeviceIdentifier,
+                disk: boundary.diskIdentifier,
+                runtime: nil,
+                recordedAt: Date(),
+                host: host
+            )
+        )
+        if case .failure = recorded { return false }
+        return true
+    }
+
     private func controlFile(of fd: Int32) -> WorkspaceControlFile? {
         var status = stat()
         guard fstat(fd, &status) == 0 else { return nil }
@@ -825,6 +907,28 @@ private func removeSnapshot(_ path: String, device: UInt64, inode: UInt64) -> Bo
     guard path.withCString({ lstat($0, &status) == 0 }) else { return true }
     guard UInt64(status.st_dev) == device, UInt64(status.st_ino) == inode else { return false }
     return path.withCString { unlink($0) == 0 }
+}
+
+/// Which finished runtimes to forget so a report still fits in `limit`.
+struct RuntimeRetention: Equatable {
+    struct Entry: Equatable {
+        var id: UUID
+        var startedAt: Date
+        var running: Bool
+    }
+
+    /// Oldest finished ids that do not fit beside every running entry.
+    /// Running entries are never dropped.
+    static func finishedIDsToDrop(_ entries: [Entry], limit: Int) -> Set<UUID> {
+        let running = entries.filter(\.running).count
+        let room = max(0, limit - running)
+        let finished = entries.filter { $0.running == false }.sorted { lhs, rhs in
+            if lhs.startedAt != rhs.startedAt { return lhs.startedAt < rhs.startedAt }
+            return lhs.id.uuidString < rhs.id.uuidString
+        }
+        guard finished.count > room else { return [] }
+        return Set(finished.prefix(finished.count - room).map(\.id))
+    }
 }
 
 private final class WorkspaceChild: @unchecked Sendable {
@@ -851,12 +955,16 @@ private final class WorkspaceChild: @unchecked Sendable {
         finished.withLock { $0 = true }
     }
 
-    func start(_ ended: @escaping @Sendable () -> Void) {
+    func start(
+        _ ended: @escaping @Sendable () -> Void,
+        settled: @escaping @Sendable () -> Void
+    ) {
         let child = self
         let thread = Thread {
             _ = watchSeatbeltProcess(child.live, stop: child.stop)
             ended()
             child.markFinished()
+            settled()
         }
         thread.name = "rv-runtime-\(child.live.session.id.rawValue.uuidString)"
         thread.start()

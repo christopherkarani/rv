@@ -64,5 +64,6 @@ jobs:
             .build/release-stage/rv
             .build/release-stage/rv-cli
             .build/release-stage/rvd
+            .build/release-stage/rv-workspace-host
             .build/release-stage/*_RVPacks.bundle
           if-no-files-found: error

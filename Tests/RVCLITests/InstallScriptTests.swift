@@ -93,7 +93,7 @@ private func writeDarwinShims(in shim: URL, productVersion: String = "26.0") thr
 
 private func writeDummyTrio(in src: URL) throws {
     let dummy = "#!/bin/sh\n# installed-dummy\nexit 0\n"
-    for name in ["rv", "rv-cli", "rvd", "rv-isolation-exec"] {
+    for name in ["rv", "rv-cli", "rvd", "rv-workspace-host", "rv-isolation-exec"] {
         try writeExecutable(src.appendingPathComponent(name), contents: dummy)
     }
 }
@@ -140,6 +140,10 @@ private func writeLinuxSetupTrio(in src: URL, swiftRV: URL) throws {
     try writeExecutable(
         src.appendingPathComponent("rvd"),
         contents: "#!/bin/sh\n# dummy-rvd\nexit 0\n"
+    )
+    try writeExecutable(
+        src.appendingPathComponent("rv-workspace-host"),
+        contents: "#!/bin/sh\n# dummy-workspace-host\nexit 0\n"
     )
 }
 
@@ -405,6 +409,7 @@ private func proveLinuxInstall(arch: String) throws {
     let dummy = "#!/bin/sh\nexit 0\n"
     try writeExecutable(src.appendingPathComponent("rv"), contents: dummy)
     try writeExecutable(src.appendingPathComponent("rvd"), contents: dummy)
+    try writeExecutable(src.appendingPathComponent("rv-workspace-host"), contents: dummy)
 
     let shim = root.appendingPathComponent("shim", isDirectory: true)
     try writeDarwinShims(in: shim)
@@ -428,6 +433,7 @@ private func proveLinuxInstall(arch: String) throws {
     let dummy = "#!/bin/sh\nexit 0\n"
     try writeExecutable(src.appendingPathComponent("rv"), contents: dummy)
     try writeExecutable(src.appendingPathComponent("rvd"), contents: dummy)
+    try writeExecutable(src.appendingPathComponent("rv-workspace-host"), contents: dummy)
     let cli = src.appendingPathComponent("rv-cli")
     try dummy.write(to: cli, atomically: true, encoding: .utf8)
     try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: cli.path)
@@ -471,6 +477,10 @@ private func proveLinuxInstall(arch: String) throws {
     try writeExecutable(
         src.appendingPathComponent("rvd"),
         contents: "#!/bin/sh\n# dummy-rvd\nexit 0\n"
+    )
+    try writeExecutable(
+        src.appendingPathComponent("rv-workspace-host"),
+        contents: "#!/bin/sh\n# dummy-workspace-host\nexit 0\n"
     )
     let bundlePack = src.appendingPathComponent("rv_RVPacks.bundle/packs/core.json")
     try FileManager.default.createDirectory(
@@ -725,6 +735,10 @@ private func writeCurlShim(
         assets.appendingPathComponent("rvd"),
         contents: "#!/bin/sh\nexit 0\n"
     )
+    try writeExecutable(
+        assets.appendingPathComponent("rv-workspace-host"),
+        contents: "#!/bin/sh\nexit 0\n"
+    )
     try writePackBundleTarball(in: assets)
     #expect(FileManager.default.fileExists(atPath: assets.appendingPathComponent("rv_RVPacks.bundle.tar.gz").path))
     #expect(isDirectory(assets.appendingPathComponent("rv_RVPacks.bundle")) == false)
@@ -791,6 +805,10 @@ private func writeCurlShim(
     )
     try writeExecutable(
         assets.appendingPathComponent("rvd"),
+        contents: "#!/bin/sh\nexit 0\n"
+    )
+    try writeExecutable(
+        assets.appendingPathComponent("rv-workspace-host"),
         contents: "#!/bin/sh\nexit 0\n"
     )
 

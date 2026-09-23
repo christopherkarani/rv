@@ -47,6 +47,7 @@ tmp_fetch=""
 tmp_rv=""
 tmp_cli=""
 tmp_rvd=""
+tmp_host=""
 tmp_isolation=""
 
 # Download progress. Same glyphs/width as Sources/RVTUI/SetupRenderer.swift.
@@ -63,6 +64,7 @@ cleanup() {
   [ -n "${tmp_rv:-}" ] && rm -f "$tmp_rv"
   [ -n "${tmp_cli:-}" ] && rm -f "$tmp_cli"
   [ -n "${tmp_rvd:-}" ] && rm -f "$tmp_rvd"
+  [ -n "${tmp_host:-}" ] && rm -f "$tmp_host"
   [ -n "${tmp_isolation:-}" ] && rm -f "$tmp_isolation"
   [ -n "${tmp_fetch:-}" ] && rm -rf "$tmp_fetch"
   :
@@ -255,8 +257,8 @@ fetch_pack_bundles() {
 
 if [ -n "${RV_INSTALL_BIN:-}" ]; then
   src="$RV_INSTALL_BIN"
-  [ -x "$src/rv" ] && [ -x "$src/rv-cli" ] && [ -x "$src/rvd" ] || {
-    echo "rv: RV_INSTALL_BIN must contain executable rv, rv-cli, and rvd" >&2
+  [ -x "$src/rv" ] && [ -x "$src/rv-cli" ] && [ -x "$src/rvd" ] && [ -x "$src/rv-workspace-host" ] || {
+    echo "rv: RV_INSTALL_BIN must contain executable rv, rv-cli, rvd, and rv-workspace-host" >&2
     exit 1
   }
 else
@@ -265,9 +267,10 @@ else
   size_rv="$(normalize_size "$(content_length "$release_base/rv")")"
   size_cli="$(normalize_size "$(content_length "$release_base/rv-cli")")"
   size_rvd="$(normalize_size "$(content_length "$release_base/rvd")")"
+  size_host="$(normalize_size "$(content_length "$release_base/rv-workspace-host")")"
   size_packs="$(normalize_size "$(content_length "$release_base/rv_RVPacks.bundle.tar.gz")")"
 
-  progress_total=$((size_rv + size_cli + size_rvd + size_packs))
+  progress_total=$((size_rv + size_cli + size_rvd + size_host + size_packs))
   size_isolation=0
   if [ "$os" = "Linux" ]; then
     size_isolation="$(normalize_size "$(content_length "$release_base/rv-isolation-exec")")"
@@ -280,7 +283,8 @@ else
   download_release_asset "$tmp_fetch" "rv" "$size_rv"
   download_release_asset "$tmp_fetch" "rv-cli" "$size_cli"
   download_release_asset "$tmp_fetch" "rvd" "$size_rvd"
-  chmod 755 "$tmp_fetch/rv" "$tmp_fetch/rv-cli" "$tmp_fetch/rvd"
+  download_release_asset "$tmp_fetch" "rv-workspace-host" "$size_host"
+  chmod 755 "$tmp_fetch/rv" "$tmp_fetch/rv-cli" "$tmp_fetch/rvd" "$tmp_fetch/rv-workspace-host"
   if [ "$os" = "Linux" ]; then
     download_release_asset "$tmp_fetch" "rv-isolation-exec" "$size_isolation"
     chmod 755 "$tmp_fetch/rv-isolation-exec"
@@ -289,8 +293,8 @@ else
   progress_finish
 
   src="$tmp_fetch"
-  [ -x "$src/rv" ] && [ -x "$src/rv-cli" ] && [ -x "$src/rvd" ] || {
-    echo "rv: download did not produce executable rv, rv-cli, and rvd" >&2
+  [ -x "$src/rv" ] && [ -x "$src/rv-cli" ] && [ -x "$src/rvd" ] && [ -x "$src/rv-workspace-host" ] || {
+    echo "rv: download did not produce executable rv, rv-cli, rvd, and rv-workspace-host" >&2
     exit 1
   }
 fi
@@ -306,11 +310,13 @@ fi
 tmp_rv="$bin/.rv.installing"
 tmp_cli="$bin/.rv-cli.installing"
 tmp_rvd="$bin/.rvd.installing"
-rm -f "$tmp_rv" "$tmp_cli" "$tmp_rvd"
+tmp_host="$bin/.rv-workspace-host.installing"
+rm -f "$tmp_rv" "$tmp_cli" "$tmp_rvd" "$tmp_host"
 cp "$src/rv" "$tmp_rv"
 cp "$src/rv-cli" "$tmp_cli"
 cp "$src/rvd" "$tmp_rvd"
-chmod 755 "$tmp_rv" "$tmp_cli" "$tmp_rvd"
+cp "$src/rv-workspace-host" "$tmp_host"
+chmod 755 "$tmp_rv" "$tmp_cli" "$tmp_rvd" "$tmp_host"
 if [ "$os" = "Linux" ]; then
   tmp_isolation="$bin/.rv-isolation-exec.installing"
   rm -f "$tmp_isolation"
@@ -320,10 +326,11 @@ fi
 
 # Unlink dest first: BSD cp writes through an existing dest symlink. Same
 # directory rename after a successful staging is metadata-only.
-rm -f "$bin/rv" "$bin/rv-cli" "$bin/rvd"
+rm -f "$bin/rv" "$bin/rv-cli" "$bin/rvd" "$bin/rv-workspace-host"
 mv -f "$tmp_rv" "$bin/rv"
 mv -f "$tmp_cli" "$bin/rv-cli"
 mv -f "$tmp_rvd" "$bin/rvd"
+mv -f "$tmp_host" "$bin/rv-workspace-host"
 if [ "$os" = "Linux" ]; then
   rm -f "$bin/rv-isolation-exec"
   mv -f "$tmp_isolation" "$bin/rv-isolation-exec"
@@ -332,6 +339,7 @@ fi
 tmp_rv=""
 tmp_cli=""
 tmp_rvd=""
+tmp_host=""
 
 # Pack JSON lives next to the binaries (Scripts/release.sh). Darwin SPM emits
 # *_RVPacks.bundle; Linux SPM emits *_RVPacks.resources. Bundle.module loads

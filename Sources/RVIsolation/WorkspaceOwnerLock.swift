@@ -207,6 +207,17 @@ final class WorkspaceOwnerLock: @unchecked Sendable {
         return fsync(directory) == 0
     }
 
+    /// Reads the token without taking the lock. A live owner keeps `flock`.
+    static func token(at path: String) -> UUID? {
+        let fd = path.withCString { open($0, O_RDONLY | O_CLOEXEC | O_NOFOLLOW) }
+        if fd < 0 { return nil }
+        defer { close(fd) }
+        var status = stat()
+        if fstat(fd, &status) != 0 { return nil }
+        if (status.st_mode & S_IFMT) != S_IFREG { return nil }
+        return readToken(fd)
+    }
+
     private static func readToken(_ fd: Int32) -> UUID? {
         if lseek(fd, 0, SEEK_SET) < 0 { return nil }
         var buffer = [UInt8](repeating: 0, count: 80)

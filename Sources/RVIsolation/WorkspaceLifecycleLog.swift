@@ -45,6 +45,8 @@ struct WorkspaceLifecycleRecord: Equatable, Sendable {
         case recoveryCompleted
         case recoveryBlocked
         case closed
+        /// The persistent host bound its control endpoint. Not proof of liveness.
+        case hostStarted
     }
 
     var kind: Kind
@@ -60,6 +62,8 @@ struct WorkspaceLifecycleRecord: Equatable, Sendable {
     var processStartSeconds: Int64?
     var processStartMicroseconds: Int64?
     var blockReason: String?
+    /// Persistent host that bound the control endpoint. Absent on older lines.
+    var host: UUID?
 
     init(
         kind: Kind,
@@ -74,7 +78,8 @@ struct WorkspaceLifecycleRecord: Equatable, Sendable {
         processGroup: Int64? = nil,
         processStartSeconds: Int64? = nil,
         processStartMicroseconds: Int64? = nil,
-        blockReason: String? = nil
+        blockReason: String? = nil,
+        host: UUID? = nil
     ) {
         self.kind = kind
         self.workspace = workspace
@@ -89,6 +94,7 @@ struct WorkspaceLifecycleRecord: Equatable, Sendable {
         self.processStartSeconds = processStartSeconds
         self.processStartMicroseconds = processStartMicroseconds
         self.blockReason = blockReason
+        self.host = host
     }
 }
 
@@ -150,6 +156,7 @@ enum WorkspaceLifecycleLog {
         var processStartSeconds: Int64?
         var processStartMicroseconds: Int64?
         var blockReason: String?
+        var host: UUID?
     }
 
     /// `$HOME/.config/rv/workspace-sessions.jsonl`. Ignores `XDG_CONFIG_HOME`.
@@ -182,7 +189,8 @@ enum WorkspaceLifecycleLog {
             processGroup: record.processGroup,
             processStartSeconds: record.processStartSeconds,
             processStartMicroseconds: record.processStartMicroseconds,
-            blockReason: record.blockReason
+            blockReason: record.blockReason,
+            host: record.host
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
@@ -270,7 +278,8 @@ enum WorkspaceLifecycleLog {
             processGroup: record.processGroup,
             processStartSeconds: record.processStartSeconds,
             processStartMicroseconds: record.processStartMicroseconds,
-            blockReason: record.blockReason
+            blockReason: record.blockReason,
+            host: record.host
         )
     }
 }

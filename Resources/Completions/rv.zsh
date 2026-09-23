@@ -4,6 +4,7 @@ _rv() {
   local -a commands
   commands=(
     'opencode:Launch OpenCode with workspace write containment'
+    'workspace:Attach to the persistent workspace host'
     'test:Evaluate a command'
     'explain:Explain a decision'
     'packs:List and enable packs'
@@ -24,6 +25,11 @@ _rv() {
     cmds) _describe -t commands 'rv command' commands ;;
     args)
       case $words[1] in
+        workspace)
+          local -a ws
+          ws=('start:Start or attach' 'attach:Attach until stdin closes' 'status:Show the live host' 'close:Close the workspace')
+          _describe -t commands 'workspace' ws
+          ;;
         allow-once)
           local -a ao
           ao=('mint:Mint a code' 'list:List rows' 'clear:Clear rows')

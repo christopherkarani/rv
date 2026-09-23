@@ -153,10 +153,15 @@ let serviceLibraryAndDaemon: [Target] = [
         name: "rvd",
         dependencies: ["RVService"]
     ),
+    .executableTarget(
+        name: "rv-workspace-host",
+        dependencies: ["RVIsolation"]
+    ),
 ]
 let serviceProducts: [Product] = [
     .library(name: "RVService", targets: ["RVService"]),
     .executable(name: "rvd", targets: ["rvd"]),
+    .executable(name: "rv-workspace-host", targets: ["rv-workspace-host"]),
 ]
 let serviceTestTargets: [Target] = [
     .testTarget(name: "RVServiceTests", dependencies: ["RVService", "RVAnalytics"]),

@@ -8,6 +8,7 @@ public struct RV: AsyncParsableCommand {
         version: ProductVersion.semver,
         subcommands: [
             OpenCode.self,
+            Workspace.self,
             Test.self,
             Explain.self,
             Packs.self,

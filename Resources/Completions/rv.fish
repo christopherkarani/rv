@@ -1,5 +1,6 @@
 complete -c rv -f
 complete -c rv -n "__fish_use_subcommand" -a "opencode" -d "Launch OpenCode with workspace write containment"
+complete -c rv -n "__fish_use_subcommand" -a "workspace" -d "Attach to the persistent workspace host"
 complete -c rv -n "__fish_use_subcommand" -a "test" -d "Evaluate a command"
 complete -c rv -n "__fish_use_subcommand" -a "explain" -d "Explain a decision"
 complete -c rv -n "__fish_use_subcommand" -a "packs" -d "List and enable packs"
@@ -14,6 +15,10 @@ complete -c rv -n "__fish_use_subcommand" -a "uninstall" -d "Remove rv-owned fil
 complete -c rv -n "__fish_use_subcommand" -a "doctor" -d "Read-only health"
 complete -c rv -n "__fish_use_subcommand" -a "safety" -d "Show or set normal or strict"
 complete -c rv -n "__fish_use_subcommand" -a "blocks" -d "List recent denials"
+complete -c rv -n "__fish_seen_subcommand_from workspace" -a "start" -d "Start or attach"
+complete -c rv -n "__fish_seen_subcommand_from workspace" -a "attach" -d "Attach until stdin closes"
+complete -c rv -n "__fish_seen_subcommand_from workspace" -a "status" -d "Show the live host"
+complete -c rv -n "__fish_seen_subcommand_from workspace" -a "close" -d "Close the workspace"
 complete -c rv -n "__fish_seen_subcommand_from allow-once" -a "mint" -d "Mint a code"
 complete -c rv -n "__fish_seen_subcommand_from allow-once" -a "list" -d "List rows"
 complete -c rv -n "__fish_seen_subcommand_from allow-once" -a "clear" -d "Clear rows"
