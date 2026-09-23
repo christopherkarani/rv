@@ -836,6 +836,7 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
                     id: id.rawValue,
                     startedAt: child.live.session.startedAt,
                     running: child.watchFinished == false
+                        || (child.live.pty?.hasSubscribers ?? false)
                 )
             }
             let drop = RuntimeRetention.finishedIDsToDrop(entries, limit: limit)
@@ -848,15 +849,102 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
 
     /// Runtimes this workspace owns. No capability, pid, or process group.
     func runtimeFacts() -> [WorkspaceRuntimeFact] {
-        state.withLock { state in
-            state.children.map { _, child in
-                WorkspaceRuntimeFact(
-                    id: child.live.session.id.rawValue,
-                    hookHost: child.live.session.host?.rawValue,
-                    running: child.watchFinished == false
-                )
-            }
-            .sorted { $0.id.uuidString < $1.id.uuidString }
+        let children = state.withLock { Array($0.children.values) }
+        return children.map { child in
+            let window = child.live.pty?.window()
+            let terminal = child.live.pty != nil
+            return WorkspaceRuntimeFact(
+                id: child.live.session.id.rawValue,
+                hookHost: child.live.session.host?.rawValue,
+                running: child.watchFinished == false,
+                terminal: terminal,
+                rows: terminal ? window?.rows : nil,
+                columns: terminal ? window?.columns : nil,
+                inputOwner: child.live.pty?.hasInputOwner ?? false
+            )
+        }
+        .sorted { $0.id.uuidString < $1.id.uuidString }
+    }
+
+    func subscribeTerminal(
+        runtime: UUID,
+        client: UUID,
+        emit: @escaping @Sendable (TerminalNotice) -> Void
+    ) -> Result<Void, WorkspaceControlCode> {
+        guard let terminal = terminal(runtime) else {
+            return .failure(terminalMissing(runtime))
+        }
+        return terminal.subscribe(client: client, emit: emit).mapError { self.controlCode($0) }
+    }
+
+    func activateTerminal(runtime: UUID, client: UUID) {
+        terminal(runtime)?.activate(client: client)
+    }
+
+    func detachTerminalClient(_ client: UUID) {
+        let children = state.withLock { Array($0.children.values) }
+        for child in children {
+            child.live.pty?.detach(client: client)
+        }
+    }
+
+    func unsubscribeTerminal(runtime: UUID, client: UUID) -> Result<Void, WorkspaceControlCode> {
+        guard let terminal = terminal(runtime) else {
+            return .failure(terminalMissing(runtime))
+        }
+        terminal.detach(client: client)
+        return .success(())
+    }
+
+    func acquireTerminalInput(runtime: UUID, client: UUID) -> Result<Void, WorkspaceControlCode> {
+        guard let terminal = terminal(runtime) else {
+            return .failure(terminalMissing(runtime))
+        }
+        return terminal.acquireInput(client: client).mapError { self.controlCode($0) }
+    }
+
+    func releaseTerminalInput(runtime: UUID, client: UUID) -> Result<Void, WorkspaceControlCode> {
+        guard let terminal = terminal(runtime) else {
+            return .failure(terminalMissing(runtime))
+        }
+        return terminal.releaseInput(client: client).mapError { self.controlCode($0) }
+    }
+
+    func writeTerminal(runtime: UUID, client: UUID, bytes: Data) -> Result<Void, WorkspaceControlCode> {
+        guard let terminal = terminal(runtime) else {
+            return .failure(terminalMissing(runtime))
+        }
+        return terminal.writeInput(client: client, bytes: bytes).mapError { self.controlCode($0) }
+    }
+
+    func resizeTerminal(runtime: UUID, rows: Int, columns: Int) -> Result<Void, WorkspaceControlCode> {
+        guard let terminal = terminal(runtime) else {
+            return .failure(terminalMissing(runtime))
+        }
+        return terminal.resize(rows: rows, columns: columns).mapError { self.controlCode($0) }
+    }
+
+    func terminalWindow(runtime: UUID) -> (rows: Int, columns: Int)? {
+        terminal(runtime)?.window()
+    }
+
+    private func terminal(_ runtime: UUID) -> RuntimeTerminal? {
+        let named = RuntimeSessionID(rawValue: runtime)
+        return state.withLock { $0.children[named]?.live.pty }
+    }
+
+    private func terminalMissing(_ runtime: UUID) -> WorkspaceControlCode {
+        let named = RuntimeSessionID(rawValue: runtime)
+        let known = state.withLock { $0.children[named] != nil }
+        return known ? .terminalUnavailable : .runtimeNotFound
+    }
+
+    private func controlCode(_ error: TerminalControlError) -> WorkspaceControlCode {
+        switch error {
+        case .unavailable: .terminalUnavailable
+        case .busy: .terminalBusy
+        case .limit: .terminalLimit
+        case .invalid: .invalidRequest
         }
     }
 

@@ -118,6 +118,44 @@ struct DescriptorHygieneTests {
             #expect(report.stdio[1] != parent[1])
         }
         #expect(report.openFDs == grantedPayloadDescriptors)
+        #expect(report.tty == [0, 0, 0])
+    }
+
+    @Test func pseudoTerminalStandardIOIsTheSlaveAndDoesNotLeakParentDescriptors() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        guard try macOSContainedLaunch(tree) else { return }
+        let outside = tree.siblingURL.appendingPathComponent("pty-ambient")
+        var held = try OwnedDescriptors.file(outside, bytes: Array("PARENT".utf8))
+        var fillers: [Int32] = []
+        defer {
+            held.release()
+            for fd in fillers where fd >= 0 { close(fd) }
+        }
+        // Occupy every free slot below 64 so the PTY master cannot be assumed
+        // to land on a particular number. Those descriptors stay in the parent.
+        let nullFD = open("/dev/null", O_RDWR | O_CLOEXEC)
+        try #require(nullFD >= 0)
+        fillers.append(nullFD)
+        for slot in 3..<64 {
+            if fcntl(Int32(slot), F_GETFD) >= 0 { continue }
+            let copied = fcntl(nullFD, F_DUPFD_CLOEXEC, slot)
+            if copied >= 0 { fillers.append(copied) }
+        }
+        let nullIdentity = try #require(fileIdentity(nullFD))
+        let report = try runProbe(
+            tree,
+            io: .pseudoTerminal(rows: 24, columns: 80),
+            checks: held.checks(label: "file") + ["handshake:3"]
+        )
+        #expect(report.tty == [1, 1, 1])
+        #expect(report.stdio[0] == report.stdio[1])
+        #expect(report.stdio[1] == report.stdio[2])
+        #expect(report.stdio[0] != nullIdentity)
+        #expect(report.openFDs == grantedPayloadDescriptors)
+        report.expectClosed("file")
+        report.expectClosed("handshake", errno: EBADF)
+        #expect(try String(contentsOf: outside, encoding: .utf8) == "PARENT")
     }
 
     @Test func innerExecutableDoesNotKeepHandshakeDescriptor() throws {
@@ -299,6 +337,7 @@ private struct ProbeReport {
     var stderrWrite: Int?
     var openFDs: [Int32] = []
     var openByFD: [Int32: FileIdentity] = [:]
+    var tty: [Int] = []
 
     func expectClosed(_ label: String, errno expected: Int32? = nil) {
         let matches = checks.filter { $0.label == label }
@@ -460,9 +499,18 @@ private func runProbe(
 ) throws -> ProbeReport {
     let binary = try compileDescriptorProbe(in: tree.workspaceURL)
     let reportURL = tree.workspaceURL.appendingPathComponent("descriptor-report-\(UUID().uuidString)")
+    let mode: String
+    switch io {
+    case .inherit:
+        mode = "inherit"
+    case .discard:
+        mode = "discard"
+    case .pseudoTerminal:
+        mode = "terminal"
+    }
     let command = try #require(IsolatedCommand(
         executable: binary.path,
-        arguments: [reportURL.path, io == .inherit ? "inherit" : "discard"] + checks
+        arguments: [reportURL.path, mode] + checks
     ))
     let log = tree.rootURL.appendingPathComponent("sessions.jsonl")
     let result = IsolationBackends.applyLaunch(
@@ -515,6 +563,9 @@ private func parseProbeReport(_ text: String, run: IsolatedRunResult) throws -> 
             else { continue }
             report.openFDs.append(fd)
             report.openByFD[fd] = FileIdentity(device: device, inode: inode)
+        case "tty":
+            guard parts.count >= 4 else { continue }
+            report.tty = [Int(parts[1]) ?? -1, Int(parts[2]) ?? -1, Int(parts[3]) ?? -1]
         default:
             break
         }
@@ -681,6 +732,7 @@ int main(int argc, char **argv) {
     ssize_t stdoutCount = write(1, "S", 1);
     ssize_t stderrCount = write(2, "E", 1);
     add("stdio-write %zd %zd\n", stdoutCount, stderrCount);
+    add("tty %d %d %d\n", isatty(0), isatty(1), isatty(2));
     for (int fd = 0; fd < 256; fd++) {
         struct stat info;
         if (fstat(fd, &info) != 0) continue;

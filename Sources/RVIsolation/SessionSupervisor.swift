@@ -14,6 +14,9 @@ private let seatbeltHandshakeScript =
 /// The child receives no descriptor the file actions did not grant.
 /// Those grants are stdin/stdout/stderr for the selected IO mode, the
 /// handshake write end on fd 3, and the admission pipes on fds 4 and 5.
+/// A pseudo-terminal slave replaces `/dev/null` on 0, 1, and 2. The master
+/// stays in RV. `POSIX_SPAWN_SETSID` runs before Seatbelt, so the child is
+/// the session leader without a `setsid` allow inside the sandbox.
 /// The wrapper closes fd 3 before exec. Fds 4 and 5 stay open for the payload.
 /// They are pipes RV created. The profile does not gain a socket or network allow.
 func superviseSeatbelt(
@@ -133,7 +136,8 @@ final class LiveSeatbeltChild: @unchecked Sendable {
     let nonce: String
     let admission: RuntimeAdmissionSession
     /// Parent-side descriptors that must not appear in the child.
-    let parentDescriptors: [Int32]
+    private let retainedDescriptors: [Int32]
+    let pty: RuntimeTerminal?
     var handshakeRead: Int32
     private let established = Mutex(false)
     private let watchStarted = Mutex(false)
@@ -151,15 +155,27 @@ final class LiveSeatbeltChild: @unchecked Sendable {
         nonce: String,
         admission: RuntimeAdmissionSession,
         parentDescriptors: [Int32],
-        handshakeRead: Int32
+        handshakeRead: Int32,
+        terminal: RuntimeTerminal?
     ) {
         self.session = session
         self.capability = capability
         self.pid = pid
         self.nonce = nonce
         self.admission = admission
-        self.parentDescriptors = parentDescriptors
+        self.retainedDescriptors = parentDescriptors
         self.handshakeRead = handshakeRead
+        self.pty = terminal
+    }
+
+    /// Descriptors RV still holds. The PTY master is included only while it
+    /// is open, so a reused descriptor number is not reported after close.
+    var parentDescriptors: [Int32] {
+        var values = retainedDescriptors
+        if let fd = pty?.masterFD, fd >= 0 {
+            values.append(fd)
+        }
+        return values
     }
 
     var isEstablished: Bool { established.withLock { $0 } }
@@ -219,6 +235,7 @@ final class LiveSeatbeltChild: @unchecked Sendable {
             terminateSession(pgid: pid, also: [pid])
             _ = waitUntilSessionIsDead(pgid: pid, also: [pid])
         }
+        pty?.shutdownMaster()
     }
 }
 
@@ -274,17 +291,42 @@ func spawnSeatbeltProcess(
         readEnd = moved
     }
 
+    let terminal: RuntimeTerminal?
+    let spawnFlags: Int16
+    switch request.io {
+    case .discard, .inherit:
+        terminal = nil
+        spawnFlags = Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT)
+    case .pseudoTerminal(let rows, let columns):
+        guard let opened = RuntimeTerminal.open(rows: rows, columns: columns) else {
+            return .failure(.processSpawnFailed)
+        }
+        terminal = opened
+        // SETSID is applied in the child before file actions, still outside
+        // Seatbelt. It is not combined with SETPGROUP. The recorded process
+        // group remains the session leader's pid.
+        spawnFlags = Int16(POSIX_SPAWN_SETSID | POSIX_SPAWN_CLOEXEC_DEFAULT)
+    }
+    var handedOff = false
+    defer {
+        if handedOff == false {
+            terminal?.shutdownMaster()
+        }
+    }
+
     var attributes: posix_spawnattr_t?
     guard posix_spawnattr_init(&attributes) == 0 else {
         return .failure(.lifetimeBoundaryFailed)
     }
     defer { posix_spawnattr_destroy(&attributes) }
     // Every parent descriptor is close-on-exec unless a file action grants it.
-    let flags = Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT)
-    guard posix_spawnattr_setflags(&attributes, flags) == 0,
-        posix_spawnattr_setpgroup(&attributes, 0) == 0
-    else {
+    guard posix_spawnattr_setflags(&attributes, spawnFlags) == 0 else {
         return .failure(.lifetimeBoundaryFailed)
+    }
+    if terminal == nil {
+        guard posix_spawnattr_setpgroup(&attributes, 0) == 0 else {
+            return .failure(.lifetimeBoundaryFailed)
+        }
     }
 
     var actions: posix_spawn_file_actions_t?
@@ -303,7 +345,8 @@ func spawnSeatbeltProcess(
         io: request.io,
         readEnd: readEnd,
         writeEnd: writeEnd,
-        nullFD: &nullFD
+        nullFD: &nullFD,
+        slavePath: terminal?.slavePath
     ), installAdmissionDescriptors(&actions, pipes: admissionPipes) else {
         return .failure(.processSpawnFailed)
     }
@@ -323,13 +366,7 @@ func spawnSeatbeltProcess(
         request.command.executable,
     ]
     arguments.append(contentsOf: request.command.arguments)
-    let environment = [
-        "PATH=/usr/bin:/bin",
-        "LANG=C",
-        "LC_ALL=C",
-        "HOME=\(workspace)",
-        "TMPDIR=\(workspace)",
-    ]
+    let environment = containedRuntimeEnvironment(workspace: workspace, io: request.io)
     let argv = SpawnPointers(arguments)
     let envp = SpawnPointers(environment)
     defer {
@@ -417,17 +454,33 @@ func spawnSeatbeltProcess(
     admitted.sendGrant()
     let ownedRead = readEnd
     readEnd = -1
-    return .success(
-        LiveSeatbeltChild(
-            session: running,
-            capability: capability,
-            pid: pid,
-            nonce: nonce,
-            admission: admitted,
-            parentDescriptors: [ownedRead, parentRead, parentWrite],
-            handshakeRead: ownedRead
-        )
+    let child = LiveSeatbeltChild(
+        session: running,
+        capability: capability,
+        pid: pid,
+        nonce: nonce,
+        admission: admitted,
+        parentDescriptors: [ownedRead, parentRead, parentWrite],
+        handshakeRead: ownedRead,
+        terminal: terminal
     )
+    terminal?.startReader()
+    handedOff = true
+    return .success(child)
+}
+
+private func containedRuntimeEnvironment(workspace: String, io: IsolatedIO) -> [String] {
+    var values = [
+        "PATH=/usr/bin:/bin",
+        "LANG=C",
+        "LC_ALL=C",
+        "HOME=\(workspace)",
+        "TMPDIR=\(workspace)",
+    ]
+    if case .pseudoTerminal = io {
+        values.append("TERM=\(TerminalStreamLimits.supportedTerm)")
+    }
+    return values
 }
 
 func watchSeatbeltProcess(
@@ -477,6 +530,7 @@ func watchSeatbeltProcess(
     } else {
         live.recordTerminal(nil)
     }
+    live.pty?.finish(status: outcome.status)
     if live.handshakeRead >= 0 {
         close(live.handshakeRead)
         live.handshakeRead = -1
@@ -565,7 +619,8 @@ private func installGrantedDescriptorActions(
     io: IsolatedIO,
     readEnd: Int32,
     writeEnd: Int32,
-    nullFD: inout Int32
+    nullFD: inout Int32,
+    slavePath: String?
 ) -> Bool {
     if writeEnd == 3 {
         guard posix_spawn_file_actions_addinherit_np(&actions, writeEnd) == 0 else {
@@ -605,6 +660,18 @@ private func installGrantedDescriptorActions(
             posix_spawn_file_actions_adddup2(&actions, nullFD, STDOUT_FILENO) == 0,
             posix_spawn_file_actions_adddup2(&actions, nullFD, STDERR_FILENO) == 0,
             posix_spawn_file_actions_addclose(&actions, nullFD) == 0
+        else {
+            return false
+        }
+        return true
+    case .pseudoTerminal:
+        guard let slavePath else { return false }
+        let opened = slavePath.withCString { path in
+            posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, path, O_RDWR, 0)
+        }
+        guard opened == 0,
+            posix_spawn_file_actions_adddup2(&actions, STDIN_FILENO, STDOUT_FILENO) == 0,
+            posix_spawn_file_actions_adddup2(&actions, STDIN_FILENO, STDERR_FILENO) == 0
         else {
             return false
         }

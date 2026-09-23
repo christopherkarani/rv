@@ -40,11 +40,18 @@ public enum IsolationApplyError: Error, Sendable, Equatable {
     case workspaceUnresolved(String)
 }
 
-/// Child stdio. `discard` is `/dev/null` (apply / perform / probes).
-/// `inherit` is the host-launch door.
+/// Child stdio. The workspace host chooses this. It is not inferred from
+/// whether the caller has a terminal or from whether a client is attached.
+///
+/// `discard` is `/dev/null` (apply / perform / probes).
+/// `inherit` is the in-process host-launch door.
+/// `pseudoTerminal` is a PTY the workspace host creates and keeps. The child
+/// receives the slave as stdin, stdout, and stderr. Rows and columns are the
+/// initial window.
 public enum IsolatedIO: Sendable, Equatable {
     case discard
     case inherit
+    case pseudoTerminal(rows: Int, columns: Int)
 }
 
 /// Absolute argv the backend starts (the inner command, not `sandbox-exec`).
@@ -533,6 +540,9 @@ func spawn(
         process.standardInput = FileHandle.standardInput
         process.standardOutput = FileHandle.standardOutput
         process.standardError = FileHandle.standardError
+    case .pseudoTerminal:
+        // A host-owned PTY exists only on the contained Seatbelt path.
+        return .failure(.processSpawnFailed)
     }
     do {
         try process.run()

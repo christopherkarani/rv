@@ -221,6 +221,39 @@ struct RuntimeAdmissionIsolationTests {
         #expect(rejected.allSatisfy { $0.executionAttempted == false })
     }
 
+    @Test func ptyRuntimeStillAdmitsShellCommands() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let client = try compileAdmissionClient(in: tree.workspaceURL)
+        let reply = tree.workspaceURL.appendingPathComponent("pty-admission-reply")
+        let marker = tree.workspaceURL.appendingPathComponent("admitted-marker")
+        let evidence = RuntimeAdmissionEvidence()
+        let configuration = RuntimeAdmissionConfiguration(
+            normalize: isolationAdmissionNormalize,
+            executor: .containedCommand,
+            approval: { _ in nil },
+            policy: { _ in .empty },
+            evidence: evidence
+        )
+        let command = try #require(
+            IsolatedCommand(executable: client.path, arguments: [reply.path])
+        )
+        let log = tree.rootURL.appendingPathComponent("pty-sessions.jsonl")
+        let result = IsolationBackends.applyLaunch(
+            tree.contained,
+            command: command,
+            io: .pseudoTerminal(rows: 24, columns: 80),
+            host: .opencode,
+            sessionStore: .file(log),
+            admission: configuration
+        )
+        let run = try result.get()
+        #expect(run.exitStatus == 0)
+        let text = try String(contentsOf: reply, encoding: .utf8)
+        #expect(text.contains("\"status\":\"executed\""))
+        #expect(FileManager.default.fileExists(atPath: marker.path))
+    }
+
     @Test func admittedCommandStopsWhenContainedProcessExits() throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }

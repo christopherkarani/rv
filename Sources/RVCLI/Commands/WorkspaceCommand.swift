@@ -10,7 +10,10 @@ struct Workspace: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "workspace",
         abstract: "Attach to the persistent workspace host.",
-        subcommands: [WorkspaceStart.self, WorkspaceAttach.self, WorkspaceStatus.self, WorkspaceClose.self]
+        subcommands: [
+            WorkspaceStart.self, WorkspaceAttach.self, WorkspaceStatus.self, WorkspaceClose.self,
+            WorkspaceRun.self,
+        ]
     )
 }
 
@@ -55,6 +58,29 @@ struct WorkspaceStatus: AsyncParsableCommand {
 
     func run() throws {
         try WorkspaceCommandRun.status(path.workspace)
+    }
+}
+
+struct WorkspaceRun: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "run",
+        abstract: "Launch a contained runtime on a host-owned terminal and attach until it exits."
+    )
+
+    @OptionGroup var path: WorkspacePath
+
+    @Option(name: .long, help: "Initial terminal rows. Defaults to the current terminal, or 24.")
+    var rows: Int?
+
+    @Option(name: .long, help: "Initial terminal columns. Defaults to the current terminal, or 80.")
+    var columns: Int?
+
+    @Argument(parsing: .captureForPassthrough, help: "Absolute executable and arguments.")
+    var command: [String] = []
+
+    func run() throws {
+        let argv = command.first == "--" ? Array(command.dropFirst()) : command
+        try WorkspaceCommandRun.run(path.workspace, rows: rows, columns: columns, command: argv)
     }
 }
 
@@ -172,6 +198,100 @@ enum WorkspaceCommandRun {
         #endif
     }
 
+    static func run(_ raw: String?, rows: Int?, columns: Int?, command: [String]) throws {
+        #if !os(macOS)
+        throw ValidationError("contained workspace host is unavailable")
+        #else
+        guard let executable = command.first, executable.hasPrefix("/"), executable.contains("\0") == false else {
+            throw ValidationError("executable must be an absolute path")
+        }
+        let arguments = Array(command.dropFirst())
+        guard arguments.contains(where: { $0.contains("\0") }) == false else {
+            throw ValidationError("executable must be an absolute path")
+        }
+        let project = try requireProject(raw)
+        let endpoint = try requireEndpoint(
+            WorkspaceHosts.ensure(project: project, executable: try hostBinary())
+        )
+        guard let client = connected(endpoint) else {
+            throw ValidationError("workspace host is not reachable")
+        }
+        let window = LocalTerminalWindow.current(fd: STDOUT_FILENO)
+        let rows = rows ?? window?.rows ?? TerminalStreamLimits.defaultRows
+        let columns = columns ?? window?.columns ?? TerminalStreamLimits.defaultColumns
+        guard TerminalStreamLimits.accepts(rows: rows, columns: columns) else {
+            throw ValidationError("terminal size is out of range")
+        }
+        let launched = client.launchRuntime(
+            executable: executable,
+            arguments: arguments,
+            terminalRows: rows,
+            terminalColumns: columns
+        )
+        let runtime: UUID
+        switch launched {
+        case .failure(let error):
+            _ = client.detach()
+            throw ValidationError(text(error))
+        case .success(let report):
+            guard report.terminal else {
+                _ = client.detach()
+                throw ValidationError("runtime has no terminal")
+            }
+            runtime = report.runtime
+        }
+        if case .failure(let error) = client.subscribeTerminal(runtime) {
+            _ = client.detach()
+            throw ValidationError(text(error))
+        }
+        if case .failure(let error) = client.acquireTerminalInput(runtime) {
+            _ = client.detach()
+            throw ValidationError(text(error))
+        }
+        let restorer = LocalTerminalRestorer.engage(STDIN_FILENO)
+        defer { restorer?.restore() }
+        let bridge = TerminalStdinBridge(client: client, runtime: runtime)
+        bridge.start()
+        var exitCode: Int32 = 1
+        var currentRows = rows
+        var currentColumns = columns
+        while true {
+            if let size = LocalTerminalWindow.current(fd: STDOUT_FILENO),
+                size.rows != currentRows || size.columns != currentColumns
+            {
+                currentRows = size.rows
+                currentColumns = size.columns
+                _ = client.resizeTerminal(runtime, rows: size.rows, columns: size.columns)
+            }
+            switch client.nextTerminalEvent(timeout: 0.2) {
+            case .failure(let error):
+                restorer?.restore()
+                _ = client.detach()
+                throw ValidationError(text(error))
+            case .success(.waiting):
+                continue
+            case .success(.event(let event)):
+                guard event.runtime == runtime else { continue }
+                switch event.body {
+                case .replay(_, let bytes), .output(_, let bytes):
+                    FileHandle.standardOutput.write(bytes)
+                case .exited(let status):
+                    exitCode = status
+                    restorer?.restore()
+                    _ = client.detach()
+                    throw ExitCode(exitCode)
+                case .overflow:
+                    restorer?.restore()
+                    _ = client.detach()
+                    throw ValidationError("terminal client fell behind")
+                case .inputOwner:
+                    break
+                }
+            }
+        }
+        #endif
+    }
+
     #if os(macOS)
     private static func requireProject(_ raw: String?) throws -> String {
         let value = raw ?? FileManager.default.currentDirectoryPath
@@ -279,6 +399,9 @@ enum WorkspaceCommandRun {
         case .childTeardownFailed: "runtime teardown failed"
         case .runtimeLimit: "workspace runtime limit reached"
         case .staleEndpoint: "stale endpoint"
+        case .terminalUnavailable: "runtime has no terminal"
+        case .terminalBusy: "terminal input is owned by another client"
+        case .terminalLimit: "terminal subscriber limit reached"
         }
     }
 
@@ -299,3 +422,40 @@ enum WorkspaceCommandRun {
     }
     #endif
 }
+
+#if os(macOS)
+private final class TerminalStdinBridge: @unchecked Sendable {
+    private let client: WorkspaceClient
+    private let runtime: UUID
+
+    init(client: WorkspaceClient, runtime: UUID) {
+        self.client = client
+        self.runtime = runtime
+    }
+
+    func start() {
+        let bridge = self
+        let thread = Thread {
+            bridge.read()
+        }
+        thread.name = "rv-terminal-stdin"
+        thread.start()
+    }
+
+    private func read() {
+        var buffer = [UInt8](repeating: 0, count: TerminalStreamLimits.maximumInputBytes)
+        while true {
+            let count = Darwin.read(STDIN_FILENO, &buffer, buffer.count)
+            if count == 0 { return }
+            if count < 0 {
+                if errno == EINTR { continue }
+                return
+            }
+            let data = Data(buffer.prefix(count))
+            if case .failure = client.writeTerminal(runtime, bytes: data) {
+                return
+            }
+        }
+    }
+}
+#endif

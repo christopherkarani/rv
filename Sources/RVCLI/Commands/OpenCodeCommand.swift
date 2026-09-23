@@ -30,6 +30,7 @@ enum OpenCodeLaunchError: Error, Sendable, Equatable {
 enum OpenCodeRun {
     /// This command still owns one runtime inside the invoking process so its
     /// exit status stays the agent status. Persistent attach is `rv workspace`.
+    /// An interactive PTY runtime is `rv workspace run`, not this command.
     static let isolationNotice =
         "rv opencode: writes stay in the workspace. Reads include that workspace and the system locations needed to start programs. Network is denied. Signals to processes outside the sandbox are denied. On Linux this launch is refused until the kernel backend enforces those limits.\n"
 

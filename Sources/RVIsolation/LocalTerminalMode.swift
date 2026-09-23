@@ -1,0 +1,100 @@
+#if os(macOS)
+import Darwin
+import Foundation
+
+/// Saved attributes for the caller's terminal.
+///
+/// Raw mode is local to the proving client. It is not the runtime's PTY.
+/// `restore()` is safe to call more than once, including after a normal
+/// exit, a protocol error, or a signal that the client handles.
+public final class LocalTerminalRestorer: @unchecked Sendable {
+    private let fd: Int32
+    private var saved: termios
+    private var active: Bool
+    private let installSignals: Bool
+
+    private init(fd: Int32, saved: termios, installSignals: Bool) {
+        self.fd = fd
+        self.saved = saved
+        self.active = true
+        self.installSignals = installSignals
+    }
+
+    /// Puts `fd` in raw mode when it is a terminal. Returns nil otherwise.
+    public static func engage(_ fd: Int32, signals: Bool = true) -> LocalTerminalRestorer? {
+        guard isatty(fd) == 1 else { return nil }
+        var original = termios()
+        guard tcgetattr(fd, &original) == 0 else { return nil }
+        var raw = original
+        cfmakeraw(&raw)
+        guard tcsetattr(fd, TCSANOW, &raw) == 0 else { return nil }
+        let restorer = LocalTerminalRestorer(fd: fd, saved: original, installSignals: signals)
+        if signals {
+            LocalTerminalSignal.arm(fd: fd, saved: original)
+        }
+        return restorer
+    }
+
+    public func restore() {
+        guard active else { return }
+        var copy = saved
+        _ = tcsetattr(fd, TCSANOW, &copy)
+        active = false
+        if installSignals {
+            LocalTerminalSignal.disarm(fd: fd)
+        }
+    }
+
+    deinit {
+        restore()
+    }
+}
+
+public struct LocalTerminalWindow: Sendable, Equatable {
+    public var rows: Int
+    public var columns: Int
+
+    public static func current(fd: Int32) -> LocalTerminalWindow? {
+        guard isatty(fd) == 1 else { return nil }
+        var size = winsize()
+        guard ioctl(fd, TIOCGWINSZ, &size) == 0 else { return nil }
+        let rows = Int(size.ws_row)
+        let columns = Int(size.ws_col)
+        guard TerminalStreamLimits.accepts(rows: rows, columns: columns) else { return nil }
+        return LocalTerminalWindow(rows: rows, columns: columns)
+    }
+}
+
+private enum LocalTerminalSignal {
+    nonisolated(unsafe) static var saved = termios()
+    nonisolated(unsafe) static var fd: Int32 = -1
+    nonisolated(unsafe) static var armed: Int32 = 0
+
+    static func arm(fd: Int32, saved: termios) {
+        self.fd = fd
+        self.saved = saved
+        armed = 1
+        signal(SIGTERM, handle)
+        signal(SIGHUP, handle)
+        signal(SIGQUIT, handle)
+    }
+
+    static func disarm(fd: Int32) {
+        guard self.fd == fd else { return }
+        armed = 0
+        self.fd = -1
+        signal(SIGTERM, SIG_DFL)
+        signal(SIGHUP, SIG_DFL)
+        signal(SIGQUIT, SIG_DFL)
+    }
+
+    private static let handle: @convention(c) (Int32) -> Void = { _ in
+        if armed != 0 {
+            var copy = saved
+            _ = tcsetattr(fd, TCSANOW, &copy)
+            armed = 0
+        }
+        _exit(1)
+    }
+}
+#endif
