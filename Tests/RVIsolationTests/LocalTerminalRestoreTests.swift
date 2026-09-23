@@ -1,7 +1,5 @@
-import ArgumentParser
 import Foundation
 import Testing
-@testable import RVCLI
 #if os(macOS)
 import Darwin
 @testable import RVIsolation
@@ -41,8 +39,13 @@ struct LocalTerminalRestoreTests {
         let endpoint = host.server.endpoint
 
         try expectRestored(host: host, endpoint: endpoint, onError: { error in
-            let status = try #require(error as? ExitCode)
-            #expect(status.rawValue == 9)
+            guard let driveError = error as? WorkspaceTerminalDriveError,
+                case .exited(let status) = driveError
+            else {
+                Issue.record("an exiting runtime must report its status, got \(error)")
+                return
+            }
+            #expect(status == 9)
         }) { client, restorer, pty in
             let runtime = try launchTerminal(client, command: ["/bin/sh", "-c", "printf ready; exit 9"])
             try #require(client.subscribeTerminal(runtime).get() == ())
@@ -64,8 +67,7 @@ struct LocalTerminalRestoreTests {
                     columns: 80,
                     input: input.fileHandleForReading.fileDescriptor,
                     output: FileHandle(fileDescriptor: pty.slave, closeOnDealloc: false),
-                    restorer: restorer,
-                    failureText: { String(describing: $0) }
+                    restorer: restorer
                 )
             }
             thread.start()
@@ -95,8 +97,7 @@ struct LocalTerminalRestoreTests {
                         columns: 80,
                         input: pty.master,
                         output: FileHandle(fileDescriptor: pty.slave, closeOnDealloc: false),
-                        restorer: restorer,
-                        failureText: { String(describing: $0) }
+                        restorer: restorer
                     )
                 }
             }
@@ -107,7 +108,13 @@ struct LocalTerminalRestoreTests {
                 Thread.sleep(forTimeInterval: 0.02)
             }
             let error = try #require(box.error)
-            #expect(String(describing: error).contains("closed") || error is ValidationError)
+            guard let driveError = error as? WorkspaceTerminalDriveError,
+                case .client(let failure) = driveError
+            else {
+                Issue.record("workspace close must fail the driver, got \(error)")
+                return
+            }
+            #expect(failure == .workspaceClosed || failure == .disconnected)
         }
     }
 
@@ -132,7 +139,12 @@ struct LocalTerminalRestoreTests {
                 Thread.sleep(forTimeInterval: 0.02)
             }
             let error = try #require(box.error)
-            #expect(String(describing: error).contains("disconnected"))
+            guard let driveError = error as? WorkspaceTerminalDriveError,
+                case .client(.disconnected) = driveError
+            else {
+                Issue.record("disconnect must fail the driver, got \(error)")
+                return
+            }
             #expect(disconnectHost.supervisor.runtimeFacts().contains { $0.id == runtime && $0.running })
         }
 
@@ -156,7 +168,12 @@ struct LocalTerminalRestoreTests {
                 Thread.sleep(forTimeInterval: 0.02)
             }
             let error = try #require(box.error)
-            #expect(String(describing: error).contains("malformed"))
+            guard let driveError = error as? WorkspaceTerminalDriveError,
+                case .client(.malformed) = driveError
+            else {
+                Issue.record("a bad terminal frame must fail the driver, got \(error)")
+                return
+            }
             let again = try WorkspaceClient.connect(protocolHost.server.endpoint).get()
             #expect(try again.listRuntimes().get().contains { $0.runtime == runtime && $0.running })
             _ = again.detach()
@@ -275,7 +292,7 @@ private func builtProbe() throws -> URL {
         return found
     }
     Issue.record("missing built product rv-terminal-probe")
-    throw ValidationError("workspace host executable is missing")
+    throw WorkspaceTerminalDriveError.client(.disconnected)
 }
 
 private func launchTerminal(_ client: WorkspaceClient, command: [String]) throws -> UUID {
@@ -302,8 +319,7 @@ private func drive(
         columns: 80,
         input: pty.master,
         output: FileHandle(fileDescriptor: pty.slave, closeOnDealloc: false),
-        restorer: restorer,
-        failureText: { String(describing: $0) }
+        restorer: restorer
     )
 }
 

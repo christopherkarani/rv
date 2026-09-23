@@ -152,4 +152,124 @@ private enum LocalTerminalSignal {
         _exit(1)
     }
 }
+
+public enum WorkspaceTerminalDriveError: Error, Equatable {
+    case exited(Int32)
+    case client(WorkspaceClientFailure)
+}
+
+/// Proving client for `rv workspace run`. Restores the local terminal before
+/// it returns or throws. The runtime PTY is a different descriptor.
+public enum WorkspaceTerminalDriver {
+    public static func drive(
+        client: WorkspaceClient,
+        runtime: UUID,
+        rows: Int,
+        columns: Int,
+        input: Int32,
+        output: FileHandle,
+        restorer: LocalTerminalRestorer?
+    ) throws {
+        let bridge = TerminalStdinBridge(client: client, runtime: runtime, input: input)
+        bridge.start()
+        var currentRows = rows
+        var currentColumns = columns
+        while true {
+            if bridge.didEnd {
+                restorer?.restore()
+                _ = client.detach()
+                return
+            }
+            if let size = LocalTerminalWindow.current(fd: output.fileDescriptor),
+                size.rows != currentRows || size.columns != currentColumns
+            {
+                currentRows = size.rows
+                currentColumns = size.columns
+                _ = client.resizeTerminal(runtime, rows: size.rows, columns: size.columns)
+            }
+            switch client.nextTerminalEvent(timeout: 0.2) {
+            case .failure(let error):
+                restorer?.restore()
+                _ = client.detach()
+                throw WorkspaceTerminalDriveError.client(error)
+            case .success(.waiting):
+                continue
+            case .success(.event(let event)):
+                guard event.runtime == runtime else { continue }
+                switch event.body {
+                case .replay(_, let bytes), .output(_, let bytes):
+                    output.write(bytes)
+                case .exited(let status):
+                    restorer?.restore()
+                    _ = client.detach()
+                    throw WorkspaceTerminalDriveError.exited(status)
+                case .overflow:
+                    restorer?.restore()
+                    _ = client.detach()
+                    throw WorkspaceTerminalDriveError.client(.terminalLimit)
+                case .inputOwner:
+                    break
+                }
+            }
+        }
+    }
+}
+
+private final class TerminalStdinBridge: @unchecked Sendable {
+    private let client: WorkspaceClient
+    private let runtime: UUID
+    private let input: Int32
+    private let lock = NSLock()
+    private var ended = false
+
+    init(client: WorkspaceClient, runtime: UUID, input: Int32) {
+        self.client = client
+        self.runtime = runtime
+        self.input = input
+    }
+
+    var didEnd: Bool {
+        lock.lock()
+        let value = ended
+        lock.unlock()
+        return value
+    }
+
+    func start() {
+        let bridge = self
+        let thread = Thread {
+            bridge.read()
+        }
+        thread.name = "rv-terminal-stdin"
+        thread.start()
+    }
+
+    private func read() {
+        LocalTerminalRestorer.blockInterruptSignalsInThisThread()
+        var buffer = [UInt8](repeating: 0, count: TerminalStreamLimits.maximumInputBytes)
+        while true {
+            let count = Darwin.read(input, &buffer, buffer.count)
+            if count == 0 {
+                finish()
+                return
+            }
+            if count < 0 {
+                if errno == EINTR { continue }
+                finish()
+                return
+            }
+            let data = Data(buffer.prefix(count))
+            if case .failure = client.writeTerminal(runtime, bytes: data) {
+                finish()
+                return
+            }
+        }
+    }
+
+    private func finish() {
+        lock.lock()
+        ended = true
+        lock.unlock()
+    }
+}
 #endif

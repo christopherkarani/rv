@@ -195,7 +195,7 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
         case .success:
             break
         }
-        if Task.isCancelled || CooperativeLaunchStop.isRequested {
+        if blockingWorkIsCancelled() {
             releaseAdmission(owner: nil)
             return .failure(.apply(.cancelled))
         }
@@ -429,6 +429,7 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
     }
 
     /// One runtime, watched on the caller's thread, then the caller closes.
+    /// `LocalExecutor` calls this from `rv-executor-apply`, not a cooperative task.
     func runSingleRuntime(
         _ request: IsolatedLaunchRequest,
         host: HookHost?,
@@ -653,7 +654,7 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
     ) -> Result<RunningRuntime, WorkspaceSessionError> {
         let deadline = Date().addingTimeInterval(45)
         while Date() < deadline {
-            if Task.isCancelled || CooperativeLaunchStop.isRequested {
+            if blockingWorkIsCancelled() {
                 child.stop.request()
             }
             if child.live.isEstablished {

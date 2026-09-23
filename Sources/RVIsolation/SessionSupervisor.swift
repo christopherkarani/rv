@@ -71,7 +71,7 @@ func superviseSeatbelt(
     case .success:
         break
     }
-    if Task.isCancelled || CooperativeLaunchStop.isRequested {
+    if blockingWorkIsCancelled() {
         return .failure(.cancelled)
     }
     // Hand-built profiles that are not the contained compiler output never
@@ -620,7 +620,7 @@ private func waitForSeatbeltSession(
     let expected = Data(nonce.utf8)
     var recorded: Set<pid_t> = [root]
     while true {
-        if Task.isCancelled || stop.isRequested || CooperativeLaunchStop.isRequested {
+        if blockingWorkIsCancelled() || stop.isRequested {
             outcome.cancelled = true
             admission.finish()
         }

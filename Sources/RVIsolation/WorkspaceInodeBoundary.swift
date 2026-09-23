@@ -715,7 +715,7 @@ final class WorkspaceInodeBoundary {
 func establishWorkspaceInodeBoundary(
     at workspacePath: String
 ) -> Result<WorkspaceInodeBoundary, IsolationApplyError> {
-    if Task.isCancelled || CooperativeLaunchStop.isRequested {
+    if blockingWorkIsCancelled() {
         return .failure(.cancelled)
     }
     let rootFD = workspacePath.withCString { path in
@@ -887,7 +887,7 @@ private func createMountedDisk(
         guard let disk = diskDevice(in: attached.stdout) else {
             return .failure(.workspaceInodeBoundaryFailed)
         }
-        if Task.isCancelled {
+        if blockingWorkIsCancelled() {
             return toolFailure(ToolOutput(status: -1, stdout: "", stderr: ""), disk: disk)
         }
         let formatted = runTool(
@@ -897,7 +897,7 @@ private func createMountedDisk(
         guard formatted.status == 0 else {
             return toolFailure(formatted, disk: disk)
         }
-        if Task.isCancelled {
+        if blockingWorkIsCancelled() {
             return toolFailure(ToolOutput(status: -1, stdout: "", stderr: ""), disk: disk)
         }
         let mounted = runTool(
@@ -1257,7 +1257,7 @@ private func toolFailure(
             honorCancellation: false
         )
     }
-    if output.status < 0, Task.isCancelled {
+    if output.status < 0, blockingWorkIsCancelled() {
         return .failure(.cancelled)
     }
     return .failure(.workspaceInodeBoundaryFailed)
@@ -1270,8 +1270,10 @@ private func toolFailure(
 /// cancellation. Under parallel launches DiskArbitration holds `hdiutil`
 /// long enough that a cancelled test used to sit inside that wait until the
 /// runner timed the test out. Cancellation kills the helper and returns.
-/// Cleanup calls pass `honorCancellation: false` so a cancelled task can
-/// still detach the disk it created.
+/// The executor runs this on `rv-executor-apply`; the poll sees that thread's
+/// flag as well as `Task.isCancelled`. Cleanup calls pass
+/// `honorCancellation: false` so a cancelled task can still detach the disk
+/// it created.
 private func runTool(
     _ arguments: [String],
     honorCancellation: Bool = false,
@@ -1305,7 +1307,7 @@ private func runTool(
     while process.isRunning {
         stdout.append(readToolPipe(outFD))
         stderr.append(readToolPipe(errFD))
-        let cancelled = honorCancellation && Task.isCancelled
+        let cancelled = honorCancellation && blockingWorkIsCancelled()
         let expired = limit.map { Date() >= $0 } ?? false
         if cancelled || expired {
             interrupted = true

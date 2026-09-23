@@ -326,11 +326,12 @@ check_no_xctest() {
 }
 
 check_no_main_in_library() {
-  # main.swift or @main only in executable targets (Sources/rv, Sources/rvd)
+  # main.swift or @main only in executable targets.
   local fail=0
   local matches
   matches=$(find "$SOURCES" -name 'main.swift' \
-    | grep -v 'Sources/rv/' | grep -v 'Sources/rvd/' | grep -v 'Sources/rv-workspace-host/' || true)
+    | grep -v 'Sources/rv/' | grep -v 'Sources/rvd/' \
+    | grep -v 'Sources/rv-workspace-host/' | grep -v 'Sources/rv-terminal-probe/' || true)
   local count
   count=$(echo "$matches" | grep -c . || true)
   if [ "$count" -gt 0 ]; then
@@ -343,7 +344,8 @@ check_no_main_in_library() {
   # @main in library target source files
   local amatches
   amatches=$(grep -rn '@main' "$SOURCES" --include='*.swift' \
-    | grep -v 'Sources/rv/' | grep -v 'Sources/rvd/' | grep -v 'Sources/rv-workspace-host/' || true)
+    | grep -v 'Sources/rv/' | grep -v 'Sources/rvd/' \
+    | grep -v 'Sources/rv-workspace-host/' | grep -v 'Sources/rv-terminal-probe/' || true)
   local acount
   acount=$(echo "$amatches" | grep -c . || true)
   if [ "$acount" -gt 0 ]; then

@@ -100,7 +100,7 @@ public actor LocalExecutor {
                         continuation.resume(throwing: LocalExecutorError.applyFailed(error))
                     }
                 }
-                thread.name = "rv-executor"
+                thread.name = "rv-executor-apply"
                 thread.start()
             }
         } onCancel: {
@@ -147,4 +147,11 @@ public actor LocalExecutor {
             }
         }
     }
+}
+
+/// True when the current task is cancelled, or this thread is the executor
+/// worker whose task was cancelled after `run` hopped off the cooperative pool.
+/// `Task.isCancelled` does not cross that hop.
+func blockingWorkIsCancelled() -> Bool {
+    Task.isCancelled || CooperativeLaunchStop.isRequested
 }

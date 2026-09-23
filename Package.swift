@@ -50,7 +50,11 @@ let terminalProbeProducts: [Product] = [
     .executable(name: "rv-terminal-probe", targets: ["RVTerminalProbe"]),
 ]
 let terminalProbeTargets: [Target] = [
-    .executableTarget(name: "RVTerminalProbe", dependencies: ["RVIsolation"]),
+    .executableTarget(
+        name: "RVTerminalProbe",
+        dependencies: ["RVIsolation"],
+        path: "Sources/rv-terminal-probe"
+    ),
 ]
 #else
 let terminalProbeProducts: [Product] = []
@@ -206,7 +210,7 @@ let cliProducts: [Product] = [
     .executable(name: "rv", targets: ["rv"]),
 ]
 let cliTestTargets: [Target] = [
-    .testTarget(name: "RVCLITests", dependencies: ["RVCLI", "RVService", "RVIsolation"]),
+    .testTarget(name: "RVCLITests", dependencies: ["RVCLI", "RVService"]),
 ]
 
 let package = Package(
