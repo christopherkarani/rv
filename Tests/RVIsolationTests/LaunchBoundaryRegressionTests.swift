@@ -186,7 +186,7 @@ struct LaunchBoundaryRegressionTests {
         #expect(Set(records.map(\.id)) == Set(saved.ids))
     }
 
-    @Test func unwritableSessionLogDoesNotExecute() throws {
+    @Test func unwritableSessionLogDoesNotExecute() async throws {
         #if os(macOS)
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
@@ -215,7 +215,7 @@ struct LaunchBoundaryRegressionTests {
         #endif
     }
 
-    @Test func sessionRecordFailureDoesNotExecuteInnerCommand() throws {
+    @Test func sessionRecordFailureDoesNotExecuteInnerCommand() async throws {
         #if os(macOS)
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
@@ -242,7 +242,7 @@ struct LaunchBoundaryRegressionTests {
         #endif
     }
 
-    @Test func invalidSeatbeltProfileDoesNotExecuteInnerCommand() throws {
+    @Test func invalidSeatbeltProfileDoesNotExecuteInnerCommand() async throws {
         #if os(macOS)
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
