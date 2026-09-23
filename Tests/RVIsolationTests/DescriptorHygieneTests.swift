@@ -200,7 +200,7 @@ struct DescriptorHygieneTests {
             else { return nil }
             return "\(fd) \(path)"
         }
-        #expect(leaked.isEmpty)
+        #expect(leaked.isEmpty, "root \(tree.rootURL.path)")
         #expect(after.contains(sentinel))
     }
 
@@ -214,9 +214,11 @@ struct DescriptorHygieneTests {
         #expect(refusedLaunchKeptPath("pipe:[12]", root: root) == false)
         #expect(refusedLaunchKeptPath("socket:[12]", root: root) == false)
         #expect(refusedLaunchKeptPath("anon_inode:[eventfd]", root: root) == false)
-        #expect(refusedLaunchKeptPath("/dev/disk2", root: root))
-        #expect(refusedLaunchKeptPath("/private/tmp/rv-inode-1", root: root))
-        #expect(refusedLaunchKeptPath("/private/tmp/.rv-saved-ws", root: root))
+        #expect(refusedLaunchKeptPath("\(root)/repo/.rv-saved-ws", root: root))
+        // Disks and hidden originals outside this tree belong to other suites.
+        #expect(refusedLaunchKeptPath("/dev/disk2", root: root) == false)
+        #expect(refusedLaunchKeptPath("/private/tmp/rv-inode-1", root: root) == false)
+        #expect(refusedLaunchKeptPath("/private/tmp/.rv-saved-ws", root: root) == false)
     }
 
     @Test func cancellationClosesLaunchDescriptors() async throws {
@@ -259,17 +261,13 @@ struct DescriptorHygieneTests {
         let after = openDescriptors()
         // Other suites share this process and open descriptors while this
         // launch is mounted. Only paths this launch creates are attributable.
-        let leaked = after.subtracting(before).filter { fd in
-            var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
-            guard fcntl(fd, F_GETPATH, &buffer) == 0 else { return false }
-            let count = buffer.firstIndex(of: 0) ?? buffer.count
-            let path = String(decoding: buffer[..<count].map { UInt8(bitPattern: $0) }, as: UTF8.self)
-            return path.hasPrefix(tree.rootURL.path)
-                || path.hasPrefix("/dev/disk")
-                || path.contains("rv-inode-")
-                || path.contains(".rv-saved-")
+        let leaked = after.subtracting(before).compactMap { fd -> String? in
+            guard let path = descriptorPath(fd),
+                refusedLaunchKeptPath(path, root: tree.rootURL.path)
+            else { return nil }
+            return "\(fd) \(path)"
         }
-        #expect(leaked.isEmpty)
+        #expect(leaked.isEmpty, "root \(tree.rootURL.path)")
         #expect(after.contains(sentinel))
         #else
         let command = try #require(IsolatedCommand(executable: "/bin/sleep", arguments: ["30"]))
@@ -581,18 +579,13 @@ private func descriptorPath(_ fd: Int32) -> String? {
     #endif
 }
 
-/// A refused launch kept this path when it is the test tree or a mount
-/// artifact. Named files outside the tree belong to other suites.
+/// A refused launch kept this path when it is inside the test tree.
+/// Disks and hidden originals outside the tree belong to other suites.
 private func refusedLaunchKeptPath(_ path: String, root: String) -> Bool {
     if path.hasPrefix("pipe:") || path.hasPrefix("socket:") || path.hasPrefix("anon_inode:") {
         return false
     }
-    if path == root || path.hasPrefix(root + "/") {
-        return true
-    }
-    return path.hasPrefix("/dev/disk")
-        || path.contains("rv-inode-")
-        || path.contains(".rv-saved-")
+    return path == root || path.hasPrefix(root + "/")
 }
 
 private func openDescriptors() -> Set<Int32> {

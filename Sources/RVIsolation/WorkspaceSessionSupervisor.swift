@@ -172,6 +172,19 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
             }
             ownerLock.release()
         }
+        func failOpen(
+            _ boundary: WorkspaceInodeBoundary,
+            owner: UUID
+        ) -> Result<WorkspaceSessionSupervisor, WorkspaceSessionError> {
+            switch boundary.discardAndRestore() {
+            case .failure(let cleanup):
+                releaseAdmission(owner: owner)
+                return .failure(.cleanupFailed(cleanup))
+            case .success:
+                releaseAdmission(owner: owner)
+                return .failure(.apply(.sessionRecordFailed))
+            }
+        }
         switch rejectWorkspaceInodeAlias(resolved) {
         case .failure(let error):
             releaseAdmission(owner: nil)
@@ -211,17 +224,13 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
         let snapshotIdentity: (device: UInt64, inode: UInt64)
         switch WorkspaceRecovery.writeSnapshot(boundary.snapshotStamps(), to: snapshotFile) {
         case .failure:
-            _ = boundary.discardAndRestore()
-            releaseAdmission(owner: id.rawValue)
-            return .failure(.apply(.sessionRecordFailed))
+            return failOpen(boundary, owner: id.rawValue)
         case .success(let identity):
             snapshotIdentity = identity
         }
         guard let token = ownerLock.token else {
-            _ = boundary.discardAndRestore()
             _ = removeSnapshot(snapshotFile.path, device: snapshotIdentity.device, inode: snapshotIdentity.inode)
-            releaseAdmission(owner: id.rawValue)
-            return .failure(.apply(.sessionRecordFailed))
+            return failOpen(boundary, owner: id.rawValue)
         }
         let durable = boundary.recoveryIdentity(
             lockPath: ownerLock.path,
@@ -573,6 +582,7 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
         guard let fact = ProcessGroupRecovery.capture(pid: child.live.pid) else {
             return .failure(.apply(.lifetimeBoundaryFailed))
         }
+        child.provenGroup = fact
         let recorded = lifecycleLog.append(
             WorkspaceLifecycleRecord(
                 kind: .runtimeStarted,
@@ -600,8 +610,15 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
         state.withLock { state in
             state.children[session.id] = nil
         }
-        if pid > 1 {
-            _ = kill(-pid, SIGKILL)
+        if let fact = child.provenGroup {
+            _ = ProcessGroupRecovery.terminate(
+                RecordedProcessGroup(
+                    runtime: session.id.rawValue,
+                    pgid: fact.pgid,
+                    startSeconds: fact.startSeconds,
+                    startMicroseconds: fact.startMicroseconds
+                )
+            )
         }
         let deadline = Date().addingTimeInterval(5)
         while Date() < deadline {
@@ -813,6 +830,9 @@ private func removeSnapshot(_ path: String, device: UInt64, inode: UInt64) -> Bo
 private final class WorkspaceChild: @unchecked Sendable {
     let live: LiveSeatbeltChild
     let stop = RuntimeCancellation()
+    /// Start time captured before the group is recorded. Absent when the
+    /// kernel identity could not be proved, in which case nothing is signalled.
+    var provenGroup: ProcessGroupFact?
     private let finished = Mutex(false)
 
     init(live: LiveSeatbeltChild) {
