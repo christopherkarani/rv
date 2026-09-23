@@ -60,6 +60,7 @@ struct TerminalReplayBuffer: Equatable, Sendable {
         }
         chunks.append(TerminalStoredChunk(sequence: storedSequence, bytes: incoming))
         byteCount += incoming.count
+        var splitOldest = false
         while byteCount > limit, chunks.isEmpty == false {
             let excess = byteCount - limit
             if chunks[0].bytes.count <= excess {
@@ -68,7 +69,18 @@ struct TerminalReplayBuffer: Equatable, Sendable {
             } else {
                 chunks[0].bytes.removeFirst(excess)
                 byteCount -= excess
-                chunks[0].sequence = allocateSequence(&nextSequence)
+                splitOldest = true
+            }
+        }
+        if splitOldest {
+            // The suffix is not the chunk that was published. Numbering only
+            // that suffix uses the next sequence, which is higher than the
+            // later chunks that still carry their original sequences, so a
+            // late subscriber sees the suffix before the bytes that follow
+            // it. Renumber the retained buffer in byte order. Live output
+            // notices already used the sequences they were published with.
+            for index in chunks.indices {
+                chunks[index].sequence = allocateSequence(&nextSequence)
             }
         }
     }

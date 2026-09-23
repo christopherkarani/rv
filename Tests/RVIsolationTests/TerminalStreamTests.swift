@@ -34,10 +34,10 @@ struct TerminalStreamTests {
         buffer.append(sequence: 2, bytes: Data([5, 6, 7, 8]), limit: 6, nextSequence: &next)
         #expect(buffer.byteCount == 6)
         #expect(buffer.chunks.first?.bytes == Data([3, 4]))
-        #expect(buffer.chunks.first?.sequence != 1)
-        #expect(buffer.chunks.first?.sequence != 2)
         #expect(buffer.chunks.last?.bytes == Data([5, 6, 7, 8]))
-        #expect(buffer.chunks.last?.sequence == 2)
+        let sequences = buffer.chunks.map(\.sequence)
+        #expect(sequences.allSatisfy { $0 != 1 && $0 != 2 })
+        #expect(zip(sequences, sequences.dropFirst()).allSatisfy { $0 < $1 })
     }
 
     @Test func terminalRulesKeepTheNonceDrainAndPartialWrite() {

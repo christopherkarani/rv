@@ -502,33 +502,9 @@ func spawnSeatbeltProcess(
             return .failure(.lifetimeBoundaryFailed)
         }
     }
-    // SETSID makes the child its own session and process group. The claim
-    // helper, still that same pid, installs the controlling terminal and the
-    // foreground group before sandbox-exec. VINTR must reach that group.
-    // The parent is not in the session, so it verifies with TIOCGPGRP and
-    // does not call TIOCSPGRP. A live child that never becomes its own
-    // foreground group is killed. A command that has already exited may
-    // pass only when the handshake pipe shows the post-claim shell ran.
-    var claimPreface = Data()
-    if let terminal {
-        switch proveForegroundGroup(
-            terminal,
-            pid: pid,
-            handshake: readEnd,
-            nonce: Data(nonce.utf8)
-        ) {
-        case .claimed(let preface):
-            claimPreface = preface
-        case .cancelled:
-            terminateSession(pgid: pid, also: [pid])
-            _ = waitUntilSessionIsDead(pgid: pid, also: [pid])
-            return .failure(.cancelled)
-        case .failed:
-            terminateSession(pgid: pid, also: [pid])
-            _ = waitUntilSessionIsDead(pgid: pid, also: [pid])
-            return .failure(.lifetimeBoundaryFailed)
-        }
-    }
+    // The image is still stopped. Recording the process group happens before
+    // SIGCONT. The claim helper cannot install the controlling terminal until
+    // that resume, so the foreground proof runs there, not here.
 
     let capability = RuntimeCapability()
     let parentRead = admissionPipes.requestRead
@@ -565,8 +541,6 @@ func spawnSeatbeltProcess(
         handshakeRead: ownedRead,
         terminal: terminal
     )
-    child.handshakePreface = claimPreface
-    terminal?.startReader()
     handedOff = true
     return .success(child)
 }
@@ -840,6 +814,38 @@ func resumeSuspendedSeatbelt(_ pid: pid_t) -> Bool {
     return kill(pid, SIGCONT) == 0
 }
 
+/// Continue a spawned child, then require a PTY leader to be its own
+/// foreground group. Discard and inherit have no claim helper.
+/// The reader starts only after the claim succeeds, so a failed proof does
+/// not leave a thread on a master that is about to be closed.
+func resumeAndClaimForeground(_ child: LiveSeatbeltChild) -> Result<Void, IsolationApplyError> {
+    guard resumeSuspendedSeatbelt(child.pid) else {
+        return .failure(.lifetimeBoundaryFailed)
+    }
+    guard let terminal = child.pty else {
+        return .success(())
+    }
+    switch proveForegroundGroup(
+        terminal,
+        pid: child.pid,
+        handshake: child.handshakeRead,
+        nonce: Data(child.nonce.utf8)
+    ) {
+    case .claimed(let preface):
+        child.handshakePreface = preface
+        terminal.startReader()
+        return .success(())
+    case .cancelled:
+        terminateSession(pgid: child.pid, also: [child.pid])
+        _ = waitUntilSessionIsDead(pgid: child.pid, also: [child.pid])
+        return .failure(.cancelled)
+    case .failed:
+        terminateSession(pgid: child.pid, also: [child.pid])
+        _ = waitUntilSessionIsDead(pgid: child.pid, also: [child.pid])
+        return .failure(.lifetimeBoundaryFailed)
+    }
+}
+
 private func terminateSession(pgid: pid_t, also pids: Set<pid_t>) {
     if pgid > 1 {
         _ = kill(-pgid, SIGKILL)
@@ -1017,7 +1023,8 @@ func resolvedPtyClaimPath(workspace: String) -> String? {
     return walk(compiled)
 }
 
-/// `<.build>/<triple>/{debug,release}/rv-pty-claim`. The triple is not a
+/// `<.build>/<triple>/{debug,release}/rv-pty-claim` and the swiftbuild
+/// layout `<.build>/out/Products/Debug/rv-pty-claim`. The triple is not a
 /// fixed name, so it is not in the suffix list.
 private func considerBuildTriples(
     _ directory: URL,
@@ -1043,9 +1050,16 @@ private func considerBuildTriples(
         return nil
     }
     for child in children {
-        for config in ["debug", "release"] {
+        for config in ["debug", "release", "Debug", "Release"] {
             if let found = consider(
                 child.appendingPathComponent(config, isDirectory: true)
+                    .appendingPathComponent(ptyClaimExecutableName).path
+            ) {
+                return found
+            }
+            if let found = consider(
+                child.appendingPathComponent("Products", isDirectory: true)
+                    .appendingPathComponent(config, isDirectory: true)
                     .appendingPathComponent(ptyClaimExecutableName).path
             ) {
                 return found

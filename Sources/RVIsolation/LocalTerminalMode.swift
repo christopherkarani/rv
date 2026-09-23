@@ -70,15 +70,24 @@ public final class LocalTerminalRestorer: @unchecked Sendable {
     }
 }
 
-/// Writes `saved` twice. The second `tcsetattr` drops `PENDIN`
-/// (`0x20000000`), which the kernel sets when leaving raw mode. Both writes
-/// are the already-copied attributes. There is no `tcgetattr`, so the signal
-/// handler can use the same sequence.
+/// `PENDIN` (`0x20000000`) is set by the kernel when `ICANON` turns on.
+/// A second `tcsetattr` of the same termios is ignored, so the bit stays.
+/// The first write flips `EXTPROC` (`0x800`) so the follow-up is a real
+/// change and copies `c_lflag` without `PENDIN`. There is no `tcgetattr`.
+private let termiosPendin = tcflag_t(0x2000_0000)
+private let termiosExtproc = tcflag_t(0x800)
+
 private func applySavedTermios(_ saved: termios, fd: Int32) -> Bool {
+    var forced = saved
+    forced.c_lflag ^= termiosExtproc
+    forced.c_lflag &= ~termiosPendin
+    // A control character has to change too. A local-flag-only difference
+    // can be dropped when the kernel rewrites `c_lflag` for `PENDIN`.
+    forced.c_cc.16 = forced.c_cc.16 &+ 1
+    guard writeTermios(fd, &forced) else { return false }
     var copy = saved
-    guard writeTermios(fd, &copy) else { return false }
-    var again = saved
-    return writeTermios(fd, &again)
+    copy.c_lflag &= ~termiosPendin
+    return writeTermios(fd, &copy)
 }
 
 private func writeTermios(_ fd: Int32, _ term: inout termios) -> Bool {
@@ -179,13 +188,18 @@ private enum LocalTerminalSignal {
         sigaction(number, &copy, nil)
     }
 
-    /// Only `tcsetattr` of the termios copied at `arm`. No `tcgetattr`.
+    /// Same two writes as `applySavedTermios`. Literals, not the file-level
+    /// constants: this pointer cannot capture context. No `tcgetattr`.
     private static let handle: @convention(c) (Int32) -> Void = { _ in
         if armed != 0, fd >= 0 {
+            var forced = saved
+            forced.c_lflag ^= tcflag_t(0x800)
+            forced.c_lflag &= ~tcflag_t(0x2000_0000)
+            forced.c_cc.16 = forced.c_cc.16 &+ 1
+            while tcsetattr(fd, TCSANOW, &forced) != 0 && errno == EINTR {}
             var copy = saved
+            copy.c_lflag &= ~tcflag_t(0x2000_0000)
             while tcsetattr(fd, TCSANOW, &copy) != 0 && errno == EINTR {}
-            var again = saved
-            while tcsetattr(fd, TCSANOW, &again) != 0 && errno == EINTR {}
         }
         _exit(1)
     }

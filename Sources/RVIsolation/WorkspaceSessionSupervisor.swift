@@ -625,10 +625,12 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
         if case .failure(let error) = recorded {
             return .failure(.apply(error))
         }
-        guard resumeSuspendedSeatbelt(child.live.pid) else {
-            return .failure(.apply(.lifetimeBoundaryFailed))
+        switch resumeAndClaimForeground(child.live) {
+        case .failure(let error):
+            return .failure(.apply(error))
+        case .success:
+            return .success(())
         }
-        return .success(())
     }
 
     private func retireUnrecorded(_ child: WorkspaceChild) {

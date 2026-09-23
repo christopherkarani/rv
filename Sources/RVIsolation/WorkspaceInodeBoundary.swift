@@ -396,10 +396,14 @@ final class WorkspaceInodeBoundary {
 
     private func detachVolume() {
         if blockingWorkIsCancelled() {
+            // One detach. `honorCancellation` would SIGTERM hdiutil on the
+            // first poll, the mount would stay, and teardown would replace
+            // the child's `.cancelled` with `workspaceInodeBoundaryFailed`.
+            // Five seconds stays inside the caller's 8-second bound.
             _ = runTool(
                 ["/usr/bin/hdiutil", "detach", "-force", "-quiet", disk],
-                honorCancellation: true,
-                deadline: 1
+                honorCancellation: false,
+                deadline: 5
             )
             return
         }
