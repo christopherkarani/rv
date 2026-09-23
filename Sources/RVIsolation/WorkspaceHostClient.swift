@@ -16,6 +16,7 @@ public enum WorkspaceClientFailure: Error, Sendable, Equatable {
     case invalidRequest
     case recoveryRequired
     case childTeardownFailed
+    case runtimeLimit
     case staleEndpoint
 }
 
@@ -42,8 +43,9 @@ public enum WorkspaceHostExit {
 /// Authenticated control client. It never receives workspace or runtime capabilities.
 public final class WorkspaceClient: @unchecked Sendable {
     private let endpoint: WorkspaceEndpoint
-    private let writeLock = Mutex(0)
-    private let state: Mutex<ClientState>
+    /// Serializes every read, write, and close on `fd`. One transaction owns
+    /// the byte stream until its reply arrives or the socket is closed.
+    private let io: Mutex<ClientState>
 
     private struct ClientState {
         var fd: Int32
@@ -52,17 +54,11 @@ public final class WorkspaceClient: @unchecked Sendable {
 
     private init(fd: Int32, endpoint: WorkspaceEndpoint) {
         self.endpoint = endpoint
-        self.state = Mutex(ClientState(fd: fd, open: true))
+        self.io = Mutex(ClientState(fd: fd, open: true))
     }
 
     deinit {
-        let fd = state.withLock { current -> Int32 in
-            let fd = current.fd
-            current.open = false
-            current.fd = -1
-            return fd
-        }
-        if fd >= 0 { close(fd) }
+        io.withLock { closeLocked(&$0) }
     }
 
     public static func connect(
@@ -187,15 +183,23 @@ public final class WorkspaceClient: @unchecked Sendable {
     public func watchClose(
         timeout: TimeInterval = WorkspaceControlLimits.closeTimeoutSeconds
     ) -> Result<WorkspaceDescription, WorkspaceClientFailure> {
-        while true {
-            switch read(timeout: timeout) {
-            case .failure(let error):
-                return .failure(error)
-            case .success(let message):
-                guard message.op == WorkspaceControlOp.workspaceClosed.rawValue else {
-                    continue
+        io.withLock { state in
+            let deadline = Date().addingTimeInterval(timeout)
+            while true {
+                let remain = deadline.timeIntervalSinceNow
+                if remain <= 0 {
+                    closeLocked(&state)
+                    return .failure(.timedOut)
                 }
-                return description(message)
+                switch readFrame(state: &state, timeout: remain) {
+                case .failure(let error):
+                    return .failure(error)
+                case .success(let message):
+                    guard message.op == WorkspaceControlOp.workspaceClosed.rawValue else {
+                        continue
+                    }
+                    return description(message)
+                }
             }
         }
     }
@@ -227,42 +231,61 @@ public final class WorkspaceClient: @unchecked Sendable {
         timeout: TimeInterval
     ) -> Result<WorkspaceControlMessage, WorkspaceClientFailure> {
         guard let body = WorkspaceControlCodec.encode(message) else { return .failure(.malformed) }
-        let wrote = writeLock.withLock { _ in
-            guard let fd = fileDescriptor() else { return false }
-            return WorkspaceControlSocket.writeFrame(fd: fd, body: body)
-        }
-        guard wrote else { return .failure(.disconnected) }
-        let deadline = Date().addingTimeInterval(timeout)
-        while true {
-            let remain = deadline.timeIntervalSinceNow
-            if remain <= 0 { return .failure(.timedOut) }
-            switch read(timeout: remain) {
-            case .failure(let error):
-                return .failure(error)
-            case .success(let reply):
-                if reply.op == WorkspaceControlOp.workspaceClosed.rawValue,
-                    reply.id != message.id
-                {
-                    return .failure(.workspaceClosed)
+        let requestID = message.id
+        return io.withLock { state in
+            guard state.open, state.fd >= 0 else { return .failure(.disconnected) }
+            guard WorkspaceControlSocket.writeFrame(fd: state.fd, body: body) else {
+                closeLocked(&state)
+                return .failure(.disconnected)
+            }
+            let deadline = Date().addingTimeInterval(timeout)
+            while true {
+                let remain = deadline.timeIntervalSinceNow
+                if remain <= 0 {
+                    closeLocked(&state)
+                    return .failure(.timedOut)
                 }
-                guard reply.id == message.id else { return .failure(.malformed) }
-                return interpret(reply)
+                switch readFrame(state: &state, timeout: remain) {
+                case .failure(let error):
+                    return .failure(error)
+                case .success(let reply):
+                    if reply.op == WorkspaceControlOp.workspaceClosed.rawValue,
+                        reply.id != requestID
+                    {
+                        closeLocked(&state)
+                        return .failure(.workspaceClosed)
+                    }
+                    guard reply.id == requestID else {
+                        closeLocked(&state)
+                        return .failure(.malformed)
+                    }
+                    return interpret(reply)
+                }
             }
         }
     }
 
-    private func read(timeout: TimeInterval) -> Result<WorkspaceControlMessage, WorkspaceClientFailure> {
-        guard let fd = fileDescriptor() else { return .failure(.disconnected) }
-        switch WorkspaceControlSocket.readFrame(fd: fd, timeout: timeout) {
+    /// Caller holds `io`. A broken frame closes the socket so the next call
+    /// cannot pair a later reply with an earlier request.
+    private func readFrame(
+        state: inout ClientState,
+        timeout: TimeInterval
+    ) -> Result<WorkspaceControlMessage, WorkspaceClientFailure> {
+        guard state.open, state.fd >= 0 else { return .failure(.disconnected) }
+        switch WorkspaceControlSocket.readFrame(fd: state.fd, timeout: timeout) {
         case .failure(.timedOut):
+            closeLocked(&state)
             return .failure(.timedOut)
         case .failure:
+            closeLocked(&state)
             return .failure(.disconnected)
         case .success(let data):
             switch WorkspaceControlCodec.decode(data) {
             case .incompatible:
+                closeLocked(&state)
                 return .failure(.incompatibleProtocol)
             case .invalid:
+                closeLocked(&state)
                 return .failure(.malformed)
             case .message(let message):
                 return .success(message)
@@ -304,19 +327,15 @@ public final class WorkspaceClient: @unchecked Sendable {
         )
     }
 
-    private func fileDescriptor() -> Int32? {
-        state.withLock { current in
-            current.open ? current.fd : nil
-        }
+    private func finish() {
+        io.withLock { closeLocked(&$0) }
     }
 
-    private func finish() {
-        let fd = state.withLock { current -> Int32 in
-            let fd = current.fd
-            current.open = false
-            current.fd = -1
-            return fd
-        }
+    /// Caller holds `io`.
+    private func closeLocked(_ state: inout ClientState) {
+        let fd = state.fd
+        state.open = false
+        state.fd = -1
         if fd >= 0 { close(fd) }
     }
 }
@@ -331,6 +350,7 @@ private func clientFailure(_ code: WorkspaceControlCode) -> WorkspaceClientFailu
     case .unauthorizedClient: .unauthorizedClient
     case .recoveryRequired: .recoveryRequired
     case .childTeardownFailed: .childTeardownFailed
-    }
+    case .runtimeLimit: .runtimeLimit
+}
 }
 #endif

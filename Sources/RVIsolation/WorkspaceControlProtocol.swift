@@ -31,6 +31,7 @@ public enum WorkspaceControlCode: String, Error, Sendable, Equatable, Codable {
     case unauthorizedClient
     case recoveryRequired
     case childTeardownFailed
+    case runtimeLimit
 }
 
 public enum WorkspaceControlOp: String, Sendable, Equatable {
@@ -402,6 +403,8 @@ func workspaceControlCode(_ error: WorkspaceSessionError) -> WorkspaceControlCod
         .runtimeNotFound
     case .childTeardownFailed:
         .childTeardownFailed
+    case .runtimeLimit:
+        .runtimeLimit
     case .ownedByLiveProcess, .recoveryInProgress, .unresolvedWorkspace:
         .recoveryRequired
     case .apply, .cleanupFailed:

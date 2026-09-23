@@ -20,6 +20,23 @@ enum WorkspacePeerPolicy {
     }
 }
 
+enum WorkspaceAcceptAction: Equatable {
+    /// `EINTR` and `ECONNABORTED` are normal. Call `accept` again.
+    case retryImmediately
+    /// A resource limit or other transient failure. Pause, then call `accept` again.
+    case retryAfterPause
+    /// The listen socket is closed, or the host is retiring.
+    case stop
+}
+
+enum WorkspaceAcceptLoop {
+    static func action(for error: Int32, retired: Bool) -> WorkspaceAcceptAction {
+        if retired || error == EBADF { return .stop }
+        if error == EINTR || error == ECONNABORTED { return .retryImmediately }
+        return .retryAfterPause
+    }
+}
+
 enum WorkspaceSocketMode {
     static func isOwnerDirectory(_ path: String) -> Bool {
         mode(path, expected: 0o700, kind: S_IFDIR)

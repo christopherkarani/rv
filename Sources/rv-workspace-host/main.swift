@@ -30,9 +30,10 @@ enum WorkspaceHostMain {
             Darwin.exit(WorkspaceHostExit.unsupported)
         }
         _ = setsid()
+        // The creating terminal may close. A client disconnect must not kill the host.
+        // SIGTERM and SIGINT keep the default terminate action so the lock drops
+        // and the next start recovers.
         signal(SIGHUP, SIG_IGN)
-        signal(SIGINT, SIG_IGN)
-        signal(SIGTERM, SIG_IGN)
         signal(SIGPIPE, SIG_IGN)
         Darwin.exit(WorkspaceHostProcess.run(workspace: arguments[1]))
         #endif

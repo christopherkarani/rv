@@ -277,6 +277,7 @@ enum WorkspaceCommandRun {
         case .invalidRequest: "invalid workspace request"
         case .recoveryRequired: "workspace recovery is required"
         case .childTeardownFailed: "runtime teardown failed"
+        case .runtimeLimit: "workspace runtime limit reached"
         case .staleEndpoint: "stale endpoint"
         }
     }
@@ -289,7 +290,11 @@ enum WorkspaceCommandRun {
         var buffer = [UInt8](repeating: 0, count: 256)
         while true {
             let count = read(STDIN_FILENO, &buffer, buffer.count)
-            if count <= 0 { return }
+            if count == 0 { return }
+            if count < 0 {
+                if errno == EINTR { continue }
+                return
+            }
         }
     }
     #endif

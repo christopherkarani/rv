@@ -32,17 +32,16 @@ private final class CloseGate: @unchecked Sendable {
 
 private final class WorkspaceControlConnection: @unchecked Sendable {
     let id = UUID()
-    let fd: Int32
-    private let writeLock = Mutex(0)
-    private let flags = Mutex(ConnectionFlags())
+    private let flags: Mutex<ConnectionFlags>
 
     private struct ConnectionFlags {
+        var fd: Int32
         var hello = false
         var closed = false
     }
 
     init(fd: Int32) {
-        self.fd = fd
+        self.flags = Mutex(ConnectionFlags(fd: fd))
     }
 
     var isHello: Bool {
@@ -55,16 +54,39 @@ private final class WorkspaceControlConnection: @unchecked Sendable {
 
     func send(_ message: WorkspaceControlMessage) -> Bool {
         guard let body = WorkspaceControlCodec.encode(message) else { return false }
-        return writeLock.withLock { _ in
-            let closed = flags.withLock { $0.closed }
-            guard closed == false else { return false }
-            return WorkspaceControlSocket.writeFrame(fd: fd, body: body)
+        return flags.withLock { flags in
+            guard flags.closed == false else { return false }
+            return WorkspaceControlSocket.writeFrame(fd: flags.fd, body: body)
         }
     }
 
-    func shutdown() {
-        flags.withLock { $0.closed = true }
+    func socketFD() -> Int32 {
+        flags.withLock { flags in
+            flags.closed ? -1 : flags.fd
+        }
+    }
+
+    /// Unblock a read without releasing the descriptor. The serve thread closes it.
+    func interrupt() {
+        flags.withLock { flags in
+            guard flags.closed == false, flags.fd >= 0 else { return }
+            _ = Darwin.shutdown(flags.fd, SHUT_RDWR)
+        }
+    }
+
+    /// Shutdown and close exactly once. A later caller observes `closed` and
+    /// does not touch the descriptor after it can be reused.
+    func closeSocket() {
+        let fd = flags.withLock { flags -> Int32 in
+            if flags.closed { return -1 }
+            flags.closed = true
+            let fd = flags.fd
+            flags.fd = -1
+            return fd
+        }
+        guard fd >= 0 else { return }
         _ = Darwin.shutdown(fd, SHUT_RDWR)
+        Darwin.close(fd)
     }
 }
 
@@ -79,9 +101,13 @@ final class WorkspaceHostServer: @unchecked Sendable {
     private let endpointFile: URL
     private let socketDirectory: String
     private let removeSocketDirectory: Bool
-    private let connections = Mutex<[UUID: WorkspaceControlConnection]>([:])
-    private let retired = Mutex(false)
+    private let registry = Mutex<Registry>(Registry())
     private let gate = CloseGate()
+
+    private struct Registry {
+        var connections: [UUID: WorkspaceControlConnection] = [:]
+        var retired = false
+    }
 
     private init(
         supervisor: WorkspaceSessionSupervisor,
@@ -199,10 +225,25 @@ final class WorkspaceHostServer: @unchecked Sendable {
     }
 
     private func acceptLoop() {
-        while true {
+        while registry.withLock({ $0.retired }) == false {
             let client = accept(listenFD, nil, nil)
             if client < 0 {
-                if errno == EINTR { continue }
+                let error = errno
+                switch WorkspaceAcceptLoop.action(
+                    for: error,
+                    retired: registry.withLock { $0.retired }
+                ) {
+                case .stop:
+                    return
+                case .retryImmediately:
+                    continue
+                case .retryAfterPause:
+                    usleep(50_000)
+                    continue
+                }
+            }
+            if registry.withLock({ $0.retired }) {
+                Darwin.close(client)
                 return
             }
             _ = fcntl(client, F_SETFD, FD_CLOEXEC)
@@ -219,11 +260,6 @@ final class WorkspaceHostServer: @unchecked Sendable {
     }
 
     private func adopt(_ fd: Int32) {
-        let allowed = connections.withLock { $0.count < WorkspaceControlLimits.maxConnections }
-        guard allowed else {
-            Darwin.close(fd)
-            return
-        }
         guard let uid = WorkspaceControlSocket.peerUID(fd),
             WorkspacePeerPolicy.decide(peerUID: uid, ownerUID: getuid()) == nil
         else {
@@ -239,7 +275,19 @@ final class WorkspaceHostServer: @unchecked Sendable {
             return
         }
         let connection = WorkspaceControlConnection(fd: fd)
-        connections.withLock { $0[connection.id] = connection }
+        let stored = registry.withLock { state -> Bool in
+            guard state.retired == false,
+                state.connections.count < WorkspaceControlLimits.maxConnections
+            else {
+                return false
+            }
+            state.connections[connection.id] = connection
+            return true
+        }
+        guard stored else {
+            connection.closeSocket()
+            return
+        }
         let server = self
         let thread = Thread {
             server.serve(connection)
@@ -250,12 +298,13 @@ final class WorkspaceHostServer: @unchecked Sendable {
 
     private func serve(_ connection: WorkspaceControlConnection) {
         defer {
-            connections.withLock { $0[connection.id] = nil }
-            connection.shutdown()
-            Darwin.close(connection.fd)
+            registry.withLock { $0.connections[connection.id] = nil }
+            connection.closeSocket()
         }
-        while retired.withLock({ $0 }) == false {
-            switch WorkspaceControlSocket.readFrame(fd: connection.fd, timeout: nil) {
+        while registry.withLock({ $0.retired }) == false {
+            let fd = connection.socketFD()
+            if fd < 0 { return }
+            switch WorkspaceControlSocket.readFrame(fd: fd, timeout: nil) {
             case .failure:
                 return
             case .success(let body):
@@ -383,8 +432,8 @@ final class WorkspaceHostServer: @unchecked Sendable {
         guard snapshot.originalPath.rawValue.utf8.count <= WorkspaceControlLimits.maxProjectBytes else {
             return failure(message, .invalidRequest)
         }
-        let attached = connections.withLock { list in
-            list.values.filter(\.isHello).count
+        let attached = registry.withLock { state in
+            state.connections.values.filter(\.isHello).count
         }
         return WorkspaceControlMessage(
             version: WorkspaceControlLimits.version,
@@ -400,9 +449,10 @@ final class WorkspaceHostServer: @unchecked Sendable {
     }
 
     private func list(_ message: WorkspaceControlMessage) -> WorkspaceControlMessage {
+        supervisor.pruneFinishedRuntimes(limit: WorkspaceControlLimits.maxRuntimes)
         let facts = supervisor.runtimeFacts()
         guard facts.count <= WorkspaceControlLimits.maxRuntimes else {
-            return failure(message, .invalidRequest)
+            return failure(message, .runtimeLimit)
         }
         return WorkspaceControlMessage(
             version: WorkspaceControlLimits.version,
@@ -419,9 +469,6 @@ final class WorkspaceHostServer: @unchecked Sendable {
         let phase = supervisor.snapshot.phase
         guard phase.acceptsRuntime else {
             return failure(message, workspaceControlCode(.notAcceptingRuntime(phase)))
-        }
-        guard supervisor.runtimeFacts().count < WorkspaceControlLimits.maxRuntimes else {
-            return failure(message, .invalidRequest)
         }
         guard let executable = message.executable, executable.hasPrefix("/") else {
             return failure(message, .invalidRequest)
@@ -448,11 +495,13 @@ final class WorkspaceHostServer: @unchecked Sendable {
             plan: plan,
             io: .discard,
             admission: .failClosed,
-            sessionStore: sessionStore
+            sessionStore: sessionStore,
+            runningLimit: WorkspaceControlLimits.maxRuntimes
         ) {
         case .failure(let error):
             return failure(message, workspaceControlCode(error))
         case .success(let running):
+            supervisor.pruneFinishedRuntimes(limit: WorkspaceControlLimits.maxRuntimes)
             return WorkspaceControlMessage(
                 version: WorkspaceControlLimits.version,
                 id: message.id,
@@ -516,12 +565,17 @@ final class WorkspaceHostServer: @unchecked Sendable {
     }
 
     private func retire(excluding: UUID?, notify: Bool) {
-        let first = retired.withLock { flag -> Bool in
-            if flag { return false }
-            flag = true
-            return true
+        let snapshot: (first: Bool, others: [WorkspaceControlConnection]) = registry.withLock { state in
+            if state.retired { return (false, []) }
+            state.retired = true
+            let others = state.connections.values.filter { $0.id != excluding }
+            return (true, Array(others))
         }
-        guard first else { return }
+        guard snapshot.first else { return }
+        // Stop accept before client descriptors are closed so a new connection
+        // cannot reuse a number this host still reads.
+        _ = Darwin.shutdown(listenFD, SHUT_RDWR)
+        Darwin.close(listenFD)
         if notify {
             let event = WorkspaceControlMessage(
                 version: WorkspaceControlLimits.version,
@@ -533,23 +587,18 @@ final class WorkspaceHostServer: @unchecked Sendable {
                 project: supervisor.snapshot.originalPath.rawValue,
                 attached: 0
             )
-            let others = connections.withLock { list in
-                list.values.filter { $0.id != excluding }
-            }
-            for connection in others {
+            for connection in snapshot.others {
                 _ = connection.send(event)
             }
         }
-        let fds = connections.withLock { list -> [Int32] in
-            let values = list.values.map(\.fd)
-            list.removeAll()
-            return values
+        for connection in snapshot.others {
+            connection.interrupt()
         }
-        for fd in fds {
-            _ = Darwin.shutdown(fd, SHUT_RDWR)
+        if let current = registry.withLock({ state in
+            state.connections.values.first { $0.id == excluding }
+        }) {
+            current.interrupt()
         }
-        _ = Darwin.shutdown(listenFD, SHUT_RDWR)
-        Darwin.close(listenFD)
         _ = WorkspaceControlSocket.unlinkOwnedSocket(endpoint.socketPath)
         if removeSocketDirectory {
             _ = socketDirectory.withCString { rmdir($0) }

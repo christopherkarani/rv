@@ -32,8 +32,27 @@ import Testing
     var header = UInt32(WorkspaceControlLimits.maxBodyBytes + 1).bigEndian
     let declared = Data(bytes: &header, count: 4)
     #expect(WorkspaceControlCodec.headerCount(declared).isFailure)
+    #if os(macOS)
     #expect(WorkspacePeerPolicy.decide(peerUID: 1, ownerUID: 2) == .unauthorizedClient)
     #expect(WorkspacePeerPolicy.decide(peerUID: 2, ownerUID: 2) == nil)
+    #expect(WorkspaceAcceptLoop.action(for: ECONNABORTED, retired: false) == .retryImmediately)
+    #expect(WorkspaceAcceptLoop.action(for: EINTR, retired: false) == .retryImmediately)
+    #expect(WorkspaceAcceptLoop.action(for: EBADF, retired: false) == .stop)
+    #expect(WorkspaceAcceptLoop.action(for: ECONNABORTED, retired: true) == .stop)
+    #expect(WorkspaceAcceptLoop.action(for: EMFILE, retired: false) == .retryAfterPause)
+    let older = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+    let newer = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
+    let running = UUID(uuidString: "00000000-0000-0000-0000-000000000003")!
+    let dropped = RuntimeRetention.finishedIDsToDrop(
+        [
+            .init(id: older, startedAt: Date(timeIntervalSince1970: 1), running: false),
+            .init(id: newer, startedAt: Date(timeIntervalSince1970: 2), running: false),
+            .init(id: running, startedAt: Date(timeIntervalSince1970: 3), running: true),
+        ],
+        limit: 2
+    )
+    #expect(dropped == [older])
+    #endif
 }
 
 #if os(macOS)
@@ -229,7 +248,7 @@ struct WorkspaceHostTests {
         #expect(try again.listRuntimes().get().contains { $0.runtime == runtime.runtime && $0.running })
         #expect(try again.describe().get().phase == .active)
         #expect(kill(host, 0) == 0)
-        kill(host, SIGKILL)
+        kill(host, SIGTERM)
         #expect(waitUntil(seconds: 5) { kill(host, 0) != 0 })
         #expect(again.ping().isFailure)
         let afterDeath = WorkspaceDiscovery.inspect(
@@ -318,10 +337,90 @@ struct WorkspaceHostTests {
         #expect(try client.describe().get().workspace == endpoint.workspace)
         #expect(try client.closeWorkspace().get().phase == .closed)
     }
+
+    @Test func runningLimitRefusesASecondLaunch() throws {
+        let opened = try TestHost()
+        defer { opened.close() }
+        let command = try #require(IsolatedCommand(
+            executable: "/bin/sh",
+            arguments: ["-c", "/bin/sleep 30"]
+        ))
+        let plan = compileContainedPlan(workspace: opened.supervisor.snapshot.policyWorkspace)
+        let log = opened.tree.rootURL.appendingPathComponent("runtime-limit.jsonl")
+        let first = try opened.supervisor.launch(
+            host: nil,
+            command: command,
+            plan: plan,
+            io: .discard,
+            admission: .failClosed,
+            sessionStore: .file(log),
+            runningLimit: 1
+        ).get()
+        let second = opened.supervisor.launch(
+            host: nil,
+            command: command,
+            plan: plan,
+            io: .discard,
+            admission: .failClosed,
+            sessionStore: .file(log),
+            runningLimit: 1
+        )
+        guard case .failure(.runtimeLimit) = second else {
+            Issue.record("a second running runtime must be refused at the cap")
+            return
+        }
+        #expect(opened.supervisor.runtimeFacts().contains { $0.id == first.id.rawValue && $0.running })
+    }
+
+    @Test func oneClientSerializesOverlappedCalls() throws {
+        let opened = try TestHost()
+        defer { opened.close() }
+        let client = try WorkspaceClient.connect(opened.server.endpoint).get()
+        defer { _ = client.detach() }
+        let box = OverlapBox()
+        for _ in 0..<8 {
+            box.reset()
+            let thread = Thread {
+                box.finish(client.ping())
+            }
+            thread.start()
+            let primary = client.ping()
+            let deadline = Date().addingTimeInterval(5)
+            while box.secondary == nil, Date() < deadline {
+                Thread.sleep(forTimeInterval: 0.01)
+            }
+            #expect(primary.isSuccess)
+            #expect(box.secondary?.isSuccess == true)
+        }
+    }
 }
 
 private final class WatchBox: @unchecked Sendable {
     var result: Result<WorkspaceDescription, WorkspaceClientFailure>?
+}
+
+private final class OverlapBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Result<Void, WorkspaceClientFailure>?
+
+    func reset() {
+        lock.lock()
+        value = nil
+        lock.unlock()
+    }
+
+    func finish(_ result: Result<Void, WorkspaceClientFailure>) {
+        lock.lock()
+        value = result
+        lock.unlock()
+    }
+
+    var secondary: Result<Void, WorkspaceClientFailure>? {
+        lock.lock()
+        let copy = value
+        lock.unlock()
+        return copy
+    }
 }
 
 private final class OutputBox: @unchecked Sendable {
@@ -454,6 +553,7 @@ private func writeAll(fd: Int32, data: Data) -> Bool {
     }
     return true
 }
+#endif
 
 extension Result where Failure: Equatable {
     var isSuccess: Bool {
@@ -478,4 +578,3 @@ extension Result where Failure == WorkspaceControlCode {
         return false
     }
 }
-#endif
