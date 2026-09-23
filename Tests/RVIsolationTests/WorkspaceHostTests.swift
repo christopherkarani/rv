@@ -271,6 +271,84 @@ struct WorkspaceHostTests {
         restarted.waitUntilExit()
     }
 
+    @Test func hostDeathDuringAPtyRuntimeIsOrphanedNotReattachable() throws {
+        let home = try shortDirectory(prefix: "/tmp/rvp")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let workspace = home.appendingPathComponent("ws", isDirectory: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        let hostBinary = try builtProduct("rv-workspace-host")
+        let pidFile = home.appendingPathComponent("host.pid")
+        let parent = Process()
+        parent.executableURL = URL(fileURLWithPath: "/bin/sh")
+        parent.arguments = [
+            "-c",
+            "\"$1\" --workspace \"$2\" >/dev/null 2>&1 & echo $! > \"$3\"; exit 0",
+            "sh",
+            hostBinary.path,
+            workspace.path,
+            pidFile.path,
+        ]
+        var environment = ProcessInfo.processInfo.environment
+        environment["HOME"] = home.path
+        parent.environment = environment
+        try parent.run()
+        parent.waitUntilExit()
+        #expect(parent.terminationStatus == 0)
+        let hostPID = pid_t(try String(contentsOf: pidFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines))
+        let host = try #require(hostPID)
+        defer { terminate(host) }
+        let config = home.appendingPathComponent(".config/rv", isDirectory: true)
+        let endpoint = try #require(waitLive(project: workspace.path, configuration: config, seconds: 60))
+        let owner = try WorkspaceClient.connect(endpoint).get()
+        let runtime = try owner.launchRuntime(
+            executable: "/bin/sh",
+            arguments: ["-c", "printf '%s\\n' $$ > pty-death.pid; exec /bin/sleep 120"],
+            terminalRows: 24,
+            terminalColumns: 80
+        ).get()
+        #expect(runtime.terminal)
+        #expect(runtime.running)
+        let childFile = workspace.appendingPathComponent("pty-death.pid")
+        #expect(waitFor(childFile))
+        let child = pid_t(
+            try String(contentsOf: childFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+        let childPID = try #require(child)
+        defer {
+            if kill(childPID, 0) == 0 { kill(childPID, SIGKILL) }
+        }
+        try #require(owner.subscribeTerminal(runtime.runtime).get() == ())
+        kill(host, SIGKILL)
+        #expect(waitUntil(seconds: 5) { kill(host, 0) != 0 })
+        #expect(owner.ping().isFailure)
+        #expect(owner.subscribeTerminal(runtime.runtime).isFailure)
+        let afterDeath = WorkspaceDiscovery.inspect(
+            project: workspace.path,
+            configurationDirectory: config
+        )
+        guard case .orphaned = afterDeath else {
+            Issue.record("host death must classify the workspace as orphaned, got \(afterDeath)")
+            return
+        }
+        #expect(WorkspaceClient.connect(endpoint).isFailure)
+        let restarted = Process()
+        restarted.executableURL = hostBinary
+        restarted.arguments = ["--workspace", workspace.path]
+        restarted.environment = environment
+        try restarted.run()
+        defer { terminate(restarted.processIdentifier) }
+        let recovered = try #require(waitLive(project: workspace.path, configuration: config, seconds: 90))
+        #expect(recovered.workspace != endpoint.workspace)
+        #expect(waitUntil(seconds: 10) { kill(childPID, 0) != 0 })
+        let closing = try WorkspaceClient.connect(recovered).get()
+        let described = try closing.describe().get()
+        #expect(described.workspace == recovered.workspace)
+        #expect(described.phase == .active)
+        #expect(try closing.listRuntimes().get().contains { $0.runtime == runtime.runtime } == false)
+        #expect(try closing.closeWorkspace().get().phase == .closed)
+        restarted.waitUntilExit()
+    }
+
     @Test func workspaceStartLeavesALiveHostAfterTheClientExits() throws {
         let home = try shortDirectory(prefix: "/tmp/rvs")
         defer { try? FileManager.default.removeItem(at: home) }

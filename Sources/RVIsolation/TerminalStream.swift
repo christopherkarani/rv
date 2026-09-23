@@ -49,11 +49,21 @@ struct TerminalReplayBuffer: Equatable, Sendable {
 
     mutating func append(sequence: Int64, bytes: Data, limit: Int) {
         guard bytes.isEmpty == false, limit > 0 else { return }
-        chunks.append(TerminalStoredChunk(sequence: sequence, bytes: bytes))
-        byteCount += bytes.count
+        var incoming = bytes
+        if incoming.count > limit {
+            incoming = Data(incoming.suffix(limit))
+        }
+        chunks.append(TerminalStoredChunk(sequence: sequence, bytes: incoming))
+        byteCount += incoming.count
         while byteCount > limit, chunks.isEmpty == false {
-            let removed = chunks.removeFirst()
-            byteCount -= removed.bytes.count
+            let excess = byteCount - limit
+            if chunks[0].bytes.count <= excess {
+                let removed = chunks.removeFirst()
+                byteCount -= removed.bytes.count
+            } else {
+                chunks[0].bytes.removeFirst(excess)
+                byteCount -= excess
+            }
         }
     }
 }

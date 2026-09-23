@@ -207,6 +207,18 @@ final class LiveSeatbeltChild: @unchecked Sendable {
         terminal.withLock { $0 = error }
     }
 
+    /// Spawn succeeded and then the runtime was not registered. Stop the
+    /// reader, close the master once, and drop the admission pipes. The
+    /// watch thread is not running, so nothing else will do this.
+    func releaseAbandoned() {
+        pty?.finish(status: nil)
+        if handshakeRead >= 0 {
+            close(handshakeRead)
+            handshakeRead = -1
+        }
+        admission.finish()
+    }
+
     var terminalError: IsolationApplyError? {
         terminal.withLock { $0 }
     }
@@ -329,6 +341,10 @@ func spawnSeatbeltProcess(
             return .failure(.processSpawnFailed)
         }
         terminal = opened
+        if request.spawnFault == .spawn {
+            opened.shutdownMaster()
+            return .failure(.processSpawnFailed)
+        }
         // SETSID is not combined with SETPGROUP. The recorded process group
         // is the session leader's pid. START_SUSPENDED holds the image until
         // that group is durable.
@@ -474,7 +490,6 @@ func spawnSeatbeltProcess(
             return .failure(.lifetimeBoundaryFailed)
         }
     }
-
     let capability = RuntimeCapability()
     let parentRead = admissionPipes.requestRead
     let parentWrite = admissionPipes.responseWrite
@@ -805,6 +820,12 @@ private func waitUntilSessionIsDead(pgid: pid_t, also pids: Set<pid_t>) -> Bool 
         usleep(10_000)
     }
     return processGroupIsEmpty(pgid) && pids.allSatisfy { processIsGone($0) }
+}
+
+/// SIGKILL the session leader's group and wait until those processes are gone.
+func stopOwnedSession(leader: pid_t) -> Bool {
+    terminateSession(pgid: leader, also: [leader])
+    return waitUntilSessionIsDead(pgid: leader, also: visibleSessionPIDs(root: leader).union([leader]))
 }
 
 func processGroupIsEmpty(_ pgid: pid_t) -> Bool {

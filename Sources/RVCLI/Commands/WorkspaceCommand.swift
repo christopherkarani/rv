@@ -439,15 +439,86 @@ enum WorkspaceCommandRun {
 }
 
 #if os(macOS)
+enum WorkspaceTerminalDriver {
+    static func drive(
+        client: WorkspaceClient,
+        runtime: UUID,
+        rows: Int,
+        columns: Int,
+        input: Int32,
+        output: FileHandle,
+        restorer: LocalTerminalRestorer?,
+        failureText: (WorkspaceClientFailure) -> String
+    ) throws {
+        let bridge = TerminalStdinBridge(client: client, runtime: runtime, input: input)
+        bridge.start()
+        var currentRows = rows
+        var currentColumns = columns
+        while true {
+            if bridge.didEnd {
+                restorer?.restore()
+                _ = client.detach()
+                return
+            }
+            if let size = LocalTerminalWindow.current(fd: output.fileDescriptor),
+                size.rows != currentRows || size.columns != currentColumns
+            {
+                currentRows = size.rows
+                currentColumns = size.columns
+                _ = client.resizeTerminal(runtime, rows: size.rows, columns: size.columns)
+            }
+            switch client.nextTerminalEvent(timeout: 0.2) {
+            case .failure(let error):
+                restorer?.restore()
+                _ = client.detach()
+                throw ValidationError(failureText(error))
+            case .success(.waiting):
+                continue
+            case .success(.event(let event)):
+                guard event.runtime == runtime else { continue }
+                switch event.body {
+                case .replay(_, let bytes), .output(_, let bytes):
+                    output.write(bytes)
+                case .exited(let status):
+                    restorer?.restore()
+                    _ = client.detach()
+                    throw ExitCode(status)
+                case .overflow:
+                    restorer?.restore()
+                    _ = client.detach()
+                    throw ValidationError("terminal client fell behind")
+                case .inputOwner:
+                    break
+                }
+            }
+        }
+    }
+}
+
 private final class TerminalStdinBridge: @unchecked Sendable {
     private let client: WorkspaceClient
     private let runtime: UUID
+    private let input: Int32
     private let lock = NSLock()
     private var ended = false
 
     init(client: WorkspaceClient, runtime: UUID) {
         self.client = client
         self.runtime = runtime
+        self.input = STDIN_FILENO
+    }
+
+    init(client: WorkspaceClient, runtime: UUID, input: Int32) {
+        self.client = client
+        self.runtime = runtime
+        self.input = input
+    }
+
+    var didEnd: Bool {
+        lock.lock()
+        let value = ended
+        lock.unlock()
+        return value
     }
 
     var inputEnded: Bool {
@@ -470,7 +541,7 @@ private final class TerminalStdinBridge: @unchecked Sendable {
         LocalTerminalRestorer.blockInterruptSignalsInThisThread()
         var buffer = [UInt8](repeating: 0, count: TerminalStreamLimits.maximumInputBytes)
         while true {
-            let count = Darwin.read(STDIN_FILENO, &buffer, buffer.count)
+            let count = Darwin.read(input, &buffer, buffer.count)
             if count == 0 {
                 markEnded()
                 return

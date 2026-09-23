@@ -27,6 +27,13 @@ public final class LocalTerminalRestorer: @unchecked Sendable {
         guard tcgetattr(fd, &original) == 0 else { return nil }
         var raw = original
         cfmakeraw(&raw)
+        // Raw mode clears ISIG. The proving client still wants Ctrl-C to
+        // raise SIGINT so the handler can put the local terminal back.
+        // The runtime's own PTY keeps ISIG separately and receives 0x03
+        // only when a client writes that byte.
+        if signals {
+            raw.c_lflag |= tcflag_t(ISIG)
+        }
         guard tcsetattr(fd, TCSANOW, &raw) == 0 else { return nil }
         let restorer = LocalTerminalRestorer(fd: fd, saved: original, installSignals: signals)
         if signals {
@@ -49,6 +56,11 @@ public final class LocalTerminalRestorer: @unchecked Sendable {
         if installSignals {
             LocalTerminalSignal.disarm(fd: fd)
         }
+    }
+
+    /// Restores the attributes the signal handler would restore, without exiting.
+    func restoreInstalledSignal() {
+        LocalTerminalSignal.restoreArmedTerminal()
     }
 
     deinit {
@@ -103,6 +115,15 @@ private enum LocalTerminalSignal {
         signal(SIGTERM, SIG_DFL)
         signal(SIGHUP, SIG_DFL)
         signal(SIGQUIT, SIG_DFL)
+        signal(SIGINT, SIG_DFL)
+    }
+
+    /// Same termios restore the signal handler runs before it exits.
+    static func restoreArmedTerminal() {
+        guard armed != 0 else { return }
+        var copy = saved
+        _ = tcsetattr(fd, TCSANOW, &copy)
+        armed = 0
     }
 
     /// The stdin reader blocks in `read`. A handler that calls `tcsetattr` on
@@ -127,11 +148,7 @@ private enum LocalTerminalSignal {
     }
 
     private static let handle: @convention(c) (Int32) -> Void = { _ in
-        if armed != 0 {
-            var copy = saved
-            _ = tcsetattr(fd, TCSANOW, &copy)
-            armed = 0
-        }
+        restoreArmedTerminal()
         _exit(1)
     }
 }

@@ -45,6 +45,18 @@ let isolationExecTargets: [Target] = []
 let isolationTestDependencies: [Target.Dependency] = ["RVIsolation"]
 #endif
 
+#if os(macOS)
+let terminalProbeProducts: [Product] = [
+    .executable(name: "rv-terminal-probe", targets: ["RVTerminalProbe"]),
+]
+let terminalProbeTargets: [Target] = [
+    .executableTarget(name: "RVTerminalProbe", dependencies: ["RVIsolation"]),
+]
+#else
+let terminalProbeProducts: [Product] = []
+let terminalProbeTargets: [Target] = []
+#endif
+
 let coreLibraryTargets: [Target] = [
     .target(name: "RVDomain"),
     .target(
@@ -194,7 +206,7 @@ let cliProducts: [Product] = [
     .executable(name: "rv", targets: ["rv"]),
 ]
 let cliTestTargets: [Target] = [
-    .testTarget(name: "RVCLITests", dependencies: ["RVCLI", "RVService"]),
+    .testTarget(name: "RVCLITests", dependencies: ["RVCLI", "RVService", "RVIsolation"]),
 ]
 
 let package = Package(
@@ -202,11 +214,11 @@ let package = Package(
     platforms: [
         .macOS(.v26),
     ],
-    products: coreProducts + isolationExecProducts + serviceProducts + cliProducts,
+    products: coreProducts + isolationExecProducts + terminalProbeProducts + serviceProducts + cliProducts,
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.7.0"),
     ] + extraPackageDependencies,
-    targets: coreLibraryTargets + isolationExecTargets + serviceLibraryAndDaemon + cliTargets
+    targets: coreLibraryTargets + isolationExecTargets + terminalProbeTargets + serviceLibraryAndDaemon + cliTargets
         + coreTestTargets + serviceTestTargets + cliTestTargets,
     swiftLanguageModes: [.v6]
 )

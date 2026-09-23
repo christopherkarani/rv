@@ -131,9 +131,12 @@ struct ExecutorLifecycleRegressionTests {
         )
         let executor = LocalExecutor()
         let task = Task { try await lifecycleRun(executor, executable) }
-        // Mounting the private workspace volume runs before the shell. Under a
-        // parallel CI load that mount can take longer than a few seconds.
-        let deadline = Date().addingTimeInterval(45)
+        // DiskArbitration can queue hdiutil behind other suites. Wait until the
+        // owned child exists, then cancel. The old failure was cancelling during
+        // that wait: Process.waitUntilExit ignored the task, so this test hung
+        // until the runner timed it out. A missing pid is still a failed launch,
+        // but cancellation itself has to return.
+        let deadline = Date().addingTimeInterval(90)
         var sleepPID: Int32?
         while Date() < deadline {
             if let text = try? String(contentsOf: pidFile, encoding: .utf8) {
@@ -145,14 +148,14 @@ struct ExecutorLifecycleRegressionTests {
             }
             try await Task.sleep(nanoseconds: 20_000_000)
         }
+        task.cancel()
+        let cancelledAt = Date()
+        let result = try await task.value
+        #expect(Date().timeIntervalSince(cancelledAt) < 8)
         guard let pid = sleepPID else {
-            task.cancel()
-            let result = try await task.value
             Issue.record("contained sleep pid did not appear; launch returned \(result)")
             return
         }
-        task.cancel()
-        let result = try await task.value
         #expect(result == .failure(.cancelled))
         let probe = kill(pid, 0)
         let probeError = errno
@@ -160,6 +163,18 @@ struct ExecutorLifecycleRegressionTests {
         #expect(probeError == ESRCH)
         #endif
     }
+
+    #if os(macOS)
+    @Test func cancellingAHelperDoesNotWaitForItToExit() async throws {
+        let task = Task { cancellableHelperProbe() }
+        try await Task.sleep(nanoseconds: 200_000_000)
+        task.cancel()
+        let cancelledAt = Date()
+        let status = await task.value
+        #expect(Date().timeIntervalSince(cancelledAt) < 3)
+        #expect(status < 0)
+    }
+    #endif
 }
 
 private enum ExecutorLifecycleFixtureError: Error {

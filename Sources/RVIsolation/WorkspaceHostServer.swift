@@ -583,22 +583,7 @@ final class WorkspaceHostServer: @unchecked Sendable {
     private func launchIO(
         _ message: WorkspaceControlMessage
     ) -> Result<IsolatedIO, WorkspaceControlCode> {
-        switch message.io {
-        case nil, "discard":
-            guard message.rows == nil, message.columns == nil else {
-                return .failure(.invalidRequest)
-            }
-            return .success(.discard)
-        case "terminal":
-            guard let rows = message.rows, let columns = message.columns,
-                TerminalStreamLimits.accepts(rows: rows, columns: columns)
-            else {
-                return .failure(.invalidRequest)
-            }
-            return .success(.pseudoTerminal(rows: rows, columns: columns))
-        default:
-            return .failure(.invalidRequest)
-        }
+        workspaceLaunchIO(io: message.io, rows: message.rows, columns: message.columns)
     }
 
     private func subscribe(
@@ -844,6 +829,21 @@ final class WorkspaceHostServer: @unchecked Sendable {
         }
         _ = endpointFile.path.withCString { unlink($0) }
         gate.signal()
+    }
+
+    /// Pushes a terminal frame the client must reject. The stream fails closed
+    /// and the runtime is left running. Tests use this for the protocol-error
+    /// raw-mode path; it is not a client operation.
+    func testingInjectMalformedTerminalFrame() -> Bool {
+        let message = WorkspaceControlMessage(
+            version: WorkspaceControlLimits.version,
+            op: WorkspaceControlOp.terminalOutput.rawValue,
+            runtime: UUID(),
+            ok: true
+        )
+        let connections = registry.withLock { Array($0.connections.values) }
+        guard connections.isEmpty == false else { return false }
+        return connections.contains { $0.send(message) }
     }
 }
 

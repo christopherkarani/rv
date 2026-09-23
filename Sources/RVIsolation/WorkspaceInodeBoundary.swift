@@ -395,10 +395,12 @@ final class WorkspaceInodeBoundary {
     }
 
     private func detachVolume() {
-        for _ in 0..<25 {
-            let result = runTool([
-                "/usr/bin/hdiutil", "detach", "-force", "-quiet", disk,
-            ])
+        for _ in 0..<8 {
+            let result = runTool(
+                ["/usr/bin/hdiutil", "detach", "-force", "-quiet", disk],
+                honorCancellation: false,
+                deadline: 8
+            )
             if result.status == 0 { return }
             usleep(40_000)
         }
@@ -750,10 +752,10 @@ func establishWorkspaceInodeBoundary(
     }
     let mounted: MountedDisk
     switch createMountedDisk(byteCount: byteCount, mountPoint: workspacePath, token: String(token)) {
-    case .failure:
+    case .failure(let error):
         rmdir(workspacePath)
         _ = renamePath(savedPath, workspacePath)
-        return .failure(.workspaceInodeBoundaryFailed)
+        return .failure(error)
     case .success(let disk):
         mounted = disk
     }
@@ -875,42 +877,57 @@ private func createMountedDisk(
     // of requested space, use a sparse image so launch does not pin that RAM.
     if bytes <= 256 * 1024 * 1024 {
         let sectors = Int((bytes + 511) / 512)
-        let attached = runTool([
-            "/usr/bin/hdiutil", "attach", "-nomount", "ram://\(sectors)",
-        ])
-        guard attached.status == 0 else { return .failure(.workspaceInodeBoundaryFailed) }
-        guard let disk = attached.stdout.split(whereSeparator: \.isWhitespace).map(String.init).first(where: {
-            $0.hasPrefix("/dev/disk")
-        }) else {
+        let attached = runTool(
+            ["/usr/bin/hdiutil", "attach", "-nomount", "ram://\(sectors)"],
+            honorCancellation: true
+        )
+        guard attached.status == 0 else {
+            return toolFailure(attached, disk: diskDevice(in: attached.stdout))
+        }
+        guard let disk = diskDevice(in: attached.stdout) else {
             return .failure(.workspaceInodeBoundaryFailed)
         }
-        let formatted = runTool(["/sbin/newfs_hfs", "-s", "-v", "rv\(token.prefix(8))", disk])
+        if Task.isCancelled {
+            return toolFailure(ToolOutput(status: -1, stdout: "", stderr: ""), disk: disk)
+        }
+        let formatted = runTool(
+            ["/sbin/newfs_hfs", "-s", "-v", "rv\(token.prefix(8))", disk],
+            honorCancellation: true
+        )
         guard formatted.status == 0 else {
-            _ = runTool(["/usr/bin/hdiutil", "detach", "-force", "-quiet", disk])
-            return .failure(.workspaceInodeBoundaryFailed)
+            return toolFailure(formatted, disk: disk)
         }
-        let mounted = runTool([
-            "/usr/sbin/diskutil", "mount", "-mountPoint", mountPoint, disk,
-        ])
+        if Task.isCancelled {
+            return toolFailure(ToolOutput(status: -1, stdout: "", stderr: ""), disk: disk)
+        }
+        let mounted = runTool(
+            ["/usr/sbin/diskutil", "mount", "-mountPoint", mountPoint, disk],
+            honorCancellation: true
+        )
         guard mounted.status == 0 else {
-            _ = runTool(["/usr/bin/hdiutil", "detach", "-force", "-quiet", disk])
-            return .failure(.workspaceInodeBoundaryFailed)
+            return toolFailure(mounted, disk: disk)
         }
         return .success(MountedDisk(disk: disk, imagePath: nil))
     }
     let image = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-inode-\(token).sparseimage").path
     let megabytes = max(Int(bytes / (1024 * 1024)) + 1, 32)
-    let created = runTool([
-        "/usr/bin/hdiutil", "create", "-size", "\(megabytes)m",
-        "-fs", "Case-sensitive HFS+",
-        "-volname", "rv\(token.prefix(8))", "-type", "SPARSE", "-quiet", image,
-    ])
+    let created = runTool(
+        [
+            "/usr/bin/hdiutil", "create", "-size", "\(megabytes)m",
+            "-fs", "Case-sensitive HFS+",
+            "-volname", "rv\(token.prefix(8))", "-type", "SPARSE", "-quiet", image,
+        ],
+        honorCancellation: true
+    )
     guard created.status == 0 else { return .failure(.workspaceInodeBoundaryFailed) }
-    let attached = runTool([
-        "/usr/bin/hdiutil", "attach", "-nobrowse", "-owners", "on",
-        "-mountpoint", mountPoint, "-plist", image,
-    ])
+    let attached = runTool(
+        [
+            "/usr/bin/hdiutil", "attach", "-nobrowse", "-owners", "on",
+            "-mountpoint", mountPoint, "-plist", image,
+        ],
+        honorCancellation: true
+    )
     guard attached.status == 0 else {
         unlink(image)
         return .failure(.workspaceInodeBoundaryFailed)
@@ -1226,7 +1243,40 @@ private struct ToolOutput {
     var stderr: String
 }
 
-private func runTool(_ arguments: [String]) -> ToolOutput {
+private func diskDevice(in text: String) -> String? {
+    text.split(whereSeparator: \.isWhitespace).map(String.init).first { $0.hasPrefix("/dev/disk") }
+}
+
+private func toolFailure(
+    _ output: ToolOutput,
+    disk: String?
+) -> Result<MountedDisk, IsolationApplyError> {
+    if let disk {
+        _ = runTool(
+            ["/usr/bin/hdiutil", "detach", "-force", "-quiet", disk],
+            honorCancellation: false
+        )
+    }
+    if output.status < 0, Task.isCancelled {
+        return .failure(.cancelled)
+    }
+    return .failure(.workspaceInodeBoundaryFailed)
+}
+
+/// Runs a short-lived helper.
+///
+/// The pipes are drained while the child runs. `waitUntilExit` before that
+/// drain deadlocks once a child fills the pipe, and it also ignores task
+/// cancellation. Under parallel launches DiskArbitration holds `hdiutil`
+/// long enough that a cancelled test used to sit inside that wait until the
+/// runner timed the test out. Cancellation kills the helper and returns.
+/// Cleanup calls pass `honorCancellation: false` so a cancelled task can
+/// still detach the disk it created.
+private func runTool(
+    _ arguments: [String],
+    honorCancellation: Bool = false,
+    deadline: TimeInterval? = nil
+) -> ToolOutput {
     guard let executable = arguments.first else {
         return ToolOutput(status: 1, stdout: "", stderr: "missing executable")
     }
@@ -1238,20 +1288,80 @@ private func runTool(_ arguments: [String]) -> ToolOutput {
     process.standardOutput = output
     process.standardError = errors
     process.standardInput = FileHandle.nullDevice
+    let outFD = output.fileHandleForReading.fileDescriptor
+    let errFD = errors.fileHandleForReading.fileDescriptor
+    guard setToolNonblocking(outFD), setToolNonblocking(errFD) else {
+        return ToolOutput(status: 1, stdout: "", stderr: "pipe flags")
+    }
     do {
         try process.run()
     } catch {
         return ToolOutput(status: 1, stdout: "", stderr: String(describing: error))
     }
+    var stdout = Data()
+    var stderr = Data()
+    let limit = deadline.map { Date().addingTimeInterval($0) }
+    var interrupted = false
+    while process.isRunning {
+        stdout.append(readToolPipe(outFD))
+        stderr.append(readToolPipe(errFD))
+        let cancelled = honorCancellation && Task.isCancelled
+        let expired = limit.map { Date() >= $0 } ?? false
+        if cancelled || expired {
+            interrupted = true
+            process.terminate()
+            let killAfter = Date().addingTimeInterval(0.5)
+            while process.isRunning, Date() < killAfter {
+                stdout.append(readToolPipe(outFD))
+                stderr.append(readToolPipe(errFD))
+                usleep(10_000)
+            }
+            if process.isRunning {
+                kill(process.processIdentifier, SIGKILL)
+            }
+            break
+        }
+        usleep(10_000)
+    }
     process.waitUntilExit()
-    let data = output.fileHandleForReading.readDataToEndOfFile()
-    let err = errors.fileHandleForReading.readDataToEndOfFile()
+    stdout.append(readToolPipe(outFD))
+    stderr.append(readToolPipe(errFD))
     try? output.fileHandleForReading.close()
     try? errors.fileHandleForReading.close()
+    let status: Int32 = interrupted ? -1 : process.terminationStatus
     return ToolOutput(
-        status: process.terminationStatus,
-        stdout: String(data: data, encoding: .utf8) ?? "",
-        stderr: String(data: err, encoding: .utf8) ?? ""
+        status: status,
+        stdout: String(data: stdout, encoding: .utf8) ?? "",
+        stderr: String(data: stderr, encoding: .utf8) ?? ""
     )
+}
+
+/// Runs `/bin/sleep` until the current task is cancelled.
+/// The status is `-1` when cancellation kills the helper.
+func cancellableHelperProbe() -> Int32 {
+    runTool(["/bin/sleep", "30"], honorCancellation: true, deadline: 30).status
+}
+
+private func setToolNonblocking(_ fd: Int32) -> Bool {
+    let flags = fcntl(fd, F_GETFL)
+    guard flags >= 0 else { return false }
+    return fcntl(fd, F_SETFL, flags | O_NONBLOCK) >= 0
+}
+
+private func readToolPipe(_ fd: Int32) -> Data {
+    var bytes = Data()
+    var buffer = [UInt8](repeating: 0, count: 4096)
+    while true {
+        let count = buffer.withUnsafeMutableBytes { raw -> Int in
+            guard let base = raw.baseAddress else { return -1 }
+            return read(fd, base, raw.count)
+        }
+        if count > 0 {
+            bytes.append(contentsOf: buffer.prefix(count))
+            continue
+        }
+        if count < 0, errno == EINTR { continue }
+        return bytes
+    }
 }
 #endif

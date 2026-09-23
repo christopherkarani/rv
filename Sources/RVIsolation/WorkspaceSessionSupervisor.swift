@@ -580,6 +580,10 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
             guard let child = slot.child else {
                 return .failure(.apply(.processSpawnFailed))
             }
+            if request.spawnFault == .register {
+                retireUnrecorded(child)
+                return .failure(.apply(.processSpawnFailed))
+            }
             switch recordProcessGroup(child) {
             case .failure(let error):
                 retireUnrecorded(child)
@@ -640,11 +644,6 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
                     startMicroseconds: fact.startMicroseconds
                 )
             )
-        }
-        let deadline = Date().addingTimeInterval(5)
-        while Date() < deadline {
-            if processGroupIsEmpty(pid), processIsGone(pid) { break }
-            usleep(10_000)
         }
         noteRuntimeEnded(session)
     }
@@ -933,6 +932,11 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
 
     func terminalWindow(runtime: UUID) -> (rows: Int, columns: Int)? {
         terminal(runtime)?.window()
+    }
+
+    func terminalMasterOpen(_ runtime: UUID) -> Bool {
+        guard let fd = terminal(runtime)?.masterFD else { return false }
+        return fd >= 0
     }
 
     private func terminal(_ runtime: UUID) -> RuntimeTerminal? {
