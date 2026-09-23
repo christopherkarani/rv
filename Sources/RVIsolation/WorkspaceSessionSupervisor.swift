@@ -195,7 +195,7 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
         case .success:
             break
         }
-        if Task.isCancelled {
+        if Task.isCancelled || CooperativeLaunchStop.isRequested {
             releaseAdmission(owner: nil)
             return .failure(.apply(.cancelled))
         }
@@ -593,6 +593,9 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
     private func recordProcessGroup(
         _ child: WorkspaceChild
     ) -> Result<Void, WorkspaceSessionError> {
+        if TerminalTestInjection.failRegistration.withLock({ $0 }) {
+            return .failure(.apply(.lifetimeBoundaryFailed))
+        }
         guard let fact = ProcessGroupRecovery.capture(pid: child.live.pid) else {
             return .failure(.apply(.lifetimeBoundaryFailed))
         }
@@ -615,6 +618,9 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
         if case .failure(let error) = recorded {
             return .failure(.apply(error))
         }
+        guard resumeSuspendedSeatbelt(child.live.pid) else {
+            return .failure(.apply(.lifetimeBoundaryFailed))
+        }
         return .success(())
     }
 
@@ -624,6 +630,7 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
         state.withLock { state in
             state.children[session.id] = nil
         }
+        child.live.abandonIfUnwatched()
         if let fact = child.provenGroup {
             _ = ProcessGroupRecovery.terminate(
                 RecordedProcessGroup(
@@ -647,7 +654,7 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
     ) -> Result<RunningRuntime, WorkspaceSessionError> {
         let deadline = Date().addingTimeInterval(45)
         while Date() < deadline {
-            if Task.isCancelled {
+            if Task.isCancelled || CooperativeLaunchStop.isRequested {
                 child.stop.request()
             }
             if child.live.isEstablished {

@@ -51,6 +51,7 @@ struct IsolationApplyTests {
             #expect(profile.source.contains("file-write*"))
             #expect(profile.source.contains("(allow signal (target same-sandbox))"))
             #expect(profile.source.contains("(allow signal (target self))") == false)
+            #expect(profile.source.contains("(allow signal (signal-number") == false)
             #expect(profile.source.contains("(deny file-link)"))
             #expect(profile.source.contains("(deny file-clone)"))
             #expect(profile.source.contains("(deny syscall-unix (syscall-number 82))"))

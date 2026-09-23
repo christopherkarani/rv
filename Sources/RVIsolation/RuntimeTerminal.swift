@@ -1,6 +1,23 @@
 #if os(macOS)
 import Darwin
 import Foundation
+import Synchronization
+
+enum TerminalOpenFault: Equatable, Sendable {
+    case master
+    case grant
+    case slaveName
+    case slaveOpen
+    case configure
+    case stopPipe
+}
+
+/// Test-only launch failures. Production leaves every flag clear.
+enum TerminalTestInjection {
+    static let openFault = Mutex<TerminalOpenFault?>(nil)
+    static let failSpawn = Mutex(false)
+    static let failRegistration = Mutex(false)
+}
 
 /// One notice the single PTY reader fans out. Bytes are unmodified master output.
 enum TerminalNotice: Sendable, Equatable {
@@ -21,9 +38,9 @@ enum TerminalControlError: Error, Equatable, Sendable {
 /// Host-owned PTY for one runtime.
 ///
 /// The master stays in this process. The child receives the slave as stdin,
-/// stdout, and stderr through `posix_spawn` file actions after
-/// `POSIX_SPAWN_SETSID`, so the child is the session leader and the slave is
-/// its controlling terminal. Seatbelt still denies `setsid` and `setpgid`,
+/// stdout, and stderr. `POSIX_SPAWN_SETSID` makes that child the session
+/// leader outside Seatbelt, and the handshake reclaims the slave as the
+/// controlling terminal. Seatbelt still denies `setsid` and `setpgid`,
 /// so the agent cannot leave the process group RV records.
 ///
 /// This object is the only reader of the master. Client sockets never receive
@@ -33,6 +50,9 @@ enum TerminalControlError: Error, Equatable, Sendable {
 final class RuntimeTerminal: @unchecked Sendable {
     private let condition = NSCondition()
     private var master: Int32
+    /// Keeps the slave open until the child has its own descriptor. Closing the
+    /// last slave resets termios and the window on Darwin.
+    private var heldSlave: Int32
     private var stopRead: Int32
     private var stopWrite: Int32
     private var rows: Int
@@ -43,14 +63,25 @@ final class RuntimeTerminal: @unchecked Sendable {
     private var inputOwner: UUID?
     private var exited = false
     private var exitStatus: Int32?
+    private var finishing = false
     private var exitQueued = false
     private var readerStarted = false
     private var readerStopped = false
+    private var shutdownStarted = false
     private var masterClosed = false
     let slavePath: String
 
-    private init(master: Int32, stopRead: Int32, stopWrite: Int32, slavePath: String, rows: Int, columns: Int) {
+    private init(
+        master: Int32,
+        heldSlave: Int32,
+        stopRead: Int32,
+        stopWrite: Int32,
+        slavePath: String,
+        rows: Int,
+        columns: Int
+    ) {
         self.master = master
+        self.heldSlave = heldSlave
         self.stopRead = stopRead
         self.stopWrite = stopWrite
         self.slavePath = slavePath
@@ -62,13 +93,22 @@ final class RuntimeTerminal: @unchecked Sendable {
     /// only the master. The slave path is opened again by the child.
     static func open(rows: Int, columns: Int) -> RuntimeTerminal? {
         guard TerminalStreamLimits.accepts(rows: rows, columns: columns) else { return nil }
+        if injected(.master) { return nil }
         var master = posix_openpt(O_RDWR | O_NOCTTY | O_CLOEXEC)
         guard master >= 0 else { return nil }
         guard relocate(&master, floor: 16) else {
             Darwin.close(master)
             return nil
         }
+        if injected(.grant) {
+            Darwin.close(master)
+            return nil
+        }
         guard grantpt(master) == 0, unlockpt(master) == 0 else {
+            Darwin.close(master)
+            return nil
+        }
+        if injected(.slaveName) {
             Darwin.close(master)
             return nil
         }
@@ -78,12 +118,21 @@ final class RuntimeTerminal: @unchecked Sendable {
             return nil
         }
         let slavePath = String(cString: name)
+        if injected(.slaveOpen) {
+            Darwin.close(master)
+            return nil
+        }
         var slave = slavePath.withCString { Darwin.open($0, O_RDWR | O_NOCTTY | O_CLOEXEC) }
         guard slave >= 0 else {
             Darwin.close(master)
             return nil
         }
         guard relocate(&slave, floor: 16) else {
+            Darwin.close(slave)
+            Darwin.close(master)
+            return nil
+        }
+        if injected(.configure) {
             Darwin.close(slave)
             Darwin.close(master)
             return nil
@@ -95,13 +144,18 @@ final class RuntimeTerminal: @unchecked Sendable {
             Darwin.close(master)
             return nil
         }
-        Darwin.close(slave)
+        if injected(.stopPipe) {
+            Darwin.close(slave)
+            Darwin.close(master)
+            return nil
+        }
         var ends: [Int32] = [-1, -1]
         let piped = ends.withUnsafeMutableBufferPointer { buffer -> Int32 in
             guard let base = buffer.baseAddress else { return -1 }
             return pipe(base)
         }
         guard piped == 0 else {
+            Darwin.close(slave)
             Darwin.close(master)
             return nil
         }
@@ -115,11 +169,13 @@ final class RuntimeTerminal: @unchecked Sendable {
         else {
             Darwin.close(stopRead)
             Darwin.close(stopWrite)
+            Darwin.close(slave)
             Darwin.close(master)
             return nil
         }
         return RuntimeTerminal(
             master: master,
+            heldSlave: slave,
             stopRead: stopRead,
             stopWrite: stopWrite,
             slavePath: slavePath,
@@ -149,6 +205,13 @@ final class RuntimeTerminal: @unchecked Sendable {
         return value
     }
 
+    var replayByteCount: Int {
+        condition.lock()
+        let value = replay.byteCount
+        condition.unlock()
+        return value
+    }
+
     func window() -> (rows: Int, columns: Int) {
         condition.lock()
         let value = (rows, columns)
@@ -163,7 +226,10 @@ final class RuntimeTerminal: @unchecked Sendable {
             return
         }
         readerStarted = true
+        let held = heldSlave
+        heldSlave = -1
         condition.unlock()
+        if held >= 0 { Darwin.close(held) }
         let thread = Thread { [self] in
             self.readLoop()
             self.condition.lock()
@@ -175,33 +241,45 @@ final class RuntimeTerminal: @unchecked Sendable {
         thread.start()
     }
 
-    /// Records process exit, tells current subscribers, and closes the master
-    /// after the reader has stopped. Further attaches still see replay.
+    /// Drains the master, then tells subscribers the runtime exited.
+    /// Further attaches still see replay plus the exit status.
     func finish(status: Int32?) {
         condition.lock()
-        if exitQueued {
+        if finishing {
             condition.unlock()
             return
         }
-        exitQueued = true
+        finishing = true
         exited = true
         exitStatus = status
-        let notice = TerminalNotice.exited(status ?? -1)
-        for subscriber in subscribers.values where subscriber.dropped == false && subscriber.stopped == false {
-            subscriber.chunks.append(notice)
+        if inputOwner != nil {
+            inputOwner = nil
+            enqueueOwnerLocked(false)
         }
-        condition.broadcast()
         condition.unlock()
         shutdownMaster()
+        condition.lock()
+        if exitQueued == false {
+            exitQueued = true
+            let notice = TerminalNotice.exited(exitStatus ?? -1)
+            for subscriber in subscribers.values where subscriber.dropped == false && subscriber.stopped == false {
+                subscriber.chunks.append(notice)
+            }
+            condition.broadcast()
+        }
+        condition.unlock()
     }
 
     func shutdownMaster() {
         condition.lock()
-        if masterClosed {
+        if shutdownStarted {
+            while masterClosed == false {
+                condition.wait()
+            }
             condition.unlock()
             return
         }
-        masterClosed = true
+        shutdownStarted = true
         let wake = stopWrite
         let started = readerStarted
         condition.unlock()
@@ -220,14 +298,18 @@ final class RuntimeTerminal: @unchecked Sendable {
         let fd = master
         let stopR = stopRead
         let stopW = stopWrite
+        let held = heldSlave
         master = -1
         stopRead = -1
         stopWrite = -1
+        heldSlave = -1
+        masterClosed = true
         condition.broadcast()
         condition.unlock()
         if fd >= 0 { Darwin.close(fd) }
         if stopR >= 0 { Darwin.close(stopR) }
         if stopW >= 0 { Darwin.close(stopW) }
+        if held >= 0 { Darwin.close(held) }
     }
 
     func subscribe(
@@ -262,10 +344,25 @@ final class RuntimeTerminal: @unchecked Sendable {
         return .success(())
     }
 
-    /// Replay and live bytes stay queued until the subscribe reply is written.
+    /// Replaces the queue with the current replay, then lets the subscriber read.
+    /// Bytes that arrive before the first flush trim the oldest retained output
+    /// instead of declaring the subscriber slow.
     func activate(client: UUID) {
         condition.lock()
-        subscribers[client]?.deliver = true
+        guard let subscriber = subscribers[client], subscriber.stopped == false else {
+            condition.unlock()
+            return
+        }
+        subscriber.chunks.removeAll()
+        subscriber.queuedBytes = 0
+        for chunk in replay.chunks {
+            subscriber.chunks.append(.replay(sequence: chunk.sequence, bytes: chunk.bytes))
+            subscriber.queuedBytes += chunk.bytes.count
+        }
+        if exitQueued {
+            subscriber.chunks.append(.exited(exitStatus ?? -1))
+        }
+        subscriber.deliver = true
         condition.broadcast()
         condition.unlock()
     }
@@ -328,8 +425,10 @@ final class RuntimeTerminal: @unchecked Sendable {
             condition.unlock()
             return .failure(error)
         }
-        let fd = master
+        let fd = Darwin.dup(master)
         condition.unlock()
+        guard fd >= 0 else { return .failure(.unavailable) }
+        defer { Darwin.close(fd) }
         guard writeAll(fd: fd, bytes: bytes) else { return .failure(.unavailable) }
         return .success(())
     }
@@ -343,14 +442,18 @@ final class RuntimeTerminal: @unchecked Sendable {
             condition.unlock()
             return .failure(.unavailable)
         }
-        let fd = master
+        let fd = Darwin.dup(master)
         condition.unlock()
+        guard fd >= 0 else { return .failure(.unavailable) }
+        defer { Darwin.close(fd) }
         guard Self.applyWindow(rows: rows, columns: columns, fd: fd) else {
             return .failure(.unavailable)
         }
         condition.lock()
-        self.rows = rows
-        self.columns = columns
+        if masterClosed == false {
+            self.rows = rows
+            self.columns = columns
+        }
         condition.unlock()
         return .success(())
     }
@@ -365,14 +468,15 @@ final class RuntimeTerminal: @unchecked Sendable {
     private func readLoop() {
         while true {
             condition.lock()
-            if masterClosed {
-                condition.unlock()
-                return
-            }
             let masterFD = master
             let wakeFD = stopRead
+            let stopping = shutdownStarted
             condition.unlock()
             guard masterFD >= 0, wakeFD >= 0 else { return }
+            if stopping {
+                drainMaster(masterFD)
+                return
+            }
             var polls = [
                 pollfd(fd: wakeFD, events: Int16(POLLIN), revents: 0),
                 pollfd(fd: masterFD, events: Int16(POLLIN), revents: 0),
@@ -380,28 +484,56 @@ final class RuntimeTerminal: @unchecked Sendable {
             let waited = poll(&polls, nfds_t(polls.count), -1)
             if waited < 0 {
                 if errno == EINTR { continue }
+                drainMaster(masterFD)
                 return
             }
-            if polls[0].revents != 0 { return }
-            guard polls[1].revents != 0 else { continue }
-            var buffer = [UInt8](repeating: 0, count: TerminalStreamLimits.readChunkBytes)
-            let count = buffer.withUnsafeMutableBytes { raw -> Int in
-                guard let base = raw.baseAddress else { return -1 }
-                return Darwin.read(masterFD, base, raw.count)
+            if polls[1].revents != 0 {
+                if case .eof = readMaster(masterFD) {
+                    return
+                }
             }
-            if count > 0 {
-                publish(Data(buffer.prefix(count)))
+            if polls[0].revents != 0 {
+                drainMaster(masterFD)
+                return
+            }
+        }
+    }
+
+    private enum MasterRead {
+        case data
+        case again
+        case eof
+    }
+
+    private func readMaster(_ fd: Int32) -> MasterRead {
+        var buffer = [UInt8](repeating: 0, count: TerminalStreamLimits.readChunkBytes)
+        let count = buffer.withUnsafeMutableBytes { raw -> Int in
+            guard let base = raw.baseAddress else { return -1 }
+            return Darwin.read(fd, base, raw.count)
+        }
+        if count > 0 {
+            publish(Data(buffer.prefix(count)))
+            return .data
+        }
+        if count < 0, errno == EINTR || errno == EAGAIN { return .again }
+        return .eof
+    }
+
+    private func drainMaster(_ fd: Int32) {
+        while true {
+            switch readMaster(fd) {
+            case .data:
                 continue
+            case .again, .eof:
+                return
             }
-            if count < 0, errno == EINTR || errno == EAGAIN { continue }
-            return
         }
     }
 
     private func publish(_ data: Data) {
         guard data.isEmpty == false else { return }
         condition.lock()
-        if masterClosed || exited {
+        if masterClosed || exitQueued {
             condition.unlock()
             return
         }
@@ -414,6 +546,12 @@ final class RuntimeTerminal: @unchecked Sendable {
         replay.append(sequence: sequence, bytes: data, limit: TerminalStreamLimits.replayBytes)
         let notice = TerminalNotice.output(sequence: sequence, bytes: data)
         for subscriber in subscribers.values where subscriber.stopped == false && subscriber.dropped == false {
+            if subscriber.primed == false {
+                subscriber.chunks.append(notice)
+                subscriber.queuedBytes += data.count
+                trimUnprimed(subscriber)
+                continue
+            }
             switch TerminalQueue.decide(
                 queued: subscriber.queuedBytes,
                 incoming: data.count,
@@ -453,6 +591,7 @@ final class RuntimeTerminal: @unchecked Sendable {
             let batch = subscriber.chunks
             subscriber.chunks.removeAll()
             subscriber.queuedBytes = 0
+            subscriber.primed = true
             let dropped = subscriber.dropped
             condition.unlock()
             var ended = false
@@ -464,6 +603,10 @@ final class RuntimeTerminal: @unchecked Sendable {
                 condition.lock()
                 subscribers[subscriber.id] = nil
                 subscriber.stopped = true
+                if inputOwner == subscriber.id {
+                    inputOwner = nil
+                    enqueueOwnerLocked(false)
+                }
                 condition.unlock()
                 return
             }
@@ -495,21 +638,43 @@ final class RuntimeTerminal: @unchecked Sendable {
         return true
     }
 
+    /// Output bytes are not translated. `ISIG` still turns VINTR into SIGINT
+    /// for the foreground process group. Applications can enable cooked mode.
     private static func configureSlave(_ fd: Int32) -> Bool {
         var term = termios()
         guard tcgetattr(fd, &term) == 0 else { return false }
-        term.c_iflag |= tcflag_t(ICRNL | IXON)
-        term.c_iflag &= ~tcflag_t(ISTRIP | INLCR | IGNCR)
-        term.c_oflag |= tcflag_t(OPOST | ONLCR)
-        term.c_lflag |= tcflag_t(ISIG | ICANON | ECHO | ECHOE | ECHOK)
-        term.c_cflag |= tcflag_t(CS8)
+        cfmakeraw(&term)
+        term.c_lflag |= tcflag_t(ISIG)
         setControlCharacter(&term, VINTR, 3)
         setControlCharacter(&term, VQUIT, 28)
-        setControlCharacter(&term, VERASE, 127)
-        setControlCharacter(&term, VKILL, 21)
-        setControlCharacter(&term, VEOF, 4)
         setControlCharacter(&term, VSUSP, 26)
         return tcsetattr(fd, TCSANOW, &term) == 0
+    }
+
+    private func trimUnprimed(_ subscriber: Subscriber) {
+        let limit = TerminalStreamLimits.subscriberQueueBytes
+        while subscriber.queuedBytes > limit {
+            guard let index = subscriber.chunks.firstIndex(where: { notice in
+                switch notice {
+                case .output, .replay:
+                    return true
+                case .inputOwner, .exited, .overflow:
+                    return false
+                }
+            }) else {
+                return
+            }
+            switch subscriber.chunks.remove(at: index) {
+            case .output(_, let bytes), .replay(_, let bytes):
+                subscriber.queuedBytes -= bytes.count
+            case .inputOwner, .exited, .overflow:
+                break
+            }
+        }
+    }
+
+    private static func injected(_ fault: TerminalOpenFault) -> Bool {
+        TerminalTestInjection.openFault.withLock { $0 == fault }
     }
 
     private static func setControlCharacter(_ term: inout termios, _ index: Int32, _ value: UInt8) {
@@ -552,6 +717,7 @@ private final class Subscriber: @unchecked Sendable {
     var chunks: [TerminalNotice] = []
     var queuedBytes = 0
     var deliver = false
+    var primed = false
     var dropped = false
     var stopped = false
 

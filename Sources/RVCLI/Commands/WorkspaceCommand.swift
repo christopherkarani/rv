@@ -244,18 +244,33 @@ enum WorkspaceCommandRun {
             _ = client.detach()
             throw ValidationError(text(error))
         }
-        if case .failure(let error) = client.acquireTerminalInput(runtime) {
+        let ownsInput: Bool
+        switch client.acquireTerminalInput(runtime) {
+        case .success:
+            ownsInput = true
+        case .failure(.terminalUnavailable):
+            // The runtime can exit before this client takes input. The exit
+            // status is still on the stream.
+            ownsInput = false
+        case .failure(let error):
             _ = client.detach()
             throw ValidationError(text(error))
         }
-        let restorer = LocalTerminalRestorer.engage(STDIN_FILENO)
+        let restorer = ownsInput ? LocalTerminalRestorer.engage(STDIN_FILENO) : nil
         defer { restorer?.restore() }
         let bridge = TerminalStdinBridge(client: client, runtime: runtime)
-        bridge.start()
+        if ownsInput {
+            bridge.start()
+        }
         var exitCode: Int32 = 1
         var currentRows = rows
         var currentColumns = columns
         while true {
+            if ownsInput, bridge.inputEnded {
+                restorer?.restore()
+                _ = client.detach()
+                return
+            }
             if let size = LocalTerminalWindow.current(fd: STDOUT_FILENO),
                 size.rows != currentRows || size.columns != currentColumns
             {
@@ -427,10 +442,19 @@ enum WorkspaceCommandRun {
 private final class TerminalStdinBridge: @unchecked Sendable {
     private let client: WorkspaceClient
     private let runtime: UUID
+    private let lock = NSLock()
+    private var ended = false
 
     init(client: WorkspaceClient, runtime: UUID) {
         self.client = client
         self.runtime = runtime
+    }
+
+    var inputEnded: Bool {
+        lock.lock()
+        let value = ended
+        lock.unlock()
+        return value
     }
 
     func start() {
@@ -443,19 +467,31 @@ private final class TerminalStdinBridge: @unchecked Sendable {
     }
 
     private func read() {
+        LocalTerminalRestorer.blockInterruptSignalsInThisThread()
         var buffer = [UInt8](repeating: 0, count: TerminalStreamLimits.maximumInputBytes)
         while true {
             let count = Darwin.read(STDIN_FILENO, &buffer, buffer.count)
-            if count == 0 { return }
+            if count == 0 {
+                markEnded()
+                return
+            }
             if count < 0 {
                 if errno == EINTR { continue }
+                markEnded()
                 return
             }
             let data = Data(buffer.prefix(count))
             if case .failure = client.writeTerminal(runtime, bytes: data) {
+                markEnded()
                 return
             }
         }
+    }
+
+    private func markEnded() {
+        lock.lock()
+        ended = true
+        lock.unlock()
     }
 }
 #endif

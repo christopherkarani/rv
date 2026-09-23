@@ -1,9 +1,55 @@
+import Foundation
 import RVDomain
+import Synchronization
 
 public enum LocalExecutorError: Error, Sendable, Equatable {
     case cancelled
     case alreadyExecuted(ActionFingerprint)
     case applyFailed(IsolationApplyError)
+}
+
+/// Cancellation for blocking supervision that has left the cooperative pool.
+///
+/// `Task.isCancelled` is visible only on the task that owns the executor call.
+/// The watch loop runs on a dedicated thread, so it reads this flag instead.
+enum CooperativeLaunchStop {
+    final class Flag: NSObject, @unchecked Sendable {
+        private let value = Mutex(false)
+
+        func cancel() {
+            value.withLock { $0 = true }
+        }
+
+        var isSet: Bool {
+            value.withLock { $0 }
+        }
+    }
+
+    private static let key = "rv.cooperativeLaunchStop"
+
+    static func install(_ flag: Flag) {
+        Thread.current.threadDictionary[key] = flag
+    }
+
+    static func uninstall() {
+        Thread.current.threadDictionary.removeObject(forKey: key)
+    }
+
+    static var isRequested: Bool {
+        (Thread.current.threadDictionary[key] as? Flag)?.isSet ?? false
+    }
+}
+
+private final class ExecutorApplyGate: @unchecked Sendable {
+    private let semaphore = DispatchSemaphore(value: 1)
+
+    func wait() {
+        semaphore.wait()
+    }
+
+    func signal() {
+        semaphore.signal()
+    }
 }
 
 /// Dispatches a compiled `ExecutableAction` at most once per fingerprint.
@@ -12,10 +58,11 @@ public enum LocalExecutorError: Error, Sendable, Equatable {
 /// to `IsolationPlan` at that call.
 public actor LocalExecutor {
     private var dispatched: Set<ActionFingerprint> = []
+    private let applyGate = ExecutorApplyGate()
 
     public init() {}
 
-    public func run(_ executable: ExecutableAction) throws -> IsolatedRunResult {
+    public func run(_ executable: ExecutableAction) async throws -> IsolatedRunResult {
         guard Task.isCancelled == false else {
             throw LocalExecutorError.cancelled
         }
@@ -26,13 +73,38 @@ public actor LocalExecutor {
         // Apply can fail after the child has produced effects. Never make the
         // same authorization reusable based on an ambiguous backend result.
         dispatched.insert(fingerprint)
-        switch IsolationBackends.apply(executable.plan.isolationPlan(), command: executable.command) {
-        case .success(let result):
-            return result
-        case .failure(.cancelled):
-            throw LocalExecutorError.cancelled
-        case .failure(let error):
-            throw LocalExecutorError.applyFailed(error)
+        let plan = executable.plan.isolationPlan()
+        let command = executable.command
+        let gate = applyGate
+        let flag = CooperativeLaunchStop.Flag()
+        // `usleep` and disk-image setup block. Doing that on a cooperative
+        // thread stalls every other test task, so cancellation never runs and
+        // the suite times out. This thread is the one the watch loop polls.
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                let thread = Thread {
+                    gate.wait()
+                    defer { gate.signal() }
+                    if flag.isSet {
+                        continuation.resume(throwing: LocalExecutorError.cancelled)
+                        return
+                    }
+                    CooperativeLaunchStop.install(flag)
+                    defer { CooperativeLaunchStop.uninstall() }
+                    switch IsolationBackends.apply(plan, command: command) {
+                    case .success(let result):
+                        continuation.resume(returning: result)
+                    case .failure(.cancelled):
+                        continuation.resume(throwing: LocalExecutorError.cancelled)
+                    case .failure(let error):
+                        continuation.resume(throwing: LocalExecutorError.applyFailed(error))
+                    }
+                }
+                thread.name = "rv-executor"
+                thread.start()
+            }
+        } onCancel: {
+            flag.cancel()
         }
     }
 
@@ -45,10 +117,10 @@ public actor LocalExecutor {
         _ authorization: AgentAuthorization,
         plan: ContainedPlan,
         approval: Result<ApprovalDecision, AgentApprovalError>? = nil
-    ) -> Result<AgentTurn, AgentTurnError> {
+    ) async -> Result<AgentTurn, AgentTurnError> {
         switch AgentAuthorization.step(authorization, approval: approval) {
         case .execute(let allowed):
-            return compileAndRun(allowed: allowed, plan: plan)
+            return await compileAndRun(allowed: allowed, plan: plan)
         case .denied(let denied):
             return .success(.denied(denied))
         case .awaitingApproval(let pending):
@@ -61,13 +133,13 @@ public actor LocalExecutor {
     private func compileAndRun(
         allowed: AllowedAction,
         plan: ContainedPlan
-    ) -> Result<AgentTurn, AgentTurnError> {
+    ) async -> Result<AgentTurn, AgentTurnError> {
         switch compileExecutable(allowed: allowed, plan: plan) {
         case .failure(let error):
             return .failure(.compile(error))
         case .success(let executable):
             do {
-                return .success(.executed(try run(executable)))
+                return .success(.executed(try await run(executable)))
             } catch let error as LocalExecutorError {
                 return .failure(.execute(error))
             } catch {

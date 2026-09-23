@@ -35,6 +35,12 @@ public final class LocalTerminalRestorer: @unchecked Sendable {
         return restorer
     }
 
+    /// Blocks the signals `engage` handles. Call this on a thread that reads
+    /// the terminal, so the handler does not run inside that `read`.
+    public static func blockInterruptSignalsInThisThread() {
+        LocalTerminalSignal.blockInReaderThread()
+    }
+
     public func restore() {
         guard active else { return }
         var copy = saved
@@ -74,18 +80,50 @@ private enum LocalTerminalSignal {
         self.fd = fd
         self.saved = saved
         armed = 1
-        signal(SIGTERM, handle)
-        signal(SIGHUP, handle)
-        signal(SIGQUIT, handle)
+        install(SIGINT)
+        install(SIGTERM)
+        install(SIGHUP)
+        install(SIGQUIT)
+        // Swift blocks these on the threads it creates. Leave them unblocked
+        // on the thread that armed the handler so the signal can be delivered.
+        var set = sigset_t()
+        sigemptyset(&set)
+        sigaddset(&set, SIGINT)
+        sigaddset(&set, SIGTERM)
+        sigaddset(&set, SIGHUP)
+        sigaddset(&set, SIGQUIT)
+        pthread_sigmask(SIG_UNBLOCK, &set, nil)
     }
 
     static func disarm(fd: Int32) {
         guard self.fd == fd else { return }
         armed = 0
         self.fd = -1
+        signal(SIGINT, SIG_DFL)
         signal(SIGTERM, SIG_DFL)
         signal(SIGHUP, SIG_DFL)
         signal(SIGQUIT, SIG_DFL)
+    }
+
+    /// The stdin reader blocks in `read`. A handler that calls `tcsetattr` on
+    /// that thread deadlocks on the tty lock, so that thread blocks these
+    /// signals and the handler runs elsewhere.
+    static func blockInReaderThread() {
+        var set = sigset_t()
+        sigemptyset(&set)
+        sigaddset(&set, SIGINT)
+        sigaddset(&set, SIGTERM)
+        sigaddset(&set, SIGHUP)
+        sigaddset(&set, SIGQUIT)
+        pthread_sigmask(SIG_BLOCK, &set, nil)
+    }
+
+    private static func install(_ number: Int32) {
+        var action = sigaction()
+        action.__sigaction_u.__sa_handler = handle
+        sigemptyset(&action.sa_mask)
+        action.sa_flags = 0
+        sigaction(number, &action, nil)
     }
 
     private static let handle: @convention(c) (Int32) -> Void = { _ in

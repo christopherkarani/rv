@@ -7,6 +7,18 @@ import Synchronization
 private let seatbeltHandshakeScript =
     "printf %s \"$1\" >&3 || exit 127; exec 3>&- || exit 127; shift; exec \"$@\""
 
+/// PTY launches only. Spawn opens the slave and then `POSIX_SPAWN_SETSID`
+/// drops any controlling terminal the open acquired. The session leader
+/// reclaims it with `TIOCSCTTY` (`0x20007461`) and proves `TIOCGPGRP`
+/// (`0x40047477`) before the handshake, so a failed claim never looks
+/// established. Descriptors other than the terminal, the handshake, and the
+/// admission pipes are closed before the agent image.
+private let seatbeltPTYHandshakeScript = """
+nonce=$1
+shift
+exec /usr/bin/perl -e 'my $b = pack("i", 0); ioctl(STDIN, 0x20007461, $b); my $pg = pack("i", 0); ioctl(STDIN, 0x40047477, $pg) or exit 127; exit 127 unless unpack("i", $pg) == getpgrp(); require POSIX; for (my $fd = 3; $fd < 256; $fd++) { next if $fd == 3 || $fd == 4 || $fd == 5; POSIX::close($fd); } my $nonce = shift @ARGV; open(my $h, ">&=3") or exit 127; syswrite($h, $nonce) == length($nonce) or exit 127; close($h); exec @ARGV or exit 127' -- "$nonce" "$@"
+"""
+
 /// Seatbelt launch: persist the session, spawn into an RV process group,
 /// read a handshake byte string that only the in-sandbox wrapper can write,
 /// then signal the group and wait until it is empty.
@@ -15,10 +27,13 @@ private let seatbeltHandshakeScript =
 /// Those grants are stdin/stdout/stderr for the selected IO mode, the
 /// handshake write end on fd 3, and the admission pipes on fds 4 and 5.
 /// A pseudo-terminal slave replaces `/dev/null` on 0, 1, and 2. The master
-/// stays in RV. `POSIX_SPAWN_SETSID` runs before Seatbelt, so the child is
-/// the session leader without a `setsid` allow inside the sandbox.
-/// The wrapper closes fd 3 before exec. Fds 4 and 5 stay open for the payload.
+/// stays in RV. `POSIX_SPAWN_SETSID` runs outside Seatbelt, so the child is
+/// the session leader without a `setsid` allow inside the sandbox. The same
+/// leader reclaims the slave as its controlling terminal before the agent
+/// runs. Fds 4 and 5 stay open for the payload.
 /// They are pipes RV created. The profile does not gain a socket or network allow.
+/// The child stays stopped until its process group is recorded, so a failed
+/// registration never executes the agent.
 func superviseSeatbelt(
     _ request: IsolatedLaunchRequest,
     host: HookHost?,
@@ -56,7 +71,7 @@ func superviseSeatbelt(
     case .success:
         break
     }
-    if Task.isCancelled {
+    if Task.isCancelled || CooperativeLaunchStop.isRequested {
         return .failure(.cancelled)
     }
     // Hand-built profiles that are not the contained compiler output never
@@ -225,16 +240,26 @@ final class LiveSeatbeltChild: @unchecked Sendable {
     }
 
     deinit {
-        let started = watchStarted.withLock { $0 }
-        if started == false {
-            if handshakeRead >= 0 {
-                close(handshakeRead)
-                handshakeRead = -1
-            }
-            admission.finish()
-            terminateSession(pgid: pid, also: [pid])
-            _ = waitUntilSessionIsDead(pgid: pid, also: [pid])
+        abandonIfUnwatched()
+        pty?.shutdownMaster()
+    }
+
+    /// The watch never started. Signal the group and drop parent descriptors.
+    /// A second call is a no-op so `deinit` can run after an early failure.
+    func abandonIfUnwatched() {
+        let started = watchStarted.withLock { value -> Bool in
+            if value { return true }
+            value = true
+            return false
         }
+        guard started == false else { return }
+        if handshakeRead >= 0 {
+            close(handshakeRead)
+            handshakeRead = -1
+        }
+        admission.finish()
+        terminateSession(pgid: pid, also: [pid])
+        _ = waitUntilSessionIsDead(pgid: pid, also: [pid])
         pty?.shutdownMaster()
     }
 }
@@ -293,19 +318,21 @@ func spawnSeatbeltProcess(
 
     let terminal: RuntimeTerminal?
     let spawnFlags: Int16
+    let suspended = Int16(POSIX_SPAWN_START_SUSPENDED)
+    let signals = Int16(POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF)
     switch request.io {
     case .discard, .inherit:
         terminal = nil
-        spawnFlags = Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT)
+        spawnFlags = Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT) | suspended | signals
     case .pseudoTerminal(let rows, let columns):
         guard let opened = RuntimeTerminal.open(rows: rows, columns: columns) else {
             return .failure(.processSpawnFailed)
         }
         terminal = opened
-        // SETSID is applied in the child before file actions, still outside
-        // Seatbelt. It is not combined with SETPGROUP. The recorded process
-        // group remains the session leader's pid.
-        spawnFlags = Int16(POSIX_SPAWN_SETSID | POSIX_SPAWN_CLOEXEC_DEFAULT)
+        // SETSID is not combined with SETPGROUP. The recorded process group
+        // is the session leader's pid. START_SUSPENDED holds the image until
+        // that group is durable.
+        spawnFlags = Int16(POSIX_SPAWN_SETSID | POSIX_SPAWN_CLOEXEC_DEFAULT) | suspended | signals
     }
     var handedOff = false
     defer {
@@ -321,6 +348,20 @@ func spawnSeatbeltProcess(
     defer { posix_spawnattr_destroy(&attributes) }
     // Every parent descriptor is close-on-exec unless a file action grants it.
     guard posix_spawnattr_setflags(&attributes, spawnFlags) == 0 else {
+        return .failure(.lifetimeBoundaryFailed)
+    }
+    // The host thread often has SIGINT blocked or ignored. A terminal child
+    // must receive VINTR with the default action, or Ctrl-C never lands.
+    var emptyMask = sigset_t()
+    sigemptyset(&emptyMask)
+    var defaulted = sigset_t()
+    sigemptyset(&defaulted)
+    for number in [SIGINT, SIGQUIT, SIGHUP, SIGTERM, SIGTSTP, SIGTTIN, SIGTTOU, SIGWINCH, SIGINFO] {
+        sigaddset(&defaulted, number)
+    }
+    guard posix_spawnattr_setsigmask(&attributes, &emptyMask) == 0,
+        posix_spawnattr_setsigdefault(&attributes, &defaulted) == 0
+    else {
         return .failure(.lifetimeBoundaryFailed)
     }
     if terminal == nil {
@@ -354,13 +395,14 @@ func spawnSeatbeltProcess(
         return .failure(.workspaceInodeBoundaryFailed)
     }
 
+    let handshakeScript = terminal == nil ? seatbeltHandshakeScript : seatbeltPTYHandshakeScript
     var arguments = [
         IsolationBackends.sandboxExecPath,
         "-p",
         profile.source,
         "/bin/sh",
         "-c",
-        seatbeltHandshakeScript,
+        handshakeScript,
         "rv-seatbelt",
         nonce,
         request.command.executable,
@@ -372,6 +414,10 @@ func spawnSeatbeltProcess(
     defer {
         argv.release()
         envp.release()
+    }
+
+    if TerminalTestInjection.failSpawn.withLock({ $0 }) {
+        return .failure(.processSpawnFailed)
     }
 
     var pid: pid_t = 0
@@ -559,7 +605,7 @@ private func waitForSeatbeltSession(
     let expected = Data(nonce.utf8)
     var recorded: Set<pid_t> = [root]
     while true {
-        if Task.isCancelled || stop.isRequested {
+        if Task.isCancelled || stop.isRequested || CooperativeLaunchStop.isRequested {
             outcome.cancelled = true
             admission.finish()
         }
@@ -731,6 +777,12 @@ private func listedPIDs(
     return buffer.prefix(count).compactMap { value in
         value > 1 ? pid_t(value) : nil
     }
+}
+
+/// `POSIX_SPAWN_START_SUSPENDED` stops the child before its image runs.
+func resumeSuspendedSeatbelt(_ pid: pid_t) -> Bool {
+    guard pid > 1 else { return false }
+    return kill(pid, SIGCONT) == 0
 }
 
 private func terminateSession(pgid: pid_t, also pids: Set<pid_t>) {

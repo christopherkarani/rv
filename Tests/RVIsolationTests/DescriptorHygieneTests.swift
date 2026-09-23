@@ -139,7 +139,7 @@ struct DescriptorHygieneTests {
         fillers.append(nullFD)
         for slot in 3..<64 {
             if fcntl(Int32(slot), F_GETFD) >= 0 { continue }
-            let copied = fcntl(nullFD, F_DUPFD_CLOEXEC, slot)
+            let copied = fcntl(nullFD, F_DUPFD_CLOEXEC, Int32(slot))
             if copied >= 0 { fillers.append(copied) }
         }
         let nullIdentity = try #require(fileIdentity(nullFD))

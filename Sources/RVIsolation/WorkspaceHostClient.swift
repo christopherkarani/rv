@@ -645,6 +645,20 @@ private final class ReplyWaiter: @unchecked Sendable {
 }
 
 private final class EventBoard: @unchecked Sendable {
+    /// Replay plus one live queue. Framing is not counted; only terminal bytes are.
+    static let queueLimit = TerminalStreamLimits.replayBytes + TerminalStreamLimits.subscriberQueueBytes
+
+    static func payloadBytes(_ message: WorkspaceControlMessage) -> Int {
+        guard let encoded = message.bytes else { return 0 }
+        guard let data = TerminalBytesCodec.decode(
+            encoded,
+            maximum: TerminalStreamLimits.readChunkBytes
+        ) else {
+            return queueLimit + 1
+        }
+        return data.count
+    }
+
     private let condition = NSCondition()
     private var streaming = false
     private var readerClaimed = false
@@ -716,9 +730,9 @@ private final class EventBoard: @unchecked Sendable {
             condition.unlock()
             return false
         }
-        let weight = message.bytes?.utf8.count ?? 1
+        let weight = EventBoard.payloadBytes(message)
         let (sum, overflowed) = queuedBytes.addingReportingOverflow(weight)
-        if overflowed || sum > TerminalStreamLimits.subscriberQueueBytes {
+        if overflowed || sum > EventBoard.queueLimit {
             failed = .terminalLimit
             condition.broadcast()
             condition.unlock()
@@ -757,7 +771,7 @@ private final class EventBoard: @unchecked Sendable {
             return .failure(failed)
         }
         let message = messages.removeFirst()
-        queuedBytes = max(0, queuedBytes - (message.bytes?.utf8.count ?? 1))
+        queuedBytes = max(0, queuedBytes - EventBoard.payloadBytes(message))
         condition.unlock()
         return .success(message)
     }

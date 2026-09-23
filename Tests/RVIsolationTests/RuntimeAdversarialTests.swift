@@ -412,8 +412,16 @@ struct RuntimeAdversarialTests {
             if victim.isRunning { victim.terminate() }
             victim.waitUntilExit()
         }
-        let run = try runShell(tree.contained, "kill -TERM \(victim.processIdentifier)")
-        #expect(run.exitStatus != 0)
+        let pid = victim.processIdentifier
+        let script = """
+        kill -TERM \(pid) && exit 2
+        kill -INT \(pid) && exit 3
+        kill -HUP \(pid) && exit 4
+        kill -WINCH \(pid) && exit 5
+        exit 0
+        """
+        let run = try runShell(tree.contained, script)
+        #expect(run.exitStatus == 0)
         Thread.sleep(forTimeInterval: 0.3)
         #expect(victim.isRunning)
     }

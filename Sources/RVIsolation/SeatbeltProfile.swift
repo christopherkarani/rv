@@ -170,6 +170,9 @@ func compileFirstSliceProfile(
     (deny default)
     (allow process-exec*)
     (allow process-fork)
+    ;; In-sandbox signals only. TTY signals arrive from the unsandboxed host
+    ;; writing the PTY. An untargeted signal allow would let the agent signal
+    ;; processes outside this sandbox.
     (allow signal (target same-sandbox))
     (allow sysctl-read)
     (allow mach-lookup)

@@ -35,6 +35,9 @@ private final class CloseGate: @unchecked Sendable {
 private final class WorkspaceControlConnection: @unchecked Sendable {
     let id = UUID()
     private let flags: Mutex<ConnectionFlags>
+    /// Serializes frames. `flags` is not held across the write, so a slow
+    /// client cannot stall accept, but two writers cannot interleave bytes.
+    private let sendLock = NSLock()
 
     private struct ConnectionFlags {
         var fd: Int32
@@ -56,10 +59,17 @@ private final class WorkspaceControlConnection: @unchecked Sendable {
 
     func send(_ message: WorkspaceControlMessage) -> Bool {
         guard let body = WorkspaceControlCodec.encode(message) else { return false }
-        return flags.withLock { flags in
-            guard flags.closed == false else { return false }
-            return WorkspaceControlSocket.writeFrame(fd: flags.fd, body: body)
+        let fd = flags.withLock { flags -> Int32 in
+            guard flags.closed == false, flags.fd >= 0 else { return -1 }
+            return Darwin.dup(flags.fd)
         }
+        guard fd >= 0 else { return false }
+        sendLock.lock()
+        defer {
+            sendLock.unlock()
+            Darwin.close(fd)
+        }
+        return WorkspaceControlSocket.writeFrame(fd: fd, body: body)
     }
 
     func socketFD() -> Int32 {
@@ -540,8 +550,20 @@ final class WorkspaceHostServer: @unchecked Sendable {
         case .failure(let error):
             return failure(message, workspaceControlCode(error))
         case .success(let running):
-            supervisor.pruneFinishedRuntimes(limit: WorkspaceControlLimits.maxRuntimes)
             let fact = supervisor.runtimeFacts().first { $0.id == running.id.rawValue }
+            supervisor.pruneFinishedRuntimes(limit: WorkspaceControlLimits.maxRuntimes)
+            let launchedTerminal: Bool
+            let launchedRows: Int?
+            let launchedColumns: Int?
+            if case .pseudoTerminal(let rows, let columns) = io {
+                launchedTerminal = true
+                launchedRows = rows
+                launchedColumns = columns
+            } else {
+                launchedTerminal = false
+                launchedRows = nil
+                launchedColumns = nil
+            }
             return WorkspaceControlMessage(
                 version: WorkspaceControlLimits.version,
                 id: message.id,
@@ -549,10 +571,10 @@ final class WorkspaceHostServer: @unchecked Sendable {
                 runtime: running.id.rawValue,
                 hook: running.session.host?.rawValue,
                 ok: true,
-                running: true,
-                rows: fact?.rows,
-                columns: fact?.columns,
-                terminal: fact?.terminal ?? false,
+                running: fact?.running ?? true,
+                rows: fact?.rows ?? launchedRows,
+                columns: fact?.columns ?? launchedColumns,
+                terminal: (fact?.terminal ?? false) || launchedTerminal,
                 inputOwner: fact?.inputOwner ?? false
             )
         }

@@ -713,7 +713,7 @@ final class WorkspaceInodeBoundary {
 func establishWorkspaceInodeBoundary(
     at workspacePath: String
 ) -> Result<WorkspaceInodeBoundary, IsolationApplyError> {
-    if Task.isCancelled {
+    if Task.isCancelled || CooperativeLaunchStop.isRequested {
         return .failure(.cancelled)
     }
     let rootFD = workspacePath.withCString { path in
