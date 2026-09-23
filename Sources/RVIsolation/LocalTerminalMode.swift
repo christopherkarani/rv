@@ -286,27 +286,36 @@ private func restoreSIGPIPE(_ previous: sig_t) {
     _ = signal(SIGPIPE, previous)
 }
 
-private final class TerminalStdinBridge: @unchecked Sendable {
+/// Reads one file descriptor on `rv-terminal-stdin` and writes those bytes
+/// to the runtime. `rv workspace run` and the proving driver share this type
+/// so the CLI module stays free of classes.
+public final class TerminalStdinBridge: @unchecked Sendable {
     private let client: WorkspaceClient
     private let runtime: UUID
     private let input: Int32
     private let lock = NSLock()
     private var ended = false
 
-    init(client: WorkspaceClient, runtime: UUID, input: Int32) {
+    public init(client: WorkspaceClient, runtime: UUID, input: Int32) {
         self.client = client
         self.runtime = runtime
         self.input = input
     }
 
-    var didEnd: Bool {
+    public convenience init(client: WorkspaceClient, runtime: UUID) {
+        self.init(client: client, runtime: runtime, input: STDIN_FILENO)
+    }
+
+    public var didEnd: Bool {
         lock.lock()
         let value = ended
         lock.unlock()
         return value
     }
 
-    func start() {
+    public var inputEnded: Bool { didEnd }
+
+    public func start() {
         let bridge = self
         let thread = Thread {
             bridge.read()

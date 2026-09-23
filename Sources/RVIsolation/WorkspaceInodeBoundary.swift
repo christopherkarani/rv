@@ -1391,15 +1391,25 @@ private func readToolPipe(_ fd: Int32) -> Data {
 
 /// Foundation `Process.deinit` calls `waitUntilExit`. A helper stuck in
 /// disk I/O after SIGKILL must stay referenced so that deinit cannot block
-/// the caller.
-private enum UnreapedToolProcesses {
-    private static let lock = NSLock()
-    private static var processes: [Process] = []
+/// the caller. The array lives in a class: a mutable static is not
+/// concurrency-safe, and `Process` is not `Sendable`, so a lock around a
+/// `static var` does not satisfy Swift 6.
+private final class ParkedToolProcesses: @unchecked Sendable {
+    private let lock = NSLock()
+    private var processes: [Process] = []
 
-    static func park(_ process: Process) {
+    func park(_ process: Process) {
         lock.lock()
         processes.append(process)
         lock.unlock()
+    }
+}
+
+private enum UnreapedToolProcesses {
+    private static let parked = ParkedToolProcesses()
+
+    static func park(_ process: Process) {
+        parked.park(process)
     }
 }
 #endif
