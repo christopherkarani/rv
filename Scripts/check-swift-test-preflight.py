@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Fail if RVIsolationTests lists a third Swift module (RVEngine is forbidden)."""
+"""Fail if RVIsolationTests depends on anything but RVIsolation and the two C helpers.
+
+RVEngine stays forbidden. rv-isolation-exec (Linux) and rv-pty-claim (Darwin)
+are C trampolines, the same class as each other, not extra Swift modules.
+"""
 
 from __future__ import annotations
 
@@ -9,7 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 PACKAGE = ROOT / "Package.swift"
-ALLOWED = {"RVIsolation", "rv-isolation-exec"}
+ALLOWED = {"RVIsolation", "rv-isolation-exec", "rv-pty-claim"}
 
 
 def isolation_test_dependency_blocks(text: str) -> list[str]:
@@ -66,10 +70,10 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
-    if len(unique) > 2:
+    if len(unique) > 3:
         print(
             "check-swift-test-preflight: RVIsolationTests has "
-            f"{len(unique)} Swift modules: {unique}",
+            f"{len(unique)} modules: {unique}",
             file=sys.stderr,
         )
         return 1

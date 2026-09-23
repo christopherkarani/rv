@@ -38,10 +38,11 @@ enum TerminalControlError: Error, Equatable, Sendable {
 /// Host-owned PTY for one runtime.
 ///
 /// The master stays in this process. The child receives the slave as stdin,
-/// stdout, and stderr. `POSIX_SPAWN_SETSID` makes that child the session
-/// leader outside Seatbelt, and the handshake reclaims the slave as the
-/// controlling terminal. Seatbelt still denies `setsid` and `setpgid`,
-/// so the agent cannot leave the process group RV records.
+/// stdout, and stderr through `posix_spawn` file actions after
+/// `POSIX_SPAWN_SETSID`. `rv-pty-claim` then makes the slave the controlling
+/// terminal and the foreground group before Seatbelt starts. Seatbelt still
+/// denies `setsid` and `setpgid`, so the agent cannot leave the process
+/// group RV records.
 ///
 /// This object is the only reader of the master. Client sockets never receive
 /// the descriptor. Closing a client does not close the master. Closing the
@@ -217,6 +218,21 @@ final class RuntimeTerminal: @unchecked Sendable {
         let value = (rows, columns)
         condition.unlock()
         return value
+    }
+
+    /// Foreground process group, read from the master.
+    ///
+    /// The parent is outside the child's session, so `TIOCSPGRP` here cannot
+    /// install the group. `rv-pty-claim` does that on the slave. A live child
+    /// whose group is not its own pid fails the launch.
+    func foregroundProcessGroup() -> pid_t? {
+        condition.lock()
+        let fd = masterClosed ? -1 : master
+        condition.unlock()
+        guard fd >= 0 else { return nil }
+        var group: pid_t = -1
+        let read = ioctl(fd, TIOCGPGRP, &group) == 0 && group > 1
+        return read ? group : nil
     }
 
     func startReader() {

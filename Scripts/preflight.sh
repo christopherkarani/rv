@@ -60,7 +60,7 @@ Available checks:
   corpus-landmines      near-miss.json retains required landmine commands
   corpus-structure      All corpus files have valid schema (cases array)
   test-target-isolation Only RVCorpusTests may list 3+ module deps
-  isolation-test-modules RVIsolationTests may depend on RVIsolation and rv-isolation-exec only
+  isolation-test-modules RVIsolationTests may depend on RVIsolation, rv-isolation-exec, and rv-pty-claim only
 EOF
 }
 

@@ -42,12 +42,13 @@ let isolationTestDependencies: [Target.Dependency] = ["RVIsolation", "rv-isolati
 #else
 let isolationExecProducts: [Product] = []
 let isolationExecTargets: [Target] = []
-let isolationTestDependencies: [Target.Dependency] = ["RVIsolation"]
+let isolationTestDependencies: [Target.Dependency] = ["RVIsolation", "rv-pty-claim"]
 #endif
 
 #if os(macOS)
 let terminalProbeProducts: [Product] = [
     .executable(name: "rv-terminal-probe", targets: ["RVTerminalProbe"]),
+    .executable(name: "rv-pty-claim", targets: ["rv-pty-claim"]),
 ]
 let terminalProbeTargets: [Target] = [
     .executableTarget(
@@ -55,6 +56,7 @@ let terminalProbeTargets: [Target] = [
         dependencies: ["RVIsolation"],
         path: "Sources/rv-terminal-probe"
     ),
+    .executableTarget(name: "rv-pty-claim"),
 ]
 #else
 let terminalProbeProducts: [Product] = []

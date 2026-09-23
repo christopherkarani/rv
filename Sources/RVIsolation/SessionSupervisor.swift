@@ -7,18 +7,6 @@ import Synchronization
 private let seatbeltHandshakeScript =
     "printf %s \"$1\" >&3 || exit 127; exec 3>&- || exit 127; shift; exec \"$@\""
 
-/// PTY launches only. Spawn opens the slave and then `POSIX_SPAWN_SETSID`
-/// drops any controlling terminal the open acquired. The session leader
-/// reclaims it with `TIOCSCTTY` (`0x20007461`) and proves `TIOCGPGRP`
-/// (`0x40047477`) before the handshake, so a failed claim never looks
-/// established. Descriptors other than the terminal, the handshake, and the
-/// admission pipes are closed before the agent image.
-private let seatbeltPTYHandshakeScript = """
-nonce=$1
-shift
-exec /usr/bin/perl -e 'my $b = pack("i", 0); ioctl(STDIN, 0x20007461, $b); my $pg = pack("i", 0); ioctl(STDIN, 0x40047477, $pg) or exit 127; exit 127 unless unpack("i", $pg) == getpgrp(); require POSIX; for (my $fd = 3; $fd < 256; $fd++) { next if $fd == 3 || $fd == 4 || $fd == 5; POSIX::close($fd); } my $nonce = shift @ARGV; open(my $h, ">&=3") or exit 127; syswrite($h, $nonce) == length($nonce) or exit 127; close($h); exec @ARGV or exit 127' -- "$nonce" "$@"
-"""
-
 /// Seatbelt launch: persist the session, spawn into an RV process group,
 /// read a handshake byte string that only the in-sandbox wrapper can write,
 /// then signal the group and wait until it is empty.
@@ -27,10 +15,14 @@ exec /usr/bin/perl -e 'my $b = pack("i", 0); ioctl(STDIN, 0x20007461, $b); my $p
 /// Those grants are stdin/stdout/stderr for the selected IO mode, the
 /// handshake write end on fd 3, and the admission pipes on fds 4 and 5.
 /// A pseudo-terminal slave replaces `/dev/null` on 0, 1, and 2. The master
-/// stays in RV. `POSIX_SPAWN_SETSID` runs outside Seatbelt, so the child is
-/// the session leader without a `setsid` allow inside the sandbox. The same
-/// leader reclaims the slave as its controlling terminal before the agent
-/// runs. Fds 4 and 5 stay open for the payload.
+/// stays in RV. `POSIX_SPAWN_SETSID` runs before Seatbelt, so the child is
+/// the session leader without a `setsid` allow inside the sandbox.
+/// Darwin does not make that slave the controlling terminal from a file
+/// action. `rv-pty-claim` reopens the slave, calls `TIOCSCTTY`, and sets
+/// the foreground group to its own pid, then execs `sandbox-exec`. The
+/// parent reads that group back. A live child whose group is not that pid
+/// is killed. The wrapper closes fd 3 before exec. Fds 4 and 5 stay open
+/// for the payload.
 /// They are pipes RV created. The profile does not gain a socket or network allow.
 /// The child stays stopped until its process group is recorded, so a failed
 /// registration never executes the agent.
@@ -411,9 +403,23 @@ func spawnSeatbeltProcess(
         return .failure(.workspaceInodeBoundaryFailed)
     }
 
-    let handshakeScript = terminal == nil ? seatbeltHandshakeScript : seatbeltPTYHandshakeScript
-    var arguments = [
-        IsolationBackends.sandboxExecPath,
+    // Missing claim helper fails closed. Do not spawn sandbox-exec directly:
+    // the parent cannot install the controlling terminal from outside the
+    // child's session, and a live unclaimed group is the boundary failure.
+    let handshakeScript = seatbeltHandshakeScript
+    let spawnPath: String
+    var arguments: [String]
+    if let terminal {
+        guard let claim = resolvedPtyClaimPath(workspace: workspace) else {
+            return .failure(.lifetimeBoundaryFailed)
+        }
+        spawnPath = claim
+        arguments = [claim, terminal.slavePath, IsolationBackends.sandboxExecPath]
+    } else {
+        spawnPath = IsolationBackends.sandboxExecPath
+        arguments = [IsolationBackends.sandboxExecPath]
+    }
+    arguments.append(contentsOf: [
         "-p",
         profile.source,
         "/bin/sh",
@@ -422,7 +428,7 @@ func spawnSeatbeltProcess(
         "rv-seatbelt",
         nonce,
         request.command.executable,
-    ]
+    ])
     arguments.append(contentsOf: request.command.arguments)
     let environment = containedRuntimeEnvironment(workspace: workspace, io: request.io)
     let argv = SpawnPointers(arguments)
@@ -441,7 +447,7 @@ func spawnSeatbeltProcess(
         envp.withPointers { envPointer in
             posix_spawn(
                 &pid,
-                IsolationBackends.sandboxExecPath,
+                spawnPath,
                 &actions,
                 &attributes,
                 argvPointer,
@@ -490,6 +496,28 @@ func spawnSeatbeltProcess(
             return .failure(.lifetimeBoundaryFailed)
         }
     }
+    // SETSID makes the child its own session and process group. The claim
+    // helper, still that same pid, installs the controlling terminal and the
+    // foreground group before sandbox-exec. VINTR must reach that group.
+    // The parent is not in the session, so it verifies with TIOCGPGRP and
+    // does not call TIOCSPGRP. A live child that never becomes its own
+    // foreground group is killed. A command that has already exited may
+    // pass only when the handshake pipe shows the post-claim shell ran.
+    if let terminal {
+        switch proveForegroundGroup(terminal, pid: pid, handshake: readEnd) {
+        case .claimed:
+            break
+        case .cancelled:
+            terminateSession(pgid: pid, also: [pid])
+            _ = waitUntilSessionIsDead(pgid: pid, also: [pid])
+            return .failure(.cancelled)
+        case .failed:
+            terminateSession(pgid: pid, also: [pid])
+            _ = waitUntilSessionIsDead(pgid: pid, also: [pid])
+            return .failure(.lifetimeBoundaryFailed)
+        }
+    }
+
     let capability = RuntimeCapability()
     let parentRead = admissionPipes.requestRead
     let parentWrite = admissionPipes.responseWrite
@@ -839,6 +867,216 @@ func processIsGone(_ pid: pid_t) -> Bool {
         return false
     }
     return errno == ESRCH
+}
+
+private enum ForegroundProof {
+    case claimed
+    case cancelled
+    case failed
+}
+
+/// Polls until the session leader is the foreground group, the leader has
+/// exited after the post-claim handshake, or the deadline passes.
+/// Two seconds is the claim itself, not a test timeout. A live mismatch
+/// is `.failed`.
+private func proveForegroundGroup(
+    _ terminal: RuntimeTerminal,
+    pid: pid_t,
+    handshake: Int32
+) -> ForegroundProof {
+    let deadline = Date().addingTimeInterval(2)
+    while true {
+        if blockingWorkIsCancelled() {
+            return .cancelled
+        }
+        if foregroundGroupIsLeader(terminal, pid: pid) {
+            return .claimed
+        }
+        if sessionLeaderHasExited(pid) || processIsGone(pid) {
+            if foregroundGroupIsLeader(terminal, pid: pid) {
+                return .claimed
+            }
+            // The handshake is written only by the shell after rv-pty-claim
+            // execs sandbox-exec. An empty pipe means the leader died first.
+            return handshakeBytesAreWaiting(handshake) ? .claimed : .failed
+        }
+        if Date() >= deadline {
+            return .failed
+        }
+        usleep(1_000)
+    }
+}
+
+/// Bytes queued on the handshake pipe. `poll` is the imported readiness
+/// check; `FIONREAD` is a macro the Swift overlay does not import.
+/// `POLLIN` means the post-claim shell wrote. `POLLHUP` alone means the
+/// leader died first.
+private func handshakeBytesAreWaiting(_ fd: Int32) -> Bool {
+    guard fd >= 0 else { return false }
+    var state = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+    let ready = poll(&state, 1, 0)
+    guard ready > 0 else { return false }
+    return (state.revents & Int16(POLLIN)) != 0
+}
+
+private let ptyClaimExecutableName = "rv-pty-claim"
+
+/// Layouts where `release.sh` and `swift build` publish `rv-pty-claim`.
+/// The test runner's argv0 is the xctest inside `debug/`, not the host
+/// binary. The host publishes the helper beside itself in `release-stage`
+/// and in the release products directory.
+private let ptyClaimPublishSuffixes = [
+    "rv-pty-claim",
+    "release/rv-pty-claim",
+    "debug/rv-pty-claim",
+    "release-stage/rv-pty-claim",
+    ".build/release-stage/rv-pty-claim",
+    ".build/debug/rv-pty-claim",
+    ".build/release/rv-pty-claim",
+]
+
+/// Locate `rv-pty-claim`. Never an env override, never a relative argv0,
+/// never a helper at or under the workspace. A missing helper fails the
+/// PTY launch. There is no direct `sandbox-exec` fallback.
+func resolvedPtyClaimPath(workspace: String) -> String? {
+    var seen = Set<String>()
+    func consider(_ path: String) -> String? {
+        guard seen.insert(path).inserted else { return nil }
+        return usablePtyClaimPath(path, workspacePath: workspace)
+    }
+    func considerDirectory(_ directory: URL) -> String? {
+        for suffix in ptyClaimPublishSuffixes {
+            if let found = consider(directory.appendingPathComponent(suffix).path) {
+                return found
+            }
+        }
+        return nil
+    }
+    func walk(_ start: URL) -> String? {
+        var directory = start
+        for _ in 0..<8 {
+            if let found = considerDirectory(directory) {
+                return found
+            }
+            if let found = considerBuildTriples(directory, consider: consider) {
+                return found
+            }
+            let parent = directory.deletingLastPathComponent()
+            if parent.path == directory.path { break }
+            directory = parent
+        }
+        return nil
+    }
+    if let argv0 = CommandLine.arguments.first, IsolatedCommand.isAbsoluteExecutable(argv0) {
+        if let found = walk(URL(fileURLWithPath: argv0).deletingLastPathComponent()) {
+            return found
+        }
+    }
+    for bundle in Bundle.allBundles {
+        if let found = walk(bundle.bundleURL) {
+            return found
+        }
+        if let executable = bundle.executableURL, let found = walk(executable.deletingLastPathComponent()) {
+            return found
+        }
+    }
+    // Checkout that compiled this file. An installed host finds the sibling
+    // of argv0 first; this path is absent on a machine that does not have
+    // the source tree.
+    let compiled = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    return walk(compiled)
+}
+
+/// `<.build>/<triple>/{debug,release}/rv-pty-claim`. The triple is not a
+/// fixed name, so it is not in the suffix list.
+private func considerBuildTriples(
+    _ directory: URL,
+    consider: (String) -> String?
+) -> String? {
+    let build: URL
+    if directory.lastPathComponent == ".build" {
+        build = directory
+    } else {
+        build = directory.appendingPathComponent(".build", isDirectory: true)
+    }
+    var isDirectory: ObjCBool = false
+    guard FileManager.default.fileExists(atPath: build.path, isDirectory: &isDirectory),
+        isDirectory.boolValue
+    else {
+        return nil
+    }
+    guard let children = try? FileManager.default.contentsOfDirectory(
+        at: build,
+        includingPropertiesForKeys: [.isDirectoryKey],
+        options: [.skipsHiddenFiles]
+    ) else {
+        return nil
+    }
+    for child in children {
+        for config in ["debug", "release"] {
+            if let found = consider(
+                child.appendingPathComponent(config, isDirectory: true)
+                    .appendingPathComponent(ptyClaimExecutableName).path
+            ) {
+                return found
+            }
+        }
+    }
+    return nil
+}
+
+/// True when `pid` is the foreground group of `slavePath`.
+///
+/// `TIOCGPGRP` on the master is the first read. The parent is not in the
+/// child's session, so that ioctl can return `ENOTTY` even after the claim.
+/// `proc_bsdinfo.e_tpgid` is the same foreground group, and `e_tdev` must be
+/// this slave. A live child that is not that group still fails the launch.
+private func foregroundGroupIsLeader(_ terminal: RuntimeTerminal, pid: pid_t) -> Bool {
+    if let group = terminal.foregroundProcessGroup() {
+        return group == pid
+    }
+    return sessionLeaderIsForeground(pid, slavePath: terminal.slavePath)
+}
+
+private func sessionLeaderIsForeground(_ pid: pid_t, slavePath: String) -> Bool {
+    guard pid > 1 else { return false }
+    var info = proc_bsdinfo()
+    errno = 0
+    let size = Int32(MemoryLayout<proc_bsdinfo>.stride)
+    let wrote = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size)
+    guard wrote > 0 else { return false }
+    guard info.pbi_pgid == UInt32(pid), Int(info.e_tpgid) == Int(pid) else { return false }
+    guard info.e_tdev != 0 else { return false }
+    var status = stat()
+    guard slavePath.withCString({ stat($0, &status) == 0 }) else { return false }
+    return info.e_tdev == UInt32(truncatingIfNeeded: status.st_rdev)
+}
+
+func usablePtyClaimPath(_ path: String, workspacePath: String) -> String? {
+    guard IsolatedCommand.isAbsoluteExecutable(path) else { return nil }
+    guard URL(fileURLWithPath: path).lastPathComponent == ptyClaimExecutableName else { return nil }
+    guard FileManager.default.isExecutableFile(atPath: path) else { return nil }
+    guard let resolved = posixRealpath(path) else { return nil }
+    guard IsolatedCommand.isAbsoluteExecutable(resolved),
+        isFilesystemRoot(resolved) == false,
+        URL(fileURLWithPath: resolved).lastPathComponent == ptyClaimExecutableName
+    else {
+        return nil
+    }
+    var isDirectory: ObjCBool = false
+    let exists = FileManager.default.fileExists(atPath: resolved, isDirectory: &isDirectory)
+    guard exists, isDirectory.boolValue == false else { return nil }
+    let canonicalWorkspace = posixRealpath(workspacePath) ?? workspacePath
+    if isFilesystemRoot(canonicalWorkspace)
+        || isLookupInsideWorkspace(path, workspace: canonicalWorkspace)
+        || isResolvedPath(resolved, atOrBeneath: canonicalWorkspace)
+    {
+        return nil
+    }
+    return resolved
 }
 
 private func exitStatus(_ status: Int32) -> Int32 {
