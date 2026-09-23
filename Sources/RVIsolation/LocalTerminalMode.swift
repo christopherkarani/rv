@@ -50,8 +50,7 @@ public final class LocalTerminalRestorer: @unchecked Sendable {
 
     public func restore() {
         guard active else { return }
-        var copy = saved
-        _ = tcsetattr(fd, TCSANOW, &copy)
+        applySavedTermios(saved, fd: fd)
         active = false
         if installSignals {
             LocalTerminalSignal.disarm(fd: fd)
@@ -66,6 +65,24 @@ public final class LocalTerminalRestorer: @unchecked Sendable {
     deinit {
         restore()
     }
+}
+
+/// Writes `saved` back, then clears `PENDIN` when the kernel set it.
+///
+/// Leaving raw mode for the saved canonical mode makes `tcgetattr` report
+/// `PENDIN` (`0x20000000`) even though that bit was not in the saved flags.
+/// It is a one-shot retype state, not part of the mode. A second
+/// `tcsetattr` of the already-canonical attributes drops it, so a later
+/// `tcgetattr` matches the mode `engage` captured.
+private func applySavedTermios(_ saved: termios, fd: Int32) {
+    var copy = saved
+    guard tcsetattr(fd, TCSANOW, &copy) == 0 else { return }
+    var applied = termios()
+    guard tcgetattr(fd, &applied) == 0 else { return }
+    let pending = tcflag_t(PENDIN)
+    guard (applied.c_lflag & pending) != 0, (saved.c_lflag & pending) == 0 else { return }
+    applied.c_lflag &= ~pending
+    _ = tcsetattr(fd, TCSANOW, &applied)
 }
 
 public struct LocalTerminalWindow: Sendable, Equatable {
@@ -121,8 +138,7 @@ private enum LocalTerminalSignal {
     /// Same termios restore the signal handler runs before it exits.
     static func restoreArmedTerminal() {
         guard armed != 0 else { return }
-        var copy = saved
-        _ = tcsetattr(fd, TCSANOW, &copy)
+        applySavedTermios(saved, fd: fd)
         armed = 0
     }
 

@@ -227,9 +227,15 @@ struct RuntimeAdmissionIsolationTests {
         #expect(text.contains("\"status\":\"pending\""))
         #expect(text.contains("\"status\":\"http\""))
         #expect(FileManager.default.fileExists(atPath: marker.path))
+        // One allowed shell and one allowed GET. A second shell still fails.
         let attempted = evidence.snapshot().filter(\.executionAttempted)
-        #expect(attempted.count == 1)
-        #expect(attempted.first?.authorization == .allowed)
+        let shells = attempted.filter { $0.httpMethod == nil }
+        let transfers = attempted.filter { $0.httpMethod != nil }
+        #expect(shells.count == 1)
+        #expect(shells.first?.authorization == .allowed)
+        #expect(shells.first?.result == "exit:0")
+        #expect(transfers.count == 1)
+        #expect(transfers.first?.authorization == .allowed)
         let rejected = evidence.snapshot().filter { $0.eventExecutionWasRejected }
         #expect(rejected.allSatisfy { $0.executionAttempted == false })
     }

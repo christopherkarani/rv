@@ -413,6 +413,9 @@ func spawnSeatbeltProcess(
         guard let claim = resolvedPtyClaimPath(workspace: workspace) else {
             return .failure(.lifetimeBoundaryFailed)
         }
+        // argv[1] is the slave. The helper reopens it after SETSID. The
+        // payload starts at argv[2], so sandbox-exec still sees its own path
+        // as argv[0].
         spawnPath = claim
         arguments = [claim, terminal.slavePath, IsolationBackends.sandboxExecPath]
     } else {
