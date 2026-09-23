@@ -2,6 +2,7 @@ import Foundation
 import Testing
 #if os(macOS)
 import Darwin
+import RVDomain
 @testable import RVIsolation
 
 @Suite("Local terminal restore", .serialized)
