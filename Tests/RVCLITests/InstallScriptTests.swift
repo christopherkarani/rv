@@ -206,35 +206,29 @@ private func runInstallScript(
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
 
-    let shim = root.appendingPathComponent("bin", isDirectory: true)
-    try FileManager.default.createDirectory(at: shim, withIntermediateDirectories: true)
-    let uname = shim.appendingPathComponent("uname")
-    try """
-    #!/bin/sh
-    if [ "$1" = "-s" ]; then echo Windows_NT; exit 0; fi
-    if [ "$1" = "-m" ]; then echo x86_64; exit 0; fi
-    echo Windows_NT
-    """.write(to: uname, atomically: true, encoding: .utf8)
-    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: uname.path)
+    let home = root.appendingPathComponent("home", isDirectory: true)
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    // Required binaries, including rv-workspace-host, are present. Windows is
+    // still refused; the test must not stop on the missing-binary check.
+    let src = root.appendingPathComponent("src", isDirectory: true)
+    try writeDummyTrio(in: src)
 
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/bin/sh")
-    process.arguments = [installScriptURL().path]
-    process.environment = [
-        "HOME": root.path,
-        "PATH": shim.path + ":/usr/bin:/bin",
-        "RV_INSTALL_BIN": root.path,
-    ]
-    let stderr = Pipe()
-    process.standardError = stderr
-    process.standardOutput = Pipe()
-    try process.run()
-    process.waitUntilExit()
-    let err = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-    #expect(process.terminationStatus == 1)
-    #expect(err.contains("macOS 26 Apple Silicon, or Linux aarch64/x86_64"))
-    #expect(err.localizedCaseInsensitiveContains("windows") == false)
-    #expect(FileManager.default.fileExists(atPath: root.path + "/.local/bin/rv") == false)
+    let shim = root.appendingPathComponent("shim", isDirectory: true)
+    try writeExecutable(
+        shim.appendingPathComponent("uname"),
+        contents: """
+        #!/bin/sh
+        if [ "$1" = "-s" ]; then echo Windows_NT; exit 0; fi
+        if [ "$1" = "-m" ]; then echo x86_64; exit 0; fi
+        echo Windows_NT
+        """
+    )
+
+    let result = try runInstallScript(home: home, src: src, pathPrefix: shim.path)
+    #expect(result.status == 1)
+    #expect(result.stderr.contains("macOS 26 Apple Silicon, or Linux aarch64/x86_64"))
+    #expect(result.stderr.localizedCaseInsensitiveContains("windows") == false)
+    #expect(FileManager.default.fileExists(atPath: home.path + "/.local/bin/rv") == false)
 }
 
 @Test(arguments: ["26.0", "26.1", "27.0"])
