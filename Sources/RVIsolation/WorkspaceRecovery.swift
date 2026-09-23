@@ -870,7 +870,7 @@ extension WorkspaceRecovery {
             case .recoveryCompleted, .closed:
                 phase = .closed
             case .runtimeEnded, .recoveryBegan, .childTeardownCompleted, .publicationCompleted,
-                .mountCleanupCompleted, .originalRestored:
+                .mountCleanupCompleted, .originalRestored, .hostStarted:
                 break
             }
         }

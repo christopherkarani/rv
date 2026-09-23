@@ -166,6 +166,15 @@ cp "$BIN_DIR/rvd" "$STAGE/rvd"
 chmod 755 "$STAGE/rvd"
 strip -x "$STAGE/rvd"
 
+"$SWIFT_WRAP" build -c release --product rv-workspace-host
+if [[ ! -x "$BIN_DIR/rv-workspace-host" ]]; then
+  printf "release: expected executable rv-workspace-host in %s\n" "$BIN_DIR" >&2
+  exit 1
+fi
+cp "$BIN_DIR/rv-workspace-host" "$STAGE/rv-workspace-host"
+chmod 755 "$STAGE/rv-workspace-host"
+strip -x "$STAGE/rv-workspace-host"
+
 for bundle in "$BIN_DIR"/*_RVPacks.bundle "$BIN_DIR"/*_RVPacks.resources; do
   [[ -d "$bundle" ]] || continue
   name="$(basename "$bundle")"
@@ -180,7 +189,7 @@ if [[ "$copied" -eq 0 ]]; then
 fi
 
 printf "Staged %s\n" "$STAGE"
-ls -l "$STAGE/rv" "$STAGE/rv-cli" "$STAGE/rvd"
+ls -l "$STAGE/rv" "$STAGE/rv-cli" "$STAGE/rvd" "$STAGE/rv-workspace-host"
 for bundle in "$STAGE"/*_RVPacks.bundle "$STAGE"/*_RVPacks.resources; do
   [[ -d "$bundle" ]] || continue
   ls -ld "$bundle"

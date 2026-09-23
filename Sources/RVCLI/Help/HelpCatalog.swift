@@ -25,6 +25,7 @@ enum HelpCatalog {
         case .safety: safety
         case .blocks: blocks
         case .opencode: opencode
+        case .workspace: workspace
         }
     }
 
@@ -36,6 +37,7 @@ enum HelpCatalog {
                 heading: "Get started",
                 rows: [
                     HelpRow(name: "opencode", description: "Launch OpenCode in a workspace sandbox"),
+                    HelpRow(name: "workspace", description: "Attach to the persistent workspace host"),
                     HelpRow(name: "setup", description: "Wire host hooks and start rvd"),
                     HelpRow(name: "test", description: "Try a command before it runs"),
                     HelpRow(name: "doctor", description: "Check service, packs, and hosts"),
@@ -100,6 +102,23 @@ enum HelpCatalog {
             ]),
         ],
         examples: ["rv opencode", "rv opencode --workspace /path/to/repo -- run 'describe this project'"]
+    )
+
+    static let workspace = HelpViewModel(
+        title: "",
+        blurb: "",
+        sections: [
+            HelpSection(heading: "Usage", rows: [
+                HelpRow(name: "rv workspace start [--workspace <absolute-path>]"),
+                HelpRow(name: "rv workspace attach [--workspace <absolute-path>]"),
+                HelpRow(name: "rv workspace status [--workspace <absolute-path>]"),
+                HelpRow(name: "rv workspace close [--workspace <absolute-path>]"),
+            ]),
+            HelpSection(heading: "Flags", rows: [
+                HelpRow(name: "--workspace", description: "Project path; default is the current directory"),
+            ]),
+        ],
+        examples: ["rv workspace start", "rv workspace status"]
     )
 
     static let test = HelpViewModel(

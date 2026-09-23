@@ -28,6 +28,7 @@ public enum HelpTopic: Equatable, Sendable {
     case safety
     case blocks
     case opencode
+    case workspace
 }
 
 /// Intercepts help argv before ArgumentParser so passthrough commands still get help.
@@ -91,6 +92,8 @@ public enum HelpDispatch {
         switch head {
         case "opencode":
             return isOpenCodePath(rest) ? .opencode : nil
+        case "workspace":
+            return isWorkspacePath(rest) ? .workspace : nil
         case "test":
             return rest.allSatisfy(isTestFlag) ? .test : nil
         case "explain":
@@ -147,6 +150,29 @@ public enum HelpDispatch {
             } else {
                 return false
             }
+        }
+        return true
+    }
+
+    private static func isWorkspacePath(_ tokens: [String]) -> Bool {
+        var index = tokens.startIndex
+        while index < tokens.endIndex {
+            let token = tokens[index]
+            if token == "start" || token == "attach" || token == "status" || token == "close" {
+                index = tokens.index(after: index)
+                continue
+            }
+            if token == "--workspace" {
+                let value = tokens.index(after: index)
+                guard value < tokens.endIndex else { return false }
+                index = tokens.index(after: value)
+                continue
+            }
+            if token.hasPrefix("--workspace=") {
+                index = tokens.index(after: index)
+                continue
+            }
+            return false
         }
         return true
     }

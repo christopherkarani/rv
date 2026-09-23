@@ -330,7 +330,7 @@ check_no_main_in_library() {
   local fail=0
   local matches
   matches=$(find "$SOURCES" -name 'main.swift' \
-    | grep -v 'Sources/rv/' | grep -v 'Sources/rvd/' || true)
+    | grep -v 'Sources/rv/' | grep -v 'Sources/rvd/' | grep -v 'Sources/rv-workspace-host/' || true)
   local count
   count=$(echo "$matches" | grep -c . || true)
   if [ "$count" -gt 0 ]; then
@@ -343,7 +343,7 @@ check_no_main_in_library() {
   # @main in library target source files
   local amatches
   amatches=$(grep -rn '@main' "$SOURCES" --include='*.swift' \
-    | grep -v 'Sources/rv/' | grep -v 'Sources/rvd/' || true)
+    | grep -v 'Sources/rv/' | grep -v 'Sources/rvd/' | grep -v 'Sources/rv-workspace-host/' || true)
   local acount
   acount=$(echo "$amatches" | grep -c . || true)
   if [ "$acount" -gt 0 ]; then

@@ -803,6 +803,55 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
         }
     }
 
+    func ownerCredential() -> WorkspaceOwnerCredential? {
+        guard let token = ownerLock.token else { return nil }
+        return WorkspaceOwnerCredential(
+            token: token,
+            lockPath: ownerLock.path,
+            lockDevice: ownerLock.device,
+            lockInode: ownerLock.inode
+        )
+    }
+
+    /// Runtimes this workspace owns. No capability, pid, or process group.
+    func runtimeFacts() -> [WorkspaceRuntimeFact] {
+        state.withLock { state in
+            state.children.map { _, child in
+                WorkspaceRuntimeFact(
+                    id: child.live.session.id.rawValue,
+                    hookHost: child.live.session.host?.rawValue,
+                    running: child.watchFinished == false
+                )
+            }
+            .sorted { $0.id.uuidString < $1.id.uuidString }
+        }
+    }
+
+    func cancel(runtime rawValue: UUID) -> Result<Void, WorkspaceSessionError> {
+        let named = RuntimeSessionID(rawValue: rawValue)
+        let known = state.withLock { $0.children[named] != nil }
+        guard known else { return .failure(.unknownRuntime(named)) }
+        return cancel(named)
+    }
+
+    func recordHostStarted(_ host: UUID) -> Bool {
+        let recorded = lifecycleLog.append(
+            WorkspaceLifecycleRecord(
+                kind: .hostStarted,
+                workspace: id.rawValue,
+                originalPath: original.rawValue,
+                protectedPath: protected.rawValue,
+                volumeDevice: boundary.volumeDeviceIdentifier,
+                disk: boundary.diskIdentifier,
+                runtime: nil,
+                recordedAt: Date(),
+                host: host
+            )
+        )
+        if case .failure = recorded { return false }
+        return true
+    }
+
     private func controlFile(of fd: Int32) -> WorkspaceControlFile? {
         var status = stat()
         guard fstat(fd, &status) == 0 else { return nil }

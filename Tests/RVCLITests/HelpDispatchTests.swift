@@ -145,7 +145,7 @@ import RVTheme
 @Test func helpText_leafPagesOmitTitleAndNext() {
     for topic: HelpTopic in [
         .test, .explain, .doctor, .service, .serviceStatus, .hook, .help,
-        .packs, .scan, .policy, .allowlist, .safety, .blocks,
+        .packs, .scan, .policy, .allowlist, .safety, .blocks, .workspace,
     ] {
         let text = HelpDispatch.text(topic, palette: colorOffPalette)
         #expect(text.hasPrefix("Usage") || text.hasPrefix("\n") == false)
