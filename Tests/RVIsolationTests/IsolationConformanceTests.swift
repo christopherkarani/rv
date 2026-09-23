@@ -464,7 +464,7 @@ private func runHoleNet(verdict: IsolationConformanceVerdict) throws -> String {
         case .backendUnavailable, .backendMismatch, .workspaceMustBeAbsolute,
             .workspaceDoesNotExist, .workspacePathUnresolvable, .workspacePathUnsafe,
             .workspaceContainsInodeAlias, .workspaceInodeBoundaryFailed, .profileNotApplicable, .processSpawnFailed,
-            .commandContainsNUL, .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
+            .commandContainsNUL, .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled, .workspaceUnresolved:
             recordUnexpectedConformanceError(
                 error,
                 id: .holeNet,
@@ -513,7 +513,7 @@ private func runHoleRead(verdict: IsolationConformanceVerdict) throws -> String 
         case .backendUnavailable, .backendMismatch, .workspaceMustBeAbsolute,
             .workspaceDoesNotExist, .workspacePathUnresolvable, .workspacePathUnsafe,
             .workspaceContainsInodeAlias, .workspaceInodeBoundaryFailed, .profileNotApplicable, .processSpawnFailed,
-            .commandContainsNUL, .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
+            .commandContainsNUL, .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled, .workspaceUnresolved:
             recordUnexpectedConformanceError(
                 error,
                 id: .holeRead,
@@ -583,7 +583,7 @@ private func runFCUnavailable(verdict: IsolationConformanceVerdict) throws -> St
             .profileNotApplicable,
             .processSpawnFailed,
             .commandContainsNUL,
-            .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
+            .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled, .workspaceUnresolved:
             Issue.record(
                 "id=FC-UNAVAILABLE must be backendUnavailable, got \(isolationApplyErrorName(error))"
             )
@@ -618,7 +618,7 @@ private func runFCLandlockDarwin(verdict: IsolationConformanceVerdict) throws ->
                 .profileNotApplicable,
                 .processSpawnFailed,
                 .commandContainsNUL,
-                .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
+                .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled, .workspaceUnresolved:
                 Issue.record(
                     "id=FC-LANDLOCK-DARWIN must be backendUnavailable, got \(isolationApplyErrorName(error))"
                 )
@@ -632,7 +632,7 @@ private func runFCLandlockDarwin(verdict: IsolationConformanceVerdict) throws ->
         case .backendUnavailable, .backendMismatch, .workspaceMustBeAbsolute,
             .workspaceDoesNotExist, .workspacePathUnresolvable, .workspacePathUnsafe,
             .workspaceContainsInodeAlias, .workspaceInodeBoundaryFailed, .profileNotApplicable, .processSpawnFailed,
-            .commandContainsNUL, .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
+            .commandContainsNUL, .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled, .workspaceUnresolved:
             recordUnexpectedConformanceError(
                 error,
                 id: .fcLandlockDarwin,
@@ -835,7 +835,7 @@ private func expectWorkspacePathUnsafe(_ error: IsolationApplyError, stage: Stri
         .profileNotApplicable,
         .processSpawnFailed,
         .commandContainsNUL,
-        .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled:
+        .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled, .workspaceUnresolved:
         Issue.record(
             "id=FC-ROOT-WS \(stage) must be workspacePathUnsafe, got \(isolationApplyErrorName(error))"
         )
@@ -890,6 +890,8 @@ private func isolationApplyErrorName(_ error: IsolationApplyError) -> String {
         return "lifetimeBoundaryFailed"
     case .cancelled:
         return "cancelled"
+    case .workspaceUnresolved:
+        return "workspaceUnresolved"
     }
 }
 
