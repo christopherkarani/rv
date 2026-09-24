@@ -211,19 +211,38 @@ public enum WorkspaceTerminalDriver {
         restorer: LocalTerminalRestorer?
     ) throws {
         let previousPipe = ignoreSIGPIPE()
+        let bridge = TerminalStdinBridge(client: client, runtime: runtime, input: input)
+        bridge.start()
         defer {
+            // The reader blocks in `read`. Closing that descriptor from the
+            // caller waits behind it, and a pending read makes restore set
+            // PENDIN. Stop the reader before either of those.
+            bridge.stop()
             restorer?.restore()
             restoreSIGPIPE(previousPipe)
         }
-        let bridge = TerminalStdinBridge(client: client, runtime: runtime, input: input)
-        bridge.start()
         var currentRows = rows
         var currentColumns = columns
         while true {
             if bridge.didEnd {
-                restorer?.restore()
-                _ = client.detach()
-                return
+                // Output copied onto this PTY can come back as stdin and end
+                // the bridge before the exit event is read. Take that event
+                // before returning.
+                switch client.nextTerminalEvent(timeout: 0.5) {
+                case .failure(let error):
+                    _ = client.detach()
+                    throw WorkspaceTerminalDriveError.client(error)
+                case .success(.event(let event)) where event.runtime == runtime:
+                    if case .exited(let status) = event.body {
+                        _ = client.detach()
+                        throw WorkspaceTerminalDriveError.exited(status)
+                    }
+                    _ = client.detach()
+                    return
+                case .success:
+                    _ = client.detach()
+                    return
+                }
             }
             if let size = LocalTerminalWindow.current(fd: output.fileDescriptor),
                 size.rows != currentRows || size.columns != currentColumns
@@ -234,7 +253,6 @@ public enum WorkspaceTerminalDriver {
             }
             switch client.nextTerminalEvent(timeout: 0.2) {
             case .failure(let error):
-                restorer?.restore()
                 _ = client.detach()
                 throw WorkspaceTerminalDriveError.client(error)
             case .success(.waiting):
@@ -252,17 +270,14 @@ public enum WorkspaceTerminalDriver {
                     // failure the driver must report.
                     switch client.nextTerminalEvent(timeout: 0.3) {
                     case .failure(let error) where error == .workspaceClosed || error == .disconnected:
-                        restorer?.restore()
                         _ = client.detach()
                         throw WorkspaceTerminalDriveError.client(error)
                     case .failure, .success:
                         break
                     }
-                    restorer?.restore()
                     _ = client.detach()
                     throw WorkspaceTerminalDriveError.exited(status)
                 case .overflow:
-                    restorer?.restore()
                     _ = client.detach()
                     throw WorkspaceTerminalDriveError.client(.terminalLimit)
                 case .inputOwner:
@@ -315,6 +330,9 @@ public final class TerminalStdinBridge: @unchecked Sendable {
     private let input: Int32
     private let lock = NSLock()
     private var ended = false
+    private var stopRequested = false
+    private let stopped = NSCondition()
+    private var readerStopped = false
 
     public init(client: WorkspaceClient, runtime: UUID, input: Int32) {
         self.client = client
@@ -344,17 +362,58 @@ public final class TerminalStdinBridge: @unchecked Sendable {
         thread.start()
     }
 
+    /// Wakes a blocked `read` so the caller can close `input` and restore
+    /// the terminal. Waits until that loop has left the descriptor.
+    public func stop() {
+        lock.lock()
+        stopRequested = true
+        lock.unlock()
+        stopped.lock()
+        let deadline = Date().addingTimeInterval(2)
+        while readerStopped == false {
+            if stopped.wait(until: deadline) == false { break }
+        }
+        stopped.unlock()
+        // `TCSAFLUSH` waits for the slave output queue. On a PTY that queue
+        // is this master, and nothing else is reading it once the loop stops.
+        drainInput()
+    }
+
+    private func drainInput() {
+        let flags = fcntl(input, F_GETFL)
+        guard flags >= 0 else { return }
+        guard fcntl(input, F_SETFL, flags | O_NONBLOCK) >= 0 else { return }
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while true {
+            let count = Darwin.read(input, &buffer, buffer.count)
+            if count > 0 { continue }
+            break
+        }
+        _ = fcntl(input, F_SETFL, flags)
+    }
+
     private func read() {
         LocalTerminalRestorer.blockInterruptSignalsInThisThread()
         var buffer = [UInt8](repeating: 0, count: TerminalStreamLimits.maximumInputBytes)
-        while true {
+        var fds = [pollfd(fd: input, events: Int16(POLLIN), revents: 0)]
+        defer { markReaderStopped() }
+        while shouldStop() == false {
+            fds[0].revents = 0
+            let ready = poll(&fds, 1, 50)
+            if shouldStop() { return }
+            if ready == 0 { continue }
+            if ready < 0 {
+                if errno == EINTR { continue }
+                finish()
+                return
+            }
             let count = Darwin.read(input, &buffer, buffer.count)
             if count == 0 {
                 finish()
                 return
             }
             if count < 0 {
-                if errno == EINTR { continue }
+                if errno == EINTR || errno == EAGAIN { continue }
                 finish()
                 return
             }
@@ -366,10 +425,24 @@ public final class TerminalStdinBridge: @unchecked Sendable {
         }
     }
 
+    private func shouldStop() -> Bool {
+        lock.lock()
+        let value = stopRequested
+        lock.unlock()
+        return value
+    }
+
     private func finish() {
         lock.lock()
         ended = true
         lock.unlock()
+    }
+
+    private func markReaderStopped() {
+        stopped.lock()
+        readerStopped = true
+        stopped.broadcast()
+        stopped.unlock()
     }
 }
 #endif

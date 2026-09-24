@@ -432,7 +432,7 @@ final class WorkspaceHostServer: @unchecked Sendable {
         case .cancelRuntime:
             return Reply(message: cancel(message))
         case .closeWorkspace:
-            return close(message)
+            return close(message, connection: connection)
         case .detach:
             return Reply(
                 message: WorkspaceControlMessage(
@@ -756,7 +756,14 @@ final class WorkspaceHostServer: @unchecked Sendable {
         }
     }
 
-    private func close(_ message: WorkspaceControlMessage) -> Reply {
+    private func close(
+        _ message: WorkspaceControlMessage,
+        connection: WorkspaceControlConnection
+    ) -> Reply {
+        // The child dies during `close`, and its exit is on the terminal
+        // stream before this call returns. Tell the other clients first so
+        // they report the close instead of the signal.
+        announceClosed(excluding: connection.id)
         let result = supervisor.close()
         let closed = supervisor.snapshot.phase == .closed
         let response: WorkspaceControlMessage
@@ -788,6 +795,25 @@ final class WorkspaceHostServer: @unchecked Sendable {
         WorkspaceControlMessage.error(id: message.id, op: message.op, code: code)
     }
 
+    private func announceClosed(excluding: UUID?) {
+        let others = registry.withLock { state in
+            Array(state.connections.values.filter { $0.id != excluding })
+        }
+        let event = WorkspaceControlMessage(
+            version: WorkspaceControlLimits.version,
+            op: WorkspaceControlOp.workspaceClosed.rawValue,
+            ok: true,
+            workspace: supervisor.id.rawValue,
+            host: hostID.rawValue,
+            phase: WorkspaceLifecycle.closed.rawValue,
+            project: supervisor.snapshot.originalPath.rawValue,
+            attached: 0
+        )
+        for connection in others {
+            _ = connection.send(event)
+        }
+    }
+
     private func retire(excluding: UUID?, notify: Bool) {
         let snapshot: (first: Bool, others: [WorkspaceControlConnection]) = registry.withLock { state in
             if state.retired { return (false, []) }
@@ -801,19 +827,7 @@ final class WorkspaceHostServer: @unchecked Sendable {
         _ = Darwin.shutdown(listenFD, SHUT_RDWR)
         Darwin.close(listenFD)
         if notify {
-            let event = WorkspaceControlMessage(
-                version: WorkspaceControlLimits.version,
-                op: WorkspaceControlOp.workspaceClosed.rawValue,
-                ok: true,
-                workspace: supervisor.id.rawValue,
-                host: hostID.rawValue,
-                phase: WorkspaceLifecycle.closed.rawValue,
-                project: supervisor.snapshot.originalPath.rawValue,
-                attached: 0
-            )
-            for connection in snapshot.others {
-                _ = connection.send(event)
-            }
+            announceClosed(excluding: excluding)
         }
         for connection in snapshot.others {
             connection.interrupt()

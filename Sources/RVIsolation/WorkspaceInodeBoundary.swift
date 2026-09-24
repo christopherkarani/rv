@@ -1281,7 +1281,10 @@ private func toolFailure(
 /// drain deadlocks once a child fills the pipe, and it also ignores task
 /// cancellation. Under parallel launches DiskArbitration holds `hdiutil`
 /// long enough that a cancelled test used to sit inside that wait until the
-/// runner timed the test out. Cancellation kills the helper and returns.
+/// runner timed the test out. A helper with no deadline did the same thing:
+/// a wedged `hdiutil` never returned, and the isolation job sat until GitHub
+/// cancelled it. The default deadline kills that helper and returns.
+/// Cancellation kills the helper and returns.
 /// The executor runs this on `rv-executor-apply`; the poll sees that thread's
 /// flag as well as `Task.isCancelled`. Cleanup calls pass
 /// `honorCancellation: false` so a cancelled task can still detach the disk
@@ -1289,7 +1292,7 @@ private func toolFailure(
 private func runTool(
     _ arguments: [String],
     honorCancellation: Bool = false,
-    deadline: TimeInterval? = nil
+    deadline: TimeInterval? = 45
 ) -> ToolOutput {
     guard let executable = arguments.first else {
         return ToolOutput(status: 1, stdout: "", stderr: "missing executable")

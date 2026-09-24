@@ -74,24 +74,27 @@ struct LocalTerminalRestoreTests {
             try #require(client.subscribeTerminal(runtime).get() == ())
             try #require(client.acquireTerminalInput(runtime).get() == ())
             let input = Pipe()
+            let box = DriveBox()
             let thread = Thread {
-                try? WorkspaceTerminalDriver.drive(
-                    client: client,
-                    runtime: runtime,
-                    rows: 24,
-                    columns: 80,
-                    input: input.fileHandleForReading.fileDescriptor,
-                    output: FileHandle(fileDescriptor: pty.slave, closeOnDealloc: false),
-                    restorer: restorer
-                )
+                box.finish {
+                    try WorkspaceTerminalDriver.drive(
+                        client: client,
+                        runtime: runtime,
+                        rows: 24,
+                        columns: 80,
+                        input: input.fileHandleForReading.fileDescriptor,
+                        output: FileHandle(fileDescriptor: pty.slave, closeOnDealloc: false),
+                        restorer: restorer
+                    )
+                }
             }
             thread.start()
             try input.fileHandleForWriting.close()
             let deadline = Date().addingTimeInterval(5)
-            while thread.isExecuting, Date() < deadline {
+            while box.isFinished == false, Date() < deadline {
                 Thread.sleep(forTimeInterval: 0.02)
             }
-            #expect(thread.isExecuting == false)
+            #expect(box.isFinished)
             let listed = try WorkspaceClient.connect(endpoint).get()
             #expect(try listed.listRuntimes().get().contains { $0.runtime == runtime && $0.running })
             _ = listed.detach()
@@ -360,8 +363,14 @@ private func expectRestored(
 private final class DriveBox: @unchecked Sendable {
     private let lock = NSLock()
     private var stored: Error?
+    private var finished = false
 
     func finish(_ body: () throws -> Void) {
+        defer {
+            lock.lock()
+            finished = true
+            lock.unlock()
+        }
         do {
             try body()
         } catch {
@@ -369,6 +378,13 @@ private final class DriveBox: @unchecked Sendable {
             stored = error
             lock.unlock()
         }
+    }
+
+    var isFinished: Bool {
+        lock.lock()
+        let value = finished
+        lock.unlock()
+        return value
     }
 
     var error: Error? {
