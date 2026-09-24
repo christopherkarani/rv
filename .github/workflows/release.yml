@@ -67,3 +67,52 @@ jobs:
             .build/release-stage/rv-workspace-host
             .build/release-stage/*_RVPacks.bundle
           if-no-files-found: error
+
+  sequoia-smoke:
+    name: macos 15 smoke
+    runs-on: macos-15
+    needs: gate
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: rv-${{ github.ref_name }}
+          path: stage
+
+      - name: Load commands are macOS 15
+        run: |
+          set -euo pipefail
+          for bin in stage/rv stage/rv-cli stage/rvd stage/rv-workspace-host; do
+            chmod 755 "$bin"
+            show="$(vtool -show-build "$bin")"
+            printf '%s\n' "$show" | grep -q 'minos 15.0' || {
+              printf 'sequoia: %s minos is not 15.0\n%s\n' "$bin" "$show" >&2
+              exit 1
+            }
+          done
+
+      - name: Swift binaries load on Sequoia
+        run: |
+          set -euo pipefail
+          stage/rv-cli --help > /tmp/rv-cli-help.txt
+          grep -q 'setup' /tmp/rv-cli-help.txt
+          stage/rvd --version > /tmp/rvd-version.txt
+          grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+' /tmp/rvd-version.txt
+          set +e
+          stage/rv-workspace-host > /tmp/rv-host-usage.txt 2>&1
+          host_status=$?
+          set -e
+          test "$host_status" -eq 2
+          grep -q 'usage: rv-workspace-host --workspace' /tmp/rv-host-usage.txt
+          # `rv test` exits 1 on a deny. Robot JSON is rv.test.v1 and does not echo the command.
+          set +e
+          stage/rv-cli test --robot 'git reset --hard' > /tmp/rv-test.json 2> /tmp/rv-test.err
+          test_status=$?
+          set -e
+          test "$test_status" -eq 0 -o "$test_status" -eq 1
+          grep -q 'rv.test.v1' /tmp/rv-test.json
+          if grep -E 'Symbol not found|Library not loaded' /tmp/rv-test.err; then
+            exit 1
+          fi
