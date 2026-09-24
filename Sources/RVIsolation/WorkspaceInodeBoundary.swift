@@ -1383,6 +1383,16 @@ private func readToolPipe(_ fd: Int32) -> Data {
     var bytes = Data()
     var buffer = [UInt8](repeating: 0, count: 4096)
     while true {
+        // `O_NONBLOCK` does not stick on a Foundation pipe. A blocking
+        // `read` here never returns to the deadline check, so a quiet
+        // `hdiutil` holds the isolation job until the runner cancels it.
+        var state = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+        let ready = poll(&state, 1, 0)
+        if ready < 0 {
+            if errno == EINTR { continue }
+            return bytes
+        }
+        if ready == 0 { return bytes }
         let count = buffer.withUnsafeMutableBytes { raw -> Int in
             guard let base = raw.baseAddress else { return -1 }
             return read(fd, base, raw.count)
@@ -1391,7 +1401,7 @@ private func readToolPipe(_ fd: Int32) -> Data {
             bytes.append(contentsOf: buffer.prefix(count))
             continue
         }
-        if count < 0, errno == EINTR { continue }
+        if count < 0, errno == EINTR || errno == EAGAIN { return bytes }
         return bytes
     }
 }
