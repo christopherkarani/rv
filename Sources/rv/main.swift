@@ -10,7 +10,7 @@ enum RVEntry {
     static func main() async {
         let args = Array(CommandLine.arguments.dropFirst())
         if args.isEmpty {
-            await WorkspaceTUI.main()
+            await RV.main(["workspace", "tui"])
             return
         }
         if HelpDispatch.tryEmit(arguments: args) {
