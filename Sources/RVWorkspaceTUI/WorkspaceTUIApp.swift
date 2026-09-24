@@ -84,8 +84,7 @@ struct WorkspaceShellView: View {
             Text("workspace disconnected · ^G d detach")
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         } else if snapshot.tree.isEmpty {
-            Text("empty workspace    ^G n new runtime")
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            emptyWorkspace(snapshot)
         } else {
             GeometryReader { proxy in
                 let _ = model.noteCanvas(width: Int(proxy.size.width), height: Int(proxy.size.height))
@@ -93,27 +92,65 @@ struct WorkspaceShellView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        if snapshot.mode == .help {
+        if snapshot.mode == .help, snapshot.tree.isEmpty == false {
             Text(WorkspaceHelp.text)
         }
-        if snapshot.mode == .launcher {
+        if snapshot.mode == .launcher, snapshot.tree.isEmpty == false {
             Text(launcherText(snapshot.launcher))
+        }
+    }
+
+    @ViewBuilder
+    private func emptyWorkspace(_ snapshot: WorkspaceTUISnapshot) -> some View {
+        if snapshot.mode == .launcher {
+            VStack(alignment: .center, spacing: 1) {
+                Text("New runtime").bold()
+                Text("Choose what to launch in this workspace")
+                    .foregroundStyle(Color.gray)
+                Text(launcherText(snapshot.launcher))
+                Text("Esc to cancel").foregroundStyle(Color.gray)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        } else if snapshot.mode == .help {
+            Text(WorkspaceHelp.text)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        } else {
+            VStack(alignment: .center, spacing: 1) {
+                Text("No runtimes yet").bold()
+                Text("Start a shell or coding agent to begin working here.")
+                    .foregroundStyle(Color.gray)
+                Text("^G n    New runtime").bold()
+                if snapshot.launcher.isEmpty {
+                    Text("No runtime launchers are available.")
+                        .foregroundStyle(Color.gray)
+                } else {
+                    Text(launcherText(snapshot.launcher))
+                        .foregroundStyle(Color.gray)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         }
     }
 
     @ViewBuilder
     private func status(_ snapshot: WorkspaceTUISnapshot) -> some View {
         let state = snapshot.connection == .connected ? "workspace \(snapshot.phase)" : "disconnected"
-        let hint = snapshot.mode == .prefix ? "command" : "^G ? help"
+        let hint: String
+        switch snapshot.mode {
+        case .terminal: hint = "^G n new runtime · ^G ? help"
+        case .prefix: hint = "command"
+        case .launcher: hint = "1–9 launch · Esc cancel"
+        case .help: hint = "Esc close help"
+        }
         Text("\(snapshot.runtimeCount) runtimes · \(state) · \(hint)")
             .foregroundStyle(Color.gray)
     }
 
     private func launcherText(_ choices: [RuntimeLaunchChoice]) -> String {
         guard choices.isEmpty == false else { return "no launchers available · Esc close" }
-        return "new runtime · " + choices.enumerated()
+        return choices.enumerated()
             .map { "\($0.offset + 1) \($0.element.title)" }
-            .joined(separator: "  ") + "  Esc close"
+            .joined(separator: "    ")
     }
 
     private func handle(_ press: KeyPress) -> KeyPressResult {
