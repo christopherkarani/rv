@@ -195,7 +195,7 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
         case .success:
             break
         }
-        if Task.isCancelled || CooperativeLaunchStop.isRequested {
+        if blockingWorkIsCancelled() {
             releaseAdmission(owner: nil)
             return .failure(.apply(.cancelled))
         }
@@ -328,6 +328,7 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
         let children = state.withLock { Array($0.children.values) }
         for child in children {
             child.stop.request()
+            _ = stopOwnedSession(leader: child.live.pid, reap: false)
         }
         let deadline = Date().addingTimeInterval(5)
         while Date() < deadline, children.contains(where: { $0.watchFinished == false }) {
@@ -429,6 +430,7 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
     }
 
     /// One runtime, watched on the caller's thread, then the caller closes.
+    /// `LocalExecutor` calls this from `rv-executor-apply`, not a cooperative task.
     func runSingleRuntime(
         _ request: IsolatedLaunchRequest,
         host: HookHost?,
@@ -473,6 +475,7 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
         }
         guard let child else { return .failure(.unknownRuntime(runtime)) }
         child.stop.request()
+        _ = stopOwnedSession(leader: child.live.pid, reap: false)
         guard waitForChildren([child], seconds: 45) else {
             return .failure(.childTeardownFailed)
         }
@@ -580,6 +583,10 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
             guard let child = slot.child else {
                 return .failure(.apply(.processSpawnFailed))
             }
+            if request.spawnFault == .register {
+                retireUnrecorded(child)
+                return .failure(.apply(.processSpawnFailed))
+            }
             switch recordProcessGroup(child) {
             case .failure(let error):
                 retireUnrecorded(child)
@@ -618,10 +625,12 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
         if case .failure(let error) = recorded {
             return .failure(.apply(error))
         }
-        guard resumeSuspendedSeatbelt(child.live.pid) else {
-            return .failure(.apply(.lifetimeBoundaryFailed))
+        switch resumeAndClaimForeground(child.live) {
+        case .failure(let error):
+            return .failure(.apply(error))
+        case .success:
+            return .success(())
         }
-        return .success(())
     }
 
     private func retireUnrecorded(_ child: WorkspaceChild) {
@@ -641,11 +650,6 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
                 )
             )
         }
-        let deadline = Date().addingTimeInterval(5)
-        while Date() < deadline {
-            if processGroupIsEmpty(pid), processIsGone(pid) { break }
-            usleep(10_000)
-        }
         noteRuntimeEnded(session)
     }
 
@@ -654,8 +658,9 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
     ) -> Result<RunningRuntime, WorkspaceSessionError> {
         let deadline = Date().addingTimeInterval(45)
         while Date() < deadline {
-            if Task.isCancelled || CooperativeLaunchStop.isRequested {
+            if blockingWorkIsCancelled() {
                 child.stop.request()
+                _ = stopOwnedSession(leader: child.live.pid, reap: false)
             }
             if child.live.isEstablished {
                 return .success(
@@ -673,6 +678,7 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
             usleep(10_000)
         }
         child.stop.request()
+        _ = stopOwnedSession(leader: child.live.pid, reap: false)
         _ = waitForChildren([child], seconds: 45)
         return .failure(.apply(child.live.terminalError ?? .seatbeltNotEstablished))
     }
@@ -727,6 +733,7 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
         let children = state.withLock { Array($0.children.values) }
         for child in children {
             child.stop.request()
+            _ = stopOwnedSession(leader: child.live.pid, reap: false)
         }
         guard waitForChildren(children, seconds: 45) else {
             return .failure(.childTeardownFailed)
@@ -876,7 +883,7 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
     func subscribeTerminal(
         runtime: UUID,
         client: UUID,
-        emit: @escaping @Sendable (TerminalNotice) -> Void
+        emit: @escaping @Sendable (TerminalNotice) -> Bool
     ) -> Result<Void, WorkspaceControlCode> {
         guard let terminal = terminal(runtime) else {
             return .failure(terminalMissing(runtime))
@@ -935,6 +942,11 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
         terminal(runtime)?.window()
     }
 
+    func terminalMasterOpen(_ runtime: UUID) -> Bool {
+        guard let fd = terminal(runtime)?.masterFD else { return false }
+        return fd >= 0
+    }
+
     private func terminal(_ runtime: UUID) -> RuntimeTerminal? {
         let named = RuntimeSessionID(rawValue: runtime)
         return state.withLock { $0.children[named]?.live.pty }
@@ -952,6 +964,7 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
         case .busy: .terminalBusy
         case .limit: .terminalLimit
         case .invalid: .invalidRequest
+        case .prefixCommitted: .terminalPrefixCommitted
         }
     }
 

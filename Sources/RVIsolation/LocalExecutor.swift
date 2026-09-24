@@ -90,7 +90,11 @@ public actor LocalExecutor {
                         return
                     }
                     CooperativeLaunchStop.install(flag)
-                    defer { CooperativeLaunchStop.uninstall() }
+                    IsolationBlockingWork.markOffPool()
+                    defer {
+                        IsolationBlockingWork.clearOffPool()
+                        CooperativeLaunchStop.uninstall()
+                    }
                     switch IsolationBackends.apply(plan, command: command) {
                     case .success(let result):
                         continuation.resume(returning: result)
@@ -100,7 +104,7 @@ public actor LocalExecutor {
                         continuation.resume(throwing: LocalExecutorError.applyFailed(error))
                     }
                 }
-                thread.name = "rv-executor"
+                thread.name = "rv-executor-apply"
                 thread.start()
             }
         } onCancel: {
@@ -145,6 +149,60 @@ public actor LocalExecutor {
             } catch {
                 preconditionFailure("LocalExecutor.run throws only LocalExecutorError")
             }
+        }
+    }
+}
+
+/// True when the current task is cancelled, or this thread is the executor
+/// worker whose task was cancelled after `run` hopped off the cooperative pool.
+/// `Task.isCancelled` does not cross that hop.
+func blockingWorkIsCancelled() -> Bool {
+    Task.isCancelled || CooperativeLaunchStop.isRequested
+}
+
+/// Runs blocking isolation work on a Foundation thread.
+///
+/// A synchronous wait on the cooperative pool pins that thread, so Swift
+/// Testing cannot report a suite result. Callers `await` this hop. A thread
+/// that is already off the pool runs `body` inline, so a nested call does
+/// not start a second thread. Cancellation is the pthread flag the watch
+/// loop already polls; `Task.isCancelled` does not cross the hop.
+enum IsolationBlockingWork {
+    private static let key = "rv.blockingWorkOffPool"
+
+    static func markOffPool() {
+        Thread.current.threadDictionary[key] = true
+    }
+
+    static func clearOffPool() {
+        Thread.current.threadDictionary.removeObject(forKey: key)
+    }
+
+    static var isOffPool: Bool {
+        (Thread.current.threadDictionary[key] as? Bool) == true
+    }
+
+    static func perform<T: Sendable>(_ body: @escaping @Sendable () -> T) async -> T {
+        if isOffPool {
+            return body()
+        }
+        let flag = CooperativeLaunchStop.Flag()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<T, Never>) in
+                let thread = Thread {
+                    IsolationBlockingWork.markOffPool()
+                    CooperativeLaunchStop.install(flag)
+                    defer {
+                        CooperativeLaunchStop.uninstall()
+                        IsolationBlockingWork.clearOffPool()
+                    }
+                    continuation.resume(returning: body())
+                }
+                thread.name = "rv-blocking-work"
+                thread.start()
+            }
+        } onCancel: {
+            flag.cancel()
         }
     }
 }

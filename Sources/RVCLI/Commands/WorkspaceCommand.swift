@@ -417,6 +417,7 @@ enum WorkspaceCommandRun {
         case .terminalUnavailable: "runtime has no terminal"
         case .terminalBusy: "terminal input is owned by another client"
         case .terminalLimit: "terminal subscriber limit reached"
+        case .terminalPrefixCommitted: "terminal input was partially written"
         }
     }
 
@@ -437,61 +438,3 @@ enum WorkspaceCommandRun {
     }
     #endif
 }
-
-#if os(macOS)
-private final class TerminalStdinBridge: @unchecked Sendable {
-    private let client: WorkspaceClient
-    private let runtime: UUID
-    private let lock = NSLock()
-    private var ended = false
-
-    init(client: WorkspaceClient, runtime: UUID) {
-        self.client = client
-        self.runtime = runtime
-    }
-
-    var inputEnded: Bool {
-        lock.lock()
-        let value = ended
-        lock.unlock()
-        return value
-    }
-
-    func start() {
-        let bridge = self
-        let thread = Thread {
-            bridge.read()
-        }
-        thread.name = "rv-terminal-stdin"
-        thread.start()
-    }
-
-    private func read() {
-        LocalTerminalRestorer.blockInterruptSignalsInThisThread()
-        var buffer = [UInt8](repeating: 0, count: TerminalStreamLimits.maximumInputBytes)
-        while true {
-            let count = Darwin.read(STDIN_FILENO, &buffer, buffer.count)
-            if count == 0 {
-                markEnded()
-                return
-            }
-            if count < 0 {
-                if errno == EINTR { continue }
-                markEnded()
-                return
-            }
-            let data = Data(buffer.prefix(count))
-            if case .failure = client.writeTerminal(runtime, bytes: data) {
-                markEnded()
-                return
-            }
-        }
-    }
-
-    private func markEnded() {
-        lock.lock()
-        ended = true
-        lock.unlock()
-    }
-}
-#endif

@@ -1876,7 +1876,7 @@ private func runAdapter(
     }
     if let sessionMessages {
         let data = try JSONSerialization.data(withJSONObject: sessionMessages)
-        environment["RV_SESSION_MESSAGES"] = try #require(String(data: data, encoding: .utf8))
+        environment["RV_SESSION_MESSAGES"] = String(decoding: data, as: UTF8.self)
     }
     if let secondStub {
         switch secondStub {

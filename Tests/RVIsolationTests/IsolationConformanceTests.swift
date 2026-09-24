@@ -52,23 +52,23 @@ struct IsolationConformanceTests {
     }
 
     @Test(arguments: IsolationConformanceCatalog.denyAndAllowIn.map(\.id))
-    func isolationConformance_kernelFence(_ id: IsolationConformanceID) throws {
-        _ = try runCatalogID(id)
+    func isolationConformance_kernelFence(_ id: IsolationConformanceID) async throws {
+        _ = try await runCatalogID(id)
     }
 
     @Test(arguments: IsolationConformanceCatalog.holes.map(\.id))
-    func isolationConformance_hole(_ id: IsolationConformanceID) throws {
-        _ = try runCatalogID(id)
+    func isolationConformance_hole(_ id: IsolationConformanceID) async throws {
+        _ = try await runCatalogID(id)
     }
 
     @Test(arguments: IsolationConformanceCatalog.failClosedOnThisPlatform.map(\.id))
-    func isolationConformance_failClosed(_ id: IsolationConformanceID) throws {
-        _ = try runCatalogID(id)
+    func isolationConformance_failClosed(_ id: IsolationConformanceID) async throws {
+        _ = try await runCatalogID(id)
     }
 
-    @Test func isolationConformance_operatorProbe_printsCatalog() throws {
+    @Test func isolationConformance_operatorProbe_printsCatalog() async throws {
         for entry in IsolationConformanceCatalog.entries {
-            let line = try runCatalogID(entry.id)
+            let line = try await runCatalogID(entry.id)
             print(line)
             #expect(line.contains("id=\(entry.id.rawValue)"))
             #expect(line.contains("verdict=\(entry.verdict.rawValue)"))
@@ -117,49 +117,49 @@ private func requireCommand(executable: String, arguments: [String] = []) throws
 private func applyContained(
     _ plan: IsolationPlan,
     command: IsolatedCommand
-) -> Result<IsolatedRunResult, IsolationApplyError> {
-    IsolationBackends.apply(plan, command: command)
+) async -> Result<IsolatedRunResult, IsolationApplyError> {
+    await IsolationBackends.applyOffPool(plan, command: command)
 }
 
-private func runCatalogID(_ id: IsolationConformanceID) throws -> String {
+private func runCatalogID(_ id: IsolationConformanceID) async throws -> String {
     let verdict = try #require(verdict(id))
     switch id {
     case .fsWriteIn:
-        return try runAllowInTouch(verdict: verdict)
+        return try await runAllowInTouch(verdict: verdict)
     case .fsWriteOut:
-        return try runDenyAbsentTouch(
+        return try await runDenyAbsentTouch(
             id: id,
             verdict: verdict,
             plan: { $0.contained },
             target: { $0.siblingURL.appendingPathComponent("out.txt").path }
         )
     case .fsWriteRepo:
-        return try runDenyAbsentTouch(
+        return try await runDenyAbsentTouch(
             id: id,
             verdict: verdict,
             plan: { $0.containedDifferingRoot },
             target: { $0.repositoryURL.appendingPathComponent("leak.txt").path }
         )
     case .fsMkdirOut:
-        return try runDenyMkdir(verdict: verdict)
+        return try await runDenyMkdir(verdict: verdict)
     case .fsAppendOut:
-        return try runDenyAppend(verdict: verdict)
+        return try await runDenyAppend(verdict: verdict)
     case .fsUnlinkOut:
-        return try runDenyUnlink(verdict: verdict)
+        return try await runDenyUnlink(verdict: verdict)
     case .fsRenameOut:
-        return try runDenyRename(verdict: verdict)
+        return try await runDenyRename(verdict: verdict)
     case .descSh:
-        return try runDenyDescendant(id: id, verdict: verdict, nested: false)
+        return try await runDenyDescendant(id: id, verdict: verdict, nested: false)
     case .descNested:
-        return try runDenyDescendant(id: id, verdict: verdict, nested: true)
+        return try await runDenyDescendant(id: id, verdict: verdict, nested: true)
     case .holeNet:
-        return try runHoleNet(verdict: verdict)
+        return try await runHoleNet(verdict: verdict)
     case .holeRead:
-        return try runHoleRead(verdict: verdict)
+        return try await runHoleRead(verdict: verdict)
     case .holeSymlink:
-        return try runHoleSymlink(verdict: verdict)
+        return try await runHoleSymlink(verdict: verdict)
     case .fcUnavailable:
-        return try runFCUnavailable(verdict: verdict)
+        return try await runFCUnavailable(verdict: verdict)
     case .fcLandlockDarwin:
         #if os(macOS)
         return try runFCLandlockDarwin(verdict: verdict)
@@ -174,10 +174,10 @@ private func runCatalogID(_ id: IsolationConformanceID) throws -> String {
         )
         #endif
     case .fcRootWs:
-        return try runFCRootWs(verdict: verdict)
+        return try await runFCRootWs(verdict: verdict)
     case .fcHelperInWs:
         #if os(Linux)
-        return try runFCHelperInWs(verdict: verdict)
+        return try await runFCHelperInWs(verdict: verdict)
         #else
         return formatProbe(
             id: id,
@@ -218,12 +218,12 @@ private func expectLinuxContainedRefusal(
 }
 #endif
 
-private func runAllowInTouch(verdict: IsolationConformanceVerdict) throws -> String {
+private func runAllowInTouch(verdict: IsolationConformanceVerdict) async throws -> String {
     let tree = try ContainmentTree()
     defer { tree.tearDown() }
     let inside = tree.workspaceURL.appendingPathComponent("in.txt").path
     let command = try requireCommand(executable: "/usr/bin/touch", arguments: [inside])
-    let result = applyContained(tree.contained, command: command)
+    let result = await applyContained(tree.contained, command: command)
     #if os(Linux)
     return try expectLinuxContainedRefusal(result, id: .fsWriteIn, verdict: verdict) {
         #expect(FileManager.default.fileExists(atPath: inside) == false)
@@ -251,14 +251,14 @@ private func runDenyAbsentTouch(
     verdict: IsolationConformanceVerdict,
     plan: (ContainmentTree) -> IsolationPlan,
     target: (ContainmentTree) -> String
-) throws -> String {
+) async throws -> String {
     let tree = try ContainmentTree()
     defer { tree.tearDown() }
     let isolation = plan(tree)
     let path = target(tree)
     #expect(FileManager.default.fileExists(atPath: path) == false)
     let command = try requireCommand(executable: "/usr/bin/touch", arguments: [path])
-    let result = applyContained(isolation, command: command)
+    let result = await applyContained(isolation, command: command)
     #if os(Linux)
     return try expectLinuxContainedRefusal(result, id: id, verdict: verdict) {
         #expect(FileManager.default.fileExists(atPath: path) == false)
@@ -281,13 +281,13 @@ private func runDenyAbsentTouch(
     #endif
 }
 
-private func runDenyMkdir(verdict: IsolationConformanceVerdict) throws -> String {
+private func runDenyMkdir(verdict: IsolationConformanceVerdict) async throws -> String {
     let tree = try ContainmentTree()
     defer { tree.tearDown() }
     let path = tree.siblingURL.appendingPathComponent("newdir").path
     #expect(FileManager.default.fileExists(atPath: path) == false)
     let command = try requireCommand(executable: "/bin/mkdir", arguments: [path])
-    let result = applyContained(tree.contained, command: command)
+    let result = await applyContained(tree.contained, command: command)
     #if os(Linux)
     return try expectLinuxContainedRefusal(result, id: .fsMkdirOut, verdict: verdict) {
         #expect(FileManager.default.fileExists(atPath: path) == false)
@@ -310,13 +310,13 @@ private func runDenyMkdir(verdict: IsolationConformanceVerdict) throws -> String
     #endif
 }
 
-private func runDenyAppend(verdict: IsolationConformanceVerdict) throws -> String {
+private func runDenyAppend(verdict: IsolationConformanceVerdict) async throws -> String {
     let tree = try ContainmentTree()
     defer { tree.tearDown() }
     let path = tree.siblingURL.appendingPathComponent("exist.txt").path
     try "keep\n".write(toFile: path, atomically: true, encoding: .utf8)
     let command = try requireCommand(executable: "/bin/sh", arguments: ["-c", ": >> \(path)"])
-    let result = applyContained(tree.contained, command: command)
+    let result = await applyContained(tree.contained, command: command)
     #if os(Linux)
     return try expectLinuxContainedRefusal(result, id: .fsAppendOut, verdict: verdict) {
         let remaining = try String(contentsOfFile: path, encoding: .utf8)
@@ -341,13 +341,13 @@ private func runDenyAppend(verdict: IsolationConformanceVerdict) throws -> Strin
     #endif
 }
 
-private func runDenyUnlink(verdict: IsolationConformanceVerdict) throws -> String {
+private func runDenyUnlink(verdict: IsolationConformanceVerdict) async throws -> String {
     let tree = try ContainmentTree()
     defer { tree.tearDown() }
     let path = tree.siblingURL.appendingPathComponent("del.txt").path
     try "keep\n".write(toFile: path, atomically: true, encoding: .utf8)
     let command = try requireCommand(executable: "/bin/rm", arguments: [path])
-    let result = applyContained(tree.contained, command: command)
+    let result = await applyContained(tree.contained, command: command)
     #if os(Linux)
     return try expectLinuxContainedRefusal(result, id: .fsUnlinkOut, verdict: verdict) {
         #expect(FileManager.default.fileExists(atPath: path))
@@ -370,14 +370,14 @@ private func runDenyUnlink(verdict: IsolationConformanceVerdict) throws -> Strin
     #endif
 }
 
-private func runDenyRename(verdict: IsolationConformanceVerdict) throws -> String {
+private func runDenyRename(verdict: IsolationConformanceVerdict) async throws -> String {
     let tree = try ContainmentTree()
     defer { tree.tearDown() }
     let source = tree.workspaceURL.appendingPathComponent("move.txt").path
     let dest = tree.siblingURL.appendingPathComponent("moved.txt").path
     try "keep\n".write(toFile: source, atomically: true, encoding: .utf8)
     let command = try requireCommand(executable: "/bin/mv", arguments: [source, dest])
-    let result = applyContained(tree.contained, command: command)
+    let result = await applyContained(tree.contained, command: command)
     #if os(Linux)
     return try expectLinuxContainedRefusal(result, id: .fsRenameOut, verdict: verdict) {
         #expect(FileManager.default.fileExists(atPath: dest) == false)
@@ -406,7 +406,7 @@ private func runDenyDescendant(
     id: IsolationConformanceID,
     verdict: IsolationConformanceVerdict,
     nested: Bool
-) throws -> String {
+) async throws -> String {
     let tree = try ContainmentTree()
     defer { tree.tearDown() }
     let outside = tree.siblingURL.appendingPathComponent("out.txt").path
@@ -417,7 +417,7 @@ private func runDenyDescendant(
         script = "/usr/bin/touch \(outside)"
     }
     let command = try requireCommand(executable: "/bin/sh", arguments: ["-c", script])
-    let result = applyContained(tree.contained, command: command)
+    let result = await applyContained(tree.contained, command: command)
     #if os(Linux)
     return try expectLinuxContainedRefusal(result, id: id, verdict: verdict) {
         #expect(FileManager.default.fileExists(atPath: outside) == false)
@@ -440,7 +440,7 @@ private func runDenyDescendant(
     #endif
 }
 
-private func runHoleNet(verdict: IsolationConformanceVerdict) throws -> String {
+private func runHoleNet(verdict: IsolationConformanceVerdict) async throws -> String {
     let tree = try ContainmentTree()
     defer { tree.tearDown() }
     switch compileSeatbeltProfile(tree.contained) {
@@ -473,7 +473,7 @@ private func runHoleNet(verdict: IsolationConformanceVerdict) throws -> String {
         }
     }
     let command = try requireCommand(executable: "/usr/bin/true")
-    let result = applyContained(tree.contained, command: command)
+    let result = await applyContained(tree.contained, command: command)
     #if os(Linux)
     return try expectLinuxContainedRefusal(result, id: .holeNet, verdict: verdict)
     #else
@@ -492,13 +492,13 @@ private func runHoleNet(verdict: IsolationConformanceVerdict) throws -> String {
     #endif
 }
 
-private func runHoleRead(verdict: IsolationConformanceVerdict) throws -> String {
+private func runHoleRead(verdict: IsolationConformanceVerdict) async throws -> String {
     let tree = try ContainmentTree()
     defer { tree.tearDown() }
     let secret = tree.siblingURL.appendingPathComponent("secret.txt").path
     try "secret\n".write(toFile: secret, atomically: true, encoding: .utf8)
     let command = try requireCommand(executable: "/bin/cat", arguments: [secret])
-    let result = applyContained(tree.contained, command: command)
+    let result = await applyContained(tree.contained, command: command)
     let unchanged = (try? String(contentsOfFile: secret, encoding: .utf8)) == "secret\n"
     #expect(unchanged)
     switch result {
@@ -524,7 +524,7 @@ private func runHoleRead(verdict: IsolationConformanceVerdict) throws -> String 
     }
 }
 
-private func runHoleSymlink(verdict: IsolationConformanceVerdict) throws -> String {
+private func runHoleSymlink(verdict: IsolationConformanceVerdict) async throws -> String {
     let tree = try ContainmentTree()
     defer { tree.tearDown() }
     let outside = tree.siblingURL.appendingPathComponent("via-link.txt").path
@@ -532,7 +532,7 @@ private func runHoleSymlink(verdict: IsolationConformanceVerdict) throws -> Stri
     try "before\n".write(toFile: outside, atomically: true, encoding: .utf8)
     try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: outside)
     let command = try requireCommand(executable: "/bin/sh", arguments: ["-c", "printf x >> \(link)"])
-    let result = applyContained(tree.contained, command: command)
+    let result = await applyContained(tree.contained, command: command)
     #if os(Linux)
     return try expectLinuxContainedRefusal(result, id: .holeSymlink, verdict: verdict) {
         let remaining = try String(contentsOfFile: outside, encoding: .utf8)
@@ -560,12 +560,12 @@ private func runHoleSymlink(verdict: IsolationConformanceVerdict) throws -> Stri
     #endif
 }
 
-private func runFCUnavailable(verdict: IsolationConformanceVerdict) throws -> String {
+private func runFCUnavailable(verdict: IsolationConformanceVerdict) async throws -> String {
     let tree = try ContainmentTree()
     defer { tree.tearDown() }
     let inside = tree.workspaceURL.appendingPathComponent("in.txt").path
     let command = try requireCommand(executable: "/usr/bin/touch", arguments: [inside])
-    switch IsolationBackends.unavailable().apply(tree.contained, command: command) {
+    switch await IsolationBackends.unavailable().applyOffPool(tree.contained, command: command) {
     case .success(let run):
         recordMintedContained(id: .fcUnavailable, established: run.established)
         return formatProbe(id: .fcUnavailable, verdict: verdict, run: run)
@@ -644,7 +644,7 @@ private func runFCLandlockDarwin(verdict: IsolationConformanceVerdict) throws ->
 }
 #endif
 
-private func runFCRootWs(verdict: IsolationConformanceVerdict) throws -> String {
+private func runFCRootWs(verdict: IsolationConformanceVerdict) async throws -> String {
     let workspace = try ContainmentTree.requireWorkspace("/")
     let plan = try ContainmentTree.requirePlan(
         IsolationCompileRequest(requested: .contained, workspace: workspace)
@@ -662,7 +662,7 @@ private func runFCRootWs(verdict: IsolationConformanceVerdict) throws -> String 
         expectWorkspacePathUnsafe(error, stage: "Landlock compile")
     }
     let command = try requireCommand(executable: "/usr/bin/true")
-    switch IsolationBackends.apply(plan, command: command) {
+    switch await IsolationBackends.applyOffPool(plan, command: command) {
     case .success(let run):
         recordMintedContained(id: .fcRootWs, established: run.established)
         return formatProbe(id: .fcRootWs, verdict: verdict, run: run)
@@ -673,7 +673,7 @@ private func runFCRootWs(verdict: IsolationConformanceVerdict) throws -> String 
 }
 
 #if os(Linux)
-private func runFCHelperInWs(verdict: IsolationConformanceVerdict) throws -> String {
+private func runFCHelperInWs(verdict: IsolationConformanceVerdict) async throws -> String {
     let tree = try ContainmentTree()
     defer { tree.tearDown() }
     let helper = tree.workspaceURL.appendingPathComponent("rv-isolation-exec")
@@ -682,7 +682,7 @@ private func runFCHelperInWs(verdict: IsolationConformanceVerdict) throws -> Str
     let inside = tree.workspaceURL.appendingPathComponent("in.txt").path
     let command = try requireCommand(executable: "/usr/bin/touch", arguments: [inside])
     let backend = IsolationBackends.landlock(executable: helper)
-    switch backend.apply(tree.contained, command: command) {
+    switch await backend.applyOffPool(tree.contained, command: command) {
     case .success(let run):
         recordMintedContained(id: .fcHelperInWs, established: run.established)
         return formatProbe(id: .fcHelperInWs, verdict: verdict, run: run)

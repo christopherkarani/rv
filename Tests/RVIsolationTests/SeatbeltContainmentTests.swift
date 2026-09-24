@@ -18,7 +18,7 @@ import Testing
 /// Missing `/usr/bin/sandbox-exec` must fail these tests — do not skip.
 @Suite("SeatbeltContainment")
 struct SeatbeltContainmentTests {
-    @Test func seatbelt_touchInsideWorkspace_succeedsAndEstablishesContained() throws {
+    @Test func seatbelt_touchInsideWorkspace_succeedsAndEstablishesContained() async throws {
         let sandboxExec = URL(fileURLWithPath: "/usr/bin/sandbox-exec")
         #expect(FileManager.default.isExecutableFile(atPath: sandboxExec.path))
 
@@ -26,7 +26,7 @@ struct SeatbeltContainmentTests {
         defer { tree.tearDown() }
 
         let inside = tree.workspaceURL.appendingPathComponent("inside.txt").path
-        let result = IsolationBackends.seatbelt().apply(
+        let result = await IsolationBackends.seatbelt().applyOffPool(
             tree.contained,
             command: IsolatedCommand(executable: "/usr/bin/touch", arguments: [inside])!
         )
@@ -40,13 +40,13 @@ struct SeatbeltContainmentTests {
         }
     }
 
-    @Test func seatbelt_touchOutsideWorkspace_isBlockedFileAbsent_stillEstablishedContained() throws {
+    @Test func seatbelt_touchOutsideWorkspace_isBlockedFileAbsent_stillEstablishedContained() async throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
 
         let outside = tree.siblingURL.appendingPathComponent("outside.txt").path
         #expect(FileManager.default.fileExists(atPath: outside) == false)
-        let result = IsolationBackends.seatbelt().apply(
+        let result = await IsolationBackends.seatbelt().applyOffPool(
             tree.contained,
             command: IsolatedCommand(executable: "/usr/bin/touch", arguments: [outside])!
         )
@@ -60,12 +60,12 @@ struct SeatbeltContainmentTests {
         }
     }
 
-    @Test func seatbelt_binShChild_cannotWriteOutsideWorkspace() throws {
+    @Test func seatbelt_binShChild_cannotWriteOutsideWorkspace() async throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
 
         let outside = tree.siblingURL.appendingPathComponent("child-outside.txt").path
-        let result = IsolationBackends.seatbelt().apply(
+        let result = await IsolationBackends.seatbelt().applyOffPool(
             tree.contained,
             command: IsolatedCommand(
                 executable: "/bin/sh",
@@ -82,12 +82,12 @@ struct SeatbeltContainmentTests {
         }
     }
 
-    @Test func observed_touchOutsideWorkspace_succeeds_notSecretlySandboxed() throws {
+    @Test func observed_touchOutsideWorkspace_succeeds_notSecretlySandboxed() async throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
 
         let outside = tree.siblingURL.appendingPathComponent("observed-outside.txt").path
-        let result = IsolationBackends.apply(
+        let result = await IsolationBackends.applyOffPool(
             tree.observed,
             command: IsolatedCommand(executable: "/usr/bin/touch", arguments: [outside])!
         )
@@ -108,12 +108,12 @@ struct SeatbeltContainmentTests {
         }
     }
 
-    @Test func seatbelt_writeUnderRepositoryRootOutsideWorkspace_isBlocked() throws {
+    @Test func seatbelt_writeUnderRepositoryRootOutsideWorkspace_isBlocked() async throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
 
         let leak = tree.repositoryURL.appendingPathComponent("leak.txt").path
-        let result = IsolationBackends.seatbelt().apply(
+        let result = await IsolationBackends.seatbelt().applyOffPool(
             tree.containedDifferingRoot,
             command: IsolatedCommand(executable: "/usr/bin/touch", arguments: [leak])!
         )

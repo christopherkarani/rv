@@ -33,15 +33,18 @@ enum TerminalControlError: Error, Equatable, Sendable {
     case busy
     case limit
     case invalid
+    /// A prefix of the input was written before the master failed.
+    case prefixCommitted
 }
 
 /// Host-owned PTY for one runtime.
 ///
 /// The master stays in this process. The child receives the slave as stdin,
-/// stdout, and stderr. `POSIX_SPAWN_SETSID` makes that child the session
-/// leader outside Seatbelt, and the handshake reclaims the slave as the
-/// controlling terminal. Seatbelt still denies `setsid` and `setpgid`,
-/// so the agent cannot leave the process group RV records.
+/// stdout, and stderr through `posix_spawn` file actions after
+/// `POSIX_SPAWN_SETSID`. `rv-pty-claim` then makes the slave the controlling
+/// terminal and the foreground group before Seatbelt starts. Seatbelt still
+/// denies `setsid` and `setpgid`, so the agent cannot leave the process
+/// group RV records.
 ///
 /// This object is the only reader of the master. Client sockets never receive
 /// the descriptor. Closing a client does not close the master. Closing the
@@ -60,6 +63,9 @@ final class RuntimeTerminal: @unchecked Sendable {
     private var replay = TerminalReplayBuffer()
     private var nextSequence: Int64 = 1
     private var subscribers: [UUID: Subscriber] = [:]
+    /// Clients whose flush thread is inside `emit`. Detach waits for this set
+    /// to drop the id, and subscribe rejects it until then.
+    private var flushing: Set<UUID> = []
     private var inputOwner: UUID?
     private var exited = false
     private var exitStatus: Int32?
@@ -219,6 +225,21 @@ final class RuntimeTerminal: @unchecked Sendable {
         return value
     }
 
+    /// Foreground process group, read from the master.
+    ///
+    /// The parent is outside the child's session, so `TIOCSPGRP` here cannot
+    /// install the group. `rv-pty-claim` does that on the slave. A live child
+    /// whose group is not its own pid fails the launch.
+    func foregroundProcessGroup() -> pid_t? {
+        condition.lock()
+        let fd = masterClosed ? -1 : master
+        condition.unlock()
+        guard fd >= 0 else { return nil }
+        var group: pid_t = -1
+        let read = ioctl(fd, TIOCGPGRP, &group) == 0 && group > 1
+        return read ? group : nil
+    }
+
     func startReader() {
         condition.lock()
         if masterClosed || readerStarted {
@@ -314,9 +335,13 @@ final class RuntimeTerminal: @unchecked Sendable {
 
     func subscribe(
         client: UUID,
-        emit: @escaping @Sendable (TerminalNotice) -> Void
+        emit: @escaping @Sendable (TerminalNotice) -> Bool
     ) -> Result<Void, TerminalControlError> {
         condition.lock()
+        if flushing.contains(client) {
+            condition.unlock()
+            return .failure(.busy)
+        }
         if subscribers[client] != nil {
             condition.unlock()
             return .failure(.invalid)
@@ -377,16 +402,19 @@ final class RuntimeTerminal: @unchecked Sendable {
             enqueueOwnerLocked(false)
         }
         condition.broadcast()
+        while flushing.contains(client) {
+            condition.wait()
+        }
         condition.unlock()
     }
 
     func acquireInput(client: UUID) -> Result<Void, TerminalControlError> {
         condition.lock()
-        guard subscribers[client] != nil else {
+        guard let subscriber = subscribers[client], subscriber.stopped == false else {
             condition.unlock()
             return .failure(.unavailable)
         }
-        if exited && exitQueued {
+        if exited || exitQueued {
             condition.unlock()
             return .failure(.unavailable)
         }
@@ -420,17 +448,26 @@ final class RuntimeTerminal: @unchecked Sendable {
             return .failure(.invalid)
         }
         condition.lock()
-        guard inputOwner == client, masterClosed == false, exited == false, master >= 0 else {
-            let error: TerminalControlError = inputOwner == client ? .unavailable : .busy
+        if masterClosed || exited || master < 0 {
             condition.unlock()
-            return .failure(error)
+            return .failure(.unavailable)
+        }
+        guard inputOwner == client else {
+            condition.unlock()
+            return .failure(.busy)
         }
         let fd = Darwin.dup(master)
         condition.unlock()
         guard fd >= 0 else { return .failure(.unavailable) }
         defer { Darwin.close(fd) }
-        guard writeAll(fd: fd, bytes: bytes) else { return .failure(.unavailable) }
-        return .success(())
+        switch writeAll(fd: fd, bytes: bytes) {
+        case .flushed:
+            return .success(())
+        case .failed:
+            return .failure(.unavailable)
+        case .prefixCommitted:
+            return .failure(.prefixCommitted)
+        }
     }
 
     func resize(rows: Int, columns: Int) -> Result<Void, TerminalControlError> {
@@ -472,6 +509,9 @@ final class RuntimeTerminal: @unchecked Sendable {
             let wakeFD = stopRead
             let stopping = shutdownStarted
             condition.unlock()
+            // `shutdownMaster` sets `shutdownStarted` and waits for this thread
+            // before it closes the master. Every return below drains that fd
+            // first, so the last slave bytes are copied before the close.
             guard masterFD >= 0, wakeFD >= 0 else { return }
             if stopping {
                 drainMaster(masterFD)
@@ -488,7 +528,13 @@ final class RuntimeTerminal: @unchecked Sendable {
                 return
             }
             if polls[1].revents != 0 {
-                if case .eof = readMaster(masterFD) {
+                switch readMaster(masterFD) {
+                case .data, .interrupted:
+                    continue
+                case .again:
+                    break
+                case .eof:
+                    drainMaster(masterFD)
                     return
                 }
             }
@@ -501,6 +547,7 @@ final class RuntimeTerminal: @unchecked Sendable {
 
     private enum MasterRead {
         case data
+        case interrupted
         case again
         case eof
     }
@@ -515,18 +562,21 @@ final class RuntimeTerminal: @unchecked Sendable {
             publish(Data(buffer.prefix(count)))
             return .data
         }
-        if count < 0, errno == EINTR || errno == EAGAIN { return .again }
+        if count < 0, errno == EINTR { return .interrupted }
+        if count < 0, errno == EAGAIN || errno == EWOULDBLOCK { return .again }
         return .eof
     }
 
     private func drainMaster(_ fd: Int32) {
-        while true {
-            switch readMaster(fd) {
-            case .data:
-                continue
-            case .again, .eof:
-                return
-            }
+        while terminalDrainShouldContinue(masterRead(readMaster(fd))) {}
+    }
+
+    private func masterRead(_ read: MasterRead) -> TerminalMasterRead {
+        switch read {
+        case .data: .data
+        case .interrupted: .interrupted
+        case .again: .wouldBlock
+        case .eof: .end
         }
     }
 
@@ -543,7 +593,14 @@ final class RuntimeTerminal: @unchecked Sendable {
         }
         let sequence = nextSequence
         nextSequence += 1
-        replay.append(sequence: sequence, bytes: data, limit: TerminalStreamLimits.replayBytes)
+        var cursor = nextSequence
+        replay.append(
+            sequence: sequence,
+            bytes: data,
+            limit: TerminalStreamLimits.replayBytes,
+            nextSequence: &cursor
+        )
+        nextSequence = cursor
         let notice = TerminalNotice.output(sequence: sequence, bytes: data)
         for subscriber in subscribers.values where subscriber.stopped == false && subscriber.dropped == false {
             if subscriber.primed == false {
@@ -589,20 +646,37 @@ final class RuntimeTerminal: @unchecked Sendable {
                 return
             }
             let batch = subscriber.chunks
+            let inflight = subscriber.queuedBytes
             subscriber.chunks.removeAll()
-            subscriber.queuedBytes = 0
             subscriber.primed = true
             let dropped = subscriber.dropped
+            flushing.insert(subscriber.id)
             condition.unlock()
             var ended = false
+            var sendFailed = false
             for notice in batch {
-                subscriber.emit(notice)
+                if subscriber.emit(notice) == false {
+                    sendFailed = true
+                    if case .overflow = notice {
+                        break
+                    }
+                    _ = subscriber.emit(.overflow)
+                    break
+                }
                 if case .exited = notice { ended = true }
             }
-            if dropped || ended {
-                condition.lock()
-                subscribers[subscriber.id] = nil
+            condition.lock()
+            flushing.remove(subscriber.id)
+            if subscriber.dropped == false, sendFailed == false {
+                subscriber.queuedBytes = releaseInflight(queued: subscriber.queuedBytes, inflight: inflight)
+            }
+            condition.broadcast()
+            if sendFailed {
+                subscriber.dropped = true
                 subscriber.stopped = true
+                subscriber.chunks.removeAll()
+                subscriber.queuedBytes = 0
+                subscribers[subscriber.id] = nil
                 if inputOwner == subscriber.id {
                     inputOwner = nil
                     enqueueOwnerLocked(false)
@@ -610,13 +684,27 @@ final class RuntimeTerminal: @unchecked Sendable {
                 condition.unlock()
                 return
             }
+            if dropped || ended {
+                // The exit notice is already on the wire. Remove the subscriber
+                // so the same client can attach again and acquire fails closed.
+                subscriber.stopped = true
+                subscriber.chunks.removeAll()
+                subscriber.queuedBytes = 0
+                subscribers[subscriber.id] = nil
+                if inputOwner == subscriber.id {
+                    inputOwner = nil
+                    enqueueOwnerLocked(false)
+                }
+                condition.unlock()
+                return
+            }
+            condition.unlock()
         }
     }
 
-    private func writeAll(fd: Int32, bytes: Data) -> Bool {
+    private func writeAll(fd: Int32, bytes: Data) -> TerminalWriteOutcome {
         let raw = [UInt8](bytes)
         var offset = 0
-        let deadline = Date().addingTimeInterval(1)
         while offset < raw.count {
             let count = raw.withUnsafeBytes { buffer -> Int in
                 guard let base = buffer.baseAddress else { return -1 }
@@ -628,14 +716,17 @@ final class RuntimeTerminal: @unchecked Sendable {
             }
             if count < 0, errno == EINTR { continue }
             if count < 0, errno == EAGAIN || errno == EWOULDBLOCK {
-                if Date() >= deadline { return false }
                 var state = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
-                _ = poll(&state, 1, 50)
+                let ready = poll(&state, 1, 200)
+                if ready < 0, errno == EINTR { continue }
+                if ready > 0, (state.revents & Int16(POLLHUP | POLLERR | POLLNVAL)) != 0 {
+                    return terminalWriteOutcome(written: offset, hardFailure: true)
+                }
                 continue
             }
-            return false
+            return terminalWriteOutcome(written: offset, hardFailure: true)
         }
-        return true
+        return .flushed
     }
 
     /// Output bytes are not translated. `ISIG` still turns VINTR into SIGINT
@@ -713,7 +804,7 @@ final class RuntimeTerminal: @unchecked Sendable {
 
 private final class Subscriber: @unchecked Sendable {
     let id: UUID
-    let emit: @Sendable (TerminalNotice) -> Void
+    let emit: @Sendable (TerminalNotice) -> Bool
     var chunks: [TerminalNotice] = []
     var queuedBytes = 0
     var deliver = false
@@ -721,7 +812,7 @@ private final class Subscriber: @unchecked Sendable {
     var dropped = false
     var stopped = false
 
-    init(id: UUID, emit: @escaping @Sendable (TerminalNotice) -> Void) {
+    init(id: UUID, emit: @escaping @Sendable (TerminalNotice) -> Bool) {
         self.id = id
         self.emit = emit
     }

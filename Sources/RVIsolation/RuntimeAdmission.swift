@@ -214,7 +214,7 @@ final class RuntimeAdmissionSession {
                     #if os(macOS)
                     if sessionLeaderHasExited(leader) { return true }
                     #endif
-                    return Task.isCancelled
+                    return blockingWorkIsCancelled()
                 }) {
                     configuration.normalize(subject, accepted.action)
                 }
@@ -334,11 +334,11 @@ final class RuntimeAdmissionSession {
             #if os(macOS)
             let leader = launch.sessionLeader
             let shouldStop: @Sendable () -> Bool = {
-                token.isCancelled || Task.isCancelled || sessionLeaderHasExited(leader)
+                token.isCancelled || blockingWorkIsCancelled() || sessionLeaderHasExited(leader)
             }
             #else
             let shouldStop: @Sendable () -> Bool = {
-                token.isCancelled || Task.isCancelled
+                token.isCancelled || blockingWorkIsCancelled()
             }
             #endif
             switch configuration.http {
@@ -455,7 +455,7 @@ public func resolveAdmittedHTTPHost(
     budgetMilliseconds: Int,
     lookup: @escaping @Sendable (String) -> Result<[HTTPIPAddress], HTTPResolutionError>
 ) -> Result<[HTTPIPAddress], HTTPResolutionError> {
-    if RuntimeAdmissionStop.shouldStop() || Task.isCancelled {
+    if RuntimeAdmissionStop.shouldStop() || blockingWorkIsCancelled() {
         return .failure(.failed)
     }
     let flight = AdmittedDNSLookup()
@@ -469,7 +469,7 @@ public func resolveAdmittedHTTPHost(
     let deadline = monotonicMilliseconds() + Int64(max(budgetMilliseconds, 0))
     while monotonicMilliseconds() < deadline {
         if let result = flight.current() { return result }
-        if RuntimeAdmissionStop.shouldStop() || Task.isCancelled {
+        if RuntimeAdmissionStop.shouldStop() || blockingWorkIsCancelled() {
             return .failure(.failed)
         }
         usleep(10_000)

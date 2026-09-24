@@ -10,12 +10,12 @@ import Testing
 /// failures stay typed. A write-class helper is not a successful contained run.
 @Suite("LandlockContainment")
 struct LandlockContainmentTests {
-    @Test func landlock_touchInsideWorkspace_succeedsAndEstablishesContained() throws {
+    @Test func landlock_touchInsideWorkspace_succeedsAndEstablishesContained() async throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
 
         let inside = tree.workspaceURL.appendingPathComponent("inside.txt").path
-        let result = IsolationBackends.apply(
+        let result = await IsolationBackends.applyOffPool(
             tree.contained,
             command: IsolatedCommand(executable: "/usr/bin/touch", arguments: [inside])!
         )
@@ -28,13 +28,13 @@ struct LandlockContainmentTests {
         }
     }
 
-    @Test func landlock_touchOutsideWorkspace_isBlockedFileAbsent_stillEstablishedContained() throws {
+    @Test func landlock_touchOutsideWorkspace_isBlockedFileAbsent_stillEstablishedContained() async throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
 
         let outside = tree.siblingURL.appendingPathComponent("outside.txt").path
         #expect(FileManager.default.fileExists(atPath: outside) == false)
-        let result = IsolationBackends.apply(
+        let result = await IsolationBackends.applyOffPool(
             tree.contained,
             command: IsolatedCommand(executable: "/usr/bin/touch", arguments: [outside])!
         )
@@ -47,12 +47,12 @@ struct LandlockContainmentTests {
         }
     }
 
-    @Test func landlock_binShChild_cannotWriteOutsideWorkspace() throws {
+    @Test func landlock_binShChild_cannotWriteOutsideWorkspace() async throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
 
         let outside = tree.siblingURL.appendingPathComponent("child-outside.txt").path
-        let result = IsolationBackends.apply(
+        let result = await IsolationBackends.applyOffPool(
             tree.contained,
             command: IsolatedCommand(
                 executable: "/bin/sh",
@@ -68,12 +68,12 @@ struct LandlockContainmentTests {
         }
     }
 
-    @Test func observed_touchOutsideWorkspace_succeeds_notSecretlySandboxed() throws {
+    @Test func observed_touchOutsideWorkspace_succeeds_notSecretlySandboxed() async throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
 
         let outside = tree.siblingURL.appendingPathComponent("observed-outside.txt").path
-        let result = IsolationBackends.apply(
+        let result = await IsolationBackends.applyOffPool(
             tree.observed,
             command: IsolatedCommand(executable: "/usr/bin/touch", arguments: [outside])!
         )
@@ -94,12 +94,12 @@ struct LandlockContainmentTests {
         }
     }
 
-    @Test func landlock_writeUnderRepositoryRootOutsideWorkspace_isBlocked() throws {
+    @Test func landlock_writeUnderRepositoryRootOutsideWorkspace_isBlocked() async throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
 
         let leak = tree.repositoryURL.appendingPathComponent("leak.txt").path
-        let result = IsolationBackends.apply(
+        let result = await IsolationBackends.applyOffPool(
             tree.containedDifferingRoot,
             command: IsolatedCommand(executable: "/usr/bin/touch", arguments: [leak])!
         )
@@ -130,14 +130,14 @@ struct LandlockContainmentTests {
         #expect(FileManager.default.fileExists(atPath: marker) == false)
     }
 
-    @Test func landlock_truncateOutsideWorkspace_isBlockedFileUnchanged_stillEstablished() throws {
+    @Test func landlock_truncateOutsideWorkspace_isBlockedFileUnchanged_stillEstablished() async throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
 
         let outside = tree.siblingURL.appendingPathComponent("seed.txt").path
         try "keep-me\n".write(toFile: outside, atomically: true, encoding: .utf8)
         let python = python3Executable()
-        let result = IsolationBackends.apply(
+        let result = await IsolationBackends.applyOffPool(
             tree.contained,
             command: IsolatedCommand(
                 executable: python,
@@ -187,13 +187,13 @@ struct LandlockContainmentTests {
         #expect(status == IsolationBackends.isolationExecExecFailedExit)
     }
 
-    @Test func landlock_overrideTrue_doesNotEstablishContained() throws {
+    @Test func landlock_overrideTrue_doesNotEstablishContained() async throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
         let backend = IsolationBackends.landlock(
             executable: URL(fileURLWithPath: "/usr/bin/true")
         )
-        switch backend.apply(tree.contained, command: trueCommand) {
+        switch await backend.applyOffPool(tree.contained, command: trueCommand) {
         case .success:
             Issue.record("/usr/bin/true must not mint contained+landlock")
         case .failure(let error):

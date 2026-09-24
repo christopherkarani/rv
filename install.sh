@@ -311,6 +311,7 @@ tmp_rv="$bin/.rv.installing"
 tmp_cli="$bin/.rv-cli.installing"
 tmp_rvd="$bin/.rvd.installing"
 tmp_host="$bin/.rv-workspace-host.installing"
+tmp_claim=""
 rm -f "$tmp_rv" "$tmp_cli" "$tmp_rvd" "$tmp_host"
 cp "$src/rv" "$tmp_rv"
 cp "$src/rv-cli" "$tmp_cli"
@@ -322,6 +323,14 @@ if [ "$os" = "Linux" ]; then
   rm -f "$tmp_isolation"
   cp "$src/rv-isolation-exec" "$tmp_isolation"
   chmod 755 "$tmp_isolation"
+fi
+# Optional: older stages and the Darwin install fixtures omit it. A present
+# helper must land next to rv-workspace-host or contained PTY launches fail closed.
+if [ "$os" = "Darwin" ] && [ -x "$src/rv-pty-claim" ]; then
+  tmp_claim="$bin/.rv-pty-claim.installing"
+  rm -f "$tmp_claim"
+  cp "$src/rv-pty-claim" "$tmp_claim"
+  chmod 755 "$tmp_claim"
 fi
 
 # Unlink dest first: BSD cp writes through an existing dest symlink. Same
@@ -335,6 +344,11 @@ if [ "$os" = "Linux" ]; then
   rm -f "$bin/rv-isolation-exec"
   mv -f "$tmp_isolation" "$bin/rv-isolation-exec"
   tmp_isolation=""
+fi
+if [ -n "$tmp_claim" ]; then
+  rm -f "$bin/rv-pty-claim"
+  mv -f "$tmp_claim" "$bin/rv-pty-claim"
+  tmp_claim=""
 fi
 tmp_rv=""
 tmp_cli=""

@@ -21,6 +21,7 @@ public enum WorkspaceClientFailure: Error, Sendable, Equatable {
     case terminalUnavailable
     case terminalBusy
     case terminalLimit
+    case terminalPrefixCommitted
 }
 
 /// One host-owned terminal event. `bytes` are raw PTY output, not text.
@@ -600,6 +601,7 @@ private func clientFailure(_ code: WorkspaceControlCode) -> WorkspaceClientFailu
     case .terminalUnavailable: .terminalUnavailable
     case .terminalBusy: .terminalBusy
     case .terminalLimit: .terminalLimit
+    case .terminalPrefixCommitted: .terminalPrefixCommitted
 }
 }
 
@@ -731,15 +733,29 @@ private final class EventBoard: @unchecked Sendable {
             return false
         }
         let weight = EventBoard.payloadBytes(message)
-        let (sum, overflowed) = queuedBytes.addingReportingOverflow(weight)
-        if overflowed || sum > EventBoard.queueLimit {
-            failed = .terminalLimit
-            condition.broadcast()
-            condition.unlock()
-            return true
+        switch planClientTerminalFrame(
+            queued: queuedBytes,
+            incoming: weight,
+            limit: EventBoard.queueLimit
+        ) {
+        case .store(let sum):
+            messages.append(message)
+            queuedBytes = sum
+        case .overflow:
+            let alreadyNoticed = messages.contains {
+                $0.op == WorkspaceControlOp.terminalOverflow.rawValue
+            }
+            if alreadyNoticed == false {
+                messages.append(
+                    WorkspaceControlMessage(
+                        version: WorkspaceControlLimits.version,
+                        op: WorkspaceControlOp.terminalOverflow.rawValue,
+                        runtime: message.runtime,
+                        ok: true
+                    )
+                )
+            }
         }
-        messages.append(message)
-        queuedBytes = sum
         condition.broadcast()
         condition.unlock()
         return true
@@ -765,6 +781,10 @@ private final class EventBoard: @unchecked Sendable {
                 condition.unlock()
                 return .success(nil)
             }
+        }
+        if let failed, failed == .workspaceClosed || failed == .disconnected {
+            condition.unlock()
+            return .failure(failed)
         }
         if messages.isEmpty, let failed {
             condition.unlock()

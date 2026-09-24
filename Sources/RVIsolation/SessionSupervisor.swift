@@ -7,18 +7,6 @@ import Synchronization
 private let seatbeltHandshakeScript =
     "printf %s \"$1\" >&3 || exit 127; exec 3>&- || exit 127; shift; exec \"$@\""
 
-/// PTY launches only. Spawn opens the slave and then `POSIX_SPAWN_SETSID`
-/// drops any controlling terminal the open acquired. The session leader
-/// reclaims it with `TIOCSCTTY` (`0x20007461`) and proves `TIOCGPGRP`
-/// (`0x40047477`) before the handshake, so a failed claim never looks
-/// established. Descriptors other than the terminal, the handshake, and the
-/// admission pipes are closed before the agent image.
-private let seatbeltPTYHandshakeScript = """
-nonce=$1
-shift
-exec /usr/bin/perl -e 'my $b = pack("i", 0); ioctl(STDIN, 0x20007461, $b); my $pg = pack("i", 0); ioctl(STDIN, 0x40047477, $pg) or exit 127; exit 127 unless unpack("i", $pg) == getpgrp(); require POSIX; for (my $fd = 3; $fd < 256; $fd++) { next if $fd == 3 || $fd == 4 || $fd == 5; POSIX::close($fd); } my $nonce = shift @ARGV; open(my $h, ">&=3") or exit 127; syswrite($h, $nonce) == length($nonce) or exit 127; close($h); exec @ARGV or exit 127' -- "$nonce" "$@"
-"""
-
 /// Seatbelt launch: persist the session, spawn into an RV process group,
 /// read a handshake byte string that only the in-sandbox wrapper can write,
 /// then signal the group and wait until it is empty.
@@ -27,10 +15,14 @@ exec /usr/bin/perl -e 'my $b = pack("i", 0); ioctl(STDIN, 0x20007461, $b); my $p
 /// Those grants are stdin/stdout/stderr for the selected IO mode, the
 /// handshake write end on fd 3, and the admission pipes on fds 4 and 5.
 /// A pseudo-terminal slave replaces `/dev/null` on 0, 1, and 2. The master
-/// stays in RV. `POSIX_SPAWN_SETSID` runs outside Seatbelt, so the child is
-/// the session leader without a `setsid` allow inside the sandbox. The same
-/// leader reclaims the slave as its controlling terminal before the agent
-/// runs. Fds 4 and 5 stay open for the payload.
+/// stays in RV. `POSIX_SPAWN_SETSID` runs before Seatbelt, so the child is
+/// the session leader without a `setsid` allow inside the sandbox.
+/// Darwin does not make that slave the controlling terminal from a file
+/// action. `rv-pty-claim` reopens the slave, calls `TIOCSCTTY`, and sets
+/// the foreground group to its own pid, then execs `sandbox-exec`. The
+/// parent reads that group back. A live child whose group is not that pid
+/// is killed. The wrapper closes fd 3 before exec. Fds 4 and 5 stay open
+/// for the payload.
 /// They are pipes RV created. The profile does not gain a socket or network allow.
 /// The child stays stopped until its process group is recorded, so a failed
 /// registration never executes the agent.
@@ -71,7 +63,7 @@ func superviseSeatbelt(
     case .success:
         break
     }
-    if Task.isCancelled || CooperativeLaunchStop.isRequested {
+    if blockingWorkIsCancelled() {
         return .failure(.cancelled)
     }
     // Hand-built profiles that are not the contained compiler output never
@@ -154,6 +146,9 @@ final class LiveSeatbeltChild: @unchecked Sendable {
     private let retainedDescriptors: [Int32]
     let pty: RuntimeTerminal?
     var handshakeRead: Int32
+    /// Nonce bytes already read while proving a dead leader. The watch
+    /// must still see them; a pipe read is consuming.
+    var handshakePreface = Data()
     private let established = Mutex(false)
     private let watchStarted = Mutex(false)
     private let terminal = Mutex<IsolationApplyError?>(nil)
@@ -205,6 +200,18 @@ final class LiveSeatbeltChild: @unchecked Sendable {
 
     func recordTerminal(_ error: IsolationApplyError?) {
         terminal.withLock { $0 = error }
+    }
+
+    /// Spawn succeeded and then the runtime was not registered. Stop the
+    /// reader, close the master once, and drop the admission pipes. The
+    /// watch thread is not running, so nothing else will do this.
+    func releaseAbandoned() {
+        pty?.finish(status: nil)
+        if handshakeRead >= 0 {
+            close(handshakeRead)
+            handshakeRead = -1
+        }
+        admission.finish()
     }
 
     var terminalError: IsolationApplyError? {
@@ -329,6 +336,10 @@ func spawnSeatbeltProcess(
             return .failure(.processSpawnFailed)
         }
         terminal = opened
+        if request.spawnFault == .spawn {
+            opened.shutdownMaster()
+            return .failure(.processSpawnFailed)
+        }
         // SETSID is not combined with SETPGROUP. The recorded process group
         // is the session leader's pid. START_SUSPENDED holds the image until
         // that group is durable.
@@ -395,9 +406,26 @@ func spawnSeatbeltProcess(
         return .failure(.workspaceInodeBoundaryFailed)
     }
 
-    let handshakeScript = terminal == nil ? seatbeltHandshakeScript : seatbeltPTYHandshakeScript
-    var arguments = [
-        IsolationBackends.sandboxExecPath,
+    // Missing claim helper fails closed. Do not spawn sandbox-exec directly:
+    // the parent cannot install the controlling terminal from outside the
+    // child's session, and a live unclaimed group is the boundary failure.
+    let handshakeScript = seatbeltHandshakeScript
+    let spawnPath: String
+    var arguments: [String]
+    if let terminal {
+        guard let claim = resolvedPtyClaimPath(workspace: workspace) else {
+            return .failure(.lifetimeBoundaryFailed)
+        }
+        // argv[1] is the slave. The helper reopens it after SETSID. The
+        // payload starts at argv[2], so sandbox-exec still sees its own path
+        // as argv[0].
+        spawnPath = claim
+        arguments = [claim, terminal.slavePath, IsolationBackends.sandboxExecPath]
+    } else {
+        spawnPath = IsolationBackends.sandboxExecPath
+        arguments = [IsolationBackends.sandboxExecPath]
+    }
+    arguments.append(contentsOf: [
         "-p",
         profile.source,
         "/bin/sh",
@@ -406,7 +434,7 @@ func spawnSeatbeltProcess(
         "rv-seatbelt",
         nonce,
         request.command.executable,
-    ]
+    ])
     arguments.append(contentsOf: request.command.arguments)
     let environment = containedRuntimeEnvironment(workspace: workspace, io: request.io)
     let argv = SpawnPointers(arguments)
@@ -425,7 +453,7 @@ func spawnSeatbeltProcess(
         envp.withPointers { envPointer in
             posix_spawn(
                 &pid,
-                IsolationBackends.sandboxExecPath,
+                spawnPath,
                 &actions,
                 &attributes,
                 argvPointer,
@@ -474,6 +502,9 @@ func spawnSeatbeltProcess(
             return .failure(.lifetimeBoundaryFailed)
         }
     }
+    // The image is still stopped. Recording the process group happens before
+    // SIGCONT. The claim helper cannot install the controlling terminal until
+    // that resume, so the foreground proof runs there, not here.
 
     let capability = RuntimeCapability()
     let parentRead = admissionPipes.requestRead
@@ -510,7 +541,6 @@ func spawnSeatbeltProcess(
         handshakeRead: ownedRead,
         terminal: terminal
     )
-    terminal?.startReader()
     handedOff = true
     return .success(child)
 }
@@ -538,6 +568,7 @@ func watchSeatbeltProcess(
         root: live.pid,
         readEnd: live.handshakeRead,
         nonce: live.nonce,
+        preface: live.handshakePreface,
         admission: live.admission,
         stop: stop,
         onEstablished: { live.markEstablished() },
@@ -595,17 +626,18 @@ private func waitForSeatbeltSession(
     root: pid_t,
     readEnd: Int32,
     nonce: String,
+    preface: Data = Data(),
     admission: RuntimeAdmissionSession,
     stop: RuntimeCancellation,
     onEstablished: () -> Void,
     drain: () -> Void
 ) -> SeatbeltWaitOutcome {
     var outcome = SeatbeltWaitOutcome()
-    var handshake = Data()
+    var handshake = preface
     let expected = Data(nonce.utf8)
     var recorded: Set<pid_t> = [root]
     while true {
-        if Task.isCancelled || stop.isRequested || CooperativeLaunchStop.isRequested {
+        if blockingWorkIsCancelled() || stop.isRequested {
             outcome.cancelled = true
             admission.finish()
         }
@@ -636,10 +668,7 @@ private func waitForSeatbeltSession(
                 }
             }
             if outcome.status == nil {
-                var late: Int32 = 0
-                if waitpid(root, &late, WNOHANG) == root {
-                    outcome.status = exitStatus(late)
-                }
+                outcome.status = reapLeaderStatus(root)
             }
             outcome.recordedPIDs = recorded
             return outcome
@@ -785,6 +814,38 @@ func resumeSuspendedSeatbelt(_ pid: pid_t) -> Bool {
     return kill(pid, SIGCONT) == 0
 }
 
+/// Continue a spawned child, then require a PTY leader to be its own
+/// foreground group. Discard and inherit have no claim helper.
+/// The reader starts only after the claim succeeds, so a failed proof does
+/// not leave a thread on a master that is about to be closed.
+func resumeAndClaimForeground(_ child: LiveSeatbeltChild) -> Result<Void, IsolationApplyError> {
+    guard resumeSuspendedSeatbelt(child.pid) else {
+        return .failure(.lifetimeBoundaryFailed)
+    }
+    guard let terminal = child.pty else {
+        return .success(())
+    }
+    switch proveForegroundGroup(
+        terminal,
+        pid: child.pid,
+        handshake: child.handshakeRead,
+        nonce: Data(child.nonce.utf8)
+    ) {
+    case .claimed(let preface):
+        child.handshakePreface = preface
+        terminal.startReader()
+        return .success(())
+    case .cancelled:
+        terminateSession(pgid: child.pid, also: [child.pid])
+        _ = waitUntilSessionIsDead(pgid: child.pid, also: [child.pid])
+        return .failure(.cancelled)
+    case .failed:
+        terminateSession(pgid: child.pid, also: [child.pid])
+        _ = waitUntilSessionIsDead(pgid: child.pid, also: [child.pid])
+        return .failure(.lifetimeBoundaryFailed)
+    }
+}
+
 private func terminateSession(pgid: pid_t, also pids: Set<pid_t>) {
     if pgid > 1 {
         _ = kill(-pgid, SIGKILL)
@@ -794,17 +855,49 @@ private func terminateSession(pgid: pid_t, also pids: Set<pid_t>) {
     }
 }
 
-private func waitUntilSessionIsDead(pgid: pid_t, also pids: Set<pid_t>) -> Bool {
-    for _ in 0..<200 {
+/// After SIGKILL, poll `waitpid(WNOHANG)` for a short bound. A blocking
+/// `waitpid` does not return when the leader is stuck in disk I/O.
+private func reapLeaderStatus(_ pid: pid_t) -> Int32? {
+    let deadline = Date().addingTimeInterval(0.25)
+    while Date() < deadline {
         var status: Int32 = 0
-        _ = waitpid(pgid, &status, WNOHANG)
+        let waited = waitpid(pid, &status, WNOHANG)
+        if waited == pid {
+            return exitStatus(status)
+        }
+        if waited < 0, errno == ECHILD {
+            return nil
+        }
+        usleep(10_000)
+    }
+    return nil
+}
+
+private func waitUntilSessionIsDead(pgid: pid_t, also pids: Set<pid_t>, reap: Bool = true) -> Bool {
+    for _ in 0..<200 {
+        if reap {
+            var status: Int32 = 0
+            _ = waitpid(pgid, &status, WNOHANG)
+        }
         terminateSession(pgid: pgid, also: pids)
-        if processGroupIsEmpty(pgid), pids.allSatisfy({ processIsGone($0) }) {
+        let gone = pids.allSatisfy { processIsGone($0) || (reap == false && sessionLeaderHasExited($0)) }
+        if processGroupIsEmpty(pgid), gone {
             return true
         }
         usleep(10_000)
     }
-    return processGroupIsEmpty(pgid) && pids.allSatisfy { processIsGone($0) }
+    let gone = pids.allSatisfy { processIsGone($0) || (reap == false && sessionLeaderHasExited($0)) }
+    return processGroupIsEmpty(pgid) && gone
+}
+
+/// SIGKILL the session leader's group.
+/// `reap: false` does not `waitpid`, so the watch thread still collects the status.
+func stopOwnedSession(leader: pid_t, reap: Bool = true) -> Bool {
+    terminateSession(pgid: leader, also: [leader])
+    if reap == false {
+        return sessionLeaderHasExited(leader) || processIsGone(leader)
+    }
+    return waitUntilSessionIsDead(pgid: leader, also: visibleSessionPIDs(root: leader).union([leader]))
 }
 
 func processGroupIsEmpty(_ pgid: pid_t) -> Bool {
@@ -818,6 +911,213 @@ func processIsGone(_ pid: pid_t) -> Bool {
         return false
     }
     return errno == ESRCH
+}
+
+private enum ForegroundProof {
+    case claimed(Data)
+    case cancelled
+    case failed
+}
+
+/// Polls until the session leader is the foreground group, the leader has
+/// exited after the post-claim handshake, or the deadline passes.
+/// Two seconds is the claim itself, not a test timeout. A live mismatch
+/// is `.failed`.
+private func proveForegroundGroup(
+    _ terminal: RuntimeTerminal,
+    pid: pid_t,
+    handshake: Int32,
+    nonce: Data
+) -> ForegroundProof {
+    let deadline = Date().addingTimeInterval(2)
+    while true {
+        if blockingWorkIsCancelled() {
+            return .cancelled
+        }
+        let exited = sessionLeaderHasExited(pid) || processIsGone(pid)
+        if exited == false, foregroundGroupIsLeader(terminal, pid: pid) {
+            return .claimed(Data())
+        }
+        if exited {
+            let queued = readAvailable(handshake, limit: max(nonce.count, 1))
+            if deadLeaderClaimedByHandshake(queued: queued, nonce: nonce) {
+                return .claimed(queued)
+            }
+            return .failed
+        }
+        if Date() >= deadline {
+            return .failed
+        }
+        usleep(1_000)
+    }
+}
+
+private let ptyClaimExecutableName = "rv-pty-claim"
+
+/// Layouts where `release.sh` and `swift build` publish `rv-pty-claim`.
+/// The test runner's argv0 is the xctest inside `debug/`, not the host
+/// binary. The host publishes the helper beside itself in `release-stage`
+/// and in the release products directory.
+private let ptyClaimPublishSuffixes = [
+    "rv-pty-claim",
+    "release/rv-pty-claim",
+    "debug/rv-pty-claim",
+    "release-stage/rv-pty-claim",
+    ".build/release-stage/rv-pty-claim",
+    ".build/debug/rv-pty-claim",
+    ".build/release/rv-pty-claim",
+]
+
+/// Locate `rv-pty-claim`. Never an env override, never a relative argv0,
+/// never a helper at or under the workspace. A missing helper fails the
+/// PTY launch. There is no direct `sandbox-exec` fallback.
+func resolvedPtyClaimPath(workspace: String) -> String? {
+    var seen = Set<String>()
+    func consider(_ path: String) -> String? {
+        guard seen.insert(path).inserted else { return nil }
+        return usablePtyClaimPath(path, workspacePath: workspace)
+    }
+    func considerDirectory(_ directory: URL) -> String? {
+        for suffix in ptyClaimPublishSuffixes {
+            if let found = consider(directory.appendingPathComponent(suffix).path) {
+                return found
+            }
+        }
+        return nil
+    }
+    func walk(_ start: URL) -> String? {
+        var directory = start
+        for _ in 0..<8 {
+            if let found = considerDirectory(directory) {
+                return found
+            }
+            if let found = considerBuildTriples(directory, consider: consider) {
+                return found
+            }
+            let parent = directory.deletingLastPathComponent()
+            if parent.path == directory.path { break }
+            directory = parent
+        }
+        return nil
+    }
+    if let argv0 = CommandLine.arguments.first, IsolatedCommand.isAbsoluteExecutable(argv0) {
+        if let found = walk(URL(fileURLWithPath: argv0).deletingLastPathComponent()) {
+            return found
+        }
+    }
+    for bundle in Bundle.allBundles {
+        if let found = walk(bundle.bundleURL) {
+            return found
+        }
+        if let executable = bundle.executableURL, let found = walk(executable.deletingLastPathComponent()) {
+            return found
+        }
+    }
+    // Checkout that compiled this file. An installed host finds the sibling
+    // of argv0 first; this path is absent on a machine that does not have
+    // the source tree.
+    let compiled = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    return walk(compiled)
+}
+
+/// `<.build>/<triple>/{debug,release}/rv-pty-claim` and the swiftbuild
+/// layout `<.build>/out/Products/Debug/rv-pty-claim`. The triple is not a
+/// fixed name, so it is not in the suffix list.
+private func considerBuildTriples(
+    _ directory: URL,
+    consider: (String) -> String?
+) -> String? {
+    let build: URL
+    if directory.lastPathComponent == ".build" {
+        build = directory
+    } else {
+        build = directory.appendingPathComponent(".build", isDirectory: true)
+    }
+    var isDirectory: ObjCBool = false
+    guard FileManager.default.fileExists(atPath: build.path, isDirectory: &isDirectory),
+        isDirectory.boolValue
+    else {
+        return nil
+    }
+    guard let children = try? FileManager.default.contentsOfDirectory(
+        at: build,
+        includingPropertiesForKeys: [.isDirectoryKey],
+        options: [.skipsHiddenFiles]
+    ) else {
+        return nil
+    }
+    for child in children {
+        for config in ["debug", "release", "Debug", "Release"] {
+            if let found = consider(
+                child.appendingPathComponent(config, isDirectory: true)
+                    .appendingPathComponent(ptyClaimExecutableName).path
+            ) {
+                return found
+            }
+            if let found = consider(
+                child.appendingPathComponent("Products", isDirectory: true)
+                    .appendingPathComponent(config, isDirectory: true)
+                    .appendingPathComponent(ptyClaimExecutableName).path
+            ) {
+                return found
+            }
+        }
+    }
+    return nil
+}
+
+/// True when `pid` is the foreground group of `slavePath`.
+///
+/// `TIOCGPGRP` on the master is the first read. The parent is not in the
+/// child's session, so that ioctl can return `ENOTTY` even after the claim.
+/// `proc_bsdinfo.e_tpgid` is the same foreground group, and `e_tdev` must be
+/// this slave. A live child that is not that group still fails the launch.
+private func foregroundGroupIsLeader(_ terminal: RuntimeTerminal, pid: pid_t) -> Bool {
+    if let group = terminal.foregroundProcessGroup() {
+        return group == pid
+    }
+    return sessionLeaderIsForeground(pid, slavePath: terminal.slavePath)
+}
+
+private func sessionLeaderIsForeground(_ pid: pid_t, slavePath: String) -> Bool {
+    guard pid > 1 else { return false }
+    var info = proc_bsdinfo()
+    errno = 0
+    let size = Int32(MemoryLayout<proc_bsdinfo>.stride)
+    let wrote = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size)
+    guard wrote > 0 else { return false }
+    guard info.pbi_pgid == UInt32(pid), Int(info.e_tpgid) == Int(pid) else { return false }
+    guard info.e_tdev != 0 else { return false }
+    var status = stat()
+    guard slavePath.withCString({ stat($0, &status) == 0 }) else { return false }
+    return info.e_tdev == UInt32(truncatingIfNeeded: status.st_rdev)
+}
+
+func usablePtyClaimPath(_ path: String, workspacePath: String) -> String? {
+    guard IsolatedCommand.isAbsoluteExecutable(path) else { return nil }
+    guard URL(fileURLWithPath: path).lastPathComponent == ptyClaimExecutableName else { return nil }
+    guard FileManager.default.isExecutableFile(atPath: path) else { return nil }
+    guard let resolved = posixRealpath(path) else { return nil }
+    guard IsolatedCommand.isAbsoluteExecutable(resolved),
+        isFilesystemRoot(resolved) == false,
+        URL(fileURLWithPath: resolved).lastPathComponent == ptyClaimExecutableName
+    else {
+        return nil
+    }
+    var isDirectory: ObjCBool = false
+    let exists = FileManager.default.fileExists(atPath: resolved, isDirectory: &isDirectory)
+    guard exists, isDirectory.boolValue == false else { return nil }
+    let canonicalWorkspace = posixRealpath(workspacePath) ?? workspacePath
+    if isFilesystemRoot(canonicalWorkspace)
+        || isLookupInsideWorkspace(path, workspace: canonicalWorkspace)
+        || isResolvedPath(resolved, atOrBeneath: canonicalWorkspace)
+    {
+        return nil
+    }
+    return resolved
 }
 
 private func exitStatus(_ status: Int32) -> Int32 {

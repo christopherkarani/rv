@@ -379,7 +379,7 @@ struct IsolationApplyLandlockTests {
         )
     }
 
-    @Test func runLandlock_seatbeltRequest_returnsBackendMismatch() throws {
+    @Test func runLandlock_seatbeltRequest_returnsBackendMismatch() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-landlock-mismatch-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -391,7 +391,7 @@ struct IsolationApplyLandlockTests {
         switch IsolationBackends.seatbelt().prepare(plan, trueCommand) {
         case .success(let request):
             expectApplyFailure(
-                runLandlock(request, executable: nil),
+                await runLandlockOffPool(request, executable: nil),
                 .backendMismatch,
                 because: "runLandlock of a seatbelt request"
             )
@@ -611,7 +611,7 @@ struct IsolationApplyLandlockTests {
         }
     }
 
-    @Test func apply_contained_onDarwin_stillEstablishesSeatbelt() throws {
+    @Test func apply_contained_onDarwin_stillEstablishesSeatbelt() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-landlock-darwin-apply-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -620,7 +620,7 @@ struct IsolationApplyLandlockTests {
         let plan = try requirePlan(
             IsolationCompileRequest(requested: .contained, workspace: workspace)
         )
-        switch IsolationBackends.apply(plan, command: trueCommand) {
+        switch await IsolationBackends.applyOffPool(plan, command: trueCommand) {
         case .success(let result):
             #expect(result.exitStatus == 0)
             switch result.established {

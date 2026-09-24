@@ -556,7 +556,40 @@ private func detach(_ disk: String) {
     process.standardOutput = FileHandle.nullDevice
     process.standardError = FileHandle.nullDevice
     try? process.run()
-    process.waitUntilExit()
+    let deadline = Date().addingTimeInterval(5)
+    while process.isRunning {
+        if blockingWorkIsCancelled() || Date() >= deadline {
+            process.terminate()
+            let killAfter = Date().addingTimeInterval(0.5)
+            while process.isRunning, Date() < killAfter {
+                Thread.sleep(forTimeInterval: 0.01)
+            }
+            if process.isRunning {
+                kill(process.processIdentifier, SIGKILL)
+            }
+            break
+        }
+        Thread.sleep(forTimeInterval: 0.02)
+    }
+    if process.isRunning {
+        ParkedDetach.keep(process)
+    } else {
+        process.waitUntilExit()
+    }
+}
+
+/// `Process.deinit` calls `waitUntilExit`. A detach still in disk I/O after
+/// SIGKILL stays referenced so that deinit cannot pin the caller.
+private final class ParkedDetach: @unchecked Sendable {
+    private static let parked = ParkedDetach()
+    private let lock = NSLock()
+    private var processes: [Process] = []
+
+    static func keep(_ process: Process) {
+        parked.lock.lock()
+        parked.processes.append(process)
+        parked.lock.unlock()
+    }
 }
 
 private func cleanupVolume(in tree: ContainmentTree) {

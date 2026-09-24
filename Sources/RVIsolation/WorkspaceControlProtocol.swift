@@ -35,6 +35,7 @@ public enum WorkspaceControlCode: String, Error, Sendable, Equatable, Codable {
     case terminalUnavailable
     case terminalBusy
     case terminalLimit
+    case terminalPrefixCommitted
 }
 
 public enum WorkspaceControlOp: String, Sendable, Equatable {
@@ -155,6 +156,29 @@ enum WorkspaceControlDecode: Equatable, Sendable {
     case message(WorkspaceControlMessage)
     case incompatible
     case invalid
+}
+
+/// `io` omitted or `discard` drops the runtime's output. `terminal` keeps a
+/// host PTY. Any other value, or a size outside 1...512, fails closed.
+func workspaceLaunchIO(
+    io: String?,
+    rows: Int?,
+    columns: Int?
+) -> Result<IsolatedIO, WorkspaceControlCode> {
+    switch io {
+    case nil, "discard":
+        guard rows == nil, columns == nil else {
+            return .failure(.invalidRequest)
+        }
+        return .success(.discard)
+    case "terminal":
+        guard let rows, let columns, TerminalStreamLimits.accepts(rows: rows, columns: columns) else {
+            return .failure(.invalidRequest)
+        }
+        return .success(.pseudoTerminal(rows: rows, columns: columns))
+    default:
+        return .failure(.invalidRequest)
+    }
 }
 
 enum WorkspaceControlCodec {

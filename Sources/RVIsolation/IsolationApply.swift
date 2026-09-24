@@ -88,6 +88,16 @@ public struct IsolatedCommand: Sendable, Equatable {
     }
 }
 
+/// Where a PTY launch is forced to fail. Production leaves this unset.
+enum RuntimeSpawnFault: Equatable, Sendable {
+    case openpt
+    case grant
+    case unlock
+    case slave
+    case spawn
+    case register
+}
+
 /// Prepared launch. Not established. Production construction is `prepare`.
 public struct IsolatedLaunchRequest: Sendable, Equatable {
     enum Launch: Sendable, Equatable {
@@ -101,6 +111,9 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
     public let family: IsolationBackendFamily
     let launch: Launch
     let io: IsolatedIO
+    /// Test-only. Production launches leave this nil. A fault fails the
+    /// launch before the payload is reported running.
+    let spawnFault: RuntimeSpawnFault?
 
     var seatbeltProfile: SeatbeltProfile? {
         switch launch {
@@ -134,7 +147,8 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
         plan: IsolationPlan,
         command: IsolatedCommand,
         launch: Launch,
-        io: IsolatedIO = .discard
+        io: IsolatedIO = .discard,
+        spawnFault: RuntimeSpawnFault? = nil
     ) {
         switch (launch, plan.mode) {
         case (.seatbelt, .contained):
@@ -152,18 +166,37 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
         self.command = command
         self.launch = launch
         self.io = io
+        self.spawnFault = spawnFault
     }
 
     func withIO(_ io: IsolatedIO) -> IsolatedLaunchRequest {
-        IsolatedLaunchRequest(copying: self, io: io)
+        IsolatedLaunchRequest(copying: self, io: io, spawnFault: spawnFault)
     }
 
-    private init(copying request: IsolatedLaunchRequest, io: IsolatedIO) {
+    func withSpawnFault(_ fault: RuntimeSpawnFault) -> IsolatedLaunchRequest {
+        IsolatedLaunchRequest(copying: self, io: io, spawnFault: fault)
+    }
+
+    private init(
+        copying request: IsolatedLaunchRequest,
+        io: IsolatedIO,
+        spawnFault: RuntimeSpawnFault?
+    ) {
         self.plan = request.plan
         self.command = request.command
         self.family = request.family
         self.launch = request.launch
         self.io = io
+        self.spawnFault = spawnFault
+    }
+
+    public static func == (lhs: IsolatedLaunchRequest, rhs: IsolatedLaunchRequest) -> Bool {
+        lhs.plan == rhs.plan
+            && lhs.command == rhs.command
+            && lhs.family == rhs.family
+            && lhs.launch == rhs.launch
+            && lhs.io == rhs.io
+            && lhs.spawnFault == rhs.spawnFault
     }
 
     /// Executable `run` will start. Observed / mediated never use a helper.
@@ -358,6 +391,55 @@ public enum IsolationBackends {
             }
         }
     }
+
+    /// Same door as `apply`, off the cooperative pool.
+    public static func applyOffPool(
+        _ plan: IsolationPlan,
+        command: IsolatedCommand,
+        io: IsolatedIO = .discard,
+        admission: RuntimeAdmissionConfiguration = .failClosed
+    ) async -> Result<IsolatedRunResult, IsolationApplyError> {
+        await IsolationBlockingWork.perform {
+            apply(plan, command: command, io: io, admission: admission)
+        }
+    }
+
+    static func applyLaunchOffPool(
+        _ plan: IsolationPlan,
+        command: IsolatedCommand,
+        io: IsolatedIO,
+        host: HookHost?,
+        sessionStore: RuntimeSessionStore,
+        admission: RuntimeAdmissionConfiguration = .failClosed
+    ) async -> Result<IsolatedRunResult, IsolationApplyError> {
+        await IsolationBlockingWork.perform {
+            applyLaunch(
+                plan,
+                command: command,
+                io: io,
+                host: host,
+                sessionStore: sessionStore,
+                admission: admission
+            )
+        }
+    }
+}
+
+extension IsolationBackend {
+    /// Same as `apply`, off the cooperative pool.
+    func applyOffPool(
+        _ plan: IsolationPlan,
+        command: IsolatedCommand,
+        io: IsolatedIO = .discard
+    ) async -> Result<IsolatedRunResult, IsolationApplyError> {
+        let prepare = self.prepare
+        let run = self.run
+        return await IsolationBlockingWork.perform {
+            prepare(plan, command).flatMap { request in
+                run(request.withIO(io))
+            }
+        }
+    }
 }
 
 func prepareSeatbelt(
@@ -448,6 +530,22 @@ func runSeatbeltLaunch(
     #else
     return .failure(.backendUnavailable)
     #endif
+}
+
+func runSeatbeltLaunchOffPool(
+    _ request: IsolatedLaunchRequest,
+    host: HookHost?,
+    sessionStore: RuntimeSessionStore,
+    admission: RuntimeAdmissionConfiguration = .failClosed
+) async -> Result<IsolatedRunResult, IsolationApplyError> {
+    await IsolationBlockingWork.perform {
+        runSeatbeltLaunch(
+            request,
+            host: host,
+            sessionStore: sessionStore,
+            admission: admission
+        )
+    }
 }
 
 func runUnavailable(
