@@ -2,6 +2,7 @@
 import Darwin
 import Foundation
 import RVDomain
+import Synchronization
 import Testing
 @testable import RVIsolation
 
@@ -482,8 +483,13 @@ enum AdversarialLauncher: String, CaseIterable, Sendable {
     }
 }
 
-private final class HardlinkRaceBox: @unchecked Sendable {
-    var result: Result<IsolatedRunResult, IsolationApplyError>?
+private final class HardlinkRaceBox: Sendable {
+    private let box = Mutex<Result<IsolatedRunResult, IsolationApplyError>?>(nil)
+
+    var result: Result<IsolatedRunResult, IsolationApplyError>? {
+        get { box.withLock { $0 } }
+        set { box.withLock { $0 = newValue } }
+    }
 }
 
 private func runShell(_ plan: IsolationPlan, _ script: String) async throws -> IsolatedRunResult {

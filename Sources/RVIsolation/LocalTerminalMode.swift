@@ -1,22 +1,22 @@
 #if os(macOS)
 import Darwin
 import Foundation
+import Synchronization
 
 /// Saved attributes for the caller's terminal.
 ///
 /// Raw mode is local to the proving client. It is not the runtime's PTY.
 /// `restore()` is safe to call more than once, including after a normal
 /// exit, a protocol error, or a signal that the client handles.
-public final class LocalTerminalRestorer: @unchecked Sendable {
+public final class LocalTerminalRestorer: Sendable {
     private let fd: Int32
-    private var saved: termios
-    private var active: Bool
+    private let saved: termios
+    private let active = Mutex(true)
     private let installSignals: Bool
 
     private init(fd: Int32, saved: termios, installSignals: Bool) {
         self.fd = fd
         self.saved = saved
-        self.active = true
         self.installSignals = installSignals
     }
 
@@ -52,9 +52,9 @@ public final class LocalTerminalRestorer: @unchecked Sendable {
     }
 
     public func restore() {
-        guard active else { return }
+        guard active.withLock({ $0 }) else { return }
         guard applySavedTermios(saved, fd: fd) else { return }
-        active = false
+        active.withLock { $0 = false }
         if installSignals {
             LocalTerminalSignal.disarm(fd: fd)
         }
@@ -327,20 +327,24 @@ private func restoreSIGPIPE(_ previous: sigaction) {
 /// Reads one file descriptor on `rv-terminal-stdin` and writes those bytes
 /// to the runtime. `rv workspace run` and the proving driver share this type
 /// so the CLI module stays free of classes.
-public final class TerminalStdinBridge: @unchecked Sendable {
+public final class TerminalStdinBridge: Sendable {
     private let client: WorkspaceClient
     private let runtime: UUID
     private let input: Int32
-    private let lock = NSLock()
-    private var ended = false
-    private var stopRequested = false
-    private let stopped = NSCondition()
-    private var readerStopped = false
+    private let state = Mutex<State>(State())
+    private let stopped = DispatchGroup()
+
+    private struct State {
+        var ended = false
+        var stopRequested = false
+        var readerStopped = false
+    }
 
     public init(client: WorkspaceClient, runtime: UUID, input: Int32) {
         self.client = client
         self.runtime = runtime
         self.input = input
+        stopped.enter()
     }
 
     public convenience init(client: WorkspaceClient, runtime: UUID) {
@@ -348,10 +352,7 @@ public final class TerminalStdinBridge: @unchecked Sendable {
     }
 
     public var didEnd: Bool {
-        lock.lock()
-        let value = ended
-        lock.unlock()
-        return value
+        state.withLock { $0.ended }
     }
 
     public var inputEnded: Bool { didEnd }
@@ -368,15 +369,10 @@ public final class TerminalStdinBridge: @unchecked Sendable {
     /// Wakes a blocked `read` so the caller can close `input` and restore
     /// the terminal. Waits until that loop has left the descriptor.
     public func stop() {
-        lock.lock()
-        stopRequested = true
-        lock.unlock()
-        stopped.lock()
-        let deadline = Date().addingTimeInterval(2)
-        while readerStopped == false {
-            if stopped.wait(until: deadline) == false { break }
-        }
-        stopped.unlock()
+        state.withLock { $0.stopRequested = true }
+        // Bounded like the old condition wait: proceed to drain even if the
+        // reader never started or is stuck in `read`.
+        _ = stopped.wait(timeout: .now() + 2)
         // `TCSAFLUSH` waits for the slave output queue. On a PTY that queue
         // is this master, and nothing else is reading it once the loop stops.
         drainInput()
@@ -429,23 +425,24 @@ public final class TerminalStdinBridge: @unchecked Sendable {
     }
 
     private func shouldStop() -> Bool {
-        lock.lock()
-        let value = stopRequested
-        lock.unlock()
-        return value
+        state.withLock { $0.stopRequested }
     }
 
     private func finish() {
-        lock.lock()
-        ended = true
-        lock.unlock()
+        state.withLock { $0.ended = true }
     }
 
+    /// Only the first call balances the `enter` in `init`, so a double
+    /// `start` cannot drive the group count negative.
     private func markReaderStopped() {
-        stopped.lock()
-        readerStopped = true
-        stopped.broadcast()
-        stopped.unlock()
+        let first = state.withLock { state -> Bool in
+            if state.readerStopped { return false }
+            state.readerStopped = true
+            return true
+        }
+        if first {
+            stopped.leave()
+        }
     }
 }
 #endif

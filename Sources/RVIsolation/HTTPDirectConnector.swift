@@ -162,15 +162,20 @@ private func openAndExchange(
     }
 }
 
+// @unchecked: NWConnection is a non-Sendable handle. All mutable state lives
+// in `state`; the connection itself is only used from its queue and the
+// synchronous transfer loop.
 private final class PinnedTLSConnection: @unchecked Sendable {
     private let connection: NWConnection
     private let queue = DispatchQueue(label: "rv.http.direct")
-    private let lock = NSLock()
-    private var stopped = false
-    private var inbound = Data()
-    private var ended = false
-    private var failed = false
-    private var waiter: (() -> Void)?
+    private let state = Mutex<ConnectionState>(ConnectionState())
+
+    private struct ConnectionState {
+        var stopped = false
+        var inbound = Data()
+        var ended = false
+        var failed = false
+    }
 
     private init(_ connection: NWConnection) {
         self.connection = connection
@@ -257,7 +262,7 @@ private final class PinnedTLSConnection: @unchecked Sendable {
         deadline: Date,
         shouldStop: @escaping @Sendable () -> Bool
     ) -> Result<Void, HTTPTransferFault> {
-        if stopped || shouldStop() { return .failure(.cancelled) }
+        if state.withLock({ $0.stopped }) || shouldStop() { return .failure(.cancelled) }
         let semaphore = DispatchSemaphore(value: 0)
         let outcome = Mutex<Bool?>(nil)
         connection.send(content: data, completion: .contentProcessed { error in
@@ -269,7 +274,7 @@ private final class PinnedTLSConnection: @unchecked Sendable {
             if semaphore.wait(timeout: .now() + slice) == .success {
                 return outcome.withLock { $0 == true } ? .success(()) : .failure(.failed)
             }
-            if stopped || shouldStop() {
+            if state.withLock({ $0.stopped }) || shouldStop() {
                 connection.cancel()
                 return .failure(.cancelled)
             }
@@ -281,18 +286,18 @@ private final class PinnedTLSConnection: @unchecked Sendable {
     private func read(maximumBytes: Int, waitMilliseconds: Int) -> Result<HTTPTransferRead, HTTPTransferFault> {
         let deadline = Date().addingTimeInterval(TimeInterval(waitMilliseconds) / 1_000)
         while Date() < deadline {
-            let next = lock.withLock { () -> HTTPTransferRead? in
-                if failed { return nil }
-                if inbound.isEmpty == false {
-                    let count = min(maximumBytes, inbound.count)
-                    let chunk = inbound.prefix(count)
-                    inbound.removeFirst(count)
+            let next = state.withLock { state -> HTTPTransferRead? in
+                if state.failed { return nil }
+                if state.inbound.isEmpty == false {
+                    let count = min(maximumBytes, state.inbound.count)
+                    let chunk = state.inbound.prefix(count)
+                    state.inbound.removeFirst(count)
                     return .bytes(Data(chunk))
                 }
-                if ended { return .end }
+                if state.ended { return .end }
                 return .waiting
             }
-            if failed { return .failure(.failed) }
+            if state.withLock({ $0.failed }) { return .failure(.failed) }
             if let next, case .waiting = next {
                 usleep(1_000)
                 continue
@@ -303,9 +308,7 @@ private final class PinnedTLSConnection: @unchecked Sendable {
     }
 
     private func stop() {
-        lock.lock()
-        stopped = true
-        lock.unlock()
+        state.withLock { $0.stopped = true }
         connection.cancel()
     }
 
@@ -317,18 +320,18 @@ private final class PinnedTLSConnection: @unchecked Sendable {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 8_192) {
             [weak self] data, _, isComplete, error in
             guard let self else { return }
-            self.lock.lock()
-            if let data, data.isEmpty == false {
-                self.inbound.append(data)
+            let keepGoing = self.state.withLock { state -> Bool in
+                if let data, data.isEmpty == false {
+                    state.inbound.append(data)
+                }
+                if error != nil {
+                    state.failed = true
+                }
+                if isComplete {
+                    state.ended = true
+                }
+                return state.stopped == false && state.failed == false && state.ended == false
             }
-            if error != nil {
-                self.failed = true
-            }
-            if isComplete {
-                self.ended = true
-            }
-            let keepGoing = self.stopped == false && self.failed == false && self.ended == false
-            self.lock.unlock()
             if keepGoing {
                 self.receiveMore()
             }
@@ -336,23 +339,17 @@ private final class PinnedTLSConnection: @unchecked Sendable {
     }
 }
 
-private final class ConnectState: @unchecked Sendable {
-    private let lock = NSLock()
-    private var value: ConnectValue?
+private final class ConnectState: Sendable {
+    private let box = Mutex<ConnectValue?>(nil)
 
     func finish(_ value: ConnectValue) {
-        lock.lock()
-        if self.value == nil {
-            self.value = value
+        box.withLock {
+            if $0 == nil { $0 = value }
         }
-        lock.unlock()
     }
 
     func poll() -> ConnectValue? {
-        lock.lock()
-        let value = self.value
-        lock.unlock()
-        return value
+        box.withLock { $0 }
     }
 }
 
@@ -362,11 +359,4 @@ private enum ConnectValue {
     case cancelled
 }
 
-private extension NSLock {
-    func withLock<T>(_ body: () -> T) -> T {
-        lock()
-        defer { unlock() }
-        return body()
-    }
-}
 #endif

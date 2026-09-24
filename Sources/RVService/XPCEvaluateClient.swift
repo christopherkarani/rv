@@ -1,26 +1,31 @@
 #if canImport(XPC)
 import Foundation
+import Synchronization
 @preconcurrency import XPC
 
-public final class XPCEvaluateClient: @unchecked Sendable {
+public final class XPCEvaluateClient: Sendable {
     public let serviceName: String
-    // lock guards connection and opened. Never cancel/resume while holding it.
-    private let lock = NSLock()
-    private var connection: xpc_connection_t?
-    private var opened = 0
+    private let state: Mutex<ClientState>
+
+    /// Never cancel/resume a connection while holding the state lock.
+    private struct ClientState {
+        var connection: xpc_connection_t?
+        var opened = 0
+    }
 
     public init(serviceName: String = RVService.machServiceName) {
         self.serviceName = serviceName
+        self.state = Mutex(ClientState())
     }
 
     public var openedConnectionCount: Int {
-        lock.withLock { opened }
+        state.withLock { $0.opened }
     }
 
     public func invalidate() {
-        let existing = lock.withLock { () -> xpc_connection_t? in
-            let current = connection
-            connection = nil
+        let existing = state.withLock { state -> xpc_connection_t? in
+            let current = state.connection
+            state.connection = nil
             return current
         }
         if let existing {
@@ -66,7 +71,7 @@ public final class XPCEvaluateClient: @unchecked Sendable {
     }
 
     private func liveConnection() throws -> xpc_connection_t {
-        if let existing = lock.withLock({ connection }) {
+        if let existing = state.withLock({ $0.connection }) {
             return existing
         }
 
@@ -78,12 +83,12 @@ public final class XPCEvaluateClient: @unchecked Sendable {
             }
         }
 
-        let winner = lock.withLock { () -> xpc_connection_t in
-            if let existing = connection {
+        let winner = state.withLock { state -> xpc_connection_t in
+            if let existing = state.connection {
                 return existing
             }
-            connection = created
-            opened += 1
+            state.connection = created
+            state.opened += 1
             return created
         }
         if winner !== created {
@@ -95,9 +100,9 @@ public final class XPCEvaluateClient: @unchecked Sendable {
     }
 
     private func forget(_ candidate: xpc_connection_t) {
-        lock.withLock {
-            if connection === candidate {
-                connection = nil
+        state.withLock {
+            if $0.connection === candidate {
+                $0.connection = nil
             }
         }
     }
@@ -108,7 +113,7 @@ public enum XPCEvaluateClientError: Error, Sendable, Equatable {
     case cancelled
 }
 
-final class OnceResume<T: Sendable>: @unchecked Sendable {
+final class OnceResume<T: Sendable>: Sendable {
     private enum State {
         case idle
         case pending(Error)
@@ -116,63 +121,73 @@ final class OnceResume<T: Sendable>: @unchecked Sendable {
         case finished
     }
 
-    // lock guards state. Resume only a taken continuation, after unlock.
-    private let lock = NSLock()
-    private var state: State
+    private enum InstallAction {
+        case resumeThrowing(Error)
+        case armed
+        case settled
+    }
+
+    // A taken continuation is always resumed after the state lock is released.
+    private let state: Mutex<State>
 
     init() {
-        state = .idle
+        state = Mutex(.idle)
     }
 
     init(_ continuation: CheckedContinuation<T, Error>) {
-        state = .armed(continuation)
+        state = Mutex(.armed(continuation))
     }
 
     /// Stores `continuation`, or resumes it immediately if cancel already landed.
     /// Returns `true` when the continuation is already settled.
     @discardableResult
     func install(_ continuation: CheckedContinuation<T, Error>) -> Bool {
-        lock.lock()
-        switch state {
-        case .pending(let error):
-            state = .finished
-            lock.unlock()
+        let action = state.withLock { state -> InstallAction in
+            switch state {
+            case .pending(let error):
+                state = .finished
+                return .resumeThrowing(error)
+            case .idle:
+                state = .armed(continuation)
+                return .armed
+            case .armed, .finished:
+                return .settled
+            }
+        }
+        switch action {
+        case .resumeThrowing(let error):
             continuation.resume(throwing: error)
             return true
-        case .idle:
-            state = .armed(continuation)
-            lock.unlock()
+        case .armed:
             return false
-        case .armed, .finished:
-            lock.unlock()
+        case .settled:
             return true
         }
     }
 
     func resume(returning value: T) {
-        lock.lock()
-        guard case .armed(let taken) = state else {
-            lock.unlock()
-            return
+        let taken = state.withLock { state -> CheckedContinuation<T, Error>? in
+            guard case .armed(let continuation) = state else { return nil }
+            state = .finished
+            return continuation
         }
-        state = .finished
-        lock.unlock()
-        taken.resume(returning: value)
+        taken?.resume(returning: value)
     }
 
     func resume(throwing error: Error) {
-        lock.lock()
-        switch state {
-        case .armed(let taken):
-            state = .finished
-            lock.unlock()
-            taken.resume(throwing: error)
-        case .idle:
-            state = .pending(error)
-            lock.unlock()
-        case .pending, .finished:
-            lock.unlock()
+        let taken = state.withLock { state -> CheckedContinuation<T, Error>? in
+            switch state {
+            case .armed(let continuation):
+                state = .finished
+                return continuation
+            case .idle:
+                state = .pending(error)
+                return nil
+            case .pending, .finished:
+                return nil
+            }
         }
+        taken?.resume(throwing: error)
     }
 }
 #endif

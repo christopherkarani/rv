@@ -4,6 +4,7 @@ import Glibc
 #endif
 import Foundation
 import RVIPC
+import Synchronization
 
 enum UnixFrameError: Error, Sendable, Equatable {
     case socket
@@ -86,13 +87,17 @@ enum UnixFrameIO {
 }
 
 /// AF_UNIX listener for Linux `rvd --socket`. Same `FrameCodec` algebra as tests.
-public final class UnixEvaluateListener: @unchecked Sendable {
+public final class UnixEvaluateListener: Sendable {
     private let runtime: ServiceRuntime
     private let watchdog: IdleWatchdog
     public let socketURL: URL
-    private var listenFD: Int32 = -1
-    private var source: DispatchSourceRead?
+    private let state = Mutex<ListenerState>(ListenerState())
     private let queue = DispatchQueue(label: "rv.unix-evaluate")
+
+    private struct ListenerState {
+        var listenFD: Int32 = -1
+        var source: DispatchSourceRead?
+    }
 
     public init(runtime: ServiceRuntime, watchdog: IdleWatchdog, socketURL: URL) {
         self.runtime = runtime
@@ -123,7 +128,7 @@ public final class UnixEvaluateListener: @unchecked Sendable {
             _ = Glibc.close(fd)
             throw UnixFrameError.listen
         }
-        listenFD = fd
+        state.withLock { $0.listenFD = fd }
         let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
         source.setEventHandler { [weak self] in
             self?.acceptOne()
@@ -131,18 +136,23 @@ public final class UnixEvaluateListener: @unchecked Sendable {
         source.setCancelHandler {
             _ = Glibc.close(fd)
         }
-        self.source = source
         source.resume()
+        state.withLock { $0.source = source }
     }
 
     public func stop() {
+        let source = state.withLock { state -> DispatchSourceRead? in
+            let current = state.source
+            state.source = nil
+            state.listenFD = -1
+            return current
+        }
         source?.cancel()
-        source = nil
-        listenFD = -1
         try? FileManager.default.removeItem(at: socketURL)
     }
 
     private func acceptOne() {
+        let listenFD = state.withLock { $0.listenFD }
         let client = Glibc.accept(listenFD, nil, nil)
         guard client >= 0 else { return }
         queue.async { self.serve(client) }
@@ -205,18 +215,18 @@ final class UnixEvaluateClient {
     }
 }
 
-final class UnixReplyGate: @unchecked Sendable {
+final class UnixReplyGate: Sendable {
     private let sem = DispatchSemaphore(value: 0)
-    private var reply = IncomingReply(frame: Data(), handshakeAccepted: false)
+    private let box = Mutex<IncomingReply?>(nil)
 
     func finish(_ reply: IncomingReply) {
-        self.reply = reply
+        box.withLock { $0 = reply }
         sem.signal()
     }
 
     func wait() -> IncomingReply {
         sem.wait()
-        return reply
+        return box.withLock { $0 } ?? IncomingReply(frame: Data(), handshakeAccepted: false)
     }
 }
 

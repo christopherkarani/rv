@@ -5,6 +5,7 @@ import Glibc
 #endif
 import Foundation
 import RVDomain
+import Synchronization
 import Testing
 @testable import RVIsolation
 
@@ -331,9 +332,11 @@ struct RuntimeAdmissionIsolationTests {
     #endif
 }
 
-private final class AdmissionEffect: @unchecked Sendable {
+private final class AdmissionEffect: Sendable {
     let url: URL
-    var runs = 0
+    private let runsBox = Mutex(0)
+
+    var runs: Int { runsBox.withLock { $0 } }
 
     init() {
         url = FileManager.default.temporaryDirectory
@@ -345,7 +348,7 @@ private final class AdmissionEffect: @unchecked Sendable {
     }
 
     func run(_: AllowedAction) -> Result<Int32, RuntimeAdmissionExecutorError> {
-        runs += 1
+        runsBox.withLock { $0 += 1 }
         guard FileManager.default.createFile(atPath: url.path, contents: Data("once".utf8)) else {
             return .failure(.spawnFailed)
         }

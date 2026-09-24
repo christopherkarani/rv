@@ -1,6 +1,7 @@
 #if canImport(XPC)
 import Foundation
 import RVIPC
+import Synchronization
 @preconcurrency import XPC
 
 /// Dictionary key for UTF-8 `IPCRequest` / `IPCResponse` / Hello JSON (`IPCJSON`).
@@ -47,12 +48,11 @@ enum XPCIPCWire {
 }
 
 /// Raw libxpc listener on `dev.rv.evaluate`. C and Swift share `rv.ipc` xpc_data.
-public final class XPCEvaluateListener: @unchecked Sendable {
+public final class XPCEvaluateListener: Sendable {
     private let runtime: ServiceRuntime
     private let watchdog: IdleWatchdog
     private let serviceName: String
-    private let lock = NSLock()
-    private var listener: xpc_connection_t?
+    private let listener = Mutex<xpc_connection_t?>(nil)
 
     public init(
         runtime: ServiceRuntime,
@@ -73,12 +73,12 @@ public final class XPCEvaluateListener: @unchecked Sendable {
         xpc_connection_set_event_handler(connection) { [weak self] event in
             self?.handleListenerEvent(event)
         }
-        lock.withLock { listener = connection }
+        listener.withLock { $0 = connection }
         xpc_connection_resume(connection)
     }
 
     public func stop() {
-        let existing = lock.withLock { () -> xpc_connection_t? in
+        let existing = listener.withLock { listener -> xpc_connection_t? in
             let current = listener
             listener = nil
             return current
@@ -107,11 +107,10 @@ public final class XPCEvaluateListener: @unchecked Sendable {
     }
 }
 
-final class XPCPeerSession: @unchecked Sendable {
+final class XPCPeerSession: Sendable {
     private let runtime: ServiceRuntime
     private let watchdog: IdleWatchdog
-    private let lock = NSLock()
-    private var handshakeOK = false
+    private let handshake = Mutex(false)
     private let beginTransaction: @Sendable () -> Void
     private let endTransaction: @Sendable () -> Void
 
@@ -144,7 +143,7 @@ final class XPCPeerSession: @unchecked Sendable {
             let message = held.object
             let incoming = XPCIPCWire.body(from: message)
             let stdinOverlay = XPCIPCWire.stdin(from: message)
-            let accepted = self.lock.withLock { self.handshakeOK }
+            let accepted = self.handshake.withLock { $0 }
             let incomingReply: IncomingReply
             if let incoming {
                 incomingReply = await self.runtime.handleIncoming(
@@ -159,7 +158,7 @@ final class XPCPeerSession: @unchecked Sendable {
                     handshakeAccepted: accepted
                 )
             }
-            self.lock.withLock { self.handshakeOK = incomingReply.handshakeAccepted }
+            self.handshake.withLock { $0 = incomingReply.handshakeAccepted }
             guard let reply = xpc_dictionary_create_reply(message) else {
                 return
             }
@@ -171,6 +170,8 @@ final class XPCPeerSession: @unchecked Sendable {
     }
 }
 
+// Immutable after init. libxpc objects are safe to use from multiple
+// threads; the handle itself is never mutated, only passed to xpc calls.
 final class XPCHeld: @unchecked Sendable {
     let object: xpc_object_t
 

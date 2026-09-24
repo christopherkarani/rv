@@ -3,6 +3,7 @@ import Darwin
 import Foundation
 import RVAnalytics
 import RVIPC
+import Synchronization
 
 public enum RVDProcess {
     public static func run(configuration: RVDConfiguration) throws {
@@ -24,13 +25,19 @@ public enum RVDProcess {
     }
 }
 
-private final class ListenerSlot: @unchecked Sendable {
-    var listener: XPCEvaluateListener?
+private final class ListenerSlot: Sendable {
+    private let box = Mutex<XPCEvaluateListener?>(nil)
+
+    var listener: XPCEvaluateListener? {
+        get { box.withLock { $0 } }
+        set { box.withLock { $0 = newValue } }
+    }
 }
 #else
 import Foundation
 import RVAnalytics
 import RVIPC
+import Synchronization
 
 public enum RVDProcess {
     public static func run(configuration: RVDConfiguration) throws {
@@ -57,7 +64,12 @@ public enum RVDProcess {
     }
 }
 
-private final class ListenerSlot: @unchecked Sendable {
-    var listener: UnixEvaluateListener?
+private final class ListenerSlot: Sendable {
+    private let box = Mutex<UnixEvaluateListener?>(nil)
+
+    var listener: UnixEvaluateListener? {
+        get { box.withLock { $0 } }
+        set { box.withLock { $0 = newValue } }
+    }
 }
 #endif

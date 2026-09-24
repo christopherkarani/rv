@@ -1,5 +1,6 @@
 #if canImport(XPC)
 import Foundation
+import Synchronization
 import Testing
 @preconcurrency import XPC
 @testable import RVService
@@ -105,16 +106,19 @@ struct PeerSessionPingOnHandleTests {
     }
 }
 
-private final class TransactionProbe: @unchecked Sendable {
-    private let lock = NSLock()
-    private var begins = 0
-    private var ends = 0
+private final class TransactionProbe: Sendable {
+    private let box = Mutex<State>(State())
 
-    var beginCount: Int { lock.withLock { begins } }
-    var endCount: Int { lock.withLock { ends } }
+    private struct State {
+        var begins = 0
+        var ends = 0
+    }
 
-    func begin() { lock.withLock { begins += 1 } }
-    func end() { lock.withLock { ends += 1 } }
+    var beginCount: Int { box.withLock { $0.begins } }
+    var endCount: Int { box.withLock { $0.ends } }
+
+    func begin() { box.withLock { $0.begins += 1 } }
+    func end() { box.withLock { $0.ends += 1 } }
 }
 #endif
 

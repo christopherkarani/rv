@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 import RVDomain
 import RVEngine
@@ -423,16 +424,15 @@ struct HookEvaluateTests {
     #endif
 }
 
-private final class EvaluateCallProbe: @unchecked Sendable {
-    private let lock = NSLock()
-    private var count = 0
+private final class EvaluateCallProbe: Sendable {
+    private let box = Mutex(0)
 
-    var calls: Int { lock.withLock { count } }
+    var calls: Int { box.withLock { $0 } }
 
     func evaluate(_ command: ShellCommand, cwd: WorkingDirectory?) async -> EvaluationResult {
         _ = command
         _ = cwd
-        lock.withLock { count += 1 }
+        box.withLock { $0 += 1 }
         return EvaluationResult(
             outcome: .plain,
             matchingView: Normalize.matchingView(of: command)

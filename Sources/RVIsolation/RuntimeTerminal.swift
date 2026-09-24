@@ -50,6 +50,10 @@ enum TerminalControlError: Error, Equatable, Sendable {
 /// the descriptor. Closing a client does not close the master. Closing the
 /// workspace host does: the PTY dies with this process, and crash recovery
 /// reclaims the process group without rebuilding the byte stream.
+//
+// @unchecked: NSCondition is load-bearing (reader fan-out with predicate
+// waits and broadcasts across subscribe/emit/detach). All mutable state is
+// only touched while holding `condition`.
 final class RuntimeTerminal: @unchecked Sendable {
     private let condition = NSCondition()
     private var master: Int32
@@ -802,6 +806,8 @@ final class RuntimeTerminal: @unchecked Sendable {
     }
 }
 
+// Confined to `RuntimeTerminal.condition`: only touched while the owner holds
+// its condition lock. Never shared directly.
 private final class Subscriber: @unchecked Sendable {
     let id: UUID
     let emit: @Sendable (TerminalNotice) -> Bool
