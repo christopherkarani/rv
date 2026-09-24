@@ -51,7 +51,6 @@ struct WorkspaceShellView: View {
         VStack(alignment: .leading, spacing: 0) {
             header(snapshot)
             content(snapshot)
-            status(snapshot)
         }
         .onKeyPress(.any) { press in
             handle(press)
@@ -76,16 +75,26 @@ struct WorkspaceShellView: View {
     @ViewBuilder
     private func header(_ snapshot: WorkspaceTUISnapshot) -> some View {
         let name = URL(fileURLWithPath: snapshot.project).lastPathComponent
-        let state = snapshot.connection == .connected
-            ? (snapshot.protected ? "PROTECTED" : snapshot.phase.uppercased())
-            : "DISCONNECTED"
-        Text("RV  \(name)  \(state)").bold()
+        let indicatorColor: Color
+        if snapshot.connection == .disconnected {
+            indicatorColor = .red
+        } else if snapshot.phase == "active", snapshot.protected {
+            indicatorColor = .green
+        } else {
+            indicatorColor = .yellow
+        }
+        HStack(spacing: 1) {
+            Text("RV  \(name)").bold()
+            Spacer(minLength: 0)
+            Text("●").foregroundStyle(indicatorColor)
+        }
+        .frame(maxWidth: .infinity)
     }
 
     @ViewBuilder
     private func content(_ snapshot: WorkspaceTUISnapshot) -> some View {
         if snapshot.connection == .disconnected {
-            Text("workspace disconnected · ^G d detach")
+            Text("workspace disconnected")
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         } else if snapshot.tree.isEmpty {
             emptyWorkspace(snapshot)
@@ -119,37 +128,9 @@ struct WorkspaceShellView: View {
             Text(WorkspaceHelp.text)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         } else {
-            VStack(alignment: .center, spacing: 1) {
-                Text("No runtimes yet").bold()
-                Text("Choose a runtime to begin working here.")
-                    .foregroundStyle(Color.gray)
-                if snapshot.launcher.isEmpty {
-                    Text("No runtime launchers are available.")
-                        .foregroundStyle(Color.gray)
-                } else {
-                    Text(launcherText(snapshot.launcher)).bold()
-                        .foregroundStyle(Color.gray)
-                    Text("Type its number to launch")
-                        .foregroundStyle(Color.gray)
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            Text(" ")
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-    }
-
-    @ViewBuilder
-    private func status(_ snapshot: WorkspaceTUISnapshot) -> some View {
-        let state = snapshot.connection == .connected ? "workspace \(snapshot.phase)" : "disconnected"
-        let hint: String
-        switch snapshot.mode {
-        case .terminal:
-            hint = snapshot.tree.isEmpty ? "press a number to launch" : "^G n new runtime · ^G ? help"
-        case .prefix: hint = "command"
-        case .launcher: hint = "1–9 launch · Esc cancel"
-        case .help: hint = "Esc close help"
-        }
-        Text("\(snapshot.runtimeCount) runtimes · \(state) · \(hint)")
-            .foregroundStyle(Color.gray)
     }
 
     private func launcherText(_ choices: [RuntimeLaunchChoice]) -> String {

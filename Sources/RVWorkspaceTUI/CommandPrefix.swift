@@ -74,9 +74,11 @@ public enum CommandPrefix {
         case .prefix:
             return routePrefix(key)
         case .terminal:
-            if directLauncherSelection, case .character(let character) = key,
-               let index = Int(String(character)), index > 0, index <= launcher.count {
-                return (.terminal, .launch(launcher[index - 1]))
+            if directLauncherSelection, case .character(let character) = key {
+                if character.lowercased() == "n" { return (.launcher, .newRuntime) }
+                if let index = Int(String(character)), index > 0, index <= launcher.count {
+                    return (.terminal, .launch(launcher[index - 1]))
+                }
             }
             if case .control(let character) = key, character.lowercased() == "g" { return (.prefix, nil) }
             return (.terminal, .send(TerminalInputEncoder.bytes(for: key)))

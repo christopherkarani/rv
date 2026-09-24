@@ -541,6 +541,25 @@ private func model(_ client: FakeWorkspaceClient) -> WorkspaceTUIModel {
     #expect(shell.snapshot().panes.values.first?.title == "opencode")
 }
 
+@Test func nOpensTheRuntimeLauncherOnlyWhenWorkspaceHasNoPanes() throws {
+    let client = FakeWorkspaceClient()
+    let shell = model(client)
+    try shell.connect().get()
+
+    shell.handle(.character("n"))
+
+    #expect(shell.snapshot().mode == .launcher)
+    #expect(client.launchAttempts == 0)
+    shell.handle(.escape)
+    #expect(shell.snapshot().mode == .terminal)
+    shell.handle(.character("1"))
+    #expect(waitForModel { shell.snapshot().panes.count == 1 })
+    #expect(waitForModel { shell.snapshot().panes.values.first?.lease == .owned })
+
+    shell.handle(.character("n"))
+    #expect(waitForModel { client.writes.contains { $0.1 == Data("n".utf8) } })
+}
+
 @Test func failedRuntimeCancellationKeepsItsPaneAndTree() throws {
     let client = FakeWorkspaceClient()
     let shell = model(client)

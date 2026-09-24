@@ -137,6 +137,10 @@ import Testing
     let opencode = RuntimeLaunchChoice(id: "opencode", title: "opencode", executable: "/bin/opencode", arguments: [], hook: nil)
     let choices = [shell, opencode]
 
+    #expect(CommandPrefix.route(.character("n"), mode: .terminal, launcher: choices, directLauncherSelection: true)
+        == (.launcher, .newRuntime))
+    #expect(CommandPrefix.route(.character("n"), mode: .terminal, launcher: choices)
+        == (.terminal, .send(Data("n".utf8))))
     #expect(CommandPrefix.route(.character("1"), mode: .terminal, launcher: choices, directLauncherSelection: true)
         == (.terminal, .launch(shell)))
     #expect(CommandPrefix.route(.character("2"), mode: .terminal, launcher: choices, directLauncherSelection: true)

@@ -781,7 +781,7 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
 
     private static func terminalDimensions(in rect: PaneRect) -> (rows: Int, columns: Int) {
         // PaneTree frames include the two-cell border; the title consumes one
-        // additional row. Global header and status bar are outside this rect.
+        // additional row. The global header is outside this rect.
         let columns = Self.bound(rect.width - 2)
         let rows = Self.bound(rect.height - 3)
         return (rows, columns)
