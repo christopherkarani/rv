@@ -239,6 +239,9 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.7.0"),
         .package(url: "https://github.com/SwiftTUI/swift-tui", exact: "0.14.0"),
         .package(url: "https://github.com/migueldeicaza/SwiftTerm", exact: "1.19.0"),
+        // SwiftTUI requires 1.6.0 or newer. 1.7.0 emits Swift 6.4 borrow
+        // runtime calls unavailable on the macOS 26 release runner.
+        .package(url: "https://github.com/apple/swift-collections.git", exact: "1.6.0"),
     ] + extraPackageDependencies,
     targets: coreLibraryTargets + isolationExecTargets + terminalProbeTargets + serviceLibraryAndDaemon + cliTargets
         + coreTestTargets + serviceTestTargets + cliTestTargets,

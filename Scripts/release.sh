@@ -215,6 +215,10 @@ if [[ "$OS" == "Darwin" ]]; then
     otool -L "$STAGE/rv-cli" >&2
     exit 1
   fi
+  if nm -u "$STAGE/rv-cli" | grep -q '_swift_initBorrow'; then
+    printf 'release: rv-cli references _swift_initBorrow, unavailable on macOS 26\n' >&2
+    exit 1
+  fi
 fi
 
 printf "Staged %s\n" "$STAGE"
