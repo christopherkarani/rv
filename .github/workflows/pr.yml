@@ -148,12 +148,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: rv-macos-stage
-          path: |
-            .build/release-stage/rv
-            .build/release-stage/rv-cli
-            .build/release-stage/rvd
-            .build/release-stage/rv-workspace-host
-            .build/release-stage/*_RVPacks.bundle
+          path: .build/release-stage/
           if-no-files-found: error
 
   sequoia-smoke:
