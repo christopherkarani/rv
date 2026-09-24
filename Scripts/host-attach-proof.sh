@@ -174,7 +174,7 @@ stage_from_debug() {
   rvd="$(find_debug_bin rvd)" || return 1
   mkdir -p "$STAGE"
   case "$(uname -s)" in
-    Darwin) clang_flags=(-arch arm64 -mmacosx-version-min=26.0) ;;
+    Darwin) clang_flags=(-arch arm64 -mmacosx-version-min=15.0) ;;
   esac
   clang -Os "${clang_flags[@]}" -std=c11 -Wall \
     -I "$C_SRC" \

@@ -50,7 +50,7 @@ case "$OS" in
       printf "release: Apple Silicon only\n" >&2
       exit 1
     fi
-    CLANG_OS_FLAGS=(-arch arm64 -mmacosx-version-min=26.0)
+    CLANG_OS_FLAGS=(-arch arm64 -mmacosx-version-min=15.0)
     ;;
   Linux)
     case "$ARCH" in
@@ -62,7 +62,7 @@ case "$OS" in
     esac
     ;;
   *)
-    printf "release: macOS 26 Apple Silicon, or Linux aarch64/x86_64\n" >&2
+    printf "release: macOS 15 Apple Silicon, or Linux aarch64/x86_64\n" >&2
     exit 1
     ;;
 esac
