@@ -24,7 +24,7 @@ enum WorkspaceTUICommand {
         #if !os(macOS)
         throw ValidationError("contained workspace host is unavailable")
         #else
-        let project = try projectPath(raw)
+        let project = try WorkspaceCommandRun.requireProject(raw)
         guard let host = WorkspaceHostExecutable.currentSibling() else {
             throw ValidationError("workspace host executable is missing")
         }
@@ -74,16 +74,6 @@ enum WorkspaceTUICommand {
     }
 
     #if os(macOS)
-    private static func projectPath(_ raw: String?) throws -> String {
-        let value = raw ?? FileManager.default.currentDirectoryPath
-        guard value.isEmpty == false, value.contains("\0") == false else {
-            throw ValidationError("workspace path is unusable")
-        }
-        if value.hasPrefix("/") { return value }
-        return URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
-            .appendingPathComponent(value).path
-    }
-
     private static func launcherChoices() -> [RuntimeLaunchChoice] {
         var choices = [
             RuntimeLaunchChoice(

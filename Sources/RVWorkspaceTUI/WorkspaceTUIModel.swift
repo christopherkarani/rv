@@ -19,6 +19,7 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
     private var tree: PaneTree = .empty
     private var focusedPane: PaneID?
     private var focusRevision: UInt64 = 0
+    private var presentationRevision: UInt64 = 0
     private var panes: [PaneID: TerminalPaneModel] = [:]
     private var mode: CommandMode = .terminal
     private var connection: ConnectionState = .disconnected
@@ -96,6 +97,7 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
             let columns = runtime.columns.map(Self.bound) ?? initialColumns
             panes[pane] = makeRecord(pane: pane, runtime: runtime, rows: rows, columns: columns)
         }
+        markPresentationChangedLocked()
         let focus = focusedPane
         lock.unlock()
 
@@ -116,6 +118,8 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
             lock.unlock()
             return
         }
+        let previousMode = mode
+        let previousShouldExit = shouldExit
         let decision = CommandPrefix.route(
             key,
             mode: mode,
@@ -128,6 +132,9 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
             // SwiftTUI polls this state to leave TerminalRunner and restore the
             // local terminal. Detach itself performs no blocking host RPC.
             shouldExit = true
+        }
+        if mode != previousMode || shouldExit != previousShouldExit {
+            markPresentationChangedLocked()
         }
         lock.unlock()
         guard let command, command != .detach else { return }
@@ -150,6 +157,7 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
     /// lock. Emulator replies are sent only after the lock is released.
     public func apply(_ events: [WorkspaceTUIEvent]) {
         var replies: [(UUID, Data)] = []
+        var presentationChanged = false
         lock.lock()
         guard connection == .connected else {
             lock.unlock()
@@ -159,16 +167,25 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
             switch event {
             case .bytes(let runtime, let data):
                 guard let pane = pane(runtime: runtime), let record = panes[pane] else { continue }
+                guard data.isEmpty == false else { continue }
                 record.emulator.feed(data)
+                presentationChanged = true
                 let responses = record.emulator.takeResponses()
                 if leasedRuntime == runtime, record.state.lease == .owned {
                     replies.append(contentsOf: responses.map { (runtime, $0) })
                 }
             case .overflow(let runtime):
                 guard let pane = pane(runtime: runtime) else { continue }
-                panes[pane]?.state.overflowed = true
+                if panes[pane]?.state.overflowed != true {
+                    panes[pane]?.state.overflowed = true
+                    presentationChanged = true
+                }
             case .exited(let runtime, let status):
                 guard let pane = pane(runtime: runtime) else { continue }
+                if panes[pane]?.state.running != false || panes[pane]?.state.exitStatus != status
+                    || panes[pane]?.state.lease != .released {
+                    presentationChanged = true
+                }
                 panes[pane]?.state.running = false
                 panes[pane]?.state.exitStatus = status
                 panes[pane]?.state.lease = .released
@@ -180,6 +197,7 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
                     // client owns it. Only our successful acquire RPC grants
                     // local write authority.
                     if leasedRuntime != runtime {
+                        presentationChanged = presentationChanged || panes[pane]?.state.lease != .readOnly
                         panes[pane]?.state.lease = .readOnly
                     }
                 } else {
@@ -188,6 +206,7 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
                     // later acquire succeeded, so the successful acquire is
                     // authoritative while this client still claims ownership.
                     guard leasedRuntime != runtime else { continue }
+                    presentationChanged = presentationChanged || panes[pane]?.state.lease != .readOnly
                     panes[pane]?.state.lease = .readOnly
                     if focusedPane == pane, panes[pane]?.state.running == true {
                         pendingInputAcquisitions.insert(pane)
@@ -195,6 +214,7 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
                 }
             }
         }
+        if presentationChanged { markPresentationChangedLocked() }
         lock.unlock()
 
         if replies.isEmpty == false {
@@ -248,6 +268,7 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
             requests.append((record.state.runtime, size.rows, size.columns))
             panes[pane] = record
         }
+        if requests.isEmpty == false { markPresentationChangedLocked() }
         acquisitions = pendingInputAcquisitions
             .filter { $0 == focusedPane && panes[$0]?.state.lease == .readOnly }
             .sorted { $0.rawValue.uuidString < $1.rawValue.uuidString }
@@ -297,6 +318,7 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
             mode: mode,
             launcher: launcher,
             runtimeCount: panes.values.filter(\.state.running).count,
+            presentationRevision: presentationRevision,
             shouldExit: shouldExit
         )
     }
@@ -334,6 +356,7 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
             panes[key]?.state.lease = .released
             panes[key]?.state.subscribed = false
         }
+        markPresentationChangedLocked()
         lock.unlock()
 
         // Drain terminal RPCs before closing their dedicated host connection,
@@ -421,6 +444,7 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
         var record = makeRecord(pane: pane, runtime: runtime, rows: rows, columns: columns)
         record.state.title = selected.title
         panes[pane] = record
+        markPresentationChangedLocked()
         lock.unlock()
 
         switch bind(pane, runtime: runtime.id) {
@@ -445,6 +469,7 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
             ?? previousFocus.flatMap { tree.contains($0) ? $0 : nil }
             ?? tree.firstLeaf
         setFocusedPaneLocked(next)
+        markPresentationChangedLocked()
         lock.unlock()
         if subscribed, let runtime { _ = client.unsubscribe(runtime) }
     }
@@ -489,6 +514,7 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
             tree = closed.tree
             let preservedFocus = focusBeforeClose.flatMap { tree.contains($0) ? $0 : nil }
             setFocusedPaneLocked(preservedFocus ?? closed.focus)
+            markPresentationChangedLocked()
         }
         lock.unlock()
     }
@@ -528,10 +554,13 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
             break
         case .failure(.busy):
             lock.lock()
+            var presentationChanged = false
             if panes[record.state.pane]?.state.runtime == runtime {
+                presentationChanged = panes[record.state.pane]?.state.lease != .readOnly
                 panes[record.state.pane]?.state.lease = .readOnly
             }
             if leasedRuntime == runtime { leasedRuntime = nil }
+            if presentationChanged { markPresentationChangedLocked() }
             lock.unlock()
         case .failure(.disconnected):
             markDisconnected()
@@ -597,8 +626,10 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
     /// as the focus mutation, preserving focus/RPC order across UI and lifecycle
     /// callbacks.
     private func setFocusedPaneLocked(_ pane: PaneID?) {
-        if focusedPane != pane {
+        let changed = focusedPane != pane
+        if changed {
             focusRevision &+= 1
+            markPresentationChangedLocked()
         }
         if focusedPane != pane,
            let leasedRuntime,
@@ -622,6 +653,7 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
         let oldRuntime = leasedRuntime
         guard oldRuntime != targetRuntime else {
             if let pane, let targetRuntime, panes[pane]?.state.runtime == targetRuntime {
+                if panes[pane]?.state.lease != .owned { markPresentationChangedLocked() }
                 panes[pane]?.state.lease = .owned
             }
             lock.unlock()
@@ -629,6 +661,7 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
         }
         leasedRuntime = nil
         if let oldRuntime, let oldPane = self.pane(runtime: oldRuntime) {
+            if panes[oldPane]?.state.lease != .released { markPresentationChangedLocked() }
             panes[oldPane]?.state.lease = .released
         }
         lock.unlock()
@@ -659,6 +692,7 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
                 && (requireFocus == false || focusedPane == pane)
                 && panes[pane]?.state.runtime == runtime && panes[pane]?.state.running == true
             if stillAvailable {
+                if panes[pane]?.state.lease != .owned { markPresentationChangedLocked() }
                 panes[pane]?.state.lease = .owned
                 leasedRuntime = runtime
             }
@@ -667,6 +701,7 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
         case .failure(.busy):
             lock.lock()
             if focusedPane == pane, panes[pane]?.state.runtime == runtime {
+                if panes[pane]?.state.lease != .readOnly { markPresentationChangedLocked() }
                 panes[pane]?.state.lease = .readOnly
             }
             lock.unlock()
@@ -675,6 +710,7 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
         case .failure:
             lock.lock()
             if focusedPane == pane, panes[pane]?.state.runtime == runtime {
+                if panes[pane]?.state.lease != .readOnly { markPresentationChangedLocked() }
                 panes[pane]?.state.lease = .readOnly
             }
             lock.unlock()
@@ -702,6 +738,8 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
 
     private func markDisconnected() {
         lock.lock()
+        let changed = connection != .disconnected
+            || panes.values.contains { $0.state.lease != .readOnly || $0.state.subscribed }
         connection = .disconnected
         leasedRuntime = nil
         pendingInputAcquisitions.removeAll()
@@ -709,6 +747,7 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
             panes[key]?.state.lease = .readOnly
             panes[key]?.state.subscribed = false
         }
+        if changed { markPresentationChangedLocked() }
         lock.unlock()
     }
 
@@ -718,11 +757,20 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
             lock.unlock()
             return
         }
+        let changed = panes[pane]?.state.running != false || panes[pane]?.state.exitStatus != nil
+            || panes[pane]?.state.lease != .released
         panes[pane]?.state.running = false
         panes[pane]?.state.exitStatus = nil
         panes[pane]?.state.lease = .released
         if leasedRuntime == runtime { leasedRuntime = nil }
+        if changed { markPresentationChangedLocked() }
         lock.unlock()
+    }
+
+    /// Call with `lock` held. SwiftTUI polls this revision to coalesce model
+    /// changes instead of invalidating its view tree on every idle timer tick.
+    private func markPresentationChangedLocked() {
+        presentationRevision &+= 1
     }
 
     private func canIssueCommands() -> Bool {
@@ -761,5 +809,20 @@ public struct WorkspaceTUISnapshot: Equatable, Sendable {
     public var mode: CommandMode
     public var launcher: [RuntimeLaunchChoice]
     public var runtimeCount: Int
+    public var presentationRevision: UInt64
     public var shouldExit: Bool
+}
+
+struct WorkspaceTUIRefreshGate {
+    private var revision: UInt64
+
+    init(revision: UInt64) {
+        self.revision = revision
+    }
+
+    mutating func consume(_ latestRevision: UInt64) -> Bool {
+        guard latestRevision != revision else { return false }
+        revision = latestRevision
+        return true
+    }
 }

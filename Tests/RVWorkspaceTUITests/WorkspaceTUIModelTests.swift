@@ -9,6 +9,7 @@ final class FakeWorkspaceClient: WorkspaceTUIClient, @unchecked Sendable {
     private var storedFailLaunch = false
     private var storedFailCancel = false
     private var storedBusyInput = false
+    private var storedBusyWrite = false
     private var storedFailDescribe = false
     private var storedWrites: [(UUID, Data)] = []
     private var storedCancels: [UUID] = []
@@ -52,6 +53,10 @@ final class FakeWorkspaceClient: WorkspaceTUIClient, @unchecked Sendable {
     var busyInput: Bool {
         get { withLock { storedBusyInput } }
         set { withLock { storedBusyInput = newValue } }
+    }
+    var busyWrite: Bool {
+        get { withLock { storedBusyWrite } }
+        set { withLock { storedBusyWrite = newValue } }
     }
     var failDescribe: Bool {
         get { withLock { storedFailDescribe } }
@@ -152,17 +157,17 @@ final class FakeWorkspaceClient: WorkspaceTUIClient, @unchecked Sendable {
     }
 
     func write(_ id: UUID, bytes: Data) -> Result<Void, WorkspaceTUIClientError> {
-        let block = withLock {
+        let (block, busy) = withLock {
             storedWrites.append((id, bytes))
-            guard writesToBlock > 0 else { return false }
-            writesToBlock -= 1
-            return true
+            let block = writesToBlock > 0
+            if block { writesToBlock -= 1 }
+            return (block, storedBusyWrite)
         }
         if block {
             writeStarted.signal()
             _ = writeGate.wait(timeout: .now() + 5)
         }
-        return .success(())
+        return busy ? .failure(.busy) : .success(())
     }
 
     func resize(_ id: UUID, rows: Int, columns: Int) -> Result<Void, WorkspaceTUIClientError> {
@@ -477,6 +482,40 @@ private func model(_ client: FakeWorkspaceClient) -> WorkspaceTUIModel {
     #expect(client.subscribes.isEmpty)
 }
 
+@Test func renderRevisionGateDoesNotInvalidateThroughAFullIdleStackDepth() {
+    var gate = WorkspaceTUIRefreshGate(revision: 0)
+    var invalidations = 0
+    for _ in 0..<130_609 {
+        if gate.consume(0) { invalidations += 1 }
+    }
+    #expect(invalidations == 0)
+    let changed = gate.consume(1)
+    let unchanged = gate.consume(1)
+    #expect(changed)
+    #expect(unchanged == false)
+}
+
+@Test func presentationRevisionChangesForTerminalOutputAndStaysStableWhileIdle() throws {
+    let client = FakeWorkspaceClient()
+    let runtime = UUID()
+    client.runtimes = [ListedRuntime(id: runtime, hook: nil, running: true, terminal: true)]
+    let shell = model(client)
+    try shell.connect().get()
+    let pane = try #require(shell.snapshot().focused)
+
+    let resizeDate = Date().addingTimeInterval(1)
+    shell.processPendingWork(now: resizeDate)
+    let idleRevision = shell.snapshot().presentationRevision
+    for _ in 0..<130_609 {
+        shell.processPendingWork(now: resizeDate.addingTimeInterval(1))
+    }
+    #expect(shell.snapshot().presentationRevision == idleRevision)
+
+    shell.apply([.bytes(runtime: runtime, data: Data("visible output".utf8))])
+    #expect(shell.snapshot().presentationRevision > idleRevision)
+    #expect(shell.terminalFrame(for: pane)?.generation == 1)
+}
+
 @Test func numberedChoiceLaunchesDirectlyFromAnEmptyWorkspace() throws {
     let client = FakeWorkspaceClient()
     let shell = model(client)
@@ -575,6 +614,23 @@ private func model(_ client: FakeWorkspaceClient) -> WorkspaceTUIModel {
     #expect(client.detached == false)
     shell.detachSession()
     #expect(client.detached)
+}
+
+@Test func busyWriteRendersTheFocusedPaneAsReadOnly() throws {
+    let client = FakeWorkspaceClient()
+    let runtime = UUID()
+    client.runtimes = [ListedRuntime(id: runtime, hook: nil, running: true, terminal: true)]
+    let shell = model(client)
+    try shell.connect().get()
+    let pane = try #require(shell.snapshot().focused)
+    #expect(shell.snapshot().panes[pane]?.lease == .owned)
+    let previousRevision = shell.snapshot().presentationRevision
+
+    client.busyWrite = true
+    shell.handle(.character("A"))
+
+    #expect(waitForModel { shell.snapshot().panes[pane]?.lease == .readOnly })
+    #expect(shell.snapshot().presentationRevision > previousRevision)
 }
 
 @Test func inputReachesOnlyTheFocusedRuntime() throws {

@@ -58,6 +58,7 @@ struct WorkspaceShellView: View {
         }
         .focusable()
         .task {
+            var refreshGate = WorkspaceTUIRefreshGate(revision: snapshot.presentationRevision)
             while Task.isCancelled == false, model.snapshot().shouldExit == false {
                 do {
                     try await Task.sleep(for: .milliseconds(32))
@@ -65,7 +66,9 @@ struct WorkspaceShellView: View {
                     return
                 }
                 model.processPendingWork()
-                revision &+= 1
+                if refreshGate.consume(model.snapshot().presentationRevision) {
+                    revision &+= 1
+                }
             }
         }
     }
