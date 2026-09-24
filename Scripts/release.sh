@@ -188,6 +188,21 @@ if [[ "$copied" -eq 0 ]]; then
   exit 1
 fi
 
+if [[ "$OS" == "Darwin" ]]; then
+  for staged in "$STAGE/rv" "$STAGE/rv-cli" "$STAGE/rvd" "$STAGE/rv-workspace-host"; do
+    show="$(vtool -show-build "$staged")"
+    printf '%s\n' "$show" | grep -q 'minos 15.0' || {
+      printf 'release: %s minos is not 15.0\n%s\n' "$staged" "$show" >&2
+      exit 1
+    }
+  done
+  if otool -L "$STAGE/rv-cli" | grep -E 'libswiftCore|FoundationModels' | grep -q '@rpath'; then
+    printf 'release: rv-cli must link the OS Swift runtime, not an @rpath toolchain\n' >&2
+    otool -L "$STAGE/rv-cli" >&2
+    exit 1
+  fi
+fi
+
 printf "Staged %s\n" "$STAGE"
 ls -l "$STAGE/rv" "$STAGE/rv-cli" "$STAGE/rvd" "$STAGE/rv-workspace-host"
 for bundle in "$STAGE"/*_RVPacks.bundle "$STAGE"/*_RVPacks.resources; do
