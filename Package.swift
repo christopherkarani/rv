@@ -200,7 +200,7 @@ let cliTestTargets: [Target] = [
 let package = Package(
     name: "rv",
     platforms: [
-        .macOS(.v26),
+        .macOS(.v15),
     ],
     products: coreProducts + isolationExecProducts + serviceProducts + cliProducts,
     dependencies: [
