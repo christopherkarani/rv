@@ -195,7 +195,7 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
         case .success:
             break
         }
-        if Task.isCancelled {
+        if blockingWorkIsCancelled() {
             releaseAdmission(owner: nil)
             return .failure(.apply(.cancelled))
         }
@@ -328,6 +328,7 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
         let children = state.withLock { Array($0.children.values) }
         for child in children {
             child.stop.request()
+            _ = stopOwnedSession(leader: child.live.pid, reap: false)
         }
         let deadline = Date().addingTimeInterval(5)
         while Date() < deadline, children.contains(where: { $0.watchFinished == false }) {
@@ -429,6 +430,7 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
     }
 
     /// One runtime, watched on the caller's thread, then the caller closes.
+    /// `LocalExecutor` calls this from `rv-executor-apply`, not a cooperative task.
     func runSingleRuntime(
         _ request: IsolatedLaunchRequest,
         host: HookHost?,
@@ -473,6 +475,7 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
         }
         guard let child else { return .failure(.unknownRuntime(runtime)) }
         child.stop.request()
+        _ = stopOwnedSession(leader: child.live.pid, reap: false)
         guard waitForChildren([child], seconds: 45) else {
             return .failure(.childTeardownFailed)
         }
@@ -580,6 +583,10 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
             guard let child = slot.child else {
                 return .failure(.apply(.processSpawnFailed))
             }
+            if request.spawnFault == .register {
+                retireUnrecorded(child)
+                return .failure(.apply(.processSpawnFailed))
+            }
             switch recordProcessGroup(child) {
             case .failure(let error):
                 retireUnrecorded(child)
@@ -593,6 +600,9 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
     private func recordProcessGroup(
         _ child: WorkspaceChild
     ) -> Result<Void, WorkspaceSessionError> {
+        if TerminalTestInjection.failRegistration.withLock({ $0 }) {
+            return .failure(.apply(.lifetimeBoundaryFailed))
+        }
         guard let fact = ProcessGroupRecovery.capture(pid: child.live.pid) else {
             return .failure(.apply(.lifetimeBoundaryFailed))
         }
@@ -615,7 +625,12 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
         if case .failure(let error) = recorded {
             return .failure(.apply(error))
         }
-        return .success(())
+        switch resumeAndClaimForeground(child.live) {
+        case .failure(let error):
+            return .failure(.apply(error))
+        case .success:
+            return .success(())
+        }
     }
 
     private func retireUnrecorded(_ child: WorkspaceChild) {
@@ -624,6 +639,7 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
         state.withLock { state in
             state.children[session.id] = nil
         }
+        child.live.abandonIfUnwatched()
         if let fact = child.provenGroup {
             _ = ProcessGroupRecovery.terminate(
                 RecordedProcessGroup(
@@ -634,11 +650,6 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
                 )
             )
         }
-        let deadline = Date().addingTimeInterval(5)
-        while Date() < deadline {
-            if processGroupIsEmpty(pid), processIsGone(pid) { break }
-            usleep(10_000)
-        }
         noteRuntimeEnded(session)
     }
 
@@ -647,8 +658,9 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
     ) -> Result<RunningRuntime, WorkspaceSessionError> {
         let deadline = Date().addingTimeInterval(45)
         while Date() < deadline {
-            if Task.isCancelled {
+            if blockingWorkIsCancelled() {
                 child.stop.request()
+                _ = stopOwnedSession(leader: child.live.pid, reap: false)
             }
             if child.live.isEstablished {
                 return .success(
@@ -666,6 +678,7 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
             usleep(10_000)
         }
         child.stop.request()
+        _ = stopOwnedSession(leader: child.live.pid, reap: false)
         _ = waitForChildren([child], seconds: 45)
         return .failure(.apply(child.live.terminalError ?? .seatbeltNotEstablished))
     }
@@ -720,6 +733,7 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
         let children = state.withLock { Array($0.children.values) }
         for child in children {
             child.stop.request()
+            _ = stopOwnedSession(leader: child.live.pid, reap: false)
         }
         guard waitForChildren(children, seconds: 45) else {
             return .failure(.childTeardownFailed)
@@ -836,6 +850,7 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
                     id: id.rawValue,
                     startedAt: child.live.session.startedAt,
                     running: child.watchFinished == false
+                        || (child.live.pty?.hasSubscribers ?? false)
                 )
             }
             let drop = RuntimeRetention.finishedIDsToDrop(entries, limit: limit)
@@ -848,15 +863,108 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
 
     /// Runtimes this workspace owns. No capability, pid, or process group.
     func runtimeFacts() -> [WorkspaceRuntimeFact] {
-        state.withLock { state in
-            state.children.map { _, child in
-                WorkspaceRuntimeFact(
-                    id: child.live.session.id.rawValue,
-                    hookHost: child.live.session.host?.rawValue,
-                    running: child.watchFinished == false
-                )
-            }
-            .sorted { $0.id.uuidString < $1.id.uuidString }
+        let children = state.withLock { Array($0.children.values) }
+        return children.map { child in
+            let window = child.live.pty?.window()
+            let terminal = child.live.pty != nil
+            return WorkspaceRuntimeFact(
+                id: child.live.session.id.rawValue,
+                hookHost: child.live.session.host?.rawValue,
+                running: child.watchFinished == false,
+                terminal: terminal,
+                rows: terminal ? window?.rows : nil,
+                columns: terminal ? window?.columns : nil,
+                inputOwner: child.live.pty?.hasInputOwner ?? false
+            )
+        }
+        .sorted { $0.id.uuidString < $1.id.uuidString }
+    }
+
+    func subscribeTerminal(
+        runtime: UUID,
+        client: UUID,
+        emit: @escaping @Sendable (TerminalNotice) -> Bool
+    ) -> Result<Void, WorkspaceControlCode> {
+        guard let terminal = terminal(runtime) else {
+            return .failure(terminalMissing(runtime))
+        }
+        return terminal.subscribe(client: client, emit: emit).mapError { self.controlCode($0) }
+    }
+
+    func activateTerminal(runtime: UUID, client: UUID) {
+        terminal(runtime)?.activate(client: client)
+    }
+
+    func detachTerminalClient(_ client: UUID) {
+        let children = state.withLock { Array($0.children.values) }
+        for child in children {
+            child.live.pty?.detach(client: client)
+        }
+    }
+
+    func unsubscribeTerminal(runtime: UUID, client: UUID) -> Result<Void, WorkspaceControlCode> {
+        guard let terminal = terminal(runtime) else {
+            return .failure(terminalMissing(runtime))
+        }
+        terminal.detach(client: client)
+        return .success(())
+    }
+
+    func acquireTerminalInput(runtime: UUID, client: UUID) -> Result<Void, WorkspaceControlCode> {
+        guard let terminal = terminal(runtime) else {
+            return .failure(terminalMissing(runtime))
+        }
+        return terminal.acquireInput(client: client).mapError { self.controlCode($0) }
+    }
+
+    func releaseTerminalInput(runtime: UUID, client: UUID) -> Result<Void, WorkspaceControlCode> {
+        guard let terminal = terminal(runtime) else {
+            return .failure(terminalMissing(runtime))
+        }
+        return terminal.releaseInput(client: client).mapError { self.controlCode($0) }
+    }
+
+    func writeTerminal(runtime: UUID, client: UUID, bytes: Data) -> Result<Void, WorkspaceControlCode> {
+        guard let terminal = terminal(runtime) else {
+            return .failure(terminalMissing(runtime))
+        }
+        return terminal.writeInput(client: client, bytes: bytes).mapError { self.controlCode($0) }
+    }
+
+    func resizeTerminal(runtime: UUID, rows: Int, columns: Int) -> Result<Void, WorkspaceControlCode> {
+        guard let terminal = terminal(runtime) else {
+            return .failure(terminalMissing(runtime))
+        }
+        return terminal.resize(rows: rows, columns: columns).mapError { self.controlCode($0) }
+    }
+
+    func terminalWindow(runtime: UUID) -> (rows: Int, columns: Int)? {
+        terminal(runtime)?.window()
+    }
+
+    func terminalMasterOpen(_ runtime: UUID) -> Bool {
+        guard let fd = terminal(runtime)?.masterFD else { return false }
+        return fd >= 0
+    }
+
+    private func terminal(_ runtime: UUID) -> RuntimeTerminal? {
+        let named = RuntimeSessionID(rawValue: runtime)
+        return state.withLock { $0.children[named]?.live.pty }
+    }
+
+    private func terminalMissing(_ runtime: UUID) -> WorkspaceControlCode {
+        let named = RuntimeSessionID(rawValue: runtime)
+        let known = state.withLock { $0.children[named] != nil }
+        return known ? .terminalUnavailable : .runtimeNotFound
+    }
+
+    private func controlCode(_ error: TerminalControlError) -> WorkspaceControlCode {
+        switch error {
+        case .unavailable: .terminalUnavailable
+        case .busy: .terminalBusy
+        case .limit: .terminalLimit
+        case .invalid: .invalidRequest
+        case .prefixCommitted: .terminalPrefixCommitted
         }
     }
 

@@ -32,6 +32,10 @@ public enum WorkspaceControlCode: String, Error, Sendable, Equatable, Codable {
     case recoveryRequired
     case childTeardownFailed
     case runtimeLimit
+    case terminalUnavailable
+    case terminalBusy
+    case terminalLimit
+    case terminalPrefixCommitted
 }
 
 public enum WorkspaceControlOp: String, Sendable, Equatable {
@@ -44,6 +48,17 @@ public enum WorkspaceControlOp: String, Sendable, Equatable {
     case closeWorkspace
     case detach
     case workspaceClosed
+    case subscribeTerminal
+    case unsubscribeTerminal
+    case terminalInput
+    case acquireTerminalInput
+    case releaseTerminalInput
+    case resizeTerminal
+    case terminalReplay
+    case terminalOutput
+    case terminalInputOwner
+    case runtimeExited
+    case terminalOverflow
 }
 
 /// One runtime as a control client may see it.
@@ -51,11 +66,29 @@ public struct WorkspaceRuntimeReport: Sendable, Equatable {
     public var runtime: UUID
     public var hook: String?
     public var running: Bool
+    /// The runtime has a host-owned PTY. File descriptors stay on the host.
+    public var terminal: Bool
+    public var rows: Int?
+    public var columns: Int?
+    /// Some attached client currently holds terminal input.
+    public var inputOwner: Bool
 
-    public init(runtime: UUID, hook: String?, running: Bool) {
+    public init(
+        runtime: UUID,
+        hook: String?,
+        running: Bool,
+        terminal: Bool = false,
+        rows: Int? = nil,
+        columns: Int? = nil,
+        inputOwner: Bool = false
+    ) {
         self.runtime = runtime
         self.hook = hook
         self.running = running
+        self.terminal = terminal
+        self.rows = rows
+        self.columns = columns
+        self.inputOwner = inputOwner
     }
 }
 
@@ -63,6 +96,10 @@ struct WorkspaceRuntimeFact: Sendable, Equatable {
     var id: UUID
     var hookHost: String?
     var running: Bool
+    var terminal: Bool
+    var rows: Int?
+    var columns: Int?
+    var inputOwner: Bool
 }
 
 struct WorkspaceOwnerCredential: Sendable, Equatable {
@@ -91,6 +128,14 @@ struct WorkspaceControlMessage: Sendable, Equatable {
     var runtimes: [WorkspaceRuntimeReport]?
     var attached: Int?
     var running: Bool?
+    var io: String?
+    var rows: Int?
+    var columns: Int?
+    var sequence: Int64?
+    var bytes: String?
+    var exitStatus: Int32?
+    var terminal: Bool?
+    var inputOwner: Bool?
 
     static func error(
         id: UUID?,
@@ -113,13 +158,39 @@ enum WorkspaceControlDecode: Equatable, Sendable {
     case invalid
 }
 
+/// `io` omitted or `discard` drops the runtime's output. `terminal` keeps a
+/// host PTY. Any other value, or a size outside 1...512, fails closed.
+func workspaceLaunchIO(
+    io: String?,
+    rows: Int?,
+    columns: Int?
+) -> Result<IsolatedIO, WorkspaceControlCode> {
+    switch io {
+    case nil, "discard":
+        guard rows == nil, columns == nil else {
+            return .failure(.invalidRequest)
+        }
+        return .success(.discard)
+    case "terminal":
+        guard let rows, let columns, TerminalStreamLimits.accepts(rows: rows, columns: columns) else {
+            return .failure(.invalidRequest)
+        }
+        return .success(.pseudoTerminal(rows: rows, columns: columns))
+    default:
+        return .failure(.invalidRequest)
+    }
+}
+
 enum WorkspaceControlCodec {
     private static let rootKeys: Set<String> = [
         "v", "id", "op", "token", "executable", "arguments", "runtime", "hook",
         "ok", "error", "workspace", "host", "phase", "project", "runtimes",
-        "attached", "running",
+        "attached", "running", "io", "rows", "cols", "sequence", "bytes", "exit",
+        "terminal", "input",
     ]
-    private static let runtimeKeys: Set<String> = ["runtime", "hook", "running"]
+    private static let runtimeKeys: Set<String> = [
+        "runtime", "hook", "running", "terminal", "rows", "cols", "input",
+    ]
 
     static func decode(_ data: Data) -> WorkspaceControlDecode {
         guard data.isEmpty == false, data.count <= WorkspaceControlLimits.maxBodyBytes else {
@@ -142,7 +213,12 @@ enum WorkspaceControlCodec {
             fits(envelope.phase, 32),
             fits(envelope.project, WorkspaceControlLimits.maxProjectBytes),
             argumentsFit(envelope.arguments),
-            attachedFits(envelope.attached)
+            attachedFits(envelope.attached),
+            ioFits(envelope.io),
+            dimensionFits(envelope.rows, maximum: TerminalStreamLimits.maximumRows),
+            dimensionFits(envelope.columns, maximum: TerminalStreamLimits.maximumColumns),
+            sequenceFits(envelope.sequence),
+            encodedBytesFit(envelope.bytes)
         else {
             return .invalid
         }
@@ -197,6 +273,27 @@ enum WorkspaceControlCodec {
         guard let value else { return true }
         return value >= 0 && value <= WorkspaceControlLimits.maxConnections
     }
+
+    private static func ioFits(_ value: String?) -> Bool {
+        guard let value else { return true }
+        return value == "discard" || value == "terminal"
+    }
+
+    private static func dimensionFits(_ value: Int?, maximum: Int) -> Bool {
+        guard let value else { return true }
+        return value >= TerminalStreamLimits.minimumDimension && value <= maximum
+    }
+
+    private static func sequenceFits(_ value: Int64?) -> Bool {
+        guard let value else { return true }
+        return value >= 0
+    }
+
+    private static func encodedBytesFit(_ value: String?) -> Bool {
+        guard let value else { return true }
+        if value.isEmpty { return true }
+        return TerminalBytesCodec.decode(value, maximum: TerminalStreamLimits.maximumInputBytes) != nil
+    }
 }
 
 private struct KeyScan: Decodable {
@@ -233,27 +330,57 @@ private struct Envelope: Codable {
     var runtimes: [RuntimeWire]?
     var attached: Int?
     var running: Bool?
+    var io: String?
+    var rows: Int?
+    var columns: Int?
+    var sequence: Int64?
+    var bytes: String?
+    var exitStatus: Int32?
+    var terminal: Bool?
+    var inputOwner: Bool?
 
     struct RuntimeWire: Codable {
         var runtime: UUID
         var hook: String?
         var running: Bool
+        var terminal: Bool
+        var rows: Int?
+        var columns: Int?
+        var inputOwner: Bool
 
         enum CodingKeys: String, CodingKey {
             case runtime
             case hook
             case running
+            case terminal
+            case rows
+            case cols
+            case input
         }
 
-        init(runtime: UUID, hook: String?, running: Bool) {
+        init(
+            runtime: UUID,
+            hook: String?,
+            running: Bool,
+            terminal: Bool = false,
+            rows: Int? = nil,
+            columns: Int? = nil,
+            inputOwner: Bool = false
+        ) {
             self.runtime = runtime
             self.hook = hook
             self.running = running
+            self.terminal = terminal
+            self.rows = rows
+            self.columns = columns
+            self.inputOwner = inputOwner
         }
 
         init(from decoder: Decoder) throws {
             let keys = try KeyScan(from: decoder)
-            guard keys.keys.isSubset(of: ["runtime", "hook", "running"]) else {
+            guard keys.keys.isSubset(of: [
+                "runtime", "hook", "running", "terminal", "rows", "cols", "input",
+            ]) else {
                 throw DecodingError.dataCorrupted(
                     .init(codingPath: decoder.codingPath, debugDescription: "unknown runtime field")
                 )
@@ -262,6 +389,25 @@ private struct Envelope: Codable {
             runtime = try container.decode(UUID.self, forKey: .runtime)
             hook = try container.decodeIfPresent(String.self, forKey: .hook)
             running = try container.decode(Bool.self, forKey: .running)
+            terminal = try container.decodeIfPresent(Bool.self, forKey: .terminal) ?? false
+            rows = try container.decodeIfPresent(Int.self, forKey: .rows)
+            columns = try container.decodeIfPresent(Int.self, forKey: .cols)
+            inputOwner = try container.decodeIfPresent(Bool.self, forKey: .input) ?? false
+            if let rows,
+                (TerminalStreamLimits.minimumDimension...TerminalStreamLimits.maximumRows).contains(rows) == false
+            {
+                throw DecodingError.dataCorrupted(
+                    .init(codingPath: decoder.codingPath, debugDescription: "rows")
+                )
+            }
+            if let columns,
+                (TerminalStreamLimits.minimumDimension...TerminalStreamLimits.maximumColumns).contains(columns)
+                    == false
+            {
+                throw DecodingError.dataCorrupted(
+                    .init(codingPath: decoder.codingPath, debugDescription: "columns")
+                )
+            }
         }
 
         func encode(to encoder: Encoder) throws {
@@ -269,6 +415,10 @@ private struct Envelope: Codable {
             try container.encode(runtime, forKey: .runtime)
             try container.encodeIfPresent(hook, forKey: .hook)
             try container.encode(running, forKey: .running)
+            try container.encode(terminal, forKey: .terminal)
+            try container.encodeIfPresent(rows, forKey: .rows)
+            try container.encodeIfPresent(columns, forKey: .cols)
+            try container.encode(inputOwner, forKey: .input)
         }
     }
 
@@ -290,6 +440,14 @@ private struct Envelope: Codable {
         case runtimes
         case attached
         case running
+        case io
+        case rows
+        case columns = "cols"
+        case sequence
+        case bytes
+        case exitStatus = "exit"
+        case terminal
+        case inputOwner = "input"
     }
 
     init(from decoder: Decoder) throws {
@@ -297,7 +455,8 @@ private struct Envelope: Codable {
         guard keys.keys.isSubset(of: [
             "v", "id", "op", "token", "executable", "arguments", "runtime", "hook",
             "ok", "error", "workspace", "host", "phase", "project", "runtimes",
-            "attached", "running",
+            "attached", "running", "io", "rows", "cols", "sequence", "bytes", "exit",
+        "terminal", "input",
         ]) else {
             throw DecodingError.dataCorrupted(
                 .init(codingPath: decoder.codingPath, debugDescription: "unknown field")
@@ -321,6 +480,14 @@ private struct Envelope: Codable {
         runtimes = try container.decodeIfPresent([RuntimeWire].self, forKey: .runtimes)
         attached = try container.decodeIfPresent(Int.self, forKey: .attached)
         running = try container.decodeIfPresent(Bool.self, forKey: .running)
+        io = try container.decodeIfPresent(String.self, forKey: .io)
+        rows = try container.decodeIfPresent(Int.self, forKey: .rows)
+        columns = try container.decodeIfPresent(Int.self, forKey: .columns)
+        sequence = try container.decodeIfPresent(Int64.self, forKey: .sequence)
+        bytes = try container.decodeIfPresent(String.self, forKey: .bytes)
+        exitStatus = try container.decodeIfPresent(Int32.self, forKey: .exitStatus)
+        terminal = try container.decodeIfPresent(Bool.self, forKey: .terminal)
+        inputOwner = try container.decodeIfPresent(Bool.self, forKey: .inputOwner)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -342,6 +509,14 @@ private struct Envelope: Codable {
         try container.encodeIfPresent(runtimes, forKey: .runtimes)
         try container.encodeIfPresent(attached, forKey: .attached)
         try container.encodeIfPresent(running, forKey: .running)
+        try container.encodeIfPresent(io, forKey: .io)
+        try container.encodeIfPresent(rows, forKey: .rows)
+        try container.encodeIfPresent(columns, forKey: .columns)
+        try container.encodeIfPresent(sequence, forKey: .sequence)
+        try container.encodeIfPresent(bytes, forKey: .bytes)
+        try container.encodeIfPresent(exitStatus, forKey: .exitStatus)
+        try container.encodeIfPresent(terminal, forKey: .terminal)
+        try container.encodeIfPresent(inputOwner, forKey: .inputOwner)
     }
 
     init(_ message: WorkspaceControlMessage) {
@@ -360,10 +535,26 @@ private struct Envelope: Codable {
         phase = message.phase
         project = message.project
         runtimes = message.runtimes?.map {
-            RuntimeWire(runtime: $0.runtime, hook: $0.hook, running: $0.running)
+            RuntimeWire(
+                runtime: $0.runtime,
+                hook: $0.hook,
+                running: $0.running,
+                terminal: $0.terminal,
+                rows: $0.rows,
+                columns: $0.columns,
+                inputOwner: $0.inputOwner
+            )
         }
         attached = message.attached
         running = message.running
+        io = message.io
+        rows = message.rows
+        columns = message.columns
+        sequence = message.sequence
+        bytes = message.bytes
+        exitStatus = message.exitStatus
+        terminal = message.terminal
+        inputOwner = message.inputOwner
     }
 
     var message: WorkspaceControlMessage {
@@ -383,10 +574,26 @@ private struct Envelope: Codable {
             phase: phase,
             project: project,
             runtimes: runtimes?.map {
-                WorkspaceRuntimeReport(runtime: $0.runtime, hook: $0.hook, running: $0.running)
+                WorkspaceRuntimeReport(
+                    runtime: $0.runtime,
+                    hook: $0.hook,
+                    running: $0.running,
+                    terminal: $0.terminal,
+                    rows: $0.rows,
+                    columns: $0.columns,
+                    inputOwner: $0.inputOwner
+                )
             },
             attached: attached,
-            running: running
+            running: running,
+            io: io,
+            rows: rows,
+            columns: columns,
+            sequence: sequence,
+            bytes: bytes,
+            exitStatus: exitStatus,
+            terminal: terminal,
+            inputOwner: inputOwner
         )
     }
 }

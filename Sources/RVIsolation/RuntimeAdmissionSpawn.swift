@@ -193,7 +193,7 @@ func runAdmittedSeatbeltCommand(
     launch: AdmittedLaunchContext
 ) -> Result<Int32, RuntimeAdmissionExecutorError> {
     #if os(macOS)
-    if Task.isCancelled { return .failure(.cancelled) }
+    if blockingWorkIsCancelled() { return .failure(.cancelled) }
     guard launch.profileSource.contains("(deny file-link)") else {
         return .failure(.notEstablished)
     }
@@ -358,7 +358,7 @@ private func waitForAdmittedPayload(
     var established = false
     var status: Int32?
     while true {
-        let cancel = Task.isCancelled
+        let cancel = blockingWorkIsCancelled()
         if established == false {
             handshake.append(admissionReadAvailable(readEnd))
             if handshake.starts(with: expected), handshake.count >= expected.count {

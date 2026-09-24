@@ -175,6 +175,20 @@ cp "$BIN_DIR/rv-workspace-host" "$STAGE/rv-workspace-host"
 chmod 755 "$STAGE/rv-workspace-host"
 strip -x "$STAGE/rv-workspace-host"
 
+# Contained Darwin PTY launches exec this sibling before sandbox-exec.
+# The host looks it up next to its own binary. Do not ship the host without it.
+if [[ "$OS" == "Darwin" ]]; then
+  "$SWIFT_WRAP" build -c release --product rv-pty-claim
+  BIN_DIR="$("$SWIFT_WRAP" build -c release --show-bin-path)"
+  if [[ ! -x "$BIN_DIR/rv-pty-claim" ]]; then
+    printf "release: expected executable rv-pty-claim in %s\n" "$BIN_DIR" >&2
+    exit 1
+  fi
+  cp "$BIN_DIR/rv-pty-claim" "$STAGE/rv-pty-claim"
+  chmod 755 "$STAGE/rv-pty-claim"
+  strip -x "$STAGE/rv-pty-claim"
+fi
+
 for bundle in "$BIN_DIR"/*_RVPacks.bundle "$BIN_DIR"/*_RVPacks.resources; do
   [[ -d "$bundle" ]] || continue
   name="$(basename "$bundle")"
@@ -205,6 +219,9 @@ fi
 
 printf "Staged %s\n" "$STAGE"
 ls -l "$STAGE/rv" "$STAGE/rv-cli" "$STAGE/rvd" "$STAGE/rv-workspace-host"
+if [[ "$OS" == "Darwin" ]]; then
+  ls -l "$STAGE/rv-pty-claim"
+fi
 for bundle in "$STAGE"/*_RVPacks.bundle "$STAGE"/*_RVPacks.resources; do
   [[ -d "$bundle" ]] || continue
   ls -ld "$bundle"

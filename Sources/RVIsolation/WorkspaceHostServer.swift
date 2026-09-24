@@ -8,6 +8,8 @@ private struct Reply {
     var message: WorkspaceControlMessage
     var endConnection = false
     var retire = false
+    /// Runs after the reply frame is written, so streamed bytes cannot precede it.
+    var afterSend: (() -> Void)?
 }
 
 private final class CloseGate: @unchecked Sendable {
@@ -33,6 +35,9 @@ private final class CloseGate: @unchecked Sendable {
 private final class WorkspaceControlConnection: @unchecked Sendable {
     let id = UUID()
     private let flags: Mutex<ConnectionFlags>
+    /// Serializes frames. `flags` is not held across the write, so a slow
+    /// client cannot stall accept, but two writers cannot interleave bytes.
+    private let sendLock = NSLock()
 
     private struct ConnectionFlags {
         var fd: Int32
@@ -54,10 +59,17 @@ private final class WorkspaceControlConnection: @unchecked Sendable {
 
     func send(_ message: WorkspaceControlMessage) -> Bool {
         guard let body = WorkspaceControlCodec.encode(message) else { return false }
-        return flags.withLock { flags in
-            guard flags.closed == false else { return false }
-            return WorkspaceControlSocket.writeFrame(fd: flags.fd, body: body)
+        let fd = flags.withLock { flags -> Int32 in
+            guard flags.closed == false, flags.fd >= 0 else { return -1 }
+            return Darwin.dup(flags.fd)
         }
+        guard fd >= 0 else { return false }
+        sendLock.lock()
+        defer {
+            sendLock.unlock()
+            Darwin.close(fd)
+        }
+        return WorkspaceControlSocket.writeFrame(fd: fd, body: body)
     }
 
     func socketFD() -> Int32 {
@@ -298,6 +310,7 @@ final class WorkspaceHostServer: @unchecked Sendable {
 
     private func serve(_ connection: WorkspaceControlConnection) {
         defer {
+            supervisor.detachTerminalClient(connection.id)
             registry.withLock { $0.connections[connection.id] = nil }
             connection.closeSocket()
         }
@@ -309,7 +322,12 @@ final class WorkspaceHostServer: @unchecked Sendable {
                 return
             case .success(let body):
                 let reply = respond(body, connection: connection)
-                _ = connection.send(reply.message)
+                let sent = connection.send(reply.message)
+                if sent {
+                    reply.afterSend?()
+                } else if reply.afterSend != nil {
+                    supervisor.detachTerminalClient(connection.id)
+                }
                 if reply.retire {
                     retire(excluding: connection.id, notify: true)
                 }
@@ -352,7 +370,7 @@ final class WorkspaceHostServer: @unchecked Sendable {
             if connection.isHello == false {
                 return hello(message, connection: connection)
             }
-            return operation(message)
+            return operation(message, connection: connection)
         }
     }
 
@@ -385,7 +403,10 @@ final class WorkspaceHostServer: @unchecked Sendable {
         )
     }
 
-    private func operation(_ message: WorkspaceControlMessage) -> Reply {
+    private func operation(
+        _ message: WorkspaceControlMessage,
+        connection: WorkspaceControlConnection
+    ) -> Reply {
         guard let op = WorkspaceControlOp(rawValue: message.op) else {
             return Reply(message: failure(message, .invalidRequest))
         }
@@ -411,7 +432,7 @@ final class WorkspaceHostServer: @unchecked Sendable {
         case .cancelRuntime:
             return Reply(message: cancel(message))
         case .closeWorkspace:
-            return close(message)
+            return close(message, connection: connection)
         case .detach:
             return Reply(
                 message: WorkspaceControlMessage(
@@ -422,8 +443,21 @@ final class WorkspaceHostServer: @unchecked Sendable {
                 ),
                 endConnection: true
             )
-        case .workspaceClosed:
+        case .workspaceClosed, .terminalReplay, .terminalOutput, .terminalInputOwner,
+            .runtimeExited, .terminalOverflow:
             return Reply(message: failure(message, .invalidRequest))
+        case .subscribeTerminal:
+            return subscribe(message, connection: connection)
+        case .unsubscribeTerminal:
+            return unsubscribe(message, connection: connection)
+        case .terminalInput:
+            return input(message, connection: connection)
+        case .acquireTerminalInput:
+            return acquire(message, connection: connection)
+        case .releaseTerminalInput:
+            return release(message, connection: connection)
+        case .resizeTerminal:
+            return resize(message)
         }
     }
 
@@ -460,7 +494,15 @@ final class WorkspaceHostServer: @unchecked Sendable {
             op: WorkspaceControlOp.listRuntimes.rawValue,
             ok: true,
             runtimes: facts.map {
-                WorkspaceRuntimeReport(runtime: $0.id, hook: $0.hookHost, running: $0.running)
+                WorkspaceRuntimeReport(
+                    runtime: $0.id,
+                    hook: $0.hookHost,
+                    running: $0.running,
+                    terminal: $0.terminal,
+                    rows: $0.rows,
+                    columns: $0.columns,
+                    inputOwner: $0.inputOwner
+                )
             }
         )
     }
@@ -488,12 +530,19 @@ final class WorkspaceHostServer: @unchecked Sendable {
         ) else {
             return failure(message, .invalidRequest)
         }
+        let io: IsolatedIO
+        switch launchIO(message) {
+        case .failure(let code):
+            return failure(message, code)
+        case .success(let parsed):
+            io = parsed
+        }
         let plan = compileContainedPlan(workspace: supervisor.snapshot.policyWorkspace)
         switch supervisor.launch(
             host: hook,
             command: command,
             plan: plan,
-            io: .discard,
+            io: io,
             admission: .failClosed,
             sessionStore: sessionStore,
             runningLimit: WorkspaceControlLimits.maxRuntimes
@@ -501,7 +550,20 @@ final class WorkspaceHostServer: @unchecked Sendable {
         case .failure(let error):
             return failure(message, workspaceControlCode(error))
         case .success(let running):
+            let fact = supervisor.runtimeFacts().first { $0.id == running.id.rawValue }
             supervisor.pruneFinishedRuntimes(limit: WorkspaceControlLimits.maxRuntimes)
+            let launchedTerminal: Bool
+            let launchedRows: Int?
+            let launchedColumns: Int?
+            if case .pseudoTerminal(let rows, let columns) = io {
+                launchedTerminal = true
+                launchedRows = rows
+                launchedColumns = columns
+            } else {
+                launchedTerminal = false
+                launchedRows = nil
+                launchedColumns = nil
+            }
             return WorkspaceControlMessage(
                 version: WorkspaceControlLimits.version,
                 id: message.id,
@@ -509,7 +571,169 @@ final class WorkspaceHostServer: @unchecked Sendable {
                 runtime: running.id.rawValue,
                 hook: running.session.host?.rawValue,
                 ok: true,
-                running: true
+                running: fact?.running ?? true,
+                rows: fact?.rows ?? launchedRows,
+                columns: fact?.columns ?? launchedColumns,
+                terminal: (fact?.terminal ?? false) || launchedTerminal,
+                inputOwner: fact?.inputOwner ?? false
+            )
+        }
+    }
+
+    private func launchIO(
+        _ message: WorkspaceControlMessage
+    ) -> Result<IsolatedIO, WorkspaceControlCode> {
+        workspaceLaunchIO(io: message.io, rows: message.rows, columns: message.columns)
+    }
+
+    private func subscribe(
+        _ message: WorkspaceControlMessage,
+        connection: WorkspaceControlConnection
+    ) -> Reply {
+        guard let runtime = message.runtime else {
+            return Reply(message: failure(message, .invalidRequest))
+        }
+        let client = connection.id
+        switch supervisor.subscribeTerminal(runtime: runtime, client: client, emit: { notice in
+            connection.send(workspaceTerminalMessage(notice, runtime: runtime))
+        }) {
+        case .failure(let code):
+            return Reply(message: failure(message, code))
+        case .success:
+            let window = supervisor.terminalWindow(runtime: runtime)
+            return Reply(
+                message: WorkspaceControlMessage(
+                    version: WorkspaceControlLimits.version,
+                    id: message.id,
+                    op: WorkspaceControlOp.subscribeTerminal.rawValue,
+                    runtime: runtime,
+                    ok: true,
+                    rows: window?.rows,
+                    columns: window?.columns,
+                    terminal: true
+                ),
+                afterSend: { [supervisor] in
+                    supervisor.activateTerminal(runtime: runtime, client: client)
+                }
+            )
+        }
+    }
+
+    private func unsubscribe(
+        _ message: WorkspaceControlMessage,
+        connection: WorkspaceControlConnection
+    ) -> Reply {
+        guard let runtime = message.runtime else {
+            return Reply(message: failure(message, .invalidRequest))
+        }
+        switch supervisor.unsubscribeTerminal(runtime: runtime, client: connection.id) {
+        case .failure(let code):
+            return Reply(message: failure(message, code))
+        case .success:
+            return Reply(
+                message: WorkspaceControlMessage(
+                    version: WorkspaceControlLimits.version,
+                    id: message.id,
+                    op: WorkspaceControlOp.unsubscribeTerminal.rawValue,
+                    runtime: runtime,
+                    ok: true
+                )
+            )
+        }
+    }
+
+    private func input(
+        _ message: WorkspaceControlMessage,
+        connection: WorkspaceControlConnection
+    ) -> Reply {
+        guard let runtime = message.runtime, let encoded = message.bytes,
+            let data = TerminalBytesCodec.decode(encoded, maximum: TerminalStreamLimits.maximumInputBytes),
+            data.isEmpty == false
+        else {
+            return Reply(message: failure(message, .invalidRequest))
+        }
+        switch supervisor.writeTerminal(runtime: runtime, client: connection.id, bytes: data) {
+        case .failure(let code):
+            return Reply(message: failure(message, code))
+        case .success:
+            return Reply(
+                message: WorkspaceControlMessage(
+                    version: WorkspaceControlLimits.version,
+                    id: message.id,
+                    op: WorkspaceControlOp.terminalInput.rawValue,
+                    runtime: runtime,
+                    ok: true
+                )
+            )
+        }
+    }
+
+    private func acquire(
+        _ message: WorkspaceControlMessage,
+        connection: WorkspaceControlConnection
+    ) -> Reply {
+        guard let runtime = message.runtime else {
+            return Reply(message: failure(message, .invalidRequest))
+        }
+        switch supervisor.acquireTerminalInput(runtime: runtime, client: connection.id) {
+        case .failure(let code):
+            return Reply(message: failure(message, code))
+        case .success:
+            return Reply(
+                message: WorkspaceControlMessage(
+                    version: WorkspaceControlLimits.version,
+                    id: message.id,
+                    op: WorkspaceControlOp.acquireTerminalInput.rawValue,
+                    runtime: runtime,
+                    ok: true,
+                    inputOwner: true
+                )
+            )
+        }
+    }
+
+    private func release(
+        _ message: WorkspaceControlMessage,
+        connection: WorkspaceControlConnection
+    ) -> Reply {
+        guard let runtime = message.runtime else {
+            return Reply(message: failure(message, .invalidRequest))
+        }
+        switch supervisor.releaseTerminalInput(runtime: runtime, client: connection.id) {
+        case .failure(let code):
+            return Reply(message: failure(message, code))
+        case .success:
+            return Reply(
+                message: WorkspaceControlMessage(
+                    version: WorkspaceControlLimits.version,
+                    id: message.id,
+                    op: WorkspaceControlOp.releaseTerminalInput.rawValue,
+                    runtime: runtime,
+                    ok: true,
+                    inputOwner: false
+                )
+            )
+        }
+    }
+
+    private func resize(_ message: WorkspaceControlMessage) -> Reply {
+        guard let runtime = message.runtime, let rows = message.rows, let columns = message.columns else {
+            return Reply(message: failure(message, .invalidRequest))
+        }
+        switch supervisor.resizeTerminal(runtime: runtime, rows: rows, columns: columns) {
+        case .failure(let code):
+            return Reply(message: failure(message, code))
+        case .success:
+            return Reply(
+                message: WorkspaceControlMessage(
+                    version: WorkspaceControlLimits.version,
+                    id: message.id,
+                    op: WorkspaceControlOp.resizeTerminal.rawValue,
+                    runtime: runtime,
+                    ok: true,
+                    rows: rows,
+                    columns: columns
+                )
             )
         }
     }
@@ -532,7 +756,14 @@ final class WorkspaceHostServer: @unchecked Sendable {
         }
     }
 
-    private func close(_ message: WorkspaceControlMessage) -> Reply {
+    private func close(
+        _ message: WorkspaceControlMessage,
+        connection: WorkspaceControlConnection
+    ) -> Reply {
+        // The child dies during `close`, and its exit is on the terminal
+        // stream before this call returns. Tell the other clients first so
+        // they report the close instead of the signal.
+        announceClosed(excluding: connection.id)
         let result = supervisor.close()
         let closed = supervisor.snapshot.phase == .closed
         let response: WorkspaceControlMessage
@@ -564,6 +795,25 @@ final class WorkspaceHostServer: @unchecked Sendable {
         WorkspaceControlMessage.error(id: message.id, op: message.op, code: code)
     }
 
+    private func announceClosed(excluding: UUID?) {
+        let others = registry.withLock { state in
+            Array(state.connections.values.filter { $0.id != excluding })
+        }
+        let event = WorkspaceControlMessage(
+            version: WorkspaceControlLimits.version,
+            op: WorkspaceControlOp.workspaceClosed.rawValue,
+            ok: true,
+            workspace: supervisor.id.rawValue,
+            host: hostID.rawValue,
+            phase: WorkspaceLifecycle.closed.rawValue,
+            project: supervisor.snapshot.originalPath.rawValue,
+            attached: 0
+        )
+        for connection in others {
+            _ = connection.send(event)
+        }
+    }
+
     private func retire(excluding: UUID?, notify: Bool) {
         let snapshot: (first: Bool, others: [WorkspaceControlConnection]) = registry.withLock { state in
             if state.retired { return (false, []) }
@@ -577,19 +827,7 @@ final class WorkspaceHostServer: @unchecked Sendable {
         _ = Darwin.shutdown(listenFD, SHUT_RDWR)
         Darwin.close(listenFD)
         if notify {
-            let event = WorkspaceControlMessage(
-                version: WorkspaceControlLimits.version,
-                op: WorkspaceControlOp.workspaceClosed.rawValue,
-                ok: true,
-                workspace: supervisor.id.rawValue,
-                host: hostID.rawValue,
-                phase: WorkspaceLifecycle.closed.rawValue,
-                project: supervisor.snapshot.originalPath.rawValue,
-                attached: 0
-            )
-            for connection in snapshot.others {
-                _ = connection.send(event)
-            }
+            announceClosed(excluding: excluding)
         }
         for connection in snapshot.others {
             connection.interrupt()
@@ -605,6 +843,71 @@ final class WorkspaceHostServer: @unchecked Sendable {
         }
         _ = endpointFile.path.withCString { unlink($0) }
         gate.signal()
+    }
+
+    /// Pushes a terminal frame the client must reject. The stream fails closed
+    /// and the runtime is left running. Tests use this for the protocol-error
+    /// raw-mode path; it is not a client operation.
+    func testingInjectMalformedTerminalFrame() -> Bool {
+        let message = WorkspaceControlMessage(
+            version: WorkspaceControlLimits.version,
+            op: WorkspaceControlOp.terminalOutput.rawValue,
+            runtime: UUID(),
+            ok: true
+        )
+        let connections = registry.withLock { Array($0.connections.values) }
+        guard connections.isEmpty == false else { return false }
+        return connections.contains { $0.send(message) }
+    }
+}
+
+private func workspaceTerminalMessage(
+    _ notice: TerminalNotice,
+    runtime: UUID
+) -> WorkspaceControlMessage {
+    switch notice {
+    case .replay(let sequence, let bytes):
+        WorkspaceControlMessage(
+            version: WorkspaceControlLimits.version,
+            op: WorkspaceControlOp.terminalReplay.rawValue,
+            runtime: runtime,
+            ok: true,
+            sequence: sequence,
+            bytes: TerminalBytesCodec.encode(bytes)
+        )
+    case .output(let sequence, let bytes):
+        WorkspaceControlMessage(
+            version: WorkspaceControlLimits.version,
+            op: WorkspaceControlOp.terminalOutput.rawValue,
+            runtime: runtime,
+            ok: true,
+            sequence: sequence,
+            bytes: TerminalBytesCodec.encode(bytes)
+        )
+    case .inputOwner(let owned):
+        WorkspaceControlMessage(
+            version: WorkspaceControlLimits.version,
+            op: WorkspaceControlOp.terminalInputOwner.rawValue,
+            runtime: runtime,
+            ok: true,
+            inputOwner: owned
+        )
+    case .exited(let status):
+        WorkspaceControlMessage(
+            version: WorkspaceControlLimits.version,
+            op: WorkspaceControlOp.runtimeExited.rawValue,
+            runtime: runtime,
+            ok: true,
+            running: false,
+            exitStatus: status
+        )
+    case .overflow:
+        WorkspaceControlMessage(
+            version: WorkspaceControlLimits.version,
+            op: WorkspaceControlOp.terminalOverflow.rawValue,
+            runtime: runtime,
+            ok: true
+        )
     }
 }
 #endif

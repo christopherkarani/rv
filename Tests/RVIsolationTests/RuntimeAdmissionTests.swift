@@ -162,12 +162,12 @@ struct RuntimeAdmissionIsolationTests {
     }
 
     #if os(Linux)
-    @Test func containedLaunchStaysUnsupported() throws {
+    @Test func containedLaunchStaysUnsupported() async throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
         let marker = tree.workspaceURL.appendingPathComponent("must-not-run")
         let command = try #require(IsolatedCommand(executable: "/bin/touch", arguments: ["must-not-run"]))
-        switch IsolationBackends.apply(tree.contained, command: command) {
+        switch await IsolationBackends.applyOffPool(tree.contained, command: command) {
         case .failure(.containedGuaranteesUnsupported):
             break
         case .failure(let error):
@@ -180,7 +180,7 @@ struct RuntimeAdmissionIsolationTests {
     #endif
 
     #if os(macOS)
-    @Test func containedClientUsesTheGrantedPipes() throws {
+    @Test func containedClientUsesTheGrantedPipes() async throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
         let client = try compileAdmissionClient(in: tree.workspaceURL)
@@ -188,8 +188,18 @@ struct RuntimeAdmissionIsolationTests {
         let marker = tree.workspaceURL.appendingPathComponent("admitted-marker")
         let evidence = RuntimeAdmissionEvidence()
         let configuration = RuntimeAdmissionConfiguration(
-            normalize: isolationAdmissionNormalize,
+            normalize: containedPipeNormalize,
             executor: .containedCommand,
+            http: .effect { action, _, _ in
+                .success(
+                    HTTPExecutionReceipt(
+                        status: 204,
+                        destination: action.destination.auditedResource,
+                        headers: [],
+                        body: Data()
+                    )
+                )
+            },
             approval: { _ in nil },
             policy: { _ in .empty },
             evidence: evidence
@@ -198,7 +208,7 @@ struct RuntimeAdmissionIsolationTests {
             IsolatedCommand(executable: client.path, arguments: [reply.path])
         )
         let log = tree.rootURL.appendingPathComponent("sessions.jsonl")
-        let result = IsolationBackends.applyLaunch(
+        let result = await IsolationBackends.applyLaunchOffPool(
             tree.contained,
             command: command,
             io: .discard,
@@ -213,15 +223,74 @@ struct RuntimeAdmissionIsolationTests {
         #expect(text.contains("\"reason\":\"replay\""))
         #expect(text.contains("\"reason\":\"impersonation\""))
         #expect(text.contains("\"reason\":\"invalidCapability\""))
+        #expect(text.contains("\"status\":\"denied\""))
+        #expect(text.contains("\"status\":\"pending\""))
+        #expect(text.contains("\"status\":\"http\""))
         #expect(FileManager.default.fileExists(atPath: marker.path))
+        // One allowed shell and one allowed GET. A second shell still fails.
         let attempted = evidence.snapshot().filter(\.executionAttempted)
-        #expect(attempted.count == 1)
-        #expect(attempted.first?.authorization == .allowed)
+        let shells = attempted.filter { $0.httpMethod == nil }
+        let transfers = attempted.filter { $0.httpMethod != nil }
+        #expect(shells.count == 1)
+        #expect(shells.first?.authorization == .allowed)
+        #expect(shells.first?.result == "exit:0")
+        #expect(transfers.count == 1)
+        #expect(transfers.first?.authorization == .allowed)
         let rejected = evidence.snapshot().filter { $0.eventExecutionWasRejected }
         #expect(rejected.allSatisfy { $0.executionAttempted == false })
     }
 
-    @Test func admittedCommandStopsWhenContainedProcessExits() throws {
+    @Test func ptyRuntimeStillAdmitsShellCommands() async throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let client = try compileAdmissionClient(in: tree.workspaceURL)
+        let reply = tree.workspaceURL.appendingPathComponent("pty-admission-reply")
+        let marker = tree.workspaceURL.appendingPathComponent("admitted-marker")
+        let evidence = RuntimeAdmissionEvidence()
+        let configuration = RuntimeAdmissionConfiguration(
+            normalize: containedPipeNormalize,
+            executor: .containedCommand,
+            http: .effect { action, _, _ in
+                .success(
+                    HTTPExecutionReceipt(
+                        status: 204,
+                        destination: action.destination.auditedResource,
+                        headers: [],
+                        body: Data()
+                    )
+                )
+            },
+            approval: { _ in nil },
+            policy: { _ in .empty },
+            evidence: evidence
+        )
+        let command = try #require(
+            IsolatedCommand(executable: client.path, arguments: [reply.path])
+        )
+        let log = tree.rootURL.appendingPathComponent("pty-sessions.jsonl")
+        let result = await IsolationBackends.applyLaunchOffPool(
+            tree.contained,
+            command: command,
+            io: .pseudoTerminal(rows: 24, columns: 80),
+            host: .opencode,
+            sessionStore: .file(log),
+            admission: configuration
+        )
+        let run = try result.get()
+        #expect(run.exitStatus == 0)
+        let text = try String(contentsOf: reply, encoding: .utf8)
+        #expect(text.contains("\"status\":\"executed\""))
+        #expect(text.contains("\"reason\":\"replay\""))
+        #expect(text.contains("\"reason\":\"impersonation\""))
+        #expect(text.contains("\"reason\":\"invalidCapability\""))
+        #expect(text.contains("\"status\":\"denied\""))
+        #expect(text.contains("\"status\":\"pending\""))
+        #expect(text.contains("\"status\":\"http\""))
+        #expect(FileManager.default.fileExists(atPath: marker.path))
+        #expect(FileManager.default.fileExists(atPath: "/tmp/rv-pty-deny-marker") == false)
+    }
+
+    @Test func admittedCommandStopsWhenContainedProcessExits() async throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
         let sleeper = try compileC(
@@ -246,7 +315,7 @@ struct RuntimeAdmissionIsolationTests {
             policy: { _ in .empty },
             evidence: RuntimeAdmissionEvidence()
         )
-        let result = IsolationBackends.applyLaunch(
+        let result = await IsolationBackends.applyLaunchOffPool(
             tree.contained,
             command: command,
             io: .discard,
@@ -422,6 +491,25 @@ private func isolationAdmissionNormalize(
     )
 }
 
+/// Shell rules plus one public HTTPS GET, so a PTY payload can use fds 4 and 5
+/// for both without touching its terminal.
+private func containedPipeNormalize(
+    subject: RuntimeAdmissionSubject,
+    action: RuntimeRequestedAction
+) -> Result<ProposedAction, RuntimeAdmissionEvaluationError> {
+    if case .http(let method, let url) = action {
+        return normalizeRuntimeHTTP(
+            subject: subject,
+            method: method,
+            url: url
+        ) { host in
+            guard host == "example.com" else { return .failure(.failed) }
+            return .success([HTTPIPAddress(ipv4: [1, 1, 1, 1])!])
+        }
+    }
+    return isolationAdmissionNormalize(subject: subject, action: action)
+}
+
 #if os(macOS)
 /// Test double that authorizes the requested argv. Production normalization
 /// stays in RVEngine; this only lets a lifetime probe reach the spawner.
@@ -575,6 +663,18 @@ int main(int argc, char **argv) {
         "{\"v\":1,\"id\":\"cccccccc-cccc-cccc-cccc-cccccccccccc\",\"capability\":\"%s\",\"session\":\"%s\",\"command\":\"touch admitted-marker\"}",
         fake, session);
     if (exchange(4, 5, body, reply) != 0) return 9;
+    snprintf(body, sizeof body,
+        "{\"v\":1,\"id\":\"dddddddd-dddd-dddd-dddd-dddddddddddd\",\"capability\":\"%s\",\"session\":\"%s\",\"command\":\"touch /tmp/rv-pty-deny-marker\"}",
+        capability, session);
+    if (exchange(4, 5, body, reply) != 0) return 10;
+    snprintf(body, sizeof body,
+        "{\"v\":1,\"id\":\"eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee\",\"capability\":\"%s\",\"session\":\"%s\",\"command\":\"echo hello\"}",
+        capability, session);
+    if (exchange(4, 5, body, reply) != 0) return 11;
+    snprintf(body, sizeof body,
+        "{\"v\":1,\"id\":\"ffffffff-ffff-ffff-ffff-ffffffffffff\",\"capability\":\"%s\",\"session\":\"%s\",\"method\":\"GET\",\"url\":\"https://example.com/a\"}",
+        capability, session);
+    if (exchange(4, 5, body, reply) != 0) return 12;
     fclose(reply);
     return 0;
 }

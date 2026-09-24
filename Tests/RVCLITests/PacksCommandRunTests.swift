@@ -11,7 +11,7 @@ import RVTheme
 struct PacksCommandRunTests {
     @Test func list_missingHome() async throws {
         try await withCLIProcess(environment: [:]) {
-            var command = try Packs.parse([])
+            let command = try Packs.parse([])
             await #expect(throws: ExitCode(1)) {
                 try await command.run()
             }
@@ -21,17 +21,17 @@ struct PacksCommandRunTests {
     @Test func list_defaultPrettyAndRobot() async throws {
         let home = try isolatedHome()
         try await withCLIProcess(home: home) {
-            var pretty = try Packs.parse(["--plain", "--no-color"])
+            let pretty = try Packs.parse(["--plain", "--no-color"])
             try await pretty.run()
-            var robot = try Packs.parse(["--json"])
+            let robot = try Packs.parse(["--json"])
             try await robot.run()
-            var verbose = try Packs.parse([
+            let verbose = try Packs.parse([
                 "--verbose", "--expand", "--max-patterns", "0", "--search", "git",
             ])
             try await verbose.run()
-            var enabled = try Packs.parse(["--enabled", "--category", "core"])
+            let enabled = try Packs.parse(["--enabled", "--category", "core"])
             try await enabled.run()
-            var all = try Packs.parse(["--all", "--enabled"])
+            let all = try Packs.parse(["--all", "--enabled"])
             try await all.run()
         }
     }
@@ -39,9 +39,9 @@ struct PacksCommandRunTests {
     @Test func list_emptyFilterHints() async throws {
         let home = try isolatedHome()
         try await withCLIProcess(home: home) {
-            var none = try Packs.parse(["--search", "zzz-no-such-pack"])
+            let none = try Packs.parse(["--search", "zzz-no-such-pack"])
             try await none.run()
-            var category = try Packs.parse(["--category", "no-such-category"])
+            let category = try Packs.parse(["--category", "no-such-category"])
             try await category.run()
         }
         try PacksConfigStore.save(
@@ -49,7 +49,7 @@ struct PacksCommandRunTests {
             home: home
         )
         try await withCLIProcess(home: home) {
-            var enabled = try Packs.parse(["--enabled"])
+            let enabled = try Packs.parse(["--enabled"])
             try await enabled.run()
         }
     }
@@ -67,7 +67,7 @@ struct PacksCommandRunTests {
 
     @Test func enable_missingHomeEmptyAndUnknown() async throws {
         try await withCLIProcess(environment: [:]) {
-            var home = try Packs.Enable.parse(["core.git"])
+            let home = try Packs.Enable.parse(["core.git"])
             await #expect(throws: ExitCode(1)) {
                 try await home.run()
             }
@@ -79,13 +79,13 @@ struct PacksCommandRunTests {
             await #expect(throws: (any Error).self) {
                 try await empty.run()
             }
-            var unknown = try Packs.Enable.parse(["not-a-pack"])
+            let unknown = try Packs.Enable.parse(["not-a-pack"])
             await #expect(throws: ExitCode(1)) {
                 try await unknown.run()
             }
-            var ok = try Packs.Enable.parse(["core.git"])
+            let ok = try Packs.Enable.parse(["core.git"])
             try await ok.run()
-            var category = try Packs.Enable.parse(["core"])
+            let category = try Packs.Enable.parse(["core"])
             try await category.run()
         }
     }
@@ -93,19 +93,19 @@ struct PacksCommandRunTests {
     @Test func disable_succeedsAndUnwritableConfig() async throws {
         let home = try isolatedHome()
         try await withCLIProcess(home: home) {
-            var disable = try Packs.Disable.parse(["core.git"])
+            let disable = try Packs.Disable.parse(["core.git"])
             try await disable.run()
         }
         try replacePathWithDirectory(PacksConfigStore.configURL(home: home))
         try await withCLIProcess(home: home) {
-            var again = try Packs.Disable.parse(["core.filesystem"])
+            let again = try Packs.Disable.parse(["core.filesystem"])
             await #expect(throws: ExitCode(1)) {
                 try await again.run()
             }
         }
         let isolated = try isolatedHome()
         try await withCLIProcess(home: isolated) {
-            var unknown = try Packs.Disable.parse(["not-a-pack"])
+            let unknown = try Packs.Disable.parse(["not-a-pack"])
             await #expect(throws: ExitCode(1)) {
                 try await unknown.run()
             }
@@ -114,24 +114,24 @@ struct PacksCommandRunTests {
 
     @Test func info_missingHomeUnknownAndPrettyRobot() async throws {
         try await withCLIProcess(environment: [:]) {
-            var home = try Packs.Info.parse(["core.git"])
+            let home = try Packs.Info.parse(["core.git"])
             await #expect(throws: ExitCode(1)) {
                 try await home.run()
             }
         }
         let isolated = try isolatedHome()
         try await withCLIProcess(home: isolated) {
-            var invalid = try Packs.Info.parse(["NOT VALID"])
+            let invalid = try Packs.Info.parse(["NOT VALID"])
             await #expect(throws: ExitCode(1)) {
                 try await invalid.run()
             }
-            var missing = try Packs.Info.parse(["zzz.missing"])
+            let missing = try Packs.Info.parse(["zzz.missing"])
             await #expect(throws: ExitCode(1)) {
                 try await missing.run()
             }
-            var pretty = try Packs.Info.parse(["core.git"])
+            let pretty = try Packs.Info.parse(["core.git"])
             try await pretty.run()
-            var robot = try Packs.Info.parse(["--robot", "core.git"])
+            let robot = try Packs.Info.parse(["--robot", "core.git"])
             try await robot.run()
         }
     }

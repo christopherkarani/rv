@@ -280,6 +280,16 @@ enum WorkspaceControlSocket {
         var offset = 0
         let bytes = [UInt8](data)
         while offset < bytes.count {
+            // A subscriber that stops reading fills the socket. A blocking
+            // write there holds workspace close until the client times out.
+            var state = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+            let ready = poll(&state, 1, 1_000)
+            if ready == 0 { return false }
+            if ready < 0 {
+                if errno == EINTR { continue }
+                return false
+            }
+            if state.revents & Int16(POLLERR | POLLHUP | POLLNVAL) != 0 { return false }
             let count = bytes.withUnsafeBytes { buffer -> Int in
                 guard let base = buffer.baseAddress else { return -1 }
                 return Darwin.write(fd, base.advanced(by: offset), bytes.count - offset)
