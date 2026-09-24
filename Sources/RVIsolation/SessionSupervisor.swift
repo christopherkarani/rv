@@ -293,7 +293,11 @@ func spawnSeatbeltProcess(
     }
     defer { posix_spawn_file_actions_destroy(&actions) }
     let chdirResult = workspace.withCString { path in
-        posix_spawn_file_actions_addchdir(&actions, path)
+        if #available(macOS 26, *) {
+            posix_spawn_file_actions_addchdir(&actions, path)
+        } else {
+            posix_spawn_file_actions_addchdir_np(&actions, path)
+        }
     }
     guard chdirResult == 0 else {
         return .failure(.processSpawnFailed)
