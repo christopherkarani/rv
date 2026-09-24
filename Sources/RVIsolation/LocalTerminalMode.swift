@@ -247,6 +247,17 @@ public enum WorkspaceTerminalDriver {
                         throw WorkspaceTerminalDriveError.client(.disconnected)
                     }
                 case .exited(let status):
+                    // Workspace close kills the child, so the signal status
+                    // can arrive before `workspaceClosed`. The close is the
+                    // failure the driver must report.
+                    switch client.nextTerminalEvent(timeout: 0.3) {
+                    case .failure(let error) where error == .workspaceClosed || error == .disconnected:
+                        restorer?.restore()
+                        _ = client.detach()
+                        throw WorkspaceTerminalDriveError.client(error)
+                    case .failure, .success:
+                        break
+                    }
                     restorer?.restore()
                     _ = client.detach()
                     throw WorkspaceTerminalDriveError.exited(status)

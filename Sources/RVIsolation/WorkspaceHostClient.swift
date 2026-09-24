@@ -782,6 +782,10 @@ private final class EventBoard: @unchecked Sendable {
                 return .success(nil)
             }
         }
+        if let failed, failed == .workspaceClosed || failed == .disconnected {
+            condition.unlock()
+            return .failure(failed)
+        }
         if messages.isEmpty, let failed {
             condition.unlock()
             return .failure(failed)

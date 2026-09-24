@@ -681,7 +681,9 @@ final class RuntimeTerminal: @unchecked Sendable {
                 return
             }
             if dropped || ended {
-                subscribers[subscriber.id] = nil
+                // The exit is already on the wire. Dropping the subscriber
+                // here makes a following acquire report `.unavailable`, so
+                // the driver never reads the status or restores the terminal.
                 subscriber.stopped = true
                 if inputOwner == subscriber.id {
                     inputOwner = nil
