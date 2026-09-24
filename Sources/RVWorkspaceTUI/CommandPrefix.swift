@@ -63,7 +63,8 @@ public enum CommandPrefix {
     public static func route(
         _ key: TUIKey,
         mode: CommandMode,
-        launcher: [RuntimeLaunchChoice]
+        launcher: [RuntimeLaunchChoice],
+        directLauncherSelection: Bool = false
     ) -> (CommandMode, TUICommand?) {
         switch mode {
         case .help:
@@ -73,6 +74,10 @@ public enum CommandPrefix {
         case .prefix:
             return routePrefix(key)
         case .terminal:
+            if directLauncherSelection, case .character(let character) = key,
+               let index = Int(String(character)), index > 0, index <= launcher.count {
+                return (.terminal, .launch(launcher[index - 1]))
+            }
             if case .control(let character) = key, character.lowercased() == "g" { return (.prefix, nil) }
             return (.terminal, .send(TerminalInputEncoder.bytes(for: key)))
         }

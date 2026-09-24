@@ -116,7 +116,12 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
             lock.unlock()
             return
         }
-        let decision = CommandPrefix.route(key, mode: mode, launcher: launcher)
+        let decision = CommandPrefix.route(
+            key,
+            mode: mode,
+            launcher: launcher,
+            directLauncherSelection: tree.isEmpty
+        )
         mode = decision.0
         command = decision.1
         if command == .detach {

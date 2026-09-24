@@ -56,6 +56,7 @@ struct WorkspaceShellView: View {
         .onKeyPress(.any) { press in
             handle(press)
         }
+        .focusable()
         .task {
             while Task.isCancelled == false, model.snapshot().shouldExit == false {
                 do {
@@ -117,14 +118,15 @@ struct WorkspaceShellView: View {
         } else {
             VStack(alignment: .center, spacing: 1) {
                 Text("No runtimes yet").bold()
-                Text("Start a shell or coding agent to begin working here.")
+                Text("Choose a runtime to begin working here.")
                     .foregroundStyle(Color.gray)
-                Text("^G n    New runtime").bold()
                 if snapshot.launcher.isEmpty {
                     Text("No runtime launchers are available.")
                         .foregroundStyle(Color.gray)
                 } else {
-                    Text(launcherText(snapshot.launcher))
+                    Text(launcherText(snapshot.launcher)).bold()
+                        .foregroundStyle(Color.gray)
+                    Text("Type its number to launch")
                         .foregroundStyle(Color.gray)
                 }
             }
@@ -137,7 +139,8 @@ struct WorkspaceShellView: View {
         let state = snapshot.connection == .connected ? "workspace \(snapshot.phase)" : "disconnected"
         let hint: String
         switch snapshot.mode {
-        case .terminal: hint = "^G n new runtime · ^G ? help"
+        case .terminal:
+            hint = snapshot.tree.isEmpty ? "press a number to launch" : "^G n new runtime · ^G ? help"
         case .prefix: hint = "command"
         case .launcher: hint = "1–9 launch · Esc cancel"
         case .help: hint = "Esc close help"

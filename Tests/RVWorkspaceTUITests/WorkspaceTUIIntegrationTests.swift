@@ -32,8 +32,6 @@ struct WorkspaceTUIIntegrationTests {
         shell.detachSession()
     }
     pump?.start()
-    shell.handle(.control("g"))
-    shell.handle(.character("n"))
     shell.handle(.character("1"))
     #expect(waitUntil { shell.snapshot().panes.values.first?.lease == .owned })
     let pane = try #require(shell.snapshot().focused)

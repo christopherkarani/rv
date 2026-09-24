@@ -132,6 +132,19 @@ import Testing
     #expect(TerminalInputEncoder.bytes(for: .control("c")) == Data([0x03]))
 }
 
+@Test func emptyWorkspaceLaunchNumbersWorkWithoutThePrefix() {
+    let shell = RuntimeLaunchChoice(id: "shell", title: "shell", executable: "/bin/sh", arguments: [], hook: nil)
+    let opencode = RuntimeLaunchChoice(id: "opencode", title: "opencode", executable: "/bin/opencode", arguments: [], hook: nil)
+    let choices = [shell, opencode]
+
+    #expect(CommandPrefix.route(.character("1"), mode: .terminal, launcher: choices, directLauncherSelection: true)
+        == (.terminal, .launch(shell)))
+    #expect(CommandPrefix.route(.character("2"), mode: .terminal, launcher: choices, directLauncherSelection: true)
+        == (.terminal, .launch(opencode)))
+    #expect(CommandPrefix.route(.character("1"), mode: .terminal, launcher: choices)
+        == (.terminal, .send(Data("1".utf8))))
+}
+
 @Test func resizeCoalescerSendsOnlyAStableChange() {
     var gate = ResizeCoalescer()
     gate.recordLaunch(rows: 24, columns: 80)

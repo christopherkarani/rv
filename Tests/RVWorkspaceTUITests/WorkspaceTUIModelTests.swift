@@ -262,6 +262,7 @@ private func model(_ client: FakeWorkspaceClient) -> WorkspaceTUIModel {
         summary: client.summary,
         launcher: [
             RuntimeLaunchChoice(id: "shell", title: "shell", executable: "/bin/sh", arguments: [], hook: nil),
+            RuntimeLaunchChoice(id: "opencode", title: "opencode", executable: "/bin/opencode", arguments: [], hook: "opencode"),
         ]
     )
 }
@@ -474,6 +475,31 @@ private func model(_ client: FakeWorkspaceClient) -> WorkspaceTUIModel {
     #expect(shell.snapshot().focused == nil)
     #expect(client.runtimes.isEmpty)
     #expect(client.subscribes.isEmpty)
+}
+
+@Test func numberedChoiceLaunchesDirectlyFromAnEmptyWorkspace() throws {
+    let client = FakeWorkspaceClient()
+    let shell = model(client)
+    try shell.connect().get()
+
+    shell.handle(.character("1"))
+
+    #expect(waitForModel { shell.snapshot().panes.count == 1 })
+    #expect(client.launchAttempts == 1)
+    #expect(shell.snapshot().panes.values.first?.title == "shell")
+    #expect(client.writes.isEmpty)
+}
+
+@Test func secondNumberLaunchesOpenCodeDirectlyFromAnEmptyWorkspace() throws {
+    let client = FakeWorkspaceClient()
+    let shell = model(client)
+    try shell.connect().get()
+
+    shell.handle(.character("2"))
+
+    #expect(waitForModel { shell.snapshot().panes.count == 1 })
+    #expect(client.launchAttempts == 1)
+    #expect(shell.snapshot().panes.values.first?.title == "opencode")
 }
 
 @Test func failedRuntimeCancellationKeepsItsPaneAndTree() throws {
