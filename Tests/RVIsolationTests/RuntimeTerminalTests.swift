@@ -937,7 +937,7 @@ private func ttyPaths() -> Set<String> {
     for fd in 0..<256 {
         var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
         guard fcntl(Int32(fd), F_GETPATH, &buffer) == 0 else { continue }
-        let path = String(cString: buffer)
+        let path = utf8Path(buffer)
         if path.contains("/dev/ttys") || path.contains("/dev/pty") {
             paths.insert(path)
         }
@@ -1055,7 +1055,13 @@ private func processPath(_ pid: pid_t) -> String? {
     var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
     let length = proc_pidpath(pid, &buffer, UInt32(buffer.count))
     guard length > 0 else { return nil }
-    return String(cString: buffer)
+    return utf8Path(buffer, length: Int(length))
+}
+
+private func utf8Path(_ buffer: [CChar], length: Int? = nil) -> String {
+    let limit = min(length ?? buffer.count, buffer.count)
+    let bytes = buffer.prefix(limit).prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) }
+    return String(decoding: bytes, as: UTF8.self)
 }
 
 private func waitLive(project: String, configuration: URL, seconds: TimeInterval) -> WorkspaceEndpoint? {
