@@ -97,6 +97,8 @@ struct WorkspaceHostTests {
         defer { opened.close() }
         let first = try WorkspaceClient.connect(opened.server.endpoint).get()
         let second = try WorkspaceClient.connect(opened.server.endpoint).get()
+        #expect(first.supportsEnsureTerminalRuntime)
+        #expect(second.supportsEnsureTerminalRuntime)
         let described = try first.describe().get()
         #expect(described.workspace == opened.supervisor.id.rawValue)
         #expect(described.host == opened.server.endpoint.host)

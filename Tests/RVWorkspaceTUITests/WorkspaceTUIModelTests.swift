@@ -7,6 +7,7 @@ final class FakeWorkspaceClient: WorkspaceTUIClient, @unchecked Sendable {
     private var storedSummary: WorkspaceTUISummary
     private var storedRuntimes: [ListedRuntime] = []
     private var storedFailLaunch = false
+    private var storedFailSubscribe = false
     private var storedFailCancel = false
     private var storedBusyInput = false
     private var storedBusyWrite = false
@@ -45,6 +46,10 @@ final class FakeWorkspaceClient: WorkspaceTUIClient, @unchecked Sendable {
     var failLaunch: Bool {
         get { withLock { storedFailLaunch } }
         set { withLock { storedFailLaunch = newValue } }
+    }
+    var failSubscribe: Bool {
+        get { withLock { storedFailSubscribe } }
+        set { withLock { storedFailSubscribe = newValue } }
     }
     var failCancel: Bool {
         get { withLock { storedFailCancel } }
@@ -112,9 +117,33 @@ final class FakeWorkspaceClient: WorkspaceTUIClient, @unchecked Sendable {
             _ = launchGate.wait(timeout: .now() + 5)
         }
         if fails { return .failure(.rejected) }
-        let runtime = ListedRuntime(id: UUID(), hook: hook, running: true, terminal: true)
+        let runtime = ListedRuntime(id: UUID(), hook: hook, running: true, terminal: true, created: true)
         withLock { storedRuntimes.append(runtime) }
         return .success(runtime)
+    }
+
+    func ensureTerminalRuntime(
+        executable: String,
+        arguments: [String],
+        hook: String?,
+        rows: Int,
+        columns: Int
+    ) -> Result<ListedRuntime, WorkspaceTUIClientError> {
+        if case .success(let values) = listRuntimes(),
+            let existing = values
+                .filter({ $0.running && $0.terminal })
+                .sorted(by: { $0.id.uuidString < $1.id.uuidString })
+                .first
+        {
+            return .success(existing)
+        }
+        return launchRuntime(
+            executable: executable,
+            arguments: arguments,
+            hook: hook,
+            rows: rows,
+            columns: columns
+        )
     }
 
     func cancelRuntime(_ id: UUID) -> Result<Void, WorkspaceTUIClientError> {
@@ -132,8 +161,11 @@ final class FakeWorkspaceClient: WorkspaceTUIClient, @unchecked Sendable {
     }
 
     func subscribe(_ id: UUID) -> Result<Void, WorkspaceTUIClientError> {
-        withLock { storedSubscribes.append(id) }
-        return .success(())
+        let fails = withLock {
+            storedSubscribes.append(id)
+            return storedFailSubscribe
+        }
+        return fails ? .failure(.unavailable) : .success(())
     }
 
     func unsubscribe(_ id: UUID) -> Result<Void, WorkspaceTUIClientError> {
@@ -480,6 +512,91 @@ private func model(_ client: FakeWorkspaceClient) -> WorkspaceTUIModel {
     #expect(shell.snapshot().focused == nil)
     #expect(client.runtimes.isEmpty)
     #expect(client.subscribes.isEmpty)
+}
+
+@Test func emptyWorkspaceCanStartTheConfiguredShellOnce() throws {
+    let client = FakeWorkspaceClient()
+    let shell = model(client)
+    try shell.connect().get()
+
+    shell.launchDefaultRuntimeIfEmpty()
+
+    #expect(client.launchAttempts == 1)
+    #expect(shell.snapshot().panes.count == 1)
+    #expect(shell.snapshot().panes.values.first?.title == "shell")
+    #expect(shell.snapshot().panes.values.first?.lease == .owned)
+    shell.launchDefaultRuntimeIfEmpty()
+    Thread.sleep(forTimeInterval: 0.05)
+    #expect(client.launchAttempts == 1)
+}
+
+@Test func defaultShellDoesNotLaunchWhenAnExistingRuntimeIsAttached() throws {
+    let client = FakeWorkspaceClient()
+    let runtime = UUID()
+    client.runtimes = [ListedRuntime(id: runtime, hook: "codex", running: true, terminal: true)]
+    let shell = model(client)
+    try shell.connect().get()
+
+    shell.launchDefaultRuntimeIfEmpty()
+
+    #expect(shell.snapshot().panes.count == 1)
+    #expect(client.launchAttempts == 0)
+    #expect(shell.snapshot().panes.values.first?.runtime == runtime)
+}
+
+@Test func failedDefaultShellLaunchFallsBackToTheRuntimeLauncher() throws {
+    let client = FakeWorkspaceClient()
+    client.failLaunch = true
+    let shell = model(client)
+    try shell.connect().get()
+
+    shell.launchDefaultRuntimeIfEmpty()
+
+    #expect(waitForModel { shell.snapshot().mode == .launcher })
+    #expect(shell.snapshot().tree == .empty)
+    #expect(client.launchAttempts == 1)
+}
+
+@Test func ensureUsesTheRuntimeThatAppearedAfterInventory() throws {
+    let client = FakeWorkspaceClient()
+    let shell = model(client)
+    try shell.connect().get()
+    let runtime = ListedRuntime(id: UUID(), hook: "opencode", running: true, terminal: true)
+    client.runtimes = [runtime]
+
+    shell.launchDefaultRuntimeIfEmpty()
+
+    #expect(client.launchAttempts == 0)
+    #expect(shell.snapshot().panes.values.first?.runtime == runtime.id)
+    #expect(shell.snapshot().panes.values.first?.title == "opencode")
+}
+
+@Test func reusedUnhookedRuntimeUsesANeutralTitle() throws {
+    let client = FakeWorkspaceClient()
+    let shell = model(client)
+    try shell.connect().get()
+    let runtime = ListedRuntime(id: UUID(), hook: nil, running: true, terminal: true)
+    client.runtimes = [runtime]
+
+    shell.launchDefaultRuntimeIfEmpty()
+
+    #expect(shell.snapshot().panes.values.first?.runtime == runtime.id)
+    #expect(shell.snapshot().panes.values.first?.title == "runtime")
+}
+
+@Test func failedDefaultShellSubscriptionIsMarkedUnavailable() throws {
+    let client = FakeWorkspaceClient()
+    client.failSubscribe = true
+    let shell = model(client)
+    try shell.connect().get()
+
+    shell.launchDefaultRuntimeIfEmpty()
+
+    let pane = try #require(shell.snapshot().panes.values.first)
+    #expect(pane.title == "shell (unavailable)")
+    #expect(pane.subscribed == false)
+    #expect(pane.lease == .readOnly)
+    #expect(client.acquires.isEmpty)
 }
 
 @Test func renderRevisionGateDoesNotInvalidateThroughAFullIdleStackDepth() {

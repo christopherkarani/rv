@@ -7,6 +7,47 @@ import Testing
 
 @Suite(.serialized)
 struct WorkspaceTUIIntegrationTests {
+@Test func emptyWorkspaceStartsAnInteractiveContainedShell() throws {
+    let host = try OpenedHost()
+    defer { host.close() }
+    let client = try WorkspaceClient.connect(host.server.endpoint).get()
+    let terminalClient = try WorkspaceClient.connect(host.server.endpoint).get()
+    let live = LiveWorkspaceTUIClient(controlClient: client, terminalClient: terminalClient)
+    let script = "stty icanon icrnl; printf 'RV-AUTO-SHELL-READY\\r\\n'; while IFS= read -r line; do printf 'RV-AUTO-SHELL-REPLY:%s\\r\\n' \"$line\"; done"
+    let model = WorkspaceTUIModel(
+        client: live,
+        summary: try live.describe().get(),
+        launcher: [RuntimeLaunchChoice(
+            id: "shell", title: "shell", executable: "/bin/sh",
+            arguments: ["-c", script], hook: nil
+        )],
+        rows: 12,
+        columns: 40
+    )
+    try model.connect().get()
+    let pump = TerminalEventPump(client: live, model: model)
+    pump.start()
+    defer {
+        pump.stop()
+        model.detachSession()
+    }
+
+    model.launchDefaultRuntimeIfEmpty()
+
+    #expect(model.snapshot().panes.values.first?.lease == .owned)
+    let pane = try #require(model.snapshot().focused)
+    let runtime = try #require(model.snapshot().panes[pane]?.runtime)
+    send("typed input", to: model)
+    #expect(waitUntil { screen(model, pane).contains("RV-AUTO-SHELL-READY") })
+    #expect(waitUntil { screen(model, pane).contains("RV-AUTO-SHELL-REPLY:typed input") })
+
+    model.handle(.control("g"))
+    model.handle(.character("x"))
+    #expect(waitUntil { model.snapshot().tree == .empty })
+    #expect(try client.listRuntimes().get().first { $0.runtime == runtime }?.running == false)
+    #expect(try live.describe().get().phase == "active")
+}
+
 @Test func hostPTYBytesResizeDetachAndReattachUseTheSameRuntime() throws {
     let host = try OpenedHost()
     defer { host.close() }

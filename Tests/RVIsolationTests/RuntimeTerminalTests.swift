@@ -485,6 +485,65 @@ struct RuntimeTerminalTests {
         #expect(opened.supervisor.snapshot.phase == .active)
     }
 
+    @Test func concurrentEnsureTerminalRuntimeRequestsShareOneRuntime() throws {
+        let opened = try PTYHost()
+        defer { opened.close() }
+        let clients = try [
+            WorkspaceClient.connect(opened.server.endpoint).get(),
+            WorkspaceClient.connect(opened.server.endpoint).get(),
+        ]
+        let reports = RuntimeReportBox()
+        DispatchQueue.concurrentPerform(iterations: clients.count) { index in
+            let report = clients[index].ensureTerminalRuntime(
+                executable: "/bin/sh",
+                arguments: ["-c", "while read line; do printf '%s\\n' \"$line\"; done"],
+                terminalRows: 24,
+                terminalColumns: 80
+            )
+            if case .success(let value) = report {
+                reports.append(value)
+            }
+        }
+
+        let results = reports.values
+        #expect(results.count == clients.count)
+        #expect(Set(results.map(\.runtime)).count == 1)
+        #expect(Set(results.map(\.created)) == [false, true])
+        let activeTerminals = try clients[0].listRuntimes().get().filter { $0.running && $0.terminal }
+        #expect(activeTerminals.count == 1)
+        #expect(activeTerminals.first?.runtime == results.first?.runtime)
+        #expect(clients[0].cancelRuntime(results[0].runtime).isSuccess)
+    }
+
+    @Test func legacyEnsureFallbackLockSerializesCallers() {
+        let probe = CriticalSectionProbe()
+        DispatchQueue.concurrentPerform(iterations: 4) { _ in
+            _ = LegacyTerminalEnsureLock.withLock {
+                probe.enter()
+                Thread.sleep(forTimeInterval: 0.02)
+                probe.leave()
+            }
+        }
+
+        #expect(probe.maximumConcurrency == 1)
+        #expect(probe.entries == 4)
+    }
+
+    @Test func legacyEnsureFallbackLockUsesAPrivateDirectory() throws {
+        let fd = try #require(LegacyTerminalEnsureLock.acquire())
+        defer { LegacyTerminalEnsureLock.release(fd) }
+        var directory = stat()
+        #expect(LegacyTerminalEnsureLock.directoryPath.withCString { lstat($0, &directory) } == 0)
+        #expect(directory.st_uid == getuid())
+        #expect((directory.st_mode & S_IFMT) == S_IFDIR)
+        #expect((directory.st_mode & 0o777) == 0o700)
+        var file = stat()
+        #expect(LegacyTerminalEnsureLock.lockPath.withCString { lstat($0, &file) } == 0)
+        #expect(file.st_uid == getuid())
+        #expect((file.st_mode & S_IFMT) == S_IFREG)
+        #expect((file.st_mode & 0o777) == 0o600)
+    }
+
     @Test func inputReachesOnlyTheAddressedRuntime() throws {
         let opened = try PTYHost()
         defer { opened.close() }
@@ -1428,6 +1487,56 @@ private final class WatchBox: @unchecked Sendable {
             value = newValue
             lock.unlock()
         }
+    }
+}
+
+private final class RuntimeReportBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var reports: [WorkspaceRuntimeReport] = []
+
+    var values: [WorkspaceRuntimeReport] {
+        lock.lock()
+        defer { lock.unlock() }
+        return reports
+    }
+
+    func append(_ report: WorkspaceRuntimeReport) {
+        lock.lock()
+        reports.append(report)
+        lock.unlock()
+    }
+}
+
+private final class CriticalSectionProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var active = 0
+    private var maximum = 0
+    private var entryCount = 0
+
+    var maximumConcurrency: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return maximum
+    }
+
+    var entries: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return entryCount
+    }
+
+    func enter() {
+        lock.lock()
+        active += 1
+        entryCount += 1
+        maximum = max(maximum, active)
+        lock.unlock()
+    }
+
+    func leave() {
+        lock.lock()
+        active -= 1
+        lock.unlock()
     }
 }
 

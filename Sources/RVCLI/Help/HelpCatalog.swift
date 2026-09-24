@@ -36,6 +36,7 @@ enum HelpCatalog {
             HelpSection(
                 heading: "Get started",
                 rows: [
+                    HelpRow(name: "rv", description: "Open the workspace shell in the current project"),
                     HelpRow(name: "opencode", description: "Launch OpenCode in a workspace sandbox"),
                     HelpRow(name: "workspace", description: "Attach to the persistent workspace host"),
                     HelpRow(name: "setup", description: "Wire host hooks and start rvd"),
@@ -61,6 +62,7 @@ enum HelpCatalog {
             ]),
         ],
         examples: [
+            "rv",
             "rv setup",
             "rv test 'git reset --hard'",
             "rv explain 'rm -rf ~'",

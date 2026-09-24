@@ -115,6 +115,9 @@ final class WorkspaceHostServer: @unchecked Sendable {
     private let removeSocketDirectory: Bool
     private let registry = Mutex<Registry>(Registry())
     private let gate = CloseGate()
+    /// Serializes the TUI's ensure-terminal operation across independent
+    /// Workspace Host clients.
+    private let terminalEnsureLock = NSLock()
 
     private struct Registry {
         var connections: [UUID: WorkspaceControlConnection] = [:]
@@ -413,6 +416,16 @@ final class WorkspaceHostServer: @unchecked Sendable {
         switch op {
         case .hello:
             return Reply(message: failure(message, .invalidRequest))
+        case .capabilities:
+            return Reply(
+                message: WorkspaceControlMessage(
+                    version: WorkspaceControlLimits.version,
+                    id: message.id,
+                    op: op.rawValue,
+                    ok: true,
+                    features: [WorkspaceControlFeature.ensureTerminalRuntime]
+                )
+            )
         case .ping:
             return Reply(
                 message: WorkspaceControlMessage(
@@ -429,6 +442,8 @@ final class WorkspaceHostServer: @unchecked Sendable {
             return Reply(message: list(message))
         case .launchRuntime:
             return Reply(message: launch(message))
+        case .ensureTerminalRuntime:
+            return Reply(message: ensureTerminalRuntime(message))
         case .cancelRuntime:
             return Reply(message: cancel(message))
         case .closeWorkspace:
@@ -507,7 +522,52 @@ final class WorkspaceHostServer: @unchecked Sendable {
         )
     }
 
-    private func launch(_ message: WorkspaceControlMessage) -> WorkspaceControlMessage {
+    private func ensureTerminalRuntime(_ message: WorkspaceControlMessage) -> WorkspaceControlMessage {
+        terminalEnsureLock.lock()
+        defer { terminalEnsureLock.unlock() }
+
+        let phase = supervisor.snapshot.phase
+        guard phase.acceptsRuntime else {
+            return failure(message, workspaceControlCode(.notAcceptingRuntime(phase)))
+        }
+        if let rawHook = message.hook, HookHost(rawValue: rawHook) == nil {
+            return failure(message, .invalidRequest)
+        }
+        guard let executable = message.executable, executable.hasPrefix("/"),
+            IsolatedCommand(executable: executable, arguments: message.arguments ?? []) != nil,
+            case .success(.pseudoTerminal(_, _)) = launchIO(message)
+        else {
+            return failure(message, .invalidRequest)
+        }
+
+        supervisor.pruneFinishedRuntimes(limit: WorkspaceControlLimits.maxRuntimes)
+        if let existing = supervisor.runtimeFacts()
+            .filter({ $0.running && $0.terminal })
+            .sorted(by: { $0.id.uuidString < $1.id.uuidString })
+            .first
+        {
+            return WorkspaceControlMessage(
+                version: WorkspaceControlLimits.version,
+                id: message.id,
+                op: WorkspaceControlOp.ensureTerminalRuntime.rawValue,
+                runtime: existing.id,
+                hook: existing.hookHost,
+                ok: true,
+                running: true,
+                rows: existing.rows,
+                columns: existing.columns,
+                terminal: true,
+                inputOwner: existing.inputOwner,
+                created: false
+            )
+        }
+        return launch(message, responseOp: .ensureTerminalRuntime)
+    }
+
+    private func launch(
+        _ message: WorkspaceControlMessage,
+        responseOp: WorkspaceControlOp = .launchRuntime
+    ) -> WorkspaceControlMessage {
         let phase = supervisor.snapshot.phase
         guard phase.acceptsRuntime else {
             return failure(message, workspaceControlCode(.notAcceptingRuntime(phase)))
@@ -567,7 +627,7 @@ final class WorkspaceHostServer: @unchecked Sendable {
             return WorkspaceControlMessage(
                 version: WorkspaceControlLimits.version,
                 id: message.id,
-                op: WorkspaceControlOp.launchRuntime.rawValue,
+                op: responseOp.rawValue,
                 runtime: running.id.rawValue,
                 hook: running.session.host?.rawValue,
                 ok: true,
@@ -575,7 +635,8 @@ final class WorkspaceHostServer: @unchecked Sendable {
                 rows: fact?.rows ?? launchedRows,
                 columns: fact?.columns ?? launchedColumns,
                 terminal: (fact?.terminal ?? false) || launchedTerminal,
-                inputOwner: fact?.inputOwner ?? false
+                inputOwner: fact?.inputOwner ?? false,
+                created: responseOp == .ensureTerminalRuntime ? true : nil
             )
         }
     }

@@ -28,6 +28,7 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
     private var shouldExit = false
     private var didConnect = false
     private var didDetach = false
+    private var initialRuntimeLaunchRequested = false
     private var leasedRuntime: UUID?
     private var pendingInputAcquisitions = Set<PaneID>()
     private var canvas = PaneRect(x: 0, y: 0, width: 80, height: 24)
@@ -109,6 +110,84 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
         }
         if let focus { acquire(focus) }
         return .success(())
+    }
+
+    /// Establishes a host-owned terminal before the local terminal begins
+    /// accepting input. The host serializes this operation across TUI clients.
+    public func launchDefaultRuntimeIfEmpty() {
+        lock.lock()
+        guard didConnect, connection == .connected, didDetach == false, shouldExit == false,
+              tree.isEmpty, initialRuntimeLaunchRequested == false else {
+            lock.unlock()
+            return
+        }
+        initialRuntimeLaunchRequested = true
+        let shell = launcher.first { $0.id == "shell" }
+        if shell == nil {
+            mode = .launcher
+            markPresentationChangedLocked()
+        }
+        lock.unlock()
+
+        guard let shell else { return }
+
+        let runtime: ListedRuntime
+        switch client.ensureTerminalRuntime(
+            executable: shell.executable,
+            arguments: shell.arguments,
+            hook: shell.hook,
+            rows: initialRows,
+            columns: initialColumns
+        ) {
+        case .success(let value):
+            runtime = value
+        case .failure(.disconnected):
+            markDisconnected()
+            return
+        case .failure:
+            lock.lock()
+            if tree.isEmpty, connection == .connected {
+                mode = .launcher
+                markPresentationChangedLocked()
+            }
+            lock.unlock()
+            return
+        }
+
+        let pane = PaneID()
+        let rows = runtime.rows.map(Self.bound) ?? initialRows
+        let columns = runtime.columns.map(Self.bound) ?? initialColumns
+        let title: String
+        if let hook = runtime.hook {
+            title = launcher.first(where: { $0.hook == hook })?.title ?? hook
+        } else {
+            title = runtime.created ? shell.title : "runtime"
+        }
+        lock.lock()
+        guard tree.isEmpty, connection == .connected, didDetach == false, shouldExit == false else {
+            lock.unlock()
+            return
+        }
+        tree = .leaf(pane)
+        focusedPane = pane
+        focusRevision &+= 1
+        var record = makeRecord(pane: pane, runtime: runtime, rows: rows, columns: columns)
+        record.state.title = title
+        panes[pane] = record
+        markPresentationChangedLocked()
+        lock.unlock()
+
+        if case .success = bind(pane, runtime: runtime.id) {
+            acquire(pane)
+        } else {
+            lock.lock()
+            if let record = panes[pane], record.state.subscribed == false {
+                panes[pane]?.state.title = "\(title) (unavailable)"
+                panes[pane]?.state.lease = .readOnly
+                markPresentationChangedLocked()
+            }
+            lock.unlock()
+        }
     }
 
     public func handle(_ key: TUIKey, now: Date = Date()) {

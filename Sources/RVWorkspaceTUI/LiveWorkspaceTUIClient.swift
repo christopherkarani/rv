@@ -40,7 +40,8 @@ public final class LiveWorkspaceTUIClient: WorkspaceTUIClient, @unchecked Sendab
                     running: $0.running,
                     terminal: $0.terminal,
                     rows: $0.rows,
-                    columns: $0.columns
+                    columns: $0.columns,
+                    created: $0.created
                 )
             }
         }.mapError(Self.failure)
@@ -67,7 +68,35 @@ public final class LiveWorkspaceTUIClient: WorkspaceTUIClient, @unchecked Sendab
                 running: report.running,
                 terminal: report.terminal,
                 rows: report.rows,
-                columns: report.columns
+                columns: report.columns,
+                created: report.created
+            )
+        }.mapError(Self.failure)
+    }
+
+    public func ensureTerminalRuntime(
+        executable: String,
+        arguments: [String],
+        hook: String?,
+        rows: Int,
+        columns: Int
+    ) -> Result<ListedRuntime, WorkspaceTUIClientError> {
+        let host = hook.flatMap(HookHost.init(rawValue:))
+        return controlClient.ensureTerminalRuntime(
+            executable: executable,
+            arguments: arguments,
+            hookHost: host,
+            terminalRows: rows,
+            terminalColumns: columns
+        ).map { report in
+            ListedRuntime(
+                id: report.runtime,
+                hook: report.hook,
+                running: report.running,
+                terminal: report.terminal,
+                rows: report.rows,
+                columns: report.columns,
+                created: report.created
             )
         }.mapError(Self.failure)
     }

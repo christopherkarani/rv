@@ -1,20 +1,23 @@
 import ArgumentParser
 import Foundation
 #if os(macOS)
+import Darwin
 import RVDomain
 import RVIsolation
 import RVWorkspaceTUI
 #endif
 
-struct WorkspaceTUI: AsyncParsableCommand {
-    static let configuration = CommandConfiguration(
+public struct WorkspaceTUI: AsyncParsableCommand {
+    public static let configuration = CommandConfiguration(
         commandName: "tui",
         abstract: "Open the workspace shell. Runtimes stay alive after detach."
     )
 
     @OptionGroup var path: WorkspacePath
 
-    func run() async throws {
+    public init() {}
+
+    public func run() async throws {
         try await WorkspaceTUICommand.run(path.workspace)
     }
 }
@@ -24,6 +27,9 @@ enum WorkspaceTUICommand {
         #if !os(macOS)
         throw ValidationError("contained workspace host is unavailable")
         #else
+        guard isatty(STDIN_FILENO) == 1, isatty(STDOUT_FILENO) == 1 else {
+            throw ValidationError("workspace shell requires an interactive terminal")
+        }
         let project = try WorkspaceCommandRun.requireProject(raw)
         guard let host = WorkspaceHostExecutable.currentSibling() else {
             throw ValidationError("workspace host executable is missing")
@@ -58,7 +64,7 @@ enum WorkspaceTUICommand {
         )
         switch model.connect() {
         case .success:
-            break
+            model.launchDefaultRuntimeIfEmpty()
         case .failure:
             _ = live.detach()
             throw ValidationError("workspace host is not reachable")

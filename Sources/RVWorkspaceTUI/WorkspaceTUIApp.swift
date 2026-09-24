@@ -75,9 +75,15 @@ struct WorkspaceShellView: View {
     @ViewBuilder
     private func header(_ snapshot: WorkspaceTUISnapshot) -> some View {
         let name = URL(fileURLWithPath: snapshot.project).lastPathComponent
+        let focusedPane = snapshot.focused.flatMap { snapshot.panes[$0] }
+        let focusedPaneNeedsAttention = focusedPane?.running == false
+            || focusedPane?.lease == .readOnly
+            || focusedPane?.overflowed == true
         let indicatorColor: Color
         if snapshot.connection == .disconnected {
             indicatorColor = .red
+        } else if focusedPaneNeedsAttention {
+            indicatorColor = .yellow
         } else if snapshot.phase == "active", snapshot.protected {
             indicatorColor = .green
         } else {
@@ -204,29 +210,50 @@ struct TerminalPaneView: View {
     var body: some View {
         let state = snapshot.panes[pane]
         let focused = snapshot.focused == pane
-        let marker: String
-        if snapshot.connection == .disconnected {
-            marker = "disconnected"
-        } else if state?.running == false {
-            marker = "exited\(state?.exitStatus.map { " (\($0))" } ?? "")"
-        } else if state?.lease == .readOnly {
-            marker = "read-only"
-        } else if state?.overflowed == true {
-            marker = "● overflow"
-        } else {
-            marker = "●"
-        }
-        VStack(alignment: .leading, spacing: 0) {
-            Text("\(state?.title ?? "runtime")  \(marker)").bold(focused)
-            GeometryReader { proxy in
-                let rows = max(1, Int(proxy.size.height))
-                let columns = max(1, Int(proxy.size.width))
-                let _ = model.noteSize(of: pane, rows: rows, columns: columns, now: Date())
-                TerminalCells(frame: model.terminalFrame(for: pane), rows: rows, columns: columns)
+        if snapshot.panes.count > 1 {
+            VStack(alignment: .leading, spacing: 0) {
+                Text("\(state?.title ?? "runtime")  \(statusMarker(state, connection: snapshot.connection))")
+                    .bold(focused)
+                terminalSurface
             }
+            // SwiftTUI draws borders over the view's edge cells. Keep the
+            // emulator inside the border so its first and last cells remain
+            // visible and resize dimensions match the content area.
+            .padding(1)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            .border(focused ? Color.white : Color.gray)
+        } else {
+            terminalSurface
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-        .border(focused ? Color.white : Color.gray)
+    }
+
+    private var terminalSurface: some View {
+        GeometryReader { proxy in
+            let rows = max(1, Int(proxy.size.height))
+            let columns = max(1, Int(proxy.size.width))
+            let _ = model.noteSize(of: pane, rows: rows, columns: columns, now: Date())
+            TerminalCells(frame: model.terminalFrame(for: pane), rows: rows, columns: columns)
+        }
+    }
+
+    private func statusMarker(
+        _ state: TerminalPaneState?,
+        connection: ConnectionState
+    ) -> String {
+        if connection == .disconnected {
+            return "disconnected"
+        }
+        if state?.running == false {
+            return "exited\(state?.exitStatus.map { " (\($0))" } ?? "")"
+        }
+        if state?.lease == .readOnly {
+            return "read-only"
+        }
+        if state?.overflowed == true {
+            return "● overflow"
+        }
+        return "●"
     }
 }
 

@@ -646,8 +646,12 @@ final class RuntimeTerminal: @unchecked Sendable {
                 return
             }
             let batch = subscriber.chunks
-            let inflight = subscriber.queuedBytes
             subscriber.chunks.removeAll()
+            // `queuedBytes` tracks waiting chunks only. Keep the detached
+            // batch bounded separately so live output can queue while replay
+            // is being emitted without falsely overflowing at the 64 KiB
+            // replay boundary.
+            subscriber.queuedBytes = 0
             subscriber.primed = true
             let dropped = subscriber.dropped
             flushing.insert(subscriber.id)
@@ -667,9 +671,6 @@ final class RuntimeTerminal: @unchecked Sendable {
             }
             condition.lock()
             flushing.remove(subscriber.id)
-            if subscriber.dropped == false, sendFailed == false {
-                subscriber.queuedBytes = releaseInflight(queued: subscriber.queuedBytes, inflight: inflight)
-            }
             condition.broadcast()
             if sendFailed {
                 subscriber.dropped = true

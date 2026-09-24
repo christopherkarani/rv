@@ -70,6 +70,7 @@ import RVTheme
     #expect(text.contains("Examples"))
     #expect(text.contains("Next"))
     #expect(text.contains("rv setup"))
+    #expect(text.contains("Open the workspace shell in the current project"))
     #expect(text.contains("rv help setup"))
     #expect(text.contains("allow-once"))
     #expect(text.contains("packs"))

@@ -21,14 +21,24 @@ public struct ListedRuntime: Equatable, Sendable {
     public var terminal: Bool
     public var rows: Int?
     public var columns: Int?
+    public var created: Bool
 
-    public init(id: UUID, hook: String?, running: Bool, terminal: Bool, rows: Int? = nil, columns: Int? = nil) {
+    public init(
+        id: UUID,
+        hook: String?,
+        running: Bool,
+        terminal: Bool,
+        rows: Int? = nil,
+        columns: Int? = nil,
+        created: Bool = false
+    ) {
         self.id = id
         self.hook = hook
         self.running = running
         self.terminal = terminal
         self.rows = rows
         self.columns = columns
+        self.created = created
     }
 }
 
@@ -51,6 +61,13 @@ public protocol WorkspaceTUIClient: AnyObject, Sendable {
     func describe() -> Result<WorkspaceTUISummary, WorkspaceTUIClientError>
     func listRuntimes() -> Result<[ListedRuntime], WorkspaceTUIClientError>
     func launchRuntime(
+        executable: String,
+        arguments: [String],
+        hook: String?,
+        rows: Int,
+        columns: Int
+    ) -> Result<ListedRuntime, WorkspaceTUIClientError>
+    func ensureTerminalRuntime(
         executable: String,
         arguments: [String],
         hook: String?,
