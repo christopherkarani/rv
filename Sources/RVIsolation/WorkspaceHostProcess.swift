@@ -140,7 +140,7 @@ public enum WorkspaceHosts {
             project: project,
             executable: executable,
             timeout: timeout,
-            homeDirectory: NSHomeDirectory()
+            homeDirectory: FileManager.default.homeDirectoryForCurrentUser.path
         )
     }
 
