@@ -15,7 +15,7 @@ case "$OS" in
       printf "rv-c tests: Apple Silicon only\n" >&2
       exit 1
     fi
-    CLANG_OS_FLAGS=(-arch arm64 -mmacosx-version-min=26.0)
+    CLANG_OS_FLAGS=(-arch arm64 -mmacosx-version-min=15.0)
     ;;
   Linux)
     case "$ARCH" in
@@ -27,7 +27,7 @@ case "$OS" in
     esac
     ;;
   *)
-    printf "rv-c tests: macOS 26 Apple Silicon, or Linux aarch64/x86_64\n" >&2
+    printf "rv-c tests: macOS 15 Apple Silicon, or Linux aarch64/x86_64\n" >&2
     exit 1
     ;;
 esac

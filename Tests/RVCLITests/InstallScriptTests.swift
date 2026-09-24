@@ -226,13 +226,13 @@ private func runInstallScript(
 
     let result = try runInstallScript(home: home, src: src, pathPrefix: shim.path)
     #expect(result.status == 1)
-    #expect(result.stderr.contains("macOS 26 Apple Silicon, or Linux aarch64/x86_64"))
+    #expect(result.stderr.contains("macOS 15 Apple Silicon, or Linux aarch64/x86_64"))
     #expect(result.stderr.localizedCaseInsensitiveContains("windows") == false)
     #expect(FileManager.default.fileExists(atPath: home.path + "/.local/bin/rv") == false)
 }
 
-@Test(arguments: ["26.0", "26.1", "27.0"])
-func installSh_acceptsDarwinMacOS26OrNewer(_ productVersion: String) throws {
+@Test(arguments: ["15.0", "15.6", "26.0", "26.1", "27.0"])
+func installSh_acceptsDarwinMacOS15OrNewer(_ productVersion: String) throws {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-install-darwin-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -255,7 +255,7 @@ func installSh_acceptsDarwinMacOS26OrNewer(_ productVersion: String) throws {
     )
 }
 
-@Test(arguments: ["15.6", "25.0", ""])
+@Test(arguments: ["14.6", "14.0", ""])
 func installSh_refusesOlderMacOS(_ productVersion: String) throws {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-install-oldmac-\(UUID().uuidString)", isDirectory: true)
@@ -272,7 +272,7 @@ func installSh_refusesOlderMacOS(_ productVersion: String) throws {
 
     let result = try runInstallScript(home: home, src: src, pathPrefix: shim.path)
     #expect(result.status == 1)
-    #expect(result.stderr.contains("macOS 26 Apple Silicon, or Linux aarch64/x86_64"))
+    #expect(result.stderr.contains("macOS 15 Apple Silicon, or Linux aarch64/x86_64"))
     #expect(FileManager.default.fileExists(atPath: home.path + "/.local/bin/rv") == false)
 }
 

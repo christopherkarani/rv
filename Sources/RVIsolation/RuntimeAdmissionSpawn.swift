@@ -262,7 +262,11 @@ private func spawnAdmittedCommand(
     guard posix_spawn_file_actions_init(&actions) == 0 else { return .failure(.spawnFailed) }
     defer { posix_spawn_file_actions_destroy(&actions) }
     let chdirOK = launch.workspacePath.withCString { path in
-        posix_spawn_file_actions_addchdir(&actions, path)
+        if #available(macOS 26, *) {
+            posix_spawn_file_actions_addchdir(&actions, path)
+        } else {
+            posix_spawn_file_actions_addchdir_np(&actions, path)
+        }
     }
     guard chdirOK == 0,
         posix_spawn_file_actions_adddup2(&actions, writeEnd, 3) == 0,

@@ -50,7 +50,7 @@ case "$OS" in
       printf "release: Apple Silicon only\n" >&2
       exit 1
     fi
-    CLANG_OS_FLAGS=(-arch arm64 -mmacosx-version-min=26.0)
+    CLANG_OS_FLAGS=(-arch arm64 -mmacosx-version-min=15.0)
     ;;
   Linux)
     case "$ARCH" in
@@ -62,7 +62,7 @@ case "$OS" in
     esac
     ;;
   *)
-    printf "release: macOS 26 Apple Silicon, or Linux aarch64/x86_64\n" >&2
+    printf "release: macOS 15 Apple Silicon, or Linux aarch64/x86_64\n" >&2
     exit 1
     ;;
 esac
@@ -200,6 +200,21 @@ done
 if [[ "$copied" -eq 0 ]]; then
   printf "release: no *_RVPacks.bundle or *_RVPacks.resources next to products in %s\n" "$BIN_DIR" >&2
   exit 1
+fi
+
+if [[ "$OS" == "Darwin" ]]; then
+  for staged in "$STAGE/rv" "$STAGE/rv-cli" "$STAGE/rvd" "$STAGE/rv-workspace-host"; do
+    show="$(vtool -show-build "$staged")"
+    printf '%s\n' "$show" | grep -q 'minos 15.0' || {
+      printf 'release: %s minos is not 15.0\n%s\n' "$staged" "$show" >&2
+      exit 1
+    }
+  done
+  if otool -L "$STAGE/rv-cli" | grep -E 'libswiftCore|FoundationModels' | grep -q '@rpath'; then
+    printf 'release: rv-cli must link the OS Swift runtime, not an @rpath toolchain\n' >&2
+    otool -L "$STAGE/rv-cli" >&2
+    exit 1
+  fi
 fi
 
 printf "Staged %s\n" "$STAGE"

@@ -33,7 +33,7 @@ clang_c_hook() {
   arch="$(uname -m)"
   case "$os" in
     Darwin)
-      flags=(-arch arm64 -mmacosx-version-min=26.0)
+      flags=(-arch arm64 -mmacosx-version-min=15.0)
       ;;
     Linux)
       case "$arch" in
@@ -42,7 +42,7 @@ clang_c_hook() {
       esac
       ;;
     *)
-      fail "macOS 26 Apple Silicon, or Linux aarch64/x86_64"
+      fail "macOS 15 Apple Silicon, or Linux aarch64/x86_64"
       ;;
   esac
   clang -Os "${flags[@]}" -std=c11 -Wall \
@@ -737,7 +737,7 @@ int main(void) {
     return 0;
 }
 EOF
-clang -Os -arch arm64 -mmacosx-version-min=26.0 -std=c11 -Wall \
+clang -Os -arch arm64 -mmacosx-version-min=15.0 -std=c11 -Wall \
   -o "$PROOF_ROOT/skew-rvd" "$PROOF_ROOT/skew-rvd.c"
 chmod 755 "$PROOF_ROOT/skew-rvd"
 write_plist "$PROOF_ROOT/skew-rvd" "$PROOF_ROOT/skew.plist"
@@ -848,7 +848,7 @@ int main(void) {
     return 0;
 }
 EOF
-clang -Os -arch arm64 -mmacosx-version-min=26.0 -std=c11 -Wall \
+clang -Os -arch arm64 -mmacosx-version-min=15.0 -std=c11 -Wall \
   -o "$PROOF_ROOT/unparseable-rvd" "$PROOF_ROOT/unparseable-rvd.c"
 chmod 755 "$PROOF_ROOT/unparseable-rvd"
 write_plist "$PROOF_ROOT/unparseable-rvd" "$PROOF_ROOT/unparseable.plist"

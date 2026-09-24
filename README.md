@@ -10,7 +10,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-0f172a" alt="Apache 2.0"></a>
   <a href="https://github.com/christopherkarani/rv"><img src="https://img.shields.io/github/stars/christopherkarani/rv?style=flat" alt="Stars"></a>
   <a href="https://discord.gg/uZn9MDUYKx"><img src="https://img.shields.io/badge/discord-join-5865F2?logo=discord&logoColor=white" alt="Discord"></a>
-  <img src="https://img.shields.io/badge/platform-macOS%2026%20arm64%20%7C%20Linux-111827" alt="macOS 26 arm64 and Linux">
+  <img src="https://img.shields.io/badge/platform-macOS%2015%2B%20arm64%20%7C%20Linux-111827" alt="macOS 15 or newer, Apple Silicon, and Linux">
   <img src="https://img.shields.io/badge/hosts-Grok%20%7C%20Pi%20%7C%20OpenCode%20%7C%20Claude%20%7C%20OpenClaw%20%7C%20Hermes%20%7C%20Codex%20%7C%20Cursor-334155" alt="Hosts">
 </p>
 
@@ -51,7 +51,7 @@ RV searches absolute `PATH` directories for OpenCode, or accepts `--executable /
 | Allow once | Redeem the code from a block; the next matching call in this working directory runs once |
 | Explain | `rv explain` shows which pack would fire |
 | Hosts | Grok, Pi, OpenCode, Claude, OpenClaw, Hermes, Codex, Cursor. `rv setup` writes a host only when that host is already on the machine. |
-| Platform | macOS 26 Apple Silicon, Linux aarch64/x86_64. PR CI Linux is ubuntu-24.04 x86_64; aarch64 is a supported install, not a PR job. |
+| Platform | macOS 15 or newer, Apple Silicon. Linux aarch64/x86_64. Foundation Models on macOS 26 or newer. PR CI builds Swift on macos-26 and smokes the binaries on macos-15. Linux PR CI is ubuntu-24.04 x86_64; aarch64 is a supported install, not a PR job. |
 
 ## Supported hosts
 
