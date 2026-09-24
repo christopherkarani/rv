@@ -58,6 +58,40 @@ import Testing
 #if os(macOS)
 @Suite("Workspace host", .serialized)
 struct WorkspaceHostTests {
+    @Test func workspaceRootPolicyRejectsOnlyTheHomeDirectory() throws {
+        let parent = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let home = parent.appendingPathComponent("home", isDirectory: true)
+        let project = home.appendingPathComponent("project", isDirectory: true)
+        let homeAlias = parent.appendingPathComponent("home-alias", isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: homeAlias, withDestinationURL: home)
+        defer { try? FileManager.default.removeItem(at: parent) }
+
+        #expect(WorkspaceRootPolicy.isHomeDirectory(project: home.path, homeDirectory: home.path))
+        #expect(WorkspaceRootPolicy.isHomeDirectory(project: homeAlias.path, homeDirectory: home.path))
+        #expect(WorkspaceRootPolicy.isHomeDirectory(project: project.path, homeDirectory: home.path) == false)
+    }
+
+    @Test func startingNewWorkspaceAtHomeRefusesBeforeLaunchingHost() throws {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let result = WorkspaceHosts.ensure(
+            project: home.path,
+            executable: URL(fileURLWithPath: "/missing/rv-workspace-host"),
+            timeout: 2,
+            homeDirectory: home.path
+        )
+        if case .failure(.homeDirectory) = result {
+            return
+        }
+        Issue.record("new workspaces rooted at home must fail before host launch")
+    }
+
     @Test func clientsAttachDetachAndCancelWithoutSharingAuthority() throws {
         let opened = try TestHost()
         defer { opened.close() }

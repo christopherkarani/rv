@@ -57,6 +57,19 @@ public enum WorkspaceHostProcess {
     }
 }
 
+enum WorkspaceRootPolicy {
+    static func isHomeDirectory(project: String, homeDirectory: String) -> Bool {
+        func canonicalPath(_ path: String) -> String {
+            URL(fileURLWithPath: path, isDirectory: true)
+                .standardizedFileURL
+                .resolvingSymlinksInPath()
+                .standardizedFileURL
+                .path
+        }
+        return canonicalPath(project) == canonicalPath(homeDirectory)
+    }
+}
+
 public enum WorkspaceHostExecutable {
     public static func currentSibling() -> URL? {
         let base = Bundle.main.executableURL
@@ -123,6 +136,20 @@ public enum WorkspaceHosts {
         executable: URL,
         timeout: TimeInterval = 90
     ) -> Result<WorkspaceEndpoint, WorkspaceHostFailure> {
+        ensure(
+            project: project,
+            executable: executable,
+            timeout: timeout,
+            homeDirectory: NSHomeDirectory()
+        )
+    }
+
+    static func ensure(
+        project: String,
+        executable: URL,
+        timeout: TimeInterval = 90,
+        homeDirectory: String
+    ) -> Result<WorkspaceEndpoint, WorkspaceHostFailure> {
         let deadline = Date().addingTimeInterval(timeout)
         var child: pid_t = -1
         var spawned = false
@@ -140,7 +167,15 @@ public enum WorkspaceHosts {
                 return .failure(.recoveryBlocked(block))
             case .unsupported:
                 return .failure(.unsupported)
-            case .absent, .orphaned:
+            case .absent:
+                guard WorkspaceRootPolicy.isHomeDirectory(
+                    project: project,
+                    homeDirectory: homeDirectory
+                ) == false else {
+                    return .failure(.homeDirectory)
+                }
+                fallthrough
+            case .orphaned:
                 if spawned == false {
                     switch WorkspaceHostLauncher.spawn(executable: executable, workspace: project) {
                     case .failure(let error):

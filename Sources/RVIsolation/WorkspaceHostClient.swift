@@ -47,6 +47,7 @@ public enum WorkspaceTerminalRead: Sendable, Equatable {
 public enum WorkspaceHostFailure: Error, Sendable, Equatable {
     case unsupported
     case projectUnusable
+    case homeDirectory
     case hostBinaryMissing
     case spawnFailed
     case recoveryBlocked(WorkspaceRecoveryBlock)

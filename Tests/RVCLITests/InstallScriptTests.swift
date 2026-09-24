@@ -48,6 +48,29 @@ private func installScriptURL() -> URL {
     #expect(try String(contentsOf: previous, encoding: .utf8).contains("previous-install"))
 }
 
+@Test func installSh_stagesSwiftCompatibilityRuntimeBesideCLI() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-span-install-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let src = root.appendingPathComponent("src")
+    try writeDummyTrio(in: src)
+    let runtime = "swift compatibility runtime fixture\n"
+    try writeExecutable(src.appendingPathComponent("libswiftCompatibilitySpan.dylib"), contents: runtime)
+    let shim = root.appendingPathComponent("shim")
+    try writeDarwinShims(in: shim)
+    let home = root.appendingPathComponent("home")
+
+    let result = try runInstallScript(home: home, src: src, pathPrefix: shim.path)
+
+    #expect(result.status == 0)
+    #expect(
+        try String(
+            contentsOf: home.appendingPathComponent(".local/bin/libswiftCompatibilitySpan.dylib"),
+            encoding: .utf8
+        ) == runtime
+    )
+}
+
 private func writeExecutable(_ url: URL, contents: String) throws {
     try FileManager.default.createDirectory(
         at: url.deletingLastPathComponent(),

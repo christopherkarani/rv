@@ -48,6 +48,7 @@ tmp_rv=""
 tmp_cli=""
 tmp_rvd=""
 tmp_host=""
+tmp_span=""
 tmp_isolation=""
 
 # Download progress. Same glyphs/width as Sources/RVTUI/SetupRenderer.swift.
@@ -65,6 +66,7 @@ cleanup() {
   [ -n "${tmp_cli:-}" ] && rm -f "$tmp_cli"
   [ -n "${tmp_rvd:-}" ] && rm -f "$tmp_rvd"
   [ -n "${tmp_host:-}" ] && rm -f "$tmp_host"
+  [ -n "${tmp_span:-}" ] && rm -f "$tmp_span"
   [ -n "${tmp_isolation:-}" ] && rm -f "$tmp_isolation"
   [ -n "${tmp_fetch:-}" ] && rm -rf "$tmp_fetch"
   :
@@ -269,8 +271,12 @@ else
   size_rvd="$(normalize_size "$(content_length "$release_base/rvd")")"
   size_host="$(normalize_size "$(content_length "$release_base/rv-workspace-host")")"
   size_packs="$(normalize_size "$(content_length "$release_base/rv_RVPacks.bundle.tar.gz")")"
+  size_span=0
+  if [ "$os" = "Darwin" ]; then
+    size_span="$(normalize_size "$(content_length "$release_base/libswiftCompatibilitySpan.dylib")")"
+  fi
 
-  progress_total=$((size_rv + size_cli + size_rvd + size_host + size_packs))
+  progress_total=$((size_rv + size_cli + size_rvd + size_host + size_packs + size_span))
   size_isolation=0
   if [ "$os" = "Linux" ]; then
     size_isolation="$(normalize_size "$(content_length "$release_base/rv-isolation-exec")")"
@@ -285,6 +291,10 @@ else
   download_release_asset "$tmp_fetch" "rvd" "$size_rvd"
   download_release_asset "$tmp_fetch" "rv-workspace-host" "$size_host"
   chmod 755 "$tmp_fetch/rv" "$tmp_fetch/rv-cli" "$tmp_fetch/rvd" "$tmp_fetch/rv-workspace-host"
+  if [ "$os" = "Darwin" ] && [ "$size_span" -gt 0 ]; then
+    download_release_asset "$tmp_fetch" "libswiftCompatibilitySpan.dylib" "$size_span"
+    chmod 755 "$tmp_fetch/libswiftCompatibilitySpan.dylib"
+  fi
   if [ "$os" = "Linux" ]; then
     download_release_asset "$tmp_fetch" "rv-isolation-exec" "$size_isolation"
     chmod 755 "$tmp_fetch/rv-isolation-exec"
@@ -304,6 +314,14 @@ if [ "$os" = "Linux" ] && [ ! -x "$src/rv-isolation-exec" ]; then
   exit 1
 fi
 
+if [ "$os" = "Darwin" ] && command -v otool >/dev/null 2>&1; then
+  if otool -L "$src/rv-cli" 2>/dev/null | grep -q 'libswiftCompatibilitySpan.dylib' \
+    && [ ! -f "$src/libswiftCompatibilitySpan.dylib" ]; then
+    echo "rv: rv-cli needs libswiftCompatibilitySpan.dylib beside it" >&2
+    exit 1
+  fi
+fi
+
 # Stage all required copies before touching any destination: a copy failure
 # must leave the previous install intact, never a torn trio (new C rv with
 # no rv-cli sibling makes doctor unreachable and hooks deny-only).
@@ -312,12 +330,19 @@ tmp_cli="$bin/.rv-cli.installing"
 tmp_rvd="$bin/.rvd.installing"
 tmp_host="$bin/.rv-workspace-host.installing"
 tmp_claim=""
+tmp_span=""
 rm -f "$tmp_rv" "$tmp_cli" "$tmp_rvd" "$tmp_host"
 cp "$src/rv" "$tmp_rv"
 cp "$src/rv-cli" "$tmp_cli"
 cp "$src/rvd" "$tmp_rvd"
 cp "$src/rv-workspace-host" "$tmp_host"
 chmod 755 "$tmp_rv" "$tmp_cli" "$tmp_rvd" "$tmp_host"
+if [ "$os" = "Darwin" ] && [ -f "$src/libswiftCompatibilitySpan.dylib" ]; then
+  tmp_span="$bin/.libswiftCompatibilitySpan.dylib.installing"
+  rm -f "$tmp_span"
+  cp "$src/libswiftCompatibilitySpan.dylib" "$tmp_span"
+  chmod 755 "$tmp_span"
+fi
 if [ "$os" = "Linux" ]; then
   tmp_isolation="$bin/.rv-isolation-exec.installing"
   rm -f "$tmp_isolation"
@@ -340,6 +365,11 @@ mv -f "$tmp_rv" "$bin/rv"
 mv -f "$tmp_cli" "$bin/rv-cli"
 mv -f "$tmp_rvd" "$bin/rvd"
 mv -f "$tmp_host" "$bin/rv-workspace-host"
+if [ -n "$tmp_span" ]; then
+  rm -f "$bin/libswiftCompatibilitySpan.dylib"
+  mv -f "$tmp_span" "$bin/libswiftCompatibilitySpan.dylib"
+  tmp_span=""
+fi
 if [ "$os" = "Linux" ]; then
   rm -f "$bin/rv-isolation-exec"
   mv -f "$tmp_isolation" "$bin/rv-isolation-exec"

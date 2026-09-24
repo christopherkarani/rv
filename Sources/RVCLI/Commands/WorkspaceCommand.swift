@@ -18,7 +18,7 @@ struct Workspace: AsyncParsableCommand {
 }
 
 struct WorkspacePath: ParsableArguments {
-    @Option(name: .long, help: "Project path. Defaults to the current directory.")
+    @Option(name: .long, help: "Project directory, not the home directory. Defaults to the current directory.")
     var workspace: String?
 }
 
@@ -376,12 +376,14 @@ enum WorkspaceCommandRun {
         }
     }
 
-    private static func text(_ error: WorkspaceHostFailure) -> String {
+    static func text(_ error: WorkspaceHostFailure) -> String {
         switch error {
         case .unsupported:
             "contained workspace host is unavailable"
         case .projectUnusable:
             "workspace path is unusable"
+        case .homeDirectory:
+            "home directory cannot be a workspace root; pass --workspace <project directory>"
         case .hostBinaryMissing:
             "workspace host executable is missing"
         case .spawnFailed:

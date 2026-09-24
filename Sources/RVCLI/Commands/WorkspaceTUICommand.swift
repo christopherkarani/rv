@@ -33,7 +33,7 @@ enum WorkspaceTUICommand {
         case .success(let value):
             endpoint = value
         case .failure(let error):
-            throw ValidationError(String(describing: error))
+            throw ValidationError(WorkspaceCommandRun.text(error))
         }
         guard case .success(let client) = WorkspaceClient.connect(endpoint) else {
             throw ValidationError("workspace host is not reachable")
