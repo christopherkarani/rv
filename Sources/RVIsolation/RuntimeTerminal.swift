@@ -416,7 +416,7 @@ final class RuntimeTerminal: @unchecked Sendable {
         }
         if exited && exitQueued {
             condition.unlock()
-            return .failure(.unavailable)
+            return .success(())
         }
         if let inputOwner, inputOwner != client {
             condition.unlock()

@@ -280,12 +280,19 @@ public enum WorkspaceTerminalDriver {
     }
 }
 
-private func ignoreSIGPIPE() -> sig_t {
-    signal(SIGPIPE, SIG_IGN)
+private func ignoreSIGPIPE() -> sigaction {
+    var action = sigaction()
+    var previous = sigaction()
+    action.__sigaction_u.__sa_handler = SIG_IGN
+    sigemptyset(&action.sa_mask)
+    action.sa_flags = 0
+    sigaction(SIGPIPE, &action, &previous)
+    return previous
 }
 
-private func restoreSIGPIPE(_ previous: sig_t) {
-    _ = signal(SIGPIPE, previous)
+private func restoreSIGPIPE(_ previous: sigaction) {
+    var copy = previous
+    sigaction(SIGPIPE, &copy, nil)
 }
 
 /// Reads one file descriptor on `rv-terminal-stdin` and writes those bytes
