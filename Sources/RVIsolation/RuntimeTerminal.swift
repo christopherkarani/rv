@@ -410,13 +410,13 @@ final class RuntimeTerminal: @unchecked Sendable {
 
     func acquireInput(client: UUID) -> Result<Void, TerminalControlError> {
         condition.lock()
-        guard subscribers[client] != nil else {
+        guard let subscriber = subscribers[client], subscriber.stopped == false else {
             condition.unlock()
             return .failure(.unavailable)
         }
-        if exited && exitQueued {
+        if exited || exitQueued {
             condition.unlock()
-            return .success(())
+            return .failure(.unavailable)
         }
         if let inputOwner, inputOwner != client {
             condition.unlock()
@@ -448,9 +448,13 @@ final class RuntimeTerminal: @unchecked Sendable {
             return .failure(.invalid)
         }
         condition.lock()
-        guard inputOwner == client, masterClosed == false, exited == false, master >= 0 else {
+        if masterClosed || exited || master < 0 {
             condition.unlock()
             return .failure(.unavailable)
+        }
+        guard inputOwner == client else {
+            condition.unlock()
+            return .failure(.busy)
         }
         let fd = Darwin.dup(master)
         condition.unlock()
@@ -681,10 +685,12 @@ final class RuntimeTerminal: @unchecked Sendable {
                 return
             }
             if dropped || ended {
-                // The exit is already on the wire. Dropping the subscriber
-                // here makes a following acquire report `.unavailable`, so
-                // the driver never reads the status or restores the terminal.
+                // The exit notice is already on the wire. Remove the subscriber
+                // so the same client can attach again and acquire fails closed.
                 subscriber.stopped = true
+                subscriber.chunks.removeAll()
+                subscriber.queuedBytes = 0
+                subscribers[subscriber.id] = nil
                 if inputOwner == subscriber.id {
                     inputOwner = nil
                     enqueueOwnerLocked(false)

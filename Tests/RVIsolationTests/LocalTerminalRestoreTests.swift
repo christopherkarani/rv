@@ -64,7 +64,9 @@ struct LocalTerminalRestoreTests {
         }) { client, restorer, pty in
             let runtime = try launchTerminal(client, command: ["/bin/sh", "-c", "printf ready; exit 9"])
             try #require(client.subscribeTerminal(runtime).get() == ())
-            try #require(client.acquireTerminalInput(runtime).get() == ())
+            // A fast exit can win the race with acquire. The status is still
+            // on the stream, and drive still has to put the terminal back.
+            _ = client.acquireTerminalInput(runtime)
             try drive(client, runtime: runtime, pty: pty, restorer: restorer)
             Issue.record("an exiting runtime must throw its status")
         }
@@ -233,7 +235,7 @@ private func terminalFlags(_ fd: Int32) throws -> TerminalFlags {
     return TerminalFlags(
         input: UInt(term.c_iflag),
         output: UInt(term.c_oflag),
-        local: UInt(term.c_lflag)
+        local: UInt(term.c_lflag) & ~0x2000_0000
     )
 }
 

@@ -83,10 +83,13 @@ private func applySavedTermios(_ saved: termios, fd: Int32) -> Bool {
 }
 
 private func writeTermios(_ fd: Int32, _ term: inout termios) -> Bool {
-    while true {
-        if tcsetattr(fd, TCSAFLUSH, &term) == 0 { return true }
+    // `TCSAFLUSH` waits until the other side of a PTY reads pending output.
+    // A client that still owns the master blocks there, so the process never
+    // exits and the terminal stays raw. `TCSANOW` applies immediately.
+    while tcsetattr(fd, TCSANOW, &term) != 0 {
         if errno != EINTR { return false }
     }
+    return true
 }
 
 public struct LocalTerminalWindow: Sendable, Equatable {
@@ -187,7 +190,7 @@ private enum LocalTerminalSignal {
         if armed != 0, fd >= 0 {
             var copy = saved
             copy.c_lflag &= ~tcflag_t(0x2000_0000)
-            while tcsetattr(fd, TCSAFLUSH, &copy) != 0 && errno == EINTR {}
+            while tcsetattr(fd, TCSANOW, &copy) != 0 && errno == EINTR {}
         }
         _exit(1)
     }
