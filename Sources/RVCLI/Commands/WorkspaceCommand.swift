@@ -12,7 +12,7 @@ struct Workspace: AsyncParsableCommand {
         abstract: "Attach to the persistent workspace host.",
         subcommands: [
             WorkspaceStart.self, WorkspaceAttach.self, WorkspaceStatus.self, WorkspaceClose.self,
-            WorkspaceRun.self,
+            WorkspaceRun.self, WorkspaceTUI.self,
         ]
     )
 }

@@ -43,7 +43,7 @@ WARNINGS=0
 print_list() {
   cat <<'EOF'
 Available checks:
-  value-types           No class/actor outside RVService/RVPolicy/RVAnalytics/RVIsolation
+  value-types           No class/actor outside RVService/RVWorkspaceTUI/RVPolicy/RVAnalytics/RVIsolation
   no-isdenied           No boolean isDenied anywhere in Sources
   no-force-unwrap       No try! or force-unwrap (!) on production paths
   no-exported-import    No new @_exported import (existing T1 debt is known)
@@ -97,9 +97,9 @@ check_empty() {
 
 check_value_types() {
   # Reference types (class, actor) outside the allowed edges.
-  #   class  — only RVService (the XPC/NSObject edge).
+  #   class  — RVService (XPC/NSObject) and RVWorkspaceTUI (framework/session adapters).
   #   actor  — RVService, RVPolicy, RVAnalytics, and RVIsolation (LocalExecutor).
-  #            Domain/Engine/Packs/Presentation are value-only.
+  #            Domain/Engine/Packs/Presentation remain value-only.
   # A leading attribute (@MainActor, @objc, @unchecked Sendable, …) or access
   # modifier (public/internal/…/final) must not hide a declaration, so we match
   # the keyword on a line that may start with any run of those tokens.
@@ -107,14 +107,14 @@ check_value_types() {
   local matches
   matches=$(grep -rnE "$pat" "$SOURCES" --include='*.swift' \
     | grep -v 'Sources/RVService/' | grep -v 'Sources/RVPolicy/' | grep -v 'Sources/RVAnalytics/' \
-    | grep -v 'Sources/RVIsolation/' || true)
+    | grep -v 'Sources/RVIsolation/' | grep -v 'Sources/RVWorkspaceTUI/' || true)
   local count
   count=$(echo "$matches" | grep -c . || true)
   if [ "$count" -eq 0 ]; then
-    if [ "$QUIET" -eq 0 ]; then printf "  %b✓%b %s\n" "$GREEN" "$NC" "No class/actor outside RVService/RVPolicy/RVAnalytics/RVIsolation"; fi
+    if [ "$QUIET" -eq 0 ]; then printf "  %b✓%b %s\n" "$GREEN" "$NC" "No class/actor outside RVService/RVWorkspaceTUI/RVPolicy/RVAnalytics/RVIsolation"; fi
     return 0
   else
-    printf "  %b✗ class/actor outside RVService/RVPolicy/RVAnalytics/RVIsolation%b (%d)\n" "$RED" "$NC" "$count"
+    printf "  %b✗ class/actor outside RVService/RVWorkspaceTUI/RVPolicy/RVAnalytics/RVIsolation%b (%d)\n" "$RED" "$NC" "$count"
     echo "$matches" | head -15 | indent
     return 1
   fi

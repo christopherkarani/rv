@@ -114,6 +114,7 @@ enum HelpCatalog {
                 HelpRow(name: "rv workspace status [--workspace <absolute-path>]"),
                 HelpRow(name: "rv workspace close [--workspace <absolute-path>]"),
                 HelpRow(name: "rv workspace run [--rows N] [--columns N] -- <absolute-executable> [args...]"),
+                HelpRow(name: "rv workspace tui [--workspace <project-path>]", description: "Interactive terminal workspace for contained runtimes"),
             ]),
             HelpSection(heading: "Flags", rows: [
                 HelpRow(name: "--workspace", description: "Project path; default is the current directory"),
