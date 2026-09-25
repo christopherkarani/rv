@@ -39,7 +39,9 @@ public struct CodexStoreAdapter: SessionStoreAdapter {
     /// when `data` is empty, not UTF-8, or contains no usable line. A line is
     /// usable exactly when it is a JSON object — wrong-typed fields decode as
     /// nil instead of failing the line. Bad lines and unknown shapes
-    /// contribute zero events without aborting the file.
+    /// contribute zero events without aborting the file. Lines split on LF
+    /// only: bare-CR separators no longer split (the old `\.isNewline` split
+    /// did), so a CR-only file yields no usable line and throws.
     public func extract(fileURL: URL, data: Data) throws -> [ExtractedEvent] {
         try Self.events(in: data, sourcePath: fileURL.path, fallbackSession: Self.sessionID(from: fileURL))
     }
@@ -93,7 +95,7 @@ public struct CodexStoreAdapter: SessionStoreAdapter {
         if let value = node.sessionCamel, let id = SessionID(validating: value) {
             return id
         }
-        if let payload = node.payload {
+        if let payload = node.payload?.line {
             return sessionID(in: payload)
         }
         return nil
@@ -106,7 +108,7 @@ public struct CodexStoreAdapter: SessionStoreAdapter {
         if let command = hookCommand(in: node) {
             return [command]
         }
-        if let payload = node.payload {
+        if let payload = node.payload?.line {
             return commands(in: payload)
         }
         if let command = functionCallCommand(in: node) {
@@ -143,10 +145,13 @@ public struct CodexStoreAdapter: SessionStoreAdapter {
             // allowFragments: only a top-level array or object re-parses;
             // anything else (including JSON scalars) keeps the literal text.
             if let data = text.data(using: .utf8) {
-                if let array = try? JSONDecoder().decode([CodexValue].self, from: data) {
+                // One function-local decoder for both attempts: thread-confined,
+                // so sharing is safe (JSONDecoder is not thread-safe in general).
+                let decoder = JSONDecoder()
+                if let array = try? decoder.decode([CodexValue].self, from: data) {
                     return joinedTokens(array)
                 }
-                if let object = try? JSONDecoder().decode([String: CodexValue].self, from: data) {
+                if let object = try? decoder.decode([String: CodexValue].self, from: data) {
                     return commandFromMap(object)
                 }
             }
@@ -211,14 +216,15 @@ public struct CodexStoreAdapter: SessionStoreAdapter {
 }
 
 /// One JSONL line of the Codex session store. Also the shape of nested
-/// `payload` objects, hence a class: payloads nest recursively. Covers exactly
+/// `payload` objects, hence the `indirect`-enum payload box below: payloads
+/// nest recursively, which a struct cannot express directly. Covers exactly
 /// the fields extraction reads: timestamps, session ids, hook/tool routing,
 /// command carriers, and cwd-ish fields.
 ///
 /// Lenient: every field decodes with `try?`, so any JSON object yields a node
 /// and only non-object lines fail to decode — the typed equivalent of the old
 /// `as? [String: Any]` line check. Explicit JSON null decodes as absent.
-private final class CodexStoreLine: Decodable {
+private struct CodexStoreLine: Decodable {
     var timestamp: CodexValue?
     var ts: CodexValue?
     var sessionSnake: String?
@@ -229,7 +235,7 @@ private final class CodexStoreLine: Decodable {
     var toolCamel: String?
     var toolInputSnake: CodexValue?
     var toolInputCamel: CodexValue?
-    var payload: CodexStoreLine?
+    var payload: CodexPayload?
     var type: String?
     var name: String?
     var arguments: CodexValue?
@@ -249,7 +255,7 @@ private final class CodexStoreLine: Decodable {
             ?? toolInputSnake?.nestedWorkingDirectory
             ?? input?.nestedWorkingDirectory
             ?? arguments?.nestedWorkingDirectory
-            ?? payload?.workingDirectory
+            ?? payload?.line.workingDirectory
             ?? ScanStoreWorkingDirectory.firstValid(cwd, workdir, workingDirectoryRaw, workingDirectorySnake)
     }
 
@@ -288,7 +294,7 @@ private final class CodexStoreLine: Decodable {
         toolCamel = try? container.decode(String.self, forKey: .toolCamel)
         toolInputSnake = try? container.decode(CodexValue.self, forKey: .toolInputSnake)
         toolInputCamel = try? container.decode(CodexValue.self, forKey: .toolInputCamel)
-        payload = try? container.decode(CodexStoreLine.self, forKey: .payload)
+        payload = try? container.decode(CodexPayload.self, forKey: .payload)
         type = try? container.decode(String.self, forKey: .type)
         name = try? container.decode(String.self, forKey: .name)
         arguments = try? container.decode(CodexValue.self, forKey: .arguments)
@@ -298,6 +304,24 @@ private final class CodexStoreLine: Decodable {
         workdir = try? container.decode(String.self, forKey: .workdir)
         workingDirectoryRaw = try? container.decode(String.self, forKey: .workingDirectoryRaw)
         workingDirectorySnake = try? container.decode(String.self, forKey: .workingDirectorySnake)
+    }
+}
+
+/// Recursive `payload` chain without a reference type: `indirect` supplies
+/// the indirection a struct cannot. Decodes exactly one nested line, so
+/// present-but-wrong-typed payloads still decode as absent via `try?`.
+private indirect enum CodexPayload: Decodable {
+    case line(CodexStoreLine)
+
+    init(from decoder: Decoder) throws {
+        self = .line(try CodexStoreLine(from: decoder))
+    }
+
+    var line: CodexStoreLine {
+        switch self {
+        case .line(let line):
+            return line
+        }
     }
 }
 
