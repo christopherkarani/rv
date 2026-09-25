@@ -75,14 +75,14 @@ enum WorkspaceTUIReducerEvent: Equatable, Sendable {
     case writeCompleted(runtime: UUID, outcome: TUIRPCOutcome)
     case acquireCompleted(runtime: UUID, outcome: TUIRPCOutcome)
     case resizeCompleted(runtime: UUID, outcome: TUIRPCOutcome)
-    case subscribeCompleted(runtime: UUID, context: TUISubscribeContext, succeeded: Bool, disconnected: Bool)
+    case attachCompleted(runtime: UUID, context: TUIAttachContext, outcome: SessionAttachOutcome)
     case detachRequested
 }
 
 /// One runtime action for the shell to execute. Effects never dispatch
 /// themselves; the runtime owns queue choice and lock discipline.
 enum TUIRuntimeEffect: Equatable, Sendable {
-    /// Synchronous describe/list query. The runtime feeds the result back as
+    /// Synchronous inventory query. The runtime feeds the result back as
     /// `.connectQuery` or `.connectQueryFailed`.
     case queryConnect
     /// Synchronous ensure-or-reuse query for the default shell.
@@ -96,8 +96,7 @@ enum TUIRuntimeEffect: Equatable, Sendable {
     /// Synchronous launch query. The runtime feeds the result back as
     /// `.launchQuerySucceeded` or `.launchQueryFailed`.
     case launchQuery(choice: RuntimeLaunchChoice, rows: Int, columns: Int)
-    case subscribe(runtime: UUID, context: TUISubscribeContext)
-    case unsubscribe(runtime: UUID)
+    case attach(runtime: UUID, context: TUIAttachContext)
     case acquire(runtime: UUID)
     case release(runtime: UUID)
     case write(runtime: UUID, bytes: Data)
@@ -110,10 +109,12 @@ enum TUIRuntimeEffect: Equatable, Sendable {
     case dropEmulator(runtime: UUID)
 }
 
-/// Why a subscribe was issued. Each origin handles subscribe failure
+/// Why an attach was issued. Each origin handles attach failure
 /// differently, so the context travels with the effect to its completion.
-enum TUISubscribeContext: Equatable, Sendable {
-    /// `connect()`: a non-disconnect failure still attempts acquisition.
+enum TUIAttachContext: Equatable, Sendable {
+    /// `connect()`: a refused attach renders the terminal read-only
+    /// without acquiring. The seam pairs subscribe with its acquire, so
+    /// unlike the pre-seam client there is no acquire after a refusal.
     case connect
     /// `launchDefaultRuntimeIfEmpty()`: failure marks the terminal
     /// "(unavailable)" and read-only without acquiring.
@@ -123,7 +124,7 @@ enum TUISubscribeContext: Equatable, Sendable {
     case launch
 }
 
-/// Outcome of one terminal-queue RPC, mapped from `WorkspaceTUIClientError`.
+/// Outcome of one terminal-queue RPC, mapped from `WorkspaceTUIError`.
 enum TUIRPCOutcome: Equatable, Sendable {
     case ok
     case busy
@@ -131,7 +132,7 @@ enum TUIRPCOutcome: Equatable, Sendable {
     case unavailable
     case rejected
 
-    static func from(_ result: Result<Void, WorkspaceTUIClientError>) -> Self {
+    static func from(_ result: Result<Void, WorkspaceTUIError>) -> Self {
         switch result {
         case .success: .ok
         case .failure(.busy): .busy
@@ -183,7 +184,7 @@ enum WorkspaceTUIReducer {
                 )
                 effects = [
                     .createEmulator(runtime: runtime.id, rows: rows, columns: columns),
-                    .subscribe(runtime: runtime.id, context: .connect),
+                    .attach(runtime: runtime.id, context: .connect),
                 ]
             }
 
@@ -219,7 +220,7 @@ enum WorkspaceTUIReducer {
             presentationChanged = true
             effects = [
                 .createEmulator(runtime: runtime.id, rows: rows, columns: columns),
-                .subscribe(runtime: runtime.id, context: .ensure),
+                .attach(runtime: runtime.id, context: .ensure),
             ]
 
         case .ensureFailed(let disconnected):
@@ -295,9 +296,9 @@ enum WorkspaceTUIReducer {
             presentationChanged = true
             effects = [.createEmulator(runtime: runtime.id, rows: rows, columns: columns)]
             if oldSubscribed, let oldRuntime {
-                effects.append(.unsubscribe(runtime: oldRuntime))
+                effects.append(.release(runtime: oldRuntime))
             }
-            effects.append(.subscribe(runtime: runtime.id, context: .launch))
+            effects.append(.attach(runtime: runtime.id, context: .launch))
 
         case .launchQueryFailed:
             guard next.lifecycle == .connected else { break }
@@ -418,49 +419,71 @@ enum WorkspaceTUIReducer {
                 break
             }
 
-        case .subscribeCompleted(let runtime, let context, let succeeded, let disconnected):
-            if succeeded {
-                // A success that arrives after the terminal moved on (or
-                // detached) must not claim the subscription or trigger an
-                // acquire the runtime would only drop or release again.
+        case .attachCompleted(let runtime, let context, let outcome):
+            switch outcome {
+            case .owned:
+                // Release-after-acquire: a grant that arrives after the
+                // terminal moved on (or detached) must release the orphaned
+                // lease instead of claiming it.
+                let stillAvailable = next.lifecycle == .connected
+                    && next.terminal?.state.runtime == runtime
+                    && next.terminal?.state.running == true
+                if stillAvailable {
+                    if next.terminal?.state.lease != .owned {
+                        presentationChanged = true
+                    }
+                    next.terminal?.state.subscribed = true
+                    next.terminal?.state.lease = .owned
+                    next.leasedRuntime = runtime
+                } else {
+                    effects = [.release(runtime: runtime)]
+                }
+            case .readOnly:
+                // A contended attach still subscribes; the lease stays
+                // read-only until the host reports it free. Stale grants
+                // (or detached ones) claim nothing.
                 guard next.lifecycle == .connected, next.terminal?.state.runtime == runtime else { break }
+                if next.terminal?.state.lease != .readOnly {
+                    presentationChanged = true
+                }
                 next.terminal?.state.subscribed = true
-                effects = [.acquire(runtime: runtime)]
-                break
-            }
-            // Failure handling mutates the terminal (unavailable titles,
-            // launcher fallback, emulator drops); detached state is final.
-            guard next.lifecycle != .detached else { break }
-            if disconnected {
-                Self.applyDisconnect(to: &next, presentationChanged: &presentationChanged)
-                if next.lifecycle == .connected {
-                    next.lifecycle = .disconnected
+                next.terminal?.state.lease = .readOnly
+            case .unavailable, .disconnected:
+                // Failure handling mutates the terminal (unavailable titles,
+                // launcher fallback, emulator drops); detached state is final.
+                guard next.lifecycle != .detached else { break }
+                if outcome == .disconnected {
+                    Self.applyDisconnect(to: &next, presentationChanged: &presentationChanged)
+                    if next.lifecycle == .connected {
+                        next.lifecycle = .disconnected
+                    }
                 }
-            }
-            switch context {
-            case .connect:
-                if next.terminal?.state.runtime == runtime {
-                    next.terminal?.state.subscribed = false
+                switch context {
+                case .connect:
+                    if outcome == .unavailable, next.terminal?.state.runtime == runtime {
+                        if next.terminal?.state.lease != .readOnly {
+                            presentationChanged = true
+                        }
+                        next.terminal?.state.subscribed = false
+                        next.terminal?.state.lease = .readOnly
+                    }
+                case .ensure:
+                    if next.terminal?.state.runtime == runtime {
+                        next.terminal?.state.title += " (unavailable)"
+                        presentationChanged = presentationChanged || next.terminal?.state.lease != .readOnly
+                        next.terminal?.state.lease = .readOnly
+                        next.terminal?.state.subscribed = false
+                    }
+                case .launch:
+                    if next.terminal?.state.runtime == runtime {
+                        next.terminal = nil
+                    }
+                    if next.lifecycle == .connected {
+                        next.mode = .launcher
+                    }
+                    presentationChanged = true
+                    effects = [.dropEmulator(runtime: runtime), .cancel(runtime: runtime)]
                 }
-                if disconnected == false {
-                    effects = [.acquire(runtime: runtime)]
-                }
-            case .ensure:
-                if next.terminal?.state.runtime == runtime {
-                    next.terminal?.state.title += " (unavailable)"
-                    presentationChanged = presentationChanged || next.terminal?.state.lease != .readOnly
-                    next.terminal?.state.lease = .readOnly
-                    next.terminal?.state.subscribed = false
-                }
-            case .launch:
-                if next.terminal?.state.runtime == runtime {
-                    next.terminal = nil
-                }
-                if next.lifecycle == .connected {
-                    next.mode = .launcher
-                }
-                presentationChanged = true
-                effects = [.dropEmulator(runtime: runtime), .cancel(runtime: runtime)]
             }
 
         case .detachRequested:
@@ -468,14 +491,22 @@ enum WorkspaceTUIReducer {
             next.lifecycle = .detached
             next.shouldExit = true
             presentationChanged = true
-            if let lease = next.leasedRuntime {
-                effects.append(.release(runtime: lease))
+            // One release covers the lease and the subscription alike;
+            // the usual case (leased and subscribed to one runtime)
+            // emits a single effect.
+            var releases: [UUID] = []
+            if let lease = next.leasedRuntime, releases.contains(lease) == false {
+                releases.append(lease)
             }
+            if next.terminal?.state.subscribed == true,
+               let runtime = next.terminal?.state.runtime,
+               releases.contains(runtime) == false
+            {
+                releases.append(runtime)
+            }
+            effects.append(contentsOf: releases.map(TUIRuntimeEffect.release))
             next.leasedRuntime = nil
             next.retryAcquire = false
-            if next.terminal?.state.subscribed == true, let runtime = next.terminal?.state.runtime {
-                effects.append(.unsubscribe(runtime: runtime))
-            }
             next.terminal?.state.lease = .released
             next.terminal?.state.subscribed = false
             effects.append(.detach)

@@ -6,6 +6,7 @@ import Testing
 import RVDomain
 import RVHooks
 import RVTheme
+import Synchronization
 @testable import RVCLI
 
 @Test func hookDispatch_matchesHookButNotHelpOrOtherCommands() {
@@ -162,11 +163,13 @@ import RVTheme
     }
 }
 
-private final class DispatchEvaluateProbe: @unchecked Sendable {
-    private(set) var commands: [String] = []
+private final class DispatchEvaluateProbe: Sendable {
+    private let box = Mutex<[String]>([])
+
+    var commands: [String] { box.withLock { $0 } }
 
     func record(_ command: ShellCommand) -> EvaluationResult {
-        commands.append(command.rawValue)
+        box.withLock { $0.append(command.rawValue) }
         return EvaluationResult(outcome: .plain)
     }
 }

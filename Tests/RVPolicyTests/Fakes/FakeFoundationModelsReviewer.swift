@@ -1,5 +1,6 @@
 import RVDomain
 import RVPolicy
+import Synchronization
 
 actor ReviewCallLog {
     private(set) var count = 0
@@ -94,6 +95,11 @@ enum ShadowReviewFixtures {
     }
 }
 
-final class PayloadBox: @unchecked Sendable {
-    var payload: ReviewPromptPayload?
+final class PayloadBox: Sendable {
+    private let box = Mutex<ReviewPromptPayload?>(nil)
+
+    var payload: ReviewPromptPayload? {
+        get { box.withLock { $0 } }
+        set { box.withLock { $0 = newValue } }
+    }
 }

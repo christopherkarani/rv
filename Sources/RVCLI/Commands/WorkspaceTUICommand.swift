@@ -41,24 +41,19 @@ enum WorkspaceTUICommand {
         case .failure(let error):
             throw ValidationError(WorkspaceCommandRun.text(error))
         }
-        guard case .success(let client) = WorkspaceClient.connect(endpoint) else {
+        guard case .success(let session) = LiveWorkspaceTUISession.connect(endpoint) else {
             throw ValidationError("workspace host is not reachable")
         }
-        guard case .success(let terminalClient) = WorkspaceClient.connect(endpoint) else {
-            _ = client.detach()
-            throw ValidationError("workspace host is not reachable")
-        }
-        let live = LiveWorkspaceTUIClient(controlClient: client, terminalClient: terminalClient)
         let described: WorkspaceTUISummary
-        switch live.describe() {
-        case .success(let summary):
-            described = summary
+        switch session.inventory() {
+        case .success(let inventoried):
+            described = inventoried.summary
         case .failure:
-            _ = live.detach()
+            session.close()
             throw ValidationError("workspace host is not reachable")
         }
         let model = WorkspaceTUIModel(
-            client: live,
+            session: session,
             summary: described,
             launcher: launcherChoices()
         )
@@ -66,12 +61,11 @@ enum WorkspaceTUICommand {
         case .success:
             model.launchDefaultRuntimeIfEmpty()
         case .failure:
-            _ = live.detach()
+            session.close()
             throw ValidationError("workspace host is not reachable")
         }
-        let pump = TerminalEventPump(client: live, model: model)
         do {
-            try await WorkspaceTUILaunch.run(model, pump: pump)
+            try await WorkspaceTUILaunch.run(model)
         } catch {
             model.detachSession()
             throw error

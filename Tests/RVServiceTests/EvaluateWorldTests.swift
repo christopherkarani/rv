@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 import RVDomain
 import RVPacks
@@ -187,15 +188,14 @@ private func resetHardRequest() -> EvaluationRequest {
     )
 }
 
-private final class BuildCounter: @unchecked Sendable {
-    private let lock = NSLock()
-    private var count = 0
+private final class BuildCounter: Sendable {
+    private let box = Mutex(0)
 
     var value: Int {
-        lock.withLock { count }
+        box.withLock { $0 }
     }
 
     func increment() {
-        lock.withLock { count += 1 }
+        box.withLock { $0 += 1 }
     }
 }

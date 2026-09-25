@@ -58,7 +58,7 @@ enum WorkspaceOwnerRegistry {
 /// The file stores a token and its device/inode are recorded in the lifecycle
 /// log. A later process may reclaim the workspace only when it can lock this
 /// same inode and the token still matches. PID reuse does not keep the lock.
-final class WorkspaceOwnerLock: @unchecked Sendable {
+final class WorkspaceOwnerLock: Sendable {
     enum Acquisition: Sendable {
         case acquired(WorkspaceOwnerLock)
         case busy
@@ -67,16 +67,23 @@ final class WorkspaceOwnerLock: @unchecked Sendable {
         case unavailable
     }
 
-    private var fd: Int32
+    private let state: Mutex<LockState>
     let path: String
-    private(set) var token: UUID?
     let device: UInt64
     let inode: UInt64
 
+    private struct LockState {
+        var fd: Int32
+        var token: UUID?
+    }
+
+    var token: UUID? {
+        state.withLock { $0.token }
+    }
+
     private init(fd: Int32, path: String, token: UUID?, device: UInt64, inode: UInt64) {
-        self.fd = fd
+        self.state = Mutex(LockState(fd: fd, token: token))
         self.path = path
-        self.token = token
         self.device = device
         self.inode = inode
     }
@@ -167,36 +174,43 @@ final class WorkspaceOwnerLock: @unchecked Sendable {
     }
 
     func replaceToken(_ newToken: UUID) -> Bool {
-        guard fd >= 0 else { return false }
-        let text = Data((newToken.uuidString + "\n").utf8)
-        if lseek(fd, 0, SEEK_SET) < 0 { return false }
-        if ftruncate(fd, 0) != 0 { return false }
-        let bytes = [UInt8](text)
-        var offset = 0
-        while offset < bytes.count {
-            let count = bytes.withUnsafeBytes { buffer -> Int in
-                guard let base = buffer.baseAddress else { return -1 }
-                return write(fd, base.advanced(by: offset), bytes.count - offset)
+        // Held across the write so `release` cannot close the descriptor
+        // mid-write and recycle its number under us.
+        state.withLock { state in
+            guard state.fd >= 0 else { return false }
+            let text = Data((newToken.uuidString + "\n").utf8)
+            if lseek(state.fd, 0, SEEK_SET) < 0 { return false }
+            if ftruncate(state.fd, 0) != 0 { return false }
+            let bytes = [UInt8](text)
+            var offset = 0
+            while offset < bytes.count {
+                let count = bytes.withUnsafeBytes { buffer -> Int in
+                    guard let base = buffer.baseAddress else { return -1 }
+                    return write(state.fd, base.advanced(by: offset), bytes.count - offset)
+                }
+                if count > 0 {
+                    offset += count
+                    continue
+                }
+                if count < 0, errno == EINTR { continue }
+                return false
             }
-            if count > 0 {
-                offset += count
-                continue
-            }
-            if count < 0, errno == EINTR { continue }
-            return false
+            if fsync(state.fd) != 0 { return false }
+            guard fsyncParent() else { return false }
+            state.token = newToken
+            return true
         }
-        if fsync(fd) != 0 { return false }
-        guard fsyncParent() else { return false }
-        token = newToken
-        return true
     }
 
     func release() {
-        if fd >= 0 {
-            _ = flock(fd, LOCK_UN)
-            close(fd)
-            fd = -1
+        let fd = state.withLock { state -> Int32 in
+            let fd = state.fd
+            state.fd = -1
+            return fd
         }
+        guard fd >= 0 else { return }
+        _ = flock(fd, LOCK_UN)
+        close(fd)
     }
 
     private func fsyncParent() -> Bool {

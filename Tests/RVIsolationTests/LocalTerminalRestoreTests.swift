@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 #if os(macOS)
 import Darwin
@@ -362,38 +363,31 @@ private func expectRestored(
     #expect(try terminalFlags(pty.slave) == before)
 }
 
-private final class DriveBox: @unchecked Sendable {
-    private let lock = NSLock()
-    private var stored: Error?
-    private var finished = false
+private final class DriveBox: Sendable {
+    private let state = Mutex<State>(State())
+
+    private struct State {
+        var stored: (any Error)?
+        var finished = false
+    }
 
     func finish(_ body: () throws -> Void) {
         defer {
-            lock.lock()
-            finished = true
-            lock.unlock()
+            state.withLock { $0.finished = true }
         }
         do {
             try body()
         } catch {
-            lock.lock()
-            stored = error
-            lock.unlock()
+            state.withLock { $0.stored = error }
         }
     }
 
     var isFinished: Bool {
-        lock.lock()
-        let value = finished
-        lock.unlock()
-        return value
+        state.withLock { $0.finished }
     }
 
     var error: Error? {
-        lock.lock()
-        let value = stored
-        lock.unlock()
-        return value
+        state.withLock { $0.stored }
     }
 }
 #endif

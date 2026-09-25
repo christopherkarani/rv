@@ -8,35 +8,36 @@ import Foundation
 /// attached, and a later attach reuses the existing runtime inventory.
 ///
 /// All decisions live in the pure `WorkspaceTUIReducer`. This class is the
-/// thin runtime: it owns the client, the emulator object, the lock, and the
+/// thin runtime: it owns the session, the emulator object, the lock, and the
 /// queues, and executes the effects the reducer returns.
 public final class WorkspaceTUIModel: @unchecked Sendable {
-    private let client: any WorkspaceTUIClient
+    private let session: any WorkspaceTUISession
     private let emulators: any TerminalEmulatorFactory
     private let lock = NSLock()
     /// Lifecycle RPCs use a separate Workspace Host connection. Cancellation
     /// can wait for child teardown without blocking terminal I/O.
     private let commandQueue = DispatchQueue(label: "rv.workspace-tui.commands")
-    /// Lease, write, and resize RPCs share the adapter's independent terminal
+    /// Lease, write, and resize RPCs share the session's independent terminal
     /// connection and stay ordered with each other.
     private let terminalQueue = DispatchQueue(label: "rv.workspace-tui.terminal")
     private var state: WorkspaceTUIState
+    private var pump: SessionEventPump?
     /// The emulator for the attached terminal. Created, fed, resized, and read
     /// only while `lock` is held; renderers use `terminalFrame()` snapshots.
     private var emulator: (runtime: UUID, emulator: any TerminalEmulating)?
     /// connect()'s query failure, when the reducer stayed retryable. Written
     /// by `.queryConnect` and read by `connect()`; always under `lock`.
-    private var connectError: WorkspaceTUIClientError?
+    private var connectError: WorkspaceTUIError?
 
     public init(
-        client: any WorkspaceTUIClient,
+        session: any WorkspaceTUISession,
         emulators: any TerminalEmulatorFactory = SwiftTermFactory(),
         summary: WorkspaceTUISummary,
         launcher: [RuntimeLaunchChoice],
         rows: Int = 24,
         columns: Int = 80
     ) {
-        self.client = client
+        self.session = session
         self.emulators = emulators
         self.state = WorkspaceTUIState(
             lifecycle: .neverConnected,
@@ -55,9 +56,11 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
         )
     }
 
-    /// Describes and inventories through WorkspaceHostClient's public surface.
-    /// Repeated calls are harmless and never create another runtime.
-    public func connect() -> Result<Void, WorkspaceTUIClientError> {
+    /// Inventories through the session and attaches to the first terminal
+    /// runtime. Repeated calls are harmless and never create another runtime.
+    /// A disconnected attach fails: callers must not start event delivery
+    /// against a dead connection.
+    public func connect() -> Result<Void, WorkspaceTUIError> {
         lock.lock()
         let lifecycle = state.lifecycle
         lock.unlock()
@@ -69,13 +72,29 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
         lock.unlock()
         drain(.connectRequested, route: { _ in .inline })
         // A failed first query stays retryable and reports the underlying
-        // describe/list error, as the previous model did.
+        // inventory error, as the previous model did.
         guard connectedNow() else {
             lock.lock()
             defer { lock.unlock() }
             return .failure(connectError ?? .disconnected)
         }
         return .success(())
+    }
+
+    /// Starts the session's event reader. Idempotent; the reader stops inside
+    /// `detachSession`. The app calls this once after `connect` succeeds.
+    public func startEventDelivery() {
+        lock.lock()
+        if pump == nil {
+            pump = SessionEventPump()
+        }
+        let pump = pump
+        lock.unlock()
+        pump?.start(
+            session: session,
+            onEvents: { [weak self] in self?.apply($0) },
+            onDisconnect: { [weak self] in self?.hostDisconnected() }
+        )
     }
 
     /// Establishes a host-owned terminal before the local terminal begins
@@ -95,8 +114,8 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
         })
     }
 
-    /// Applies a bounded batch from the one WorkspaceClient terminal reader.
-    /// Every emulator mutation and render snapshot is protected by this model's
+    /// Applies a bounded batch from the session's terminal reader. Every
+    /// emulator mutation and render snapshot is protected by this model's
     /// lock. Emulator replies are sent only after the lock is released.
     public func apply(_ events: [WorkspaceTUIEvent]) {
         drain(.hostEvents(events), route: {
@@ -157,27 +176,28 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
     /// Runs during structured application cleanup. It never cancels a runtime
     /// or closes the workspace.
     public func detachSession() {
+        lock.lock()
+        let pump = self.pump
+        self.pump = nil
+        lock.unlock()
+        pump?.stop()
         let effects = reduceAndApply(.detachRequested).effects
         // A repeat call is a no-op: the reducer emits no `.detach` effect once
         // detached, and the previous model early-returned without any RPC.
         guard effects.contains(.detach) else { return }
-        var lease: UUID?
-        var subscription: UUID?
+        var releases: [UUID] = []
         for effect in effects {
-            switch effect {
-            case .release(let runtime): lease = runtime
-            case .unsubscribe(let runtime): subscription = runtime
-            default: break
+            if case .release(let runtime) = effect {
+                releases.append(runtime)
             }
         }
         // Drain terminal RPCs before closing their dedicated host connection,
-        // then drain lifecycle work before unsubscribing and closing control.
+        // then drain lifecycle work before closing control.
         terminalQueue.sync {
-            if let lease { _ = client.releaseInput(lease) }
+            for release in releases { session.release(release) }
         }
         commandQueue.sync {
-            if let subscription { _ = client.unsubscribe(subscription) }
-            _ = client.detach()
+            session.close()
         }
     }
 
@@ -291,24 +311,16 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
     private func runInline(_ effect: TUIRuntimeEffect, followups: inout [WorkspaceTUIReducerEvent]) {
         switch effect {
         case .queryConnect:
-            let described: WorkspaceTUISummary
-            switch client.describe() {
-            case .success(let value): described = value
-            case .failure(let error):
-                setConnectError(error)
-                followups.append(.connectQueryFailed)
-                return
-            }
-            switch client.listRuntimes() {
-            case .success(let runtimes):
-                followups.append(.connectQuery(described: described, runtimes: runtimes))
+            switch session.inventory() {
+            case .success(let inventoried):
+                followups.append(.connectQuery(described: inventoried.summary, runtimes: inventoried.terminals))
             case .failure(let error):
                 setConnectError(error)
                 followups.append(.connectQueryFailed)
             }
 
         case .ensureShell(let choice, let rows, let columns):
-            switch client.ensureTerminalRuntime(
+            switch session.ensureTerminal(
                 executable: choice.executable,
                 arguments: choice.arguments,
                 hook: choice.hook,
@@ -332,7 +344,7 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
             followups.append(.launchDue(choice: choice))
 
         case .launchQuery(let choice, let rows, let columns):
-            switch client.launchRuntime(
+            switch session.launch(
                 executable: choice.executable,
                 arguments: choice.arguments,
                 hook: choice.hook,
@@ -345,29 +357,15 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
                 followups.append(.launchQueryFailed)
             }
 
-        case .subscribe(let runtime, let context):
-            switch client.subscribe(runtime) {
-            case .success:
-                followups.append(.subscribeCompleted(runtime: runtime, context: context, succeeded: true, disconnected: false))
-            case .failure(let error):
-                followups.append(
-                    .subscribeCompleted(
-                        runtime: runtime,
-                        context: context,
-                        succeeded: false,
-                        disconnected: error == .disconnected
-                    )
-                )
-            }
+        case .attach(let runtime, let context):
+            followups.append(.attachCompleted(runtime: runtime, context: context, outcome: session.attach(runtime)))
 
-        case .unsubscribe(let runtime):
-            _ = client.unsubscribe(runtime)
         case .release(let runtime):
-            _ = client.releaseInput(runtime)
+            session.release(runtime)
         case .cancel(let runtime):
-            _ = client.cancelRuntime(runtime)
+            session.cancel(runtime)
         case .detach:
-            _ = client.detach()
+            session.close()
 
         case .acquire(let runtime):
             // Narrow the race between the reducer's gate and the RPC: a
@@ -379,14 +377,23 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
                 && state.terminal?.state.running == true
             lock.unlock()
             guard attempt else { return }
-            followups.append(.acquireCompleted(runtime: runtime, outcome: .from(client.acquireInput(runtime))))
+            let outcome: TUIRPCOutcome
+            switch session.reacquire(runtime) {
+            case .owned:
+                outcome = .ok
+            case .readOnly, .unavailable:
+                outcome = .busy
+            case .disconnected:
+                outcome = .disconnected
+            }
+            followups.append(.acquireCompleted(runtime: runtime, outcome: outcome))
 
         case .write(let runtime, let bytes):
             guard bytes.isEmpty == false else { return }
-            followups.append(.writeCompleted(runtime: runtime, outcome: .from(client.write(runtime, bytes: bytes))))
+            followups.append(.writeCompleted(runtime: runtime, outcome: .from(session.send(bytes, to: runtime))))
 
         case .resize(let runtime, let rows, let columns):
-            followups.append(.resizeCompleted(runtime: runtime, outcome: .from(client.resize(runtime, rows: rows, columns: columns))))
+            followups.append(.resizeCompleted(runtime: runtime, outcome: .from(session.resize(runtime, rows: rows, columns: columns))))
 
         case .createEmulator(let runtime, let rows, let columns):
             lock.lock()
@@ -433,7 +440,7 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
         return state.lifecycle == .connected && state.shouldExit == false
     }
 
-    private func setConnectError(_ error: WorkspaceTUIClientError) {
+    private func setConnectError(_ error: WorkspaceTUIError) {
         lock.lock()
         connectError = error
         lock.unlock()

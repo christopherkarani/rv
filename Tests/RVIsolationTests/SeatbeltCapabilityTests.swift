@@ -2,6 +2,7 @@
 import Darwin
 import Foundation
 import RVDomain
+import Synchronization
 import Testing
 @testable import RVIsolation
 
@@ -145,13 +146,16 @@ private func runDirect(_ binary: URL, arguments: [String]) throws -> (status: In
     return (process.terminationStatus, text)
 }
 
-private final class BoundSocket: @unchecked Sendable {
+private final class BoundSocket: Sendable {
     let fd: Int32
     let port: String
     let path: String
-    private let lock = NSLock()
-    private var payload: String?
-    private var running = true
+    private let state = Mutex<SocketState>(SocketState())
+
+    private struct SocketState: Sendable {
+        var payload: String?
+        var running = true
+    }
 
     private init(fd: Int32, port: String, path: String) {
         self.fd = fd
@@ -160,19 +164,19 @@ private final class BoundSocket: @unchecked Sendable {
     }
 
     var received: String? {
-        lock.lock()
-        defer { lock.unlock() }
-        return payload
+        state.withLock { $0.payload }
+    }
+
+    private var isRunning: Bool {
+        state.withLock { $0.running }
     }
 
     func reset() {
-        lock.lock()
-        payload = nil
-        lock.unlock()
+        state.withLock { $0.payload = nil }
     }
 
     func close() {
-        running = false
+        state.withLock { $0.running = false }
         Darwin.close(fd)
         if path.isEmpty == false {
             unlink(path)
@@ -288,16 +292,15 @@ private final class BoundSocket: @unchecked Sendable {
     private func acceptLoop() {
         let fd = self.fd
         Thread.detachNewThread { [weak self] in
-            while self?.running == true {
+            while self?.isRunning == true {
                 var buffer = [UInt8](repeating: 0, count: 16)
                 let client = accept(fd, nil, nil)
                 guard client >= 0 else { return }
                 let count = read(client, &buffer, buffer.count)
                 Darwin.close(client)
                 guard let self, count > 0 else { continue }
-                self.lock.lock()
-                self.payload = String(decoding: buffer.prefix(count), as: UTF8.self)
-                self.lock.unlock()
+                let text = String(decoding: buffer.prefix(count), as: UTF8.self)
+                self.state.withLock { $0.payload = text }
             }
         }
     }
@@ -305,13 +308,12 @@ private final class BoundSocket: @unchecked Sendable {
     private func receiveDatagram() {
         let fd = self.fd
         Thread.detachNewThread { [weak self] in
-            while self?.running == true {
+            while self?.isRunning == true {
                 var buffer = [UInt8](repeating: 0, count: 16)
                 let count = recvfrom(fd, &buffer, buffer.count, 0, nil, nil)
                 guard let self, count > 0 else { return }
-                self.lock.lock()
-                self.payload = String(decoding: buffer.prefix(count), as: UTF8.self)
-                self.lock.unlock()
+                let text = String(decoding: buffer.prefix(count), as: UTF8.self)
+                self.state.withLock { $0.payload = text }
             }
         }
     }

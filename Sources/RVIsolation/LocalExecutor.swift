@@ -13,7 +13,7 @@ public enum LocalExecutorError: Error, Sendable, Equatable {
 /// `Task.isCancelled` is visible only on the task that owns the executor call.
 /// The watch loop runs on a dedicated thread, so it reads this flag instead.
 enum CooperativeLaunchStop {
-    final class Flag: NSObject, @unchecked Sendable {
+    final class Flag: NSObject, Sendable {
         private let value = Mutex(false)
 
         func cancel() {
@@ -40,7 +40,7 @@ enum CooperativeLaunchStop {
     }
 }
 
-private final class ExecutorApplyGate: @unchecked Sendable {
+private final class ExecutorApplyGate: Sendable {
     private let semaphore = DispatchSemaphore(value: 1)
 
     func wait() {

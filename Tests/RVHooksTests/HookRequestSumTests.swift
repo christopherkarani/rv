@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 import RVDomain
 @testable import RVHooks
@@ -197,23 +198,31 @@ import RVDomain
     #expect(wire.stdout.contains("permissionDecision\":\"deny\""))
 }
 
-private final class DoorProbe: @unchecked Sendable {
-    private(set) var commands: [String] = []
-    private(set) var files: [String] = []
-    private(set) var spends: [String] = []
+private final class DoorProbe: Sendable {
+    private let state = Mutex<State>(State())
+
+    private struct State: Sendable {
+        var commands: [String] = []
+        var files: [String] = []
+        var spends: [String] = []
+    }
+
+    var commands: [String] { state.withLock { $0.commands } }
+    var files: [String] { state.withLock { $0.files } }
+    var spends: [String] { state.withLock { $0.spends } }
 
     func evaluate(_ command: ShellCommand, _: WorkingDirectory?) -> EvaluationResult {
-        commands.append(command.rawValue)
+        state.withLock { $0.commands.append(command.rawValue) }
         return EvaluationResult(outcome: .plain)
     }
 
     func spend(_ command: ShellCommand, _: WorkingDirectory?) -> EvaluationResult {
-        spends.append(command.rawValue)
+        state.withLock { $0.spends.append(command.rawValue) }
         return EvaluationResult(outcome: .plain)
     }
 
     func evaluateFile(_ action: FileToolAction, _: WorkingDirectory?) -> EvaluationResult {
-        files.append(action.path.rawValue)
+        state.withLock { $0.files.append(action.path.rawValue) }
         if let rule = SecretPathCatalog.dayOne.firstMatch(of: action.path.rawValue) {
             let ruleID = RuleID(pack: .coreSecrets, pattern: rule.pattern)
             return EvaluationResult(

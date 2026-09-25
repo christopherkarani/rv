@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 import RVDomain
 @testable import RVHooks
@@ -211,10 +212,17 @@ private struct LeftoverVoiceCodec: HostAskCodec {
     }
 }
 
-private final class EvaluatedDenyDoorSpy: HostCodec, @unchecked Sendable {
+private final class EvaluatedDenyDoorSpy: HostCodec {
     var host: HookHost { .grok }
-    private(set) var evaluatedCalls = 0
-    private(set) var denyCalls = 0
+    private let counts = Mutex<Counts>(Counts())
+
+    private struct Counts: Sendable {
+        var evaluatedCalls = 0
+        var denyCalls = 0
+    }
+
+    var evaluatedCalls: Int { counts.withLock { $0.evaluatedCalls } }
+    var denyCalls: Int { counts.withLock { $0.denyCalls } }
 
     func decode(_ stdin: String) -> HookDecodeOutcome {
         .malformed(.missingCommand)
@@ -225,32 +233,39 @@ private final class EvaluatedDenyDoorSpy: HostCodec, @unchecked Sendable {
         command: ShellCommand,
         unlockCode: AllowOnceUnlockMint?
     ) -> HookWire {
-        evaluatedCalls += 1
+        counts.withLock { $0.evaluatedCalls += 1 }
         return HookWire(stdout: "evaluated\n", exitCode: 7)
     }
 
     func encodeDeny(reason: String, rule: RuleID?, next: HookVoiceNext) -> HookWire {
-        denyCalls += 1
+        counts.withLock { $0.denyCalls += 1 }
         return HookWire(stdout: "deny\n", exitCode: 9)
     }
 }
 
-private final class FileDenyDoorSpy: HostCodec, @unchecked Sendable {
+private final class FileDenyDoorSpy: HostCodec {
     var host: HookHost { .grok }
-    private(set) var fileCalls = 0
-    private(set) var denyCalls = 0
+    private let counts = Mutex<Counts>(Counts())
+
+    private struct Counts: Sendable {
+        var fileCalls = 0
+        var denyCalls = 0
+    }
+
+    var fileCalls: Int { counts.withLock { $0.fileCalls } }
+    var denyCalls: Int { counts.withLock { $0.denyCalls } }
 
     func decode(_ stdin: String) -> HookDecodeOutcome {
         .malformed(.missingCommand)
     }
 
     func encodeFileDeny(from result: EvaluationResult) -> HookWire {
-        fileCalls += 1
+        counts.withLock { $0.fileCalls += 1 }
         return HookWire(stdout: "file-deny\n", exitCode: 7)
     }
 
     func encodeDeny(reason: String, rule: RuleID?, next: HookVoiceNext) -> HookWire {
-        denyCalls += 1
+        counts.withLock { $0.denyCalls += 1 }
         return HookWire(stdout: "deny\n", exitCode: 9)
     }
 }

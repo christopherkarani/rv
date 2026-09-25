@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 import RVDomain
 import RVHooks
@@ -70,11 +71,13 @@ private func withTempHome<T>(_ body: (URL) async throws -> T) async throws -> T 
     return try await body(root)
 }
 
-private final class EvaluateProbe: @unchecked Sendable {
-    private(set) var commands: [String] = []
+private final class EvaluateProbe: Sendable {
+    private let box = Mutex<[String]>([])
+
+    var commands: [String] { box.withLock { $0 } }
 
     func record(_ command: ShellCommand, result: EvaluationResult) -> EvaluationResult {
-        commands.append(command.rawValue)
+        box.withLock { $0.append(command.rawValue) }
         return result
     }
 }

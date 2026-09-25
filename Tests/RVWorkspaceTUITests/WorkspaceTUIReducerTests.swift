@@ -110,7 +110,7 @@ private func connectedState(
         #expect(transition.state.terminal?.state.title == "runtime")
         #expect(transition.effects == [
             .createEmulator(runtime: runtimeA, rows: 24, columns: 80),
-            .subscribe(runtime: runtimeA, context: .connect),
+            .attach(runtime: runtimeA, context: .connect),
         ])
         #expect(transition.state.presentationRevision == 1)
     }
@@ -170,7 +170,7 @@ private func connectedState(
         #expect(transition.state.terminal?.state.title == "opencode")
         #expect(transition.effects == [
             .createEmulator(runtime: runtimeA, rows: 24, columns: 80),
-            .subscribe(runtime: runtimeA, context: .ensure),
+            .attach(runtime: runtimeA, context: .ensure),
         ])
     }
 
@@ -307,8 +307,8 @@ private func connectedState(
         #expect(transition.state.mode == .terminal)
         #expect(transition.effects == [
             .createEmulator(runtime: runtimeB, rows: 24, columns: 80),
-            .unsubscribe(runtime: runtimeA),
-            .subscribe(runtime: runtimeB, context: .launch),
+            .release(runtime: runtimeA),
+            .attach(runtime: runtimeB, context: .launch),
         ])
     }
 
@@ -555,43 +555,63 @@ private func connectedState(
         #expect(transition.state.mode == .launcher)
     }
 
-    @Test func subscribeSuccessAcquiresInEveryContext() {
-        let before = connectedState()
-        for context in [TUISubscribeContext.connect, .ensure, .launch] {
+    @Test func attachOwnedClaimsTheLeaseInEveryContext() {
+        var before = connectedState(leasedRuntime: nil)
+        before.terminal?.state.lease = .readOnly
+        before.terminal?.state.subscribed = false
+        for context in [TUIAttachContext.connect, .ensure, .launch] {
             let transition = WorkspaceTUIReducer.reduce(
                 before,
-                .subscribeCompleted(runtime: runtimeA, context: context, succeeded: true, disconnected: false)
+                .attachCompleted(runtime: runtimeA, context: context, outcome: .owned)
             )
             #expect(transition.state.terminal?.state.subscribed == true)
-            #expect(transition.effects == [.acquire(runtime: runtimeA)])
+            #expect(transition.state.terminal?.state.lease == .owned)
+            #expect(transition.state.leasedRuntime == runtimeA)
+            #expect(transition.effects == [])
         }
     }
 
-    @Test func connectSubscribeFailureStillAcquiresUnlessDisconnected() {
+    @Test func attachReadOnlySubscribesWithoutTheLease() {
+        var before = connectedState(leasedRuntime: nil)
+        before.terminal?.state.lease = .released
+        before.terminal?.state.subscribed = false
+        let transition = WorkspaceTUIReducer.reduce(
+            before,
+            .attachCompleted(runtime: runtimeA, context: .connect, outcome: .readOnly)
+        )
+        #expect(transition.state.terminal?.state.subscribed == true)
+        #expect(transition.state.terminal?.state.lease == .readOnly)
+        #expect(transition.state.leasedRuntime == nil)
+        #expect(transition.effects == [])
+    }
+
+    @Test func connectAttachUnavailableAcquiresNothing() {
         var before = connectedState()
         before.terminal?.state.subscribed = false
-        let rejected = WorkspaceTUIReducer.reduce(
+        let refused = WorkspaceTUIReducer.reduce(
             before,
-            .subscribeCompleted(runtime: runtimeA, context: .connect, succeeded: false, disconnected: false)
+            .attachCompleted(runtime: runtimeA, context: .connect, outcome: .unavailable)
         )
-        #expect(rejected.effects == [.acquire(runtime: runtimeA)])
-        #expect(rejected.state.lifecycle == .connected)
+        #expect(refused.effects == [])
+        #expect(refused.state.lifecycle == .connected)
+        #expect(refused.state.terminal?.state.subscribed == false)
+        #expect(refused.state.terminal?.state.lease == .readOnly)
         let dropped = WorkspaceTUIReducer.reduce(
             before,
-            .subscribeCompleted(runtime: runtimeA, context: .connect, succeeded: false, disconnected: true)
+            .attachCompleted(runtime: runtimeA, context: .connect, outcome: .disconnected)
         )
         #expect(dropped.effects == [])
         #expect(dropped.state.lifecycle == .disconnected)
     }
 
-    @Test func ensureSubscribeFailureMarksTheTerminalUnavailable() {
+    @Test func ensureAttachUnavailableMarksTheTerminalUnavailable() {
         var before = connectedState()
         before.terminal?.state.lease = .released
         before.terminal?.state.subscribed = false
         before.leasedRuntime = nil
         let transition = WorkspaceTUIReducer.reduce(
             before,
-            .subscribeCompleted(runtime: runtimeA, context: .ensure, succeeded: false, disconnected: false)
+            .attachCompleted(runtime: runtimeA, context: .ensure, outcome: .unavailable)
         )
         #expect(transition.state.terminal?.state.title == "shell (unavailable)")
         #expect(transition.state.terminal?.state.subscribed == false)
@@ -599,22 +619,22 @@ private func connectedState(
         #expect(transition.effects == [])
     }
 
-    @Test func launchSubscribeFailureDropsTheTerminalAndCancels() {
+    @Test func launchAttachUnavailableDropsTheTerminalAndCancels() {
         let before = connectedState()
         let transition = WorkspaceTUIReducer.reduce(
             before,
-            .subscribeCompleted(runtime: runtimeA, context: .launch, succeeded: false, disconnected: false)
+            .attachCompleted(runtime: runtimeA, context: .launch, outcome: .unavailable)
         )
         #expect(transition.state.terminal == nil)
         #expect(transition.state.mode == .launcher)
         #expect(transition.effects == [.dropEmulator(runtime: runtimeA), .cancel(runtime: runtimeA)])
     }
 
-    @Test func ensureSubscribeFailureWhileDisconnectedStillMarksTheTerminalUnavailable() {
+    @Test func ensureAttachDisconnectedStillMarksTheTerminalUnavailable() {
         let before = connectedState()
         let transition = WorkspaceTUIReducer.reduce(
             before,
-            .subscribeCompleted(runtime: runtimeA, context: .ensure, succeeded: false, disconnected: true)
+            .attachCompleted(runtime: runtimeA, context: .ensure, outcome: .disconnected)
         )
         #expect(transition.state.lifecycle == .disconnected)
         #expect(transition.state.terminal?.state.title == "shell (unavailable)")
@@ -624,11 +644,11 @@ private func connectedState(
         #expect(transition.effects == [])
     }
 
-    @Test func launchSubscribeFailureWhileDisconnectedDropsTheTerminalWithoutTheLauncher() {
+    @Test func launchAttachDisconnectedDropsTheTerminalWithoutTheLauncher() {
         let before = connectedState()
         let transition = WorkspaceTUIReducer.reduce(
             before,
-            .subscribeCompleted(runtime: runtimeA, context: .launch, succeeded: false, disconnected: true)
+            .attachCompleted(runtime: runtimeA, context: .launch, outcome: .disconnected)
         )
         #expect(transition.state.lifecycle == .disconnected)
         #expect(transition.state.terminal == nil)
@@ -636,12 +656,11 @@ private func connectedState(
         #expect(transition.effects == [.dropEmulator(runtime: runtimeA), .cancel(runtime: runtimeA)])
     }
 
-    @Test func detachReleasesUnsubscribesAndIsIdempotent() {
+    @Test func detachReleasesOnceAndIsIdempotent() {
         let before = connectedState()
         let transition = WorkspaceTUIReducer.reduce(before, .detachRequested)
         #expect(transition.effects == [
             .release(runtime: runtimeA),
-            .unsubscribe(runtime: runtimeA),
             .detach,
         ])
         #expect(transition.state.lifecycle == .detached)
@@ -669,9 +688,11 @@ private func connectedState(
             .acquireCompleted(runtime: runtimeA, outcome: .disconnected),
             .resizeCompleted(runtime: runtimeA, outcome: .unavailable),
             .resizeCompleted(runtime: runtimeA, outcome: .disconnected),
-            .subscribeCompleted(runtime: runtimeA, context: .connect, succeeded: true, disconnected: false),
-            .subscribeCompleted(runtime: runtimeA, context: .ensure, succeeded: false, disconnected: false),
-            .subscribeCompleted(runtime: runtimeA, context: .launch, succeeded: false, disconnected: false),
+            .attachCompleted(runtime: runtimeA, context: .connect, outcome: .readOnly),
+            .attachCompleted(runtime: runtimeA, context: .connect, outcome: .unavailable),
+            .attachCompleted(runtime: runtimeA, context: .ensure, outcome: .unavailable),
+            .attachCompleted(runtime: runtimeA, context: .launch, outcome: .unavailable),
+            .attachCompleted(runtime: runtimeA, context: .launch, outcome: .disconnected),
         ]
         for event in racing {
             let transition = WorkspaceTUIReducer.reduce(detached, event)
@@ -687,12 +708,33 @@ private func connectedState(
         #expect(transition.state == detached)
     }
 
-    @Test func staleSubscribeSuccessSkipsTheAcquire() {
+    @Test func orphanedAttachAfterDetachStillReleasesWithoutMutating() {
+        let detached = WorkspaceTUIReducer.reduce(connectedState(), .detachRequested).state
+        let transition = WorkspaceTUIReducer.reduce(
+            detached,
+            .attachCompleted(runtime: runtimeA, context: .connect, outcome: .owned)
+        )
+        #expect(transition.effects == [.release(runtime: runtimeA)])
+        #expect(transition.state == detached)
+    }
+
+    @Test func staleAttachOwnedReleasesWithoutClaiming() {
         var before = connectedState()
         before.terminal?.state.subscribed = false
         let transition = WorkspaceTUIReducer.reduce(
             before,
-            .subscribeCompleted(runtime: runtimeB, context: .connect, succeeded: true, disconnected: false)
+            .attachCompleted(runtime: runtimeB, context: .connect, outcome: .owned)
+        )
+        #expect(transition.effects == [.release(runtime: runtimeB)])
+        #expect(transition.state == before)
+    }
+
+    @Test func staleAttachReadOnlyClaimsNothing() {
+        var before = connectedState()
+        before.terminal?.state.subscribed = false
+        let transition = WorkspaceTUIReducer.reduce(
+            before,
+            .attachCompleted(runtime: runtimeB, context: .connect, outcome: .readOnly)
         )
         #expect(transition.effects == [])
         #expect(transition.state == before)
@@ -722,24 +764,19 @@ private func connectedState(
         )
         #expect(queried.effects == [
             .createEmulator(runtime: runtimeA, rows: 24, columns: 80),
-            .subscribe(runtime: runtimeA, context: .connect),
+            .attach(runtime: runtimeA, context: .connect),
         ])
 
-        let subscribed = WorkspaceTUIReducer.reduce(
+        let attached = WorkspaceTUIReducer.reduce(
             queried.state,
-            .subscribeCompleted(runtime: runtimeA, context: .connect, succeeded: true, disconnected: false)
+            .attachCompleted(runtime: runtimeA, context: .connect, outcome: .owned)
         )
-        #expect(subscribed.effects == [.acquire(runtime: runtimeA)])
+        #expect(attached.effects == [])
+        #expect(attached.state.terminal?.state.subscribed == true)
+        #expect(attached.state.terminal?.state.lease == .owned)
+        #expect(attached.state.leasedRuntime == runtimeA)
 
-        let acquired = WorkspaceTUIReducer.reduce(
-            subscribed.state,
-            .acquireCompleted(runtime: runtimeA, outcome: .ok)
-        )
-        #expect(acquired.effects == [])
-        #expect(acquired.state.terminal?.state.lease == .owned)
-        #expect(acquired.state.leasedRuntime == runtimeA)
-
-        let typed = WorkspaceTUIReducer.reduce(acquired.state, .key(.character("a")))
+        let typed = WorkspaceTUIReducer.reduce(attached.state, .key(.character("a")))
         #expect(typed.effects == [.queueSend(runtime: runtimeA, bytes: Data("a".utf8))])
 
         let sent = WorkspaceTUIReducer.reduce(typed.state, .sendDue(runtime: runtimeA, bytes: Data("a".utf8)))

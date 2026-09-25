@@ -1,5 +1,6 @@
 import Foundation
 import RVDomain
+import Synchronization
 import Testing
 @testable import RVIsolation
 #if canImport(Darwin)
@@ -178,6 +179,56 @@ struct RuntimeTerminalTests {
         #expect(healthy.bytes == expected)
         #expect(terminal.replayByteCount <= TerminalStreamLimits.replayBytes)
         #expect(healthy.exitStatus == nil)
+    }
+
+    @Test func resubscribeAfterOverflowResumesFromReplay() throws {
+        let terminal = try #require(RuntimeTerminal.open(rows: 24, columns: 80))
+        let slave = try openSlave(terminal.slavePath)
+        defer {
+            close(slave)
+            terminal.shutdownMaster()
+        }
+        terminal.startReader()
+        let slow = BlockingBox()
+        let id = UUID()
+        #expect(terminal.subscribe(client: id, emit: slow.append).isSuccess)
+        terminal.activate(client: id)
+        #expect(writeAll(fd: slave, bytes: Data([0x01])))
+        #expect(waitUntil(seconds: 2) { slow.isBlocked })
+        #expect(writeAll(fd: slave, bytes: binaryPayload(count: 80_000)))
+        slow.unblock()
+        #expect(waitUntil(seconds: 5) { slow.sawOverflow })
+        let resumed = NoticeBox()
+        #expect(waitUntil(seconds: 5) {
+            if case .success = terminal.subscribe(client: id, emit: resumed.append) {
+                terminal.activate(client: id)
+                return true
+            }
+            return false
+        })
+        let marker = Data("RESUMED".utf8)
+        #expect(writeAll(fd: slave, bytes: marker))
+        #expect(waitUntil(seconds: 5) { resumed.bytes.suffix(marker.count) == marker })
+        #expect(resumed.replayBytes.isEmpty == false)
+        terminal.finish(status: 0)
+        #expect(waitUntil(seconds: 2) { resumed.exitStatus == 0 })
+    }
+
+    @Test func clientResubscribeAfterUnsubscribeReceivesReplay() throws {
+        let opened = try PTYHost()
+        defer { opened.close() }
+        let client = try WorkspaceClient.connect(opened.server.endpoint).get()
+        let runtime = try client.launchRuntime(
+            executable: "/bin/sh",
+            arguments: ["-c", "printf 'RV-RESUB-MARKER'; /bin/sleep 30"],
+            terminalRows: 24,
+            terminalColumns: 80
+        ).get()
+        #expect(client.subscribeTerminal(runtime.runtime).isSuccess)
+        #expect(readUntil(client, contains: Data("RV-RESUB-MARKER".utf8), seconds: 10).contains(Data("RV-RESUB-MARKER".utf8)))
+        #expect(client.resubscribeTerminal(runtime.runtime).isSuccess)
+        #expect(readUntil(client, contains: Data("RV-RESUB-MARKER".utf8), seconds: 10).contains(Data("RV-RESUB-MARKER".utf8)))
+        #expect(client.cancelRuntime(runtime.runtime).isSuccess)
     }
 
     @Test func detachWaitsUntilFlushLeavesEmit() throws {
@@ -1163,21 +1214,16 @@ private func termFlags(_ fd: Int32) throws -> TermFlags {
     return TermFlags(input: term.c_iflag, output: term.c_oflag, local: term.c_lflag, control: term.c_cflag)
 }
 
-private final class NoticeBox: @unchecked Sendable {
-    private let lock = NSLock()
-    private var notices: [TerminalNotice] = []
+private final class NoticeBox: Sendable {
+    private let box = Mutex<[TerminalNotice]>([])
 
     func append(_ notice: TerminalNotice) -> Bool {
-        lock.lock()
-        notices.append(notice)
-        lock.unlock()
+        box.withLock { $0.append(notice) }
         return true
     }
 
     var bytes: Data {
-        lock.lock()
-        let copy = notices
-        lock.unlock()
+        let copy = box.withLock { $0 }
         return copy.reduce(into: Data()) { partial, notice in
             switch notice {
             case .output(_, let bytes), .replay(_, let bytes):
@@ -1189,18 +1235,14 @@ private final class NoticeBox: @unchecked Sendable {
     }
 
     var replayBytes: Data {
-        lock.lock()
-        let copy = notices
-        lock.unlock()
+        let copy = box.withLock { $0 }
         return copy.reduce(into: Data()) { partial, notice in
             if case .replay(_, let bytes) = notice { partial.append(bytes) }
         }
     }
 
     var sequences: [Int64] {
-        lock.lock()
-        let copy = notices
-        lock.unlock()
+        let copy = box.withLock { $0 }
         return copy.compactMap { notice in
             switch notice {
             case .output(let sequence, _), .replay(let sequence, _):
@@ -1212,9 +1254,7 @@ private final class NoticeBox: @unchecked Sendable {
     }
 
     var exitStatus: Int32? {
-        lock.lock()
-        let copy = notices
-        lock.unlock()
+        let copy = box.withLock { $0 }
         for notice in copy {
             if case .exited(let status) = notice { return status }
         }
@@ -1222,76 +1262,67 @@ private final class NoticeBox: @unchecked Sendable {
     }
 }
 
-private final class FinishedFlag: @unchecked Sendable {
-    private let lock = NSLock()
-    private var value = false
+private final class FinishedFlag: Sendable {
+    private let box = Mutex(false)
 
     func set() {
-        lock.lock()
-        value = true
-        lock.unlock()
+        box.withLock { $0 = true }
     }
 
     var isSet: Bool {
-        lock.lock()
-        let copy = value
-        lock.unlock()
-        return copy
+        box.withLock { $0 }
     }
 }
 
-private final class FailSendBox: @unchecked Sendable {
-    private let lock = NSLock()
-    private var overflow = false
-    private var count = 0
+private final class FailSendBox: Sendable {
+    private let box = Mutex<State>(State())
+
+    private struct State {
+        var overflow = false
+        var count = 0
+    }
 
     func append(_ notice: TerminalNotice) -> Bool {
-        lock.lock()
-        count += 1
-        if case .overflow = notice { overflow = true }
-        lock.unlock()
+        box.withLock {
+            $0.count += 1
+            if case .overflow = notice { $0.overflow = true }
+        }
         return false
     }
 
     var sawOverflow: Bool {
-        lock.lock()
-        let value = overflow
-        lock.unlock()
-        return value
+        box.withLock { $0.overflow }
     }
 
     var calls: Int {
-        lock.lock()
-        let value = count
-        lock.unlock()
-        return value
+        box.withLock { $0.count }
     }
 }
 
-private final class BlockingBox: @unchecked Sendable {
-    private let lock = NSLock()
-    private var blocked = false
-    private var overflow = false
+private final class BlockingBox: Sendable {
+    private let box = Mutex<State>(State())
     private let release = DispatchSemaphore(value: 0)
 
+    private struct State {
+        var blocked = false
+        var overflow = false
+    }
+
     func append(_ notice: TerminalNotice) -> Bool {
-        var wait = false
-        lock.lock()
-        if case .overflow = notice { overflow = true }
-        if case .output = notice, blocked == false {
-            blocked = true
-            wait = true
+        let wait = box.withLock { state -> Bool in
+            if case .overflow = notice { state.overflow = true }
+            if case .output = notice, state.blocked == false {
+                state.blocked = true
+                return true
+            }
+            return false
         }
-        lock.unlock()
         if wait { release.wait() }
         return true
     }
 
     var isBlocked: Bool {
-        lock.lock()
-        let value = blocked
-        lock.unlock()
-        return value
+        box.withLock { $0.blocked }
     }
 
     func unblock() {
@@ -1299,28 +1330,19 @@ private final class BlockingBox: @unchecked Sendable {
     }
 
     var sawOverflow: Bool {
-        lock.lock()
-        let value = overflow
-        lock.unlock()
-        return value
+        box.withLock { $0.overflow }
     }
 }
 
-private final class PTYHTTPSpy: @unchecked Sendable {
-    private let lock = NSLock()
-    private var value = 0
+private final class PTYHTTPSpy: Sendable {
+    private let box = Mutex(0)
 
     var calls: Int {
-        lock.lock()
-        let copy = value
-        lock.unlock()
-        return copy
+        box.withLock { $0 }
     }
 
     func run(_ action: HTTPAction) -> Result<HTTPExecutionReceipt, HTTPEgressFailure> {
-        lock.lock()
-        value += 1
-        lock.unlock()
+        box.withLock { $0 += 1 }
         return .success(
             HTTPExecutionReceipt(
                 status: 204,
@@ -1475,22 +1497,12 @@ private struct PTYHost {
     }
 }
 
-private final class WatchBox: @unchecked Sendable {
-    private let lock = NSLock()
-    private var value: Result<WorkspaceDescription, WorkspaceClientFailure>?
+private final class WatchBox: Sendable {
+    private let box = Mutex<Result<WorkspaceDescription, WorkspaceClientFailure>?>(nil)
 
     var result: Result<WorkspaceDescription, WorkspaceClientFailure>? {
-        get {
-            lock.lock()
-            let copy = value
-            lock.unlock()
-            return copy
-        }
-        set {
-            lock.lock()
-            value = newValue
-            lock.unlock()
-        }
+        get { box.withLock { $0 } }
+        set { box.withLock { $0 = newValue } }
     }
 }
 

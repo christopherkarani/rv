@@ -83,7 +83,7 @@ func expectNoCommandOrPath(_ payload: AnalyticsPayload, sourceLocation: SourceLo
 struct LoopbackHTTPError: Error, Sendable {}
 
 /// Loopback HTTP/1.1 listener for sink transport tests. Never leaves 127.0.0.1.
-final class LoopbackHTTPServer: @unchecked Sendable {
+final class LoopbackHTTPServer: Sendable {
     let port: Int
     private let listenFD: Int32
 

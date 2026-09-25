@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 import RVDomain
 @testable import RVHooks
@@ -336,10 +337,12 @@ func codexHonorPath_missingReasonExitTwoWithWhitespaceStderrIsNotEnough(_ missin
     )
 }
 
-private final class CodexEvaluateProbe: @unchecked Sendable {
-    private(set) var commands: [String] = []
+private final class CodexEvaluateProbe: Sendable {
+    private let commandsBox = Mutex<[String]>([])
+
+    var commands: [String] { commandsBox.withLock { $0 } }
 
     func record(_ command: ShellCommand) {
-        commands.append(command.rawValue)
+        commandsBox.withLock { $0.append(command.rawValue) }
     }
 }

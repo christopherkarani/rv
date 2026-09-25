@@ -3,6 +3,7 @@ import Darwin
 #endif
 import Foundation
 import RVDomain
+import Synchronization
 import Testing
 @testable import RVIsolation
 
@@ -507,50 +508,99 @@ struct WorkspaceHostTests {
             #expect(box.secondary?.isSuccess == true)
         }
     }
+
+    @Test func negotiatedFeaturesTreatInvalidRequestAsLegacy() {
+        guard case .success(let empty) = WorkspaceClient.negotiatedFeatures(from: .failure(.invalidRequest)) else {
+            Issue.record("invalidRequest must map to an empty feature list")
+            return
+        }
+        #expect(empty.isEmpty)
+        #expect(WorkspaceClient.negotiatedFeatures(from: .failure(.timedOut)).isFailure)
+        let reply = WorkspaceControlMessage(
+            version: 1,
+            id: UUID(),
+            op: WorkspaceControlOp.capabilities.rawValue,
+            ok: true,
+            features: [WorkspaceControlFeature.ensureTerminalRuntime]
+        )
+        guard case .success(let features) = WorkspaceClient.negotiatedFeatures(from: .success(reply)) else {
+            Issue.record("capabilities reply must map to its features")
+            return
+        }
+        #expect(features == [WorkspaceControlFeature.ensureTerminalRuntime])
+        let wrongOp = WorkspaceControlMessage(
+            version: 1,
+            id: UUID(),
+            op: WorkspaceControlOp.ping.rawValue,
+            ok: true,
+            features: []
+        )
+        #expect(WorkspaceClient.negotiatedFeatures(from: .success(wrongOp)).isFailure)
+    }
+
+    @Test func legacyEnsureReusesARunningTerminalAndLaunchesWhenEmpty() throws {
+        let opened = try TestHost()
+        defer { opened.close() }
+        let client = try WorkspaceClient.connect(opened.server.endpoint).get()
+        defer { _ = client.detach() }
+        #expect(client.supportsEnsureTerminalRuntime)
+        client.testingSetSupportsEnsureTerminalRuntime(false)
+        #expect(client.supportsEnsureTerminalRuntime == false)
+
+        let created = try client.ensureTerminalRuntime(
+            executable: "/bin/sh",
+            arguments: ["-c", "/bin/sleep 30"],
+            terminalRows: 24,
+            terminalColumns: 80
+        ).get()
+        #expect(created.terminal)
+        #expect(created.running)
+        let reused = try client.ensureTerminalRuntime(
+            executable: "/bin/sh",
+            arguments: ["-c", "/bin/sleep 30"],
+            terminalRows: 24,
+            terminalColumns: 80
+        ).get()
+        #expect(reused.runtime == created.runtime)
+        #expect(try client.listRuntimes().get().filter(\.terminal).count == 1)
+        #expect(client.cancelRuntime(created.runtime).isSuccess)
+    }
 }
 
-private final class WatchBox: @unchecked Sendable {
-    var result: Result<WorkspaceDescription, WorkspaceClientFailure>?
+private final class WatchBox: Sendable {
+    private let box = Mutex<Result<WorkspaceDescription, WorkspaceClientFailure>?>(nil)
+
+    var result: Result<WorkspaceDescription, WorkspaceClientFailure>? {
+        get { box.withLock { $0 } }
+        set { box.withLock { $0 = newValue } }
+    }
 }
 
-private final class OverlapBox: @unchecked Sendable {
-    private let lock = NSLock()
-    private var value: Result<Void, WorkspaceClientFailure>?
+private final class OverlapBox: Sendable {
+    private let box = Mutex<Result<Void, WorkspaceClientFailure>?>(nil)
 
     func reset() {
-        lock.lock()
-        value = nil
-        lock.unlock()
+        box.withLock { $0 = nil }
     }
 
     func finish(_ result: Result<Void, WorkspaceClientFailure>) {
-        lock.lock()
-        value = result
-        lock.unlock()
+        box.withLock { $0 = result }
     }
 
     var secondary: Result<Void, WorkspaceClientFailure>? {
-        lock.lock()
-        let copy = value
-        lock.unlock()
-        return copy
+        box.withLock { $0 }
     }
 }
 
-private final class OutputBox: @unchecked Sendable {
-    private let lock = NSLock()
-    private var data = Data()
+private final class OutputBox: Sendable {
+    private let box = Mutex(Data())
 
     func append(_ next: Data) {
-        lock.lock()
-        data.append(next)
-        lock.unlock()
+        box.withLock { $0.append(next) }
     }
 
     var text: String {
-        lock.lock()
-        let copy = data
-        lock.unlock()
+        let copy = box.withLock { $0 }
         return String(data: copy, encoding: .utf8) ?? ""
     }
 }

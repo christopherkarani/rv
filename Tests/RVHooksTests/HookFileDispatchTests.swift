@@ -1,14 +1,22 @@
 import Foundation
+import Synchronization
 import Testing
 import RVDomain
 @testable import RVHooks
 
-private final class EvaluateProbe: @unchecked Sendable {
-    private(set) var commands: [String] = []
-    private(set) var files: [String] = []
+private final class EvaluateProbe: Sendable {
+    private let state = Mutex<State>(State())
+
+    private struct State: Sendable {
+        var commands: [String] = []
+        var files: [String] = []
+    }
+
+    var commands: [String] { state.withLock { $0.commands } }
+    var files: [String] { state.withLock { $0.files } }
 
     func evaluate(_ command: ShellCommand, _: WorkingDirectory?) -> EvaluationResult {
-        commands.append(command.rawValue)
+        state.withLock { $0.commands.append(command.rawValue) }
         return EvaluationResult(
             outcome: .deny(
                 Deny(
@@ -21,7 +29,7 @@ private final class EvaluateProbe: @unchecked Sendable {
     }
 
     func evaluateFile(_ action: FileToolAction, _: WorkingDirectory?) -> EvaluationResult {
-        files.append(action.path.rawValue)
+        state.withLock { $0.files.append(action.path.rawValue) }
         if action.path.isEmpty {
             Issue.record("evaluateFile should not run for empty path")
         }
