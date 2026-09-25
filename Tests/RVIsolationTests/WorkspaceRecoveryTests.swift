@@ -244,7 +244,7 @@ struct WorkspaceRecoveryTests {
         let created = try createdRecord(logs.life, workspace: opened.supervisor.id.rawValue)
         let identity = try #require(created.identity)
         opened.supervisor.abandonForCrashSimulation()
-        detach(identity.disk)
+        detach(identity.disk, mountPoint: tree.workspaceURL.path)
         #expect(waitUntil(seconds: 5) {
             workspacePathIdentity(tree.workspaceURL.path)?.device != identity.volumeDevice
         })
@@ -550,10 +550,25 @@ private func tamper(_ source: URL, into destination: URL, _ mutate: (inout [Stri
     try output.write(to: destination)
 }
 
-private func detach(_ disk: String) {
+private func detach(_ disk: String, mountPoint: String? = nil) {
+    // Direct umount first: arbitration-mediated unmounts wedge when
+    // diskarbitrationd is unresponsive, after which `hdiutil detach` fails
+    // "Resource busy" and the test volume leaks. The bare-disk detach that
+    // follows still ejects. The mountpoint is test-owned, so no foreign
+    // volume can be unmounted here. Abandoned supervisors keep volume
+    // descriptors open in-process, so the plain unmount fails busy and the
+    // forced one does the work.
+    if let mountPoint {
+        runHelper("/sbin/umount", [mountPoint])
+        runHelper("/sbin/umount", ["-f", mountPoint])
+    }
+    runHelper("/usr/bin/hdiutil", ["detach", "-force", "-quiet", disk])
+}
+
+private func runHelper(_ executable: String, _ arguments: [String]) {
     let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
-    process.arguments = ["detach", "-force", "-quiet", disk]
+    process.executableURL = URL(fileURLWithPath: executable)
+    process.arguments = arguments
     process.standardOutput = FileHandle.nullDevice
     process.standardError = FileHandle.nullDevice
     try? process.run()
@@ -603,7 +618,7 @@ private func cleanupVolume(in tree: ContainmentTree) {
                 let recorded = nested["volumeDevice"] as? UInt64,
                 identity.device == recorded
             else { continue }
-            detach(disk)
+            detach(disk, mountPoint: tree.workspaceURL.path)
         }
     }
     tree.tearDown()

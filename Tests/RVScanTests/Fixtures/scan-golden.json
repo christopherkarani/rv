@@ -1,0 +1,431 @@
+[
+  {
+    "events" : [
+      {
+        "at" : 1787227201,
+        "command" : "git reset --hard",
+        "host" : "claude",
+        "session" : "ac001-session"
+      }
+    ],
+    "label" : "claude\/ac001-reset-hard.jsonl"
+  },
+  {
+    "events" : [
+      {
+        "at" : 1787230800,
+        "command" : "git status",
+        "host" : "claude",
+        "session" : "allow-session"
+      }
+    ],
+    "label" : "claude\/allow-status.jsonl"
+  },
+  {
+    "events" : [
+
+    ],
+    "label" : "claude\/non-utf8"
+  },
+  {
+    "events" : [
+
+    ],
+    "label" : "claude\/unrecognized-ext"
+  },
+  {
+    "events" : [
+      {
+        "command" : "git reset --hard",
+        "cwd" : "\/tmp\/ws",
+        "host" : "codex",
+        "session" : "sess_fixture_1"
+      }
+    ],
+    "label" : "codex\/bash-function-call.jsonl"
+  },
+  {
+    "events" : [
+      {
+        "command" : "git status",
+        "cwd" : "\/tmp\/ws",
+        "host" : "codex",
+        "session" : "sess_hook"
+      }
+    ],
+    "label" : "codex\/pretool-bash.jsonl"
+  },
+  {
+    "events" : [
+
+    ],
+    "label" : "codex\/empty",
+    "thrown" : "unreadable(sourcePath: \"<tmp>\/golden-codex.jsonl\")"
+  },
+  {
+    "events" : [
+
+    ],
+    "label" : "codex\/non-utf8",
+    "thrown" : "unreadable(sourcePath: \"<tmp>\/golden-codex.jsonl\")"
+  },
+  {
+    "events" : [
+
+    ],
+    "label" : "codex\/not-json",
+    "thrown" : "unreadable(sourcePath: \"<tmp>\/golden-codex.jsonl\")"
+  },
+  {
+    "events" : [
+      {
+        "at" : 1709294400,
+        "command" : "echo iso",
+        "cwd" : "\/tmp\/ws",
+        "host" : "codex",
+        "session" : "sess_ts"
+      },
+      {
+        "at" : 1709294460,
+        "command" : "echo secs",
+        "cwd" : "\/tmp\/ws",
+        "host" : "codex",
+        "session" : "sess_ts"
+      },
+      {
+        "at" : 1709294520.123,
+        "command" : "echo millis",
+        "cwd" : "\/tmp\/ws",
+        "host" : "codex",
+        "session" : "sess_ts"
+      }
+    ],
+    "label" : "codex\/timestamps"
+  },
+  {
+    "events" : [
+      {
+        "at" : 1787788800,
+        "command" : "git reset --hard",
+        "cwd" : "\/tmp\/ws",
+        "host" : "cursor",
+        "session" : "sess_cursor_1"
+      }
+    ],
+    "label" : "cursor\/before-shell.jsonl"
+  },
+  {
+    "events" : [
+      {
+        "command" : "git status",
+        "cwd" : "\/tmp\/ws",
+        "host" : "cursor",
+        "session" : "sess_hook"
+      }
+    ],
+    "label" : "cursor\/pretool-shell.jsonl"
+  },
+  {
+    "events" : [
+
+    ],
+    "label" : "cursor\/empty",
+    "thrown" : "unreadable(sourcePath: \"<tmp>\/golden-cursor.jsonl\")"
+  },
+  {
+    "events" : [
+
+    ],
+    "label" : "cursor\/non-utf8",
+    "thrown" : "unreadable(sourcePath: \"<tmp>\/golden-cursor.jsonl\")"
+  },
+  {
+    "events" : [
+
+    ],
+    "label" : "cursor\/not-json",
+    "thrown" : "unreadable(sourcePath: \"<tmp>\/golden-cursor.jsonl\")"
+  },
+  {
+    "events" : [
+      {
+        "command" : "echo num",
+        "cwd" : "\/tmp\/ws",
+        "host" : "cursor",
+        "session" : "sess_cursor_ts"
+      },
+      {
+        "at" : 1709294400,
+        "command" : "echo iso",
+        "cwd" : "\/tmp\/ws",
+        "host" : "cursor",
+        "session" : "sess_cursor_ts"
+      }
+    ],
+    "label" : "cursor\/numeric-timestamp-ignored"
+  },
+  {
+    "events" : [
+      {
+        "command" : "git reset --hard",
+        "cwd" : "\/tmp\/rv-ws",
+        "host" : "grok",
+        "session" : "sess-enc"
+      },
+      {
+        "command" : "git status",
+        "cwd" : "\/tmp\/rv-ws",
+        "host" : "grok",
+        "session" : "sess-enc"
+      }
+    ],
+    "label" : "grok\/encoded-layout"
+  },
+  {
+    "events" : [
+      {
+        "command" : "git reset --hard",
+        "host" : "grok",
+        "session" : "sess-grok-1"
+      },
+      {
+        "command" : "git status",
+        "host" : "grok",
+        "session" : "sess-grok-1"
+      }
+    ],
+    "label" : "grok\/plain"
+  },
+  {
+    "events" : [
+      {
+        "command" : "git reset --hard",
+        "host" : "grok",
+        "session" : "sess-rel"
+      },
+      {
+        "command" : "git status",
+        "host" : "grok",
+        "session" : "sess-rel"
+      }
+    ],
+    "label" : "grok\/relative-slug"
+  },
+  {
+    "events" : [
+
+    ],
+    "label" : "grok\/non-utf8"
+  },
+  {
+    "events" : [
+      {
+        "at" : 1768478460,
+        "command" : "git reset --hard",
+        "cwd" : "\/tmp\/rv-scan-fixture",
+        "host" : "pi",
+        "session" : "pi-sess-fixture-1"
+      },
+      {
+        "at" : 1768478520,
+        "command" : "git status",
+        "cwd" : "\/tmp\/rv-scan-fixture",
+        "host" : "pi",
+        "session" : "pi-sess-fixture-1"
+      }
+    ],
+    "label" : "pi\/session"
+  },
+  {
+    "events" : [
+
+    ],
+    "label" : "pi\/non-utf8"
+  },
+  {
+    "events" : [
+      {
+        "at" : 1709294400,
+        "command" : "echo envelope",
+        "cwd" : "\/tmp\/pi-num",
+        "host" : "pi",
+        "session" : "pi-sess-numeric"
+      },
+      {
+        "at" : 1709294460,
+        "command" : "echo fallback",
+        "cwd" : "\/tmp\/pi-num",
+        "host" : "pi",
+        "session" : "pi-sess-numeric"
+      },
+      {
+        "at" : 1,
+        "command" : "echo bool-true",
+        "cwd" : "\/tmp\/pi-num",
+        "host" : "pi",
+        "session" : "pi-sess-numeric"
+      },
+      {
+        "at" : 0,
+        "command" : "echo bool-false",
+        "cwd" : "\/tmp\/pi-num",
+        "host" : "pi",
+        "session" : "pi-sess-numeric"
+      }
+    ],
+    "label" : "pi\/numeric-timestamps"
+  },
+  {
+    "events" : [
+      {
+        "at" : 1710000000,
+        "command" : "git reset --hard",
+        "cwd" : "\/tmp\/ws",
+        "host" : "hermes",
+        "session" : "sess_fixture_1"
+      }
+    ],
+    "label" : "hermes\/terminal-tool-call"
+  },
+  {
+    "events" : [
+      {
+        "at" : 1710000000,
+        "command" : "git status",
+        "cwd" : "\/tmp\/ws",
+        "host" : "hermes",
+        "session" : "sess_nested"
+      }
+    ],
+    "label" : "hermes\/nested-function-terminal"
+  },
+  {
+    "events" : [
+      {
+        "at" : 1710000000.123,
+        "command" : "git reset --hard",
+        "cwd" : "\/tmp\/ws",
+        "host" : "hermes",
+        "session" : "sess_millis"
+      }
+    ],
+    "label" : "hermes\/millis-timestamp"
+  },
+  {
+    "events" : [
+
+    ],
+    "label" : "hermes\/empty",
+    "thrown" : "unreadable(sourcePath: \"<tmp>\/state.db\")"
+  },
+  {
+    "events" : [
+
+    ],
+    "label" : "hermes\/not-db",
+    "thrown" : "unreadable(sourcePath: \"<tmp>\/state.db\")"
+  },
+  {
+    "events" : [
+
+    ],
+    "label" : "hermes\/no-messages-table",
+    "thrown" : "prepareFailed(sourcePath: \"<tmp>\/no-messages.db\")"
+  },
+  {
+    "events" : [
+      {
+        "at" : 1,
+        "command" : "git reset --hard",
+        "cwd" : "\/tmp\/ws",
+        "host" : "openclaw",
+        "session" : "sess_fixture_1"
+      }
+    ],
+    "label" : "openclaw\/exec-tool-call"
+  },
+  {
+    "events" : [
+      {
+        "at" : 1,
+        "command" : "git status",
+        "cwd" : "\/tmp\/nested",
+        "host" : "openclaw",
+        "session" : "sess_nested"
+      }
+    ],
+    "label" : "openclaw\/nested-message-exec"
+  },
+  {
+    "events" : [
+      {
+        "at" : 1710000000.123,
+        "command" : "git reset --hard",
+        "cwd" : "\/tmp\/ws",
+        "host" : "openclaw",
+        "session" : "sess_millis"
+      }
+    ],
+    "label" : "openclaw\/millis-created-at"
+  },
+  {
+    "events" : [
+
+    ],
+    "label" : "openclaw\/empty",
+    "thrown" : "unreadable(sourcePath: \"<tmp>\/openclaw-agent.sqlite\")"
+  },
+  {
+    "events" : [
+
+    ],
+    "label" : "openclaw\/not-db",
+    "thrown" : "unreadable(sourcePath: \"<tmp>\/openclaw-agent.sqlite\")"
+  },
+  {
+    "events" : [
+
+    ],
+    "label" : "openclaw\/no-events-table",
+    "thrown" : "prepareFailed(sourcePath: \"<tmp>\/no-events.db\")"
+  },
+  {
+    "events" : [
+      {
+        "at" : 1736942460,
+        "command" : "git reset --hard",
+        "host" : "opencode",
+        "session" : "ses_fixture_1"
+      }
+    ],
+    "label" : "opencode\/bash-part"
+  },
+  {
+    "events" : [
+
+    ],
+    "label" : "opencode\/empty",
+    "thrown" : "unreadable(sourcePath: \"<tmp>\/opencode.db\")"
+  },
+  {
+    "events" : [
+
+    ],
+    "label" : "opencode\/not-db",
+    "thrown" : "unreadable(sourcePath: \"<tmp>\/opencode.db\")"
+  },
+  {
+    "events" : [
+
+    ],
+    "label" : "opencode\/no-part-table",
+    "thrown" : "prepareFailed(sourcePath: \"<tmp>\/no-part.db\")"
+  },
+  {
+    "events" : [
+
+    ],
+    "label" : "opencode\/bad-image",
+    "thrown" : "unreadable(sourcePath: \"<tmp>\/opencode.db\")"
+  }
+]

@@ -11,6 +11,8 @@ final class FakeWorkspaceSession: WorkspaceTUISession, @unchecked Sendable {
     private var storedBusyInput = false
     private var storedBusyWrite = false
     private var storedFailDescribe = false
+    private var storedDescribeError: WorkspaceTUIError = .disconnected
+    private var storedDetachCalls = 0
     private var storedFailPoll = false
     private var storedDisconnectOnAttach = false
     private var storedWrites: [(UUID, Data)] = []
@@ -64,6 +66,11 @@ final class FakeWorkspaceSession: WorkspaceTUISession, @unchecked Sendable {
         get { withLock { storedFailDescribe } }
         set { withLock { storedFailDescribe = newValue } }
     }
+    var describeError: WorkspaceTUIError {
+        get { withLock { storedDescribeError } }
+        set { withLock { storedDescribeError = newValue } }
+    }
+    var detachCalls: Int { withLock { storedDetachCalls } }
     var failPoll: Bool {
         get { withLock { storedFailPoll } }
         set { withLock { storedFailPoll = newValue } }
@@ -96,8 +103,10 @@ final class FakeWorkspaceSession: WorkspaceTUISession, @unchecked Sendable {
     }
 
     func inventory() -> Result<SessionInventory, WorkspaceTUIError> {
-        let (fails, summary, runtimes) = withLock { (storedFailDescribe, storedSummary, storedRuntimes) }
-        if fails { return .failure(.disconnected) }
+        let (fails, summary, runtimes, error) = withLock {
+            (storedFailDescribe, storedSummary, storedRuntimes, storedDescribeError)
+        }
+        if fails { return .failure(error) }
         let terminals = runtimes
             .filter(\.terminal)
             .sorted { $0.id.uuidString < $1.id.uuidString }
@@ -220,7 +229,10 @@ final class FakeWorkspaceSession: WorkspaceTUISession, @unchecked Sendable {
     }
 
     func close() {
-        withLock { storedDetached = true }
+        withLock {
+            storedDetached = true
+            storedDetachCalls += 1
+        }
     }
 
     func poll(timeout: TimeInterval) -> SessionPoll {
@@ -771,6 +783,99 @@ private func model(_ session: FakeWorkspaceSession) -> WorkspaceTUIModel {
         Issue.record("connect should report a disconnected attach instead of succeeding detached")
     }
     #expect(shell.snapshot().connection == .disconnected)
+}
+
+@Test func connectFailureReportsTheUnderlyingQueryError() throws {
+    let session = FakeWorkspaceSession()
+    session.failDescribe = true
+    session.describeError = .rejected
+    let shell = model(session)
+    if case .failure(.rejected) = shell.connect() {
+        #expect(Bool(true))
+    } else {
+        Issue.record("connect should report the underlying inventory error")
+    }
+    #expect(shell.snapshot().connection == .disconnected)
+    // A failed first query stays retryable.
+    session.failDescribe = false
+    try shell.connect().get()
+    #expect(shell.snapshot().connection == .connected)
+}
+
+@Test func detachSessionIsIdempotent() throws {
+    let session = FakeWorkspaceSession()
+    session.runtimes = [ListedRuntime(id: UUID(), hook: nil, running: true, terminal: true)]
+    let shell = model(session)
+    try shell.connect().get()
+    shell.detachSession()
+    shell.detachSession()
+    #expect(session.detachCalls == 1)
+    #expect(session.releases.count == 1)
+    #expect(session.unsubscribes.count == 1)
+}
+
+@Test func revisionBumpAndEmulatorFeedCommitAtomically() throws {
+    let session = FakeWorkspaceSession()
+    let runtime = UUID()
+    session.runtimes = [ListedRuntime(id: runtime, hook: nil, running: true, terminal: true)]
+    let shell = model(session)
+    try shell.connect().get()
+    let baselineRevision = shell.snapshot().presentationRevision
+    let baselineGeneration = try #require(shell.terminalFrame()?.generation)
+
+    // Readers pair snapshot() with terminalFrame() exactly like the render
+    // pass. Each apply() bumps the revision once and feeds once; if the two
+    // committed under separate holds, a reader could observe the new revision
+    // with the stale frame, and its refresh gate would drop the fed bytes.
+    let applies = 2_000
+    let skew = RevisionSkewBox(baselineRevision: baselineRevision, baselineGeneration: baselineGeneration)
+    let group = DispatchGroup()
+    for _ in 0..<4 {
+        group.enter()
+        DispatchQueue.global().async {
+            for _ in 0..<applies {
+                let revision = shell.snapshot().presentationRevision
+                let generation = shell.terminalFrame()?.generation ?? -1
+                skew.record(revision: revision, generation: generation)
+            }
+            group.leave()
+        }
+    }
+    for _ in 0..<applies {
+        shell.apply([.bytes(runtime: runtime, data: Data("x".utf8))])
+    }
+    group.wait()
+    #expect(skew.worst == 0)
+    #expect(shell.snapshot().presentationRevision == baselineRevision + UInt64(applies))
+    #expect(shell.terminalFrame()?.generation == baselineGeneration + applies)
+}
+
+private final class RevisionSkewBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private let baselineRevision: UInt64
+    private let baselineGeneration: Int
+    private var storedWorst = 0
+
+    init(baselineRevision: UInt64, baselineGeneration: Int) {
+        self.baselineRevision = baselineRevision
+        self.baselineGeneration = baselineGeneration
+    }
+
+    /// Tracks how far the frame generation lags the revision. Reads after the
+    /// snapshot can only observe a generation that already moved with its
+    /// revision, so the lag must stay at zero.
+    func record(revision: UInt64, generation: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        let lag = Int(revision - baselineRevision) - (generation - baselineGeneration)
+        storedWorst = max(storedWorst, lag)
+    }
+
+    var worst: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedWorst
+    }
 }
 
 @Test func resizeCoalescerSendsOnlyAStableChange() {

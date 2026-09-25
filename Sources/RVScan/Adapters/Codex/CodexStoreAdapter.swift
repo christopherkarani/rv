@@ -1,13 +1,6 @@
 import Foundation
 import RVDomain
 
-/// Fail-closed Codex store I/O. Empty or non-UTF-8 bytes are an error,
-/// not a successful empty event list.
-public enum CodexStoreError: Error, Sendable, Equatable {
-    /// `data` is empty, not UTF-8, or wholly unreadable as JSONL.
-    case unreadable(sourcePath: String)
-}
-
 /// Codex session store at `$HOME/.codex/sessions/**/rollout-*.jsonl`.
 /// Surface fields: `tool_name` / `function_call.name` Bash (or `shell`) with
 /// `tool_input.command` / `arguments.command`.
@@ -35,65 +28,17 @@ public struct CodexStoreAdapter: SessionStoreAdapter {
     /// Surface-extract Bash events from provided store bytes.
     /// `fileURL` is provenance only; missing or unreadable `data` throws.
     public func extract(fileURL: URL, data: Data) throws -> [ExtractedEvent] {
-        try Self.events(in: data, sourcePath: fileURL.path, fallbackSession: Self.sessionID(from: fileURL))
-    }
-
-    private static func sessionID(from fileURL: URL) -> SessionID? {
-        SessionID(validating: fileURL.deletingPathExtension().lastPathComponent)
-    }
-
-    private static func events(
-        in data: Data,
-        sourcePath: String,
-        fallbackSession: SessionID?
-    ) throws -> [ExtractedEvent] {
-        guard data.isEmpty == false else {
-            throw CodexStoreError.unreadable(sourcePath: sourcePath)
-        }
-        guard let text = String(data: data, encoding: .utf8) else {
-            throw CodexStoreError.unreadable(sourcePath: sourcePath)
-        }
-
-        var events: [ExtractedEvent] = []
-        var sawJSON = false
-        for rawLine in text.split(whereSeparator: \.isNewline) {
-            let line = rawLine.trimmingCharacters(in: .whitespaces)
-            guard line.isEmpty == false else { continue }
-            guard let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
-            else {
-                continue
-            }
-            sawJSON = true
-            for command in commands(in: object) {
-                events.append(
-                    ExtractedEvent(
-                        host: .codex,
-                        sessionID: sessionID(in: object) ?? fallbackSession,
-                        sourcePath: sourcePath,
-                        occurredAt: parseTimestamp(object["timestamp"] ?? object["ts"]),
-                        command: ShellCommand(rawValue: command),
-                        workingDirectory: ScanStoreWorkingDirectory.fromEnvelope(object)
-                    )
-                )
-            }
-        }
-        if sawJSON == false {
-            throw CodexStoreError.unreadable(sourcePath: sourcePath)
-        }
-        return events
-    }
-
-    private static func sessionID(in object: [String: Any]) -> SessionID? {
-        if let value = object["session_id"] as? String, let id = SessionID(validating: value) {
-            return id
-        }
-        if let value = object["sessionId"] as? String, let id = SessionID(validating: value) {
-            return id
-        }
-        if let payload = object["payload"] as? [String: Any] {
-            return sessionID(in: payload)
-        }
-        return nil
+        try ScanJSONLEngine.extractFailClosed(
+            host: host,
+            data: data,
+            sourcePath: fileURL.path,
+            fallbackSession: SessionID(validating: fileURL.deletingPathExtension().lastPathComponent),
+            sessionKeys: ["session_id", "sessionId"],
+            recurseSessionKeys: ["payload"],
+            timestampKeys: ["timestamp", "ts"],
+            allowEpochTimestamp: true,
+            commands: Self.commands(in:)
+        )
     }
 
     private static func commands(in object: [String: Any]) -> [String] {
@@ -150,24 +95,6 @@ public struct CodexStoreAdapter: SessionStoreAdapter {
                 return commandText(in: parsed)
             }
             return text
-        }
-        return nil
-    }
-
-    private static func parseTimestamp(_ value: Any?) -> Date? {
-        if let raw = value as? String, raw.isEmpty == false {
-            let fractional = ISO8601DateFormatter()
-            fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            if let date = fractional.date(from: raw) { return date }
-            let plain = ISO8601DateFormatter()
-            plain.formatOptions = [.withInternetDateTime]
-            return plain.date(from: raw)
-        }
-        if let raw = value as? Double, raw > 0 {
-            if raw > 1_000_000_000_000 {
-                return Date(timeIntervalSince1970: raw / 1000)
-            }
-            return Date(timeIntervalSince1970: raw)
         }
         return nil
     }

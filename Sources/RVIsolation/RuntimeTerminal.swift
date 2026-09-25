@@ -215,6 +215,16 @@ final class RuntimeTerminal: @unchecked Sendable {
         return value
     }
 
+    /// True once `finish` ran, which is before the exit notice is queued.
+    /// Facts consult this (not just the watch flag) so a listed runtime
+    /// never reports running after its exit was delivered.
+    var hasExited: Bool {
+        condition.lock()
+        let value = exited
+        condition.unlock()
+        return value
+    }
+
     var replayByteCount: Int {
         condition.lock()
         let value = replay.byteCount

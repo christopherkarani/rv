@@ -301,7 +301,8 @@ func spawnSeatbeltProcess(
     profile: SeatbeltProfile,
     boundary: WorkspaceInodeBoundary,
     started: RuntimeSession,
-    admission: RuntimeAdmissionConfiguration
+    admission: RuntimeAdmissionConfiguration,
+    egressProxyPort: Int? = nil
 ) -> Result<LiveSeatbeltChild, IsolationApplyError> {
     guard profile.source.contains("(deny file-link)") else {
         return .failure(.seatbeltNotEstablished)
@@ -464,7 +465,15 @@ func spawnSeatbeltProcess(
         request.command.executable,
     ])
     arguments.append(contentsOf: request.command.arguments)
-    let environment = containedRuntimeEnvironment(workspace: workspace, io: request.io)
+    if case .pseudoTerminal = request.io {
+        stageAgentHomes(workspace: workspace)
+    }
+    let environment = containedRuntimeEnvironment(
+        workspace: workspace,
+        io: request.io,
+        agentBin: AgentBin.installedDirectory(),
+        egressProxyPort: egressProxyPort
+    )
     let argv = SpawnPointers(arguments)
     let envp = SpawnPointers(environment)
     defer {
@@ -573,16 +582,65 @@ func spawnSeatbeltProcess(
     return .success(child)
 }
 
-private func containedRuntimeEnvironment(workspace: String, io: IsolatedIO) -> [String] {
+func containedRuntimeEnvironment(
+    workspace: String,
+    io: IsolatedIO,
+    agentBin: String? = nil,
+    egressProxyPort: Int? = nil,
+    hostEnvironment: [String: String]? = nil
+) -> [String] {
+    guard case .pseudoTerminal = io else {
+        // One-shot contained runs stay byte-identical: no agent PATH, no
+        // proxy, workspace TMPDIR.
+        return [
+            "PATH=/usr/bin:/bin",
+            "LANG=C",
+            "LC_ALL=C",
+            "HOME=\(workspace)",
+            "TMPDIR=\(workspace)",
+        ]
+    }
     var values = [
         "PATH=/usr/bin:/bin",
         "LANG=C",
         "LC_ALL=C",
         "HOME=\(workspace)",
-        "TMPDIR=\(workspace)",
+        "TMPDIR=\(workspace)/\(AgentHomeStaging.cageTmpSubpath)",
     ]
-    if case .pseudoTerminal = io {
-        values.append("TERM=\(TerminalStreamLimits.supportedTerm)")
+    values.append("TERM=\(TerminalStreamLimits.supportedTerm)")
+    // The sandbox cannot see user dotfiles, so interactive shells start
+    // bare. Standard color output only; zsh ignores an inherited PS1, so
+    // the prompt stays its default unless the user creates a
+    // workspace-local .zshrc (HOME is the workspace).
+    values.append("CLICOLOR=1")
+    if let agentBin {
+        values[0] = "PATH=\(agentBin):/usr/bin:/bin"
+        // The cage cannot manage host services or rewrite installs, so
+        // agent self-update and service-ensure steps stay off.
+        values.append("OCX_SHIM_BYPASS=1")
+        values.append("MUSE_NO_AUTO_UPDATE=1")
+        values.append("DISABLE_AUTOUPDATER=1")
+        let host = hostEnvironment ?? ProcessInfo.processInfo.environment
+        for name in AgentHomeStaging.gatewayPassthrough + AgentHomeStaging.apiKeyPassthrough {
+            if let value = host[name], value.contains("\0") == false {
+                values.append("\(name)=\(value)")
+            }
+        }
+        if values.allSatisfy({ $0.hasPrefix("ANTHROPIC_API_KEY=") == false }) {
+            values.append("ANTHROPIC_API_KEY=\(AgentHomeStaging.anthropicGatewayPlaceholder)")
+        }
+    }
+    if let port = egressProxyPort, (1...65535).contains(port) {
+        let proxy = "http://127.0.0.1:\(port)"
+        values.append("HTTPS_PROXY=\(proxy)")
+        values.append("HTTP_PROXY=\(proxy)")
+        values.append("https_proxy=\(proxy)")
+        values.append("http_proxy=\(proxy)")
+        // Loopback bypasses the proxy when the client honors it (the
+        // seatbelt rule admits it directly); the proxy also relays
+        // loopback absolute-URI requests for clients that do not.
+        values.append("NO_PROXY=localhost,127.0.0.1")
+        values.append("no_proxy=localhost,127.0.0.1")
     }
     return values
 }

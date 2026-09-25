@@ -262,11 +262,15 @@ enum WorkspaceCommandRun {
         if ownsInput {
             bridge.start()
         }
+        // A pipe or /dev/null EOFs immediately; only a terminal EOF (Ctrl-D)
+        // means the user wants out. Abandoning on any EOF cuts slow
+        // commands short with a success exit.
+        let stdinIsTTY = isatty(STDIN_FILENO) == 1
         var exitCode: Int32 = 1
         var currentRows = rows
         var currentColumns = columns
         while true {
-            if ownsInput, bridge.inputEnded {
+            if abandonRunOnInputEnd(ownsInput: ownsInput, stdinIsTTY: stdinIsTTY, inputEnded: bridge.inputEnded) {
                 restorer?.restore()
                 _ = client.detach()
                 return
@@ -453,4 +457,12 @@ enum WorkspaceCommandRun {
         }
     }
     #endif
+}
+
+/// Whether a local stdin EOF abandons `workspace run` instead of waiting
+/// for the runtime to exit. Only an interactive terminal EOFs on purpose
+/// (Ctrl-D); a pipe or /dev/null EOFs immediately and must not cut a slow
+/// command's output short with a success exit.
+func abandonRunOnInputEnd(ownsInput: Bool, stdinIsTTY: Bool, inputEnded: Bool) -> Bool {
+    ownsInput && stdinIsTTY && inputEnded
 }

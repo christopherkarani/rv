@@ -43,3 +43,13 @@ import Testing
     #expect(resolved == root.path)
 }
 #endif
+
+@Test func workspaceRunAbandonsOnTerminalEOFOnly() {
+    // Interactive Ctrl-D abandons the run; a pipe or /dev/null EOF arrives
+    // immediately and must wait for the runtime instead of cutting slow
+    // output short with a success exit.
+    #expect(abandonRunOnInputEnd(ownsInput: true, stdinIsTTY: true, inputEnded: true))
+    #expect(abandonRunOnInputEnd(ownsInput: true, stdinIsTTY: true, inputEnded: false) == false)
+    #expect(abandonRunOnInputEnd(ownsInput: true, stdinIsTTY: false, inputEnded: true) == false)
+    #expect(abandonRunOnInputEnd(ownsInput: false, stdinIsTTY: true, inputEnded: true) == false)
+}
