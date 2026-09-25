@@ -78,6 +78,17 @@ private func extractPi(_ payload: String, fileName: String = "inline-pi.jsonl") 
     #expect(try extractGrok(nonObjects).isEmpty)
 }
 
+@Test func grokTyped_inertArgumentsSkipCallOnly() throws {
+    // Present-but-inert `arguments` (bool/null/array, or a string that is
+    // not a JSON object — including valid JSON scalars, which the old
+    // fragment-less re-parse also rejected) skip only their call via the
+    // typed `.other` arm; siblings still extract.
+    let payload = """
+    {"type":"assistant","tool_calls":[{"name":"Bash","arguments":true},{"name":"Bash","arguments":null},{"name":"Bash","arguments":[1,2]},{"name":"Bash","arguments":"42"},{"name":"Bash","arguments":"null"},{"name":"Bash","arguments":"\\"just a string\\""},{"name":"Bash","arguments":"{\\"command\\":\\"kept\\"}"}]}
+    """
+    #expect(try extractGrok(payload).map(\.command.rawValue) == ["kept"])
+}
+
 @Test func grokTyped_toolRouting() throws {
     // Non-assistant entries and non-shell tools are skipped.
     let payload = """
