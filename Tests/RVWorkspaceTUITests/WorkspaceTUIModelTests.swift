@@ -585,6 +585,70 @@ private func model(_ client: FakeWorkspaceClient) -> WorkspaceTUIModel {
     #expect(shell.terminalFrame()?.generation == 1)
 }
 
+@Test func revisionBumpAndEmulatorFeedCommitAtomically() throws {
+    let client = FakeWorkspaceClient()
+    let runtime = UUID()
+    client.runtimes = [ListedRuntime(id: runtime, hook: nil, running: true, terminal: true)]
+    let shell = model(client)
+    try shell.connect().get()
+    let baselineRevision = shell.snapshot().presentationRevision
+    let baselineGeneration = try #require(shell.terminalFrame()?.generation)
+
+    // Readers pair snapshot() with terminalFrame() exactly like the render
+    // pass. Each apply() bumps the revision once and feeds once; if the two
+    // committed under separate holds, a reader could observe the new revision
+    // with the stale frame, and its refresh gate would drop the fed bytes.
+    let applies = 2_000
+    let skew = RevisionSkewBox(baselineRevision: baselineRevision, baselineGeneration: baselineGeneration)
+    let group = DispatchGroup()
+    for _ in 0..<4 {
+        group.enter()
+        DispatchQueue.global().async {
+            for _ in 0..<applies {
+                let revision = shell.snapshot().presentationRevision
+                let generation = shell.terminalFrame()?.generation ?? -1
+                skew.record(revision: revision, generation: generation)
+            }
+            group.leave()
+        }
+    }
+    for _ in 0..<applies {
+        shell.apply([.bytes(runtime: runtime, data: Data("x".utf8))])
+    }
+    group.wait()
+    #expect(skew.worst == 0)
+    #expect(shell.snapshot().presentationRevision == baselineRevision + UInt64(applies))
+    #expect(shell.terminalFrame()?.generation == baselineGeneration + applies)
+}
+
+private final class RevisionSkewBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private let baselineRevision: UInt64
+    private let baselineGeneration: Int
+    private var storedWorst = 0
+
+    init(baselineRevision: UInt64, baselineGeneration: Int) {
+        self.baselineRevision = baselineRevision
+        self.baselineGeneration = baselineGeneration
+    }
+
+    /// Tracks how far the frame generation lags the revision. Reads after the
+    /// snapshot can only observe a generation that already moved with its
+    /// revision, so the lag must stay at zero.
+    func record(revision: UInt64, generation: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        let lag = Int(revision - baselineRevision) - (generation - baselineGeneration)
+        storedWorst = max(storedWorst, lag)
+    }
+
+    var worst: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedWorst
+    }
+}
+
 @Test func numberedChoiceLaunchesDirectlyFromAnEmptyWorkspace() throws {
     let client = FakeWorkspaceClient()
     let shell = model(client)

@@ -157,7 +157,7 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
     /// Runs during structured application cleanup. It never cancels a runtime
     /// or closes the workspace.
     public func detachSession() {
-        let effects = reduceAndApply(.detachRequested)
+        let effects = reduceAndApply(.detachRequested).effects
         // A repeat call is a no-op: the reducer emits no `.detach` effect once
         // detached, and the previous model early-returned without any RPC.
         guard effects.contains(.detach) else { return }
@@ -201,7 +201,9 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
         var events = [event]
         while let current = events.first {
             events.removeFirst()
-            for effect in reduceAndApply(current) {
+            let applied = reduceAndApply(current)
+            events.append(contentsOf: applied.followups)
+            for effect in applied.effects {
                 switch route(effect) {
                 case .inline:
                     runInline(effect, followups: &events)
@@ -239,17 +241,53 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
     }
 
     /// Reduces one event and stores the next state. Called with no lock held.
-    private func reduceAndApply(_ event: WorkspaceTUIReducerEvent) -> [TUIRuntimeEffect] {
+    ///
+    /// Emulator effects commit under the same hold as the state: the
+    /// presentation revision and the emulator move together, so a renderer
+    /// that snapshots the new revision can never read the stale frame. Feed
+    /// replies are captured under the hold and returned as follow-ups; the
+    /// drain loop reduces them after the lock is released.
+    private func reduceAndApply(_ event: WorkspaceTUIReducerEvent) -> (
+        effects: [TUIRuntimeEffect], followups: [WorkspaceTUIReducerEvent]
+    ) {
         lock.lock()
         let transition = WorkspaceTUIReducer.reduce(state, event)
+        var followups: [WorkspaceTUIReducerEvent] = []
+        var remaining: [TUIRuntimeEffect] = []
+        remaining.reserveCapacity(transition.effects.count)
+        for effect in transition.effects {
+            switch effect {
+            case .createEmulator(let runtime, let rows, let columns):
+                emulator = (runtime, emulators.make(columns: columns, rows: rows))
+            case .feedEmulator(let runtime, let data):
+                if emulator?.runtime == runtime {
+                    emulator?.emulator.feed(data)
+                    let responses = emulator?.emulator.takeResponses() ?? []
+                    if responses.isEmpty == false {
+                        followups.append(.emulatorResponded(runtime: runtime, responses: responses))
+                    }
+                }
+            case .resizeEmulator(let runtime, let rows, let columns):
+                if emulator?.runtime == runtime {
+                    emulator?.emulator.resize(columns: columns, rows: rows)
+                }
+            case .dropEmulator(let runtime):
+                if emulator?.runtime == runtime {
+                    emulator = nil
+                }
+            default:
+                remaining.append(effect)
+            }
+        }
         state = transition.state
         lock.unlock()
-        return transition.effects
+        return (remaining, followups)
     }
 
-    /// Executes one effect in the current context. RPCs run outside the lock;
-    /// emulator operations take it. Completions are appended as follow-up
-    /// events for the drain loop to reduce.
+    /// Executes one effect in the current context. RPCs run outside the lock.
+    /// Emulator effects commit under the reduce hold in `reduceAndApply`, so
+    /// the emulator cases below only serve direct callers. Completions are
+    /// appended as follow-up events for the drain loop to reduce.
     private func runInline(_ effect: TUIRuntimeEffect, followups: inout [WorkspaceTUIReducerEvent]) {
         switch effect {
         case .queryConnect:

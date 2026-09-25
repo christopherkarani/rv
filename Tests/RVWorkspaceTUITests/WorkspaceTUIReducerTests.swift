@@ -233,6 +233,41 @@ private func connectedState(
         #expect(transition.state == before)
     }
 
+    @Test func keyHelpEntersHelpModeWithoutEffects() {
+        let before = connectedState(mode: .prefix)
+        let transition = WorkspaceTUIReducer.reduce(before, .key(.character("?")))
+        #expect(transition.state.mode == .help)
+        #expect(transition.state.shouldExit == false)
+        #expect(transition.effects == [])
+        #expect(transition.state.presentationRevision == before.presentationRevision + 1)
+    }
+
+    @Test func keyDismissesOverlaysWithoutEffects() {
+        let fromHelp = WorkspaceTUIReducer.reduce(connectedState(mode: .help), .key(.character("a")))
+        #expect(fromHelp.state.mode == .terminal)
+        #expect(fromHelp.effects == [])
+
+        let fromLauncher = WorkspaceTUIReducer.reduce(connectedState(mode: .launcher), .key(.escape))
+        #expect(fromLauncher.state.mode == .terminal)
+        #expect(fromLauncher.effects == [])
+    }
+
+    @Test func keyNilDecisionsChangeOnlyTheMode() {
+        let before = connectedState()
+        let entered = WorkspaceTUIReducer.reduce(before, .key(.control("g")))
+        #expect(entered.state.mode == .prefix)
+        #expect(entered.effects == [])
+        #expect(entered.state.presentationRevision == before.presentationRevision + 1)
+
+        let cancelled = WorkspaceTUIReducer.reduce(entered.state, .key(.character("q")))
+        #expect(cancelled.state.mode == .terminal)
+        #expect(cancelled.effects == [])
+
+        let launcher = WorkspaceTUIReducer.reduce(connectedState(mode: .launcher), .key(.character("x")))
+        #expect(launcher.state.mode == .terminal)
+        #expect(launcher.effects == [])
+    }
+
     @Test func sendDueRequiresTheOwnedLease() {
         let before = connectedState()
         #expect(
@@ -447,6 +482,48 @@ private func connectedState(
         #expect(ok.state == before)
     }
 
+    @Test func writeDisconnectedMarksTheWorkspaceReadOnly() {
+        let before = connectedState()
+        let transition = WorkspaceTUIReducer.reduce(before, .writeCompleted(runtime: runtimeA, outcome: .disconnected))
+        #expect(transition.state.lifecycle == .disconnected)
+        #expect(transition.state.terminal?.state.lease == .readOnly)
+        #expect(transition.state.terminal?.state.subscribed == false)
+        #expect(transition.state.leasedRuntime == nil)
+        #expect(transition.state.retryAcquire == false)
+        #expect(transition.state.presentationRevision == before.presentationRevision + 1)
+        #expect(transition.effects == [])
+    }
+
+    @Test func acquireDisconnectedMarksTheWorkspaceReadOnly() {
+        let before = connectedState()
+        let transition = WorkspaceTUIReducer.reduce(
+            before,
+            .acquireCompleted(runtime: runtimeA, outcome: .disconnected)
+        )
+        #expect(transition.state.lifecycle == .disconnected)
+        #expect(transition.state.terminal?.state.lease == .readOnly)
+        #expect(transition.state.terminal?.state.subscribed == false)
+        #expect(transition.state.leasedRuntime == nil)
+        #expect(transition.state.retryAcquire == false)
+        #expect(transition.state.presentationRevision == before.presentationRevision + 1)
+        #expect(transition.effects == [])
+    }
+
+    @Test func resizeDisconnectedMarksTheWorkspaceReadOnly() {
+        let before = connectedState()
+        let transition = WorkspaceTUIReducer.reduce(
+            before,
+            .resizeCompleted(runtime: runtimeA, outcome: .disconnected)
+        )
+        #expect(transition.state.lifecycle == .disconnected)
+        #expect(transition.state.terminal?.state.lease == .readOnly)
+        #expect(transition.state.terminal?.state.subscribed == false)
+        #expect(transition.state.leasedRuntime == nil)
+        #expect(transition.state.retryAcquire == false)
+        #expect(transition.state.presentationRevision == before.presentationRevision + 1)
+        #expect(transition.effects == [])
+    }
+
     @Test func acquireSuccessClaimsOrReleases() {
         var before = connectedState(leasedRuntime: nil)
         before.terminal?.state.lease = .readOnly
@@ -530,6 +607,32 @@ private func connectedState(
         )
         #expect(transition.state.terminal == nil)
         #expect(transition.state.mode == .launcher)
+        #expect(transition.effects == [.dropEmulator(runtime: runtimeA), .cancel(runtime: runtimeA)])
+    }
+
+    @Test func ensureSubscribeFailureWhileDisconnectedStillMarksTheTerminalUnavailable() {
+        let before = connectedState()
+        let transition = WorkspaceTUIReducer.reduce(
+            before,
+            .subscribeCompleted(runtime: runtimeA, context: .ensure, succeeded: false, disconnected: true)
+        )
+        #expect(transition.state.lifecycle == .disconnected)
+        #expect(transition.state.terminal?.state.title == "shell (unavailable)")
+        #expect(transition.state.terminal?.state.lease == .readOnly)
+        #expect(transition.state.terminal?.state.subscribed == false)
+        #expect(transition.state.leasedRuntime == nil)
+        #expect(transition.effects == [])
+    }
+
+    @Test func launchSubscribeFailureWhileDisconnectedDropsTheTerminalWithoutTheLauncher() {
+        let before = connectedState()
+        let transition = WorkspaceTUIReducer.reduce(
+            before,
+            .subscribeCompleted(runtime: runtimeA, context: .launch, succeeded: false, disconnected: true)
+        )
+        #expect(transition.state.lifecycle == .disconnected)
+        #expect(transition.state.terminal == nil)
+        #expect(transition.state.mode == .terminal)
         #expect(transition.effects == [.dropEmulator(runtime: runtimeA), .cancel(runtime: runtimeA)])
     }
 
