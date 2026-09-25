@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import Testing
 @testable import RVIsolation
@@ -36,3 +37,4 @@ import Testing
     )
     #expect(oneShot.contains("PATH=/usr/bin:/bin"))
 }
+#endif
