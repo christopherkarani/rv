@@ -137,12 +137,3 @@ public enum InputLease: Equatable, Sendable {
     case readOnly
     case released
 }
-
-/// UI-side state and terminal emulator for the one visible terminal. Security
-/// and process details remain in the Workspace Host and are deliberately
-/// absent here.
-struct WorkspaceTerminal {
-    var state: WorkspaceTerminalState
-    var emulator: any TerminalEmulating
-    var resize: ResizeCoalescer
-}

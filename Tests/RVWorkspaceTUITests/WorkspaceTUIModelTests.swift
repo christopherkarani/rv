@@ -12,6 +12,8 @@ final class FakeWorkspaceClient: WorkspaceTUIClient, @unchecked Sendable {
     private var storedBusyInput = false
     private var storedBusyWrite = false
     private var storedFailDescribe = false
+    private var storedDescribeError: WorkspaceTUIClientError = .disconnected
+    private var storedDetachCalls = 0
     private var storedWrites: [(UUID, Data)] = []
     private var storedCancels: [UUID] = []
     private var storedSubscribes: [UUID] = []
@@ -67,6 +69,11 @@ final class FakeWorkspaceClient: WorkspaceTUIClient, @unchecked Sendable {
         get { withLock { storedFailDescribe } }
         set { withLock { storedFailDescribe = newValue } }
     }
+    var describeError: WorkspaceTUIClientError {
+        get { withLock { storedDescribeError } }
+        set { withLock { storedDescribeError = newValue } }
+    }
+    var detachCalls: Int { withLock { storedDetachCalls } }
     var writes: [(UUID, Data)] { withLock { storedWrites } }
     var cancels: [UUID] { withLock { storedCancels } }
     var subscribes: [UUID] { withLock { storedSubscribes } }
@@ -91,8 +98,8 @@ final class FakeWorkspaceClient: WorkspaceTUIClient, @unchecked Sendable {
     }
 
     func describe() -> Result<WorkspaceTUISummary, WorkspaceTUIClientError> {
-        let (fails, value) = withLock { (storedFailDescribe, storedSummary) }
-        return fails ? .failure(.disconnected) : .success(value)
+        let (fails, value, error) = withLock { (storedFailDescribe, storedSummary, storedDescribeError) }
+        return fails ? .failure(error) : .success(value)
     }
 
     func listRuntimes() -> Result<[ListedRuntime], WorkspaceTUIClientError> {
@@ -217,7 +224,10 @@ final class FakeWorkspaceClient: WorkspaceTUIClient, @unchecked Sendable {
     }
 
     func detach() -> Result<Void, WorkspaceTUIClientError> {
-        withLock { storedDetached = true }
+        withLock {
+            storedDetached = true
+            storedDetachCalls += 1
+        }
         return .success(())
     }
 
@@ -575,6 +585,70 @@ private func model(_ client: FakeWorkspaceClient) -> WorkspaceTUIModel {
     #expect(shell.terminalFrame()?.generation == 1)
 }
 
+@Test func revisionBumpAndEmulatorFeedCommitAtomically() throws {
+    let client = FakeWorkspaceClient()
+    let runtime = UUID()
+    client.runtimes = [ListedRuntime(id: runtime, hook: nil, running: true, terminal: true)]
+    let shell = model(client)
+    try shell.connect().get()
+    let baselineRevision = shell.snapshot().presentationRevision
+    let baselineGeneration = try #require(shell.terminalFrame()?.generation)
+
+    // Readers pair snapshot() with terminalFrame() exactly like the render
+    // pass. Each apply() bumps the revision once and feeds once; if the two
+    // committed under separate holds, a reader could observe the new revision
+    // with the stale frame, and its refresh gate would drop the fed bytes.
+    let applies = 2_000
+    let skew = RevisionSkewBox(baselineRevision: baselineRevision, baselineGeneration: baselineGeneration)
+    let group = DispatchGroup()
+    for _ in 0..<4 {
+        group.enter()
+        DispatchQueue.global().async {
+            for _ in 0..<applies {
+                let revision = shell.snapshot().presentationRevision
+                let generation = shell.terminalFrame()?.generation ?? -1
+                skew.record(revision: revision, generation: generation)
+            }
+            group.leave()
+        }
+    }
+    for _ in 0..<applies {
+        shell.apply([.bytes(runtime: runtime, data: Data("x".utf8))])
+    }
+    group.wait()
+    #expect(skew.worst == 0)
+    #expect(shell.snapshot().presentationRevision == baselineRevision + UInt64(applies))
+    #expect(shell.terminalFrame()?.generation == baselineGeneration + applies)
+}
+
+private final class RevisionSkewBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private let baselineRevision: UInt64
+    private let baselineGeneration: Int
+    private var storedWorst = 0
+
+    init(baselineRevision: UInt64, baselineGeneration: Int) {
+        self.baselineRevision = baselineRevision
+        self.baselineGeneration = baselineGeneration
+    }
+
+    /// Tracks how far the frame generation lags the revision. Reads after the
+    /// snapshot can only observe a generation that already moved with its
+    /// revision, so the lag must stay at zero.
+    func record(revision: UInt64, generation: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        let lag = Int(revision - baselineRevision) - (generation - baselineGeneration)
+        storedWorst = max(storedWorst, lag)
+    }
+
+    var worst: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedWorst
+    }
+}
+
 @Test func numberedChoiceLaunchesDirectlyFromAnEmptyWorkspace() throws {
     let client = FakeWorkspaceClient()
     let shell = model(client)
@@ -735,6 +809,35 @@ private func model(_ client: FakeWorkspaceClient) -> WorkspaceTUIModel {
     #expect(shell.snapshot().connection == .disconnected)
     shell.handle(.character("A"))
     #expect(client.writes.isEmpty)
+}
+
+@Test func connectFailureReportsTheUnderlyingQueryError() throws {
+    let client = FakeWorkspaceClient()
+    client.failDescribe = true
+    client.describeError = .rejected
+    let shell = model(client)
+    if case .failure(.rejected) = shell.connect() {
+        #expect(Bool(true))
+    } else {
+        Issue.record("connect should report the underlying describe error")
+    }
+    #expect(shell.snapshot().connection == .disconnected)
+    // A failed first query stays retryable.
+    client.failDescribe = false
+    try shell.connect().get()
+    #expect(shell.snapshot().connection == .connected)
+}
+
+@Test func detachSessionIsIdempotent() throws {
+    let client = FakeWorkspaceClient()
+    client.runtimes = [ListedRuntime(id: UUID(), hook: nil, running: true, terminal: true)]
+    let shell = model(client)
+    try shell.connect().get()
+    shell.detachSession()
+    shell.detachSession()
+    #expect(client.detachCalls == 1)
+    #expect(client.releases.count == 1)
+    #expect(client.unsubscribes.count == 1)
 }
 
 @Test func resizeCoalescerSendsOnlyAStableChange() {
