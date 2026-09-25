@@ -31,6 +31,10 @@ public struct OpenCodeStoreAdapter: SessionStoreAdapter {
 
     /// Surface-extract bash `part` rows from provided store bytes.
     /// `fileURL` is provenance only; missing or unreadable `data` throws.
+    ///
+    /// Per-row failure policy (best-effort, unchanged): undecodable `part`
+    /// payloads and unknown shapes contribute zero events without aborting
+    /// the file; only store I/O failures throw.
     public func extract(fileURL: URL, data: Data) throws -> [ExtractedEvent] {
         try Self.events(in: data, sourcePath: fileURL.path)
     }
@@ -63,18 +67,16 @@ public struct OpenCodeStoreAdapter: SessionStoreAdapter {
                 let sessionID = Self.textColumn(statement, index: 0)
                 guard let dataText = Self.textColumn(statement, index: 1),
                       let payload = dataText.data(using: .utf8),
-                      let object = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
-                      (object["type"] as? String) == "tool",
-                      (object["tool"] as? String) == "bash",
-                      let state = object["state"] as? [String: Any],
-                      let input = state["input"] as? [String: Any],
-                      let command = input["command"] as? String,
+                      let row = try? JSONDecoder().decode(OpenCodeStoreRow.self, from: payload),
+                      row.type == "tool",
+                      row.tool == "bash",
+                      let command = row.state?.input?.command,
                       command.isEmpty == false
                 else {
                     stepStatus = sqlite3_step(statement)
                     continue
                 }
-                let occurredAt = Self.date(from: state["time"])
+                let occurredAt = Self.date(from: row.state?.time?.start)
                 events.append(
                     ExtractedEvent(
                         host: .opencode,
@@ -82,7 +84,7 @@ public struct OpenCodeStoreAdapter: SessionStoreAdapter {
                         sourcePath: sourcePath,
                         occurredAt: occurredAt,
                         command: ShellCommand(rawValue: command),
-                        workingDirectory: ScanStoreWorkingDirectory.fromEnvelope(object)
+                        workingDirectory: row.workingDirectory
                     )
                 )
                 stepStatus = sqlite3_step(statement)
@@ -161,20 +163,145 @@ public struct OpenCodeStoreAdapter: SessionStoreAdapter {
         return String(cString: cString)
     }
 
-    private static func date(from value: Any?) -> Date? {
-        guard let time = value as? [String: Any] else { return nil }
-        let raw: Double?
-        if let number = time["start"] as? NSNumber {
-            raw = number.doubleValue
-        } else if let number = time["start"] as? Double {
-            raw = number
-        } else {
-            raw = nil
-        }
-        guard let raw else { return nil }
+    /// Old `date(from:)`: `state.time.start` is epoch seconds (milliseconds
+    /// above 1e12, with no positivity guard); anything else yields nil. JSON
+    /// booleans decode as absent (the old NSNumber crawl read `true` as epoch
+    /// 1; no real store emits boolean timestamps).
+    private static func date(from start: Double?) -> Date? {
+        guard let raw = start else { return nil }
         if raw > 1_000_000_000_000 {
             return Date(timeIntervalSince1970: raw / 1000)
         }
         return Date(timeIntervalSince1970: raw)
+    }
+}
+
+/// One `part.data` JSON payload of the OpenCode session store. Covers exactly
+/// the fields extraction reads: the part type/tool routing, the state input
+/// command, the state time, and cwd-ish fields at row/state/input depth.
+///
+/// Lenient: every field decodes with `try?`, so any JSON object yields a row
+/// and only non-object payloads fail to decode — the typed equivalent of the
+/// old `as? [String: Any]` row check. Explicit JSON null decodes as absent.
+private struct OpenCodeStoreRow: Decodable {
+    var type: String?
+    var tool: String?
+    var state: OpenCodeState?
+    var cwd: String?
+    var workdir: String?
+    var workingDirectoryRaw: String?
+    var workingDirectorySnake: String?
+
+    /// Input cwd wins over state cwd wins over row cwd — the typed replacement
+    /// for this adapter's share of the old deep crawl (which also probed
+    /// unmodeled sibling keys, JSON-string carriers, and a top-level `input`
+    /// before `state`; those exotic nestings now read as absent).
+    var workingDirectory: WorkingDirectory? {
+        state?.input?.workingDirectory
+            ?? state?.workingDirectory
+            ?? ScanStoreWorkingDirectory.firstValid(cwd, workdir, workingDirectoryRaw, workingDirectorySnake)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case tool
+        case state
+        case cwd
+        case workdir
+        case workingDirectoryRaw = "workingDirectory"
+        case workingDirectorySnake = "working_directory"
+    }
+
+    /// Field-independent leniency: a present-but-wrong-typed scalar decodes
+    /// as nil (matching the old per-field `as?`) instead of failing the row.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        type = try? container.decode(String.self, forKey: .type)
+        tool = try? container.decode(String.self, forKey: .tool)
+        state = try? container.decode(OpenCodeState.self, forKey: .state)
+        cwd = try? container.decode(String.self, forKey: .cwd)
+        workdir = try? container.decode(String.self, forKey: .workdir)
+        workingDirectoryRaw = try? container.decode(String.self, forKey: .workingDirectoryRaw)
+        workingDirectorySnake = try? container.decode(String.self, forKey: .workingDirectorySnake)
+    }
+}
+
+/// Part state: the tool input, its time, and cwd-ish fields.
+/// Lenient: any JSON object decodes; wrong-typed fields become nil.
+private struct OpenCodeState: Decodable {
+    var input: OpenCodeInput?
+    var time: OpenCodeTime?
+    var cwd: String?
+    var workdir: String?
+    var workingDirectoryRaw: String?
+    var workingDirectorySnake: String?
+
+    /// Direct cwd-ish fields only; the row composes input-over-state.
+    var workingDirectory: WorkingDirectory? {
+        ScanStoreWorkingDirectory.firstValid(cwd, workdir, workingDirectoryRaw, workingDirectorySnake)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case input
+        case time
+        case cwd
+        case workdir
+        case workingDirectoryRaw = "workingDirectory"
+        case workingDirectorySnake = "working_directory"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        input = try? container.decode(OpenCodeInput.self, forKey: .input)
+        time = try? container.decode(OpenCodeTime.self, forKey: .time)
+        cwd = try? container.decode(String.self, forKey: .cwd)
+        workdir = try? container.decode(String.self, forKey: .workdir)
+        workingDirectoryRaw = try? container.decode(String.self, forKey: .workingDirectoryRaw)
+        workingDirectorySnake = try? container.decode(String.self, forKey: .workingDirectorySnake)
+    }
+}
+
+/// Tool input: the string `command` plus cwd-ish fields.
+/// Lenient: any JSON object decodes; wrong-typed fields become nil.
+private struct OpenCodeInput: Decodable {
+    var command: String?
+    var cwd: String?
+    var workdir: String?
+    var workingDirectoryRaw: String?
+    var workingDirectorySnake: String?
+
+    var workingDirectory: WorkingDirectory? {
+        ScanStoreWorkingDirectory.firstValid(cwd, workdir, workingDirectoryRaw, workingDirectorySnake)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case command
+        case cwd
+        case workdir
+        case workingDirectoryRaw = "workingDirectory"
+        case workingDirectorySnake = "working_directory"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        command = try? container.decode(String.self, forKey: .command)
+        cwd = try? container.decode(String.self, forKey: .cwd)
+        workdir = try? container.decode(String.self, forKey: .workdir)
+        workingDirectoryRaw = try? container.decode(String.self, forKey: .workingDirectoryRaw)
+        workingDirectorySnake = try? container.decode(String.self, forKey: .workingDirectorySnake)
+    }
+}
+
+/// Part time: the epoch `start`. A wrong-typed `start` decodes as nil.
+private struct OpenCodeTime: Decodable {
+    var start: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case start
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        start = try? container.decode(Double.self, forKey: .start)
     }
 }
