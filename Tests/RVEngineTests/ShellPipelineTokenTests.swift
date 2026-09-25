@@ -149,9 +149,12 @@ private let parityCorpus: [String] = [
             Token(lexeme: "git", wasQuoted: false),
             Token(lexeme: "\n", wasQuoted: false),
             Token(lexeme: "status", wasQuoted: true),
+            // Quoted newline is data, not a separator: it must survive the
+            // structural-newline filter.
+            Token(lexeme: "\n", wasQuoted: true),
         ])
         #expect(argv?.program == "git")
-        #expect(argv?.args == ["status"])
+        #expect(argv?.args == ["status", "\n"])
         #expect(argv?.redacted == [])
     }
 }
