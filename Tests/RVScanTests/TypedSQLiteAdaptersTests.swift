@@ -33,6 +33,7 @@ import RVDomain
         (sessionID: "s", eventJSON: #"{"name":"exec","params":{"command":42}}"#, createdAt: 1_710_000_000),
         (sessionID: "s", eventJSON: "not-json", createdAt: 1_710_000_000),
         (sessionID: "s", eventJSON: "[1,2]", createdAt: 1_710_000_000),
+        (sessionID: "s", eventJSON: "[{}]", createdAt: 1_710_000_000),
         (sessionID: "s", eventJSON: "42", createdAt: 1_710_000_000),
         (sessionID: "s", eventJSON: "null", createdAt: 1_710_000_000),
         (sessionID: "s", eventJSON: "\"just a string\"", createdAt: 1_710_000_000),
@@ -64,8 +65,9 @@ import RVDomain
         (sessionID: "s", eventJSON: #"{"message":{"content":[{"name":"exec","params":{"command":"seven"}}]}}"#, createdAt: 1_710_000_000),
         (sessionID: "s", eventJSON: #"{"message":{"content":"nope"}}"#, createdAt: 1_710_000_000),
         (sessionID: "s", eventJSON: #"{"message":42,"name":"exec","params":{"command":"eight"}}"#, createdAt: 1_710_000_000),
+        (sessionID: "s", eventJSON: #"{"name":"exec","arguments":42,"params":{"command":42},"input":{"command":"nine"}}"#, createdAt: 1_710_000_000),
     ])
-    #expect(events.map(\.command.rawValue) == ["one", "two", "three", "four", "five", "six", "seven", "eight"])
+    #expect(events.map(\.command.rawValue) == ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine"])
     #expect(events.allSatisfy { $0.occurredAt == Date(timeIntervalSince1970: 1_710_000_000) })
     #expect(events.allSatisfy { $0.workingDirectory == nil })
 }
@@ -80,9 +82,10 @@ import RVDomain
         (sessionID: "s", eventJSON: #"{"message":{"content":[{"name":"exec","params":{"command":"first"}},{"name":"exec","params":{"command":"second"}}]}}"#, createdAt: 1_710_000_000),
         (sessionID: "s", eventJSON: #"{"message":{"content":[{"toolCall":{"name":"exec","arguments":{"command":"deep"}}}]}}"#, createdAt: 1_710_000_000),
         (sessionID: "s", eventJSON: #"{"toolCall":{"toolName":"exec","params":{"command":"toolname"}}}"#, createdAt: 1_710_000_000),
+        (sessionID: "s", eventJSON: #"{"toolCall":{"name":"exec","params":{"command":"via-tool-wins"}},"message":{"content":[{"name":"exec","params":{"command":"shadow"}}]}}"#, createdAt: 1_710_000_000),
     ])
-    #expect(events.map(\.command.rawValue) == ["envelope", "via-tool", "via-tool-2", "first", "deep", "toolname"])
-    #expect(events.map { $0.workingDirectory?.rawValue } == [nil, "/tmp/tool", "/tmp/env", nil, nil, nil])
+    #expect(events.map(\.command.rawValue) == ["envelope", "via-tool", "via-tool-2", "first", "deep", "toolname", "via-tool-wins"])
+    #expect(events.map { $0.workingDirectory?.rawValue } == [nil, "/tmp/tool", "/tmp/env", nil, nil, nil, nil])
 }
 
 @Test func openClawTyped_workingDirectoryPriority() throws {
@@ -151,6 +154,8 @@ import RVDomain
         (sessionID: "s", toolCalls: "\"x\"", timestamp: 1_710_000_000),
         (sessionID: "s", toolCalls: "null", timestamp: 1_710_000_000),
         (sessionID: "s", toolCalls: "[{}]", timestamp: 1_710_000_000),
+        (sessionID: "s", toolCalls: "{}", timestamp: 1_710_000_000),
+        (sessionID: "s", toolCalls: "[null]", timestamp: 1_710_000_000),
         (sessionID: "s", toolCalls: #"[{"name":"terminal","arguments":{"command":"dropped"}},42]"#, timestamp: 1_710_000_000),
         (sessionID: "s", toolCalls: nil, timestamp: 1_710_000_000),
         (sessionID: "s", toolCalls: #"{"name":"terminal","arguments":{"command":"single"}}"#, timestamp: 1_710_000_000),
