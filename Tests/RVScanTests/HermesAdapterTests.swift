@@ -74,17 +74,17 @@ import RVDomain
         let adapter = HermesStoreAdapter()
         let source = homeURL.appendingPathComponent("state.db")
 
-        #expect(throws: HermesStoreError.unreadable(sourcePath: source.path)) {
+        #expect(throws: SessionStoreError.unreadable(host: .hermes, sourcePath: source.path)) {
             _ = try adapter.extract(fileURL: source, data: Data())
         }
-        #expect(throws: HermesStoreError.unreadable(sourcePath: source.path)) {
+        #expect(throws: SessionStoreError.unreadable(host: .hermes, sourcePath: source.path)) {
             _ = try adapter.extract(fileURL: source, data: Data("not-a-database".utf8))
         }
 
         let noMessages = homeURL.appendingPathComponent("no-messages.db")
         try writeSQLiteDatabase(at: noMessages, sql: "CREATE TABLE other (id TEXT);")
         let noMessagesBytes = try Data(contentsOf: noMessages)
-        #expect(throws: HermesStoreError.prepareFailed(sourcePath: noMessages.path)) {
+        #expect(throws: SessionStoreError.queryFailed(host: .hermes, sourcePath: noMessages.path)) {
             _ = try adapter.extract(fileURL: noMessages, data: noMessagesBytes)
         }
 
@@ -126,7 +126,7 @@ import RVDomain
         let diskBytes = try Data(contentsOf: dbURL)
 
         let adapter = HermesStoreAdapter()
-        #expect(throws: HermesStoreError.unreadable(sourcePath: dbURL.path)) {
+        #expect(throws: SessionStoreError.unreadable(host: .hermes, sourcePath: dbURL.path)) {
             _ = try adapter.extract(fileURL: dbURL, data: Data("not-sqlite".utf8))
         }
 

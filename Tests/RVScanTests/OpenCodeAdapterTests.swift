@@ -65,17 +65,17 @@ import RVDomain
         let adapter = OpenCodeStoreAdapter()
         let source = homeURL.appendingPathComponent("opencode.db")
 
-        #expect(throws: OpenCodeStoreError.unreadable(sourcePath: source.path)) {
+        #expect(throws: SessionStoreError.unreadable(host: .opencode, sourcePath: source.path)) {
             _ = try adapter.extract(fileURL: source, data: Data())
         }
-        #expect(throws: OpenCodeStoreError.unreadable(sourcePath: source.path)) {
+        #expect(throws: SessionStoreError.unreadable(host: .opencode, sourcePath: source.path)) {
             _ = try adapter.extract(fileURL: source, data: Data("not-a-database".utf8))
         }
 
         let noPart = homeURL.appendingPathComponent("no-part.db")
         try writeSQLiteDatabase(at: noPart, sql: "CREATE TABLE other (id TEXT);")
         let noPartBytes = try Data(contentsOf: noPart)
-        #expect(throws: OpenCodeStoreError.prepareFailed(sourcePath: noPart.path)) {
+        #expect(throws: SessionStoreError.queryFailed(host: .opencode, sourcePath: noPart.path)) {
             _ = try adapter.extract(fileURL: noPart, data: noPartBytes)
         }
 
@@ -116,7 +116,7 @@ import RVDomain
         image[18] = 1
         image[19] = 1
         let adapter = OpenCodeStoreAdapter()
-        #expect(throws: OpenCodeStoreError.unreadable(sourcePath: source.path)) {
+        #expect(throws: SessionStoreError.unreadable(host: .opencode, sourcePath: source.path)) {
             _ = try adapter.extract(fileURL: source, data: image)
         }
     }
@@ -133,7 +133,7 @@ import RVDomain
         let diskBytes = try Data(contentsOf: dbURL)
 
         let adapter = OpenCodeStoreAdapter()
-        #expect(throws: OpenCodeStoreError.unreadable(sourcePath: dbURL.path)) {
+        #expect(throws: SessionStoreError.unreadable(host: .opencode, sourcePath: dbURL.path)) {
             _ = try adapter.extract(fileURL: dbURL, data: Data("not-sqlite".utf8))
         }
 
