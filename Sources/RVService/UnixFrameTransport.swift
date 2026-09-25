@@ -96,7 +96,13 @@ public final class UnixEvaluateListener: Sendable {
 
     private struct ListenerState {
         var listenFD: Int32 = -1
-        var source: DispatchSourceRead?
+        var source: ReadSource?
+    }
+
+    /// Dispatch sources are thread-safe handles. Only the listener touches
+    /// the source, and only under `state`, so sharing it there is sound.
+    private struct ReadSource: @unchecked Sendable {
+        let source: DispatchSourceRead
     }
 
     public init(runtime: ServiceRuntime, watchdog: IdleWatchdog, socketURL: URL) {
@@ -137,24 +143,18 @@ public final class UnixEvaluateListener: Sendable {
             _ = Glibc.close(fd)
         }
         source.resume()
-        storeSource(source)
-    }
-
-    /// `sending` moves the source out of the caller's region. The read source
-    /// is not `Sendable` on Linux, so storing a plain capture trips region
-    /// isolation (`inout sending` error) on the Linux gate.
-    private func storeSource(_ newSource: sending DispatchSourceRead) {
-        state.withLock { $0.source = newSource }
+        let held = ReadSource(source: source)
+        state.withLock { $0.source = held }
     }
 
     public func stop() {
-        let source = state.withLock { state -> DispatchSourceRead? in
+        let held = state.withLock { state -> ReadSource? in
             let current = state.source
             state.source = nil
             state.listenFD = -1
             return current
         }
-        source?.cancel()
+        held?.source.cancel()
         try? FileManager.default.removeItem(at: socketURL)
     }
 
