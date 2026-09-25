@@ -21,7 +21,7 @@ public struct ClaudeSessionStoreAdapter: SessionStoreAdapter {
         fileURL.pathExtension.lowercased() == "jsonl"
     }
 
-    public func extract(fileURL: URL, data: Data) throws -> [ExtractedEvent] {
+    public func extract(fileURL: URL, data: Data) throws(SessionStoreError) -> [ExtractedEvent] {
         guard recognizes(fileURL: fileURL) else { return [] }
 
         let sourcePath = fileURL.path

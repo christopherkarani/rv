@@ -4,15 +4,6 @@ import RVDomain
 import SQLite3
 #endif
 
-/// Fail-closed Hermes store I/O. Empty, invalid, or unprepared database
-/// bytes are an error, not a successful empty event list.
-public enum HermesStoreError: Error, Sendable, Equatable {
-    /// `data` is empty, not SQLite, or could not be opened.
-    case unreadable(sourcePath: String)
-    /// Database opened but the `messages` query could not be prepared.
-    case prepareFailed(sourcePath: String)
-}
-
 /// Hermes session store at `$HOME/.hermes/state.db`.
 /// Surface field: `messages.tool_calls` (JSON) with a `terminal` tool call
 /// (`function.name` / `name` == `terminal`, and `arguments.command`).
@@ -35,8 +26,16 @@ public struct HermesStoreAdapter: SessionStoreAdapter {
     /// Per-row failure policy (best-effort, unchanged): undecodable
     /// `tool_calls` payloads and unknown shapes contribute zero events without
     /// aborting the file; only store I/O failures throw.
-    public func extract(fileURL: URL, data: Data) throws -> [ExtractedEvent] {
-        try Self.events(in: data, sourcePath: fileURL.path)
+    public func extract(fileURL: URL, data: Data) throws(SessionStoreError) -> [ExtractedEvent] {
+        do {
+            return try Self.events(in: data, sourcePath: fileURL.path)
+        } catch let error as SessionStoreError {
+            throw error
+        } catch {
+            // Unreachable: `events` only throws `SessionStoreError` values, and
+            // `withConnection` only rethrows what its body throws.
+            throw SessionStoreError.unreadable(host: .hermes, sourcePath: fileURL.path)
+        }
     }
 
     private static let sqliteHeader = Data("SQLite format 3\u{0}".utf8)
@@ -54,9 +53,9 @@ public struct HermesStoreAdapter: SessionStoreAdapter {
                 if statement != nil { _ = sqlite3_finalize(statement) }
                 switch prepareStatus {
                 case SQLITE_NOTADB, SQLITE_CORRUPT, SQLITE_CANTOPEN:
-                    throw HermesStoreError.unreadable(sourcePath: sourcePath)
+                    throw SessionStoreError.unreadable(host: .hermes, sourcePath: sourcePath)
                 default:
-                    throw HermesStoreError.prepareFailed(sourcePath: sourcePath)
+                    throw SessionStoreError.queryFailed(host: .hermes, sourcePath: sourcePath)
                 }
             }
             defer { _ = sqlite3_finalize(statement) }
@@ -83,7 +82,7 @@ public struct HermesStoreAdapter: SessionStoreAdapter {
                 stepStatus = sqlite3_step(statement)
             }
             guard stepStatus == SQLITE_DONE else {
-                throw HermesStoreError.unreadable(sourcePath: sourcePath)
+                throw SessionStoreError.unreadable(host: .hermes, sourcePath: sourcePath)
             }
             return events
         }
@@ -94,19 +93,19 @@ public struct HermesStoreAdapter: SessionStoreAdapter {
         sourcePath: String
     ) throws -> OwnedSQLiteDatabase {
         guard data.starts(with: sqliteHeader) else {
-            throw HermesStoreError.unreadable(sourcePath: sourcePath)
+            throw SessionStoreError.unreadable(host: .hermes, sourcePath: sourcePath)
         }
 
         var db: OpaquePointer?
         guard sqlite3_open(":memory:", &db) == SQLITE_OK, let db else {
             if let db { _ = sqlite3_close(db) }
-            throw HermesStoreError.unreadable(sourcePath: sourcePath)
+            throw SessionStoreError.unreadable(host: .hermes, sourcePath: sourcePath)
         }
 
         let byteCount = data.count
         guard let raw = sqlite3_malloc64(sqlite3_uint64(byteCount)) else {
             _ = sqlite3_close(db)
-            throw HermesStoreError.unreadable(sourcePath: sourcePath)
+            throw SessionStoreError.unreadable(host: .hermes, sourcePath: sourcePath)
         }
 
         let copied = data.withUnsafeBytes { buffer -> Bool in
@@ -117,7 +116,7 @@ public struct HermesStoreAdapter: SessionStoreAdapter {
         guard copied else {
             sqlite3_free(raw)
             _ = sqlite3_close(db)
-            throw HermesStoreError.unreadable(sourcePath: sourcePath)
+            throw SessionStoreError.unreadable(host: .hermes, sourcePath: sourcePath)
         }
 
         // WAL stores write/read format 2 at header bytes 18–19. Deserialize
@@ -146,7 +145,7 @@ public struct HermesStoreAdapter: SessionStoreAdapter {
         guard status == SQLITE_OK else {
             sqlite3_free(raw)
             _ = sqlite3_close(db)
-            throw HermesStoreError.unreadable(sourcePath: sourcePath)
+            throw SessionStoreError.unreadable(host: .hermes, sourcePath: sourcePath)
         }
         return OwnedSQLiteDatabase(db: db, buffer: raw)
     }

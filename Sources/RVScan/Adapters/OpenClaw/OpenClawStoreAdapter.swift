@@ -4,15 +4,6 @@ import RVDomain
 import SQLite3
 #endif
 
-/// Fail-closed OpenClaw store I/O. Empty, invalid, or unprepared database
-/// bytes are an error, not a successful empty event list.
-public enum OpenClawStoreError: Error, Sendable, Equatable {
-    /// `data` is empty, not SQLite, or could not be opened.
-    case unreadable(sourcePath: String)
-    /// Database opened but the `transcript_events` query could not be prepared.
-    case prepareFailed(sourcePath: String)
-}
-
 /// OpenClaw per-agent session store at
 /// `$HOME/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`.
 /// Surface field: `transcript_events.event_json` with an exec tool call
@@ -37,8 +28,16 @@ public struct OpenClawStoreAdapter: SessionStoreAdapter {
     /// Per-row failure policy (best-effort, unchanged): undecodable
     /// `event_json` payloads and unknown shapes contribute zero events without
     /// aborting the file; only store I/O failures throw.
-    public func extract(fileURL: URL, data: Data) throws -> [ExtractedEvent] {
-        try Self.events(in: data, sourcePath: fileURL.path)
+    public func extract(fileURL: URL, data: Data) throws(SessionStoreError) -> [ExtractedEvent] {
+        do {
+            return try Self.events(in: data, sourcePath: fileURL.path)
+        } catch let error as SessionStoreError {
+            throw error
+        } catch {
+            // Unreachable: `events` only throws `SessionStoreError` values, and
+            // `withConnection` only rethrows what its body throws.
+            throw SessionStoreError.unreadable(host: .openclaw, sourcePath: fileURL.path)
+        }
     }
 
     private static let sqliteHeader = Data("SQLite format 3\u{0}".utf8)
@@ -56,9 +55,9 @@ public struct OpenClawStoreAdapter: SessionStoreAdapter {
                 if statement != nil { _ = sqlite3_finalize(statement) }
                 switch prepareStatus {
                 case SQLITE_NOTADB, SQLITE_CORRUPT, SQLITE_CANTOPEN:
-                    throw OpenClawStoreError.unreadable(sourcePath: sourcePath)
+                    throw SessionStoreError.unreadable(host: .openclaw, sourcePath: sourcePath)
                 default:
-                    throw OpenClawStoreError.prepareFailed(sourcePath: sourcePath)
+                    throw SessionStoreError.queryFailed(host: .openclaw, sourcePath: sourcePath)
                 }
             }
             defer { _ = sqlite3_finalize(statement) }
@@ -87,7 +86,7 @@ public struct OpenClawStoreAdapter: SessionStoreAdapter {
                 stepStatus = sqlite3_step(statement)
             }
             guard stepStatus == SQLITE_DONE else {
-                throw OpenClawStoreError.unreadable(sourcePath: sourcePath)
+                throw SessionStoreError.unreadable(host: .openclaw, sourcePath: sourcePath)
             }
             return events
         }
@@ -98,19 +97,19 @@ public struct OpenClawStoreAdapter: SessionStoreAdapter {
         sourcePath: String
     ) throws -> OwnedSQLiteDatabase {
         guard data.starts(with: sqliteHeader) else {
-            throw OpenClawStoreError.unreadable(sourcePath: sourcePath)
+            throw SessionStoreError.unreadable(host: .openclaw, sourcePath: sourcePath)
         }
 
         var db: OpaquePointer?
         guard sqlite3_open(":memory:", &db) == SQLITE_OK, let db else {
             if let db { _ = sqlite3_close(db) }
-            throw OpenClawStoreError.unreadable(sourcePath: sourcePath)
+            throw SessionStoreError.unreadable(host: .openclaw, sourcePath: sourcePath)
         }
 
         let byteCount = data.count
         guard let raw = sqlite3_malloc64(sqlite3_uint64(byteCount)) else {
             _ = sqlite3_close(db)
-            throw OpenClawStoreError.unreadable(sourcePath: sourcePath)
+            throw SessionStoreError.unreadable(host: .openclaw, sourcePath: sourcePath)
         }
 
         let copied = data.withUnsafeBytes { buffer -> Bool in
@@ -121,7 +120,7 @@ public struct OpenClawStoreAdapter: SessionStoreAdapter {
         guard copied else {
             sqlite3_free(raw)
             _ = sqlite3_close(db)
-            throw OpenClawStoreError.unreadable(sourcePath: sourcePath)
+            throw SessionStoreError.unreadable(host: .openclaw, sourcePath: sourcePath)
         }
 
         // WAL stores write/read format 2 at header bytes 18–19. Deserialize
@@ -150,7 +149,7 @@ public struct OpenClawStoreAdapter: SessionStoreAdapter {
         guard status == SQLITE_OK else {
             sqlite3_free(raw)
             _ = sqlite3_close(db)
-            throw OpenClawStoreError.unreadable(sourcePath: sourcePath)
+            throw SessionStoreError.unreadable(host: .openclaw, sourcePath: sourcePath)
         }
         return OwnedSQLiteDatabase(db: db, buffer: raw)
     }

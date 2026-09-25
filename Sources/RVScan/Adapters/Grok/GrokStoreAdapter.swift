@@ -27,7 +27,7 @@ public struct GrokStoreAdapter: SessionStoreAdapter {
     ///
     /// Per-file failure policy (best-effort, unchanged): never throws —
     /// undecodable data, bad lines, and unknown shapes contribute zero events.
-    public func extract(fileURL: URL, data: Data) throws -> [ExtractedEvent] {
+    public func extract(fileURL: URL, data: Data) throws(SessionStoreError) -> [ExtractedEvent] {
         let sourcePath = fileURL.path
         let sessionID = fileURL.deletingLastPathComponent().lastPathComponent
         let workingDirectory = ScanStoreWorkingDirectory.fromGrokLayout(fileURL: fileURL)

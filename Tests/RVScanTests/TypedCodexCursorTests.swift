@@ -40,23 +40,23 @@ private func extractCursor(_ payload: String, fileName: String = "inline-cursor.
 @Test func codexTyped_failurePolicy() throws {
     let adapter = CodexStoreAdapter()
     let source = URL(fileURLWithPath: "/tmp/codex-typed-unreadable.jsonl")
-    #expect(throws: CodexStoreError.unreadable(sourcePath: source.path)) {
+    #expect(throws: SessionStoreError.unreadable(host: .codex, sourcePath: source.path)) {
         _ = try adapter.extract(fileURL: source, data: Data())
     }
-    #expect(throws: CodexStoreError.unreadable(sourcePath: source.path)) {
+    #expect(throws: SessionStoreError.unreadable(host: .codex, sourcePath: source.path)) {
         _ = try adapter.extract(fileURL: source, data: Data([0xFF, 0xFE]))
     }
-    #expect(throws: CodexStoreError.unreadable(sourcePath: source.path)) {
+    #expect(throws: SessionStoreError.unreadable(host: .codex, sourcePath: source.path)) {
         _ = try adapter.extract(fileURL: source, data: Data("not-json\n".utf8))
     }
-    #expect(throws: CodexStoreError.unreadable(sourcePath: source.path)) {
+    #expect(throws: SessionStoreError.unreadable(host: .codex, sourcePath: source.path)) {
         _ = try adapter.extract(fileURL: source, data: Data("   \n".utf8))
     }
     // Any JSON object counts as usable, even with zero events or wrong-typed fields.
     #expect(try adapter.extract(fileURL: source, data: Data("{}\n".utf8)).isEmpty)
     #expect(try adapter.extract(fileURL: source, data: Data("{\"session_id\":42}\n".utf8)).isEmpty)
     // Non-object JSON lines never count as usable.
-    #expect(throws: CodexStoreError.unreadable(sourcePath: source.path)) {
+    #expect(throws: SessionStoreError.unreadable(host: .codex, sourcePath: source.path)) {
         _ = try adapter.extract(fileURL: source, data: Data("[1,2]\n\"hi\"\n42\n".utf8))
     }
 }
@@ -448,23 +448,23 @@ private func extractCursor(_ payload: String, fileName: String = "inline-cursor.
 @Test func cursorTyped_failurePolicy() throws {
     let adapter = CursorStoreAdapter()
     let source = URL(fileURLWithPath: "/tmp/cursor-typed-unreadable.jsonl")
-    #expect(throws: CursorStoreError.unreadable(sourcePath: source.path)) {
+    #expect(throws: SessionStoreError.unreadable(host: .cursor, sourcePath: source.path)) {
         _ = try adapter.extract(fileURL: source, data: Data())
     }
-    #expect(throws: CursorStoreError.unreadable(sourcePath: source.path)) {
+    #expect(throws: SessionStoreError.unreadable(host: .cursor, sourcePath: source.path)) {
         _ = try adapter.extract(fileURL: source, data: Data([0xFF, 0xFE]))
     }
-    #expect(throws: CursorStoreError.unreadable(sourcePath: source.path)) {
+    #expect(throws: SessionStoreError.unreadable(host: .cursor, sourcePath: source.path)) {
         _ = try adapter.extract(fileURL: source, data: Data("not-json\n".utf8))
     }
-    #expect(throws: CursorStoreError.unreadable(sourcePath: source.path)) {
+    #expect(throws: SessionStoreError.unreadable(host: .cursor, sourcePath: source.path)) {
         _ = try adapter.extract(fileURL: source, data: Data("   \n".utf8))
     }
     // Any JSON object counts as usable, even with zero events or wrong-typed fields.
     #expect(try adapter.extract(fileURL: source, data: Data("{}\n".utf8)).isEmpty)
     #expect(try adapter.extract(fileURL: source, data: Data("{\"conversation_id\":42}\n".utf8)).isEmpty)
     // Non-object JSON lines never count as usable.
-    #expect(throws: CursorStoreError.unreadable(sourcePath: source.path)) {
+    #expect(throws: SessionStoreError.unreadable(host: .cursor, sourcePath: source.path)) {
         _ = try adapter.extract(fileURL: source, data: Data("[1,2]\n\"hi\"\n42\n".utf8))
     }
 }
