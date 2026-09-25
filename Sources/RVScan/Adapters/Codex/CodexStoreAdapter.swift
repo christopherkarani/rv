@@ -14,6 +14,8 @@ public struct CodexStoreAdapter: SessionStoreAdapter {
         "local_shell",
     ]
 
+    private static let profile = ScanJSONLProfile(sessionKeys: ["session_id", "sessionId"], recurseSessionKeys: ["payload"], timestampKeys: ["timestamp", "ts"], allowEpochTimestamp: true, commands: Self.commands(in:))
+
     public init() {}
 
     public func roots(home: ScanHome) -> [URL] {
@@ -33,11 +35,7 @@ public struct CodexStoreAdapter: SessionStoreAdapter {
             data: data,
             sourcePath: fileURL.path,
             fallbackSession: SessionID(validating: fileURL.deletingPathExtension().lastPathComponent),
-            sessionKeys: ["session_id", "sessionId"],
-            recurseSessionKeys: ["payload"],
-            timestampKeys: ["timestamp", "ts"],
-            allowEpochTimestamp: true,
-            commands: Self.commands(in:)
+            profile: Self.profile
         )
     }
 
