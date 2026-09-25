@@ -42,6 +42,20 @@ public protocol SessionStoreAdapter: Sendable {
 /// Cwd already present in a session store. Lexical only — no `FileManager`,
 /// no `process.cwd`, no live symlink follow.
 enum ScanStoreWorkingDirectory {
+    /// Typed field access for Decodable-converted adapters. Pass values in
+    /// hook-codec priority order (`cwd`, `workdir`, `workingDirectory`,
+    /// `working_directory`); the first non-empty valid path wins. Direct
+    /// fields only — this replaces the untyped deep crawl call-by-call, and
+    /// the crawl is deleted once every adapter is converted.
+    static func firstValid(_ values: String?...) -> WorkingDirectory? {
+        for value in values {
+            if let value, let dir = WorkingDirectory(validating: value) {
+                return dir
+            }
+        }
+        return nil
+    }
+
     /// Hook-codec field names: `cwd`, `workdir`, `working_directory`.
     /// Nested command objects (`tool_input`, `params`, `args`, …) win over the
     /// envelope, matching Codex/Cursor/Hermes/OpenClaw `firstNonEmpty`.
