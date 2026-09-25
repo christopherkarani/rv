@@ -315,6 +315,26 @@ private func syntheticContext() -> HookCommandContext {
     }
 }
 
+@Test func mergeEngine_malformedBytesAreUnreadable() {
+    let malformed = Data("not json{".utf8)
+    #expect(throws: HostHooksMergeError.unreadable) {
+        _ = try HostHooksMergeEngine.merge(
+            existingData: malformed,
+            descriptor: syntheticNested,
+            context: syntheticContext()
+        )
+    }
+    #expect(throws: HostHooksMergeError.unreadable) {
+        _ = try HostHooksMergeEngine.uninstall(
+            existingData: malformed,
+            descriptor: syntheticNested
+        )
+    }
+    #expect(throws: HostHooksMergeError.unreadable) {
+        _ = try HostHooksMergeEngine.parseRoot(malformed)
+    }
+}
+
 // MARK: - Occupancy + stale-legacy preserved (Claude inspection)
 
 @Test func mergeEngine_claudeInspectionStatesPreserved() {

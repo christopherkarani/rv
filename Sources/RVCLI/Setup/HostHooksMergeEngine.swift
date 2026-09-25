@@ -269,7 +269,7 @@ enum HostHooksMergeEngine {
 
     static func parseRoot(_ data: Data?) throws -> [String: Any] {
         guard let data else { return [:] }
-        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw HostHooksMergeError.unreadable
         }
         return object
