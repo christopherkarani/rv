@@ -5,6 +5,10 @@ import Foundation
 /// so `HostAdapterInstallation.inspect` can require sibling `rv-cli` for `.wired`.
 /// Occupied is a foreign/tampered `rv-guard.py` that is not current. Stale
 /// `hook --host claude` is outdated rv: setup rewrites without `--force`.
+///
+/// Round-trip, strip/insert/uninstall, and locate delegate to
+/// `HostHooksMergeEngine` via `wiringDescriptor`; inspection (occupancy,
+/// stale-legacy, matcher coverage) stays here over the engine's locate.
 enum ClaudeSettingsMerge {
     static let settingsFileName = "settings.json"
     static let hooksRootKey = "hooks"
@@ -17,6 +21,16 @@ enum ClaudeSettingsMerge {
     static let hookType = "command"
     /// Claude waits this long for the wrapper, including the human confirm dialog.
     static let timeout = 90
+
+    static let wiringDescriptor = HostWiringDescriptor(
+        layout: .nested(hooksRootKey: hooksRootKey, listKey: preToolUseKey),
+        matchers: matchers,
+        hookType: hookType,
+        isFingerprintedCommand: { isFingerprinted(command: $0) },
+        buildEntry: { context, _ in
+            hookEntry(rvPath: context.rvPath ?? "", adapterPath: context.adapterPath)
+        }
+    )
 
     static func adapterPath(settingsPath: String) -> String {
         (settingsPath as NSString).deletingLastPathComponent + "/hooks/rv-guard.py"
@@ -75,12 +89,7 @@ enum ClaudeSettingsMerge {
     }
 
     static func isFingerprintedHook(_ hook: [String: Any]) -> Bool {
-        guard let type = hook["type"] as? String, type == hookType,
-              let command = hook["command"] as? String
-        else {
-            return false
-        }
-        return isFingerprinted(command: command)
+        HostHooksMergeEngine.isFingerprintedHook(hook, descriptor: wiringDescriptor)
     }
 
     /// v1 `…/rv hook --host claude` is our stale command, not a foreign guard.
@@ -93,21 +102,32 @@ enum ClaudeSettingsMerge {
         return command.contains(fingerprintLegacy) && command.contains(fingerprint) == false
     }
 
+    static func hookEntry(rvPath: String, adapterPath: String) -> HookEntry {
+        HookEntry(
+            command: hookCommand(rvPath: rvPath, adapterPath: adapterPath),
+            timeout: timeout,
+            type: hookType,
+            failClosed: nil,
+            statusMessage: nil
+        )
+    }
+
     static func rvEntry(rvPath: String, adapterPath: String, matcher: String) -> [String: Any] {
         [
             "matcher": matcher,
             "hooks": [
-                [
-                    "type": hookType,
-                    "command": hookCommand(rvPath: rvPath, adapterPath: adapterPath),
-                    "timeout": timeout,
-                ] as [String: Any],
+                HostHooksMergeEngine.hookDictionary(
+                    hookEntry(rvPath: rvPath, adapterPath: adapterPath)
+                ),
             ],
         ]
     }
 
     static func hasFileToolMatchers(in root: [String: Any]) -> Bool {
-        let present = Set(locateFingerprintedHooks(in: root).compactMap { $0.entry["matcher"] as? String })
+        let present = Set(
+            HostHooksMergeEngine.locateFingerprintedHooks(in: root, descriptor: wiringDescriptor)
+                .compactMap { $0.matcher }
+        )
         return Set(fileMatchers).isSubset(of: present)
     }
 
@@ -119,25 +139,32 @@ enum ClaudeSettingsMerge {
         adapterPath: String,
         force: Bool
     ) throws -> (data: Data, wrote: Bool) {
-        let root = try parseRoot(existingData)
-        if force == false, inspectionState(of: root) == .occupied {
-            preconditionFailure("merge called on occupied settings without --force")
+        do {
+            return try HostHooksMergeEngine.merge(
+                existingData: existingData,
+                descriptor: wiringDescriptor,
+                context: HookCommandContext(rvPath: rvPath, adapterPath: adapterPath),
+                willMerge: { root in
+                    if force == false, inspectionState(of: root) == .occupied {
+                        preconditionFailure("merge called on occupied settings without --force")
+                    }
+                }
+            )
+        } catch {
+            throw ClaudeSettingsMergeError.unreadable
         }
-        var next = stripFingerprinted(from: root)
-        next = insertRVEntry(into: next, rvPath: rvPath, adapterPath: adapterPath)
-        let data = try encode(next)
-        let wrote = existingData != data
-        return (data, wrote)
     }
 
     /// Strips rv-fingerprinted hooks. Returns `nil` when the file should be removed.
     static func uninstall(existingData: Data) throws -> Data? {
-        let root = try parseRoot(existingData)
-        let stripped = stripFingerprinted(from: root)
-        if stripped.isEmpty {
-            return nil
+        do {
+            return try HostHooksMergeEngine.uninstall(
+                existingData: existingData,
+                descriptor: wiringDescriptor
+            )
+        } catch {
+            throw ClaudeSettingsMergeError.unreadable
         }
-        return try encode(stripped)
     }
 
     enum InspectionState: Equatable {
@@ -150,19 +177,22 @@ enum ClaudeSettingsMerge {
 
     static func inspectionState(of data: Data?) -> InspectionState {
         guard let data else { return .absentFile }
-        guard let root = try? parseRoot(data) else { return .occupied }
+        guard let root = try? HostHooksMergeEngine.parseRoot(data) else { return .occupied }
         return inspectionState(of: root)
     }
 
     static func inspectionState(of root: [String: Any]) -> InspectionState {
-        let located = locateFingerprintedHooks(in: root)
+        let located = HostHooksMergeEngine.locateFingerprintedHooks(
+            in: root,
+            descriptor: wiringDescriptor
+        )
         guard located.isEmpty == false else { return .absentFile }
 
         var allCurrent = true
         var hasStaleLegacy = false
         var hasNonCurrentGuard = false
         for item in located {
-            if let itemMatcher = item.entry["matcher"] as? String,
+            if let itemMatcher = item.matcher,
                matchers.contains(itemMatcher),
                matchesCurrentHook(item.hook)
             {
@@ -183,7 +213,7 @@ enum ClaudeSettingsMerge {
             else {
                 return .occupied
             }
-            let present = Set(located.compactMap { $0.entry["matcher"] as? String })
+            let present = Set(located.compactMap { $0.matcher })
             if Set(matchers).isSubset(of: present) {
                 return .wired(bakedPath: bakedPath)
             }
@@ -198,91 +228,6 @@ enum ClaudeSettingsMerge {
         return .occupied
     }
 
-    private struct LocatedHook {
-        var entry: [String: Any]
-        var hook: [String: Any]
-    }
-
-    private static func locateFingerprintedHooks(in root: [String: Any]) -> [LocatedHook] {
-        guard let hooksRoot = root[hooksRootKey] as? [String: Any],
-              let preToolUse = hooksRoot[preToolUseKey] as? [[String: Any]]
-        else {
-            return []
-        }
-        var located: [LocatedHook] = []
-        for entry in preToolUse {
-            guard let hooks = entry["hooks"] as? [[String: Any]] else { continue }
-            for hook in hooks where isFingerprintedHook(hook) {
-                located.append(LocatedHook(entry: entry, hook: hook))
-            }
-        }
-        return located
-    }
-
-    private static func parseRoot(_ data: Data?) throws -> [String: Any] {
-        guard let data else { return [:] }
-        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw ClaudeSettingsMergeError.unreadable
-        }
-        return object
-    }
-
-    private static func stripFingerprinted(from root: [String: Any]) -> [String: Any] {
-        guard var hooksRoot = root[hooksRootKey] as? [String: Any],
-              let preToolUse = hooksRoot[preToolUseKey] as? [[String: Any]]
-        else {
-            return root
-        }
-
-        var nextEntries: [[String: Any]] = []
-        for var entry in preToolUse {
-            guard var hooks = entry["hooks"] as? [[String: Any]] else {
-                nextEntries.append(entry)
-                continue
-            }
-            hooks.removeAll(where: isFingerprintedHook)
-            guard hooks.isEmpty == false else { continue }
-            entry["hooks"] = hooks
-            nextEntries.append(entry)
-        }
-
-        if nextEntries.isEmpty {
-            hooksRoot.removeValue(forKey: preToolUseKey)
-        } else {
-            hooksRoot[preToolUseKey] = nextEntries
-        }
-
-        var next = root
-        if hooksRoot.isEmpty {
-            next.removeValue(forKey: hooksRootKey)
-        } else {
-            next[hooksRootKey] = hooksRoot
-        }
-        return next
-    }
-
-    private static func insertRVEntry(
-        into root: [String: Any],
-        rvPath: String,
-        adapterPath: String
-    ) -> [String: Any] {
-        var next = root
-        var hooksRoot = next[hooksRootKey] as? [String: Any] ?? [:]
-        var preToolUse = hooksRoot[preToolUseKey] as? [[String: Any]] ?? []
-        for name in matchers {
-            preToolUse.append(rvEntry(rvPath: rvPath, adapterPath: adapterPath, matcher: name))
-        }
-        hooksRoot[preToolUseKey] = preToolUse
-        next[hooksRootKey] = hooksRoot
-        return next
-    }
-
-    private static func encode(_ root: [String: Any]) throws -> Data {
-        guard JSONSerialization.isValidJSONObject(root) else {
-            throw ClaudeSettingsMergeError.unreadable
-        }
-        return try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys, .prettyPrinted])
-    }
 }
 
 enum ClaudeSettingsMergeError: Error, Equatable {
