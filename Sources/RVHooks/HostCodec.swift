@@ -20,6 +20,13 @@ public enum HostAskHookIntent: String, Sendable, Equatable {
     case spend
 }
 
+/// Closed payload for `HookRequest.decoded`. Shell-vs-file exclusivity is
+/// structural: a file payload cannot carry command text or a spend flag.
+enum HookDecodedPayload: Sendable {
+    case shell(command: String?, ask: HostAskHookIntent?)
+    case file(FileToolAction)
+}
+
 /// What a codec decoded from host stdin. Closed over shell, file tool, or same-turn spend.
 public enum HookRequest: Equatable, Sendable {
     case shell(host: HookHost, command: ShellCommand, cwd: WorkingDirectory?, session: SessionID?)
@@ -53,26 +60,29 @@ public enum HookRequest: Equatable, Sendable {
         }
     }
 
-    /// File wins a spend flag on the same envelope. Spend requires command text.
+    /// Shell-vs-file exclusivity is structural: the unrepresentable
+    /// combinations (file + command, file + spend flag) cannot be built.
+    /// A shell payload without command text is `.malformed(.missingCommand)`;
+    /// spend still requires command text.
     static func decoded(
         host: HookHost,
-        command: String?,
         cwd: WorkingDirectory?,
         session: SessionID?,
-        file: FileToolAction? = nil,
-        hostAsk: HostAskHookIntent? = nil
+        payload: HookDecodedPayload
     ) -> HookDecodeOutcome {
-        if let file {
+        switch payload {
+        case .file(let file):
             return .request(.file(host: host, file: file, cwd: cwd, session: session))
+        case .shell(let command, let ask):
+            guard let command, command.isEmpty == false else {
+                return .malformed(.missingCommand)
+            }
+            let shell = ShellCommand(rawValue: command)
+            if ask == .spend {
+                return .request(.spend(host: host, command: shell, cwd: cwd, session: session))
+            }
+            return .request(.shell(host: host, command: shell, cwd: cwd, session: session))
         }
-        guard let command, command.isEmpty == false else {
-            return .malformed(.missingCommand)
-        }
-        let shell = ShellCommand(rawValue: command)
-        if hostAsk == .spend {
-            return .request(.spend(host: host, command: shell, cwd: cwd, session: session))
-        }
-        return .request(.shell(host: host, command: shell, cwd: cwd, session: session))
     }
 }
 

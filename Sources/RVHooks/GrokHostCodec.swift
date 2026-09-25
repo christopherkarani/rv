@@ -20,9 +20,9 @@ public struct GrokHostCodec: HostCodec {
         if Self.shellTools.contains(envelope.toolName ?? "") {
             return HookRequest.decoded(
                 host: .grok,
-                command: envelope.toolInput?.command,
                 cwd: cwd,
-                session: session
+                session: session,
+                payload: .shell(command: envelope.toolInput?.command, ask: nil)
             )
         }
         if let file = FileToolAction.make(
@@ -34,10 +34,9 @@ public struct GrokHostCodec: HostCodec {
         ) {
             return HookRequest.decoded(
                 host: .grok,
-                command: nil,
                 cwd: cwd,
                 session: session,
-                file: file
+                payload: .file(file)
             )
         }
         return .foreign

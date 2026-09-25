@@ -43,19 +43,18 @@ public struct CursorHostCodec: HostCodec {
             }
             return HookRequest.decoded(
                 host: .cursor,
-                command: nil,
                 cwd: cwd,
                 session: session,
-                file: file
+                payload: .file(file)
             )
         case .shell:
             break
         }
         return HookRequest.decoded(
             host: .cursor,
-            command: shellCommand(in: envelope),
             cwd: cwd,
-            session: session
+            session: session,
+            payload: .shell(command: shellCommand(in: envelope), ask: nil)
         )
     }
 
