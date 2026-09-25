@@ -54,6 +54,17 @@ private func extractPi(_ payload: String, fileName: String = "inline-pi.jsonl") 
     #expect(events.allSatisfy { $0.sessionID == SessionID(validating: "inline-grok") })
 }
 
+@Test func grokTyped_partialInvalidFileKeepsValidLines() throws {
+    // Per-line UTF-8 gate (was whole-file): an invalid-UTF-8 line is
+    // skipped while neighboring valid lines still extract.
+    var data = Data(#"{"type":"assistant","tool_calls":[{"name":"Bash","arguments":"{\"command\":\"one\"}"}]}"#.utf8)
+    data.append(contentsOf: [0x0A, 0xFF, 0xFE, 0x0A])
+    data.append(contentsOf: Data(#"{"type":"assistant","tool_calls":[{"name":"Bash","arguments":"{\"command\":\"two\"}"}]}"#.utf8))
+    let url = URL(fileURLWithPath: "/tmp/inline-grok/chat_history.jsonl")
+    let events = try GrokStoreAdapter().extract(fileURL: url, data: data)
+    #expect(events.map(\.command.rawValue) == ["one", "two"])
+}
+
 @Test func grokTyped_wrongTypeScalarsKeepLine() throws {
     // Old per-field `as?` ignored mistyped scalars and still extracted the
     // line; a wrong-typed call must not drop its siblings.
@@ -85,6 +96,16 @@ private func extractPi(_ payload: String, fileName: String = "inline-pi.jsonl") 
     // typed `.other` arm; siblings still extract.
     let payload = """
     {"type":"assistant","tool_calls":[{"name":"Bash","arguments":true},{"name":"Bash","arguments":null},{"name":"Bash","arguments":[1,2]},{"name":"Bash","arguments":"42"},{"name":"Bash","arguments":"null"},{"name":"Bash","arguments":"\\"just a string\\""},{"name":"Bash","arguments":"{\\"command\\":\\"kept\\"}"}]}
+    """
+    #expect(try extractGrok(payload).map(\.command.rawValue) == ["kept"])
+}
+
+@Test func grokTyped_nestedArgumentsCarriersYieldNoCommand() throws {
+    // Object `arguments` read only the direct string `command`; a command
+    // nested below unmodeled carriers yields no command (matching the old
+    // direct-key lookup), skipping only its call.
+    let payload = """
+    {"type":"assistant","tool_calls":[{"name":"Bash","arguments":{"input":{"command":"dropped"}}},{"name":"Bash","arguments":{"params":{"command":"dropped"}}},{"name":"Bash","arguments":{"command":"kept"}}]}
     """
     #expect(try extractGrok(payload).map(\.command.rawValue) == ["kept"])
 }
@@ -152,6 +173,20 @@ private func extractPi(_ payload: String, fileName: String = "inline-pi.jsonl") 
     #expect(events[1].occurredAt == nil)
 }
 
+@Test func piTyped_partialInvalidFileKeepsValidLines() throws {
+    // Per-line UTF-8 gate (was whole-file): an invalid-UTF-8 line is
+    // skipped while neighboring valid lines still extract, and session
+    // accumulation still spans the skipped line.
+    var data = Data(#"{"type":"session","id":"s1","cwd":"/tmp/ws"}"#.utf8)
+    data.append(contentsOf: [0x0A, 0xFF, 0xFE, 0x0A])
+    data.append(contentsOf: Data(#"{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","name":"bash","arguments":{"command":"git status"}}]}}"#.utf8))
+    let url = URL(fileURLWithPath: "/tmp/inline-pi.jsonl")
+    let events = try PiStoreAdapter().extract(fileURL: url, data: data)
+    #expect(events.map(\.command.rawValue) == ["git status"])
+    #expect(events[0].sessionID == SessionID(validating: "s1"))
+    #expect(events[0].workingDirectory?.rawValue == "/tmp/ws")
+}
+
 @Test func piTyped_wrongTypeScalarsKeepLine() throws {
     // Old per-field `as?` ignored mistyped scalars; the line still extracts
     // with nil session/timestamps/cwd.
@@ -190,6 +225,19 @@ private func extractPi(_ payload: String, fileName: String = "inline-pi.jsonl") 
     let events = try extractPi(payload)
     #expect(events.map(\.command.rawValue) == ["one", "two", "three"])
     #expect(events.map { $0.workingDirectory?.rawValue } == ["/tmp/args", "/tmp/item2", "/tmp/session"])
+}
+
+@Test func piTyped_exoticCwdNestingsReadAsAbsent() throws {
+    // The typed reader covers direct cwd-ish fields only. The old deep
+    // crawl also probed unmodeled nested keys and JSON-string carriers;
+    // those now read as absent while the command still extracts.
+    let payload = """
+    {"type":"session","id":"s","params":{"cwd":"/tmp/params"},"args":"{\\"cwd\\":\\"/tmp/encoded\\"}","state":{"cwd":"/tmp/state"},"payload":{"cwd":"/tmp/payload"}}
+    {"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","name":"bash","toolInput":{"cwd":"/tmp/tool"},"params":{"cwd":"/tmp/item"},"arguments":{"command":"one","params":{"cwd":"/tmp/nested"}}}]}}
+    """
+    let events = try extractPi(payload)
+    #expect(events.map(\.command.rawValue) == ["one"])
+    #expect(events[0].workingDirectory == nil)
 }
 
 @Test func piTyped_sessionAccumulation() throws {
@@ -277,6 +325,20 @@ private func extractPi(_ payload: String, fileName: String = "inline-pi.jsonl") 
     ])
     #expect(events.map(\.command.rawValue) == ["one", "two", "three"])
     #expect(events.map { $0.workingDirectory?.rawValue } == ["/tmp/input", "/tmp/state2", "/tmp/row3"])
+}
+
+@Test func openCodeTyped_exoticCwdNestingsReadAsAbsent() throws {
+    // The typed reader covers direct cwd-ish fields at input/state/row
+    // depth only. The old deep crawl also probed unmodeled sibling keys,
+    // JSON-string carriers, and a top-level `input` before `state`; those
+    // now read as absent while the command still extracts.
+    let events = try extractOpenCode(rows: [
+        (sessionID: "s", partJSON: #"{"type":"tool","tool":"bash","input":{"cwd":"/tmp/top"},"state":{"input":{"command":"one"}}}"#),
+        (sessionID: "s", partJSON: #"{"type":"tool","tool":"bash","params":{"cwd":"/tmp/params"},"state":{"input":{"command":"two"}}}"#),
+        (sessionID: "s", partJSON: #"{"type":"tool","tool":"bash","state":{"input":{"command":"three","params":{"cwd":"/tmp/deep"}},"payload":"{\"cwd\":\"/tmp/encoded\"}"}}"#),
+    ])
+    #expect(events.map(\.command.rawValue) == ["one", "two", "three"])
+    #expect(events.allSatisfy { $0.workingDirectory == nil })
 }
 
 @Test func openCodeTyped_timestampSecondsAndMillis() throws {
