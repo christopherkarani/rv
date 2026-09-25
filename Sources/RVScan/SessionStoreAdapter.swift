@@ -29,6 +29,16 @@ public struct ExtractedEvent: Sendable, Equatable {
     }
 }
 
+/// Closed store I/O failures. Fail-closed adapters throw these instead of
+/// returning a successful empty event list; per-row/line failures stay
+/// best-effort (zero events, no throw).
+public enum SessionStoreError: Error, Sendable, Equatable {
+    /// `data` is empty, not the expected store encoding, or could not be opened.
+    case unreadable(host: ScanHostID, sourcePath: String)
+    /// The store opened but its event query could not be prepared.
+    case queryFailed(host: ScanHostID, sourcePath: String)
+}
+
 /// Discovers host session roots, recognizes layout files, and surface-extracts events.
 public protocol SessionStoreAdapter: Sendable {
     var host: ScanHostID { get }
@@ -36,12 +46,26 @@ public protocol SessionStoreAdapter: Sendable {
     func recognizes(fileURL: URL) -> Bool
     /// Map recognized store bytes to surface events. `fileURL` is provenance;
     /// `data` is the store.
-    func extract(fileURL: URL, data: Data) throws -> [ExtractedEvent]
+    func extract(fileURL: URL, data: Data) throws(SessionStoreError) -> [ExtractedEvent]
 }
 
 /// Cwd already present in a session store. Lexical only — no `FileManager`,
 /// no `process.cwd`, no live symlink follow.
 enum ScanStoreWorkingDirectory {
+    /// Typed field access for Decodable-converted adapters. Pass values in
+    /// hook-codec priority order (`cwd`, `workdir`, `workingDirectory`,
+    /// `working_directory`); the first non-empty valid path wins. Direct
+    /// fields only — this replaces the untyped deep crawl call-by-call, and
+    /// the crawl is deleted once every adapter is converted.
+    static func firstValid(_ values: String?...) -> WorkingDirectory? {
+        for value in values {
+            if let value, let dir = WorkingDirectory(validating: value) {
+                return dir
+            }
+        }
+        return nil
+    }
+
     /// Hook-codec field names: `cwd`, `workdir`, `working_directory`.
     /// Nested command objects (`tool_input`, `params`, `args`, …) win over the
     /// envelope, matching Codex/Cursor/Hermes/OpenClaw `firstNonEmpty`.

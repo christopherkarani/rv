@@ -70,13 +70,13 @@ import RVDomain
 @Test func codexAdapter_emptyOrUnreadableThrows() throws {
     let adapter = CodexStoreAdapter()
     let source = URL(fileURLWithPath: "/tmp/codex-unreadable.jsonl")
-    #expect(throws: CodexStoreError.unreadable(sourcePath: source.path)) {
+    #expect(throws: SessionStoreError.unreadable(host: .codex, sourcePath: source.path)) {
         _ = try adapter.extract(fileURL: source, data: Data())
     }
-    #expect(throws: CodexStoreError.unreadable(sourcePath: source.path)) {
+    #expect(throws: SessionStoreError.unreadable(host: .codex, sourcePath: source.path)) {
         _ = try adapter.extract(fileURL: source, data: Data([0xFF, 0xFE]))
     }
-    #expect(throws: CodexStoreError.unreadable(sourcePath: source.path)) {
+    #expect(throws: SessionStoreError.unreadable(host: .codex, sourcePath: source.path)) {
         _ = try adapter.extract(fileURL: source, data: Data("not-json\n".utf8))
     }
 }
@@ -117,7 +117,7 @@ import RVDomain
         try diskBytes.write(to: fileURL)
 
         let adapter = CodexStoreAdapter()
-        #expect(throws: CodexStoreError.unreadable(sourcePath: fileURL.path)) {
+        #expect(throws: SessionStoreError.unreadable(host: .codex, sourcePath: fileURL.path)) {
             _ = try adapter.extract(fileURL: fileURL, data: Data("not-json\n".utf8))
         }
 

@@ -96,6 +96,7 @@ public enum SessionScanError: Error, Sendable, Equatable {
     case listingFailed(String)
     case includeGlobRequiresPath
     case packsUnavailable
+    case extractFailed(SessionStoreError)
 }
 
 /// Session-forensics entry: walk, extract, classify, time-window, dedupe.
@@ -105,7 +106,7 @@ public struct SessionScan: Sendable {
     public func run(
         _ request: SessionScanRequest,
         fileManager: FileManager = .default
-    ) throws -> SessionScanResult {
+    ) throws(SessionScanError) -> SessionScanResult {
         if request.includeGlobs.isEmpty == false, request.rootPath == nil {
             throw SessionScanError.includeGlobRequiresPath
         }
@@ -188,14 +189,15 @@ public struct SessionScan: Sendable {
                 // (SQLite or JSONL) must not abort the scan when another adapter
                 // can still extract.
                 if candidate.includeGlobOnly { continue }
-                throw error
+                throw SessionScanError.extractFailed(error)
             }
         }
 
         let classify: ScanClassify
         do {
             classify = try ScanClassify(enabledPacks: request.packIDs)
-        } catch ScanClassifyError.packsUnavailable {
+        } catch {
+            // `ScanClassify.init` only throws `packsUnavailable`.
             throw SessionScanError.packsUnavailable
         }
         let resolver = fileInstantResolver()
@@ -223,11 +225,14 @@ private func walkMapped(
     walker: DirectoryWalker,
     root: URL,
     fileManager: FileManager
-) throws -> DirectoryWalkResult {
+) throws(SessionScanError) -> DirectoryWalkResult {
     do {
         return try walker.walk(at: root, fileManager: fileManager)
     } catch DirectoryWalkError.listingFailed(let path) {
         throw SessionScanError.listingFailed(path)
+    } catch {
+        // Unreachable: `walk` only throws `DirectoryWalkError.listingFailed`.
+        throw SessionScanError.listingFailed(root.path)
     }
 }
 
