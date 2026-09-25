@@ -388,7 +388,7 @@ private func extractCursor(_ payload: String, fileName: String = "inline-cursor.
     // (LF is pinned by every multi-line test above; CRLF by the test above.)
     let url = URL(fileURLWithPath: "/tmp/inline-codex-cr.jsonl")
     let payload = "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"one\"}}\r{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"two\"}}"
-    #expect(throws: CodexStoreError.unreadable(sourcePath: url.path)) {
+    #expect(throws: SessionStoreError.unreadable(host: .codex, sourcePath: url.path)) {
         _ = try CodexStoreAdapter().extract(fileURL: url, data: Data(payload.utf8))
     }
 }
@@ -676,7 +676,7 @@ private func extractCursor(_ payload: String, fileName: String = "inline-cursor.
     // (LF is pinned by every multi-line test above; CRLF by the test above.)
     let url = URL(fileURLWithPath: "/tmp/inline-cursor-cr.jsonl")
     let payload = "{\"hook_event_name\":\"beforeShellExecution\",\"command\":\"one\"}\r{\"hook_event_name\":\"beforeShellExecution\",\"command\":\"two\"}"
-    #expect(throws: CursorStoreError.unreadable(sourcePath: url.path)) {
+    #expect(throws: SessionStoreError.unreadable(host: .cursor, sourcePath: url.path)) {
         _ = try CursorStoreAdapter().extract(fileURL: url, data: Data(payload.utf8))
     }
 }
