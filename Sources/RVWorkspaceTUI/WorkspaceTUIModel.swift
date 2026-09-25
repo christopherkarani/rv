@@ -6,6 +6,10 @@ import Foundation
 /// This model owns the one visible terminal, its render state, and
 /// command-prefix mode. Panes and tabs are deferred: at most one runtime is
 /// attached, and a later attach reuses the existing runtime inventory.
+///
+/// All decisions live in the pure `WorkspaceTUIReducer`. This class is the
+/// thin runtime: it owns the client, the emulator object, the lock, and the
+/// queues, and executes the effects the reducer returns.
 public final class WorkspaceTUIModel: @unchecked Sendable {
     private let client: any WorkspaceTUIClient
     private let emulators: any TerminalEmulatorFactory
@@ -16,21 +20,10 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
     /// Lease, write, and resize RPCs share the adapter's independent terminal
     /// connection and stay ordered with each other.
     private let terminalQueue = DispatchQueue(label: "rv.workspace-tui.terminal")
-    private var terminal: WorkspaceTerminal?
-    private var presentationRevision: UInt64 = 0
-    private var mode: CommandMode = .terminal
-    private var connection: ConnectionState = .disconnected
-    private var summary: WorkspaceTUISummary
-    private let launcher: [RuntimeLaunchChoice]
-    private var shouldExit = false
-    private var didConnect = false
-    private var didDetach = false
-    private var initialRuntimeLaunchRequested = false
-    private var leasedRuntime: UUID?
-    private var retryAcquire = false
-    private var viewSize: (rows: Int, columns: Int)?
-    private let initialRows: Int
-    private let initialColumns: Int
+    private var state: WorkspaceTUIState
+    /// The emulator for the attached terminal. Created, fed, resized, and read
+    /// only while `lock` is held; renderers use `terminalFrame()` snapshots.
+    private var emulator: (runtime: UUID, emulator: any TerminalEmulating)?
 
     public init(
         client: any WorkspaceTUIClient,
@@ -42,371 +35,125 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
     ) {
         self.client = client
         self.emulators = emulators
-        self.summary = summary
-        self.launcher = launcher
-        self.initialRows = Self.bound(rows)
-        self.initialColumns = Self.bound(columns)
+        self.state = WorkspaceTUIState(
+            lifecycle: .neverConnected,
+            summary: summary,
+            launcher: launcher,
+            initialRows: Self.bound(rows),
+            initialColumns: Self.bound(columns),
+            mode: .terminal,
+            terminal: nil,
+            leasedRuntime: nil,
+            retryAcquire: false,
+            shouldExit: false,
+            initialLaunchRequested: false,
+            viewSize: nil,
+            presentationRevision: 0
+        )
     }
 
     /// Describes and inventories through WorkspaceHostClient's public surface.
     /// Repeated calls are harmless and never create another runtime.
     public func connect() -> Result<Void, WorkspaceTUIClientError> {
         lock.lock()
-        if didConnect {
-            let connected = connection == .connected
-            lock.unlock()
-            return connected ? .success(()) : .failure(.disconnected)
-        }
+        let lifecycle = state.lifecycle
         lock.unlock()
-
-        let described: WorkspaceTUISummary
-        switch client.describe() {
-        case .success(let value): described = value
-        case .failure(let error):
-            markDisconnected()
-            return .failure(error)
+        guard lifecycle == .neverConnected else {
+            return lifecycle == .connected ? .success(()) : .failure(.disconnected)
         }
-        let runtimes: [ListedRuntime]
-        switch client.listRuntimes() {
-        case .success(let values):
-            runtimes = values
-                .filter(\.terminal)
-                .sorted { $0.id.uuidString < $1.id.uuidString }
-        case .failure(let error):
-            markDisconnected()
-            return .failure(error)
-        }
-
-        lock.lock()
-        summary = described
-        connection = .connected
-        didConnect = true
-        if let runtime = runtimes.first {
-            let rows = runtime.rows.map(Self.bound) ?? initialRows
-            let columns = runtime.columns.map(Self.bound) ?? initialColumns
-            terminal = makeRecord(runtime: runtime, rows: rows, columns: columns)
-        }
-        markPresentationChangedLocked()
-        let attached = terminal?.state.runtime
-        lock.unlock()
-
-        if let attached {
-            if case .failure(.disconnected) = bind(attached) {
-                markDisconnected()
-                return .failure(.disconnected)
-            }
-            acquire()
-        }
-        return .success(())
+        drain(.connectRequested, route: { _ in .inline })
+        return connectedNow() ? .success(()) : .failure(.disconnected)
     }
 
     /// Establishes a host-owned terminal before the local terminal begins
     /// accepting input. The host serializes this operation across TUI clients.
     public func launchDefaultRuntimeIfEmpty() {
-        lock.lock()
-        guard didConnect, connection == .connected, didDetach == false, shouldExit == false,
-              terminal == nil, initialRuntimeLaunchRequested == false else {
-            lock.unlock()
-            return
-        }
-        initialRuntimeLaunchRequested = true
-        let shell = launcher.first { $0.id == "shell" }
-        if shell == nil {
-            mode = .launcher
-            markPresentationChangedLocked()
-        }
-        lock.unlock()
-
-        guard let shell else { return }
-
-        let runtime: ListedRuntime
-        switch client.ensureTerminalRuntime(
-            executable: shell.executable,
-            arguments: shell.arguments,
-            hook: shell.hook,
-            rows: initialRows,
-            columns: initialColumns
-        ) {
-        case .success(let value):
-            runtime = value
-        case .failure(.disconnected):
-            markDisconnected()
-            return
-        case .failure:
-            lock.lock()
-            if terminal == nil, connection == .connected {
-                mode = .launcher
-                markPresentationChangedLocked()
-            }
-            lock.unlock()
-            return
-        }
-
-        let rows = runtime.rows.map(Self.bound) ?? initialRows
-        let columns = runtime.columns.map(Self.bound) ?? initialColumns
-        let title: String
-        if let hook = runtime.hook {
-            title = launcher.first(where: { $0.hook == hook })?.title ?? hook
-        } else {
-            title = runtime.created ? shell.title : "runtime"
-        }
-        lock.lock()
-        guard terminal == nil, connection == .connected, didDetach == false, shouldExit == false else {
-            lock.unlock()
-            return
-        }
-        var record = makeRecord(runtime: runtime, rows: rows, columns: columns)
-        record.state.title = title
-        terminal = record
-        markPresentationChangedLocked()
-        lock.unlock()
-
-        if case .success = bind(runtime.id) {
-            acquire()
-        } else {
-            lock.lock()
-            if terminal?.state.subscribed == false {
-                terminal?.state.title = "\(title) (unavailable)"
-                terminal?.state.lease = .readOnly
-                markPresentationChangedLocked()
-            }
-            lock.unlock()
-        }
+        drain(.launchDefaultRequested, route: { _ in .inline })
     }
 
     public func handle(_ key: TUIKey, now: Date = Date()) {
-        let command: TUICommand?
-        lock.lock()
-        guard didDetach == false, shouldExit == false else {
-            lock.unlock()
-            return
-        }
-        let previousMode = mode
-        let previousShouldExit = shouldExit
-        let decision = CommandPrefix.route(
-            key,
-            mode: mode,
-            launcher: launcher,
-            directLauncherSelection: terminal?.state.running != true
-        )
-        mode = decision.0
-        command = decision.1
-        if command == .detach {
-            // SwiftTUI polls this state to leave TerminalRunner and restore the
-            // local terminal. Detach itself performs no blocking host RPC.
-            shouldExit = true
-        }
-        if mode != previousMode || shouldExit != previousShouldExit {
-            markPresentationChangedLocked()
-        }
-        lock.unlock()
-        guard let command, command != .detach else { return }
-        switch command {
-        case .send(let bytes):
-            guard let runtime = runtimeForInput() else { return }
-            terminalQueue.async { [weak self] in
-                guard let self, self.canIssueCommands() else { return }
-                self.send(bytes, to: runtime)
+        _ = now
+        drain(.key(key), route: {
+            switch $0 {
+            case .queueSend: .terminal
+            case .queueLaunch: .command
+            default: .inline
             }
-        default:
-            commandQueue.async { [weak self] in self?.perform(command, now: now) }
-        }
+        })
     }
 
     /// Applies a bounded batch from the one WorkspaceClient terminal reader.
     /// Every emulator mutation and render snapshot is protected by this model's
     /// lock. Emulator replies are sent only after the lock is released.
     public func apply(_ events: [WorkspaceTUIEvent]) {
-        var replies: [(UUID, Data)] = []
-        var presentationChanged = false
-        lock.lock()
-        guard connection == .connected else {
-            lock.unlock()
-            return
-        }
-        for event in events {
-            switch event {
-            case .bytes(let runtime, let data):
-                guard terminal?.state.runtime == runtime, let record = terminal else { continue }
-                guard data.isEmpty == false else { continue }
-                record.emulator.feed(data)
-                presentationChanged = true
-                let responses = record.emulator.takeResponses()
-                if leasedRuntime == runtime, record.state.lease == .owned {
-                    replies.append(contentsOf: responses.map { (runtime, $0) })
-                }
-            case .overflow(let runtime):
-                guard terminal?.state.runtime == runtime else { continue }
-                if terminal?.state.overflowed != true {
-                    terminal?.state.overflowed = true
-                    presentationChanged = true
-                }
-            case .exited(let runtime, let status):
-                guard terminal?.state.runtime == runtime else { continue }
-                if terminal?.state.running != false || terminal?.state.exitStatus != status
-                    || terminal?.state.lease != .released {
-                    presentationChanged = true
-                }
-                terminal?.state.running = false
-                terminal?.state.exitStatus = status
-                terminal?.state.lease = .released
-                if leasedRuntime == runtime { leasedRuntime = nil }
-                // The final output stays on screen; the launcher offers a
-                // replacement runtime and number keys select it directly.
-                if mode != .launcher {
-                    mode = .launcher
-                    presentationChanged = true
-                }
-            case .inputOwner(let runtime, let owned):
-                guard terminal?.state.runtime == runtime else { continue }
-                if owned {
-                    // The host broadcasts only that an owner exists, not which
-                    // client owns it. Only our successful acquire RPC grants
-                    // local write authority.
-                    if leasedRuntime != runtime {
-                        presentationChanged = presentationChanged || terminal?.state.lease != .readOnly
-                        terminal?.state.lease = .readOnly
-                    }
-                } else {
-                    // Notifications do not carry a lease generation. A queued
-                    // release from an earlier epoch may arrive after a later
-                    // acquire succeeded, so the successful acquire is
-                    // authoritative while this client still claims ownership.
-                    guard leasedRuntime != runtime else { continue }
-                    presentationChanged = presentationChanged || terminal?.state.lease != .readOnly
-                    terminal?.state.lease = .readOnly
-                    if terminal?.state.running == true {
-                        retryAcquire = true
-                    }
-                }
-            }
-        }
-        if presentationChanged { markPresentationChangedLocked() }
-        lock.unlock()
-
-        if replies.isEmpty == false {
-            let pendingReplies = replies
-            terminalQueue.async { [weak self] in
-                guard let self, self.canIssueCommands() else { return }
-                for (runtime, bytes) in pendingReplies {
-                    self.send(bytes, to: runtime)
-                    if self.snapshot().connection == .disconnected { break }
-                }
-            }
-        }
+        drain(.hostEvents(events), route: {
+            if case .queueSend = $0 { .terminal } else { .inline }
+        })
     }
 
     public func hostDisconnected() {
-        markDisconnected()
+        drain(.hostDisconnected, route: { _ in .inline })
     }
 
     /// Records the content area of the terminal. It does not perform an RPC or
     /// resize during SwiftTUI's render pass.
     public func noteSize(rows: Int, columns: Int, now: Date) {
-        lock.lock()
-        guard terminal != nil, connection == .connected else {
-            lock.unlock()
-            return
-        }
-        terminal?.resize.record(rows: rows, columns: columns, now: now)
-        viewSize = (rows, columns)
-        lock.unlock()
+        drain(.sizeNoted(rows: rows, columns: columns, now: now), route: { _ in .inline })
     }
 
     /// Called by the app's single coalescing timer. Equal dimensions never
     /// produce another RPC; changed dimensions wait for the debounce window.
     public func processPendingWork(now: Date = Date()) {
-        var request: (UUID, Int, Int)?
-        var shouldAcquire = false
-        lock.lock()
-        guard connection == .connected else {
-            lock.unlock()
-            return
-        }
-        if var record = terminal, let size = record.resize.flush(now: now) {
-            record.emulator.resize(columns: size.columns, rows: size.rows)
-            request = (record.state.runtime, size.rows, size.columns)
-            terminal = record
-            markPresentationChangedLocked()
-        }
-        shouldAcquire = retryAcquire && terminal?.state.lease == .readOnly
-        retryAcquire = false
-        lock.unlock()
-
-        if let request {
-            terminalQueue.async { [weak self] in
-                guard let self, self.canIssueCommands() else { return }
-                switch self.client.resize(request.0, rows: request.1, columns: request.2) {
-                case .success:
-                    break
-                case .failure(.disconnected):
-                    self.markDisconnected()
-                case .failure(.unavailable):
-                    self.markRuntimeExited(request.0)
-                case .failure:
-                    break
-                }
+        drain(.tick(now: now), route: {
+            switch $0 {
+            case .resize, .acquire: .terminal
+            default: .inline
             }
-        }
-        if shouldAcquire {
-            terminalQueue.async { [weak self] in
-                guard let self, self.canIssueCommands() else { return }
-                self.acquire()
-            }
-        }
+        })
     }
 
     public func snapshot() -> WorkspaceTUISnapshot {
         lock.lock()
         defer { lock.unlock() }
         return WorkspaceTUISnapshot(
-            project: summary.project,
-            phase: summary.phase,
-            protected: summary.protected,
-            workspace: summary.workspace,
-            connection: connection,
-            terminal: terminal?.state,
-            mode: mode,
-            launcher: launcher,
-            presentationRevision: presentationRevision,
-            shouldExit: shouldExit
+            project: state.summary.project,
+            phase: state.summary.phase,
+            protected: state.summary.protected,
+            workspace: state.summary.workspace,
+            connection: state.lifecycle == .connected ? .connected : .disconnected,
+            terminal: state.terminal?.state,
+            mode: state.mode,
+            launcher: state.launcher,
+            presentationRevision: state.presentationRevision,
+            shouldExit: state.shouldExit
         )
     }
 
     public func terminalFrame() -> TerminalFrame? {
         lock.lock()
         defer { lock.unlock() }
-        return terminal?.emulator.frame()
+        return emulator?.emulator.frame()
     }
 
     public func terminalSize() -> (rows: Int, columns: Int)? {
         lock.lock()
         defer { lock.unlock() }
-        return terminal?.resize.effectiveSize
+        return state.terminal?.resize.effectiveSize
     }
 
     /// Runs during structured application cleanup. It never cancels a runtime
     /// or closes the workspace.
     public func detachSession() {
-        let lease: UUID?
-        let subscription: UUID?
-        lock.lock()
-        guard didDetach == false else {
-            lock.unlock()
-            return
+        let effects = reduceAndApply(.detachRequested)
+        var lease: UUID?
+        var subscription: UUID?
+        for effect in effects {
+            switch effect {
+            case .release(let runtime): lease = runtime
+            case .unsubscribe(let runtime): subscription = runtime
+            default: break
+            }
         }
-        didDetach = true
-        shouldExit = true
-        connection = .disconnected
-        lease = leasedRuntime
-        leasedRuntime = nil
-        retryAcquire = false
-        subscription = terminal?.state.subscribed == true ? terminal?.state.runtime : nil
-        terminal?.state.lease = .released
-        terminal?.state.subscribed = false
-        markPresentationChangedLocked()
-        lock.unlock()
-
         // Drain terminal RPCs before closing their dedicated host connection,
         // then drain lifecycle work before unsubscribing and closing control.
         terminalQueue.sync {
@@ -418,229 +165,216 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
         }
     }
 
-    private func perform(_ command: TUICommand, now: Date) {
-        guard canIssueCommands() else { return }
-        switch command {
-        case .send, .detach, .help, .dismissOverlay:
-            break // Routed on the ordered input worker by `handle`, or already applied.
-        case .launch(let choice):
-            launch(choice)
+    // MARK: - Runtime effect boundary
+
+    /// Where one effect executes. Queue choice is the runtime's discipline;
+    /// the reducer never dispatches.
+    private enum QueueHop {
+        case inline
+        case terminal
+        case command
+    }
+
+    /// Reduces one event under the lock and executes its effects. Inline
+    /// effects run in the current context; routed effects hop to their queue,
+    /// where the worker re-checks `commandsAllowed()` before executing. This
+    /// preserves the previous per-method dispatch: key sends and emulator
+    /// replies ride the terminal queue, launches ride the command queue, and
+    /// synchronous queries (connect, ensure) run on the caller.
+    private func drain(_ event: WorkspaceTUIReducerEvent, route: (TUIRuntimeEffect) -> QueueHop) {
+        var events = [event]
+        while let current = events.first {
+            events.removeFirst()
+            for effect in reduceAndApply(current) {
+                switch route(effect) {
+                case .inline:
+                    runInline(effect, followups: &events)
+                case .terminal:
+                    terminalQueue.async { [weak self] in
+                        guard let self, self.commandsAllowed() else { return }
+                        self.runRouted(effect)
+                    }
+                case .command:
+                    commandQueue.async { [weak self] in
+                        guard let self, self.commandsAllowed() else { return }
+                        self.runRouted(effect)
+                    }
+                }
+            }
         }
     }
 
-    private func launch(_ choice: RuntimeLaunchChoice) {
-        lock.lock()
-        guard connection == .connected, shouldExit == false, didDetach == false,
-              terminal?.state.running != true else {
-            lock.unlock()
-            return
+    /// Executes one queue-routed effect on its worker. Routed sends and
+    /// launches re-gate through their Due event first, so a detach or lease
+    /// move that landed while the work was queued still wins.
+    private func runRouted(_ effect: TUIRuntimeEffect) {
+        switch effect {
+        case .queueSend(let runtime, let bytes):
+            drain(.sendDue(runtime: runtime, bytes: bytes), route: { _ in .inline })
+        case .queueLaunch(let choice):
+            drain(.launchDue(choice: choice), route: { _ in .inline })
+        default:
+            var followups: [WorkspaceTUIReducerEvent] = []
+            runInline(effect, followups: &followups)
+            for followup in followups {
+                drain(followup, route: { _ in .inline })
+            }
         }
-        let oldRuntime = terminal?.state.runtime
-        let oldSubscribed = terminal?.state.subscribed == true
-        let size = viewSize ?? (initialRows, initialColumns)
-        lock.unlock()
+    }
 
-        guard case .success(let runtime) = client.launchRuntime(
-            executable: choice.executable,
-            arguments: choice.arguments,
-            hook: choice.hook,
-            rows: size.rows,
-            columns: size.columns
-        ) else {
+    /// Reduces one event and stores the next state. Called with no lock held.
+    private func reduceAndApply(_ event: WorkspaceTUIReducerEvent) -> [TUIRuntimeEffect] {
+        lock.lock()
+        let transition = WorkspaceTUIReducer.reduce(state, event)
+        state = transition.state
+        lock.unlock()
+        return transition.effects
+    }
+
+    /// Executes one effect in the current context. RPCs run outside the lock;
+    /// emulator operations take it. Completions are appended as follow-up
+    /// events for the drain loop to reduce.
+    private func runInline(_ effect: TUIRuntimeEffect, followups: inout [WorkspaceTUIReducerEvent]) {
+        switch effect {
+        case .queryConnect:
+            let described: WorkspaceTUISummary
+            switch client.describe() {
+            case .success(let value): described = value
+            case .failure:
+                followups.append(.connectQueryFailed)
+                return
+            }
+            switch client.listRuntimes() {
+            case .success(let runtimes):
+                followups.append(.connectQuery(described: described, runtimes: runtimes))
+            case .failure:
+                followups.append(.connectQueryFailed)
+            }
+
+        case .ensureShell(let choice, let rows, let columns):
+            switch client.ensureTerminalRuntime(
+                executable: choice.executable,
+                arguments: choice.arguments,
+                hook: choice.hook,
+                rows: rows,
+                columns: columns
+            ) {
+            case .success(let runtime):
+                followups.append(.ensureSucceeded(runtime: runtime, shell: choice))
+            case .failure(let error):
+                followups.append(.ensureFailed(disconnected: error == .disconnected))
+            }
+
+        case .queueSend(let runtime, let bytes):
+            // Inline fallback; queue-routed callers reduce `.sendDue` on the
+            // terminal worker instead.
+            followups.append(.sendDue(runtime: runtime, bytes: bytes))
+
+        case .queueLaunch(let choice):
+            // Inline fallback; queue-routed callers reduce `.launchDue` on the
+            // command worker instead.
+            followups.append(.launchDue(choice: choice))
+
+        case .launchQuery(let choice, let rows, let columns):
+            switch client.launchRuntime(
+                executable: choice.executable,
+                arguments: choice.arguments,
+                hook: choice.hook,
+                rows: rows,
+                columns: columns
+            ) {
+            case .success(let runtime):
+                followups.append(.launchQuerySucceeded(choice: choice, runtime: runtime, rows: rows, columns: columns))
+            case .failure:
+                followups.append(.launchQueryFailed)
+            }
+
+        case .subscribe(let runtime, let context):
+            switch client.subscribe(runtime) {
+            case .success:
+                followups.append(.subscribeCompleted(runtime: runtime, context: context, succeeded: true, disconnected: false))
+            case .failure(let error):
+                followups.append(
+                    .subscribeCompleted(
+                        runtime: runtime,
+                        context: context,
+                        succeeded: false,
+                        disconnected: error == .disconnected
+                    )
+                )
+            }
+
+        case .unsubscribe(let runtime):
+            _ = client.unsubscribe(runtime)
+        case .release(let runtime):
+            _ = client.releaseInput(runtime)
+        case .cancel(let runtime):
+            _ = client.cancelRuntime(runtime)
+        case .detach:
+            _ = client.detach()
+
+        case .acquire(let runtime):
+            // Narrow the race between the reducer's gate and the RPC: a
+            // detach that lands in between skips the call. A success that
+            // still arrives stale is released by `.acquireCompleted`.
             lock.lock()
-            if connection == .connected {
-                mode = .launcher
-                markPresentationChangedLocked()
+            let attempt = state.lifecycle == .connected && state.shouldExit == false
+                && state.terminal?.state.runtime == runtime
+                && state.terminal?.state.running == true
+            lock.unlock()
+            guard attempt else { return }
+            followups.append(.acquireCompleted(runtime: runtime, outcome: .from(client.acquireInput(runtime))))
+
+        case .write(let runtime, let bytes):
+            guard bytes.isEmpty == false else { return }
+            followups.append(.writeCompleted(runtime: runtime, outcome: .from(client.write(runtime, bytes: bytes))))
+
+        case .resize(let runtime, let rows, let columns):
+            followups.append(.resizeCompleted(runtime: runtime, outcome: .from(client.resize(runtime, rows: rows, columns: columns))))
+
+        case .createEmulator(let runtime, let rows, let columns):
+            lock.lock()
+            emulator = (runtime, emulators.make(columns: columns, rows: rows))
+            lock.unlock()
+
+        case .feedEmulator(let runtime, let data):
+            lock.lock()
+            var responses: [Data] = []
+            if emulator?.runtime == runtime {
+                emulator?.emulator.feed(data)
+                responses = emulator?.emulator.takeResponses() ?? []
             }
             lock.unlock()
-            return
-        }
+            if responses.isEmpty == false {
+                followups.append(.emulatorResponded(runtime: runtime, responses: responses))
+            }
 
-        lock.lock()
-        let detached = didDetach || shouldExit || connection != .connected
-        guard detached == false, terminal?.state.running != true else {
-            lock.unlock()
-            // A launch that races UI detach belongs to the workspace now. Keep
-            // it alive so the next TUI invocation can rediscover it.
-            if detached == false { _ = client.cancelRuntime(runtime.id) }
-            return
-        }
-        var record = makeRecord(runtime: runtime, rows: size.rows, columns: size.columns)
-        record.state.title = choice.title
-        terminal = record
-        mode = .terminal
-        markPresentationChangedLocked()
-        lock.unlock()
-
-        if oldSubscribed, let oldRuntime { _ = client.unsubscribe(oldRuntime) }
-
-        switch bind(runtime.id) {
-        case .success:
-            acquire()
-        case .failure:
+        case .resizeEmulator(let runtime, let rows, let columns):
             lock.lock()
-            if terminal?.state.runtime == runtime.id { terminal = nil }
-            if connection == .connected { mode = .launcher }
-            markPresentationChangedLocked()
+            if emulator?.runtime == runtime {
+                emulator?.emulator.resize(columns: columns, rows: rows)
+            }
             lock.unlock()
-            _ = client.cancelRuntime(runtime.id)
+
+        case .dropEmulator(let runtime):
+            lock.lock()
+            if emulator?.runtime == runtime {
+                emulator = nil
+            }
+            lock.unlock()
         }
     }
 
-    private func runtimeForInput() -> UUID? {
+    private func connectedNow() -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        guard connection == .connected, shouldExit == false, didDetach == false,
-              let record = terminal, record.state.running
-        else { return nil }
-        return record.state.runtime
+        return state.lifecycle == .connected
     }
 
-    private func send(_ bytes: Data, to runtime: UUID) {
-        guard bytes.isEmpty == false else { return }
-        lock.lock()
-        let connected = connection == .connected && shouldExit == false && didDetach == false
-        let ownsInput = leasedRuntime == runtime
-        let record = terminal
-        lock.unlock()
-        guard connected, ownsInput, let record, record.state.running,
-              record.state.runtime == runtime else { return }
-        switch client.write(runtime, bytes: bytes) {
-        case .success:
-            break
-        case .failure(.busy):
-            lock.lock()
-            var presentationChanged = false
-            if terminal?.state.runtime == runtime {
-                presentationChanged = terminal?.state.lease != .readOnly
-                terminal?.state.lease = .readOnly
-            }
-            if leasedRuntime == runtime { leasedRuntime = nil }
-            if presentationChanged { markPresentationChangedLocked() }
-            lock.unlock()
-        case .failure(.disconnected):
-            markDisconnected()
-        case .failure:
-            break
-        }
-    }
-
-    private func bind(_ runtime: UUID) -> Result<Void, WorkspaceTUIClientError> {
-        switch client.subscribe(runtime) {
-        case .success:
-            lock.lock()
-            if terminal?.state.runtime == runtime { terminal?.state.subscribed = true }
-            lock.unlock()
-            return .success(())
-        case .failure(let error):
-            if error == .disconnected {
-                markDisconnected()
-            }
-            lock.lock()
-            if terminal?.state.runtime == runtime { terminal?.state.subscribed = false }
-            lock.unlock()
-            return .failure(error)
-        }
-    }
-
-    private func acquire() {
-        lock.lock()
-        guard connection == .connected, shouldExit == false, didDetach == false,
-              let record = terminal, record.state.running else {
-            lock.unlock()
-            return
-        }
-        let runtime = record.state.runtime
-        lock.unlock()
-
-        switch client.acquireInput(runtime) {
-        case .success:
-            lock.lock()
-            let stillAvailable = connection == .connected
-                && terminal?.state.runtime == runtime && terminal?.state.running == true
-            if stillAvailable {
-                if terminal?.state.lease != .owned { markPresentationChangedLocked() }
-                terminal?.state.lease = .owned
-                leasedRuntime = runtime
-            }
-            lock.unlock()
-            if stillAvailable == false { _ = client.releaseInput(runtime) }
-        case .failure(.busy):
-            lock.lock()
-            if terminal?.state.runtime == runtime {
-                if terminal?.state.lease != .readOnly { markPresentationChangedLocked() }
-                terminal?.state.lease = .readOnly
-            }
-            lock.unlock()
-        case .failure(.disconnected):
-            markDisconnected()
-        case .failure:
-            lock.lock()
-            if terminal?.state.runtime == runtime {
-                if terminal?.state.lease != .readOnly { markPresentationChangedLocked() }
-                terminal?.state.lease = .readOnly
-            }
-            lock.unlock()
-        }
-    }
-
-    private func makeRecord(runtime: ListedRuntime, rows: Int, columns: Int) -> WorkspaceTerminal {
-        var resize = ResizeCoalescer()
-        resize.recordLaunch(rows: rows, columns: columns)
-        return WorkspaceTerminal(
-            state: WorkspaceTerminalState(
-                runtime: runtime.id,
-                title: runtime.hook ?? "runtime",
-                running: runtime.running
-            ),
-            emulator: emulators.make(columns: columns, rows: rows),
-            resize: resize
-        )
-    }
-
-    private func markDisconnected() {
-        lock.lock()
-        let changed = connection != .disconnected
-            || terminal?.state.lease != .readOnly || terminal?.state.subscribed == true
-        connection = .disconnected
-        leasedRuntime = nil
-        retryAcquire = false
-        terminal?.state.lease = .readOnly
-        terminal?.state.subscribed = false
-        if changed { markPresentationChangedLocked() }
-        lock.unlock()
-    }
-
-    private func markRuntimeExited(_ runtime: UUID) {
-        lock.lock()
-        guard terminal?.state.runtime == runtime else {
-            lock.unlock()
-            return
-        }
-        var changed = terminal?.state.running != false || terminal?.state.exitStatus != nil
-            || terminal?.state.lease != .released
-        terminal?.state.running = false
-        terminal?.state.exitStatus = nil
-        terminal?.state.lease = .released
-        if leasedRuntime == runtime { leasedRuntime = nil }
-        if mode != .launcher {
-            mode = .launcher
-            changed = true
-        }
-        if changed { markPresentationChangedLocked() }
-        lock.unlock()
-    }
-
-    /// Call with `lock` held. SwiftTUI polls this revision to coalesce model
-    /// changes instead of invalidating its view tree on every idle timer tick.
-    private func markPresentationChangedLocked() {
-        presentationRevision &+= 1
-    }
-
-    private func canIssueCommands() -> Bool {
+    private func commandsAllowed() -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        return connection == .connected && shouldExit == false && didDetach == false
+        return state.lifecycle == .connected && state.shouldExit == false
     }
 
     private static func bound(_ value: Int) -> Int {
