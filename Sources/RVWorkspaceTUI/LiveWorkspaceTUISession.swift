@@ -61,6 +61,11 @@ public final class LiveWorkspaceTUISession: WorkspaceTUISession, @unchecked Send
         }
     }
 
+    /// A failed subscribe reports `unavailable` without acquiring. Acquiring a
+    /// lease for a runtime this session is not subscribed to would leave an
+    /// orphaned lease the model cannot observe events for, so unlike the
+    /// pre-seam model (which attempted an acquire after any non-disconnect
+    /// subscribe failure) this pairing stops before the acquire.
     public func attach(_ id: UUID) -> SessionAttachOutcome {
         switch terminalClient.subscribeTerminal(id) {
         case .success:
@@ -77,6 +82,8 @@ public final class LiveWorkspaceTUISession: WorkspaceTUISession, @unchecked Send
         acquire(id)
     }
 
+    /// An unknown hook string is rejected. Silently dropping it to `nil`
+    /// would ensure an unhooked runtime the launcher cannot title or match.
     public func ensureTerminal(
         executable: String,
         arguments: [String],
@@ -84,7 +91,10 @@ public final class LiveWorkspaceTUISession: WorkspaceTUISession, @unchecked Send
         rows: Int,
         columns: Int
     ) -> Result<ListedRuntime, WorkspaceTUIError> {
-        controlClient.ensureTerminalRuntime(
+        if let hook, HookHost(rawValue: hook) == nil {
+            return .failure(.rejected)
+        }
+        return controlClient.ensureTerminalRuntime(
             executable: executable,
             arguments: arguments,
             hookHost: hook.flatMap(HookHost.init(rawValue:)),
@@ -93,6 +103,8 @@ public final class LiveWorkspaceTUISession: WorkspaceTUISession, @unchecked Send
         ).map(Self.listed).mapError(Self.failure)
     }
 
+    /// An unknown hook string is rejected. Silently dropping it to `nil`
+    /// would launch an unhooked runtime the launcher cannot title or match.
     public func launch(
         executable: String,
         arguments: [String],
@@ -100,7 +112,10 @@ public final class LiveWorkspaceTUISession: WorkspaceTUISession, @unchecked Send
         rows: Int,
         columns: Int
     ) -> Result<ListedRuntime, WorkspaceTUIError> {
-        controlClient.launchRuntime(
+        if let hook, HookHost(rawValue: hook) == nil {
+            return .failure(.rejected)
+        }
+        return controlClient.launchRuntime(
             executable: executable,
             arguments: arguments,
             hookHost: hook.flatMap(HookHost.init(rawValue:)),

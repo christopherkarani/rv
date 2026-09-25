@@ -98,6 +98,8 @@ public protocol WorkspaceTUISession: AnyObject, Sendable {
     /// rejects a second subscribe, so lease retries must not re-attach.
     /// Never reports `unavailable`; a failed acquire degrades to `readOnly`.
     func reacquire(_ id: UUID) -> SessionAttachOutcome
+    /// An unknown `hook` string is `rejected` without ensuring anything;
+    /// it never falls back to an unhooked runtime.
     func ensureTerminal(
         executable: String,
         arguments: [String],
@@ -105,6 +107,8 @@ public protocol WorkspaceTUISession: AnyObject, Sendable {
         rows: Int,
         columns: Int
     ) -> Result<ListedRuntime, WorkspaceTUIError>
+    /// An unknown `hook` string is `rejected` without launching anything;
+    /// it never falls back to an unhooked runtime.
     func launch(
         executable: String,
         arguments: [String],

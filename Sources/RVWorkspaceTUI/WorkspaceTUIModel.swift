@@ -50,7 +50,11 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
     }
 
     /// Describes and inventories through the session. Repeated calls are
-    /// harmless and never create another runtime.
+    /// harmless and never create another runtime. A disconnected attach
+    /// fails: the pre-seam model returned success with an internally
+    /// disconnected state when its lease acquire hit a disconnect after a
+    /// successful subscribe, which let callers start event delivery against
+    /// a dead connection.
     public func connect() -> Result<Void, WorkspaceTUIError> {
         lock.lock()
         if didConnect {

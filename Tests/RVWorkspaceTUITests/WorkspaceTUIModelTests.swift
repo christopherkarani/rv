@@ -12,6 +12,7 @@ final class FakeWorkspaceSession: WorkspaceTUISession, @unchecked Sendable {
     private var storedBusyWrite = false
     private var storedFailDescribe = false
     private var storedFailPoll = false
+    private var storedDisconnectOnAttach = false
     private var storedWrites: [(UUID, Data)] = []
     private var storedCancels: [UUID] = []
     private var storedSubscribes: [UUID] = []
@@ -67,6 +68,10 @@ final class FakeWorkspaceSession: WorkspaceTUISession, @unchecked Sendable {
         get { withLock { storedFailPoll } }
         set { withLock { storedFailPoll = newValue } }
     }
+    var disconnectOnAttach: Bool {
+        get { withLock { storedDisconnectOnAttach } }
+        set { withLock { storedDisconnectOnAttach = newValue } }
+    }
     var writes: [(UUID, Data)] { withLock { storedWrites } }
     var cancels: [UUID] { withLock { storedCancels } }
     var subscribes: [UUID] { withLock { storedSubscribes } }
@@ -100,10 +105,11 @@ final class FakeWorkspaceSession: WorkspaceTUISession, @unchecked Sendable {
     }
 
     func attach(_ id: UUID) -> SessionAttachOutcome {
-        let (fails, busy) = withLock {
+        let (fails, busy, disconnected) = withLock {
             storedSubscribes.append(id)
-            return (storedFailSubscribe, storedBusyInput)
+            return (storedFailSubscribe, storedBusyInput, storedDisconnectOnAttach)
         }
+        if disconnected { return .disconnected }
         if fails { return .unavailable }
         if busy { return .readOnly }
         withLock { storedAcquires.append(id) }
@@ -543,6 +549,22 @@ private func model(_ session: FakeWorkspaceSession) -> WorkspaceTUIModel {
     #expect(session.acquires.isEmpty)
 }
 
+@Test func unavailableConnectAttachAcquiresNothing() throws {
+    let session = FakeWorkspaceSession()
+    let runtime = UUID()
+    session.runtimes = [ListedRuntime(id: runtime, hook: nil, running: true, terminal: true)]
+    session.failSubscribe = true
+    let shell = model(session)
+    try shell.connect().get()
+
+    let terminal = try #require(shell.snapshot().terminal)
+    #expect(terminal.runtime == runtime)
+    #expect(terminal.subscribed == false)
+    #expect(terminal.lease == .readOnly)
+    #expect(session.subscribes == [runtime])
+    #expect(session.acquires.isEmpty)
+}
+
 @Test func renderRevisionGateDoesNotInvalidateThroughAFullIdleStackDepth() {
     var gate = WorkspaceTUIRefreshGate(revision: 0)
     var invalidations = 0
@@ -736,6 +758,19 @@ private func model(_ session: FakeWorkspaceSession) -> WorkspaceTUIModel {
     #expect(shell.snapshot().connection == .disconnected)
     shell.handle(.character("A"))
     #expect(session.writes.isEmpty)
+}
+
+@Test func disconnectedAttachFailsConnect() {
+    let session = FakeWorkspaceSession()
+    session.runtimes = [ListedRuntime(id: UUID(), hook: nil, running: true, terminal: true)]
+    session.disconnectOnAttach = true
+    let shell = model(session)
+    if case .failure(.disconnected) = shell.connect() {
+        #expect(Bool(true))
+    } else {
+        Issue.record("connect should report a disconnected attach instead of succeeding detached")
+    }
+    #expect(shell.snapshot().connection == .disconnected)
 }
 
 @Test func resizeCoalescerSendsOnlyAStableChange() {
