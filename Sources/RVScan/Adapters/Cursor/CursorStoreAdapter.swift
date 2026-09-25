@@ -14,7 +14,12 @@ public struct CursorStoreAdapter: SessionStoreAdapter {
         "bash",
     ]
 
-    private static let profile = ScanJSONLProfile(sessionKeys: ["conversation_id", "session_id", "sessionId"], timestampKeys: ["timestamp", "ts"], allowEpochTimestamp: false, commands: Self.commands(in:))
+    private static let profile = ScanJSONLProfile(
+        sessionKeys: ["conversation_id", "session_id", "sessionId"],
+        timestampKeys: ["timestamp", "ts"],
+        allowEpochTimestamp: false,
+        commands: Self.commands(in:)
+    )
 
     public init() {}
 

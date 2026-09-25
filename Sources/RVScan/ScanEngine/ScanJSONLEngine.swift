@@ -10,7 +10,8 @@ import RVDomain
 /// the report's documented fallback (keep per-host adapters, share the
 /// JSONL/timestamp/cwd cores). Untyped JSON survives only inside this engine
 /// and the per-host matchers it calls.
-/// Correlated per-host knobs for extractFailClosed. One const per adapter; Codex keys must never mix with the Cursor matcher or epoch flag.
+/// Correlated per-host knobs for extractFailClosed. One const per
+/// adapter; Codex keys must never mix with the Cursor matcher or epoch flag.
 struct ScanJSONLProfile: Sendable {
     var sessionKeys: [String]
     var recurseSessionKeys: [String] = []

@@ -14,7 +14,13 @@ public struct CodexStoreAdapter: SessionStoreAdapter {
         "local_shell",
     ]
 
-    private static let profile = ScanJSONLProfile(sessionKeys: ["session_id", "sessionId"], recurseSessionKeys: ["payload"], timestampKeys: ["timestamp", "ts"], allowEpochTimestamp: true, commands: Self.commands(in:))
+    private static let profile = ScanJSONLProfile(
+        sessionKeys: ["session_id", "sessionId"],
+        recurseSessionKeys: ["payload"],
+        timestampKeys: ["timestamp", "ts"],
+        allowEpochTimestamp: true,
+        commands: Self.commands(in:)
+    )
 
     public init() {}
 
