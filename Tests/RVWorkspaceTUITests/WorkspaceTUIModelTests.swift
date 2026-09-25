@@ -304,7 +304,7 @@ private func model(_ client: FakeWorkspaceClient) -> WorkspaceTUIModel {
     )
 }
 
-@Test func connectBuildsPanesForExistingRuntimesWithoutLaunching() throws {
+@Test func connectAttachesTheFirstExistingRuntimeWithoutLaunching() throws {
     let client = FakeWorkspaceClient()
     let first = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
     let second = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
@@ -314,22 +314,42 @@ private func model(_ client: FakeWorkspaceClient) -> WorkspaceTUIModel {
     ]
     let shell = model(client)
     try shell.connect().get()
-    let snapshot = shell.snapshot()
-    #expect(snapshot.tree.paneIDs.count == 2)
-    #expect(client.subscribes == [second, first])
-    #expect(snapshot.panes.values.contains { $0.runtime == second })
+    #expect(shell.snapshot().terminal?.runtime == second)
+    #expect(client.subscribes == [second])
     #expect(client.runtimes.count == 2)
+    #expect(client.launchAttempts == 0)
 }
 
-@Test func failedLaunchDoesNotMutateTheTree() throws {
+@Test func eventsForUnattachedRuntimesAreIgnored() throws {
+    let client = FakeWorkspaceClient()
+    let attached = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+    let other = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
+    client.runtimes = [
+        ListedRuntime(id: attached, hook: nil, running: true, terminal: true),
+        ListedRuntime(id: other, hook: nil, running: true, terminal: true),
+    ]
+    let shell = model(client)
+    try shell.connect().get()
+    shell.apply([
+        .bytes(runtime: other, data: Data("elsewhere".utf8)),
+        .exited(runtime: other, status: 3),
+        .inputOwner(runtime: other, owned: false),
+    ])
+    #expect(shell.snapshot().terminal?.runtime == attached)
+    #expect(shell.snapshot().terminal?.running == true)
+    #expect(shell.snapshot().terminal?.lease == .owned)
+    #expect(shell.snapshot().mode == .terminal)
+}
+
+@Test func failedLaunchDoesNotCreateATerminal() throws {
     let client = FakeWorkspaceClient()
     let shell = model(client)
     try shell.connect().get()
     client.failLaunch = true
-    shell.handle(.control("g"))
-    shell.handle(.character("v"))
-    #expect(waitForModel { client.launchAttempts == 1 })
-    #expect(shell.snapshot().tree == .empty)
+    shell.handle(.character("1"))
+    #expect(waitForModel { shell.snapshot().mode == .launcher })
+    #expect(client.launchAttempts == 1)
+    #expect(shell.snapshot().terminal == nil)
 }
 
 @Test func blockingHostWritesDoNotBlockKeyHandling() throws {
@@ -356,13 +376,12 @@ private func model(_ client: FakeWorkspaceClient) -> WorkspaceTUIModel {
     client.runtimes = [ListedRuntime(id: runtime, hook: nil, running: true, terminal: true)]
     let shell = model(client)
     try shell.connect().get()
-    let pane = try #require(shell.snapshot().focused)
 
     shell.apply([
         .inputOwner(runtime: runtime, owned: false),
         .inputOwner(runtime: runtime, owned: true),
     ])
-    #expect(shell.snapshot().panes[pane]?.lease == .owned)
+    #expect(shell.snapshot().terminal?.lease == .owned)
     shell.handle(.character("Q"))
     #expect(waitForModel { client.writes.count == 1 })
 }
@@ -372,9 +391,8 @@ private func model(_ client: FakeWorkspaceClient) -> WorkspaceTUIModel {
     client.runtimes = [ListedRuntime(id: UUID(), hook: nil, running: true, terminal: true)]
     let shell = model(client)
     try shell.connect().get()
-    let pane = try #require(shell.snapshot().focused)
     let now = Date(timeIntervalSince1970: 10_000)
-    shell.noteSize(of: pane, rows: 30, columns: 90, now: now)
+    shell.noteSize(rows: 30, columns: 90, now: now)
     client.blockNextResize()
 
     let start = Date()
@@ -384,102 +402,30 @@ private func model(_ client: FakeWorkspaceClient) -> WorkspaceTUIModel {
     client.resizeGate.signal()
 }
 
-@Test func blockingRuntimeCancellationDoesNotBlockTheKeyHandler() throws {
+@Test func blockedReplacementLaunchDoesNotBlockKeyHandling() throws {
     let client = FakeWorkspaceClient()
-    client.runtimes = [ListedRuntime(id: UUID(), hook: nil, running: true, terminal: true)]
+    let runtime = UUID()
+    client.runtimes = [ListedRuntime(id: runtime, hook: nil, running: true, terminal: true)]
     let shell = model(client)
     try shell.connect().get()
-    client.blockNextCancel()
-
-    shell.handle(.control("g"))
-    let start = Date()
-    shell.handle(.character("x"))
-    #expect(Date().timeIntervalSince(start) < 0.1)
-    #expect(client.cancelStarted.wait(timeout: .now() + 2) == .success)
-    shell.handle(.character("A"))
-    #expect(waitForModel { client.writes.count == 1 })
-    client.cancelGate.signal()
-    #expect(waitForModel { shell.snapshot().tree == .empty })
-}
-
-@Test func slowPaneCloseDoesNotOverwriteANewerFocusChange() throws {
-    let client = FakeWorkspaceClient()
-    let firstRuntime = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
-    client.runtimes = [ListedRuntime(id: firstRuntime, hook: nil, running: true, terminal: true)]
-    let shell = model(client)
-    try shell.connect().get()
-    let firstPane = try #require(shell.snapshot().focused)
-
-    shell.handle(.control("g"))
-    shell.handle(.character("s"))
-    #expect(waitForModel { shell.snapshot().panes.count == 2 })
-    shell.handle(.control("g"))
-    shell.handle(.character("v"))
-    #expect(waitForModel { shell.snapshot().panes.count == 3 })
-    let closingPane = try #require(shell.snapshot().focused)
-    client.blockNextCancel()
-
-    shell.handle(.control("g"))
-    shell.handle(.character("x"))
-    #expect(client.cancelStarted.wait(timeout: .now() + 2) == .success)
-    shell.handle(.control("g"))
-    shell.handle(.character("k"))
-    #expect(shell.snapshot().focused == firstPane)
-
-    client.cancelGate.signal()
-    #expect(waitForModel { shell.snapshot().panes[closingPane] == nil })
-    #expect(shell.snapshot().focused == firstPane)
-    #expect(waitForModel { shell.snapshot().panes[firstPane]?.lease == .owned })
-}
-
-@Test func blockedRuntimeLaunchDoesNotDelayInputToTheExistingPane() throws {
-    let client = FakeWorkspaceClient()
-    client.runtimes = [ListedRuntime(id: UUID(), hook: nil, running: true, terminal: true)]
-    let shell = model(client)
-    try shell.connect().get()
+    shell.apply([.exited(runtime: runtime, status: 0)])
+    #expect(shell.snapshot().mode == .launcher)
     client.blockNextLaunch()
 
-    shell.handle(.control("g"))
-    shell.handle(.character("v"))
-    #expect(client.launchStarted.wait(timeout: .now() + 2) == .success)
     let start = Date()
-    shell.handle(.character("A"))
-    #expect(Date().timeIntervalSince(start) < 0.1)
-    #expect(waitForModel { client.writes.count == 1 })
-    client.launchGate.signal()
-    #expect(waitForModel { shell.snapshot().panes.count == 2 })
-}
-
-@Test func slowSplitLaunchPreservesFocusMovedWhileLaunching() throws {
-    let client = FakeWorkspaceClient()
-    let shell = model(client)
-    try shell.connect().get()
-    shell.handle(.control("g"))
-    shell.handle(.character("n"))
     shell.handle(.character("1"))
-    #expect(waitForModel { shell.snapshot().panes.count == 1 })
-
-    shell.handle(.control("g"))
-    shell.handle(.character("v"))
-    #expect(waitForModel { shell.snapshot().panes.count == 2 })
-    let secondPane = try #require(shell.snapshot().focused)
-    shell.handle(.control("g"))
-    shell.handle(.character("h"))
-    let firstPane = try #require(shell.snapshot().focused)
-    #expect(firstPane != secondPane)
-
-    client.blockNextLaunch()
-    shell.handle(.control("g"))
-    shell.handle(.character("v"))
+    #expect(Date().timeIntervalSince(start) < 0.1)
     #expect(client.launchStarted.wait(timeout: .now() + 2) == .success)
-
-    shell.handle(.control("g"))
-    shell.handle(.character("l"))
-    #expect(shell.snapshot().focused == secondPane)
+    // While the replacement is blocked the exited terminal stays put and
+    // typed input has nowhere to go.
+    shell.handle(.character("A"))
+    #expect(client.writes.isEmpty)
 
     client.launchGate.signal()
-    #expect(waitForModel { shell.snapshot().panes.count == 3 })
-    #expect(shell.snapshot().focused == secondPane)
+    #expect(waitForModel { shell.snapshot().terminal?.running == true })
+    #expect(shell.snapshot().terminal?.runtime != runtime)
+    #expect(client.unsubscribes == [runtime])
+    #expect(client.cancels.isEmpty)
 }
 
 @Test func emulatorRepliesDoNotBlockTheTerminalEventPump() throws {
@@ -508,8 +454,7 @@ private func model(_ client: FakeWorkspaceClient) -> WorkspaceTUIModel {
     let client = FakeWorkspaceClient()
     let shell = model(client)
     try shell.connect().get()
-    #expect(shell.snapshot().tree == .empty)
-    #expect(shell.snapshot().focused == nil)
+    #expect(shell.snapshot().terminal == nil)
     #expect(client.runtimes.isEmpty)
     #expect(client.subscribes.isEmpty)
 }
@@ -522,9 +467,8 @@ private func model(_ client: FakeWorkspaceClient) -> WorkspaceTUIModel {
     shell.launchDefaultRuntimeIfEmpty()
 
     #expect(client.launchAttempts == 1)
-    #expect(shell.snapshot().panes.count == 1)
-    #expect(shell.snapshot().panes.values.first?.title == "shell")
-    #expect(shell.snapshot().panes.values.first?.lease == .owned)
+    #expect(shell.snapshot().terminal?.title == "shell")
+    #expect(shell.snapshot().terminal?.lease == .owned)
     shell.launchDefaultRuntimeIfEmpty()
     Thread.sleep(forTimeInterval: 0.05)
     #expect(client.launchAttempts == 1)
@@ -539,9 +483,8 @@ private func model(_ client: FakeWorkspaceClient) -> WorkspaceTUIModel {
 
     shell.launchDefaultRuntimeIfEmpty()
 
-    #expect(shell.snapshot().panes.count == 1)
+    #expect(shell.snapshot().terminal?.runtime == runtime)
     #expect(client.launchAttempts == 0)
-    #expect(shell.snapshot().panes.values.first?.runtime == runtime)
 }
 
 @Test func failedDefaultShellLaunchFallsBackToTheRuntimeLauncher() throws {
@@ -553,7 +496,7 @@ private func model(_ client: FakeWorkspaceClient) -> WorkspaceTUIModel {
     shell.launchDefaultRuntimeIfEmpty()
 
     #expect(waitForModel { shell.snapshot().mode == .launcher })
-    #expect(shell.snapshot().tree == .empty)
+    #expect(shell.snapshot().terminal == nil)
     #expect(client.launchAttempts == 1)
 }
 
@@ -567,8 +510,8 @@ private func model(_ client: FakeWorkspaceClient) -> WorkspaceTUIModel {
     shell.launchDefaultRuntimeIfEmpty()
 
     #expect(client.launchAttempts == 0)
-    #expect(shell.snapshot().panes.values.first?.runtime == runtime.id)
-    #expect(shell.snapshot().panes.values.first?.title == "opencode")
+    #expect(shell.snapshot().terminal?.runtime == runtime.id)
+    #expect(shell.snapshot().terminal?.title == "opencode")
 }
 
 @Test func reusedUnhookedRuntimeUsesANeutralTitle() throws {
@@ -580,8 +523,8 @@ private func model(_ client: FakeWorkspaceClient) -> WorkspaceTUIModel {
 
     shell.launchDefaultRuntimeIfEmpty()
 
-    #expect(shell.snapshot().panes.values.first?.runtime == runtime.id)
-    #expect(shell.snapshot().panes.values.first?.title == "runtime")
+    #expect(shell.snapshot().terminal?.runtime == runtime.id)
+    #expect(shell.snapshot().terminal?.title == "runtime")
 }
 
 @Test func failedDefaultShellSubscriptionIsMarkedUnavailable() throws {
@@ -592,10 +535,10 @@ private func model(_ client: FakeWorkspaceClient) -> WorkspaceTUIModel {
 
     shell.launchDefaultRuntimeIfEmpty()
 
-    let pane = try #require(shell.snapshot().panes.values.first)
-    #expect(pane.title == "shell (unavailable)")
-    #expect(pane.subscribed == false)
-    #expect(pane.lease == .readOnly)
+    let terminal = try #require(shell.snapshot().terminal)
+    #expect(terminal.title == "shell (unavailable)")
+    #expect(terminal.subscribed == false)
+    #expect(terminal.lease == .readOnly)
     #expect(client.acquires.isEmpty)
 }
 
@@ -618,7 +561,6 @@ private func model(_ client: FakeWorkspaceClient) -> WorkspaceTUIModel {
     client.runtimes = [ListedRuntime(id: runtime, hook: nil, running: true, terminal: true)]
     let shell = model(client)
     try shell.connect().get()
-    let pane = try #require(shell.snapshot().focused)
 
     let resizeDate = Date().addingTimeInterval(1)
     shell.processPendingWork(now: resizeDate)
@@ -630,7 +572,7 @@ private func model(_ client: FakeWorkspaceClient) -> WorkspaceTUIModel {
 
     shell.apply([.bytes(runtime: runtime, data: Data("visible output".utf8))])
     #expect(shell.snapshot().presentationRevision > idleRevision)
-    #expect(shell.terminalFrame(for: pane)?.generation == 1)
+    #expect(shell.terminalFrame()?.generation == 1)
 }
 
 @Test func numberedChoiceLaunchesDirectlyFromAnEmptyWorkspace() throws {
@@ -640,9 +582,9 @@ private func model(_ client: FakeWorkspaceClient) -> WorkspaceTUIModel {
 
     shell.handle(.character("1"))
 
-    #expect(waitForModel { shell.snapshot().panes.count == 1 })
+    #expect(waitForModel { shell.snapshot().terminal != nil })
     #expect(client.launchAttempts == 1)
-    #expect(shell.snapshot().panes.values.first?.title == "shell")
+    #expect(shell.snapshot().terminal?.title == "shell")
     #expect(client.writes.isEmpty)
 }
 
@@ -653,161 +595,132 @@ private func model(_ client: FakeWorkspaceClient) -> WorkspaceTUIModel {
 
     shell.handle(.character("2"))
 
-    #expect(waitForModel { shell.snapshot().panes.count == 1 })
+    #expect(waitForModel { shell.snapshot().terminal != nil })
     #expect(client.launchAttempts == 1)
-    #expect(shell.snapshot().panes.values.first?.title == "opencode")
+    #expect(shell.snapshot().terminal?.title == "opencode")
 }
 
-@Test func nOpensTheRuntimeLauncherOnlyWhenWorkspaceHasNoPanes() throws {
+@Test func nIsTerminalInputAndNeverOpensALauncher() throws {
     let client = FakeWorkspaceClient()
     let shell = model(client)
     try shell.connect().get()
 
     shell.handle(.character("n"))
 
-    #expect(shell.snapshot().mode == .launcher)
-    #expect(client.launchAttempts == 0)
-    shell.handle(.escape)
     #expect(shell.snapshot().mode == .terminal)
+    #expect(client.launchAttempts == 0)
     shell.handle(.character("1"))
-    #expect(waitForModel { shell.snapshot().panes.count == 1 })
-    #expect(waitForModel { shell.snapshot().panes.values.first?.lease == .owned })
+    #expect(waitForModel { shell.snapshot().terminal?.lease == .owned })
 
     shell.handle(.character("n"))
     #expect(waitForModel { client.writes.contains { $0.1 == Data("n".utf8) } })
 }
 
-@Test func failedRuntimeCancellationKeepsItsPaneAndTree() throws {
+@Test func exitedShellOffersTheLauncherAndNumberKeysReplaceIt() throws {
     let client = FakeWorkspaceClient()
+    let runtime = UUID()
+    client.runtimes = [ListedRuntime(id: runtime, hook: nil, running: true, terminal: true)]
     let shell = model(client)
     try shell.connect().get()
-    shell.handle(.control("g"))
-    shell.handle(.character("n"))
+
+    shell.apply([.exited(runtime: runtime, status: 0)])
+
+    #expect(shell.snapshot().terminal?.running == false)
+    #expect(shell.snapshot().terminal?.exitStatus == 0)
+    #expect(shell.snapshot().terminal?.lease == .released)
+    #expect(shell.snapshot().mode == .launcher)
+    #expect(shell.snapshot().terminal?.runtime == runtime)
+
     shell.handle(.character("1"))
-    #expect(waitForModel { shell.snapshot().panes.count == 1 })
-    let pane = try #require(shell.snapshot().focused)
-    let before = shell.snapshot().tree
-    client.failCancel = true
-    shell.handle(.control("g"))
-    shell.handle(.character("x"))
-    #expect(waitForModel { client.cancels.count == 1 })
-    #expect(shell.snapshot().tree == before)
-    #expect(shell.snapshot().panes[pane]?.running == true)
-    #expect(client.cancels == [try #require(shell.snapshot().panes[pane]?.runtime)])
+
+    #expect(waitForModel { shell.snapshot().terminal?.running == true })
+    #expect(shell.snapshot().terminal?.runtime != runtime)
+    #expect(shell.snapshot().mode == .terminal)
+    #expect(client.unsubscribes == [runtime])
+    #expect(client.cancels.isEmpty)
+    #expect(waitForModel { shell.snapshot().terminal?.lease == .owned })
+}
+
+@Test func failedReplacementLaunchKeepsTheExitedTerminal() throws {
+    let client = FakeWorkspaceClient()
+    let runtime = UUID()
+    client.runtimes = [ListedRuntime(id: runtime, hook: nil, running: true, terminal: true)]
+    let shell = model(client)
+    try shell.connect().get()
+    shell.apply([.exited(runtime: runtime, status: 1)])
+    client.failLaunch = true
+
+    shell.handle(.character("1"))
+
+    #expect(waitForModel { client.launchAttempts == 1 })
+    #expect(shell.snapshot().terminal?.runtime == runtime)
+    #expect(shell.snapshot().terminal?.running == false)
+    #expect(shell.snapshot().mode == .launcher)
 }
 
 @Test func disconnectedWorkspaceRejectsFurtherTerminalInput() throws {
     let client = FakeWorkspaceClient()
     let shell = model(client)
     try shell.connect().get()
-    shell.handle(.control("g"))
-    shell.handle(.character("n"))
     shell.handle(.character("1"))
-    #expect(waitForModel { shell.snapshot().panes.count == 1 })
+    #expect(waitForModel { shell.snapshot().terminal?.lease == .owned })
     shell.handle(.character("A"))
     #expect(waitForModel { client.writes.count == 1 })
     shell.hostDisconnected()
     shell.handle(.character("B"))
     #expect(shell.snapshot().connection == .disconnected)
-    #expect(shell.snapshot().panes.values.first?.lease == .readOnly)
+    #expect(shell.snapshot().terminal?.lease == .readOnly)
     #expect(client.writes.count == 1)
 }
 
-@Test func splitCloseExitDetachAndBusyInput() throws {
+@Test func detachReleasesInputAndUnsubscribesWithoutClosingTheRuntime() throws {
     let client = FakeWorkspaceClient()
     let shell = model(client)
     try shell.connect().get()
-    shell.handle(.control("g"))
-    shell.handle(.character("n"))
     shell.handle(.character("1"))
-    #expect(waitForModel { shell.snapshot().panes.count == 1 })
-    let launched = try #require(shell.snapshot().focused)
-    let runtime = try #require(shell.snapshot().panes[launched]?.runtime)
-    #expect(shell.snapshot().panes[launched]?.lease == .owned)
+    #expect(waitForModel { shell.snapshot().terminal?.lease == .owned })
+    let runtime = try #require(shell.snapshot().terminal?.runtime)
     shell.handle(.character("A"))
     #expect(waitForModel { client.writes.count == 1 })
     #expect(client.writes.first?.0 == runtime)
     #expect(client.writes.first?.1 == Data("A".utf8))
-    shell.apply([.exited(runtime: runtime, status: 0)])
-    #expect(shell.snapshot().panes[launched]?.running == false)
-    #expect(shell.snapshot().tree != .empty)
-    shell.handle(.control("g"))
-    shell.handle(.character("x"))
-    #expect(waitForModel { shell.snapshot().tree == .empty })
-    #expect(shell.snapshot().tree == .empty)
-    #expect(client.cancels.isEmpty)
-    client.busyInput = true
-    shell.handle(.control("g"))
-    shell.handle(.character("v"))
-    #expect(waitForModel { shell.snapshot().panes.values.first?.lease == .readOnly })
-    let busy = try #require(shell.snapshot().focused)
-    #expect(shell.snapshot().panes[busy]?.lease == .readOnly)
-    shell.handle(.character("B"))
-    #expect(client.writes.count == 1)
     shell.handle(.control("g"))
     shell.handle(.character("d"))
     #expect(shell.snapshot().shouldExit)
     #expect(client.detached == false)
     shell.detachSession()
     #expect(client.detached)
+    #expect(client.releases == [runtime])
+    #expect(client.unsubscribes == [runtime])
+    #expect(client.cancels.isEmpty)
 }
 
-@Test func busyWriteRendersTheFocusedPaneAsReadOnly() throws {
+@Test func busyInputKeepsTheTerminalReadOnly() throws {
+    let client = FakeWorkspaceClient()
+    client.busyInput = true
+    client.runtimes = [ListedRuntime(id: UUID(), hook: nil, running: true, terminal: true)]
+    let shell = model(client)
+    try shell.connect().get()
+    #expect(shell.snapshot().terminal?.lease == .readOnly)
+    shell.handle(.character("B"))
+    Thread.sleep(forTimeInterval: 0.05)
+    #expect(client.writes.isEmpty)
+}
+
+@Test func busyWriteRendersTheTerminalAsReadOnly() throws {
     let client = FakeWorkspaceClient()
     let runtime = UUID()
     client.runtimes = [ListedRuntime(id: runtime, hook: nil, running: true, terminal: true)]
     let shell = model(client)
     try shell.connect().get()
-    let pane = try #require(shell.snapshot().focused)
-    #expect(shell.snapshot().panes[pane]?.lease == .owned)
+    #expect(shell.snapshot().terminal?.lease == .owned)
     let previousRevision = shell.snapshot().presentationRevision
 
     client.busyWrite = true
     shell.handle(.character("A"))
 
-    #expect(waitForModel { shell.snapshot().panes[pane]?.lease == .readOnly })
+    #expect(waitForModel { shell.snapshot().terminal?.lease == .readOnly })
     #expect(shell.snapshot().presentationRevision > previousRevision)
-}
-
-@Test func inputReachesOnlyTheFocusedRuntime() throws {
-    let client = FakeWorkspaceClient()
-    let shell = model(client)
-    try shell.connect().get()
-    shell.handle(.control("g"))
-    shell.handle(.character("n"))
-    shell.handle(.character("1"))
-    #expect(waitForModel { shell.snapshot().panes.values.first?.lease == .owned })
-    let left = try #require(shell.snapshot().focused)
-    let leftRuntime = try #require(shell.snapshot().panes[left]?.runtime)
-    shell.handle(.control("g"))
-    shell.handle(.character("v"))
-    #expect(waitForModel { shell.snapshot().panes.count == 2 })
-    let right = try #require(shell.snapshot().focused)
-    let rightRuntime = try #require(shell.snapshot().panes[right]?.runtime)
-    shell.noteCanvas(width: 80, height: 24)
-    shell.handle(.control("g"))
-    shell.handle(.character("h"))
-    #expect(waitForModel { shell.snapshot().focused == left })
-    #expect(left != right)
-    shell.handle(.character("A"))
-    #expect(waitForModel { client.writes.count == 1 })
-    shell.handle(.control("g"))
-    shell.handle(.character("l"))
-    #expect(waitForModel { shell.snapshot().focused == right })
-    shell.handle(.character("B"))
-    #expect(waitForModel { client.writes.count == 2 })
-    #expect(client.writes.map(\.0) == [leftRuntime, rightRuntime])
-    #expect(client.writes.map(\.1) == [Data("A".utf8), Data("B".utf8)])
-    let before = shell.snapshot().workspace
-    shell.handle(.control("g"))
-    shell.handle(.character("h"))
-    shell.handle(.control("g"))
-    shell.handle(.character("x"))
-    #expect(waitForModel { shell.snapshot().panes[left] == nil })
-    #expect(shell.snapshot().panes[left] == nil)
-    #expect(shell.snapshot().panes[right]?.running == true)
-    #expect(shell.snapshot().workspace == before)
-    #expect(client.detached == false)
 }
 
 @Test func describeFailureMarksTheWorkspaceDisconnected() {
@@ -822,6 +735,23 @@ private func model(_ client: FakeWorkspaceClient) -> WorkspaceTUIModel {
     #expect(shell.snapshot().connection == .disconnected)
     shell.handle(.character("A"))
     #expect(client.writes.isEmpty)
+}
+
+@Test func resizeCoalescerSendsOnlyAStableChange() {
+    var gate = ResizeCoalescer()
+    gate.recordLaunch(rows: 24, columns: 80)
+    let now = Date(timeIntervalSince1970: 1_000)
+    #expect(gate.propose(rows: 24, columns: 80, now: now) == nil)
+    #expect(gate.propose(rows: 40, columns: 100, now: now) == nil)
+    #expect(gate.propose(rows: 41, columns: 100, now: now.addingTimeInterval(0.01)) == nil)
+    let sent = gate.propose(rows: 41, columns: 100, now: now.addingTimeInterval(0.08))
+    #expect(sent?.rows == 41)
+    #expect(sent?.columns == 100)
+    #expect(gate.propose(rows: 41, columns: 100, now: now.addingTimeInterval(1)) == nil)
+    #expect(gate.propose(rows: 900, columns: 1, now: now)?.rows == nil)
+    let clamped = gate.propose(rows: 900, columns: 1, now: now.addingTimeInterval(1.05))
+    #expect(clamped?.rows == 512)
+    #expect(clamped?.columns == 1)
 }
 
 private func waitForModel(
@@ -861,3 +791,4 @@ private func waitForModel(
         #expect(text.contains("import SwiftTerm") == false)
     }
 }
+

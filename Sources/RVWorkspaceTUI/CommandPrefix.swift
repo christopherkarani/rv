@@ -29,16 +29,19 @@ public enum CommandMode: Equatable, Sendable {
 }
 
 public enum TUICommand: Equatable, Sendable {
-    case splitVertical
-    case splitHorizontal
-    case focus(FocusDirection)
-    case closePane
-    case newRuntime
     case detach
     case help
     case dismissOverlay
     case launch(RuntimeLaunchChoice)
     case send(Data)
+}
+
+/// Arrow-key direction. Panes are deferred; this only encodes terminal input.
+public enum FocusDirection: String, Sendable, Equatable {
+    case left
+    case right
+    case up
+    case down
 }
 
 /// One offered runtime. The host still performs the launch.
@@ -75,7 +78,6 @@ public enum CommandPrefix {
             return routePrefix(key)
         case .terminal:
             if directLauncherSelection, case .character(let character) = key {
-                if character.lowercased() == "n" { return (.launcher, .newRuntime) }
                 if let index = Int(String(character)), index > 0, index <= launcher.count {
                     return (.terminal, .launch(launcher[index - 1]))
                 }
@@ -91,14 +93,6 @@ public enum CommandPrefix {
             return (.terminal, nil)
         }
         switch character {
-        case "v": return (.terminal, .splitVertical)
-        case "s": return (.terminal, .splitHorizontal)
-        case "h": return (.terminal, .focus(.left))
-        case "j": return (.terminal, .focus(.down))
-        case "k": return (.terminal, .focus(.up))
-        case "l": return (.terminal, .focus(.right))
-        case "x": return (.terminal, .closePane)
-        case "n": return (.launcher, .newRuntime)
         case "d": return (.terminal, .detach)
         case "?": return (.help, .help)
         default: return (.terminal, nil)

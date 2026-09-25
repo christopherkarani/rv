@@ -104,8 +104,7 @@ public protocol TerminalEmulating: AnyObject {
     func takeResponses() -> [Data]
 }
 
-public struct TerminalPaneState: Equatable, Sendable {
-    public var pane: PaneID
+public struct WorkspaceTerminalState: Equatable, Sendable {
     public var runtime: UUID
     public var title: String
     public var running: Bool
@@ -115,7 +114,6 @@ public struct TerminalPaneState: Equatable, Sendable {
     public var overflowed: Bool
 
     public init(
-        pane: PaneID,
         runtime: UUID,
         title: String,
         running: Bool,
@@ -124,7 +122,6 @@ public struct TerminalPaneState: Equatable, Sendable {
         subscribed: Bool = false,
         overflowed: Bool = false
     ) {
-        self.pane = pane
         self.runtime = runtime
         self.title = title
         self.running = running
@@ -141,10 +138,11 @@ public enum InputLease: Equatable, Sendable {
     case released
 }
 
-/// UI-side state and terminal emulator for one pane. Security and process
-/// details remain in the Workspace Host and are deliberately absent here.
-struct TerminalPaneModel {
-    var state: TerminalPaneState
+/// UI-side state and terminal emulator for the one visible terminal. Security
+/// and process details remain in the Workspace Host and are deliberately
+/// absent here.
+struct WorkspaceTerminal {
+    var state: WorkspaceTerminalState
     var emulator: any TerminalEmulating
     var resize: ResizeCoalescer
 }

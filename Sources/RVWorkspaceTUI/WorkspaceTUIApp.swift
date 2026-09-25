@@ -34,8 +34,8 @@ struct WorkspaceShellApp: App {
                 Text("RV workspace is not connected")
             }
         }
-        // In terminal mode plain d is consumed by the focused terminal key
-        // handler. After Ctrl-G d, the handler deliberately returns ignored so
+        // In terminal mode plain d is consumed by the terminal key handler.
+        // After Ctrl-G d, the handler deliberately returns ignored so
         // SwiftTUI performs its normal shutdown and restores the user's tty.
         .exitOnKey(.character("d"))
     }
@@ -75,14 +75,13 @@ struct WorkspaceShellView: View {
     @ViewBuilder
     private func header(_ snapshot: WorkspaceTUISnapshot) -> some View {
         let name = URL(fileURLWithPath: snapshot.project).lastPathComponent
-        let focusedPane = snapshot.focused.flatMap { snapshot.panes[$0] }
-        let focusedPaneNeedsAttention = focusedPane?.running == false
-            || focusedPane?.lease == .readOnly
-            || focusedPane?.overflowed == true
+        let terminalNeedsAttention = snapshot.terminal?.running == false
+            || snapshot.terminal?.lease == .readOnly
+            || snapshot.terminal?.overflowed == true
         let indicatorColor: Color
         if snapshot.connection == .disconnected {
             indicatorColor = .red
-        } else if focusedPaneNeedsAttention {
+        } else if terminalNeedsAttention {
             indicatorColor = .yellow
         } else if snapshot.phase == "active", snapshot.protected {
             indicatorColor = .green
@@ -102,19 +101,16 @@ struct WorkspaceShellView: View {
         if snapshot.connection == .disconnected {
             Text("workspace disconnected")
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-        } else if snapshot.tree.isEmpty {
+        } else if snapshot.terminal == nil {
             emptyWorkspace(snapshot)
         } else {
-            GeometryReader { proxy in
-                let _ = model.noteCanvas(width: Int(proxy.size.width), height: Int(proxy.size.height))
-                PaneTreeView(shape: snapshot.tree.shape, snapshot: snapshot, model: model)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            TerminalView(model: model)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         }
-        if snapshot.mode == .help, snapshot.tree.isEmpty == false {
+        if snapshot.mode == .help, snapshot.terminal != nil {
             Text(WorkspaceHelp.text)
         }
-        if snapshot.mode == .launcher, snapshot.tree.isEmpty == false {
+        if snapshot.mode == .launcher, snapshot.terminal != nil {
             Text(launcherText(snapshot.launcher))
         }
     }
@@ -151,109 +147,21 @@ struct WorkspaceShellView: View {
         model.handle(key)
         revision &+= 1
         // The exit binding below is reached only for Ctrl-G d. A plain d in
-        // terminal mode is consumed above and sent to the focused runtime.
+        // terminal mode is consumed above and sent to the runtime.
         return model.snapshot().shouldExit ? .ignored : .handled
     }
 }
 
-struct PaneTreeView: View {
-    var shape: PaneTree.Shape
-    var snapshot: WorkspaceTUISnapshot
+struct TerminalView: View {
     var model: WorkspaceTUIModel
 
     var body: some View {
-        switch shape {
-        case .empty:
-            Text(" ")
-        case .leaf(let id):
-            TerminalPaneView(pane: id, snapshot: snapshot, model: model)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        case .split(let axis, let ratio, let first, let second):
-            GeometryReader { proxy in
-                let extent = axis == .vertical ? Int(proxy.size.width) : Int(proxy.size.height)
-                let firstExtent = splitExtent(extent, ratio: ratio)
-                switch axis {
-                case .vertical:
-                    HStack(spacing: 0) {
-                        PaneTreeView(shape: first, snapshot: snapshot, model: model)
-                            .frame(width: firstExtent)
-                            .frame(maxHeight: .infinity)
-                        PaneTreeView(shape: second, snapshot: snapshot, model: model)
-                            .frame(width: max(0, extent - firstExtent))
-                            .frame(maxHeight: .infinity)
-                    }
-                case .horizontal:
-                    VStack(alignment: .leading, spacing: 0) {
-                        PaneTreeView(shape: first, snapshot: snapshot, model: model)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: firstExtent)
-                        PaneTreeView(shape: second, snapshot: snapshot, model: model)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: max(0, extent - firstExtent))
-                    }
-                }
-            }
-        }
-    }
-
-    private func splitExtent(_ extent: Int, ratio: SplitRatio) -> Int {
-        guard extent > 1 else { return extent }
-        return min(extent - 1, max(1, extent * ratio.firstBasisPoints / 10_000))
-    }
-}
-
-struct TerminalPaneView: View {
-    var pane: PaneID
-    var snapshot: WorkspaceTUISnapshot
-    var model: WorkspaceTUIModel
-
-    var body: some View {
-        let state = snapshot.panes[pane]
-        let focused = snapshot.focused == pane
-        if snapshot.panes.count > 1 {
-            VStack(alignment: .leading, spacing: 0) {
-                Text("\(state?.title ?? "runtime")  \(statusMarker(state, connection: snapshot.connection))")
-                    .bold(focused)
-                terminalSurface
-            }
-            // SwiftTUI draws borders over the view's edge cells. Keep the
-            // emulator inside the border so its first and last cells remain
-            // visible and resize dimensions match the content area.
-            .padding(1)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-            .border(focused ? Color.white : Color.gray)
-        } else {
-            terminalSurface
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-        }
-    }
-
-    private var terminalSurface: some View {
         GeometryReader { proxy in
             let rows = max(1, Int(proxy.size.height))
             let columns = max(1, Int(proxy.size.width))
-            let _ = model.noteSize(of: pane, rows: rows, columns: columns, now: Date())
-            TerminalCells(frame: model.terminalFrame(for: pane), rows: rows, columns: columns)
+            let _ = model.noteSize(rows: rows, columns: columns, now: Date())
+            TerminalCells(frame: model.terminalFrame(), rows: rows, columns: columns)
         }
-    }
-
-    private func statusMarker(
-        _ state: TerminalPaneState?,
-        connection: ConnectionState
-    ) -> String {
-        if connection == .disconnected {
-            return "disconnected"
-        }
-        if state?.running == false {
-            return "exited\(state?.exitStatus.map { " (\($0))" } ?? "")"
-        }
-        if state?.lease == .readOnly {
-            return "read-only"
-        }
-        if state?.overflowed == true {
-            return "● overflow"
-        }
-        return "●"
     }
 }
 
@@ -356,10 +264,7 @@ private struct TerminalTextRun {
 
 enum WorkspaceHelp {
     static let text = """
-    ^G v split vertical    ^G s split horizontal
-    ^G h j k l focus       ^G x close pane
-    ^G n new runtime       ^G d detach
-    ^G ? help
+    ^G d detach    ^G ? help
     """
 }
 

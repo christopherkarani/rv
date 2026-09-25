@@ -13,7 +13,7 @@ struct WorkspaceTUIIntegrationTests {
     let client = try WorkspaceClient.connect(host.server.endpoint).get()
     let terminalClient = try WorkspaceClient.connect(host.server.endpoint).get()
     let live = LiveWorkspaceTUIClient(controlClient: client, terminalClient: terminalClient)
-    let script = "stty icanon icrnl; printf 'RV-AUTO-SHELL-READY\\r\\n'; while IFS= read -r line; do printf 'RV-AUTO-SHELL-REPLY:%s\\r\\n' \"$line\"; done"
+    let script = "stty icanon icrnl; printf 'RV-AUTO-SHELL-READY\\r\\n'; while IFS= read -r line; do if [ \"$line\" = quit ]; then break; else printf 'RV-AUTO-SHELL-REPLY:%s\\r\\n' \"$line\"; fi; done"
     let model = WorkspaceTUIModel(
         client: live,
         summary: try live.describe().get(),
@@ -34,16 +34,23 @@ struct WorkspaceTUIIntegrationTests {
 
     model.launchDefaultRuntimeIfEmpty()
 
-    #expect(model.snapshot().panes.values.first?.lease == .owned)
-    let pane = try #require(model.snapshot().focused)
-    let runtime = try #require(model.snapshot().panes[pane]?.runtime)
+    #expect(model.snapshot().terminal?.lease == .owned)
+    let runtime = try #require(model.snapshot().terminal?.runtime)
     send("typed input", to: model)
-    #expect(waitUntil { screen(model, pane).contains("RV-AUTO-SHELL-READY") })
-    #expect(waitUntil { screen(model, pane).contains("RV-AUTO-SHELL-REPLY:typed input") })
+    #expect(waitUntil { screen(model).contains("RV-AUTO-SHELL-READY") })
+    #expect(waitUntil { screen(model).contains("RV-AUTO-SHELL-REPLY:typed input") })
 
-    model.handle(.control("g"))
-    model.handle(.character("x"))
-    #expect(waitUntil { model.snapshot().tree == .empty })
+    send("quit", to: model)
+    #expect(waitUntil { model.snapshot().mode == .launcher })
+    #expect(model.snapshot().terminal?.running == false)
+    #expect(model.snapshot().terminal?.runtime == runtime)
+    model.handle(.character("1"))
+    #expect(waitUntil {
+        model.snapshot().terminal?.runtime != runtime && model.snapshot().terminal?.lease == .owned
+    })
+    #expect(waitUntil { screen(model).contains("RV-AUTO-SHELL-READY") })
+    send("again", to: model)
+    #expect(waitUntil { screen(model).contains("RV-AUTO-SHELL-REPLY:again") })
     #expect(try client.listRuntimes().get().first { $0.runtime == runtime }?.running == false)
     #expect(try live.describe().get().phase == "active")
 }
@@ -74,23 +81,22 @@ struct WorkspaceTUIIntegrationTests {
     }
     pump?.start()
     shell.handle(.character("1"))
-    #expect(waitUntil { shell.snapshot().panes.values.first?.lease == .owned })
-    let pane = try #require(shell.snapshot().focused)
-    let runtime = try #require(shell.snapshot().panes[pane]?.runtime)
+    #expect(waitUntil { shell.snapshot().terminal?.lease == .owned })
+    let runtime = try #require(shell.snapshot().terminal?.runtime)
 
-    #expect(shell.snapshot().panes[pane]?.lease == .owned)
+    #expect(shell.snapshot().terminal?.lease == .owned)
     #expect(try client.listRuntimes().get().first?.inputOwner == true)
-    #expect(waitUntil { screen(shell, pane).contains("RV-TUI-MARKER") })
+    #expect(waitUntil { screen(shell).contains("RV-TUI-MARKER") })
     send("Z", to: shell)
-    #expect(waitUntil { screen(shell, pane).contains("REPLY:Z") })
+    #expect(waitUntil { screen(shell).contains("REPLY:Z") })
 
     let resizeAt = Date(timeIntervalSince1970: 1_000)
-    shell.noteSize(of: pane, rows: 17, columns: 53, now: resizeAt)
+    shell.noteSize(rows: 17, columns: 53, now: resizeAt)
     shell.processPendingWork(now: resizeAt.addingTimeInterval(0.1))
     send("size", to: shell)
-    #expect(waitUntil { screen(shell, pane).contains("17 53") })
-    #expect(shell.terminalSize(for: pane)?.rows == 17)
-    #expect(shell.terminalSize(for: pane)?.columns == 53)
+    #expect(waitUntil { screen(shell).contains("17 53") })
+    #expect(shell.terminalSize()?.rows == 17)
+    #expect(shell.terminalSize()?.columns == 53)
 
     pump?.stop()
     pump = nil
@@ -106,87 +112,14 @@ struct WorkspaceTUIIntegrationTests {
     )
     let reattached = WorkspaceTUIModel(client: second, summary: try second.describe().get(), launcher: [])
     try reattached.connect().get()
-    let reattachedPane = try #require(
-        reattached.snapshot().panes.first { $0.value.runtime == runtime }?.key
-    )
+    #expect(reattached.snapshot().terminal?.runtime == runtime)
     let replay = TerminalEventPump(client: second, model: reattached)
     pump = replay
     replay.start()
-    #expect(waitUntil { screen(reattached, reattachedPane).contains("RV-TUI-MARKER") })
-    #expect(reattached.snapshot().panes[reattachedPane]?.running == true)
+    #expect(waitUntil { screen(reattached).contains("RV-TUI-MARKER") })
+    #expect(reattached.snapshot().terminal?.running == true)
     #expect(try reattachClient.listRuntimes().get().filter(\.terminal).count == 1)
     _ = reattachClient.cancelRuntime(runtime)
-}
-
-@Test func focusedInputAndPaneCloseLeaveTheSiblingRuntimeAlive() throws {
-    let host = try OpenedHost()
-    defer { host.close() }
-    let client = try WorkspaceClient.connect(host.server.endpoint).get()
-    let terminalClient = try WorkspaceClient.connect(host.server.endpoint).get()
-    let live = LiveWorkspaceTUIClient(controlClient: client, terminalClient: terminalClient)
-    let shell = WorkspaceTUIModel(
-        client: live,
-        summary: try live.describe().get(),
-        launcher: [RuntimeLaunchChoice(
-            id: "shell", title: "shell", executable: "/bin/sh",
-            arguments: ["-c", "stty icanon icrnl; while IFS= read -r line; do printf 'RECEIVED:%s\\r\\n' \"$line\"; done"],
-            hook: nil
-        )],
-        rows: 12,
-        columns: 40
-    )
-    try shell.connect().get()
-    let pump = TerminalEventPump(client: live, model: shell)
-    pump.start()
-    defer {
-        pump.stop()
-        shell.detachSession()
-    }
-    shell.handle(.control("g"))
-    shell.handle(.character("n"))
-    shell.handle(.character("1"))
-    #expect(waitUntil { shell.snapshot().panes.values.first?.lease == .owned })
-    let firstPane = try #require(shell.snapshot().focused)
-    let firstRuntime = try #require(shell.snapshot().panes[firstPane]?.runtime)
-    #expect(shell.snapshot().panes[firstPane]?.lease == .owned)
-    #expect(waitUntil { shell.snapshot().panes[firstPane]?.subscribed == true })
-
-    shell.noteCanvas(width: 80, height: 24)
-    shell.handle(.control("g"))
-    shell.handle(.character("v"))
-    #expect(waitUntil { shell.snapshot().panes.count == 2 })
-    let secondPane = try #require(shell.snapshot().focused)
-    let secondRuntime = try #require(shell.snapshot().panes[secondPane]?.runtime)
-    #expect(firstRuntime != secondRuntime)
-    #expect(waitUntil { shell.snapshot().panes[secondPane]?.subscribed == true })
-
-    shell.handle(.control("g"))
-    shell.handle(.character("h"))
-    #expect(waitUntil { shell.snapshot().focused == firstPane })
-    #expect(waitUntil { shell.snapshot().panes[firstPane]?.lease == .owned })
-    send("A", to: shell)
-    #expect(waitUntil { screen(shell, firstPane).contains("RECEIVED:A") })
-    #expect(screen(shell, secondPane).contains("RECEIVED:A") == false)
-
-    shell.handle(.control("g"))
-    shell.handle(.character("l"))
-    #expect(waitUntil { shell.snapshot().focused == secondPane })
-    #expect(waitUntil { shell.snapshot().panes[secondPane]?.lease == .owned })
-    send("B", to: shell)
-    #expect(waitUntil { screen(shell, secondPane).contains("RECEIVED:B") })
-    #expect(screen(shell, firstPane).contains("RECEIVED:B") == false)
-
-    shell.handle(.control("g"))
-    shell.handle(.character("h"))
-    shell.handle(.control("g"))
-    shell.handle(.character("x"))
-    #expect(waitUntil { shell.snapshot().panes[firstPane] == nil })
-    #expect(shell.snapshot().panes[firstPane] == nil)
-    #expect(shell.snapshot().panes[secondPane]?.running == true)
-    #expect(try live.describe().get().phase == "active")
-    let runtimes = try live.listRuntimes().get()
-    #expect(runtimes.contains { $0.id == secondRuntime && $0.running })
-    #expect(runtimes.contains { $0.id == firstRuntime && $0.running == false })
 }
 
 @Test func sustainedPTYOutputKeepsInputResponsiveAndReachesTheFinalScreen() throws {
@@ -196,6 +129,9 @@ struct WorkspaceTUIIntegrationTests {
     let terminalClient = try WorkspaceClient.connect(host.server.endpoint).get()
     let live = LiveWorkspaceTUIClient(controlClient: client, terminalClient: terminalClient)
     let script = "stty icanon icrnl;read g;(i=0;while ((i<1000));do printf 'OUT:%d:abcdefghijklmnopqrstuvwx\\r\\n' \"$i\";((i==400))&&echo READY;if ((i>400));then sleep .05;fi;((i++));done)&p=$!;read -r l;printf 'IN:%s\\r\\n' \"$l\";kill $p;wait $p;printf 'DONE\\r\\n'"
+    // The kill/notice/DONE cascade lands within one screen poll, so the
+    // screen must be tall enough to retain IN:stop past bash's multi-line
+    // job-termination notice.
     let shell = WorkspaceTUIModel(
         client: live,
         summary: try live.describe().get(),
@@ -203,8 +139,8 @@ struct WorkspaceTUIIntegrationTests {
             id: "shell", title: "shell", executable: "/bin/bash",
             arguments: ["-c", script], hook: nil
         )],
-        rows: 12,
-        columns: 40
+        rows: 21,
+        columns: 78
     )
     try shell.connect().get()
     let pump = TerminalEventPump(client: live, model: shell)
@@ -213,21 +149,17 @@ struct WorkspaceTUIIntegrationTests {
         pump.stop()
         shell.detachSession()
     }
-    shell.handle(.control("g"))
-    shell.handle(.character("n"))
     shell.handle(.character("1"))
-    #expect(waitUntil { shell.snapshot().panes.values.first?.lease == .owned })
-    let pane = try #require(shell.snapshot().focused)
-    #expect(shell.snapshot().panes[pane]?.lease == .owned)
+    #expect(waitUntil { shell.snapshot().terminal?.lease == .owned })
     send("go", to: shell)
-    #expect(waitUntil(seconds: 8) { screen(shell, pane).contains("READY") })
-    #expect(shell.snapshot().panes[pane]?.overflowed == false)
+    #expect(waitUntil(seconds: 8) { screen(shell).contains("READY") })
+    #expect(shell.snapshot().terminal?.overflowed == false)
     let sendBegan = Date()
     send("stop", to: shell)
     #expect(Date().timeIntervalSince(sendBegan) < 3)
-    #expect(waitUntil(seconds: 8) { screen(shell, pane).contains("IN:stop") })
-    #expect(waitUntil(seconds: 8) { screen(shell, pane).contains("DONE") })
-    #expect(shell.snapshot().panes[pane]?.overflowed == false)
+    #expect(waitUntil(seconds: 8) { screen(shell).contains("IN:stop") })
+    #expect(waitUntil(seconds: 8) { screen(shell).contains("DONE") })
+    #expect(shell.snapshot().terminal?.overflowed == false)
     #expect(TerminalScrollback.lines == 1_000)
 }
 
@@ -249,24 +181,24 @@ struct WorkspaceTUIIntegrationTests {
     let live = LiveWorkspaceTUIClient(controlClient: viewer, terminalClient: viewerTerminal)
     let model = WorkspaceTUIModel(client: live, summary: try live.describe().get(), launcher: [])
     try model.connect().get()
-    let pane = try #require(model.snapshot().focused)
-    #expect(model.snapshot().panes[pane]?.lease == .readOnly)
+    #expect(model.snapshot().terminal?.runtime == runtime.runtime)
+    #expect(model.snapshot().terminal?.lease == .readOnly)
     model.apply([.inputOwner(runtime: runtime.runtime, owned: true)])
-    #expect(model.snapshot().panes[pane]?.lease == .readOnly)
+    #expect(model.snapshot().terminal?.lease == .readOnly)
 
     model.handle(.character("X"))
     #expect(try viewer.listRuntimes().get().first?.inputOwner == true)
     try owner.releaseTerminalInput(runtime.runtime).get()
     model.apply([.inputOwner(runtime: runtime.runtime, owned: false)])
     model.processPendingWork()
-    #expect(waitUntil { model.snapshot().panes[pane]?.lease == .owned })
+    #expect(waitUntil { model.snapshot().terminal?.lease == .owned })
     #expect(try viewer.listRuntimes().get().first?.inputOwner == true)
     model.detachSession()
     _ = owner.cancelRuntime(runtime.runtime)
 }
 
-private func screen(_ model: WorkspaceTUIModel, _ pane: PaneID) -> String {
-    guard let frame = model.terminalFrame(for: pane) else { return "" }
+private func screen(_ model: WorkspaceTUIModel) -> String {
+    guard let frame = model.terminalFrame() else { return "" }
     return (0..<frame.rows).map(frame.line).joined(separator: "\n")
 }
 
