@@ -190,7 +190,7 @@ import RVDomain
         var host: ScanHostID { .pi }
         func roots(home: ScanHome) -> [URL] { [home.url] }
         func recognizes(fileURL: URL) -> Bool { fileURL.pathExtension == "jsonl" }
-        func extract(fileURL: URL, data: Data) throws -> [ExtractedEvent] { [] }
+        func extract(fileURL: URL, data: Data) throws(SessionStoreError) -> [ExtractedEvent] { [] }
     }
 
     let home = try #require(ScanHome(validating: "/tmp/rv-scan-home"))

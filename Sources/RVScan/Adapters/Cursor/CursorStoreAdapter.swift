@@ -1,13 +1,6 @@
 import Foundation
 import RVDomain
 
-/// Fail-closed Cursor store I/O. Empty or non-UTF-8 bytes are an error,
-/// not a successful empty event list.
-public enum CursorStoreError: Error, Sendable, Equatable {
-    /// `data` is empty, not UTF-8, or wholly unreadable as JSONL.
-    case unreadable(sourcePath: String)
-}
-
 /// Cursor session store at `$HOME/.cursor/projects/**/agent-transcripts/*.jsonl`.
 /// Surface fields: official `beforeShellExecution.command` and `preToolUse` /
 /// `Shell` `tool_input.command`. `extract(fileURL:data:)` uses **`data`**.
@@ -42,7 +35,7 @@ public struct CursorStoreAdapter: SessionStoreAdapter {
     /// contribute zero events without aborting the file. Lines split on LF
     /// only: bare-CR separators no longer split (the old `\.isNewline` split
     /// did), so a CR-only file yields no usable line and throws.
-    public func extract(fileURL: URL, data: Data) throws -> [ExtractedEvent] {
+    public func extract(fileURL: URL, data: Data) throws(SessionStoreError) -> [ExtractedEvent] {
         try Self.events(
             in: data,
             sourcePath: fileURL.path,
@@ -58,12 +51,12 @@ public struct CursorStoreAdapter: SessionStoreAdapter {
         in data: Data,
         sourcePath: String,
         fallbackSession: SessionID?
-    ) throws -> [ExtractedEvent] {
+    ) throws(SessionStoreError) -> [ExtractedEvent] {
         guard data.isEmpty == false else {
-            throw CursorStoreError.unreadable(sourcePath: sourcePath)
+            throw SessionStoreError.unreadable(host: .cursor, sourcePath: sourcePath)
         }
         guard String(data: data, encoding: .utf8) != nil else {
-            throw CursorStoreError.unreadable(sourcePath: sourcePath)
+            throw SessionStoreError.unreadable(host: .cursor, sourcePath: sourcePath)
         }
 
         var events: [ExtractedEvent] = []
@@ -87,7 +80,7 @@ public struct CursorStoreAdapter: SessionStoreAdapter {
             }
         }
         if sawUsableLine == false {
-            throw CursorStoreError.unreadable(sourcePath: sourcePath)
+            throw SessionStoreError.unreadable(host: .cursor, sourcePath: sourcePath)
         }
         return events
     }

@@ -69,6 +69,12 @@ func sqlite3_finalize(_ pStmt: OpaquePointer?) -> Int32
 @_silgen_name("sqlite3_step")
 func sqlite3_step(_ pStmt: OpaquePointer?) -> Int32
 
+@_silgen_name("sqlite3_reset")
+func sqlite3_reset(_ pStmt: OpaquePointer?) -> Int32
+
+@_silgen_name("sqlite3_clear_bindings")
+func sqlite3_clear_bindings(_ pStmt: OpaquePointer?) -> Int32
+
 @_silgen_name("sqlite3_column_text")
 func sqlite3_column_text(_ pStmt: OpaquePointer?, _ iCol: Int32) -> UnsafePointer<UInt8>?
 
@@ -86,6 +92,15 @@ func sqlite3_bind_text(
     _ n: Int32,
     _ destructor: sqlite3_destructor_type?
 ) -> Int32
+
+@_silgen_name("sqlite3_bind_null")
+func sqlite3_bind_null(_ pStmt: OpaquePointer?, _ index: Int32) -> Int32
+
+@_silgen_name("sqlite3_bind_int64")
+func sqlite3_bind_int64(_ pStmt: OpaquePointer?, _ index: Int32, _ value: sqlite3_int64) -> Int32
+
+@_silgen_name("sqlite3_bind_double")
+func sqlite3_bind_double(_ pStmt: OpaquePointer?, _ index: Int32, _ value: Double) -> Int32
 
 @_silgen_name("sqlite3_malloc64")
 func sqlite3_malloc64(_ n: sqlite3_uint64) -> UnsafeMutableRawPointer?

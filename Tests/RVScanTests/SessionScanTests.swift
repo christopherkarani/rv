@@ -210,7 +210,11 @@ import RVDomain
         let home = try #require(ScanHome(validating: "/tmp/rv-scan-unused-home"))
         let now = Date(timeIntervalSince1970: 1_777_000_000)
         let expected = db.standardizedFileURL.path
-        #expect(throws: OpenCodeStoreError.unreadable(sourcePath: expected)) {
+        #expect(
+            throws: SessionScanError.extractFailed(
+                .unreadable(host: .opencode, sourcePath: expected)
+            )
+        ) {
             try SessionScan().run(
                 SessionScanRequest(home: home, now: now, rootPath: root.path, timeWindow: .all)
             )
