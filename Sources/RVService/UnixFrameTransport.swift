@@ -137,7 +137,14 @@ public final class UnixEvaluateListener: Sendable {
             _ = Glibc.close(fd)
         }
         source.resume()
-        state.withLock { $0.source = source }
+        storeSource(source)
+    }
+
+    /// `sending` moves the source out of the caller's region. The read source
+    /// is not `Sendable` on Linux, so storing a plain capture trips region
+    /// isolation (`inout sending` error) on the Linux gate.
+    private func storeSource(_ newSource: sending DispatchSourceRead) {
+        state.withLock { $0.source = newSource }
     }
 
     public func stop() {
