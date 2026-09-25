@@ -6,11 +6,11 @@ struct HookEntry: Equatable, Sendable {
     var command: String
     var timeout: Int
     /// Nested layouts (`"command"`); nil for flat layouts (Cursor has no `type` key).
-    var type: String?
+    var type: String? = nil
     /// Cursor only.
-    var failClosed: Bool?
+    var failClosed: Bool? = nil
     /// Codex only.
-    var statusMessage: String?
+    var statusMessage: String? = nil
 }
 
 /// Per-call inputs needed to build hook entries.
@@ -63,6 +63,7 @@ enum HostHooksMergeError: Error, Equatable {
 /// hook-list shape, so they stay out of the engine per the GUD-001 fallback.
 /// Claude inspection (occupancy, stale legacy, matcher coverage) stays in
 /// `ClaudeSettingsMerge`, implemented over `locateFingerprintedHooks`.
+/// Follow-up per GUD-002: adopt T1's typed-JSON value here once T1 lands.
 enum HostHooksMergeEngine {
     /// Returns merged bytes and whether content changed.
     /// `willMerge` runs after parsing, before mutation (Claude occupancy trap).
