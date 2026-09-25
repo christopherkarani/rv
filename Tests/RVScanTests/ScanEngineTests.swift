@@ -104,8 +104,10 @@ import RVDomain
     // Matches `object["timestamp"] ?? object["ts"]`: presence wins, then
     // coercion yields nil rather than falling through.
     let object: [String: Any] = ["timestamp": "", "ts": "2026-08-27T00:00:00Z"]
-    let value = try? #require(ScanTimestamp.firstValue(keys: ["timestamp", "ts"], in: object))
-    #expect((value as? String) == "")
+    // Cast before requiring: `#require` on `Any?` is vacuous (the macro
+    // type-erases the optional) and warns as redundant.
+    let value = try? #require(ScanTimestamp.firstValue(keys: ["timestamp", "ts"], in: object) as? String)
+    #expect(value == "")
     #expect(ScanTimestamp.coerce(value, allowEpoch: true) == nil)
     let missing: [String: Any] = [:]
     #expect(ScanTimestamp.firstValue(keys: ["timestamp", "ts"], in: missing) == nil)
