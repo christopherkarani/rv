@@ -2,6 +2,7 @@
 import Darwin
 import Foundation
 import RVService
+import Synchronization
 
 enum UnixFrameError: Error {
     case socket
@@ -72,12 +73,16 @@ enum UnixFrameIO {
     }
 }
 
-final class FakeXPCServer: @unchecked Sendable {
+final class FakeXPCServer: Sendable {
     let path: String
     let runtime: ServiceRuntime
-    private var listenFD: Int32 = -1
-    private var source: DispatchSourceRead?
+    private let state = Mutex<ListenerState>(ListenerState())
     private let queue = DispatchQueue(label: "rv.fake-xpc")
+
+    private struct ListenerState {
+        var listenFD: Int32 = -1
+        var source: DispatchSourceRead?
+    }
 
     init(runtime: ServiceRuntime, path: String) {
         self.runtime = runtime
@@ -104,7 +109,7 @@ final class FakeXPCServer: @unchecked Sendable {
             Darwin.close(fd)
             throw UnixFrameError.listen
         }
-        listenFD = fd
+        state.withLock { $0.listenFD = fd }
         let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
         source.setEventHandler { [weak self] in
             self?.acceptOne()
@@ -112,18 +117,23 @@ final class FakeXPCServer: @unchecked Sendable {
         source.setCancelHandler {
             Darwin.close(fd)
         }
-        self.source = source
         source.resume()
+        state.withLock { $0.source = source }
     }
 
     func stop() {
+        let source = state.withLock { state -> DispatchSourceRead? in
+            let current = state.source
+            state.source = nil
+            state.listenFD = -1
+            return current
+        }
         source?.cancel()
-        source = nil
-        listenFD = -1
         unlink(path)
     }
 
     private func acceptOne() {
+        let listenFD = state.withLock { $0.listenFD }
         let client = Darwin.accept(listenFD, nil, nil)
         guard client >= 0 else { return }
         queue.async { self.serve(client) }
@@ -194,18 +204,18 @@ final class FakeXPCClient {
     }
 }
 
-final class ReplyGate: @unchecked Sendable {
+final class ReplyGate: Sendable {
     private let sem = DispatchSemaphore(value: 0)
-    private var reply = IncomingReply(frame: Data(), handshakeAccepted: false)
+    private let box = Mutex<IncomingReply?>(nil)
 
     func finish(_ reply: IncomingReply) {
-        self.reply = reply
+        box.withLock { $0 = reply }
         sem.signal()
     }
 
     func wait() -> IncomingReply {
         sem.wait()
-        return reply
+        return box.withLock { $0 } ?? IncomingReply(frame: Data(), handshakeAccepted: false)
     }
 }
 

@@ -12,32 +12,37 @@ private struct Reply {
     var afterSend: (() -> Void)?
 }
 
-private final class CloseGate: @unchecked Sendable {
-    private let condition = NSCondition()
-    private var signaled = false
+private final class CloseGate: Sendable {
+    private let group = DispatchGroup()
+    private let state = Mutex(false)
 
+    init() {
+        group.enter()
+    }
+
+    /// Idempotent: only the first signal balances the initial `enter`.
     func signal() {
-        condition.lock()
-        signaled = true
-        condition.broadcast()
-        condition.unlock()
+        let first = state.withLock { signaled -> Bool in
+            if signaled { return false }
+            signaled = true
+            return true
+        }
+        if first {
+            group.leave()
+        }
     }
 
     func wait() {
-        condition.lock()
-        while signaled == false {
-            condition.wait()
-        }
-        condition.unlock()
+        group.wait()
     }
 }
 
-private final class WorkspaceControlConnection: @unchecked Sendable {
+private final class WorkspaceControlConnection: Sendable {
     let id = UUID()
     private let flags: Mutex<ConnectionFlags>
     /// Serializes frames. `flags` is not held across the write, so a slow
     /// client cannot stall accept, but two writers cannot interleave bytes.
-    private let sendLock = NSLock()
+    private let sendLock = Mutex<Void>(())
 
     private struct ConnectionFlags {
         var fd: Int32
@@ -64,12 +69,11 @@ private final class WorkspaceControlConnection: @unchecked Sendable {
             return Darwin.dup(flags.fd)
         }
         guard fd >= 0 else { return false }
-        sendLock.lock()
-        defer {
-            sendLock.unlock()
-            Darwin.close(fd)
+        let ok = sendLock.withLock { _ in
+            WorkspaceControlSocket.writeFrame(fd: fd, body: body)
         }
-        return WorkspaceControlSocket.writeFrame(fd: fd, body: body)
+        Darwin.close(fd)
+        return ok
     }
 
     func socketFD() -> Int32 {
@@ -103,7 +107,7 @@ private final class WorkspaceControlConnection: @unchecked Sendable {
 }
 
 /// Control plane for one live workspace. It does not render a UI.
-final class WorkspaceHostServer: @unchecked Sendable {
+final class WorkspaceHostServer: Sendable {
     let endpoint: WorkspaceEndpoint
     private let supervisor: WorkspaceSessionSupervisor
     private let hostID: WorkspaceHostID

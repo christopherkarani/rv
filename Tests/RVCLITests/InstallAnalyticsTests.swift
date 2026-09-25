@@ -1,14 +1,17 @@
 import Foundation
 import RVAnalytics
 import RVPresentation
+import Synchronization
 import Testing
 @testable import RVCLI
 
-final class RecordingInstallAnalytics: InstallAnalyticsCapturing, @unchecked Sendable {
-    private(set) var captures: [[String: String]] = []
+final class RecordingInstallAnalytics: InstallAnalyticsCapturing, Sendable {
+    private let box = Mutex<[[String: String]]>([])
+
+    var captures: [[String: String]] { box.withLock { $0 } }
 
     func captureInstall(hosts: [String: String]) {
-        captures.append(hosts)
+        box.withLock { $0.append(hosts) }
     }
 }
 

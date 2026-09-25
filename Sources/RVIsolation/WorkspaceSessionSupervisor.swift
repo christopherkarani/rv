@@ -72,6 +72,8 @@ struct WorkspaceControlFile: Equatable, Sendable {
 /// single-runtime launch, so Swift task cancellation is visible, and on an
 /// owned thread for every additional runtime. Those threads are retained
 /// until the process group is dead. There is no process-wide workspace table.
+// @unchecked: `boundary` (WorkspaceInodeBoundary) is a non-Sendable holder.
+// All supervisor-owned mutable state is in `Mutex<State>`.
 public final class WorkspaceSessionSupervisor: @unchecked Sendable {
     #if os(macOS)
     private struct State: Sendable {
@@ -528,7 +530,7 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
         else {
             return .failure(.apply(.containedGuaranteesUnsupported))
         }
-        let slot = WorkspaceChildSlot()
+        var slot = WorkspaceChildSlot()
         let result: Result<Void, WorkspaceSessionError> = state.withLock { state in
             guard state.closeAccepted == false, state.lifecycle.acceptsRuntime else {
                 return .failure(.notAcceptingRuntime(state.lifecycle))
@@ -1005,7 +1007,9 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
 }
 
 #if os(macOS)
-private final class WorkspaceChildSlot: @unchecked Sendable {
+// Method-local outbox for one `launch` call. It never leaves the caller's
+// thread: the `withLock` closure that fills it is non-escaping.
+private struct WorkspaceChildSlot {
     var child: WorkspaceChild?
     var logged: RuntimeSession?
 }
@@ -1039,13 +1043,19 @@ struct RuntimeRetention: Equatable {
     }
 }
 
-private final class WorkspaceChild: @unchecked Sendable {
+private final class WorkspaceChild: Sendable {
     let live: LiveSeatbeltChild
     let stop = RuntimeCancellation()
     /// Start time captured before the group is recorded. Absent when the
     /// kernel identity could not be proved, in which case nothing is signalled.
-    var provenGroup: ProcessGroupFact?
+    private let provenGroupBox = Mutex<ProcessGroupFact?>(nil)
     private let finished = Mutex(false)
+
+    /// Set once on the launch path, read when retiring an unrecorded child.
+    var provenGroup: ProcessGroupFact? {
+        get { provenGroupBox.withLock { $0 } }
+        set { provenGroupBox.withLock { $0 = newValue } }
+    }
 
     init(live: LiveSeatbeltChild) {
         self.live = live

@@ -3,6 +3,7 @@ import Darwin
 #endif
 import Foundation
 import RVDomain
+import Synchronization
 import Testing
 @testable import RVIsolation
 
@@ -509,48 +510,40 @@ struct WorkspaceHostTests {
     }
 }
 
-private final class WatchBox: @unchecked Sendable {
-    var result: Result<WorkspaceDescription, WorkspaceClientFailure>?
+private final class WatchBox: Sendable {
+    private let box = Mutex<Result<WorkspaceDescription, WorkspaceClientFailure>?>(nil)
+
+    var result: Result<WorkspaceDescription, WorkspaceClientFailure>? {
+        get { box.withLock { $0 } }
+        set { box.withLock { $0 = newValue } }
+    }
 }
 
-private final class OverlapBox: @unchecked Sendable {
-    private let lock = NSLock()
-    private var value: Result<Void, WorkspaceClientFailure>?
+private final class OverlapBox: Sendable {
+    private let box = Mutex<Result<Void, WorkspaceClientFailure>?>(nil)
 
     func reset() {
-        lock.lock()
-        value = nil
-        lock.unlock()
+        box.withLock { $0 = nil }
     }
 
     func finish(_ result: Result<Void, WorkspaceClientFailure>) {
-        lock.lock()
-        value = result
-        lock.unlock()
+        box.withLock { $0 = result }
     }
 
     var secondary: Result<Void, WorkspaceClientFailure>? {
-        lock.lock()
-        let copy = value
-        lock.unlock()
-        return copy
+        box.withLock { $0 }
     }
 }
 
-private final class OutputBox: @unchecked Sendable {
-    private let lock = NSLock()
-    private var data = Data()
+private final class OutputBox: Sendable {
+    private let box = Mutex(Data())
 
     func append(_ next: Data) {
-        lock.lock()
-        data.append(next)
-        lock.unlock()
+        box.withLock { $0.append(next) }
     }
 
     var text: String {
-        lock.lock()
-        let copy = data
-        lock.unlock()
+        let copy = box.withLock { $0 }
         return String(data: copy, encoding: .utf8) ?? ""
     }
 }
