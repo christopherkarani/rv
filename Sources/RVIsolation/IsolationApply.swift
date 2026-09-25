@@ -460,6 +460,7 @@ func prepareSeatbelt(
             return .failure(error)
         case .success(let compiled):
             let profile = compiled.allowingExecutable(command.executable)
+                .allowingAgentShims(directory: AgentShim.installedDirectory())
             guard let workspace = plan.workspace else {
                 return .failure(.containedGuaranteesUnsupported)
             }

@@ -1,0 +1,5 @@
+#!/bin/sh
+# Guidance only: coding agents run outside the sandbox.
+echo "codex runs outside the sandbox: it needs your credentials and network, which this shell cannot see." >&2
+echo "Run codex in your normal terminal instead; RV hooks guard this project there." >&2
+exit 127

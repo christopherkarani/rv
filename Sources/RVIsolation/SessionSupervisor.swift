@@ -440,7 +440,11 @@ func spawnSeatbeltProcess(
         request.command.executable,
     ])
     arguments.append(contentsOf: request.command.arguments)
-    let environment = containedRuntimeEnvironment(workspace: workspace, io: request.io)
+    let environment = containedRuntimeEnvironment(
+        workspace: workspace,
+        io: request.io,
+        agentShims: AgentShim.installedDirectory()
+    )
     let argv = SpawnPointers(arguments)
     let envp = SpawnPointers(environment)
     defer {
@@ -549,7 +553,11 @@ func spawnSeatbeltProcess(
     return .success(child)
 }
 
-func containedRuntimeEnvironment(workspace: String, io: IsolatedIO) -> [String] {
+func containedRuntimeEnvironment(
+    workspace: String,
+    io: IsolatedIO,
+    agentShims: String? = nil
+) -> [String] {
     var values = [
         "PATH=/usr/bin:/bin",
         "LANG=C",
@@ -564,6 +572,9 @@ func containedRuntimeEnvironment(workspace: String, io: IsolatedIO) -> [String] 
         // the prompt stays its default unless the user creates a
         // workspace-local .zshrc (HOME is the workspace).
         values.append("CLICOLOR=1")
+        if let agentShims {
+            values[0] = "PATH=\(agentShims):/usr/bin:/bin"
+        }
     }
     return values
 }

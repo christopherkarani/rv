@@ -29,6 +29,27 @@ public struct SeatbeltProfile: Sendable, Equatable {
         self.workspacePath = workspacePath
     }
 
+    /// Guidance shims for agent CLIs typed inside a contained shell.
+    ///
+    /// Agents need credentials and network, which the sandbox withholds, so
+    /// the contained shell cannot run them. A shim dir shipped next to the
+    /// host binary puts the familiar names on PATH; each shim only prints
+    /// where to run the agent instead. Shims grant no capability: they
+    /// execute under this same contained profile.
+    func allowingAgentShims(directory: String?) -> SeatbeltProfile {
+        guard let directory else { return self }
+        let literals = AgentShim.names
+            .map { "\(directory)/\($0)" }
+            .map { "(literal \"\(escapeSeatbeltSubpath($0))\")" }
+            .joined(separator: "\n        ")
+        let addition = """
+
+        (allow file-read* file-map-executable
+            \(literals))
+        """
+        return SeatbeltProfile(source: source + addition, workspacePath: workspacePath)
+    }
+
     /// The granted executable may live outside the workspace. Allow reading
     /// and mapping that one file, including its realpath when the caller path
     /// and the kernel path differ (`/var` versus `/private/var`). This does
@@ -46,6 +67,43 @@ public struct SeatbeltProfile: Sendable, Equatable {
             \(literals))
         """
         return SeatbeltProfile(source: source + addition, workspacePath: workspacePath)
+    }
+}
+
+/// Locates the installed agent guidance shims, if any.
+public enum AgentShim {
+    public static let directoryName = "rv-agent-shims"
+    public static let names = ["claude", "codex", "muse", "opencode"]
+
+    /// Sibling of the running host (or CLI) binary, whatever the install
+    /// prefix is. Nil when it cannot be determined.
+    public static func directory() -> String? {
+        let base = Bundle.main.executableURL
+            ?? URL(fileURLWithPath: CommandLine.arguments.first ?? "")
+        guard base.path.isEmpty == false else { return nil }
+        return directory(executablePath: base.path)
+    }
+
+    public static func directory(executablePath: String) -> String {
+        (executablePath as NSString).deletingLastPathComponent
+            .appending("/" + directoryName)
+    }
+
+    /// All shims present and executable. Partial installs count as missing
+    /// so the shell never mixes guidance names with command-not-found.
+    public static func isInstalled(at directory: String) -> Bool {
+        AgentShim.names.allSatisfy {
+            FileManager.default.isExecutableFile(atPath: "\(directory)/\($0)")
+        }
+    }
+
+    /// The shim dir to admit and put on PATH, or nil on installs that predate
+    /// shims. Nil keeps both the profile and PATH exactly as before.
+    public static func installedDirectory() -> String? {
+        guard let directory = directory(), isInstalled(at: directory) else {
+            return nil
+        }
+        return directory
     }
 }
 

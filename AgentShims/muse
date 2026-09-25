@@ -1,0 +1,5 @@
+#!/bin/sh
+# Guidance only: coding agents run outside the sandbox.
+echo "muse runs outside the sandbox: it needs your credentials and network, which this shell cannot see." >&2
+echo "Run it in your normal terminal. (RV hooks do not cover muse yet, unlike claude/codex/opencode.)" >&2
+exit 127

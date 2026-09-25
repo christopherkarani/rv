@@ -21,3 +21,18 @@ import Testing
     #expect(values.allSatisfy { $0.hasPrefix("PS1=") == false })
     #expect(values.contains("PATH=/usr/bin:/bin"))
 }
+
+@Test func terminalPATHPrefersInstalledAgentShims() {
+    let plain = containedRuntimeEnvironment(
+        workspace: "/tmp/ws", io: .pseudoTerminal(rows: 24, columns: 80), agentShims: nil
+    )
+    #expect(plain.contains("PATH=/usr/bin:/bin"))
+    let shimmed = containedRuntimeEnvironment(
+        workspace: "/tmp/ws", io: .pseudoTerminal(rows: 24, columns: 80), agentShims: "/opt/rv/bin/rv-agent-shims"
+    )
+    #expect(shimmed.contains("PATH=/opt/rv/bin/rv-agent-shims:/usr/bin:/bin"))
+    let oneShot = containedRuntimeEnvironment(
+        workspace: "/tmp/ws", io: .inherit, agentShims: "/opt/rv/bin/rv-agent-shims"
+    )
+    #expect(oneShot.contains("PATH=/usr/bin:/bin"))
+}
