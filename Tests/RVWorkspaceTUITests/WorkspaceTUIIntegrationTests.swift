@@ -181,6 +181,27 @@ struct WorkspaceTUIIntegrationTests {
     _ = owner.cancelRuntime(runtime.runtime)
 }
 
+@Test func invalidHookStringIsRejectedWithoutLaunching() throws {
+    let host = try OpenedHost()
+    defer { host.close() }
+    let session = try LiveWorkspaceTUISession.connect(host.server.endpoint).get()
+    let probe = try WorkspaceClient.connect(host.server.endpoint).get()
+    defer { session.close() }
+    guard case .failure(.rejected) = session.launch(
+        executable: "/bin/sh", arguments: [], hook: "bogus-hook", rows: 12, columns: 40
+    ) else {
+        Issue.record("an unknown hook must fail instead of launching unhooked")
+        return
+    }
+    guard case .failure(.rejected) = session.ensureTerminal(
+        executable: "/bin/sh", arguments: [], hook: "bogus-hook", rows: 12, columns: 40
+    ) else {
+        Issue.record("an unknown hook must fail instead of ensuring unhooked")
+        return
+    }
+    #expect(try probe.listRuntimes().get().isEmpty)
+}
+
 private func screen(_ model: WorkspaceTUIModel) -> String {
     guard let frame = model.terminalFrame() else { return "" }
     return (0..<frame.rows).map(frame.line).joined(separator: "\n")

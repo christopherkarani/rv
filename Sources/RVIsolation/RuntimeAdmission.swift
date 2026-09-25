@@ -9,7 +9,7 @@ import Synchronization
 
 /// In-memory admission evidence. A failed record is not represented: appending
 /// here cannot fail, and the shell records the final outcome before it returns.
-public final class RuntimeAdmissionEvidence: @unchecked Sendable {
+public final class RuntimeAdmissionEvidence: Sendable {
     private let events = Mutex<[RuntimeAdmissionEvent]>([])
     private let file: URL?
 
@@ -140,15 +140,20 @@ struct AdmittedLaunchContext: Sendable, Equatable {
 /// The request pipe is the channel. `RuntimeSessionID` is only the name the
 /// claim must match. `close()` makes later bytes, including a copied
 /// capability, unable to execute.
-final class RuntimeAdmissionSession {
-    private var binding: RuntimeChannelBinding?
+final class RuntimeAdmissionSession: Sendable {
+    private let state: Mutex<ChannelState>
     private let configuration: RuntimeAdmissionConfiguration
     private let subject: RuntimeAdmissionSubject
     private let launch: AdmittedLaunchContext
-    private var buffer = Data()
-    private var requestRead: Int32
-    private var responseWrite: Int32
-    private let flight = Mutex(HTTPFlight())
+
+    private struct ChannelState: Sendable {
+        var binding: RuntimeChannelBinding?
+        var buffer = Data()
+        var requestRead: Int32
+        var responseWrite: Int32
+        var httpToken: HTTPCancellation?
+        var stop = false
+    }
 
     init(
         binding: RuntimeChannelBinding,
@@ -157,36 +162,43 @@ final class RuntimeAdmissionSession {
         requestRead: Int32,
         responseWrite: Int32
     ) {
-        self.binding = binding
+        state = Mutex(
+            ChannelState(
+                binding: binding,
+                requestRead: requestRead,
+                responseWrite: responseWrite
+            )
+        )
         self.configuration = configuration
         self.subject = RuntimeAdmissionSubject(
             session: binding.session,
             policyWorkspace: launch.plan.workspace
         )
         self.launch = launch
-        self.requestRead = requestRead
-        self.responseWrite = responseWrite
     }
 
     func sendGrant() {
-        guard let binding, responseWrite >= 0 else { return }
+        let snapshot = state.withLock { ($0.binding, $0.responseWrite) }
+        guard let binding = snapshot.0, snapshot.1 >= 0 else { return }
         guard case .success(let frame) = RuntimeAdmissionCodec.encodeGrant(
             capability: binding.capability,
             session: binding.session.id.rawValue
         ) else {
             return
         }
-        _ = admissionWriteAll(responseWrite, frame)
+        _ = admissionWriteAll(snapshot.1, frame)
     }
 
     /// Reads whatever is currently available. A finished session drops bytes.
     func service() {
-        guard binding?.phase == .active else {
-            buffer.removeAll()
+        guard state.withLock({ $0.binding?.phase == .active }) else {
+            state.withLock { $0.buffer.removeAll() }
             return
         }
-        if requestRead >= 0 {
-            buffer.append(admissionReadAvailable(requestRead))
+        let fd = state.withLock { $0.requestRead }
+        if fd >= 0 {
+            let bytes = admissionReadAvailable(fd)
+            state.withLock { $0.buffer.append(bytes) }
         }
         _ = acceptBuffered()
     }
@@ -194,7 +206,7 @@ final class RuntimeAdmissionSession {
     /// Test entry for bytes that did not come from the granted pipe.
     @discardableResult
     func accept(_ data: Data) -> [RuntimeAdmissionDecision] {
-        buffer.append(data)
+        state.withLock { $0.buffer.append(data) }
         return acceptBuffered()
     }
 
@@ -202,7 +214,7 @@ final class RuntimeAdmissionSession {
     func submit(
         _ frame: Result<RuntimeActionFrame, RuntimeAdmissionDecodeError>
     ) -> RuntimeAdmissionDecision {
-        var binding = self.binding
+        var binding = state.withLock { $0.binding }
         let leader = launch.sessionLeader
         let decision = RuntimeAdmissionGate.submit(
             binding: &binding,
@@ -220,11 +232,11 @@ final class RuntimeAdmissionSession {
                 }
             }
         )
-        flight.withLock { state in
-            if state.stop {
+        state.withLock { channel in
+            if channel.stop {
                 binding?.phase = .finished
             }
-            self.binding = binding
+            channel.binding = binding
         }
         guard let allowed = decision.execute, binding?.phase == .active else {
             if decision.execute != nil {
@@ -248,43 +260,50 @@ final class RuntimeAdmissionSession {
     }
 
     func finish() {
-        let token = flight.withLock { state -> HTTPCancellation? in
-            state.stop = true
-            if var binding {
+        let token = state.withLock { channel -> HTTPCancellation? in
+            channel.stop = true
+            if var binding = channel.binding {
                 binding.phase = .finished
-                self.binding = binding
+                channel.binding = binding
             }
-            return state.token
+            return channel.httpToken
         }
         token?.cancel()
         let deadline = Date().addingTimeInterval(
             TimeInterval(HTTPEgressLimits.requestTimeoutMilliseconds) / 1_000 + 2
         )
         while Date() < deadline {
-            if flight.withLock({ $0.token == nil }) { break }
+            if state.withLock({ $0.httpToken == nil }) { break }
             usleep(1_000)
         }
-        buffer.removeAll()
-        if requestRead >= 0 {
-            admissionClose(requestRead)
-            requestRead = -1
+        let fds = state.withLock { channel -> (Int32, Int32) in
+            channel.buffer.removeAll()
+            let pair = (channel.requestRead, channel.responseWrite)
+            channel.requestRead = -1
+            channel.responseWrite = -1
+            return pair
         }
-        if responseWrite >= 0 {
-            admissionClose(responseWrite)
-            responseWrite = -1
+        if fds.0 >= 0 {
+            admissionClose(fds.0)
+        }
+        if fds.1 >= 0 {
+            admissionClose(fds.1)
         }
     }
 
     private func acceptBuffered() -> [RuntimeAdmissionDecision] {
-        guard binding?.phase == .active else {
-            let hadBytes = buffer.isEmpty == false
-            buffer.removeAll()
+        guard state.withLock({ $0.binding?.phase == .active }) else {
+            let hadBytes = state.withLock { channel -> Bool in
+                let had = channel.buffer.isEmpty == false
+                channel.buffer.removeAll()
+                return had
+            }
             guard hadBytes else { return [] }
             return [submit(.failure(.malformed))]
         }
         var decisions: [RuntimeAdmissionDecision] = []
-        while binding?.phase == .active {
-            guard let taken = RuntimeAdmissionCodec.takeFrame(from: &buffer) else { break }
+        while state.withLock({ $0.binding?.phase == .active }) {
+            guard let taken = state.withLock({ RuntimeAdmissionCodec.takeFrame(from: &$0.buffer) }) else { break }
             let frame: Result<RuntimeActionFrame, RuntimeAdmissionDecodeError>
             switch taken {
             case .failure(let error):
@@ -296,21 +315,22 @@ final class RuntimeAdmissionSession {
             decisions.append(decision)
             writeResponse(decision)
         }
-        if binding?.phase != .active {
-            buffer.removeAll()
+        if state.withLock({ $0.binding?.phase }) != .active {
+            state.withLock { $0.buffer.removeAll() }
         }
         return decisions
     }
 
     private func writeResponse(_ decision: RuntimeAdmissionDecision) {
-        guard responseWrite >= 0 else { return }
+        let fd = state.withLock { $0.responseWrite }
+        guard fd >= 0 else { return }
         guard case .success(let frame) = RuntimeAdmissionCodec.encodeResponse(
             decision.response,
             requestID: decision.event.requestID
         ) else {
             return
         }
-        _ = admissionWriteAll(responseWrite, frame)
+        _ = admissionWriteAll(fd, frame)
     }
 
     private func perform(_ allowed: AllowedAction) -> AdmissionPerformResult {
@@ -359,18 +379,18 @@ final class RuntimeAdmissionSession {
     }
 
     private func beginHTTP() -> HTTPCancellation? {
-        flight.withLock { state in
-            guard state.stop == false, state.token == nil, binding?.phase == .active else {
+        state.withLock { channel in
+            guard channel.stop == false, channel.httpToken == nil, channel.binding?.phase == .active else {
                 return nil
             }
             let token = HTTPCancellation()
-            state.token = token
+            channel.httpToken = token
             return token
         }
     }
 
     private func endHTTP() {
-        flight.withLock { $0.token = nil }
+        state.withLock { $0.httpToken = nil }
     }
 
     private func inactiveDecision(
@@ -391,11 +411,6 @@ final class RuntimeAdmissionSession {
             )
         )
     }
-}
-
-private struct HTTPFlight: Sendable {
-    var token: HTTPCancellation?
-    var stop = false
 }
 
 private enum AdmissionPerformResult {

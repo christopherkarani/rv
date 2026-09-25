@@ -57,8 +57,22 @@ public struct ResizeCoalescer: Equatable, Sendable {
 
     /// A call made by the render loop only records geometry. RPCs happen from
     /// the workspace model's coalescing tick, never while building a view.
+    /// This never promotes a settled size: promoting here would mark the size
+    /// sent while `flush` still holds nothing, silently dropping the resize.
     public mutating func record(rows: Int, columns: Int, now: Date) {
-        _ = propose(rows: rows, columns: columns, now: now)
+        let nextRows = min(Self.maximum, max(Self.minimum, rows))
+        let nextColumns = min(Self.maximum, max(Self.minimum, columns))
+        if lastSentRows == nextRows, lastSentColumns == nextColumns {
+            pendingRows = nil
+            pendingColumns = nil
+            pendingAt = nil
+            return
+        }
+        if pendingRows != nextRows || pendingColumns != nextColumns {
+            pendingRows = nextRows
+            pendingColumns = nextColumns
+            pendingAt = now
+        }
     }
 
     public mutating func flush(now: Date) -> (rows: Int, columns: Int)? {

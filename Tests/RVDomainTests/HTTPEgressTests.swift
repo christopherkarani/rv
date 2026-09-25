@@ -630,83 +630,86 @@ private struct HTTPAdmissionFixture {
     }
 }
 
-private final class AdvancingClock: @unchecked Sendable {
-    private let lock = NSLock()
-    private var current: Date
+private final class AdvancingClock: Sendable {
+    private let current: Mutex<Date>
     private let step: TimeInterval
 
     init(start: Date, step: TimeInterval) {
-        current = start
+        current = Mutex(start)
         self.step = step
     }
 
     func now() -> Date {
-        lock.lock()
-        defer { lock.unlock() }
-        let value = current
-        current = current.addingTimeInterval(step)
-        return value
+        current.withLock { ticking in
+            let value = ticking
+            ticking = ticking.addingTimeInterval(step)
+            return value
+        }
     }
 }
 
-private final class StopAfterFirst: @unchecked Sendable {
-    private let lock = NSLock()
-    private var seen = false
+private final class StopAfterFirst: Sendable {
+    private let seen = Mutex(false)
 
     func shouldStop() -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        if seen { return true }
-        seen = true
-        return false
+        seen.withLock { already in
+            if already { return true }
+            already = true
+            return false
+        }
     }
 }
 
-private final class ScriptedTransfer: @unchecked Sendable {
-    private let lock = NSLock()
-    private var chunks: [HTTPTransferRead]
-    private(set) var written = Data()
-    private(set) var reads = 0
-    private(set) var stopped = false
-    private(set) var bytesIssued = 0
-    private(set) var leftover = 0
+private final class ScriptedTransfer: Sendable {
+    private let state: Mutex<State>
+
+    private struct State: Sendable {
+        var chunks: [HTTPTransferRead]
+        var written = Data()
+        var reads = 0
+        var stopped = false
+        var bytesIssued = 0
+        var leftover = 0
+    }
+
+    var written: Data { state.withLock { $0.written } }
+    var reads: Int { state.withLock { $0.reads } }
+    var stopped: Bool { state.withLock { $0.stopped } }
+    var bytesIssued: Int { state.withLock { $0.bytesIssued } }
+    var leftover: Int { state.withLock { $0.leftover } }
 
     init(chunks: [HTTPTransferRead]) {
-        self.chunks = chunks
+        state = Mutex(State(chunks: chunks))
     }
 
     func transfer() -> HTTPTransfer {
         HTTPTransfer(
             write: { [self] data in
-                self.lock.lock()
-                self.written.append(data)
-                self.lock.unlock()
+                self.state.withLock { $0.written.append(data) }
                 return .success(())
             },
             read: { [self] maximum, _ in
-                self.lock.lock()
-                defer { self.lock.unlock() }
-                self.reads += 1
-                if self.stopped { return .success(.end) }
-                guard self.chunks.isEmpty == false else { return .success(.end) }
-                let next = self.chunks.removeFirst()
-                guard case .bytes(var data) = next else { return .success(next) }
-                if data.count > maximum {
-                    let head = Data(data.prefix(maximum))
-                    data.removeFirst(maximum)
-                    self.chunks.insert(.bytes(data), at: 0)
-                    self.bytesIssued += head.count
-                    self.leftover = self.chunks.count
-                    return .success(.bytes(head))
+                self.state.withLock { script -> Result<HTTPTransferRead, HTTPTransferFault> in
+                    script.reads += 1
+                    if script.stopped { return .success(.end) }
+                    guard script.chunks.isEmpty == false else { return .success(.end) }
+                    let next = script.chunks.removeFirst()
+                    guard case .bytes(var data) = next else { return .success(next) }
+                    if data.count > maximum {
+                        let head = Data(data.prefix(maximum))
+                        data.removeFirst(maximum)
+                        script.chunks.insert(.bytes(data), at: 0)
+                        script.bytesIssued += head.count
+                        script.leftover = script.chunks.count
+                        return .success(.bytes(head))
+                    }
+                    script.bytesIssued += data.count
+                    script.leftover = script.chunks.count
+                    return .success(.bytes(data))
                 }
-                self.bytesIssued += data.count
-                self.leftover = self.chunks.count
-                return .success(.bytes(data))
             },
             stop: { [self] in
-                self.lock.lock()
-                self.stopped = true
-                self.lock.unlock()
+                self.state.withLock { $0.stopped = true }
             }
         )
     }
@@ -828,20 +831,15 @@ private final class LocalHTTPServer {
     }
 }
 
-private final class RequestBox: @unchecked Sendable {
-    private let lock = NSLock()
-    private var data = Data()
+private final class RequestBox: Sendable {
+    private let box = Mutex(Data())
 
     func store(_ data: Data) {
-        lock.lock()
-        self.data = data
-        lock.unlock()
+        box.withLock { $0 = data }
     }
 
     func bytes() -> Data {
-        lock.lock()
-        defer { lock.unlock() }
-        return data
+        box.withLock { $0 }
     }
 }
 

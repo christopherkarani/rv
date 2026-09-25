@@ -727,6 +727,7 @@ func rejectWorkspaceInodeAlias(_ root: String) -> Result<Void, IsolationApplyErr
 }
 
 /// Mutable flag for `rejectWorkspaceInodeAlias`. The directory walk is synchronous.
-private final class InodeAliasScan: @unchecked Sendable {
+/// Not Sendable: FileManager calls the error handler on the scanning thread.
+private final class InodeAliasScan {
     var failed = false
 }

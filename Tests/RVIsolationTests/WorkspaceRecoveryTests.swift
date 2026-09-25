@@ -3,6 +3,7 @@ import Darwin
 #endif
 import Foundation
 import RVDomain
+import Synchronization
 import Testing
 @testable import RVIsolation
 
@@ -580,15 +581,12 @@ private func detach(_ disk: String) {
 
 /// `Process.deinit` calls `waitUntilExit`. A detach still in disk I/O after
 /// SIGKILL stays referenced so that deinit cannot pin the caller.
-private final class ParkedDetach: @unchecked Sendable {
+private final class ParkedDetach: Sendable {
     private static let parked = ParkedDetach()
-    private let lock = NSLock()
-    private var processes: [Process] = []
+    private let box = Mutex<[Process]>([])
 
     static func keep(_ process: Process) {
-        parked.lock.lock()
-        parked.processes.append(process)
-        parked.lock.unlock()
+        parked.box.withLock { $0.append(process) }
     }
 }
 

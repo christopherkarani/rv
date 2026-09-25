@@ -117,9 +117,12 @@ public final class SwiftTermAdapter: TerminalEmulating {
             if value < ansiColors.count {
                 rgb = ansiColors[value]
             } else if value < 232 {
-                let levels: [UInt8] = [0, 95, 135, 175, 215, 255]
                 let index = value - 16
-                rgb = (levels[index / 36], levels[(index / 6) % 6], levels[index % 6])
+                rgb = (
+                    Self.cubeLevels[index / 36],
+                    Self.cubeLevels[(index / 6) % 6],
+                    Self.cubeLevels[index % 6]
+                )
             } else {
                 let gray = UInt8(8 + (value - 232) * 10)
                 rgb = (gray, gray, gray)
@@ -129,6 +132,10 @@ public final class SwiftTermAdapter: TerminalEmulating {
             return TerminalColor(red: red, green: green, blue: blue)
         }
     }
+
+    /// 6x6x6 color cube levels for ANSI 16-231. Shared so `frame` does not
+    /// allocate per cell.
+    private static let cubeLevels: [UInt8] = [0, 95, 135, 175, 215, 255]
 
     /// The standard xterm palette used by SwiftTerm's `.xterm` strategy.
     private static let ansiColors: [(UInt8, UInt8, UInt8)] = [

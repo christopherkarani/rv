@@ -50,6 +50,10 @@ enum TerminalControlError: Error, Equatable, Sendable {
 /// the descriptor. Closing a client does not close the master. Closing the
 /// workspace host does: the PTY dies with this process, and crash recovery
 /// reclaims the process group without rebuilding the byte stream.
+//
+// @unchecked: NSCondition is load-bearing (reader fan-out with predicate
+// waits and broadcasts across subscribe/emit/detach). All mutable state is
+// only touched while holding `condition`.
 final class RuntimeTerminal: @unchecked Sendable {
     private let condition = NSCondition()
     private var master: Int32
@@ -333,6 +337,10 @@ final class RuntimeTerminal: @unchecked Sendable {
         if held >= 0 { Darwin.close(held) }
     }
 
+    /// Attaches a client to replay plus live output. When a subscriber falls
+    /// behind, the flush loop emits `.overflow` and drops it; the same client
+    /// id may subscribe again to resume from replay (see
+    /// `WorkspaceClient.resubscribeTerminal`).
     func subscribe(
         client: UUID,
         emit: @escaping @Sendable (TerminalNotice) -> Bool
@@ -686,8 +694,9 @@ final class RuntimeTerminal: @unchecked Sendable {
                 return
             }
             if dropped || ended {
-                // The exit notice is already on the wire. Remove the subscriber
-                // so the same client can attach again and acquire fails closed.
+                // The overflow/exit notice is already on the wire. Remove the
+                // subscriber so the same client id can subscribe again and
+                // resume from replay; acquire fails closed until it does.
                 subscriber.stopped = true
                 subscriber.chunks.removeAll()
                 subscriber.queuedBytes = 0
@@ -803,6 +812,8 @@ final class RuntimeTerminal: @unchecked Sendable {
     }
 }
 
+// Confined to `RuntimeTerminal.condition`: only touched while the owner holds
+// its condition lock. Never shared directly.
 private final class Subscriber: @unchecked Sendable {
     let id: UUID
     let emit: @Sendable (TerminalNotice) -> Bool
