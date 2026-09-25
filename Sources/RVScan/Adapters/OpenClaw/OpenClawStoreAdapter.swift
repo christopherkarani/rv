@@ -225,25 +225,29 @@ public struct OpenClawStoreAdapter: SessionStoreAdapter {
 
 /// One `transcript_events.event_json` payload of the OpenClaw session store.
 /// Also the shape of nested `toolCall` objects and `message.content` items,
-/// hence a class: matching recurses into both. Covers exactly the fields
-/// extraction reads: the exec routing names, the command carriers, the nested
-/// match sites, and cwd-ish fields.
+/// hence recursive: `toolCall` nests through an indirect box (a struct cannot
+/// store itself) while `message.content` recurs through its array. Covers
+/// exactly the fields extraction reads: the exec routing names, the command
+/// carriers, the nested match sites, and cwd-ish fields.
 ///
 /// Lenient: every field decodes with `try?`, so any JSON object yields a row
 /// and only non-object payloads fail to decode — the typed equivalent of the
 /// old `as? [String: Any]` row check. Explicit JSON null decodes as absent.
-private final class OpenClawStoreRow: Decodable {
+private struct OpenClawStoreRow: Decodable {
     var name: String?
     var toolName: String?
     var arguments: OpenClawCommandInput?
     var params: OpenClawCommandInput?
     var input: OpenClawCommandInput?
-    var toolCall: OpenClawStoreRow?
+    var toolCallStorage: OpenClawStoreToolCall?
     var message: OpenClawStoreMessage?
     var cwd: String?
     var workdir: String?
     var workingDirectoryRaw: String?
     var workingDirectorySnake: String?
+
+    /// The nested `toolCall` row, when the payload carried a decodable object.
+    var toolCall: OpenClawStoreRow? { toolCallStorage?.row }
 
     /// Cwd in the old crawl's probe order over the modeled carriers (`params`,
     /// then `input`, then `arguments` — not command-fallthrough order), then
@@ -264,7 +268,7 @@ private final class OpenClawStoreRow: Decodable {
         case arguments
         case params
         case input
-        case toolCall
+        case toolCallStorage = "toolCall"
         case message
         case cwd
         case workdir
@@ -281,12 +285,28 @@ private final class OpenClawStoreRow: Decodable {
         arguments = try? container.decode(OpenClawCommandInput.self, forKey: .arguments)
         params = try? container.decode(OpenClawCommandInput.self, forKey: .params)
         input = try? container.decode(OpenClawCommandInput.self, forKey: .input)
-        toolCall = try? container.decode(OpenClawStoreRow.self, forKey: .toolCall)
+        toolCallStorage = try? container.decode(OpenClawStoreToolCall.self, forKey: .toolCallStorage)
         message = try? container.decode(OpenClawStoreMessage.self, forKey: .message)
         cwd = try? container.decode(String.self, forKey: .cwd)
         workdir = try? container.decode(String.self, forKey: .workdir)
         workingDirectoryRaw = try? container.decode(String.self, forKey: .workingDirectoryRaw)
         workingDirectorySnake = try? container.decode(String.self, forKey: .workingDirectorySnake)
+    }
+}
+
+/// Indirect box for the recursive `toolCall` nesting. Decodes transparently
+/// as a row, so a wrong-typed `toolCall` stays inert exactly like before.
+private enum OpenClawStoreToolCall: Decodable {
+    indirect case row(OpenClawStoreRow)
+
+    init(from decoder: Decoder) throws {
+        self = .row(try OpenClawStoreRow(from: decoder))
+    }
+
+    var row: OpenClawStoreRow {
+        switch self {
+        case .row(let row): return row
+        }
     }
 }
 

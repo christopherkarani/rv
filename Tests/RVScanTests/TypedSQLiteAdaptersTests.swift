@@ -118,6 +118,26 @@ import RVDomain
     #expect(events[3].occurredAt == nil)
 }
 
+@Test func openClawTyped_narrowingPins() throws {
+    // The typed step narrowed the old deep crawl: unmodeled keys, JSON-string
+    // carriers, and nesting below depth 1 read as absent.
+    let events = try extractTypedOpenClaw(rows: [
+        (sessionID: "s", eventJSON: #"{"name":"exec","args":{"command":"dropped"}}"#, createdAt: 1_710_000_000),
+        (sessionID: "s", eventJSON: #"{"name":"exec","toolInput":{"command":"dropped"}}"#, createdAt: 1_710_000_000),
+        (sessionID: "s", eventJSON: #"{"name":"exec","state":{"command":"dropped"}}"#, createdAt: 1_710_000_000),
+        (sessionID: "s", eventJSON: #"{"name":"exec","payload":{"command":"dropped"}}"#, createdAt: 1_710_000_000),
+        (sessionID: "s", eventJSON: #"{"function":{"name":"exec","params":{"command":"dropped"}}}"#, createdAt: 1_710_000_000),
+        (sessionID: "s", eventJSON: #"{"name":"exec","params":"{\"command\":\"dropped\"}"}"#, createdAt: 1_710_000_000),
+        (sessionID: "s", eventJSON: #"{"toolCall":{"name":"other","toolCall":{"name":"exec","params":{"command":"dropped"}}}}"#, createdAt: 1_710_000_000),
+        (sessionID: "s", eventJSON: #"{"name":"exec","params":{"nested":{"command":"dropped"}}}"#, createdAt: 1_710_000_000),
+        (sessionID: "s", eventJSON: #"{"name":"exec","params":{"command":"kept"},"args":{"cwd":"/tmp/dropped"}}"#, createdAt: 1_710_000_000),
+        (sessionID: "s", eventJSON: #"{"name":"exec","params":{"command":"kept","nested":{"cwd":"/tmp/dropped"}}}"#, createdAt: 1_710_000_000),
+        (sessionID: "s", eventJSON: #"{"name":"exec","params":{"command":"kept"},"arguments":"{\"cwd\":\"/tmp/dropped\"}"}"#, createdAt: 1_710_000_000),
+    ])
+    #expect(events.map(\.command.rawValue) == ["kept", "kept", "kept"])
+    #expect(events.allSatisfy { $0.workingDirectory == nil })
+}
+
 // MARK: - Hermes goldens
 
 @Test func hermesTyped_fixtureGoldens() throws {
@@ -265,6 +285,21 @@ import RVDomain
     #expect(events[1].occurredAt == Date(timeIntervalSince1970: 1_710_000_000))
     #expect(events[2].occurredAt == nil)
     #expect(events[3].occurredAt == nil)
+}
+
+@Test func hermesTyped_narrowingPins() throws {
+    // The typed step narrowed the old deep crawl: `function.input` is never
+    // routed, and unmodeled keys plus nesting below depth 1 read as absent.
+    let events = try extractTypedHermes(rows: [
+        (sessionID: "s", toolCalls: #"{"name":"other","function":{"name":"terminal","input":{"command":"dropped"}}}"#, timestamp: 1_710_000_000),
+        (sessionID: "s", toolCalls: #"{"name":"terminal","arguments":{"nested":{"command":"dropped"}}}"#, timestamp: 1_710_000_000),
+        (sessionID: "s", toolCalls: #"{"name":"terminal","arguments":"{\"nested\":{\"command\":\"dropped\"}}"}"#, timestamp: 1_710_000_000),
+        (sessionID: "s", toolCalls: #"{"name":"terminal","arguments":{"command":"kept"},"args":{"cwd":"/tmp/dropped"},"toolInput":{"cwd":"/tmp/dropped"},"state":{"cwd":"/tmp/dropped"},"payload":{"cwd":"/tmp/dropped"}}"#, timestamp: 1_710_000_000),
+        (sessionID: "s", toolCalls: #"{"name":"terminal","arguments":{"command":"kept","nested":{"cwd":"/tmp/dropped"}}}"#, timestamp: 1_710_000_000),
+        (sessionID: "s", toolCalls: #"{"name":"terminal","arguments":{"command":"kept"},"function":{"name":"terminal","input":{"cwd":"/tmp/dropped"},"args":{"cwd":"/tmp/dropped"}}}"#, timestamp: 1_710_000_000),
+    ])
+    #expect(events.map(\.command.rawValue) == ["kept", "kept", "kept"])
+    #expect(events.allSatisfy { $0.workingDirectory == nil })
 }
 
 // MARK: - SQLite test support
