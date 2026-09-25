@@ -79,7 +79,7 @@ private final class EgressStubServer: @unchecked Sendable {
     }
 
     init?(reply: String) {
-        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        let fd = egressStreamSocket()
         guard fd >= 0 else { return nil }
         var address = sockaddr_in()
         address.sin_family = sa_family_t(AF_INET)
@@ -136,8 +136,16 @@ private final class EgressStubServer: @unchecked Sendable {
     }
 }
 
+private func egressStreamSocket() -> Int32 {
+    #if canImport(Darwin)
+    return socket(AF_INET, SOCK_STREAM, 0)
+    #else
+    return socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
+    #endif
+}
+
 private func egressConnect(port: Int) -> Int32? {
-    let fd = socket(AF_INET, SOCK_STREAM, 0)
+    let fd = egressStreamSocket()
     guard fd >= 0 else { return nil }
     var address = sockaddr_in()
     address.sin_family = sa_family_t(AF_INET)
@@ -295,7 +303,7 @@ private func egressRead(_ fd: Int32, timeoutSeconds: Int = 10) -> String {
 
 @Test func egressProxyReportsDialFailures() throws {
     // A port nothing listens on: admitted by the loopback rule, then refused.
-    let reserved = socket(AF_INET, SOCK_STREAM, 0)
+    let reserved = egressStreamSocket()
     try #require(reserved >= 0)
     var address = sockaddr_in()
     address.sin_family = sa_family_t(AF_INET)

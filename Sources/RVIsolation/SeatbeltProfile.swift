@@ -195,6 +195,38 @@ enum AgentHomeStaging {
     static let anthropicGatewayPlaceholder = "rv-cage-gateway-placeholder"
 }
 
+/// Host-side agent home staging, run before each contained spawn.
+///
+/// Symlinks the host-owned credential originals into the workspace-local
+/// agent homes (read-only targets; the profile grants read-data only),
+/// prepares the cage tmp dir, and ensures claude's hardcoded scratch root
+/// exists (the cage can write beneath it but cannot create it: /tmp itself
+/// stays metadata-only). Skips any destination that already exists so
+/// project-owned agent state wins. Best-effort: failures leave the agent
+/// to report its own missing credentials.
+///
+/// Portable FileManager logic, so it lives in this unguarded file next to
+/// `AgentHomeStaging` rather than in the macOS-only supervisor.
+func stageAgentHomes(workspace: String, home: String? = nil) {
+    let manager = FileManager.default
+    let home = home ?? ProcessInfo.processInfo.environment["HOME"] ?? ""
+    let cageTmp = "\(workspace)/\(AgentHomeStaging.cageTmpSubpath)"
+    try? manager.createDirectory(atPath: cageTmp, withIntermediateDirectories: true)
+    for root in AgentHomeStaging.claudeScratchRoots() {
+        try? manager.createDirectory(atPath: root, withIntermediateDirectories: true)
+    }
+    guard home.hasPrefix("/"), home.contains("\0") == false else { return }
+    for link in AgentHomeStaging.credentialLinks {
+        let source = "\(home)/\(link.source)"
+        guard manager.isReadableFile(atPath: source) else { continue }
+        let destination = "\(workspace)/\(link.relative)"
+        if manager.fileExists(atPath: destination) { continue }
+        let parent = (destination as NSString).deletingLastPathComponent
+        try? manager.createDirectory(atPath: parent, withIntermediateDirectories: true)
+        try? manager.createSymbolicLink(atPath: destination, withDestinationPath: source)
+    }
+}
+
 /// Locates installed agent CLIs and resolves their file grants.
 ///
 /// The bin dir is a sibling of the running host (or CLI) binary holding one
