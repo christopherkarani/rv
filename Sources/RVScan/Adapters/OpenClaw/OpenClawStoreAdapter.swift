@@ -33,6 +33,10 @@ public struct OpenClawStoreAdapter: SessionStoreAdapter {
 
     /// Surface-extract exec events from provided store bytes.
     /// `fileURL` is provenance only; missing or unreadable `data` throws.
+    ///
+    /// Per-row failure policy (best-effort, unchanged): undecodable
+    /// `event_json` payloads and unknown shapes contribute zero events without
+    /// aborting the file; only store I/O failures throw.
     public func extract(fileURL: URL, data: Data) throws -> [ExtractedEvent] {
         try Self.events(in: data, sourcePath: fileURL.path)
     }
@@ -151,37 +155,33 @@ public struct OpenClawStoreAdapter: SessionStoreAdapter {
         return OwnedSQLiteDatabase(db: db, buffer: raw)
     }
 
-    private struct ExtractedShell {
-        var command: String
-        var workingDirectory: WorkingDirectory?
-    }
-
-    private static func extractCommand(from eventJSON: String) -> ExtractedShell? {
-        guard let data = eventJSON.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    /// Old `extractCommand(from:)` on the decoded row: an exec match on the
+    /// envelope wins, then on `toolCall`, then the first match scanning
+    /// `message.content` in order (one shell per row at most).
+    private static func extractCommand(from eventJSON: String) -> ScanExtractedShell? {
+        guard let payload = eventJSON.data(using: .utf8),
+              let row = try? JSONDecoder().decode(OpenClawStoreRow.self, from: payload)
         else {
             return nil
         }
-        return extractCommand(from: object)
+        return extractCommand(from: row)
     }
 
-    private static func extractCommand(from object: [String: Any]) -> ExtractedShell? {
-        if let command = execCommand(in: object) {
-            return ExtractedShell(
+    private static func extractCommand(from row: OpenClawStoreRow) -> ScanExtractedShell? {
+        if let command = execCommand(in: row) {
+            return ScanExtractedShell(
                 command: command,
-                workingDirectory: ScanStoreWorkingDirectory.fromEnvelope(object)
+                workingDirectory: row.workingDirectory
             )
         }
-        if let toolCall = object["toolCall"] as? [String: Any],
+        if let toolCall = row.toolCall,
            let command = execCommand(in: toolCall) {
-            return ExtractedShell(
+            return ScanExtractedShell(
                 command: command,
-                workingDirectory: ScanStoreWorkingDirectory.fromEnvelope(toolCall)
-                    ?? ScanStoreWorkingDirectory.fromEnvelope(object)
+                workingDirectory: toolCall.workingDirectory ?? row.workingDirectory
             )
         }
-        if let message = object["message"] as? [String: Any],
-           let content = message["content"] as? [[String: Any]] {
+        if let content = row.message?.content {
             for item in content {
                 if let extracted = extractCommand(from: item) {
                     return extracted
@@ -191,19 +191,19 @@ public struct OpenClawStoreAdapter: SessionStoreAdapter {
         return nil
     }
 
-    private static func execCommand(in object: [String: Any]) -> String? {
-        let name = (object["name"] as? String) ?? (object["toolName"] as? String)
-        guard name == "exec" else { return nil }
-        return commandText(in: object["arguments"])
-            ?? commandText(in: object["params"])
-            ?? commandText(in: object["input"])
+    /// Old `execCommand(in:)`: `name`/`toolName` routes to `exec`, then the
+    /// command falls through `arguments` → `params` → `input`. Carriers are
+    /// objects only — the old code never re-parsed a string carrier, so a
+    /// present-but-wrong-typed carrier is inert and falls through.
+    private static func execCommand(in row: OpenClawStoreRow) -> String? {
+        guard (row.name ?? row.toolName) == "exec" else { return nil }
+        return commandText(in: row.arguments)
+            ?? commandText(in: row.params)
+            ?? commandText(in: row.input)
     }
 
-    private static func commandText(in value: Any?) -> String? {
-        guard let object = value as? [String: Any],
-              let command = object["command"] as? String,
-              command.isEmpty == false
-        else {
+    private static func commandText(in value: OpenClawCommandInput?) -> String? {
+        guard let command = value?.command, command.isEmpty == false else {
             return nil
         }
         return command
@@ -220,5 +220,121 @@ public struct OpenClawStoreAdapter: SessionStoreAdapter {
             return Date(timeIntervalSince1970: Double(raw) / 1000)
         }
         return Date(timeIntervalSince1970: TimeInterval(raw))
+    }
+}
+
+/// One `transcript_events.event_json` payload of the OpenClaw session store.
+/// Also the shape of nested `toolCall` objects and `message.content` items,
+/// hence a class: matching recurses into both. Covers exactly the fields
+/// extraction reads: the exec routing names, the command carriers, the nested
+/// match sites, and cwd-ish fields.
+///
+/// Lenient: every field decodes with `try?`, so any JSON object yields a row
+/// and only non-object payloads fail to decode — the typed equivalent of the
+/// old `as? [String: Any]` row check. Explicit JSON null decodes as absent.
+private final class OpenClawStoreRow: Decodable {
+    var name: String?
+    var toolName: String?
+    var arguments: OpenClawCommandInput?
+    var params: OpenClawCommandInput?
+    var input: OpenClawCommandInput?
+    var toolCall: OpenClawStoreRow?
+    var message: OpenClawStoreMessage?
+    var cwd: String?
+    var workdir: String?
+    var workingDirectoryRaw: String?
+    var workingDirectorySnake: String?
+
+    /// Cwd in the old crawl's probe order over the modeled carriers (`params`,
+    /// then `input`, then `arguments` — not command-fallthrough order), then
+    /// the envelope fields. The typed replacement for this adapter's share of
+    /// the old deep crawl (which also probed unmodeled `args`/`toolInput`/
+    /// `state`/`payload`/`function` keys, JSON-string carriers, and recursed
+    /// below depth 1; those exotic nestings now read as absent).
+    var workingDirectory: WorkingDirectory? {
+        params?.workingDirectory
+            ?? input?.workingDirectory
+            ?? arguments?.workingDirectory
+            ?? ScanStoreWorkingDirectory.firstValid(cwd, workdir, workingDirectoryRaw, workingDirectorySnake)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case toolName
+        case arguments
+        case params
+        case input
+        case toolCall
+        case message
+        case cwd
+        case workdir
+        case workingDirectoryRaw = "workingDirectory"
+        case workingDirectorySnake = "working_directory"
+    }
+
+    /// Field-independent leniency: a present-but-wrong-typed scalar decodes
+    /// as nil (matching the old per-field `as?`) instead of failing the row.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try? container.decode(String.self, forKey: .name)
+        toolName = try? container.decode(String.self, forKey: .toolName)
+        arguments = try? container.decode(OpenClawCommandInput.self, forKey: .arguments)
+        params = try? container.decode(OpenClawCommandInput.self, forKey: .params)
+        input = try? container.decode(OpenClawCommandInput.self, forKey: .input)
+        toolCall = try? container.decode(OpenClawStoreRow.self, forKey: .toolCall)
+        message = try? container.decode(OpenClawStoreMessage.self, forKey: .message)
+        cwd = try? container.decode(String.self, forKey: .cwd)
+        workdir = try? container.decode(String.self, forKey: .workdir)
+        workingDirectoryRaw = try? container.decode(String.self, forKey: .workingDirectoryRaw)
+        workingDirectorySnake = try? container.decode(String.self, forKey: .workingDirectorySnake)
+    }
+}
+
+/// A message wrapper: only its content items participate in matching.
+/// Lenient: any JSON object decodes; a wrong-typed `content` becomes nil. A
+/// non-object element still fails the enclosing `content` array, matching the
+/// old `as? [[String: Any]]` row check.
+private struct OpenClawStoreMessage: Decodable {
+    var content: [OpenClawStoreRow]?
+
+    enum CodingKeys: String, CodingKey {
+        case content
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        content = try? container.decode([OpenClawStoreRow].self, forKey: .content)
+    }
+}
+
+/// A command carrier (`arguments`, `params`, or `input`): the string `command`
+/// plus cwd-ish fields. Lenient: any JSON object decodes; wrong-typed fields
+/// become nil.
+private struct OpenClawCommandInput: Decodable {
+    var command: String?
+    var cwd: String?
+    var workdir: String?
+    var workingDirectoryRaw: String?
+    var workingDirectorySnake: String?
+
+    var workingDirectory: WorkingDirectory? {
+        ScanStoreWorkingDirectory.firstValid(cwd, workdir, workingDirectoryRaw, workingDirectorySnake)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case command
+        case cwd
+        case workdir
+        case workingDirectoryRaw = "workingDirectory"
+        case workingDirectorySnake = "working_directory"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        command = try? container.decode(String.self, forKey: .command)
+        cwd = try? container.decode(String.self, forKey: .cwd)
+        workdir = try? container.decode(String.self, forKey: .workdir)
+        workingDirectoryRaw = try? container.decode(String.self, forKey: .workingDirectoryRaw)
+        workingDirectorySnake = try? container.decode(String.self, forKey: .workingDirectorySnake)
     }
 }

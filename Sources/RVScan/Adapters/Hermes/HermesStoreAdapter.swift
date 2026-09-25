@@ -31,6 +31,10 @@ public struct HermesStoreAdapter: SessionStoreAdapter {
 
     /// Surface-extract terminal events from provided store bytes.
     /// `fileURL` is provenance only; missing or unreadable `data` throws.
+    ///
+    /// Per-row failure policy (best-effort, unchanged): undecodable
+    /// `tool_calls` payloads and unknown shapes contribute zero events without
+    /// aborting the file; only store I/O failures throw.
     public func extract(fileURL: URL, data: Data) throws -> [ExtractedEvent] {
         try Self.events(in: data, sourcePath: fileURL.path)
     }
@@ -147,71 +151,74 @@ public struct HermesStoreAdapter: SessionStoreAdapter {
         return OwnedSQLiteDatabase(db: db, buffer: raw)
     }
 
-    private struct ExtractedShell {
-        var command: String
-        var workingDirectory: WorkingDirectory?
-    }
-
-    private static func extractCommands(from toolCallsJSON: String) -> [ExtractedShell] {
-        guard let data = toolCallsJSON.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data)
-        else {
-            return []
-        }
-        if let list = object as? [[String: Any]] {
+    /// Old `extractCommands(from:)`: a `tool_calls` payload is a list of calls
+    /// or a single call; anything else contributes zero events. A non-object
+    /// element still fails a list payload, matching the old
+    /// `as? [[String: Any]]` row check.
+    private static func extractCommands(from toolCallsJSON: String) -> [ScanExtractedShell] {
+        guard let payload = toolCallsJSON.data(using: .utf8) else { return [] }
+        if let list = try? JSONDecoder().decode([HermesToolCall].self, from: payload) {
             return list.compactMap(extractedShell(in:))
         }
-        if let object = object as? [String: Any],
+        if let object = try? JSONDecoder().decode(HermesToolCall.self, from: payload),
            let extracted = extractedShell(in: object) {
             return [extracted]
         }
         return []
     }
 
-    private static func extractedShell(in object: [String: Any]) -> ExtractedShell? {
-        guard let command = terminalCommand(in: object) else { return nil }
-        return ExtractedShell(
+    private static func extractedShell(in call: HermesToolCall) -> ScanExtractedShell? {
+        guard let command = terminalCommand(in: call) else { return nil }
+        return ScanExtractedShell(
             command: command,
-            workingDirectory: ScanStoreWorkingDirectory.fromEnvelope(object)
+            workingDirectory: call.workingDirectory
         )
     }
 
-    private static func terminalCommand(in object: [String: Any]) -> String? {
-        if isTerminal(object) {
-            return commandText(in: object["arguments"])
-                ?? commandText(in: object["params"])
-                ?? commandText(in: object["input"])
+    /// Old `terminalCommand(in:)`: a `terminal` call reads `arguments` →
+    /// `params` → `input`; otherwise a `terminal` function reads its own
+    /// `arguments` → `params`, then the outer `arguments` — never the outer
+    /// `params`/`input`, and never `function.input`.
+    private static func terminalCommand(in call: HermesToolCall) -> String? {
+        if isTerminal(name: call.name, toolName: call.toolName) {
+            return commandText(in: call.arguments)
+                ?? commandText(in: call.params)
+                ?? commandText(in: call.input)
         }
-        if let function = object["function"] as? [String: Any], isTerminal(function) {
-            return commandText(in: function["arguments"])
-                ?? commandText(in: function["params"])
-                ?? commandText(in: object["arguments"])
+        if let function = call.function,
+           isTerminal(name: function.name, toolName: function.toolName) {
+            return commandText(in: function.arguments)
+                ?? commandText(in: function.params)
+                ?? commandText(in: call.arguments)
         }
         return nil
     }
 
-    private static func isTerminal(_ object: [String: Any]) -> Bool {
-        let name = (object["name"] as? String) ?? (object["toolName"] as? String)
-        return name == "terminal"
+    private static func isTerminal(name: String?, toolName: String?) -> Bool {
+        (name ?? toolName) == "terminal"
     }
 
-    private static func commandText(in value: Any?) -> String? {
-        if let object = value as? [String: Any],
-           let command = object["command"] as? String,
-           command.isEmpty == false {
+    /// Old `commandText(in:)`: an object yields its non-empty string `command`;
+    /// a string is re-parsed as JSON and yields the object's non-empty string
+    /// `command`; an empty command is inert and falls through like a miss.
+    private static func commandText(in value: HermesCommandValue?) -> String? {
+        switch value {
+        case .object(let input):
+            guard let command = input.command, command.isEmpty == false else {
+                return nil
+            }
             return command
-        }
-        if let text = value as? String, text.isEmpty == false {
-            guard let data = text.data(using: .utf8),
-                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let command = object["command"] as? String,
-                  command.isEmpty == false
+        case .text(let raw):
+            guard let payload = raw.data(using: .utf8),
+                  let input = try? JSONDecoder().decode(HermesCommandInput.self, from: payload),
+                  let command = input.command, command.isEmpty == false
             else {
                 return nil
             }
             return command
+        case .other, nil:
+            return nil
         }
-        return nil
     }
 
     private static func textColumn(_ statement: OpaquePointer, index: Int32) -> String? {
@@ -225,5 +232,218 @@ public struct HermesStoreAdapter: SessionStoreAdapter {
             return Date(timeIntervalSince1970: raw / 1000)
         }
         return Date(timeIntervalSince1970: raw)
+    }
+}
+
+/// One tool call of a Hermes `messages.tool_calls` payload (a list of calls
+/// or a single call). Covers exactly the fields extraction reads: the
+/// terminal routing names, the command carriers, the nested function, and
+/// cwd-ish fields.
+///
+/// Lenient: every field decodes with `try?`, so any JSON object yields a call
+/// and only non-object payloads fail to decode — the typed equivalent of the
+/// old `as? [String: Any]` row check. Explicit JSON null decodes as absent.
+private struct HermesToolCall: Decodable {
+    var name: String?
+    var toolName: String?
+    var arguments: HermesCommandValue?
+    var params: HermesCommandValue?
+    var input: HermesCommandValue?
+    var function: HermesFunction?
+    var cwd: String?
+    var workdir: String?
+    var workingDirectoryRaw: String?
+    var workingDirectorySnake: String?
+
+    /// Cwd in the old crawl's probe order over the modeled carriers (`params`,
+    /// then `input`, then `arguments`, then the `function` subtree — not
+    /// command-fallthrough order), then the envelope fields. The typed
+    /// replacement for this adapter's share of the old deep crawl (which also
+    /// probed unmodeled `args`/`toolInput`/`state`/`payload` keys and recursed
+    /// below depth 1; those exotic nestings now read as absent).
+    var workingDirectory: WorkingDirectory? {
+        params?.nestedWorkingDirectory
+            ?? input?.nestedWorkingDirectory
+            ?? arguments?.nestedWorkingDirectory
+            ?? function?.workingDirectory
+            ?? ScanStoreWorkingDirectory.firstValid(cwd, workdir, workingDirectoryRaw, workingDirectorySnake)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case toolName
+        case arguments
+        case params
+        case input
+        case function
+        case cwd
+        case workdir
+        case workingDirectoryRaw = "workingDirectory"
+        case workingDirectorySnake = "working_directory"
+    }
+
+    /// Field-independent leniency: a present-but-wrong-typed scalar decodes
+    /// as nil (matching the old per-field `as?`) instead of failing the row.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try? container.decode(String.self, forKey: .name)
+        toolName = try? container.decode(String.self, forKey: .toolName)
+        arguments = try? container.decode(HermesCommandValue.self, forKey: .arguments)
+        params = try? container.decode(HermesCommandValue.self, forKey: .params)
+        input = try? container.decode(HermesCommandValue.self, forKey: .input)
+        function = try? container.decode(HermesFunction.self, forKey: .function)
+        cwd = try? container.decode(String.self, forKey: .cwd)
+        workdir = try? container.decode(String.self, forKey: .workdir)
+        workingDirectoryRaw = try? container.decode(String.self, forKey: .workingDirectoryRaw)
+        workingDirectorySnake = try? container.decode(String.self, forKey: .workingDirectorySnake)
+    }
+}
+
+/// A nested function call: the terminal routing names plus its own command
+/// carriers and cwd-ish fields. Command routing reads `arguments`/`params`
+/// only — never `input`, which the old code never subscripted here.
+/// Lenient: any JSON object decodes; wrong-typed fields become nil.
+private struct HermesFunction: Decodable {
+    var name: String?
+    var toolName: String?
+    var arguments: HermesCommandValue?
+    var params: HermesCommandValue?
+    var cwd: String?
+    var workdir: String?
+    var workingDirectoryRaw: String?
+    var workingDirectorySnake: String?
+
+    /// Direct cwd-ish fields plus the modeled carriers in crawl order. The old
+    /// crawl also probed unmodeled keys (`input`, `args`, `state`, …) and
+    /// recursed deeper; those exotic nestings now read as absent.
+    var workingDirectory: WorkingDirectory? {
+        params?.nestedWorkingDirectory
+            ?? arguments?.nestedWorkingDirectory
+            ?? ScanStoreWorkingDirectory.firstValid(cwd, workdir, workingDirectoryRaw, workingDirectorySnake)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case toolName
+        case arguments
+        case params
+        case cwd
+        case workdir
+        case workingDirectoryRaw = "workingDirectory"
+        case workingDirectorySnake = "working_directory"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try? container.decode(String.self, forKey: .name)
+        toolName = try? container.decode(String.self, forKey: .toolName)
+        arguments = try? container.decode(HermesCommandValue.self, forKey: .arguments)
+        params = try? container.decode(HermesCommandValue.self, forKey: .params)
+        cwd = try? container.decode(String.self, forKey: .cwd)
+        workdir = try? container.decode(String.self, forKey: .workdir)
+        workingDirectoryRaw = try? container.decode(String.self, forKey: .workingDirectoryRaw)
+        workingDirectorySnake = try? container.decode(String.self, forKey: .workingDirectorySnake)
+    }
+}
+
+/// A command carrier: JSON-encoded string, object, or inert.
+/// Total: every JSON value decodes (numbers/bools/null/arrays become `.other`),
+/// so a wrong-typed carrier is inert and falls through, never failing the row.
+private enum HermesCommandValue: Decodable {
+    case text(String)
+    case object(HermesCommandInput)
+    case other
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let value = try? container.decode(String.self) {
+            self = .text(value)
+            return
+        }
+        if let value = try? container.decode(HermesCommandInput.self) {
+            self = .object(value)
+            return
+        }
+        if container.decodeNil() {
+            self = .other
+            return
+        }
+        if (try? container.decode(Bool.self)) != nil {
+            self = .other
+            return
+        }
+        if (try? container.decode(Double.self)) != nil {
+            self = .other
+            return
+        }
+        if (try? container.decode([HermesInertJSON].self)) != nil {
+            self = .other
+            return
+        }
+        throw DecodingError.dataCorruptedError(in: container, debugDescription: "unsupported JSON value")
+    }
+
+    /// Direct cwd-ish fields of an object carrier, or of a JSON-encoded object
+    /// string, mirroring the old nested-object and JSON-string crawl one
+    /// level deep.
+    var nestedWorkingDirectory: WorkingDirectory? {
+        switch self {
+        case .object(let input):
+            return input.workingDirectory
+        case .text(let raw):
+            guard let payload = raw.data(using: .utf8),
+                  let input = try? JSONDecoder().decode(HermesCommandInput.self, from: payload)
+            else {
+                return nil
+            }
+            return input.workingDirectory
+        case .other:
+            return nil
+        }
+    }
+}
+
+/// A command-carrier object: the string `command` plus cwd-ish fields.
+/// Lenient: any JSON object decodes; wrong-typed fields become nil.
+private struct HermesCommandInput: Decodable {
+    var command: String?
+    var cwd: String?
+    var workdir: String?
+    var workingDirectoryRaw: String?
+    var workingDirectorySnake: String?
+
+    var workingDirectory: WorkingDirectory? {
+        ScanStoreWorkingDirectory.firstValid(cwd, workdir, workingDirectoryRaw, workingDirectorySnake)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case command
+        case cwd
+        case workdir
+        case workingDirectoryRaw = "workingDirectory"
+        case workingDirectorySnake = "working_directory"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        command = try? container.decode(String.self, forKey: .command)
+        cwd = try? container.decode(String.self, forKey: .cwd)
+        workdir = try? container.decode(String.self, forKey: .workdir)
+        workingDirectoryRaw = try? container.decode(String.self, forKey: .workingDirectoryRaw)
+        workingDirectorySnake = try? container.decode(String.self, forKey: .workingDirectorySnake)
+    }
+}
+
+/// Total consumer for array payloads, which carry no command.
+private struct HermesInertJSON: Decodable {
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if container.decodeNil() { return }
+        if (try? container.decode(Bool.self)) != nil { return }
+        if (try? container.decode(Double.self)) != nil { return }
+        if (try? container.decode(String.self)) != nil { return }
+        if (try? container.decode([HermesInertJSON].self)) != nil { return }
+        if (try? container.decode([String: HermesInertJSON].self)) != nil { return }
+        throw DecodingError.dataCorruptedError(in: container, debugDescription: "unsupported JSON value")
     }
 }
