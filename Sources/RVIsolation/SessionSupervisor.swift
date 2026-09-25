@@ -549,7 +549,7 @@ func spawnSeatbeltProcess(
     return .success(child)
 }
 
-private func containedRuntimeEnvironment(workspace: String, io: IsolatedIO) -> [String] {
+func containedRuntimeEnvironment(workspace: String, io: IsolatedIO) -> [String] {
     var values = [
         "PATH=/usr/bin:/bin",
         "LANG=C",
@@ -559,6 +559,11 @@ private func containedRuntimeEnvironment(workspace: String, io: IsolatedIO) -> [
     ]
     if case .pseudoTerminal = io {
         values.append("TERM=\(TerminalStreamLimits.supportedTerm)")
+        // The sandbox cannot see user dotfiles, so interactive shells start
+        // bare. Standard color output only; zsh ignores an inherited PS1, so
+        // the prompt stays its default unless the user creates a
+        // workspace-local .zshrc (HOME is the workspace).
+        values.append("CLICOLOR=1")
     }
     return values
 }

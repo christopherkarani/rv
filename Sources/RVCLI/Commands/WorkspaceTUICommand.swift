@@ -80,13 +80,20 @@ enum WorkspaceTUICommand {
     }
 
     #if os(macOS)
-    private static func launcherChoices() -> [RuntimeLaunchChoice] {
+    static func launcherChoices() -> [RuntimeLaunchChoice] {
+        // The sandbox cannot see user dotfiles, so zsh starts with default
+        // options, including PROMPT_SP (stray `%` lines). Preset it off for
+        // the default shell only; a workspace-local .zshrc still overrides.
+        // Plain sh has no such option and takes no arguments.
+        let zshPath = "/bin/zsh"
+        let shellExecutable = FileManager.default.isExecutableFile(atPath: zshPath) ? zshPath : "/bin/sh"
+        let shellArguments = shellExecutable == zshPath ? ["-o", "NO_PROMPT_SP"] : []
         var choices = [
             RuntimeLaunchChoice(
                 id: "shell",
                 title: "shell",
-                executable: FileManager.default.isExecutableFile(atPath: "/bin/zsh") ? "/bin/zsh" : "/bin/sh",
-                arguments: [],
+                executable: shellExecutable,
+                arguments: shellArguments,
                 hook: nil
             ),
         ]
