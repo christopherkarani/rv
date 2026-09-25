@@ -72,7 +72,11 @@ public final class EgressProxy: @unchecked Sendable {
         var hints = addrinfo()
         memset(&hints, 0, MemoryLayout<addrinfo>.size)
         hints.ai_family = AF_INET
+        #if canImport(Darwin)
         hints.ai_socktype = SOCK_STREAM
+        #else
+        hints.ai_socktype = Int32(SOCK_STREAM.rawValue)
+        #endif
         hints.ai_flags = AI_NUMERICHOST | AI_NUMERICSERV
         var info: UnsafeMutablePointer<addrinfo>?
         guard getaddrinfo("127.0.0.1", "0", &hints, &info) == 0, let first = info else {
@@ -239,8 +243,8 @@ public final class EgressProxy: @unchecked Sendable {
             group.leave()
         }
         group.notify(queue: relayQueue) {
-            shutdown(client, SHUT_RDWR)
-            shutdown(upstream, SHUT_RDWR)
+            shutdown(client, Int32(SHUT_RDWR))
+            shutdown(upstream, Int32(SHUT_RDWR))
             close(client)
             close(upstream)
         }
@@ -360,7 +364,11 @@ public final class EgressProxy: @unchecked Sendable {
         var hints = addrinfo()
         memset(&hints, 0, MemoryLayout<addrinfo>.size)
         hints.ai_family = AF_UNSPEC
+        #if canImport(Darwin)
         hints.ai_socktype = SOCK_STREAM
+        #else
+        hints.ai_socktype = Int32(SOCK_STREAM.rawValue)
+        #endif
         var info: UnsafeMutablePointer<addrinfo>?
         guard getaddrinfo(host, String(port), &hints, &info) == 0, let first = info else {
             return nil
@@ -504,8 +512,8 @@ public final class EgressProxy: @unchecked Sendable {
             if writeAll(destination, bytes: Array(buffer[..<count])) == false { break }
             if item.revents & Int16(POLLHUP) != 0 { break }
         }
-        shutdown(source, SHUT_RD)
-        shutdown(destination, SHUT_WR)
+        shutdown(source, Int32(SHUT_RD))
+        shutdown(destination, Int32(SHUT_WR))
     }
 
     @discardableResult
