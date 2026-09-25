@@ -197,6 +197,49 @@ struct WorkspaceTUIIntegrationTests {
     _ = owner.cancelRuntime(runtime.runtime)
 }
 
+@Test func invalidHookStringIsRejectedWithoutLaunching() throws {
+    let host = try OpenedHost()
+    defer { host.close() }
+    let client = try WorkspaceClient.connect(host.server.endpoint).get()
+    let terminalClient = try WorkspaceClient.connect(host.server.endpoint).get()
+    let live = LiveWorkspaceTUIClient(controlClient: client, terminalClient: terminalClient)
+    defer { _ = live.detach() }
+    guard case .failure(.rejected) = live.launchRuntime(
+        executable: "/bin/sh", arguments: [], hook: "bogus-hook", rows: 12, columns: 40
+    ) else {
+        Issue.record("an unknown hook must fail instead of launching unhooked")
+        return
+    }
+    guard case .failure(.rejected) = live.ensureTerminalRuntime(
+        executable: "/bin/sh", arguments: [], hook: "bogus-hook", rows: 12, columns: 40
+    ) else {
+        Issue.record("an unknown hook must fail instead of ensuring unhooked")
+        return
+    }
+    #expect(try client.listRuntimes().get().isEmpty)
+}
+
+@Test func overflowedTerminalResubscribesFromReplay() throws {
+    let host = try OpenedHost()
+    defer { host.close() }
+    let client = try WorkspaceClient.connect(host.server.endpoint).get()
+    let terminalClient = try WorkspaceClient.connect(host.server.endpoint).get()
+    let live = LiveWorkspaceTUIClient(controlClient: client, terminalClient: terminalClient)
+    defer { _ = live.detach() }
+    let runtime = try live.ensureTerminalRuntime(
+        executable: "/bin/sh",
+        arguments: ["-c", "printf 'RV-TUI-RESUB'; /bin/sleep 30"],
+        hook: nil,
+        rows: 12,
+        columns: 40
+    ).get()
+    try live.subscribe(runtime.id).get()
+    #expect(waitUntil { drainContains(live, needle: "RV-TUI-RESUB") })
+    try live.resubscribe(runtime.id).get()
+    #expect(waitUntil { drainContains(live, needle: "RV-TUI-RESUB") })
+    _ = client.cancelRuntime(runtime.id)
+}
+
 private func screen(_ model: WorkspaceTUIModel) -> String {
     guard let frame = model.terminalFrame() else { return "" }
     return (0..<frame.rows).map(frame.line).joined(separator: "\n")
@@ -205,6 +248,25 @@ private func screen(_ model: WorkspaceTUIModel) -> String {
 private func send(_ string: String, to model: WorkspaceTUIModel) {
     for character in string { model.handle(.character(character)) }
     model.handle(.enter)
+}
+
+private func drainContains(_ live: LiveWorkspaceTUIClient, needle: String) -> Bool {
+    var seen = Data()
+    let deadline = Date().addingTimeInterval(2)
+    while Date() < deadline {
+        switch live.nextEvent(timeout: 0.2) {
+        case .failure:
+            return false
+        case .success(nil):
+            continue
+        case .success(.bytes(_, let data)):
+            seen.append(data)
+            if String(data: seen, encoding: .utf8)?.contains(needle) == true { return true }
+        case .success:
+            continue
+        }
+    }
+    return false
 }
 
 private struct OpenedHost {

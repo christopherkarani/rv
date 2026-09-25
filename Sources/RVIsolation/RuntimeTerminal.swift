@@ -337,6 +337,10 @@ final class RuntimeTerminal: @unchecked Sendable {
         if held >= 0 { Darwin.close(held) }
     }
 
+    /// Attaches a client to replay plus live output. When a subscriber falls
+    /// behind, the flush loop emits `.overflow` and drops it; the same client
+    /// id may subscribe again to resume from replay (see
+    /// `WorkspaceClient.resubscribeTerminal`).
     func subscribe(
         client: UUID,
         emit: @escaping @Sendable (TerminalNotice) -> Bool
@@ -690,8 +694,9 @@ final class RuntimeTerminal: @unchecked Sendable {
                 return
             }
             if dropped || ended {
-                // The exit notice is already on the wire. Remove the subscriber
-                // so the same client can attach again and acquire fails closed.
+                // The overflow/exit notice is already on the wire. Remove the
+                // subscriber so the same client id can subscribe again and
+                // resume from replay; acquire fails closed until it does.
                 subscriber.stopped = true
                 subscriber.chunks.removeAll()
                 subscriber.queuedBytes = 0

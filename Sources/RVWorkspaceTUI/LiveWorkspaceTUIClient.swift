@@ -54,6 +54,9 @@ public final class LiveWorkspaceTUIClient: WorkspaceTUIClient, @unchecked Sendab
         rows: Int,
         columns: Int
     ) -> Result<ListedRuntime, WorkspaceTUIClientError> {
+        if let hook, HookHost(rawValue: hook) == nil {
+            return .failure(.rejected)
+        }
         let host = hook.flatMap(HookHost.init(rawValue:))
         return controlClient.launchRuntime(
             executable: executable,
@@ -81,6 +84,9 @@ public final class LiveWorkspaceTUIClient: WorkspaceTUIClient, @unchecked Sendab
         rows: Int,
         columns: Int
     ) -> Result<ListedRuntime, WorkspaceTUIClientError> {
+        if let hook, HookHost(rawValue: hook) == nil {
+            return .failure(.rejected)
+        }
         let host = hook.flatMap(HookHost.init(rawValue:))
         return controlClient.ensureTerminalRuntime(
             executable: executable,
@@ -111,6 +117,14 @@ public final class LiveWorkspaceTUIClient: WorkspaceTUIClient, @unchecked Sendab
 
     public func unsubscribe(_ id: UUID) -> Result<Void, WorkspaceTUIClientError> {
         terminalClient.unsubscribeTerminal(id).mapError(Self.failure)
+    }
+
+    /// Manual recovery after `.overflow`: the host dropped this terminal's
+    /// subscription, so re-subscribe to resume from replay, then re-acquire
+    /// input if this client held it. Not in `WorkspaceTUIClient`; callers use
+    /// it directly after observing overflow.
+    public func resubscribe(_ id: UUID) -> Result<Void, WorkspaceTUIClientError> {
+        terminalClient.resubscribeTerminal(id).mapError(Self.failure)
     }
 
     public func acquireInput(_ id: UUID) -> Result<Void, WorkspaceTUIClientError> {

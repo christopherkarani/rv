@@ -118,21 +118,27 @@ public enum WorkspaceHostExit {
 /// Authenticated control client. It never receives workspace or runtime capabilities.
 public final class WorkspaceClient: Sendable {
     private let endpoint: WorkspaceEndpoint
-    private(set) var supportsEnsureTerminalRuntime = false
     /// Serializes every read, write, and close on `fd` before a terminal
     /// subscription. After that, the event reader is the only reader.
     private let io: Mutex<ClientState>
     private let writeLock = Mutex<Void>(())
     private let events = EventBoard()
 
+    /// True when the host advertised `ensureTerminalRuntime`. Read from the
+    /// Mutex-protected state so the Sendable client holds no mutable storage.
+    var supportsEnsureTerminalRuntime: Bool {
+        io.withLock { $0.supportsEnsureTerminalRuntime }
+    }
+
     private struct ClientState {
         var fd: Int32
         var open: Bool
+        var supportsEnsureTerminalRuntime: Bool
     }
 
     private init(fd: Int32, endpoint: WorkspaceEndpoint) {
         self.endpoint = endpoint
-        self.io = Mutex(ClientState(fd: fd, open: true))
+        self.io = Mutex(ClientState(fd: fd, open: true, supportsEnsureTerminalRuntime: false))
     }
 
     deinit {
@@ -185,9 +191,11 @@ public final class WorkspaceClient: Sendable {
                 client.finish()
                 return .failure(error)
             case .success(let features):
-                client.supportsEnsureTerminalRuntime = features.contains(
-                    WorkspaceControlFeature.ensureTerminalRuntime
-                )
+                client.io.withLock {
+                    $0.supportsEnsureTerminalRuntime = features.contains(
+                        WorkspaceControlFeature.ensureTerminalRuntime
+                    )
+                }
             }
             return .success(client)
         }
@@ -319,6 +327,10 @@ public final class WorkspaceClient: Sendable {
         }
     }
 
+    /// Subscribes this connection to a terminal. After the host drops the
+    /// subscription for overflow (a `.overflow` event), call
+    /// `resubscribeTerminal` to resume from replay, then re-acquire input if
+    /// this client held it.
     public func subscribeTerminal(_ runtime: UUID) -> Result<Void, WorkspaceClientFailure> {
         var message = WorkspaceControlMessage(
             version: WorkspaceControlLimits.version,
@@ -335,6 +347,16 @@ public final class WorkspaceClient: Sendable {
             startEventReader()
         }
         return result.map { _ in () }
+    }
+
+    /// Re-establishes a terminal subscription after the host dropped it for
+    /// overflow. The host replays recent bytes, then live output resumes.
+    /// Re-acquire input after this returns if the client held the lease.
+    /// Manual recovery: call this after `.overflow`, or detach and connect a
+    /// fresh client to start over.
+    public func resubscribeTerminal(_ runtime: UUID) -> Result<Void, WorkspaceClientFailure> {
+        _ = unsubscribeTerminal(runtime)
+        return subscribeTerminal(runtime)
     }
 
     public func unsubscribeTerminal(_ runtime: UUID) -> Result<Void, WorkspaceClientFailure> {
@@ -477,10 +499,19 @@ public final class WorkspaceClient: Sendable {
     }
 
     private func negotiateCapabilities() -> Result<[String], WorkspaceClientFailure> {
-        switch transact(op: .capabilities, timeout: WorkspaceControlLimits.describeTimeoutSeconds) {
+        Self.negotiatedFeatures(
+            from: transact(op: .capabilities, timeout: WorkspaceControlLimits.describeTimeoutSeconds)
+        )
+    }
+
+    /// Maps a capabilities RPC to its feature list. Older persistent hosts
+    /// reject the operation with `invalidRequest`; they remain usable through
+    /// the serialized ensure fallback below.
+    static func negotiatedFeatures(
+        from result: Result<WorkspaceControlMessage, WorkspaceClientFailure>
+    ) -> Result<[String], WorkspaceClientFailure> {
+        switch result {
         case .failure(.invalidRequest):
-            // Older persistent hosts reject this operation. They remain usable
-            // through the serialized ensure fallback below.
             return .success([])
         case .failure(let error):
             return .failure(error)
@@ -490,6 +521,12 @@ public final class WorkspaceClient: Sendable {
             }
             return .success(message.features ?? [])
         }
+    }
+
+    /// Forces the legacy ensure path for tests. Production sets this once
+    /// from the capabilities negotiation in `connect`.
+    func testingSetSupportsEnsureTerminalRuntime(_ value: Bool) {
+        io.withLock { $0.supportsEnsureTerminalRuntime = value }
     }
 
     private func ensureTerminalRuntimeOnLegacyHost(

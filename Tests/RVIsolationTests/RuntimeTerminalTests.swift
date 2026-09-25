@@ -177,6 +177,56 @@ struct RuntimeTerminalTests {
         #expect(healthy.exitStatus == nil)
     }
 
+    @Test func resubscribeAfterOverflowResumesFromReplay() throws {
+        let terminal = try #require(RuntimeTerminal.open(rows: 24, columns: 80))
+        let slave = try openSlave(terminal.slavePath)
+        defer {
+            close(slave)
+            terminal.shutdownMaster()
+        }
+        terminal.startReader()
+        let slow = BlockingBox()
+        let id = UUID()
+        #expect(terminal.subscribe(client: id, emit: slow.append).isSuccess)
+        terminal.activate(client: id)
+        #expect(writeAll(fd: slave, bytes: Data([0x01])))
+        #expect(waitUntil(seconds: 2) { slow.isBlocked })
+        #expect(writeAll(fd: slave, bytes: binaryPayload(count: 80_000)))
+        slow.unblock()
+        #expect(waitUntil(seconds: 5) { slow.sawOverflow })
+        let resumed = NoticeBox()
+        #expect(waitUntil(seconds: 5) {
+            if case .success = terminal.subscribe(client: id, emit: resumed.append) {
+                terminal.activate(client: id)
+                return true
+            }
+            return false
+        })
+        let marker = Data("RESUMED".utf8)
+        #expect(writeAll(fd: slave, bytes: marker))
+        #expect(waitUntil(seconds: 5) { resumed.bytes.suffix(marker.count) == marker })
+        #expect(resumed.replayBytes.isEmpty == false)
+        terminal.finish(status: 0)
+        #expect(waitUntil(seconds: 2) { resumed.exitStatus == 0 })
+    }
+
+    @Test func clientResubscribeAfterUnsubscribeReceivesReplay() throws {
+        let opened = try PTYHost()
+        defer { opened.close() }
+        let client = try WorkspaceClient.connect(opened.server.endpoint).get()
+        let runtime = try client.launchRuntime(
+            executable: "/bin/sh",
+            arguments: ["-c", "printf 'RV-RESUB-MARKER'; /bin/sleep 30"],
+            terminalRows: 24,
+            terminalColumns: 80
+        ).get()
+        #expect(client.subscribeTerminal(runtime.runtime).isSuccess)
+        #expect(readUntil(client, contains: Data("RV-RESUB-MARKER".utf8), seconds: 10).contains(Data("RV-RESUB-MARKER".utf8)))
+        #expect(client.resubscribeTerminal(runtime.runtime).isSuccess)
+        #expect(readUntil(client, contains: Data("RV-RESUB-MARKER".utf8), seconds: 10).contains(Data("RV-RESUB-MARKER".utf8)))
+        #expect(client.cancelRuntime(runtime.runtime).isSuccess)
+    }
+
     @Test func detachWaitsUntilFlushLeavesEmit() throws {
         let terminal = try #require(RuntimeTerminal.open(rows: 24, columns: 80))
         let slave = try openSlave(terminal.slavePath)

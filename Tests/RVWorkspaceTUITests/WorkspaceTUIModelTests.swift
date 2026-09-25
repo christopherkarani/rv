@@ -754,6 +754,20 @@ private func model(_ client: FakeWorkspaceClient) -> WorkspaceTUIModel {
     #expect(clamped?.columns == 1)
 }
 
+@Test func recordNeverPromotesASettledResize() {
+    var gate = ResizeCoalescer()
+    gate.recordLaunch(rows: 24, columns: 80)
+    let start = Date(timeIntervalSince1970: 2_000)
+    gate.record(rows: 30, columns: 90, now: start)
+    // A render after the settle window must not mark the size sent; only the
+    // coalescing tick promotes via `flush`.
+    gate.record(rows: 30, columns: 90, now: start.addingTimeInterval(0.1))
+    let flushed = gate.flush(now: start.addingTimeInterval(0.1))
+    #expect(flushed?.rows == 30)
+    #expect(flushed?.columns == 90)
+    #expect(gate.flush(now: start.addingTimeInterval(1)) == nil)
+}
+
 private func waitForModel(
     timeout: TimeInterval = 3,
     _ condition: () -> Bool
