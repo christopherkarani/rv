@@ -236,6 +236,44 @@ private func extractCursor(_ payload: String, fileName: String = "inline-cursor.
     )
 }
 
+@Test func codexTyped_carrierEdgeShapes() throws {
+    // A token array directly under tool_input/arguments joins (old array branch).
+    #expect(
+        try extractCodex(
+            #"{"tool_name":"Bash","tool_input":["git","status"]}"#
+        ).map(\.command.rawValue) == ["git status"]
+    )
+    #expect(
+        try extractCodex(
+            #"{"type":"function_call","name":"shell","arguments":["git","log"]}"#
+        ).map(\.command.rawValue) == ["git log"]
+    )
+    // A present-but-inert carrier shadows its fallback (old `??` on Any?):
+    // numbers, null, and bools yield zero events without failing the line.
+    #expect(
+        try extractCodex(
+            #"{"type":"function_call","name":"shell","arguments":42,"input":{"command":"x"}}"#
+        ).isEmpty
+    )
+    #expect(
+        try extractCodex(
+            #"{"tool_name":"Bash","tool_input":null,"toolInput":{"command":"x"}}"#
+        ).isEmpty
+    )
+    // snake_case tool_input wins over camelCase toolInput for the command.
+    #expect(
+        try extractCodex(
+            #"{"tool_name":"Bash","tool_input":{"command":"snake"},"toolInput":{"command":"camel"}}"#
+        ).map(\.command.rawValue) == ["snake"]
+    )
+    // Empty commands yield nothing.
+    #expect(
+        try extractCodex(
+            #"{"tool_name":"Bash","tool_input":{"command":""}}"#
+        ).isEmpty
+    )
+}
+
 @Test func codexTyped_payloadQuirks() throws {
     // Envelope hook beats the payload.
     #expect(
