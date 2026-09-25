@@ -24,10 +24,9 @@ public struct PiHostCodec: HostAskCodec {
         let hostAsk = envelope.hostAsk.flatMap(HostAskHookIntent.init(rawValue:))
         return HookRequest.decoded(
             host: .pi,
-            command: envelope.input?.command,
             cwd: cwd,
             session: session,
-            hostAsk: hostAsk
+            payload: .shell(command: envelope.input?.command, ask: hostAsk)
         )
     }
 

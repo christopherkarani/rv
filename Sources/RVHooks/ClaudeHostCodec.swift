@@ -21,10 +21,9 @@ public struct ClaudeHostCodec: HostAskCodec {
         if envelope.toolName == "Bash" {
             return HookRequest.decoded(
                 host: .claude,
-                command: envelope.toolInput?.command,
                 cwd: cwd,
                 session: session,
-                hostAsk: hostAsk
+                payload: .shell(command: envelope.toolInput?.command, ask: hostAsk)
             )
         }
         if let file = FileToolAction.make(
@@ -36,10 +35,9 @@ public struct ClaudeHostCodec: HostAskCodec {
         ) {
             return HookRequest.decoded(
                 host: .claude,
-                command: nil,
                 cwd: cwd,
                 session: session,
-                file: file
+                payload: .file(file)
             )
         }
         return .foreign

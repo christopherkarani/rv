@@ -26,10 +26,9 @@ public struct HermesHostCodec: HostAskCodec {
         let hostAsk = envelope.hostAsk.flatMap(HostAskHookIntent.init(rawValue:))
         return HookRequest.decoded(
             host: .hermes,
-            command: envelope.args?.command,
             cwd: cwd,
             session: session,
-            hostAsk: hostAsk
+            payload: .shell(command: envelope.args?.command, ask: hostAsk)
         )
     }
 

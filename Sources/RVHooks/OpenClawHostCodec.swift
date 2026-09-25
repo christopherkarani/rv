@@ -29,10 +29,9 @@ public struct OpenClawHostCodec: HostAskCodec {
         let hostAsk = envelope.hostAsk.flatMap(HostAskHookIntent.init(rawValue:))
         return HookRequest.decoded(
             host: .openclaw,
-            command: envelope.params?.command,
             cwd: cwd,
             session: session,
-            hostAsk: hostAsk
+            payload: .shell(command: envelope.params?.command, ask: hostAsk)
         )
     }
 

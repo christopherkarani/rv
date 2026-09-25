@@ -28,9 +28,9 @@ public struct CodexHostCodec: HostCodec {
             .flatMap { SessionID(validating: $0) }
         return HookRequest.decoded(
             host: .codex,
-            command: envelope.toolInput?.command,
             cwd: cwd,
-            session: session
+            session: session,
+            payload: .shell(command: envelope.toolInput?.command, ask: nil)
         )
     }
 
