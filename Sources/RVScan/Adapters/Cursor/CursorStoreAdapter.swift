@@ -1,13 +1,6 @@
 import Foundation
 import RVDomain
 
-/// Fail-closed Cursor store I/O. Empty or non-UTF-8 bytes are an error,
-/// not a successful empty event list.
-public enum CursorStoreError: Error, Sendable, Equatable {
-    /// `data` is empty, not UTF-8, or wholly unreadable as JSONL.
-    case unreadable(sourcePath: String)
-}
-
 /// Cursor session store at `$HOME/.cursor/projects/**/agent-transcripts/*.jsonl`.
 /// Surface fields: official `beforeShellExecution.command` and `preToolUse` /
 /// `Shell` `tool_input.command`. `extract(fileURL:data:)` uses **`data`**.
@@ -35,69 +28,16 @@ public struct CursorStoreAdapter: SessionStoreAdapter {
     /// Surface-extract shell events from provided store bytes.
     /// `fileURL` is provenance only; missing or unreadable `data` throws.
     public func extract(fileURL: URL, data: Data) throws -> [ExtractedEvent] {
-        try Self.events(
-            in: data,
+        try ScanJSONLEngine.extractFailClosed(
+            host: host,
+            data: data,
             sourcePath: fileURL.path,
-            fallbackSession: Self.sessionID(from: fileURL)
+            fallbackSession: SessionID(validating: fileURL.deletingPathExtension().lastPathComponent),
+            sessionKeys: ["conversation_id", "session_id", "sessionId"],
+            timestampKeys: ["timestamp", "ts"],
+            allowEpochTimestamp: false,
+            commands: Self.commands(in:)
         )
-    }
-
-    private static func sessionID(from fileURL: URL) -> SessionID? {
-        SessionID(validating: fileURL.deletingPathExtension().lastPathComponent)
-    }
-
-    private static func events(
-        in data: Data,
-        sourcePath: String,
-        fallbackSession: SessionID?
-    ) throws -> [ExtractedEvent] {
-        guard data.isEmpty == false else {
-            throw CursorStoreError.unreadable(sourcePath: sourcePath)
-        }
-        guard let text = String(data: data, encoding: .utf8) else {
-            throw CursorStoreError.unreadable(sourcePath: sourcePath)
-        }
-
-        var events: [ExtractedEvent] = []
-        var sawJSON = false
-        for rawLine in text.split(whereSeparator: \.isNewline) {
-            let line = rawLine.trimmingCharacters(in: .whitespaces)
-            guard line.isEmpty == false else { continue }
-            guard let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
-            else {
-                continue
-            }
-            sawJSON = true
-            for command in commands(in: object) {
-                events.append(
-                    ExtractedEvent(
-                        host: .cursor,
-                        sessionID: sessionID(in: object) ?? fallbackSession,
-                        sourcePath: sourcePath,
-                        occurredAt: parseTimestamp(object["timestamp"] ?? object["ts"]),
-                        command: ShellCommand(rawValue: command),
-                        workingDirectory: ScanStoreWorkingDirectory.fromEnvelope(object)
-                    )
-                )
-            }
-        }
-        if sawJSON == false {
-            throw CursorStoreError.unreadable(sourcePath: sourcePath)
-        }
-        return events
-    }
-
-    private static func sessionID(in object: [String: Any]) -> SessionID? {
-        if let value = object["conversation_id"] as? String, let id = SessionID(validating: value) {
-            return id
-        }
-        if let value = object["session_id"] as? String, let id = SessionID(validating: value) {
-            return id
-        }
-        if let value = object["sessionId"] as? String, let id = SessionID(validating: value) {
-            return id
-        }
-        return nil
     }
 
     private static func commands(in object: [String: Any]) -> [String] {
@@ -131,18 +71,6 @@ public struct CursorStoreAdapter: SessionStoreAdapter {
         }
         if let text = value as? String, text.isEmpty == false {
             return text
-        }
-        return nil
-    }
-
-    private static func parseTimestamp(_ value: Any?) -> Date? {
-        if let raw = value as? String, raw.isEmpty == false {
-            let fractional = ISO8601DateFormatter()
-            fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            if let date = fractional.date(from: raw) { return date }
-            let plain = ISO8601DateFormatter()
-            plain.formatOptions = [.withInternetDateTime]
-            return plain.date(from: raw)
         }
         return nil
     }

@@ -29,8 +29,9 @@ public struct GrokStoreAdapter: SessionStoreAdapter {
         let workingDirectory = ScanStoreWorkingDirectory.fromGrokLayout(fileURL: fileURL)
         var events: [ExtractedEvent] = []
 
-        for line in Self.jsonlLines(in: data) {
-            guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+        guard let lines = ScanJSONLEngine.textLines(in: data) else { return [] }
+        for line in lines {
+            guard let object = ScanJSONLEngine.parseObject(line),
                   (object["type"] as? String) == "assistant",
                   let toolCalls = object["tool_calls"] as? [[String: Any]]
             else {
@@ -70,14 +71,5 @@ public struct GrokStoreAdapter: SessionStoreAdapter {
             return nil
         }
         return object["command"] as? String
-    }
-
-    private static func jsonlLines(in data: Data) -> [Data] {
-        guard let text = String(data: data, encoding: .utf8) else { return [] }
-        return text.split(whereSeparator: \.isNewline).compactMap { line in
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard trimmed.isEmpty == false else { return nil }
-            return Data(trimmed.utf8)
-        }
     }
 }

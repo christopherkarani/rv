@@ -28,12 +28,7 @@ public struct ClaudeSessionStoreAdapter: SessionStoreAdapter {
         let fallbackSessionID = SessionID(validating: fileURL.deletingPathExtension().lastPathComponent)
         var events: [ExtractedEvent] = []
 
-        var offset = data.startIndex
-        while offset < data.endIndex {
-            let next = data[offset...].firstIndex(of: UInt8(ascii: "\n")) ?? data.endIndex
-            let line = data[offset..<next]
-            offset = next == data.endIndex ? data.endIndex : data.index(after: next)
-            if line.isEmpty { continue }
+        for line in ScanJSONLEngine.byteLines(in: data) {
             events.append(
                 contentsOf: Self.events(
                     fromLine: line,
@@ -53,18 +48,13 @@ public struct ClaudeSessionStoreAdapter: SessionStoreAdapter {
         sourcePath: String,
         fallbackSessionID: SessionID?
     ) -> [ExtractedEvent] {
-        guard let root = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else {
+        guard let root = ScanJSONLEngine.parseObject(line) else {
             return []
         }
 
-        let occurredAt = parseTimestamp(root["timestamp"])
+        let occurredAt = (root["timestamp"] as? String).flatMap(ScanTimestamp.iso8601)
         let envelopeCwd = ScanStoreWorkingDirectory.fromEnvelope(root)
-        let sessionID: SessionID? = {
-            if let value = root["sessionId"] as? String {
-                return SessionID(validating: value) ?? fallbackSessionID
-            }
-            return fallbackSessionID
-        }()
+        let sessionID = ScanJSONLEngine.sessionID(keys: ["sessionId"], in: root) ?? fallbackSessionID
 
         guard let message = root["message"] as? [String: Any] else { return [] }
         let blocks: [[String: Any]]
@@ -94,15 +84,5 @@ public struct ClaudeSessionStoreAdapter: SessionStoreAdapter {
             )
         }
         return out
-    }
-
-    private static func parseTimestamp(_ value: Any?) -> Date? {
-        guard let raw = value as? String, raw.isEmpty == false else { return nil }
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = fractional.date(from: raw) { return date }
-        let plain = ISO8601DateFormatter()
-        plain.formatOptions = [.withInternetDateTime]
-        return plain.date(from: raw)
     }
 }

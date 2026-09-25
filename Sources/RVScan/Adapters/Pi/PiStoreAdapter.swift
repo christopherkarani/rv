@@ -23,8 +23,9 @@ public struct PiStoreAdapter: SessionStoreAdapter {
         var sessionCwd: WorkingDirectory?
         var events: [ExtractedEvent] = []
 
-        for line in Self.jsonlLines(in: data) {
-            guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else {
+        guard let lines = ScanJSONLEngine.textLines(in: data) else { return [] }
+        for line in lines {
+            guard let object = ScanJSONLEngine.parseObject(line) else {
                 continue
             }
             let type = object["type"] as? String
@@ -43,8 +44,8 @@ public struct PiStoreAdapter: SessionStoreAdapter {
             else {
                 continue
             }
-            let occurredAt = Self.date(from: object["timestamp"])
-                ?? Self.date(from: message["timestamp"])
+            let occurredAt = ScanTimestamp.coerce(object["timestamp"], allowEpoch: true, requirePositive: false)
+                ?? ScanTimestamp.coerce(message["timestamp"], allowEpoch: true, requirePositive: false)
             for item in content {
                 guard (item["type"] as? String) == "toolCall",
                       (item["name"] as? String) == "bash",
@@ -69,35 +70,5 @@ public struct PiStoreAdapter: SessionStoreAdapter {
             }
         }
         return events
-    }
-
-    private static func jsonlLines(in data: Data) -> [Data] {
-        guard let text = String(data: data, encoding: .utf8) else { return [] }
-        return text.split(whereSeparator: \.isNewline).compactMap { line in
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard trimmed.isEmpty == false else { return nil }
-            return Data(trimmed.utf8)
-        }
-    }
-
-    private static func date(from value: Any?) -> Date? {
-        if let string = value as? String {
-            let fractional = ISO8601DateFormatter()
-            fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            if let date = fractional.date(from: string) {
-                return date
-            }
-            let basic = ISO8601DateFormatter()
-            basic.formatOptions = [.withInternetDateTime]
-            return basic.date(from: string)
-        }
-        if let number = value as? NSNumber {
-            let raw = number.doubleValue
-            if raw > 1_000_000_000_000 {
-                return Date(timeIntervalSince1970: raw / 1000)
-            }
-            return Date(timeIntervalSince1970: raw)
-        }
-        return nil
     }
 }
