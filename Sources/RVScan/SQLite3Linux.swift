@@ -96,6 +96,12 @@ func sqlite3_bind_text(
 @_silgen_name("sqlite3_bind_null")
 func sqlite3_bind_null(_ pStmt: OpaquePointer?, _ index: Int32) -> Int32
 
+@_silgen_name("sqlite3_bind_int64")
+func sqlite3_bind_int64(_ pStmt: OpaquePointer?, _ index: Int32, _ value: sqlite3_int64) -> Int32
+
+@_silgen_name("sqlite3_bind_double")
+func sqlite3_bind_double(_ pStmt: OpaquePointer?, _ index: Int32, _ value: Double) -> Int32
+
 @_silgen_name("sqlite3_malloc64")
 func sqlite3_malloc64(_ n: sqlite3_uint64) -> UnsafeMutableRawPointer?
 

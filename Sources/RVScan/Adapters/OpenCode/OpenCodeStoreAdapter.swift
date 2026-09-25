@@ -4,15 +4,6 @@ import RVDomain
 import SQLite3
 #endif
 
-/// Fail-closed OpenCode store I/O. Empty, invalid, or unprepared database
-/// bytes are an error, not a successful empty event list.
-public enum OpenCodeStoreError: Error, Sendable, Equatable {
-    /// `data` is empty, not SQLite, or could not be opened.
-    case unreadable(sourcePath: String)
-    /// Database opened but the `part` query could not be prepared.
-    case prepareFailed(sourcePath: String)
-}
-
 /// OpenCode session store at `$HOME/.local/share/opencode/opencode.db`.
 /// Surface field: `part.data` JSON with `type == "tool"`, `tool == "bash"`,
 /// and `state.input.command` (string).
@@ -35,8 +26,16 @@ public struct OpenCodeStoreAdapter: SessionStoreAdapter {
     /// Per-row failure policy (best-effort, unchanged): undecodable `part`
     /// payloads and unknown shapes contribute zero events without aborting
     /// the file; only store I/O failures throw.
-    public func extract(fileURL: URL, data: Data) throws -> [ExtractedEvent] {
-        try Self.events(in: data, sourcePath: fileURL.path)
+    public func extract(fileURL: URL, data: Data) throws(SessionStoreError) -> [ExtractedEvent] {
+        do {
+            return try Self.events(in: data, sourcePath: fileURL.path)
+        } catch let error as SessionStoreError {
+            throw error
+        } catch {
+            // Unreachable: `events` only throws `SessionStoreError` values, and
+            // `withConnection` only rethrows what its body throws.
+            throw SessionStoreError.unreadable(host: .opencode, sourcePath: fileURL.path)
+        }
     }
 
     private static let sqliteHeader = Data("SQLite format 3\u{0}".utf8)
@@ -54,9 +53,9 @@ public struct OpenCodeStoreAdapter: SessionStoreAdapter {
                 if statement != nil { _ = sqlite3_finalize(statement) }
                 switch prepareStatus {
                 case SQLITE_NOTADB, SQLITE_CORRUPT, SQLITE_CANTOPEN:
-                    throw OpenCodeStoreError.unreadable(sourcePath: sourcePath)
+                    throw SessionStoreError.unreadable(host: .opencode, sourcePath: sourcePath)
                 default:
-                    throw OpenCodeStoreError.prepareFailed(sourcePath: sourcePath)
+                    throw SessionStoreError.queryFailed(host: .opencode, sourcePath: sourcePath)
                 }
             }
             defer { _ = sqlite3_finalize(statement) }
@@ -90,7 +89,7 @@ public struct OpenCodeStoreAdapter: SessionStoreAdapter {
                 stepStatus = sqlite3_step(statement)
             }
             guard stepStatus == SQLITE_DONE else {
-                throw OpenCodeStoreError.unreadable(sourcePath: sourcePath)
+                throw SessionStoreError.unreadable(host: .opencode, sourcePath: sourcePath)
             }
             return events
         }
@@ -101,19 +100,19 @@ public struct OpenCodeStoreAdapter: SessionStoreAdapter {
         sourcePath: String
     ) throws -> OwnedSQLiteDatabase {
         guard data.starts(with: sqliteHeader) else {
-            throw OpenCodeStoreError.unreadable(sourcePath: sourcePath)
+            throw SessionStoreError.unreadable(host: .opencode, sourcePath: sourcePath)
         }
 
         var db: OpaquePointer?
         guard sqlite3_open(":memory:", &db) == SQLITE_OK, let db else {
             if let db { _ = sqlite3_close(db) }
-            throw OpenCodeStoreError.unreadable(sourcePath: sourcePath)
+            throw SessionStoreError.unreadable(host: .opencode, sourcePath: sourcePath)
         }
 
         let byteCount = data.count
         guard let raw = sqlite3_malloc64(sqlite3_uint64(byteCount)) else {
             _ = sqlite3_close(db)
-            throw OpenCodeStoreError.unreadable(sourcePath: sourcePath)
+            throw SessionStoreError.unreadable(host: .opencode, sourcePath: sourcePath)
         }
 
         let copied = data.withUnsafeBytes { buffer -> Bool in
@@ -124,7 +123,7 @@ public struct OpenCodeStoreAdapter: SessionStoreAdapter {
         guard copied else {
             sqlite3_free(raw)
             _ = sqlite3_close(db)
-            throw OpenCodeStoreError.unreadable(sourcePath: sourcePath)
+            throw SessionStoreError.unreadable(host: .opencode, sourcePath: sourcePath)
         }
 
         // WAL stores write/read format 2 at header bytes 18–19. Deserialize
@@ -153,7 +152,7 @@ public struct OpenCodeStoreAdapter: SessionStoreAdapter {
         guard status == SQLITE_OK else {
             sqlite3_free(raw)
             _ = sqlite3_close(db)
-            throw OpenCodeStoreError.unreadable(sourcePath: sourcePath)
+            throw SessionStoreError.unreadable(host: .opencode, sourcePath: sourcePath)
         }
         return OwnedSQLiteDatabase(db: db, buffer: raw)
     }

@@ -77,17 +77,17 @@ import RVDomain
         let adapter = OpenClawStoreAdapter()
         let source = homeURL.appendingPathComponent("openclaw-agent.sqlite")
 
-        #expect(throws: OpenClawStoreError.unreadable(sourcePath: source.path)) {
+        #expect(throws: SessionStoreError.unreadable(host: .openclaw, sourcePath: source.path)) {
             _ = try adapter.extract(fileURL: source, data: Data())
         }
-        #expect(throws: OpenClawStoreError.unreadable(sourcePath: source.path)) {
+        #expect(throws: SessionStoreError.unreadable(host: .openclaw, sourcePath: source.path)) {
             _ = try adapter.extract(fileURL: source, data: Data("not-a-database".utf8))
         }
 
         let noEvents = homeURL.appendingPathComponent("no-events.db")
         try writeSQLiteDatabase(at: noEvents, sql: "CREATE TABLE other (id TEXT);")
         let noEventsBytes = try Data(contentsOf: noEvents)
-        #expect(throws: OpenClawStoreError.prepareFailed(sourcePath: noEvents.path)) {
+        #expect(throws: SessionStoreError.queryFailed(host: .openclaw, sourcePath: noEvents.path)) {
             _ = try adapter.extract(fileURL: noEvents, data: noEventsBytes)
         }
 
@@ -132,7 +132,7 @@ import RVDomain
         let diskBytes = try Data(contentsOf: dbURL)
 
         let adapter = OpenClawStoreAdapter()
-        #expect(throws: OpenClawStoreError.unreadable(sourcePath: dbURL.path)) {
+        #expect(throws: SessionStoreError.unreadable(host: .openclaw, sourcePath: dbURL.path)) {
             _ = try adapter.extract(fileURL: dbURL, data: Data("not-sqlite".utf8))
         }
 
