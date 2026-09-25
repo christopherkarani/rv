@@ -2,13 +2,13 @@
 import Foundation
 import SwiftTUICLI
 
-/// Starts one SwiftTUI application value and owns only local client cleanup.
+/// Starts one SwiftTUI application value and owns only local session cleanup.
+/// Event delivery starts here and stops inside `detachSession`.
 public enum WorkspaceTUILaunch {
     @MainActor
-    public static func run(_ model: WorkspaceTUIModel, pump: TerminalEventPump) async throws {
-        pump.start()
+    public static func run(_ model: WorkspaceTUIModel) async throws {
+        model.startEventDelivery()
         defer {
-            pump.stop()
             model.detachSession()
         }
         try await TerminalRunner.run(WorkspaceShellApp(model: model))

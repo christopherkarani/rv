@@ -10,13 +10,12 @@ struct WorkspaceTUIIntegrationTests {
 @Test func emptyWorkspaceStartsAnInteractiveContainedShell() throws {
     let host = try OpenedHost()
     defer { host.close() }
-    let client = try WorkspaceClient.connect(host.server.endpoint).get()
-    let terminalClient = try WorkspaceClient.connect(host.server.endpoint).get()
-    let live = LiveWorkspaceTUIClient(controlClient: client, terminalClient: terminalClient)
+    let session = try LiveWorkspaceTUISession.connect(host.server.endpoint).get()
+    let probe = try WorkspaceClient.connect(host.server.endpoint).get()
     let script = "stty icanon icrnl; printf 'RV-AUTO-SHELL-READY\\r\\n'; while IFS= read -r line; do if [ \"$line\" = quit ]; then break; else printf 'RV-AUTO-SHELL-REPLY:%s\\r\\n' \"$line\"; fi; done"
     let model = WorkspaceTUIModel(
-        client: live,
-        summary: try live.describe().get(),
+        session: session,
+        summary: try session.inventory().get().summary,
         launcher: [RuntimeLaunchChoice(
             id: "shell", title: "shell", executable: "/bin/sh",
             arguments: ["-c", script], hook: nil
@@ -25,10 +24,8 @@ struct WorkspaceTUIIntegrationTests {
         columns: 40
     )
     try model.connect().get()
-    let pump = TerminalEventPump(client: live, model: model)
-    pump.start()
+    model.startEventDelivery()
     defer {
-        pump.stop()
         model.detachSession()
     }
 
@@ -51,20 +48,19 @@ struct WorkspaceTUIIntegrationTests {
     #expect(waitUntil { screen(model).contains("RV-AUTO-SHELL-READY") })
     send("again", to: model)
     #expect(waitUntil { screen(model).contains("RV-AUTO-SHELL-REPLY:again") })
-    #expect(try client.listRuntimes().get().first { $0.runtime == runtime }?.running == false)
-    #expect(try live.describe().get().phase == "active")
+    #expect(try probe.listRuntimes().get().first { $0.runtime == runtime }?.running == false)
+    #expect(try session.inventory().get().summary.phase == "active")
 }
 
 @Test func hostPTYBytesResizeDetachAndReattachUseTheSameRuntime() throws {
     let host = try OpenedHost()
     defer { host.close() }
-    let client = try WorkspaceClient.connect(host.server.endpoint).get()
-    let terminalClient = try WorkspaceClient.connect(host.server.endpoint).get()
-    let live = LiveWorkspaceTUIClient(controlClient: client, terminalClient: terminalClient)
-    let summary = try live.describe().get()
+    let session = try LiveWorkspaceTUISession.connect(host.server.endpoint).get()
+    let probe = try WorkspaceClient.connect(host.server.endpoint).get()
+    let summary = try session.inventory().get().summary
     let script = "stty icanon icrnl; printf 'RV-TUI-MARKER\\r\\n'; while IFS= read -r line; do if [ \"$line\" = size ]; then stty size; else printf 'REPLY:%s\\r\\n' \"$line\"; fi; done"
     let shell = WorkspaceTUIModel(
-        client: live,
+        session: session,
         summary: summary,
         launcher: [RuntimeLaunchChoice(
             id: "shell", title: "shell", executable: "/bin/sh",
@@ -74,18 +70,16 @@ struct WorkspaceTUIIntegrationTests {
         columns: 80
     )
     try shell.connect().get()
-    var pump: TerminalEventPump? = TerminalEventPump(client: live, model: shell)
     defer {
-        pump?.stop()
         shell.detachSession()
     }
-    pump?.start()
+    shell.startEventDelivery()
     shell.handle(.character("1"))
     #expect(waitUntil { shell.snapshot().terminal?.lease == .owned })
     let runtime = try #require(shell.snapshot().terminal?.runtime)
 
     #expect(shell.snapshot().terminal?.lease == .owned)
-    #expect(try client.listRuntimes().get().first?.inputOwner == true)
+    #expect(try probe.listRuntimes().get().first?.inputOwner == true)
     #expect(waitUntil { screen(shell).contains("RV-TUI-MARKER") })
     send("Z", to: shell)
     #expect(waitUntil { screen(shell).contains("REPLY:Z") })
@@ -98,24 +92,19 @@ struct WorkspaceTUIIntegrationTests {
     #expect(shell.terminalSize()?.rows == 17)
     #expect(shell.terminalSize()?.columns == 53)
 
-    pump?.stop()
-    pump = nil
     shell.detachSession()
     let reattachClient = try WorkspaceClient.connect(host.server.endpoint).get()
     let remaining = try reattachClient.listRuntimes().get()
     #expect(remaining.contains { $0.runtime == runtime && $0.running })
 
-    let reattachTerminalClient = try WorkspaceClient.connect(host.server.endpoint).get()
-    let second = LiveWorkspaceTUIClient(
-        controlClient: reattachClient,
-        terminalClient: reattachTerminalClient
-    )
-    let reattached = WorkspaceTUIModel(client: second, summary: try second.describe().get(), launcher: [])
+    let second = try LiveWorkspaceTUISession.connect(host.server.endpoint).get()
+    let reattached = WorkspaceTUIModel(session: second, summary: try second.inventory().get().summary, launcher: [])
     try reattached.connect().get()
     #expect(reattached.snapshot().terminal?.runtime == runtime)
-    let replay = TerminalEventPump(client: second, model: reattached)
-    pump = replay
-    replay.start()
+    reattached.startEventDelivery()
+    defer {
+        reattached.detachSession()
+    }
     #expect(waitUntil { screen(reattached).contains("RV-TUI-MARKER") })
     #expect(reattached.snapshot().terminal?.running == true)
     #expect(try reattachClient.listRuntimes().get().filter(\.terminal).count == 1)
@@ -125,16 +114,14 @@ struct WorkspaceTUIIntegrationTests {
 @Test func sustainedPTYOutputKeepsInputResponsiveAndReachesTheFinalScreen() throws {
     let host = try OpenedHost()
     defer { host.close() }
-    let client = try WorkspaceClient.connect(host.server.endpoint).get()
-    let terminalClient = try WorkspaceClient.connect(host.server.endpoint).get()
-    let live = LiveWorkspaceTUIClient(controlClient: client, terminalClient: terminalClient)
+    let session = try LiveWorkspaceTUISession.connect(host.server.endpoint).get()
     let script = "stty icanon icrnl;read g;(i=0;while ((i<1000));do printf 'OUT:%d:abcdefghijklmnopqrstuvwx\\r\\n' \"$i\";((i==400))&&echo READY;if ((i>400));then sleep .05;fi;((i++));done)&p=$!;read -r l;printf 'IN:%s\\r\\n' \"$l\";kill $p;wait $p;printf 'DONE\\r\\n'"
     // The kill/notice/DONE cascade lands within one screen poll, so the
     // screen must be tall enough to retain IN:stop past bash's multi-line
     // job-termination notice.
     let shell = WorkspaceTUIModel(
-        client: live,
-        summary: try live.describe().get(),
+        session: session,
+        summary: try session.inventory().get().summary,
         launcher: [RuntimeLaunchChoice(
             id: "shell", title: "shell", executable: "/bin/bash",
             arguments: ["-c", script], hook: nil
@@ -143,10 +130,8 @@ struct WorkspaceTUIIntegrationTests {
         columns: 78
     )
     try shell.connect().get()
-    let pump = TerminalEventPump(client: live, model: shell)
-    pump.start()
+    shell.startEventDelivery()
     defer {
-        pump.stop()
         shell.detachSession()
     }
     shell.handle(.character("1"))
@@ -177,9 +162,8 @@ struct WorkspaceTUIIntegrationTests {
     try owner.acquireTerminalInput(runtime.runtime).get()
 
     let viewer = try WorkspaceClient.connect(host.server.endpoint).get()
-    let viewerTerminal = try WorkspaceClient.connect(host.server.endpoint).get()
-    let live = LiveWorkspaceTUIClient(controlClient: viewer, terminalClient: viewerTerminal)
-    let model = WorkspaceTUIModel(client: live, summary: try live.describe().get(), launcher: [])
+    let session = try LiveWorkspaceTUISession.connect(host.server.endpoint).get()
+    let model = WorkspaceTUIModel(session: session, summary: try session.inventory().get().summary, launcher: [])
     try model.connect().get()
     #expect(model.snapshot().terminal?.runtime == runtime.runtime)
     #expect(model.snapshot().terminal?.lease == .readOnly)

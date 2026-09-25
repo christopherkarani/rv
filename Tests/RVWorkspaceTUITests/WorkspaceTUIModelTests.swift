@@ -2,16 +2,16 @@ import Foundation
 import Testing
 @testable import RVWorkspaceTUI
 
-final class FakeWorkspaceClient: WorkspaceTUIClient, @unchecked Sendable {
+final class FakeWorkspaceSession: WorkspaceTUISession, @unchecked Sendable {
     private let lock = NSLock()
     private var storedSummary: WorkspaceTUISummary
     private var storedRuntimes: [ListedRuntime] = []
     private var storedFailLaunch = false
     private var storedFailSubscribe = false
-    private var storedFailCancel = false
     private var storedBusyInput = false
     private var storedBusyWrite = false
     private var storedFailDescribe = false
+    private var storedFailPoll = false
     private var storedWrites: [(UUID, Data)] = []
     private var storedCancels: [UUID] = []
     private var storedSubscribes: [UUID] = []
@@ -51,10 +51,6 @@ final class FakeWorkspaceClient: WorkspaceTUIClient, @unchecked Sendable {
         get { withLock { storedFailSubscribe } }
         set { withLock { storedFailSubscribe = newValue } }
     }
-    var failCancel: Bool {
-        get { withLock { storedFailCancel } }
-        set { withLock { storedFailCancel = newValue } }
-    }
     var busyInput: Bool {
         get { withLock { storedBusyInput } }
         set { withLock { storedBusyInput = newValue } }
@@ -66,6 +62,10 @@ final class FakeWorkspaceClient: WorkspaceTUIClient, @unchecked Sendable {
     var failDescribe: Bool {
         get { withLock { storedFailDescribe } }
         set { withLock { storedFailDescribe = newValue } }
+    }
+    var failPoll: Bool {
+        get { withLock { storedFailPoll } }
+        set { withLock { storedFailPoll = newValue } }
     }
     var writes: [(UUID, Data)] { withLock { storedWrites } }
     var cancels: [UUID] { withLock { storedCancels } }
@@ -90,22 +90,42 @@ final class FakeWorkspaceClient: WorkspaceTUIClient, @unchecked Sendable {
         )
     }
 
-    func describe() -> Result<WorkspaceTUISummary, WorkspaceTUIClientError> {
-        let (fails, value) = withLock { (storedFailDescribe, storedSummary) }
-        return fails ? .failure(.disconnected) : .success(value)
+    func inventory() -> Result<SessionInventory, WorkspaceTUIError> {
+        let (fails, summary, runtimes) = withLock { (storedFailDescribe, storedSummary, storedRuntimes) }
+        if fails { return .failure(.disconnected) }
+        let terminals = runtimes
+            .filter(\.terminal)
+            .sorted { $0.id.uuidString < $1.id.uuidString }
+        return .success(SessionInventory(summary: summary, terminals: terminals))
     }
 
-    func listRuntimes() -> Result<[ListedRuntime], WorkspaceTUIClientError> {
-        .success(withLock { storedRuntimes })
+    func attach(_ id: UUID) -> SessionAttachOutcome {
+        let (fails, busy) = withLock {
+            storedSubscribes.append(id)
+            return (storedFailSubscribe, storedBusyInput)
+        }
+        if fails { return .unavailable }
+        if busy { return .readOnly }
+        withLock { storedAcquires.append(id) }
+        return .owned
     }
 
-    func launchRuntime(
+    func reacquire(_ id: UUID) -> SessionAttachOutcome {
+        let busy = withLock {
+            if storedBusyInput { return true }
+            storedAcquires.append(id)
+            return false
+        }
+        return busy ? .readOnly : .owned
+    }
+
+    func launch(
         executable: String,
         arguments: [String],
         hook: String?,
         rows: Int,
         columns: Int
-    ) -> Result<ListedRuntime, WorkspaceTUIClientError> {
+    ) -> Result<ListedRuntime, WorkspaceTUIError> {
         let (fails, block) = withLock {
             storedLaunchAttempts += 1
             let block = launchesToBlock > 0
@@ -122,22 +142,21 @@ final class FakeWorkspaceClient: WorkspaceTUIClient, @unchecked Sendable {
         return .success(runtime)
     }
 
-    func ensureTerminalRuntime(
+    func ensureTerminal(
         executable: String,
         arguments: [String],
         hook: String?,
         rows: Int,
         columns: Int
-    ) -> Result<ListedRuntime, WorkspaceTUIClientError> {
-        if case .success(let values) = listRuntimes(),
-            let existing = values
-                .filter({ $0.running && $0.terminal })
-                .sorted(by: { $0.id.uuidString < $1.id.uuidString })
+    ) -> Result<ListedRuntime, WorkspaceTUIError> {
+        if case .success(let inventoried) = inventory(),
+            let existing = inventoried.terminals
+                .filter(\.running)
                 .first
         {
             return .success(existing)
         }
-        return launchRuntime(
+        return launch(
             executable: executable,
             arguments: arguments,
             hook: hook,
@@ -146,49 +165,27 @@ final class FakeWorkspaceClient: WorkspaceTUIClient, @unchecked Sendable {
         )
     }
 
-    func cancelRuntime(_ id: UUID) -> Result<Void, WorkspaceTUIClientError> {
-        let (fails, block) = withLock {
+    func cancel(_ id: UUID) {
+        let block = withLock {
             storedCancels.append(id)
-            let block = cancelsToBlock > 0
-            if block { cancelsToBlock -= 1 }
-            return (storedFailCancel, block)
+            guard cancelsToBlock > 0 else { return false }
+            cancelsToBlock -= 1
+            return true
         }
         if block {
             cancelStarted.signal()
             _ = cancelGate.wait(timeout: .now() + 5)
         }
-        return fails ? .failure(.rejected) : .success(())
     }
 
-    func subscribe(_ id: UUID) -> Result<Void, WorkspaceTUIClientError> {
-        let fails = withLock {
-            storedSubscribes.append(id)
-            return storedFailSubscribe
+    func release(_ id: UUID) {
+        withLock {
+            storedReleases.append(id)
+            storedUnsubscribes.append(id)
         }
-        return fails ? .failure(.unavailable) : .success(())
     }
 
-    func unsubscribe(_ id: UUID) -> Result<Void, WorkspaceTUIClientError> {
-        withLock { storedUnsubscribes.append(id) }
-        return .success(())
-    }
-
-    func acquireInput(_ id: UUID) -> Result<Void, WorkspaceTUIClientError> {
-        let busy = withLock {
-            if storedBusyInput { return true }
-            storedAcquires.append(id)
-            return false
-        }
-        if busy { return .failure(.busy) }
-        return .success(())
-    }
-
-    func releaseInput(_ id: UUID) -> Result<Void, WorkspaceTUIClientError> {
-        withLock { storedReleases.append(id) }
-        return .success(())
-    }
-
-    func write(_ id: UUID, bytes: Data) -> Result<Void, WorkspaceTUIClientError> {
+    func send(_ bytes: Data, to id: UUID) -> Result<Void, WorkspaceTUIError> {
         let (block, busy) = withLock {
             storedWrites.append((id, bytes))
             let block = writesToBlock > 0
@@ -202,7 +199,7 @@ final class FakeWorkspaceClient: WorkspaceTUIClient, @unchecked Sendable {
         return busy ? .failure(.busy) : .success(())
     }
 
-    func resize(_ id: UUID, rows: Int, columns: Int) -> Result<Void, WorkspaceTUIClientError> {
+    func resize(_ id: UUID, rows: Int, columns: Int) -> Result<Void, WorkspaceTUIError> {
         let block = withLock {
             storedResizes.append((id, rows, columns))
             guard resizesToBlock > 0 else { return false }
@@ -216,13 +213,17 @@ final class FakeWorkspaceClient: WorkspaceTUIClient, @unchecked Sendable {
         return .success(())
     }
 
-    func detach() -> Result<Void, WorkspaceTUIClientError> {
+    func close() {
         withLock { storedDetached = true }
-        return .success(())
     }
 
-    func nextEvent(timeout: TimeInterval) -> Result<WorkspaceTUIEvent?, WorkspaceTUIClientError> {
-        .success(withLock { storedEvents.isEmpty ? nil : storedEvents.removeFirst() })
+    func poll(timeout: TimeInterval) -> SessionPoll {
+        withLock {
+            if storedEvents.isEmpty == false {
+                return .event(storedEvents.removeFirst())
+            }
+            return storedFailPoll ? .disconnected : .none
+        }
     }
 
     func blockNextWrite() {
@@ -292,11 +293,11 @@ struct RecordingFactory: TerminalEmulatorFactory {
     }
 }
 
-private func model(_ client: FakeWorkspaceClient) -> WorkspaceTUIModel {
+private func model(_ session: FakeWorkspaceSession) -> WorkspaceTUIModel {
     WorkspaceTUIModel(
-        client: client,
+        session: session,
         emulators: RecordingFactory(),
-        summary: client.summary,
+        summary: session.summary,
         launcher: [
             RuntimeLaunchChoice(id: "shell", title: "shell", executable: "/bin/sh", arguments: [], hook: nil),
             RuntimeLaunchChoice(id: "opencode", title: "opencode", executable: "/bin/opencode", arguments: [], hook: "opencode"),
@@ -305,30 +306,30 @@ private func model(_ client: FakeWorkspaceClient) -> WorkspaceTUIModel {
 }
 
 @Test func connectAttachesTheFirstExistingRuntimeWithoutLaunching() throws {
-    let client = FakeWorkspaceClient()
+    let session = FakeWorkspaceSession()
     let first = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
     let second = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
-    client.runtimes = [
+    session.runtimes = [
         ListedRuntime(id: first, hook: "opencode", running: true, terminal: true),
         ListedRuntime(id: second, hook: nil, running: true, terminal: true),
     ]
-    let shell = model(client)
+    let shell = model(session)
     try shell.connect().get()
     #expect(shell.snapshot().terminal?.runtime == second)
-    #expect(client.subscribes == [second])
-    #expect(client.runtimes.count == 2)
-    #expect(client.launchAttempts == 0)
+    #expect(session.subscribes == [second])
+    #expect(session.runtimes.count == 2)
+    #expect(session.launchAttempts == 0)
 }
 
 @Test func eventsForUnattachedRuntimesAreIgnored() throws {
-    let client = FakeWorkspaceClient()
+    let session = FakeWorkspaceSession()
     let attached = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
     let other = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
-    client.runtimes = [
+    session.runtimes = [
         ListedRuntime(id: attached, hook: nil, running: true, terminal: true),
         ListedRuntime(id: other, hook: nil, running: true, terminal: true),
     ]
-    let shell = model(client)
+    let shell = model(session)
     try shell.connect().get()
     shell.apply([
         .bytes(runtime: other, data: Data("elsewhere".utf8)),
@@ -342,39 +343,39 @@ private func model(_ client: FakeWorkspaceClient) -> WorkspaceTUIModel {
 }
 
 @Test func failedLaunchDoesNotCreateATerminal() throws {
-    let client = FakeWorkspaceClient()
-    let shell = model(client)
+    let session = FakeWorkspaceSession()
+    let shell = model(session)
     try shell.connect().get()
-    client.failLaunch = true
+    session.failLaunch = true
     shell.handle(.character("1"))
     #expect(waitForModel { shell.snapshot().mode == .launcher })
-    #expect(client.launchAttempts == 1)
+    #expect(session.launchAttempts == 1)
     #expect(shell.snapshot().terminal == nil)
 }
 
 @Test func blockingHostWritesDoNotBlockKeyHandling() throws {
-    let client = FakeWorkspaceClient()
-    client.runtimes = [ListedRuntime(id: UUID(), hook: nil, running: true, terminal: true)]
-    let shell = model(client)
+    let session = FakeWorkspaceSession()
+    session.runtimes = [ListedRuntime(id: UUID(), hook: nil, running: true, terminal: true)]
+    let shell = model(session)
     try shell.connect().get()
-    client.blockNextWrite()
+    session.blockNextWrite()
 
     shell.handle(.character("A"))
-    #expect(client.writeStarted.wait(timeout: .now() + 2) == .success)
+    #expect(session.writeStarted.wait(timeout: .now() + 2) == .success)
     let start = Date()
     shell.handle(.character("B"))
     #expect(Date().timeIntervalSince(start) < 0.1)
 
-    client.writeGate.signal()
-    #expect(waitForModel { client.writes.count == 2 })
-    #expect(client.writes.map(\.1) == [Data("A".utf8), Data("B".utf8)])
+    session.writeGate.signal()
+    #expect(waitForModel { session.writes.count == 2 })
+    #expect(session.writes.map(\.1) == [Data("A".utf8), Data("B".utf8)])
 }
 
 @Test func delayedLeaseReleaseDoesNotRevokeANewerLocalAcquire() throws {
-    let client = FakeWorkspaceClient()
+    let session = FakeWorkspaceSession()
     let runtime = UUID()
-    client.runtimes = [ListedRuntime(id: runtime, hook: nil, running: true, terminal: true)]
-    let shell = model(client)
+    session.runtimes = [ListedRuntime(id: runtime, hook: nil, running: true, terminal: true)]
+    let shell = model(session)
     try shell.connect().get()
 
     shell.apply([
@@ -383,143 +384,143 @@ private func model(_ client: FakeWorkspaceClient) -> WorkspaceTUIModel {
     ])
     #expect(shell.snapshot().terminal?.lease == .owned)
     shell.handle(.character("Q"))
-    #expect(waitForModel { client.writes.count == 1 })
+    #expect(waitForModel { session.writes.count == 1 })
 }
 
 @Test func renderResizeWorkDoesNotWaitForTheWorkspaceHost() throws {
-    let client = FakeWorkspaceClient()
-    client.runtimes = [ListedRuntime(id: UUID(), hook: nil, running: true, terminal: true)]
-    let shell = model(client)
+    let session = FakeWorkspaceSession()
+    session.runtimes = [ListedRuntime(id: UUID(), hook: nil, running: true, terminal: true)]
+    let shell = model(session)
     try shell.connect().get()
     let now = Date(timeIntervalSince1970: 10_000)
     shell.noteSize(rows: 30, columns: 90, now: now)
-    client.blockNextResize()
+    session.blockNextResize()
 
     let start = Date()
     shell.processPendingWork(now: now.addingTimeInterval(1))
     #expect(Date().timeIntervalSince(start) < 0.1)
-    #expect(client.resizeStarted.wait(timeout: .now() + 2) == .success)
-    client.resizeGate.signal()
+    #expect(session.resizeStarted.wait(timeout: .now() + 2) == .success)
+    session.resizeGate.signal()
 }
 
 @Test func blockedReplacementLaunchDoesNotBlockKeyHandling() throws {
-    let client = FakeWorkspaceClient()
+    let session = FakeWorkspaceSession()
     let runtime = UUID()
-    client.runtimes = [ListedRuntime(id: runtime, hook: nil, running: true, terminal: true)]
-    let shell = model(client)
+    session.runtimes = [ListedRuntime(id: runtime, hook: nil, running: true, terminal: true)]
+    let shell = model(session)
     try shell.connect().get()
     shell.apply([.exited(runtime: runtime, status: 0)])
     #expect(shell.snapshot().mode == .launcher)
-    client.blockNextLaunch()
+    session.blockNextLaunch()
 
     let start = Date()
     shell.handle(.character("1"))
     #expect(Date().timeIntervalSince(start) < 0.1)
-    #expect(client.launchStarted.wait(timeout: .now() + 2) == .success)
+    #expect(session.launchStarted.wait(timeout: .now() + 2) == .success)
     // While the replacement is blocked the exited terminal stays put and
     // typed input has nowhere to go.
     shell.handle(.character("A"))
-    #expect(client.writes.isEmpty)
+    #expect(session.writes.isEmpty)
 
-    client.launchGate.signal()
+    session.launchGate.signal()
     #expect(waitForModel { shell.snapshot().terminal?.running == true })
     #expect(shell.snapshot().terminal?.runtime != runtime)
-    #expect(client.unsubscribes == [runtime])
-    #expect(client.cancels.isEmpty)
+    #expect(session.unsubscribes == [runtime])
+    #expect(session.cancels.isEmpty)
 }
 
-@Test func emulatorRepliesDoNotBlockTheTerminalEventPump() throws {
-    let client = FakeWorkspaceClient()
+@Test func emulatorRepliesDoNotBlockEventDelivery() throws {
+    let session = FakeWorkspaceSession()
     let runtime = UUID()
-    client.runtimes = [ListedRuntime(id: runtime, hook: nil, running: true, terminal: true)]
+    session.runtimes = [ListedRuntime(id: runtime, hook: nil, running: true, terminal: true)]
     let shell = WorkspaceTUIModel(
-        client: client,
+        session: session,
         emulators: RecordingFactory(responses: [Data("R".utf8)]),
-        summary: client.summary,
+        summary: session.summary,
         launcher: []
     )
     try shell.connect().get()
-    client.blockNextWrite()
+    session.blockNextWrite()
 
     let start = Date()
     shell.apply([.bytes(runtime: runtime, data: Data("query".utf8))])
     #expect(Date().timeIntervalSince(start) < 0.1)
-    #expect(client.writeStarted.wait(timeout: .now() + 2) == .success)
-    client.writeGate.signal()
-    #expect(waitForModel { client.writes.count == 1 })
-    #expect(client.writes.first?.1 == Data("R".utf8))
+    #expect(session.writeStarted.wait(timeout: .now() + 2) == .success)
+    session.writeGate.signal()
+    #expect(waitForModel { session.writes.count == 1 })
+    #expect(session.writes.first?.1 == Data("R".utf8))
 }
 
 @Test func emptyWorkspaceDoesNotStartAnArbitraryRuntime() throws {
-    let client = FakeWorkspaceClient()
-    let shell = model(client)
+    let session = FakeWorkspaceSession()
+    let shell = model(session)
     try shell.connect().get()
     #expect(shell.snapshot().terminal == nil)
-    #expect(client.runtimes.isEmpty)
-    #expect(client.subscribes.isEmpty)
+    #expect(session.runtimes.isEmpty)
+    #expect(session.subscribes.isEmpty)
 }
 
 @Test func emptyWorkspaceCanStartTheConfiguredShellOnce() throws {
-    let client = FakeWorkspaceClient()
-    let shell = model(client)
+    let session = FakeWorkspaceSession()
+    let shell = model(session)
     try shell.connect().get()
 
     shell.launchDefaultRuntimeIfEmpty()
 
-    #expect(client.launchAttempts == 1)
+    #expect(session.launchAttempts == 1)
     #expect(shell.snapshot().terminal?.title == "shell")
     #expect(shell.snapshot().terminal?.lease == .owned)
     shell.launchDefaultRuntimeIfEmpty()
     Thread.sleep(forTimeInterval: 0.05)
-    #expect(client.launchAttempts == 1)
+    #expect(session.launchAttempts == 1)
 }
 
 @Test func defaultShellDoesNotLaunchWhenAnExistingRuntimeIsAttached() throws {
-    let client = FakeWorkspaceClient()
+    let session = FakeWorkspaceSession()
     let runtime = UUID()
-    client.runtimes = [ListedRuntime(id: runtime, hook: "codex", running: true, terminal: true)]
-    let shell = model(client)
+    session.runtimes = [ListedRuntime(id: runtime, hook: "codex", running: true, terminal: true)]
+    let shell = model(session)
     try shell.connect().get()
 
     shell.launchDefaultRuntimeIfEmpty()
 
     #expect(shell.snapshot().terminal?.runtime == runtime)
-    #expect(client.launchAttempts == 0)
+    #expect(session.launchAttempts == 0)
 }
 
 @Test func failedDefaultShellLaunchFallsBackToTheRuntimeLauncher() throws {
-    let client = FakeWorkspaceClient()
-    client.failLaunch = true
-    let shell = model(client)
+    let session = FakeWorkspaceSession()
+    session.failLaunch = true
+    let shell = model(session)
     try shell.connect().get()
 
     shell.launchDefaultRuntimeIfEmpty()
 
     #expect(waitForModel { shell.snapshot().mode == .launcher })
     #expect(shell.snapshot().terminal == nil)
-    #expect(client.launchAttempts == 1)
+    #expect(session.launchAttempts == 1)
 }
 
 @Test func ensureUsesTheRuntimeThatAppearedAfterInventory() throws {
-    let client = FakeWorkspaceClient()
-    let shell = model(client)
+    let session = FakeWorkspaceSession()
+    let shell = model(session)
     try shell.connect().get()
     let runtime = ListedRuntime(id: UUID(), hook: "opencode", running: true, terminal: true)
-    client.runtimes = [runtime]
+    session.runtimes = [runtime]
 
     shell.launchDefaultRuntimeIfEmpty()
 
-    #expect(client.launchAttempts == 0)
+    #expect(session.launchAttempts == 0)
     #expect(shell.snapshot().terminal?.runtime == runtime.id)
     #expect(shell.snapshot().terminal?.title == "opencode")
 }
 
 @Test func reusedUnhookedRuntimeUsesANeutralTitle() throws {
-    let client = FakeWorkspaceClient()
-    let shell = model(client)
+    let session = FakeWorkspaceSession()
+    let shell = model(session)
     try shell.connect().get()
     let runtime = ListedRuntime(id: UUID(), hook: nil, running: true, terminal: true)
-    client.runtimes = [runtime]
+    session.runtimes = [runtime]
 
     shell.launchDefaultRuntimeIfEmpty()
 
@@ -528,9 +529,9 @@ private func model(_ client: FakeWorkspaceClient) -> WorkspaceTUIModel {
 }
 
 @Test func failedDefaultShellSubscriptionIsMarkedUnavailable() throws {
-    let client = FakeWorkspaceClient()
-    client.failSubscribe = true
-    let shell = model(client)
+    let session = FakeWorkspaceSession()
+    session.failSubscribe = true
+    let shell = model(session)
     try shell.connect().get()
 
     shell.launchDefaultRuntimeIfEmpty()
@@ -539,7 +540,7 @@ private func model(_ client: FakeWorkspaceClient) -> WorkspaceTUIModel {
     #expect(terminal.title == "shell (unavailable)")
     #expect(terminal.subscribed == false)
     #expect(terminal.lease == .readOnly)
-    #expect(client.acquires.isEmpty)
+    #expect(session.acquires.isEmpty)
 }
 
 @Test func renderRevisionGateDoesNotInvalidateThroughAFullIdleStackDepth() {
@@ -556,10 +557,10 @@ private func model(_ client: FakeWorkspaceClient) -> WorkspaceTUIModel {
 }
 
 @Test func presentationRevisionChangesForTerminalOutputAndStaysStableWhileIdle() throws {
-    let client = FakeWorkspaceClient()
+    let session = FakeWorkspaceSession()
     let runtime = UUID()
-    client.runtimes = [ListedRuntime(id: runtime, hook: nil, running: true, terminal: true)]
-    let shell = model(client)
+    session.runtimes = [ListedRuntime(id: runtime, hook: nil, running: true, terminal: true)]
+    let shell = model(session)
     try shell.connect().get()
 
     let resizeDate = Date().addingTimeInterval(1)
@@ -576,51 +577,51 @@ private func model(_ client: FakeWorkspaceClient) -> WorkspaceTUIModel {
 }
 
 @Test func numberedChoiceLaunchesDirectlyFromAnEmptyWorkspace() throws {
-    let client = FakeWorkspaceClient()
-    let shell = model(client)
+    let session = FakeWorkspaceSession()
+    let shell = model(session)
     try shell.connect().get()
 
     shell.handle(.character("1"))
 
     #expect(waitForModel { shell.snapshot().terminal != nil })
-    #expect(client.launchAttempts == 1)
+    #expect(session.launchAttempts == 1)
     #expect(shell.snapshot().terminal?.title == "shell")
-    #expect(client.writes.isEmpty)
+    #expect(session.writes.isEmpty)
 }
 
 @Test func secondNumberLaunchesOpenCodeDirectlyFromAnEmptyWorkspace() throws {
-    let client = FakeWorkspaceClient()
-    let shell = model(client)
+    let session = FakeWorkspaceSession()
+    let shell = model(session)
     try shell.connect().get()
 
     shell.handle(.character("2"))
 
     #expect(waitForModel { shell.snapshot().terminal != nil })
-    #expect(client.launchAttempts == 1)
+    #expect(session.launchAttempts == 1)
     #expect(shell.snapshot().terminal?.title == "opencode")
 }
 
 @Test func nIsTerminalInputAndNeverOpensALauncher() throws {
-    let client = FakeWorkspaceClient()
-    let shell = model(client)
+    let session = FakeWorkspaceSession()
+    let shell = model(session)
     try shell.connect().get()
 
     shell.handle(.character("n"))
 
     #expect(shell.snapshot().mode == .terminal)
-    #expect(client.launchAttempts == 0)
+    #expect(session.launchAttempts == 0)
     shell.handle(.character("1"))
     #expect(waitForModel { shell.snapshot().terminal?.lease == .owned })
 
     shell.handle(.character("n"))
-    #expect(waitForModel { client.writes.contains { $0.1 == Data("n".utf8) } })
+    #expect(waitForModel { session.writes.contains { $0.1 == Data("n".utf8) } })
 }
 
 @Test func exitedShellOffersTheLauncherAndNumberKeysReplaceIt() throws {
-    let client = FakeWorkspaceClient()
+    let session = FakeWorkspaceSession()
     let runtime = UUID()
-    client.runtimes = [ListedRuntime(id: runtime, hook: nil, running: true, terminal: true)]
-    let shell = model(client)
+    session.runtimes = [ListedRuntime(id: runtime, hook: nil, running: true, terminal: true)]
+    let shell = model(session)
     try shell.connect().get()
 
     shell.apply([.exited(runtime: runtime, status: 0)])
@@ -636,87 +637,87 @@ private func model(_ client: FakeWorkspaceClient) -> WorkspaceTUIModel {
     #expect(waitForModel { shell.snapshot().terminal?.running == true })
     #expect(shell.snapshot().terminal?.runtime != runtime)
     #expect(shell.snapshot().mode == .terminal)
-    #expect(client.unsubscribes == [runtime])
-    #expect(client.cancels.isEmpty)
+    #expect(session.unsubscribes == [runtime])
+    #expect(session.cancels.isEmpty)
     #expect(waitForModel { shell.snapshot().terminal?.lease == .owned })
 }
 
 @Test func failedReplacementLaunchKeepsTheExitedTerminal() throws {
-    let client = FakeWorkspaceClient()
+    let session = FakeWorkspaceSession()
     let runtime = UUID()
-    client.runtimes = [ListedRuntime(id: runtime, hook: nil, running: true, terminal: true)]
-    let shell = model(client)
+    session.runtimes = [ListedRuntime(id: runtime, hook: nil, running: true, terminal: true)]
+    let shell = model(session)
     try shell.connect().get()
     shell.apply([.exited(runtime: runtime, status: 1)])
-    client.failLaunch = true
+    session.failLaunch = true
 
     shell.handle(.character("1"))
 
-    #expect(waitForModel { client.launchAttempts == 1 })
+    #expect(waitForModel { session.launchAttempts == 1 })
     #expect(shell.snapshot().terminal?.runtime == runtime)
     #expect(shell.snapshot().terminal?.running == false)
     #expect(shell.snapshot().mode == .launcher)
 }
 
 @Test func disconnectedWorkspaceRejectsFurtherTerminalInput() throws {
-    let client = FakeWorkspaceClient()
-    let shell = model(client)
+    let session = FakeWorkspaceSession()
+    let shell = model(session)
     try shell.connect().get()
     shell.handle(.character("1"))
     #expect(waitForModel { shell.snapshot().terminal?.lease == .owned })
     shell.handle(.character("A"))
-    #expect(waitForModel { client.writes.count == 1 })
+    #expect(waitForModel { session.writes.count == 1 })
     shell.hostDisconnected()
     shell.handle(.character("B"))
     #expect(shell.snapshot().connection == .disconnected)
     #expect(shell.snapshot().terminal?.lease == .readOnly)
-    #expect(client.writes.count == 1)
+    #expect(session.writes.count == 1)
 }
 
 @Test func detachReleasesInputAndUnsubscribesWithoutClosingTheRuntime() throws {
-    let client = FakeWorkspaceClient()
-    let shell = model(client)
+    let session = FakeWorkspaceSession()
+    let shell = model(session)
     try shell.connect().get()
     shell.handle(.character("1"))
     #expect(waitForModel { shell.snapshot().terminal?.lease == .owned })
     let runtime = try #require(shell.snapshot().terminal?.runtime)
     shell.handle(.character("A"))
-    #expect(waitForModel { client.writes.count == 1 })
-    #expect(client.writes.first?.0 == runtime)
-    #expect(client.writes.first?.1 == Data("A".utf8))
+    #expect(waitForModel { session.writes.count == 1 })
+    #expect(session.writes.first?.0 == runtime)
+    #expect(session.writes.first?.1 == Data("A".utf8))
     shell.handle(.control("g"))
     shell.handle(.character("d"))
     #expect(shell.snapshot().shouldExit)
-    #expect(client.detached == false)
+    #expect(session.detached == false)
     shell.detachSession()
-    #expect(client.detached)
-    #expect(client.releases == [runtime])
-    #expect(client.unsubscribes == [runtime])
-    #expect(client.cancels.isEmpty)
+    #expect(session.detached)
+    #expect(session.releases == [runtime])
+    #expect(session.unsubscribes == [runtime])
+    #expect(session.cancels.isEmpty)
 }
 
 @Test func busyInputKeepsTheTerminalReadOnly() throws {
-    let client = FakeWorkspaceClient()
-    client.busyInput = true
-    client.runtimes = [ListedRuntime(id: UUID(), hook: nil, running: true, terminal: true)]
-    let shell = model(client)
+    let session = FakeWorkspaceSession()
+    session.busyInput = true
+    session.runtimes = [ListedRuntime(id: UUID(), hook: nil, running: true, terminal: true)]
+    let shell = model(session)
     try shell.connect().get()
     #expect(shell.snapshot().terminal?.lease == .readOnly)
     shell.handle(.character("B"))
     Thread.sleep(forTimeInterval: 0.05)
-    #expect(client.writes.isEmpty)
+    #expect(session.writes.isEmpty)
 }
 
 @Test func busyWriteRendersTheTerminalAsReadOnly() throws {
-    let client = FakeWorkspaceClient()
+    let session = FakeWorkspaceSession()
     let runtime = UUID()
-    client.runtimes = [ListedRuntime(id: runtime, hook: nil, running: true, terminal: true)]
-    let shell = model(client)
+    session.runtimes = [ListedRuntime(id: runtime, hook: nil, running: true, terminal: true)]
+    let shell = model(session)
     try shell.connect().get()
     #expect(shell.snapshot().terminal?.lease == .owned)
     let previousRevision = shell.snapshot().presentationRevision
 
-    client.busyWrite = true
+    session.busyWrite = true
     shell.handle(.character("A"))
 
     #expect(waitForModel { shell.snapshot().terminal?.lease == .readOnly })
@@ -724,9 +725,9 @@ private func model(_ client: FakeWorkspaceClient) -> WorkspaceTUIModel {
 }
 
 @Test func describeFailureMarksTheWorkspaceDisconnected() {
-    let client = FakeWorkspaceClient()
-    client.failDescribe = true
-    let shell = model(client)
+    let session = FakeWorkspaceSession()
+    session.failDescribe = true
+    let shell = model(session)
     if case .failure(.disconnected) = shell.connect() {
         #expect(Bool(true))
     } else {
@@ -734,7 +735,7 @@ private func model(_ client: FakeWorkspaceClient) -> WorkspaceTUIModel {
     }
     #expect(shell.snapshot().connection == .disconnected)
     shell.handle(.character("A"))
-    #expect(client.writes.isEmpty)
+    #expect(session.writes.isEmpty)
 }
 
 @Test func resizeCoalescerSendsOnlyAStableChange() {
@@ -752,6 +753,73 @@ private func model(_ client: FakeWorkspaceClient) -> WorkspaceTUIModel {
     let clamped = gate.propose(rows: 900, columns: 1, now: now.addingTimeInterval(1.05))
     #expect(clamped?.rows == 512)
     #expect(clamped?.columns == 1)
+}
+
+final class PumpRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedBatches: [[WorkspaceTUIEvent]] = []
+    private var storedDisconnects = 0
+
+    func record(_ batch: [WorkspaceTUIEvent]) {
+        lock.lock()
+        storedBatches.append(batch)
+        lock.unlock()
+    }
+
+    func recordDisconnect() {
+        lock.lock()
+        storedDisconnects += 1
+        lock.unlock()
+    }
+
+    var batches: [[WorkspaceTUIEvent]] {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedBatches
+    }
+
+    var disconnects: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedDisconnects
+    }
+}
+
+@Test func eventPumpDeliversOneBatchThenDisconnects() {
+    let session = FakeWorkspaceSession()
+    let runtime = UUID()
+    session.events = [
+        .bytes(runtime: runtime, data: Data("a".utf8)),
+        .overflow(runtime: runtime),
+    ]
+    session.failPoll = true
+    let recorder = PumpRecorder()
+    let pump = SessionEventPump()
+    pump.start(
+        session: session,
+        onEvents: { recorder.record($0) },
+        onDisconnect: { recorder.recordDisconnect() }
+    )
+    #expect(waitForModel { recorder.disconnects == 1 })
+    pump.stop()
+    #expect(recorder.batches.count == 1)
+    #expect(recorder.batches.first == [
+        .bytes(runtime: runtime, data: Data("a".utf8)),
+        .overflow(runtime: runtime),
+    ])
+    #expect(recorder.disconnects == 1)
+}
+
+@Test func eventDeliveryDisconnectsTheModelAndDetachStopsIt() throws {
+    let session = FakeWorkspaceSession()
+    session.runtimes = [ListedRuntime(id: UUID(), hook: nil, running: true, terminal: true)]
+    let shell = model(session)
+    try shell.connect().get()
+    session.failPoll = true
+    shell.startEventDelivery()
+    #expect(waitForModel { shell.snapshot().connection == .disconnected })
+    shell.detachSession()
+    #expect(session.detached)
 }
 
 private func waitForModel(

@@ -7,15 +7,16 @@ import Foundation
 /// command-prefix mode. Panes and tabs are deferred: at most one runtime is
 /// attached, and a later attach reuses the existing runtime inventory.
 public final class WorkspaceTUIModel: @unchecked Sendable {
-    private let client: any WorkspaceTUIClient
+    private let session: any WorkspaceTUISession
     private let emulators: any TerminalEmulatorFactory
     private let lock = NSLock()
     /// Lifecycle RPCs use a separate Workspace Host connection. Cancellation
     /// can wait for child teardown without blocking terminal I/O.
     private let commandQueue = DispatchQueue(label: "rv.workspace-tui.commands")
-    /// Lease, write, and resize RPCs share the adapter's independent terminal
+    /// Lease, write, and resize RPCs share the session's independent terminal
     /// connection and stay ordered with each other.
     private let terminalQueue = DispatchQueue(label: "rv.workspace-tui.terminal")
+    private var pump: SessionEventPump?
     private var terminal: WorkspaceTerminal?
     private var presentationRevision: UInt64 = 0
     private var mode: CommandMode = .terminal
@@ -33,14 +34,14 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
     private let initialColumns: Int
 
     public init(
-        client: any WorkspaceTUIClient,
+        session: any WorkspaceTUISession,
         emulators: any TerminalEmulatorFactory = SwiftTermFactory(),
         summary: WorkspaceTUISummary,
         launcher: [RuntimeLaunchChoice],
         rows: Int = 24,
         columns: Int = 80
     ) {
-        self.client = client
+        self.session = session
         self.emulators = emulators
         self.summary = summary
         self.launcher = launcher
@@ -48,9 +49,9 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
         self.initialColumns = Self.bound(columns)
     }
 
-    /// Describes and inventories through WorkspaceHostClient's public surface.
-    /// Repeated calls are harmless and never create another runtime.
-    public func connect() -> Result<Void, WorkspaceTUIClientError> {
+    /// Describes and inventories through the session. Repeated calls are
+    /// harmless and never create another runtime.
+    public func connect() -> Result<Void, WorkspaceTUIError> {
         lock.lock()
         if didConnect {
             let connected = connection == .connected
@@ -59,29 +60,20 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
         }
         lock.unlock()
 
-        let described: WorkspaceTUISummary
-        switch client.describe() {
-        case .success(let value): described = value
-        case .failure(let error):
-            markDisconnected()
-            return .failure(error)
-        }
-        let runtimes: [ListedRuntime]
-        switch client.listRuntimes() {
-        case .success(let values):
-            runtimes = values
-                .filter(\.terminal)
-                .sorted { $0.id.uuidString < $1.id.uuidString }
+        let inventoried: SessionInventory
+        switch session.inventory() {
+        case .success(let value):
+            inventoried = value
         case .failure(let error):
             markDisconnected()
             return .failure(error)
         }
 
         lock.lock()
-        summary = described
+        summary = inventoried.summary
         connection = .connected
         didConnect = true
-        if let runtime = runtimes.first {
+        if let runtime = inventoried.terminals.first {
             let rows = runtime.rows.map(Self.bound) ?? initialRows
             let columns = runtime.columns.map(Self.bound) ?? initialColumns
             terminal = makeRecord(runtime: runtime, rows: rows, columns: columns)
@@ -91,13 +83,35 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
         lock.unlock()
 
         if let attached {
-            if case .failure(.disconnected) = bind(attached) {
+            switch session.attach(attached) {
+            case .owned:
+                noteAcquired(attached)
+            case .readOnly:
+                noteAttached(attached, lease: .readOnly)
+            case .unavailable:
+                noteUnattached(attached)
+            case .disconnected:
                 markDisconnected()
                 return .failure(.disconnected)
             }
-            acquire()
         }
         return .success(())
+    }
+
+    /// Starts the session's event reader. Idempotent; the reader stops inside
+    /// `detachSession`. The app calls this once after `connect` succeeds.
+    public func startEventDelivery() {
+        lock.lock()
+        if pump == nil {
+            pump = SessionEventPump()
+        }
+        let pump = pump
+        lock.unlock()
+        pump?.start(
+            session: session,
+            onEvents: { [weak self] in self?.apply($0) },
+            onDisconnect: { [weak self] in self?.hostDisconnected() }
+        )
     }
 
     /// Establishes a host-owned terminal before the local terminal begins
@@ -120,7 +134,7 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
         guard let shell else { return }
 
         let runtime: ListedRuntime
-        switch client.ensureTerminalRuntime(
+        switch session.ensureTerminal(
             executable: shell.executable,
             arguments: shell.arguments,
             hook: shell.hook,
@@ -161,9 +175,16 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
         markPresentationChangedLocked()
         lock.unlock()
 
-        if case .success = bind(runtime.id) {
-            acquire()
-        } else {
+        let outcome = session.attach(runtime.id)
+        if outcome == .disconnected {
+            markDisconnected()
+        }
+        switch outcome {
+        case .owned:
+            noteAcquired(runtime.id)
+        case .readOnly:
+            noteAttached(runtime.id, lease: .readOnly)
+        case .unavailable, .disconnected:
             lock.lock()
             if terminal?.state.subscribed == false {
                 terminal?.state.title = "\(title) (unavailable)"
@@ -213,8 +234,8 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
         }
     }
 
-    /// Applies a bounded batch from the one WorkspaceClient terminal reader.
-    /// Every emulator mutation and render snapshot is protected by this model's
+    /// Applies a bounded batch from the session's terminal reader. Every
+    /// emulator mutation and render snapshot is protected by this model's
     /// lock. Emulator replies are sent only after the lock is released.
     public func apply(_ events: [WorkspaceTUIEvent]) {
         var replies: [(UUID, Data)] = []
@@ -336,7 +357,7 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
         if let request {
             terminalQueue.async { [weak self] in
                 guard let self, self.canIssueCommands() else { return }
-                switch self.client.resize(request.0, rows: request.1, columns: request.2) {
+                switch self.session.resize(request.0, rows: request.1, columns: request.2) {
                 case .success:
                     break
                 case .failure(.disconnected):
@@ -351,7 +372,7 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
         if shouldAcquire {
             terminalQueue.async { [weak self] in
                 guard let self, self.canIssueCommands() else { return }
-                self.acquire()
+                self.reacquireLease()
             }
         }
     }
@@ -405,16 +426,20 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
         terminal?.state.lease = .released
         terminal?.state.subscribed = false
         markPresentationChangedLocked()
+        let pump = self.pump
+        self.pump = nil
         lock.unlock()
 
+        pump?.stop()
+
         // Drain terminal RPCs before closing their dedicated host connection,
-        // then drain lifecycle work before unsubscribing and closing control.
+        // then drain lifecycle work before closing control.
         terminalQueue.sync {
-            if let lease { _ = client.releaseInput(lease) }
+            if let lease, lease != subscription { session.release(lease) }
+            if let subscription { session.release(subscription) }
         }
         commandQueue.sync {
-            if let subscription { _ = client.unsubscribe(subscription) }
-            _ = client.detach()
+            session.close()
         }
     }
 
@@ -440,7 +465,7 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
         let size = viewSize ?? (initialRows, initialColumns)
         lock.unlock()
 
-        guard case .success(let runtime) = client.launchRuntime(
+        guard case .success(let runtime) = session.launch(
             executable: choice.executable,
             arguments: choice.arguments,
             hook: choice.hook,
@@ -462,7 +487,7 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
             lock.unlock()
             // A launch that races UI detach belongs to the workspace now. Keep
             // it alive so the next TUI invocation can rediscover it.
-            if detached == false { _ = client.cancelRuntime(runtime.id) }
+            if detached == false { session.cancel(runtime.id) }
             return
         }
         var record = makeRecord(runtime: runtime, rows: size.rows, columns: size.columns)
@@ -472,18 +497,24 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
         markPresentationChangedLocked()
         lock.unlock()
 
-        if oldSubscribed, let oldRuntime { _ = client.unsubscribe(oldRuntime) }
+        if oldSubscribed, let oldRuntime { session.release(oldRuntime) }
 
-        switch bind(runtime.id) {
-        case .success:
-            acquire()
-        case .failure:
+        let outcome = session.attach(runtime.id)
+        if outcome == .disconnected {
+            markDisconnected()
+        }
+        switch outcome {
+        case .owned:
+            noteAcquired(runtime.id)
+        case .readOnly:
+            noteAttached(runtime.id, lease: .readOnly)
+        case .unavailable, .disconnected:
             lock.lock()
             if terminal?.state.runtime == runtime.id { terminal = nil }
             if connection == .connected { mode = .launcher }
             markPresentationChangedLocked()
             lock.unlock()
-            _ = client.cancelRuntime(runtime.id)
+            session.cancel(runtime.id)
         }
     }
 
@@ -505,7 +536,7 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
         lock.unlock()
         guard connected, ownsInput, let record, record.state.running,
               record.state.runtime == runtime else { return }
-        switch client.write(runtime, bytes: bytes) {
+        switch session.send(bytes, to: runtime) {
         case .success:
             break
         case .failure(.busy):
@@ -525,25 +556,45 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
         }
     }
 
-    private func bind(_ runtime: UUID) -> Result<Void, WorkspaceTUIClientError> {
-        switch client.subscribe(runtime) {
-        case .success:
-            lock.lock()
-            if terminal?.state.runtime == runtime { terminal?.state.subscribed = true }
-            lock.unlock()
-            return .success(())
-        case .failure(let error):
-            if error == .disconnected {
-                markDisconnected()
-            }
-            lock.lock()
-            if terminal?.state.runtime == runtime { terminal?.state.subscribed = false }
-            lock.unlock()
-            return .failure(error)
+    /// Records a subscribe the session paired with the given lease.
+    private func noteAttached(_ runtime: UUID, lease: InputLease) {
+        lock.lock()
+        if terminal?.state.runtime == runtime {
+            if terminal?.state.lease != lease { markPresentationChangedLocked() }
+            terminal?.state.subscribed = true
+            terminal?.state.lease = lease
         }
+        lock.unlock()
     }
 
-    private func acquire() {
+    /// Records a subscribe the session paired with a granted input lease. A
+    /// lease that arrives after the terminal moved on is released again.
+    private func noteAcquired(_ runtime: UUID) {
+        lock.lock()
+        let stillAvailable = connection == .connected
+            && terminal?.state.runtime == runtime && terminal?.state.running == true
+        if stillAvailable {
+            if terminal?.state.lease != .owned { markPresentationChangedLocked() }
+            terminal?.state.subscribed = true
+            terminal?.state.lease = .owned
+            leasedRuntime = runtime
+        }
+        lock.unlock()
+        if stillAvailable == false { session.release(runtime) }
+    }
+
+    /// Records a subscribe the host refused. Nothing was acquired.
+    private func noteUnattached(_ runtime: UUID) {
+        lock.lock()
+        if terminal?.state.runtime == runtime {
+            if terminal?.state.lease != .readOnly { markPresentationChangedLocked() }
+            terminal?.state.subscribed = false
+            terminal?.state.lease = .readOnly
+        }
+        lock.unlock()
+    }
+
+    private func reacquireLease() {
         lock.lock()
         guard connection == .connected, shouldExit == false, didDetach == false,
               let record = terminal, record.state.running else {
@@ -553,34 +604,13 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
         let runtime = record.state.runtime
         lock.unlock()
 
-        switch client.acquireInput(runtime) {
-        case .success:
-            lock.lock()
-            let stillAvailable = connection == .connected
-                && terminal?.state.runtime == runtime && terminal?.state.running == true
-            if stillAvailable {
-                if terminal?.state.lease != .owned { markPresentationChangedLocked() }
-                terminal?.state.lease = .owned
-                leasedRuntime = runtime
-            }
-            lock.unlock()
-            if stillAvailable == false { _ = client.releaseInput(runtime) }
-        case .failure(.busy):
-            lock.lock()
-            if terminal?.state.runtime == runtime {
-                if terminal?.state.lease != .readOnly { markPresentationChangedLocked() }
-                terminal?.state.lease = .readOnly
-            }
-            lock.unlock()
-        case .failure(.disconnected):
+        switch session.reacquire(runtime) {
+        case .owned:
+            noteAcquired(runtime)
+        case .readOnly, .unavailable:
+            noteAttached(runtime, lease: .readOnly)
+        case .disconnected:
             markDisconnected()
-        case .failure:
-            lock.lock()
-            if terminal?.state.runtime == runtime {
-                if terminal?.state.lease != .readOnly { markPresentationChangedLocked() }
-                terminal?.state.lease = .readOnly
-            }
-            lock.unlock()
         }
     }
 
