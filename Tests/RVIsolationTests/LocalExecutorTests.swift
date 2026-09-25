@@ -20,6 +20,7 @@ import Testing
 /// 13. a contained apply failure consumes the fingerprint
 /// 14. uncovered in-workspace `touch` (empty effects → reviewAsk) →
 ///     resolve(allowOnce) → compileExecutable → contained run creates the file
+/// 15. `run` declares `throws(LocalExecutorError)`; a bare `catch` pins it
 /// `compileExecutable(allowed:plan:)` takes `AllowedAction` and `ContainedPlan`.
 /// `LocalExecutor.run` takes `ExecutableAction` only.
 /// There is no `PendingAuthorization` or `DeniedAction` overload.
@@ -379,6 +380,43 @@ struct LocalExecutorTests {
         #expect(result.exitStatus == 0)
         #expect(FileManager.default.fileExists(atPath: inside))
         expectContainedPlatform(result.established, matching: tree.contained)
+    }
+
+    @Test func localExecutor_run_declaresTypedThrows() async throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+
+        let workspace = try #require(tree.contained.workspace)
+        let inside = tree.workspaceURL.appendingPathComponent("typed-throws.txt").path
+        let executable = try requireExecutable(
+            supportingCommand: "\(try requireTouchExecutable()) \(inside)",
+            workingDirectory: workspace,
+            path: inside,
+            fingerprint: "shell:local-executor:typed-throws",
+            plan: try tree.containedPlan()
+        )
+        let executor = LocalExecutor()
+        do {
+            let result = try await executor.run(executable)
+            #if os(Linux)
+            Issue.record("Linux contained launch must be refused, got exit \(result.exitStatus)")
+            #else
+            #expect(result.exitStatus == 0)
+            #expect(FileManager.default.fileExists(atPath: inside))
+            expectContainedPlatform(result.established, matching: tree.contained)
+            #endif
+        } catch {
+            // Pins throws(LocalExecutorError): `error` has this type only
+            // while run declares it. An untyped `throws` reverts `error`
+            // to any Error and fails to compile below.
+            let failure: LocalExecutorError = error
+            #if os(Linux)
+            #expect(failure == .applyFailed(.containedGuaranteesUnsupported))
+            #expect(FileManager.default.fileExists(atPath: inside) == false)
+            #else
+            Issue.record("typed-throws run must succeed, got \(failure)")
+            #endif
+        }
     }
 }
 

@@ -62,7 +62,7 @@ public actor LocalExecutor {
 
     public init() {}
 
-    public func run(_ executable: ExecutableAction) async throws -> IsolatedRunResult {
+    public func run(_ executable: ExecutableAction) async throws(LocalExecutorError) -> IsolatedRunResult {
         guard Task.isCancelled == false else {
             throw LocalExecutorError.cancelled
         }
@@ -80,13 +80,16 @@ public actor LocalExecutor {
         // `usleep` and disk-image setup block. Doing that on a cooperative
         // thread stalls every other test task, so cancellation never runs and
         // the suite times out. This thread is the one the watch loop polls.
-        return try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { continuation in
+        // The outcome crosses the thread hop as a value because
+        // `withTaskCancellationHandler` has no typed-throws overload; only the
+        // `throw` below can fail, so the declared error type is exact.
+        let outcome: Result<IsolatedRunResult, LocalExecutorError> = await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Result<IsolatedRunResult, LocalExecutorError>, Never>) in
                 let thread = Thread {
                     gate.wait()
                     defer { gate.signal() }
                     if flag.isSet {
-                        continuation.resume(throwing: LocalExecutorError.cancelled)
+                        continuation.resume(returning: .failure(.cancelled))
                         return
                     }
                     CooperativeLaunchStop.install(flag)
@@ -97,11 +100,11 @@ public actor LocalExecutor {
                     }
                     switch IsolationBackends.apply(plan, command: command) {
                     case .success(let result):
-                        continuation.resume(returning: result)
+                        continuation.resume(returning: .success(result))
                     case .failure(.cancelled):
-                        continuation.resume(throwing: LocalExecutorError.cancelled)
+                        continuation.resume(returning: .failure(.cancelled))
                     case .failure(let error):
-                        continuation.resume(throwing: LocalExecutorError.applyFailed(error))
+                        continuation.resume(returning: .failure(.applyFailed(error)))
                     }
                 }
                 thread.name = "rv-executor-apply"
@@ -109,6 +112,12 @@ public actor LocalExecutor {
             }
         } onCancel: {
             flag.cancel()
+        }
+        switch outcome {
+        case .success(let result):
+            return result
+        case .failure(let error):
+            throw error
         }
     }
 
@@ -144,10 +153,8 @@ public actor LocalExecutor {
         case .success(let executable):
             do {
                 return .success(.executed(try await run(executable)))
-            } catch let error as LocalExecutorError {
+            } catch let error {
                 return .failure(.execute(error))
-            } catch {
-                preconditionFailure("LocalExecutor.run throws only LocalExecutorError")
             }
         }
     }
