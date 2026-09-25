@@ -2,6 +2,9 @@ import Foundation
 import RVDomain
 import Testing
 @testable import RVIsolation
+#if canImport(Darwin)
+import Darwin
+#endif
 
 /// Isolation apply edges this suite encodes before production code:
 /// 1. `compileSeatbeltProfile` on a compiled contained `/workspace` plan contains
@@ -34,6 +37,63 @@ import Testing
 /// 21. Seatbelt `launchArguments` are `-p` + profile + inner argv
 @Suite("IsolationApply")
 struct IsolationApplyTests {
+    @Test func workspaceFilesystemMetadata_isSkippedOnlyAtRootOwnedDirectories() {
+        #expect(
+            WorkspaceFilesystemMetadata.shouldSkip(
+                name: ".fseventsd",
+                isRootChild: true,
+                isDirectory: true,
+                isSymbolicLink: false,
+                ownerID: 0
+            )
+        )
+        #expect(
+            WorkspaceFilesystemMetadata.shouldSkip(
+                name: ".fseventsd",
+                isRootChild: false,
+                isDirectory: true,
+                isSymbolicLink: false,
+                ownerID: 0
+            ) == false
+        )
+        #expect(
+            WorkspaceFilesystemMetadata.shouldSkip(
+                name: ".fseventsd",
+                isRootChild: true,
+                isDirectory: true,
+                isSymbolicLink: false,
+                ownerID: 501
+            ) == false
+        )
+        #expect(
+            WorkspaceFilesystemMetadata.shouldSkip(
+                name: ".fseventsd",
+                isRootChild: true,
+                isDirectory: false,
+                isSymbolicLink: false,
+                ownerID: 0
+            ) == false
+        )
+        #expect(
+            WorkspaceFilesystemMetadata.shouldSkip(
+                name: ".fseventsd",
+                isRootChild: true,
+                isDirectory: true,
+                isSymbolicLink: true,
+                ownerID: 0
+            ) == false
+        )
+        #expect(
+            WorkspaceFilesystemMetadata.shouldSkip(
+                name: "project-file",
+                isRootChild: true,
+                isDirectory: true,
+                isSymbolicLink: false,
+                ownerID: 0
+            ) == false
+        )
+    }
+
     @Test func compileSeatbeltProfile_contained_isDenyDefaultWorkspaceScope()
         throws
     {
@@ -66,6 +126,51 @@ struct IsolationApplyTests {
     }
 
     #if os(macOS)
+    @Test func workspaceFilesystemMetadata_treeWalkAndCopyKeepProjectNames() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-filesystem-metadata-\(UUID().uuidString)")
+        let destination = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-filesystem-metadata-copy-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: destination)
+        }
+
+        let rootMetadata = root.appendingPathComponent(".fseventsd", isDirectory: true)
+        let nested = root.appendingPathComponent("project/.fseventsd", isDirectory: true)
+        try FileManager.default.createDirectory(at: rootMetadata, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        try Data("root entry".utf8).write(to: rootMetadata.appendingPathComponent("entry"))
+        try Data("nested entry".utf8).write(to: nested.appendingPathComponent("entry"))
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+
+        let sourceFD = root.path.withCString { open($0, O_RDONLY | O_DIRECTORY | O_CLOEXEC) }
+        let destinationFD = destination.path.withCString { open($0, O_RDONLY | O_DIRECTORY | O_CLOEXEC) }
+        guard sourceFD >= 0, destinationFD >= 0 else {
+            if sourceFD >= 0 { close(sourceFD) }
+            if destinationFD >= 0 { close(destinationFD) }
+            Issue.record("could not open filesystem metadata test roots")
+            return
+        }
+        defer {
+            close(sourceFD)
+            close(destinationFD)
+        }
+
+        var rootStatus = stat()
+        #expect(fstat(sourceFD, &rootStatus) == 0)
+        let sourceDevice = UInt64(rootStatus.st_dev)
+        let sourceTree = try #require(collectTree(root: sourceFD, checkDevice: sourceDevice))
+        let rootEntryIncluded = geteuid() != 0
+        #expect((sourceTree[".fseventsd/entry"] != nil) == rootEntryIncluded)
+        #expect(sourceTree["project/.fseventsd/entry"] != nil)
+
+        #expect(copyTree(from: sourceFD, to: destinationFD, expectDevice: sourceDevice))
+        let copiedTree = try #require(collectTree(root: destinationFD, checkDevice: sourceDevice))
+        #expect((copiedTree[".fseventsd/entry"] != nil) == rootEntryIncluded)
+        #expect(copiedTree["project/.fseventsd/entry"] != nil)
+    }
+
     @Test func workspacePublishDecision_rejectsForeignInodeAndLinkCountChange() {
         let original = WorkspaceInodeStamp(device: 1, inode: 10, linkCount: 1, kind: .regular)
         var extraLink = original
@@ -574,6 +679,30 @@ struct IsolationApplyTests {
             Issue.record("expected workspaceContainsInodeAlias, got \(error)")
         }
         #expect(try String(contentsOf: outside, encoding: .utf8) == "original")
+    }
+
+    @Test func rejectWorkspaceInodeAlias_unreadableUserFilesystemMetadataDirectoryRefuses() throws {
+        guard getuid() != 0 else { return }
+        let tree = try ContainmentTree()
+        let metadata = tree.workspaceURL.appendingPathComponent(".fseventsd", isDirectory: true)
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o700],
+                ofItemAtPath: metadata.path
+            )
+            tree.tearDown()
+        }
+        try FileManager.default.createDirectory(at: metadata, withIntermediateDirectories: false)
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: metadata.path)
+        let root = try #require(posixRealpath(tree.workspaceURL.path))
+        switch rejectWorkspaceInodeAlias(root) {
+        case .failure(.workspaceContainsInodeAlias):
+            break
+        case .success:
+            Issue.record("a user-owned reserved-name directory must not bypass the alias scan")
+        case .failure(let error):
+            Issue.record("expected workspaceContainsInodeAlias, got \(error)")
+        }
     }
 
     @Test func seatbelt_prepare_launchArguments_areSandboxExecProfileAndInnerArgv() throws {

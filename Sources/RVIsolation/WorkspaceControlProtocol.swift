@@ -14,6 +14,8 @@ public enum WorkspaceControlLimits {
     public static let maxErrorBytes = 64
     public static let maxHookBytes = 32
     public static let maxOperationBytes = 64
+    public static let maxFeatures = 32
+    public static let maxFeatureBytes = 64
     public static let maxConnections = 32
     public static let describeTimeoutSeconds: TimeInterval = 5
     public static let launchTimeoutSeconds: TimeInterval = 60
@@ -40,10 +42,12 @@ public enum WorkspaceControlCode: String, Error, Sendable, Equatable, Codable {
 
 public enum WorkspaceControlOp: String, Sendable, Equatable {
     case hello
+    case capabilities
     case ping
     case describeWorkspace
     case listRuntimes
     case launchRuntime
+    case ensureTerminalRuntime
     case cancelRuntime
     case closeWorkspace
     case detach
@@ -61,6 +65,10 @@ public enum WorkspaceControlOp: String, Sendable, Equatable {
     case terminalOverflow
 }
 
+enum WorkspaceControlFeature {
+    static let ensureTerminalRuntime = "ensureTerminalRuntime"
+}
+
 /// One runtime as a control client may see it.
 public struct WorkspaceRuntimeReport: Sendable, Equatable {
     public var runtime: UUID
@@ -72,6 +80,8 @@ public struct WorkspaceRuntimeReport: Sendable, Equatable {
     public var columns: Int?
     /// Some attached client currently holds terminal input.
     public var inputOwner: Bool
+    /// True when this request created the runtime instead of reusing one.
+    public var created: Bool
 
     public init(
         runtime: UUID,
@@ -80,7 +90,8 @@ public struct WorkspaceRuntimeReport: Sendable, Equatable {
         terminal: Bool = false,
         rows: Int? = nil,
         columns: Int? = nil,
-        inputOwner: Bool = false
+        inputOwner: Bool = false,
+        created: Bool = false
     ) {
         self.runtime = runtime
         self.hook = hook
@@ -89,6 +100,7 @@ public struct WorkspaceRuntimeReport: Sendable, Equatable {
         self.rows = rows
         self.columns = columns
         self.inputOwner = inputOwner
+        self.created = created
     }
 }
 
@@ -136,6 +148,8 @@ struct WorkspaceControlMessage: Sendable, Equatable {
     var exitStatus: Int32?
     var terminal: Bool?
     var inputOwner: Bool?
+    var created: Bool?
+    var features: [String]?
 
     static func error(
         id: UUID?,
@@ -186,7 +200,7 @@ enum WorkspaceControlCodec {
         "v", "id", "op", "token", "executable", "arguments", "runtime", "hook",
         "ok", "error", "workspace", "host", "phase", "project", "runtimes",
         "attached", "running", "io", "rows", "cols", "sequence", "bytes", "exit",
-        "terminal", "input",
+        "terminal", "input", "created", "features",
     ]
     private static let runtimeKeys: Set<String> = [
         "runtime", "hook", "running", "terminal", "rows", "cols", "input",
@@ -212,6 +226,7 @@ enum WorkspaceControlCodec {
             fits(envelope.error, WorkspaceControlLimits.maxErrorBytes),
             fits(envelope.phase, 32),
             fits(envelope.project, WorkspaceControlLimits.maxProjectBytes),
+            featuresFit(envelope.features),
             argumentsFit(envelope.arguments),
             attachedFits(envelope.attached),
             ioFits(envelope.io),
@@ -294,6 +309,14 @@ enum WorkspaceControlCodec {
         if value.isEmpty { return true }
         return TerminalBytesCodec.decode(value, maximum: TerminalStreamLimits.maximumInputBytes) != nil
     }
+
+    private static func featuresFit(_ values: [String]?) -> Bool {
+        guard let values else { return true }
+        return values.count <= WorkspaceControlLimits.maxFeatures
+            && values.allSatisfy {
+                $0.utf8.count <= WorkspaceControlLimits.maxFeatureBytes && $0.contains("\0") == false
+            }
+    }
 }
 
 private struct KeyScan: Decodable {
@@ -338,6 +361,8 @@ private struct Envelope: Codable {
     var exitStatus: Int32?
     var terminal: Bool?
     var inputOwner: Bool?
+    var created: Bool?
+    var features: [String]?
 
     struct RuntimeWire: Codable {
         var runtime: UUID
@@ -448,6 +473,8 @@ private struct Envelope: Codable {
         case exitStatus = "exit"
         case terminal
         case inputOwner = "input"
+        case created
+        case features
     }
 
     init(from decoder: Decoder) throws {
@@ -456,7 +483,7 @@ private struct Envelope: Codable {
             "v", "id", "op", "token", "executable", "arguments", "runtime", "hook",
             "ok", "error", "workspace", "host", "phase", "project", "runtimes",
             "attached", "running", "io", "rows", "cols", "sequence", "bytes", "exit",
-        "terminal", "input",
+            "terminal", "input", "created", "features",
         ]) else {
             throw DecodingError.dataCorrupted(
                 .init(codingPath: decoder.codingPath, debugDescription: "unknown field")
@@ -488,6 +515,8 @@ private struct Envelope: Codable {
         exitStatus = try container.decodeIfPresent(Int32.self, forKey: .exitStatus)
         terminal = try container.decodeIfPresent(Bool.self, forKey: .terminal)
         inputOwner = try container.decodeIfPresent(Bool.self, forKey: .inputOwner)
+        created = try container.decodeIfPresent(Bool.self, forKey: .created)
+        features = try container.decodeIfPresent([String].self, forKey: .features)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -517,6 +546,8 @@ private struct Envelope: Codable {
         try container.encodeIfPresent(exitStatus, forKey: .exitStatus)
         try container.encodeIfPresent(terminal, forKey: .terminal)
         try container.encodeIfPresent(inputOwner, forKey: .inputOwner)
+        try container.encodeIfPresent(created, forKey: .created)
+        try container.encodeIfPresent(features, forKey: .features)
     }
 
     init(_ message: WorkspaceControlMessage) {
@@ -555,6 +586,8 @@ private struct Envelope: Codable {
         exitStatus = message.exitStatus
         terminal = message.terminal
         inputOwner = message.inputOwner
+        created = message.created
+        features = message.features
     }
 
     var message: WorkspaceControlMessage {
@@ -593,7 +626,9 @@ private struct Envelope: Codable {
             bytes: bytes,
             exitStatus: exitStatus,
             terminal: terminal,
-            inputOwner: inputOwner
+            inputOwner: inputOwner,
+            created: created,
+            features: features
         )
     }
 }

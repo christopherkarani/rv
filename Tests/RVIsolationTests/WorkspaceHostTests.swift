@@ -59,11 +59,47 @@ import Testing
 #if os(macOS)
 @Suite("Workspace host", .serialized)
 struct WorkspaceHostTests {
+    @Test func workspaceRootPolicyRejectsOnlyTheHomeDirectory() throws {
+        let parent = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let home = parent.appendingPathComponent("home", isDirectory: true)
+        let project = home.appendingPathComponent("project", isDirectory: true)
+        let homeAlias = parent.appendingPathComponent("home-alias", isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: homeAlias, withDestinationURL: home)
+        defer { try? FileManager.default.removeItem(at: parent) }
+
+        #expect(WorkspaceRootPolicy.isHomeDirectory(project: home.path, homeDirectory: home.path))
+        #expect(WorkspaceRootPolicy.isHomeDirectory(project: homeAlias.path, homeDirectory: home.path))
+        #expect(WorkspaceRootPolicy.isHomeDirectory(project: project.path, homeDirectory: home.path) == false)
+    }
+
+    @Test func startingNewWorkspaceAtHomeRefusesBeforeLaunchingHost() throws {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let result = WorkspaceHosts.ensure(
+            project: home.path,
+            executable: URL(fileURLWithPath: "/missing/rv-workspace-host"),
+            timeout: 2,
+            homeDirectory: home.path
+        )
+        if case .failure(.homeDirectory) = result {
+            return
+        }
+        Issue.record("new workspaces rooted at home must fail before host launch")
+    }
+
     @Test func clientsAttachDetachAndCancelWithoutSharingAuthority() throws {
         let opened = try TestHost()
         defer { opened.close() }
         let first = try WorkspaceClient.connect(opened.server.endpoint).get()
         let second = try WorkspaceClient.connect(opened.server.endpoint).get()
+        #expect(first.supportsEnsureTerminalRuntime)
+        #expect(second.supportsEnsureTerminalRuntime)
         let described = try first.describe().get()
         #expect(described.workspace == opened.supervisor.id.rawValue)
         #expect(described.host == opened.server.endpoint.host)
@@ -471,6 +507,63 @@ struct WorkspaceHostTests {
             #expect(primary.isSuccess)
             #expect(box.secondary?.isSuccess == true)
         }
+    }
+
+    @Test func negotiatedFeaturesTreatInvalidRequestAsLegacy() {
+        guard case .success(let empty) = WorkspaceClient.negotiatedFeatures(from: .failure(.invalidRequest)) else {
+            Issue.record("invalidRequest must map to an empty feature list")
+            return
+        }
+        #expect(empty.isEmpty)
+        #expect(WorkspaceClient.negotiatedFeatures(from: .failure(.timedOut)).isFailure)
+        let reply = WorkspaceControlMessage(
+            version: 1,
+            id: UUID(),
+            op: WorkspaceControlOp.capabilities.rawValue,
+            ok: true,
+            features: [WorkspaceControlFeature.ensureTerminalRuntime]
+        )
+        guard case .success(let features) = WorkspaceClient.negotiatedFeatures(from: .success(reply)) else {
+            Issue.record("capabilities reply must map to its features")
+            return
+        }
+        #expect(features == [WorkspaceControlFeature.ensureTerminalRuntime])
+        let wrongOp = WorkspaceControlMessage(
+            version: 1,
+            id: UUID(),
+            op: WorkspaceControlOp.ping.rawValue,
+            ok: true,
+            features: []
+        )
+        #expect(WorkspaceClient.negotiatedFeatures(from: .success(wrongOp)).isFailure)
+    }
+
+    @Test func legacyEnsureReusesARunningTerminalAndLaunchesWhenEmpty() throws {
+        let opened = try TestHost()
+        defer { opened.close() }
+        let client = try WorkspaceClient.connect(opened.server.endpoint).get()
+        defer { _ = client.detach() }
+        #expect(client.supportsEnsureTerminalRuntime)
+        client.testingSetSupportsEnsureTerminalRuntime(false)
+        #expect(client.supportsEnsureTerminalRuntime == false)
+
+        let created = try client.ensureTerminalRuntime(
+            executable: "/bin/sh",
+            arguments: ["-c", "/bin/sleep 30"],
+            terminalRows: 24,
+            terminalColumns: 80
+        ).get()
+        #expect(created.terminal)
+        #expect(created.running)
+        let reused = try client.ensureTerminalRuntime(
+            executable: "/bin/sh",
+            arguments: ["-c", "/bin/sleep 30"],
+            terminalRows: 24,
+            terminalColumns: 80
+        ).get()
+        #expect(reused.runtime == created.runtime)
+        #expect(try client.listRuntimes().get().filter(\.terminal).count == 1)
+        #expect(client.cancelRuntime(created.runtime).isSuccess)
     }
 }
 

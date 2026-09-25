@@ -101,6 +101,15 @@ let coreLibraryTargets: [Target] = [
     .target(name: "RVAnalytics"),
     .target(name: "RVPresentation", dependencies: ["RVDomain", "RVTheme"]),
     .target(name: "RVTUI", dependencies: ["RVTheme", "RVPresentation"]),
+    .target(
+        name: "RVWorkspaceTUI",
+        dependencies: [
+            "RVDomain",
+            "RVIsolation",
+            .product(name: "SwiftTUICLI", package: "swift-tui"),
+            .product(name: "SwiftTerm", package: "SwiftTerm"),
+        ]
+    ),
 ]
 
 let coreProducts: [Product] = [
@@ -115,6 +124,7 @@ let coreProducts: [Product] = [
     .library(name: "RVPresentation", targets: ["RVPresentation"]),
     .library(name: "RVTheme", targets: ["RVTheme"]),
     .library(name: "RVTUI", targets: ["RVTUI"]),
+    .library(name: "RVWorkspaceTUI", targets: ["RVWorkspaceTUI"]),
     .library(name: "RVHistory", targets: ["RVHistory"]),
     .library(name: "RVAnalytics", targets: ["RVAnalytics"]),
 ]
@@ -147,6 +157,10 @@ let coreTestTargets: [Target] = [
         name: "RVTUITests",
         dependencies: ["RVTUI"],
         exclude: ["Fixtures"]
+    ),
+    .testTarget(
+        name: "RVWorkspaceTUITests",
+        dependencies: ["RVWorkspaceTUI", "RVIsolation"]
     ),
     .testTarget(name: "RVHistoryTests", dependencies: ["RVHistory"]),
     .testTarget(name: "RVAnalyticsTests", dependencies: ["RVAnalytics"]),
@@ -190,7 +204,7 @@ let cliTargets: [Target] = [
         name: "RVCLI",
         dependencies: [
             "RVDomain", "RVEngine", "RVPolicy", "RVHooks", "RVIPC",
-            "RVPresentation", "RVScan", "RVTheme", "RVTUI", "RVService", "RVHistory",
+            "RVPresentation", "RVScan", "RVTheme", "RVTUI", "RVWorkspaceTUI", "RVService", "RVHistory",
             "RVAnalytics", "RVIsolation",
             .product(name: "ArgumentParser", package: "swift-argument-parser"),
         ],
@@ -223,6 +237,11 @@ let package = Package(
     products: coreProducts + isolationExecProducts + terminalProbeProducts + serviceProducts + cliProducts,
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.7.0"),
+        .package(url: "https://github.com/SwiftTUI/swift-tui", exact: "0.14.0"),
+        .package(url: "https://github.com/migueldeicaza/SwiftTerm", exact: "1.19.0"),
+        // SwiftTUI requires 1.6.0 or newer. 1.7.0 emits Swift 6.4 borrow
+        // runtime calls unavailable on the macOS 26 release runner.
+        .package(url: "https://github.com/apple/swift-collections.git", exact: "1.6.0"),
     ] + extraPackageDependencies,
     targets: coreLibraryTargets + isolationExecTargets + terminalProbeTargets + serviceLibraryAndDaemon + cliTargets
         + coreTestTargets + serviceTestTargets + cliTestTargets,

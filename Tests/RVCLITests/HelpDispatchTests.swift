@@ -70,6 +70,7 @@ import RVTheme
     #expect(text.contains("Examples"))
     #expect(text.contains("Next"))
     #expect(text.contains("rv setup"))
+    #expect(text.contains("Open the workspace shell in the current project"))
     #expect(text.contains("rv help setup"))
     #expect(text.contains("allow-once"))
     #expect(text.contains("packs"))
@@ -112,6 +113,12 @@ import RVTheme
 @Test func helpText_helpMeta_hasNoExamples() {
     let text = HelpDispatch.text(.help, palette: colorOffPalette)
     #expect(text.contains("Examples") == false)
+}
+
+@Test func helpText_workspaceListsTheTUICommand() {
+    let text = HelpDispatch.text(.workspace, palette: colorOffPalette)
+    #expect(text.contains("rv workspace tui [--workspace <project-path>]"))
+    #expect(text.contains("Interactive terminal workspace for contained runtimes"))
 }
 
 @Test func helpText_hook_hasNoFakeFileExamples() {

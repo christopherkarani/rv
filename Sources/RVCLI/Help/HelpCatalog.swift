@@ -36,6 +36,7 @@ enum HelpCatalog {
             HelpSection(
                 heading: "Get started",
                 rows: [
+                    HelpRow(name: "rv", description: "Open the workspace shell in the current project"),
                     HelpRow(name: "opencode", description: "Launch OpenCode in a workspace sandbox"),
                     HelpRow(name: "workspace", description: "Attach to the persistent workspace host"),
                     HelpRow(name: "setup", description: "Wire host hooks and start rvd"),
@@ -61,6 +62,7 @@ enum HelpCatalog {
             ]),
         ],
         examples: [
+            "rv",
             "rv setup",
             "rv test 'git reset --hard'",
             "rv explain 'rm -rf ~'",
@@ -114,6 +116,7 @@ enum HelpCatalog {
                 HelpRow(name: "rv workspace status [--workspace <absolute-path>]"),
                 HelpRow(name: "rv workspace close [--workspace <absolute-path>]"),
                 HelpRow(name: "rv workspace run [--rows N] [--columns N] -- <absolute-executable> [args...]"),
+                HelpRow(name: "rv workspace tui [--workspace <project-path>]", description: "Interactive terminal workspace for contained runtimes"),
             ]),
             HelpSection(heading: "Flags", rows: [
                 HelpRow(name: "--workspace", description: "Project path; default is the current directory"),

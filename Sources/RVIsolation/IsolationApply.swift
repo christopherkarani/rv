@@ -1,5 +1,10 @@
 import Foundation
 import RVDomain
+#if os(macOS)
+import Darwin
+#elseif os(Linux)
+import Glibc
+#endif
 
 public enum IsolationBackendFamily: Sendable, Equatable {
     case none
@@ -662,6 +667,8 @@ func spawn(
 /// workspace while their path stays inside the Seatbelt write allow.
 /// Directories have a link count above one without being aliases.
 /// Symlink entries are not followed. A scan failure refuses the launch.
+/// Root-owned filesystem metadata directories are skipped by identity; a
+/// matching project-owned or nested name is scanned as ordinary content.
 func rejectWorkspaceInodeAlias(_ root: String) -> Result<Void, IsolationApplyError> {
     let rootURL = URL(fileURLWithPath: root, isDirectory: true)
     // FileManager calls this handler synchronously on the scanning thread.
@@ -679,13 +686,30 @@ func rejectWorkspaceInodeAlias(_ root: String) -> Result<Void, IsolationApplyErr
     else {
         return .failure(.workspaceContainsInodeAlias)
     }
-    let keys: Set<URLResourceKey> = [.isRegularFileKey, .isSymbolicLinkKey, .linkCountKey]
+    let keys: Set<URLResourceKey> = [
+        .isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey, .linkCountKey,
+    ]
     for case let url as URL in enumerator {
         if scan.failed {
             return .failure(.workspaceContainsInodeAlias)
         }
         do {
             let values = try url.resourceValues(forKeys: keys)
+            let isRootChild = url.deletingLastPathComponent().standardizedFileURL == rootURL.standardizedFileURL
+            var status = stat()
+            guard url.path.withCString({ lstat($0, &status) == 0 }) else {
+                return .failure(.workspaceContainsInodeAlias)
+            }
+            if WorkspaceFilesystemMetadata.shouldSkip(
+                name: url.lastPathComponent,
+                isRootChild: isRootChild,
+                isDirectory: (status.st_mode & S_IFMT) == S_IFDIR,
+                isSymbolicLink: (status.st_mode & S_IFMT) == S_IFLNK,
+                ownerID: status.st_uid
+            ) {
+                enumerator.skipDescendants()
+                continue
+            }
             if values.isSymbolicLink == true {
                 continue
             }

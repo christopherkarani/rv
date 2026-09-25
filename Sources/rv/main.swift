@@ -9,6 +9,10 @@ import RVCLI
 enum RVEntry {
     static func main() async {
         let args = Array(CommandLine.arguments.dropFirst())
+        if args.isEmpty {
+            await RV.main(["workspace", "tui"])
+            return
+        }
         if HelpDispatch.tryEmit(arguments: args) {
             return
         }

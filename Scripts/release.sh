@@ -187,6 +187,37 @@ if [[ "$OS" == "Darwin" ]]; then
   cp "$BIN_DIR/rv-pty-claim" "$STAGE/rv-pty-claim"
   chmod 755 "$STAGE/rv-pty-claim"
   strip -x "$STAGE/rv-pty-claim"
+
+  needs_span=0
+  for staged in "$STAGE/rv-cli" "$STAGE/rvd" "$STAGE/rv-workspace-host" "$STAGE/rv-pty-claim"; do
+    if otool -L "$staged" | grep -q 'libswiftCompatibilitySpan.dylib'; then
+      needs_span=1
+    fi
+  done
+  if [[ "$needs_span" -eq 1 ]]; then
+    runtime_resource="$("$SWIFT_WRAP" -print-target-info | python3 -c 'import json,sys; print(json.load(sys.stdin)["paths"]["runtimeResourcePath"])')"
+    swift_lib_root="$(cd "$(dirname "$runtime_resource")" && pwd)"
+    span_runtime=""
+    for candidate in "$swift_lib_root"/swift-*/macosx/libswiftCompatibilitySpan.dylib; do
+      [[ -f "$candidate" ]] || continue
+      span_runtime="$candidate"
+      break
+    done
+    if [[ -z "$span_runtime" ]]; then
+      printf 'release: Swift binaries require libswiftCompatibilitySpan.dylib, but it is missing from the Swift toolchain\n' >&2
+      exit 1
+    fi
+    cp "$span_runtime" "$STAGE/libswiftCompatibilitySpan.dylib"
+    chmod 755 "$STAGE/libswiftCompatibilitySpan.dylib"
+    for staged in "$STAGE/rv-cli" "$STAGE/rvd" "$STAGE/rv-workspace-host" "$STAGE/rv-pty-claim"; do
+      if ! otool -L "$staged" | grep -q 'libswiftCompatibilitySpan.dylib'; then
+        continue
+      fi
+      if ! otool -l "$staged" | grep -A3 'cmd LC_RPATH' | grep -Fq 'path @loader_path '; then
+        install_name_tool -add_rpath @loader_path "$staged"
+      fi
+    done
+  fi
 fi
 
 for bundle in "$BIN_DIR"/*_RVPacks.bundle "$BIN_DIR"/*_RVPacks.resources; do
@@ -213,6 +244,10 @@ if [[ "$OS" == "Darwin" ]]; then
   if otool -L "$STAGE/rv-cli" | grep -E 'libswiftCore|FoundationModels' | grep -q '@rpath'; then
     printf 'release: rv-cli must link the OS Swift runtime, not an @rpath toolchain\n' >&2
     otool -L "$STAGE/rv-cli" >&2
+    exit 1
+  fi
+  if nm -u "$STAGE/rv-cli" | grep -q '_swift_initBorrow'; then
+    printf 'release: rv-cli references _swift_initBorrow, unavailable on macOS 26\n' >&2
     exit 1
   fi
 fi

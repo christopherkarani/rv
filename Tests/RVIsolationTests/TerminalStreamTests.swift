@@ -54,7 +54,6 @@ struct TerminalStreamTests {
         #expect(terminalWriteOutcome(written: 0, hardFailure: true) == .failed)
         #expect(admitClientTerminalBytes(queued: 100, incoming: 20, limit: 128) == .accept(queued: 120))
         #expect(admitClientTerminalBytes(queued: 100, incoming: 40, limit: 128) == .overflow)
-        #expect(releaseInflight(queued: 70_000, inflight: 65_536) == 4_464)
         #expect(
             planClientTerminalFrame(queued: 65_536, incoming: 1, limit: 65_536) == .overflow
         )
@@ -129,6 +128,37 @@ struct TerminalStreamTests {
         #expect(WorkspaceControlCodec.decode(version) == .incompatible)
         #expect(WorkspaceControlLimits.version == 1)
         #expect(WorkspaceControlLimits.name == "rv.workspace.v1")
+    }
+
+    @Test func capabilityRepliesRoundTripWithinTheirBounds() {
+        let message = WorkspaceControlMessage(
+            version: WorkspaceControlLimits.version,
+            id: UUID(),
+            op: WorkspaceControlOp.capabilities.rawValue,
+            ok: true,
+            features: [WorkspaceControlFeature.ensureTerminalRuntime]
+        )
+        guard let encoded = WorkspaceControlCodec.encode(message),
+            case .message(let decoded) = WorkspaceControlCodec.decode(encoded)
+        else {
+            Issue.record("capabilities reply should round-trip")
+            return
+        }
+        #expect(decoded.features == [WorkspaceControlFeature.ensureTerminalRuntime])
+
+        let tooMany = Array(repeating: "x", count: WorkspaceControlLimits.maxFeatures + 1)
+        let oversized = WorkspaceControlMessage(
+            version: WorkspaceControlLimits.version,
+            id: UUID(),
+            op: WorkspaceControlOp.capabilities.rawValue,
+            ok: true,
+            features: tooMany
+        )
+        guard let oversizedBytes = WorkspaceControlCodec.encode(oversized) else {
+            Issue.record("bounded capability test frame should fit the control frame")
+            return
+        }
+        #expect(WorkspaceControlCodec.decode(oversizedBytes) == .invalid)
     }
 
     #if os(Linux)

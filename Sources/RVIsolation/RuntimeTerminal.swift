@@ -337,6 +337,10 @@ final class RuntimeTerminal: @unchecked Sendable {
         if held >= 0 { Darwin.close(held) }
     }
 
+    /// Attaches a client to replay plus live output. When a subscriber falls
+    /// behind, the flush loop emits `.overflow` and drops it; the same client
+    /// id may subscribe again to resume from replay (see
+    /// `WorkspaceClient.resubscribeTerminal`).
     func subscribe(
         client: UUID,
         emit: @escaping @Sendable (TerminalNotice) -> Bool
@@ -650,8 +654,12 @@ final class RuntimeTerminal: @unchecked Sendable {
                 return
             }
             let batch = subscriber.chunks
-            let inflight = subscriber.queuedBytes
             subscriber.chunks.removeAll()
+            // `queuedBytes` tracks waiting chunks only. Keep the detached
+            // batch bounded separately so live output can queue while replay
+            // is being emitted without falsely overflowing at the 64 KiB
+            // replay boundary.
+            subscriber.queuedBytes = 0
             subscriber.primed = true
             let dropped = subscriber.dropped
             flushing.insert(subscriber.id)
@@ -671,9 +679,6 @@ final class RuntimeTerminal: @unchecked Sendable {
             }
             condition.lock()
             flushing.remove(subscriber.id)
-            if subscriber.dropped == false, sendFailed == false {
-                subscriber.queuedBytes = releaseInflight(queued: subscriber.queuedBytes, inflight: inflight)
-            }
             condition.broadcast()
             if sendFailed {
                 subscriber.dropped = true
@@ -689,8 +694,9 @@ final class RuntimeTerminal: @unchecked Sendable {
                 return
             }
             if dropped || ended {
-                // The exit notice is already on the wire. Remove the subscriber
-                // so the same client can attach again and acquire fails closed.
+                // The overflow/exit notice is already on the wire. Remove the
+                // subscriber so the same client id can subscribe again and
+                // resume from replay; acquire fails closed until it does.
                 subscriber.stopped = true
                 subscriber.chunks.removeAll()
                 subscriber.queuedBytes = 0

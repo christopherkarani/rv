@@ -12,13 +12,13 @@ struct Workspace: AsyncParsableCommand {
         abstract: "Attach to the persistent workspace host.",
         subcommands: [
             WorkspaceStart.self, WorkspaceAttach.self, WorkspaceStatus.self, WorkspaceClose.self,
-            WorkspaceRun.self,
+            WorkspaceRun.self, WorkspaceTUI.self,
         ]
     )
 }
 
 struct WorkspacePath: ParsableArguments {
-    @Option(name: .long, help: "Project path. Defaults to the current directory.")
+    @Option(name: .long, help: "Project directory, not the home directory. Defaults to the current directory.")
     var workspace: String?
 }
 
@@ -308,14 +308,28 @@ enum WorkspaceCommandRun {
     }
 
     #if os(macOS)
-    private static func requireProject(_ raw: String?) throws -> String {
-        let value = raw ?? FileManager.default.currentDirectoryPath
+    static func requireProject(
+        _ raw: String?,
+        currentDirectory: String = FileManager.default.currentDirectoryPath,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) throws -> String {
+        let shellDirectory = environment["PWD"].flatMap { candidate -> String? in
+            guard candidate.hasPrefix("/"), candidate.isEmpty == false, candidate.contains("\0") == false else {
+                return nil
+            }
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: candidate, isDirectory: &isDirectory), isDirectory.boolValue else {
+                return nil
+            }
+            return candidate
+        }
+        let baseDirectory = shellDirectory ?? currentDirectory
+        let value = raw ?? baseDirectory
         guard value.isEmpty == false, value.contains("\0") == false else {
             throw ValidationError("workspace path is unusable")
         }
         if value.hasPrefix("/") { return value }
-        return URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
-            .appendingPathComponent(value).path
+        return URL(fileURLWithPath: baseDirectory, isDirectory: true).appendingPathComponent(value).path
     }
 
     private static func hostBinary() throws -> URL {
@@ -376,12 +390,14 @@ enum WorkspaceCommandRun {
         }
     }
 
-    private static func text(_ error: WorkspaceHostFailure) -> String {
+    static func text(_ error: WorkspaceHostFailure) -> String {
         switch error {
         case .unsupported:
             "contained workspace host is unavailable"
         case .projectUnusable:
             "workspace path is unusable"
+        case .homeDirectory:
+            "home directory cannot be a workspace root; pass --workspace <project directory>"
         case .hostBinaryMissing:
             "workspace host executable is missing"
         case .spawnFailed:

@@ -4,6 +4,56 @@ import Foundation
 import RVDomain
 import Synchronization
 
+enum LegacyTerminalEnsureLock {
+    static var directoryPath: String {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-terminal-ensure-\(getuid())", isDirectory: true)
+            .path
+    }
+
+    static var lockPath: String {
+        URL(fileURLWithPath: directoryPath)
+            .appendingPathComponent("ensure.lock")
+            .path
+    }
+
+    static func acquire() -> Int32? {
+        guard WorkspaceControlSocket.prepareDirectory(directoryPath) else { return nil }
+        let path = lockPath
+        let fd = path.withCString {
+            Darwin.open($0, O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, mode_t(S_IRUSR | S_IWUSR))
+        }
+        guard fd >= 0 else { return nil }
+        var info = stat()
+        guard fstat(fd, &info) == 0,
+            info.st_uid == getuid(),
+            (info.st_mode & S_IFMT) == S_IFREG,
+            (info.st_mode & 0o077) == 0
+        else {
+            Darwin.close(fd)
+            return nil
+        }
+        while flock(fd, LOCK_EX) != 0 {
+            guard errno == EINTR else {
+                Darwin.close(fd)
+                return nil
+            }
+        }
+        return fd
+    }
+
+    static func release(_ fd: Int32) {
+        _ = flock(fd, LOCK_UN)
+        Darwin.close(fd)
+    }
+
+    static func withLock<Value>(_ body: () -> Value) -> Value? {
+        guard let fd = acquire() else { return nil }
+        defer { release(fd) }
+        return body()
+    }
+}
+
 public enum WorkspaceClientFailure: Error, Sendable, Equatable {
     case disconnected
     case malformed
@@ -47,6 +97,7 @@ public enum WorkspaceTerminalRead: Sendable, Equatable {
 public enum WorkspaceHostFailure: Error, Sendable, Equatable {
     case unsupported
     case projectUnusable
+    case homeDirectory
     case hostBinaryMissing
     case spawnFailed
     case recoveryBlocked(WorkspaceRecoveryBlock)
@@ -73,14 +124,21 @@ public final class WorkspaceClient: Sendable {
     private let writeLock = Mutex<Void>(())
     private let events = EventBoard()
 
+    /// True when the host advertised `ensureTerminalRuntime`. Read from the
+    /// Mutex-protected state so the Sendable client holds no mutable storage.
+    var supportsEnsureTerminalRuntime: Bool {
+        io.withLock { $0.supportsEnsureTerminalRuntime }
+    }
+
     private struct ClientState {
         var fd: Int32
         var open: Bool
+        var supportsEnsureTerminalRuntime: Bool
     }
 
     private init(fd: Int32, endpoint: WorkspaceEndpoint) {
         self.endpoint = endpoint
-        self.io = Mutex(ClientState(fd: fd, open: true))
+        self.io = Mutex(ClientState(fd: fd, open: true, supportsEnsureTerminalRuntime: false))
     }
 
     deinit {
@@ -127,6 +185,17 @@ public final class WorkspaceClient: Sendable {
             else {
                 client.finish()
                 return .failure(.staleEndpoint)
+            }
+            switch client.negotiateCapabilities() {
+            case .failure(let error):
+                client.finish()
+                return .failure(error)
+            case .success(let features):
+                client.io.withLock {
+                    $0.supportsEnsureTerminalRuntime = features.contains(
+                        WorkspaceControlFeature.ensureTerminalRuntime
+                    )
+                }
             }
             return .success(client)
         }
@@ -194,12 +263,74 @@ public final class WorkspaceClient: Sendable {
                     terminal: reply.terminal ?? false,
                     rows: reply.rows,
                     columns: reply.columns,
-                    inputOwner: reply.inputOwner ?? false
+                    inputOwner: reply.inputOwner ?? false,
+                    created: reply.created ?? true
                 )
             )
         }
     }
 
+    /// Ensures at least one running host-owned terminal exists. Concurrent
+    /// callers are serialized by the host and receive the same runtime.
+    public func ensureTerminalRuntime(
+        executable: String,
+        arguments: [String] = [],
+        hookHost: HookHost? = nil,
+        terminalRows: Int,
+        terminalColumns: Int
+    ) -> Result<WorkspaceRuntimeReport, WorkspaceClientFailure> {
+        guard executable.hasPrefix("/"),
+            IsolatedCommand(executable: executable, arguments: arguments) != nil,
+            TerminalStreamLimits.accepts(rows: terminalRows, columns: terminalColumns)
+        else {
+            return .failure(.invalidRequest)
+        }
+        guard supportsEnsureTerminalRuntime else {
+            return ensureTerminalRuntimeOnLegacyHost(
+                executable: executable,
+                arguments: arguments,
+                hookHost: hookHost,
+                terminalRows: terminalRows,
+                terminalColumns: terminalColumns
+            )
+        }
+        var message = WorkspaceControlMessage(
+            version: WorkspaceControlLimits.version,
+            id: UUID(),
+            op: WorkspaceControlOp.ensureTerminalRuntime.rawValue,
+            executable: executable,
+            arguments: arguments,
+            hook: hookHost?.rawValue,
+            io: "terminal",
+            rows: terminalRows,
+            columns: terminalColumns
+        )
+        switch transact(&message, timeout: WorkspaceControlLimits.launchTimeoutSeconds) {
+        case .failure(let error):
+            return .failure(error)
+        case .success(let reply):
+            guard let runtime = reply.runtime, let running = reply.running, reply.terminal == true else {
+                return .failure(.malformed)
+            }
+            return .success(
+                WorkspaceRuntimeReport(
+                    runtime: runtime,
+                    hook: reply.hook,
+                    running: running,
+                    terminal: reply.terminal ?? false,
+                    rows: reply.rows,
+                    columns: reply.columns,
+                    inputOwner: reply.inputOwner ?? false,
+                    created: reply.created ?? false
+                )
+            )
+        }
+    }
+
+    /// Subscribes this connection to a terminal. After the host drops the
+    /// subscription for overflow (a `.overflow` event), call
+    /// `resubscribeTerminal` to resume from replay, then re-acquire input if
+    /// this client held it.
     public func subscribeTerminal(_ runtime: UUID) -> Result<Void, WorkspaceClientFailure> {
         var message = WorkspaceControlMessage(
             version: WorkspaceControlLimits.version,
@@ -216,6 +347,16 @@ public final class WorkspaceClient: Sendable {
             startEventReader()
         }
         return result.map { _ in () }
+    }
+
+    /// Re-establishes a terminal subscription after the host dropped it for
+    /// overflow. The host replays recent bytes, then live output resumes.
+    /// Re-acquire input after this returns if the client held the lease.
+    /// Manual recovery: call this after `.overflow`, or detach and connect a
+    /// fresh client to start over.
+    public func resubscribeTerminal(_ runtime: UUID) -> Result<Void, WorkspaceClientFailure> {
+        _ = unsubscribeTerminal(runtime)
+        return subscribeTerminal(runtime)
     }
 
     public func unsubscribeTerminal(_ runtime: UUID) -> Result<Void, WorkspaceClientFailure> {
@@ -355,6 +496,68 @@ public final class WorkspaceClient: Sendable {
             token: endpoint.ownerToken
         )
         return transact(&message, timeout: WorkspaceControlLimits.connectTimeoutSeconds)
+    }
+
+    private func negotiateCapabilities() -> Result<[String], WorkspaceClientFailure> {
+        Self.negotiatedFeatures(
+            from: transact(op: .capabilities, timeout: WorkspaceControlLimits.describeTimeoutSeconds)
+        )
+    }
+
+    /// Maps a capabilities RPC to its feature list. Older persistent hosts
+    /// reject the operation with `invalidRequest`; they remain usable through
+    /// the serialized ensure fallback below.
+    static func negotiatedFeatures(
+        from result: Result<WorkspaceControlMessage, WorkspaceClientFailure>
+    ) -> Result<[String], WorkspaceClientFailure> {
+        switch result {
+        case .failure(.invalidRequest):
+            return .success([])
+        case .failure(let error):
+            return .failure(error)
+        case .success(let message):
+            guard message.op == WorkspaceControlOp.capabilities.rawValue, message.ok == true else {
+                return .failure(.malformed)
+            }
+            return .success(message.features ?? [])
+        }
+    }
+
+    /// Forces the legacy ensure path for tests. Production sets this once
+    /// from the capabilities negotiation in `connect`.
+    func testingSetSupportsEnsureTerminalRuntime(_ value: Bool) {
+        io.withLock { $0.supportsEnsureTerminalRuntime = value }
+    }
+
+    private func ensureTerminalRuntimeOnLegacyHost(
+        executable: String,
+        arguments: [String],
+        hookHost: HookHost?,
+        terminalRows: Int,
+        terminalColumns: Int
+    ) -> Result<WorkspaceRuntimeReport, WorkspaceClientFailure> {
+        let fallback = LegacyTerminalEnsureLock.withLock {
+            switch listRuntimes() {
+            case .failure(let error):
+                return Result<WorkspaceRuntimeReport, WorkspaceClientFailure>.failure(error)
+            case .success(let runtimes):
+                if let existing = runtimes
+                    .filter({ $0.running && $0.terminal })
+                    .sorted(by: { $0.runtime.uuidString < $1.runtime.uuidString })
+                    .first
+                {
+                    return .success(existing)
+                }
+                return launchRuntime(
+                    executable: executable,
+                    arguments: arguments,
+                    hookHost: hookHost,
+                    terminalRows: terminalRows,
+                    terminalColumns: terminalColumns
+                )
+            }
+        }
+        return fallback ?? .failure(.timedOut)
     }
 
     private func transact(

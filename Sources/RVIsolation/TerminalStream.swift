@@ -150,11 +150,6 @@ enum TerminalClientAdmit: Equatable, Sendable {
     case overflow
 }
 
-/// Bytes still charged while a taken batch is inside `emit`.
-func releaseInflight(queued: Int, inflight: Int) -> Int {
-    max(0, queued - inflight)
-}
-
 enum ClientTerminalFramePlan: Equatable, Sendable {
     case store(queued: Int)
     case overflow
