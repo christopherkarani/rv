@@ -277,7 +277,8 @@ func spawnSeatbeltProcess(
     profile: SeatbeltProfile,
     boundary: WorkspaceInodeBoundary,
     started: RuntimeSession,
-    admission: RuntimeAdmissionConfiguration
+    admission: RuntimeAdmissionConfiguration,
+    egressProxyPort: Int? = nil
 ) -> Result<LiveSeatbeltChild, IsolationApplyError> {
     guard profile.source.contains("(deny file-link)") else {
         return .failure(.seatbeltNotEstablished)
@@ -440,10 +441,14 @@ func spawnSeatbeltProcess(
         request.command.executable,
     ])
     arguments.append(contentsOf: request.command.arguments)
+    if case .pseudoTerminal = request.io {
+        stageAgentHomes(workspace: workspace)
+    }
     let environment = containedRuntimeEnvironment(
         workspace: workspace,
         io: request.io,
-        agentShims: AgentShim.installedDirectory()
+        agentBin: AgentBin.installedDirectory(),
+        egressProxyPort: egressProxyPort
     )
     let argv = SpawnPointers(arguments)
     let envp = SpawnPointers(environment)
@@ -553,28 +558,145 @@ func spawnSeatbeltProcess(
     return .success(child)
 }
 
+/// Host-staged agent credential links, shared by staging and publish scrub.
+///
+/// The cage home is the workspace, so agents look for credentials at these
+/// workspace-relative paths. The host symlinks the host-owned originals
+/// into place before each spawn; publish removes exactly these links (plus
+/// the cage dir) when the snapshot does not own them, so user-owned files
+/// at the same paths are never touched.
+enum AgentHomeStaging {
+    static let cageDirectoryName = ".rv-cage"
+    static let cageTmpSubpath = ".rv-cage/tmp"
+    /// Workspace-relative link path to home-relative credential source.
+    static let credentialLinks = [
+        (relative: ".codex/auth.json", source: ".codex/auth.json"),
+        (relative: ".codex/config.toml", source: ".codex/config.toml"),
+        (relative: ".config/muse/auth.json", source: ".config/muse/auth.json"),
+        (relative: ".claude/.credentials.json", source: ".claude/.credentials.json"),
+        (relative: ".claude/settings.json", source: ".claude/settings.json"),
+        (relative: ".claude/settings.local.json", source: ".claude/settings.local.json"),
+        (relative: ".local/share/opencode/auth.json", source: ".local/share/opencode/auth.json"),
+    ]
+    /// Claude's hardcoded file-history scratch dir, keyed by uid. It ignores
+    /// TMPDIR for this path, so the host ensures the root exists and the
+    /// profile admits the subpath (same-user scratch data only, never code).
+    static func claudeScratchRoots() -> [String] {
+        let uid = getuid()
+        return ["/tmp/claude-\(uid)", "/private/tmp/claude-\(uid)"]
+    }
+    /// Gateway routing passes through so agents use the host's model
+    /// gateway instead of direct provider endpoints.
+    static let gatewayPassthrough = [
+        "ANTHROPIC_BASE_URL",
+        "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+    ]
+    /// Provider keys that pass through when set on the host. muse keeps
+    /// its token in the host keychain (unreachable in the cage) and honors
+    /// only META_API_KEY otherwise. claude gates on login state bound to
+    /// the passwd home, which a workspace HOME can never satisfy; a key
+    /// selects key auth and skips the gate. Other provider keys stay
+    /// blocked: codex and opencode authenticate from staged files.
+    static let apiKeyPassthrough = [
+        "META_API_KEY",
+        "ANTHROPIC_API_KEY",
+    ]
+    /// Non-secret stand-in so gateway-routed claude runs work with no host
+    /// key configured. The gateway performs real auth and ignores the
+    /// value; direct-endpoint runs with it fail closed at the provider
+    /// (401), same as having no key.
+    static let anthropicGatewayPlaceholder = "rv-cage-gateway-placeholder"
+}
+
+/// Host-side agent home staging, run before each contained spawn.
+///
+/// Symlinks the host-owned credential originals into the workspace-local
+/// agent homes (read-only targets; the profile grants read-data only),
+/// prepares the cage tmp dir, and ensures claude's hardcoded scratch root
+/// exists (the cage can write beneath it but cannot create it: /tmp itself
+/// stays metadata-only). Skips any destination that already exists so
+/// project-owned agent state wins. Best-effort: failures leave the agent
+/// to report its own missing credentials.
+func stageAgentHomes(workspace: String, home: String? = nil) {
+    let manager = FileManager.default
+    let home = home ?? ProcessInfo.processInfo.environment["HOME"] ?? ""
+    let cageTmp = "\(workspace)/\(AgentHomeStaging.cageTmpSubpath)"
+    try? manager.createDirectory(atPath: cageTmp, withIntermediateDirectories: true)
+    for root in AgentHomeStaging.claudeScratchRoots() {
+        try? manager.createDirectory(atPath: root, withIntermediateDirectories: true)
+    }
+    guard home.hasPrefix("/"), home.contains("\0") == false else { return }
+    for link in AgentHomeStaging.credentialLinks {
+        let source = "\(home)/\(link.source)"
+        guard manager.isReadableFile(atPath: source) else { continue }
+        let destination = "\(workspace)/\(link.relative)"
+        if manager.fileExists(atPath: destination) { continue }
+        let parent = (destination as NSString).deletingLastPathComponent
+        try? manager.createDirectory(atPath: parent, withIntermediateDirectories: true)
+        try? manager.createSymbolicLink(atPath: destination, withDestinationPath: source)
+    }
+}
+
 func containedRuntimeEnvironment(
     workspace: String,
     io: IsolatedIO,
-    agentShims: String? = nil
+    agentBin: String? = nil,
+    egressProxyPort: Int? = nil,
+    hostEnvironment: [String: String]? = nil
 ) -> [String] {
+    guard case .pseudoTerminal = io else {
+        // One-shot contained runs stay byte-identical: no agent PATH, no
+        // proxy, workspace TMPDIR.
+        return [
+            "PATH=/usr/bin:/bin",
+            "LANG=C",
+            "LC_ALL=C",
+            "HOME=\(workspace)",
+            "TMPDIR=\(workspace)",
+        ]
+    }
     var values = [
         "PATH=/usr/bin:/bin",
         "LANG=C",
         "LC_ALL=C",
         "HOME=\(workspace)",
-        "TMPDIR=\(workspace)",
+        "TMPDIR=\(workspace)/\(AgentHomeStaging.cageTmpSubpath)",
     ]
-    if case .pseudoTerminal = io {
-        values.append("TERM=\(TerminalStreamLimits.supportedTerm)")
-        // The sandbox cannot see user dotfiles, so interactive shells start
-        // bare. Standard color output only; zsh ignores an inherited PS1, so
-        // the prompt stays its default unless the user creates a
-        // workspace-local .zshrc (HOME is the workspace).
-        values.append("CLICOLOR=1")
-        if let agentShims {
-            values[0] = "PATH=\(agentShims):/usr/bin:/bin"
+    values.append("TERM=\(TerminalStreamLimits.supportedTerm)")
+    // The sandbox cannot see user dotfiles, so interactive shells start
+    // bare. Standard color output only; zsh ignores an inherited PS1, so
+    // the prompt stays its default unless the user creates a
+    // workspace-local .zshrc (HOME is the workspace).
+    values.append("CLICOLOR=1")
+    if let agentBin {
+        values[0] = "PATH=\(agentBin):/usr/bin:/bin"
+        // The cage cannot manage host services or rewrite installs, so
+        // agent self-update and service-ensure steps stay off.
+        values.append("OCX_SHIM_BYPASS=1")
+        values.append("MUSE_NO_AUTO_UPDATE=1")
+        values.append("DISABLE_AUTOUPDATER=1")
+        let host = hostEnvironment ?? ProcessInfo.processInfo.environment
+        for name in AgentHomeStaging.gatewayPassthrough + AgentHomeStaging.apiKeyPassthrough {
+            if let value = host[name], value.contains("\0") == false {
+                values.append("\(name)=\(value)")
+            }
         }
+        if values.allSatisfy({ $0.hasPrefix("ANTHROPIC_API_KEY=") == false }) {
+            values.append("ANTHROPIC_API_KEY=\(AgentHomeStaging.anthropicGatewayPlaceholder)")
+        }
+    }
+    if let port = egressProxyPort, (1...65535).contains(port) {
+        let proxy = "http://127.0.0.1:\(port)"
+        values.append("HTTPS_PROXY=\(proxy)")
+        values.append("HTTP_PROXY=\(proxy)")
+        values.append("https_proxy=\(proxy)")
+        values.append("http_proxy=\(proxy)")
+        // Loopback bypasses the proxy when the client honors it (the
+        // seatbelt rule admits it directly); the proxy also relays
+        // loopback absolute-URI requests for clients that do not.
+        values.append("NO_PROXY=localhost,127.0.0.1")
+        values.append("no_proxy=localhost,127.0.0.1")
     }
     return values
 }

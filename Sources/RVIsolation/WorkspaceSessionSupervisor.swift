@@ -99,6 +99,8 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
     private let lifecycleLog: WorkspaceLifecycleStore
     private let ownerLock: WorkspaceOwnerLock
     private let state: Mutex<State>
+    private let egressProxy: EgressProxy?
+    private let egressPort: Int?
 
     private init(
         id: WorkspaceSessionID,
@@ -117,7 +119,19 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
         self.lifecycleLog = lifecycleLog
         self.ownerLock = ownerLock
         self.state = Mutex(State(lifecycle: .creating))
+        // One CONNECT proxy per workspace host. A bind failure leaves the
+        // port nil and contained spawns omit proxy variables (fail closed:
+        // without a proxy the cage has no route out at all).
+        let proxy = EgressProxy()
+        if let port = proxy.start() {
+            self.egressProxy = proxy
+            self.egressPort = port
+        } else {
+            self.egressProxy = nil
+            self.egressPort = nil
+        }
     }
+
     #endif
 
     /// Open a protected workspace at `workspace`.
@@ -315,6 +329,7 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
     }
 
     deinit {
+        egressProxy?.stop()
         let abandoned = state.withLock { $0.abandoned }
         if abandoned {
             let children = state.withLock { Array($0.children.values) }
@@ -560,7 +575,8 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
                 profile: profile,
                 boundary: boundary,
                 started: session,
-                admission: admission
+                admission: admission,
+                egressProxyPort: egressPort
             ) {
             case .failure(let error):
                 return .failure(.apply(error))
@@ -738,6 +754,7 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
         guard waitForChildren(children, seconds: 45) else {
             return .failure(.childTeardownFailed)
         }
+        egressProxy?.stop()
         if publish {
             state.withLock { $0.publishCount += 1 }
         }
@@ -867,10 +884,14 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
         return children.map { child in
             let window = child.live.pty?.window()
             let terminal = child.live.pty != nil
+            // The exit notice is queued inside the watch, before the watch
+            // flag flips (a log append runs between them). A client that
+            // received the notice must already see running=false here.
+            let exited = child.live.pty?.hasExited == true
             return WorkspaceRuntimeFact(
                 id: child.live.session.id.rawValue,
                 hookHost: child.live.session.host?.rawValue,
-                running: child.watchFinished == false,
+                running: child.watchFinished == false && exited == false,
                 terminal: terminal,
                 rows: terminal ? window?.rows : nil,
                 columns: terminal ? window?.columns : nil,

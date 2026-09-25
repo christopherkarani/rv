@@ -5,8 +5,33 @@ import Testing
     let policy = EgressHostPolicy.agentAPIs
     #expect(policy.allows(host: "api.anthropic.com", port: 443))
     #expect(policy.allows(host: "api.openai.com", port: 443))
+    #expect(policy.allows(host: "chatgpt.com", port: 443))
+    #expect(policy.allows(host: "auth.openai.com", port: 443))
+    #expect(policy.allows(host: "api.meta.ai", port: 443))
+    #expect(policy.allows(host: "auth.meta.com", port: 443))
+    #expect(policy.allows(host: "opencode.ai", port: 443))
+    #expect(policy.allows(host: "models.opencode.ai", port: 443))
     #expect(policy.allows(host: "API.ANTHROPIC.COM", port: 443))
     #expect(policy.allows(host: "api.anthropic.com.", port: 443))
+}
+
+@Test func egressPolicyAdmitsLoopbackTargetsOnAnyPort() {
+    let policy = EgressHostPolicy.agentAPIs
+    #expect(policy.allowsLoopbackTarget(host: "localhost", port: 10100))
+    #expect(policy.allowsLoopbackTarget(host: "localhost", port: 443))
+    #expect(policy.allowsLoopbackTarget(host: "LOCALHOST", port: 3000))
+    #expect(policy.allowsLoopbackTarget(host: "localhost.", port: 3000))
+    #expect(policy.allowsLoopbackTarget(host: "127.0.0.1", port: 10100))
+    #expect(policy.allowsLoopbackTarget(host: "127.0.0.2", port: 8080))
+    #expect(policy.allowsLoopbackTarget(host: "128.0.0.1", port: 10100) == false)
+    #expect(policy.allowsLoopbackTarget(host: "1.2.3.4", port: 10100) == false)
+    #expect(policy.allowsLoopbackTarget(host: "example.com", port: 10100) == false)
+    #expect(policy.allowsLoopbackTarget(host: "localhost.evil.com", port: 10100) == false)
+    #expect(policy.allowsLoopbackTarget(host: "[::1]", port: 10100) == false)
+    #expect(policy.allowsLoopbackTarget(host: "user@localhost", port: 10100) == false)
+    #expect(policy.allowsLoopbackTarget(host: "", port: 10100) == false)
+    #expect(policy.allowsLoopbackTarget(host: "localhost", port: 0) == false)
+    #expect(policy.allowsLoopbackTarget(host: "localhost", port: 70_000) == false)
 }
 
 @Test func egressPolicyRejectsWrongPortAndUnknownHosts() {

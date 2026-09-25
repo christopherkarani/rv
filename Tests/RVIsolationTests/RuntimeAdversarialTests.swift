@@ -22,23 +22,22 @@ struct RuntimeAdversarialTests {
         let inside = tree.workspaceURL.appendingPathComponent("ran")
         let outside = tree.siblingURL.appendingPathComponent("escaped")
         let script = "printf ran > \(quote(inside.path)); printf escaped > \(quote(outside.path))"
-        let run: IsolatedRunResult
         if launcher == .xargs {
-            // posix_spawn is denied so a utility cannot leave RV's process group.
+            // xargs executes only with stdin input. The write fence still
+            // applies to the spawned shell.
             _ = try await runShell(
                 tree.contained,
                 "printf '%s\\n' fixture | \(quote(executable)) /bin/sh -c \(quote(script))"
             )
-            #expect(!exists(inside))
+            #expect(try String(contentsOf: inside, encoding: .utf8) == "ran")
             #expect(!exists(outside))
             return
-        } else {
-            run = try await runIsolated(
-                tree.contained,
-                executable: executable,
-                arguments: launcher.arguments(script: script)
-            )
         }
+        let run = try await runIsolated(
+            tree.contained,
+            executable: executable,
+            arguments: launcher.arguments(script: script)
+        )
         #expect(try String(contentsOf: inside, encoding: .utf8) == "ran")
         #expect(run.exitStatus != 0)
         #expect(!exists(outside))
@@ -360,7 +359,7 @@ struct RuntimeAdversarialTests {
         try await assertNoSurvivingWriter(tree, script: "/bin/sh -c \(quote(inner))")
     }
 
-    @Test func lifetimeSyscallsAreDeniedInsideSeatbelt() async throws {
+    @Test func spawnIsAllowedWhileGroupEscapeStaysDenied() async throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
         let probe = try compileProbe(lifetimeSyscallProbeSource, named: "lifetime-syscalls", in: tree.workspaceURL)
@@ -374,7 +373,9 @@ struct RuntimeAdversarialTests {
         #expect(lines.contains("fork 0"))
         #expect(lines.contains("setsid 1"))
         #expect(lines.contains("setpgid 1"))
-        #expect(lines.contains("posix_spawn 1"))
+        // Node, Python, and Rust spawn only through posix_spawn. Children
+        // inherit the profile, so this grants no authority beyond the fence.
+        #expect(lines.contains("posix_spawn 0"))
     }
 
     @Test func setsidProbeCannotRetainWorkspaceAuthorityAfterReturn() async throws {
@@ -409,8 +410,8 @@ struct RuntimeAdversarialTests {
         victim.standardError = FileHandle.nullDevice
         try victim.run()
         defer {
-            if victim.isRunning { victim.terminate() }
-            victim.waitUntilExit()
+            reapVictim(victim)
+            ParkedVictim.keep(victim)
         }
         let pid = victim.processIdentifier
         let script = """
@@ -716,4 +717,38 @@ int main(int argc, char **argv) {
     return 0;
 }
 """
+
+/// Bounded reap of a test-owned `sleep` victim. `waitUntilExit` on a
+/// cooperative-pool thread can miss the child-exit notification and hang
+/// forever behind a live zombie; polling `waitpid` directly cannot wedge.
+private func reapVictim(_ victim: Process) {
+    let pid = victim.processIdentifier
+    if victim.isRunning { victim.terminate() }
+    var status: Int32 = 0
+    for _ in 0..<250 {
+        let reaped = waitpid(pid, &status, WNOHANG)
+        if reaped == pid || (reaped < 0 && errno == ECHILD) { return }
+        if reaped < 0 { break }
+        Thread.sleep(forTimeInterval: 0.02)
+    }
+    kill(pid, SIGKILL)
+    for _ in 0..<250 {
+        if waitpid(pid, &status, WNOHANG) != 0 { return }
+        Thread.sleep(forTimeInterval: 0.02)
+    }
+}
+
+/// `Process.deinit` calls `waitUntilExit`, which is the call that wedges.
+/// A reaped victim stays referenced so deinit never runs for it.
+private final class ParkedVictim: @unchecked Sendable {
+    private static let parked = ParkedVictim()
+    private let lock = NSLock()
+    private var processes: [Process] = []
+
+    static func keep(_ process: Process) {
+        parked.lock.lock()
+        parked.processes.append(process)
+        parked.lock.unlock()
+    }
+}
 #endif

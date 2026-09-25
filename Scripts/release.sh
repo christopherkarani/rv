@@ -209,9 +209,6 @@ if [[ "$OS" == "Darwin" ]]; then
     fi
     cp "$span_runtime" "$STAGE/libswiftCompatibilitySpan.dylib"
     chmod 755 "$STAGE/libswiftCompatibilitySpan.dylib"
-    mkdir -p "$STAGE/rv-agent-shims"
-    cp "$ROOT"/AgentShims/claude "$ROOT"/AgentShims/codex "$ROOT"/AgentShims/muse "$ROOT"/AgentShims/opencode "$STAGE/rv-agent-shims/"
-    chmod 755 "$STAGE"/rv-agent-shims/claude "$STAGE"/rv-agent-shims/codex "$STAGE"/rv-agent-shims/muse "$STAGE"/rv-agent-shims/opencode
     for staged in "$STAGE/rv-cli" "$STAGE/rvd" "$STAGE/rv-workspace-host" "$STAGE/rv-pty-claim"; do
       if ! otool -L "$staged" | grep -q 'libswiftCompatibilitySpan.dylib'; then
         continue
@@ -221,6 +218,81 @@ if [[ "$OS" == "Darwin" ]]; then
       fi
     done
   fi
+  # `Claude` on PATH is not always Anthropic's: Meta's installer also
+  # claims the name for its launcher. Verify the codesign identity and
+  # fall back to Anthropic's versioned install before linking, so the
+  # contained `Claude` is never the wrong vendor's binary. Prints the link
+  # target stdout, nothing when no verified target exists.
+  is_anthropic_claude() {
+    # No pipe: grep -q exits early, SIGPIPEs the writer, and pipefail
+    # would report failure on a valid match.
+    local info
+    info="$(codesign -dv "$1" 2>&1 || true)"
+    [[ "$info" == *"Identifier=com.anthropic.claude-code"* ]]
+  }
+  resolve_anthropic_claude() {
+    local candidate resolved versions latest entry
+    candidate="$(command -v claude 2>/dev/null || true)"
+    if [[ -n "$candidate" ]]; then
+      resolved="$candidate"
+      if [[ -L "$candidate" ]]; then
+        resolved="$(readlink "$candidate" || true)"
+        [[ -z "$resolved" ]] && return 1
+        case "$resolved" in
+          /*) ;;
+          *) resolved="$(cd "$(dirname "$candidate")" && pwd)/$resolved" ;;
+        esac
+      fi
+      if [[ -f "$resolved" ]] && is_anthropic_claude "$resolved"; then
+        printf '%s\n' "$candidate"
+        return 0
+      fi
+      printf 'release: ignoring non-Anthropic claude on PATH: %s\n' "$candidate" >&2
+    fi
+    versions="$HOME/.local/share/claude/versions"
+    if [[ -d "$versions" ]]; then
+      latest=""
+      for entry in "$versions"/*; do
+        [[ -f "$entry" && -x "$entry" ]] || continue
+        if [[ -z "$latest" || "$entry" -nt "$latest" ]]; then
+          latest="$entry"
+        fi
+      done
+      if [[ -n "$latest" ]] && is_anthropic_claude "$latest"; then
+        printf 'release: linking claude to versioned install: %s\n' "$latest" >&2
+        printf '%s\n' "$latest"
+        return 0
+      fi
+    fi
+    if [[ -x /opt/homebrew/bin/claude ]] && is_anthropic_claude /opt/homebrew/bin/claude; then
+      printf '%s\n' /opt/homebrew/bin/claude
+      return 0
+    fi
+    return 1
+  }
+  # Agent CLIs for contained shells: one symlink per installed agent. The
+  # host resolves these per spawn and grants exactly the targets, so a
+  # missing agent degrades to command-not-found instead of failing the run.
+  # Never ship the retired guidance shims.
+  rm -rf "$STAGE/rv-agent-shims"
+  rm -rf "$STAGE/rv-agent-bin"
+  mkdir -p "$STAGE/rv-agent-bin"
+  for agent in claude codex muse opencode node; do
+    if [[ "$agent" == "claude" ]]; then
+      target="$(resolve_anthropic_claude || true)"
+      if [[ -z "$target" ]]; then
+        printf 'release: agent claude has no verified Anthropic target, skipping contained link\n' >&2
+        continue
+      fi
+    else
+      target="$(command -v "$agent" 2>/dev/null || true)"
+      if [[ -z "$target" ]]; then
+        printf 'release: agent %s not on PATH, skipping contained link\n' "$agent" >&2
+        continue
+      fi
+    fi
+    ln -s "$target" "$STAGE/rv-agent-bin/$agent"
+  done
 fi
 
 for bundle in "$BIN_DIR"/*_RVPacks.bundle "$BIN_DIR"/*_RVPacks.resources; do

@@ -8,14 +8,14 @@ import RVDomain
 
 /// Darwin syscalls that can leave the process group RV owns.
 ///
-/// `posix_spawn` is included because `POSIX_SPAWN_SETSID` and
-/// `POSIX_SPAWN_SETPGROUP` create a new session or group inside that syscall.
-/// A userspace scan cannot reliably observe that child before its parent exits
-/// and it is reparented. `fork` and `execve` stay allowed.
+/// `setpgid` and `setsid` stay denied: a group member must not reassign
+/// itself. `posix_spawn` stays allowed: Node, Python, and Rust spawn only
+/// through it, and agents cannot work without it. Spawned children inherit
+/// this same profile, so group escape buys no file or network authority,
+/// and forced detach reaps anything left on the volume.
 enum SeatbeltLifetimeSyscall {
     static let setpgid = 82
     static let setsid = 147
-    static let posixSpawn = 244
 }
 
 /// SBPL text compiled from a contained `IsolationPlan`. Production construction
@@ -29,25 +29,65 @@ public struct SeatbeltProfile: Sendable, Equatable {
         self.workspacePath = workspacePath
     }
 
-    /// Guidance shims for agent CLIs typed inside a contained shell.
-    ///
-    /// Agents need credentials and network, which the sandbox withholds, so
-    /// the contained shell cannot run them. A shim dir shipped next to the
-    /// host binary puts the familiar names on PATH; each shim only prints
-    /// where to run the agent instead. Shims grant no capability: they
-    /// execute under this same contained profile.
-    func allowingAgentShims(directory: String?) -> SeatbeltProfile {
-        guard let directory else { return self }
-        let literals = AgentShim.names
-            .map { "\(directory)/\($0)" }
-            .map { "(literal \"\(escapeSeatbeltSubpath($0))\")" }
-            .joined(separator: "\n        ")
+    /// Loopback TCP only. The cage reaches the host-side egress proxy and
+    /// local gateways/MCP servers on loopback; every non-loopback connect
+    /// stays denied. Seatbelt only filters the remote host as `*` or
+    /// `localhost`, so per-host direct egress is unrepresentable and all
+    /// external traffic funnels through the proxy allowlist instead.
+    func allowingLoopbackEgress() -> SeatbeltProfile {
         let addition = """
 
-        (allow file-read* file-map-executable
-            \(literals))
+        (allow network-outbound
+            (remote tcp "localhost:*"))
         """
         return SeatbeltProfile(source: source + addition, workspacePath: workspacePath)
+    }
+
+    /// Real agent CLIs for a contained shell.
+    ///
+    /// The agent bin dir (sibling of the host binary) holds symlinks to the
+    /// installed agent executables and sits on the contained PATH. Each
+    /// resolution grants exactly the resolved link, its target, its support
+    /// tree, and its credential file (read-only): agents execute under this
+    /// same contained profile, and missing agents simply resolve to nothing.
+    func allowingAgentBin(_ resolution: AgentBinResolution) -> SeatbeltProfile {
+        var additions = ""
+        let reads = [resolution.directory] + resolution.executables
+        if reads.isEmpty == false {
+            let literals = reads
+                .map { "(literal \"\(escapeSeatbeltSubpath($0))\")" }
+                .joined(separator: "\n        ")
+            additions += """
+
+            (allow file-read* file-map-executable
+                \(literals))
+            """
+        }
+        for tree in resolution.trees {
+            additions += """
+
+            (allow file-read* file-map-executable
+                (subpath "\(escapeSeatbeltSubpath(tree))"))
+            """
+        }
+        if resolution.credentials.isEmpty == false {
+            let literals = resolution.credentials
+                .map { "(literal \"\(escapeSeatbeltSubpath($0))\")" }
+                .joined(separator: "\n        ")
+            additions += """
+
+            (allow file-read-data
+                \(literals))
+            """
+        }
+        for tree in resolution.writableTrees {
+            additions += """
+
+            (allow file-read* file-write*
+                (subpath "\(escapeSeatbeltSubpath(tree))"))
+            """
+        }
+        return SeatbeltProfile(source: source + additions, workspacePath: workspacePath)
     }
 
     /// The granted executable may live outside the workspace. Allow reading
@@ -70,10 +110,45 @@ public struct SeatbeltProfile: Sendable, Equatable {
     }
 }
 
-/// Locates the installed agent guidance shims, if any.
-public enum AgentShim {
-    public static let directoryName = "rv-agent-shims"
-    public static let names = ["claude", "codex", "muse", "opencode"]
+/// Resolved agent file grants for one contained spawn.
+public struct AgentBinResolution: Sendable, Equatable {
+    /// The agent bin dir itself (PATH lookup).
+    public var directory: String
+    /// Link and realpath target literals (read + map-executable).
+    public var executables: [String]
+    /// Support trees (subpath read + map-executable).
+    public var trees: [String]
+    /// Credential originals (read-data only, never write or map).
+    public var credentials: [String]
+    /// Agent scratch dirs outside the workspace (subpath read+write).
+    /// Same-user scratch data only; the host ensures the roots exist
+    /// because the parents stay unwritable.
+    public var writableTrees: [String]
+
+    public init(
+        directory: String,
+        executables: [String] = [],
+        trees: [String] = [],
+        credentials: [String] = [],
+        writableTrees: [String] = []
+    ) {
+        self.directory = directory
+        self.executables = executables
+        self.trees = trees
+        self.credentials = credentials
+        self.writableTrees = writableTrees
+    }
+}
+
+/// Locates installed agent CLIs and resolves their file grants.
+///
+/// The bin dir is a sibling of the running host (or CLI) binary holding one
+/// symlink per agent. Resolution runs host-side per spawn: only links that
+/// resolve to an executable file grant anything, so a partially installed
+/// agent set degrades to command-not-found per agent instead of failing.
+public enum AgentBin {
+    public static let directoryName = "rv-agent-bin"
+    public static let names = ["claude", "codex", "muse", "opencode", "node"]
 
     /// Sibling of the running host (or CLI) binary, whatever the install
     /// prefix is. Nil when it cannot be determined.
@@ -89,28 +164,100 @@ public enum AgentShim {
             .appending("/" + directoryName)
     }
 
-    /// All shims present and executable. Partial installs count as missing
-    /// so the shell never mixes guidance names with command-not-found.
-    public static func isInstalled(at directory: String) -> Bool {
-        AgentShim.names.allSatisfy {
-            FileManager.default.isExecutableFile(atPath: "\(directory)/\($0)")
-        }
-    }
-
-    /// The shim dir to admit and put on PATH, or nil on installs that predate
-    /// shims. Nil keeps both the profile and PATH exactly as before.
+    /// The bin dir to admit and put on PATH, or nil when the install
+    /// predates agent support. Nil keeps both the profile and PATH exactly
+    /// as before.
     public static func installedDirectory() -> String? {
-        guard let directory = directory(), isInstalled(at: directory) else {
+        guard let directory = directory() else { return nil }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: directory, isDirectory: &isDirectory),
+            isDirectory.boolValue
+        else {
             return nil
         }
         return directory
     }
+
+    /// Per-spawn grants. `home` is the host user's home, owner of the
+    /// credential files the cage reads (never writes).
+    public static func resolve(binDirectory: String, home: String) -> AgentBinResolution {
+        var resolution = AgentBinResolution(directory: binDirectory)
+        for name in names {
+            let link = "\(binDirectory)/\(name)"
+            guard FileManager.default.isExecutableFile(atPath: link),
+                let target = posixRealpath(link)
+            else {
+                continue
+            }
+            resolution.executables.append(link)
+            if target != link {
+                resolution.executables.append(target)
+            }
+            switch name {
+            case "claude":
+                let auth = "\(home)/.claude/.credentials.json"
+                if FileManager.default.isReadableFile(atPath: auth) {
+                    resolution.credentials.append(auth)
+                }
+                // Model, gateway routing, and hooks live in settings; without
+                // them the CLI falls back to defaults the gateway rejects.
+                for settings in ["settings.json", "settings.local.json"] {
+                    let config = "\(home)/.claude/\(settings)"
+                    if FileManager.default.isReadableFile(atPath: config) {
+                        resolution.credentials.append(config)
+                    }
+                }
+                resolution.writableTrees.append(
+                    contentsOf: AgentHomeStaging.claudeScratchRoots()
+                )
+            case "codex":
+                // codex.js requires its package tree relatively.
+                let package = ((target as NSString).deletingLastPathComponent as NSString)
+                    .deletingLastPathComponent
+                resolution.trees.append(package)
+                let auth = "\(home)/.codex/auth.json"
+                if FileManager.default.isReadableFile(atPath: auth) {
+                    resolution.credentials.append(auth)
+                }
+                let config = "\(home)/.codex/config.toml"
+                if FileManager.default.isReadableFile(atPath: config) {
+                    resolution.credentials.append(config)
+                }
+            case "muse":
+                // The launcher reads version metadata and the versioned
+                // binary next to itself. Enumerate (bounded) instead of
+                // parsing so renames stay admitted.
+                let install = (target as NSString).deletingLastPathComponent
+                let entries = (try? FileManager.default.contentsOfDirectory(atPath: install)) ?? []
+                for entry in entries.prefix(32) {
+                    guard entry.hasPrefix("muse-bin-") || entry == ".muse-version"
+                        || entry == ".muse-release-info.json"
+                    else {
+                        continue
+                    }
+                    resolution.executables.append("\(install)/\(entry)")
+                }
+                let auth = "\(home)/.config/muse/auth.json"
+                if FileManager.default.isReadableFile(atPath: auth) {
+                    resolution.credentials.append(auth)
+                }
+            case "opencode":
+                let auth = "\(home)/.local/share/opencode/auth.json"
+                if FileManager.default.isReadableFile(atPath: auth) {
+                    resolution.credentials.append(auth)
+                }
+            default:
+                break
+            }
+        }
+        return resolution
+    }
 }
 
 /// Seatbelt profile for a workspace-scoped contained plan.
-/// `(deny default)` plus the execution baseline. No network allow.
-/// Observed / mediated plans are not applicable. A contained plan with any
-/// broader filesystem, network, or process guarantee is rejected.
+/// `(deny default)` plus the execution baseline and the loopback egress
+/// rule. Observed / mediated plans are not applicable. A contained plan with
+/// any broader filesystem, network, or process guarantee is rejected.
 public func compileSeatbeltProfile(
     _ plan: IsolationPlan
 ) -> Result<SeatbeltProfile, IsolationApplyError> {
@@ -240,6 +387,25 @@ func compileFirstSliceProfile(
         (subpath "/tmp")
         (subpath "/var")
         (subpath "/Users"))
+    ;; System config lookups must report missing, not denied: tools tell
+    ;; ENOENT (fall back) from EPERM (fatal). Metadata only: no content,
+    ;; no directory listing.
+    (allow file-read-metadata
+        (literal "/etc")
+        (literal "/etc/codex"))
+    ;; Exception: TLS trust is fatal-if-missing (no fallback), so the CA
+    ;; bundle and OpenSSL config read as content. Root-owned public data;
+    ;; the cage user cannot write here.
+    (allow file-read*
+        (subpath "/etc/ssl")
+        (subpath "/private/etc/ssl"))
+    ;; Exception: timezone data is fatal-if-denied. /etc/localtime points
+    ;; into /var/db/timezone/zoneinfo, and JS runtimes (Bun, Node) trap on
+    ;; EPERM reading it instead of falling back. Root-owned public data;
+    ;; the cage user cannot write here.
+    (allow file-read*
+        (subpath "/var/db/timezone")
+        (subpath "/private/var/db/timezone"))
     (allow file-map-executable file-read* file-ioctl
         (subpath "/usr")
         (subpath "/bin")
@@ -253,7 +419,13 @@ func compileFirstSliceProfile(
     (deny file-clone)
     (deny syscall-unix (syscall-number \(SeatbeltLifetimeSyscall.setpgid)))
     (deny syscall-unix (syscall-number \(SeatbeltLifetimeSyscall.setsid)))
-    (deny syscall-unix (syscall-number \(SeatbeltLifetimeSyscall.posixSpawn)))
+    ;; `posix_spawn` stays allowed: the runtimes agents are built on spawn
+    ;; only through it. Children inherit this profile (descent), so spawn
+    ;; grants no file or network authority beyond this fence.
+    ;; `/dev/null` is the universal sink. Scripts and runtimes redirect
+    ;; there; write-data on this one literal cannot exfiltrate or persist.
+    (allow file-write-data
+        (literal "/dev/null"))
     """
     return .success(SeatbeltProfile(source: source, workspacePath: resolved))
 }

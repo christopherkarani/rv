@@ -37,14 +37,41 @@ import Darwin
 /// 21. Seatbelt `launchArguments` are `-p` + profile + inner argv
 @Suite("IsolationApply")
 struct IsolationApplyTests {
-    @Test func workspaceFilesystemMetadata_isSkippedOnlyAtRootOwnedDirectories() {
+    @Test func workspaceFilesystemMetadata_skipsRootBookkeepingWhenRootOwnedOrOwnersIgnored() {
+        // Root-owned daemon directories skip wherever ownership is honored.
         #expect(
             WorkspaceFilesystemMetadata.shouldSkip(
                 name: ".fseventsd",
                 isRootChild: true,
                 isDirectory: true,
                 isSymbolicLink: false,
-                ownerID: 0
+                ownerUid: 0,
+                ownersIgnored: false
+            )
+        )
+        // A user-owned copy on an ownership-honoring filesystem is project
+        // content and stays scanned.
+        #expect(
+            WorkspaceFilesystemMetadata.shouldSkip(
+                name: ".fseventsd",
+                isRootChild: true,
+                isDirectory: true,
+                isSymbolicLink: false,
+                ownerUid: 501,
+                ownersIgnored: false
+            ) == false
+        )
+        // Workspace volumes ignore ownership, so the daemon's own
+        // directories already show the user's uid and the owner gate cannot
+        // discriminate: root-level daemon names skip there regardless.
+        #expect(
+            WorkspaceFilesystemMetadata.shouldSkip(
+                name: ".fseventsd",
+                isRootChild: true,
+                isDirectory: true,
+                isSymbolicLink: false,
+                ownerUid: 501,
+                ownersIgnored: true
             )
         )
         #expect(
@@ -53,16 +80,8 @@ struct IsolationApplyTests {
                 isRootChild: false,
                 isDirectory: true,
                 isSymbolicLink: false,
-                ownerID: 0
-            ) == false
-        )
-        #expect(
-            WorkspaceFilesystemMetadata.shouldSkip(
-                name: ".fseventsd",
-                isRootChild: true,
-                isDirectory: true,
-                isSymbolicLink: false,
-                ownerID: 501
+                ownerUid: 0,
+                ownersIgnored: true
             ) == false
         )
         #expect(
@@ -71,7 +90,8 @@ struct IsolationApplyTests {
                 isRootChild: true,
                 isDirectory: false,
                 isSymbolicLink: false,
-                ownerID: 0
+                ownerUid: 0,
+                ownersIgnored: true
             ) == false
         )
         #expect(
@@ -80,7 +100,8 @@ struct IsolationApplyTests {
                 isRootChild: true,
                 isDirectory: true,
                 isSymbolicLink: true,
-                ownerID: 0
+                ownerUid: 0,
+                ownersIgnored: true
             ) == false
         )
         #expect(
@@ -89,10 +110,83 @@ struct IsolationApplyTests {
                 isRootChild: true,
                 isDirectory: true,
                 isSymbolicLink: false,
-                ownerID: 0
+                ownerUid: 0,
+                ownersIgnored: true
             ) == false
         )
     }
+
+    #if os(macOS)
+    @Test func workspaceFilesystemMetadata_ownershipCheckHonorsTemporaryDirectory() {
+        // The temporary directory honors ownership, and unknown paths fail
+        // closed toward honoring it.
+        #expect(
+            WorkspaceFilesystemMetadata.filesystemIgnoresOwnership(
+                path: FileManager.default.temporaryDirectory.path
+            ) == false
+        )
+        #expect(
+            WorkspaceFilesystemMetadata.filesystemIgnoresOwnership(
+                path: "/nonexistent-rv-probe-\(UUID().uuidString)"
+            ) == false
+        )
+        #expect(
+            WorkspaceFilesystemMetadata.filesystemIgnoresOwnership(descriptor: -1) == false
+        )
+    }
+
+    @Test func hfsSliceDevice_prefersAppleHFSContentHint() {
+        let plist = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <plist version="1.0">
+            <dict>
+                <key>system-entities</key>
+                <array>
+                    <dict>
+                        <key>dev-entry</key>
+                        <string>/dev/disk20</string>
+                        <key>content-hint</key>
+                        <string>GUID_partition_scheme</string>
+                    </dict>
+                    <dict>
+                        <key>dev-entry</key>
+                        <string>/dev/disk20s1</string>
+                        <key>content-hint</key>
+                        <string>Apple_HFS</string>
+                        <key>volume-kind</key>
+                        <string>hfs</string>
+                    </dict>
+                </array>
+            </dict>
+            </plist>
+            """
+        #expect(hfsSliceDevice(inPlist: plist) == "/dev/disk20s1")
+    }
+
+    @Test func hfsSliceDevice_fallsBackToSolePartition() {
+        let plist = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <plist version="1.0">
+            <dict>
+                <key>system-entities</key>
+                <array>
+                    <dict>
+                        <key>dev-entry</key>
+                        <string>/dev/disk20</string>
+                    </dict>
+                    <dict>
+                        <key>dev-entry</key>
+                        <string>/dev/disk20s2</string>
+                    </dict>
+                </array>
+            </dict>
+            </plist>
+            """
+        #expect(hfsSliceDevice(inPlist: plist) == "/dev/disk20s2")
+        #expect(hfsSliceDevice(inPlist: "not a plist") == nil)
+        #expect(hfsSliceDevice(inPlist: "") == nil)
+    }
+    #endif
 
     @Test func compileSeatbeltProfile_contained_isDenyDefaultWorkspaceScope()
         throws
@@ -116,8 +210,13 @@ struct IsolationApplyTests {
             #expect(profile.source.contains("(deny file-clone)"))
             #expect(profile.source.contains("(deny syscall-unix (syscall-number 82))"))
             #expect(profile.source.contains("(deny syscall-unix (syscall-number 147))"))
-            #expect(profile.source.contains("(deny syscall-unix (syscall-number 244))"))
+            #expect(profile.source.contains("(deny syscall-unix (syscall-number 244))") == false)
+            #expect(profile.source.contains("(literal \"/dev/null\")"))
             #expect(profile.source.contains("subpath \"\(escapeSBPL(resolved))\""))
+            #expect(profile.source.contains("(subpath \"/etc/ssl\")"))
+            #expect(profile.source.contains("(subpath \"/private/etc/ssl\")"))
+            #expect(profile.source.contains("(subpath \"/var/db/timezone\")"))
+            #expect(profile.source.contains("(subpath \"/private/var/db/timezone\")"))
             let again = try #require(try? compileSeatbeltProfile(plan).get())
             #expect(profile.source == again.source)
         case .failure(let error):
@@ -127,6 +226,9 @@ struct IsolationApplyTests {
 
     #if os(macOS)
     @Test func workspaceFilesystemMetadata_treeWalkAndCopyKeepProjectNames() throws {
+        // Temporary directories honor ownership, so a user-owned daemon
+        // name at the root is project content: the walk and the copy keep
+        // it, exactly like the nested copy.
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-filesystem-metadata-\(UUID().uuidString)")
         let destination = FileManager.default.temporaryDirectory
@@ -161,13 +263,12 @@ struct IsolationApplyTests {
         #expect(fstat(sourceFD, &rootStatus) == 0)
         let sourceDevice = UInt64(rootStatus.st_dev)
         let sourceTree = try #require(collectTree(root: sourceFD, checkDevice: sourceDevice))
-        let rootEntryIncluded = geteuid() != 0
-        #expect((sourceTree[".fseventsd/entry"] != nil) == rootEntryIncluded)
+        #expect(sourceTree[".fseventsd/entry"] != nil)
         #expect(sourceTree["project/.fseventsd/entry"] != nil)
 
         #expect(copyTree(from: sourceFD, to: destinationFD, expectDevice: sourceDevice))
         let copiedTree = try #require(collectTree(root: destinationFD, checkDevice: sourceDevice))
-        #expect((copiedTree[".fseventsd/entry"] != nil) == rootEntryIncluded)
+        #expect(copiedTree[".fseventsd/entry"] != nil)
         #expect(copiedTree["project/.fseventsd/entry"] != nil)
     }
 

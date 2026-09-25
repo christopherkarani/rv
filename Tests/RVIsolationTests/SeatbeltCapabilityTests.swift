@@ -9,7 +9,10 @@ import Testing
 /// A tool that exits before the operation is not a denial.
 @Suite("SeatbeltCapability", .serialized)
 struct SeatbeltCapabilityTests {
-    @Test func containedProcessCannotConnectOrResolve() async throws {
+    /// The cage reaches loopback TCP (egress proxy, local gateways) and
+    /// nothing else: no UDP, no public IPs, no unix sockets it does not own,
+    /// no DNS. Descent inherits the same rule.
+    @Test func containedProcessReachesLoopbackOnly() async throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
         let binary = try compileConnectClient(in: tree.workspaceURL)
@@ -53,17 +56,19 @@ struct SeatbeltCapabilityTests {
         let sandboxed = try await IsolationBackends.applyOffPool(tree.contained, command: command).get()
         let captured = try String(contentsOf: netOut, encoding: .utf8)
         #expect(sandboxed.exitStatus == 0)
-        #expect(captured.contains("tcp4 errno=1"))
+        #expect(captured.contains("tcp4 ok"))
+        #expect(captured.contains("tcp6 ok"))
         #expect(captured.contains("udp4 errno=1"))
-        #expect(captured.contains("tcp6 errno=1"))
         #expect(captured.contains("public errno=1"))
         #expect(captured.contains("unix errno=1"))
         #expect(captured.contains("dns rc="))
         #expect(captured.contains("dns ok") == false)
-        #expect(tcp4.received == nil)
+        #expect(tcp4.received == "c-tcp")
+        #expect(tcp6.received == "c-tcp6")
         #expect(udp4.received == nil)
-        #expect(tcp6.received == nil)
         #expect(unix.received == nil)
+        tcp4.reset()
+        tcp6.reset()
 
         let child = try #require(
             IsolatedCommand(
@@ -79,8 +84,8 @@ struct SeatbeltCapabilityTests {
             contentsOf: tree.workspaceURL.appendingPathComponent("child.out"),
             encoding: .utf8
         )
-        #expect(childOut.contains("tcp4 errno=1"))
-        #expect(tcp4.received == nil)
+        #expect(childOut.contains("tcp4 ok"))
+        #expect(tcp4.received == "c-tcp")
     }
 
     @Test func containedProcessCannotReadSiblingFile() async throws {

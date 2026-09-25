@@ -80,7 +80,11 @@ struct RuntimeTerminalTests {
             #expect(RuntimeTerminal.open(rows: 24, columns: 80) == nil)
         }
         TerminalTestInjection.openFault.withLock { $0 = nil }
-        #expect(ttyPaths() == before)
+        // One-sided: sibling suites run in parallel in this process and
+        // hold PTY masters transiently, so the set may legitimately shrink
+        // (their masters closing) or flutter. A master leaked by the fault
+        // loop above is new and never drains, which still fails.
+        #expect(waitUntil(seconds: 30) { ttyPaths().subtracting(before).isEmpty })
     }
 
     @Test func subscribersShareOneOrderedBinaryStream() throws {

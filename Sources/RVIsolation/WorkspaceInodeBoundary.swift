@@ -212,9 +212,28 @@ final class WorkspaceInodeBoundary {
         return true
     }
 
+    /// Remove host-staged agent credential links and the cage dir from the
+    /// volume before publish. Only names the snapshot does not own are
+    /// removed, so project-owned files at the same paths publish normally.
+    /// Only staged symlinks go: a regular file the contained process wrote
+    /// at an auth path is project state and publishes through the normal
+    /// decision.
+    func scrubHostStagedAgentHomes() {
+        let manager = FileManager.default
+        for link in AgentHomeStaging.credentialLinks {
+            guard snapshot[link.relative] == nil else { continue }
+            let path = "\(workspacePath)/\(link.relative)"
+            guard (try? manager.destinationOfSymbolicLink(atPath: path)) != nil else { continue }
+            try? manager.removeItem(atPath: path)
+        }
+        guard snapshot[AgentHomeStaging.cageDirectoryName] == nil else { return }
+        try? manager.removeItem(atPath: "\(workspacePath)/\(AgentHomeStaging.cageDirectoryName)")
+    }
+
     /// Copy volume contents onto the original inodes, then put that directory
     /// back at the workspace path and release the volume.
     func publishAndRestore() -> Result<Void, IsolationApplyError> {
+        scrubHostStagedAgentHomes()
         let published: Result<Void, IsolationApplyError>
         if remainsEstablished() {
             published = publishIntoSaved(writing: true)
@@ -271,7 +290,8 @@ final class WorkspaceInodeBoundary {
 
     /// Copy the volume onto the hidden original. Does not unmount.
     func publishPreservingMount() -> Result<Void, IsolationApplyError> {
-        publishIntoSaved(writing: true)
+        scrubHostStagedAgentHomes()
+        return publishIntoSaved(writing: true)
     }
 
     /// Detach this volume only when the mount source and device still match.
@@ -395,6 +415,10 @@ final class WorkspaceInodeBoundary {
     }
 
     private func detachVolume() {
+        // Unmount directly first: arbitration-mediated unmounts wedge when
+        // the daemon is unresponsive, and then every detach below fails
+        // "Resource busy" while the mount leaks.
+        unmountDirect(workspacePath, onlySource: disk)
         if blockingWorkIsCancelled() {
             // One detach. `honorCancellation` would SIGTERM hdiutil on the
             // first poll, the mount would stay, and teardown would replace
@@ -773,7 +797,7 @@ func establishWorkspaceInodeBoundary(
     }
     _ = workspacePath.withCString { chmod($0, 0o700) }
     guard let volumeDevice = currentDevice(workspacePath), volumeDevice != originalDevice else {
-        _ = runTool(["/usr/bin/hdiutil", "detach", "-force", "-quiet", mounted.disk])
+        detachWorkspaceDisk(mounted.disk, mountPoint: workspacePath)
         rmdir(workspacePath)
         _ = renamePath(savedPath, workspacePath)
         if let image = mounted.imagePath { unlink(image) }
@@ -788,7 +812,7 @@ func establishWorkspaceInodeBoundary(
     guard savedFD >= 0, volumeFD >= 0 else {
         if savedFD >= 0 { close(savedFD) }
         if volumeFD >= 0 { close(volumeFD) }
-        _ = runTool(["/usr/bin/hdiutil", "detach", "-force", "-quiet", mounted.disk])
+        detachWorkspaceDisk(mounted.disk, mountPoint: workspacePath)
         rmdir(workspacePath)
         _ = renamePath(savedPath, workspacePath)
         if let image = mounted.imagePath { unlink(image) }
@@ -798,7 +822,7 @@ func establishWorkspaceInodeBoundary(
     guard fstat(savedFD, &savedStatus) == 0, device(of: savedStatus) == originalDevice else {
         close(savedFD)
         close(volumeFD)
-        _ = runTool(["/usr/bin/hdiutil", "detach", "-force", "-quiet", mounted.disk])
+        detachWorkspaceDisk(mounted.disk, mountPoint: workspacePath)
         rmdir(workspacePath)
         _ = renamePath(savedPath, workspacePath)
         if let image = mounted.imagePath { unlink(image) }
@@ -807,7 +831,7 @@ func establishWorkspaceInodeBoundary(
     if copyTree(from: savedFD, to: volumeFD, expectDevice: originalDevice) == false {
         close(savedFD)
         close(volumeFD)
-        _ = runTool(["/usr/bin/hdiutil", "detach", "-force", "-quiet", mounted.disk])
+        detachWorkspaceDisk(mounted.disk, mountPoint: workspacePath)
         rmdir(workspacePath)
         _ = renamePath(savedPath, workspacePath)
         if let image = mounted.imagePath { unlink(image) }
@@ -817,7 +841,7 @@ func establishWorkspaceInodeBoundary(
     guard fstat(volumeFD, &volumeStatus) == 0, device(of: volumeStatus) == volumeDevice else {
         close(savedFD)
         close(volumeFD)
-        _ = runTool(["/usr/bin/hdiutil", "detach", "-force", "-quiet", mounted.disk])
+        detachWorkspaceDisk(mounted.disk, mountPoint: workspacePath)
         rmdir(workspacePath)
         _ = renamePath(savedPath, workspacePath)
         if let image = mounted.imagePath { unlink(image) }
@@ -826,7 +850,7 @@ func establishWorkspaceInodeBoundary(
     guard let mountSource = workspaceMountSource(workspacePath), mountSource.isEmpty == false else {
         close(savedFD)
         close(volumeFD)
-        _ = runTool(["/usr/bin/hdiutil", "detach", "-force", "-quiet", mounted.disk])
+        detachWorkspaceDisk(mounted.disk, mountPoint: workspacePath)
         rmdir(workspacePath)
         _ = renamePath(savedPath, workspacePath)
         if let image = mounted.imagePath { unlink(image) }
@@ -836,7 +860,7 @@ func establishWorkspaceInodeBoundary(
     if mounted.imagePath != nil, imageIdentity?.isDirectory != false {
         close(savedFD)
         close(volumeFD)
-        _ = runTool(["/usr/bin/hdiutil", "detach", "-force", "-quiet", mounted.disk])
+        detachWorkspaceDisk(mounted.disk, mountPoint: workspacePath)
         rmdir(workspacePath)
         _ = renamePath(savedPath, workspacePath)
         if let image = mounted.imagePath { unlink(image) }
@@ -912,12 +936,20 @@ private func createMountedDisk(
         if blockingWorkIsCancelled() {
             return toolFailure(ToolOutput(status: -1, stdout: "", stderr: ""), disk: disk)
         }
+        // Direct mount(2) through mount_hfs. An arbitration-mediated
+        // `diskutil mount` wedges indefinitely when diskarbitrationd or
+        // storagekitd is unresponsive, while the direct mount completes in
+        // milliseconds and reports identical statfs facts. `noowners`
+        // matches the external-volume default the old path relied on.
         let mounted = runTool(
-            ["/usr/sbin/diskutil", "mount", "-mountPoint", mountPoint, disk],
+            [
+                "/sbin/mount_hfs", "-o", "nobrowse,noowners,nodev,nosuid",
+                disk, mountPoint,
+            ],
             honorCancellation: true
         )
         guard mounted.status == 0 else {
-            return toolFailure(mounted, disk: disk)
+            return toolFailure(mounted, disk: disk, mountPoint: mountPoint)
         }
         return .success(MountedDisk(disk: disk, imagePath: nil))
     }
@@ -933,11 +965,12 @@ private func createMountedDisk(
         honorCancellation: true
     )
     guard created.status == 0 else { return .failure(.workspaceInodeBoundaryFailed) }
+    // `-nomount` plus a direct mount_hfs of the HFS slice: attaching
+    // with a mountpoint asks DiskArbitration to mount, which wedges when
+    // the daemon is unresponsive. Owners stay honored, matching the old
+    // `-owners on` attach.
     let attached = runTool(
-        [
-            "/usr/bin/hdiutil", "attach", "-nobrowse", "-owners", "on",
-            "-mountpoint", mountPoint, "-plist", image,
-        ],
+        ["/usr/bin/hdiutil", "attach", "-nomount", "-plist", image],
         honorCancellation: true
     )
     guard attached.status == 0 else {
@@ -946,6 +979,25 @@ private func createMountedDisk(
     }
     guard let disk = diskDevice(inPlist: attached.stdout) else {
         _ = runTool(["/usr/bin/hdiutil", "detach", "-force", "-quiet", mountPoint])
+        unlink(image)
+        return .failure(.workspaceInodeBoundaryFailed)
+    }
+    guard let slice = hfsSliceDevice(inPlist: attached.stdout) else {
+        detachWorkspaceDisk(disk, mountPoint: nil)
+        unlink(image)
+        return .failure(.workspaceInodeBoundaryFailed)
+    }
+    if blockingWorkIsCancelled() {
+        detachWorkspaceDisk(disk, mountPoint: nil)
+        unlink(image)
+        return .failure(.cancelled)
+    }
+    let mounted = runTool(
+        ["/sbin/mount_hfs", "-o", "nobrowse,nodev,nosuid", slice, mountPoint],
+        honorCancellation: true
+    )
+    guard mounted.status == 0 else {
+        detachWorkspaceDisk(disk, mountPoint: mountPoint)
         unlink(image)
         return .failure(.workspaceInodeBoundaryFailed)
     }
@@ -1120,8 +1172,12 @@ private func directoryNames(_ dirfd: Int32, isWorkspaceRoot: Bool) -> [String]? 
         }
         let name = entryName(entry)
         if name == "." || name == ".." { continue }
-        // Only ignore actual system-owned metadata at the volume root. A
-        // project entry with one of these names remains part of the boundary.
+        // Volume bookkeeping is never workspace content. On filesystems
+        // that ignore ownership (workspace volumes) the owner gate cannot
+        // distinguish the daemon's copy, so root-level daemon names skip
+        // regardless of apparent owner; where ownership is honored only a
+        // root-owned copy skips. A nested same-named directory remains part
+        // of the boundary.
         if isWorkspaceRoot, WorkspaceFilesystemMetadata.isBookkeepingName(name) {
             var status = stat()
             let stated = name.withCString { item in
@@ -1133,7 +1189,10 @@ private func directoryNames(_ dirfd: Int32, isWorkspaceRoot: Bool) -> [String]? 
                     isRootChild: true,
                     isDirectory: kind(of: status.st_mode) == .directory,
                     isSymbolicLink: kind(of: status.st_mode) == .symlink,
-                    ownerID: status.st_uid
+                    ownerUid: status.st_uid,
+                    ownersIgnored: WorkspaceFilesystemMetadata.filesystemIgnoresOwnership(
+                        descriptor: dirfd
+                    )
                 )
             {
                 continue
@@ -1274,15 +1333,63 @@ private func diskDevice(in text: String) -> String? {
     text.split(whereSeparator: \.isWhitespace).map(String.init).first { $0.hasPrefix("/dev/disk") }
 }
 
+/// The mountable HFS slice from a `-nomount` attach plist: the entity
+/// whose content hint is Apple_HFS, or the sole partition when hints are
+/// absent (images rv creates carry exactly one volume).
+func hfsSliceDevice(inPlist stdout: String) -> String? {
+    guard let data = stdout.data(using: .utf8),
+        let plist = try? PropertyListSerialization.propertyList(from: data, format: nil),
+        let root = plist as? [String: Any],
+        let entities = root["system-entities"] as? [[String: Any]]
+    else { return nil }
+    let devices: [(device: String, hint: String?)] = entities.compactMap { entity in
+        guard let device = entity["dev-entry"] as? String else { return nil }
+        return (device, entity["content-hint"] as? String)
+    }
+    if let hfs = devices.first(where: { $0.hint == "Apple_HFS" }) {
+        return hfs.device
+    }
+    let partitions = devices.dropFirst().map(\.device)
+    return partitions.count == 1 ? partitions.first : nil
+}
+
+/// Tears a workspace disk down without asking DiskArbitration to unmount.
+/// Arbitration-mediated unmounts wedge when diskarbitrationd is
+/// unresponsive (after which `hdiutil detach` fails "Resource busy"),
+/// while a direct `umount` completes in milliseconds and detaching the
+/// bare disk afterwards succeeds.
+private func detachWorkspaceDisk(_ disk: String, mountPoint: String?) {
+    if let mountPoint {
+        unmountDirect(mountPoint, onlySource: disk)
+    }
+    _ = runTool(
+        ["/usr/bin/hdiutil", "detach", "-force", "-quiet", disk],
+        honorCancellation: false
+    )
+}
+
+/// Direct `umount` of our own volume. Only runs when the mountpoint's
+/// statfs source is our disk, so a reused path never unmounts a foreign
+/// volume. Plain unmount first; forced only while our source is still
+/// mounted (open descriptors make the plain call fail busy).
+private func unmountDirect(_ mountPoint: String, onlySource disk: String) {
+    func isOurs(_ source: String?) -> Bool {
+        guard let source else { return false }
+        return source == disk || source.hasPrefix(disk + "s")
+    }
+    guard isOurs(workspaceMountSource(mountPoint)) else { return }
+    _ = runTool(["/sbin/umount", mountPoint], honorCancellation: false)
+    guard isOurs(workspaceMountSource(mountPoint)) else { return }
+    _ = runTool(["/sbin/umount", "-f", mountPoint], honorCancellation: false)
+}
+
 private func toolFailure(
     _ output: ToolOutput,
-    disk: String?
+    disk: String?,
+    mountPoint: String? = nil
 ) -> Result<MountedDisk, IsolationApplyError> {
     if let disk {
-        _ = runTool(
-            ["/usr/bin/hdiutil", "detach", "-force", "-quiet", disk],
-            honorCancellation: false
-        )
+        detachWorkspaceDisk(disk, mountPoint: mountPoint)
     }
     if output.status < 0, blockingWorkIsCancelled() {
         return .failure(.cancelled)
@@ -1299,6 +1406,9 @@ private func toolFailure(
 /// runner timed the test out. A helper with no deadline did the same thing:
 /// a wedged `hdiutil` never returned, and the isolation job sat until GitHub
 /// cancelled it. The default deadline kills that helper and returns.
+/// Mount and unmount go through `mount_hfs`/`umount` directly instead of
+/// arbitration-mediated `diskutil`, so they stay fast when the daemon is
+/// unresponsive; only bare-disk attach/detach still use `hdiutil`.
 /// Cancellation kills the helper and returns.
 /// The executor runs this on `rv-executor-apply`; the poll sees that thread's
 /// flag as well as `Task.isCancelled`. Cleanup calls pass

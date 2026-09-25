@@ -459,8 +459,13 @@ func prepareSeatbelt(
         case .failure(let error):
             return .failure(error)
         case .success(let compiled):
-            let profile = compiled.allowingExecutable(command.executable)
-                .allowingAgentShims(directory: AgentShim.installedDirectory())
+            var profile = compiled.allowingExecutable(command.executable)
+                .allowingLoopbackEgress()
+            if let agentBin = AgentBin.installedDirectory(),
+                let home = ProcessInfo.processInfo.environment["HOME"]
+            {
+                profile = profile.allowingAgentBin(AgentBin.resolve(binDirectory: agentBin, home: home))
+            }
             guard let workspace = plan.workspace else {
                 return .failure(.containedGuaranteesUnsupported)
             }
@@ -670,8 +675,16 @@ func spawn(
 /// Symlink entries are not followed. A scan failure refuses the launch.
 /// Root-owned filesystem metadata directories are skipped by identity; a
 /// matching project-owned or nested name is scanned as ordinary content.
+/// On filesystems that ignore ownership (workspace volumes) the owner
+/// check cannot discriminate, so root-level daemon names skip regardless
+/// of apparent owner.
 func rejectWorkspaceInodeAlias(_ root: String) -> Result<Void, IsolationApplyError> {
     let rootURL = URL(fileURLWithPath: root, isDirectory: true)
+#if os(macOS)
+    let ownersIgnored = WorkspaceFilesystemMetadata.filesystemIgnoresOwnership(path: root)
+#else
+    let ownersIgnored = false
+#endif
     // FileManager calls this handler synchronously on the scanning thread.
     let scan = InodeAliasScan()
     guard
@@ -706,7 +719,8 @@ func rejectWorkspaceInodeAlias(_ root: String) -> Result<Void, IsolationApplyErr
                 isRootChild: isRootChild,
                 isDirectory: (status.st_mode & S_IFMT) == S_IFDIR,
                 isSymbolicLink: (status.st_mode & S_IFMT) == S_IFLNK,
-                ownerID: status.st_uid
+                ownerUid: status.st_uid,
+                ownersIgnored: ownersIgnored
             ) {
                 enumerator.skipDescendants()
                 continue
