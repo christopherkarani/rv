@@ -85,6 +85,27 @@ struct WorkspaceLifecycleTests {
         #expect(retry.phase == .active)
     }
 
+    @Test func allRefusalOutcomesRefuseTheAttempt() {
+        let block = WorkspaceRecoveryBlock(workspace: nil, reason: .tornLog)
+        let refusals: [WorkspaceRecoveryOutcome] = [
+            .liveOwner(nil),
+            .liveOwner(UUID()),
+            .recoveryInProgress(UUID()),
+            .blocked(block),
+            .interrupted(.afterPublish),
+            .failed,
+        ]
+        for outcome in refusals {
+            let (state, effects) = run([.recoveryReported(outcome)])
+            #expect(
+                effects == [[.replyOpenRefused(outcome), .releaseOwnership]],
+                "outcome \(outcome) must refuse the attempt"
+            )
+            #expect(state.phase == .closed, "outcome \(outcome) must close the attempt")
+            #expect(state.admissionPending == false)
+        }
+    }
+
     @Test func duplicateRecoveryReportDrains() {
         let (state, _) = run([.recoveryReported(.clean)])
         let out = step(state, .recoveryReported(.clean))
@@ -119,6 +140,48 @@ struct WorkspaceLifecycleTests {
         )
         #expect(effects[1] == [.appendRuntimeEnded(id)])
         #expect(state.runtimes[id] == nil)
+    }
+
+    @Test func duplicateSpawnRequestDrains() {
+        // The supervisor mints a fresh id per spawn, so a duplicate names an
+        // already-tracked runtime and drains without a second spawn.
+        let id = RuntimeSessionID()
+        let requested = step(active(), .spawnRequested(id))
+        #expect(requested.effects.effects == [.spawnRuntime(id)])
+        let duplicate = step(requested.state, .spawnRequested(id))
+        #expect(duplicate.effects.effects == [])
+        #expect(duplicate.state == requested.state)
+        // Still tracked after a duplicate: the original request proceeds.
+        let recorded = step(duplicate.state, .spawnRecorded(id))
+        #expect(recorded.effects.effects == [.resumeRuntime(id)])
+        #expect(recorded.state.runtimes[id] == .handshaking)
+    }
+
+    @Test func mismatchedPhaseCompletionsDrain() {
+        let starting = RuntimeSessionID()
+        let established = RuntimeSessionID()
+        var state = active()
+        state = step(state, .spawnRequested(starting)).state
+        for event: WorkspaceEvent in [
+            .spawnRequested(established), .spawnRecorded(established), .handshakeSucceeded(established),
+        ] {
+            state = step(state, event).state
+        }
+        // Known ids, wrong phases: every completion guard must hold.
+        let mismatches: [WorkspaceEvent] = [
+            .spawnRecorded(established),
+            .spawnFailed(established),
+            .handshakeSucceeded(starting),
+            .handshakeFailed(starting),
+            .handshakeFailed(established),
+            .runtimeForgotten(starting),
+            .runtimeForgotten(established),
+        ]
+        for event in mismatches {
+            let out = step(state, event)
+            #expect(out.effects.effects == [], "mismatched \(event) must drain")
+            #expect(out.state == state, "mismatched \(event) must not move state")
+        }
     }
 
     @Test func handshakeFailureFailsTheRuntime() {
@@ -162,6 +225,8 @@ struct WorkspaceLifecycleTests {
         let refused = step(state, .spawnRequested(second))
         #expect(refused.effects.effects == [.replySpawnRefused(second, .limitReached)])
         #expect(refused.state.runtimes[second] == nil)
+        // Configuration: the transition never mutates the cap.
+        #expect(refused.state.runningLimit == 1)
         // An exited runtime frees its slot without being forgotten.
         let exited = step(state, .runtimeExited(first)).state
         let admitted = step(exited, .spawnRequested(second))
@@ -278,6 +343,8 @@ struct WorkspaceLifecycleTests {
         #expect(failed.effects.effects == [.replyCloseFailed(.childrenAlive)])
         #expect(failed.state.phase == .closing)
         #expect(failed.state.terminalCloseFailure == nil)
+        // Only successful publishes count; attempts do not.
+        #expect(failed.state.publishCount == 0)
         // The next close leads again with its own publish flag.
         let reled = step(failed.state, .closeRequested(publish: false))
         #expect(
@@ -294,6 +361,7 @@ struct WorkspaceLifecycleTests {
         let failed = step(requested.state, .closeFailed(.teardownFailed))
         #expect(failed.effects.effects == [.replyCloseFailed(.teardownFailed)])
         #expect(failed.state.phase == .closing)
+        #expect(failed.state.publishCount == 0)
         // Later closes replay the failure without new work.
         let replayed = step(failed.state, .closeRequested(publish: false))
         #expect(replayed.effects.effects == [.replyCloseFailed(.teardownFailed)])
