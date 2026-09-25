@@ -582,57 +582,6 @@ func spawnSeatbeltProcess(
     return .success(child)
 }
 
-/// Host-staged agent credential links, shared by staging and publish scrub.
-///
-/// The cage home is the workspace, so agents look for credentials at these
-/// workspace-relative paths. The host symlinks the host-owned originals
-/// into place before each spawn; publish removes exactly these links (plus
-/// the cage dir) when the snapshot does not own them, so user-owned files
-/// at the same paths are never touched.
-enum AgentHomeStaging {
-    static let cageDirectoryName = ".rv-cage"
-    static let cageTmpSubpath = ".rv-cage/tmp"
-    /// Workspace-relative link path to home-relative credential source.
-    static let credentialLinks = [
-        (relative: ".codex/auth.json", source: ".codex/auth.json"),
-        (relative: ".codex/config.toml", source: ".codex/config.toml"),
-        (relative: ".config/muse/auth.json", source: ".config/muse/auth.json"),
-        (relative: ".claude/.credentials.json", source: ".claude/.credentials.json"),
-        (relative: ".claude/settings.json", source: ".claude/settings.json"),
-        (relative: ".claude/settings.local.json", source: ".claude/settings.local.json"),
-        (relative: ".local/share/opencode/auth.json", source: ".local/share/opencode/auth.json"),
-    ]
-    /// Claude's hardcoded file-history scratch dir, keyed by uid. It ignores
-    /// TMPDIR for this path, so the host ensures the root exists and the
-    /// profile admits the subpath (same-user scratch data only, never code).
-    static func claudeScratchRoots() -> [String] {
-        let uid = getuid()
-        return ["/tmp/claude-\(uid)", "/private/tmp/claude-\(uid)"]
-    }
-    /// Gateway routing passes through so agents use the host's model
-    /// gateway instead of direct provider endpoints.
-    static let gatewayPassthrough = [
-        "ANTHROPIC_BASE_URL",
-        "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
-        "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
-    ]
-    /// Provider keys that pass through when set on the host. muse keeps
-    /// its token in the host keychain (unreachable in the cage) and honors
-    /// only META_API_KEY otherwise. claude gates on login state bound to
-    /// the passwd home, which a workspace HOME can never satisfy; a key
-    /// selects key auth and skips the gate. Other provider keys stay
-    /// blocked: codex and opencode authenticate from staged files.
-    static let apiKeyPassthrough = [
-        "META_API_KEY",
-        "ANTHROPIC_API_KEY",
-    ]
-    /// Non-secret stand-in so gateway-routed claude runs work with no host
-    /// key configured. The gateway performs real auth and ignores the
-    /// value; direct-endpoint runs with it fail closed at the provider
-    /// (401), same as having no key.
-    static let anthropicGatewayPlaceholder = "rv-cage-gateway-placeholder"
-}
-
 /// Host-side agent home staging, run before each contained spawn.
 ///
 /// Symlinks the host-owned credential originals into the workspace-local
