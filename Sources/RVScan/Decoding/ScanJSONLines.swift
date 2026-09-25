@@ -25,6 +25,10 @@ enum ScanJSONLines {
     }
 
     /// Decodes one line leniently; nil when undecodable or wrong shape.
+    ///
+    /// The per-line decoder is intentional: `JSONDecoder` is not thread
+    /// safe and callers (`SessionStoreAdapter` is `Sendable`) may decode
+    /// from multiple threads, so a shared instance would race.
     static func decode<Line: Decodable>(_ type: Line.Type, from line: Data) -> Line? {
         try? JSONDecoder().decode(type, from: line)
     }

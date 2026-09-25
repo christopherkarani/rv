@@ -28,6 +28,18 @@ import RVDomain
     #expect(String(data: lines[1], encoding: .utf8) == "{\"b\":2}")
 }
 
+@Test func scanJSONLines_crlfSplitKeepsCarriageReturn() {
+    // Contract is LF-only splitting: a CRLF line keeps its trailing CR,
+    // which is JSON whitespace so the line still decodes.
+    let data = Data("{\"a\":1}\r\n{\"b\":2}".utf8)
+    let lines = ScanJSONLines.lines(from: data)
+    #expect(lines.count == 2)
+    #expect(String(data: lines[0], encoding: .utf8) == "{\"a\":1}\r")
+    #expect(String(data: lines[1], encoding: .utf8) == "{\"b\":2}")
+    #expect(ScanJSONLines.decode(DecodingProbe.self, from: lines[0]) == DecodingProbe(name: nil))
+    #expect(ScanJSONLines.decode(DecodingProbe.self, from: lines[1]) == DecodingProbe(name: nil))
+}
+
 private struct DecodingProbe: Decodable, Equatable {
     var name: String?
 }
