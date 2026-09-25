@@ -12,6 +12,8 @@ final class FakeWorkspaceClient: WorkspaceTUIClient, @unchecked Sendable {
     private var storedBusyInput = false
     private var storedBusyWrite = false
     private var storedFailDescribe = false
+    private var storedDescribeError: WorkspaceTUIClientError = .disconnected
+    private var storedDetachCalls = 0
     private var storedWrites: [(UUID, Data)] = []
     private var storedCancels: [UUID] = []
     private var storedSubscribes: [UUID] = []
@@ -67,6 +69,11 @@ final class FakeWorkspaceClient: WorkspaceTUIClient, @unchecked Sendable {
         get { withLock { storedFailDescribe } }
         set { withLock { storedFailDescribe = newValue } }
     }
+    var describeError: WorkspaceTUIClientError {
+        get { withLock { storedDescribeError } }
+        set { withLock { storedDescribeError = newValue } }
+    }
+    var detachCalls: Int { withLock { storedDetachCalls } }
     var writes: [(UUID, Data)] { withLock { storedWrites } }
     var cancels: [UUID] { withLock { storedCancels } }
     var subscribes: [UUID] { withLock { storedSubscribes } }
@@ -91,8 +98,8 @@ final class FakeWorkspaceClient: WorkspaceTUIClient, @unchecked Sendable {
     }
 
     func describe() -> Result<WorkspaceTUISummary, WorkspaceTUIClientError> {
-        let (fails, value) = withLock { (storedFailDescribe, storedSummary) }
-        return fails ? .failure(.disconnected) : .success(value)
+        let (fails, value, error) = withLock { (storedFailDescribe, storedSummary, storedDescribeError) }
+        return fails ? .failure(error) : .success(value)
     }
 
     func listRuntimes() -> Result<[ListedRuntime], WorkspaceTUIClientError> {
@@ -217,7 +224,10 @@ final class FakeWorkspaceClient: WorkspaceTUIClient, @unchecked Sendable {
     }
 
     func detach() -> Result<Void, WorkspaceTUIClientError> {
-        withLock { storedDetached = true }
+        withLock {
+            storedDetached = true
+            storedDetachCalls += 1
+        }
         return .success(())
     }
 
@@ -735,6 +745,35 @@ private func model(_ client: FakeWorkspaceClient) -> WorkspaceTUIModel {
     #expect(shell.snapshot().connection == .disconnected)
     shell.handle(.character("A"))
     #expect(client.writes.isEmpty)
+}
+
+@Test func connectFailureReportsTheUnderlyingQueryError() throws {
+    let client = FakeWorkspaceClient()
+    client.failDescribe = true
+    client.describeError = .rejected
+    let shell = model(client)
+    if case .failure(.rejected) = shell.connect() {
+        #expect(Bool(true))
+    } else {
+        Issue.record("connect should report the underlying describe error")
+    }
+    #expect(shell.snapshot().connection == .disconnected)
+    // A failed first query stays retryable.
+    client.failDescribe = false
+    try shell.connect().get()
+    #expect(shell.snapshot().connection == .connected)
+}
+
+@Test func detachSessionIsIdempotent() throws {
+    let client = FakeWorkspaceClient()
+    client.runtimes = [ListedRuntime(id: UUID(), hook: nil, running: true, terminal: true)]
+    let shell = model(client)
+    try shell.connect().get()
+    shell.detachSession()
+    shell.detachSession()
+    #expect(client.detachCalls == 1)
+    #expect(client.releases.count == 1)
+    #expect(client.unsubscribes.count == 1)
 }
 
 @Test func resizeCoalescerSendsOnlyAStableChange() {

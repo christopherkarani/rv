@@ -24,6 +24,9 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
     /// The emulator for the attached terminal. Created, fed, resized, and read
     /// only while `lock` is held; renderers use `terminalFrame()` snapshots.
     private var emulator: (runtime: UUID, emulator: any TerminalEmulating)?
+    /// connect()'s query failure, when the reducer stayed retryable. Written
+    /// by `.queryConnect` and read by `connect()`; always under `lock`.
+    private var connectError: WorkspaceTUIClientError?
 
     public init(
         client: any WorkspaceTUIClient,
@@ -61,8 +64,18 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
         guard lifecycle == .neverConnected else {
             return lifecycle == .connected ? .success(()) : .failure(.disconnected)
         }
+        lock.lock()
+        connectError = nil
+        lock.unlock()
         drain(.connectRequested, route: { _ in .inline })
-        return connectedNow() ? .success(()) : .failure(.disconnected)
+        // A failed first query stays retryable and reports the underlying
+        // describe/list error, as the previous model did.
+        guard connectedNow() else {
+            lock.lock()
+            defer { lock.unlock() }
+            return .failure(connectError ?? .disconnected)
+        }
+        return .success(())
     }
 
     /// Establishes a host-owned terminal before the local terminal begins
@@ -145,6 +158,9 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
     /// or closes the workspace.
     public func detachSession() {
         let effects = reduceAndApply(.detachRequested)
+        // A repeat call is a no-op: the reducer emits no `.detach` effect once
+        // detached, and the previous model early-returned without any RPC.
+        guard effects.contains(.detach) else { return }
         var lease: UUID?
         var subscription: UUID?
         for effect in effects {
@@ -240,14 +256,16 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
             let described: WorkspaceTUISummary
             switch client.describe() {
             case .success(let value): described = value
-            case .failure:
+            case .failure(let error):
+                setConnectError(error)
                 followups.append(.connectQueryFailed)
                 return
             }
             switch client.listRuntimes() {
             case .success(let runtimes):
                 followups.append(.connectQuery(described: described, runtimes: runtimes))
-            case .failure:
+            case .failure(let error):
+                setConnectError(error)
                 followups.append(.connectQueryFailed)
             }
 
@@ -375,6 +393,12 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return state.lifecycle == .connected && state.shouldExit == false
+    }
+
+    private func setConnectError(_ error: WorkspaceTUIClientError) {
+        lock.lock()
+        connectError = error
+        lock.unlock()
     }
 
     private static func bound(_ value: Int) -> Int {
