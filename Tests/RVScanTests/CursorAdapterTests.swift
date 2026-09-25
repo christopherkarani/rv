@@ -41,13 +41,13 @@ import RVDomain
 @Test func cursorAdapter_emptyOrUnreadableThrows() throws {
     let adapter = CursorStoreAdapter()
     let source = URL(fileURLWithPath: "/tmp/cursor-unreadable.jsonl")
-    #expect(throws: CursorStoreError.unreadable(sourcePath: source.path)) {
+    #expect(throws: SessionStoreError.unreadable(host: .cursor, sourcePath: source.path)) {
         _ = try adapter.extract(fileURL: source, data: Data())
     }
-    #expect(throws: CursorStoreError.unreadable(sourcePath: source.path)) {
+    #expect(throws: SessionStoreError.unreadable(host: .cursor, sourcePath: source.path)) {
         _ = try adapter.extract(fileURL: source, data: Data([0xFF, 0xFE]))
     }
-    #expect(throws: CursorStoreError.unreadable(sourcePath: source.path)) {
+    #expect(throws: SessionStoreError.unreadable(host: .cursor, sourcePath: source.path)) {
         _ = try adapter.extract(fileURL: source, data: Data("not-json\n".utf8))
     }
 }
@@ -90,7 +90,7 @@ import RVDomain
         try diskBytes.write(to: fileURL)
 
         let adapter = CursorStoreAdapter()
-        #expect(throws: CursorStoreError.unreadable(sourcePath: fileURL.path)) {
+        #expect(throws: SessionStoreError.unreadable(host: .cursor, sourcePath: fileURL.path)) {
             _ = try adapter.extract(fileURL: fileURL, data: Data("not-json\n".utf8))
         }
 

@@ -1,13 +1,6 @@
 import Foundation
 import RVDomain
 
-/// Fail-closed Codex store I/O. Empty or non-UTF-8 bytes are an error,
-/// not a successful empty event list.
-public enum CodexStoreError: Error, Sendable, Equatable {
-    /// `data` is empty, not UTF-8, or wholly unreadable as JSONL.
-    case unreadable(sourcePath: String)
-}
-
 /// Codex session store at `$HOME/.codex/sessions/**/rollout-*.jsonl`.
 /// Surface fields: `tool_name` / `function_call.name` Bash (or `shell`) with
 /// `tool_input.command` / `arguments.command`.
@@ -42,7 +35,7 @@ public struct CodexStoreAdapter: SessionStoreAdapter {
     /// contribute zero events without aborting the file. Lines split on LF
     /// only: bare-CR separators no longer split (the old `\.isNewline` split
     /// did), so a CR-only file yields no usable line and throws.
-    public func extract(fileURL: URL, data: Data) throws -> [ExtractedEvent] {
+    public func extract(fileURL: URL, data: Data) throws(SessionStoreError) -> [ExtractedEvent] {
         try Self.events(in: data, sourcePath: fileURL.path, fallbackSession: Self.sessionID(from: fileURL))
     }
 
@@ -54,12 +47,12 @@ public struct CodexStoreAdapter: SessionStoreAdapter {
         in data: Data,
         sourcePath: String,
         fallbackSession: SessionID?
-    ) throws -> [ExtractedEvent] {
+    ) throws(SessionStoreError) -> [ExtractedEvent] {
         guard data.isEmpty == false else {
-            throw CodexStoreError.unreadable(sourcePath: sourcePath)
+            throw SessionStoreError.unreadable(host: .codex, sourcePath: sourcePath)
         }
         guard String(data: data, encoding: .utf8) != nil else {
-            throw CodexStoreError.unreadable(sourcePath: sourcePath)
+            throw SessionStoreError.unreadable(host: .codex, sourcePath: sourcePath)
         }
 
         var events: [ExtractedEvent] = []
@@ -83,7 +76,7 @@ public struct CodexStoreAdapter: SessionStoreAdapter {
             }
         }
         if sawUsableLine == false {
-            throw CodexStoreError.unreadable(sourcePath: sourcePath)
+            throw SessionStoreError.unreadable(host: .codex, sourcePath: sourcePath)
         }
         return events
     }

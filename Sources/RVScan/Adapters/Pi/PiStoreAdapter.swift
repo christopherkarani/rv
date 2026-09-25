@@ -22,7 +22,7 @@ public struct PiStoreAdapter: SessionStoreAdapter {
     /// Per-file failure policy (best-effort, unchanged): never throws —
     /// undecodable data, bad lines, and unknown shapes contribute zero events.
     /// Session id/cwd accumulate from `session` lines across the file.
-    public func extract(fileURL: URL, data: Data) throws -> [ExtractedEvent] {
+    public func extract(fileURL: URL, data: Data) throws(SessionStoreError) -> [ExtractedEvent] {
         let sourcePath = fileURL.path
         var sessionID: SessionID?
         var sessionCwd: WorkingDirectory?
