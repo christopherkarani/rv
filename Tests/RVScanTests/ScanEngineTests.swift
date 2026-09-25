@@ -84,14 +84,20 @@ import RVDomain
     #expect(ScanTimestamp.epoch(-5, requirePositive: false) == Date(timeIntervalSince1970: -5))
 }
 
-@Test func scanTimestamp_epochValue_onlyNumbersConvert() throws {
+@Test func scanTimestamp_epochValue_numbersAndJSONBooleansBridge() throws {
     let parsed = try #require(
-        ScanJSONLEngine.parseObject(Data(#"{"i":1710000000,"f":1710000000.5,"s":"x","b":true}"#.utf8))
+        ScanJSONLEngine.parseObject(Data(#"{"i":1710000000,"f":1710000000.5,"s":"x","b":true,"c":false}"#.utf8))
     )
     #expect(ScanTimestamp.epochValue(parsed["i"]) == Date(timeIntervalSince1970: 1_710_000_000))
     #expect(ScanTimestamp.epochValue(parsed["f"]) == Date(timeIntervalSince1970: 1_710_000_000.5))
     #expect(ScanTimestamp.epochValue(parsed["s"]) == nil)
     #expect(ScanTimestamp.epochValue(nil) == nil)
+    // Historical bridging preserved byte-identically: JSON booleans arrive as
+    // NSNumber, and `as? Double` converts true->1.0 / false->0.0 exactly as
+    // the pre-T1 `as? Double` (Codex) and `as? NSNumber` (Pi) paths did.
+    #expect(ScanTimestamp.epochValue(parsed["b"]) == Date(timeIntervalSince1970: 1))
+    #expect(ScanTimestamp.epochValue(parsed["c"]) == nil)
+    #expect(ScanTimestamp.epochValue(parsed["c"], requirePositive: false) == Date(timeIntervalSince1970: 0))
 }
 
 @Test func scanTimestamp_firstValue_presentEmptyStringBlocksLaterKey() {
