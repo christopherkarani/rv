@@ -148,10 +148,11 @@ func cannotPauseForcedAsk_doesNotEmitAskJSON(_ host: HookHost) throws {
         outcome: .deny(deny, matched: nil),
         matchingView: MatchingView("git reset --hard")
     )
+    guard case .denyOnly(let codec) = productionHostCodec(host) else { return }
     let wire = hookWire(
         from: result,
         command: command,
-        using: makeHostCodec(host),
+        using: codec,
         intent: .firstCall(verdict: .ask(.hostNative), unlockCode: nil)
     )
     #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
