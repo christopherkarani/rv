@@ -36,11 +36,29 @@ enum ScanTimestamp {
     }
 
     /// Epoch coercion for a JSON number. Uses the adapters' historical
-    /// `as? Double` bridge, so `NSNumber` values (including integers) convert
-    /// while strings never do.
+    /// `as? NSNumber` bridge (Pi, OpenCode), so integers and JSON booleans
+    /// (true->1, false->0) convert while strings never do. Falls back to
+    /// native Swift scalars where the NSNumber bridge is unavailable.
     static func epochValue(_ value: Any?, requirePositive: Bool = true) -> Date? {
-        guard let raw = value as? Double else { return nil }
-        return epoch(raw, requirePositive: requirePositive)
+        if let number = value as? NSNumber {
+            return epoch(number.doubleValue, requirePositive: requirePositive)
+        }
+        if let raw = value as? Double {
+            return epoch(raw, requirePositive: requirePositive)
+        }
+        if let raw = value as? Bool {
+            return epoch(raw ? 1 : 0, requirePositive: requirePositive)
+        }
+        if let raw = value as? Int {
+            return epoch(Double(raw), requirePositive: requirePositive)
+        }
+        if let raw = value as? Int64 {
+            return epoch(Double(raw), requirePositive: requirePositive)
+        }
+        if let raw = value as? UInt64 {
+            return epoch(Double(raw), requirePositive: requirePositive)
+        }
+        return nil
     }
 
     /// Coerce one timestamp field: strings parse as ISO-8601, numbers as

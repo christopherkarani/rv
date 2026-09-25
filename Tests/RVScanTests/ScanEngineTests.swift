@@ -93,11 +93,37 @@ import RVDomain
     #expect(ScanTimestamp.epochValue(parsed["s"]) == nil)
     #expect(ScanTimestamp.epochValue(nil) == nil)
     // Historical bridging preserved byte-identically: JSON booleans arrive as
-    // NSNumber, and `as? Double` converts true->1.0 / false->0.0 exactly as
-    // the pre-T1 `as? Double` (Codex) and `as? NSNumber` (Pi) paths did.
+    // NSNumber, and `as? NSNumber` converts true->1.0 / false->0.0 exactly as
+    // the pre-T1 `as? NSNumber` (Pi) path did.
     #expect(ScanTimestamp.epochValue(parsed["b"]) == Date(timeIntervalSince1970: 1))
     #expect(ScanTimestamp.epochValue(parsed["c"]) == nil)
     #expect(ScanTimestamp.epochValue(parsed["c"], requirePositive: false) == Date(timeIntervalSince1970: 0))
+}
+
+@Test func scanTimestamp_epochValue_nativeScalarsBridgeLikeNSNumber() {
+    // Pins the Pi `as? NSNumber` semantics for scalars without ObjC
+    // bridging (Linux JSON, native Swift values): booleans map to 1/0 and
+    // integers convert, exactly as `NSNumber.doubleValue` does.
+    // `as? Double` alone yields nil for all of these.
+    let nativeTrue: Any = true
+    let nativeFalse: Any = false
+    #expect(ScanTimestamp.epochValue(nativeTrue) == Date(timeIntervalSince1970: 1))
+    #expect(ScanTimestamp.epochValue(nativeFalse) == nil)
+    #expect(ScanTimestamp.epochValue(nativeFalse, requirePositive: false) == Date(timeIntervalSince1970: 0))
+    let nativeInt: Any = 1_710_000_000
+    #expect(ScanTimestamp.epochValue(nativeInt) == Date(timeIntervalSince1970: 1_710_000_000))
+    let nativeInt64: Any = Int64(1_710_000_000)
+    #expect(ScanTimestamp.epochValue(nativeInt64) == Date(timeIntervalSince1970: 1_710_000_000))
+    let nativeUInt64: Any = UInt64(1_710_000_000)
+    #expect(ScanTimestamp.epochValue(nativeUInt64) == Date(timeIntervalSince1970: 1_710_000_000))
+    let nativeDouble: Any = 1_710_000_000.5
+    #expect(ScanTimestamp.epochValue(nativeDouble) == Date(timeIntervalSince1970: 1_710_000_000.5))
+    // Millis integers divide by 1000 (Pi message timestamps).
+    let nativeMillis: Any = 1_736_942_460_000
+    #expect(ScanTimestamp.epochValue(nativeMillis) == Date(timeIntervalSince1970: 1_736_942_460))
+    // Strings and nil never convert.
+    #expect(ScanTimestamp.epochValue("1710000000") == nil)
+    #expect(ScanTimestamp.epochValue(nil) == nil)
 }
 
 @Test func scanTimestamp_firstValue_presentEmptyStringBlocksLaterKey() {
