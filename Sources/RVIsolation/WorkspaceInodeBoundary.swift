@@ -870,7 +870,7 @@ private struct MountedDisk {
     var imagePath: String?
 }
 
-private struct TreeEntry {
+struct TreeEntry {
     var stamp: WorkspaceInodeStamp
     var mode: mode_t
     var bytes: UInt64
@@ -963,7 +963,7 @@ private func diskDevice(inPlist stdout: String) -> String? {
         ?? devices.first
 }
 
-private func collectTree(root: Int32, checkDevice: UInt64) -> [String: TreeEntry]? {
+func collectTree(root: Int32, checkDevice: UInt64) -> [String: TreeEntry]? {
     var entries: [String: TreeEntry] = [:]
     guard readTree(fd: root, prefix: "", expectedDevice: checkDevice, into: &entries) else { return nil }
     return entries
@@ -975,7 +975,7 @@ private func readTree(
     expectedDevice: UInt64,
     into entries: inout [String: TreeEntry]
 ) -> Bool {
-    guard let names = directoryNames(fd) else { return false }
+    guard let names = directoryNames(fd, isWorkspaceRoot: prefix.isEmpty) else { return false }
     for name in names {
         let relative = prefix.isEmpty ? name : prefix + "/" + name
         var status = stat()
@@ -1002,8 +1002,13 @@ private func readTree(
 
 /// Copy names onto the volume as new inodes. A regular file whose link count
 /// rose after the snapshot aborts the launch before the agent runs.
-private func copyTree(from source: Int32, to destination: Int32, expectDevice: UInt64) -> Bool {
-    guard let names = directoryNames(source) else {
+func copyTree(
+    from source: Int32,
+    to destination: Int32,
+    expectDevice: UInt64,
+    isWorkspaceRoot: Bool = true
+) -> Bool {
+    guard let names = directoryNames(source, isWorkspaceRoot: isWorkspaceRoot) else {
         return false
     }
     for name in names {
@@ -1031,7 +1036,12 @@ private func copyTree(from source: Int32, to destination: Int32, expectDevice: U
                 if childDest >= 0 { close(childDest) }
                 return false
             }
-            let copied = copyTree(from: childSource, to: childDest, expectDevice: expectDevice)
+            let copied = copyTree(
+                from: childSource,
+                to: childDest,
+                expectDevice: expectDevice,
+                isWorkspaceRoot: false
+            )
             close(childSource)
             close(childDest)
             if copied == false { return false }
@@ -1087,7 +1097,7 @@ private func copyTree(from source: Int32, to destination: Int32, expectDevice: U
     return true
 }
 
-private func directoryNames(_ dirfd: Int32) -> [String]? {
+private func directoryNames(_ dirfd: Int32, isWorkspaceRoot: Bool) -> [String]? {
     let copy = dup(dirfd)
     guard copy >= 0 else { return nil }
     // `dup` shares the directory offset. A previous listing leaves it at the
@@ -1109,7 +1119,26 @@ private func directoryNames(_ dirfd: Int32) -> [String]? {
             break
         }
         let name = entryName(entry)
-        if name == "." || name == ".." || isFilesystemBookkeeping(name) { continue }
+        if name == "." || name == ".." { continue }
+        // Only ignore actual system-owned metadata at the volume root. A
+        // project entry with one of these names remains part of the boundary.
+        if isWorkspaceRoot, WorkspaceFilesystemMetadata.isBookkeepingName(name) {
+            var status = stat()
+            let stated = name.withCString { item in
+                fstatat(dirfd, item, &status, AT_SYMLINK_NOFOLLOW) == 0
+            }
+            if stated,
+                WorkspaceFilesystemMetadata.shouldSkip(
+                    name: name,
+                    isRootChild: true,
+                    isDirectory: kind(of: status.st_mode) == .directory,
+                    isSymbolicLink: kind(of: status.st_mode) == .symlink,
+                    ownerID: status.st_uid
+                )
+            {
+                continue
+            }
+        }
         names.append(name)
     }
     return names
@@ -1201,20 +1230,6 @@ func workspaceMountFacts(_ path: String) -> WorkspaceMountFacts? {
 
 func workspaceMountSource(_ path: String) -> String? {
     workspaceMountFacts(path)?.source
-}
-
-/// Names a fresh HFS volume creates at its root. They are not workspace
-/// content. Copying or publishing them makes the next launch see a directory
-/// the volume already owns.
-private func isFilesystemBookkeeping(_ name: String) -> Bool {
-    switch name {
-    case ".fseventsd", ".Trashes", ".Spotlight-V100", ".TemporaryItems",
-        ".DocumentRevisions-V100", ".vol", ".HFS+ Private Directory Data",
-        ".apdisk", ".metadata_never_index":
-        return true
-    default:
-        return false
-    }
 }
 
 private func pathDepth(_ path: String) -> Int {
