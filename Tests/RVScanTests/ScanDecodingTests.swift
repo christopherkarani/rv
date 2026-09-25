@@ -128,6 +128,31 @@ private func extractClaude(_ payload: String, fileName: String = "inline-claude.
     #expect(events[0].sessionID == SessionID(validating: "fallback-session"))
 }
 
+@Test func claudeTyped_wrongTypeScalarsKeepLine() throws {
+    // Old per-field `as?` ignored a mistyped scalar and still extracted the
+    // line; the whole line must not be dropped.
+    let payload = """
+    {"type":"assistant","sessionId":42,"timestamp":42,"cwd":42,"message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"git status"}}]}}
+    """
+    let events = try extractClaude(payload, fileName: "fallback-session.jsonl")
+    #expect(events.count == 1)
+    #expect(events[0].command.rawValue == "git status")
+    #expect(events[0].occurredAt == nil)
+    #expect(events[0].sessionID == SessionID(validating: "fallback-session"))
+    #expect(events[0].workingDirectory == nil)
+}
+
+@Test func claudeTyped_wrongTypeInputCwdFallsBackToEnvelope() throws {
+    // A mistyped input cwd is ignored; the block still extracts with the
+    // envelope cwd (old `fromEnvelope(input) ?? envelopeCwd` behavior).
+    let payload = """
+    {"type":"assistant","sessionId":"s","cwd":"/tmp/envelope","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"git status","cwd":42}}]}}
+    """
+    let events = try extractClaude(payload)
+    #expect(events.count == 1)
+    #expect(events[0].workingDirectory == WorkingDirectory(validating: "/tmp/envelope"))
+}
+
 @Test func claudeTyped_timestampVariants() throws {
     let payload = """
     {"type":"assistant","sessionId":"s","timestamp":"2026-08-20T12:00:01.000Z","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"one"}}]}}

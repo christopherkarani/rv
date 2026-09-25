@@ -105,6 +105,19 @@ private struct ClaudeStoreLine: Decodable {
         case workingDirectorySnake = "working_directory"
         case message
     }
+
+    /// Field-independent leniency: a present-but-wrong-typed scalar decodes
+    /// as nil (matching the old per-field `as?`) instead of failing the line.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        timestamp = try? container.decode(String.self, forKey: .timestamp)
+        sessionId = try? container.decode(String.self, forKey: .sessionId)
+        cwd = try? container.decode(String.self, forKey: .cwd)
+        workdir = try? container.decode(String.self, forKey: .workdir)
+        workingDirectoryRaw = try? container.decode(String.self, forKey: .workingDirectoryRaw)
+        workingDirectorySnake = try? container.decode(String.self, forKey: .workingDirectorySnake)
+        message = try? container.decode(ClaudeStoreMessage.self, forKey: .message)
+    }
 }
 
 /// Assistant message. `content` is a string for text turns and an array for
@@ -148,6 +161,18 @@ private struct ClaudeStoreInput: Decodable {
         case workdir
         case workingDirectoryRaw = "workingDirectory"
         case workingDirectorySnake = "working_directory"
+    }
+
+    /// Field-independent leniency: a wrong-typed `cwd` decodes as nil (the
+    /// block still extracts, falling back to the envelope cwd) instead of
+    /// failing the block. Matches the old per-field `as?` behavior.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        command = try? container.decode(String.self, forKey: .command)
+        cwd = try? container.decode(String.self, forKey: .cwd)
+        workdir = try? container.decode(String.self, forKey: .workdir)
+        workingDirectoryRaw = try? container.decode(String.self, forKey: .workingDirectoryRaw)
+        workingDirectorySnake = try? container.decode(String.self, forKey: .workingDirectorySnake)
     }
 }
 
