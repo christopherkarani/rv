@@ -39,7 +39,9 @@ public struct CursorStoreAdapter: SessionStoreAdapter {
     /// when `data` is empty, not UTF-8, or contains no usable line. A line is
     /// usable exactly when it is a JSON object — wrong-typed fields decode as
     /// nil instead of failing the line. Bad lines and unknown shapes
-    /// contribute zero events without aborting the file.
+    /// contribute zero events without aborting the file. Lines split on LF
+    /// only: bare-CR separators no longer split (the old `\.isNewline` split
+    /// did), so a CR-only file yields no usable line and throws.
     public func extract(fileURL: URL, data: Data) throws -> [ExtractedEvent] {
         try Self.events(
             in: data,

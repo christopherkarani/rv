@@ -382,6 +382,46 @@ private func extractCursor(_ payload: String, fileName: String = "inline-cursor.
     #expect(events.map(\.command.rawValue) == ["one", "two"])
 }
 
+@Test func codexTyped_bareCRDoesNotSplit() throws {
+    // LF-only splitting (see `ScanJSONLines`): CR-joined objects form one
+    // undecodable blob, so a CR-only file throws instead of yielding events.
+    // (LF is pinned by every multi-line test above; CRLF by the test above.)
+    let url = URL(fileURLWithPath: "/tmp/inline-codex-cr.jsonl")
+    let payload = "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"one\"}}\r{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"two\"}}"
+    #expect(throws: CodexStoreError.unreadable(sourcePath: url.path)) {
+        _ = try CodexStoreAdapter().extract(fileURL: url, data: Data(payload.utf8))
+    }
+}
+
+@Test func codexTyped_exoticNestingReadsAsAbsent() throws {
+    // The old deep crawl (see `fromEnvelope`) probed unmodeled `params` /
+    // `args` / `state` / `function` keys and recursed below depth 1; the
+    // typed replacement reads modeled carriers one level deep only, so these
+    // nestings read as absent while the command still extracts.
+    let unmodeled = [
+        #"{"tool_name":"Bash","tool_input":{"command":"x"},"params":{"cwd":"/exotic"}}"#,
+        #"{"tool_name":"Bash","tool_input":{"command":"x"},"args":{"workdir":"/exotic"}}"#,
+        #"{"tool_name":"Bash","tool_input":{"command":"x"},"state":{"cwd":"/exotic"}}"#,
+        #"{"tool_name":"Bash","tool_input":{"command":"x"},"function":{"cwd":"/exotic"}}"#,
+    ]
+    for payload in unmodeled {
+        let events = try extractCodex(payload)
+        #expect(events.map(\.command.rawValue) == ["x"])
+        #expect(events.allSatisfy { $0.workingDirectory == nil })
+    }
+    // Depth 2 under a modeled carrier: nested object and JSON-encoded string.
+    let deep = try extractCodex(
+        #"{"tool_name":"Bash","tool_input":{"command":"x","nested":{"cwd":"/deep"}}}"#
+    )
+    #expect(deep.map(\.command.rawValue) == ["x"])
+    #expect(deep.allSatisfy { $0.workingDirectory == nil })
+    let deepString = try extractCodex(
+        #"{"type":"function_call","name":"shell","arguments":"{\"command\":\"x\",\"nested\":{\"cwd\":\"/deep\"}}"}"#
+    )
+    #expect(deepString.map(\.command.rawValue) == ["x"])
+    #expect(deepString.allSatisfy { $0.workingDirectory == nil })
+}
+
 // MARK: - Cursor goldens
 
 @Test func cursorTyped_fixtureGoldens() throws {
@@ -628,4 +668,41 @@ private func extractCursor(_ payload: String, fileName: String = "inline-cursor.
     let payload = "{\"hook_event_name\":\"beforeShellExecution\",\"command\":\"one\"}\r\n{\"hook_event_name\":\"beforeShellExecution\",\"command\":\"two\"}\r\n"
     let events = try CursorStoreAdapter().extract(fileURL: url, data: Data(payload.utf8))
     #expect(events.map(\.command.rawValue) == ["one", "two"])
+}
+
+@Test func cursorTyped_bareCRDoesNotSplit() throws {
+    // LF-only splitting (see `ScanJSONLines`): CR-joined objects form one
+    // undecodable blob, so a CR-only file throws instead of yielding events.
+    // (LF is pinned by every multi-line test above; CRLF by the test above.)
+    let url = URL(fileURLWithPath: "/tmp/inline-cursor-cr.jsonl")
+    let payload = "{\"hook_event_name\":\"beforeShellExecution\",\"command\":\"one\"}\r{\"hook_event_name\":\"beforeShellExecution\",\"command\":\"two\"}"
+    #expect(throws: CursorStoreError.unreadable(sourcePath: url.path)) {
+        _ = try CursorStoreAdapter().extract(fileURL: url, data: Data(payload.utf8))
+    }
+}
+
+@Test func cursorTyped_exoticNestingReadsAsAbsent() throws {
+    // Same narrowing as Codex: unmodeled keys and below-depth-1 nestings
+    // read as absent (the old deep crawl found them via `fromEnvelope`).
+    let unmodeled = [
+        #"{"tool_name":"Shell","tool_input":{"command":"x"},"params":{"cwd":"/exotic"}}"#,
+        #"{"tool_name":"Shell","tool_input":{"command":"x"},"state":{"workdir":"/exotic"}}"#,
+    ]
+    for payload in unmodeled {
+        let events = try extractCursor(payload)
+        #expect(events.map(\.command.rawValue) == ["x"])
+        #expect(events.allSatisfy { $0.workingDirectory == nil })
+    }
+    let deep = try extractCursor(
+        #"{"tool_name":"Shell","tool_input":{"command":"x","nested":{"cwd":"/deep"}}}"#
+    )
+    #expect(deep.map(\.command.rawValue) == ["x"])
+    #expect(deep.allSatisfy { $0.workingDirectory == nil })
+    // A JSON-encoded tool_input string reads one level deep only; the string
+    // itself stays the literal command.
+    let deepString = try extractCursor(
+        #"{"tool_name":"Shell","tool_input":"{\"nested\":{\"cwd\":\"/deep\"}}"}"#
+    )
+    #expect(deepString.count == 1)
+    #expect(deepString.allSatisfy { $0.workingDirectory == nil })
 }
