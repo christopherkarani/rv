@@ -65,12 +65,12 @@ public enum WorkspaceHostExit {
 }
 
 /// Authenticated control client. It never receives workspace or runtime capabilities.
-public final class WorkspaceClient: @unchecked Sendable {
+public final class WorkspaceClient: Sendable {
     private let endpoint: WorkspaceEndpoint
     /// Serializes every read, write, and close on `fd` before a terminal
     /// subscription. After that, the event reader is the only reader.
     private let io: Mutex<ClientState>
-    private let writeLock = NSLock()
+    private let writeLock = Mutex<Void>(())
     private let events = EventBoard()
 
     private struct ClientState {
@@ -446,9 +446,9 @@ public final class WorkspaceClient: @unchecked Sendable {
             events.fail(requestID, .disconnected)
             return .failure(.disconnected)
         }
-        writeLock.lock()
-        let wrote = WorkspaceControlSocket.writeFrame(fd: fd, body: body)
-        writeLock.unlock()
+        let wrote = writeLock.withLock { _ in
+            WorkspaceControlSocket.writeFrame(fd: fd, body: body)
+        }
         guard wrote else {
             failStream(.disconnected)
             return .failure(.disconnected)
@@ -506,9 +506,9 @@ public final class WorkspaceClient: @unchecked Sendable {
     }
 
     private func failStream(_ error: WorkspaceClientFailure) {
-        writeLock.lock()
-        io.withLock { closeLocked(&$0) }
-        writeLock.unlock()
+        writeLock.withLock { _ in
+            io.withLock { closeLocked(&$0) }
+        }
         events.failAll(error)
     }
 
@@ -605,47 +605,62 @@ private func clientFailure(_ code: WorkspaceControlCode) -> WorkspaceClientFailu
 }
 }
 
-private final class ReplyWaiter: @unchecked Sendable {
-    private let condition = NSCondition()
-    private var message: WorkspaceControlMessage?
-    private var failure: WorkspaceClientFailure?
+private final class ReplyWaiter: Sendable {
+    private let group = DispatchGroup()
+    private let state = Mutex<State>(State())
+
+    private struct State {
+        var message: WorkspaceControlMessage?
+        var failure: WorkspaceClientFailure?
+    }
+
+    init() {
+        group.enter()
+    }
 
     func succeed(_ message: WorkspaceControlMessage) {
-        condition.lock()
-        self.message = message
-        condition.signal()
-        condition.unlock()
+        settle(message: message, failure: nil)
     }
 
     func fail(_ error: WorkspaceClientFailure) {
-        condition.lock()
-        if message == nil, failure == nil { failure = error }
-        condition.signal()
-        condition.unlock()
+        settle(message: nil, failure: error)
+    }
+
+    /// First settle wins and balances the initial `enter`.
+    private func settle(message: WorkspaceControlMessage?, failure: WorkspaceClientFailure?) {
+        let first = state.withLock { state -> Bool in
+            if state.message != nil || state.failure != nil { return false }
+            state.message = message
+            state.failure = failure
+            return true
+        }
+        if first {
+            group.leave()
+        }
     }
 
     func wait(timeout: TimeInterval) -> Result<WorkspaceControlMessage, WorkspaceClientFailure> {
-        let deadline = Date().addingTimeInterval(timeout)
-        condition.lock()
-        while message == nil, failure == nil {
-            if condition.wait(until: deadline) == false, message == nil, failure == nil {
-                condition.unlock()
-                return .failure(.timedOut)
+        _ = group.wait(timeout: .now() + timeout)
+        return state.withLock { state -> Result<WorkspaceControlMessage, WorkspaceClientFailure> in
+            if let message = state.message {
+                return message.ok == false
+                    ? .failure(
+                        message.error.flatMap(WorkspaceControlCode.init(rawValue:)).map(clientFailure)
+                            ?? .malformed
+                    )
+                    : .success(message)
             }
+            if let failure = state.failure {
+                return .failure(failure)
+            }
+            return .failure(.timedOut)
         }
-        let result: Result<WorkspaceControlMessage, WorkspaceClientFailure>
-        if let message {
-            result = message.ok == false
-                ? .failure(message.error.flatMap(WorkspaceControlCode.init(rawValue:)).map(clientFailure) ?? .malformed)
-                : .success(message)
-        } else {
-            result = .failure(failure ?? .disconnected)
-        }
-        condition.unlock()
-        return result
     }
 }
 
+// NSCondition is load-bearing: `next(timeout:)` waits on a multi-predicate
+// queue (messages/failed) with broadcast wakeups, and the client API is
+// synchronous. Mutex has no condition wait; an async rewrite is out of scope.
 private final class EventBoard: @unchecked Sendable {
     /// Replay plus one live queue. Framing is not counted; only terminal bytes are.
     static let queueLimit = TerminalStreamLimits.replayBytes + TerminalStreamLimits.subscriberQueueBytes

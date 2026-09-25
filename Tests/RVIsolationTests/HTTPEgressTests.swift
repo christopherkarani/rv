@@ -216,11 +216,22 @@ private enum HTTPHarnessExchange {
     case blockUntilCancel
 }
 
-private final class HTTPSpy: @unchecked Sendable {
-    var calls = 0
-    var stopped = false
-    var started: DispatchSemaphore?
+private final class HTTPSpy: Sendable {
+    private let state = Mutex<SpyState>(SpyState())
     let exchange: HTTPHarnessExchange
+
+    private struct SpyState {
+        var calls = 0
+        var stopped = false
+        var started: DispatchSemaphore?
+    }
+
+    var calls: Int { state.withLock { $0.calls } }
+    var stopped: Bool { state.withLock { $0.stopped } }
+    var started: DispatchSemaphore? {
+        get { state.withLock { $0.started } }
+        set { state.withLock { $0.started = newValue } }
+    }
 
     init(exchange: HTTPHarnessExchange) {
         self.exchange = exchange
@@ -231,7 +242,7 @@ private final class HTTPSpy: @unchecked Sendable {
         _ cancellation: HTTPCancellation,
         _ shouldStop: @escaping @Sendable () -> Bool
     ) -> Result<HTTPExecutionReceipt, HTTPEgressFailure> {
-        calls += 1
+        state.withLock { $0.calls += 1 }
         switch exchange {
         case .empty:
             return .success(
@@ -253,19 +264,20 @@ private final class HTTPSpy: @unchecked Sendable {
                 shouldStop: shouldStop
             )
         case .blockUntilCancel:
-            started?.signal()
+            state.withLock { $0.started }?.signal()
             while cancellation.isCancelled == false && shouldStop() == false {
                 usleep(1_000)
             }
-            stopped = true
+            state.withLock { $0.stopped = true }
             return .failure(.opened(.cancelled))
         }
     }
 }
 
 /// The cancellation test shares this with one worker thread and joins it
-/// before the harness is released.
-private struct HTTPHarness: @unchecked Sendable {
+/// before the harness is released. The session serializes its channel
+/// state internally; the spy and harness members are independently locked.
+private struct HTTPHarness: Sendable {
     let runtime: RuntimeSession
     let spy: HTTPSpy
     let session: RuntimeAdmissionSession
@@ -353,7 +365,7 @@ private struct HTTPHarness: @unchecked Sendable {
     }
 }
 
-private final class OneShotTransfer: @unchecked Sendable {
+private final class OneShotTransfer: Sendable {
     let response: String
     init(response: String) { self.response = response }
 
@@ -368,18 +380,17 @@ private final class OneShotTransfer: @unchecked Sendable {
     }
 }
 
-private final class TransferState: @unchecked Sendable {
-    private let lock = NSLock()
-    private var payload: Data
-    init(payload: Data) { self.payload = payload }
+private final class TransferState: Sendable {
+    private let payloadBox: Mutex<Data>
+    init(payload: Data) { payloadBox = Mutex(payload) }
 
     func take() -> Result<HTTPTransferRead, HTTPTransferFault> {
-        lock.lock()
-        defer { lock.unlock() }
-        if payload.isEmpty { return .success(.end) }
-        let data = payload
-        payload.removeAll()
-        return .success(.bytes(data))
+        payloadBox.withLock { payload in
+            if payload.isEmpty { return .success(.end) }
+            let data = payload
+            payload.removeAll()
+            return .success(.bytes(data))
+        }
     }
 }
 

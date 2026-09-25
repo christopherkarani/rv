@@ -461,11 +461,16 @@ private func processGone(_ pid: pid_t) -> Bool {
     return errno == ESRCH
 }
 
-private final class CloseBox: @unchecked Sendable {
-    var result: Result<Void, WorkspaceSessionError>?
+private final class CloseBox: Sendable {
+    private let box = Mutex<Result<Void, WorkspaceSessionError>?>(nil)
+
+    var result: Result<Void, WorkspaceSessionError>? {
+        get { box.withLock { $0 } }
+        set { box.withLock { $0 = newValue } }
+    }
 }
 
-private final class RunCounter: @unchecked Sendable {
+private final class RunCounter: Sendable {
     private let runs = Mutex(0)
 
     func run(_ action: AllowedAction) -> Result<Int32, RuntimeAdmissionExecutorError> {

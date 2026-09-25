@@ -111,7 +111,7 @@ struct MountedSeatbeltOutcome {
 }
 
 /// Cooperative stop for one runtime. The watch loop polls it.
-final class RuntimeCancellation: @unchecked Sendable {
+final class RuntimeCancellation: Sendable {
     private let flag = Mutex(false)
 
     func request() {
@@ -123,7 +123,7 @@ final class RuntimeCancellation: @unchecked Sendable {
     }
 }
 
-private final class AdmissionReply: @unchecked Sendable {
+private final class AdmissionReply: Sendable {
     private let value = Mutex<RuntimeAdmissionDecision?>(nil)
 
     func store(_ decision: RuntimeAdmissionDecision) {
@@ -136,7 +136,7 @@ private final class AdmissionReply: @unchecked Sendable {
 }
 
 /// One Seatbelt process after `posix_spawn`. The watch loop owns its lifetime.
-final class LiveSeatbeltChild: @unchecked Sendable {
+final class LiveSeatbeltChild: Sendable {
     let session: RuntimeSession
     let capability: RuntimeCapability
     let pid: pid_t
@@ -145,10 +145,24 @@ final class LiveSeatbeltChild: @unchecked Sendable {
     /// Parent-side descriptors that must not appear in the child.
     private let retainedDescriptors: [Int32]
     let pty: RuntimeTerminal?
-    var handshakeRead: Int32
-    /// Nonce bytes already read while proving a dead leader. The watch
-    /// must still see them; a pipe read is consuming.
-    var handshakePreface = Data()
+    private let handshakeIO = Mutex<HandshakeIO>(HandshakeIO())
+
+    private struct HandshakeIO: Sendable {
+        var read: Int32 = -1
+        /// Nonce bytes already read while proving a dead leader. The watch
+        /// must still see them; a pipe read is consuming.
+        var preface = Data()
+    }
+
+    var handshakeRead: Int32 {
+        get { handshakeIO.withLock { $0.read } }
+        set { handshakeIO.withLock { $0.read = newValue } }
+    }
+
+    var handshakePreface: Data {
+        get { handshakeIO.withLock { $0.preface } }
+        set { handshakeIO.withLock { $0.preface = newValue } }
+    }
     private let established = Mutex(false)
     private let watchStarted = Mutex(false)
     private let terminal = Mutex<IsolationApplyError?>(nil)
@@ -174,8 +188,8 @@ final class LiveSeatbeltChild: @unchecked Sendable {
         self.nonce = nonce
         self.admission = admission
         self.retainedDescriptors = parentDescriptors
-        self.handshakeRead = handshakeRead
         self.pty = terminal
+        self.handshakeRead = handshakeRead
     }
 
     /// Descriptors RV still holds. The PTY master is included only while it
@@ -207,11 +221,21 @@ final class LiveSeatbeltChild: @unchecked Sendable {
     /// watch thread is not running, so nothing else will do this.
     func releaseAbandoned() {
         pty?.finish(status: nil)
-        if handshakeRead >= 0 {
-            close(handshakeRead)
-            handshakeRead = -1
+        let fd = takeHandshakeRead()
+        if fd >= 0 {
+            close(fd)
         }
         admission.finish()
+    }
+
+    /// Takes the handshake fd exactly once, so concurrent teardown paths
+    /// cannot close the same descriptor twice.
+    func takeHandshakeRead() -> Int32 {
+        handshakeIO.withLock { io in
+            let fd = io.read
+            io.read = -1
+            return fd
+        }
     }
 
     var terminalError: IsolationApplyError? {
@@ -260,9 +284,9 @@ final class LiveSeatbeltChild: @unchecked Sendable {
             return false
         }
         guard started == false else { return }
-        if handshakeRead >= 0 {
-            close(handshakeRead)
-            handshakeRead = -1
+        let fd = takeHandshakeRead()
+        if fd >= 0 {
+            close(fd)
         }
         admission.finish()
         terminateSession(pgid: pid, also: [pid])
@@ -612,9 +636,9 @@ func watchSeatbeltProcess(
         live.recordTerminal(nil)
     }
     live.pty?.finish(status: outcome.status)
-    if live.handshakeRead >= 0 {
-        close(live.handshakeRead)
-        live.handshakeRead = -1
+    let handshakeFD = live.takeHandshakeRead()
+    if handshakeFD >= 0 {
+        close(handshakeFD)
     }
     return mounted
 }

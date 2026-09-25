@@ -1,11 +1,13 @@
+import Synchronization
+
 @testable import RVService
 
-final class RecordingLog: ServiceLog, @unchecked Sendable {
-    nonisolated(unsafe) private var events: [ServiceLogEvent] = []
+final class RecordingLog: ServiceLog, Sendable {
+    private let box = Mutex<[ServiceLogEvent]>([])
 
     func record(_ event: ServiceLogEvent) {
-        events.append(event)
+        box.withLock { $0.append(event) }
     }
 
-    var snapshot: [ServiceLogEvent] { events }
+    var snapshot: [ServiceLogEvent] { box.withLock { $0 } }
 }

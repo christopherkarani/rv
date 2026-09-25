@@ -1,6 +1,7 @@
 #if os(macOS)
 import Darwin
 import Foundation
+import Synchronization
 
 /// Identity of one workspace name, captured before the contained process runs.
 struct WorkspaceInodeStamp: Equatable, Sendable {
@@ -1411,14 +1412,11 @@ private func readToolPipe(_ fd: Int32) -> Data {
 /// the caller. The array lives in a class: a mutable static is not
 /// concurrency-safe, and `Process` is not `Sendable`, so a lock around a
 /// `static var` does not satisfy Swift 6.
-private final class ParkedToolProcesses: @unchecked Sendable {
-    private let lock = NSLock()
-    private var processes: [Process] = []
+private final class ParkedToolProcesses: Sendable {
+    private let box = Mutex<[Process]>([])
 
     func park(_ process: Process) {
-        lock.lock()
-        processes.append(process)
-        lock.unlock()
+        box.withLock { $0.append(process) }
     }
 }
 
