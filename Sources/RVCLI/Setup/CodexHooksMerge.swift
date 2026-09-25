@@ -46,7 +46,8 @@ enum CodexHooksMerge {
         guard let type = hook["type"] as? String, type == hookType,
               let command = hook["command"] as? String,
               command == hookCommand(adapterPath: adapterPath),
-              hook["timeout"] as? Int == timeout
+              hook["timeout"] as? Int == timeout,
+              hook["statusMessage"] as? String == statusMessage
         else {
             return false
         }

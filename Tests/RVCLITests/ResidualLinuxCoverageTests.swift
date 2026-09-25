@@ -185,9 +185,20 @@ struct ResidualLinuxCoverageTests {
                     "type": CodexHooksMerge.hookType,
                     "command": CodexHooksMerge.hookCommand(adapterPath: "/tmp/rv-guard.py"),
                     "timeout": CodexHooksMerge.timeout,
+                    "statusMessage": CodexHooksMerge.statusMessage,
                 ],
                 adapterPath: "/tmp/rv-guard.py"
             )
+        )
+        #expect(
+            CodexHooksMerge.matchesCurrentHook(
+                [
+                    "type": CodexHooksMerge.hookType,
+                    "command": CodexHooksMerge.hookCommand(adapterPath: "/tmp/rv-guard.py"),
+                    "timeout": CodexHooksMerge.timeout,
+                ],
+                adapterPath: "/tmp/rv-guard.py"
+            ) == false
         )
         #expect(CodexHooksMerge.matchesCurrentHook([:], adapterPath: "/tmp/x") == false)
         #expect(throws: CodexHooksMergeError.unreadable) {

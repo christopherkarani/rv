@@ -659,6 +659,45 @@ private func connectedState(
         #expect(transition.effects == [.detach])
     }
 
+    @Test func completionsThatRaceDetachLeaveDetachedStateAlone() {
+        let detached = WorkspaceTUIReducer.reduce(connectedState(), .detachRequested).state
+        let racing: [WorkspaceTUIReducerEvent] = [
+            .hostDisconnected,
+            .writeCompleted(runtime: runtimeA, outcome: .busy),
+            .writeCompleted(runtime: runtimeA, outcome: .disconnected),
+            .acquireCompleted(runtime: runtimeA, outcome: .busy),
+            .acquireCompleted(runtime: runtimeA, outcome: .disconnected),
+            .resizeCompleted(runtime: runtimeA, outcome: .unavailable),
+            .resizeCompleted(runtime: runtimeA, outcome: .disconnected),
+            .subscribeCompleted(runtime: runtimeA, context: .connect, succeeded: true, disconnected: false),
+            .subscribeCompleted(runtime: runtimeA, context: .ensure, succeeded: false, disconnected: false),
+            .subscribeCompleted(runtime: runtimeA, context: .launch, succeeded: false, disconnected: false),
+        ]
+        for event in racing {
+            let transition = WorkspaceTUIReducer.reduce(detached, event)
+            #expect(transition.effects == [])
+            #expect(transition.state == detached)
+        }
+    }
+
+    @Test func orphanedAcquireAfterDetachStillReleasesWithoutMutating() {
+        let detached = WorkspaceTUIReducer.reduce(connectedState(), .detachRequested).state
+        let transition = WorkspaceTUIReducer.reduce(detached, .acquireCompleted(runtime: runtimeA, outcome: .ok))
+        #expect(transition.effects == [.release(runtime: runtimeA)])
+        #expect(transition.state == detached)
+    }
+
+    @Test func staleSubscribeSuccessSkipsTheAcquire() {
+        var before = connectedState()
+        before.terminal?.state.subscribed = false
+        let transition = WorkspaceTUIReducer.reduce(
+            before,
+            .subscribeCompleted(runtime: runtimeB, context: .connect, succeeded: true, disconnected: false)
+        )
+        #expect(transition.effects == [])
+        #expect(transition.state == before)
+    }
+
     @Test func hostDisconnectedMarksTheWorkspaceReadOnly() {
         let before = connectedState()
         let transition = WorkspaceTUIReducer.reduce(before, .hostDisconnected)

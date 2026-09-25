@@ -9,7 +9,9 @@ import Foundation
 ///   retries the describe/list query instead of failing fast.
 /// - `connected`: the host is reachable; terminal I/O is allowed.
 /// - `disconnected`: a query, RPC, or host event reported the host gone.
-/// - `detached`: `detachSession()` ran. No transition leaves this state.
+/// - `detached`: `detachSession()` ran. No transition leaves this state, and
+///   completions that race detach reduce to no-ops (an orphaned acquire
+///   still emits `.release` so the host drops the stale lease).
 enum WorkspaceTUILifecycle: Equatable, Sendable {
     case neverConnected
     case connected
@@ -336,12 +338,18 @@ enum WorkspaceTUIReducer {
             next.retryAcquire = false
 
         case .hostDisconnected:
+            // A disconnect that races detach must not resurrect the lease:
+            // detached already released it and reported shouldExit.
+            guard next.lifecycle != .detached else { break }
             Self.applyDisconnect(to: &next, presentationChanged: &presentationChanged)
             if next.lifecycle == .connected {
                 next.lifecycle = .disconnected
             }
 
         case .writeCompleted(let runtime, let outcome):
+            // The terminal worker drains in-flight writes after detach; their
+            // completions reduce here and must leave detached state alone.
+            guard next.lifecycle != .detached else { break }
             switch outcome {
             case .busy:
                 if next.terminal?.state.runtime == runtime {
@@ -379,6 +387,7 @@ enum WorkspaceTUIReducer {
                     effects = [.release(runtime: runtime)]
                 }
             case .busy, .unavailable, .rejected:
+                guard next.lifecycle != .detached else { break }
                 if next.terminal?.state.runtime == runtime {
                     if next.terminal?.state.lease != .readOnly {
                         presentationChanged = true
@@ -386,6 +395,7 @@ enum WorkspaceTUIReducer {
                     next.terminal?.state.lease = .readOnly
                 }
             case .disconnected:
+                guard next.lifecycle != .detached else { break }
                 Self.applyDisconnect(to: &next, presentationChanged: &presentationChanged)
                 if next.lifecycle == .connected {
                     next.lifecycle = .disconnected
@@ -393,6 +403,9 @@ enum WorkspaceTUIReducer {
             }
 
         case .resizeCompleted(let runtime, let outcome):
+            // As with writes: a resize that races detach reduces after the
+            // lifecycle committed and must not touch detached state.
+            guard next.lifecycle != .detached else { break }
             switch outcome {
             case .disconnected:
                 Self.applyDisconnect(to: &next, presentationChanged: &presentationChanged)
@@ -407,12 +420,17 @@ enum WorkspaceTUIReducer {
 
         case .subscribeCompleted(let runtime, let context, let succeeded, let disconnected):
             if succeeded {
-                if next.terminal?.state.runtime == runtime {
-                    next.terminal?.state.subscribed = true
-                }
+                // A success that arrives after the terminal moved on (or
+                // detached) must not claim the subscription or trigger an
+                // acquire the runtime would only drop or release again.
+                guard next.lifecycle == .connected, next.terminal?.state.runtime == runtime else { break }
+                next.terminal?.state.subscribed = true
                 effects = [.acquire(runtime: runtime)]
                 break
             }
+            // Failure handling mutates the terminal (unavailable titles,
+            // launcher fallback, emulator drops); detached state is final.
+            guard next.lifecycle != .detached else { break }
             if disconnected {
                 Self.applyDisconnect(to: &next, presentationChanged: &presentationChanged)
                 if next.lifecycle == .connected {

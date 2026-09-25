@@ -111,6 +111,23 @@ private func goldenFixtureCases() throws -> [GoldenCase] {
     cases.append(
         goldenExtract(label: "codex/not-json", adapter: codex, fileURL: codexSource, data: Data("not-json\n".utf8))
     )
+    // The checked-in codex fixtures carry no timestamp/ts keys, so the
+    // riskiest coercion (NSNumber-first epoch, ts fallback, millis divide)
+    // pins here instead. Expected `at` values verified against python3
+    // datetime, not against the code under test.
+    let codexTimestamps = """
+        {"session_id":"sess_ts","type":"function_call","name":"shell","arguments":{"command":"echo iso"},"cwd":"/tmp/ws","timestamp":"2024-03-01T12:00:00Z"}
+        {"session_id":"sess_ts","type":"function_call","name":"shell","arguments":{"command":"echo secs"},"cwd":"/tmp/ws","timestamp":1709294460}
+        {"session_id":"sess_ts","type":"function_call","name":"shell","arguments":{"command":"echo millis"},"cwd":"/tmp/ws","ts":1709294520123}
+        """
+    cases.append(
+        goldenExtract(
+            label: "codex/timestamps",
+            adapter: codex,
+            fileURL: codexSource,
+            data: Data(codexTimestamps.utf8)
+        )
+    )
 
     let cursor = CursorStoreAdapter()
     for name in ["before-shell.jsonl", "pretool-shell.jsonl"] {
@@ -131,6 +148,19 @@ private func goldenFixtureCases() throws -> [GoldenCase] {
     )
     cases.append(
         goldenExtract(label: "cursor/not-json", adapter: cursor, fileURL: cursorSource, data: Data("not-json\n".utf8))
+    )
+    // Cursor ignores epoch numbers (allowEpoch:false) but keeps ISO strings.
+    let cursorTimestamps = """
+        {"conversation_id":"sess_cursor_ts","hook_event_name":"beforeShellExecution","command":"echo num","cwd":"/tmp/ws","timestamp":1709294400}
+        {"conversation_id":"sess_cursor_ts","hook_event_name":"beforeShellExecution","command":"echo iso","cwd":"/tmp/ws","timestamp":"2024-03-01T12:00:00Z"}
+        """
+    cases.append(
+        goldenExtract(
+            label: "cursor/numeric-timestamp-ignored",
+            adapter: cursor,
+            fileURL: cursorSource,
+            data: Data(cursorTimestamps.utf8)
+        )
     )
 
     let grok = GrokStoreAdapter()
@@ -165,6 +195,25 @@ private func goldenFixtureCases() throws -> [GoldenCase] {
             adapter: pi,
             fileURL: URL(fileURLWithPath: "/tmp/golden-pi.jsonl"),
             data: Data([0xFF, 0xFE])
+        )
+    )
+    // The session fixture's envelope ISO strings shadow every numeric path,
+    // so Pi's numeric coercion (envelope millis, message millis fallback,
+    // JSON-bool bridging) pins here. The envelope millis deliberately
+    // disagrees with the message ISO to pin precedence too.
+    let piNumeric = """
+        {"type":"session","id":"pi-sess-numeric","cwd":"/tmp/pi-num"}
+        {"type":"message","timestamp":1709294400000,"message":{"role":"assistant","content":[{"type":"toolCall","name":"bash","arguments":{"command":"echo envelope"}}],"timestamp":"2024-01-01T00:00:00Z"}}
+        {"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","name":"bash","arguments":{"command":"echo fallback"}}],"timestamp":1709294460000}}
+        {"type":"message","timestamp":true,"message":{"role":"assistant","content":[{"type":"toolCall","name":"bash","arguments":{"command":"echo bool-true"}}]}}
+        {"type":"message","timestamp":false,"message":{"role":"assistant","content":[{"type":"toolCall","name":"bash","arguments":{"command":"echo bool-false"}}]}}
+        """
+    cases.append(
+        goldenExtract(
+            label: "pi/numeric-timestamps",
+            adapter: pi,
+            fileURL: URL(fileURLWithPath: "/tmp/golden-pi.jsonl"),
+            data: Data(piNumeric.utf8)
         )
     )
 
@@ -254,6 +303,19 @@ private func goldenHermesCases() throws -> [GoldenCase] {
                 goldenExtract(label: label, adapter: adapter, fileURL: dbURL, data: try Data(contentsOf: dbURL))
             )
         }
+        // The seconds rows above never cross the >1e12 millis threshold.
+        let millisURL = homeURL.appendingPathComponent("sess_millis.db")
+        let millisCalls = try String(contentsOf: fixtureURL("hermes/terminal-tool-call.json"), encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        try goldenSQLiteDB(
+            at: millisURL,
+            ddl: goldenHermesDDL,
+            insert: "INSERT INTO messages (session_id, role, content, tool_calls, timestamp) VALUES (?, 'assistant', NULL, ?, 1710000000123.0);",
+            bindings: ["sess_millis", millisCalls]
+        )
+        cases.append(
+            goldenExtract(label: "hermes/millis-timestamp", adapter: adapter, fileURL: millisURL, data: try Data(contentsOf: millisURL))
+        )
         let source = homeURL.appendingPathComponent("state.db")
         cases.append(goldenExtract(label: "hermes/empty", adapter: adapter, fileURL: source, data: Data()))
         cases.append(
@@ -310,6 +372,19 @@ private func goldenOpenClawCases() throws -> [GoldenCase] {
                 goldenExtract(label: label, adapter: adapter, fileURL: dbURL, data: try Data(contentsOf: dbURL))
             )
         }
+        // created_at=1 above never crosses the >1e12 millis threshold.
+        let millisURL = homeURL.appendingPathComponent("sess_millis.db")
+        let millisEvent = try String(contentsOf: fixtureURL("openclaw/exec-tool-call.json"), encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        try goldenSQLiteDB(
+            at: millisURL,
+            ddl: goldenOpenClawDDL,
+            insert: "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES (?, 1, ?, 1710000000123);",
+            bindings: ["sess_millis", millisEvent]
+        )
+        cases.append(
+            goldenExtract(label: "openclaw/millis-created-at", adapter: adapter, fileURL: millisURL, data: try Data(contentsOf: millisURL))
+        )
         let source = homeURL.appendingPathComponent("openclaw-agent.sqlite")
         cases.append(goldenExtract(label: "openclaw/empty", adapter: adapter, fileURL: source, data: Data()))
         cases.append(

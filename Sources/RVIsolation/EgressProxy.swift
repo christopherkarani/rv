@@ -174,7 +174,7 @@ public final class EgressProxy: @unchecked Sendable {
                 deny(client: client, host: target.host, port: target.port, reason: "denied-policy")
                 return
             }
-            guard let upstream = EgressProxy.dial(host: target.host, port: target.port) else {
+            guard let upstream = EgressProxy.dial(host: target.host, port: target.port, external: external) else {
                 deny(client: client, host: target.host, port: target.port, reason: "dial-failed")
                 return
             }
@@ -203,7 +203,7 @@ public final class EgressProxy: @unchecked Sendable {
             deny(client: client, host: target.host, port: target.port, reason: "denied-policy")
             return
         }
-        guard let upstream = EgressProxy.dial(host: target.host, port: target.port) else {
+        guard let upstream = EgressProxy.dial(host: target.host, port: target.port, external: false) else {
             deny(client: client, host: target.host, port: target.port, reason: "dial-failed")
             return
         }
@@ -356,7 +356,7 @@ public final class EgressProxy: @unchecked Sendable {
         return nil
     }
 
-    private static func dial(host: String, port: Int) -> Int32? {
+    private static func dial(host: String, port: Int, external: Bool) -> Int32? {
         var hints = addrinfo()
         memset(&hints, 0, MemoryLayout<addrinfo>.size)
         hints.ai_family = AF_UNSPEC
@@ -368,6 +368,14 @@ public final class EgressProxy: @unchecked Sendable {
         defer { freeaddrinfo(first) }
         var current: UnsafeMutablePointer<addrinfo>? = first
         while let node = current {
+            // A compromised resolver must not rebind an allowlisted name
+            // onto loopback, LAN, link-local, or metadata addresses and
+            // have the proxy relay there. The filtered sockaddr is the one
+            // we would connect, so there is no check-to-use race.
+            if external, isPublicUnicast(node.pointee.ai_addr) == false {
+                current = node.pointee.ai_next
+                continue
+            }
             let fd = socket(node.pointee.ai_family, node.pointee.ai_socktype, node.pointee.ai_protocol)
             if fd >= 0 {
                 if connectWithTimeout(fd, address: node.pointee.ai_addr, length: node.pointee.ai_addrlen, seconds: 10) {
@@ -378,6 +386,77 @@ public final class EgressProxy: @unchecked Sendable {
             current = node.pointee.ai_next
         }
         return nil
+    }
+
+    /// True when `address` is a globally routable unicast destination.
+    /// Rejects loopback, unspecified, private, link-local, site-local,
+    /// multicast, reserved, documentation, and benchmarking ranges,
+    /// recursing into the embedded IPv4 of mapped, compatible, and 6to4
+    /// addresses. Unknown families fail closed.
+    static func isPublicUnicast(_ address: UnsafePointer<sockaddr>?) -> Bool {
+        guard let address else { return false }
+        switch Int32(address.pointee.sa_family) {
+        case AF_INET:
+            return address.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { socket in
+                isPublicIPv4(UInt32(bigEndian: socket.pointee.sin_addr.s_addr))
+            }
+        case AF_INET6:
+            return address.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) { socket in
+                withUnsafeBytes(of: socket.pointee.sin6_addr) { raw in
+                    isPublicIPv6(raw)
+                }
+            }
+        default:
+            return false
+        }
+    }
+
+    private static func isPublicIPv4(_ hostOrder: UInt32) -> Bool {
+        func contains(_ base: UInt32, _ bits: UInt32) -> Bool {
+            let mask: UInt32 = bits == 0 ? 0 : (~UInt32(0) << (32 - bits))
+            return hostOrder & mask == base & mask
+        }
+        // Unspecified, loopback, private, CGNAT, link-local (covers the
+        // 169.254.169.254 metadata endpoint), multicast, reserved.
+        let denied: [(UInt32, UInt32)] = [
+            (0x00000000, 8), (0x7F000000, 8),
+            (0x0A000000, 8), (0xAC100000, 12), (0xC0A80000, 16),
+            (0x64400000, 10), (0xA9FE0000, 16),
+            (0xE0000000, 4), (0xF0000000, 4),
+            // Documentation and benchmarking: never a real API endpoint.
+            (0xC0000200, 24), (0xC6336400, 24), (0xCB007100, 24),
+            (0xC6120000, 15),
+        ]
+        return denied.allSatisfy { contains($0.0, $0.1) == false }
+    }
+
+    private static func isPublicIPv6(_ raw: UnsafeRawBufferPointer) -> Bool {
+        guard raw.count == 16 else { return false }
+        let bytes = (0..<16).map { raw[$0] }
+        if bytes.allSatisfy({ $0 == 0 }) { return false } // ::
+        if bytes.prefix(15).allSatisfy({ $0 == 0 }), bytes[15] == 1 { return false } // ::1
+        if bytes[0] == 0xFE, bytes[1] & 0xC0 == 0x80 { return false } // fe80::/10
+        if bytes[0] == 0xFE, bytes[1] & 0xC0 == 0xC0 { return false } // fec0::/10 deprecated site-local
+        if bytes[0] & 0xFE == 0xFC { return false } // fc00::/7
+        if bytes[0] == 0xFF { return false } // ff00::/8
+        if bytes[0] == 0x20, bytes[1] == 0x01, bytes[2] == 0x0D, bytes[3] == 0xB8 {
+            return false // 2001:db8::/32 documentation
+        }
+        if Array(bytes.prefix(12)) == [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF] {
+            return isPublicIPv4(v4(bytes[12], bytes[13], bytes[14], bytes[15])) // ::ffff:0:0/96
+        }
+        if bytes.prefix(12).allSatisfy({ $0 == 0 }) {
+            // ::/96 deprecated IPv4-compatible (:: and ::1 already rejected).
+            return isPublicIPv4(v4(bytes[12], bytes[13], bytes[14], bytes[15]))
+        }
+        if bytes[0] == 0x20, bytes[1] == 0x02 { // 2002::/16 6to4
+            return isPublicIPv4(v4(bytes[2], bytes[3], bytes[4], bytes[5]))
+        }
+        return true
+    }
+
+    private static func v4(_ a: UInt8, _ b: UInt8, _ c: UInt8, _ d: UInt8) -> UInt32 {
+        UInt32(a) << 24 | UInt32(b) << 16 | UInt32(c) << 8 | UInt32(d)
     }
 
     private static func connectWithTimeout(

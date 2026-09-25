@@ -79,6 +79,32 @@
   {
     "events" : [
       {
+        "at" : 1709294400,
+        "command" : "echo iso",
+        "cwd" : "\/tmp\/ws",
+        "host" : "codex",
+        "session" : "sess_ts"
+      },
+      {
+        "at" : 1709294460,
+        "command" : "echo secs",
+        "cwd" : "\/tmp\/ws",
+        "host" : "codex",
+        "session" : "sess_ts"
+      },
+      {
+        "at" : 1709294520.123,
+        "command" : "echo millis",
+        "cwd" : "\/tmp\/ws",
+        "host" : "codex",
+        "session" : "sess_ts"
+      }
+    ],
+    "label" : "codex\/timestamps"
+  },
+  {
+    "events" : [
+      {
         "at" : 1787788800,
         "command" : "git reset --hard",
         "cwd" : "\/tmp\/ws",
@@ -119,6 +145,24 @@
     ],
     "label" : "cursor\/not-json",
     "thrown" : "unreadable(sourcePath: \"<tmp>\/golden-cursor.jsonl\")"
+  },
+  {
+    "events" : [
+      {
+        "command" : "echo num",
+        "cwd" : "\/tmp\/ws",
+        "host" : "cursor",
+        "session" : "sess_cursor_ts"
+      },
+      {
+        "at" : 1709294400,
+        "command" : "echo iso",
+        "cwd" : "\/tmp\/ws",
+        "host" : "cursor",
+        "session" : "sess_cursor_ts"
+      }
+    ],
+    "label" : "cursor\/numeric-timestamp-ignored"
   },
   {
     "events" : [
@@ -201,6 +245,39 @@
   {
     "events" : [
       {
+        "at" : 1709294400,
+        "command" : "echo envelope",
+        "cwd" : "\/tmp\/pi-num",
+        "host" : "pi",
+        "session" : "pi-sess-numeric"
+      },
+      {
+        "at" : 1709294460,
+        "command" : "echo fallback",
+        "cwd" : "\/tmp\/pi-num",
+        "host" : "pi",
+        "session" : "pi-sess-numeric"
+      },
+      {
+        "at" : 1,
+        "command" : "echo bool-true",
+        "cwd" : "\/tmp\/pi-num",
+        "host" : "pi",
+        "session" : "pi-sess-numeric"
+      },
+      {
+        "at" : 0,
+        "command" : "echo bool-false",
+        "cwd" : "\/tmp\/pi-num",
+        "host" : "pi",
+        "session" : "pi-sess-numeric"
+      }
+    ],
+    "label" : "pi\/numeric-timestamps"
+  },
+  {
+    "events" : [
+      {
         "at" : 1710000000,
         "command" : "git reset --hard",
         "cwd" : "\/tmp\/ws",
@@ -221,6 +298,18 @@
       }
     ],
     "label" : "hermes\/nested-function-terminal"
+  },
+  {
+    "events" : [
+      {
+        "at" : 1710000000.123,
+        "command" : "git reset --hard",
+        "cwd" : "\/tmp\/ws",
+        "host" : "hermes",
+        "session" : "sess_millis"
+      }
+    ],
+    "label" : "hermes\/millis-timestamp"
   },
   {
     "events" : [
@@ -266,6 +355,18 @@
       }
     ],
     "label" : "openclaw\/nested-message-exec"
+  },
+  {
+    "events" : [
+      {
+        "at" : 1710000000.123,
+        "command" : "git reset --hard",
+        "cwd" : "\/tmp\/ws",
+        "host" : "openclaw",
+        "session" : "sess_millis"
+      }
+    ],
+    "label" : "openclaw\/millis-created-at"
   },
   {
     "events" : [

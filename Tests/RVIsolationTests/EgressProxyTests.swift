@@ -342,3 +342,71 @@ private func egressRead(_ fd: Int32, timeoutSeconds: Int = 10) -> String {
     #expect(response.contains("HTTP/1.1 403"))
     #expect(collector.all.first?.reason == "header-too-large")
 }
+
+private func egressIsPublicUnicast(family: Int32, _ text: String) -> Bool? {
+    var storage = sockaddr_storage()
+    let parsed: Int32 = text.withCString { cString in
+        withUnsafeMutablePointer(to: &storage) { pointer in
+            if family == AF_INET {
+                pointer.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { addr in
+                    addr.pointee.sin_family = sa_family_t(AF_INET)
+                    return inet_pton(AF_INET, cString, &addr.pointee.sin_addr)
+                }
+            } else {
+                pointer.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) { addr in
+                    addr.pointee.sin6_family = sa_family_t(AF_INET6)
+                    return inet_pton(AF_INET6, cString, &addr.pointee.sin6_addr)
+                }
+            }
+        }
+    }
+    guard parsed == 1 else { return nil }
+    return withUnsafePointer(to: &storage) { pointer in
+        pointer.withMemoryRebound(to: sockaddr.self, capacity: 1, EgressProxy.isPublicUnicast)
+    }
+}
+
+@Test func egressProxyExternalDialFilterRejectsNonPublicAddresses() throws {
+    let publicV4 = ["8.8.8.8", "1.1.1.1", "142.250.72.14", "11.0.0.1", "172.15.0.1", "172.32.0.1", "100.128.0.1", "198.20.0.1"]
+    for text in publicV4 {
+        #expect(try #require(egressIsPublicUnicast(family: AF_INET, text)))
+    }
+    // Loopback, private, CGNAT, link-local (covers 169.254.169.254),
+    // multicast, reserved, documentation, benchmarking, unspecified.
+    let deniedV4 = [
+        "127.0.0.1", "127.1.2.3", "10.0.0.1", "172.16.5.4", "172.31.255.255",
+        "192.168.1.1", "100.64.0.1", "100.127.255.255", "169.254.169.254",
+        "224.0.0.1", "255.255.255.255", "0.0.0.0", "192.0.2.1",
+        "198.51.100.2", "203.0.113.3", "198.18.0.1", "198.19.1.1",
+    ]
+    for text in deniedV4 {
+        #expect(try #require(egressIsPublicUnicast(family: AF_INET, text)) == false)
+    }
+
+    let publicV6 = ["2606:4700:4700::1111", "2001:4860:4860::8888"]
+    for text in publicV6 {
+        #expect(try #require(egressIsPublicUnicast(family: AF_INET6, text)))
+    }
+    let deniedV6 = [
+        "::1", "::", "fe80::1", "febf::1", "fec0::1", "fc00::1", "fd00::1",
+        "ff02::1", "2001:db8::1",
+    ]
+    for text in deniedV6 {
+        #expect(try #require(egressIsPublicUnicast(family: AF_INET6, text)) == false)
+    }
+    // Embedded-IPv4 forms recurse into the v4 verdict.
+    #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "::ffff:8.8.8.8")))
+    #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "::ffff:10.0.0.1")) == false)
+    #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "::ffff:127.0.0.1")) == false)
+    #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "::8.8.8.8")))
+    #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "::10.0.0.1")) == false)
+    #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "2002:808:808::1")))
+    #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "2002:a00:1::1")) == false)
+
+    #expect(EgressProxy.isPublicUnicast(nil) == false)
+    var zero = sockaddr_storage()
+    let unknownFamily = withUnsafePointer(to: &zero) { pointer in
+        pointer.withMemoryRebound(to: sockaddr.self, capacity: 1, EgressProxy.isPublicUnicast)
+    }
+    #expect(unknownFamily == false)
+}

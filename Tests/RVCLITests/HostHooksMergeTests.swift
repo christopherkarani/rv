@@ -464,6 +464,58 @@ private func sortedReencode(_ data: Data) throws -> Data {
     )
 }
 
+@Test func mergeEngine_realDescriptorsAreIdempotent() throws {
+    let claude = try ClaudeSettingsMerge.merge(
+        existingData: nil,
+        rvPath: "/r",
+        adapterPath: "/c/hooks/rv-guard.py",
+        force: false
+    )
+    #expect(claude.wrote)
+    let claudeLocated = HostHooksMergeEngine.locateFingerprintedHooks(
+        in: try HostHooksMergeEngine.parseRoot(claude.data),
+        descriptor: ClaudeSettingsMerge.wiringDescriptor
+    )
+    #expect(claudeLocated.count == ClaudeSettingsMerge.matchers.count)
+    let claudeAgain = try ClaudeSettingsMerge.merge(
+        existingData: claude.data,
+        rvPath: "/r",
+        adapterPath: "/c/hooks/rv-guard.py",
+        force: false
+    )
+    #expect(claudeAgain.wrote == false)
+    #expect(claudeAgain.data == claude.data)
+
+    let codex = try CodexHooksMerge.merge(existingData: nil, adapterPath: "/x/hooks/rv-guard.py")
+    #expect(codex.wrote)
+    let codexAgain = try CodexHooksMerge.merge(existingData: codex.data, adapterPath: "/x/hooks/rv-guard.py")
+    #expect(codexAgain.wrote == false)
+    #expect(codexAgain.data == codex.data)
+
+    let cursor = try CursorHooksMerge.merge(existingData: nil, adapterPath: "/u/rv-guard.py")
+    #expect(cursor.wrote)
+    let cursorAgain = try CursorHooksMerge.merge(existingData: cursor.data, adapterPath: "/u/rv-guard.py")
+    #expect(cursorAgain.wrote == false)
+    #expect(cursorAgain.data == cursor.data)
+}
+
+@Test func mergeEngine_cursorIdempotentWithForeignHooksAndPinnedVersion() throws {
+    let pinned = Data(
+        """
+        {"version":9,"hooks":{"beforeShellExecution":[{"command":"foreign","timeout":1}],"preToolUse":[{"command":"other","timeout":2}]}}
+        """.utf8
+    )
+    let merged = try CursorHooksMerge.merge(existingData: pinned, adapterPath: "/u/rv-guard.py")
+    #expect(merged.wrote)
+    let root = try #require(
+        JSONSerialization.jsonObject(with: merged.data) as? [String: Any]
+    )
+    #expect(root["version"] as? Int == 9)
+    let again = try CursorHooksMerge.merge(existingData: merged.data, adapterPath: "/u/rv-guard.py")
+    #expect(again.wrote == false)
+    #expect(again.data == merged.data)
+}
+
 @Test func mergeEngine_freshUninstallRemovesFile() throws {
     let claude = try ClaudeSettingsMerge.merge(
         existingData: nil,
