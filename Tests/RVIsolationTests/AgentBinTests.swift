@@ -149,10 +149,10 @@ private struct AgentBinFixture {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-stage-homes-\(UUID().uuidString)", isDirectory: true)
     let home = root.appendingPathComponent("home", isDirectory: true)
-    let workspace = root.appendingPathComponent("workspace", isDirectory: true)
+    let cageHome = root.appendingPathComponent("cage-home", isDirectory: true)
     defer { try? FileManager.default.removeItem(at: root) }
     try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
-    try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: cageHome, withIntermediateDirectories: true)
     let source = home.appendingPathComponent(".claude/.credentials.json")
     try FileManager.default.createDirectory(
         at: source.deletingLastPathComponent(), withIntermediateDirectories: true
@@ -161,17 +161,16 @@ private struct AgentBinFixture {
     let settingsSource = home.appendingPathComponent(".claude/settings.json")
     try Data("{}".utf8).write(to: settingsSource)
 
-    stageAgentHomes(workspace: workspace.path, home: home.path)
+    stageAgentHomes(cageHome: cageHome.path, hostHome: home.path)
 
-    let link = workspace.appendingPathComponent(".claude/.credentials.json")
+    let link = cageHome.appendingPathComponent(".claude/.credentials.json")
     #expect(FileManager.default.fileExists(atPath: link.path))
     let destination = try FileManager.default.destinationOfSymbolicLink(atPath: link.path)
     #expect(destination == source.path)
-    let settingsLink = workspace.appendingPathComponent(".claude/settings.json")
+    let settingsLink = cageHome.appendingPathComponent(".claude/settings.json")
     #expect(FileManager.default.fileExists(atPath: settingsLink.path))
     let settingsDestination = try FileManager.default.destinationOfSymbolicLink(atPath: settingsLink.path)
     #expect(settingsDestination == settingsSource.path)
-    #expect(FileManager.default.fileExists(atPath: workspace.appendingPathComponent(".rv-cage/tmp").path))
 }
 
 @Test func preparedContainedProfileAdmitsLoopbackOnly() throws {

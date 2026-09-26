@@ -13,7 +13,11 @@ struct ContainmentTree {
     let containedDifferingRoot: IsolationPlan
 
     init() throws {
-        let root = FileManager.default.temporaryDirectory
+        // Rooted at the shared system temp, NOT the per-user temp: the
+        // per-user temp dir is sanctioned tool-temp (SwiftBuild backend
+        // tasks fall back to it), so outside-fence probes must live where
+        // the fence actually holds. `/tmp` exists on macOS and Linux.
+        let root = URL(fileURLWithPath: "/tmp", isDirectory: true)
             .appendingPathComponent("rv-containment-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let repository = root.appendingPathComponent("repo", isDirectory: true)

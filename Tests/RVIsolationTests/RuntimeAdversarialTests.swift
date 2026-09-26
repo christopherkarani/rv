@@ -405,7 +405,10 @@ struct RuntimeAdversarialTests {
         defer { tree.tearDown() }
         let victim = Process()
         victim.executableURL = URL(fileURLWithPath: "/bin/sleep")
-        victim.arguments = ["5"]
+        // Generous lifetime: a contained run (volume mount + publish-back)
+        // can exceed 5s on a loaded machine, and the victim must outlive
+        // the run for the survival check below to mean anything.
+        victim.arguments = ["30"]
         victim.standardInput = FileHandle.nullDevice
         victim.standardOutput = FileHandle.nullDevice
         victim.standardError = FileHandle.nullDevice

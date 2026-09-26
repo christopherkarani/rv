@@ -907,53 +907,16 @@ private func createMountedDisk(
     mountPoint: String,
     token: String
 ) -> Result<MountedDisk, IsolationApplyError> {
-    let overhead = byteCount &* 2 &+ (8 * 1024 * 1024)
-    let minimum: UInt64 = 8 * 1024 * 1024
+    // Productive builds need headroom the project itself does not predict:
+    // `.build`, `node_modules`, and `target` routinely exceed the source
+    // tree by orders of magnitude. A sparse image makes the ceiling cheap
+    // (blocks allocate on write), so size for real builds, not for the
+    // source size. Disk-backed always: a build-sized ram disk would pin
+    // gigabytes of RAM per workspace.
+    let gib: UInt64 = 1024 * 1024 * 1024
+    let overhead = byteCount &* 2 &+ gib
+    let minimum: UInt64 = gib
     let bytes = max(overhead, minimum)
-    // A ram disk is a distinct device without a large image file. Above 256MB
-    // of requested space, use a sparse image so launch does not pin that RAM.
-    if bytes <= 256 * 1024 * 1024 {
-        let sectors = Int((bytes + 511) / 512)
-        let attached = runTool(
-            ["/usr/bin/hdiutil", "attach", "-nomount", "ram://\(sectors)"],
-            honorCancellation: true
-        )
-        guard attached.status == 0 else {
-            return toolFailure(attached, disk: diskDevice(in: attached.stdout))
-        }
-        guard let disk = diskDevice(in: attached.stdout) else {
-            return .failure(.workspaceInodeBoundaryFailed)
-        }
-        if blockingWorkIsCancelled() {
-            return toolFailure(ToolOutput(status: -1, stdout: "", stderr: ""), disk: disk)
-        }
-        let formatted = runTool(
-            ["/sbin/newfs_hfs", "-s", "-v", "rv\(token.prefix(8))", disk],
-            honorCancellation: true
-        )
-        guard formatted.status == 0 else {
-            return toolFailure(formatted, disk: disk)
-        }
-        if blockingWorkIsCancelled() {
-            return toolFailure(ToolOutput(status: -1, stdout: "", stderr: ""), disk: disk)
-        }
-        // Direct mount(2) through mount_hfs. An arbitration-mediated
-        // `diskutil mount` wedges indefinitely when diskarbitrationd or
-        // storagekitd is unresponsive, while the direct mount completes in
-        // milliseconds and reports identical statfs facts. `noowners`
-        // matches the external-volume default the old path relied on.
-        let mounted = runTool(
-            [
-                "/sbin/mount_hfs", "-o", "nobrowse,noowners,nodev,nosuid",
-                disk, mountPoint,
-            ],
-            honorCancellation: true
-        )
-        guard mounted.status == 0 else {
-            return toolFailure(mounted, disk: disk, mountPoint: mountPoint)
-        }
-        return .success(MountedDisk(disk: disk, imagePath: nil))
-    }
     let image = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-inode-\(token).sparseimage").path
     let megabytes = max(Int(bytes / (1024 * 1024)) + 1, 32)
@@ -1382,20 +1345,6 @@ private func unmountDirect(_ mountPoint: String, onlySource disk: String) {
     _ = runTool(["/sbin/umount", mountPoint], honorCancellation: false)
     guard isOurs(workspaceMountSource(mountPoint)) else { return }
     _ = runTool(["/sbin/umount", "-f", mountPoint], honorCancellation: false)
-}
-
-private func toolFailure(
-    _ output: ToolOutput,
-    disk: String?,
-    mountPoint: String? = nil
-) -> Result<MountedDisk, IsolationApplyError> {
-    if let disk {
-        detachWorkspaceDisk(disk, mountPoint: mountPoint)
-    }
-    if output.status < 0, blockingWorkIsCancelled() {
-        return .failure(.cancelled)
-    }
-    return .failure(.workspaceInodeBoundaryFailed)
 }
 
 /// Runs a short-lived helper.
