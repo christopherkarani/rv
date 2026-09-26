@@ -155,10 +155,12 @@ import RVDomain
             data: Data(),
             sourcePath: source,
             fallbackSession: fallback,
-            sessionKeys: ["session_id"],
-            timestampKeys: ["timestamp"],
-            allowEpochTimestamp: true,
-            commands: { _ in [] }
+            profile: ScanJSONLProfile(
+                sessionKeys: ["session_id"],
+                timestampKeys: ["timestamp"],
+                allowEpochTimestamp: true,
+                commands: { _ in [] }
+            )
         )
     }
     #expect(throws: ScanStoreError.unreadable(sourcePath: source)) {
@@ -167,10 +169,12 @@ import RVDomain
             data: Data([0xFF, 0xFE]),
             sourcePath: source,
             fallbackSession: fallback,
-            sessionKeys: ["session_id"],
-            timestampKeys: ["timestamp"],
-            allowEpochTimestamp: true,
-            commands: { _ in [] }
+            profile: ScanJSONLProfile(
+                sessionKeys: ["session_id"],
+                timestampKeys: ["timestamp"],
+                allowEpochTimestamp: true,
+                commands: { _ in [] }
+            )
         )
     }
     #expect(throws: ScanStoreError.unreadable(sourcePath: source)) {
@@ -179,10 +183,12 @@ import RVDomain
             data: Data("not-json\n".utf8),
             sourcePath: source,
             fallbackSession: fallback,
-            sessionKeys: ["session_id"],
-            timestampKeys: ["timestamp"],
-            allowEpochTimestamp: true,
-            commands: { _ in [] }
+            profile: ScanJSONLProfile(
+                sessionKeys: ["session_id"],
+                timestampKeys: ["timestamp"],
+                allowEpochTimestamp: true,
+                commands: { _ in [] }
+            )
         )
     }
 }
@@ -198,10 +204,12 @@ import RVDomain
         data: Data(payload.utf8),
         sourcePath: "/tmp/engine.jsonl",
         fallbackSession: SessionID(validating: "fb"),
-        sessionKeys: ["session_id", "sessionId"],
-        timestampKeys: ["timestamp", "ts"],
-        allowEpochTimestamp: true,
-        commands: { _ in ["echo hi"] }
+        profile: ScanJSONLProfile(
+            sessionKeys: ["session_id", "sessionId"],
+            timestampKeys: ["timestamp", "ts"],
+            allowEpochTimestamp: true,
+            commands: { _ in ["echo hi"] }
+        )
     )
     #expect(events.count == 2)
     #expect(events[0].sessionID == SessionID(validating: "s1"))
@@ -219,10 +227,12 @@ import RVDomain
         data: Data("{\"tool_name\":\"Shell\"}\n".utf8),
         sourcePath: "/tmp/engine-fb.jsonl",
         fallbackSession: SessionID(validating: "file-sess"),
-        sessionKeys: ["conversation_id", "session_id", "sessionId"],
-        timestampKeys: ["timestamp", "ts"],
-        allowEpochTimestamp: false,
-        commands: { _ in ["ls"] }
+        profile: ScanJSONLProfile(
+            sessionKeys: ["conversation_id", "session_id", "sessionId"],
+            timestampKeys: ["timestamp", "ts"],
+            allowEpochTimestamp: false,
+            commands: { _ in ["ls"] }
+        )
     )
     #expect(events.count == 1)
     #expect(events[0].sessionID == SessionID(validating: "file-sess"))

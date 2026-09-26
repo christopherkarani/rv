@@ -10,6 +10,16 @@ import RVDomain
 /// the report's documented fallback (keep per-host adapters, share the
 /// JSONL/timestamp/cwd cores). Untyped JSON survives only inside this engine
 /// and the per-host matchers it calls.
+/// Correlated per-host knobs for extractFailClosed. One const per
+/// adapter; Codex keys must never mix with the Cursor matcher or epoch flag.
+struct ScanJSONLProfile: Sendable {
+    var sessionKeys: [String]
+    var recurseSessionKeys: [String] = []
+    var timestampKeys: [String]
+    var allowEpochTimestamp: Bool
+    var commands: @Sendable ([String: Any]) -> [String]
+}
+
 enum ScanJSONLEngine {
     /// LF byte-split (Claude semantics): each line parses independently, so
     /// one non-UTF-8 line never poisons the rest. Empty segments are skipped;
@@ -81,11 +91,7 @@ enum ScanJSONLEngine {
         data: Data,
         sourcePath: String,
         fallbackSession: SessionID?,
-        sessionKeys: [String],
-        recurseSessionKeys: [String] = [],
-        timestampKeys: [String],
-        allowEpochTimestamp: Bool,
-        commands: ([String: Any]) -> [String]
+        profile: ScanJSONLProfile
     ) throws -> [ExtractedEvent] {
         guard data.isEmpty == false else {
             throw ScanStoreError.unreadable(sourcePath: sourcePath)
@@ -98,13 +104,13 @@ enum ScanJSONLEngine {
         for line in lines {
             guard let object = parseObject(line) else { continue }
             sawJSON = true
-            let session = sessionIDDeep(keys: sessionKeys, recurse: recurseSessionKeys, in: object)
+            let session = sessionIDDeep(keys: profile.sessionKeys, recurse: profile.recurseSessionKeys, in: object)
                 ?? fallbackSession
             let occurredAt = ScanTimestamp.coerce(
-                ScanTimestamp.firstValue(keys: timestampKeys, in: object),
-                allowEpoch: allowEpochTimestamp
+                ScanTimestamp.firstValue(keys: profile.timestampKeys, in: object),
+                allowEpoch: profile.allowEpochTimestamp
             )
-            for command in commands(object) {
+            for command in profile.commands(object) {
                 events.append(
                     ExtractedEvent(
                         host: host,

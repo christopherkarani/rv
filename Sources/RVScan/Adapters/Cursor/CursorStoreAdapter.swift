@@ -14,6 +14,13 @@ public struct CursorStoreAdapter: SessionStoreAdapter {
         "bash",
     ]
 
+    private static let profile = ScanJSONLProfile(
+        sessionKeys: ["conversation_id", "session_id", "sessionId"],
+        timestampKeys: ["timestamp", "ts"],
+        allowEpochTimestamp: false,
+        commands: Self.commands(in:)
+    )
+
     public init() {}
 
     public func roots(home: ScanHome) -> [URL] {
@@ -33,10 +40,7 @@ public struct CursorStoreAdapter: SessionStoreAdapter {
             data: data,
             sourcePath: fileURL.path,
             fallbackSession: SessionID(validating: fileURL.deletingPathExtension().lastPathComponent),
-            sessionKeys: ["conversation_id", "session_id", "sessionId"],
-            timestampKeys: ["timestamp", "ts"],
-            allowEpochTimestamp: false,
-            commands: Self.commands(in:)
+            profile: Self.profile
         )
     }
 
