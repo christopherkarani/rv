@@ -13,6 +13,24 @@ private struct ProbeRecord: Codable, Sendable, Equatable {
     var count: Int
 }
 
+private struct FailingEncodeRecord: Codable, Sendable {
+    var name: String
+
+    init(name: String) {
+        self.name = name
+    }
+
+    init(from decoder: Decoder) throws {
+        name = try decoder.singleValueContainer().decode(String.self)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        throw ProbeEncodeError()
+    }
+}
+
+private struct ProbeEncodeError: Error {}
+
 struct FileLockedJSONLStoreTests {
     @Test func loadMissingFileReturnsEmpty() throws {
         let store = try makeStore("missing")
@@ -139,6 +157,37 @@ struct FileLockedJSONLStoreTests {
         )
         #expect(throws: FileLockedStoreError.lockFailed) {
             try store.withLock {}
+        }
+    }
+
+    @Test func saveEncodeFailureThrowsEncodeFailedWithoutWriting() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-store-encode-fail-\(UUID().uuidString)", isDirectory: true)
+        let store = FileLockedJSONLStore<FailingEncodeRecord>(
+            fileURL: root.appendingPathComponent("rows.jsonl"),
+            lockURL: root.appendingPathComponent("rows.lock"),
+            directoryURL: root
+        )
+        #expect(throws: FileLockedStoreError.encodeFailed) {
+            try store.save([FailingEncodeRecord(name: "x")])
+        }
+        #expect(FileManager.default.fileExists(atPath: store.fileURL.path) == false)
+    }
+
+    @Test func directoryPreparationFailureThrowsIoFailed() throws {
+        let occupied = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-store-occupied-\(UUID().uuidString)")
+        FileManager.default.createFile(atPath: occupied.path, contents: Data())
+        let store = FileLockedJSONLStore<ProbeRecord>(
+            fileURL: occupied.appendingPathComponent("rows.jsonl"),
+            lockURL: occupied.appendingPathComponent("rows.lock"),
+            directoryURL: occupied
+        )
+        #expect(throws: FileLockedStoreError.ioFailed) {
+            try store.withLock {}
+        }
+        #expect(throws: FileLockedStoreError.ioFailed) {
+            try store.save([])
         }
     }
 
