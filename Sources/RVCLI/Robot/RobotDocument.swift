@@ -41,6 +41,8 @@ enum RobotDocument {
             let data = try encoder.encode(value)
             return String(decoding: data, as: UTF8.self)
         } catch {
+            // Defensive: JSONEncoder cannot fail on these plain Codable
+            // payloads, so no seam exists to test this arm.
             throw RobotRenderError.encodingFailed(String(describing: error))
         }
     }

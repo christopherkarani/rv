@@ -54,6 +54,8 @@ enum DoctorRun {
             do {
                 stdout = try robotText(model) + "\n"
             } catch {
+                // Defensive (see RobotDocument.jsonString): render cannot
+                // fail on plain payloads, so this arm is untestable by seam.
                 return DoctorOutcome(
                     stdout: "",
                     stderr: "rv doctor failed: unable to render robot JSON\n",

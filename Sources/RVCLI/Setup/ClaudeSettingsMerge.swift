@@ -235,6 +235,6 @@ enum ClaudeSettingsMerge {
 enum ClaudeSettingsMergeError: Error, Equatable {
     case unreadable
     /// `merge` refused occupied settings without `force`. Setup surfaces this
-    /// as a failed host write; the user reruns with `--force`.
+    /// as `SetupError.hostHookOccupiedNeedsForce`; the user reruns with `--force`.
     case occupiedWithoutForce
 }

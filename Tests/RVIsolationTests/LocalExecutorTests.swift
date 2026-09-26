@@ -382,6 +382,39 @@ struct LocalExecutorTests {
         #expect(FileManager.default.fileExists(atPath: inside))
         expectContainedPlatform(result.established, matching: tree.contained)
     }
+
+    @Test func localExecutor_performWhenCancelled_returnsExecuteCancelled() async throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+
+        let workspace = try #require(tree.contained.workspace)
+        let inside = tree.workspaceURL.appendingPathComponent("cancelled.txt").path
+        let allowed = try requireAllowed(
+            inRepoWrite(
+                supportingCommand: "\(try requireTouchExecutable()) \(inside)",
+                workingDirectory: workspace,
+                path: inside,
+                fingerprint: "shell:local-executor:cancelled"
+            )
+        )
+        let plan = try tree.containedPlan()
+        let authorization = AgentAuthorization.allowed(allowed)
+        let executor = LocalExecutor()
+        // Cancel the group before adding the child: the child starts
+        // cancelled, so run's Task.isCancelled guard throws before any spawn.
+        let result = await withTaskGroup(
+            of: Result<AgentTurn, AgentTurnError>.self,
+            returning: Result<AgentTurn, AgentTurnError>?.self
+        ) { group in
+            group.cancelAll()
+            group.addTask {
+                await executor.perform(authorization, plan: plan)
+            }
+            return await group.next()
+        }
+        #expect(result == .failure(.execute(.cancelled)))
+        #expect(FileManager.default.fileExists(atPath: inside) == false)
+    }
 }
 
 private func runContainedOrRefuseOnLinux(
