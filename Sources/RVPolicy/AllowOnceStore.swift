@@ -308,7 +308,8 @@ public actor AllowOnceStore {
         } catch is FileLockedStoreError {
             // RVFileStore boundary: every save failure (encode or IO) becomes
             // the domain persistence error, so withFileLock only ever sees
-            // genuine lock-acquisition failures.
+            // lock-acquisition or lock-setup failures (FileLockedStoreError),
+            // never untranslated save failures.
             throw AllowOnceError.encodeFailed
         }
     }
@@ -317,10 +318,10 @@ public actor AllowOnceStore {
         do {
             return try store.withLock(nonBlocking: nonBlocking, body)
         } catch let error as FileLockedStoreError {
-            // Only withLock-originated failures reach here: the body throws
-            // domain errors (writeRecords translates save failures). IO from
-            // lock setup collapses into encodeFailed — fail-closed, and both
-            // map to "store unavailable" for callers.
+            // Only FileLockedStoreError-originated failures are caught here:
+            // the body throws domain errors (writeRecords translates save
+            // failures). IO from lock setup collapses into encodeFailed —
+            // fail-closed, and both map to "store unavailable" for callers.
             switch error {
             case .lockFailed:
                 throw AllowOnceError.lockFailed

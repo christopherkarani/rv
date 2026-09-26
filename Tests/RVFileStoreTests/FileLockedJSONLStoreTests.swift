@@ -69,7 +69,7 @@ struct FileLockedJSONLStoreTests {
 
     @Test func loadKeepsRowsContainingUnicodeLineSeparators() throws {
         let store = try makeStore("u2028")
-        // JSONEncoder never escapes U+2028/U+2029/U+0085, so they must not split rows.
+        // JSONEncoder never escapes these, so they must not split rows.
         let record = ProbeRecord(
             name: "a\u{2028}\u{2029}b\u{000B}\u{000C}c\u{0085}d",
             stamp: Date(timeIntervalSince1970: 1_700_000_000),
