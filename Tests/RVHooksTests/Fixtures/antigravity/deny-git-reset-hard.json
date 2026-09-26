@@ -1,0 +1,16 @@
+{
+  "artifactDirectoryPath": "/tmp/agy-hook-test/brain/uuid-2",
+  "conversationId": "sess_deny",
+  "modelName": "gemini-test",
+  "stepIdx": 2,
+  "toolCall": {
+    "args": {
+      "CommandLine": "git reset --hard",
+      "Cwd": "/tmp/ws",
+      "WaitMsBeforeAsync": 1000
+    },
+    "name": "run_command"
+  },
+  "transcriptPath": "/tmp/agy-hook-test/transcript.jsonl",
+  "workspacePaths": ["/tmp/ws"]
+}

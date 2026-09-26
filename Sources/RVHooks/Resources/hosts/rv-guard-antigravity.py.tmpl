@@ -1,0 +1,126 @@
+"""RV destructive-command guard for Antigravity run_command.
+
+Antigravity PreToolUse command hook (hooks.json; global file is
+~/.gemini/config/hooks.json — settings.json embedding does not load).
+Live deny is the official honor path ``{"decision":"deny","reason":...}``
+on stdout and process exit 0; deny wins even with
+--dangerously-skip-permissions. Allow is explicit
+``{"decision":"allow"}`` — empty or garbage stdout fails unmarshal and
+blocks. Missing rv / timeout / crash / non-JSON fail closed the same
+way. Never emit leftover Ask JSON.
+"""
+
+import json
+import subprocess
+import sys
+
+RV_BINARY = "__RV_BINARY__"
+RV_HOOK_TIMEOUT_S = 5
+
+_SHELL_TOOLS = ("run_command",)
+_FILE_TOOLS = (
+    "view_file",
+    "write_to_file",
+    "replace_file_content",
+    "multi_replace_file_content",
+)
+
+
+def main():
+    try:
+        raw = sys.stdin.read()
+        mapped = _guard(raw)
+        if mapped["action"] == "block":
+            _emit_deny(mapped["reason"])
+        else:
+            _emit_allow()
+        return
+    except Exception:
+        _emit_deny("rv failed")
+
+
+def _guard(raw):
+    envelope = _parse(raw)
+    if envelope is None:
+        return {"action": "block", "reason": "rv failed"}
+    tool_call = envelope.get("toolCall")
+    if not isinstance(tool_call, dict):
+        return {"action": "allow"}
+    tool = tool_call.get("name") or ""
+    if tool not in _SHELL_TOOLS and tool not in _FILE_TOOLS:
+        return {"action": "allow"}
+    mapped = _spawn_rv_hook("antigravity", raw)
+    if mapped["action"] == "block":
+        return mapped
+    return {"action": "allow"}
+
+
+def _parse(raw):
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+    if isinstance(parsed, dict):
+        return parsed
+    return None
+
+
+def _spawn_rv_hook(host, stdin):
+    try:
+        completed = subprocess.run(
+            [RV_BINARY, "hook", "--host", host],
+            input=stdin,
+            capture_output=True,
+            text=True,
+            timeout=RV_HOOK_TIMEOUT_S,
+        )
+    except FileNotFoundError:
+        return {"action": "block", "reason": "rv missing"}
+    except (OSError, subprocess.TimeoutExpired):
+        return {"action": "block", "reason": "rv failed"}
+    return _map_rv_hook_result(completed.stdout)
+
+
+def _map_rv_hook_result(stdout):
+    trimmed = (stdout or "").strip()
+    if trimmed:
+        try:
+            parsed = json.loads(trimmed)
+            if isinstance(parsed, dict):
+                decision = parsed.get("decision")
+                if decision == "allow":
+                    return {"action": "allow"}
+                if decision in ("block", "deny"):
+                    return {
+                        "action": "block",
+                        "reason": _blocking_reason(parsed.get("reason")),
+                    }
+        except (ValueError, TypeError):
+            pass
+        return {"action": "block", "reason": "rv failed"}
+    return {"action": "block", "reason": "rv failed"}
+
+
+def _blocking_reason(reason):
+    if isinstance(reason, str):
+        text = reason.strip()
+        if text:
+            return text
+    return "rv failed"
+
+
+def _emit_allow():
+    sys.stdout.write(json.dumps({"decision": "allow"}, separators=(",", ":")) + "\n")
+    sys.exit(0)
+
+
+def _emit_deny(reason):
+    text = _blocking_reason(reason)
+    sys.stdout.write(
+        json.dumps({"decision": "deny", "reason": text}, separators=(",", ":")) + "\n"
+    )
+    sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()

@@ -21,7 +21,7 @@ enum HostAdapterInstallation: Equatable, Sendable {
     }
 
     /// Bytes only when the setup slot is `.wired`. Other states pass `nil` so
-    /// Claude / Grok / Cursor file-tool is `.notApplicable`.
+    /// Claude / Grok / Cursor / Antigravity file-tool is `.notApplicable`.
     fileprivate var adapterBytesIfWired: Data? {
         guard case .wired(_, let data) = self else {
             return nil
@@ -104,6 +104,7 @@ struct HostAdapterInstallationSnapshot: Equatable, Sendable {
     private var hermes: HostAdapterInstallation
     private var codex: HostAdapterInstallation
     private var cursor: HostAdapterInstallation
+    private var antigravity: HostAdapterInstallation
     /// Cursor File tool matchers live in `hooks.json`, not the adapter script.
     private var cursorHooksJSON: Data?
 
@@ -116,6 +117,7 @@ struct HostAdapterInstallationSnapshot: Equatable, Sendable {
         hermes: HostAdapterInstallation,
         codex: HostAdapterInstallation,
         cursor: HostAdapterInstallation,
+        antigravity: HostAdapterInstallation,
         cursorHooksJSON: Data? = nil
     ) {
         self.grok = grok
@@ -126,6 +128,7 @@ struct HostAdapterInstallationSnapshot: Equatable, Sendable {
         self.hermes = hermes
         self.codex = codex
         self.cursor = cursor
+        self.antigravity = antigravity
         self.cursorHooksJSON = cursorHooksJSON
     }
 
@@ -162,6 +165,8 @@ struct HostAdapterInstallationSnapshot: Equatable, Sendable {
             codex
         case .cursor:
             cursor
+        case .antigravity:
+            antigravity
         }
     }
 }
@@ -214,6 +219,11 @@ extension HostAdapterInstallation {
                 pathEntries: pathEntries,
                 fileManager: fileManager
             ),
+            antigravity: try inspect(
+                path: paths.hostAdapter(for: .antigravity),
+                pathEntries: pathEntries,
+                fileManager: fileManager
+            ),
             cursorHooksJSON: fileManager.contents(atPath: paths.cursorHooksJSON)
         )
     }
@@ -225,6 +235,9 @@ extension HostAdapterInstallation {
     ) throws -> HostAdapterInstallation {
         if path.host == .claude {
             return try inspectClaude(path: path, pathEntries: pathEntries, fileManager: fileManager)
+        }
+        if path.host == .antigravity {
+            return try inspectAntigravity(path: path, pathEntries: pathEntries, fileManager: fileManager)
         }
         return try inspectExclusive(path: path, pathEntries: pathEntries, fileManager: fileManager)
     }
@@ -248,6 +261,39 @@ extension HostAdapterInstallation {
         }
 
         switch ClaudeSettingsMerge.inspectionState(of: data) {
+        case .absentFile:
+            return .absentFile(path)
+        case .occupied:
+            return .occupied(path)
+        case .outdated:
+            return .broken(path: path, existingData: data)
+        case .wired(let bakedPath):
+            if isWiredMissPath(bakedRvPath: bakedPath, fileManager: fileManager) {
+                return .wired(path: path, existingData: data)
+            }
+            return .broken(path: path, existingData: data)
+        }
+    }
+
+    private static func inspectAntigravity(
+        path: OwnedHostAdapterPath,
+        pathEntries: [String],
+        fileManager: FileManager
+    ) throws -> HostAdapterInstallation {
+        guard isDetected(path, pathEntries: pathEntries, fileManager: fileManager) else {
+            return .missing(path)
+        }
+        if (try? fileManager.destinationOfSymbolicLink(atPath: path.destination)) != nil {
+            return .occupied(path)
+        }
+        guard fileManager.fileExists(atPath: path.destination) else {
+            return .absentFile(path)
+        }
+        guard let data = fileManager.contents(atPath: path.destination) else {
+            return .occupied(path)
+        }
+
+        switch AntigravitySettingsMerge.inspectionState(of: data) {
         case .absentFile:
             return .absentFile(path)
         case .occupied:

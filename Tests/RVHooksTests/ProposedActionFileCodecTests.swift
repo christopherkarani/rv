@@ -70,7 +70,7 @@ private func codecForHost(_ host: HookHost) -> any HostCodec {
         return GrokHostCodec()
     case .cursor:
         return CursorHostCodec()
-    case .pi, .opencode, .openclaw, .hermes, .codex:
+    case .pi, .opencode, .openclaw, .hermes, .codex, .antigravity:
         Issue.record("file-tool codec test is Claude/Grok/Cursor only")
         return ClaudeHostCodec()
     }
@@ -85,7 +85,7 @@ private func fileHostFixture(host: HookHost, name: String) throws -> String {
         folder = "grok"
     case .cursor:
         folder = "cursor"
-    case .pi, .opencode, .openclaw, .hermes, .codex:
+    case .pi, .opencode, .openclaw, .hermes, .codex, .antigravity:
         folder = "claude"
     }
     let url = URL(fileURLWithPath: #filePath)

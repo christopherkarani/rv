@@ -89,12 +89,12 @@ import Testing
     }
     let wiring = frames.filter { $0.title == setupCeremonyWiringTitle }
     #expect(wiring.count >= 8)
-    #expect(wiring[0].slots.map(\.kind) == [.skipped, .skipped, .skipped, .skipped, .skipped, .skipped, .skipped, .skipped])
-    #expect(wiring[1].slots.map(\.kind) == [.wired, .skipped, .skipped, .skipped, .skipped, .skipped, .skipped, .skipped])
-    #expect(wiring[2].slots.map(\.kind) == [.wired, .occupied, .skipped, .skipped, .skipped, .skipped, .skipped, .skipped])
-    #expect(wiring[3].slots.map(\.kind) == [.wired, .occupied, .wired, .skipped, .skipped, .skipped, .skipped, .skipped])
-    #expect(wiring[4].slots.map(\.kind) == [.wired, .occupied, .wired, .skipped, .skipped, .skipped, .skipped, .skipped])
-    #expect(wiring[5].slots.map(\.kind) == [.wired, .occupied, .wired, .skipped, .skipped, .skipped, .skipped, .skipped])
-    #expect(wiring[6].slots.map(\.kind) == [.wired, .occupied, .wired, .skipped, .skipped, .skipped, .skipped, .skipped])
-    #expect(wiring[7].slots.map(\.kind) == [.wired, .occupied, .wired, .skipped, .skipped, .skipped, .skipped, .skipped])
+    #expect(wiring[0].slots.map(\.kind) == [.skipped, .skipped, .skipped, .skipped, .skipped, .skipped, .skipped, .skipped, .skipped])
+    #expect(wiring[1].slots.map(\.kind) == [.wired, .skipped, .skipped, .skipped, .skipped, .skipped, .skipped, .skipped, .skipped])
+    #expect(wiring[2].slots.map(\.kind) == [.wired, .occupied, .skipped, .skipped, .skipped, .skipped, .skipped, .skipped, .skipped])
+    #expect(wiring[3].slots.map(\.kind) == [.wired, .occupied, .wired, .skipped, .skipped, .skipped, .skipped, .skipped, .skipped])
+    #expect(wiring[4].slots.map(\.kind) == [.wired, .occupied, .wired, .skipped, .skipped, .skipped, .skipped, .skipped, .skipped])
+    #expect(wiring[5].slots.map(\.kind) == [.wired, .occupied, .wired, .skipped, .skipped, .skipped, .skipped, .skipped, .skipped])
+    #expect(wiring[6].slots.map(\.kind) == [.wired, .occupied, .wired, .skipped, .skipped, .skipped, .skipped, .skipped, .skipped])
+    #expect(wiring[7].slots.map(\.kind) == [.wired, .occupied, .wired, .skipped, .skipped, .skipped, .skipped, .skipped, .skipped])
 }

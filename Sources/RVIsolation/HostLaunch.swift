@@ -16,7 +16,7 @@ public func launchContainedHost(
     switch host {
     case .opencode:
         break
-    case .grok, .pi, .claude, .openclaw, .hermes, .codex, .cursor:
+    case .grok, .pi, .claude, .openclaw, .hermes, .codex, .cursor, .antigravity:
         return .failure(.hostUnsupported)
     }
     switch IsolationBackends.applyLaunch(

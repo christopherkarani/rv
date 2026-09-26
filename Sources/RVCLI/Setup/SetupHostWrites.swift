@@ -42,6 +42,14 @@ extension SetupRun {
                 force: force,
                 files: files
             )
+        case .antigravityHooksMerge(let force):
+            wroteAdapter = try writeAntigravityHooks(
+                path: write.destination,
+                rvPath: env.rvPath,
+                existingData: existingData,
+                force: force,
+                files: files
+            )
         case .writeOwnedRendered, .applyGrokThenWriteOwned:
             wroteAdapter = try writeOwnedHost(
                 write,
@@ -327,6 +335,61 @@ extension SetupRun {
             try files.writeData(merged.data, to: path)
         } catch {
             throw SetupError.hostHookWriteFailed(.claude)
+        }
+        return true
+    }
+
+    /// Writes the exclusive Antigravity adapter and hooks merge. Returns whether a write occurred.
+    static func writeAntigravityHooks(
+        path: String,
+        rvPath: String,
+        existingData: Data?,
+        force: Bool,
+        files: FileOps
+    ) throws(SetupError) -> Bool {
+        if files.isSymbolicLink(path) {
+            return false
+        }
+        let adapterPath = AntigravitySettingsMerge.adapterPath(hooksPath: path)
+        if files.isSymbolicLink(adapterPath) {
+            throw SetupError.hostHookWriteFailed(.antigravity)
+        }
+        let adapter: HostAdapterResource
+        do {
+            adapter = try HostAdapterResources.load(for: .antigravity)
+        } catch {
+            throw SetupError(adapterResourceFailure: error)
+        }
+        let wroteAdapter: Bool
+        do {
+            wroteAdapter = try writeOwned(
+                path: adapterPath,
+                contents: adapter.rendered(rvPath: rvPath),
+                existingData: files.readData(adapterPath),
+                files: files
+            )
+        } catch {
+            throw SetupError.hostHookWriteFailed(.antigravity)
+        }
+        let merged: (data: Data, wrote: Bool)
+        do {
+            let applied = try HostWiring.applyAntigravity(
+                existing: existingData,
+                rvPath: rvPath,
+                adapterPath: adapterPath,
+                force: force
+            )
+            merged = (applied.data, applied.wrote)
+        } catch {
+            throw SetupError.hostHookWriteFailed(.antigravity)
+        }
+        if merged.wrote == false {
+            return wroteAdapter
+        }
+        do {
+            try files.writeData(merged.data, to: path)
+        } catch {
+            throw SetupError.hostHookWriteFailed(.antigravity)
         }
         return true
     }

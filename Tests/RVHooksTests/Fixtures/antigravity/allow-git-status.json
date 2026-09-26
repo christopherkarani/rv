@@ -1,0 +1,16 @@
+{
+  "artifactDirectoryPath": "/tmp/agy-hook-test/brain/uuid-1",
+  "conversationId": "sess_1",
+  "modelName": "gemini-test",
+  "stepIdx": 1,
+  "toolCall": {
+    "args": {
+      "CommandLine": "git status",
+      "Cwd": "/tmp/ws",
+      "WaitMsBeforeAsync": 1000
+    },
+    "name": "run_command"
+  },
+  "transcriptPath": "/tmp/agy-hook-test/transcript.jsonl",
+  "workspacePaths": ["/tmp/ws"]
+}

@@ -2,7 +2,7 @@ import Foundation
 import RVDomain
 
 /// One host attach already named by the artifact table. The executor folds this;
-/// it does not recover Claude-vs-other write policy from `HookHost`.
+/// it does not recover merge-vs-exclusive write policy from `HookHost`.
 struct HostAttachWrite: Equatable, Sendable {
     var host: HookHost
     var destination: String
@@ -31,6 +31,7 @@ enum HostAdapterWrite: Equatable, Sendable {
     case writeOwnedRendered
     case applyGrokThenWriteOwned
     case claudeSettingsMerge(force: Bool)
+    case antigravityHooksMerge(force: Bool)
 }
 
 enum HostCompanionWrite: Equatable, Sendable {
@@ -56,6 +57,8 @@ enum HostDetachOperation: Equatable, Sendable {
     case removeFile(String)
     case removeClaudeRVHooks(String)
     case stripClaudeFingerprintLeavingOccupied(String)
+    case removeAntigravityRVHooks(String)
+    case stripAntigravityFingerprintLeavingOccupied(String)
     case removeCodexRVHooks(String)
     case removeCursorRVHooks(String)
     case stripOpenCodeAskPlugin
@@ -81,6 +84,8 @@ enum HostArtifacts {
             adapter = .applyGrokThenWriteOwned
         case .claudeSettingsMerge:
             adapter = .claudeSettingsMerge(force: forceClear)
+        case .antigravityHooksMerge:
+            adapter = .antigravityHooksMerge(force: forceClear)
         }
         if forceClear {
             let existing: HostExistingData
@@ -103,7 +108,7 @@ enum HostArtifacts {
         }
         let existing: HostExistingData
         switch row.kind {
-        case .claudeSettingsMerge:
+        case .claudeSettingsMerge, .antigravityHooksMerge:
             existing = .useOrReread(existingData)
         case .writeOwnedRendered, .applyGrokThenWriteOwned:
             existing = .use(existingData)
@@ -132,6 +137,10 @@ enum HostArtifacts {
         case .claudeSettingsMerge:
             remove.append(.removeClaudeRVHooks(destination))
             leaveOccupied.append(.stripClaudeFingerprintLeavingOccupied(destination))
+            removedOnlyWhenChanged = true
+        case .antigravityHooksMerge:
+            remove.append(.removeAntigravityRVHooks(destination))
+            leaveOccupied.append(.stripAntigravityFingerprintLeavingOccupied(destination))
             removedOnlyWhenChanged = true
         }
         for companion in row.companions {
@@ -171,6 +180,7 @@ enum HostArtifacts {
         case writeOwnedRendered
         case applyGrokThenWriteOwned
         case claudeSettingsMerge
+        case antigravityHooksMerge
     }
 
     private struct Row {
@@ -256,6 +266,13 @@ enum HostArtifacts {
                 ],
                 forcePrelude: .backupAndClearOwnedPath,
                 emptyDirectories: [directory]
+            )
+        case .antigravity:
+            return Row(
+                kind: .antigravityHooksMerge,
+                companions: [],
+                forcePrelude: .occupiedIfDestinationSymlink,
+                emptyDirectories: []
             )
         }
     }

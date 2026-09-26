@@ -69,6 +69,7 @@ public func setupCeremonyFrames(
     hermes: SetupSlotKind = .skipped,
     codex: SetupSlotKind = .skipped,
     cursor: SetupSlotKind = .skipped,
+    antigravity: SetupSlotKind = .skipped,
     wrote: Set<HookHost>,
     kind: SetupCeremonyKind
 ) -> [SetupCeremonyFrame]? {
@@ -82,6 +83,7 @@ public func setupCeremonyFrames(
             hermes: hermes,
             codex: codex,
             cursor: cursor,
+            antigravity: antigravity,
             wrote: wrote
         ),
         kind: kind

@@ -32,6 +32,14 @@ private func writeWiredAdapter(
             force: false
         )
         try merged.data.write(to: URL(fileURLWithPath: destination))
+    } else if host == .antigravity {
+        let merged = try AntigravitySettingsMerge.merge(
+            existingData: nil,
+            rvPath: rvPath,
+            adapterPath: AntigravitySettingsMerge.adapterPath(hooksPath: destination),
+            force: false
+        )
+        try merged.data.write(to: URL(fileURLWithPath: destination))
     } else {
         let body = try host.adapterResource().rendered(rvPath: rvPath)
         try body.write(toFile: destination, atomically: true, encoding: .utf8)
@@ -83,6 +91,10 @@ func hostInstallation_foreignOwnedBytesAreOccupiedAndUnchanged(_ host: HookHost)
             atPath: (owned.destination as NSString).deletingLastPathComponent,
             withIntermediateDirectories: true
         )
+        try FileManager.default.createDirectory(
+            atPath: owned.detectionDirectory,
+            withIntermediateDirectories: true
+        )
         try foreign.write(to: URL(fileURLWithPath: owned.destination))
 
         let snapshot = try HostAdapterInstallation.inspect(
@@ -131,6 +143,151 @@ func hostInstallation_foreignOwnedBytesAreOccupiedAndUnchanged(_ host: HookHost)
     }
 }
 
+@Test func hostInstallation_antigravityForeignGuardIsOccupied() throws {
+    try withInstallationHome { _, paths in
+        let owned = paths.hostAdapter(for: .antigravity)
+        let occupied = """
+        {
+          "rv-guard": {
+            "enabled": true,
+            "PreToolUse": [
+              {
+                "matcher": "run_command",
+                "hooks": [
+                  { "type": "command", "command": "python3 /opt/other/rv-guard.py", "timeout": 10 }
+                ]
+              }
+            ]
+          }
+        }
+        """
+        try FileManager.default.createDirectory(
+            atPath: owned.detectionDirectory,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            atPath: (owned.destination as NSString).deletingLastPathComponent,
+            withIntermediateDirectories: true
+        )
+        try occupied.write(toFile: owned.destination, atomically: true, encoding: .utf8)
+
+        let snapshot = try HostAdapterInstallation.inspect(
+            paths: paths,
+            pathEntries: [],
+            fileManager: .default
+        )
+
+        #expect(snapshot.state(for: .antigravity) == .occupied)
+        #expect(try String(contentsOfFile: owned.destination, encoding: .utf8) == occupied)
+    }
+}
+
+@Test func hostInstallation_antigravityForeignJSONWithoutFingerprintIsAbsentFile() throws {
+    try withInstallationHome { _, paths in
+        let owned = paths.hostAdapter(for: .antigravity)
+        let foreign = """
+        {
+          "other-hook": {
+            "enabled": true,
+            "PreToolUse": [
+              {
+                "matcher": "run_command",
+                "hooks": [
+                  { "type": "command", "command": "other-guard evaluate", "timeout": 10 }
+                ]
+              }
+            ]
+          }
+        }
+        """
+        try FileManager.default.createDirectory(
+            atPath: owned.detectionDirectory,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            atPath: (owned.destination as NSString).deletingLastPathComponent,
+            withIntermediateDirectories: true
+        )
+        try foreign.write(toFile: owned.destination, atomically: true, encoding: .utf8)
+
+        let snapshot = try HostAdapterInstallation.inspect(
+            paths: paths,
+            pathEntries: [],
+            fileManager: .default
+        )
+
+        #expect(snapshot.state(for: .antigravity) == .absentFile)
+        #expect(try String(contentsOfFile: owned.destination, encoding: .utf8) == foreign)
+    }
+}
+
+@Test func hostInstallation_antigravityShellOnlyIsBrokenNotOccupied() throws {
+    try withInstallationHome { _, paths in
+        let owned = paths.hostAdapter(for: .antigravity)
+        let shellOnly = """
+        {
+          "rv-guard": {
+            "enabled": true,
+            "PreToolUse": [
+              {
+                "matcher": "run_command",
+                "hooks": [
+                  { "type": "command", "command": "RV_BINARY=/r python3 /c/hooks/rv-guard.py", "timeout": 10 }
+                ]
+              }
+            ]
+          }
+        }
+        """
+        try FileManager.default.createDirectory(
+            atPath: owned.detectionDirectory,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            atPath: (owned.destination as NSString).deletingLastPathComponent,
+            withIntermediateDirectories: true
+        )
+        try shellOnly.write(toFile: owned.destination, atomically: true, encoding: .utf8)
+
+        let snapshot = try HostAdapterInstallation.inspect(
+            paths: paths,
+            pathEntries: [],
+            fileManager: .default
+        )
+
+        #expect(snapshot.state(for: .antigravity) == .broken)
+        #expect(try String(contentsOfFile: owned.destination, encoding: .utf8) == shellOnly)
+    }
+}
+
+@Test func hostInstallation_wiredAntigravityMergeIsFileToolWired() throws {
+    try withInstallationHome { home, paths in
+        let executable = try makeWiredMissPath(home: home)
+        try FileManager.default.createDirectory(
+            atPath: paths.antigravityDirectory,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            atPath: (paths.antigravityHooks as NSString).deletingLastPathComponent,
+            withIntermediateDirectories: true
+        )
+        try writeWiredAdapter(
+            host: .antigravity,
+            destination: paths.hostAdapter(for: .antigravity).destination,
+            rvPath: executable.path
+        )
+
+        let snapshot = try HostAdapterInstallation.inspect(
+            paths: paths,
+            pathEntries: [],
+            fileManager: .default
+        )
+
+        #expect(snapshot.state(for: .antigravity) == .wired)
+        #expect(snapshot.fileTools(for: .antigravity) == .wired)
+    }
+}
+
 @Test func hostInstallation_claudeForeignGuardIsOccupied() throws {
     try withInstallationHome { _, paths in
         let owned = paths.hostAdapter(for: .claude)
@@ -150,6 +307,10 @@ func hostInstallation_foreignOwnedBytesAreOccupiedAndUnchanged(_ host: HookHost)
         """
         try FileManager.default.createDirectory(
             atPath: owned.detectionDirectory,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            atPath: (owned.destination as NSString).deletingLastPathComponent,
             withIntermediateDirectories: true
         )
         try occupied.write(toFile: owned.destination, atomically: true, encoding: .utf8)
@@ -186,6 +347,10 @@ func hostInstallation_foreignOwnedBytesAreOccupiedAndUnchanged(_ host: HookHost)
             atPath: owned.detectionDirectory,
             withIntermediateDirectories: true
         )
+        try FileManager.default.createDirectory(
+            atPath: (owned.destination as NSString).deletingLastPathComponent,
+            withIntermediateDirectories: true
+        )
         try foreign.write(toFile: owned.destination, atomically: true, encoding: .utf8)
 
         let snapshot = try HostAdapterInstallation.inspect(
@@ -207,6 +372,10 @@ func hostInstallation_symlinkAtOwnedNameIsOccupiedWithoutFollowing(_ host: HookH
         try "foreign".write(to: target, atomically: true, encoding: .utf8)
         try FileManager.default.createDirectory(
             atPath: (owned.destination as NSString).deletingLastPathComponent,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            atPath: owned.detectionDirectory,
             withIntermediateDirectories: true
         )
         try FileManager.default.createSymbolicLink(
@@ -234,6 +403,10 @@ func hostInstallation_danglingSymlinkAtOwnedNameIsOccupied(_ host: HookHost) thr
             atPath: (owned.destination as NSString).deletingLastPathComponent,
             withIntermediateDirectories: true
         )
+        try FileManager.default.createDirectory(
+            atPath: owned.detectionDirectory,
+            withIntermediateDirectories: true
+        )
         try FileManager.default.createSymbolicLink(
             atPath: owned.destination,
             withDestinationPath: "/nonexistent/foreign-adapter"
@@ -257,6 +430,10 @@ func hostInstallation_danglingSymlinkAtOwnedNameIsOccupied(_ host: HookHost) thr
 func hostInstallation_currentResourceWithMissingExecutableIsBroken(_ host: HookHost) throws {
     try withInstallationHome { _, paths in
         let owned = paths.hostAdapter(for: host)
+        try FileManager.default.createDirectory(
+            atPath: owned.detectionDirectory,
+            withIntermediateDirectories: true
+        )
         try writeWiredAdapter(host: host, destination: owned.destination, rvPath: "/nonexistent/rv")
 
         let snapshot = try HostAdapterInstallation.inspect(
@@ -580,6 +757,7 @@ private func cursorFileToolsSnapshot(
         hermes: missing(.hermes),
         codex: missing(.codex),
         cursor: cursor,
+        antigravity: missing(.antigravity),
         cursorHooksJSON: cursorHooksJSON
     )
 }
