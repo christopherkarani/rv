@@ -112,6 +112,9 @@ private final class EgressStubServer: @unchecked Sendable {
     }
 
     deinit {
+        // Wake the thread parked in acceptOnce(); close() alone does not
+        // interrupt a blocked accept() on Darwin.
+        shutdown(listenFD, Int32(SHUT_RDWR))
         close(listenFD)
     }
 
@@ -201,6 +204,26 @@ private func egressRead(_ fd: Int32, timeoutSeconds: Int = 10) -> String {
     return String(bytes: collected, encoding: .utf8) ?? ""
 }
 
+/// Read until a 403 arrives or the budget runs out. Slow CI runners can
+/// delay the serve path well past one read timeout; keep polling.
+private func egressReadUntil403(_ fd: Int32, tries: Int = 6) -> String {
+    var response = ""
+    for _ in 0..<tries {
+        response += egressRead(fd)
+        if response.contains("HTTP/1.1 403") { break }
+    }
+    return response
+}
+
+/// Denials are recorded on the proxy's relay queue after the reply is
+/// written; wait for the callback to land instead of asserting immediately.
+private func egressAwaitDenials(_ collector: EgressDenialCollector, count: Int, tries: Int = 100) {
+    for _ in 0..<tries {
+        if collector.all.count >= count { break }
+        usleep(100_000)
+    }
+}
+
 @Test func egressProxyRelaysLoopbackTargets() throws {
     let stub = try #require(EgressStubServer(reply: "PONG\n"))
     let collector = EgressDenialCollector()
@@ -254,8 +277,9 @@ private func egressRead(_ fd: Int32, timeoutSeconds: Int = 10) -> String {
     let client = try #require(egressConnect(port: port))
     defer { close(client) }
     #expect(egressSend(client, text: "GET http://denied.example/ HTTP/1.1\r\n\r\n"))
-    let response = egressRead(client)
+    let response = egressReadUntil403(client)
     #expect(response.contains("HTTP/1.1 403"))
+    egressAwaitDenials(collector, count: 1)
     #expect(collector.all.count == 1)
     #expect(collector.all.first?.host == "denied.example")
     #expect(collector.all.first?.port == 80)
@@ -270,8 +294,9 @@ private func egressRead(_ fd: Int32, timeoutSeconds: Int = 10) -> String {
     let client = try #require(egressConnect(port: port))
     defer { close(client) }
     #expect(egressSend(client, text: "CONNECT denied.example:443 HTTP/1.1\r\n\r\n"))
-    let response = egressRead(client)
+    let response = egressReadUntil403(client)
     #expect(response.contains("HTTP/1.1 403"))
+    egressAwaitDenials(collector, count: 1)
     #expect(collector.all.count == 1)
     #expect(collector.all.first?.host == "denied.example")
     #expect(collector.all.first?.port == 443)
@@ -291,10 +316,11 @@ private func egressRead(_ fd: Int32, timeoutSeconds: Int = 10) -> String {
     ] {
         let client = try #require(egressConnect(port: port))
         #expect(egressSend(client, text: request))
-        let response = egressRead(client)
+        let response = egressReadUntil403(client)
         close(client)
         #expect(response.contains("HTTP/1.1 403"))
     }
+    egressAwaitDenials(collector, count: 4)
     #expect(collector.all.count == 4)
     let reasons = Set(collector.all.map(\.reason))
     #expect(reasons.contains("malformed"))
@@ -332,8 +358,9 @@ private func egressRead(_ fd: Int32, timeoutSeconds: Int = 10) -> String {
     let client = try #require(egressConnect(port: port))
     defer { close(client) }
     #expect(egressSend(client, text: "CONNECT 127.0.0.1:\(closedPort) HTTP/1.1\r\n\r\n"))
-    let response = egressRead(client)
+    let response = egressReadUntil403(client)
     #expect(response.contains("HTTP/1.1 403"))
+    egressAwaitDenials(collector, count: 1)
     #expect(collector.all.count == 1)
     #expect(collector.all.first?.reason == "dial-failed")
 }
@@ -346,8 +373,9 @@ private func egressRead(_ fd: Int32, timeoutSeconds: Int = 10) -> String {
     let client = try #require(egressConnect(port: port))
     defer { close(client) }
     #expect(egressSend(client, text: String(repeating: "A", count: 70_000)))
-    let response = egressRead(client)
+    let response = egressReadUntil403(client)
     #expect(response.contains("HTTP/1.1 403"))
+    egressAwaitDenials(collector, count: 1)
     #expect(collector.all.first?.reason == "header-too-large")
 }
 

@@ -121,7 +121,13 @@ public final class EgressProxy: @unchecked Sendable {
         listenFD = -1
         boundPort = 0
         lock.unlock()
-        if fd >= 0 { close(fd) }
+        // shutdown() first: close() alone does not wake the thread blocked
+        // in accept() on Darwin, which would park it (and the listening
+        // socket) for the life of the process.
+        if fd >= 0 {
+            shutdown(fd, Int32(SHUT_RDWR))
+            close(fd)
+        }
     }
 
     deinit {
@@ -148,7 +154,14 @@ public final class EgressProxy: @unchecked Sendable {
                 }
             }
             guard fd >= 0 else {
-                if isRunning() { usleep(50_000) }
+                if isRunning() {
+                    // Accept failures are abnormal; surface the errno instead
+                    // of spinning silently (under load these would otherwise
+                    // surface only as client-side timeouts).
+                    let line = "rv.egress: accept failed errno=\(errno)\n"
+                    FileHandle.standardError.write(Data(line.utf8))
+                    usleep(50_000)
+                }
                 continue
             }
             relayQueue.async { [weak self] in self?.serve(client: fd) }
