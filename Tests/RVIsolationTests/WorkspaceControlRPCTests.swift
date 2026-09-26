@@ -204,8 +204,19 @@ private func sortedJSON<T: Encodable>(_ value: T) throws -> Data {
 @Test func controlRPCFramesAreByteIdenticalToLegacyCodec() throws {
     let legacyMessages: [WorkspaceControlMessage] = [
         ControlRPCFixtures.legacyMessage(op: .hello) { $0.token = ControlRPCFixtures.token },
-        ControlRPCFixtures.legacyMessage(op: .capabilities),
+        ControlRPCFixtures.legacyMessage(op: .capabilities) {
+            $0.ok = true
+            $0.features = [WorkspaceControlFeature.ensureTerminalRuntime]
+        },
         ControlRPCFixtures.legacyMessage(op: .ping),
+        ControlRPCFixtures.legacyMessage(op: .describeWorkspace) {
+            $0.ok = true
+            $0.workspace = ControlRPCFixtures.workspace
+            $0.host = ControlRPCFixtures.host
+            $0.phase = "open"
+            $0.project = "/tmp/demo"
+            $0.attached = 2
+        },
         ControlRPCFixtures.legacyMessage(op: .launchRuntime) {
             $0.executable = "/bin/sh"
             $0.arguments = ["-c", "echo hi"]
@@ -242,6 +253,7 @@ private func sortedJSON<T: Encodable>(_ value: T) throws -> Data {
             $0.ok = true
             $0.running = true
             $0.terminal = true
+            $0.inputOwner = false
             $0.created = true
         },
         ControlRPCFixtures.legacyMessage(op: .terminalOutput) {
@@ -264,7 +276,7 @@ private func sortedJSON<T: Encodable>(_ value: T) throws -> Data {
         let legacyBody = try #require(WorkspaceControlCodec.encode(legacy))
         let request = WorkspaceControlRequest(
             id: legacy.id,
-            operation: WorkspaceControlOp(rawValue: legacy.op)!,
+            operation: try #require(WorkspaceControlOp(rawValue: legacy.op)),
             token: legacy.token,
             executable: legacy.executable,
             arguments: legacy.arguments,
@@ -292,7 +304,7 @@ private func sortedJSON<T: Encodable>(_ value: T) throws -> Data {
         )
         let response = WorkspaceControlResponse(
             id: legacy.id,
-            operation: WorkspaceControlOp(rawValue: legacy.op)!,
+            operation: try #require(WorkspaceControlOp(rawValue: legacy.op)),
             token: legacy.token,
             executable: legacy.executable,
             arguments: legacy.arguments,
@@ -368,4 +380,31 @@ private func sortedJSON<T: Encodable>(_ value: T) throws -> Data {
     )
     #expect(WorkspaceControlRequest.decode(incompatible) == .incompatible)
     #expect(WorkspaceControlResponse.decode(incompatible) == .incompatible)
+}
+
+@Test func controlRPCCodableInitEnforcesVersionAndLimits() throws {
+    let decoder = JSONDecoder()
+    let oversized = String(repeating: "x", count: WorkspaceControlLimits.maxExecutableBytes + 1)
+    let rejected: [Data] = [
+        Data("{\"v\":2,\"op\":\"ping\"}".utf8),
+        Data("{\"v\":1,\"op\":\"ping\",\"executable\":\"\(oversized)\"}".utf8),
+        Data("{\"v\":1,\"op\":\"ping\",\"pid\":1}".utf8),
+    ]
+    for frame in rejected {
+        do {
+            _ = try decoder.decode(WorkspaceControlRequest.self, from: frame)
+            Issue.record("request Codable init accepted \(String(decoding: frame, as: UTF8.self))")
+        } catch {
+            // Expected: version, limits, and unknown keys all fail closed.
+        }
+        do {
+            _ = try decoder.decode(WorkspaceControlResponse.self, from: frame)
+            Issue.record("response Codable init accepted \(String(decoding: frame, as: UTF8.self))")
+        } catch {
+            // Expected: version, limits, and unknown keys all fail closed.
+        }
+    }
+    let valid = Data("{\"v\":1,\"op\":\"ping\"}".utf8)
+    #expect(try decoder.decode(WorkspaceControlRequest.self, from: valid).operation == .ping)
+    #expect(try decoder.decode(WorkspaceControlResponse.self, from: valid).operation == .ping)
 }

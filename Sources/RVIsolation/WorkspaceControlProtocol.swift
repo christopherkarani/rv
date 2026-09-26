@@ -217,9 +217,23 @@ enum WorkspaceControlCodec {
         else {
             return .invalid
         }
-        guard envelope.v == WorkspaceControlLimits.version else {
+        guard versionMatches(envelope) else {
             return .incompatible
         }
+        guard limitsValid(envelope) else {
+            return .invalid
+        }
+        return .message(envelope.message)
+    }
+
+    /// Shared by `decode(_:)` and the typed RPC `init(from:)` so the Codable
+    /// path fails closed exactly like the wire path. (`decode(_:)` additionally
+    /// enforces the raw body-size cap, which is only visible on the wire.)
+    fileprivate static func versionMatches(_ envelope: Envelope) -> Bool {
+        envelope.v == WorkspaceControlLimits.version
+    }
+
+    fileprivate static func limitsValid(_ envelope: Envelope) -> Bool {
         guard fits(envelope.op, WorkspaceControlLimits.maxOperationBytes),
             fits(envelope.executable, WorkspaceControlLimits.maxExecutableBytes),
             fits(envelope.hook, WorkspaceControlLimits.maxHookBytes),
@@ -235,11 +249,9 @@ enum WorkspaceControlCodec {
             sequenceFits(envelope.sequence),
             encodedBytesFit(envelope.bytes)
         else {
-            return .invalid
+            return false
         }
-        let message = envelope.message
-        guard runtimesFit(message.runtimes) else { return .invalid }
-        return .message(message)
+        return runtimesFit(envelope.message.runtimes)
     }
 
     static func encode(_ message: WorkspaceControlMessage) -> Data? {
@@ -739,8 +751,21 @@ public struct WorkspaceControlRequest: Sendable, Equatable, Codable {
         )
     }
 
+    /// Structural decode enforcing the same version/limits checks as
+    /// `decode(_:)`; only the raw body-size cap is wire-path-only.
     public init(from decoder: Decoder) throws {
-        message = try Envelope(from: decoder).message
+        let envelope = try Envelope(from: decoder)
+        guard WorkspaceControlCodec.versionMatches(envelope),
+            WorkspaceControlCodec.limitsValid(envelope)
+        else {
+            throw DecodingError.dataCorrupted(
+                DecodingError.Context(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "invalid control frame"
+                )
+            )
+        }
+        message = envelope.message
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -969,8 +994,21 @@ public struct WorkspaceControlResponse: Sendable, Equatable, Codable {
         )
     }
 
+    /// Structural decode enforcing the same version/limits checks as
+    /// `decode(_:)`; only the raw body-size cap is wire-path-only.
     public init(from decoder: Decoder) throws {
-        message = try Envelope(from: decoder).message
+        let envelope = try Envelope(from: decoder)
+        guard WorkspaceControlCodec.versionMatches(envelope),
+            WorkspaceControlCodec.limitsValid(envelope)
+        else {
+            throw DecodingError.dataCorrupted(
+                DecodingError.Context(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "invalid control frame"
+                )
+            )
+        }
+        message = envelope.message
     }
 
     public func encode(to encoder: Encoder) throws {
