@@ -867,6 +867,12 @@ private func fixtureLoginHome() throws -> URL {
             "rv setup failed: unable to clear occupied grok hook\n"
         ),
         (
+            .hostHookOccupiedNeedsForce(.claude),
+            .setup,
+            EX_CANTCREAT,
+            "rv setup failed: occupied claude hook; rerun with --force\n"
+        ),
+        (
             .hostHookWriteFailed(.opencode),
             .setup,
             EX_CANTCREAT,
@@ -1341,6 +1347,27 @@ private func expectedClaudeHookCommand(
         #expect(outcome.stdout.contains("Skipped occupied claude hook."))
         #expect(try String(contentsOfFile: layout.claudeSettings, encoding: .utf8) == occupied)
         #expect(FileManager.default.fileExists(atPath: claudeAdapterPath(layout)) == false)
+    }
+}
+
+@Test func setup_claudeOccupiedWithoutForce_surfacesForceHint() throws {
+    try withTempHome { home, layout, launchctl in
+        let occupied = Data(
+            """
+            {"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"python3 /opt/other/rv-guard.py","timeout":10}]}]}}
+            """.utf8
+        )
+        let setupEnv = env(home: home, launchctl: launchctl)
+        let files = FileOps(fileManager: .default)
+        #expect(throws: SetupError.hostHookOccupiedNeedsForce(.claude)) {
+            _ = try SetupRun.writeClaudeSettings(
+                path: layout.claudeSettings,
+                rvPath: setupEnv.rvPath,
+                existingData: occupied,
+                force: false,
+                files: files
+            )
+        }
     }
 }
 

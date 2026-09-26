@@ -48,7 +48,7 @@ Available checks:
   no-force-unwrap       No try! or force-unwrap (!) on production paths
   no-force-cast         No as! on production paths
   no-fatal              No fatalError on production paths
-  no-precondition       No preconditionFailure on production paths
+  no-precondition-failure No preconditionFailure on production paths
   no-iuo                No implicitly unwrapped optionals on production paths
   no-exported-import    No @_exported import anywhere
   evaluate-pure         RVEngine evaluate has no Date(), FileManager, or ProcessInfo
@@ -162,19 +162,30 @@ check_no_fatal() {
   check_empty "No fatalError in Sources" 'fatalError' "$SOURCES" --include='*.swift'
 }
 
-check_no_precondition() {
-  # Zero-precondition codebase: failures are typed errors, cancellations map
-  # to .cancelled, and unreachable-but-unprovable paths return nil/Result.
+check_no_precondition_failure() {
+  # No preconditionFailure traps: failures are typed errors, cancellations
+  # map to .cancelled, and unreachable-but-unprovable paths return
+  # nil/Result. Call-site precondition() validation is out of scope (two
+  # by-construction sites remain); extending this check to ban it is future
+  # work, not a rename away from it.
   check_empty "No preconditionFailure in Sources" 'preconditionFailure' "$SOURCES" --include='*.swift'
 }
 
 check_no_iuo() {
-  # Implicitly unwrapped optionals in var/let decls and func params.
-  # Filters != comparisons and full-line comments; validated both ways
-  # (catches planted `var x: T!` / `(y: T!)`, zero hits on the clean tree).
-  local pat='((var|let)[ \t]+[A-Za-z_][A-Za-z0-9_]*[ \t]*|[,(][ \t]*[A-Za-z_][A-Za-z0-9_]*[ \t]*):[ \t]*[^ =/{!][^=/{]*![ \t]*(=|,|\)|$)'
+  # Implicitly unwrapped optionals in var/let decls, params, computed
+  # properties, return positions, and typealiases. `!` followed by an
+  # identifier char, `(` or `=` is prefix negation, a call, or a comparison,
+  # not an IUO; full-line comments are filtered. Validated both ways
+  # (catches planted decl/return/typealias IUOs, zero hits on the clean tree).
+  local id='[A-Za-z_][A-Za-z0-9_]*'
+  local first='[^ =/{!";]'
+  local span='[^=/{";]*'
+  local bang='!([^A-Za-z0-9_(=]|$)'
+  local decl="((var|let)[ \t]+${id}[ \t]*|[,(][ \t]*${id}[ \t]*):[ \t]*${first}${span}${bang}"
+  local ret="->[ \t]*${first}${span}${bang}"
+  local alias="typealias[ \t]+${id}[ \t]*=[ \t]*${first}${span}${bang}"
   local matches
-  matches=$(grep -rn --include='*.swift' -E "$pat" "$SOURCES" 2>/dev/null | grep -v '!=' | grep -vE ':[0-9]+:[ \t]*//' || true)
+  matches=$(grep -rn --include='*.swift' -E "${decl}|${ret}|${alias}" "$SOURCES" 2>/dev/null | grep -vE ':[0-9]+:[ \t]*//' || true)
   local count
   count=$(echo "$matches" | grep -c . || true)
   if [ "$count" -eq 0 ]; then
@@ -556,7 +567,7 @@ ALL_CHECKS=(
   no-force-unwrap
   no-force-cast
   no-fatal
-  no-precondition
+  no-precondition-failure
   no-iuo
   no-exported-import
   evaluate-pure
@@ -582,7 +593,7 @@ run_check() {
     no-force-unwrap)        check_no_force_unwrap ;;
     no-force-cast)          check_no_force_cast ;;
     no-fatal)               check_no_fatal ;;
-    no-precondition)        check_no_precondition ;;
+    no-precondition-failure)  check_no_precondition_failure ;;
     no-iuo)                 check_no_iuo ;;
     no-exported-import)     check_no_exported_import ;;
     evaluate-pure)          check_evaluate_pure ;;

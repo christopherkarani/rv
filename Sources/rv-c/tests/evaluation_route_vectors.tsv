@@ -25,3 +25,11 @@ not-a-version	1.0.0	inProcess
  1.0.0	1.0.0	inProcess
 99999999999999999999.0.0	1.0.0	inProcess
 1.0.0	99999999999999999999.0.0	inProcess
+# Sign-prefixed and Int64-range majors: Swift Int("+1")/Int("-0") parse and
+# Int holds 10-18 digit heads, while C rejects non-digit heads and caps at
+# INT_MAX. Equal pairs must miss on both sides; INT_MAX itself still routes.
++1.0.0	+1.0.0	inProcess
+-0.0.0	-0.0.0	inProcess
+9999999999.0.0	9999999999.0.0	inProcess
+2147483647.0.0	2147483647.0.0	service
+2147483648.0.0	2147483648.0.0	inProcess
