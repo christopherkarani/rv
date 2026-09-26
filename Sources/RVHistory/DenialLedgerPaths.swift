@@ -20,6 +20,8 @@ public struct DenialLedgerPaths: Sendable, Equatable {
     }
 
     public var uninstallArtifacts: [URL] {
-        [fileURL, lockURL]
+        // The .tmp entry covers save()'s crash window: temp-file + rename(2)
+        // can leave blocks.jsonl.tmp behind, which uninstall must not orphan.
+        [fileURL, lockURL, fileURL.appendingPathExtension("tmp")]
     }
 }

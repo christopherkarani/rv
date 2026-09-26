@@ -110,6 +110,7 @@ struct DenialLedgerTests {
         let names = DenialLedgerPaths(configDirectory: root).uninstallArtifacts.map(\.lastPathComponent)
         #expect(names.contains("blocks.jsonl"))
         #expect(names.contains("blocks.lock"))
+        #expect(names.contains("blocks.jsonl.tmp"))
     }
 
     @Test func preferences_missingIsEnabled() {
