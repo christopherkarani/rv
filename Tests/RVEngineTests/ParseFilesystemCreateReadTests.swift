@@ -85,6 +85,32 @@ struct ParseFilesystemCreateReadTests {
         )
     }
 
+    @Test func touch_dashDashKeepsValueLongsVerbatim() {
+        expectParsed(
+            parseTouch(["--", "--date", "now", "f"]),
+            "create",
+            paths: ["--date", "now", "f"]
+        )
+        expectParsed(
+            parseTouch(["--", "--time", "noon", "g"]),
+            "create",
+            paths: ["--time", "noon", "g"]
+        )
+    }
+
+    @Test func touch_pendingValueConsumesDashDash() {
+        expectParsed(
+            parseTouch(["-t", "--", "file"]),
+            "create",
+            paths: ["file"]
+        )
+        expectParsed(
+            parseTouch(["--date", "--", "file"]),
+            "create",
+            paths: ["file"]
+        )
+    }
+
     @Test func touch_rejectsUnknownAndDanglingValue() {
         #expect(parseTouch(["-z", "file"]) == nil)
         #expect(parseTouch(["--weird", "file"]) == nil)
@@ -119,6 +145,14 @@ struct ParseFilesystemCreateReadTests {
             parseFilesystemCommand(["mkdir", "out"]),
             "create",
             paths: ["out"]
+        )
+    }
+
+    @Test func mkdir_dashDashKeepsValueLongsVerbatim() {
+        expectParsed(
+            parseMkdir(["--", "--mode", "755", "d"]),
+            "create",
+            paths: ["--mode", "755", "d"]
         )
     }
 

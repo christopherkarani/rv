@@ -44,27 +44,21 @@ func scanFilesystemFlags(
 }
 
 /// Index of the first `--` the legacy loops would treat as a terminator:
-/// pending-value consumption wins over the terminator test, mirroring
-/// `ShellPipeline.scanFlags` value consumption (including
-/// `rejectsDashValues`, which leaves a dash-led word unconsumed).
+/// pending-value consumption wins over the terminator test. The cut shares
+/// `FlagValueSpec`'s consumption predicate with `ShellPipeline.scanFlags`,
+/// so the pre-split cannot desync from the scan it precedes.
 private func terminatorIndex(in words: [String], values spec: FlagValueSpec) -> Int? {
     var pending = false
     for (index, word) in words.enumerated() {
         if pending {
             pending = false
-            let consumed = spec.rejectsDashValues == false || word.hasPrefix("-") == false
-            if consumed { continue }
+            if spec.consumesValueWord(word) { continue }
         }
         if word == "--" {
             return index
         }
-        switch FlagToken.classify(word) {
-        case .long(let name, nil) where spec.valueLongs.contains(name):
+        if spec.takesValue(FlagToken.classify(word)) {
             pending = true
-        case .shorts(let letters, _) where letters.contains(where: spec.valueShorts.contains):
-            pending = true
-        default:
-            break
         }
     }
     return nil
@@ -293,8 +287,6 @@ func parseShred(_ argv: Argv) -> ParsedFilesystemCommand? {
         switch event {
         case .positional(let word):
             paths.append(word)
-        case .long(let name, nil) where shredValueLong.contains("--" + name):
-            continue
         case .long(let name, nil) where shredSkipLong.contains("--" + name):
             continue
         case .long(let name, _) where shredAttachedLongs.contains(name):
@@ -322,9 +314,6 @@ func parseShred(_ args: [String]) -> ParsedFilesystemCommand? {
 
 private let shredSkipLong: Set<String> = [
     "--force", "--remove", "--zero", "--verbose", "--exact",
-]
-private let shredValueLong: Set<String> = [
-    "--iterations", "--size",
 ]
 private let shredAttachedLongs: Set<String> = [
     "remove", "iterations", "size",

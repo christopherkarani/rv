@@ -28,29 +28,26 @@ extension ShellPipeline {
             let word = argv.args[index]
             let token = FlagToken.classify(word)
             switch token {
-            case .long(let name, let attached):
-                if let attached {
-                    out.append(.long(name: name, value: attached))
-                    index += 1
-                } else if spec.valueLongs.contains(name) {
+            case .long(let name, _):
+                if spec.takesValue(token) {
                     index = consumeValue(
                         into: &out, words: argv.args, at: index,
                         spec: spec, flag: word,
                         make: { .long(name: name, value: $0) }
                     )
                 } else {
-                    out.append(.long(name: name, value: nil))
+                    out.append(token)
                     index += 1
                 }
             case .shorts(let letters, _):
-                if letters.contains(where: spec.valueShorts.contains) {
+                if spec.takesValue(token) {
                     index = consumeValue(
                         into: &out, words: argv.args, at: index,
                         spec: spec, flag: word,
                         make: { .shorts(letters: letters, value: $0) }
                     )
                 } else {
-                    out.append(.shorts(letters: letters, value: nil))
+                    out.append(token)
                     index += 1
                 }
             case .positional, .terminator, .loneDash, .shortEquals, .dangling:
@@ -78,7 +75,7 @@ extension ShellPipeline {
             return index + 1
         }
         let candidate = words[index + 1]
-        guard spec.rejectsDashValues == false || candidate.hasPrefix("-") == false else {
+        guard spec.consumesValueWord(candidate) else {
             out.append(.dangling(flag: flag))
             return index + 1
         }
@@ -114,4 +111,26 @@ public struct FlagValueSpec: Sendable, Hashable {
 
     /// No flag takes a value; every word classifies structurally.
     public static let none = FlagValueSpec()
+
+    /// Whether a structurally classified token takes the next argv word as
+    /// its value. Attached longs (`--mode=x`) never consume; bare
+    /// value-longs and any cluster containing a value-short do. Shared by
+    /// `scanFlags` and the filesystem `--` pre-split so the two readings
+    /// cannot desync when consumption rules change.
+    public func takesValue(_ token: FlagToken) -> Bool {
+        switch token {
+        case .long(let name, nil) where valueLongs.contains(name):
+            return true
+        case .shorts(let letters, _) where letters.contains(where: valueShorts.contains):
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// Whether a pending value consumes `word`: any word, unless this spec
+    /// rejects dash-led values (`.dangling` instead).
+    public func consumesValueWord(_ word: String) -> Bool {
+        rejectsDashValues == false || word.hasPrefix("-") == false
+    }
 }

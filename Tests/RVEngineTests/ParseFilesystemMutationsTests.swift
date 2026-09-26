@@ -152,6 +152,27 @@ struct ParseFilesystemMutationsTests {
         #expect(parseTruncate([]) == nil)
     }
 
+    @Test func truncate_dashDashKeepsValueLongsVerbatim() {
+        expectParsed(
+            parseTruncate(["--", "--size", "10", "f"]),
+            "overwrite",
+            paths: ["--size", "10", "f"]
+        )
+    }
+
+    @Test func shred_dashDashKeepsValueLongsVerbatim() {
+        expectParsed(
+            parseShred(["--", "--size", "10", "f"]),
+            "delete",
+            paths: ["--size", "10", "f"]
+        )
+        expectParsed(
+            parseShred(["--", "--iterations", "3", "g"]),
+            "delete",
+            paths: ["--iterations", "3", "g"]
+        )
+    }
+
     @Test func shred_iterationsSizeAndSkip() {
         expectParsed(
             parseShred(["--iterations", "3", "--size", "1K", "--force", "file"]),
