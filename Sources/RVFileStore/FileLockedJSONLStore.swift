@@ -86,11 +86,13 @@ public struct FileLockedJSONLStore<Record: Codable & Sendable>: Sendable {
         do {
             try body.write(to: temp, atomically: true, encoding: .utf8)
         } catch {
+            try? FileManager.default.removeItem(at: temp)
             throw FileLockedStoreError.ioFailed
         }
         do {
             try setOwnerOnlyFile(temp)
         } catch {
+            try? FileManager.default.removeItem(at: temp)
             throw FileLockedStoreError.ioFailed
         }
         let renamed: Int32 = fileURL.withUnsafeFileSystemRepresentation { dest in
@@ -99,7 +101,10 @@ public struct FileLockedJSONLStore<Record: Codable & Sendable>: Sendable {
                 return rename(src, dest)
             }
         }
-        guard renamed == 0 else { throw FileLockedStoreError.ioFailed }
+        guard renamed == 0 else {
+            try? FileManager.default.removeItem(at: temp)
+            throw FileLockedStoreError.ioFailed
+        }
         do {
             try setOwnerOnlyFile(fileURL)
         } catch {

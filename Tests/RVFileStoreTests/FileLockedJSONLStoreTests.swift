@@ -186,6 +186,29 @@ struct FileLockedJSONLStoreTests {
         #expect(FileManager.default.fileExists(atPath: store.fileURL.path) == false)
     }
 
+    @Test func saveEncodeFailureLeavesPreExistingBytesUntouched() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-store-encode-atomic-\(UUID().uuidString)", isDirectory: true)
+        let seedStore = FileLockedJSONLStore<ProbeRecord>(
+            fileURL: root.appendingPathComponent("rows.jsonl"),
+            lockURL: root.appendingPathComponent("rows.lock"),
+            directoryURL: root
+        )
+        let failingStore = FileLockedJSONLStore<FailingEncodeRecord>(
+            fileURL: seedStore.fileURL,
+            lockURL: seedStore.lockURL,
+            directoryURL: seedStore.directoryURL
+        )
+        try seedStore.save([ProbeRecord(name: "seed", stamp: Date(timeIntervalSince1970: 0), count: 7)])
+        let before = try Data(contentsOf: seedStore.fileURL)
+        #expect(throws: FileLockedStoreError.encodeFailed) {
+            try failingStore.save([FailingEncodeRecord(name: "x")])
+        }
+        #expect(try Data(contentsOf: seedStore.fileURL) == before)
+        let temp = seedStore.fileURL.appendingPathExtension("tmp")
+        #expect(FileManager.default.fileExists(atPath: temp.path) == false)
+    }
+
     @Test func directoryPreparationFailureThrowsIoFailed() throws {
         let occupied = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-store-occupied-\(UUID().uuidString)")
@@ -216,6 +239,8 @@ struct FileLockedJSONLStoreTests {
         #expect(throws: FileLockedStoreError.ioFailed) {
             try store.save([ProbeRecord(name: "a", stamp: Date(timeIntervalSince1970: 0), count: 0)])
         }
+        let temp = store.fileURL.appendingPathExtension("tmp")
+        #expect(FileManager.default.fileExists(atPath: temp.path) == false)
     }
 
     @Test func concurrentLockedAppendsLoseNoUpdates() async throws {
@@ -240,7 +265,9 @@ struct FileLockedJSONLStoreTests {
             }
             try await group.waitForAll()
         }
-        #expect(store.load().count == tasks * perTask)
+        let loaded = store.load()
+        #expect(loaded.count == tasks * perTask)
+        #expect(Set(loaded.map(\.name)).count == tasks * perTask)
     }
 }
 
