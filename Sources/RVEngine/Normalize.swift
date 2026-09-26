@@ -141,8 +141,18 @@ func tokenizeCommand(_ text: String) -> [CommandToken] {
 }
 
 func applyRoleAwareQuotes(_ text: String) -> String {
-    var tokens = tokenizeCommand(text)
-    guard !tokens.isEmpty else { return text }
+    let legacy = tokenizeCommand(text)
+    guard !legacy.isEmpty else { return text }
+    return applyRoleAwareQuotes(tokens: legacy.map {
+        Token(lexeme: $0.decoded, wasQuoted: $0.wasQuoted, wasAnsiC: $0.wasAnsiC)
+    })
+}
+
+/// Role-aware masking over pipeline tokens. The `String` overload maps the
+/// legacy tokenizer output here 1:1; the facade passes `ShellPipeline.tokenize`.
+func applyRoleAwareQuotes(tokens: [Token]) -> String {
+    var tokens = tokens
+    guard !tokens.isEmpty else { return "" }
     var commandBase: String?
     var gitSubcommand: String?
     var pendingGitGlobalArg = false
@@ -152,7 +162,7 @@ func applyRoleAwareQuotes(_ text: String) -> String {
     var pendingGitConfigArg = false
     var wrapperSeek = WrapperSeek.none
     var pendingInterpreterPayload = false
-    let unquotedDataMaskSafe = tokens.contains { tokenHasShellMeta($0.decoded) } == false
+    let unquotedDataMaskSafe = tokens.contains { tokenHasShellMeta($0.lexeme) } == false
 
     for index in tokens.indices {
         if tokens[index].wasAnsiC,
@@ -166,14 +176,14 @@ func applyRoleAwareQuotes(_ text: String) -> String {
                isOnlyToken: tokens.count == 1
            )
         {
-            tokens[index].decoded = surfaced
+            tokens[index].lexeme = surfaced
         }
         let token = tokens[index]
-        let decoded = token.decoded
+        let decoded = token.lexeme
 
         if pendingInterpreterPayload {
             if token.wasQuoted, containsInlineCode(token) == false {
-                tokens[index].decoded = " "
+                tokens[index].lexeme = " "
             }
             pendingInterpreterPayload = false
             pendingDataFlag = false
@@ -231,7 +241,7 @@ func applyRoleAwareQuotes(_ text: String) -> String {
             if let masked = maskAttachedInterpreterProgram(command: commandBase, decoded: decoded),
                containsInlineCode(token) == false
             {
-                tokens[index].decoded = masked
+                tokens[index].lexeme = masked
                 continue
             }
         }
@@ -246,7 +256,7 @@ func applyRoleAwareQuotes(_ text: String) -> String {
             gitSubcommand: gitSubcommand,
             token: token
         ) {
-            tokens[index].decoded = masked
+            tokens[index].lexeme = masked
             pendingDataFlag = false
             continue
         }
@@ -280,13 +290,13 @@ func applyRoleAwareQuotes(_ text: String) -> String {
 
         if gitSubcommand == "config" {
             if containsInlineCode(token) == false, let masked = maskGitConfigAssignment(decoded) {
-                tokens[index].decoded = masked
+                tokens[index].lexeme = masked
                 gitConfigValuePending = false
                 pendingDataFlag = false
                 continue
             }
             if gitConfigValuePending, containsInlineCode(token) == false {
-                tokens[index].decoded = String(repeating: " ", count: max(decoded.count, 1))
+                tokens[index].lexeme = String(repeating: " ", count: max(decoded.count, 1))
                 gitConfigValuePending = false
                 pendingDataFlag = false
                 continue
@@ -300,7 +310,7 @@ func applyRoleAwareQuotes(_ text: String) -> String {
            isAllArgsData(commandBase),
            containsInlineCode(token) == false
         {
-            tokens[index].decoded = String(repeating: " ", count: max(decoded.count, 1))
+            tokens[index].lexeme = String(repeating: " ", count: max(decoded.count, 1))
             pendingDataFlag = false
             gitGrepPatternPending = false
             continue
@@ -314,7 +324,7 @@ func applyRoleAwareQuotes(_ text: String) -> String {
                gitGrepPatternPending: gitGrepPatternPending
            )
         {
-            tokens[index].decoded = String(repeating: " ", count: max(decoded.count, 1))
+            tokens[index].lexeme = String(repeating: " ", count: max(decoded.count, 1))
             pendingDataFlag = false
             gitGrepPatternPending = false
             continue
@@ -323,7 +333,7 @@ func applyRoleAwareQuotes(_ text: String) -> String {
         pendingDataFlag = false
         gitGrepPatternPending = false
     }
-    return joinDecodedTokens(tokens)
+    return joinTokenLexemes(tokens)
 }
 
 private enum WrapperSeek {
@@ -384,8 +394,8 @@ private func isShellSeparator(_ token: String) -> Bool {
     token == "&&" || token == "||" || token == ";" || token == "|" || token == "\n"
 }
 
-private func containsInlineCode(_ token: CommandToken) -> Bool {
-    token.decoded.contains("$(") || token.decoded.contains("`")
+private func containsInlineCode(_ token: Token) -> Bool {
+    token.lexeme.contains("$(") || token.lexeme.contains("`")
 }
 
 /// Tokenizer is whitespace-only, so `echo ok; git reset --hard` is one
@@ -398,7 +408,7 @@ private func tokenHasShellMeta(_ decoded: String) -> Bool {
 /// Matching-view surface for `$''` tokens. Tokenizer keeps `$` in `decoded` so
 /// unwrap of `bash -c $'…'` stays limited.
 private func surfacedAnsiC(
-    _ token: CommandToken,
+    _ token: Token,
     commandBase: String?,
     gitSubcommand: String?,
     pendingDataFlag: Bool,
@@ -406,9 +416,9 @@ private func surfacedAnsiC(
     pendingInterpreterPayload: Bool,
     isOnlyToken: Bool
 ) -> String? {
-    guard token.wasAnsiC, let dollar = token.decoded.lastIndex(of: "$") else { return nil }
-    let prefix = String(token.decoded[..<dollar])
-    let inner = String(token.decoded[token.decoded.index(after: dollar)...])
+    guard token.wasAnsiC, let dollar = token.lexeme.lastIndex(of: "$") else { return nil }
+    let prefix = String(token.lexeme[..<dollar])
+    let inner = String(token.lexeme[token.lexeme.index(after: dollar)...])
     let candidate = prefix + decodeAnsiCEscapes(inner)
     if pendingInterpreterPayload { return nil }
     if shouldMaskQuotedData(
@@ -586,9 +596,9 @@ private func isDataConsumingFlag(command: String?, gitSubcommand: String?, flag:
 private func maskAttachedDataValue(
     command: String?,
     gitSubcommand: String?,
-    token: CommandToken
+    token: Token
 ) -> String? {
-    let decoded = token.decoded
+    let decoded = token.lexeme
     guard let command else { return nil }
     if command == "git", decoded.hasPrefix("--message=") {
         let valueCount = decoded.dropFirst("--message=".count).count
@@ -955,11 +965,11 @@ func splitSegments(_ text: String) -> [String] {
     return segments
 }
 
-private func joinDecodedTokens(_ tokens: [CommandToken]) -> String {
+private func joinTokenLexemes(_ tokens: [Token]) -> String {
     var out = ""
     var lastWasNewline = true
     for token in tokens {
-        if token.decoded == "\n" {
+        if token.lexeme == "\n" {
             out.append("\n")
             lastWasNewline = true
             continue
@@ -967,7 +977,7 @@ private func joinDecodedTokens(_ tokens: [CommandToken]) -> String {
         if lastWasNewline == false {
             out.append(" ")
         }
-        out.append(token.decoded)
+        out.append(token.lexeme)
         lastWasNewline = false
     }
     return out
