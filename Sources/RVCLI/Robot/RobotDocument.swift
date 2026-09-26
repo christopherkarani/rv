@@ -13,37 +13,35 @@ enum RobotDocument {
     case serviceStatus(ServiceStatusReport)
 
     /// Returns this document as JSON with sorted keys and unescaped slashes.
-    func render() -> String {
+    func render() throws -> String {
         switch self {
         case .test(let payload):
-            Self.jsonString(payload)
+            try Self.jsonString(payload)
         case .explain(let payload):
-            Self.jsonString(payload)
+            try Self.jsonString(payload)
         case .doctor(let payload):
-            Self.jsonString(payload)
+            try Self.jsonString(payload)
         case .packsList(let payload):
-            Self.jsonString(payload)
+            try Self.jsonString(payload)
         case .packsInfo(let payload):
-            Self.jsonString(payload)
+            try Self.jsonString(payload)
         case .allowlistList(let rows):
-            Self.jsonString(rows)
+            try Self.jsonString(rows)
         case .allowOnceList(let rows):
-            Self.jsonString(rows)
+            try Self.jsonString(rows)
         case .serviceStatus(let report):
             Self.serviceStatusLines(report).joined(separator: "\n")
         }
     }
 
-    private static func jsonString(_ value: some Encodable) -> String {
+    private static func jsonString(_ value: some Encodable) throws -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         do {
             let data = try encoder.encode(value)
             return String(decoding: data, as: UTF8.self)
         } catch {
-            preconditionFailure(
-                "RobotDocument payloads are plain values; encoding cannot fail (\(error))"
-            )
+            throw RobotRenderError.encodingFailed(String(describing: error))
         }
     }
 

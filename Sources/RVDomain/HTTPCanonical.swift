@@ -6,14 +6,14 @@ import Foundation
 /// A caller cannot mark a loopback address public.
 public struct HTTPDestination: Hashable, Sendable, Equatable {
     public let host: String
-    public let hostKind: HTTPHostKind
+    package let hostKind: HTTPHostKind
     public let port: Int
     public let path: String
     public let query: String?
     public let address: HTTPIPAddress?
     public let classification: HTTPAddressClass
 
-    public init(
+    package init(
         host: String,
         hostKind: HTTPHostKind,
         port: Int,
@@ -122,18 +122,18 @@ extension HTTPDestination: Codable {
 }
 
 /// Parsed request before DNS. A literal address is already pinned.
-public struct HTTPCanonicalRequest: Sendable, Equatable {
-    public var method: HTTPMethod
-    public var host: String
-    public var hostKind: HTTPHostKind
-    public var port: Int
-    public var path: String
-    public var query: String?
-    public var literalAddress: HTTPIPAddress?
-    public var nameBlocked: Bool
+package struct HTTPCanonicalRequest: Sendable, Equatable {
+    package var method: HTTPMethod
+    package var host: String
+    package var hostKind: HTTPHostKind
+    package var port: Int
+    package var path: String
+    package var query: String?
+    package var literalAddress: HTTPIPAddress?
+    package var nameBlocked: Bool
 }
 
-public enum HTTPCanonicalError: Error, Sendable, Equatable {
+package enum HTTPCanonicalError: Error, Sendable, Equatable {
     case malformed
     case unsupportedScheme
     case unsupportedMethod
@@ -153,7 +153,7 @@ public struct HTTPAction: Sendable, Equatable, Codable {
     public var effects: ActionEffects
     public var resources: ActionResources
 
-    public init(
+    package init(
         fingerprint: ActionFingerprint,
         method: HTTPMethod,
         destination: HTTPDestination,
@@ -223,7 +223,7 @@ public func normalizeRuntimeHTTP(
 
 /// Builds the action RV will authorize. DNS selection is ignored for literals
 /// and for names that are blocked before lookup.
-public func makeRuntimeHTTPAction(
+package func makeRuntimeHTTPAction(
     subject: RuntimeAdmissionSubject,
     canonical: HTTPCanonicalRequest,
     resolved: HTTPAddressSelection
@@ -266,7 +266,7 @@ public func makeRuntimeHTTPAction(
 
 /// Canonicalizes one HTTPS URL. Unsupported schemes and methods fail here,
 /// before DNS and before an HTTP action exists.
-public func canonicalizeHTTP(
+package func canonicalizeHTTP(
     method: String,
     url: String
 ) -> Result<HTTPCanonicalRequest, HTTPCanonicalError> {

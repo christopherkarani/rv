@@ -136,7 +136,7 @@ private func robotProbe() -> ThemeProbe {
     }
     #expect(match.ruleID.rawValue == "core.git:stash-drop")
     #expect(hostDenyText(from: result, command: ShellCommand(rawValue: "git stash drop")) == nil)
-    let pretty = CommandRun.render(
+    let pretty = try CommandRun.render(
         kind: .test,
         result: result,
         command: ShellCommand(rawValue: "git stash drop"),
@@ -158,7 +158,7 @@ private func robotProbe() -> ThemeProbe {
     #expect(PrettyWriter.join(["a", "b"]) == "a\nb\n")
 }
 
-@Test func test_prettyDeny_doesNotFallBackToAllow() {
+@Test func test_prettyDeny_doesNotFallBackToAllow() throws {
     let result = EvaluationResult(
         outcome: .deny(
             Deny(
@@ -168,7 +168,7 @@ private func robotProbe() -> ThemeProbe {
             matched: nil
         )
     )
-    let rendered = CommandRun.render(
+    let rendered = try CommandRun.render(
         kind: .test,
         result: result,
         command: ShellCommand(rawValue: "git reset --hard"),
@@ -180,8 +180,8 @@ private func robotProbe() -> ThemeProbe {
     #expect(!rendered.stdout.contains("Result: ALLOWED"))
 }
 
-@Test func test_prettyIndeterminate_isPlanSentence() {
-    let rendered = CommandRun.render(
+@Test func test_prettyIndeterminate_isPlanSentence() throws {
+    let rendered = try CommandRun.render(
         kind: .test,
         result: EvaluationResult(outcome: .indeterminate(.corePacksUnavailable)),
         command: ShellCommand(rawValue: "git status"),

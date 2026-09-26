@@ -264,7 +264,7 @@ public struct PendingApproval: Sendable, Equatable, Codable {
     public var expiresAt: Date
     public var state: PendingApprovalState
 
-    public init(
+    package init(
         id: ApprovalID,
         identity: ApprovalIdentity,
         action: ProposedAction,

@@ -65,8 +65,7 @@ public struct GrokStoreAdapter: SessionStoreAdapter {
             return object["command"] as? String
         }
         guard let raw = value as? String,
-              let data = raw.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+              let object = JSONParse.object(raw)
         else {
             return nil
         }

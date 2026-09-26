@@ -52,7 +52,9 @@ clang -Os "${CLANG_OS_FLAGS[@]}" -std=c11 -Wall \
   -I "$SRC" \
   -o "$OUT/evaluation_route_test" \
   "$SRC/tests/evaluation_route_test.c"
-"$OUT/evaluation_route_test"
+# Shared vectors: the same file drives EvaluationRouteTests.sharedVectorsMatchC
+# on the Swift side. A vector both harnesses disagree on fails both suites.
+"$OUT/evaluation_route_test" "$SRC/tests/evaluation_route_vectors.tsv"
 
 clang -Os "${CLANG_OS_FLAGS[@]}" -std=c11 -Wall \
   -I "$SRC" \

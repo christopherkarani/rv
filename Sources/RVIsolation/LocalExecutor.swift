@@ -6,6 +6,9 @@ enum LocalExecutorError: Error, Sendable, Equatable {
     case cancelled
     case alreadyExecuted(ActionFingerprint)
     case applyFailed(IsolationApplyError)
+    /// Awaited work threw outside the typed contract. Carries the description;
+    /// no silent precondition trap on a path a future edit may open.
+    case unexpected(String)
 }
 
 /// Cancellation for blocking supervision that has left the cooperative pool.
@@ -150,8 +153,10 @@ actor LocalExecutor {
                 return .success(.executed(try await run(executable)))
             } catch let error as LocalExecutorError {
                 return .failure(.execute(error))
+            } catch is CancellationError {
+                return .failure(.execute(.cancelled))
             } catch {
-                preconditionFailure("LocalExecutor.run throws only LocalExecutorError")
+                return .failure(.execute(.unexpected(String(describing: error))))
             }
         }
     }

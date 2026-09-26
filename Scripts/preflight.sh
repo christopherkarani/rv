@@ -46,7 +46,11 @@ Available checks:
   value-types           No class/actor outside RVService/RVWorkspaceTUI/RVPolicy/RVAnalytics/RVIsolation
   no-isdenied           No boolean isDenied anywhere in Sources
   no-force-unwrap       No try! or force-unwrap (!) on production paths
-  no-exported-import    No new @_exported import (existing T1 debt is known)
+  no-force-cast         No as! on production paths
+  no-fatal              No fatalError on production paths
+  no-precondition       No preconditionFailure on production paths
+  no-iuo                No implicitly unwrapped optionals on production paths
+  no-exported-import    No @_exported import anywhere
   evaluate-pure         RVEngine evaluate has no Date(), FileManager, or ProcessInfo
   no-bypass             No RV_BYPASS or env that skips evaluate
   no-ns-home             No NSHomeDirectory() in Sources or Tests
@@ -145,29 +149,41 @@ check_no_force_unwrap() {
 }
 
 check_no_exported_import() {
-  # Existing @_exported in RVEngine/RVPacks is documented T1 debt.
-  # Flag as warning, not failure. New ones outside those two files WOULD fail.
+  # Former RVEngine/RVPacks @_exported T1 debt was removed (explicit imports
+  # at use sites). Any @_exported anywhere now fails.
+  check_empty "No @_exported import" '@_exported' "$SOURCES" --include='*.swift'
+}
+
+check_no_force_cast() {
+  check_empty "No as! in Sources" 'as!' "$SOURCES" --include='*.swift'
+}
+
+check_no_fatal() {
+  check_empty "No fatalError in Sources" 'fatalError' "$SOURCES" --include='*.swift'
+}
+
+check_no_precondition() {
+  # Zero-precondition codebase: failures are typed errors, cancellations map
+  # to .cancelled, and unreachable-but-unprovable paths return nil/Result.
+  check_empty "No preconditionFailure in Sources" 'preconditionFailure' "$SOURCES" --include='*.swift'
+}
+
+check_no_iuo() {
+  # Implicitly unwrapped optionals in var/let decls and func params.
+  # Filters != comparisons and full-line comments; validated both ways
+  # (catches planted `var x: T!` / `(y: T!)`, zero hits on the clean tree).
+  local pat='((var|let)[ \t]+[A-Za-z_][A-Za-z0-9_]*[ \t]*|[,(][ \t]*[A-Za-z_][A-Za-z0-9_]*[ \t]*):[ \t]*[^ =/{!][^=/{]*![ \t]*(=|,|\)|$)'
   local matches
-  matches=$(grep -rn '@_exported' "$SOURCES" --include='*.swift' || true)
+  matches=$(grep -rn --include='*.swift' -E "$pat" "$SOURCES" 2>/dev/null | grep -v '!=' | grep -vE ':[0-9]+:[ \t]*//' || true)
   local count
   count=$(echo "$matches" | grep -c . || true)
   if [ "$count" -eq 0 ]; then
-    if [ "$QUIET" -eq 0 ]; then printf "  %b✓%b %s\n" "$GREEN" "$NC" "No @_exported import"; fi
+    if [ "$QUIET" -eq 0 ]; then printf "  %b✓%b %s\n" "$GREEN" "$NC" "No implicitly unwrapped optionals in Sources"; fi
     return 0
-  fi
-  # Check if all matches are in RVEngine.swift or RVPacks.swift (known T1 debt)
-  local non_debt
-  non_debt=$(echo "$matches" | grep -v 'RVEngine.swift:' | grep -v 'RVPacks.swift:' || true)
-  local non_debt_count
-  non_debt_count=$(echo "$non_debt" | grep -c . || true)
-  if [ "$non_debt_count" -gt 0 ]; then
-    printf "  %b✗ New @_exported import outside known T1 debt%b (%d)\n" "$RED" "$NC" "$non_debt_count"
-    echo "$non_debt" | head -10 | indent
-    return 1
   else
-    printf "  %b⚠ @_exported import%b (%d, known T1 debt in RVEngine/RVPacks)\n" "$YELLOW" "$NC" "$count"
-    WARNINGS=$((WARNINGS + 1))
-    return 0
+    printf "  %b✗ implicitly unwrapped optional in Sources%b (%d)\n" "$RED" "$NC" "$count"
+    echo "$matches" | head -15 | indent
+    return 1
   fi
 }
 
@@ -538,6 +554,10 @@ ALL_CHECKS=(
   value-types
   no-isdenied
   no-force-unwrap
+  no-force-cast
+  no-fatal
+  no-precondition
+  no-iuo
   no-exported-import
   evaluate-pure
   no-bypass
@@ -560,6 +580,10 @@ run_check() {
     value-types)            check_value_types ;;
     no-isdenied)            check_no_isdenied ;;
     no-force-unwrap)        check_no_force_unwrap ;;
+    no-force-cast)          check_no_force_cast ;;
+    no-fatal)               check_no_fatal ;;
+    no-precondition)        check_no_precondition ;;
+    no-iuo)                 check_no_iuo ;;
     no-exported-import)     check_no_exported_import ;;
     evaluate-pure)          check_evaluate_pure ;;
     no-bypass)              check_no_bypass ;;

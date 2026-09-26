@@ -146,10 +146,12 @@ enum ClaudeSettingsMerge {
                 context: HookCommandContext(rvPath: rvPath, adapterPath: adapterPath),
                 willMerge: { root in
                     if force == false, inspectionState(of: root) == .occupied {
-                        preconditionFailure("merge called on occupied settings without --force")
+                        throw ClaudeSettingsMergeError.occupiedWithoutForce
                     }
                 }
             )
+        } catch let error as ClaudeSettingsMergeError {
+            throw error
         } catch {
             throw ClaudeSettingsMergeError.unreadable
         }
@@ -232,4 +234,7 @@ enum ClaudeSettingsMerge {
 
 enum ClaudeSettingsMergeError: Error, Equatable {
     case unreadable
+    /// `merge` refused occupied settings without `force`. Setup surfaces this
+    /// as a failed host write; the user reruns with `--force`.
+    case occupiedWithoutForce
 }

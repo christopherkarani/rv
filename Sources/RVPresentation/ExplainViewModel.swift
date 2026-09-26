@@ -137,7 +137,7 @@ public func explainViewModel(
     )
 }
 
-public func explainSemantic(from analysis: SemanticAnalysis) -> ExplainSemanticView? {
+package func explainSemantic(from analysis: SemanticAnalysis) -> ExplainSemanticView? {
     let layers = analysis.wrappers.map(\.rawValue)
     let wrapperLabels = layers.isEmpty ? nil : layers
     switch analysis.innermost {

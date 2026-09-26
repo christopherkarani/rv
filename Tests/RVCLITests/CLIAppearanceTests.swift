@@ -24,11 +24,13 @@ import RVTheme
     #expect(appearance == .robot)
 }
 
-@Test func serviceStatus_textFollowsAppearance() {
+@Test func serviceStatus_textFollowsAppearance() throws {
     let report = ServiceStatusReport(state: "down", fallback: "down")
-    #expect(ServiceStatusCommand.text(report, appearance: .robot) == ServiceStatusCommand.robotText(report))
+    let text = try ServiceStatusCommand.text(report, appearance: .robot)
+    let robot = try ServiceStatusCommand.robotText(report)
+    #expect(text == robot)
     #expect(
-        ServiceStatusCommand.text(report, appearance: .pretty(colorOffPalette))
+        try ServiceStatusCommand.text(report, appearance: .pretty(colorOffPalette))
             == ServiceStatusCommand.plainText(report)
     )
 }

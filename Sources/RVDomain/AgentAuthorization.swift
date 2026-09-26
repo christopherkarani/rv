@@ -185,7 +185,7 @@ public enum AgentAuthorization: Sendable, Equatable {
     ///
     /// `allowOnce` and `deny` succeed. `createRule` does not mint a rule on
     /// this door.
-    public static func humanDecision(
+    package static func humanDecision(
         _ decision: ApprovalDecision
     ) -> Result<AgentHumanDecision, AgentApprovalError> {
         switch decision {

@@ -1,0 +1,27 @@
+# Shared C/Swift evaluation-route vectors. Single source of truth.
+#
+# Consumed by BOTH:
+#   - Sources/rv-c/tests/evaluation_route_test.c (C: rv_should_miss_replay)
+#   - Tests/RVIPCTests/EvaluationRouteTests.swift (Swift: EvaluationRoute.path)
+# Add a case here and both harnesses must agree. Do NOT fork per-side cases.
+#
+# Columns (tab-separated, no trimming — whitespace is significant):
+#   clientversion<TAB>serviceversion<TAB>expect
+#   - "NULL" service = absent (C NULL / Swift nil). Client is never NULL.
+#   - Empty field = empty string (distinct from NULL).
+#   - expect: "service" (trust) or "inProcess" (miss/fallback).
+1.0.0	NULL	inProcess
+1.0.0		inProcess
+1.0.0	not-a-version	inProcess
+	1.0.0	inProcess
+not-a-version	1.0.0	inProcess
+1.0.0	1.9.9	service
+1.0.0	2.0.0	inProcess
+1	1.0.0	service
+1.0.0	1	service
+2.1.0	2.0.0	service
+1.0.0	v1.0.0	inProcess
+-1.0.0	1.0.0	inProcess
+ 1.0.0	1.0.0	inProcess
+99999999999999999999.0.0	1.0.0	inProcess
+1.0.0	99999999999999999999.0.0	inProcess
