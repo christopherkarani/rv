@@ -60,6 +60,7 @@ enum InstallAnalyticsHosts {
             "hermes": status(slots.hermes),
             "codex": status(slots.codex),
             "cursor": status(slots.cursor),
+            "antigravity": status(slots.antigravity),
         ]
     }
 

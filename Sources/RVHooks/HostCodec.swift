@@ -1,11 +1,11 @@
 import RVDomain
 
 extension HookHost {
-    /// Deny process exit: Grok/Claude/Cursor `0` (JSON is the gate),
+    /// Deny process exit: Grok/Claude/Cursor/Antigravity `0` (JSON is the gate),
     /// Pi/OpenCode/OpenClaw/Hermes `1`, Codex official honor path `2`.
     var denyExitCode: Int32 {
         switch self {
-        case .grok, .claude, .cursor:
+        case .grok, .claude, .cursor, .antigravity:
             return 0
         case .pi, .opencode, .openclaw, .hermes:
             return 1
@@ -126,6 +126,7 @@ func productionHostCodec(_ host: HookHost) -> ProductionHostCodec {
     case .grok: .denyOnly(GrokHostCodec())
     case .codex: .denyOnly(CodexHostCodec())
     case .cursor: .denyOnly(CursorHostCodec())
+    case .antigravity: .denyOnly(AntigravityHostCodec())
     }
 }
 

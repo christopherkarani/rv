@@ -26,6 +26,9 @@ enum HooksLayout: Equatable, Sendable {
     case nested(hooksRootKey: String, listKey: String)
     /// `{ root: { key: [hook] } }` per key, plus an optional schema version (Cursor).
     case flat(hooksRootKey: String, listKeys: [String], versionKey: String?, schemaVersion: Int?)
+    /// `{ hookName: { enabled: true, list: [{ matcher, hooks: [hook] }] } }`
+    /// (Antigravity). One named hook owns the matcher groups.
+    case grouped(hookName: String, listKey: String)
 }
 
 /// Per-host wiring descriptor: shape data plus small predicates/builders.
@@ -57,7 +60,7 @@ enum HostHooksMergeError: Error, Equatable {
 }
 
 /// Deep module owning hook-list JSON round-trip, strip/insert/uninstall, and
-/// locate for the Claude / Codex / Cursor setup merges (T2).
+/// locate for the Claude / Codex / Cursor / Antigravity setup merges (T2).
 ///
 /// OpenCode (plugin list) and Grok (exclusive render) do not share the
 /// hook-list shape, so they stay out of the engine per the GUD-001 fallback.
@@ -113,18 +116,14 @@ enum HostHooksMergeEngine {
             else {
                 return []
             }
-            var located: [LocatedHook] = []
-            for entry in list {
-                guard let hooks = entry["hooks"] as? [[String: Any]] else { continue }
-                for hook in hooks where isFingerprintedHook(hook, descriptor: descriptor) {
-                    located.append(LocatedHook(
-                        matcher: entry["matcher"] as? String,
-                        listKey: listKey,
-                        hook: hook
-                    ))
-                }
+            return locate(in: list, listKey: listKey, descriptor: descriptor)
+        case .grouped(let hookName, let listKey):
+            guard let group = root[hookName] as? [String: Any],
+                  let list = group[listKey] as? [[String: Any]]
+            else {
+                return []
             }
-            return located
+            return locate(in: list, listKey: listKey, descriptor: descriptor)
         case .flat(let hooksRootKey, let listKeys, _, _):
             guard let hooksRoot = root[hooksRootKey] as? [String: Any] else {
                 return []
@@ -138,6 +137,25 @@ enum HostHooksMergeEngine {
             }
             return located
         }
+    }
+
+    private static func locate(
+        in list: [[String: Any]],
+        listKey: String,
+        descriptor: HostWiringDescriptor
+    ) -> [LocatedHook] {
+        var located: [LocatedHook] = []
+        for entry in list {
+            guard let hooks = entry["hooks"] as? [[String: Any]] else { continue }
+            for hook in hooks where isFingerprintedHook(hook, descriptor: descriptor) {
+                located.append(LocatedHook(
+                    matcher: entry["matcher"] as? String,
+                    listKey: listKey,
+                    hook: hook
+                ))
+            }
+        }
+        return located
     }
 
     static func isFingerprintedHook(
@@ -166,17 +184,7 @@ enum HostHooksMergeEngine {
             else {
                 return root
             }
-            var nextEntries: [[String: Any]] = []
-            for var entry in list {
-                guard var hooks = entry["hooks"] as? [[String: Any]] else {
-                    nextEntries.append(entry)
-                    continue
-                }
-                hooks.removeAll { isFingerprintedHook($0, descriptor: descriptor) }
-                guard hooks.isEmpty == false else { continue }
-                entry["hooks"] = hooks
-                nextEntries.append(entry)
-            }
+            let nextEntries = stripGroups(in: list, descriptor: descriptor)
             if nextEntries.isEmpty {
                 hooksRoot.removeValue(forKey: listKey)
             } else {
@@ -187,6 +195,27 @@ enum HostHooksMergeEngine {
                 next.removeValue(forKey: hooksRootKey)
             } else {
                 next[hooksRootKey] = hooksRoot
+            }
+            return next
+        case .grouped(let hookName, let listKey):
+            guard var group = root[hookName] as? [String: Any],
+                  let list = group[listKey] as? [[String: Any]]
+            else {
+                return root
+            }
+            let nextEntries = stripGroups(in: list, descriptor: descriptor)
+            if nextEntries.isEmpty {
+                group.removeValue(forKey: listKey)
+            } else {
+                group[listKey] = nextEntries
+            }
+            var next = root
+            // Drop our named hook when only `enabled` (or nothing) remains;
+            // foreign events under the same name keep the group alive.
+            if group.keys.allSatisfy({ $0 == "enabled" }) {
+                next.removeValue(forKey: hookName)
+            } else {
+                next[hookName] = group
             }
             return next
         case .flat(let hooksRootKey, let listKeys, _, _):
@@ -214,6 +243,24 @@ enum HostHooksMergeEngine {
         }
     }
 
+    private static func stripGroups(
+        in list: [[String: Any]],
+        descriptor: HostWiringDescriptor
+    ) -> [[String: Any]] {
+        var nextEntries: [[String: Any]] = []
+        for var entry in list {
+            guard var hooks = entry["hooks"] as? [[String: Any]] else {
+                nextEntries.append(entry)
+                continue
+            }
+            hooks.removeAll { isFingerprintedHook($0, descriptor: descriptor) }
+            guard hooks.isEmpty == false else { continue }
+            entry["hooks"] = hooks
+            nextEntries.append(entry)
+        }
+        return nextEntries
+    }
+
     static func insertEntries(
         into root: [String: Any],
         descriptor: HostWiringDescriptor,
@@ -232,6 +279,20 @@ enum HostHooksMergeEngine {
             }
             hooksRoot[listKey] = list
             next[hooksRootKey] = hooksRoot
+            return next
+        case .grouped(let hookName, let listKey):
+            var next = root
+            var group = next[hookName] as? [String: Any] ?? [:]
+            var list = group[listKey] as? [[String: Any]] ?? []
+            for matcher in descriptor.matchers {
+                list.append([
+                    "matcher": matcher,
+                    "hooks": [hookDictionary(descriptor.buildEntry(context, matcher))],
+                ])
+            }
+            group["enabled"] = true
+            group[listKey] = list
+            next[hookName] = group
             return next
         case .flat(let hooksRootKey, let listKeys, let versionKey, let schemaVersion):
             var next = root

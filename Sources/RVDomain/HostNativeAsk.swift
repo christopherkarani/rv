@@ -98,7 +98,7 @@ public enum HostNativeAsk {
         switch host {
         case .pi, .opencode, .claude, .hermes, .openclaw:
             return .spendFirst
-        case .grok:
+        case .grok, .antigravity:
             return .noPause
         case .codex, .cursor:
             return .leftoverAskForbidden

@@ -217,6 +217,81 @@ extension SetupRun {
         return wroteSettings || removedAdapter
     }
 
+    /// Removes rv-fingerprinted Antigravity handlers only. Returns whether anything changed.
+    static func removeAntigravityRVHooks(at path: String, files: FileOps) throws(SetupError) -> Bool {
+        try applyAntigravityUninstall(at: path, files: files, unreadable: .fail)
+    }
+
+    /// Occupied foreign/tampered `rv-guard.py` still strips on uninstall.
+    static func stripAntigravityFingerprintLeavingOccupied(
+        at path: String,
+        files: FileOps
+    ) throws(SetupError) -> Bool {
+        try applyAntigravityUninstall(at: path, files: files, unreadable: .leave)
+    }
+
+    private enum AntigravityUnreadableUninstall {
+        case fail
+        case leave
+    }
+
+    private static func applyAntigravityUninstall(
+        at path: String,
+        files: FileOps,
+        unreadable: AntigravityUnreadableUninstall
+    ) throws(SetupError) -> Bool {
+        if files.isSymbolicLink(path) {
+            return false
+        }
+        guard let data = files.readData(path) else {
+            return removeAntigravityAdapterIfCurrent(hooksPath: path, files: files)
+        }
+        let next: Data?
+        do {
+            next = try AntigravitySettingsMerge.uninstall(existingData: data)
+        } catch {
+            switch unreadable {
+            case .fail:
+                throw SetupError.hostHookWriteFailed(.antigravity)
+            case .leave:
+                return false
+            }
+        }
+        var wroteHooks = false
+        if let next {
+            if next != data {
+                do {
+                    try files.writeData(next, to: path)
+                } catch {
+                    throw SetupError.hostHookWriteFailed(.antigravity)
+                }
+                wroteHooks = true
+            }
+        } else {
+            files.removeFile(atPath: path)
+            wroteHooks = true
+        }
+        let removedAdapter = removeAntigravityAdapterIfCurrent(hooksPath: path, files: files)
+        return wroteHooks || removedAdapter
+    }
+
+    /// Removes `~/.gemini/config/hooks/rv-guard.py` when it is the current rv adapter.
+    private static func removeAntigravityAdapterIfCurrent(hooksPath: String, files: FileOps) -> Bool {
+        let adapterPath = AntigravitySettingsMerge.adapterPath(hooksPath: hooksPath)
+        if files.isSymbolicLink(adapterPath) {
+            return false
+        }
+        guard let data = files.readData(adapterPath),
+              let text = String(data: data, encoding: .utf8),
+              let adapter = try? HostAdapterResources.load(for: .antigravity),
+              adapter.matchesCurrent(text)
+        else {
+            return false
+        }
+        files.removeFile(atPath: adapterPath)
+        return true
+    }
+
     /// Removes `~/.claude/hooks/rv-guard.py` when it is the current rv adapter.
     private static func removeClaudeAdapterIfCurrent(settingsPath: String, files: FileOps) -> Bool {
         let adapterPath = ClaudeSettingsMerge.adapterPath(settingsPath: settingsPath)

@@ -13,6 +13,12 @@ func hookAskJSON(reason: String, rule: String? = nil, next: String? = nil) -> St
     return "{\(body)}\n"
 }
 
+/// Official Antigravity honor path: explicit `decision: allow` + exit 0.
+/// Empty stdout fails protojson unmarshal and blocks, so allow is never empty.
+func hookAllowJSON() -> String {
+    "{\"decision\":\"allow\"}\n"
+}
+
 /// Last-inch host JSON. Keys stay `decision` / `reason` / `rule` / `next`.
 func hookDenyJSON(reason: String, rule: String? = nil, next: String? = nil) -> String {
     var body = "\"decision\":\"deny\",\"reason\":\(jsonQuoted(reason))"
