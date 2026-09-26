@@ -160,6 +160,34 @@ struct ParseGitWorktreeTests {
         #expect(parseClean([]) == .clean(force: false, dryRun: false, directories: false))
     }
 
+    @Test func argvDirect_matchesAdapter() {
+        // T3b2: pin Argv-direct behavior so T4 adapter deletion cannot shift semantics.
+        let checkoutArgs = ["-b", "feature"]
+        #expect(parseCheckout(Argv(program: "git", args: checkoutArgs)) == parseCheckout(checkoutArgs))
+        #expect(parseCheckout(Argv(program: "git", args: checkoutArgs)) == .createBranch(name: "feature", startPoint: nil, force: false))
+        #expect(parseCheckout(Argv(program: "git", args: ["main"])) == nil)
+
+        let switchArgs = ["-C", "rewrite"]
+        #expect(parseSwitch(Argv(program: "git", args: switchArgs)) == parseSwitch(switchArgs))
+        #expect(parseSwitch(Argv(program: "git", args: switchArgs)) == .createBranch(name: "rewrite", startPoint: nil, force: true))
+        #expect(parseSwitch(Argv(program: "git", args: [])) == nil)
+
+        let restoreArgs = ["--source", "HEAD", "a"]
+        #expect(parseRestore(Argv(program: "git", args: restoreArgs)) == parseRestore(restoreArgs))
+        #expect(parseRestore(Argv(program: "git", args: restoreArgs)) == .restore(pathspecs: ["a"], destination: .worktree, source: "HEAD"))
+        #expect(parseRestore(Argv(program: "git", args: ["--source"])) == nil)
+
+        let resetArgs = ["--hard", "HEAD", "--", "file"]
+        #expect(parseReset(Argv(program: "git", args: resetArgs)) == parseReset(resetArgs))
+        #expect(parseReset(Argv(program: "git", args: resetArgs)) == .discardWorktree(pathspecs: ["file"], source: "HEAD"))
+        #expect(parseReset(Argv(program: "git", args: ["--hard", "--soft"])) == nil)
+
+        let cleanArgs = ["-fd"]
+        #expect(parseClean(Argv(program: "git", args: cleanArgs)) == parseClean(cleanArgs))
+        #expect(parseClean(Argv(program: "git", args: cleanArgs)) == .clean(force: true, dryRun: false, directories: true))
+        #expect(parseClean(Argv(program: "git", args: ["-e"])) == nil)
+    }
+
     @Test func clean_rejectsInteractiveUnknownAndDanglingExclude() {
         #expect(parseClean(["-i"]) == nil)
         #expect(parseClean(["--interactive"]) == nil)

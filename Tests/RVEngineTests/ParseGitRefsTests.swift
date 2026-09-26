@@ -159,6 +159,36 @@ struct ParseGitRefsTests {
         #expect(parseRebase(["--unknown"]) == nil)
     }
 
+    @Test func argvDirect_matchesAdapter() {
+        // T3b2: pin Argv-direct behavior so T4 adapter deletion cannot shift semantics.
+        let pushArgs = ["--force", "origin", "main"]
+        #expect(parsePush(Argv(program: "git", args: pushArgs), context: .empty) == parsePush(pushArgs, context: .empty))
+        #expect(parsePush(Argv(program: "git", args: pushArgs), context: .empty) == .push(remote: "origin", refspec: "main", force: .force))
+        let pushBad = ["origin", "a", "b"]
+        #expect(parsePush(Argv(program: "git", args: pushBad), context: .empty) == nil)
+        #expect(parsePush(Argv(program: "git", args: pushBad), context: .empty) == parsePush(pushBad, context: .empty))
+
+        let branchArgs = ["-D", "stale"]
+        #expect(parseBranch(Argv(program: "git", args: branchArgs)) == parseBranch(branchArgs))
+        #expect(parseBranch(Argv(program: "git", args: branchArgs)) == .deleteBranch(name: "stale", force: true))
+        #expect(parseBranch(Argv(program: "git", args: ["name"])) == nil)
+
+        let tagArgs = ["-d", "v1"]
+        #expect(parseTag(Argv(program: "git", args: tagArgs)) == parseTag(tagArgs))
+        #expect(parseTag(Argv(program: "git", args: tagArgs)) == .deleteTag(name: "v1", remote: nil))
+        #expect(parseTag(Argv(program: "git", args: ["v1"])) == nil)
+
+        let stashArgs = ["-m", "wip", "push"]
+        #expect(parseStash(Argv(program: "git", args: stashArgs)) == parseStash(stashArgs))
+        #expect(parseStash(Argv(program: "git", args: stashArgs)) == .stash(verb: .push))
+        #expect(parseStash(Argv(program: "git", args: ["bogus"])) == nil)
+
+        let rebaseArgs = ["--onto", "main"]
+        #expect(parseRebase(Argv(program: "git", args: rebaseArgs)) == parseRebase(rebaseArgs))
+        #expect(parseRebase(Argv(program: "git", args: rebaseArgs)) == .rebase(verb: .start, onto: "main"))
+        #expect(parseRebase(Argv(program: "git", args: ["--onto"])) == nil)
+    }
+
     @Test func flagTokens_clusteredShortsAndGitAttachedValue() {
         #expect(clusteredShorts("-abc") == ["a", "b", "c"])
         #expect(clusteredShorts("--abc") == nil)
