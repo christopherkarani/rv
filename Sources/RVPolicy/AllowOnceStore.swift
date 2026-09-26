@@ -5,6 +5,7 @@ import Glibc
 #endif
 import Foundation
 import RVDomain
+import RVFileStore
 
 public actor AllowOnceStore {
     nonisolated public let baseDirectory: URL

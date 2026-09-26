@@ -5,12 +5,17 @@ import Glibc
 #endif
 import Foundation
 
-/// Internal. Single owner of the create-validate-chmod-open-flock-unlock protocol.
-enum ExclusiveFileLock {
+/// Single owner of the create-validate-chmod-open-flock-unlock protocol.
+/// Moved from RVPolicy; semantics unchanged.
+public enum ExclusiveFileLock {
     /// Runs `body` while holding LOCK_EX on the lock file at `lockURL`.
     /// Creates the lock file owner-only if missing; throws `LockError` on any failure.
     /// `nonBlocking` uses `LOCK_NB` so a held lock fails closed instead of waiting.
-    static func withLock<T>(at lockURL: URL, nonBlocking: Bool = false, _ body: () throws -> T) throws -> T {
+    public static func withLock<T>(
+        at lockURL: URL,
+        nonBlocking: Bool = false,
+        _ body: () throws -> T
+    ) throws -> T {
         var isDirectory: ObjCBool = false
         if FileManager.default.fileExists(atPath: lockURL.path, isDirectory: &isDirectory),
               isDirectory.boolValue == true
@@ -43,7 +48,7 @@ enum ExclusiveFileLock {
         return try body()
     }
 
-    enum LockError: Error, Equatable {
+    public enum LockError: Error, Equatable {
         case lockFailed
     }
 }
