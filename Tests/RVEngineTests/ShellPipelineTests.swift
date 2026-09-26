@@ -39,6 +39,7 @@ import RVDomain
             "cat > /tmp/note.md << 'EOF'\nSee git reset --hard\nEOF"
         ).matching
         #expect(write.rawValue.contains("reset") == false)
+        #expect(write.rawValue.contains("cat"))
         let executing = ShellPipeline.parse(
             "cat <<'EOF' | bash\ngit reset --hard\nEOF"
         ).matching
@@ -154,6 +155,7 @@ import RVDomain
             "cat > /tmp/note.md << 'EOF'\nSee git reset --hard\nEOF"
         )
         #expect(write.contains("reset") == false)
+        #expect(write.contains("cat"))
         let sink = "cat <<'EOF' | bash\ngit reset --hard\nEOF"
         #expect(ShellPipeline.peelStage(sink) == sink)
         #expect(ShellPipeline.peelStage("   ") == "")
