@@ -18,6 +18,75 @@ enum SeatbeltLifetimeSyscall {
     static let setsid = 147
 }
 
+/// Mach/XPC boundary for contained runtimes.
+///
+/// Denied by default. Narrow allows appear in `allowedServices` only when a
+/// normal development workflow demonstrably requires the service and the
+/// service is not credential-bearing. XPC to launchd services is mediated
+/// through mach-lookup, so denying mach-lookup also blocks XPC to securityd
+/// and other host agents.
+enum SeatbeltMachPolicy {
+    /// Mach services the cage may look up, by exact global name. As of the
+    /// Mach/XPC hardening chunk this holds exactly one entry
+    /// (`com.apple.bsd.dirhelper`), proven necessary for SwiftPM linking;
+    /// shell, git, swiftc, clang, python, node, curl (loopback and proxied
+    /// HTTPS), PTY, and subprocess spawning were all verified working with
+    /// zero allows. Other denied lookups (logd, notification_center,
+    /// opendirectoryd, cfprefsd, trustd, securityd.xpc, SecurityServer,
+    /// pasteboard, and others) are non-fatal fallbacks for these tools.
+    ///
+    /// Each future entry must name the exact `global-name` and carry a
+    /// comment explaining which workflow requires it and why the service is
+    /// safe. Never add broad classes (security services, pasteboard,
+    /// notifications, launchservices, user agents, credential stores)
+    /// without a demonstrated workflow need.
+    ///
+    /// macOS version compatibility: service names are stable across recent
+    /// releases, but if a required service is renamed on a new OS, list both
+    /// spellings explicitly with version comments rather than using a
+    /// wildcard or prefix match. SBPL `global-name` takes exact strings;
+    /// there is no safe wildcard for Mach names.
+    static let allowedServices: [String] = [
+        // SwiftPM link requires BSD dirhelper: `swift build` fails at the
+        // `Ld` phase with SwiftBuild `permissionDenied` without it and
+        // succeeds with only this entry allowed (verified: empty allowlist
+        // fails, dirhelper-only succeeds, Keychain stays blocked with
+        // SecItem returning -50). Compile, git, clang, python, node, curl,
+        // and subprocess spawning need no Mach service. Dirhelper performs
+        // BSD directory operations (temporary directory setup) and holds no
+        // credentials; the file sandbox still constrains every cage write,
+        // so this grants no file authority beyond the existing profile.
+        "com.apple.bsd.dirhelper",
+    ]
+
+    /// SBPL fragment for the Mach boundary. Explicit `(deny mach-lookup)`
+    /// and `(deny mach-register)` state the default (redundant with `(deny
+    /// default)` but visible in review); narrow allows follow so last-match
+    /// grants only the listed names.
+    static func sbplRules() -> String {
+        var rules = """
+        ;; Mach/XPC denied by default. The cage must not reach host
+        ;; credential/security services (securityd, SecurityServer, trustd,
+        ;; biometrickitd, GSSCred, pasteboard, accounts, SSO) or arbitrary
+        ;; host agents. Narrow allows in SeatbeltMachPolicy.allowedServices
+        ;; only, each with a workflow justification.
+        (deny mach-lookup)
+        (deny mach-register)
+        """
+        if allowedServices.isEmpty == false {
+            let names = allowedServices
+                .map { "(global-name \"\($0)\")" }
+                .joined(separator: "\n    ")
+            rules += """
+
+            (allow mach-lookup
+                \(names))
+            """
+        }
+        return rules
+    }
+}
+
 /// SBPL text compiled from a contained `IsolationPlan`. Production construction
 /// is `compileSeatbeltProfile` only.
 public struct SeatbeltProfile: Sendable, Equatable {
@@ -732,7 +801,9 @@ func compileFirstSliceProfile(
     // their own location (Python, xcrun) break. Metadata on the walk
     // prefixes lets tools resolve paths. Content outside the workspace and
     // the system prefixes below stays denied.
-    // `mach-lookup` is an unfiltered baseline; it is not a grant of host files.
+    // Mach/XPC policy comes from `SeatbeltMachPolicy` (denied by default,
+    // narrowly allowed where proven necessary). It is not a grant of host
+    // files, and host credential services stay unreachable.
     // `file-write*` does not include `file-link` or `file-clone` on this OS.
     // Deny them explicitly so a later wildcard change cannot create aliases.
     // Path rules still cannot see a hard link planted by another process.
@@ -747,7 +818,7 @@ func compileFirstSliceProfile(
     ;; processes outside this sandbox.
     (allow signal (target same-sandbox))
     (allow sysctl-read)
-    (allow mach-lookup)
+    \(SeatbeltMachPolicy.sbplRules())
     (allow file-read-data (literal "/"))
     (allow file-read-metadata (literal "/"))
     (allow file-read-metadata
