@@ -26,7 +26,8 @@ extension ShellPipeline {
         var index = 0
         while index < argv.args.count {
             let word = argv.args[index]
-            switch FlagToken.classify(word) {
+            let token = FlagToken.classify(word)
+            switch token {
             case .long(let name, let attached):
                 if let attached {
                     out.append(.long(name: name, value: attached))
@@ -53,7 +54,7 @@ extension ShellPipeline {
                     index += 1
                 }
             case .positional, .terminator, .loneDash, .shortEquals, .dangling:
-                out.append(FlagToken.classify(word))
+                out.append(token)
                 index += 1
             }
         }
@@ -96,8 +97,9 @@ public struct FlagValueSpec: Sendable, Hashable {
     /// The `=attached` form never consumes.
     public var valueLongs: Set<String>
     /// When true, a dash-led value word is rejected (`.dangling`) instead
-    /// of consumed. Only `checkout -b/-B/--orphan` and `switch -c/-C`
-    /// behave this way today.
+    /// of consumed. Only the branch-name takers behave this way today:
+    /// `checkout` (`-b`/`-B`/`--branch`/`--orphan`) and `switch`
+    /// (`-c`/`-C`/`--create`/`--force-create`).
     public var rejectsDashValues: Bool
 
     public init(

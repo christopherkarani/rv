@@ -74,6 +74,15 @@ private let singleDashWordGoldens: [(word: String, expected: String?)] = [
                 .positional("file"),
             ]
         )
+        // An empty attached value still never consumes: legacy touch skips
+        // `--date=` without arming its expect flag.
+        let empty = Argv(program: "touch", args: ["--date=", "file"])
+        #expect(
+            ShellPipeline.scanFlags(empty, values: spec) == [
+                .long(name: "date", value: ""),
+                .positional("file"),
+            ]
+        )
     }
 
     @Test func scan_bareValueLongConsumesNextWord() {
@@ -130,6 +139,14 @@ private let singleDashWordGoldens: [(word: String, expected: String?)] = [
         #expect(
             ShellPipeline.scanFlags(Argv(program: "git", args: ["-b"]), values: shortSpec)
                 == [.dangling(flag: "-b")]
+        )
+        // End-of-argv dangles under the default spec too: legacy touch
+        // `-t` with no following word fails the parse.
+        #expect(
+            ShellPipeline.scanFlags(
+                Argv(program: "touch", args: ["-t"]),
+                values: FlagValueSpec(valueShorts: ["t"])
+            ) == [.dangling(flag: "-t")]
         )
     }
 
@@ -188,6 +205,20 @@ private let singleDashWordGoldens: [(word: String, expected: String?)] = [
             }()
             #expect(gitAttachedValue(word, long: long) == expected)
         }
+    }
+
+    // Literal pins for forms the git-refs helper tests don't cover, so the
+    // old-behavior equivalence stands on values independent of the grammar.
+    @Test func adapter_literalOldBehavior() {
+        #expect(clusteredShorts("---") == nil)
+        #expect(clusteredShorts("--") == nil)
+        #expect(clusteredShorts("") == nil)
+        #expect(clusteredShorts("-=x") == nil)
+        #expect(clusteredShorts("-m=") == nil)
+        #expect(gitAttachedValue("--a=b=c", long: "--a") == "b=c")
+        #expect(gitAttachedValue("--=x", long: "--") == "x")
+        #expect(gitAttachedValue("--branch=main", long: "--branch") == "main")
+        #expect(gitAttachedValue("", long: "--source") == nil)
     }
 }
 
