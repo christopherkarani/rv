@@ -54,20 +54,27 @@ enum SecretPathGuard {
     }
 
     private static func candidates(in haystack: String, includeMetadata: Bool) -> [String] {
-        let tokens = tokenizeCommand(haystack)
-        guard let headToken = tokens.first else { return [] }
-        switch headKind(basename(headToken.decoded)) {
+        // C1: lex via the shared pipeline, then route on Argv. The Argv is
+        // built manually (not via Argv(tokens:)) so newline lexemes survive:
+        // they are load-bearing operands below, exactly as when the legacy
+        // tokenizeCommand stream carried them. A leading "\n" routes to
+        // `.other` (basename can never equal a head name), and interior
+        // "\n" words count as grep positionals and find path operands.
+        let tokens = ShellPipeline.tokenize(haystack)
+        guard let head = tokens.first else { return [] }
+        let argv = Argv(program: head.lexeme, args: tokens.dropFirst().map(\.lexeme))
+        switch headKind(basename(argv.program)) {
         case .nonPath:
             return []
         case .grep:
-            return grepCandidates(tokens.dropFirst())
+            return grepCandidates(argv.args)
         case .find:
-            return findCandidates(tokens.dropFirst())
+            return findCandidates(argv.args)
         case .metadata:
             guard includeMetadata else { return [] }
-            return otherCandidates(tokens.dropFirst())
+            return otherCandidates(argv.args)
         case .other:
-            return otherCandidates(tokens.dropFirst())
+            return otherCandidates(argv.args)
         }
     }
 }
@@ -103,25 +110,31 @@ private enum OperandFlag {
     case ignore
 }
 
-private func parseFlag(_ decoded: String) -> OperandFlag? {
-    guard decoded.hasPrefix("-"), decoded != "--" else { return nil }
-    if decoded.hasPrefix("--") {
-        let body = decoded.dropFirst(2)
-        let name: Substring
-        let attached: String?
-        if let eq = body.firstIndex(of: "=") {
-            name = body[..<eq]
-            attached = String(body[body.index(after: eq)...])
-        } else {
-            name = body
-            attached = nil
-        }
+/// Maps one grammar token to the guard's grep operand role.
+///
+/// Total over `FlagToken`: `.positional` yields `nil`, matching the legacy
+/// `parseFlag` returning `nil` for non-dash words. `.terminator` also yields
+/// `nil` (legacy `parseFlag("--")` was `nil`), but the caller consumes it
+/// first, exactly as the legacy loop tested `decoded == "--"` before calling
+/// `parseFlag`. `classify` never emits `.dangling`, so that arm only exists
+/// for totality.
+private func operandFlag(for token: FlagToken) -> OperandFlag? {
+    switch token {
+    case .positional, .terminator, .dangling:
+        return nil
+    case .loneDash:
+        // Legacy `parseFlag("-")` fell through to `.ignore`: the empty letter
+        // run vacuously satisfies the all-letters test and contains no e/f.
+        return .ignore
+    case .long(let name, let attached):
         switch name {
         case "regexp":
             return .regexp(attached: attached)
         case "file":
             return .file(attached: attached)
         case "files":
+            // Attached values are ignored here, as before: `--files=x` was
+            // `.files`, never `.equalsValue`.
             return .files
         default:
             if let attached {
@@ -129,21 +142,20 @@ private func parseFlag(_ decoded: String) -> OperandFlag? {
             }
             return .ignore
         }
-    }
-    if let eq = decoded.firstIndex(of: "="), eq > decoded.startIndex {
-        return .equalsValue(String(decoded[decoded.index(after: eq)...]))
-    }
-    let letters = decoded.dropFirst()
-    guard letters.allSatisfy({ $0.isASCII && $0.isLetter }) else {
+    case .shorts(let letters, _):
+        guard letters.allSatisfy({ $0.isASCII && $0.isLetter }) else {
+            return .ignore
+        }
+        if letters.contains("f") {
+            return .file(attached: nil)
+        }
+        if letters.contains("e") {
+            return .regexp(attached: nil)
+        }
         return .ignore
+    case .shortEquals(_, let value):
+        return .equalsValue(value)
     }
-    if letters.contains("f") {
-        return .file(attached: nil)
-    }
-    if letters.contains("e") {
-        return .regexp(attached: nil)
-    }
-    return .ignore
 }
 
 private func operandCandidate(_ decoded: String) -> String? {
@@ -160,7 +172,15 @@ private func operandCandidate(_ decoded: String) -> String? {
     return decoded
 }
 
-private func grepCandidates<C: Collection>(_ tokens: C) -> [String] where C.Element == CommandToken {
+/// Grep-family candidate extraction over grammar-classified argv words.
+///
+/// The state machine mirrors the legacy loop: a pending `-e`/`-f` value
+/// consumes the next word verbatim (even `"--"` or dash-led words), `--`
+/// flips to positional mode, `-e`/`-f`/`--files` mark the pattern as given,
+/// and otherwise the first positional is the pattern. Newline words classify
+/// as `.positional` and count as positionals, as before.
+private func grepCandidates(_ words: [String]) -> [String] {
+    let tokens = words.map(FlagToken.classify)
     var collected: [String] = []
     var skipFirstPositional = true
     var expectRegexp = false
@@ -173,16 +193,15 @@ private func grepCandidates<C: Collection>(_ tokens: C) -> [String] where C.Elem
         collected.append(value)
     }
 
-    for token in tokens {
+    for (word, token) in zip(words, tokens) {
         if collected.count >= SecretPathGuard.candidateCap { break }
-        let decoded = token.decoded
         if expectRegexp {
             expectRegexp = false
             continue
         }
         if expectFile {
             expectFile = false
-            add(decoded)
+            add(word)
             continue
         }
         if afterDoubleDash {
@@ -190,14 +209,14 @@ private func grepCandidates<C: Collection>(_ tokens: C) -> [String] where C.Elem
                 skipFirstPositional = false
                 continue
             }
-            add(decoded)
+            add(word)
             continue
         }
-        if decoded == "--" {
+        if case .terminator = token {
             afterDoubleDash = true
             continue
         }
-        if let flag = parseFlag(decoded) {
+        if let flag = operandFlag(for: token) {
             switch flag {
             case .regexp(let attached):
                 skipFirstPositional = false
@@ -224,12 +243,20 @@ private func grepCandidates<C: Collection>(_ tokens: C) -> [String] where C.Elem
             skipFirstPositional = false
             continue
         }
-        add(decoded)
+        add(word)
     }
     return collected
 }
 
-private func findCandidates<C: Collection>(_ tokens: C) -> [String] where C.Element == CommandToken {
+/// Find candidate extraction: path operands before the first predicate word.
+///
+/// A word starts the predicate section exactly when the legacy test held:
+/// every dash-led word (all non-`.positional` grammar cases) plus the bare
+/// `(`, `!`, and `;` operands. `-name`/`-iname`/`-path`, read via
+/// `singleDashWord` (which matches exactly those three literals), skip their
+/// value, since patterns are not paths.
+private func findCandidates(_ words: [String]) -> [String] {
+    let tokens = words.map(FlagToken.classify)
     var collected: [String] = []
     var beforePredicate = true
     var skipValue = false
@@ -242,34 +269,37 @@ private func findCandidates<C: Collection>(_ tokens: C) -> [String] where C.Elem
 
     for token in tokens {
         if collected.count >= SecretPathGuard.candidateCap { break }
-        let decoded = token.decoded
         if skipValue {
             skipValue = false
             continue
         }
-        if decoded.hasPrefix("-") || decoded == "(" || decoded == "!" || decoded == ";" {
+        switch token {
+        case .positional("("), .positional("!"), .positional(";"):
             beforePredicate = false
-            if decoded == "-name" || decoded == "-iname" || decoded == "-path" {
+        case .positional(let word):
+            if beforePredicate, let candidate = operandCandidate(word) {
+                add(candidate)
+            }
+        default:
+            beforePredicate = false
+            if let nameWord = token.singleDashWord,
+                nameWord == "name" || nameWord == "iname" || nameWord == "path"
+            {
                 skipValue = true
             }
-            continue
-        }
-        if beforePredicate, let candidate = operandCandidate(decoded) {
-            add(candidate)
         }
     }
     return collected
 }
 
-private func otherCandidates<C: Collection>(_ tokens: C) -> [String] where C.Element == CommandToken {
+private func otherCandidates(_ words: [String]) -> [String] {
     var collected: [String] = []
-    for token in tokens {
+    for word in words {
         if collected.count >= SecretPathGuard.candidateCap { break }
-        guard let candidate = operandCandidate(token.decoded), !candidate.isEmpty else {
+        guard let candidate = operandCandidate(word), !candidate.isEmpty else {
             continue
         }
         collected.append(candidate)
     }
     return collected
 }
-
