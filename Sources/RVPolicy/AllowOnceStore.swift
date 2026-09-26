@@ -303,13 +303,24 @@ public actor AllowOnceStore {
     }
 
     private func writeRecords(_ records: [AllowOnceRecord]) throws {
-        try store.save(records)
+        do {
+            try store.save(records)
+        } catch is FileLockedStoreError {
+            // RVFileStore boundary: every save failure (encode or IO) becomes
+            // the domain persistence error, so withFileLock only ever sees
+            // genuine lock-acquisition failures.
+            throw AllowOnceError.encodeFailed
+        }
     }
 
     private func withFileLock<T>(nonBlocking: Bool = false, _ body: () throws -> T) throws -> T {
         do {
             return try store.withLock(nonBlocking: nonBlocking, body)
         } catch let error as FileLockedStoreError {
+            // Only withLock-originated failures reach here: the body throws
+            // domain errors (writeRecords translates save failures). IO from
+            // lock setup collapses into encodeFailed — fail-closed, and both
+            // map to "store unavailable" for callers.
             switch error {
             case .lockFailed:
                 throw AllowOnceError.lockFailed
