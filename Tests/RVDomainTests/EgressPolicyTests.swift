@@ -48,6 +48,33 @@ import Testing
     #expect(policy.allows(host: "api.anthropic.com.evil.com", port: 443) == false)
 }
 
+@Test func egressPolicyPublicHTTPSAdmitsValidNamesOnWebPorts() {
+    let policy = EgressHostPolicy.publicHTTPS
+    #expect(policy.allows(host: "api.anthropic.com", port: 443))
+    #expect(policy.allows(host: "registry.npmjs.org", port: 443))
+    #expect(policy.allows(host: "github.com", port: 443))
+    #expect(policy.allows(host: "example.com", port: 80))
+    #expect(policy.allows(host: "API.ANTHROPIC.COM", port: 443))
+    #expect(policy.allows(host: "api.anthropic.com.", port: 443))
+    #expect(policy.allows(host: "a.b.c.d.example.co.uk", port: 443))
+}
+
+@Test func egressPolicyPublicHTTPSRejectsPortsAndBypassShapes() {
+    let policy = EgressHostPolicy.publicHTTPS
+    #expect(policy.allows(host: "example.com", port: 8443) == false)
+    #expect(policy.allows(host: "example.com", port: 22) == false)
+    #expect(policy.allows(host: "example.com", port: 0) == false)
+    #expect(policy.allows(host: "1.2.3.4", port: 443) == false)
+    #expect(policy.allows(host: "[::1]", port: 443) == false)
+    #expect(policy.allows(host: "user@example.com", port: 443) == false)
+    #expect(policy.allows(host: "example.com:443", port: 443) == false)
+    #expect(policy.allows(host: "localhost", port: 443) == false)
+    #expect(policy.allows(host: "singlelabel", port: 443) == false)
+    #expect(policy.allows(host: "", port: 443) == false)
+    #expect(policy.allows(host: "api..example.com", port: 443) == false)
+    #expect(policy.allows(host: String(repeating: "a", count: 64) + ".com", port: 443) == false)
+}
+
 @Test func egressPolicyRejectsIPAndUserinfoBypassShapes() {
     let policy = EgressHostPolicy.agentAPIs
     #expect(policy.allows(host: "1.2.3.4", port: 443) == false)

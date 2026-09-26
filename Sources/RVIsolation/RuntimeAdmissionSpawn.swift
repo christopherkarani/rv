@@ -292,13 +292,12 @@ private func spawnAdmittedCommand(
         command.executable,
     ]
     arguments.append(contentsOf: command.arguments)
-    let environment = [
-        "PATH=/usr/bin:/bin",
-        "LANG=C",
-        "LC_ALL=C",
-        "HOME=\(launch.workspacePath)",
-        "TMPDIR=\(launch.workspacePath)",
-    ]
+    let environment = containedRuntimeEnvironment(
+        workspace: launch.workspacePath,
+        io: .discard,
+        agentBin: AgentBin.installedDirectory(),
+        egressProxyPort: launch.egressProxyPort
+    )
     let argv = AdmissionSpawnPointers(arguments)
     let envp = AdmissionSpawnPointers(environment)
     defer {

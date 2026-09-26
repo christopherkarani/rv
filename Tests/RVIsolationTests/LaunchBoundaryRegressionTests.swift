@@ -38,12 +38,39 @@ struct LaunchBoundaryRegressionTests {
             if pair.count == 2 { values[String(pair[0])] = String(pair[1]) }
         }
         // Report names only on failure, never inherited secret values.
-        let unexpected = Set(values.keys).subtracting(["HOME", "TMPDIR", "PATH", "LANG", "LC_ALL", "PWD", "SHLVL", "_"])
-        #expect(unexpected.isEmpty)
         let root = try #require(posixRealpath(tree.workspaceURL.path))
-        #expect(values["HOME"] == root)
-        #expect(values["TMPDIR"] == root)
-        #expect(values["PATH"] == "/usr/bin:/bin")
+        let context = resolveProductiveWorkspace(
+            workspacePath: root,
+            hostEnvironment: ProcessInfo.processInfo.environment,
+            agentBin: AgentBin.installedDirectory()
+        )
+        let home = try #require(context.developerHome)
+        #expect(values["HOME"] == home.home)
+        #expect(values["TMPDIR"] == home.tmp + "/")
+        #expect(values["TEMP"] == home.tmp + "/")
+        #expect(values["TMP"] == home.tmp + "/")
+        #expect(values["PATH"] == context.pathValue)
+        #expect(values["XDG_CACHE_HOME"] == home.cache)
+        #expect(values["SWIFTPM_MODULECACHE_OVERRIDE"] == home.cache + "/swift-modulecache")
+        #expect(values["PWD"] == root)
+        // Representative secret, loader, and interpreter names never pass,
+        // whatever the runner environment holds. The two agentBin compat
+        // keys are covered by terminalEnvironmentKeyPolicy instead: with an
+        // install they carry host values, otherwise they stay absent.
+        let compatKeys = Set(["ANTHROPIC_API_KEY", "META_API_KEY"])
+        for denied in [
+            "OPENAI_API_KEY",
+            "NPM_TOKEN", "GITHUB_TOKEN", "AWS_SECRET_ACCESS_KEY",
+            "SSH_AUTH_SOCK", "DYLD_INSERT_LIBRARIES", "LD_PRELOAD",
+            "PYTHONPATH", "NODE_OPTIONS",
+        ] {
+            #expect(values[denied] == nil)
+        }
+        if AgentBin.installedDirectory() == nil {
+            for key in compatKeys {
+                #expect(values[key] == nil)
+            }
+        }
     }
 
     @Test func preparedWorkspaceRetargetDoesNotChangeGrantOrWorkingDirectory() throws {

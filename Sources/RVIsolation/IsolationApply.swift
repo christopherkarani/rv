@@ -461,7 +461,9 @@ func prepareSeatbelt(
         case .success(let compiled):
             var profile = compiled.allowingExecutable(command.executable)
                 .allowingLoopbackEgress()
-            if let agentBin = AgentBin.installedDirectory(),
+                .allowingLoopbackBind()
+            let agentBin = AgentBin.installedDirectory()
+            if let agentBin,
                 let home = ProcessInfo.processInfo.environment["HOME"]
             {
                 profile = profile.allowingAgentBin(AgentBin.resolve(binDirectory: agentBin, home: home))
@@ -482,6 +484,9 @@ func prepareSeatbelt(
                 case .success:
                     break
                 }
+                profile = profile.allowingProductiveWorkspace(
+                    resolveProductiveWorkspace(workspacePath: resolved, agentBin: agentBin)
+                )
             }
             guard
                 let request = IsolatedLaunchRequest(

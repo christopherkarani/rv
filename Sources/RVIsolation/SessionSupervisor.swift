@@ -465,14 +465,22 @@ func spawnSeatbeltProcess(
         request.command.executable,
     ])
     arguments.append(contentsOf: request.command.arguments)
+    let agentBin = AgentBin.installedDirectory()
+    let productive = resolveProductiveWorkspace(
+        workspacePath: workspace,
+        agentBin: agentBin
+    )
     if case .pseudoTerminal = request.io {
-        stageAgentHomes(workspace: workspace)
+        // Stage into the RV-managed home; the degraded workspace home
+        // keeps staging working when no managed home exists.
+        stageAgentHomes(cageHome: productive.developerHome?.home ?? workspace)
     }
     let environment = containedRuntimeEnvironment(
         workspace: workspace,
         io: request.io,
-        agentBin: AgentBin.installedDirectory(),
-        egressProxyPort: egressProxyPort
+        agentBin: agentBin,
+        egressProxyPort: egressProxyPort,
+        productive: productive
     )
     let argv = SpawnPointers(arguments)
     let envp = SpawnPointers(environment)
@@ -557,7 +565,8 @@ func spawnSeatbeltProcess(
             ),
             profileSource: profile.source,
             workspacePath: workspace,
-            sessionLeader: pid
+            sessionLeader: pid,
+            egressProxyPort: egressProxyPort
         ),
         requestRead: parentRead,
         responseWrite: parentWrite
@@ -587,62 +596,107 @@ func containedRuntimeEnvironment(
     io: IsolatedIO,
     agentBin: String? = nil,
     egressProxyPort: Int? = nil,
-    hostEnvironment: [String: String]? = nil
+    hostEnvironment: [String: String]? = nil,
+    productive: ProductiveWorkspaceResolution? = nil
 ) -> [String] {
-    guard case .pseudoTerminal = io else {
-        // One-shot contained runs stay byte-identical: no agent PATH, no
-        // proxy, workspace TMPDIR.
-        return [
-            "PATH=/usr/bin:/bin",
-            "LANG=C",
-            "LC_ALL=C",
-            "HOME=\(workspace)",
-            "TMPDIR=\(workspace)",
-        ]
+    let host = hostEnvironment ?? ProcessInfo.processInfo.environment
+    let context =
+        productive
+        ?? resolveProductiveWorkspace(
+            workspacePath: workspace,
+            hostEnvironment: host,
+            agentBin: agentBin
+        )
+    let cageHome = context.developerHome?.home ?? workspace
+    let cageTmp = context.developerHome.map { $0.tmp + "/" } ?? workspace
+    // Projected host context first. Runtime-managed names never appear
+    // here, so the owned values appended below cannot collide.
+    var values = ContainedEnvironmentPolicy.project(host: host)
+    values.append(("PATH", context.pathValue))
+    if values.allSatisfy({ $0.0 != "LANG" }) {
+        values.append(("LANG", "C"))
     }
-    var values = [
-        "PATH=/usr/bin:/bin",
-        "LANG=C",
-        "LC_ALL=C",
-        "HOME=\(workspace)",
-        "TMPDIR=\(workspace)/\(AgentHomeStaging.cageTmpSubpath)",
-    ]
-    values.append("TERM=\(TerminalStreamLimits.supportedTerm)")
-    // The sandbox cannot see user dotfiles, so interactive shells start
-    // bare. Standard color output only; zsh ignores an inherited PS1, so
-    // the prompt stays its default unless the user creates a
-    // workspace-local .zshrc (HOME is the workspace).
-    values.append("CLICOLOR=1")
-    if let agentBin {
-        values[0] = "PATH=\(agentBin):/usr/bin:/bin"
+    if values.allSatisfy({ $0.0 != "LC_ALL" }) {
+        values.append(("LC_ALL", "C"))
+    }
+    values.append(("HOME", cageHome))
+    values.append(("TMPDIR", cageTmp))
+    values.append(("TEMP", cageTmp))
+    values.append(("TMP", cageTmp))
+    if let developerHome = context.developerHome {
+        values.append(("XDG_CACHE_HOME", developerHome.cache))
+        values.append(("XDG_CONFIG_HOME", "\(cageHome)/.config"))
+        values.append(("XDG_DATA_HOME", "\(cageHome)/.local/share"))
+        values.append(("XDG_STATE_HOME", "\(cageHome)/.local/state"))
+        // SwiftPM honors this override for manifest and target module
+        // caches. Without it the compiler writes to the confstr user
+        // cache directory, which no sandbox can redirect and which must
+        // stay unshared with the host.
+        values.removeAll { $0.0 == "SWIFTPM_MODULECACHE_OVERRIDE" }
+        values.append(("SWIFTPM_MODULECACHE_OVERRIDE", "\(developerHome.cache)/swift-modulecache"))
+    }
+    values.append(("PWD", workspace))
+    if let candidate = host["SHELL"], isUsableAbsolutePath(candidate),
+        FileManager.default.isExecutableFile(atPath: candidate)
+    {
+        values.append(("SHELL", candidate))
+    } else {
+        values.append(("SHELL", "/bin/zsh"))
+    }
+    // One entry per name: the projection may carry host values the runtime
+    // overrides below.
+    values.removeAll { $0.0 == "TERM" || $0.0 == "CLICOLOR" }
+    switch io {
+    case .pseudoTerminal:
+        values.append(("TERM", TerminalStreamLimits.supportedTerm))
+        // The sandbox cannot see user dotfiles, so interactive shells
+        // start bare. Standard color output only; zsh ignores an inherited
+        // PS1, so the prompt stays its default unless the user creates a
+        // cage-home .zshrc.
+        values.append(("CLICOLOR", "1"))
+    case .discard, .inherit:
+        if let term = host["TERM"], term.isEmpty == false,
+            ContainedEnvironmentPolicy.isSaneValue(term)
+        {
+            values.append(("TERM", term))
+        }
+    }
+    if agentBin != nil {
         // The cage cannot manage host services or rewrite installs, so
         // agent self-update and service-ensure steps stay off.
-        values.append("OCX_SHIM_BYPASS=1")
-        values.append("MUSE_NO_AUTO_UPDATE=1")
-        values.append("DISABLE_AUTOUPDATER=1")
-        let host = hostEnvironment ?? ProcessInfo.processInfo.environment
+        let owned: Set<String> = [
+            "OCX_SHIM_BYPASS", "MUSE_NO_AUTO_UPDATE", "DISABLE_AUTOUPDATER",
+        ]
+        let compat = Set(AgentHomeStaging.gatewayPassthrough + AgentHomeStaging.apiKeyPassthrough)
+        values.removeAll { owned.contains($0.0) || compat.contains($0.0) }
+        values.append(("OCX_SHIM_BYPASS", "1"))
+        values.append(("MUSE_NO_AUTO_UPDATE", "1"))
+        values.append(("DISABLE_AUTOUPDATER", "1"))
+        // Temporary pre-secret-broker compatibility: re-injected after the
+        // generic policy strip, never widened. The generic runtime does not
+        // depend on these.
         for name in AgentHomeStaging.gatewayPassthrough + AgentHomeStaging.apiKeyPassthrough {
             if let value = host[name], value.contains("\0") == false {
-                values.append("\(name)=\(value)")
+                values.append((name, value))
             }
         }
-        if values.allSatisfy({ $0.hasPrefix("ANTHROPIC_API_KEY=") == false }) {
-            values.append("ANTHROPIC_API_KEY=\(AgentHomeStaging.anthropicGatewayPlaceholder)")
+        if values.allSatisfy({ $0.0 != "ANTHROPIC_API_KEY" }) {
+            values.append(("ANTHROPIC_API_KEY", AgentHomeStaging.anthropicGatewayPlaceholder))
         }
     }
     if let port = egressProxyPort, (1...65535).contains(port) {
         let proxy = "http://127.0.0.1:\(port)"
-        values.append("HTTPS_PROXY=\(proxy)")
-        values.append("HTTP_PROXY=\(proxy)")
-        values.append("https_proxy=\(proxy)")
-        values.append("http_proxy=\(proxy)")
+        values.append(("HTTPS_PROXY", proxy))
+        values.append(("HTTP_PROXY", proxy))
+        values.append(("https_proxy", proxy))
+        values.append(("http_proxy", proxy))
         // Loopback bypasses the proxy when the client honors it (the
         // seatbelt rule admits it directly); the proxy also relays
         // loopback absolute-URI requests for clients that do not.
-        values.append("NO_PROXY=localhost,127.0.0.1")
-        values.append("no_proxy=localhost,127.0.0.1")
+        values.append(("NO_PROXY", "localhost,127.0.0.1,::1"))
+        values.append(("no_proxy", "localhost,127.0.0.1,::1"))
     }
-    return values
+    return values.map { "\($0.0)=\($0.1)" }
 }
 
 func watchSeatbeltProcess(

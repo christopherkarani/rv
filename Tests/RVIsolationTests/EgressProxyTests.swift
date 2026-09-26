@@ -270,8 +270,10 @@ private func egressAwaitDenials(_ collector: EgressDenialCollector, count: Int, 
 }
 
 @Test func egressProxyDeniesExternalAbsoluteHTTP() throws {
+    // Legacy narrow mode: the Standard default (publicHTTPS) admits public
+    // port-80 traffic, so pin the allowlist policy for this denial shape.
     let collector = EgressDenialCollector()
-    let proxy = EgressProxy(record: { collector.record($0) })
+    let proxy = EgressProxy(policy: .agentAPIs, record: { collector.record($0) })
     let port = try #require(proxy.start())
     defer { proxy.stop() }
     let client = try #require(egressConnect(port: port))
@@ -287,8 +289,10 @@ private func egressAwaitDenials(_ collector: EgressDenialCollector, count: Int, 
 }
 
 @Test func egressProxyDeniesUnknownHosts() throws {
+    // Legacy narrow mode: the Standard default (publicHTTPS) admits any
+    // valid public DNS name, so pin the allowlist policy here.
     let collector = EgressDenialCollector()
-    let proxy = EgressProxy(record: { collector.record($0) })
+    let proxy = EgressProxy(policy: .agentAPIs, record: { collector.record($0) })
     let port = try #require(proxy.start())
     defer { proxy.stop() }
     let client = try #require(egressConnect(port: port))
@@ -304,8 +308,10 @@ private func egressAwaitDenials(_ collector: EgressDenialCollector, count: Int, 
 }
 
 @Test func egressProxyDeniesMalformedAndBypassShapes() throws {
+    // Legacy narrow mode (see above): port-80 and non-allowlist shapes are
+    // denied here; publicHTTPS admits them subject to the dial filter.
     let collector = EgressDenialCollector()
-    let proxy = EgressProxy(record: { collector.record($0) })
+    let proxy = EgressProxy(policy: .agentAPIs, record: { collector.record($0) })
     let port = try #require(proxy.start())
     defer { proxy.stop() }
     for request in [
