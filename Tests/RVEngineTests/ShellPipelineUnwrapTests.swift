@@ -143,6 +143,37 @@ import RVDomain
         #expect(Argv(tokens: tokens) == nil)
     }
 
+    @Test func publicAdapter_absoluteBehavior() {
+        let nested = unwrapCommand(ShellCommand(rawValue: "sudo ssh host git status"))
+        guard case .complete(let unwrapped) = nested else {
+            Issue.record("expected complete, got \(nested)")
+            return
+        }
+        #expect(unwrapped.command.rawValue == "git status")
+        #expect(unwrapped.layers == [.sudo, .ssh])
+
+        let sink = unwrapCommand(ShellCommand(rawValue: "echo 'git status' | bash"))
+        guard case .complete(let sunk) = sink else {
+            Issue.record("expected complete, got \(sink)")
+            return
+        }
+        #expect(sunk.command.rawValue == "git status")
+        #expect(sunk.layers == [.bash])
+
+        #expect(
+            unwrapCommand(ShellCommand(rawValue: "ssh host 'echo $HOME'"))
+                == .limited(layers: [.ssh])
+        )
+        #expect(
+            unwrapCommand(ShellCommand(rawValue: "sudo git status"), maxDepth: 0)
+                == .limited(layers: [.sudo])
+        )
+        #expect(
+            unwrapCommand(ShellCommand(rawValue: "mise exec git status"))
+                == .limited(layers: [.mise])
+        )
+    }
+
     @Test func executingSink_peelsThroughSingleDispatch() {
         let tokens = ShellPipeline.tokenize("echo 'git status' | bash")
         let outcome = ShellPipeline.peel(
