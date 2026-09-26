@@ -118,13 +118,8 @@ private final class EgressStubServer: @unchecked Sendable {
         close(listenFD)
     }
 
-    // TEMP-DIAG: remove after CI diagnosis.
-    private let diagT0 = Date()
-
     private func acceptOnce() {
         let fd = accept(listenFD, nil, nil)
-        // TEMP-DIAG: remove after CI diagnosis.
-        print(String(format: "rv.egress-stub: accept t=%.1f fd=%d", Date().timeIntervalSince(diagT0), fd))
         guard fd >= 0 else { return }
         defer { close(fd) }
         var buffer = [UInt8](repeating: 0, count: 4096)
@@ -132,8 +127,6 @@ private final class EgressStubServer: @unchecked Sendable {
             guard let base = pointer.baseAddress else { return -1 }
             return recv(fd, base, pointer.count, 0)
         }
-        // TEMP-DIAG: remove after CI diagnosis.
-        print(String(format: "rv.egress-stub: recv t=%.1f count=%d", Date().timeIntervalSince(diagT0), count))
         if count > 0 {
             receivedLock.lock()
             receivedBytes = Array(buffer[..<count])
@@ -143,8 +136,6 @@ private final class EgressStubServer: @unchecked Sendable {
             guard let base = pointer.baseAddress else { return -1 }
             return send(fd, base, pointer.count, 0)
         }
-        // TEMP-DIAG: remove after CI diagnosis.
-        print(String(format: "rv.egress-stub: replied t=%.1f", Date().timeIntervalSince(diagT0)))
     }
 }
 
@@ -156,17 +147,7 @@ private func egressStreamSocket() -> Int32 {
     #endif
 }
 
-// TEMP-DIAG: remove after CI diagnosis.
-private func egressLogSlow(_ label: String, seconds: Double) {
-    if seconds > 2 {
-        print("rv.egress-test: SLOW \(label) \(String(format: "%.1f", seconds))s")
-    }
-}
-
 private func egressConnect(port: Int) -> Int32? {
-    let start = Date()
-    // TEMP-DIAG: remove after CI diagnosis.
-    defer { egressLogSlow("connect port=\(port)", seconds: Date().timeIntervalSince(start)) }
     let fd = egressStreamSocket()
     guard fd >= 0 else { return nil }
     var address = sockaddr_in()
@@ -200,14 +181,6 @@ private func egressSend(_ fd: Int32, text: String) -> Bool {
 }
 
 private func egressRead(_ fd: Int32, timeoutSeconds: Int = 10) -> String {
-    let start = Date()
-    // TEMP-DIAG: remove after CI diagnosis.
-    defer {
-        egressLogSlow(
-            "read fd=\(fd) timeout=\(timeoutSeconds)",
-            seconds: Date().timeIntervalSince(start)
-        )
-    }
     var collected = [UInt8]()
     var buffer = [UInt8](repeating: 0, count: 4096)
     let deadline = Date().addingTimeInterval(TimeInterval(timeoutSeconds))
@@ -263,7 +236,7 @@ private func egressAwaitDenials(_ collector: EgressDenialCollector, count: Int, 
     #expect(egressSend(client, text: "CONNECT 127.0.0.1:\(stub.port) HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"))
     #expect(egressSend(client, text: "PING\n"))
     var response = ""
-    for _ in 0..<15 {
+    for _ in 0..<10 {
         response += egressRead(client)
         if response.contains("PONG") { break }
     }
@@ -282,7 +255,7 @@ private func egressAwaitDenials(_ collector: EgressDenialCollector, count: Int, 
     defer { close(client) }
     #expect(egressSend(client, text: "POST http://127.0.0.1:\(stub.port)/v1/x HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\n\r\n"))
     var response = ""
-    for _ in 0..<15 {
+    for _ in 0..<10 {
         response += egressRead(client)
         if response.contains("PONG") { break }
     }

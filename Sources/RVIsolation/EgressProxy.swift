@@ -168,15 +168,11 @@ public final class EgressProxy: @unchecked Sendable {
                 }
                 continue
             }
-            // TEMP-DIAG: remove after CI diagnosis.
-            Self.complain("rv.egress: accepted fd=\(fd)")
             relayQueue.async { [weak self] in self?.serve(client: fd) }
         }
     }
 
     private func serve(client: Int32) {
-        // TEMP-DIAG: remove after CI diagnosis.
-        Self.complain("rv.egress: serve fd=\(client)")
         EgressProxy.suppressSIGPIPE(client)
         EgressProxy.setTimeout(client, seconds: 10)
         switch EgressProxy.readHeaders(client, maximumBytes: 65_536) {
@@ -359,15 +355,9 @@ public final class EgressProxy: @unchecked Sendable {
             }
             if count < 0 {
                 if readError == EINTR { continue }
-                // TEMP-DIAG: remove after CI diagnosis.
-                complain("rv.egress: readHeaders recv errno=\(readError) bytes=\(bytes.count)")
                 return .failure
             }
-            if count == 0 {
-                // TEMP-DIAG: remove after CI diagnosis.
-                complain("rv.egress: readHeaders EOF bytes=\(bytes.count)")
-                return .failure
-            }
+            if count == 0 { return .failure }
             bytes.append(contentsOf: buffer[..<count])
             if let split = splitHeaders(bytes) {
                 return .success(header: split.header, leftover: split.leftover)
