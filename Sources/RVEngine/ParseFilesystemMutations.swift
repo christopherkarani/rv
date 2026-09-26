@@ -73,9 +73,9 @@ private func terminatorIndex(in words: [String], values spec: FlagValueSpec) -> 
 /// Recovers the raw argv words behind one structurally classified event:
 /// the exact inverse of `FlagToken.classify` for post-`--` recovery.
 ///
-/// Only `scanFlags` output without value consumption (`.none` spec) may
-/// reach here: a consumed value shares its case with the attached form
-/// and cannot be unmerged. Value-taking parsers must pre-split with
+/// No valued events reach here: a consumed value shares its case with the
+/// attached form and cannot be unmerged, and any structural terminator
+/// implies a pre-split cut. Value-taking parsers must pre-split with
 /// `scanFilesystemFlags` instead.
 func verbatimWords(of event: FlagToken) -> [String] {
     switch event {

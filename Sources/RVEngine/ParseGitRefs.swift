@@ -217,8 +217,8 @@ private let rebaseSkipLongs: Set<String> = [
 
 // MARK: - `[String]` adapters
 //
-// `AnalyzeGit` and the existing goldens still thread `[String]`; T4 moves
-// the call sites onto `Argv` and deletes these.
+// `AnalyzeGit` and the existing goldens still thread `[String]`; a follow-up
+// moves the call sites onto `Argv` and deletes these.
 
 func parsePush(_ args: [String], context: GitAnalysisContext) -> GitAction? {
     parsePush(Argv(program: "git", args: args), context: context)

@@ -40,6 +40,9 @@ import RVDomain
         ).matching
         #expect(write.rawValue.contains("reset") == false)
         #expect(write.rawValue.contains("cat"))
+        // Exact golden: the masked body line leaves no tokens behind, so
+        // only the de-quoted header and the delimiter survive.
+        #expect(write.rawValue == "cat > /tmp/note.md << EOF\nEOF")
         let executing = ShellPipeline.parse(
             "cat <<'EOF' | bash\ngit reset --hard\nEOF"
         ).matching
