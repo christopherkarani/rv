@@ -57,7 +57,7 @@ struct FileLockedJSONLStoreTests {
         let good = ProbeRecord(name: "a", stamp: Date(timeIntervalSince1970: 1_700_000_000), count: 1)
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        let goodLine = String(data: try encoder.encode(good), encoding: .utf8)!
+        let goodLine = try #require(String(data: try encoder.encode(good), encoding: .utf8))
         let body = goodLine + "\n"
             + "{not json}\n" // bad middle line
             + "   \n" // whitespace-only
@@ -65,6 +65,18 @@ struct FileLockedJSONLStoreTests {
             + "{\"name\":\"torn" // partial trailing line, no newline
         try body.write(to: store.fileURL, atomically: true, encoding: .utf8)
         #expect(store.load() == [good, good])
+    }
+
+    @Test func loadKeepsRowsContainingUnicodeLineSeparators() throws {
+        let store = try makeStore("u2028")
+        // JSONEncoder never escapes these, so they must not split rows.
+        let record = ProbeRecord(
+            name: "a\u{2028}\u{2029}b\u{000B}\u{000C}c\u{0085}d",
+            stamp: Date(timeIntervalSince1970: 1_700_000_000),
+            count: 1
+        )
+        try store.save([record])
+        #expect(store.load() == [record])
     }
 
     @Test func saveRoundTripsRecords() throws {
