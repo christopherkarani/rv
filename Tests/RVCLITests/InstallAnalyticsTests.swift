@@ -31,6 +31,7 @@ final class RecordingInstallAnalytics: InstallAnalyticsCapturing, Sendable {
             "hermes": "skipped",
             "codex": "skipped",
             "cursor": "skipped",
+            "antigravity": "skipped",
         ])
 }
 
@@ -56,6 +57,7 @@ final class RecordingInstallAnalytics: InstallAnalyticsCapturing, Sendable {
             "hermes": "skipped",
             "codex": "skipped",
             "cursor": "skipped",
+            "antigravity": "skipped",
         ]])
         let paths = AnalyticsPaths(
             configDirectory: URL(fileURLWithPath: layout.configDirectory, isDirectory: true)

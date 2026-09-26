@@ -147,7 +147,7 @@ private let readyService = DoctorServiceView(
     #expect(packs["enabled"] as? [String] == (dayOnePackIDs + [PackID(rawValue: "core.network")]).map(\.rawValue).sorted())
     #expect(packs["extras_enabled"] as? [String] == ["core.network"])
 
-    #expect(Set(hosts.keys) == ["grok", "pi", "opencode", "claude", "openclaw", "hermes", "codex", "cursor"])
+    #expect(Set(hosts.keys) == ["grok", "pi", "opencode", "claude", "openclaw", "hermes", "codex", "cursor", "antigravity"])
     #expect(hosts["grok"] as? String == "missing")
     #expect(hosts["pi"] as? String == "missing")
     #expect(hosts["opencode"] as? String == "missing")

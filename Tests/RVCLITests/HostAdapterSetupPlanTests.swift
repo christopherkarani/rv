@@ -44,7 +44,8 @@ import Testing
         openClaw: .missing(layout.hostAdapter(for: .openclaw)),
         hermes: .missing(layout.hostAdapter(for: .hermes)),
         codex: .missing(layout.hostAdapter(for: .codex)),
-        cursor: .missing(layout.hostAdapter(for: .cursor))
+        cursor: .missing(layout.hostAdapter(for: .cursor)),
+        antigravity: .missing(layout.hostAdapter(for: .antigravity))
     )
 
     let plan = SetupWorkPlanBuilder.make(
@@ -83,7 +84,8 @@ import Testing
         openClaw: .missing(layout.hostAdapter(for: .openclaw)),
         hermes: .missing(layout.hostAdapter(for: .hermes)),
         codex: .missing(layout.hostAdapter(for: .codex)),
-        cursor: .missing(layout.hostAdapter(for: .cursor))
+        cursor: .missing(layout.hostAdapter(for: .cursor)),
+        antigravity: .missing(layout.hostAdapter(for: .antigravity))
     )
 
     let plan = SetupWorkPlanBuilder.make(
@@ -123,7 +125,8 @@ import Testing
         openClaw: .missing(layout.hostAdapter(for: .openclaw)),
         hermes: .missing(layout.hostAdapter(for: .hermes)),
         codex: .missing(layout.hostAdapter(for: .codex)),
-        cursor: .missing(layout.hostAdapter(for: .cursor))
+        cursor: .missing(layout.hostAdapter(for: .cursor)),
+        antigravity: .missing(layout.hostAdapter(for: .antigravity))
     )
 
     let plan = SetupWorkPlanBuilder.make(
@@ -166,7 +169,8 @@ import Testing
         openClaw: .missing(layout.hostAdapter(for: .openclaw)),
         hermes: .missing(layout.hostAdapter(for: .hermes)),
         codex: .missing(layout.hostAdapter(for: .codex)),
-        cursor: .missing(layout.hostAdapter(for: .cursor))
+        cursor: .missing(layout.hostAdapter(for: .cursor)),
+        antigravity: .missing(layout.hostAdapter(for: .antigravity))
     )
 
     let plan = SetupWorkPlanBuilder.make(
@@ -199,7 +203,8 @@ import Testing
         openClaw: .missing(layout.hostAdapter(for: .openclaw)),
         hermes: .missing(layout.hostAdapter(for: .hermes)),
         codex: .missing(layout.hostAdapter(for: .codex)),
-        cursor: .missing(layout.hostAdapter(for: .cursor))
+        cursor: .missing(layout.hostAdapter(for: .cursor)),
+        antigravity: .missing(layout.hostAdapter(for: .antigravity))
     )
 
     let plan = SetupWorkPlanBuilder.make(
@@ -232,7 +237,8 @@ import Testing
         openClaw: .absentFile(layout.hostAdapter(for: .openclaw)),
         hermes: .missing(layout.hostAdapter(for: .hermes)),
         codex: .missing(layout.hostAdapter(for: .codex)),
-        cursor: .missing(layout.hostAdapter(for: .cursor))
+        cursor: .missing(layout.hostAdapter(for: .cursor)),
+        antigravity: .missing(layout.hostAdapter(for: .antigravity))
     )
 
     let plan = SetupWorkPlanBuilder.make(

@@ -78,7 +78,7 @@ import RVDomain
     #expect(allowOnceUnlockCode(in: wire.stdout) == nil)
 }
 
-@Test(arguments: [HookHost.grok, .pi, .opencode, .openclaw, .hermes, .claude, .codex, .cursor])
+@Test(arguments: [HookHost.grok, .pi, .opencode, .openclaw, .hermes, .claude, .codex, .cursor, .antigravity])
 func hookWire_samePathHosts_resetHardIsShortDeny(_ host: HookHost) throws {
     let match = RuleMatch(
         ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
@@ -112,6 +112,8 @@ func hookWire_samePathHosts_resetHardIsShortDeny(_ host: HookHost) throws {
         wire = hookWire(from: result, command: command, using: CodexHostCodec(), intent: intent)
     case .cursor:
         wire = hookWire(from: result, command: command, using: CursorHostCodec(), intent: intent)
+    case .antigravity:
+        wire = hookWire(from: result, command: command, using: AntigravityHostCodec(), intent: intent)
     }
     #expect(wire.stdout.isEmpty == false)
     #expect(wire.stdout.contains("\"permissionDecision\":\"ask\"") == false)
