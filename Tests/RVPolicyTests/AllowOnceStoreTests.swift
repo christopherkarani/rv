@@ -165,6 +165,26 @@ struct AllowOnceStoreTests {
         )
     }
 
+    @Test func saveFailureSurfacesAsEncodeFailed() async throws {
+        let store = try isolatedStore()
+        // Directory at the JSONL path: rename(2) onto a directory fails, so
+        // save throws ioFailed and the store surfaces domain encodeFailed.
+        try FileManager.default.createDirectory(
+            at: jsonl(store),
+            withIntermediateDirectories: false
+        )
+        let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+        await #expect(throws: AllowOnceError.encodeFailed) {
+            try await store.mint(
+                matchingView: "git reset --hard",
+                cwd: wd("/tmp/a"),
+                ruleID: nil,
+                tty: tty,
+                now: Date(timeIntervalSince1970: 1_700_000_000)
+            )
+        }
+    }
+
     @Test func lockFailureIsUnavailable() async throws {
         let store = try isolatedStore()
         let now = Date(timeIntervalSince1970: 1_700_000_000)

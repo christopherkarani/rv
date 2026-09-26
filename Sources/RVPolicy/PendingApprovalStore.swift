@@ -1,8 +1,3 @@
-#if canImport(Darwin)
-import Darwin
-#elseif canImport(Glibc)
-import Glibc
-#endif
 import Foundation
 import RVDomain
 import RVFileStore
@@ -11,10 +6,16 @@ import RVFileStore
 public actor PendingApprovalStore: PendingApprovalCoordinating {
     nonisolated public let baseDirectory: URL
 
+    private let store: FileLockedJSONLStore<PendingApprovalRecord>
     private var subscribers: [UUID: AsyncStream<PendingApprovalEvent>.Continuation] = [:]
 
     public init(baseDirectory: URL) {
         self.baseDirectory = baseDirectory
+        self.store = FileLockedJSONLStore(
+            fileURL: RVPolicyPaths.pendingApprovalsFile(inConfigDir: baseDirectory),
+            lockURL: RVPolicyPaths.pendingApprovalsLockFile(inConfigDir: baseDirectory),
+            directoryURL: baseDirectory
+        )
     }
 
     nonisolated public static func makeLive(home: HomeDirectory) -> PendingApprovalStore {
@@ -199,107 +200,40 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
         subscribers[id] = nil
     }
 
-    private var fileURL: URL {
-        RVPolicyPaths.pendingApprovalsFile(inConfigDir: baseDirectory)
-    }
-
-    private var lockURL: URL {
-        RVPolicyPaths.pendingApprovalsLockFile(inConfigDir: baseDirectory)
-    }
-
     private func loadRecords() -> [PendingApproval] {
-        guard let data = try? Data(contentsOf: fileURL),
-              let text = String(data: data, encoding: .utf8)
-        else {
-            return []
-        }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return text.split(whereSeparator: \.isNewline).compactMap { line in
-            let raw = line.trimmingCharacters(in: .whitespaces)
-            guard raw.isEmpty == false, let lineData = raw.data(using: .utf8) else {
-                return nil
-            }
-            guard let record = try? decoder.decode(PendingApprovalRecord.self, from: lineData),
-                  record.schemaVersion == 1
-            else {
-                return nil
-            }
-            return record.approval
-        }
+        store.load().filter { $0.schemaVersion == 1 }.map(\.approval)
     }
 
     private func writeRecords(_ records: [PendingApproval]) throws {
-        try prepareStoreDirectory()
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = [.sortedKeys]
-        let lines = try records.map { approval -> String in
-            let data: Data
-            do {
-                data = try encoder.encode(
-                    PendingApprovalRecord(schemaVersion: 1, approval: approval)
-                )
-            } catch {
-                throw PendingApprovalError.encodeFailed
-            }
-            guard let line = String(data: data, encoding: .utf8) else {
-                throw PendingApprovalError.encodeFailed
-            }
-            return line
-        }
-        let body = lines.joined(separator: "\n") + (lines.isEmpty ? "" : "\n")
-        let temp = fileURL.appendingPathExtension("tmp")
         do {
-            try body.write(to: temp, atomically: true, encoding: .utf8)
-        } catch {
+            try store.save(records.map { PendingApprovalRecord(schemaVersion: 1, approval: $0) })
+        } catch is FileLockedStoreError {
+            // RVFileStore boundary: every save failure (encode or IO) becomes
+            // the domain persistence error, so withFileLock only ever sees
+            // genuine lock-acquisition failures.
             throw PendingApprovalError.encodeFailed
         }
-        try setOwnerOnlyFile(temp)
-        let renamed: Int32 = fileURL.withUnsafeFileSystemRepresentation { dest in
-            temp.withUnsafeFileSystemRepresentation { src in
-                guard let dest, let src else { return Int32(-1) }
-                return rename(src, dest)
-            }
-        }
-        if renamed != 0 {
-            throw PendingApprovalError.encodeFailed
-        }
-        try setOwnerOnlyFile(fileURL)
     }
 
     private func withFileLock<T>(_ body: () throws -> T) throws -> T {
-        try prepareStoreDirectory()
         do {
-            return try ExclusiveFileLock.withLock(at: lockURL, body)
-        } catch let error as ExclusiveFileLock.LockError {
+            return try store.withLock(nonBlocking: false, body)
+        } catch let error as FileLockedStoreError {
+            // Only withLock-originated failures reach here: the body throws
+            // domain errors (writeRecords translates save failures). IO from
+            // lock setup collapses into encodeFailed — fail-closed, and both
+            // map to ipcError for callers.
             switch error {
             case .lockFailed:
                 throw PendingApprovalError.lockFailed
+            case .encodeFailed, .ioFailed:
+                throw PendingApprovalError.encodeFailed
             }
         }
     }
-
-    private func prepareStoreDirectory() throws {
-        try FileManager.default.createDirectory(
-            at: baseDirectory,
-            withIntermediateDirectories: true
-        )
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o700],
-            ofItemAtPath: baseDirectory.path
-        )
-    }
-
-    private func setOwnerOnlyFile(_ url: URL) throws {
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o600],
-            ofItemAtPath: url.path
-        )
-    }
 }
 
-private struct PendingApprovalRecord: Codable {
+private struct PendingApprovalRecord: Codable, Sendable {
     var schemaVersion: Int
     var approval: PendingApproval
 }

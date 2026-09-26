@@ -1,18 +1,19 @@
-#if canImport(Darwin)
-import Darwin
-#elseif canImport(Glibc)
-import Glibc
-#endif
 import Foundation
 import RVDomain
 import RVFileStore
 
 public actor AllowOnceStore {
     nonisolated public let baseDirectory: URL
+    private let store: FileLockedJSONLStore<AllowOnceRecord>
     private var liveUnlockCodes: [UnlockCacheKey: AllowOnceUnlockCode] = [:]
 
     public init(baseDirectory: URL) {
         self.baseDirectory = baseDirectory
+        self.store = FileLockedJSONLStore(
+            fileURL: RVPolicyPaths.allowOnceFile(inConfigDir: baseDirectory),
+            lockURL: RVPolicyPaths.allowOnceLockFile(inConfigDir: baseDirectory),
+            directoryURL: baseDirectory
+        )
     }
 
     nonisolated public static func makeLive(home: HomeDirectory) -> AllowOnceStore {
@@ -298,86 +299,35 @@ public actor AllowOnceStore {
     }
 
     private func loadRecords() -> [AllowOnceRecord] {
-        guard let data = try? Data(contentsOf: fileURL),
-              let text = String(data: data, encoding: .utf8)
-        else {
-            return []
-        }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return text.split(whereSeparator: \.isNewline).compactMap { line in
-            let raw = line.trimmingCharacters(in: .whitespaces)
-            guard raw.isEmpty == false,
-                  let lineData = raw.data(using: .utf8),
-                  let record = try? decoder.decode(AllowOnceRecord.self, from: lineData),
-                  record.schemaVersion == 1
-            else {
-                return nil
-            }
-            return record
-        }
+        store.load().filter { $0.schemaVersion == 1 }
     }
 
     private func writeRecords(_ records: [AllowOnceRecord]) throws {
-        try prepareStoreDirectory()
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = [.sortedKeys]
-        let lines = try records.map { record -> String in
-            let data = try encoder.encode(record)
-            guard let line = String(data: data, encoding: .utf8) else {
-                throw AllowOnceError.encodeFailed
-            }
-            return line
-        }
-        let body = lines.joined(separator: "\n") + (lines.isEmpty ? "" : "\n")
-        let temp = fileURL.appendingPathExtension("tmp")
-        try body.write(to: temp, atomically: true, encoding: .utf8)
-        try setOwnerOnlyFile(temp)
-        let renamed: Int32 = fileURL.withUnsafeFileSystemRepresentation { dest in
-            temp.withUnsafeFileSystemRepresentation { src in
-                guard let dest, let src else { return Int32(-1) }
-                return rename(src, dest)
-            }
-        }
-        if renamed != 0 {
+        do {
+            try store.save(records)
+        } catch is FileLockedStoreError {
+            // RVFileStore boundary: every save failure (encode or IO) becomes
+            // the domain persistence error, so withFileLock only ever sees
+            // genuine lock-acquisition failures.
             throw AllowOnceError.encodeFailed
         }
-        try setOwnerOnlyFile(fileURL)
     }
 
     private func withFileLock<T>(nonBlocking: Bool = false, _ body: () throws -> T) throws -> T {
-        try prepareStoreDirectory()
         do {
-            return try ExclusiveFileLock.withLock(
-                at: RVPolicyPaths.allowOnceLockFile(inConfigDir: baseDirectory),
-                nonBlocking: nonBlocking,
-                body
-            )
-        } catch let error as ExclusiveFileLock.LockError {
+            return try store.withLock(nonBlocking: nonBlocking, body)
+        } catch let error as FileLockedStoreError {
+            // Only withLock-originated failures reach here: the body throws
+            // domain errors (writeRecords translates save failures). IO from
+            // lock setup collapses into encodeFailed — fail-closed, and both
+            // map to "store unavailable" for callers.
             switch error {
             case .lockFailed:
                 throw AllowOnceError.lockFailed
+            case .encodeFailed, .ioFailed:
+                throw AllowOnceError.encodeFailed
             }
         }
-    }
-
-    private func prepareStoreDirectory() throws {
-        try FileManager.default.createDirectory(
-            at: baseDirectory,
-            withIntermediateDirectories: true
-        )
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o700],
-            ofItemAtPath: baseDirectory.path
-        )
-    }
-
-    private func setOwnerOnlyFile(_ url: URL) throws {
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o600],
-            ofItemAtPath: url.path
-        )
     }
 }
 

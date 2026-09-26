@@ -293,6 +293,20 @@ struct PendingApprovalStoreTests {
         #expect(store.baseDirectory == RVPolicyPaths.configDirectory(home: home))
     }
 
+    @Test func saveFailureSurfacesAsEncodeFailed() async throws {
+        let root = try isolatedDirectory()
+        // Directory at the JSONL path: rename(2) onto a directory fails, so
+        // save throws ioFailed and the store surfaces domain encodeFailed.
+        try FileManager.default.createDirectory(
+            at: RVPolicyPaths.pendingApprovalsFile(inConfigDir: root),
+            withIntermediateDirectories: false
+        )
+        let store = PendingApprovalStore(baseDirectory: root)
+        await #expect(throws: PendingApprovalError.encodeFailed) {
+            _ = try await store.create(Self.request(id: "io-1"), now: Self.now)
+        }
+    }
+
     @Test func corruptJSONLLineIsSkipped() async throws {
         let root = try isolatedDirectory()
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
