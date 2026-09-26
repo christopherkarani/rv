@@ -159,7 +159,7 @@ public struct ActionReview: Sendable, Equatable, Codable {
 
     /// Creates a review whose `body` is reclassified so a forged aligned
     /// pair such as `.aligned(.allow, category: .deny)` cannot persist.
-    public init(
+    package init(
         risk: RiskLevel,
         confidence: ReviewerConfidence,
         rationale: String,

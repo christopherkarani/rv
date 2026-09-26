@@ -96,8 +96,8 @@ public enum CommandRun {
         store: AllowOnceStore,
         now: Date = Date(),
         home: HomeDirectory? = HomeDirectory.process()
-    ) async -> CLIResult {
-        await run(
+    ) async throws -> CLIResult {
+        try await run(
             kind: kind,
             command: raw,
             probe: probe,
@@ -118,8 +118,8 @@ public enum CommandRun {
         store: AllowOnceStore,
         now: Date = Date(),
         home: HomeDirectory? = HomeDirectory.process()
-    ) async -> CLIResult {
-        render(
+    ) async throws -> CLIResult {
+        try render(
             kind: kind,
             result: await evaluateCommand(raw, cwd: cwd, store: store, now: now, home: home),
             command: ShellCommand(rawValue: raw),
@@ -137,8 +137,8 @@ public enum CommandRun {
         allowOnceDirectory: URL,
         now: Date = Date(),
         home: HomeDirectory? = HomeDirectory.process()
-    ) async -> CLIResult {
-        await run(
+    ) async throws -> CLIResult {
+        try await run(
             kind: kind,
             command: raw,
             probe: probe,
@@ -159,8 +159,8 @@ public enum CommandRun {
         allowOnceDirectory: URL,
         now: Date = Date(),
         home: HomeDirectory? = HomeDirectory.process()
-    ) async -> CLIResult {
-        await run(
+    ) async throws -> CLIResult {
+        try await run(
             kind: kind,
             command: raw,
             probe: probe,
@@ -178,13 +178,13 @@ public enum CommandRun {
         command: ShellCommand,
         probe: ThemeProbe,
         requested: RequestedMode
-    ) -> CLIResult {
+    ) throws -> CLIResult {
         let mode = OutputMode(probe: probe, requested: requested)
         let palette = Palette(for: ColorCapability(probe: probe, mode: mode))
         let exitCode: Int32 = kind.exitsZeroOnDeny || result.decision == .allow ? 0 : 1
 
         if mode == .robot {
-            return robotResult(kind: kind, result: result, command: command, exitCode: exitCode)
+            return try robotResult(kind: kind, result: result, command: command, exitCode: exitCode)
         }
 
         let lines = kind.usesExplainFrame
@@ -210,7 +210,7 @@ public enum CommandRun {
         result: EvaluationResult,
         command: ShellCommand,
         exitCode: Int32
-    ) -> CLIResult {
+    ) throws -> CLIResult {
         // Schema follows the CLI verb, not pretty-frame choice: only `rv explain`
         // emits `rv.explain.v1`. `rv test` / `rv test --explain` keep `rv.test.v1`.
         let text: String
@@ -223,9 +223,9 @@ public enum CommandRun {
                     normalized: result.matchingView.rawValue
                 )
             )
-            text = RobotDocument.explain(payload).render()
+            text = try RobotDocument.explain(payload).render()
         case .test, .testExplain:
-            text = RobotDocument.test(testRobotPayload(from: result)).render()
+            text = try RobotDocument.test(testRobotPayload(from: result)).render()
         }
         return CLIResult(stdout: text + "\n", exitCode: exitCode)
     }

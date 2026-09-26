@@ -26,7 +26,7 @@ public struct SecretPathRule: Sendable, Equatable {
     /// existed but was removed — call sites must now provide an explicit
     /// `SecretPathCategory`. Intentional breaking change to make the closed
     /// category table inspectable.
-    public init(
+    package init(
         pattern: String,
         kind: SecretPathKind,
         category: SecretPathCategory,
@@ -62,7 +62,7 @@ public struct SecretPathMatch: Sendable, Equatable, Codable {
 public struct SecretPathCatalog: Sendable, Equatable {
     public var rules: [SecretPathRule]
 
-    public init(rules: [SecretPathRule]) {
+    package init(rules: [SecretPathRule]) {
         self.rules = rules
     }
 

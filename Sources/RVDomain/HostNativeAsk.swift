@@ -1,5 +1,5 @@
 /// Whether a host may pause for Ask because a same-turn spend callback exists.
-public enum HostPause: Sendable, Equatable {
+package enum HostPause: Sendable, Equatable {
     /// Host confirm or resolution, then PolicyGate spend, then allow.
     /// Pi / OpenCode / Claude / Hermes / OpenClaw this slice.
     /// Claude leftover-ask-as-permit is official `permissionDecision: "ask"` JSON,
@@ -15,11 +15,11 @@ public enum HostPause: Sendable, Equatable {
 }
 
 /// Wire when the host cannot pause. Never `.ask`.
-public enum HostNoPauseFallback: Sendable, Equatable {
+package enum HostNoPauseFallback: Sendable, Equatable {
     case allow
     case deny
 
-    public var verdict: HostAskVerdict {
+    package var verdict: HostAskVerdict {
         switch self {
         case .allow: .allow
         case .deny: .deny
@@ -29,11 +29,11 @@ public enum HostNoPauseFallback: Sendable, Equatable {
 
 /// Per-host Ask table. Pause is independent of the no-pause fallbacks.
 public struct HostAskProfile: Sendable, Equatable {
-    public var pause: HostPause
-    public var grayAreaIfNoPause: HostNoPauseFallback
-    public var unlockableIfNoPause: HostNoPauseFallback
+    package var pause: HostPause
+    package var grayAreaIfNoPause: HostNoPauseFallback
+    package var unlockableIfNoPause: HostNoPauseFallback
 
-    public init(
+    package init(
         pause: HostPause,
         grayAreaIfNoPause: HostNoPauseFallback,
         unlockableIfNoPause: HostNoPauseFallback
@@ -107,7 +107,7 @@ public enum HostNativeAsk {
 
     /// Pack / evaluate `Decision` on the hook door. Cannot Ask.
     /// Product Ask is `hostAskVerdict(host:result:cwd:)`.
-    public static func packDoorVerdict(for decision: Decision) -> PackDoorVerdict {
+    package static func packDoorVerdict(for decision: Decision) -> PackDoorVerdict {
         switch decision {
         case .allow:
             return .allow

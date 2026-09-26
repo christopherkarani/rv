@@ -317,6 +317,8 @@ extension SetupRun {
                 force: force
             )
             merged = (applied.data, applied.wrote)
+        } catch ClaudeSettingsMergeError.occupiedWithoutForce {
+            throw SetupError.hostHookOccupiedNeedsForce(.claude)
         } catch {
             throw SetupError.hostHookWriteFailed(.claude)
         }

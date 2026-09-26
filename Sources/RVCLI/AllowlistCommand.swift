@@ -266,7 +266,7 @@ struct AllowlistList: AsyncParsableCommand {
         case .missing, .symlinkIntoWorkspace:
             if format.json || format.robot {
                 let document = RobotDocument.allowlistList([])
-                FileHandle.standardOutput.write(Data((document.render() + "\n").utf8))
+                FileHandle.standardOutput.write(Data((try document.render() + "\n").utf8))
             } else {
                 FileHandle.standardOutput.write(Data("no allowlist rows\n".utf8))
             }
@@ -276,7 +276,7 @@ struct AllowlistList: AsyncParsableCommand {
         case .ok(let entries):
             if format.json || format.robot {
                 let document = RobotDocument.allowlistList(allowlistRobotRows(from: entries, now: now))
-                FileHandle.standardOutput.write(Data((document.render() + "\n").utf8))
+                FileHandle.standardOutput.write(Data((try document.render() + "\n").utf8))
             } else {
                 if entries.isEmpty {
                     FileHandle.standardOutput.write(Data("no allowlist rows\n".utf8))

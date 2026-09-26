@@ -5,7 +5,17 @@ public enum ProtocolVersion: Sendable {
 
     public static func major(of semver: String) -> Int? {
         let head = semver.split(separator: ".", maxSplits: 1, omittingEmptySubsequences: false).first
-        guard let head, let value = Int(head), value >= 0 else { return nil }
+        // Mirror rv_semver_major (Sources/rv-c/evaluation_route.h): the head
+        // must be non-empty ASCII digits (Swift Int accepts "+1"/"-0"; C
+        // rejects any non-digit head), shorter than 16 chars (C rejects
+        // n >= sizeof buffer regardless of numeric value, so zero-padded
+        // heads like "0000000000000001" miss on both sides), and fit INT_MAX.
+        guard let head, head.isEmpty == false, head.count < 16,
+              head.allSatisfy({ $0 >= "0" && $0 <= "9" })
+        else {
+            return nil
+        }
+        guard let value = Int(head), value <= Int(Int32.max) else { return nil }
         return value
     }
 

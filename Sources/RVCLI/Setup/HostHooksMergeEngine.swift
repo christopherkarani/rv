@@ -71,10 +71,10 @@ enum HostHooksMergeEngine {
         existingData: Data?,
         descriptor: HostWiringDescriptor,
         context: HookCommandContext,
-        willMerge: (([String: Any]) -> Void)? = nil
+        willMerge: (([String: Any]) throws -> Void)? = nil
     ) throws -> (data: Data, wrote: Bool) {
         let root = try parseRoot(existingData)
-        willMerge?(root)
+        try willMerge?(root)
         var next = stripFingerprinted(from: root, descriptor: descriptor)
         next = insertEntries(into: next, descriptor: descriptor, context: context)
         let data = try encode(next)

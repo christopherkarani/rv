@@ -71,7 +71,7 @@ func renderScanSessionsRobot(
     from report: ScanReport,
     showCommand: Bool,
     setupNudge: Bool = false
-) -> String {
+) throws -> String {
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
     let payload = scanSessionsRobotPayload(from: report, showCommand: showCommand, setupNudge: setupNudge)
@@ -79,7 +79,7 @@ func renderScanSessionsRobot(
         let data = try encoder.encode(payload)
         return String(decoding: data, as: UTF8.self)
     } catch {
-        preconditionFailure("ScanSessionsRobotPayload encoding cannot fail (\(error))")
+        throw RobotRenderError.encodingFailed(String(describing: error))
     }
 }
 

@@ -42,20 +42,20 @@ public struct SetupCeremonyFrame: Equatable, Sendable {
     }
 }
 
-public let setupCeremonySearchActivity = "Searching for hosts…"
-public let setupCeremonyWiringTitle = "Wiring Hooks"
-public let setupCeremonyDownloadTitle = "Downloading"
-public let setupCeremonyDownloadComplete = "✓ Download complete"
-public let setupCeremonyAllHostsWired = "✓ All hosts wired"
-public let setupCeremonyHooksWired = "Hooks wired"
-public let setupCeremonyInstallCloser = "Install complete, run rv explain \"rm -rf\" to test"
-public let setupCeremonyHostlessTitle = "No hosts yet"
-public let setupCeremonyHostlessNext = "Next  rv setup"
+package let setupCeremonySearchActivity = "Searching for hosts…"
+package let setupCeremonyWiringTitle = "Wiring Hooks"
+package let setupCeremonyDownloadTitle = "Downloading"
+package let setupCeremonyDownloadComplete = "✓ Download complete"
+package let setupCeremonyAllHostsWired = "✓ All hosts wired"
+package let setupCeremonyHooksWired = "Hooks wired"
+package let setupCeremonyInstallCloser = "Install complete, run rv explain \"rm -rf\" to test"
+package let setupCeremonyHostlessTitle = "No hosts yet"
+package let setupCeremonyHostlessNext = "Next  rv setup"
 
-public let setupCeremonyProgressTickNs: UInt64 = 80_000_000
-public let setupCeremonyPhaseGapNs: UInt64 = 280_000_000
-public let setupCeremonyHostWireNs: UInt64 = 220_000_000
-public let setupCeremonySpinnerTickNs: UInt64 = 100_000_000
+package let setupCeremonyProgressTickNs: UInt64 = 80_000_000
+package let setupCeremonyPhaseGapNs: UInt64 = 280_000_000
+package let setupCeremonyHostWireNs: UInt64 = 220_000_000
+package let setupCeremonySpinnerTickNs: UInt64 = 100_000_000
 
 public let setupCeremonySpinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴"]
 
@@ -159,7 +159,7 @@ public func setupCeremonyFrames(
     return frames
 }
 
-public func setupSlotClause(host: HookHost, kind: SetupSlotKind) -> String? {
+package func setupSlotClause(host: HookHost, kind: SetupSlotKind) -> String? {
     switch kind {
     case .wired where host == .grok:
         return setupGrokReloadClause

@@ -16,7 +16,7 @@ enum CommandInvocation {
         )
         let requested = OutputModeResolver.requested(json: format.json, robot: format.robot)
         let home = CLIProcess.home()
-        let result = await CommandRun.run(
+        let result = try await CommandRun.run(
             kind: kind,
             command: raw,
             probe: probe,

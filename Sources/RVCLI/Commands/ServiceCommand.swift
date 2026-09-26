@@ -19,9 +19,9 @@ struct Status: AsyncParsableCommand {
     @OptionGroup
     var format: FormatFlags
 
-    func run() async {
+    func run() async throws {
         let report = await ServiceClient(home: CLIProcess.home()).status()
-        let text = ServiceStatusCommand.text(
+        let text = try ServiceStatusCommand.text(
             report,
             appearance: CLIAppearance.resolve(
                 json: format.json,

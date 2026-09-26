@@ -51,7 +51,17 @@ enum DoctorRun {
         let stdout: String
         switch appearance {
         case .robot:
-            stdout = robotText(model) + "\n"
+            do {
+                stdout = try robotText(model) + "\n"
+            } catch {
+                // Defensive (see RobotDocument.jsonString): render cannot
+                // fail on plain payloads, so this arm is untestable by seam.
+                return DoctorOutcome(
+                    stdout: "",
+                    stderr: "rv doctor failed: unable to render robot JSON\n",
+                    exitCode: 1
+                )
+            }
         case .pretty(let palette):
             stdout = PrettyWriter.join(DoctorRenderer().render(model, palette: palette))
         }
@@ -156,8 +166,8 @@ enum DoctorRun {
         return .readable
     }
 
-    private static func robotText(_ model: DoctorViewModel) -> String {
-        RobotDocument.doctor(doctorRobotPayload(from: model)).render()
+    private static func robotText(_ model: DoctorViewModel) throws -> String {
+        try RobotDocument.doctor(doctorRobotPayload(from: model)).render()
     }
 }
 

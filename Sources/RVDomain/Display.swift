@@ -3,6 +3,6 @@ public let incompleteEvalSentence =
     "rv could not finish evaluating this command. Run it in Terminal."
 
 /// Slash display (`core.git/reset-hard`); `RuleID.rawValue` is colon (`core.git:reset-hard`).
-public func displayRuleID(_ ruleID: RuleID) -> String {
+package func displayRuleID(_ ruleID: RuleID) -> String {
     ruleID.slashDisplay
 }

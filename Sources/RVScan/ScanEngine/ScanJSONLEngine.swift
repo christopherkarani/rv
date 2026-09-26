@@ -42,7 +42,7 @@ enum ScanJSONLEngine {
     /// Parse one line as a JSON object. Malformed lines and JSON scalars
     /// yield nil and contribute zero events.
     static func parseObject(_ line: Data) -> [String: Any]? {
-        try? JSONSerialization.jsonObject(with: line) as? [String: Any]
+        JSONParse.object(line)
     }
 
     /// First valid session id for `keys` in order. Missing keys and

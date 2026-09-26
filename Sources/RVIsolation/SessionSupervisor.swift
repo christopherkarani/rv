@@ -514,7 +514,7 @@ func spawnSeatbeltProcess(
         close(admissionPipes.responseRead)
         admissionPipes.responseRead = -1
     }
-    guard spawnResult == 0, pid > 1 else {
+    guard let spawnResult, spawnResult == 0, pid > 1 else {
         return .failure(.processSpawnFailed)
     }
     // The wait loop polls this fd. A blocking read would ignore cancellation
@@ -1228,13 +1228,15 @@ private struct SpawnPointers {
         storage.append(nil)
     }
 
+    /// Runs `body` with the vector base pointer. Nil only when the vector is
+    /// empty, which construction forbids (init always appends the terminator).
     func withPointers<T>(
         _ body: (UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>) -> T
-    ) -> T {
+    ) -> T? {
         var values = storage
         return values.withUnsafeMutableBufferPointer { buffer in
             guard let base = buffer.baseAddress else {
-                preconditionFailure("spawn argument vector is empty")
+                return nil
             }
             return body(base)
         }

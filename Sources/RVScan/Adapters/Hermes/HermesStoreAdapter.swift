@@ -56,9 +56,7 @@ public struct HermesStoreAdapter: SessionStoreAdapter {
     }
 
     private static func extractCommands(from toolCallsJSON: String) -> [ExtractedShell] {
-        guard let data = toolCallsJSON.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data)
-        else {
+        guard let object = JSONParse.value(toolCallsJSON) else {
             return []
         }
         if let list = object as? [[String: Any]] {
@@ -105,8 +103,7 @@ public struct HermesStoreAdapter: SessionStoreAdapter {
             return command
         }
         if let text = value as? String, text.isEmpty == false {
-            guard let data = text.data(using: .utf8),
-                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            guard let object = JSONParse.object(text),
                   let command = object["command"] as? String,
                   command.isEmpty == false
             else {

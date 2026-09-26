@@ -65,7 +65,7 @@ public struct FileToolAction: Sendable, Equatable, Codable {
     public var kind: FileToolKind
     public var path: FileToolPath
 
-    public init(kind: FileToolKind, path: FileToolPath) {
+    package init(kind: FileToolKind, path: FileToolPath) {
         self.kind = kind
         self.path = path
     }

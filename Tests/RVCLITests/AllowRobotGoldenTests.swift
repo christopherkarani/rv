@@ -25,7 +25,7 @@ private func decoded(_ json: String) throws -> NSArray {
     #expect(rows[0].selector == .rule(ruleID))
     #expect(rows[1].selector == .exactCommand(MatchingView("sudo rm -rf /opt/tmp/build")))
 
-    let rendered = RobotDocument.allowlistList(rows).render()
+    let rendered = try RobotDocument.allowlistList(rows).render()
     #expect(
         rendered
             == #"[{"active":"true","reason":"reviewed","rule":"core.git:reset-hard"},{"active":"false","exact_command":"sudo rm -rf /opt/tmp/build","reason":"safe"}]"#
@@ -58,7 +58,7 @@ private func decoded(_ json: String) throws -> NSArray {
     ]
     let rows = allowOnceRobotRows(from: listRows)
     #expect(rows.map(\.kind) == [.granted, .pending])
-    let rendered = RobotDocument.allowOnceList(rows).render()
+    let rendered = try RobotDocument.allowOnceList(rows).render()
     #expect(
         rendered
             == #"[{"code_hash":"\#(hashA)","command_redacted":"git …","cwd":"/tmp/a","kind":"granted"},{"code_hash":"\#(hashB)","command_redacted":"git …","cwd":"/tmp/b","kind":"pending"}]"#
@@ -68,9 +68,9 @@ private func decoded(_ json: String) throws -> NSArray {
     #expect(try decoded(rendered) == decodedPreMigration)
 }
 
-@Test func robotDocument_allowLists_emptyRenderIsBareEmptyArray() {
-    #expect(RobotDocument.allowlistList([]).render() == "[]")
-    #expect(RobotDocument.allowOnceList([]).render() == "[]")
+@Test func robotDocument_allowLists_emptyRenderIsBareEmptyArray() throws {
+    #expect(try RobotDocument.allowlistList([]).render() == "[]")
+    #expect(try RobotDocument.allowOnceList([]).render() == "[]")
 }
 
 @Test func allowlistRobotRow_selectorIsExclusiveAndActiveIsJSONString() throws {

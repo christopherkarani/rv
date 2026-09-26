@@ -1,0 +1,39 @@
+# Shared C/Swift evaluation-route vectors. Single source of truth.
+#
+# Consumed by BOTH:
+#   - Sources/rv-c/tests/evaluation_route_test.c (C: rv_should_miss_replay)
+#   - Tests/RVIPCTests/EvaluationRouteTests.swift (Swift: EvaluationRoute.path)
+# Add a case here and both harnesses must agree. Do NOT fork per-side cases.
+#
+# Columns (tab-separated, no trimming — whitespace is significant):
+#   clientversion<TAB>serviceversion<TAB>expect
+#   - "NULL" service = absent (C NULL / Swift nil). Client is never NULL.
+#   - Empty field = empty string (distinct from NULL).
+#   - expect: "service" (trust) or "inProcess" (miss/fallback).
+1.0.0	NULL	inProcess
+1.0.0		inProcess
+1.0.0	not-a-version	inProcess
+	1.0.0	inProcess
+not-a-version	1.0.0	inProcess
+1.0.0	1.9.9	service
+1.0.0	2.0.0	inProcess
+1	1.0.0	service
+1.0.0	1	service
+2.1.0	2.0.0	service
+1.0.0	v1.0.0	inProcess
+-1.0.0	1.0.0	inProcess
+ 1.0.0	1.0.0	inProcess
+99999999999999999999.0.0	1.0.0	inProcess
+1.0.0	99999999999999999999.0.0	inProcess
+# Sign-prefixed and Int64-range majors: Swift Int("+1")/Int("-0") parse and
+# Int holds 10-18 digit heads, while C rejects non-digit heads and caps at
+# INT_MAX. Equal pairs must miss on both sides; INT_MAX itself still routes.
++1.0.0	+1.0.0	inProcess
+-0.0.0	-0.0.0	inProcess
+9999999999.0.0	9999999999.0.0	inProcess
+2147483647.0.0	2147483647.0.0	service
+2147483648.0.0	2147483648.0.0	inProcess
+# 16-char zero-padded heads: numerically small but C rejects n >= sizeof
+# buffer, so both sides must miss even when the padded value equals 1.
+0000000000000001.0.0	1.0.0	inProcess
+0000000000000001.0.0	0000000000000001.0.0	inProcess
