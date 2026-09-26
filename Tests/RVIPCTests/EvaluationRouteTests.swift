@@ -89,7 +89,13 @@ struct EvaluationRouteTests {
             "evaluation_route_vectors.tsv is missing; C/Swift parity is unverified"
         )
         var cases = 0
-        for line in text.split(separator: "\n") {
+        // Mirror the C harness (fgets + strip one \n, then one \r): fold
+        // CRLF first, since a grapheme split on "\n" would not break "\r\n"
+        // clusters at all, then strip one trailing CR per line. Interior
+        // bytes (including leading spaces) stay significant.
+        let normalized = text.replacingOccurrences(of: "\r\n", with: "\n")
+        for rawLine in normalized.split(separator: "\n") {
+            let line = rawLine.hasSuffix("\r") ? rawLine.dropLast() : rawLine
             if line.hasPrefix("#") || line.isEmpty {
                 continue
             }

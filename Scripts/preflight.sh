@@ -173,10 +173,12 @@ check_no_precondition_failure() {
 
 check_no_iuo() {
   # Implicitly unwrapped optionals in var/let decls, params, computed
-  # properties, return positions, and typealiases. `!` followed by an
+  # properties, return positions, typealiases, and enum case payloads
+  # (case foo(String!), labeled or multi-case). `!` followed by an
   # identifier char, `(` or `=` is prefix negation, a call, or a comparison,
   # not an IUO; full-line comments are filtered. Validated both ways
-  # (catches planted decl/return/typealias IUOs, zero hits on the clean tree).
+  # (catches planted decl/return/typealias/case-payload IUOs, zero hits on
+  # the clean tree).
   local id='[A-Za-z_][A-Za-z0-9_]*'
   local first='[^ =/{!";]'
   local span='[^=/{";]*'
@@ -184,8 +186,9 @@ check_no_iuo() {
   local decl="((var|let)[ \t]+${id}[ \t]*|[,(][ \t]*${id}[ \t]*):[ \t]*${first}${span}${bang}"
   local ret="->[ \t]*${first}${span}${bang}"
   local alias="typealias[ \t]+${id}[ \t]*=[ \t]*${first}${span}${bang}"
+  local payload="case[ \t][^;{=]*\\([ \t]*${first}${span}${bang}"
   local matches
-  matches=$(grep -rn --include='*.swift' -E "${decl}|${ret}|${alias}" "$SOURCES" 2>/dev/null | grep -vE ':[0-9]+:[ \t]*//' || true)
+  matches=$(grep -rn --include='*.swift' -E "${decl}|${ret}|${alias}|${payload}" "$SOURCES" 2>/dev/null | grep -vE ':[0-9]+:[ \t]*//' || true)
   local count
   count=$(echo "$matches" | grep -c . || true)
   if [ "$count" -eq 0 ]; then
