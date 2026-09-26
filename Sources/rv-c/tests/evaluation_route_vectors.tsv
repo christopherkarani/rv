@@ -33,3 +33,7 @@ not-a-version	1.0.0	inProcess
 9999999999.0.0	9999999999.0.0	inProcess
 2147483647.0.0	2147483647.0.0	service
 2147483648.0.0	2147483648.0.0	inProcess
+# 16-char zero-padded heads: numerically small but C rejects n >= sizeof
+# buffer, so both sides must miss even when the padded value equals 1.
+0000000000000001.0.0	1.0.0	inProcess
+0000000000000001.0.0	0000000000000001.0.0	inProcess
