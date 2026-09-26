@@ -3,7 +3,7 @@ import RVDomain
 import RVPresentation
 
 /// File-tool door derived from Host adapter bytes and optional companion JSON.
-/// Setup writes Claude / Cursor / Grok host JSON only through `apply*`.
+/// Setup writes Claude / Cursor / Grok / Antigravity host JSON only through `apply*`.
 enum HostWiring {
     static func fileTools(
         host: HookHost,
@@ -19,6 +19,16 @@ enum HostWiring {
             }
             guard let root = jsonObject(adapterBytes),
                   ClaudeSettingsMerge.hasFileToolMatchers(in: root)
+            else {
+                return .shellOnly
+            }
+            return .wired
+        case .antigravity:
+            guard let adapterBytes else {
+                return .notApplicable
+            }
+            guard let root = jsonObject(adapterBytes),
+                  AntigravitySettingsMerge.hasFileToolMatchers(in: root)
             else {
                 return .shellOnly
             }
@@ -59,6 +69,26 @@ enum HostWiring {
             data: merged.data,
             wrote: merged.wrote,
             fileTools: fileTools(host: .claude, adapterBytes: merged.data, companionJSON: nil)
+        )
+    }
+
+    /// Merges the Antigravity hooks.json RV slice. `fileTools` is inspect of `data`.
+    static func applyAntigravity(
+        existing existingData: Data?,
+        rvPath: String,
+        adapterPath: String,
+        force: Bool = false
+    ) throws -> (data: Data, wrote: Bool, fileTools: DoctorFileToolsState) {
+        let merged = try AntigravitySettingsMerge.merge(
+            existingData: existingData,
+            rvPath: rvPath,
+            adapterPath: adapterPath,
+            force: force
+        )
+        return (
+            data: merged.data,
+            wrote: merged.wrote,
+            fileTools: fileTools(host: .antigravity, adapterBytes: merged.data, companionJSON: nil)
         )
     }
 

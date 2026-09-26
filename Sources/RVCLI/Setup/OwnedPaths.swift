@@ -33,6 +33,8 @@ struct OwnedPaths: Equatable, Sendable {
     var cursorDirectory: String { home.rawValue + "/.cursor" }
     var cursorHook: String { home.rawValue + "/.cursor/hooks/rv-guard.py" }
     var cursorHooksJSON: String { home.rawValue + "/.cursor/hooks.json" }
+    var antigravityDirectory: String { home.rawValue + "/.gemini/antigravity-cli" }
+    var antigravityHooks: String { home.rawValue + "/.gemini/config/hooks.json" }
     var launchAgent: String { home.rawValue + "/Library/LaunchAgents/dev.rv.evaluate.plist" }
     var systemdUserUnit: String { home.rawValue + "/.config/systemd/user/dev.rv.evaluate.service" }
     var localRv: String { home.rawValue + "/.local/bin/rv" }
@@ -100,6 +102,13 @@ struct OwnedPaths: Equatable, Sendable {
                 detectionDirectory: cursorDirectory,
                 executableName: "cursor",
                 destination: cursorHook
+            )
+        case .antigravity:
+            OwnedHostAdapterPath(
+                host: .antigravity,
+                detectionDirectory: antigravityDirectory,
+                executableName: "agy",
+                destination: antigravityHooks
             )
         }
     }
