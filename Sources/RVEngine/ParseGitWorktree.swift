@@ -1,6 +1,16 @@
 import RVDomain
 
-func parseCheckout(_ args: [String]) -> GitAction? {
+// MARK: - Total Argv parsers (C1 T3b2)
+//
+// Each parser classifies `Argv` words with `FlagToken` plus pending/separator
+// state instead of `ShellPipeline.scanFlags`: legacy consumes post-`--`
+// words and pending values verbatim, and rejects attached `--branch=` /
+// `--orphan=x` / `--source=` / `--create=x` / `--exclude=x` while accepting
+// the same values bare — distinctions the value-merging scan cannot express.
+// Parsed `GitAction` output is unchanged, including the dead skip entries
+// (`-m` in restore) that legacy rejects via its cluster-first ordering.
+
+func parseCheckout(_ argv: Argv) -> GitAction? {
     var create = false
     var forceCreate = false
     var orphan = false
@@ -9,60 +19,37 @@ func parseCheckout(_ args: [String]) -> GitAction? {
     var before: [String] = []
     var after: [String] = []
     var seenDash = false
-    var index = 0
-    while index < args.count {
-        let token = args[index]
+    for word in argv.args {
         if pendingName {
-            if token.hasPrefix("-") { return nil }
-            before.append(token)
+            if word.hasPrefix("-") { return nil }
+            before.append(word)
             pendingName = false
-            index += 1
             continue
         }
         if seenDash {
-            after.append(token)
-            index += 1
+            after.append(word)
             continue
         }
-        if token == "--" {
+        switch FlagToken.classify(word) {
+        case .terminator:
             seenDash = true
-            index += 1
-            continue
-        }
-        if token == "-b" || token == "--branch" {
-            create = true
-            pendingName = true
-            index += 1
-            continue
-        }
-        if token == "-B" {
-            forceCreate = true
-            pendingName = true
-            index += 1
-            continue
-        }
-        if token == "--orphan" {
+        case .long("branch", let attached):
+            if let attached {
+                guard attached.isEmpty == false else { return nil }
+                create = true
+                before.append(attached)
+            } else {
+                create = true
+                pendingName = true
+            }
+        case .long("orphan", nil):
             orphan = true
             pendingName = true
-            index += 1
-            continue
-        }
-        if let name = gitAttachedValue(token, long: "--branch") {
-            create = true
-            before.append(name)
-            index += 1
-            continue
-        }
-        if token == "-f" || token == "--force" {
-            force = true
-            index += 1
-            continue
-        }
-        if let letters = clusteredShorts(token) {
+        case .shorts(let letters, _):
             for letter in letters {
                 switch letter {
                 case "q", "l", "t", "m":
-                    continue
+                    break
                 case "f":
                     force = true
                 case "b":
@@ -77,20 +64,17 @@ func parseCheckout(_ args: [String]) -> GitAction? {
                     return nil
                 }
             }
-            index += 1
-            continue
+        case .long("force", nil):
+            force = true
+        case .long("conflict", let attached) where attached != nil:
+            break
+        case .long(let flag, nil) where checkoutSkipLongs.contains(flag):
+            break
+        case .positional(let word):
+            before.append(word)
+        default:
+            return nil
         }
-        if checkoutSkipFlags.contains(token) {
-            index += 1
-            continue
-        }
-        if token.hasPrefix("--conflict=") {
-            index += 1
-            continue
-        }
-        if token.hasPrefix("-") { return nil }
-        before.append(token)
-        index += 1
     }
     if pendingName { return nil }
     if create || forceCreate || orphan {
@@ -112,54 +96,41 @@ func parseCheckout(_ args: [String]) -> GitAction? {
     return nil
 }
 
-private let checkoutSkipFlags: Set<String> = [
-    "-q", "--quiet", "--track", "--no-track", "-t", "-l",
-    "--detach", "--progress", "--no-progress",
-    "--ignore-other-worktrees", "--guess", "--no-guess",
-    "--recurse-submodules", "--no-recurse-submodules",
-    "--overlay", "--no-overlay", "--overwrite-ignore", "--no-overwrite-ignore",
-    "--ignore-skip-worktree-bits", "-m", "--merge",
-    "--ours", "--theirs",
+private let checkoutSkipLongs: Set<String> = [
+    "quiet", "track", "no-track",
+    "detach", "progress", "no-progress",
+    "ignore-other-worktrees", "guess", "no-guess",
+    "recurse-submodules", "no-recurse-submodules",
+    "overlay", "no-overlay", "overwrite-ignore", "no-overwrite-ignore",
+    "ignore-skip-worktree-bits", "merge",
+    "ours", "theirs",
 ]
 
-func parseSwitch(_ args: [String]) -> GitAction? {
+func parseSwitch(_ argv: Argv) -> GitAction? {
     var create = false
     var forceCreate = false
     var force = false
     var pendingName = false
     var name: String?
-    var index = 0
-    while index < args.count {
-        let token = args[index]
+    for word in argv.args {
         if pendingName {
-            if token.hasPrefix("-") { return nil }
-            name = token
+            if word.hasPrefix("-") { return nil }
+            name = word
             pendingName = false
-            index += 1
             continue
         }
-        if token == "-c" || token == "--create" {
+        switch FlagToken.classify(word) {
+        case .long("create", nil):
             create = true
             pendingName = true
-            index += 1
-            continue
-        }
-        if token == "-C" || token == "--force-create" {
+        case .long("force-create", nil):
             forceCreate = true
             pendingName = true
-            index += 1
-            continue
-        }
-        if token == "-f" || token == "--force" || token == "--discard-changes" {
-            force = true
-            index += 1
-            continue
-        }
-        if let letters = clusteredShorts(token) {
+        case .shorts(let letters, _):
             for letter in letters {
                 switch letter {
                 case "q", "d", "m", "t":
-                    continue
+                    break
                 case "f":
                     force = true
                 case "c":
@@ -172,17 +143,16 @@ func parseSwitch(_ args: [String]) -> GitAction? {
                     return nil
                 }
             }
-            index += 1
-            continue
+        case .long("force", nil), .long("discard-changes", nil):
+            force = true
+        case .long(let flag, nil) where switchSkipLongs.contains(flag):
+            break
+        case .positional(let word):
+            if name != nil { return nil }
+            name = word
+        default:
+            return nil
         }
-        if switchSkipFlags.contains(token) {
-            index += 1
-            continue
-        }
-        if token.hasPrefix("-") { return nil }
-        if name != nil { return nil }
-        name = token
-        index += 1
     }
     if pendingName { return nil }
     guard let name else { return nil }
@@ -192,53 +162,44 @@ func parseSwitch(_ args: [String]) -> GitAction? {
     return .switchBranch(name: name, force: force)
 }
 
-private let switchSkipFlags: Set<String> = [
-    "-q", "--quiet", "-d", "--detach", "--guess", "--no-guess",
-    "--track", "--no-track", "-t", "-m", "--merge",
-    "--ignore-other-worktrees", "--recurse-submodules", "--no-recurse-submodules",
+private let switchSkipLongs: Set<String> = [
+    "quiet", "detach", "guess", "no-guess",
+    "track", "no-track", "merge",
+    "ignore-other-worktrees", "recurse-submodules", "no-recurse-submodules",
 ]
 
-func parseRestore(_ args: [String]) -> GitAction? {
+func parseRestore(_ argv: Argv) -> GitAction? {
     var staged = false
     var worktree = false
     var source: String?
     var pathspecs: [String] = []
     var seenDash = false
-    var index = 0
-    while index < args.count {
-        let token = args[index]
+    var pendingSource = false
+    for word in argv.args {
+        if pendingSource {
+            source = word
+            pendingSource = false
+            continue
+        }
         if seenDash {
-            pathspecs.append(token)
-            index += 1
+            pathspecs.append(word)
             continue
         }
-        if token == "--" {
+        switch FlagToken.classify(word) {
+        case .terminator:
             seenDash = true
-            index += 1
-            continue
-        }
-        if token == "--staged" || token == "-S" {
+        case .long("staged", nil):
             staged = true
-            index += 1
-            continue
-        }
-        if token == "--worktree" || token == "-W" {
+        case .long("worktree", nil):
             worktree = true
-            index += 1
-            continue
-        }
-        if token == "--source" {
-            guard index + 1 < args.count else { return nil }
-            source = args[index + 1]
-            index += 2
-            continue
-        }
-        if let value = gitAttachedValue(token, long: "--source") {
-            source = value
-            index += 1
-            continue
-        }
-        if let letters = clusteredShorts(token) {
+        case .long("source", let attached):
+            if let attached {
+                guard attached.isEmpty == false else { return nil }
+                source = attached
+            } else {
+                pendingSource = true
+            }
+        case .shorts(let letters, _):
             for letter in letters {
                 switch letter {
                 case "S":
@@ -246,22 +207,20 @@ func parseRestore(_ args: [String]) -> GitAction? {
                 case "W":
                     worktree = true
                 case "q":
-                    continue
+                    break
                 default:
                     return nil
                 }
             }
-            index += 1
-            continue
+        case .long(let flag, nil) where restoreSkipLongs.contains(flag):
+            break
+        case .positional(let word):
+            pathspecs.append(word)
+        default:
+            return nil
         }
-        if restoreSkipFlags.contains(token) {
-            index += 1
-            continue
-        }
-        if token.hasPrefix("-") { return nil }
-        pathspecs.append(token)
-        index += 1
     }
+    if pendingSource { return nil }
     let destination: GitRestoreDestination
     switch (staged, worktree) {
     case (true, true):
@@ -274,74 +233,60 @@ func parseRestore(_ args: [String]) -> GitAction? {
     return .restore(pathspecs: pathspecs, destination: destination, source: source)
 }
 
-private let restoreSkipFlags: Set<String> = [
-    "-q", "--quiet", "--progress", "--no-progress", "--ours", "--theirs",
-    "--merge", "-m", "--ignore-unmerged", "--ignore-skip-worktree-bits",
-    "--overlay", "--no-overlay",
+private let restoreSkipLongs: Set<String> = [
+    "quiet", "progress", "no-progress", "ours", "theirs",
+    "merge", "ignore-unmerged", "ignore-skip-worktree-bits",
+    "overlay", "no-overlay",
 ]
 
-func parseReset(_ args: [String]) -> GitAction? {
+func parseReset(_ argv: Argv) -> GitAction? {
     var mode: GitResetMode = .mixed
     var sawMode = false
     var target: String?
     var seenDash = false
     var pathspecs: [String] = []
-    var index = 0
-    while index < args.count {
-        let token = args[index]
+    for word in argv.args {
         if seenDash {
-            pathspecs.append(token)
-            index += 1
+            pathspecs.append(word)
             continue
         }
-        if token == "--" {
+        switch FlagToken.classify(word) {
+        case .terminator:
             seenDash = true
-            index += 1
-            continue
-        }
-        if token == "--hard" {
+        case .long("hard", nil):
             if sawMode { return nil }
             mode = .hard
             sawMode = true
-            index += 1
-            continue
-        }
-        if token == "--soft" {
+        case .long("soft", nil):
             if sawMode { return nil }
             mode = .soft
             sawMode = true
-            index += 1
-            continue
-        }
-        if token == "--mixed" {
+        case .long("mixed", nil):
             if sawMode { return nil }
             mode = .mixed
             sawMode = true
-            index += 1
-            continue
-        }
-        if token == "--merge" {
+        case .long("merge", nil):
             if sawMode { return nil }
             mode = .merge
             sawMode = true
-            index += 1
-            continue
-        }
-        if token == "--keep" {
+        case .long("keep", nil):
             if sawMode { return nil }
             mode = .keep
             sawMode = true
-            index += 1
-            continue
+        case .shorts(let letters, _):
+            guard letters.count == 1, let letter = letters.first,
+                letter == "q" || letter == "N"
+            else {
+                return nil
+            }
+        case .long("quiet", nil), .long("intent-to-add", nil):
+            break
+        case .positional(let word):
+            if target != nil { return nil }
+            target = word
+        default:
+            return nil
         }
-        if token == "-q" || token == "--quiet" || token == "-N" || token == "--intent-to-add" {
-            index += 1
-            continue
-        }
-        if token.hasPrefix("-") { return nil }
-        if target != nil { return nil }
-        target = token
-        index += 1
     }
     if pathspecs.isEmpty == false {
         if mode == .hard {
@@ -352,68 +297,79 @@ func parseReset(_ args: [String]) -> GitAction? {
     return .reset(mode: mode, target: target)
 }
 
-func parseClean(_ args: [String]) -> GitAction? {
+func parseClean(_ argv: Argv) -> GitAction? {
     var force = false
     var dryRun = false
     var directories = false
-    var index = 0
-    while index < args.count {
-        let token = args[index]
-        if token == "--force" {
+    var pendingExclude = false
+    for word in argv.args {
+        if pendingExclude {
+            pendingExclude = false
+            continue
+        }
+        switch FlagToken.classify(word) {
+        case .terminator:
+            break
+        case .long("force", nil):
             force = true
-            index += 1
-            continue
-        }
-        if token == "--dry-run" {
+        case .long("dry-run", nil):
             dryRun = true
-            index += 1
-            continue
-        }
-        if token == "-d" {
-            directories = true
-            index += 1
-            continue
-        }
-        if token == "-e" || token == "--exclude" {
-            guard index + 1 < args.count else { return nil }
-            index += 2
-            continue
-        }
-        if token == "-q" || token == "--quiet" || token == "-x" || token == "-X" {
-            index += 1
-            continue
-        }
-        if token == "-i" || token == "--interactive" {
-            return nil
-        }
-        if let letters = clusteredShorts(token) {
-            for letter in letters {
-                switch letter {
-                case "f":
-                    force = true
-                case "n":
-                    dryRun = true
-                case "d":
-                    directories = true
-                case "q", "x", "X":
-                    continue
-                case "i":
-                    return nil
-                case "e":
-                    return nil
-                default:
-                    return nil
+        case .long("exclude", nil):
+            pendingExclude = true
+        case .shorts(let letters, _):
+            if letters == ["e"] {
+                pendingExclude = true
+            } else {
+                for letter in letters {
+                    switch letter {
+                    case "f":
+                        force = true
+                    case "n":
+                        dryRun = true
+                    case "d":
+                        directories = true
+                    case "q", "x", "X":
+                        break
+                    case "i", "e":
+                        return nil
+                    default:
+                        return nil
+                    }
                 }
             }
-            index += 1
-            continue
+        case .long("quiet", nil):
+            break
+        case .positional:
+            break
+        default:
+            return nil
         }
-        if token == "--" {
-            index += 1
-            continue
-        }
-        if token.hasPrefix("-") { return nil }
-        index += 1
     }
+    if pendingExclude { return nil }
     return .clean(force: force, dryRun: dryRun, directories: directories)
+}
+
+// MARK: - `[String]` adapters
+//
+// `AnalyzeGit` and the existing goldens still thread `[String]`; T4 moves
+// the call sites onto `Argv` and deletes these.
+
+func parseCheckout(_ args: [String]) -> GitAction? {
+    parseCheckout(Argv(program: "git", args: args))
+}
+
+func parseSwitch(_ args: [String]) -> GitAction? {
+    parseSwitch(Argv(program: "git", args: args))
+}
+
+func parseRestore(_ args: [String]) -> GitAction? {
+    parseRestore(Argv(program: "git", args: args))
+}
+
+func parseReset(_ args: [String]) -> GitAction? {
+    parseReset(Argv(program: "git", args: args))
+}
+
+func parseClean(_ args: [String]) -> GitAction? {
+    parseClean(Argv(program: "git", args: args))
 }

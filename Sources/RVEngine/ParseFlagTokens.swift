@@ -1,16 +1,22 @@
-/// Shared clustered-short parse for git and filesystem flag tokens.
+/// Thin adapter over the C1 shared flag grammar (`FlagToken`).
+///
+/// Kept so the T3b-owned per-command parsers and their tests keep working
+/// unchanged until they move onto `ShellPipeline.scanFlags` directly.
 func clusteredShorts(_ token: String) -> [Character]? {
-    guard token.hasPrefix("-"), token.hasPrefix("--") == false, token.count > 1 else {
+    guard case .shorts(let letters, _) = FlagToken.classify(token) else {
         return nil
     }
-    if token.contains("=") { return nil }
-    return Array(token.dropFirst())
+    return letters
 }
 
 /// Git long-option `=value`. Named apart from unwrap's private `attachedValue`.
 func gitAttachedValue(_ token: String, long: String) -> String? {
-    let prefix = long + "="
-    guard token.hasPrefix(prefix) else { return nil }
-    let value = String(token.dropFirst(prefix.count))
-    return value.isEmpty ? nil : value
+    guard case .long(let name, let value) = FlagToken.classify(token),
+        "--" + name == long,
+        let value,
+        value.isEmpty == false
+    else {
+        return nil
+    }
+    return value
 }
