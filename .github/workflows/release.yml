@@ -32,6 +32,16 @@ jobs:
       - name: Install Swift 6.4
         run: Scripts/install-official-swift-macos.sh
 
+      - name: Cache SwiftPM build
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build
+            ~/Library/Caches/org.swift.swiftpm
+          key: swiftpm-hook-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.swift-version', 'Package.resolved', 'Package.swift') }}
+          restore-keys: |
+            swiftpm-hook-${{ runner.os }}-${{ runner.arch }}-
+
       - name: Preflight + module tests
         run: |
           Scripts/gate.sh \
@@ -39,8 +49,7 @@ jobs:
             RVHooksTests RVIPCTests RVPresentationTests \
             RVThemeTests RVTUITests RVHistoryTests RVAnalyticsTests \
             RVCorpusTests RVIsolationTests
-          Scripts/swift-6.4 test --filter RVServiceTests --skip injectedOneSecondIdleFiresWithoutKeepAlive
-          Scripts/swift-6.4 test --filter RVCLITests --skip CHookPipeTests.cHookProof
+          Scripts/swift-6.4 test --filter 'RVServiceTests|RVCLITests' --skip 'injectedOneSecondIdleFiresWithoutKeepAlive|CHookPipeTests.cHookProof'
 
       - name: Stage release binaries
         run: Scripts/release.sh
