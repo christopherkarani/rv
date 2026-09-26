@@ -22,13 +22,16 @@ import RVDomain
     }
 
     @Test func parse_matchingMasksDataRoles() {
+        // Exact goldens mirror NormalizeTests: data payloads become spaces,
+        // structure survives. Negative `contains` checks alone would pass even
+        // if masking silently stopped working.
+        let masked16 = String(repeating: " ", count: 16)
         let commit = ShellPipeline.parse("git commit -m \"git reset --hard\"").matching
-        #expect(commit.rawValue.contains("--force") == false)
+        #expect(commit.rawValue == "git commit -m " + masked16)
         let attached = ShellPipeline.parse("git commit --message=\"git reset --hard\"").matching
-        #expect(attached.rawValue.contains("reset") == false)
+        #expect(attached.rawValue == "git commit --message=" + masked16)
         let search = ShellPipeline.parse("git grep -n \"rm -rf\"").matching
-        #expect(search.rawValue.contains("rm") == false)
-        #expect(search.rawValue.contains(".env") == false)
+        #expect(search.rawValue == "git grep -n " + String(repeating: " ", count: 6))
     }
 
     @Test func parse_matchingMasksHeredocWriteBodyKeepsExecutingSink() {
@@ -46,6 +49,40 @@ import RVDomain
         // Mask-before-strip order is load-bearing: `$'sudo'` must surface as
         // a wrapper before the strip loop runs.
         #expect(ShellPipeline.parse("$'sudo' git status").matching == "git status")
+    }
+
+    @Test func adapters_delegateToSingleParse() {
+        // Both thin adapters must agree with the facade on every input shape,
+        // including the empty and budget-limited paths.
+        let inputs = [
+            "sudo git reset --hard",
+            "\"git\" reset --hard",
+            "git commit -m \"git reset --hard\"",
+            "cat > /tmp/note.md << 'EOF'\nSee git reset --hard\nEOF",
+            "cat <<'EOF' | bash\ngit reset --hard\nEOF",
+            "$'sudo' git status",
+            "sudo --not-a-flag git status",
+            "",
+            "   ",
+        ]
+        for input in inputs {
+            let parsed = ShellPipeline.parse(input)
+            #expect(Normalize.matchingView(of: input) == parsed.matching)
+            #expect(
+                Normalize.matchingView(of: ShellCommand(rawValue: input)) == parsed.matching
+            )
+            #expect(CommandPeelCore.matchingView(of: input) == parsed.matching)
+            switch CommandPeelCore.peel(ShellCommand(rawValue: input)) {
+            case .complete(let matching, let executing, let layers):
+                #expect(matching == parsed.matching)
+                #expect(parsed.executing == executing)
+                #expect(layers == parsed.layers)
+            case .limited(let matching, let layers):
+                #expect(matching == parsed.matching)
+                #expect(parsed.executing == nil)
+                #expect(layers == parsed.layers)
+            }
+        }
     }
 }
 
@@ -72,6 +109,18 @@ import RVDomain
             #expect(parsed.error == .emptyCommand)
             #expect(parsed.segments == [])
             #expect(parsed.tokens == [])
+            #expect(parsed.matching == "")
+        }
+    }
+
+    @Test func parse_newlineOnlyInput_reportsEmptyCommand() {
+        // Structural newlines are tokens but carry no command words, so the
+        // parse stage still reports `.emptyCommand` with an empty grant key.
+        for input in ["\n", "\n\n"] {
+            let parsed = ShellPipeline.parse(input)
+            #expect(parsed.error == .emptyCommand)
+            #expect(parsed.segments == [])
+            #expect(parsed.tokens == [Token(lexeme: "\n", wasQuoted: false)])
             #expect(parsed.matching == "")
         }
     }
@@ -134,7 +183,7 @@ import RVDomain
         #expect(ShellPipeline.classifyStage("command -v git") == "command -v git")
         #expect(
             ShellPipeline.classifyStage("git commit -m \"git reset --hard\"").rawValue
-                .contains("--force") == false
+                == "git commit -m " + String(repeating: " ", count: 16)
         )
     }
 
@@ -144,6 +193,10 @@ import RVDomain
             "git commit -m \"git reset --hard\"",
             "echo \"git reset --hard\" && \"git\" reset --'hard'",
             "rm $'-rf' /",
+            "echo a\ngit status",
+            "cat > /tmp/note.md << 'EOF'\nSee git reset --hard\nEOF",
+            "cat <<'EOF' | bash\ngit reset --hard\nEOF",
+            "\n",
         ]
         for input in inputs {
             #expect(
