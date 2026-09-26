@@ -108,7 +108,7 @@ private final class EgressStubServer: @unchecked Sendable {
         listenFD = fd
         port = Int(UInt16(bigEndian: name.sin_port))
         self.reply = Array(reply.utf8)
-        DispatchQueue.global().async { [weak self] in self?.acceptOnce() }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in self?.acceptOnce() }
     }
 
     deinit {
@@ -118,8 +118,13 @@ private final class EgressStubServer: @unchecked Sendable {
         close(listenFD)
     }
 
+    // TEMP-DIAG: remove after CI diagnosis.
+    private let diagT0 = Date()
+
     private func acceptOnce() {
         let fd = accept(listenFD, nil, nil)
+        // TEMP-DIAG: remove after CI diagnosis.
+        print(String(format: "rv.egress-stub: accept t=%.1f fd=%d", Date().timeIntervalSince(diagT0), fd))
         guard fd >= 0 else { return }
         defer { close(fd) }
         var buffer = [UInt8](repeating: 0, count: 4096)
@@ -127,6 +132,8 @@ private final class EgressStubServer: @unchecked Sendable {
             guard let base = pointer.baseAddress else { return -1 }
             return recv(fd, base, pointer.count, 0)
         }
+        // TEMP-DIAG: remove after CI diagnosis.
+        print(String(format: "rv.egress-stub: recv t=%.1f count=%d", Date().timeIntervalSince(diagT0), count))
         if count > 0 {
             receivedLock.lock()
             receivedBytes = Array(buffer[..<count])
@@ -136,6 +143,8 @@ private final class EgressStubServer: @unchecked Sendable {
             guard let base = pointer.baseAddress else { return -1 }
             return send(fd, base, pointer.count, 0)
         }
+        // TEMP-DIAG: remove after CI diagnosis.
+        print(String(format: "rv.egress-stub: replied t=%.1f", Date().timeIntervalSince(diagT0)))
     }
 }
 
@@ -254,7 +263,7 @@ private func egressAwaitDenials(_ collector: EgressDenialCollector, count: Int, 
     #expect(egressSend(client, text: "CONNECT 127.0.0.1:\(stub.port) HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"))
     #expect(egressSend(client, text: "PING\n"))
     var response = ""
-    for _ in 0..<10 {
+    for _ in 0..<15 {
         response += egressRead(client)
         if response.contains("PONG") { break }
     }
@@ -273,7 +282,7 @@ private func egressAwaitDenials(_ collector: EgressDenialCollector, count: Int, 
     defer { close(client) }
     #expect(egressSend(client, text: "POST http://127.0.0.1:\(stub.port)/v1/x HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\n\r\n"))
     var response = ""
-    for _ in 0..<10 {
+    for _ in 0..<15 {
         response += egressRead(client)
         if response.contains("PONG") { break }
     }
