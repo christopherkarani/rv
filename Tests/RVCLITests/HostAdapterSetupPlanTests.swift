@@ -65,6 +65,7 @@ import Testing
         .skipUndetected(.hermes),
         .skipUndetected(.codex),
         .skipUndetected(.cursor),
+        .skipUndetected(.antigravity),
         .writeLaunchAgent,
     ])
     #expect(
@@ -107,6 +108,7 @@ import Testing
         .skipUndetected(.hermes),
         .skipUndetected(.codex),
         .skipUndetected(.cursor),
+        .skipUndetected(.antigravity),
         .skipLaunchAgent,
     ])
     #expect(
@@ -154,6 +156,7 @@ import Testing
         .skipUndetected(.hermes),
         .skipUndetected(.codex),
         .skipUndetected(.cursor),
+        .skipUndetected(.antigravity),
         .writeLaunchAgent,
     ])
 }

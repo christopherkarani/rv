@@ -132,6 +132,79 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
     }
 }
 
+@Test func doctor_wiredAntigravityReportsFileTool() throws {
+    try withDoctorHome { home, paths, environment in
+        let executable = home.appendingPathComponent("bin/rv")
+        try makeExecutable(executable)
+        try makeExecutable(home.appendingPathComponent("bin/rv-cli"))
+        try FileManager.default.createDirectory(
+            atPath: paths.antigravityDirectory,
+            withIntermediateDirectories: true
+        )
+        let merged = try AntigravitySettingsMerge.merge(
+            existingData: nil,
+            rvPath: executable.path,
+            adapterPath: AntigravitySettingsMerge.adapterPath(hooksPath: paths.antigravityHooks),
+            force: false
+        )
+        try FileManager.default.createDirectory(
+            atPath: (paths.antigravityHooks as NSString).deletingLastPathComponent,
+            withIntermediateDirectories: true
+        )
+        try merged.data.write(to: URL(fileURLWithPath: paths.antigravityHooks))
+
+        let outcome = DoctorRun.run(
+            environment: environment,
+            diagnostics: localReady,
+            appearance: .pretty(colorOffPalette)
+        )
+
+        #expect(outcome.exitCode == 0)
+        #expect(outcome.stdout.contains("Antigravity") && outcome.stdout.contains("wired"))
+        #expect(outcome.stdout.contains("file-tool"))
+        #expect(outcome.stdout.contains("shell-only") == false)
+    }
+}
+
+@Test func doctor_antigravityShellOnly_reportsBrokenNotOccupied() throws {
+    try withDoctorHome { _, paths, environment in
+        try FileManager.default.createDirectory(
+            atPath: paths.antigravityDirectory,
+            withIntermediateDirectories: true
+        )
+        let shellOnly = """
+        {
+          "rv-guard": {
+            "enabled": true,
+            "PreToolUse": [
+              {
+                "matcher": "run_command",
+                "hooks": [
+                  { "type": "command", "command": "RV_BINARY=/r python3 /c/hooks/rv-guard.py", "timeout": 10 }
+                ]
+              }
+            ]
+          }
+        }
+        """
+        try FileManager.default.createDirectory(
+            atPath: (paths.antigravityHooks as NSString).deletingLastPathComponent,
+            withIntermediateDirectories: true
+        )
+        try shellOnly.write(toFile: paths.antigravityHooks, atomically: true, encoding: .utf8)
+
+        let outcome = DoctorRun.run(
+            environment: environment,
+            diagnostics: localReady,
+            appearance: .pretty(colorOffPalette)
+        )
+
+        #expect(outcome.exitCode == 0)
+        #expect(outcome.stdout.contains("Antigravity") && outcome.stdout.contains("broken"))
+        #expect(try String(contentsOfFile: paths.antigravityHooks, encoding: .utf8) == shellOnly)
+    }
+}
+
 @Test func doctor_wiredCursorReportsFileTool() throws {
     try withDoctorHome { home, paths, environment in
         let executable = home.appendingPathComponent("bin/rv")

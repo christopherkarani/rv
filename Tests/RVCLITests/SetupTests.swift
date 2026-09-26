@@ -336,6 +336,89 @@ private func fixtureLoginHome() throws -> URL {
     }
 }
 
+@Test func setup_antigravityOnly_mergesGroupedAndStripsOnUninstall() throws {
+    try withTempHome { home, layout, launchctl in
+        try FileManager.default.createDirectory(atPath: layout.antigravityDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            atPath: (layout.antigravityHooks as NSString).deletingLastPathComponent,
+            withIntermediateDirectories: true
+        )
+        let foreign = """
+        {
+          "other-hook": {
+            "enabled": true,
+            "PreToolUse": [
+              {
+                "matcher": "run_command",
+                "hooks": [
+                  { "type": "command", "command": "other-guard evaluate", "timeout": 10 }
+                ]
+              }
+            ]
+          }
+        }
+        """
+        try foreign.write(toFile: layout.antigravityHooks, atomically: true, encoding: .utf8)
+
+        let outcome = SetupRun.setup(env(home: home, launchctl: launchctl))
+        #expect(outcome.exitCode == 0)
+        let adapterPath = AntigravitySettingsMerge.adapterPath(hooksPath: layout.antigravityHooks)
+        let body = try String(contentsOfFile: adapterPath, encoding: .utf8)
+        #expect(body == (try HookHost.antigravity.adapterResource().rendered(rvPath: "/tmp/rv-bin/rv")))
+        #expect(body.contains("toolCall"))
+        #expect(body.contains("\"run_command\""))
+        #expect(body.contains("sys.exit(0)"))
+        #expect(body.contains("sys.exit(2)") == false)
+        #expect(body.contains("RV_BYPASS") == false)
+        #expect(FileManager.default.fileExists(atPath: layout.grokHook) == false)
+        #expect(FileManager.default.fileExists(atPath: layout.claudeSettings) == false)
+
+        let hooks = try #require(
+            JSONSerialization.jsonObject(
+                with: Data(contentsOf: URL(fileURLWithPath: layout.antigravityHooks))
+            ) as? [String: Any]
+        )
+        #expect(hooks["other-hook"] as? [String: Any] != nil)
+        let group = try #require(hooks["rv-guard"] as? [String: Any])
+        #expect(group["enabled"] as? Bool == true)
+        let pre = try #require(group["PreToolUse"] as? [[String: Any]])
+        #expect(pre.count == 5)
+        #expect(pre.map { $0["matcher"] as? String } == AntigravitySettingsMerge.matchers)
+        let inner = try #require(pre[0]["hooks"] as? [[String: Any]])
+        #expect(inner[0]["command"] as? String == "RV_BINARY=/tmp/rv-bin/rv python3 \(adapterPath)")
+        #expect(inner[0]["timeout"] as? Int == 10)
+
+        let uninstall = SetupRun.uninstall(env(home: home, launchctl: launchctl))
+        #expect(uninstall.exitCode == 0)
+        #expect(FileManager.default.fileExists(atPath: adapterPath) == false)
+        let after = try #require(
+            JSONSerialization.jsonObject(
+                with: Data(contentsOf: URL(fileURLWithPath: layout.antigravityHooks))
+            ) as? [String: Any]
+        )
+        #expect(after["rv-guard"] == nil)
+        let afterForeign = try #require(after["other-hook"] as? [String: Any])
+        let afterPre = try #require(afterForeign["PreToolUse"] as? [[String: Any]])
+        #expect(afterPre.count == 1)
+        let kept = try #require(afterPre[0]["hooks"] as? [[String: Any]])
+        #expect(kept[0]["command"] as? String == "other-guard evaluate")
+    }
+}
+
+@Test func setup_antigravityDetectedByExecutableOnly() throws {
+    try withTempHome { home, layout, launchctl in
+        let bin = home.appendingPathComponent("bin")
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        try makeExecutable(bin.appendingPathComponent("agy"))
+
+        let outcome = SetupRun.setup(env(home: home, launchctl: launchctl, pathEntries: [bin.path]))
+        #expect(outcome.exitCode == 0)
+        #expect(FileManager.default.fileExists(atPath: layout.antigravityHooks))
+        let adapterPath = AntigravitySettingsMerge.adapterPath(hooksPath: layout.antigravityHooks)
+        #expect(FileManager.default.fileExists(atPath: adapterPath))
+    }
+}
+
 @Test func setup_hermesOnly_writesPluginAndCompanion() throws {
     try withTempHome { home, layout, launchctl in
         try FileManager.default.createDirectory(atPath: layout.hermesDirectory, withIntermediateDirectories: true)
