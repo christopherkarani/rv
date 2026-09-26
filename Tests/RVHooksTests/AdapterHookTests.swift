@@ -461,6 +461,164 @@ func cursorWrapper_preToolUseForeignMissingRvAllows(_ tool: String) async throws
     #expect(result.exitCode == 0)
 }
 
+@Test func antigravityTemplate_emitsDecisionDenyExitZeroNotClaudeOrCodex() throws {
+    let source = try adapterSource(for: .antigravity, rvPath: "/opt/rv")
+    #expect(source.contains("toolCall"))
+    #expect(source.contains("\"run_command\""))
+    #expect(source.contains("\"view_file\""))
+    #expect(source.contains("\"write_to_file\""))
+    #expect(source.contains("\"replace_file_content\""))
+    #expect(source.contains("\"multi_replace_file_content\""))
+    #expect(source.contains("\"antigravity\""))
+    #expect(source.contains("RV_BINARY = \"/opt/rv\""))
+    #expect(source.contains("\"decision\": \"deny\"") || source.contains("\"decision\":\"deny\""))
+    #expect(source.contains("\"decision\": \"allow\"") || source.contains("\"decision\":\"allow\""))
+    #expect(source.contains("sys.exit(0)"))
+    #expect(source.contains("sys.exit(2)") == false)
+    #expect(source.contains("permissionDecision") == false)
+    #expect(source.contains("\"ask\"") == false)
+    #expect(source.contains("permission.ask") == false)
+    #expect(source.contains("RV_BYPASS") == false)
+}
+
+@Test func antigravityWrapper_resetHardWritesDecisionDenyAndExitsZero() async throws {
+    let reason = resetHardReason
+    let result = try await runAntigravityWrapper(
+        event: [
+            "conversationId": "sess_deny",
+            "toolCall": [
+                "name": "run_command",
+                "args": ["CommandLine": "git reset --hard", "Cwd": "/tmp/ws"],
+            ],
+            "workspacePaths": ["/tmp/ws"],
+        ],
+        stub: .stdout(
+            "{\"decision\":\"deny\",\"reason\":\"\(reason)\"}\n",
+            exit: 0
+        )
+    )
+    let json = try #require(
+        JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any]
+    )
+    #expect(json["decision"] as? String == "deny")
+    #expect(json["reason"] as? String == reason)
+    #expect(result.stdout.contains("\"permissionDecision\"") == false)
+    #expect(result.stdout.contains("\"decision\":\"block\"") == false)
+    #expect(result.exitCode == 0)
+}
+
+@Test func antigravityWrapper_allowIsExplicitDecisionAllow() async throws {
+    let result = try await runAntigravityWrapper(
+        event: [
+            "conversationId": "sess_allow",
+            "toolCall": [
+                "name": "run_command",
+                "args": ["CommandLine": "git status", "Cwd": "/tmp/ws"],
+            ],
+            "workspacePaths": ["/tmp/ws"],
+        ],
+        stub: .stdout("{\"decision\":\"allow\"}\n", exit: 0)
+    )
+    let json = try #require(
+        JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any]
+    )
+    #expect(json["decision"] as? String == "allow")
+    #expect(result.stdout.isEmpty == false)
+    #expect(result.exitCode == 0)
+}
+
+@Test(arguments: [
+    "",
+    "\n",
+    "   \n",
+    "not-json",
+    "{\"decision\":\"ask\"}\n",
+])
+func antigravityWrapper_emptyOrAskStdoutIsDenyNotAllow(_ stubStdout: String) async throws {
+    let result = try await runAntigravityWrapper(
+        event: [
+            "conversationId": "sess_fail",
+            "toolCall": [
+                "name": "run_command",
+                "args": ["CommandLine": "git reset --hard", "Cwd": "/tmp/ws"],
+            ],
+            "workspacePaths": ["/tmp/ws"],
+        ],
+        stub: .stdout(stubStdout, exit: 0)
+    )
+    let json = try #require(
+        JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any]
+    )
+    #expect(json["decision"] as? String == "deny")
+    #expect(json["reason"] as? String == "rv failed")
+    #expect(result.stdout.contains("\"decision\":\"ask\"") == false)
+    #expect(result.exitCode == 0)
+}
+
+@Test func antigravityWrapper_missingRvDenies() async throws {
+    let result = try await runAntigravityWrapper(
+        event: [
+            "conversationId": "sess_missing",
+            "toolCall": [
+                "name": "run_command",
+                "args": ["CommandLine": "git reset --hard", "Cwd": "/tmp/ws"],
+            ],
+            "workspacePaths": ["/tmp/ws"],
+        ],
+        stub: .missing
+    )
+    let json = try #require(
+        JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any]
+    )
+    #expect(json["decision"] as? String == "deny")
+    #expect(json["reason"] as? String == "rv missing")
+    #expect(result.exitCode == 0)
+}
+
+@Test(arguments: [
+    "view_file",
+    "write_to_file",
+    "replace_file_content",
+    "multi_replace_file_content",
+])
+func antigravityWrapper_fileToolMissingRvDenies(_ tool: String) async throws {
+    let result = try await runAntigravityWrapper(
+        event: [
+            "conversationId": "sess_file",
+            "toolCall": [
+                "name": tool,
+                "args": ["TargetFile": "/tmp/ws/file.txt"],
+            ],
+            "workspacePaths": ["/tmp/ws"],
+        ],
+        stub: .missing
+    )
+    let json = try #require(
+        JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any]
+    )
+    #expect(json["decision"] as? String == "deny")
+    #expect(result.exitCode == 0)
+}
+
+@Test func antigravityWrapper_foreignToolMissingRvAllows() async throws {
+    let result = try await runAntigravityWrapper(
+        event: [
+            "conversationId": "sess_foreign",
+            "toolCall": [
+                "name": "web_search",
+                "args": ["Query": "swift"],
+            ],
+            "workspacePaths": ["/tmp/ws"],
+        ],
+        stub: .missing
+    )
+    let json = try #require(
+        JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any]
+    )
+    #expect(json["decision"] as? String == "allow")
+    #expect(result.exitCode == 0)
+}
+
 @Test func hermesTemplate_registersPreToolCallTerminalAndBlocks() throws {
     let source = try adapterSource(for: .hermes, rvPath: "/opt/rv")
     #expect(source.contains("pre_tool_call"))
@@ -1703,6 +1861,74 @@ private func runCursorWrapper(
     }
 
     let source = try adapterSource(for: .cursor, rvPath: rvPath)
+    let adapter = root.appendingPathComponent("rv-guard.py")
+    try source.write(to: adapter, atomically: true, encoding: .utf8)
+
+    let eventData = try JSONSerialization.data(withJSONObject: event)
+    let eventText = try #require(String(data: eventData, encoding: .utf8))
+
+    var environment = ProcessInfo.processInfo.environment
+    environment["HOME"] = root.path
+    switch stub {
+    case .stdout(let stdout, let exitCode):
+        environment["RV_STUB_STDOUT"] = stdout
+        environment["RV_STUB_EXIT"] = String(exitCode)
+    case .missing, .sleep:
+        break
+    }
+
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    process.arguments = ["python3", adapter.path]
+    process.environment = environment
+    process.currentDirectoryURL = root
+    let stdin = Pipe()
+    let stdout = Pipe()
+    let stderr = Pipe()
+    process.standardInput = stdin
+    process.standardOutput = stdout
+    process.standardError = stderr
+    try process.run()
+    stdin.fileHandleForWriting.write(Data(eventText.utf8))
+    try stdin.fileHandleForWriting.close()
+    process.waitUntilExit()
+
+    return CodexWrapperRun(
+        stdout: String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "",
+        stderr: String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "",
+        exitCode: process.terminationStatus
+    )
+}
+
+private func runAntigravityWrapper(
+    event: [String: Any],
+    stub: StubRV
+) async throws -> CodexWrapperRun {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-antigravity-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let rvPath: String
+    switch stub {
+    case .missing:
+        rvPath = root.appendingPathComponent("missing-rv").path
+    case .stdout(let stdout, let exitCode):
+        rvPath = root.appendingPathComponent("rv-stub").path
+        let script = """
+        #!/bin/sh
+        printf '%s' "$RV_STUB_STDOUT"
+        exit "${RV_STUB_EXIT:-0}"
+        """
+        try script.write(toFile: rvPath, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: rvPath)
+        _ = stdout
+        _ = exitCode
+    case .sleep:
+        rvPath = root.appendingPathComponent("rv-stub").path
+    }
+
+    let source = try adapterSource(for: .antigravity, rvPath: rvPath)
     let adapter = root.appendingPathComponent("rv-guard.py")
     try source.write(to: adapter, atomically: true, encoding: .utf8)
 

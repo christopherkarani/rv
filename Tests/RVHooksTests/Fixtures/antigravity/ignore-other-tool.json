@@ -1,0 +1,11 @@
+{
+  "conversationId": "sess_other",
+  "stepIdx": 5,
+  "toolCall": {
+    "args": {
+      "Query": "swift testing"
+    },
+    "name": "web_search"
+  },
+  "workspacePaths": ["/tmp/ws"]
+}

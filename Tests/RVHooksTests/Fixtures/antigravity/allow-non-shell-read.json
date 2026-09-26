@@ -1,0 +1,11 @@
+{
+  "conversationId": "sess_read",
+  "stepIdx": 3,
+  "toolCall": {
+    "args": {
+      "TargetFile": "/tmp/ws/README.md"
+    },
+    "name": "view_file"
+  },
+  "workspacePaths": ["/tmp/ws"]
+}
