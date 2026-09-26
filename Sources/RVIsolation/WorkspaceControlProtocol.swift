@@ -668,6 +668,13 @@ func workspaceControlCode(_ error: WorkspaceSessionError) -> WorkspaceControlCod
 
 // MARK: - Typed control RPC (T6)
 
+// Drift guard: `WorkspaceControlRequest` and `WorkspaceControlResponse`
+// intentionally mirror the same `WorkspaceControlMessage` shape (init
+// parameters, Codable init/encode limit checks, property forwarders).
+// Any wire-field addition must update both inits, both Codable paths,
+// the message/Envelope paths, and the frame-identity fixtures together;
+// byte-identity tests pin the encoding but not the mirrored limit checks.
+
 /// Validated decode of a client→server frame.
 public enum WorkspaceControlRequestDecode: Sendable, Equatable {
     case request(WorkspaceControlRequest)
@@ -685,6 +692,7 @@ public enum WorkspaceControlResponseDecode: Sendable, Equatable {
 /// Typed client→server control RPC. The wire encoding is identical to
 /// `WorkspaceControlMessage`: this type owns the `WorkspaceControlOp`
 /// conversion so callers never handle op strings.
+/// Mirror of `WorkspaceControlResponse` — see the T6 drift guard above.
 public struct WorkspaceControlRequest: Sendable, Equatable, Codable {
     var message: WorkspaceControlMessage
 
@@ -900,6 +908,7 @@ public struct WorkspaceControlRequest: Sendable, Equatable, Codable {
 }
 
 /// Typed server→client control RPC. Same wire encoding as the request side.
+/// Mirror of `WorkspaceControlRequest` — see the T6 drift guard above.
 public struct WorkspaceControlResponse: Sendable, Equatable, Codable {
     var message: WorkspaceControlMessage
 
