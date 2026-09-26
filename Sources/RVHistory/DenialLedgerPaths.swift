@@ -15,7 +15,11 @@ public struct DenialLedgerPaths: Sendable, Equatable {
         configDirectory.appendingPathComponent("config.json", isDirectory: false)
     }
 
+    public var lockURL: URL {
+        configDirectory.appendingPathComponent("blocks.lock", isDirectory: false)
+    }
+
     public var uninstallArtifacts: [URL] {
-        [fileURL]
+        [fileURL, lockURL]
     }
 }

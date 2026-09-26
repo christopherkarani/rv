@@ -1,0 +1,109 @@
+import Foundation
+import Testing
+@testable import RVHistory
+
+/// OPE-158 regression tests: locked read-modify-write in `DenialLedger.append`.
+struct DenialLedgerConcurrencyTests {
+    /// AC-001: concurrent appends lose no rows.
+    @Test func concurrentAppends_loseNoRows() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-ledger-race-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let ledger = DenialLedger(configDirectory: dir)
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let template = try decode(ConcurrencyJSONL.row)
+        let taskCount = 8
+        let appendsPerTask = 20
+        let total = taskCount * appendsPerTask
+
+        await withTaskGroup(of: Void.self) { group in
+            for taskIndex in 0..<taskCount {
+                group.addTask {
+                    for rowIndex in 0..<appendsPerTask {
+                        var record = template
+                        record.timestamp = now.addingTimeInterval(
+                            TimeInterval(taskIndex * appendsPerTask + rowIndex)
+                        )
+                        ledger.append(record, now: now.addingTimeInterval(TimeInterval(total)))
+                    }
+                }
+            }
+        }
+
+        let rows = ledger.records(asOf: now.addingTimeInterval(TimeInterval(total)))
+        #expect(rows.count == total)
+    }
+
+    /// AC-003: torn file (bad middle line, truncated last line) still loads decodable rows.
+    @Test func tornFile_skipsBadLines() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-ledger-torn-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("blocks.jsonl")
+        let text = ConcurrencyJSONL.row + "\n"
+            + "not-json-at-all\n"
+            + ConcurrencyJSONL.row + "\n"
+            + #"{"category":"core.git","host":"tty","path":""# // truncated, no trailing newline
+        try Data(text.utf8).write(to: file)
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let rows = DenialLedger(fileURL: file).records(asOf: now)
+        #expect(rows.count == 2)
+    }
+
+    /// CON-005: append into a fresh dir creates owner-only blocks files and the
+    /// `blocks.lock` sidecar next to `blocks.jsonl`.
+    @Test func append_setsOwnerOnlyPermissionsAndSidecar() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-ledger-perms-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        #expect(FileManager.default.fileExists(atPath: dir.path) == false)
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        DenialLedger(configDirectory: dir).append(try decode(ConcurrencyJSONL.row), now: now)
+        let blocks = dir.appendingPathComponent("blocks.jsonl")
+        let lock = dir.appendingPathComponent("blocks.lock")
+        #expect(FileManager.default.fileExists(atPath: blocks.path))
+        #expect(FileManager.default.fileExists(atPath: lock.path))
+        #expect(try ledgerMode(dir) == 0o700)
+        #expect(try ledgerMode(blocks) == 0o600)
+        #expect(try ledgerMode(lock) == 0o600)
+    }
+
+    /// Failure contract: when the lock cannot be acquired (here a directory
+    /// occupies `blocks.lock`), append degrades to a silent no-op — no trap,
+    /// no partial rows. A chmod-based failure is not used: `withLock` prepares
+    /// the directory (re-asserting 0700 on owned dirs) before locking.
+    @Test func append_lockUnavailable_dropsRecordSilently() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-ledger-lockfail-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(
+            at: dir.appendingPathComponent("blocks.lock", isDirectory: true),
+            withIntermediateDirectories: false
+        )
+        let ledger = DenialLedger(configDirectory: dir)
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        ledger.append(try decode(ConcurrencyJSONL.row), now: now)
+        #expect(ledger.records(asOf: now) == [])
+        #expect(FileManager.default.fileExists(atPath: dir.appendingPathComponent("blocks.jsonl").path) == false)
+    }
+
+    private func decode(_ line: String) throws -> DenialLedgerRecord {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(DenialLedgerRecord.self, from: Data(line.utf8))
+    }
+}
+
+private func ledgerMode(_ url: URL) throws -> Int {
+    let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
+    let raw = attrs[.posixPermissions] as? NSNumber
+    return (raw?.intValue ?? 0) & 0o777
+}
+
+private enum ConcurrencyJSONL {
+    static let row =
+        #"{"category":"core.git","host":"tty","path":"","rule_id":"core.git:reset-hard","timestamp":"2027-01-15T08:00:00Z","tool":"Bash"}"#
+}

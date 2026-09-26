@@ -38,8 +38,18 @@ public struct FileLockedJSONLStore<Record: Codable & Sendable>: Sendable {
         }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        return text.split(whereSeparator: \.isNewline).compactMap { line in
-            let raw = line.trimmingCharacters(in: .whitespaces)
+        // Split on raw LF bytes (stdlib: identical on Darwin and corelibs):
+        // JSONEncoder never escapes U+2028/U+2029/VT/FF/NEL, so those must
+        // not act as line separators. Byte-wise split keeps CRLF loadable —
+        // the CR stays on the line and is stripped below. Character-wise
+        // split cannot be used here: CRLF is a single Character and would
+        // swallow the LF. One trailing CR per line keeps CRLF files loadable.
+        return text.utf8.split(separator: 0x0A).compactMap { bytes in
+            guard let line = String(bytes: bytes, encoding: .utf8) else {
+                return nil
+            }
+            let withoutCR = line.hasSuffix("\r") ? line.dropLast() : line[...]
+            let raw = withoutCR.trimmingCharacters(in: .whitespaces)
             guard raw.isEmpty == false,
                   let lineData = raw.data(using: .utf8),
                   let record = try? decoder.decode(Record.self, from: lineData)
