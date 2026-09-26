@@ -3,7 +3,7 @@ import RVDomain
 import Testing
 @testable import RVHooks
 
-@Test(arguments: [HookHost.grok, .pi, .opencode, .openclaw, .hermes, .codex, .cursor, .claude])
+@Test(arguments: [HookHost.grok, .pi, .opencode, .openclaw, .hermes, .codex, .cursor, .claude, .antigravity])
 func hostAdapter_bakedRvPath_roundTripsAllResources(host: HookHost) throws {
     let adapter = try HostAdapterResources.load(for: host)
     let rvPath = "/Applications/rv/bin/rv"
@@ -12,7 +12,7 @@ func hostAdapter_bakedRvPath_roundTripsAllResources(host: HookHost) throws {
     #expect(adapter.bakedRvPath(in: rendered) == rvPath)
 }
 
-@Test(arguments: [HookHost.grok, .pi, .opencode, .openclaw, .hermes, .codex, .cursor, .claude])
+@Test(arguments: [HookHost.grok, .pi, .opencode, .openclaw, .hermes, .codex, .cursor, .claude, .antigravity])
 func hostAdapter_bakedRvPath_rejectsModifiedAndForeignBytes(host: HookHost) throws {
     let adapter = try HostAdapterResources.load(for: host)
     let rendered = adapter.rendered(rvPath: "/opt/rv/bin/rv")
@@ -88,7 +88,7 @@ func hostAdapter_bakedRvPath_rejectsModifiedAndForeignBytes(host: HookHost) thro
     }
 }
 
-@Test(arguments: [HookHost.grok, .pi, .opencode, .openclaw, .hermes, .codex, .cursor, .claude])
+@Test(arguments: [HookHost.grok, .pi, .opencode, .openclaw, .hermes, .codex, .cursor, .claude, .antigravity])
 func hostAdapter_controlAndBackslashPath_roundTrips(host: HookHost) throws {
     let path = "/tmp/rv-\t\"bin\"\\\r/rv"
     let adapter = try HostAdapterResources.load(for: host)

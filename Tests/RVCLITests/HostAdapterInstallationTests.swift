@@ -580,6 +580,7 @@ private func cursorFileToolsSnapshot(
         hermes: missing(.hermes),
         codex: missing(.codex),
         cursor: cursor,
+        antigravity: missing(.antigravity),
         cursorHooksJSON: cursorHooksJSON
     )
 }

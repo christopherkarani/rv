@@ -88,6 +88,7 @@ struct FileToolDecodeStressTests {
         let codecs: [any HostCodec] = [
             GrokHostCodec(), PiHostCodec(), OpenCodeHostCodec(), ClaudeHostCodec(),
             CursorHostCodec(), CodexHostCodec(), HermesHostCodec(), OpenClawHostCodec(),
+            AntigravityHostCodec(),
         ]
         for codec in codecs {
             #expect(
@@ -126,6 +127,8 @@ private func grepEnvelope(for host: HookHost) -> String {
         return #"{"toolName":"Grep","args":{"pattern":"secret"}}"#
     case .openclaw:
         return #"{"toolName":"Grep","params":{"pattern":"secret"}}"#
+    case .antigravity:
+        return #"{"conversationId":"sess","toolCall":{"name":"Grep","args":{}},"workspacePaths":[]}"#
     }
 }
 
@@ -145,5 +148,7 @@ private func mcpEnvelope(for host: HookHost) -> String {
         return #"{"toolName":"MCP","args":{"name":"x"}}"#
     case .openclaw:
         return #"{"toolName":"MCP","params":{"name":"x"}}"#
+    case .antigravity:
+        return #"{"conversationId":"sess","toolCall":{"name":"MCP","args":{}},"workspacePaths":[]}"#
     }
 }
