@@ -346,4 +346,82 @@ struct SecretPathGuardTests {
             SecretPathGuard.firstHit(in: MatchingView("find . -path ~/.ssh"), catalog: .dayOne) == nil
         )
     }
+
+    @Test func secretPathGuard_grepTerminatorFlipsToPositional() {
+        let hit = SecretPathGuard.firstHit(
+            in: MatchingView("grep -- pat .env"),
+            catalog: .dayOne
+        )
+        #expect(hit?.ruleID.rawValue == "core.secrets:env")
+        #expect(hit?.matchedText == ".env")
+        #expect(SecretPathGuard.firstHit(in: MatchingView("grep -- .env"), catalog: .dayOne) == nil)
+    }
+
+    @Test func secretPathGuard_grepPendingValueConsumesTerminator() {
+        let hit = SecretPathGuard.firstHit(
+            in: MatchingView("grep -e -- .env"),
+            catalog: .dayOne
+        )
+        #expect(hit?.ruleID.rawValue == "core.secrets:env")
+        #expect(hit?.matchedText == ".env")
+    }
+
+    @Test func secretPathGuard_grepShortEqualsValueIsCandidate() {
+        let hit = SecretPathGuard.firstHit(
+            in: MatchingView("grep -e=.env"),
+            catalog: .dayOne
+        )
+        #expect(hit?.ruleID.rawValue == "core.secrets:env")
+        #expect(hit?.matchedText == ".env")
+        #expect(SecretPathGuard.firstHit(in: MatchingView("grep -e=x .env"), catalog: .dayOne) == nil)
+    }
+
+    @Test func secretPathGuard_grepAttachedLongValues() {
+        let fileHit = SecretPathGuard.firstHit(
+            in: MatchingView("grep --file=.env"),
+            catalog: .dayOne
+        )
+        #expect(fileHit?.ruleID.rawValue == "core.secrets:env")
+        #expect(fileHit?.matchedText == ".env")
+        #expect(
+            SecretPathGuard.firstHit(in: MatchingView("grep --regexp=.env"), catalog: .dayOne) == nil
+        )
+        #expect(
+            SecretPathGuard.firstHit(in: MatchingView("grep --files=.env"), catalog: .dayOne) == nil
+        )
+    }
+
+    @Test func secretPathGuard_grepLoneDashIsIgnored() {
+        #expect(SecretPathGuard.firstHit(in: MatchingView("grep - .env"), catalog: .dayOne) == nil)
+        let hit = SecretPathGuard.firstHit(
+            in: MatchingView("grep - pat .env"),
+            catalog: .dayOne
+        )
+        #expect(hit?.ruleID.rawValue == "core.secrets:env")
+    }
+
+    @Test func secretPathGuard_newlineOperands() {
+        let interior = SecretPathGuard.firstHit(
+            in: MatchingView("grep \n.env"),
+            catalog: .dayOne
+        )
+        #expect(interior?.ruleID.rawValue == "core.secrets:env")
+        #expect(interior?.matchedText == ".env")
+        let leading = SecretPathGuard.firstHit(
+            in: MatchingView("\n.env"),
+            catalog: .dayOne
+        )
+        #expect(leading?.ruleID.rawValue == "core.secrets:env")
+    }
+
+    @Test func secretPathGuard_findShortEqualsSkipsNoValue() {
+        #expect(
+            SecretPathGuard.firstHit(in: MatchingView("find . -name=x .env"), catalog: .dayOne) == nil
+        )
+        let hit = SecretPathGuard.firstHit(
+            in: MatchingView("find .env -name=x"),
+            catalog: .dayOne
+        )
+        #expect(hit?.ruleID.rawValue == "core.secrets:env")
+    }
 }
