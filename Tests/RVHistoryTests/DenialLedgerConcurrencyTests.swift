@@ -52,11 +52,35 @@ struct DenialLedgerConcurrencyTests {
         #expect(rows.count == 2)
     }
 
+    /// CON-005: append into a fresh dir creates owner-only blocks files and the
+    /// `blocks.lock` sidecar next to `blocks.jsonl`.
+    @Test func append_setsOwnerOnlyPermissionsAndSidecar() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-ledger-perms-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        #expect(FileManager.default.fileExists(atPath: dir.path) == false)
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        DenialLedger(configDirectory: dir).append(try decode(ConcurrencyJSONL.row), now: now)
+        let blocks = dir.appendingPathComponent("blocks.jsonl")
+        let lock = dir.appendingPathComponent("blocks.lock")
+        #expect(FileManager.default.fileExists(atPath: blocks.path))
+        #expect(FileManager.default.fileExists(atPath: lock.path))
+        #expect(try ledgerMode(dir) == 0o700)
+        #expect(try ledgerMode(blocks) == 0o600)
+        #expect(try ledgerMode(lock) == 0o600)
+    }
+
     private func decode(_ line: String) throws -> DenialLedgerRecord {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return try decoder.decode(DenialLedgerRecord.self, from: Data(line.utf8))
     }
+}
+
+private func ledgerMode(_ url: URL) throws -> Int {
+    let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
+    let raw = attrs[.posixPermissions] as? NSNumber
+    return (raw?.intValue ?? 0) & 0o777
 }
 
 private enum ConcurrencyJSONL {
