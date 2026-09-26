@@ -307,6 +307,19 @@ struct PendingApprovalStoreTests {
         }
     }
 
+    @Test func lockSetupFailureSurfacesAsEncodeFailed() async throws {
+        // File blocking the config dir path: withLock prepareDirectory fails
+        // with ioFailed before the body runs, and the store surfaces domain
+        // encodeFailed.
+        let occupied = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-pending-occupied-\(UUID().uuidString)")
+        FileManager.default.createFile(atPath: occupied.path, contents: Data())
+        let store = PendingApprovalStore(baseDirectory: occupied)
+        await #expect(throws: PendingApprovalError.encodeFailed) {
+            _ = try await store.create(Self.request(id: "lock-setup-1"), now: Self.now)
+        }
+    }
+
     @Test func corruptJSONLLineIsSkipped() async throws {
         let root = try isolatedDirectory()
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

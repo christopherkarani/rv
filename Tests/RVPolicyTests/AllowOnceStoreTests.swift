@@ -185,6 +185,26 @@ struct AllowOnceStoreTests {
         }
     }
 
+    @Test func lockSetupFailureSurfacesAsEncodeFailed() async throws {
+        // File blocking the config dir path: withLock prepareDirectory fails
+        // with ioFailed before the body runs, and the store surfaces domain
+        // encodeFailed.
+        let occupied = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-allow-once-occupied-\(UUID().uuidString)")
+        FileManager.default.createFile(atPath: occupied.path, contents: Data())
+        let store = AllowOnceStore(baseDirectory: occupied)
+        let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+        await #expect(throws: AllowOnceError.encodeFailed) {
+            try await store.mint(
+                matchingView: "git reset --hard",
+                cwd: wd("/tmp/a"),
+                ruleID: nil,
+                tty: tty,
+                now: Date(timeIntervalSince1970: 1_700_000_000)
+            )
+        }
+    }
+
     @Test func lockFailureIsUnavailable() async throws {
         let store = try isolatedStore()
         let now = Date(timeIntervalSince1970: 1_700_000_000)

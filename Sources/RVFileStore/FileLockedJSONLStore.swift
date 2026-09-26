@@ -39,7 +39,7 @@ public struct FileLockedJSONLStore<Record: Codable & Sendable>: Sendable {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         // Split on raw LF bytes (stdlib: identical on Darwin and corelibs):
-        // JSONEncoder never escapes U+2028/U+2029/VT/FF/NEL, so those must
+        // JSONEncoder never escapes U+2028/U+2029/U+0085, so those must
         // not act as line separators. Byte-wise split keeps CRLF loadable —
         // the CR stays on the line and is stripped below. Character-wise
         // split cannot be used here: CRLF is a single Character and would
