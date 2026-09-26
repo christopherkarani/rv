@@ -147,7 +147,17 @@ private func egressStreamSocket() -> Int32 {
     #endif
 }
 
+// TEMP-DIAG: remove after CI diagnosis.
+private func egressLogSlow(_ label: String, seconds: Double) {
+    if seconds > 2 {
+        print("rv.egress-test: SLOW \(label) \(String(format: "%.1f", seconds))s")
+    }
+}
+
 private func egressConnect(port: Int) -> Int32? {
+    let start = Date()
+    // TEMP-DIAG: remove after CI diagnosis.
+    defer { egressLogSlow("connect port=\(port)", seconds: Date().timeIntervalSince(start)) }
     let fd = egressStreamSocket()
     guard fd >= 0 else { return nil }
     var address = sockaddr_in()
@@ -181,6 +191,14 @@ private func egressSend(_ fd: Int32, text: String) -> Bool {
 }
 
 private func egressRead(_ fd: Int32, timeoutSeconds: Int = 10) -> String {
+    let start = Date()
+    // TEMP-DIAG: remove after CI diagnosis.
+    defer {
+        egressLogSlow(
+            "read fd=\(fd) timeout=\(timeoutSeconds)",
+            seconds: Date().timeIntervalSince(start)
+        )
+    }
     var collected = [UInt8]()
     var buffer = [UInt8](repeating: 0, count: 4096)
     let deadline = Date().addingTimeInterval(TimeInterval(timeoutSeconds))
