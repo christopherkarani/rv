@@ -38,7 +38,7 @@ static char *take_field(char **cursor) {
 
 int main(int argc, char **argv) {
     FILE *vectors;
-    char line[256];
+    char line[4096];
     int lineno;
     int cases;
 
@@ -64,13 +64,27 @@ int main(int argc, char **argv) {
         size_t len;
 
         lineno += 1;
+        /* Overlong-line guard: a full buffer with no newline means fgets
+         * truncated the row (unless EOF follows immediately). Drain the
+         * remainder and fail loudly instead of mis-parsing a fragment the
+         * Swift harness would parse whole. */
+        len = strlen(line);
+        if (len == sizeof line - 1 && line[len - 1] != '\n') {
+            int ch = fgetc(vectors);
+            if (ch != EOF) {
+                do {
+                    ch = fgetc(vectors);
+                } while (ch != '\n' && ch != EOF);
+                fail(lineno, "overlong row exceeds 4096-byte line buffer");
+                continue;
+            }
+        }
         /* Skip comments and blank lines. */
         if (line[0] == '#' || line[0] == '\n' || line[0] == '\0') {
             continue;
         }
         /* Strip one trailing newline (and optional CR). Interior bytes,
          * including leading spaces, are significant and never trimmed. */
-        len = strlen(line);
         if (len > 0 && line[len - 1] == '\n') {
             line[len - 1] = '\0';
             len -= 1;

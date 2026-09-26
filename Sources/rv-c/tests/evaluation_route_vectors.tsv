@@ -10,6 +10,8 @@
 #   - "NULL" service = absent (C NULL / Swift nil). Client is never NULL.
 #   - Empty field = empty string (distinct from NULL).
 #   - expect: "service" (trust) or "inProcess" (miss/fallback).
+# Rows (including the newline) must fit the C harness 4096-byte line
+# buffer; longer rows fail loudly in C while Swift parses them whole.
 1.0.0	NULL	inProcess
 1.0.0		inProcess
 1.0.0	not-a-version	inProcess

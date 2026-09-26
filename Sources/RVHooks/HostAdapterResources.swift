@@ -77,7 +77,12 @@ enum HostAdapterString {
         return manualEscape(value)
     }
 
-    private static func manualEscape(_ value: String) -> String {
+    // Internal (not private) so RVHooksTests pins it directly. Non-short
+    // escapes intentionally diverge from Foundation: uppercase `\u00XX`
+    // hex here vs Foundation's lowercase, and U+007F escaped here vs raw
+    // there. Both spellings decode identically, so the divergence is
+    // accepted; do not "fix" it into an escape()-coupled tautology.
+    static func manualEscape(_ value: String) -> String {
         var out = ""
         out.reserveCapacity(value.count)
         for scalar in value.unicodeScalars {
