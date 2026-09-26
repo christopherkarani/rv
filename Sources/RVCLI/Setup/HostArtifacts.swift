@@ -2,7 +2,7 @@ import Foundation
 import RVDomain
 
 /// One host attach already named by the artifact table. The executor folds this;
-/// it does not recover Claude-vs-other write policy from `HookHost`.
+/// it does not recover merge-vs-exclusive write policy from `HookHost`.
 struct HostAttachWrite: Equatable, Sendable {
     var host: HookHost
     var destination: String

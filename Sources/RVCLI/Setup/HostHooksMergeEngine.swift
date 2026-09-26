@@ -5,7 +5,7 @@ import Foundation
 struct HookEntry: Equatable, Sendable {
     var command: String
     var timeout: Int
-    /// Nested layouts (`"command"`); nil for flat layouts (Cursor has no `type` key).
+    /// Nested/grouped layouts (`"command"`); nil for flat layouts (Cursor has no `type` key).
     var type: String? = nil
     /// Cursor only.
     var failClosed: Bool? = nil
@@ -15,7 +15,7 @@ struct HookEntry: Equatable, Sendable {
 
 /// Per-call inputs needed to build hook entries.
 struct HookCommandContext: Equatable, Sendable {
-    /// Claude bakes `RV_BINARY=<rvPath>`; other hosts leave this nil.
+    /// Claude/Antigravity bake `RV_BINARY=<rvPath>`; other hosts leave this nil.
     var rvPath: String?
     var adapterPath: String
 }
@@ -37,18 +37,18 @@ enum HooksLayout: Equatable, Sendable {
 /// require them.
 struct HostWiringDescriptor: Sendable {
     var layout: HooksLayout
-    /// Nested insert matchers, in append order (Claude 4, Codex 1). Unused for flat.
+    /// Nested/grouped insert matchers, in append order (Claude 4, Codex 1, Antigravity 5). Unused for flat.
     var matchers: [String]
     /// Required hook `type` value; nil skips the check (flat layouts).
     var hookType: String?
     var isFingerprintedCommand: @Sendable (String) -> Bool
-    /// Builds one hook entry; the matcher is non-nil for nested layouts.
+    /// Builds one hook entry; the matcher is non-nil for nested/grouped layouts.
     var buildEntry: @Sendable (HookCommandContext, String?) -> HookEntry
 }
 
 /// One fingerprinted hook found in a parsed root.
 struct LocatedHook {
-    /// Nested entry matcher; nil for flat layouts.
+    /// Nested/grouped entry matcher; nil for flat layouts.
     var matcher: String?
     /// The list key the hook was found under.
     var listKey: String
@@ -65,11 +65,12 @@ enum HostHooksMergeError: Error, Equatable {
 /// OpenCode (plugin list) and Grok (exclusive render) do not share the
 /// hook-list shape, so they stay out of the engine per the GUD-001 fallback.
 /// Claude inspection (occupancy, stale legacy, matcher coverage) stays in
-/// `ClaudeSettingsMerge`, implemented over `locateFingerprintedHooks`.
+/// `ClaudeSettingsMerge`; Antigravity inspection stays in
+/// `AntigravitySettingsMerge`; both are implemented over `locateFingerprintedHooks`.
 /// Follow-up per GUD-002: adopt T1's typed-JSON value here once T1 lands.
 enum HostHooksMergeEngine {
     /// Returns merged bytes and whether content changed.
-    /// `willMerge` runs after parsing, before mutation (Claude occupancy trap).
+    /// `willMerge` runs after parsing, before mutation (Claude/Antigravity occupancy trap).
     static func merge(
         existingData: Data?,
         descriptor: HostWiringDescriptor,

@@ -187,7 +187,7 @@ extension HostCodec {
         HookWire(stdout: "", exitCode: 0)
     }
 
-    /// Grok / Pi / OpenCode / OpenClaw / Hermes honor JSON (`decision` key).
+    /// Grok / Pi / OpenCode / OpenClaw / Hermes / Antigravity honor JSON (`decision` key).
     /// Codex / Cursor / Claude must not call this — they own a native honor path.
     public func encodeLeftoverDecisionDeny(
         reason: String,

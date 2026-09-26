@@ -21,7 +21,7 @@ enum HostAdapterInstallation: Equatable, Sendable {
     }
 
     /// Bytes only when the setup slot is `.wired`. Other states pass `nil` so
-    /// Claude / Grok / Cursor file-tool is `.notApplicable`.
+    /// Claude / Grok / Cursor / Antigravity file-tool is `.notApplicable`.
     fileprivate var adapterBytesIfWired: Data? {
         guard case .wired(_, let data) = self else {
             return nil
