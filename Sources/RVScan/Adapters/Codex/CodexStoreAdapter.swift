@@ -90,8 +90,7 @@ public struct CodexStoreAdapter: SessionStoreAdapter {
             return tokens.isEmpty ? nil : tokens.joined(separator: " ")
         }
         if let text = value as? String, text.isEmpty == false {
-            if let data = text.data(using: .utf8),
-               let parsed = try? JSONSerialization.jsonObject(with: data) {
+            if let parsed = JSONParse.value(text) {
                 return commandText(in: parsed)
             }
             return text

@@ -288,7 +288,7 @@ struct LocalExecutorTests {
             switch error {
             case .alreadyExecuted(let fingerprint):
                 #expect(fingerprint == executable.allowed.action.fingerprint)
-            case .cancelled, .applyFailed:
+            case .cancelled, .applyFailed, .unexpected:
                 Issue.record("expected alreadyExecuted, got \(error)")
             }
         }
@@ -306,6 +306,8 @@ struct LocalExecutorTests {
                 #expect(fingerprint == executable.allowed.action.fingerprint)
             case .cancelled:
                 Issue.record("expected alreadyExecuted, got cancelled")
+            case .unexpected(let detail):
+                Issue.record("expected alreadyExecuted, got unexpected \(detail)")
             case .applyFailed(let apply):
                 recordUnexpectedApplyError(apply, expected: "alreadyExecuted")
             }
@@ -346,7 +348,7 @@ struct LocalExecutorTests {
             switch error {
             case .alreadyExecuted(let fingerprint):
                 #expect(fingerprint == contained.allowed.action.fingerprint)
-            case .cancelled, .applyFailed:
+            case .cancelled, .applyFailed, .unexpected:
                 Issue.record("expected alreadyExecuted, got \(error)")
             }
         } catch {
@@ -650,6 +652,8 @@ private func expectApplyFailed(
         break
     case .cancelled:
         Issue.record("expected applyFailed(backendUnavailable), got cancelled", sourceLocation: sourceLocation)
+    case .unexpected(let detail):
+        Issue.record("expected applyFailed(\(expected)), got unexpected \(detail)", sourceLocation: sourceLocation)
     case .alreadyExecuted(let fingerprint):
         Issue.record(
             "expected applyFailed(\(expected)), got alreadyExecuted \(fingerprint.rawValue)",

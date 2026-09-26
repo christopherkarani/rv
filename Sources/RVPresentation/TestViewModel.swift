@@ -1,6 +1,6 @@
 import RVDomain
 
-public let testMatchSource = "pack"
+package let testMatchSource = "pack"
 
 public struct TestViewModel: Equatable, Sendable {
     public var command: ShellCommand
@@ -87,7 +87,7 @@ extension MatchSpan {
     }
 }
 
-public func remapMatchSpan(
+package func remapMatchSpan(
     span: MatchSpan?,
     matchedText: String?,
     searchText: String? = nil,

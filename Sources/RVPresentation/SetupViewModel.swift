@@ -95,7 +95,7 @@ public struct SetupSlotSnapshot: Equatable, Sendable {
     }
 
     /// Terminal outcome of the run. Sole owner of closer decisions for every renderer.
-    public var closer: SetupCloser {
+    package var closer: SetupCloser {
         if isQuiet { return .quiet }
         if isHostless { return .hostless }
         if hasWiredSlot { return .complete(skipped: occupied) }
@@ -126,7 +126,7 @@ public struct SetupSlotView: Equatable, Sendable {
 
 /// Closed taxonomy of terminal `rv setup` outcomes. One owner: ceremony closers,
 /// pretty text, and `--robot` lines all switch over it exhaustively.
-public enum SetupCloser: Equatable, Sendable {
+package enum SetupCloser: Equatable, Sendable {
     /// Second matching run wrote nothing new; nothing prints.
     case quiet
     /// No hosts detected.
@@ -139,7 +139,7 @@ public enum SetupCloser: Equatable, Sendable {
     /// Ceremony closer lines for `kind`.
     /// Quiet is empty; hostless and occupied-only both return the hostless pair;
     /// complete is `Hooks wired` (setup) or the install closer.
-    public func lines(kind: SetupCeremonyKind) -> [String] {
+    package func lines(kind: SetupCeremonyKind) -> [String] {
         switch self {
         case .quiet: []
         case .hostless, .skipped: [setupCeremonyHostlessTitle, setupCeremonyHostlessNext]
@@ -171,6 +171,6 @@ extension HookHost {
     }
 }
 
-public let setupGrokReloadClause = "reload /hooks"
-public let setupCodexTrustClause = "trust /hooks"
-public let setupOccupiedClause = "skipped occupied"
+package let setupGrokReloadClause = "reload /hooks"
+package let setupCodexTrustClause = "trust /hooks"
+package let setupOccupiedClause = "skipped occupied"

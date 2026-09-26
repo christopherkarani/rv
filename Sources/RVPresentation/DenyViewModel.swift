@@ -32,9 +32,9 @@ public struct DenyViewModel: Equatable, Sendable {
     }
 }
 
-public let denyNextAction = "run it in Terminal, or rv allow-once"
+package let denyNextAction = "run it in Terminal, or rv allow-once"
 
-public func factSentence(from reason: String) -> String {
+package func factSentence(from reason: String) -> String {
     let trimmed = reason.trimmingCharacters(in: .whitespacesAndNewlines)
     if let end = trimmed.firstRange(of: ". ") {
         return trimmed[..<end.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
@@ -45,7 +45,7 @@ public func factSentence(from reason: String) -> String {
     return trimmed
 }
 
-public func denyViewModel(_ deny: Deny, command: ShellCommand) -> DenyViewModel {
+package func denyViewModel(_ deny: Deny, command: ShellCommand) -> DenyViewModel {
     DenyViewModel(
         decision: .deny(deny),
         command: command,
@@ -57,7 +57,7 @@ public func denyViewModel(_ deny: Deny, command: ShellCommand) -> DenyViewModel 
     )
 }
 
-public func denyViewModel(from result: EvaluationResult, command: ShellCommand) -> DenyViewModel? {
+package func denyViewModel(from result: EvaluationResult, command: ShellCommand) -> DenyViewModel? {
     guard case .deny(let deny) = result.decision else {
         return nil
     }

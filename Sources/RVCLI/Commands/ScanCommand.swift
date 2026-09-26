@@ -138,7 +138,7 @@ struct ScanSessions: AsyncParsableCommand {
             pathEntries: pathEntries,
             fileManager: .default
         )
-        let outcome = ScanRun.render(
+        let outcome = try ScanRun.render(
             report: result.report,
             showCommand: flags.showCommand,
             failOnFindings: flags.failOnFindings,
@@ -252,12 +252,12 @@ enum ScanRun {
         setupNudgeRecommended: Bool = false,
         appearance: CLIAppearance,
         probe: ThemeProbe
-    ) -> ScanOutcome {
+    ) throws -> ScanOutcome {
         let exitCode: Int32 = (failOnFindings && report.findings.isEmpty == false) ? 2 : 0
         switch appearance {
         case .robot:
             return ScanOutcome(
-                stdout: renderScanSessionsRobot(
+                stdout: try renderScanSessionsRobot(
                     from: report,
                     showCommand: showCommand,
                     setupNudge: setupNudgeRecommended

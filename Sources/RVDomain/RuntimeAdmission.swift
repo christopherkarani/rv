@@ -56,10 +56,10 @@ public struct RuntimeActionRequestID: Hashable, Sendable, Equatable {
 ///
 /// This is not `RuntimeSessionID`. Parsing one does not mint a runtime and
 /// does not authenticate the caller.
-public struct RuntimeSessionClaim: Hashable, Sendable, Equatable {
-    public let rawValue: UUID
+package struct RuntimeSessionClaim: Hashable, Sendable, Equatable {
+    package let rawValue: UUID
 
-    public init?(validating text: String) {
+    package init?(validating text: String) {
         guard let rawValue = UUID(uuidString: text) else { return nil }
         self.rawValue = rawValue
     }
@@ -79,7 +79,7 @@ public struct RuntimeChannelBinding: Sendable, Equatable {
     public var session: RuntimeSession
     public let capability: RuntimeCapability
     public var phase: RuntimeAdmissionPhase
-    public var consumedRequestIDs: Set<RuntimeActionRequestID>
+    package var consumedRequestIDs: Set<RuntimeActionRequestID>
     public var consumedFingerprints: Set<ActionFingerprint>
 
     public init(
@@ -136,10 +136,10 @@ public struct RuntimeActionFrame: Sendable, Equatable {
     public var version: Int
     public var requestID: RuntimeActionRequestID
     public var capability: RuntimeCapability
-    public var claimedSession: RuntimeSessionClaim
+    package var claimedSession: RuntimeSessionClaim
     public var action: RuntimeRequestedAction
 
-    public init(
+    package init(
         version: Int,
         requestID: RuntimeActionRequestID,
         capability: RuntimeCapability,

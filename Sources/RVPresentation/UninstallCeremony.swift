@@ -2,14 +2,14 @@ import RVDomain
 
 /// Deterministic paced frames for `rv uninstall`. Reuses `SetupCeremonyFrame`.
 
-public let uninstallCeremonyRemovingTitle = "Removing Hooks"
-public let uninstallCeremonyHooksRemoved = "✓ Hooks removed"
-public let uninstallCeremonyCloser = "Uninstall complete"
-public let uninstallCeremonyAlreadyClean = "Already clean"
-public let uninstallOccupiedClause = "left occupied"
+package let uninstallCeremonyRemovingTitle = "Removing Hooks"
+package let uninstallCeremonyHooksRemoved = "✓ Hooks removed"
+package let uninstallCeremonyCloser = "Uninstall complete"
+package let uninstallCeremonyAlreadyClean = "Already clean"
+package let uninstallOccupiedClause = "left occupied"
 
-public let uninstallCeremonyHostRemoveNs: UInt64 = 220_000_000
-public let uninstallCeremonyPhaseGapNs: UInt64 = 280_000_000
+package let uninstallCeremonyHostRemoveNs: UInt64 = 220_000_000
+package let uninstallCeremonyPhaseGapNs: UInt64 = 280_000_000
 
 public let uninstallRobotCompleteLine = "Uninstall complete."
 public let uninstallRobotAlreadyCleanLine = "Already clean."

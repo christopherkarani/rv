@@ -1,5 +1,5 @@
 /// Caller-requested isolation intent. Closed: no “contained-if-possible” boolean.
-public enum RequestedIsolation: Sendable, Equatable {
+package enum RequestedIsolation: Sendable, Equatable {
     case observed
     case mediated
     case contained
@@ -88,12 +88,12 @@ public enum EnforcementMode: Sendable, Equatable {
 
 /// Untrusted compile input. Empty-string workspace is unrepresentable because
 /// the field is `WorkingDirectory?`, not `String`.
-public struct IsolationCompileRequest: Sendable, Equatable {
-    public let requested: RequestedIsolation
-    public let workspace: WorkingDirectory?
-    public let repositoryRoot: RepositoryRoot?
+package struct IsolationCompileRequest: Sendable, Equatable {
+    package let requested: RequestedIsolation
+    package let workspace: WorkingDirectory?
+    package let repositoryRoot: RepositoryRoot?
 
-    public init(
+    package init(
         requested: RequestedIsolation,
         workspace: WorkingDirectory? = nil,
         repositoryRoot: RepositoryRoot? = nil
@@ -105,7 +105,7 @@ public struct IsolationCompileRequest: Sendable, Equatable {
 }
 
 /// Fail-closed compile error. Contained without a workspace produces no plan.
-public enum IsolationCompileError: Error, Sendable, Equatable {
+package enum IsolationCompileError: Error, Sendable, Equatable {
     /// `.contained` requires `WorkingDirectory`. `RepositoryRoot` cannot substitute.
     case containedRequiresWorkspace
     /// `compileContainedIsolation` was asked for `.observed` or `.mediated`.
@@ -119,7 +119,7 @@ public enum IsolationCompileError: Error, Sendable, Equatable {
 /// `ContainedPlan.isolationPlan()`. The memberwise initializer is
 /// fileprivate so requested and mode cannot diverge outside this file.
 public struct IsolationPlan: Sendable, Equatable {
-    public let requested: RequestedIsolation
+    package let requested: RequestedIsolation
     public let workspace: WorkingDirectory?
     public let repositoryRoot: RepositoryRoot?
     public let mode: EnforcementMode
@@ -143,12 +143,12 @@ public struct IsolationPlan: Sendable, Equatable {
 /// Production construction is `compileContainedIsolation` or
 /// `IsolationPlan.containedIsolation()`. The memberwise initializer is
 /// fileprivate so a contained value cannot carry an observed mode.
-public struct ContainedIsolation: Sendable, Equatable {
-    public let workspace: WorkingDirectory
-    public let repositoryRoot: RepositoryRoot?
-    public let guarantees: IsolationGuarantees
+package struct ContainedIsolation: Sendable, Equatable {
+    package let workspace: WorkingDirectory
+    package let repositoryRoot: RepositoryRoot?
+    package let guarantees: IsolationGuarantees
 
-    public var plan: IsolationPlan {
+    package var plan: IsolationPlan {
         IsolationPlan(
             requested: .contained,
             workspace: workspace,
@@ -168,7 +168,7 @@ public struct ContainedIsolation: Sendable, Equatable {
     }
 }
 
-public enum ContainedIsolationError: Error, Sendable, Equatable {
+package enum ContainedIsolationError: Error, Sendable, Equatable {
     case notContained
     case missingWorkspace
     case guaranteesMismatch
@@ -178,7 +178,7 @@ extension IsolationPlan {
     /// Narrows a compiled plan to the contained spawn door.
     /// Observed, mediated, a missing workspace, and guarantees other than
     /// the first-slice write limit fail closed.
-    public func containedIsolation() -> Result<ContainedIsolation, ContainedIsolationError> {
+    package func containedIsolation() -> Result<ContainedIsolation, ContainedIsolationError> {
         switch requested {
         case .observed, .mediated:
             return .failure(.notContained)
@@ -207,7 +207,7 @@ extension IsolationPlan {
 }
 
 /// Pure compile of isolation intent. Does not authorize, launch, or establish.
-public func compileIsolationPlan(
+package func compileIsolationPlan(
     _ request: IsolationCompileRequest
 ) -> Result<IsolationPlan, IsolationCompileError> {
     switch request.requested {
@@ -245,7 +245,7 @@ public func compileIsolationPlan(
 /// Contained spawn compile. Observed and mediated requests fail with
 /// `notContainedRequest`. Contained without a workspace stays
 /// `containedRequiresWorkspace`.
-public func compileContainedIsolation(
+package func compileContainedIsolation(
     _ request: IsolationCompileRequest
 ) -> Result<ContainedIsolation, IsolationCompileError> {
     switch request.requested {
@@ -288,7 +288,7 @@ private func isFirstSliceContained(
 public struct ContainedPlan: Sendable, Equatable {
     public let workspace: WorkingDirectory
     public let repositoryRoot: RepositoryRoot?
-    public let guarantees: IsolationGuarantees
+    package let guarantees: IsolationGuarantees
 
     public init(workspace: WorkingDirectory, repositoryRoot: RepositoryRoot? = nil) {
         self.workspace = workspace

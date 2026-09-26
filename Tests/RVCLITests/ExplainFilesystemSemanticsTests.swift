@@ -62,7 +62,7 @@ struct ExplainFilesystemSemanticsTests {
             atomically: true,
             encoding: .utf8
         )
-        let result = await CommandRun.run(
+        let result = try await CommandRun.run(
             kind: .explain,
             command: "echo leaked > ~/.ssh/config",
             probe: ThemeProbe(
@@ -111,7 +111,7 @@ struct ExplainFilesystemSemanticsTests {
 }
 
 private func explain(_ command: String, cwd: URL) async throws -> CLIResult {
-    await CommandRun.run(
+    try await CommandRun.run(
         kind: .explain,
         command: command,
         probe: ThemeProbe(

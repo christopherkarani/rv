@@ -21,7 +21,7 @@ struct ServiceStatusTests {
         #expect(report.protocolName == "rv.ipc.v1")
         #expect(report.label == "dev.rv.evaluate")
         #expect(report.keepAlive == false)
-        let robot = ServiceStatusCommand.robotText(report)
+        let robot = try ServiceStatusCommand.robotText(report)
         #expect(robot.contains("state=down"))
         #expect(robot.contains("protocol=rv.ipc.v1"))
         #expect(robot.contains("label=dev.rv.evaluate"))
@@ -117,13 +117,13 @@ struct ServiceStatusTests {
         #expect(report.state == "down")
         #expect(report.fallback == "down")
         #expect(report.lastError == nil)
-        let robot = ServiceStatusCommand.robotText(report)
+        let robot = try ServiceStatusCommand.robotText(report)
         #expect(robot.contains("state=down"))
         #expect(robot.contains("launch") == false)
         #expect(robot.contains("pack") == false)
     }
 
-    @Test func robotOutputKeepsExactPreMigrationBytes() {
+    @Test func robotOutputKeepsExactPreMigrationBytes() throws {
         let running = ServiceStatusReport(
             state: "running",
             fallback: "inactive",
@@ -138,8 +138,8 @@ struct ServiceStatusTests {
             keepAlive=true
             lastError=peer supplied detail
             """
-        #expect(ServiceStatusCommand.robotText(running) == runningGolden)
-        #expect(RobotDocument.serviceStatus(running).render() == runningGolden)
+        #expect(try ServiceStatusCommand.robotText(running) == runningGolden)
+        #expect(try RobotDocument.serviceStatus(running).render() == runningGolden)
 
         let down = ServiceStatusReport(state: "down", fallback: "down")
         let downGolden = """
@@ -149,8 +149,8 @@ struct ServiceStatusTests {
             fallback=down
             keepAlive=false
             """
-        #expect(ServiceStatusCommand.robotText(down) == downGolden)
-        #expect(RobotDocument.serviceStatus(down).render() == downGolden)
+        #expect(try ServiceStatusCommand.robotText(down) == downGolden)
+        #expect(try RobotDocument.serviceStatus(down).render() == downGolden)
     }
 
     @Test func xpcSkewSnapshotReportsSkewNotRunning() async throws {
@@ -184,7 +184,7 @@ struct ServiceStatusTests {
         #expect(report.state == "skew")
         #expect(report.fallback == "skew")
         #expect(report.lastError == nil)
-        let robot = ServiceStatusCommand.robotText(report)
+        let robot = try ServiceStatusCommand.robotText(report)
         #expect(robot.contains("state=skew"))
         #expect(robot.contains("peer supplied detail") == false)
         #expect(robot.contains("launch") == false)

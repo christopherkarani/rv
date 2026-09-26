@@ -322,7 +322,7 @@ private func spawnAdmittedCommand(
     writeEnd = -1
     close(nullFD)
     nullFD = -1
-    guard spawned == 0, pid > 1 else { return .failure(.spawnFailed) }
+    guard let spawned, spawned == 0, pid > 1 else { return .failure(.spawnFailed) }
     let flagsNow = fcntl(readEnd, F_GETFL)
     guard flagsNow >= 0, fcntl(readEnd, F_SETFL, flagsNow | O_NONBLOCK) >= 0 else {
         killAdmitted(pid)
@@ -450,13 +450,15 @@ private struct AdmissionSpawnPointers {
         storage.append(nil)
     }
 
+    /// Runs `body` with the vector base pointer. Nil only when the vector is
+    /// empty, which construction forbids (init always appends the terminator).
     func withPointers<T>(
         _ body: (UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>) -> T
-    ) -> T {
+    ) -> T? {
         var values = storage
         return values.withUnsafeMutableBufferPointer { buffer in
             guard let base = buffer.baseAddress else {
-                preconditionFailure("spawn argument vector is empty")
+                return nil
             }
             return body(base)
         }

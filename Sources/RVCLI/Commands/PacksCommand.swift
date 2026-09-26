@@ -60,7 +60,7 @@ struct Packs: AsyncParsableCommand {
                 enabledCount: filtered.enabledCount,
                 totalCount: filtered.totalCount
             )
-            let text = RobotDocument.packsList(payload).render()
+            let text = try RobotDocument.packsList(payload).render()
             FileHandle.standardOutput.write(Data((text + "\n").utf8))
             return
         }
@@ -169,7 +169,7 @@ struct Packs: AsyncParsableCommand {
                 throw ExitCode(1)
             }
             if format.json || format.robot {
-                let text = RobotDocument.packsInfo(packsRobotRow(row)).render()
+                let text = try RobotDocument.packsInfo(packsRobotRow(row)).render()
                 FileHandle.standardOutput.write(Data((text + "\n").utf8))
                 return
             }

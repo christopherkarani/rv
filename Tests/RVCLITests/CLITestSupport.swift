@@ -61,7 +61,7 @@ func cliRun(
     requested: RequestedMode,
     allowOnceDirectory: URL? = nil
 ) async throws -> CLIResult {
-    await CommandRun.run(
+    try await CommandRun.run(
         kind: kind,
         command: command,
         probe: probe,

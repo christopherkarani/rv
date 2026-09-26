@@ -1,5 +1,5 @@
 /// Local working-tree / index versus shared remote effect.
-public enum GitEffectScope: String, Sendable, Equatable, Codable {
+package enum GitEffectScope: String, Sendable, Equatable, Codable {
     case localWorkingTree
     case localIndex
     case localWorkingTreeAndIndex
@@ -59,7 +59,7 @@ public enum GitAction: Sendable, Equatable, Codable {
     case stash(verb: GitStashVerb)
     case rebase(verb: GitRebaseVerb, onto: String?)
 
-    public var effectScope: GitEffectScope {
+    package var effectScope: GitEffectScope {
         switch self {
         case .createBranch, .switchBranch, .deleteBranch, .stash, .rebase:
             return .localRef

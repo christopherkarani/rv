@@ -534,7 +534,7 @@ struct OperatorCommandRunTests {
             home: home
         )
         #expect(evaluated.decision == .allow)
-        let result = await CommandRun.run(
+        let result = try await CommandRun.run(
             kind: .test,
             command: "echo ok",
             probe: probe,

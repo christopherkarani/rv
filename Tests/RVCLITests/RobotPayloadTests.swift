@@ -35,8 +35,8 @@ private func denyResult() -> EvaluationResult {
     )
 }
 
-private func renderRobot(kind: CLIKind, result: EvaluationResult, command: String) -> CLIResult {
-    CommandRun.render(
+private func renderRobot(kind: CLIKind, result: EvaluationResult, command: String) throws -> CLIResult {
+    try CommandRun.render(
         kind: kind,
         result: result,
         command: ShellCommand(rawValue: command),
@@ -50,7 +50,7 @@ private func object(from stdout: String) throws -> [String: Any] {
 }
 
 @Test func explainRobot_stdoutSchemaIsNotTestSchema() throws {
-    let rendered = renderRobot(
+    let rendered = try renderRobot(
         kind: .explain,
         result: denyResult(),
         command: "git reset --hard"
@@ -64,7 +64,7 @@ private func object(from stdout: String) throws -> [String: Any] {
 }
 
 @Test func testExplainRobot_keepsTestSchemaNotExplainSchema() throws {
-    let deny = renderRobot(
+    let deny = try renderRobot(
         kind: .testExplain,
         result: denyResult(),
         command: "git reset --hard"
@@ -84,11 +84,11 @@ private func object(from stdout: String) throws -> [String: Any] {
 }
 
 @Test func testRobot_stdoutKeepsStableTestSchemaAndBytes() throws {
-    let allow = renderRobot(kind: .test, result: EvaluationResult(outcome: .plain), command: "git status")
+    let allow = try renderRobot(kind: .test, result: EvaluationResult(outcome: .plain), command: "git status")
     #expect(allow.exitCode == 0)
     #expect(trimOneNewline(allow.stdout) == #"{"decision":"allow","schema":"rv.test.v1"}"#)
 
-    let deny = renderRobot(kind: .test, result: denyResult(), command: "git reset --hard")
+    let deny = try renderRobot(kind: .test, result: denyResult(), command: "git reset --hard")
     #expect(deny.exitCode == 1)
     #expect(
         trimOneNewline(deny.stdout)
@@ -98,15 +98,17 @@ private func object(from stdout: String) throws -> [String: Any] {
 
 @Test func commandRunRobot_encodesPresentationPayloads() throws {
     let result = denyResult()
-    let testOut = renderRobot(kind: .test, result: result, command: "git reset --hard")
-    #expect(trimOneNewline(testOut.stdout) == RobotDocument.test(testRobotPayload(from: result)).render())
+    let testOut = try renderRobot(kind: .test, result: result, command: "git reset --hard")
+    let testJSON = try RobotDocument.test(testRobotPayload(from: result)).render()
+    #expect(trimOneNewline(testOut.stdout) == testJSON)
 
     let model = explainViewModel(
         from: result,
         command: ShellCommand(rawValue: "git reset --hard")
     )
-    let explainOut = renderRobot(kind: .explain, result: result, command: "git reset --hard")
-    #expect(trimOneNewline(explainOut.stdout) == RobotDocument.explain(explainRobotPayload(from: model)).render())
+    let explainOut = try renderRobot(kind: .explain, result: result, command: "git reset --hard")
+    let explainJSON = try RobotDocument.explain(explainRobotPayload(from: model)).render()
+    #expect(trimOneNewline(explainOut.stdout) == explainJSON)
 }
 
 @Test func render_encodesDoctorAndPacksFieldSets() throws {
@@ -124,7 +126,7 @@ private func object(from stdout: String) throws -> [String: Any] {
         hosts: [DoctorHostView(host: .pi, state: .wired)],
         config: .unreadable
     )
-    let doctorJSON = try object(from: RobotDocument.doctor(doctorRobotPayload(from: doctor)).render())
+    let doctorJSON = try object(from: try RobotDocument.doctor(doctorRobotPayload(from: doctor)).render())
     let service = try #require(doctorJSON["service"] as? [String: Any])
     let packs = try #require(doctorJSON["packs"] as? [String: Any])
 
@@ -145,7 +147,7 @@ private func object(from stdout: String) throws -> [String: Any] {
         destructivePatternCount: 4
     )
     let packsJSON = try object(
-        from: RobotDocument.packsList(packsRobotPayload(rows: [row], enabledCount: 1, totalCount: 99)).render()
+        from: try RobotDocument.packsList(packsRobotPayload(rows: [row], enabledCount: 1, totalCount: 99)).render()
     )
     let encodedRows = try #require(packsJSON["packs"] as? [[String: Any]])
     let encodedRow = try #require(encodedRows.first)

@@ -32,8 +32,7 @@ public struct OpenCodeStoreAdapter: SessionStoreAdapter {
         ) { statement in
             let sessionID = ScanSQLiteEngine.textColumn(statement, index: 0)
             guard let dataText = ScanSQLiteEngine.textColumn(statement, index: 1),
-                  let payload = dataText.data(using: .utf8),
-                  let object = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
+                  let object = JSONParse.object(dataText),
                   (object["type"] as? String) == "tool",
                   (object["tool"] as? String) == "bash",
                   let state = object["state"] as? [String: Any],

@@ -6,7 +6,7 @@ public enum DecisionTone: Equatable, Sendable {
     case incomplete
 }
 
-public let explainHeading = "RV EXPLAIN"
+package let explainHeading = "RV EXPLAIN"
 
 extension Decision {
     /// Lowercase operator word for explain body copy.
@@ -58,7 +58,7 @@ extension Decision {
     }
 }
 
-public func decisionWord(_ decision: Decision) -> String {
+package func decisionWord(_ decision: Decision) -> String {
     decision.displayName
 }
 
@@ -66,7 +66,7 @@ public func explainDecisionWord(_ decision: Decision) -> String {
     decision.emphasizedName
 }
 
-public func testResultWord(_ decision: Decision) -> String {
+package func testResultWord(_ decision: Decision) -> String {
     decision.testResultName
 }
 

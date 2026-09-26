@@ -22,7 +22,7 @@ public enum HTTPMethod: String, Sendable, Equatable, Codable {
     case get = "GET"
 }
 
-public enum HTTPHostKind: String, Sendable, Equatable, Codable {
+package enum HTTPHostKind: String, Sendable, Equatable, Codable {
     case dns
     case ipv4
     case ipv6
@@ -60,7 +60,7 @@ public struct HTTPIPAddress: Hashable, Sendable, Equatable {
     public let family: HTTPIPFamily
     public let presentation: String
     public let bytes: [UInt8]
-    public let addressClass: HTTPAddressClass
+    package let addressClass: HTTPAddressClass
 
     public var isPublicGlobal: Bool {
         addressClass == .publicGlobal
@@ -111,7 +111,7 @@ extension HTTPIPAddress: Codable {
 }
 
 /// Outcome of one name lookup. Any forbidden answer rejects the name.
-public enum HTTPAddressSelection: Sendable, Equatable {
+package enum HTTPAddressSelection: Sendable, Equatable {
     case empty
     case pinned(HTTPIPAddress)
     case forbidden(HTTPIPAddress)
@@ -121,7 +121,7 @@ public enum HTTPAddressSelection: Sendable, Equatable {
 ///
 /// IPv4 is preferred when every answer is public. A mixed answer is forbidden
 /// even when another answer is public.
-public func selectHTTPAddresses(_ addresses: [HTTPIPAddress]) -> HTTPAddressSelection {
+package func selectHTTPAddresses(_ addresses: [HTTPIPAddress]) -> HTTPAddressSelection {
     var seen = Set<HTTPIPAddress>()
     let unique = addresses.filter { seen.insert($0).inserted }
     let ordered = unique.sorted { left, right in
