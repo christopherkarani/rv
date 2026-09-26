@@ -100,7 +100,7 @@ let coreLibraryTargets: [Target] = [
         resources: [.embedInCode("Resources/hosts")]
     ),
     .target(name: "RVIPC", dependencies: ["RVDomain"]),
-    .target(name: "RVHistory", dependencies: ["RVDomain", "RVFileStore"]),
+    .target(name: "RVHistory", dependencies: ["RVDomain"]),
     .target(name: "RVAnalytics"),
     .target(name: "RVPresentation", dependencies: ["RVDomain", "RVTheme"]),
     .target(name: "RVTUI", dependencies: ["RVTheme", "RVPresentation"]),
