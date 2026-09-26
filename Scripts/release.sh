@@ -17,11 +17,13 @@ usage() {
 Usage: Scripts/release.sh
 
   clang -Os the C hook → stage as rv (stripped)
-  swift build -c release --product rv → stage as rv-cli (strip -x)
-  swift build -c release --product rvd → stage as rvd (strip -x)
+  one swift build -c release (all products) → stage rv-cli, rvd,
+    rv-workspace-host (+ rv-pty-claim on Darwin,
+    rv-isolation-exec on Linux) (strip -x)
   copy *_RVPacks.bundle (Darwin) or *_RVPacks.resources (Linux)
     into .build/release-stage (override with RV_RELEASE_STAGE)
 
+RV_RELEASE_SKIP_C_UNITS=1 skips the C unit run (CI runs it separately).
 Does not codesign. Does not write $HOME/.local/bin.
 C is not an SPM product. SPM product rv stays the Swift operator (rv-cli).
 EOF
@@ -82,7 +84,11 @@ if [[ ! -f "$C_SRC/rv.c" ]]; then
   exit 1
 fi
 
-bash "$C_SRC/tests/run.sh"
+if [[ "${RV_RELEASE_SKIP_C_UNITS:-0}" != "1" ]]; then
+  bash "$C_SRC/tests/run.sh"
+else
+  printf "release: skipping C units (RV_RELEASE_SKIP_C_UNITS=1)\n" >&2
+fi
 
 rm -rf "$STAGE"
 mkdir -p "$STAGE"
@@ -105,18 +111,21 @@ else
   strip "$STAGE/rv"
 fi
 
+# One build for every product. SPM honors only one --product per
+# invocation, so separate calls re-plan each time; the staging below
+# copies out just the products it needs.
 set +e
-"$SWIFT_WRAP" build -c release --product rv
-rv_st=$?
+"$SWIFT_WRAP" build -c release
+build_st=$?
 set -e
-if [[ "$rv_st" -ne 0 ]]; then
-  printf "release: swift build --product rv failed (exit %s)\n" "$rv_st" >&2
-  printf "Staged C rv at %s/rv (Swift rv-cli/rvd pending hookEvaluate dispatch)\n" "$STAGE" >&2
+if [[ "$build_st" -ne 0 ]]; then
+  printf "release: swift build -c release failed (exit %s)\n" "$build_st" >&2
+  printf "Staged C rv at %s/rv (Swift products pending)\n" "$STAGE" >&2
   ls -l "$STAGE/rv" >&2
   if [[ "$OS" == "Darwin" ]]; then
     otool -L "$STAGE/rv" >&2
   fi
-  exit "$rv_st"
+  exit "$build_st"
 fi
 BIN_DIR="$("$SWIFT_WRAP" build -c release --show-bin-path)"
 if [[ ! -x "$BIN_DIR/rv" ]]; then
@@ -129,35 +138,15 @@ strip -x "$STAGE/rv-cli"
 
 # Contained Linux launches require this trusted sibling before any agent work.
 if [[ "$OS" == "Linux" ]]; then
-  "$SWIFT_WRAP" build -c release --product rv-isolation-exec
+  if [[ ! -x "$BIN_DIR/rv-isolation-exec" ]]; then
+    printf "release: expected executable rv-isolation-exec in %s\n" "$BIN_DIR" >&2
+    exit 1
+  fi
   cp "$BIN_DIR/rv-isolation-exec" "$STAGE/rv-isolation-exec"
   chmod 755 "$STAGE/rv-isolation-exec"
   strip "$STAGE/rv-isolation-exec"
 fi
 
-copied=0
-# Darwin SPM emits *_RVPacks.bundle; Linux SPM emits *_RVPacks.resources.
-# Bundle.module looks next to the relocated binary, then a baked .build path.
-for bundle in "$BIN_DIR"/*_RVPacks.bundle "$BIN_DIR"/*_RVPacks.resources; do
-  [[ -d "$bundle" ]] || continue
-  name="$(basename "$bundle")"
-  rm -rf "$STAGE/$name"
-  cp -R "$bundle" "$STAGE/$name"
-  copied=1
-done
-
-set +e
-"$SWIFT_WRAP" build -c release --product rvd
-rvd_st=$?
-set -e
-if [[ "$rvd_st" -ne 0 ]]; then
-  printf "release: swift build --product rvd failed (exit %s)\n" "$rvd_st" >&2
-  printf "Staged %s (rv C + rv-cli; rvd pending)\n" "$STAGE" >&2
-  ls -l "$STAGE/rv" "$STAGE/rv-cli" >&2
-  exit "$rvd_st"
-fi
-
-BIN_DIR="$("$SWIFT_WRAP" build -c release --show-bin-path)"
 if [[ ! -x "$BIN_DIR/rvd" ]]; then
   printf "release: expected executable rvd in %s\n" "$BIN_DIR" >&2
   exit 1
@@ -166,7 +155,6 @@ cp "$BIN_DIR/rvd" "$STAGE/rvd"
 chmod 755 "$STAGE/rvd"
 strip -x "$STAGE/rvd"
 
-"$SWIFT_WRAP" build -c release --product rv-workspace-host
 if [[ ! -x "$BIN_DIR/rv-workspace-host" ]]; then
   printf "release: expected executable rv-workspace-host in %s\n" "$BIN_DIR" >&2
   exit 1
@@ -178,8 +166,6 @@ strip -x "$STAGE/rv-workspace-host"
 # Contained Darwin PTY launches exec this sibling before sandbox-exec.
 # The host looks it up next to its own binary. Do not ship the host without it.
 if [[ "$OS" == "Darwin" ]]; then
-  "$SWIFT_WRAP" build -c release --product rv-pty-claim
-  BIN_DIR="$("$SWIFT_WRAP" build -c release --show-bin-path)"
   if [[ ! -x "$BIN_DIR/rv-pty-claim" ]]; then
     printf "release: expected executable rv-pty-claim in %s\n" "$BIN_DIR" >&2
     exit 1
@@ -295,6 +281,9 @@ if [[ "$OS" == "Darwin" ]]; then
   done
 fi
 
+copied=0
+# Darwin SPM emits *_RVPacks.bundle; Linux SPM emits *_RVPacks.resources.
+# Bundle.module looks next to the relocated binary, then a baked .build path.
 for bundle in "$BIN_DIR"/*_RVPacks.bundle "$BIN_DIR"/*_RVPacks.resources; do
   [[ -d "$bundle" ]] || continue
   name="$(basename "$bundle")"
