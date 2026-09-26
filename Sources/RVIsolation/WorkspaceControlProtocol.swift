@@ -217,9 +217,23 @@ enum WorkspaceControlCodec {
         else {
             return .invalid
         }
-        guard envelope.v == WorkspaceControlLimits.version else {
+        guard versionMatches(envelope) else {
             return .incompatible
         }
+        guard limitsValid(envelope) else {
+            return .invalid
+        }
+        return .message(envelope.message)
+    }
+
+    /// Shared by `decode(_:)` and the typed RPC `init(from:)` so the Codable
+    /// path fails closed exactly like the wire path. (`decode(_:)` additionally
+    /// enforces the raw body-size cap, which is only visible on the wire.)
+    fileprivate static func versionMatches(_ envelope: Envelope) -> Bool {
+        envelope.v == WorkspaceControlLimits.version
+    }
+
+    fileprivate static func limitsValid(_ envelope: Envelope) -> Bool {
         guard fits(envelope.op, WorkspaceControlLimits.maxOperationBytes),
             fits(envelope.executable, WorkspaceControlLimits.maxExecutableBytes),
             fits(envelope.hook, WorkspaceControlLimits.maxHookBytes),
@@ -235,11 +249,9 @@ enum WorkspaceControlCodec {
             sequenceFits(envelope.sequence),
             encodedBytesFit(envelope.bytes)
         else {
-            return .invalid
+            return false
         }
-        let message = envelope.message
-        guard runtimesFit(message.runtimes) else { return .invalid }
-        return .message(message)
+        return runtimesFit(envelope.message.runtimes)
     }
 
     static func encode(_ message: WorkspaceControlMessage) -> Data? {
@@ -651,5 +663,494 @@ func workspaceControlCode(_ error: WorkspaceSessionError) -> WorkspaceControlCod
         .recoveryRequired
     case .apply, .cleanupFailed:
         .invalidRequest
+    }
+}
+
+// MARK: - Typed control RPC (T6)
+
+// Drift guard: `WorkspaceControlRequest` and `WorkspaceControlResponse`
+// intentionally mirror the same `WorkspaceControlMessage` shape (init
+// parameters, Codable init/encode limit checks, property forwarders).
+// Any wire-field addition must update both inits, both Codable paths,
+// the message/Envelope paths, and the frame-identity fixtures together;
+// byte-identity tests pin the encoding but not the mirrored limit checks.
+
+/// Validated decode of a client→server frame.
+public enum WorkspaceControlRequestDecode: Sendable, Equatable {
+    case request(WorkspaceControlRequest)
+    case incompatible
+    case invalid
+}
+
+/// Validated decode of a server→client frame.
+public enum WorkspaceControlResponseDecode: Sendable, Equatable {
+    case response(WorkspaceControlResponse)
+    case incompatible
+    case invalid
+}
+
+/// Typed client→server control RPC. The wire encoding is identical to
+/// `WorkspaceControlMessage`: this type owns the `WorkspaceControlOp`
+/// conversion so callers never handle op strings.
+/// Mirror of `WorkspaceControlResponse` — see the T6 drift guard above.
+public struct WorkspaceControlRequest: Sendable, Equatable, Codable {
+    var message: WorkspaceControlMessage
+
+    init(_ message: WorkspaceControlMessage) {
+        self.message = message
+    }
+
+    public init(
+        id: UUID? = nil,
+        operation: WorkspaceControlOp,
+        token: UUID? = nil,
+        executable: String? = nil,
+        arguments: [String]? = nil,
+        runtime: UUID? = nil,
+        hook: String? = nil,
+        ok: Bool? = nil,
+        error: String? = nil,
+        workspace: UUID? = nil,
+        host: UUID? = nil,
+        phase: String? = nil,
+        project: String? = nil,
+        runtimes: [WorkspaceRuntimeReport]? = nil,
+        attached: Int? = nil,
+        running: Bool? = nil,
+        io: String? = nil,
+        rows: Int? = nil,
+        columns: Int? = nil,
+        sequence: Int64? = nil,
+        bytes: String? = nil,
+        exitStatus: Int32? = nil,
+        terminal: Bool? = nil,
+        inputOwner: Bool? = nil,
+        created: Bool? = nil,
+        features: [String]? = nil
+    ) {
+        message = WorkspaceControlMessage(
+            version: WorkspaceControlLimits.version,
+            id: id,
+            op: operation.rawValue,
+            token: token,
+            executable: executable,
+            arguments: arguments,
+            runtime: runtime,
+            hook: hook,
+            ok: ok,
+            error: error,
+            workspace: workspace,
+            host: host,
+            phase: phase,
+            project: project,
+            runtimes: runtimes,
+            attached: attached,
+            running: running,
+            io: io,
+            rows: rows,
+            columns: columns,
+            sequence: sequence,
+            bytes: bytes,
+            exitStatus: exitStatus,
+            terminal: terminal,
+            inputOwner: inputOwner,
+            created: created,
+            features: features
+        )
+    }
+
+    /// Structural decode enforcing the same version/limits checks as
+    /// `decode(_:)`; only the raw body-size cap is wire-path-only.
+    public init(from decoder: Decoder) throws {
+        let envelope = try Envelope(from: decoder)
+        guard WorkspaceControlCodec.versionMatches(envelope),
+            WorkspaceControlCodec.limitsValid(envelope)
+        else {
+            throw DecodingError.dataCorrupted(
+                DecodingError.Context(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "invalid control frame"
+                )
+            )
+        }
+        message = envelope.message
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        try Envelope(message).encode(to: encoder)
+    }
+
+    /// Validated encode. Byte-identical to `WorkspaceControlCodec.encode`.
+    public func encode() -> Data? {
+        WorkspaceControlCodec.encode(message)
+    }
+
+    /// Validated decode. Limits and version checks match the legacy codec.
+    public static func decode(_ data: Data) -> WorkspaceControlRequestDecode {
+        switch WorkspaceControlCodec.decode(data) {
+        case .message(let message):
+            .request(WorkspaceControlRequest(message))
+        case .incompatible:
+            .incompatible
+        case .invalid:
+            .invalid
+        }
+    }
+
+    public var version: Int { message.version }
+    /// Nil when the peer sent an unknown op; `rawOperation` still echoes it.
+    public var operation: WorkspaceControlOp? {
+        WorkspaceControlOp(rawValue: message.op)
+    }
+    /// Exact wire op for failure echoes. Never dispatch on this.
+    public var rawOperation: String { message.op }
+
+    public var id: UUID? {
+        get { message.id }
+        set { message.id = newValue }
+    }
+    public var token: UUID? {
+        get { message.token }
+        set { message.token = newValue }
+    }
+    public var executable: String? {
+        get { message.executable }
+        set { message.executable = newValue }
+    }
+    public var arguments: [String]? {
+        get { message.arguments }
+        set { message.arguments = newValue }
+    }
+    public var runtime: UUID? {
+        get { message.runtime }
+        set { message.runtime = newValue }
+    }
+    public var hook: String? {
+        get { message.hook }
+        set { message.hook = newValue }
+    }
+    public var ok: Bool? {
+        get { message.ok }
+        set { message.ok = newValue }
+    }
+    public var error: String? {
+        get { message.error }
+        set { message.error = newValue }
+    }
+    public var workspace: UUID? {
+        get { message.workspace }
+        set { message.workspace = newValue }
+    }
+    public var host: UUID? {
+        get { message.host }
+        set { message.host = newValue }
+    }
+    public var phase: String? {
+        get { message.phase }
+        set { message.phase = newValue }
+    }
+    public var project: String? {
+        get { message.project }
+        set { message.project = newValue }
+    }
+    public var runtimes: [WorkspaceRuntimeReport]? {
+        get { message.runtimes }
+        set { message.runtimes = newValue }
+    }
+    public var attached: Int? {
+        get { message.attached }
+        set { message.attached = newValue }
+    }
+    public var running: Bool? {
+        get { message.running }
+        set { message.running = newValue }
+    }
+    public var io: String? {
+        get { message.io }
+        set { message.io = newValue }
+    }
+    public var rows: Int? {
+        get { message.rows }
+        set { message.rows = newValue }
+    }
+    public var columns: Int? {
+        get { message.columns }
+        set { message.columns = newValue }
+    }
+    public var sequence: Int64? {
+        get { message.sequence }
+        set { message.sequence = newValue }
+    }
+    public var bytes: String? {
+        get { message.bytes }
+        set { message.bytes = newValue }
+    }
+    public var exitStatus: Int32? {
+        get { message.exitStatus }
+        set { message.exitStatus = newValue }
+    }
+    public var terminal: Bool? {
+        get { message.terminal }
+        set { message.terminal = newValue }
+    }
+    public var inputOwner: Bool? {
+        get { message.inputOwner }
+        set { message.inputOwner = newValue }
+    }
+    public var created: Bool? {
+        get { message.created }
+        set { message.created = newValue }
+    }
+    public var features: [String]? {
+        get { message.features }
+        set { message.features = newValue }
+    }
+}
+
+/// Typed server→client control RPC. Same wire encoding as the request side.
+/// Mirror of `WorkspaceControlRequest` — see the T6 drift guard above.
+public struct WorkspaceControlResponse: Sendable, Equatable, Codable {
+    var message: WorkspaceControlMessage
+
+    init(_ message: WorkspaceControlMessage) {
+        self.message = message
+    }
+
+    public init(
+        id: UUID? = nil,
+        operation: WorkspaceControlOp,
+        token: UUID? = nil,
+        executable: String? = nil,
+        arguments: [String]? = nil,
+        runtime: UUID? = nil,
+        hook: String? = nil,
+        ok: Bool? = nil,
+        error: String? = nil,
+        workspace: UUID? = nil,
+        host: UUID? = nil,
+        phase: String? = nil,
+        project: String? = nil,
+        runtimes: [WorkspaceRuntimeReport]? = nil,
+        attached: Int? = nil,
+        running: Bool? = nil,
+        io: String? = nil,
+        rows: Int? = nil,
+        columns: Int? = nil,
+        sequence: Int64? = nil,
+        bytes: String? = nil,
+        exitStatus: Int32? = nil,
+        terminal: Bool? = nil,
+        inputOwner: Bool? = nil,
+        created: Bool? = nil,
+        features: [String]? = nil
+    ) {
+        message = WorkspaceControlMessage(
+            version: WorkspaceControlLimits.version,
+            id: id,
+            op: operation.rawValue,
+            token: token,
+            executable: executable,
+            arguments: arguments,
+            runtime: runtime,
+            hook: hook,
+            ok: ok,
+            error: error,
+            workspace: workspace,
+            host: host,
+            phase: phase,
+            project: project,
+            runtimes: runtimes,
+            attached: attached,
+            running: running,
+            io: io,
+            rows: rows,
+            columns: columns,
+            sequence: sequence,
+            bytes: bytes,
+            exitStatus: exitStatus,
+            terminal: terminal,
+            inputOwner: inputOwner,
+            created: created,
+            features: features
+        )
+    }
+
+    /// Failure echoing the incoming request's wire op, even when unknown.
+    public static func failure(
+        request: WorkspaceControlRequest,
+        code: WorkspaceControlCode
+    ) -> WorkspaceControlResponse {
+        WorkspaceControlResponse(
+            WorkspaceControlMessage.error(
+                id: request.message.id,
+                op: request.message.op,
+                code: code
+            )
+        )
+    }
+
+    public static func failure(
+        id: UUID?,
+        operation: WorkspaceControlOp,
+        code: WorkspaceControlCode
+    ) -> WorkspaceControlResponse {
+        WorkspaceControlResponse(
+            WorkspaceControlMessage.error(
+                id: id,
+                op: operation.rawValue,
+                code: code
+            )
+        )
+    }
+
+    /// Structural decode enforcing the same version/limits checks as
+    /// `decode(_:)`; only the raw body-size cap is wire-path-only.
+    public init(from decoder: Decoder) throws {
+        let envelope = try Envelope(from: decoder)
+        guard WorkspaceControlCodec.versionMatches(envelope),
+            WorkspaceControlCodec.limitsValid(envelope)
+        else {
+            throw DecodingError.dataCorrupted(
+                DecodingError.Context(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "invalid control frame"
+                )
+            )
+        }
+        message = envelope.message
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        try Envelope(message).encode(to: encoder)
+    }
+
+    /// Validated encode. Byte-identical to `WorkspaceControlCodec.encode`.
+    public func encode() -> Data? {
+        WorkspaceControlCodec.encode(message)
+    }
+
+    /// Validated decode. Limits and version checks match the legacy codec.
+    public static func decode(_ data: Data) -> WorkspaceControlResponseDecode {
+        switch WorkspaceControlCodec.decode(data) {
+        case .message(let message):
+            .response(WorkspaceControlResponse(message))
+        case .incompatible:
+            .incompatible
+        case .invalid:
+            .invalid
+        }
+    }
+
+    public var version: Int { message.version }
+    public var operation: WorkspaceControlOp? {
+        WorkspaceControlOp(rawValue: message.op)
+    }
+    /// Exact wire op for echoes. Never dispatch on this.
+    public var rawOperation: String { message.op }
+    /// Typed view of `error`; nil when absent or unknown.
+    public var code: WorkspaceControlCode? {
+        get { error.flatMap(WorkspaceControlCode.init(rawValue:)) }
+        set { error = newValue?.rawValue }
+    }
+
+    public var id: UUID? {
+        get { message.id }
+        set { message.id = newValue }
+    }
+    public var token: UUID? {
+        get { message.token }
+        set { message.token = newValue }
+    }
+    public var executable: String? {
+        get { message.executable }
+        set { message.executable = newValue }
+    }
+    public var arguments: [String]? {
+        get { message.arguments }
+        set { message.arguments = newValue }
+    }
+    public var runtime: UUID? {
+        get { message.runtime }
+        set { message.runtime = newValue }
+    }
+    public var hook: String? {
+        get { message.hook }
+        set { message.hook = newValue }
+    }
+    public var ok: Bool? {
+        get { message.ok }
+        set { message.ok = newValue }
+    }
+    public var error: String? {
+        get { message.error }
+        set { message.error = newValue }
+    }
+    public var workspace: UUID? {
+        get { message.workspace }
+        set { message.workspace = newValue }
+    }
+    public var host: UUID? {
+        get { message.host }
+        set { message.host = newValue }
+    }
+    public var phase: String? {
+        get { message.phase }
+        set { message.phase = newValue }
+    }
+    public var project: String? {
+        get { message.project }
+        set { message.project = newValue }
+    }
+    public var runtimes: [WorkspaceRuntimeReport]? {
+        get { message.runtimes }
+        set { message.runtimes = newValue }
+    }
+    public var attached: Int? {
+        get { message.attached }
+        set { message.attached = newValue }
+    }
+    public var running: Bool? {
+        get { message.running }
+        set { message.running = newValue }
+    }
+    public var io: String? {
+        get { message.io }
+        set { message.io = newValue }
+    }
+    public var rows: Int? {
+        get { message.rows }
+        set { message.rows = newValue }
+    }
+    public var columns: Int? {
+        get { message.columns }
+        set { message.columns = newValue }
+    }
+    public var sequence: Int64? {
+        get { message.sequence }
+        set { message.sequence = newValue }
+    }
+    public var bytes: String? {
+        get { message.bytes }
+        set { message.bytes = newValue }
+    }
+    public var exitStatus: Int32? {
+        get { message.exitStatus }
+        set { message.exitStatus = newValue }
+    }
+    public var terminal: Bool? {
+        get { message.terminal }
+        set { message.terminal = newValue }
+    }
+    public var inputOwner: Bool? {
+        get { message.inputOwner }
+        set { message.inputOwner = newValue }
+    }
+    public var created: Bool? {
+        get { message.created }
+        set { message.created = newValue }
+    }
+    public var features: [String]? {
+        get { message.features }
+        set { message.features = newValue }
     }
 }
