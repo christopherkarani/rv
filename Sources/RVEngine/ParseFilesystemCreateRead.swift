@@ -63,7 +63,7 @@ func isChmodMode(_ token: String) -> Bool {
 
 func parseTouch(_ argv: Argv) -> ParsedFilesystemCommand? {
     let spec = FlagValueSpec(valueShorts: ["t", "d"], valueLongs: ["date", "time"])
-    let (flags, rest) = splitFlagTerminator(ShellPipeline.scanFlags(argv, values: spec))
+    let (flags, rest) = scanFilesystemFlags(argv, values: spec)
     var paths: [String] = []
     for event in flags {
         switch event {
@@ -102,7 +102,7 @@ private let touchShorts: Set<Character> = ["a", "c", "f", "h", "m", "t", "d"]
 
 func parseMkdir(_ argv: Argv) -> ParsedFilesystemCommand? {
     let spec = FlagValueSpec(valueShorts: ["m"], valueLongs: ["mode"])
-    let (flags, rest) = splitFlagTerminator(ShellPipeline.scanFlags(argv, values: spec))
+    let (flags, rest) = scanFilesystemFlags(argv, values: spec)
     var paths: [String] = []
     for event in flags {
         switch event {
