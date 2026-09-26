@@ -126,16 +126,19 @@ jobs:
       - name: Install Swift 6.4
         run: Scripts/install-official-swift-macos.sh
 
-      - name: Cache SwiftPM build
+      # Packages only, not compiled artifacts: a restored build plan embeds
+      # the Metal toolchain cryptex path, which is random per runner, so an
+      # incremental rebuild fails spawning `metal` (SwiftTerm shaders).
+      - name: Cache SwiftPM packages
         uses: actions/cache@v4
         with:
           path: |
-            .build
+            .build/checkouts
             ~/Library/Caches/org.swift.swiftpm
-          key: swiftpm-isol-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.swift-version', 'Package.resolved', 'Package.swift') }}
+          key: swiftpm-pkgs-isol-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.swift-version', 'Package.resolved', 'Package.swift') }}
           restore-keys: |
-            swiftpm-isol-${{ runner.os }}-${{ runner.arch }}-
-            swiftpm-hook-${{ runner.os }}-${{ runner.arch }}-
+            swiftpm-pkgs-isol-${{ runner.os }}-${{ runner.arch }}-
+            swiftpm-pkgs-hook-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Compile RVIsolationTests
         run: Scripts/swift-6.4 build --target RVIsolationTests
@@ -170,15 +173,18 @@ jobs:
       - name: Install Swift 6.4
         run: Scripts/install-official-swift-macos.sh
 
-      - name: Cache SwiftPM build
+      # Packages only, not compiled artifacts: a restored build plan embeds
+      # the Metal toolchain cryptex path, which is random per runner, so an
+      # incremental rebuild fails spawning `metal` (SwiftTerm shaders).
+      - name: Cache SwiftPM packages
         uses: actions/cache@v4
         with:
           path: |
-            .build
+            .build/checkouts
             ~/Library/Caches/org.swift.swiftpm
-          key: swiftpm-hook-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.swift-version', 'Package.resolved', 'Package.swift') }}
+          key: swiftpm-pkgs-hook-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.swift-version', 'Package.resolved', 'Package.swift') }}
           restore-keys: |
-            swiftpm-hook-${{ runner.os }}-${{ runner.arch }}-
+            swiftpm-pkgs-hook-${{ runner.os }}-${{ runner.arch }}-
 
       - name: C hook units
         run: Sources/rv-c/tests/run.sh
