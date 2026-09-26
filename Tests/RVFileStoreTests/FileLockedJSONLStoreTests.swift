@@ -67,6 +67,18 @@ struct FileLockedJSONLStoreTests {
         #expect(store.load() == [good, good])
     }
 
+    @Test func loadKeepsRowsContainingUnicodeLineSeparators() throws {
+        let store = try makeStore("u2028")
+        // JSONEncoder never escapes these, so they must not split rows.
+        let record = ProbeRecord(
+            name: "a\u{2028}\u{2029}b\u{000B}\u{000C}c\u{0085}d",
+            stamp: Date(timeIntervalSince1970: 1_700_000_000),
+            count: 1
+        )
+        try store.save([record])
+        #expect(store.load() == [record])
+    }
+
     @Test func saveRoundTripsRecords() throws {
         let store = try makeStore("roundtrip")
         let records = [
