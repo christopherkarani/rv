@@ -5,7 +5,7 @@ import RVDomain
 import Synchronization
 
 private struct Reply {
-    var message: WorkspaceControlMessage
+    var message: WorkspaceControlResponse
     var endConnection = false
     var retire = false
     /// Runs after the reply frame is written, so streamed bytes cannot precede it.
@@ -62,8 +62,8 @@ private final class WorkspaceControlConnection: Sendable {
         flags.withLock { $0.hello = true }
     }
 
-    func send(_ message: WorkspaceControlMessage) -> Bool {
-        guard let body = WorkspaceControlCodec.encode(message) else { return false }
+    func send(_ message: WorkspaceControlResponse) -> Bool {
+        guard let body = message.encode() else { return false }
         let fd = flags.withLock { flags -> Int32 in
             guard flags.closed == false, flags.fd >= 0 else { return -1 }
             return Darwin.dup(flags.fd)
@@ -282,12 +282,12 @@ final class WorkspaceHostServer: Sendable {
         guard let uid = WorkspaceControlSocket.peerUID(fd),
             WorkspacePeerPolicy.decide(peerUID: uid, ownerUID: getuid()) == nil
         else {
-            let refusal = WorkspaceControlMessage.error(
+            let refusal = WorkspaceControlResponse.failure(
                 id: nil,
-                op: WorkspaceControlOp.hello.rawValue,
+                operation: .hello,
                 code: .unauthorizedClient
             )
-            if let body = WorkspaceControlCodec.encode(refusal) {
+            if let body = refusal.encode() {
                 _ = WorkspaceControlSocket.writeFrame(fd: fd, body: body)
             }
             Darwin.close(fd)
@@ -346,30 +346,29 @@ final class WorkspaceHostServer: Sendable {
     }
 
     private func respond(_ body: Data, connection: WorkspaceControlConnection) -> Reply {
-        switch WorkspaceControlCodec.decode(body) {
+        switch WorkspaceControlRequest.decode(body) {
         case .incompatible:
             return Reply(
-                message: WorkspaceControlMessage.error(
+                message: WorkspaceControlResponse.failure(
                     id: nil,
-                    op: WorkspaceControlOp.hello.rawValue,
+                    operation: .hello,
                     code: .incompatibleProtocol
                 ),
                 endConnection: true
             )
         case .invalid:
             return Reply(
-                message: WorkspaceControlMessage.error(
+                message: WorkspaceControlResponse.failure(
                     id: nil,
-                    op: WorkspaceControlOp.ping.rawValue,
+                    operation: .ping,
                     code: .invalidRequest
                 )
             )
-        case .message(let message):
+        case .request(let message):
             guard message.id != nil else {
                 return Reply(
-                    message: WorkspaceControlMessage.error(
-                        id: nil,
-                        op: message.op,
+                    message: WorkspaceControlResponse.failure(
+                        request: message,
                         code: .invalidRequest
                     )
                 )
@@ -382,16 +381,16 @@ final class WorkspaceHostServer: Sendable {
     }
 
     private func hello(
-        _ message: WorkspaceControlMessage,
+        _ message: WorkspaceControlRequest,
         connection: WorkspaceControlConnection
     ) -> Reply {
-        guard message.op == WorkspaceControlOp.hello.rawValue,
+        guard message.operation == .hello,
             message.token == credential.token
         else {
             return Reply(
-                message: WorkspaceControlMessage.error(
+                message: WorkspaceControlResponse.failure(
                     id: message.id,
-                    op: WorkspaceControlOp.hello.rawValue,
+                    operation: .hello,
                     code: .unauthorizedClient
                 ),
                 endConnection: true
@@ -399,10 +398,9 @@ final class WorkspaceHostServer: Sendable {
         }
         connection.markHello()
         return Reply(
-            message: WorkspaceControlMessage(
-                version: WorkspaceControlLimits.version,
+            message: WorkspaceControlResponse(
                 id: message.id,
-                op: WorkspaceControlOp.hello.rawValue,
+                operation: .hello,
                 ok: true,
                 workspace: supervisor.id.rawValue,
                 host: hostID.rawValue
@@ -411,10 +409,10 @@ final class WorkspaceHostServer: Sendable {
     }
 
     private func operation(
-        _ message: WorkspaceControlMessage,
+        _ message: WorkspaceControlRequest,
         connection: WorkspaceControlConnection
     ) -> Reply {
-        guard let op = WorkspaceControlOp(rawValue: message.op) else {
+        guard let op = message.operation else {
             return Reply(message: failure(message, .invalidRequest))
         }
         switch op {
@@ -422,20 +420,18 @@ final class WorkspaceHostServer: Sendable {
             return Reply(message: failure(message, .invalidRequest))
         case .capabilities:
             return Reply(
-                message: WorkspaceControlMessage(
-                    version: WorkspaceControlLimits.version,
+                message: WorkspaceControlResponse(
                     id: message.id,
-                    op: op.rawValue,
+                    operation: op,
                     ok: true,
                     features: [WorkspaceControlFeature.ensureTerminalRuntime]
                 )
             )
         case .ping:
             return Reply(
-                message: WorkspaceControlMessage(
-                    version: WorkspaceControlLimits.version,
+                message: WorkspaceControlResponse(
                     id: message.id,
-                    op: op.rawValue,
+                    operation: op,
                     ok: true,
                     host: hostID.rawValue
                 )
@@ -454,10 +450,9 @@ final class WorkspaceHostServer: Sendable {
             return close(message, connection: connection)
         case .detach:
             return Reply(
-                message: WorkspaceControlMessage(
-                    version: WorkspaceControlLimits.version,
+                message: WorkspaceControlResponse(
                     id: message.id,
-                    op: op.rawValue,
+                    operation: op,
                     ok: true
                 ),
                 endConnection: true
@@ -480,7 +475,7 @@ final class WorkspaceHostServer: Sendable {
         }
     }
 
-    private func describe(_ message: WorkspaceControlMessage) -> WorkspaceControlMessage {
+    private func describe(_ message: WorkspaceControlRequest) -> WorkspaceControlResponse {
         let snapshot = supervisor.snapshot
         guard snapshot.originalPath.rawValue.utf8.count <= WorkspaceControlLimits.maxProjectBytes else {
             return failure(message, .invalidRequest)
@@ -488,10 +483,9 @@ final class WorkspaceHostServer: Sendable {
         let attached = registry.withLock { state in
             state.connections.values.filter(\.isHello).count
         }
-        return WorkspaceControlMessage(
-            version: WorkspaceControlLimits.version,
+        return WorkspaceControlResponse(
             id: message.id,
-            op: WorkspaceControlOp.describeWorkspace.rawValue,
+            operation: .describeWorkspace,
             ok: true,
             workspace: snapshot.id.rawValue,
             host: hostID.rawValue,
@@ -501,16 +495,15 @@ final class WorkspaceHostServer: Sendable {
         )
     }
 
-    private func list(_ message: WorkspaceControlMessage) -> WorkspaceControlMessage {
+    private func list(_ message: WorkspaceControlRequest) -> WorkspaceControlResponse {
         supervisor.pruneFinishedRuntimes(limit: WorkspaceControlLimits.maxRuntimes)
         let facts = supervisor.runtimeFacts()
         guard facts.count <= WorkspaceControlLimits.maxRuntimes else {
             return failure(message, .runtimeLimit)
         }
-        return WorkspaceControlMessage(
-            version: WorkspaceControlLimits.version,
+        return WorkspaceControlResponse(
             id: message.id,
-            op: WorkspaceControlOp.listRuntimes.rawValue,
+            operation: .listRuntimes,
             ok: true,
             runtimes: facts.map {
                 WorkspaceRuntimeReport(
@@ -526,7 +519,7 @@ final class WorkspaceHostServer: Sendable {
         )
     }
 
-    private func ensureTerminalRuntime(_ message: WorkspaceControlMessage) -> WorkspaceControlMessage {
+    private func ensureTerminalRuntime(_ message: WorkspaceControlRequest) -> WorkspaceControlResponse {
         terminalEnsureLock.lock()
         defer { terminalEnsureLock.unlock() }
 
@@ -550,10 +543,9 @@ final class WorkspaceHostServer: Sendable {
             .sorted(by: { $0.id.uuidString < $1.id.uuidString })
             .first
         {
-            return WorkspaceControlMessage(
-                version: WorkspaceControlLimits.version,
+            return WorkspaceControlResponse(
                 id: message.id,
-                op: WorkspaceControlOp.ensureTerminalRuntime.rawValue,
+                operation: .ensureTerminalRuntime,
                 runtime: existing.id,
                 hook: existing.hookHost,
                 ok: true,
@@ -569,9 +561,9 @@ final class WorkspaceHostServer: Sendable {
     }
 
     private func launch(
-        _ message: WorkspaceControlMessage,
+        _ message: WorkspaceControlRequest,
         responseOp: WorkspaceControlOp = .launchRuntime
-    ) -> WorkspaceControlMessage {
+    ) -> WorkspaceControlResponse {
         let phase = supervisor.snapshot.phase
         guard phase.acceptsRuntime else {
             return failure(message, workspaceControlCode(.notAcceptingRuntime(phase)))
@@ -628,10 +620,9 @@ final class WorkspaceHostServer: Sendable {
                 launchedRows = nil
                 launchedColumns = nil
             }
-            return WorkspaceControlMessage(
-                version: WorkspaceControlLimits.version,
+            return WorkspaceControlResponse(
                 id: message.id,
-                op: responseOp.rawValue,
+                operation: responseOp,
                 runtime: running.id.rawValue,
                 hook: running.session.host?.rawValue,
                 ok: true,
@@ -646,13 +637,13 @@ final class WorkspaceHostServer: Sendable {
     }
 
     private func launchIO(
-        _ message: WorkspaceControlMessage
+        _ message: WorkspaceControlRequest
     ) -> Result<IsolatedIO, WorkspaceControlCode> {
         workspaceLaunchIO(io: message.io, rows: message.rows, columns: message.columns)
     }
 
     private func subscribe(
-        _ message: WorkspaceControlMessage,
+        _ message: WorkspaceControlRequest,
         connection: WorkspaceControlConnection
     ) -> Reply {
         guard let runtime = message.runtime else {
@@ -667,10 +658,9 @@ final class WorkspaceHostServer: Sendable {
         case .success:
             let window = supervisor.terminalWindow(runtime: runtime)
             return Reply(
-                message: WorkspaceControlMessage(
-                    version: WorkspaceControlLimits.version,
+                message: WorkspaceControlResponse(
                     id: message.id,
-                    op: WorkspaceControlOp.subscribeTerminal.rawValue,
+                    operation: .subscribeTerminal,
                     runtime: runtime,
                     ok: true,
                     rows: window?.rows,
@@ -685,7 +675,7 @@ final class WorkspaceHostServer: Sendable {
     }
 
     private func unsubscribe(
-        _ message: WorkspaceControlMessage,
+        _ message: WorkspaceControlRequest,
         connection: WorkspaceControlConnection
     ) -> Reply {
         guard let runtime = message.runtime else {
@@ -696,10 +686,9 @@ final class WorkspaceHostServer: Sendable {
             return Reply(message: failure(message, code))
         case .success:
             return Reply(
-                message: WorkspaceControlMessage(
-                    version: WorkspaceControlLimits.version,
+                message: WorkspaceControlResponse(
                     id: message.id,
-                    op: WorkspaceControlOp.unsubscribeTerminal.rawValue,
+                    operation: .unsubscribeTerminal,
                     runtime: runtime,
                     ok: true
                 )
@@ -708,7 +697,7 @@ final class WorkspaceHostServer: Sendable {
     }
 
     private func input(
-        _ message: WorkspaceControlMessage,
+        _ message: WorkspaceControlRequest,
         connection: WorkspaceControlConnection
     ) -> Reply {
         guard let runtime = message.runtime, let encoded = message.bytes,
@@ -722,10 +711,9 @@ final class WorkspaceHostServer: Sendable {
             return Reply(message: failure(message, code))
         case .success:
             return Reply(
-                message: WorkspaceControlMessage(
-                    version: WorkspaceControlLimits.version,
+                message: WorkspaceControlResponse(
                     id: message.id,
-                    op: WorkspaceControlOp.terminalInput.rawValue,
+                    operation: .terminalInput,
                     runtime: runtime,
                     ok: true
                 )
@@ -734,7 +722,7 @@ final class WorkspaceHostServer: Sendable {
     }
 
     private func acquire(
-        _ message: WorkspaceControlMessage,
+        _ message: WorkspaceControlRequest,
         connection: WorkspaceControlConnection
     ) -> Reply {
         guard let runtime = message.runtime else {
@@ -745,10 +733,9 @@ final class WorkspaceHostServer: Sendable {
             return Reply(message: failure(message, code))
         case .success:
             return Reply(
-                message: WorkspaceControlMessage(
-                    version: WorkspaceControlLimits.version,
+                message: WorkspaceControlResponse(
                     id: message.id,
-                    op: WorkspaceControlOp.acquireTerminalInput.rawValue,
+                    operation: .acquireTerminalInput,
                     runtime: runtime,
                     ok: true,
                     inputOwner: true
@@ -758,7 +745,7 @@ final class WorkspaceHostServer: Sendable {
     }
 
     private func release(
-        _ message: WorkspaceControlMessage,
+        _ message: WorkspaceControlRequest,
         connection: WorkspaceControlConnection
     ) -> Reply {
         guard let runtime = message.runtime else {
@@ -769,10 +756,9 @@ final class WorkspaceHostServer: Sendable {
             return Reply(message: failure(message, code))
         case .success:
             return Reply(
-                message: WorkspaceControlMessage(
-                    version: WorkspaceControlLimits.version,
+                message: WorkspaceControlResponse(
                     id: message.id,
-                    op: WorkspaceControlOp.releaseTerminalInput.rawValue,
+                    operation: .releaseTerminalInput,
                     runtime: runtime,
                     ok: true,
                     inputOwner: false
@@ -781,7 +767,7 @@ final class WorkspaceHostServer: Sendable {
         }
     }
 
-    private func resize(_ message: WorkspaceControlMessage) -> Reply {
+    private func resize(_ message: WorkspaceControlRequest) -> Reply {
         guard let runtime = message.runtime, let rows = message.rows, let columns = message.columns else {
             return Reply(message: failure(message, .invalidRequest))
         }
@@ -790,10 +776,9 @@ final class WorkspaceHostServer: Sendable {
             return Reply(message: failure(message, code))
         case .success:
             return Reply(
-                message: WorkspaceControlMessage(
-                    version: WorkspaceControlLimits.version,
+                message: WorkspaceControlResponse(
                     id: message.id,
-                    op: WorkspaceControlOp.resizeTerminal.rawValue,
+                    operation: .resizeTerminal,
                     runtime: runtime,
                     ok: true,
                     rows: rows,
@@ -803,16 +788,15 @@ final class WorkspaceHostServer: Sendable {
         }
     }
 
-    private func cancel(_ message: WorkspaceControlMessage) -> WorkspaceControlMessage {
+    private func cancel(_ message: WorkspaceControlRequest) -> WorkspaceControlResponse {
         guard let runtime = message.runtime else {
             return failure(message, .invalidRequest)
         }
         switch supervisor.cancel(runtime: runtime) {
         case .success:
-            return WorkspaceControlMessage(
-                version: WorkspaceControlLimits.version,
+            return WorkspaceControlResponse(
                 id: message.id,
-                op: WorkspaceControlOp.cancelRuntime.rawValue,
+                operation: .cancelRuntime,
                 runtime: runtime,
                 ok: true
             )
@@ -822,7 +806,7 @@ final class WorkspaceHostServer: Sendable {
     }
 
     private func close(
-        _ message: WorkspaceControlMessage,
+        _ message: WorkspaceControlRequest,
         connection: WorkspaceControlConnection
     ) -> Reply {
         // The child dies during `close`, and its exit is on the terminal
@@ -831,13 +815,12 @@ final class WorkspaceHostServer: Sendable {
         announceClosed(excluding: connection.id)
         let result = supervisor.close()
         let closed = supervisor.snapshot.phase == .closed
-        let response: WorkspaceControlMessage
+        let response: WorkspaceControlResponse
         switch result {
         case .success where closed:
-            response = WorkspaceControlMessage(
-                version: WorkspaceControlLimits.version,
+            response = WorkspaceControlResponse(
                 id: message.id,
-                op: WorkspaceControlOp.closeWorkspace.rawValue,
+                operation: .closeWorkspace,
                 ok: true,
                 workspace: supervisor.id.rawValue,
                 host: hostID.rawValue,
@@ -854,19 +837,18 @@ final class WorkspaceHostServer: Sendable {
     }
 
     private func failure(
-        _ message: WorkspaceControlMessage,
+        _ message: WorkspaceControlRequest,
         _ code: WorkspaceControlCode
-    ) -> WorkspaceControlMessage {
-        WorkspaceControlMessage.error(id: message.id, op: message.op, code: code)
+    ) -> WorkspaceControlResponse {
+        WorkspaceControlResponse.failure(request: message, code: code)
     }
 
     private func announceClosed(excluding: UUID?) {
         let others = registry.withLock { state in
             Array(state.connections.values.filter { $0.id != excluding })
         }
-        let event = WorkspaceControlMessage(
-            version: WorkspaceControlLimits.version,
-            op: WorkspaceControlOp.workspaceClosed.rawValue,
+        let event = WorkspaceControlResponse(
+            operation: .workspaceClosed,
             ok: true,
             workspace: supervisor.id.rawValue,
             host: hostID.rawValue,
@@ -914,9 +896,8 @@ final class WorkspaceHostServer: Sendable {
     /// and the runtime is left running. Tests use this for the protocol-error
     /// raw-mode path; it is not a client operation.
     func testingInjectMalformedTerminalFrame() -> Bool {
-        let message = WorkspaceControlMessage(
-            version: WorkspaceControlLimits.version,
-            op: WorkspaceControlOp.terminalOutput.rawValue,
+        let message = WorkspaceControlResponse(
+            operation: .terminalOutput,
             runtime: UUID(),
             ok: true
         )
@@ -929,47 +910,42 @@ final class WorkspaceHostServer: Sendable {
 private func workspaceTerminalMessage(
     _ notice: TerminalNotice,
     runtime: UUID
-) -> WorkspaceControlMessage {
+) -> WorkspaceControlResponse {
     switch notice {
     case .replay(let sequence, let bytes):
-        WorkspaceControlMessage(
-            version: WorkspaceControlLimits.version,
-            op: WorkspaceControlOp.terminalReplay.rawValue,
+        WorkspaceControlResponse(
+            operation: .terminalReplay,
             runtime: runtime,
             ok: true,
             sequence: sequence,
             bytes: TerminalBytesCodec.encode(bytes)
         )
     case .output(let sequence, let bytes):
-        WorkspaceControlMessage(
-            version: WorkspaceControlLimits.version,
-            op: WorkspaceControlOp.terminalOutput.rawValue,
+        WorkspaceControlResponse(
+            operation: .terminalOutput,
             runtime: runtime,
             ok: true,
             sequence: sequence,
             bytes: TerminalBytesCodec.encode(bytes)
         )
     case .inputOwner(let owned):
-        WorkspaceControlMessage(
-            version: WorkspaceControlLimits.version,
-            op: WorkspaceControlOp.terminalInputOwner.rawValue,
+        WorkspaceControlResponse(
+            operation: .terminalInputOwner,
             runtime: runtime,
             ok: true,
             inputOwner: owned
         )
     case .exited(let status):
-        WorkspaceControlMessage(
-            version: WorkspaceControlLimits.version,
-            op: WorkspaceControlOp.runtimeExited.rawValue,
+        WorkspaceControlResponse(
+            operation: .runtimeExited,
             runtime: runtime,
             ok: true,
             running: false,
             exitStatus: status
         )
     case .overflow:
-        WorkspaceControlMessage(
-            version: WorkspaceControlLimits.version,
-            op: WorkspaceControlOp.terminalOverflow.rawValue,
+        WorkspaceControlResponse(
+            operation: .terminalOverflow,
             runtime: runtime,
             ok: true
         )
