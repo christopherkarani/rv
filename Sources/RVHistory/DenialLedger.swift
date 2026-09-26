@@ -13,12 +13,16 @@ public struct DenialLedger: Sendable {
         self.init(fileURL: DenialLedgerPaths(configDirectory: configDirectory).fileURL)
     }
 
+    /// Best-effort post-decision audit write: lock, I/O, or encode failures
+    /// drop the record silently. Enforcement is unaffected — the deny stands
+    /// whether or not the audit row persists.
     public func append(_ record: DenialLedgerRecord, now: Date) {
-        (try? store.withLock {
+        // Best-effort: the ledger is a post-decision audit record, not the enforcement path.
+        _ = try? store.withLock {
             var records = store.load()
             records.append(record)
             try store.save(pruned(records, now: now))
-        }) as Void?
+        }
     }
 
     /// Returns denial records as of `now`, newest-first after cap.
@@ -44,7 +48,7 @@ public struct DenialLedger: Sendable {
         let directory = fileURL.deletingLastPathComponent()
         return FileLockedJSONLStore(
             fileURL: fileURL,
-            lockURL: directory.appendingPathComponent("blocks.lock", isDirectory: false),
+            lockURL: DenialLedgerPaths(configDirectory: directory).lockURL,
             directoryURL: directory
         )
     }

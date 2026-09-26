@@ -70,6 +70,26 @@ struct DenialLedgerConcurrencyTests {
         #expect(try ledgerMode(lock) == 0o600)
     }
 
+    /// Failure contract: when the lock cannot be acquired (here a directory
+    /// occupies `blocks.lock`), append degrades to a silent no-op — no trap,
+    /// no partial rows. A chmod-based failure is not used: `withLock` prepares
+    /// the directory (re-asserting 0700 on owned dirs) before locking.
+    @Test func append_lockUnavailable_dropsRecordSilently() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-ledger-lockfail-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(
+            at: dir.appendingPathComponent("blocks.lock", isDirectory: true),
+            withIntermediateDirectories: false
+        )
+        let ledger = DenialLedger(configDirectory: dir)
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        ledger.append(try decode(ConcurrencyJSONL.row), now: now)
+        #expect(ledger.records(asOf: now) == [])
+        #expect(FileManager.default.fileExists(atPath: dir.appendingPathComponent("blocks.jsonl").path) == false)
+    }
+
     private func decode(_ line: String) throws -> DenialLedgerRecord {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601

@@ -105,6 +105,13 @@ struct DenialLedgerTests {
         #expect(kept.contains(where: { $0.timestamp < now.addingTimeInterval(-7 * 24 * 60 * 60) }) == false)
     }
 
+    @Test func uninstallArtifactsIncludeLockSidecar() {
+        let root = URL(fileURLWithPath: "/tmp/rv-config", isDirectory: true)
+        let names = DenialLedgerPaths(configDirectory: root).uninstallArtifacts.map(\.lastPathComponent)
+        #expect(names.contains("blocks.jsonl"))
+        #expect(names.contains("blocks.lock"))
+    }
+
     @Test func preferences_missingIsEnabled() {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-ledger-pref-\(UUID().uuidString)", isDirectory: true)
