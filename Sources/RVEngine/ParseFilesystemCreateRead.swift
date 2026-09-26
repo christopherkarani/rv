@@ -1,59 +1,38 @@
 import RVDomain
 
-func parseChmod(_ args: [String]) -> ParsedFilesystemCommand? {
+func parseChmod(_ argv: Argv) -> ParsedFilesystemCommand? {
+    let (flags, rest) = splitFlagTerminator(ShellPipeline.scanFlags(argv))
     var recursive = false
     var mode: String?
     var paths: [String] = []
-    var seenDash = false
-    var index = 0
-    while index < args.count {
-        let token = args[index]
-        if seenDash {
+    for event in flags {
+        switch event {
+        case .positional(let word):
             if mode == nil {
-                guard isChmodMode(token) else { return nil }
-                mode = token
+                guard isChmodMode(word) else { return nil }
+                mode = word
             } else {
-                paths.append(token)
+                paths.append(word)
             }
-            index += 1
-            continue
-        }
-        if token == "--" {
-            seenDash = true
-            index += 1
-            continue
-        }
-        if token == "--recursive" {
+        case .long(let name, nil) where name == "recursive":
             recursive = true
-            index += 1
+        case .long(let name, nil) where chmodSkipLong.contains("--" + name):
             continue
-        }
-        if chmodSkipLong.contains(token) {
-            index += 1
-            continue
-        }
-        if let letters = clusteredShorts(token) {
-            for letter in letters {
-                switch letter {
-                case "R":
-                    recursive = true
-                case "f", "v", "c", "h":
-                    continue
-                default:
-                    return nil
-                }
+        case .shorts(let letters, _) where letters.allSatisfy(chmodShorts.contains):
+            if letters.contains("R") {
+                recursive = true
             }
-            index += 1
-            continue
+        default:
+            return nil
         }
-        if token.hasPrefix("-") { return nil }
+    }
+    for word in rest {
         if mode == nil {
-            guard isChmodMode(token) else { return nil }
-            mode = token
+            guard isChmodMode(word) else { return nil }
+            mode = word
         } else {
-            paths.append(token)
+            paths.append(word)
         }
-        index += 1
     }
     guard let mode, paths.isEmpty == false else { return nil }
     return ParsedFilesystemCommand(
@@ -65,9 +44,15 @@ func parseChmod(_ args: [String]) -> ParsedFilesystemCommand? {
     )
 }
 
+func parseChmod(_ args: [String]) -> ParsedFilesystemCommand? {
+    parseChmod(Argv(program: "chmod", args: args))
+}
+
 private let chmodSkipLong: Set<String> = [
     "--silent", "--quiet", "--verbose", "--changes", "--no-dereference",
 ]
+
+private let chmodShorts: Set<Character> = ["R", "f", "v", "c", "h"]
 
 func isChmodMode(_ token: String) -> Bool {
     if token.allSatisfy({ $0 >= "0" && $0 <= "7" }), (3...4).contains(token.count) {
@@ -76,52 +61,25 @@ func isChmodMode(_ token: String) -> Bool {
     return token.contains(where: { $0 == "+" || $0 == "-" || $0 == "=" })
 }
 
-func parseTouch(_ args: [String]) -> ParsedFilesystemCommand? {
+func parseTouch(_ argv: Argv) -> ParsedFilesystemCommand? {
+    let spec = FlagValueSpec(valueShorts: ["t", "d"], valueLongs: ["date", "time"])
+    let (flags, rest) = splitFlagTerminator(ShellPipeline.scanFlags(argv, values: spec))
     var paths: [String] = []
-    var seenDash = false
-    var expectValue = false
-    for token in args {
-        if expectValue {
-            expectValue = false
+    for event in flags {
+        switch event {
+        case .positional(let word):
+            paths.append(word)
+        case .long(let name, _) where name == "date" || name == "time":
             continue
-        }
-        if seenDash {
-            paths.append(token)
+        case .long(let name, nil) where touchSkipLong.contains("--" + name):
             continue
-        }
-        if token == "--" {
-            seenDash = true
+        case .shorts(let letters, _) where letters.allSatisfy(touchShorts.contains):
             continue
+        default:
+            return nil
         }
-        if token == "-t" || token == "-d" || token == "--date" || token == "--time" {
-            expectValue = true
-            continue
-        }
-        if token.hasPrefix("--date=") || token.hasPrefix("--time=") {
-            continue
-        }
-        if touchSkipLong.contains(token) {
-            continue
-        }
-        if let letters = clusteredShorts(token) {
-            var valid = true
-            for letter in letters {
-                switch letter {
-                case "a", "c", "f", "h", "m":
-                    continue
-                case "t", "d":
-                    expectValue = true
-                default:
-                    valid = false
-                }
-            }
-            if valid == false { return nil }
-            continue
-        }
-        if token.hasPrefix("-") { return nil }
-        paths.append(token)
     }
-    if expectValue { return nil }
+    paths += rest
     guard paths.isEmpty == false else { return nil }
     return ParsedFilesystemCommand(
         operation: .create,
@@ -130,58 +88,37 @@ func parseTouch(_ args: [String]) -> ParsedFilesystemCommand? {
         force: false,
         mode: nil
     )
+}
+
+func parseTouch(_ args: [String]) -> ParsedFilesystemCommand? {
+    parseTouch(Argv(program: "touch", args: args))
 }
 
 private let touchSkipLong: Set<String> = [
     "--no-create", "--no-dereference", "--help", "--version",
 ]
 
-func parseMkdir(_ args: [String]) -> ParsedFilesystemCommand? {
+private let touchShorts: Set<Character> = ["a", "c", "f", "h", "m", "t", "d"]
+
+func parseMkdir(_ argv: Argv) -> ParsedFilesystemCommand? {
+    let spec = FlagValueSpec(valueShorts: ["m"], valueLongs: ["mode"])
+    let (flags, rest) = splitFlagTerminator(ShellPipeline.scanFlags(argv, values: spec))
     var paths: [String] = []
-    var seenDash = false
-    var expectMode = false
-    for token in args {
-        if expectMode {
-            expectMode = false
+    for event in flags {
+        switch event {
+        case .positional(let word):
+            paths.append(word)
+        case .long(let name, _) where name == "mode":
             continue
-        }
-        if seenDash {
-            paths.append(token)
+        case .long(let name, nil) where mkdirSkipLong.contains("--" + name):
             continue
-        }
-        if token == "--" {
-            seenDash = true
+        case .shorts(let letters, _) where letters.allSatisfy(mkdirShorts.contains):
             continue
+        default:
+            return nil
         }
-        if token == "-m" || token == "--mode" {
-            expectMode = true
-            continue
-        }
-        if token.hasPrefix("--mode=") {
-            continue
-        }
-        if mkdirSkipLong.contains(token) {
-            continue
-        }
-        if let letters = clusteredShorts(token) {
-            var valid = true
-            for letter in letters {
-                switch letter {
-                case "p", "v":
-                    continue
-                case "m":
-                    expectMode = true
-                default:
-                    valid = false
-                }
-            }
-            if valid == false { return nil }
-            continue
-        }
-        if token.hasPrefix("-") { return nil }
-        paths.append(token)
     }
-    if expectMode { return nil }
+    paths += rest
     guard paths.isEmpty == false else { return nil }
     return ParsedFilesystemCommand(
         operation: .create,
@@ -192,41 +129,32 @@ func parseMkdir(_ args: [String]) -> ParsedFilesystemCommand? {
     )
 }
 
+func parseMkdir(_ args: [String]) -> ParsedFilesystemCommand? {
+    parseMkdir(Argv(program: "mkdir", args: args))
+}
+
 private let mkdirSkipLong: Set<String> = [
     "--parents", "--verbose", "--help", "--version",
 ]
 
-func parseCat(_ args: [String]) -> ParsedFilesystemCommand? {
+private let mkdirShorts: Set<Character> = ["p", "v", "m"]
+
+func parseCat(_ argv: Argv) -> ParsedFilesystemCommand? {
+    let (flags, rest) = splitFlagTerminator(ShellPipeline.scanFlags(argv))
     var paths: [String] = []
-    var seenDash = false
-    for token in args {
-        if seenDash {
-            paths.append(token)
+    for event in flags {
+        switch event {
+        case .positional(let word):
+            paths.append(word)
+        case .long(let name, nil) where catSkipLong.contains("--" + name):
             continue
-        }
-        if token == "--" {
-            seenDash = true
+        case .shorts(let letters, _) where letters.allSatisfy(catShorts.contains):
             continue
+        default:
+            return nil
         }
-        if catSkipLong.contains(token) {
-            continue
-        }
-        if let letters = clusteredShorts(token) {
-            var valid = true
-            for letter in letters {
-                switch letter {
-                case "A", "b", "E", "e", "n", "s", "T", "t", "u", "v":
-                    continue
-                default:
-                    valid = false
-                }
-            }
-            if valid == false { return nil }
-            continue
-        }
-        if token.hasPrefix("-") { return nil }
-        paths.append(token)
     }
+    paths += rest
     guard paths.isEmpty == false else { return nil }
     return ParsedFilesystemCommand(
         operation: .read,
@@ -237,13 +165,19 @@ func parseCat(_ args: [String]) -> ParsedFilesystemCommand? {
     )
 }
 
+func parseCat(_ args: [String]) -> ParsedFilesystemCommand? {
+    parseCat(Argv(program: "cat", args: args))
+}
+
 private let catSkipLong: Set<String> = [
     "--show-all", "--number-nonblank", "--show-ends", "--number",
     "--squeeze-blank", "--show-tabs", "--show-nonprinting", "--help", "--version",
 ]
 
-func parseRedirectOnly(_ tokens: [String]) -> ParsedFilesystemCommand? {
-    guard let targets = redirectTargets(tokens), targets.isEmpty == false else {
+private let catShorts: Set<Character> = ["A", "b", "E", "e", "n", "s", "T", "t", "u", "v"]
+
+func parseRedirectOnly(_ argv: Argv) -> ParsedFilesystemCommand? {
+    guard let targets = redirectTargets(argv.fullCommand), targets.isEmpty == false else {
         return nil
     }
     return ParsedFilesystemCommand(
@@ -255,32 +189,38 @@ func parseRedirectOnly(_ tokens: [String]) -> ParsedFilesystemCommand? {
     )
 }
 
+func parseRedirectOnly(_ tokens: [String]) -> ParsedFilesystemCommand? {
+    guard let first = tokens.first else { return nil }
+    return parseRedirectOnly(Argv(program: first, args: Array(tokens.dropFirst())))
+}
+
 private func redirectTargets(_ tokens: [String]) -> [String]? {
     var targets: [String] = []
-    var index = 0
-    while index < tokens.count {
+    var skipNext = false
+    for index in tokens.indices {
+        if skipNext {
+            skipNext = false
+            continue
+        }
         let token = tokens[index]
         if isFdDup(token) {
-            index += 1
             continue
         }
         if isRedirectOperator(token) {
             guard index + 1 < tokens.count else { return nil }
+            skipNext = true
             let dest = tokens[index + 1]
             if dest.hasPrefix("&") {
-                index += 2
                 continue
             }
             if isDynamicToken(dest) { return nil }
             targets.append(dest)
-            index += 2
             continue
         }
         if let attached = attachedRedirectTarget(token) {
             if isDynamicToken(attached) { return nil }
             targets.append(attached)
         }
-        index += 1
     }
     return targets
 }
