@@ -1,30 +1,28 @@
 import RVDomain
 
-func parsePush(_ args: [String], context: GitAnalysisContext) -> GitAction? {
+// MARK: - Total Argv parsers (C1 T3b2)
+//
+// push/branch/tag/stash scan `Argv` through the shared flag grammar
+// (`ShellPipeline.scanFlags`). rebase classifies each word with `FlagToken`
+// plus one pending flag: legacy rejects attached `--onto=x` while consuming
+// a bare `--onto` value verbatim, a distinction the value-merging scan
+// cannot express. Parsed `GitAction` output is unchanged, including the
+// dead skip entries (`-4`/`-6`, `-l`) that legacy rejects via its
+// cluster-first ordering.
+
+func parsePush(_ argv: Argv, context: GitAnalysisContext) -> GitAction? {
     var force = GitPushForce.none
     var delete = false
     var positionals: [String] = []
-    var index = 0
-    while index < args.count {
-        let token = args[index]
-        if token == "--force" {
+    for token in ShellPipeline.scanFlags(argv, values: pushFlagValues) {
+        switch token {
+        case .long("force", nil):
             force = .force
-            index += 1
-            continue
-        }
-        if token == "--force-with-lease" || token.hasPrefix("--force-with-lease=")
-            || token == "--force-if-includes"
-        {
+        case .long("force-with-lease", _), .long("force-if-includes", nil):
             if force != .force { force = .forceWithLease }
-            index += 1
-            continue
-        }
-        if token == "--delete" || token == "-d" {
+        case .long("delete", nil):
             delete = true
-            index += 1
-            continue
-        }
-        if let letters = clusteredShorts(token) {
+        case .shorts(let letters, _):
             for letter in letters {
                 switch letter {
                 case "f":
@@ -32,30 +30,20 @@ func parsePush(_ args: [String], context: GitAnalysisContext) -> GitAction? {
                 case "d":
                     delete = true
                 case "u", "q", "v", "n":
-                    continue
+                    break
                 default:
                     return nil
                 }
             }
-            index += 1
-            continue
+        case .long("repo", _):
+            break
+        case .long(let flag, nil) where pushSkipLongs.contains(flag):
+            break
+        case .positional(let word):
+            positionals.append(word)
+        default:
+            return nil
         }
-        if pushSkipFlags.contains(token) {
-            index += 1
-            continue
-        }
-        if token == "--repo" || token.hasPrefix("--repo=") {
-            if token == "--repo" {
-                guard index + 1 < args.count else { return nil }
-                index += 2
-            } else {
-                index += 1
-            }
-            continue
-        }
-        if token.hasPrefix("-") { return nil }
-        positionals.append(token)
-        index += 1
     }
     let remote = positionals.first
     var refspec = positionals.count > 1 ? positionals[1] : context.currentBranch
@@ -72,37 +60,26 @@ func parsePush(_ args: [String], context: GitAnalysisContext) -> GitAction? {
     return .push(remote: remote, refspec: refspec, force: force)
 }
 
-private let pushSkipFlags: Set<String> = [
-    "-u", "--set-upstream", "--all", "--mirror", "--tags", "--follow-tags",
-    "-q", "--quiet", "-v", "--verbose", "-n", "--dry-run", "--prune",
-    "--no-verify", "--verify", "--atomic", "--no-atomic",
-    "--progress", "--no-progress", "--ipv4", "--ipv6", "-4", "-6",
+private let pushFlagValues = FlagValueSpec(valueLongs: ["repo"])
+
+private let pushSkipLongs: Set<String> = [
+    "set-upstream", "all", "mirror", "tags", "follow-tags",
+    "quiet", "verbose", "dry-run", "prune",
+    "no-verify", "verify", "atomic", "no-atomic",
+    "progress", "no-progress", "ipv4", "ipv6",
 ]
 
-func parseBranch(_ args: [String]) -> GitAction? {
+func parseBranch(_ argv: Argv) -> GitAction? {
     var delete = false
     var force = false
     var names: [String] = []
-    var index = 0
-    while index < args.count {
-        let token = args[index]
-        if token == "--delete" || token == "-d" {
+    for token in ShellPipeline.scanFlags(argv) {
+        switch token {
+        case .long("delete", nil):
             delete = true
-            index += 1
-            continue
-        }
-        if token == "-D" {
-            delete = true
+        case .long("force", nil):
             force = true
-            index += 1
-            continue
-        }
-        if token == "--force" || token == "-f" {
-            force = true
-            index += 1
-            continue
-        }
-        if let letters = clusteredShorts(token) {
+        case .shorts(let letters, _):
             for letter in letters {
                 switch letter {
                 case "d":
@@ -113,140 +90,152 @@ func parseBranch(_ args: [String]) -> GitAction? {
                 case "f":
                     force = true
                 case "q", "v", "a", "r", "t":
-                    continue
+                    break
                 default:
                     return nil
                 }
             }
-            index += 1
-            continue
+        case .long(let flag, nil) where branchSkipLongs.contains(flag):
+            break
+        case .positional(let word):
+            names.append(word)
+        default:
+            return nil
         }
-        if branchSkipFlags.contains(token) {
-            index += 1
-            continue
-        }
-        if token.hasPrefix("-") { return nil }
-        names.append(token)
-        index += 1
     }
     guard delete, let name = names.first, names.count == 1 else { return nil }
     return .deleteBranch(name: name, force: force)
 }
 
-private let branchSkipFlags: Set<String> = [
-    "-q", "--quiet", "-v", "--verbose", "-a", "--all", "-r", "--remotes",
-    "--list", "-l", "--track", "--no-track",
+private let branchSkipLongs: Set<String> = [
+    "quiet", "verbose", "all", "remotes",
+    "list", "track", "no-track",
 ]
 
-func parseTag(_ args: [String]) -> GitAction? {
+func parseTag(_ argv: Argv) -> GitAction? {
     var delete = false
     var names: [String] = []
-    var index = 0
-    while index < args.count {
-        let token = args[index]
-        if token == "--delete" || token == "-d" {
+    for token in ShellPipeline.scanFlags(argv) {
+        switch token {
+        case .long("delete", nil):
             delete = true
-            index += 1
-            continue
-        }
-        if let letters = clusteredShorts(token) {
+        case .shorts(let letters, _):
             for letter in letters {
                 switch letter {
                 case "d":
                     delete = true
-                case "l", "n", "f", "a", "s", "u", "m", "F", "e":
-                    return nil
                 default:
                     return nil
                 }
             }
-            index += 1
-            continue
+        case .positional(let word):
+            names.append(word)
+        default:
+            return nil
         }
-        if token.hasPrefix("-") { return nil }
-        names.append(token)
-        index += 1
     }
     guard delete, let name = names.first, names.count == 1 else { return nil }
     return .deleteTag(name: name, remote: nil)
 }
 
-func parseStash(_ args: [String]) -> GitAction? {
+func parseStash(_ argv: Argv) -> GitAction? {
     var verb: GitStashVerb?
-    var index = 0
-    while index < args.count {
-        let token = args[index]
-        if token.hasPrefix("-") {
-            if token == "-m" || token == "--message" {
-                guard index + 1 < args.count else { return nil }
-                index += 2
-                continue
+    for token in ShellPipeline.scanFlags(argv, values: stashFlagValues) {
+        switch token {
+        case .long("message", _):
+            break
+        case .long(let flag, nil) where stashSkipLongs.contains(flag):
+            break
+        case .shorts(let letters, _):
+            guard letters.count == 1, let letter = letters.first else { return nil }
+            switch letter {
+            case "u", "a", "k", "q", "m":
+                break
+            default:
+                return nil
             }
-            if stashSkipFlags.contains(token) || token.hasPrefix("--message=") {
-                index += 1
-                continue
+        case .positional(let word):
+            if verb == nil {
+                guard let parsed = GitStashVerb(rawValue: word) else { return nil }
+                verb = parsed
             }
+        default:
             return nil
         }
-        if verb == nil {
-            guard let parsed = GitStashVerb(rawValue: token) else { return nil }
-            verb = parsed
-            index += 1
-            continue
-        }
-        index += 1
     }
     return .stash(verb: verb ?? .push)
 }
 
-private let stashSkipFlags: Set<String> = [
-    "-u", "--include-untracked", "-a", "--all", "-k", "--keep-index",
-    "-q", "--quiet", "--index",
+private let stashFlagValues = FlagValueSpec(valueShorts: ["m"], valueLongs: ["message"])
+
+private let stashSkipLongs: Set<String> = [
+    "include-untracked", "all", "keep-index", "quiet", "index",
 ]
 
-func parseRebase(_ args: [String]) -> GitAction? {
+func parseRebase(_ argv: Argv) -> GitAction? {
     var verb = GitRebaseVerb.start
     var onto: String?
-    var index = 0
-    while index < args.count {
-        let token = args[index]
-        if token == "--abort" {
+    var pendingOnto = false
+    for word in argv.args {
+        if pendingOnto {
+            onto = word
+            pendingOnto = false
+            continue
+        }
+        switch FlagToken.classify(word) {
+        case .long("abort", nil):
             verb = .abort
-            index += 1
-            continue
-        }
-        if token == "--continue" {
+        case .long("continue", nil):
             verb = .continueRebase
-            index += 1
-            continue
-        }
-        if token == "--skip" {
+        case .long("skip", nil):
             verb = .skip
-            index += 1
-            continue
-        }
-        if token == "--onto" {
-            guard index + 1 < args.count else { return nil }
-            onto = args[index + 1]
-            index += 2
-            continue
-        }
-        if token == "-i" || token == "--interactive" || token == "--edit-todo" {
+        case .long("onto", nil):
+            pendingOnto = true
+        case .long("onto", _):
+            return nil
+        case .long("interactive", _), .long("edit-todo", _):
+            return nil
+        case .shorts(let letters, _):
+            guard letters == ["q"] else { return nil }
+        case .long(let flag, nil) where rebaseSkipLongs.contains(flag):
+            break
+        case .positional(let word):
+            if onto == nil { onto = word }
+        default:
             return nil
         }
-        if rebaseSkipFlags.contains(token) {
-            index += 1
-            continue
-        }
-        if token.hasPrefix("-") { return nil }
-        if onto == nil { onto = token }
-        index += 1
     }
+    if pendingOnto { return nil }
     return .rebase(verb: verb, onto: onto)
 }
 
-private let rebaseSkipFlags: Set<String> = [
-    "-q", "--quiet", "--autostash", "--no-autostash",
-    "--keep-empty", "--rebase-merges", "--no-keep-empty",
-    "--apply", "--merge",
+private let rebaseSkipLongs: Set<String> = [
+    "quiet", "autostash", "no-autostash",
+    "keep-empty", "rebase-merges", "no-keep-empty",
+    "apply", "merge",
 ]
+
+// MARK: - `[String]` adapters
+//
+// `AnalyzeGit` and the existing goldens still thread `[String]`; T4 moves
+// the call sites onto `Argv` and deletes these.
+
+func parsePush(_ args: [String], context: GitAnalysisContext) -> GitAction? {
+    parsePush(Argv(program: "git", args: args), context: context)
+}
+
+func parseBranch(_ args: [String]) -> GitAction? {
+    parseBranch(Argv(program: "git", args: args))
+}
+
+func parseTag(_ args: [String]) -> GitAction? {
+    parseTag(Argv(program: "git", args: args))
+}
+
+func parseStash(_ args: [String]) -> GitAction? {
+    parseStash(Argv(program: "git", args: args))
+}
+
+func parseRebase(_ args: [String]) -> GitAction? {
+    parseRebase(Argv(program: "git", args: args))
+}
