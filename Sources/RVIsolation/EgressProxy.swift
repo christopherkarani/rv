@@ -38,8 +38,10 @@ public final class EgressProxy: @unchecked Sendable {
     private let lock = NSLock()
     private var listenFD: Int32 = -1
     private var running = false
-    private let acceptQueue = DispatchQueue(label: "rv.egress.accept")
-    private let relayQueue = DispatchQueue(label: "rv.egress.relay", attributes: .concurrent)
+    private let acceptQueue = DispatchQueue(label: "rv.egress.accept", qos: .userInitiated)
+    private let relayQueue = DispatchQueue(
+        label: "rv.egress.relay", qos: .userInitiated, attributes: .concurrent
+    )
 
     public init(
         policy: EgressHostPolicy = .agentAPIs,
@@ -121,7 +123,13 @@ public final class EgressProxy: @unchecked Sendable {
         listenFD = -1
         boundPort = 0
         lock.unlock()
-        if fd >= 0 { close(fd) }
+        // shutdown() first: close() alone does not wake the thread blocked
+        // in accept() on Darwin, which would park it (and the listening
+        // socket) for the life of the process.
+        if fd >= 0 {
+            shutdown(fd, Int32(SHUT_RDWR))
+            close(fd)
+        }
     }
 
     deinit {
@@ -138,17 +146,26 @@ public final class EgressProxy: @unchecked Sendable {
         while isRunning() {
             var peer = sockaddr_storage()
             var peerLength = socklen_t(MemoryLayout<sockaddr_storage>.size)
+            var acceptError: Int32 = 0
             let fd: Int32 = withUnsafeMutablePointer(to: &peer) { pointer in
                 pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { address in
                     lock.lock()
                     let listen = listenFD
                     lock.unlock()
                     guard listen >= 0 else { return Int32(-1) }
-                    return accept(listen, address, &peerLength)
+                    let accepted = accept(listen, address, &peerLength)
+                    if accepted < 0 { acceptError = errno }
+                    return accepted
                 }
             }
             guard fd >= 0 else {
-                if isRunning() { usleep(50_000) }
+                if isRunning() {
+                    // Accept failures are abnormal; surface the errno instead
+                    // of spinning silently (under load these would otherwise
+                    // surface only as client-side timeouts).
+                    Self.complain("rv.egress: accept failed errno=\(acceptError)")
+                    usleep(50_000)
+                }
                 continue
             }
             relayQueue.async { [weak self] in self?.serve(client: fd) }
@@ -329,11 +346,18 @@ public final class EgressProxy: @unchecked Sendable {
         bytes.reserveCapacity(4096)
         var buffer = [UInt8](repeating: 0, count: 4096)
         while bytes.count < maximumBytes {
+            var readError: Int32 = 0
             let count = buffer.withUnsafeMutableBytes { pointer -> Int in
                 guard let base = pointer.baseAddress else { return -1 }
-                return recv(fd, base, pointer.count, 0)
+                let received = recv(fd, base, pointer.count, 0)
+                if received < 0 { readError = errno }
+                return received
             }
-            if count <= 0 { return .failure }
+            if count < 0 {
+                if readError == EINTR { continue }
+                return .failure
+            }
+            if count == 0 { return .failure }
             bytes.append(contentsOf: buffer[..<count])
             if let split = splitHeaders(bytes) {
                 return .success(header: split.header, leftover: split.leftover)
@@ -566,6 +590,10 @@ public final class EgressProxy: @unchecked Sendable {
         default:
             return 0
         }
+    }
+
+    private static func complain(_ text: String) {
+        FileHandle.standardError.write(Data((text + "\n").utf8))
     }
 
     private static let denialLogLock = Mutex<Void>(())
