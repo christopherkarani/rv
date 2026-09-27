@@ -167,6 +167,16 @@ private let singleDashWordGoldens: [(word: String, expected: String?)] = [
                 .shorts(letters: ["q", "b"], value: "main")
             ]
         )
+        // Long-form branch takers reject dash-led values the same way.
+        let longSpec = FlagValueSpec(valueLongs: ["branch"], rejectsDashValues: true)
+        #expect(
+            ShellPipeline.scanFlags(
+                Argv(program: "git", args: ["--branch", "-f"]), values: longSpec
+            ) == [
+                .dangling(flag: "--branch"),
+                .shorts(letters: ["f"], value: nil),
+            ]
+        )
     }
 
     @Test func scan_nonValueFlagsPassThrough() {
@@ -219,6 +229,12 @@ private let singleDashWordGoldens: [(word: String, expected: String?)] = [
         #expect(gitAttachedValue("--=x", long: "--") == "x")
         #expect(gitAttachedValue("--branch=main", long: "--branch") == "main")
         #expect(gitAttachedValue("", long: "--source") == nil)
+        // Exact-name match, not prefix: a naive hasPrefix(long) would
+        // accept "--branch=main" for long "--bran"; the grammar form must not.
+        #expect(gitAttachedValue("--branch=main", long: "--bran") == nil)
+        // Narrowed contract: `long` is a bare `--name` form, so a `long`
+        // containing `=` never matches.
+        #expect(gitAttachedValue("--a=b=c", long: "--a=b") == nil)
     }
 }
 
