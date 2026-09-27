@@ -163,15 +163,17 @@ if [[ -z "$FILTERS" ]]; then
   exit 2
 fi
 
+# One invocation: each `swift test --filter` re-plans and re-typechecks the
+# graph, so a dozen filters cost a dozen plannings. The alternation matches
+# the same union the loop ran.
 fail=0
-for filt in $FILTERS; do
-  if [[ "$QUIET" -eq 0 ]]; then
-    printf "gate: Scripts/swift-6.4 test --filter %s\n" "$filt"
-  fi
-  if ! "$SWIFT_WRAP" test --filter "$filt"; then
-    fail=1
-  fi
-done
+FILTER_REGEX="${FILTERS// /|}"
+if [[ "$QUIET" -eq 0 ]]; then
+  printf "gate: Scripts/swift-6.4 test --filter %s\n" "$FILTER_REGEX"
+fi
+if ! "$SWIFT_WRAP" test --filter "$FILTER_REGEX"; then
+  fail=1
+fi
 
 if [[ "$RUN_C_UNITS" -eq 1 ]]; then
   if [[ "$QUIET" -eq 0 ]]; then
