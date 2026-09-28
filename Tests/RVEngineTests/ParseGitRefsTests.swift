@@ -156,6 +156,7 @@ struct ParseGitRefsTests {
         #expect(parseRebase(["--interactive"]) == nil)
         #expect(parseRebase(["--edit-todo"]) == nil)
         #expect(parseRebase(["--onto"]) == nil)
+        #expect(parseRebase(["--onto=x"]) == nil)
         #expect(parseRebase(["--unknown"]) == nil)
     }
 

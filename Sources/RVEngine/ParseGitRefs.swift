@@ -10,6 +10,7 @@ import RVDomain
 // dead skip entries (`-4`/`-6`, `-l`) that legacy rejects via its
 // cluster-first ordering.
 
+/// Parses `git push` argv into a push (or remote-ref delete) action.
 func parsePush(_ argv: Argv, context: GitAnalysisContext) -> GitAction? {
     var force = GitPushForce.none
     var delete = false
@@ -69,6 +70,7 @@ private let pushSkipLongs: Set<String> = [
     "progress", "no-progress", "ipv4", "ipv6",
 ]
 
+/// Parses `git branch` argv; only the delete form yields an action.
 func parseBranch(_ argv: Argv) -> GitAction? {
     var delete = false
     var force = false
@@ -112,6 +114,7 @@ private let branchSkipLongs: Set<String> = [
     "list", "track", "no-track",
 ]
 
+/// Parses `git tag` argv; only the delete form yields an action.
 func parseTag(_ argv: Argv) -> GitAction? {
     var delete = false
     var names: [String] = []
@@ -138,6 +141,7 @@ func parseTag(_ argv: Argv) -> GitAction? {
     return .deleteTag(name: name, remote: nil)
 }
 
+/// Parses `git stash` argv into a stash-verb action (default `.push`).
 func parseStash(_ argv: Argv) -> GitAction? {
     var verb: GitStashVerb?
     for token in ShellPipeline.scanFlags(argv, values: stashFlagValues) {
@@ -172,6 +176,7 @@ private let stashSkipLongs: Set<String> = [
     "include-untracked", "all", "keep-index", "quiet", "index",
 ]
 
+/// Parses `git rebase` argv; rejects attached `--onto=x` and interactive flags.
 func parseRebase(_ argv: Argv) -> GitAction? {
     var verb = GitRebaseVerb.start
     var onto: String?
@@ -196,7 +201,7 @@ func parseRebase(_ argv: Argv) -> GitAction? {
         case .long("interactive", _), .long("edit-todo", _):
             return nil
         case .shorts(let letters, _):
-            guard letters == ["q"] else { return nil }
+            guard letters.count == 1, letters.first == "q" else { return nil }
         case .long(let flag, nil) where rebaseSkipLongs.contains(flag):
             break
         case .positional(let word):
@@ -220,22 +225,27 @@ private let rebaseSkipLongs: Set<String> = [
 // `AnalyzeGit` and the existing goldens still thread `[String]`; T4 moves
 // the call sites onto `Argv` and deletes these.
 
+@available(*, deprecated, message: "Use the Argv overload; T4 deletes this adapter")
 func parsePush(_ args: [String], context: GitAnalysisContext) -> GitAction? {
     parsePush(Argv(program: "git", args: args), context: context)
 }
 
+@available(*, deprecated, message: "Use the Argv overload; T4 deletes this adapter")
 func parseBranch(_ args: [String]) -> GitAction? {
     parseBranch(Argv(program: "git", args: args))
 }
 
+@available(*, deprecated, message: "Use the Argv overload; T4 deletes this adapter")
 func parseTag(_ args: [String]) -> GitAction? {
     parseTag(Argv(program: "git", args: args))
 }
 
+@available(*, deprecated, message: "Use the Argv overload; T4 deletes this adapter")
 func parseStash(_ args: [String]) -> GitAction? {
     parseStash(Argv(program: "git", args: args))
 }
 
+@available(*, deprecated, message: "Use the Argv overload; T4 deletes this adapter")
 func parseRebase(_ args: [String]) -> GitAction? {
     parseRebase(Argv(program: "git", args: args))
 }

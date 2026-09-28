@@ -46,6 +46,7 @@ struct ParseGitWorktreeTests {
         #expect(parseCheckout(["-b", "a", "b", "c"]) == nil)
         #expect(parseCheckout(["-b", "feature", "--", "file"]) == nil)
         #expect(parseCheckout(["--branch="]) == nil)
+        #expect(parseCheckout(["--orphan=x"]) == nil)
         #expect(parseCheckout(["main"]) == nil)
         #expect(parseCheckout(["-f", "a", "b"]) == nil)
         #expect(parseCheckout([]) == nil)
@@ -73,6 +74,7 @@ struct ParseGitWorktreeTests {
         #expect(parseSwitch(["-c"]) == nil)
         #expect(parseSwitch(["-c", "-f"]) == nil)
         #expect(parseSwitch(["name", "extra"]) == nil)
+        #expect(parseSwitch(["--create=x"]) == nil)
         #expect(parseSwitch([]) == nil)
     }
 
@@ -125,6 +127,7 @@ struct ParseGitWorktreeTests {
         #expect(parseRestore(["-z", "a"]) == nil)
         #expect(parseRestore(["--unknown", "a"]) == nil)
         #expect(parseRestore(["--source"]) == nil)
+        #expect(parseRestore(["--source="]) == nil)
     }
 
     @Test func reset_modesPathspecsAndQuiet() {
@@ -193,6 +196,7 @@ struct ParseGitWorktreeTests {
         #expect(parseClean(["--interactive"]) == nil)
         #expect(parseClean(["-e"]) == nil)
         #expect(parseClean(["--exclude"]) == nil)
+        #expect(parseClean(["--exclude=x"]) == nil)
         #expect(parseClean(["-z"]) == nil)
         #expect(parseClean(["-qxX"]) == .clean(force: false, dryRun: false, directories: false))
         #expect(parseClean(["-fde"]) == nil)
