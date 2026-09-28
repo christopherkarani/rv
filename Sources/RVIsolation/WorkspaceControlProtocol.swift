@@ -2,13 +2,20 @@ import Foundation
 import RVDomain
 
 /// Bounds for the workspace attach protocol. A local client cannot raise them.
+///
+/// Launch arguments fit real developer command lines: a single `sh -c`
+/// script, compiler invocation, or test-runner filter may use up to
+/// `maxArgumentBytes` bytes, and a launch may carry up to `maxArguments`
+/// of them, as long as the whole frame stays within `maxBodyBytes`.
+/// Anything larger fails before send as `requestTooLarge`, never as an
+/// opaque host rejection.
 public enum WorkspaceControlLimits {
     public static let version = 1
     public static let name = "rv.workspace.v1"
-    public static let maxBodyBytes = 16_384
+    public static let maxBodyBytes = 65_536
     public static let maxExecutableBytes = 1_024
-    public static let maxArgumentBytes = 256
-    public static let maxArguments = 16
+    public static let maxArgumentBytes = 8_192
+    public static let maxArguments = 64
     public static let maxRuntimes = 64
     public static let maxProjectBytes = 1_024
     public static let maxErrorBytes = 64
@@ -264,6 +271,14 @@ enum WorkspaceControlCodec {
             return nil
         }
         return data
+    }
+
+    /// Size preflight for a launch, before encode. NUL content is not
+    /// checked here; the host still refuses it as `invalidRequest`.
+    static func launchFits(executable: String, arguments: [String]) -> Bool {
+        executable.utf8.count <= WorkspaceControlLimits.maxExecutableBytes
+            && arguments.count <= WorkspaceControlLimits.maxArguments
+            && arguments.allSatisfy({ $0.utf8.count <= WorkspaceControlLimits.maxArgumentBytes })
     }
 
     static func headerCount(_ header: Data) -> Result<Int, WorkspaceControlCode> {

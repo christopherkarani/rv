@@ -3,53 +3,30 @@ import RVDomain
 import Testing
 @testable import RVIsolation
 
-/// Host-launch edges this suite encodes before production code:
-/// 1. `.pi` / `.claude` + contained plan + `/usr/bin/true` → `hostUnsupported`; no spawn
-/// 2. Observed plan `containedIsolation()` is `.notContained`; launch is not called
-/// 3. Mediated plan `containedIsolation()` is `.notContained`; launch is not called
-/// 4. `.opencode` + contained + `/usr/bin/true` (or `/bin/true`) → established
-///    `.seatbelt`, exit 0
-/// 5. `.opencode` + contained + absolute `touch` inside `ContainmentTree` →
-///    file exists, seatbelt
-/// 6. `.opencode` + contained + `touch` sibling path → seatbelt established,
-///    file absent, exit ≠ 0
-@Suite("HostLaunch")
-struct HostLaunchTests {
-    @Test func launch_nonOpenCode_fails() async throws {
-        let tree = try ContainmentTree()
-        defer { tree.tearDown() }
-        let command = try requireTrueCommand()
-        let plan = try tree.containedPlan()
-        expectHostUnsupported(
-            await launchContainedHostOffPool(host: .pi, command: command, plan: plan)
-        )
-        expectHostUnsupported(
-            await launchContainedHostOffPool(host: .claude, command: command, plan: plan)
-        )
-    }
-
-    @Test func observedPlan_containedIsolation_fails() throws {
-        let tree = try ContainmentTree()
-        defer { tree.tearDown() }
-        #expect(tree.observed.containedIsolation() == .failure(.notContained))
-    }
-
-    @Test func mediatedPlan_containedIsolation_fails() throws {
-        let tree = try ContainmentTree()
-        defer { tree.tearDown() }
-        let workspace = try #require(tree.contained.workspace)
-        let mediated = try ContainmentTree.requirePlan(
-            IsolationCompileRequest(requested: .mediated, workspace: workspace)
-        )
-        #expect(mediated.containedIsolation() == .failure(.notContained))
-    }
-
+/// Executor-internal contained launch edges (`IsolationBackends.applyLaunch`).
+///
+/// This is the `LocalExecutor` / admitted-command door, not an interactive
+/// path: no CLI command reaches it. Interactive launches go through the
+/// workspace host (`WorkspaceHostTests`, `RuntimeTerminalTests`).
+/// 1. Contained + `/usr/bin/true` (or `/bin/true`) → established `.seatbelt`, exit 0
+/// 2. Contained + absolute `touch` inside `ContainmentTree` → file exists, seatbelt
+/// 3. Contained + `touch` sibling path → seatbelt established, file absent, exit ≠ 0
+/// 4. Two contained launches mint distinct runtime sessions, never the hook id
+/// 5. The session record lands before execution with host/backend/workspace
+@Suite("ContainedLaunch")
+struct ContainedLaunchTests {
     @Test func launch_containedTrue_establishes() async throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
         let command = try requireTrueCommand()
         let plan = try tree.containedPlan()
-        switch await launchContainedHostOffPool(host: .opencode, command: command, plan: plan) {
+        switch await IsolationBackends.applyLaunchOffPool(
+            plan.isolationPlan(),
+            command: command,
+            io: .discard,
+            host: .opencode,
+            sessionStore: .production
+        ) {
         case .success(let run):
             #if os(Linux)
             Issue.record("Linux contained launch must be refused, got exit \(run.exitStatus)")
@@ -59,11 +36,11 @@ struct HostLaunchTests {
             #endif
         case .failure(let error):
             #if os(Linux)
-            if case .apply(.containedGuaranteesUnsupported) = error {
-                break
+            if error == .containedGuaranteesUnsupported {
+                return
             }
             #endif
-            recordUnexpectedHostLaunchError(error, expected: "contained true establish")
+            recordUnexpectedApplyError(error, expected: "contained true establish")
         }
     }
 
@@ -73,7 +50,13 @@ struct HostLaunchTests {
         let inside = tree.workspaceURL.appendingPathComponent("inside.txt").path
         let command = try requireTouchCommand(arguments: [inside])
         let plan = try tree.containedPlan()
-        switch await launchContainedHostOffPool(host: .opencode, command: command, plan: plan) {
+        switch await IsolationBackends.applyLaunchOffPool(
+            plan.isolationPlan(),
+            command: command,
+            io: .discard,
+            host: .opencode,
+            sessionStore: .production
+        ) {
         case .success(let run):
             #if os(Linux)
             Issue.record("Linux contained launch must be refused, got exit \(run.exitStatus)")
@@ -84,12 +67,12 @@ struct HostLaunchTests {
             #endif
         case .failure(let error):
             #if os(Linux)
-            if case .apply(.containedGuaranteesUnsupported) = error {
+            if error == .containedGuaranteesUnsupported {
                 #expect(FileManager.default.fileExists(atPath: inside) == false)
-                break
+                return
             }
             #endif
-            recordUnexpectedHostLaunchError(error, expected: "in-workspace touch")
+            recordUnexpectedApplyError(error, expected: "in-workspace touch")
         }
     }
 
@@ -100,7 +83,13 @@ struct HostLaunchTests {
         #expect(FileManager.default.fileExists(atPath: outside) == false)
         let command = try requireTouchCommand(arguments: [outside])
         let plan = try tree.containedPlan()
-        switch await launchContainedHostOffPool(host: .opencode, command: command, plan: plan) {
+        switch await IsolationBackends.applyLaunchOffPool(
+            plan.isolationPlan(),
+            command: command,
+            io: .discard,
+            host: .opencode,
+            sessionStore: .production
+        ) {
         case .success(let run):
             #if os(Linux)
             Issue.record("Linux contained launch must be refused, got exit \(run.exitStatus)")
@@ -111,12 +100,12 @@ struct HostLaunchTests {
             #endif
         case .failure(let error):
             #if os(Linux)
-            if case .apply(.containedGuaranteesUnsupported) = error {
+            if error == .containedGuaranteesUnsupported {
                 #expect(FileManager.default.fileExists(atPath: outside) == false)
-                break
+                return
             }
             #endif
-            recordUnexpectedHostLaunchError(
+            recordUnexpectedApplyError(
                 error,
                 expected: "blocked outside touch with established contained"
             )
@@ -130,15 +119,19 @@ struct HostLaunchTests {
         let command = try requireTrueCommand()
         let plan = try tree.containedPlan()
         let hook = try #require(SessionID(validating: "hook-session-must-not-be-runtime-id"))
-        let firstSession = try await launchContainedHostOffPool(
-            host: .opencode,
+        let firstSession = try await IsolationBackends.applyLaunchOffPool(
+            plan.isolationPlan(),
             command: command,
-            plan: plan
+            io: .discard,
+            host: .opencode,
+            sessionStore: .production
         ).get().session
-        let secondSession = try await launchContainedHostOffPool(
-            host: .opencode,
+        let secondSession = try await IsolationBackends.applyLaunchOffPool(
+            plan.isolationPlan(),
             command: command,
-            plan: plan
+            io: .discard,
+            host: .opencode,
+            sessionStore: .production
         ).get().session
         let first = try #require(firstSession)
         let second = try #require(secondSession)
@@ -178,7 +171,7 @@ struct HostLaunchTests {
     }
 }
 
-private enum HostLaunchFixtureError: Error {
+private enum ContainedLaunchFixtureError: Error {
     case missingTrue
     case missingTouch
 }
@@ -193,7 +186,7 @@ private func requireTrueCommand() throws -> IsolatedCommand {
         }
     }
     Issue.record("neither /usr/bin/true nor /bin/true exists")
-    throw HostLaunchFixtureError.missingTrue
+    throw ContainedLaunchFixtureError.missingTrue
 }
 
 private func requireTouchExecutable() throws -> String {
@@ -201,29 +194,12 @@ private func requireTouchExecutable() throws -> String {
         return path
     }
     Issue.record("neither /usr/bin/touch nor /bin/touch exists")
-    throw HostLaunchFixtureError.missingTouch
+    throw ContainedLaunchFixtureError.missingTouch
 }
 
 private func requireTouchCommand(arguments: [String]) throws -> IsolatedCommand {
     let executable = try requireTouchExecutable()
     return try #require(IsolatedCommand(executable: executable, arguments: arguments))
-}
-
-private func expectHostUnsupported(
-    _ result: Result<IsolatedRunResult, HostLaunchError>,
-    sourceLocation: SourceLocation = #_sourceLocation
-) {
-    switch result {
-    case .failure(.hostUnsupported):
-        break
-    case .failure(.apply(let error)):
-        Issue.record(
-            "non-OpenCode contained launch must not apply, got \(error)",
-            sourceLocation: sourceLocation
-        )
-    case .success:
-        Issue.record("non-OpenCode contained launch must not spawn", sourceLocation: sourceLocation)
-    }
 }
 
 private func expectContainedPlatform(
@@ -257,25 +233,12 @@ private func expectContainedPlatform(
         )
     }
     #else
-    Issue.record("first-slice host launch requires Darwin or Linux", sourceLocation: sourceLocation)
+    Issue.record("first-slice contained launch requires Darwin or Linux", sourceLocation: sourceLocation)
     switch established {
     case .observed, .mediated, .seatbelt:
         break
     }
     #endif
-}
-
-private func recordUnexpectedHostLaunchError(
-    _ error: HostLaunchError,
-    expected: String,
-    sourceLocation: SourceLocation = #_sourceLocation
-) {
-    switch error {
-    case .hostUnsupported:
-        Issue.record("expected \(expected), got hostUnsupported", sourceLocation: sourceLocation)
-    case .apply(let apply):
-        recordUnexpectedApplyError(apply, expected: expected, sourceLocation: sourceLocation)
-    }
 }
 
 private func recordUnexpectedApplyError(
@@ -311,7 +274,7 @@ private func recordUnexpectedApplyError(
     case .processSpawnFailed:
         Issue.record("expected \(expected), got processSpawnFailed", sourceLocation: sourceLocation)
     case .commandContainsNUL:
-        Issue.record("unexpected NUL command rejection")
+        Issue.record("unexpected NUL command rejection", sourceLocation: sourceLocation)
     case .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled, .workspaceUnresolved:
         Issue.record(
             "expected \(expected), got commandExecutableMustBeAbsolute",

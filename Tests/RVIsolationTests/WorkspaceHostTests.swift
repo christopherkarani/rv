@@ -411,6 +411,42 @@ struct WorkspaceHostTests {
         #expect(try client.closeWorkspace().get().phase == .closed)
     }
 
+    @Test func rvSpawnedHostDiesOnSIGTERM() throws {
+        let home = try shortDirectory(prefix: "/tmp/rvk")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let workspace = home.appendingPathComponent("ws", isDirectory: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        let rvBinary = try builtProduct("rv")
+        var environment = ProcessInfo.processInfo.environment
+        environment["HOME"] = home.path
+        let start = Process()
+        start.executableURL = rvBinary
+        start.arguments = ["workspace", "start", "--workspace", workspace.path]
+        start.environment = environment
+        try start.run()
+        start.waitUntilExit()
+        #expect(start.terminationStatus == 0)
+        let config = home.appendingPathComponent(".config/rv", isDirectory: true)
+        let endpoint = try #require(waitLive(project: workspace.path, configuration: config, seconds: 60))
+        // `rv` spawns from a Swift cooperative thread with SIGTERM blocked;
+        // the host resets its own mask so kill-based supervision works.
+        let pid = try #require(try hostPID(commandContaining: "rv-workspace-host --workspace \(workspace.path)"))
+        kill(pid, SIGTERM)
+        #expect(waitUntil(seconds: 10) { kill(pid, 0) != 0 })
+        // Crash recovery still reclaims the workspace on the next start.
+        let restart = Process()
+        restart.executableURL = rvBinary
+        restart.arguments = ["workspace", "start", "--workspace", workspace.path]
+        restart.environment = environment
+        try restart.run()
+        restart.waitUntilExit()
+        #expect(restart.terminationStatus == 0)
+        let recovered = try #require(waitLive(project: workspace.path, configuration: config, seconds: 90))
+        #expect(recovered.workspace != endpoint.workspace)
+        let closing = try WorkspaceClient.connect(recovered).get()
+        #expect(try closing.closeWorkspace().get().phase == .closed)
+    }
+
     @Test func simultaneousCreatorsProduceOneOwner() throws {
         let home = try shortDirectory(prefix: "/tmp/rvr")
         defer { try? FileManager.default.removeItem(at: home) }
@@ -640,7 +676,216 @@ struct WorkspaceHostTests {
         #expect(try client.listRuntimes().get().filter(\.terminal).count == 1)
         #expect(client.cancelRuntime(created.runtime).isSuccess)
     }
+
+    @Test func controlLaunchBounds_fitDeveloperCommands() throws {
+        let opened = try TestHost()
+        defer { opened.close() }
+        let client = try WorkspaceClient.connect(opened.server.endpoint).get()
+        defer { _ = client.detach() }
+        // A 300-byte argument crosses the old 256-byte cliff and must execute.
+        let padding = String(repeating: "#", count: 300)
+        let launched = try client.launchRuntime(
+            executable: "/bin/sh",
+            arguments: ["-c", "printf ok > cliff.txt; : '\(padding)'"]
+        ).get()
+        // The command exits at once; the file proves the 300-byte argument
+        // crossed the protocol and executed.
+        #expect(waitFor(opened.tree.workspaceURL.appendingPathComponent("cliff.txt")))
+        // Oversize launches fail before send with a size error, never as an
+        // opaque host rejection, and the host stays usable afterwards.
+        let tooLong = String(repeating: "a", count: WorkspaceControlLimits.maxArgumentBytes + 1)
+        #expect(
+            client.launchRuntime(executable: "/bin/sh", arguments: ["-c", tooLong])
+                == .failure(.requestTooLarge)
+        )
+        let tooMany = Array(repeating: "x", count: WorkspaceControlLimits.maxArguments + 1)
+        #expect(
+            client.launchRuntime(executable: "/bin/sh", arguments: tooMany)
+                == .failure(.requestTooLarge)
+        )
+        let tooBig = Array(
+            repeating: String(
+                repeating: "b",
+                count: WorkspaceControlLimits.maxArgumentBytes
+            ),
+            count: WorkspaceControlLimits.maxArguments
+        )
+        #expect(
+            client.launchRuntime(executable: "/bin/sh", arguments: tooBig)
+                == .failure(.requestTooLarge)
+        )
+        #expect(try client.describe().get().phase == .active)
+        #expect(try client.listRuntimes().get().contains { $0.runtime == launched.runtime })
+    }
+
+    @Test func hostBinaryRunsTheProductionAdmission() throws {
+        let home = try shortDirectory(prefix: "/tmp/rva")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let workspace = home.appendingPathComponent("ws", isDirectory: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        let speaker = try compileAdmissionSpeaker(in: workspace)
+        let hostBinary = try builtProduct("rv-workspace-host")
+        var environment = ProcessInfo.processInfo.environment
+        environment["HOME"] = home.path
+        let host = Process()
+        host.executableURL = hostBinary
+        host.arguments = ["--workspace", workspace.path]
+        host.environment = environment
+        host.standardInput = FileHandle.nullDevice
+        host.standardOutput = FileHandle.nullDevice
+        host.standardError = FileHandle.nullDevice
+        try host.run()
+        defer { terminate(host.processIdentifier) }
+        let config = home.appendingPathComponent(".config/rv", isDirectory: true)
+        let endpoint = try #require(waitLive(project: workspace.path, configuration: config, seconds: 90))
+        let client = try WorkspaceClient.connect(endpoint).get()
+        let reply = workspace.appendingPathComponent("admission-reply")
+        let marker = workspace.appendingPathComponent("admitted-marker")
+        let launched = try client.launchRuntime(
+            executable: speaker.path,
+            arguments: [reply.path],
+            terminalRows: 24,
+            terminalColumns: 80
+        ).get()
+        #expect(launched.terminal)
+        _ = try client.subscribeTerminal(launched.runtime).get()
+        #expect(drainTerminal(client, seconds: 60) == 0)
+        // The live production normalize allowed the in-repo touch and the
+        // contained executor performed it. A failClosed host would answer
+        // evaluationFailed and create nothing.
+        let text = try String(contentsOf: reply, encoding: .utf8)
+        #expect(text.contains("\"status\":\"executed\""))
+        #expect(FileManager.default.fileExists(atPath: marker.path))
+        #expect(try client.closeWorkspace().get().phase == .closed)
+        host.waitUntilExit()
+    }
 }
+
+private func drainTerminal(_ client: WorkspaceClient, seconds: TimeInterval) -> Int32? {
+    let deadline = Date().addingTimeInterval(seconds)
+    while Date() < deadline {
+        switch client.nextTerminalEvent(timeout: 0.5) {
+        case .failure:
+            return nil
+        case .success(.waiting):
+            continue
+        case .success(.event(let event)):
+            if case .exited(let status) = event.body {
+                return status
+            }
+        }
+    }
+    return nil
+}
+
+private func compileAdmissionSpeaker(in workspace: URL) throws -> URL {
+    let file = workspace.appendingPathComponent("admission-speaker.c")
+    let binary = workspace.appendingPathComponent("admission-speaker")
+    try Data(admissionSpeakerSource.utf8).write(to: file)
+    let compile = Process()
+    compile.executableURL = URL(fileURLWithPath: "/usr/bin/clang")
+    compile.arguments = ["-O2", "-o", binary.path, file.path]
+    compile.standardOutput = FileHandle.nullDevice
+    compile.standardError = FileHandle.nullDevice
+    try compile.run()
+    compile.waitUntilExit()
+    try #require(compile.terminationStatus == 0)
+    return binary
+}
+
+/// One deterministic exchange: read the grant, ask for an in-repo touch,
+/// write the raw response to argv[1]. No replay probes and no live network.
+private let admissionSpeakerSource = #"""
+#include <errno.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+
+static int read_full(int fd, void *buffer, size_t count) {
+    unsigned char *bytes = buffer;
+    size_t got = 0;
+    while (got < count) {
+        ssize_t n = read(fd, bytes + got, count - got);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) return -1;
+        got += (size_t)n;
+    }
+    return 0;
+}
+
+static int write_full(int fd, const void *buffer, size_t count) {
+    const unsigned char *bytes = buffer;
+    size_t sent = 0;
+    while (sent < count) {
+        ssize_t n = write(fd, bytes + sent, count - sent);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) return -1;
+        sent += (size_t)n;
+    }
+    return 0;
+}
+
+static int read_frame(int fd, char *body, size_t cap) {
+    unsigned char header[4];
+    if (read_full(fd, header, 4) != 0) return -1;
+    size_t length = ((size_t)header[0] << 24) | ((size_t)header[1] << 16)
+        | ((size_t)header[2] << 8) | (size_t)header[3];
+    if (length == 0 || length + 1 > cap) return -1;
+    if (read_full(fd, body, length) != 0) return -1;
+    body[length] = 0;
+    return (int)length;
+}
+
+static int write_frame(int fd, const char *body) {
+    size_t length = strlen(body);
+    unsigned char header[4] = {
+        (unsigned char)((length >> 24) & 0xff),
+        (unsigned char)((length >> 16) & 0xff),
+        (unsigned char)((length >> 8) & 0xff),
+        (unsigned char)(length & 0xff),
+    };
+    if (write_full(fd, header, 4) != 0) return -1;
+    return write_full(fd, body, length);
+}
+
+static int extract(const char *json, const char *key, char *out, size_t cap) {
+    char pattern[64];
+    snprintf(pattern, sizeof pattern, "\"%s\":\"", key);
+    const char *found = strstr(json, pattern);
+    if (found == NULL) return -1;
+    found += strlen(pattern);
+    size_t used = 0;
+    while (found[used] != 0 && found[used] != '"' && used + 1 < cap) {
+        out[used] = found[used];
+        used++;
+    }
+    if (found[used] != '"') return -1;
+    out[used] = 0;
+    return 0;
+}
+
+int main(int argc, char **argv) {
+    if (argc != 2) return 2;
+    char grant[8192];
+    if (read_frame(5, grant, sizeof grant) < 0) return 3;
+    char capability[80];
+    char session[80];
+    if (extract(grant, "capability", capability, sizeof capability) != 0) return 4;
+    if (extract(grant, "session", session, sizeof session) != 0) return 4;
+    FILE *reply = fopen(argv[1], "w");
+    if (reply == NULL) return 5;
+    char body[1024];
+    snprintf(body, sizeof body,
+        "{\"v\":1,\"id\":\"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa\",\"capability\":\"%s\",\"session\":\"%s\",\"command\":\"touch admitted-marker\"}",
+        capability, session);
+    if (write_frame(4, body) != 0) return 6;
+    char incoming[8192];
+    if (read_frame(5, incoming, sizeof incoming) < 0) return 7;
+    if (fprintf(reply, "%s\n", incoming) < 0) return 8;
+    fclose(reply);
+    return 0;
+}
+"""#
 
 private final class WatchBox: Sendable {
     private let box = Mutex<Result<WorkspaceDescription, WorkspaceClientFailure>?>(nil)
@@ -697,7 +942,8 @@ private struct TestHost {
         server = try WorkspaceHostServer.start(
             supervisor: supervisor,
             configurationDirectory: config,
-            sessionStore: .file(runtime)
+            sessionStore: .file(runtime),
+            admission: .failClosed
         ).get()
     }
 
@@ -773,6 +1019,22 @@ private func terminate(_ pid: pid_t) {
     kill(pid, SIGKILL)
     var status: Int32 = 0
     _ = waitpid(pid, &status, WNOHANG)
+}
+
+private func hostPID(commandContaining pattern: String) throws -> pid_t? {
+    let pgrep = Process()
+    pgrep.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+    pgrep.arguments = ["-f", pattern]
+    let out = Pipe()
+    pgrep.standardOutput = out
+    pgrep.standardError = FileHandle.nullDevice
+    try pgrep.run()
+    pgrep.waitUntilExit()
+    let text = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+    let pids = text.split(separator: "\n").compactMap {
+        pid_t($0.trimmingCharacters(in: .whitespaces))
+    }
+    return pids.count == 1 ? pids[0] : nil
 }
 
 private func writeAll(fd: Int32, data: Data) -> Bool {

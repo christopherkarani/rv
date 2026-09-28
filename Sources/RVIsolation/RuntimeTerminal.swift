@@ -13,10 +13,12 @@ enum TerminalOpenFault: Equatable, Sendable {
 }
 
 /// Test-only launch failures. Production leaves every flag clear.
+/// Spawn and registration faults are request-scoped (`RuntimeSpawnFault`):
+/// a global flag would fail parallel sibling launches that share this
+/// process. Only the synchronous PTY-open fault stays global; its window
+/// is a single `RuntimeTerminal.open` call.
 enum TerminalTestInjection {
     static let openFault = Mutex<TerminalOpenFault?>(nil)
-    static let failSpawn = Mutex(false)
-    static let failRegistration = Mutex(false)
 }
 
 /// One notice the single PTY reader fans out. Bytes are unmodified master output.

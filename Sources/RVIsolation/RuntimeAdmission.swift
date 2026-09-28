@@ -133,6 +133,8 @@ struct AdmittedLaunchContext: Sendable, Equatable {
     /// Process that owns this runtime. `-1` when the caller is not a session.
     /// An admitted command stops if this process has exited.
     var sessionLeader: pid_t = -1
+    /// Workspace egress proxy port, when the owning runtime has one.
+    var egressProxyPort: Int? = nil
 }
 
 /// One runtime's admission state.

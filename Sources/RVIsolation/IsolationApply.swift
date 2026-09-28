@@ -93,7 +93,7 @@ public struct IsolatedCommand: Sendable, Equatable {
     }
 }
 
-/// Where a PTY launch is forced to fail. Production leaves this unset.
+/// Where a test launch is forced to fail. Production leaves this unset.
 enum RuntimeSpawnFault: Equatable, Sendable {
     case openpt
     case grant
@@ -309,7 +309,10 @@ public struct IsolationBackend: Sendable {
     }
 }
 
-public enum IsolationBackends {
+/// Executor-internal backend doors. `LocalExecutor` and tests only.
+/// Interactive commands attach to the workspace host through
+/// `WorkspaceClient` and never call these.
+enum IsolationBackends {
     static let sandboxExecPath = "/usr/bin/sandbox-exec"
     static let isolationExecName = "rv-isolation-exec"
     /// Trampoline reserved exit: apply failed, inner was not exec'd.
@@ -317,7 +320,7 @@ public enum IsolationBackends {
     /// Trampoline reserved exit: Landlock applied, then `execve` failed.
     static let isolationExecExecFailedExit: Int32 = 126
 
-    public static func seatbelt() -> IsolationBackend {
+    static func seatbelt() -> IsolationBackend {
         IsolationBackend(
             family: .seatbelt,
             prepare: prepareSeatbelt,
@@ -325,7 +328,7 @@ public enum IsolationBackends {
         )
     }
 
-    public static func unavailable() -> IsolationBackend {
+    static func unavailable() -> IsolationBackend {
         IsolationBackend(
             family: .none,
             prepare: prepareUnavailable,
@@ -333,7 +336,7 @@ public enum IsolationBackends {
         )
     }
 
-    public static func platform() -> IsolationBackend {
+    static func platform() -> IsolationBackend {
         #if os(macOS)
         seatbelt()
         #elseif os(Linux)
@@ -343,11 +346,13 @@ public enum IsolationBackends {
         #endif
     }
 
-    /// Production door. Observed / mediated always establish family `.none`
-    /// without a sandbox helper. Contained uses `platform()` (Seatbelt on
-    /// macOS, Landlock on Linux) and fails closed when that backend cannot
-    /// establish it. `IsolationPlan.mode` is unchanged.
-    public static func apply(
+    /// Executor-internal door. Observed / mediated always establish family
+    /// `.none` without a sandbox helper. Contained uses `platform()`
+    /// (Seatbelt on macOS, Landlock on Linux) and fails closed when that
+    /// backend cannot establish it. `IsolationPlan.mode` is unchanged.
+    /// `LocalExecutor` and tests only; interactive commands go through the
+    /// workspace host.
+    static func apply(
         _ plan: IsolationPlan,
         command: IsolatedCommand,
         io: IsolatedIO = .discard,
@@ -398,7 +403,7 @@ public enum IsolationBackends {
     }
 
     /// Same door as `apply`, off the cooperative pool.
-    public static func applyOffPool(
+    static func applyOffPool(
         _ plan: IsolationPlan,
         command: IsolatedCommand,
         io: IsolatedIO = .discard,
@@ -461,7 +466,9 @@ func prepareSeatbelt(
         case .success(let compiled):
             var profile = compiled.allowingExecutable(command.executable)
                 .allowingLoopbackEgress()
-            if let agentBin = AgentBin.installedDirectory(),
+                .allowingLoopbackBind()
+            let agentBin = AgentBin.installedDirectory()
+            if let agentBin,
                 let home = ProcessInfo.processInfo.environment["HOME"]
             {
                 profile = profile.allowingAgentBin(AgentBin.resolve(binDirectory: agentBin, home: home))
@@ -482,6 +489,9 @@ func prepareSeatbelt(
                 case .success:
                     break
                 }
+                profile = profile.allowingProductiveWorkspace(
+                    resolveProductiveWorkspace(workspacePath: resolved, agentBin: agentBin)
+                )
             }
             guard
                 let request = IsolatedLaunchRequest(

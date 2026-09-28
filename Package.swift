@@ -192,7 +192,7 @@ let serviceLibraryAndDaemon: [Target] = [
     ),
     .executableTarget(
         name: "rv-workspace-host",
-        dependencies: ["RVIsolation"]
+        dependencies: ["RVIsolation", "RVEngine"]
     ),
 ]
 let serviceProducts: [Product] = [

@@ -1,21 +1,36 @@
 /// CONNECT policy for the filtering egress proxy.
 ///
 /// Contained processes reach only loopback sockets (seatbelt `localhost`
-/// rule). Agent runtimes talk to a loopback proxy that dials only
-/// allowlisted HTTPS destinations and resolves names itself; clients never
-/// supply IPs. Matching is exact hostname only in v1: no subdomain
-/// wildcards, no IP literals, no userinfo, port 443 only. Everything else
-/// fails closed. Loopback targets are not egress and are admitted
-/// separately so local gateways and loopback MCP servers keep working.
+/// rule). Runtimes talk to a loopback proxy that dials external
+/// destinations and resolves names itself; clients never supply IPs.
+/// External names must be valid multi-label DNS names (no IP literals, no
+/// userinfo), and the proxy dials only addresses that pass the
+/// public-unicast filter — loopback, private, link-local (including the
+/// cloud metadata endpoint), multicast, and reserved ranges never relay,
+/// so DNS rebinding buys no lateral capability. Loopback targets are not
+/// egress and are admitted separately so local gateways and loopback
+/// servers keep working.
 public struct EgressHostPolicy: Sendable, Equatable {
     public static let httpsPort = 443
+    public static let httpPort = 80
+
+    /// How external (non-loopback) destinations are admitted.
+    public enum ExternalMode: Sendable, Equatable {
+        /// Exact-host allowlist on one port. Legacy narrow mode.
+        case allowlist
+        /// Ordinary public development traffic: any valid public DNS name
+        /// on the web ports, subject to the proxy's public-unicast dial
+        /// filter. No per-host RV patch when a registry, forge, or agent
+        /// provider uses another hostname.
+        case publicHTTPS
+    }
 
     /// Agent API defaults, each observed from a real agent run: claude and
     /// codex via api.anthropic.com / api.openai.com, ChatGPT-plan codex via
     /// chatgpt.com (backend) and auth.openai.com (OAuth refresh), muse via
     /// api.meta.ai with OAuth at auth.meta.com, opencode via opencode.ai
-    /// with its model catalog at models.opencode.ai. Other providers arrive
-    /// with user-configured lists later.
+    /// with its model catalog at models.opencode.ai. Narrow legacy mode;
+    /// Standard workspaces use `publicHTTPS`.
     public static let agentAPIs = EgressHostPolicy(
         allowedHosts: [
             "api.anthropic.com", "api.openai.com", "chatgpt.com",
@@ -24,18 +39,36 @@ public struct EgressHostPolicy: Sendable, Equatable {
         ]
     )
 
+    /// Standard-workspace default: generic public web egress.
+    public static let publicHTTPS = EgressHostPolicy(
+        allowedHosts: [],
+        mode: .publicHTTPS
+    )
+
     public var allowedHosts: Set<String>
     public var allowedPort: Int
+    public var mode: ExternalMode
 
-    public init(allowedHosts: Set<String>, allowedPort: Int = httpsPort) {
+    public init(
+        allowedHosts: Set<String>,
+        allowedPort: Int = httpsPort,
+        mode: ExternalMode = .allowlist
+    ) {
         self.allowedHosts = allowedHosts
         self.allowedPort = allowedPort
+        self.mode = mode
     }
 
     public func allows(host: String, port: Int) -> Bool {
-        guard port == allowedPort else { return false }
-        guard let name = canonicalEgressDNSName(host) else { return false }
-        return allowedHosts.contains(name)
+        switch mode {
+        case .allowlist:
+            guard port == allowedPort else { return false }
+            guard let name = canonicalEgressDNSName(host) else { return false }
+            return allowedHosts.contains(name)
+        case .publicHTTPS:
+            guard port == Self.httpsPort || port == Self.httpPort else { return false }
+            return canonicalEgressDNSName(host) != nil
+        }
     }
 
     /// Loopback CONNECT targets on any port. The cage reaches loopback

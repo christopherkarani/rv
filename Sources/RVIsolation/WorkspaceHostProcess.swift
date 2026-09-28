@@ -7,7 +7,10 @@ import RVDomain
 /// own a workspace volume, owner lock, or runtime process group. A workspace
 /// host is a separate process whose lifetime is one `WorkspaceSession`.
 public enum WorkspaceHostProcess {
-    public static func run(workspace: String) -> Int32 {
+    public static func run(
+        workspace: String,
+        admission: RuntimeAdmissionConfiguration
+    ) -> Int32 {
         guard workspace.contains("\0") == false,
             let directory = WorkingDirectory(validating: workspace),
             let configuration = WorkspaceHostLocation.configurationDirectory()
@@ -26,7 +29,8 @@ public enum WorkspaceHostProcess {
         switch WorkspaceHostServer.start(
             supervisor: supervisor,
             configurationDirectory: configuration,
-            sessionStore: .file(runtime)
+            sessionStore: .file(runtime),
+            admission: admission
         ) {
         case .failure:
             _ = supervisor.close()
@@ -158,8 +162,21 @@ public enum WorkspaceHosts {
             case .live(let endpoint):
                 switch WorkspaceClient.connect(endpoint) {
                 case .success(let client):
+                    // A live endpoint with a closing workspace is not
+                    // usable. Keep polling: the close retires the endpoint
+                    // and this loop then starts (or attaches to) the next
+                    // host. No new sleep; this is the existing poll loop.
+                    let usable: Bool
+                    switch client.describe() {
+                    case .success(let description):
+                        usable = description.phase == .active
+                    case .failure:
+                        usable = false
+                    }
                     _ = client.detach()
-                    return .success(endpoint)
+                    if usable {
+                        return .success(endpoint)
+                    }
                 case .failure:
                     break
                 }

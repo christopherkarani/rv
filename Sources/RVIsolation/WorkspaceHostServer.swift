@@ -113,6 +113,7 @@ final class WorkspaceHostServer: Sendable {
     private let hostID: WorkspaceHostID
     private let credential: WorkspaceOwnerCredential
     private let sessionStore: RuntimeSessionStore
+    private let admission: RuntimeAdmissionConfiguration
     private let listenFD: Int32
     private let endpointFile: URL
     private let socketDirectory: String
@@ -134,6 +135,7 @@ final class WorkspaceHostServer: Sendable {
         credential: WorkspaceOwnerCredential,
         endpoint: WorkspaceEndpoint,
         sessionStore: RuntimeSessionStore,
+        admission: RuntimeAdmissionConfiguration,
         listenFD: Int32,
         endpointFile: URL,
         socketDirectory: String,
@@ -144,6 +146,7 @@ final class WorkspaceHostServer: Sendable {
         self.credential = credential
         self.endpoint = endpoint
         self.sessionStore = sessionStore
+        self.admission = admission
         self.listenFD = listenFD
         self.endpointFile = endpointFile
         self.socketDirectory = socketDirectory
@@ -153,7 +156,8 @@ final class WorkspaceHostServer: Sendable {
     static func start(
         supervisor: WorkspaceSessionSupervisor,
         configurationDirectory: URL,
-        sessionStore: RuntimeSessionStore
+        sessionStore: RuntimeSessionStore,
+        admission: RuntimeAdmissionConfiguration
     ) -> Result<WorkspaceHostServer, WorkspaceHostFailure> {
         guard let credential = supervisor.ownerCredential() else {
             return .failure(.endpointUnavailable)
@@ -216,6 +220,7 @@ final class WorkspaceHostServer: Sendable {
             credential: credential,
             endpoint: record.endpoint(),
             sessionStore: sessionStore,
+            admission: admission,
             listenFD: listened.0,
             endpointFile: endpointFile,
             socketDirectory: prepared.directory,
@@ -599,7 +604,7 @@ final class WorkspaceHostServer: Sendable {
             command: command,
             plan: plan,
             io: io,
-            admission: .failClosed,
+            admission: admission,
             sessionStore: sessionStore,
             runningLimit: WorkspaceControlLimits.maxRuntimes
         ) {

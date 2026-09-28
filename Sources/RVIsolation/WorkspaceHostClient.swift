@@ -57,6 +57,8 @@ enum LegacyTerminalEnsureLock {
 public enum WorkspaceClientFailure: Error, Sendable, Equatable {
     case disconnected
     case malformed
+    /// The request exceeds the control-protocol bounds. Nothing was sent.
+    case requestTooLarge
     case timedOut
     case incompatibleProtocol
     case unauthorizedClient
@@ -230,6 +232,9 @@ public final class WorkspaceClient: Sendable {
         terminalRows: Int? = nil,
         terminalColumns: Int? = nil
     ) -> Result<WorkspaceRuntimeReport, WorkspaceClientFailure> {
+        guard WorkspaceControlCodec.launchFits(executable: executable, arguments: arguments) else {
+            return .failure(.requestTooLarge)
+        }
         var message = WorkspaceControlRequest(
             operation: .launchRuntime,
             id: UUID(),
@@ -283,6 +288,9 @@ public final class WorkspaceClient: Sendable {
             TerminalStreamLimits.accepts(rows: terminalRows, columns: terminalColumns)
         else {
             return .failure(.invalidRequest)
+        }
+        guard WorkspaceControlCodec.launchFits(executable: executable, arguments: arguments) else {
+            return .failure(.requestTooLarge)
         }
         guard supportsEnsureTerminalRuntime else {
             return ensureTerminalRuntimeOnLegacyHost(
@@ -597,7 +605,9 @@ public final class WorkspaceClient: Sendable {
         timeout: TimeInterval,
         beginStreaming: Bool
     ) -> Result<WorkspaceControlResponse, WorkspaceClientFailure>? {
-        guard let body = message.encode() else { return .failure(.malformed) }
+        // Encode fails only when the frame exceeds `maxBodyBytes`. Nothing
+        // was sent; this is a local size refusal, not a host rejection.
+        guard let body = message.encode() else { return .failure(.requestTooLarge) }
         let requestID = message.id
         return io.withLock { state in
             if events.isStreaming { return nil }
@@ -641,8 +651,13 @@ public final class WorkspaceClient: Sendable {
         _ message: WorkspaceControlRequest,
         timeout: TimeInterval
     ) -> Result<WorkspaceControlResponse, WorkspaceClientFailure> {
-        guard let body = message.encode(), let requestID = message.id else {
+        // Encode fails only when the frame exceeds `maxBodyBytes`. Nothing
+        // was sent; this is a local size refusal, not a host rejection.
+        guard let requestID = message.id else {
             return .failure(.malformed)
+        }
+        guard let body = message.encode() else {
+            return .failure(.requestTooLarge)
         }
         let waiter = ReplyWaiter()
         if events.register(requestID, waiter: waiter) == false {

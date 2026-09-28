@@ -385,6 +385,46 @@ struct RuntimeTerminalTests {
         #expect(FileManager.default.fileExists(atPath: deny.path) == false)
     }
 
+    @Test func hookAndBareLaunchesShareTheCageEnvironment() throws {
+        // `workspace run` launches without a hook; the `rv opencode`
+        // frontend launches with `.opencode`. Both must observe the
+        // identical security/productivity environment from the same host.
+        let opened = try PTYHost()
+        defer { opened.close() }
+        let first = try WorkspaceClient.connect(opened.server.endpoint).get()
+        defer { _ = first.detach() }
+        let second = try WorkspaceClient.connect(opened.server.endpoint).get()
+        defer { _ = second.detach() }
+        let bare = try first.launchRuntime(
+            executable: "/usr/bin/env",
+            terminalRows: 24,
+            terminalColumns: 80
+        ).get()
+        let hooked = try second.launchRuntime(
+            executable: "/usr/bin/env",
+            hookHost: .opencode,
+            terminalRows: 24,
+            terminalColumns: 80
+        ).get()
+        _ = try first.subscribeTerminal(bare.runtime).get()
+        _ = try second.subscribeTerminal(hooked.runtime).get()
+        let bareEvents = readEvents(first, seconds: 60)
+        let hookedEvents = readEvents(second, seconds: 60)
+        #expect(bareEvents.contains { $0.body == .exited(0) })
+        #expect(hookedEvents.contains { $0.body == .exited(0) })
+        let bareEnvironment = terminalEnvironmentLines(terminalBytes(bareEvents))
+        let hookedEnvironment = terminalEnvironmentLines(terminalBytes(hookedEvents))
+        #expect(bareEnvironment.isEmpty == false)
+        #expect(bareEnvironment == hookedEnvironment)
+        // The shared cage is really a cage: the managed home is not the
+        // host home, and the proxy route is present.
+        let hostHome = FileManager.default.homeDirectoryForCurrentUser.path
+        let home = bareEnvironment.first { $0.hasPrefix("HOME=") }
+        #expect(home != nil && home != "HOME=\(hostHome)")
+        #expect(bareEnvironment.contains { $0.hasPrefix("PATH=") })
+        #expect(bareEnvironment.contains { $0.hasPrefix("HTTPS_PROXY=http://127.0.0.1:") })
+    }
+
     @Test func containedSessionSurvivesSetsIDAndDoubleForkUntilCancel() throws {
         let opened = try PTYHost()
         defer { opened.close() }
@@ -714,30 +754,30 @@ struct RuntimeTerminalTests {
         let plan = compileContainedPlan(workspace: opened.supervisor.snapshot.policyWorkspace)
         let log = opened.tree.rootURL.appendingPathComponent("fault.jsonl")
         let before = ttyPaths()
-        TerminalTestInjection.failSpawn.withLock { $0 = true }
+        // Request-scoped faults: sibling suites launch in parallel in this
+        // process, so a global flag would fail their launches too.
         let spawned = opened.supervisor.launch(
             host: nil,
             command: command,
             plan: plan,
             io: .pseudoTerminal(rows: 24, columns: 80),
             admission: .failClosed,
-            sessionStore: .file(log)
+            sessionStore: .file(log),
+            spawnFault: .spawn
         )
-        TerminalTestInjection.failSpawn.withLock { $0 = false }
         guard case .failure(.apply(.processSpawnFailed)) = spawned else {
             Issue.record("spawn fault must fail before the agent, got \(spawned)")
             return
         }
-        TerminalTestInjection.failRegistration.withLock { $0 = true }
         let registered = opened.supervisor.launch(
             host: nil,
             command: command,
             plan: plan,
             io: .pseudoTerminal(rows: 24, columns: 80),
             admission: .failClosed,
-            sessionStore: .file(log)
+            sessionStore: .file(log),
+            spawnFault: .register
         )
-        TerminalTestInjection.failRegistration.withLock { $0 = false }
         guard case .failure(.apply(.lifetimeBoundaryFailed)) = registered else {
             Issue.record("registration fault must not report a running runtime, got \(registered)")
             return
@@ -1448,6 +1488,15 @@ private func readUntil(_ client: WorkspaceClient, contains needle: Data, seconds
     return data
 }
 
+private func terminalEnvironmentLines(_ data: Data) -> [String] {
+    (String(data: data, encoding: .utf8) ?? "")
+        .replacingOccurrences(of: "\r", with: "")
+        .split(separator: "\n")
+        .map { $0.trimmingCharacters(in: .whitespaces) }
+        .filter { $0.contains("=") }
+        .sorted()
+}
+
 private func terminalBytes(_ events: [WorkspaceTerminalEvent]) -> Data {
     events.reduce(into: Data()) { partial, event in
         switch event.body {
@@ -1486,7 +1535,8 @@ private struct PTYHost {
         server = try WorkspaceHostServer.start(
             supervisor: supervisor,
             configurationDirectory: config,
-            sessionStore: .file(runtime)
+            sessionStore: .file(runtime),
+            admission: .failClosed
         ).get()
     }
 
