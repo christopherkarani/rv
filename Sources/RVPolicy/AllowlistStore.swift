@@ -1,5 +1,6 @@
 import Foundation
 import RVDomain
+import RVFileStore
 
 public enum AllowlistStoreError: Error, Sendable, Equatable {
     case lockFailed

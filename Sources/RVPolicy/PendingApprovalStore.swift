@@ -5,6 +5,7 @@ import Glibc
 #endif
 import Foundation
 import RVDomain
+import RVFileStore
 
 /// Durable pending-approval source of truth. Survives process restart.
 public actor PendingApprovalStore: PendingApprovalCoordinating {

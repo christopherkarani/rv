@@ -9,6 +9,7 @@ let extraPackageDependencies: [Package.Dependency] = [
 ]
 let policyTargetDependencies: [Target.Dependency] = [
     "RVDomain",
+    "RVFileStore",
     .product(name: "Crypto", package: "swift-crypto"),
 ]
 // Official Linux tarball has no SQLite3 clang module. OpenCode talks system
@@ -20,6 +21,7 @@ let scanLinkerSettings: [LinkerSetting] = [
 let extraPackageDependencies: [Package.Dependency] = []
 let policyTargetDependencies: [Target.Dependency] = [
     "RVDomain",
+    "RVFileStore",
 ]
 let scanLinkerSettings: [LinkerSetting] = []
 #endif
@@ -65,6 +67,7 @@ let terminalProbeTargets: [Target] = []
 
 let coreLibraryTargets: [Target] = [
     .target(name: "RVDomain"),
+    .target(name: "RVFileStore"),
     .target(
         name: "RVIsolation",
         dependencies: ["RVDomain"],
@@ -114,6 +117,7 @@ let coreLibraryTargets: [Target] = [
 
 let coreProducts: [Product] = [
     .library(name: "RVDomain", targets: ["RVDomain"]),
+    .library(name: "RVFileStore", targets: ["RVFileStore"]),
     .library(name: "RVIsolation", targets: ["RVIsolation"]),
     .library(name: "RVEngine", targets: ["RVEngine"]),
     .library(name: "RVPacks", targets: ["RVPacks"]),
@@ -131,6 +135,7 @@ let coreProducts: [Product] = [
 
 let coreTestTargets: [Target] = [
     .testTarget(name: "RVDomainTests", dependencies: ["RVDomain"]),
+    .testTarget(name: "RVFileStoreTests", dependencies: ["RVFileStore"]),
     .testTarget(name: "RVIsolationTests", dependencies: isolationTestDependencies),
     .testTarget(
         name: "RVEngineTests",
