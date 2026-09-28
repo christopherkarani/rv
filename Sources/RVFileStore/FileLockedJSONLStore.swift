@@ -89,6 +89,7 @@ public struct FileLockedJSONLStore<Record: Codable & Sendable>: Sendable {
     ///
     /// Takes no lock: callers must hold `withLock` across load-modify-save.
     /// Concurrent saves without the lock race on the shared `<file>.tmp`.
+    /// Full-file rewrite per call: sized for small rule stores, not append-heavy logs.
     public func save(_ records: [Record]) throws {
         try prepareDirectory()
         let encoder = JSONEncoder()
