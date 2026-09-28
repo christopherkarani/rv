@@ -72,7 +72,12 @@ struct RuntimeResourcePolicyStoreTests {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-resources-policy-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        // The store rejects group-writable directories; under umask 002 the
+        // default directory mode is 0775, which must not fail this test.
+        try FileManager.default.createDirectory(
+            at: root, withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
         let file = RVPolicyPaths.runtimeResourcesFile(inConfigDir: root)
         let data = try JSONEncoder().encode(RuntimeResourcePolicy(profiles: [
             RuntimeResourceProfile(id: "profile-a", projects: ["/tmp/project"]),

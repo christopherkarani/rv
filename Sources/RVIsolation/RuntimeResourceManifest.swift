@@ -14,7 +14,14 @@ struct RuntimeResourceManifest: Sendable, Equatable {
 
     init(_ profile: RuntimeResourceProfile) {
         self.profile = profile
+        // Linux has no /private/tmp; stage under the platform temporary
+        // directory instead. macOS keeps /private/tmp for the sandbox.
+        #if os(macOS)
         privateHome = "/private/tmp/rv-runtime-\(UUID().uuidString.lowercased())"
+        #else
+        privateHome = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-runtime-\(UUID().uuidString.lowercased())").path
+        #endif
     }
 
     var bin: String { "\(privateHome)/bin" }

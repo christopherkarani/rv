@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import Darwin
 import Testing
@@ -238,3 +239,4 @@ private func layoutFixture() throws -> (URL, URL) {
     try reopened.session.save(reopened.session.view)
     #expect(reopened.session.revision == 2)
 }
+#endif
