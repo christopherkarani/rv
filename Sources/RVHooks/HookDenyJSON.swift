@@ -15,7 +15,7 @@ func hookAskJSON(reason: String, rule: String? = nil, next: String? = nil) -> St
 
 /// Official Antigravity honor path: explicit `decision: allow` + exit 0.
 /// Empty stdout fails protojson unmarshal and blocks, so allow is never empty.
-func hookAllowJSON() -> String {
+func hookDecisionAllowJSON() -> String {
     "{\"decision\":\"allow\"}\n"
 }
 

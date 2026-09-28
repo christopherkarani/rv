@@ -248,7 +248,7 @@ extension SetupRun {
         }
         let next: Data?
         do {
-            next = try AntigravitySettingsMerge.uninstall(existingData: data)
+            next = try AntigravityHooksMerge.uninstall(existingData: data)
         } catch {
             switch unreadable {
             case .fail:
@@ -277,7 +277,7 @@ extension SetupRun {
 
     /// Removes `~/.gemini/config/hooks/rv-guard.py` when it is the current rv adapter.
     private static func removeAntigravityAdapterIfCurrent(hooksPath: String, files: FileOps) -> Bool {
-        let adapterPath = AntigravitySettingsMerge.adapterPath(hooksPath: hooksPath)
+        let adapterPath = AntigravityHooksMerge.adapterPath(hooksPath: hooksPath)
         if files.isSymbolicLink(adapterPath) {
             return false
         }

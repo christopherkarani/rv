@@ -47,6 +47,9 @@ def _guard(raw):
     if not isinstance(tool_call, dict):
         return {"action": "allow"}
     tool = tool_call.get("name") or ""
+    # Unknown tools allow without consulting rv: only registered shell/file
+    # tools are guardable; a new shell-capable host tool needs an allowlist
+    # entry here (see antigravityWrapper_foreignToolMissingRvAllows).
     if tool not in _SHELL_TOOLS and tool not in _FILE_TOOLS:
         return {"action": "allow"}
     mapped = _spawn_rv_hook("antigravity", raw)

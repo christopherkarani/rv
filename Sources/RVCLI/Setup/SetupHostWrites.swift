@@ -350,7 +350,7 @@ extension SetupRun {
         if files.isSymbolicLink(path) {
             return false
         }
-        let adapterPath = AntigravitySettingsMerge.adapterPath(hooksPath: path)
+        let adapterPath = AntigravityHooksMerge.adapterPath(hooksPath: path)
         if files.isSymbolicLink(adapterPath) {
             throw SetupError.hostHookWriteFailed(.antigravity)
         }

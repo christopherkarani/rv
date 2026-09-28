@@ -340,7 +340,7 @@ private func fixtureLoginHome() throws -> URL {
     try withTempHome { home, layout, launchctl in
         try FileManager.default.createDirectory(atPath: layout.antigravityDirectory, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(
-            atPath: (layout.antigravityHooks as NSString).deletingLastPathComponent,
+            atPath: (layout.antigravityHooksJSON as NSString).deletingLastPathComponent,
             withIntermediateDirectories: true
         )
         let foreign = """
@@ -358,11 +358,11 @@ private func fixtureLoginHome() throws -> URL {
           }
         }
         """
-        try foreign.write(toFile: layout.antigravityHooks, atomically: true, encoding: .utf8)
+        try foreign.write(toFile: layout.antigravityHooksJSON, atomically: true, encoding: .utf8)
 
         let outcome = SetupRun.setup(env(home: home, launchctl: launchctl))
         #expect(outcome.exitCode == 0)
-        let adapterPath = AntigravitySettingsMerge.adapterPath(hooksPath: layout.antigravityHooks)
+        let adapterPath = AntigravityHooksMerge.adapterPath(hooksPath: layout.antigravityHooksJSON)
         let body = try String(contentsOfFile: adapterPath, encoding: .utf8)
         #expect(body == (try HookHost.antigravity.adapterResource().rendered(rvPath: "/tmp/rv-bin/rv")))
         #expect(body.contains("toolCall"))
@@ -375,7 +375,7 @@ private func fixtureLoginHome() throws -> URL {
 
         let hooks = try #require(
             JSONSerialization.jsonObject(
-                with: Data(contentsOf: URL(fileURLWithPath: layout.antigravityHooks))
+                with: Data(contentsOf: URL(fileURLWithPath: layout.antigravityHooksJSON))
             ) as? [String: Any]
         )
         #expect(hooks["other-hook"] as? [String: Any] != nil)
@@ -383,7 +383,7 @@ private func fixtureLoginHome() throws -> URL {
         #expect(group["enabled"] as? Bool == true)
         let pre = try #require(group["PreToolUse"] as? [[String: Any]])
         #expect(pre.count == 5)
-        #expect(pre.map { $0["matcher"] as? String } == AntigravitySettingsMerge.matchers)
+        #expect(pre.map { $0["matcher"] as? String } == AntigravityHooksMerge.matchers)
         let inner = try #require(pre[0]["hooks"] as? [[String: Any]])
         #expect(inner[0]["command"] as? String == "RV_BINARY=/tmp/rv-bin/rv python3 \(adapterPath)")
         #expect(inner[0]["timeout"] as? Int == 10)
@@ -393,7 +393,7 @@ private func fixtureLoginHome() throws -> URL {
         #expect(FileManager.default.fileExists(atPath: adapterPath) == false)
         let after = try #require(
             JSONSerialization.jsonObject(
-                with: Data(contentsOf: URL(fileURLWithPath: layout.antigravityHooks))
+                with: Data(contentsOf: URL(fileURLWithPath: layout.antigravityHooksJSON))
             ) as? [String: Any]
         )
         #expect(after["rv-guard"] == nil)
@@ -413,8 +413,8 @@ private func fixtureLoginHome() throws -> URL {
 
         let outcome = SetupRun.setup(env(home: home, launchctl: launchctl, pathEntries: [bin.path]))
         #expect(outcome.exitCode == 0)
-        #expect(FileManager.default.fileExists(atPath: layout.antigravityHooks))
-        let adapterPath = AntigravitySettingsMerge.adapterPath(hooksPath: layout.antigravityHooks)
+        #expect(FileManager.default.fileExists(atPath: layout.antigravityHooksJSON))
+        let adapterPath = AntigravityHooksMerge.adapterPath(hooksPath: layout.antigravityHooksJSON)
         #expect(FileManager.default.fileExists(atPath: adapterPath))
     }
 }

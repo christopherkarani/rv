@@ -121,6 +121,7 @@ private let dayOneRules: [SecretPathRule] = [
     dayOneRule("host-codex-auth", .hostAuth([".codex", "auth.json"]), .host),
     dayOneRule("host-hermes-auth", .hostAuth([".hermes", "auth.json"]), .host),
     dayOneRule("host-openclaw-auth", .hostAuth([".openclaw", "credentials"]), .host),
+    dayOneRule("host-antigravity-auth", .hostAuth([".gemini", "oauth_creds.json"]), .host),
 ]
 
 // Matching helpers live in SecretPathMatching.swift — single matcher for catalog and policy.

@@ -141,17 +141,17 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
             atPath: paths.antigravityDirectory,
             withIntermediateDirectories: true
         )
-        let merged = try AntigravitySettingsMerge.merge(
+        let merged = try AntigravityHooksMerge.merge(
             existingData: nil,
             rvPath: executable.path,
-            adapterPath: AntigravitySettingsMerge.adapterPath(hooksPath: paths.antigravityHooks),
+            adapterPath: AntigravityHooksMerge.adapterPath(hooksPath: paths.antigravityHooksJSON),
             force: false
         )
         try FileManager.default.createDirectory(
-            atPath: (paths.antigravityHooks as NSString).deletingLastPathComponent,
+            atPath: (paths.antigravityHooksJSON as NSString).deletingLastPathComponent,
             withIntermediateDirectories: true
         )
-        try merged.data.write(to: URL(fileURLWithPath: paths.antigravityHooks))
+        try merged.data.write(to: URL(fileURLWithPath: paths.antigravityHooksJSON))
 
         let outcome = DoctorRun.run(
             environment: environment,
@@ -188,10 +188,10 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
         }
         """
         try FileManager.default.createDirectory(
-            atPath: (paths.antigravityHooks as NSString).deletingLastPathComponent,
+            atPath: (paths.antigravityHooksJSON as NSString).deletingLastPathComponent,
             withIntermediateDirectories: true
         )
-        try shellOnly.write(toFile: paths.antigravityHooks, atomically: true, encoding: .utf8)
+        try shellOnly.write(toFile: paths.antigravityHooksJSON, atomically: true, encoding: .utf8)
 
         let outcome = DoctorRun.run(
             environment: environment,
@@ -201,7 +201,7 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
 
         #expect(outcome.exitCode == 0)
         #expect(outcome.stdout.contains("Antigravity") && outcome.stdout.contains("broken"))
-        #expect(try String(contentsOfFile: paths.antigravityHooks, encoding: .utf8) == shellOnly)
+        #expect(try String(contentsOfFile: paths.antigravityHooksJSON, encoding: .utf8) == shellOnly)
     }
 }
 

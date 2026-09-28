@@ -9,16 +9,16 @@ import Foundation
 /// Round-trip, strip/insert/uninstall, and locate delegate to
 /// `HostHooksMergeEngine` via `wiringDescriptor`; inspection (occupancy,
 /// matcher coverage) stays here over the engine's locate.
-enum AntigravitySettingsMerge {
+enum AntigravityHooksMerge {
     static let hooksFileName = "hooks.json"
     static let hookName = "rv-guard"
     static let preToolUseKey = "PreToolUse"
     static let fingerprint = "rv-guard.py"
-    static let shellMatcher = "run_command"
+    static let matcher = "run_command"
     static let fileMatchers = [
         "view_file", "write_to_file", "replace_file_content", "multi_replace_file_content",
     ]
-    static var matchers: [String] { [shellMatcher] + fileMatchers }
+    static var matchers: [String] { [matcher] + fileMatchers }
     static let hookType = "command"
     static let timeout = 10
 
@@ -62,7 +62,7 @@ enum AntigravitySettingsMerge {
         let rest = command.dropFirst(envPrefix.count)
         guard let space = rest.firstIndex(of: " ") else { return nil }
         let path = String(rest[..<space])
-        return path.hasPrefix("/") && path.isEmpty == false ? path : nil
+        return path.hasPrefix("/") ? path : nil
     }
 
     static func matchesCurrentHook(_ hook: [String: Any]) -> Bool {
@@ -133,7 +133,7 @@ enum AntigravitySettingsMerge {
                 }
             )
         } catch {
-            throw AntigravitySettingsMergeError.unreadable
+            throw AntigravityHooksMergeError.unreadable
         }
     }
 
@@ -145,7 +145,7 @@ enum AntigravitySettingsMerge {
                 descriptor: wiringDescriptor
             )
         } catch {
-            throw AntigravitySettingsMergeError.unreadable
+            throw AntigravityHooksMergeError.unreadable
         }
     }
 
@@ -170,9 +170,10 @@ enum AntigravitySettingsMerge {
         )
         guard located.isEmpty == false else { return .absentFile }
 
+        let want = matchers
         let allCurrent = located.allSatisfy { item in
             guard let itemMatcher = item.matcher,
-                  matchers.contains(itemMatcher),
+                  want.contains(itemMatcher),
                   matchesCurrentHook(item.hook)
             else {
                 return false
@@ -188,13 +189,13 @@ enum AntigravitySettingsMerge {
             return .occupied
         }
         let present = Set(located.compactMap { $0.matcher })
-        if Set(matchers).isSubset(of: present) {
+        if Set(want).isSubset(of: present) {
             return .wired(bakedPath: bakedPath)
         }
         return .outdated
     }
 }
 
-enum AntigravitySettingsMergeError: Error, Equatable {
+enum AntigravityHooksMergeError: Error, Equatable {
     case unreadable
 }

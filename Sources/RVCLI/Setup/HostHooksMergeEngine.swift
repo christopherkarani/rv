@@ -66,7 +66,7 @@ enum HostHooksMergeError: Error, Equatable {
 /// hook-list shape, so they stay out of the engine per the GUD-001 fallback.
 /// Claude inspection (occupancy, stale legacy, matcher coverage) stays in
 /// `ClaudeSettingsMerge`; Antigravity inspection stays in
-/// `AntigravitySettingsMerge`; both are implemented over `locateFingerprintedHooks`.
+/// `AntigravityHooksMerge`; both are implemented over `locateFingerprintedHooks`.
 /// Follow-up per GUD-002: adopt T1's typed-JSON value here once T1 lands.
 enum HostHooksMergeEngine {
     /// Returns merged bytes and whether content changed.

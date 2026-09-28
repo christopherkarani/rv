@@ -64,12 +64,15 @@ clang -Os "${CLANG_OS_FLAGS[@]}" -std=c11 -Wall \
 # Pipe hosts must match HookHost.setupSlotOrder. Invalid hosts exec rv-cli
 # before the socket/XPC door, so a missing name is silent miss-as-operator.
 if ! awk '
-  /static int is_valid_host/,/^}/ {
-    if ($0 ~ /"cursor"/) found = 1
+  /static int is_valid_host/,/^}/ { body = body $0 "\n" }
+  END {
+    n = split("grok pi opencode claude openclaw hermes codex cursor antigravity", want, " ")
+    for (i = 1; i <= n; i++) {
+      if (index(body, "\"" want[i] "\"") == 0) exit 1
+    }
   }
-  END { exit found ? 0 : 1 }
 ' "$SRC/rv.c"; then
-  printf "rv-c tests: is_valid_host must include cursor\n" >&2
+  printf "rv-c tests: is_valid_host must include every setupSlotOrder host\n" >&2
   exit 1
 fi
 

@@ -7,7 +7,7 @@ private let antigravityAdapter = "/tmp/home/.gemini/config/hooks/rv-guard.py"
 
 private func antigravityMerged(_ existing: String? = nil, force: Bool = false) throws -> Data {
     let data = existing.map { Data($0.utf8) }
-    return try AntigravitySettingsMerge.merge(
+    return try AntigravityHooksMerge.merge(
         existingData: data,
         rvPath: antigravityRvPath,
         adapterPath: antigravityAdapter,
@@ -16,11 +16,11 @@ private func antigravityMerged(_ existing: String? = nil, force: Bool = false) t
 }
 
 private func antigravityGroup(_ root: [String: Any]) throws -> [String: Any] {
-    try #require(root[AntigravitySettingsMerge.hookName] as? [String: Any])
+    try #require(root[AntigravityHooksMerge.hookName] as? [String: Any])
 }
 
 @Test func antigravityMerge_createsGroupedPreToolUseEntries() throws {
-    let merged = try AntigravitySettingsMerge.merge(
+    let merged = try AntigravityHooksMerge.merge(
         existingData: nil,
         rvPath: antigravityRvPath,
         adapterPath: antigravityAdapter,
@@ -32,7 +32,7 @@ private func antigravityGroup(_ root: [String: Any]) throws -> [String: Any] {
     #expect(group["enabled"] as? Bool == true)
     let pre = try #require(group["PreToolUse"] as? [[String: Any]])
     #expect(pre.count == 5)
-    #expect(pre.map { $0["matcher"] as? String } == AntigravitySettingsMerge.matchers)
+    #expect(pre.map { $0["matcher"] as? String } == AntigravityHooksMerge.matchers)
     for entry in pre {
         let inner = try #require(entry["hooks"] as? [[String: Any]])
         #expect(inner.count == 1)
@@ -58,7 +58,7 @@ private func antigravityGroup(_ root: [String: Any]) throws -> [String: Any] {
       }
     }
     """
-    let merged = try AntigravitySettingsMerge.merge(
+    let merged = try AntigravityHooksMerge.merge(
         existingData: Data(existing.utf8),
         rvPath: antigravityRvPath,
         adapterPath: antigravityAdapter,
@@ -78,7 +78,7 @@ private func antigravityGroup(_ root: [String: Any]) throws -> [String: Any] {
 
 @Test func antigravityMerge_isIdempotent() throws {
     let first = try antigravityMerged()
-    let second = try AntigravitySettingsMerge.merge(
+    let second = try AntigravityHooksMerge.merge(
         existingData: first,
         rvPath: antigravityRvPath,
         adapterPath: antigravityAdapter,
@@ -114,7 +114,7 @@ private func antigravityGroup(_ root: [String: Any]) throws -> [String: Any] {
       }
     }
     """
-    let next = try #require(try AntigravitySettingsMerge.uninstall(existingData: Data(existing.utf8)))
+    let next = try #require(try AntigravityHooksMerge.uninstall(existingData: Data(existing.utf8)))
     let root = try #require(JSONSerialization.jsonObject(with: next) as? [String: Any])
     #expect(root["rv-guard"] == nil)
     #expect(root["other-hook"] as? [String: Any] != nil)
@@ -136,51 +136,51 @@ private func antigravityGroup(_ root: [String: Any]) throws -> [String: Any] {
       }
     }
     """
-    #expect(try AntigravitySettingsMerge.uninstall(existingData: Data(existing.utf8)) == nil)
+    #expect(try AntigravityHooksMerge.uninstall(existingData: Data(existing.utf8)) == nil)
 }
 
 @Test func antigravityMerge_unreadableThrows() {
-    #expect(throws: AntigravitySettingsMergeError.unreadable) {
-        _ = try AntigravitySettingsMerge.merge(
+    #expect(throws: AntigravityHooksMergeError.unreadable) {
+        _ = try AntigravityHooksMerge.merge(
             existingData: Data("[]".utf8),
             rvPath: "/r",
             adapterPath: "/c/hooks/rv-guard.py",
             force: false
         )
     }
-    #expect(throws: AntigravitySettingsMergeError.unreadable) {
-        _ = try AntigravitySettingsMerge.uninstall(existingData: Data("[]".utf8))
+    #expect(throws: AntigravityHooksMergeError.unreadable) {
+        _ = try AntigravityHooksMerge.uninstall(existingData: Data("[]".utf8))
     }
 }
 
 @Test func antigravityMerge_inspectionStates() {
-    #expect(AntigravitySettingsMerge.inspectionState(of: nil) == .absentFile)
-    #expect(AntigravitySettingsMerge.inspectionState(of: Data("not json{".utf8)) == .occupied)
-    #expect(AntigravitySettingsMerge.inspectionState(of: Data("[]".utf8)) == .occupied)
+    #expect(AntigravityHooksMerge.inspectionState(of: nil) == .absentFile)
+    #expect(AntigravityHooksMerge.inspectionState(of: Data("not json{".utf8)) == .occupied)
+    #expect(AntigravityHooksMerge.inspectionState(of: Data("[]".utf8)) == .occupied)
     let foreign = Data(
         """
         {"other-hook":{"PreToolUse":[{"matcher":"run_command","hooks":[{"type":"command","command":"other","timeout":1}]}]}}
         """.utf8
     )
-    #expect(AntigravitySettingsMerge.inspectionState(of: foreign) == .absentFile)
+    #expect(AntigravityHooksMerge.inspectionState(of: foreign) == .absentFile)
     let shellOnly = Data(
         """
         {"rv-guard":{"enabled":true,"PreToolUse":[{"matcher":"run_command","hooks":[{"type":"command","command":"RV_BINARY=/r python3 /c/hooks/rv-guard.py","timeout":10}]}]}}
         """.utf8
     )
-    #expect(AntigravitySettingsMerge.inspectionState(of: shellOnly) == .outdated)
+    #expect(AntigravityHooksMerge.inspectionState(of: shellOnly) == .outdated)
     let guardForeign = Data(
         """
         {"rv-guard":{"enabled":true,"PreToolUse":[{"matcher":"run_command","hooks":[{"type":"command","command":"python3 /opt/other/rv-guard.py","timeout":10}]}]}}
         """.utf8
     )
-    #expect(AntigravitySettingsMerge.inspectionState(of: guardForeign) == .occupied)
+    #expect(AntigravityHooksMerge.inspectionState(of: guardForeign) == .occupied)
 }
 
 @Test func antigravityMerge_wiredReportsBakedPath() throws {
     let merged = try antigravityMerged()
     #expect(
-        AntigravitySettingsMerge.inspectionState(of: merged)
+        AntigravityHooksMerge.inspectionState(of: merged)
             == .wired(bakedPath: antigravityRvPath)
     )
 }
@@ -191,8 +191,8 @@ private func antigravityGroup(_ root: [String: Any]) throws -> [String: Any] {
         {"rv-guard":{"enabled":true,"PreToolUse":[{"matcher":"run_command","hooks":[{"type":"command","command":"python3 /opt/other/rv-guard.py","timeout":10}]}]}}
         """.utf8
     )
-    #expect(AntigravitySettingsMerge.inspectionState(of: occupied) == .occupied)
-    let merged = try AntigravitySettingsMerge.merge(
+    #expect(AntigravityHooksMerge.inspectionState(of: occupied) == .occupied)
+    let merged = try AntigravityHooksMerge.merge(
         existingData: occupied,
         rvPath: antigravityRvPath,
         adapterPath: antigravityAdapter,
@@ -200,7 +200,7 @@ private func antigravityGroup(_ root: [String: Any]) throws -> [String: Any] {
     )
     #expect(merged.wrote)
     #expect(
-        AntigravitySettingsMerge.inspectionState(of: merged.data)
+        AntigravityHooksMerge.inspectionState(of: merged.data)
             == .wired(bakedPath: antigravityRvPath)
     )
 }
@@ -211,22 +211,22 @@ private func antigravityGroup(_ root: [String: Any]) throws -> [String: Any] {
         {"rv-guard":{"enabled":true,"PreToolUse":[{"matcher":"run_command","hooks":[{"type":"command","command":"RV_BINARY=/r python3 /c/hooks/rv-guard.py","timeout":10}]}]}}
         """.utf8
     )
-    #expect(AntigravitySettingsMerge.inspectionState(of: shellOnly) == .outdated)
-    let merged = try AntigravitySettingsMerge.merge(
+    #expect(AntigravityHooksMerge.inspectionState(of: shellOnly) == .outdated)
+    let merged = try AntigravityHooksMerge.merge(
         existingData: shellOnly,
         rvPath: "/r",
         adapterPath: "/c/hooks/rv-guard.py",
         force: false
     )
     #expect(merged.wrote)
-    #expect(AntigravitySettingsMerge.inspectionState(of: merged.data) == .wired(bakedPath: "/r"))
+    #expect(AntigravityHooksMerge.inspectionState(of: merged.data) == .wired(bakedPath: "/r"))
 }
 
 @Test func antigravityMerge_mergedBytesHaveFileToolMatchers() throws {
     let merged = try antigravityMerged()
     let root = try #require(JSONSerialization.jsonObject(with: merged) as? [String: Any])
-    #expect(AntigravitySettingsMerge.hasFileToolMatchers(in: root))
-    #expect(AntigravitySettingsMerge.adapterPath(hooksPath: "/h/.gemini/config/hooks.json") == "/h/.gemini/config/hooks/rv-guard.py")
+    #expect(AntigravityHooksMerge.hasFileToolMatchers(in: root))
+    #expect(AntigravityHooksMerge.adapterPath(hooksPath: "/h/.gemini/config/hooks.json") == "/h/.gemini/config/hooks/rv-guard.py")
 }
 
 @Test func antigravityWiring_applyReportsWiredFileTools() throws {

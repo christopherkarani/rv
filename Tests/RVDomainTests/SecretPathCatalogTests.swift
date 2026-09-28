@@ -52,6 +52,7 @@ import Testing
             "host-codex-auth",
             "host-hermes-auth",
             "host-openclaw-auth",
+            "host-antigravity-auth",
         ]
     )
     let reason = "Access to a sensitive path is not allowed."
@@ -76,6 +77,7 @@ import Testing
     #expect(SecretPathCatalog.dayOne.firstMatch(of: "~/.codex/auth.json")?.pattern == "host-codex-auth")
     #expect(SecretPathCatalog.dayOne.firstMatch(of: "~/.hermes/auth.json")?.pattern == "host-hermes-auth")
     #expect(SecretPathCatalog.dayOne.firstMatch(of: "~/.openclaw/credentials/oauth.json")?.pattern == "host-openclaw-auth")
+    #expect(SecretPathCatalog.dayOne.firstMatch(of: "~/.gemini/oauth_creds.json")?.pattern == "host-antigravity-auth")
 }
 
 @Test func secretPathCatalog_matchesHomeAliasesAndNewHostSecrets() {

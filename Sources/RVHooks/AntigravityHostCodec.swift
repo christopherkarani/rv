@@ -35,7 +35,7 @@ public struct AntigravityHostCodec: HostCodec {
             )
         }
         if let file = FileToolAction.decoded(
-            toolName: ledgerName(for: toolCall.name),
+            toolName: Self.mappedFileToolName(for: toolCall.name),
             paths: toolCall.args?.targetFile, toolCall.args?.absolutePath
         ) {
             return HookRequest.decoded(
@@ -51,25 +51,25 @@ public struct AntigravityHostCodec: HostCodec {
 
     /// Explicit allow JSON: empty stdout fails unmarshal and blocks.
     public func encodeAllow() -> HookWire {
-        HookWire(stdout: hookAllowJSON(), exitCode: 0)
+        HookWire(stdout: hookDecisionAllowJSON(), exitCode: 0)
     }
 
     public func encodeDeny(reason: String, rule: RuleID? = nil, next: HookVoiceNext = .none) -> HookWire {
         encodeLeftoverDecisionDeny(reason: reason, rule: rule, next: next)
     }
-}
 
-/// Antigravity file-tool names onto the closed ledger kinds.
-private func ledgerName(for toolName: String?) -> String? {
-    switch toolName {
-    case "view_file":
-        "Read"
-    case "replace_file_content", "multi_replace_file_content":
-        "Edit"
-    case "write_to_file":
-        "Write"
-    default:
-        nil
+    /// Antigravity file-tool names onto the closed ledger kinds.
+    private static func mappedFileToolName(for toolName: String?) -> String? {
+        switch toolName {
+        case "view_file":
+            "Read"
+        case "replace_file_content", "multi_replace_file_content":
+            "Edit"
+        case "write_to_file":
+            "Write"
+        default:
+            nil
+        }
     }
 }
 

@@ -16,7 +16,7 @@ enum HostAttachPrelude: Equatable, Sendable {
     case none
     /// Occupied exclusive file: move it aside, then write with empty existing bytes.
     case backupAndClearOwnedPath
-    /// Occupied Claude settings symlink: do not follow or replace; mark occupied.
+    /// Occupied merged-settings symlink (Claude/Antigravity): do not follow or replace; mark occupied.
     case occupiedIfDestinationSymlink
 }
 

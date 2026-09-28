@@ -293,7 +293,7 @@ extension HostAdapterInstallation {
             return .occupied(path)
         }
 
-        switch AntigravitySettingsMerge.inspectionState(of: data) {
+        switch AntigravityHooksMerge.inspectionState(of: data) {
         case .absentFile:
             return .absentFile(path)
         case .occupied:

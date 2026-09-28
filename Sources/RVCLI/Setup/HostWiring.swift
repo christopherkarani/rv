@@ -28,7 +28,7 @@ enum HostWiring {
                 return .notApplicable
             }
             guard let root = jsonObject(adapterBytes),
-                  AntigravitySettingsMerge.hasFileToolMatchers(in: root)
+                  AntigravityHooksMerge.hasFileToolMatchers(in: root)
             else {
                 return .shellOnly
             }
@@ -79,7 +79,7 @@ enum HostWiring {
         adapterPath: String,
         force: Bool = false
     ) throws -> (data: Data, wrote: Bool, fileTools: DoctorFileToolsState) {
-        let merged = try AntigravitySettingsMerge.merge(
+        let merged = try AntigravityHooksMerge.merge(
             existingData: existingData,
             rvPath: rvPath,
             adapterPath: adapterPath,

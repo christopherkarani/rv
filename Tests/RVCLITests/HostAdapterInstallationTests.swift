@@ -33,10 +33,10 @@ private func writeWiredAdapter(
         )
         try merged.data.write(to: URL(fileURLWithPath: destination))
     } else if host == .antigravity {
-        let merged = try AntigravitySettingsMerge.merge(
+        let merged = try AntigravityHooksMerge.merge(
             existingData: nil,
             rvPath: rvPath,
-            adapterPath: AntigravitySettingsMerge.adapterPath(hooksPath: destination),
+            adapterPath: AntigravityHooksMerge.adapterPath(hooksPath: destination),
             force: false
         )
         try merged.data.write(to: URL(fileURLWithPath: destination))
@@ -268,7 +268,7 @@ func hostInstallation_foreignOwnedBytesAreOccupiedAndUnchanged(_ host: HookHost)
             withIntermediateDirectories: true
         )
         try FileManager.default.createDirectory(
-            atPath: (paths.antigravityHooks as NSString).deletingLastPathComponent,
+            atPath: (paths.antigravityHooksJSON as NSString).deletingLastPathComponent,
             withIntermediateDirectories: true
         )
         try writeWiredAdapter(
