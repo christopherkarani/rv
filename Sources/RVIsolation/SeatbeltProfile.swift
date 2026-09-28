@@ -440,16 +440,19 @@ func productiveWalkMetadataRoots(paths: [String]) -> [String] {
 
 /// Resolve the productive-workspace context for a spawn, host-side.
 ///
-/// Pure function of the workspace path and host environment (plus
-/// existence probes), so the profile compiler and the environment builder
-/// compute the same facts independently. Side effects (`ensure`) are
-/// idempotent. Degrades gracefully: without a usable host home there is no
-/// RV-managed home and no host PATH inheritance, only the legacy minimal
-/// environment.
+/// Idempotent host-side resolution over the workspace path and host
+/// environment: it probes the live filesystem, creates missing RV-managed
+/// state via `ensure`, and may spawn `git` to seed commit identity.
+/// Repeated calls converge, so the profile compiler and the environment
+/// builder compute the same facts independently; the spawn path still
+/// resolves once and threads the result through. Degrades gracefully:
+/// without a usable host home there is no RV-managed home and no host
+/// PATH inheritance, only the legacy minimal environment.
 public func resolveProductiveWorkspace(
     workspacePath: String,
     hostEnvironment: [String: String]? = nil,
-    agentBin: String? = nil
+    agentBin: String? = nil,
+    probe: ContainedPATHProbe = .live
 ) -> ProductiveWorkspaceResolution {
     let host = hostEnvironment ?? ProcessInfo.processInfo.environment
     guard let hostHome = host["HOME"], isUsableAbsolutePath(hostHome) else {
@@ -466,16 +469,18 @@ public func resolveProductiveWorkspace(
         hostPATH: host["PATH"],
         hostHome: hostHome,
         agentBin: agentBin,
-        rvBin: developerHome?.bin
+        rvBin: developerHome?.bin,
+        probe: probe
     )
-    var trees = ContainedToolchainRoots.existingSystemRoots()
-    trees.append(contentsOf: ContainedToolchainRoots.existingHomeStateRoots(hostHome: hostHome))
+    var trees = ContainedToolchainRoots.existingSystemRoots(probe: probe)
+    trees.append(contentsOf: ContainedToolchainRoots.existingHomeStateRoots(hostHome: hostHome, probe: probe))
     trees.append(contentsOf: sanitized.impliedDirectories)
     // The active developer directory is resolved, not enumerated: static
     // spellings cannot cover versioned installs (`Xcode_26.6.app`).
     if let developerRoot = ContainedToolchainRoots.activeDeveloperRoot(
         hostEnvironment: host,
-        hostHome: hostHome
+        hostHome: hostHome,
+        probe: probe
     ) {
         trees.append(developerRoot)
     }

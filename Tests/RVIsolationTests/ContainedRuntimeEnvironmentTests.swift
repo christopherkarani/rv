@@ -315,4 +315,122 @@ import Testing
     #expect(sanitized.impliedDirectories.contains("/bin"))
     #expect(sanitized.impliedDirectories.contains("/") == false)
 }
+
+@Test func blockedVariableNameMatchesUnderscoreTokens() {
+    #expect(ContainedEnvironmentPolicy.isBlockedVariableName("GH_TOKEN"))
+    #expect(ContainedEnvironmentPolicy.isBlockedVariableName("MY_API_KEY"))
+    #expect(ContainedEnvironmentPolicy.isBlockedVariableName("db_password"))
+    #expect(ContainedEnvironmentPolicy.isBlockedVariableName("MY_TOKENIZER") == false)
+    #expect(ContainedEnvironmentPolicy.isBlockedVariableName("KEYNOTE") == false)
+    #expect(ContainedEnvironmentPolicy.isBlockedVariableName("PATH") == false)
+}
+
+@Test func sanitizeTrimsToPATHBudgetFromTheTail() {
+    // Every entry resolves; the joined value exceeds the budget, so the
+    // low-priority tail drops until it fits — maximally, not one past.
+    let entries = (0..<64).map { "/tool-\(String(format: "%02d", $0))-" + String(repeating: "d", count: 180) }
+    let probe = ContainedPATHProbe(
+        realpath: { $0 },
+        isDirectory: { _ in true },
+        isExecutable: { _ in true },
+        listDirectory: { _ in [] }
+    )
+    let sanitized = ContainedPATH.sanitize(
+        hostPATH: entries.joined(separator: ":"),
+        hostHome: "/Users/test",
+        agentBin: nil,
+        probe: probe
+    )
+    #expect(sanitized.value.utf8.count <= ContainedPATH.maxValueBytes)
+    #expect(sanitized.directories.first == entries.first)
+    #expect(sanitized.directories.count < entries.count)
+    let next = sanitized.value + ":" + entries[sanitized.directories.count]
+    #expect(next.utf8.count > ContainedPATH.maxValueBytes)
+}
+
+@Test func productiveResolutionHonorsInjectedProbe() throws {
+    // Hermetic by construction: every asserted path is fictional (nothing
+    // is created for it), so only the injected probe can admit it.
+    let home = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-proberes-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: home) }
+    let fictional = "\(home.path)/fake-toolchain"
+    let probe = ContainedPATHProbe(
+        realpath: { $0 },
+        isDirectory: { _ in true },
+        isExecutable: { _ in true },
+        listDirectory: { _ in [] }
+    )
+    let resolution = resolveProductiveWorkspace(
+        workspacePath: "\(home.path)/ws",
+        hostEnvironment: [
+            "HOME": home.path,
+            "PATH": "\(fictional)/bin",
+            "DEVELOPER_DIR": "\(fictional)/Xcode.app/Contents/Developer",
+        ],
+        probe: probe
+    )
+    let developerHome = try #require(resolution.developerHome)
+    #expect(developerHome.home.hasPrefix(home.path))
+    #expect(resolution.pathValue.contains("\(fictional)/bin"))
+    #expect(resolution.pathDirectories.contains("\(fictional)/bin"))
+    #expect(resolution.toolchainTrees.contains("\(fictional)/Xcode.app"))
+    #expect(resolution.toolchainTrees.contains("\(home.path)/.cargo"))
+    #expect(resolution.toolchainTrees.contains("/opt/homebrew"))
+}
+
+@Test func seedGitIdentityUsesInjectedReader() throws {
+    let home = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-seed-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: home) }
+    let developerHome = WorkspaceDeveloperHome(
+        root: home.path, home: home.path, cache: home.path, tmp: home.path
+    )
+    developerHome.seedGitIdentity(hostHome: "/Users/test") { _ in
+        (name: "Test User", email: "test@example.com")
+    }
+    let gitconfig = home.appendingPathComponent(".gitconfig")
+    let content = try String(contentsOf: gitconfig, encoding: .utf8)
+    #expect(content.contains("name = Test User"))
+    #expect(content.contains("email = test@example.com"))
+    #expect(content.contains("gpgsign = false"))
+    // Never overwrites: an existing file wins over a later seed.
+    developerHome.seedGitIdentity(hostHome: "/Users/test") { _ in (name: "Other", email: nil) }
+    #expect(try String(contentsOf: gitconfig, encoding: .utf8) == content)
+}
+
+@Test func seedGitIdentitySkipsWhenIdentityIsEmpty() throws {
+    let home = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-seedempty-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: home) }
+    let developerHome = WorkspaceDeveloperHome(
+        root: home.path, home: home.path, cache: home.path, tmp: home.path
+    )
+    developerHome.seedGitIdentity(hostHome: "/Users/test") { _ in (name: nil, email: nil) }
+    #expect(FileManager.default.fileExists(atPath: home.appendingPathComponent(".gitconfig").path) == false)
+}
+
+@Test func writeShimRefreshesContent() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-shim-\(UUID().uuidString)", isDirectory: true)
+    let bin = root.appendingPathComponent("bin", isDirectory: true)
+    try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let developerHome = WorkspaceDeveloperHome(
+        root: root.path, home: root.path, cache: root.path, tmp: root.path, bin: bin.path
+    )
+    developerHome.writeShim(name: "test-shim", content: "v1")
+    let path = bin.appendingPathComponent("test-shim").path
+    #expect(try String(contentsOfFile: path, encoding: .utf8) == "v1")
+    #expect(FileManager.default.isExecutableFile(atPath: path))
+    developerHome.writeShim(name: "test-shim", content: "v2")
+    #expect(try String(contentsOfFile: path, encoding: .utf8) == "v2")
+    // Identical content is a no-op; staging never litters the bin dir.
+    developerHome.writeShim(name: "test-shim", content: "v2")
+    #expect(try String(contentsOfFile: path, encoding: .utf8) == "v2")
+    #expect(try FileManager.default.contentsOfDirectory(atPath: bin.path) == ["test-shim"])
+}
 #endif

@@ -526,6 +526,7 @@ private func succeededLoopback(_ result: Result<Void, WorkspaceSessionError>) ->
 /// server is reachable at the port it reported (I/J/N) and unreachable
 /// after teardown.
 private func loopbackHostFetch(host: String, port: Int, message: String) -> String? {
+    guard (0...65535).contains(port) else { return nil }
     let family: Int32 = host.contains(":") ? AF_INET6 : AF_INET
     let fd = socket(family, SOCK_STREAM, 0)
     guard fd >= 0 else { return nil }
@@ -572,6 +573,7 @@ private func loopbackHostFetch(host: String, port: Int, message: String) -> Stri
 /// with EADDRINUSE; that is normal TCP, not a leak. The companion
 /// fetch-refused assertion is what proves no listener survived.
 private func loopbackHostCanBind(host: String, port: Int) -> Bool {
+    guard (0...65535).contains(port) else { return false }
     let family: Int32 = host.contains(":") ? AF_INET6 : AF_INET
     let fd = socket(family, SOCK_STREAM, 0)
     guard fd >= 0 else { return false }
@@ -1051,5 +1053,13 @@ int main(int argc, char **argv) {
     return 64;
 }
 """#
+
+@Test func loopbackHelpersRejectOutOfRangePorts() {
+    // Ports outside UInt16 trap on conversion; the helpers fail closed.
+    #expect(loopbackHostFetch(host: "127.0.0.1", port: -1, message: "x") == nil)
+    #expect(loopbackHostFetch(host: "127.0.0.1", port: 65_536, message: "x") == nil)
+    #expect(loopbackHostCanBind(host: "127.0.0.1", port: -1) == false)
+    #expect(loopbackHostCanBind(host: "127.0.0.1", port: 70_000) == false)
+}
 #endif
 

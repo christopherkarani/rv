@@ -135,6 +135,10 @@ struct AdmittedLaunchContext: Sendable, Equatable {
     var sessionLeader: pid_t = -1
     /// Workspace egress proxy port, when the owning runtime has one.
     var egressProxyPort: Int? = nil
+    /// Owning runtime's productive-workspace facts, so each admitted
+    /// command reuses them instead of re-resolving (probes plus
+    /// idempotent `ensure`) per command.
+    var productive: ProductiveWorkspaceResolution? = nil
 }
 
 /// One runtime's admission state.

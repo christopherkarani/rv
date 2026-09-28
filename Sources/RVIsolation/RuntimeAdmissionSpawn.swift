@@ -296,7 +296,8 @@ private func spawnAdmittedCommand(
         workspace: launch.workspacePath,
         io: .discard,
         agentBin: AgentBin.installedDirectory(),
-        egressProxyPort: launch.egressProxyPort
+        egressProxyPort: launch.egressProxyPort,
+        productive: launch.productive
     )
     let argv = AdmissionSpawnPointers(arguments)
     let envp = AdmissionSpawnPointers(environment)

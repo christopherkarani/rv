@@ -54,9 +54,8 @@ public enum ContainedEnvironmentPolicy {
         for infixString in deniedInfixes {
             if folded.contains(infixString) { return true }
         }
-        let tokens = folded.split(separator: "_").map(String.init)
-        for token in deniedTokens {
-            if tokens.contains(token) { return true }
+        for token in folded.split(separator: "_") {
+            if deniedTokens.contains(String(token)) { return true }
         }
         return false
     }
@@ -82,7 +81,7 @@ public enum ContainedEnvironmentPolicy {
     public static func isValidName(_ name: String) -> Bool {
         guard name.isEmpty == false, name.count <= 128 else { return false }
         let scalars = Array(name.unicodeScalars)
-        guard isNameStart(scalars[0]) else { return false }
+        guard let first = scalars.first, isNameStart(first) else { return false }
         return scalars.allSatisfy(isNameChar)
     }
 
@@ -183,10 +182,10 @@ extension ContainedEnvironmentPolicy {
 
 /// Filesystem access for PATH sanitization. Injected so tests run hermetic.
 public struct ContainedPATHProbe: Sendable {
-    public var realpath: @Sendable (String) -> String?
-    public var isDirectory: @Sendable (String) -> Bool
-    public var isExecutable: @Sendable (String) -> Bool
-    public var listDirectory: @Sendable (String) -> [String]?
+    public let realpath: @Sendable (String) -> String?
+    public let isDirectory: @Sendable (String) -> Bool
+    public let isExecutable: @Sendable (String) -> Bool
+    public let listDirectory: @Sendable (String) -> [String]?
 
     public init(
         realpath: @escaping @Sendable (String) -> String?,
@@ -299,9 +298,11 @@ public enum ContainedPATH {
         for fallback in systemFallbacks where admitted.contains(fallback) == false {
             admit(fallback)
         }
-        // Drop from the low-priority end until the value fits the budget.
-        while admitted.joined(separator: ":").utf8.count > maxValueBytes, admitted.isEmpty == false {
-            admitted.removeLast()
+        // Drop from the low-priority end until the value fits the budget,
+        // tracking the joined length incrementally instead of re-joining.
+        var valueBytes = admitted.reduce(0) { $0 + $1.utf8.count } + max(admitted.count - 1, 0)
+        while valueBytes > maxValueBytes, let last = admitted.popLast() {
+            valueBytes -= last.utf8.count + (admitted.isEmpty ? 0 : 1)
         }
         var value = admitted.joined(separator: ":")
         if value.isEmpty {
@@ -425,21 +426,16 @@ public enum ContainedToolchainRoots {
         "miniforge3",
     ]
 
-    public static func existingSystemRoots() -> [String] {
-        systemRoots.filter {
-            var isDirectory: ObjCBool = false
-            return FileManager.default.fileExists(atPath: $0, isDirectory: &isDirectory)
-                && isDirectory.boolValue
-        }
+    public static func existingSystemRoots(probe: ContainedPATHProbe = .live) -> [String] {
+        systemRoots.filter { probe.isDirectory($0) }
     }
 
-    public static func existingHomeStateRoots(hostHome: String) -> [String] {
+    public static func existingHomeStateRoots(
+        hostHome: String,
+        probe: ContainedPATHProbe = .live
+    ) -> [String] {
         guard isUsableAbsolutePath(hostHome) else { return [] }
-        return homeStateRoots.map { "\(hostHome)/\($0)" }.filter {
-            var isDirectory: ObjCBool = false
-            return FileManager.default.fileExists(atPath: $0, isDirectory: &isDirectory)
-                && isDirectory.boolValue
-        }
+        return homeStateRoots.map { "\(hostHome)/\($0)" }.filter { probe.isDirectory($0) }
     }
 
     /// Active Apple developer directory, resolved the way `xcrun` resolves
@@ -458,20 +454,18 @@ public enum ContainedToolchainRoots {
     public static func activeDeveloperRoot(
         hostEnvironment: [String: String],
         hostHome: String,
-        selectLinkPath: String = "/var/db/xcode_select_link"
+        selectLinkPath: String = "/var/db/xcode_select_link",
+        probe: ContainedPATHProbe = .live
     ) -> String? {
         #if os(macOS)
         let candidates = [hostEnvironment["DEVELOPER_DIR"], selectLinkTarget(selectLinkPath)]
         for candidate in candidates {
             guard let candidate, isUsableAbsolutePath(candidate) else { continue }
-            guard let canonical = posixRealpath(candidate), isUsableAbsolutePath(canonical) else {
+            guard let canonical = probe.realpath(candidate), isUsableAbsolutePath(canonical) else {
                 continue
             }
             let tree = enclosingApplicationBundle(canonical) ?? canonical
-            var isDirectory: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: tree, isDirectory: &isDirectory),
-                isDirectory.boolValue
-            else {
+            guard probe.isDirectory(tree) else {
                 continue
             }
             guard ContainedSensitivePaths.isSensitivePATHEntry(tree, hostHome: hostHome) == false else {
@@ -519,8 +513,10 @@ public enum ContainedToolchainRoots {
 /// pre-secret-broker compatibility behavior.
 public enum ContainedSensitivePaths {
     /// Home-relative sensitive paths from the catalog (`homeSuffix` and
-    /// `hostAuth` kinds), e.g. `.ssh`, `.config/gh`.
-    public static var catalogRelatives: [String] {
+    /// `hostAuth` kinds), e.g. `.ssh`, `.config/gh`. Computed once: the
+    /// catalog is immutable, and the sensitivity checks in the sanitize
+    /// loops call this per PATH candidate.
+    public static let catalogRelatives: [String] = {
         var relatives: [String] = []
         for rule in SecretPathCatalog.dayOne.rules {
             switch rule.kind {
@@ -531,7 +527,7 @@ public enum ContainedSensitivePaths {
             }
         }
         return relatives
-    }
+    }()
 
     /// Whether an absolute path must never be admitted as (or implied by) a
     /// PATH entry: the home root itself, anything at-or-beneath a sensitive

@@ -75,12 +75,11 @@ struct RuntimeTerminalTests {
         #expect(RuntimeTerminal.open(rows: 0, columns: 80) == nil)
         #expect(RuntimeTerminal.open(rows: 24, columns: 513) == nil)
         let before = ttyPaths()
-        for fault in [TerminalOpenFault.master, .grant, .slaveName, .slaveOpen, .configure, .stopPipe] {
-            TerminalTestInjection.openFault.withLock { $0 = fault }
-            defer { TerminalTestInjection.openFault.withLock { $0 = nil } }
-            #expect(RuntimeTerminal.open(rows: 24, columns: 80) == nil)
+        for fault in [
+            TerminalOpenFault.master, .grant, .unlock, .slaveName, .slaveOpen, .configure, .stopPipe,
+        ] {
+            #expect(RuntimeTerminal.open(rows: 24, columns: 80, openFault: fault) == nil)
         }
-        TerminalTestInjection.openFault.withLock { $0 = nil }
         // One-sided: sibling suites run in parallel in this process and
         // hold PTY masters transiently, so the set may legitimately shrink
         // (their masters closing) or flutter. A master leaked by the fault
@@ -781,6 +780,23 @@ struct RuntimeTerminalTests {
         guard case .failure(.apply(.lifetimeBoundaryFailed)) = registered else {
             Issue.record("registration fault must not report a running runtime, got \(registered)")
             return
+        }
+        // PTY-stage faults travel the same request path: each fails the
+        // terminal open without touching sibling launches.
+        for ptyFault in [RuntimeSpawnFault.openpt, .grant, .unlock, .slave] {
+            let ptyFailed = opened.supervisor.launch(
+                host: nil,
+                command: command,
+                plan: plan,
+                io: .pseudoTerminal(rows: 24, columns: 80),
+                admission: .failClosed,
+                sessionStore: .file(log),
+                spawnFault: ptyFault
+            )
+            guard case .failure(.apply(.processSpawnFailed)) = ptyFailed else {
+                Issue.record("PTY fault \(ptyFault) must fail the open, got \(ptyFailed)")
+                return
+            }
         }
         #expect(FileManager.default.fileExists(atPath: marker.path) == false)
         #expect(opened.supervisor.runtimeFacts().contains { $0.running } == false)

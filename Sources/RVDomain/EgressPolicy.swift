@@ -45,7 +45,11 @@ public struct EgressHostPolicy: Sendable, Equatable {
         mode: .publicHTTPS
     )
 
+    /// Exact-host allowlist. Allowlist mode only; ignored in
+    /// `.publicHTTPS`, which admits any valid public DNS name.
     public var allowedHosts: Set<String>
+    /// Single admitted port. Allowlist mode only; ignored in
+    /// `.publicHTTPS`, which admits the web ports (80/443).
     public var allowedPort: Int
     public var mode: ExternalMode
 

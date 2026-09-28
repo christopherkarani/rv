@@ -139,8 +139,17 @@ extension WorkspaceDeveloperHome {
             try? manager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path)
             return
         }
-        manager.createFile(atPath: path, contents: data)
-        try? manager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path)
+        // Atomic refresh: stage beside the target and rename over it, so a
+        // cage exec racing a content change never observes a torn shim.
+        let staged = "\(bin)/.\(name).\(UUID().uuidString).tmp"
+        guard manager.createFile(atPath: staged, contents: data) else { return }
+        try? manager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: staged)
+        let renamed = staged.withCString { from in
+            path.withCString { to in rename(from, to) == 0 }
+        }
+        if renamed == false {
+            _ = staged.withCString { unlink($0) }
+        }
     }
 
     /// SwiftPM evaluates manifests under `/usr/bin/sandbox-exec` (absolute
@@ -239,20 +248,24 @@ extension WorkspaceDeveloperHome {
     /// host gitconfig (which may carry credentials, helpers, and signing
     /// configuration that cannot work in the cage). Writes
     /// `<home>/.gitconfig` only when absent; never overwrites user state.
-    /// Signing is disabled: no keys exist in the cage.
-    func seedGitIdentity(hostHome: String) {
+    /// Signing is disabled: no keys exist in the cage. The identity reader
+    /// is injectable so tests seed without spawning `git`.
+    func seedGitIdentity(
+        hostHome: String,
+        gitIdentity: @Sendable (String) -> (name: String?, email: String?) = {
+            Self.hostGitIdentity(hostHome: $0)
+        }
+    ) {
         let manager = FileManager.default
         let destination = "\(home)/.gitconfig"
         guard manager.fileExists(atPath: destination) == false else { return }
-        guard let git = Self.hostGitExecutable() else { return }
-        let name = Self.hostGlobalGitValue(git: git, key: "user.name", hostHome: hostHome)
-        let email = Self.hostGlobalGitValue(git: git, key: "user.email", hostHome: hostHome)
-        guard name != nil || email != nil else { return }
+        let identity = gitIdentity(hostHome)
+        guard identity.name != nil || identity.email != nil else { return }
         var lines = ["[user]"]
-        if let name {
+        if let name = identity.name {
             lines.append("\tname = \(gitconfigEscape(name))")
         }
-        if let email {
+        if let email = identity.email {
             lines.append("\temail = \(gitconfigEscape(email))")
         }
         lines.append("[commit]")
@@ -260,8 +273,25 @@ extension WorkspaceDeveloperHome {
         lines.append("[tag]")
         lines.append("\tgpgsign = false")
         let content = lines.joined(separator: "\n") + "\n"
-        manager.createFile(atPath: destination, contents: Data(content.utf8))
-        try? manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: destination)
+        // Create-only, atomically: link the staged file into place so a
+        // concurrent seed (or a user file appearing in the window) wins
+        // instead of being overwritten or torn.
+        let staged = "\(home)/.gitconfig.\(UUID().uuidString).tmp"
+        guard manager.createFile(atPath: staged, contents: Data(content.utf8)) else { return }
+        try? manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: staged)
+        let linked = staged.withCString { from in
+            destination.withCString { to in link(from, to) == 0 }
+        }
+        _ = staged.withCString { unlink($0) }
+        guard linked else { return }
+    }
+
+    static func hostGitIdentity(hostHome: String) -> (name: String?, email: String?) {
+        guard let git = Self.hostGitExecutable() else { return (nil, nil) }
+        return (
+            Self.hostGlobalGitValue(git: git, key: "user.name", hostHome: hostHome),
+            Self.hostGlobalGitValue(git: git, key: "user.email", hostHome: hostHome)
+        )
     }
 
     static func hostGitExecutable() -> String? {

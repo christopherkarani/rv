@@ -320,6 +320,7 @@ func spawnSeatbeltProcess(
     // closes every descriptor it opened, so the retry starts clean, and
     // deterministic failures fail twice with the same error.
     usleep(100_000)
+    if blockingWorkIsCancelled() { return first }
     return spawnSeatbeltProcessBody(
         request,
         workspace: workspace,
@@ -329,6 +330,23 @@ func spawnSeatbeltProcess(
         admission: admission,
         egressProxyPort: egressProxyPort
     )
+}
+
+/// Map a request-scoped launch fault to the PTY-open stage it fails.
+/// Non-PTY faults fail at their own gates, not here.
+func terminalOpenFault(for fault: RuntimeSpawnFault?) -> TerminalOpenFault? {
+    switch fault {
+    case .openpt:
+        return .master
+    case .grant:
+        return .grant
+    case .unlock:
+        return .unlock
+    case .slave:
+        return .slaveOpen
+    case .spawn, .register, nil:
+        return nil
+    }
 }
 
 func spawnSeatbeltProcessBody(
@@ -393,7 +411,13 @@ func spawnSeatbeltProcessBody(
         terminal = nil
         spawnFlags = Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT) | suspended | signals
     case .pseudoTerminal(let rows, let columns):
-        guard let opened = RuntimeTerminal.open(rows: rows, columns: columns) else {
+        guard
+            let opened = RuntimeTerminal.open(
+                rows: rows,
+                columns: columns,
+                openFault: terminalOpenFault(for: request.spawnFault)
+            )
+        else {
             return .failure(.processSpawnFailed)
         }
         terminal = opened
@@ -498,10 +522,12 @@ func spawnSeatbeltProcessBody(
     ])
     arguments.append(contentsOf: request.command.arguments)
     let agentBin = AgentBin.installedDirectory()
-    let productive = resolveProductiveWorkspace(
-        workspacePath: workspace,
-        agentBin: agentBin
-    )
+    let productive =
+        request.productive
+        ?? resolveProductiveWorkspace(
+            workspacePath: workspace,
+            agentBin: agentBin
+        )
     if case .pseudoTerminal = request.io {
         // Stage into the RV-managed home; the degraded workspace home
         // keeps staging working when no managed home exists.
@@ -600,7 +626,8 @@ func spawnSeatbeltProcessBody(
             profileSource: profile.source,
             workspacePath: workspace,
             sessionLeader: pid,
-            egressProxyPort: egressProxyPort
+            egressProxyPort: egressProxyPort,
+            productive: productive
         ),
         requestRead: parentRead,
         responseWrite: parentWrite
@@ -625,13 +652,22 @@ func spawnSeatbeltProcessBody(
     return .success(child)
 }
 
+/// Cage environment for one spawn: the projected host environment plus
+/// runtime-owned values.
+///
+/// The defaults are effectful: a nil host reads the live process
+/// environment, and a nil productive re-resolves the workspace (live
+/// probes plus idempotent `ensure`, and possibly a `git` spawn for
+/// commit-identity seeding). The spawn path passes prepare-time facts
+/// explicitly so each launch resolves once.
 func containedRuntimeEnvironment(
     workspace: String,
     io: IsolatedIO,
     agentBin: String? = nil,
     egressProxyPort: Int? = nil,
     hostEnvironment: [String: String]? = nil,
-    productive: ProductiveWorkspaceResolution? = nil
+    productive: ProductiveWorkspaceResolution? = nil,
+    probe: ContainedPATHProbe = .live
 ) -> [String] {
     let host = hostEnvironment ?? ProcessInfo.processInfo.environment
     let context =
@@ -639,7 +675,8 @@ func containedRuntimeEnvironment(
         ?? resolveProductiveWorkspace(
             workspacePath: workspace,
             hostEnvironment: host,
-            agentBin: agentBin
+            agentBin: agentBin,
+            probe: probe
         )
     let cageHome = context.developerHome?.home ?? workspace
     let cageTmp = context.developerHome.map { $0.tmp + "/" } ?? workspace
@@ -671,7 +708,7 @@ func containedRuntimeEnvironment(
     }
     values.append(("PWD", workspace))
     if let candidate = host["SHELL"], isUsableAbsolutePath(candidate),
-        FileManager.default.isExecutableFile(atPath: candidate)
+        probe.isExecutable(candidate)
     {
         values.append(("SHELL", candidate))
     } else {
