@@ -13,11 +13,27 @@ import RVDomain
 /// Correlated per-host knobs for extractFailClosed. One const per
 /// adapter; Codex keys must never mix with the Cursor matcher or epoch flag.
 struct ScanJSONLProfile: Sendable {
-    var sessionKeys: [String]
-    var recurseSessionKeys: [String] = []
-    var timestampKeys: [String]
-    var allowEpochTimestamp: Bool
-    var commands: @Sendable ([String: Any]) -> [String]
+    let sessionKeys: [String]
+    let recurseSessionKeys: [String]
+    let timestampKeys: [String]
+    let allowEpochTimestamp: Bool
+    let commands: @Sendable ([String: Any]) -> [String]
+
+    // Explicit init: a let with a default is excluded from the memberwise
+    // initializer, so the default for recurseSessionKeys lives here.
+    init(
+        sessionKeys: [String],
+        recurseSessionKeys: [String] = [],
+        timestampKeys: [String],
+        allowEpochTimestamp: Bool,
+        commands: @escaping @Sendable ([String: Any]) -> [String]
+    ) {
+        self.sessionKeys = sessionKeys
+        self.recurseSessionKeys = recurseSessionKeys
+        self.timestampKeys = timestampKeys
+        self.allowEpochTimestamp = allowEpochTimestamp
+        self.commands = commands
+    }
 }
 
 enum ScanJSONLEngine {
