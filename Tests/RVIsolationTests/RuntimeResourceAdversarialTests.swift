@@ -197,12 +197,12 @@ import Testing
         executable: "/bin/sh",
         arguments: [
             "-c",
-            "printf launched > nil-launched.txt; "
-                + "if cat \"$HOME/.config/auth\" >/dev/null 2>&1; then echo leak > nil-leak.txt; fi",
+            "if cat \"$HOME/.config/auth\" >/dev/null 2>&1; then echo leak > nil-leak.txt; fi; "
+                + "printf launched > nil-launched.txt",
         ]
     ).get()
+    // The marker prints last, so its presence proves the leak branch ran.
     #expect(resourceProbeWaitFor(tree.workspaceURL.appendingPathComponent("nil-launched.txt")))
-    Thread.sleep(forTimeInterval: 0.5)
     #expect(FileManager.default.fileExists(atPath: tree.workspaceURL.appendingPathComponent("nil-leak.txt").path)
         == false)
 
@@ -211,9 +211,11 @@ import Testing
         arguments: ["-c", "cat \"$HOME/.config/auth\" > picked-selected.txt"],
         resourceProfileID: "alpha"
     ).get()
-    #expect(resourceProbeWaitFor(tree.workspaceURL.appendingPathComponent("picked-selected.txt")))
-    #expect(try String(contentsOf: tree.workspaceURL.appendingPathComponent("picked-selected.txt"), encoding: .utf8)
-        == "synthetic-default")
+    // Poll for content, not mere existence: the shell creates the file
+    // before `cat` finishes writing it.
+    #expect(resourceProbeWaitForContent(
+        tree.workspaceURL.appendingPathComponent("picked-selected.txt"), equals: "synthetic-default"
+    ))
 }
 
 @Test func profileStagingFailureKeepsLaunchFailurePath() throws {
@@ -362,5 +364,16 @@ private func resourceProbeWaitFor(_ url: URL, seconds: TimeInterval = 20) -> Boo
         Thread.sleep(forTimeInterval: 0.02)
     }
     return FileManager.default.fileExists(atPath: url.path)
+}
+
+private func resourceProbeWaitForContent(
+    _ url: URL, equals expected: String, seconds: TimeInterval = 20
+) -> Bool {
+    let deadline = Date().addingTimeInterval(seconds)
+    while Date() < deadline {
+        if (try? String(contentsOf: url, encoding: .utf8)) == expected { return true }
+        Thread.sleep(forTimeInterval: 0.02)
+    }
+    return (try? String(contentsOf: url, encoding: .utf8)) == expected
 }
 #endif

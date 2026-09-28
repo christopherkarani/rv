@@ -782,9 +782,13 @@ struct WorkspaceHostTests {
         ).get()
         #expect(staged.hook == nil)
         #expect(openedHookHost(supervisor, staged.runtime) == nil)
-        #expect(waitFor(tree.workspaceURL.appendingPathComponent("proved-muse.txt")))
-        #expect(try String(contentsOf: tree.workspaceURL.appendingPathComponent("proved-muse.txt"), encoding: .utf8)
-            == "synthetic-muse-secret")
+        // Poll for content, not mere existence: the shell creates the file
+        // before `cat` finishes writing it.
+        #expect(waitUntil(seconds: 20) {
+            (try? String(
+                contentsOf: tree.workspaceURL.appendingPathComponent("proved-muse.txt"), encoding: .utf8
+            )) == "synthetic-muse-secret"
+        })
         // A known host that does not match the filter stages nothing.
         _ = try client.launchRuntime(
             executable: "/bin/sh",
@@ -796,8 +800,8 @@ struct WorkspaceHostTests {
             hook: "codex",
             resourceProfileID: "phase04"
         ).get()
+        // The marker prints last, so its presence proves the leak branch ran.
         #expect(waitFor(tree.workspaceURL.appendingPathComponent("launched-codex.txt")))
-        Thread.sleep(forTimeInterval: 0.5)
         #expect(FileManager.default.fileExists(atPath: tree.workspaceURL.appendingPathComponent("leak-codex.txt").path)
             == false)
     }

@@ -1062,8 +1062,16 @@ final class EventBoard: @unchecked Sendable {
             return false
         }
         guard accepted else {
+            if invalidBatch, markOverflow(runtime) {
+                // One runtime sent an out-of-order replay frame. Drop only
+                // its incomplete output; every other runtime's queued bytes
+                // and all pending RPC waiters stay intact.
+                condition.broadcast()
+                condition.unlock()
+                return true
+            }
             condition.unlock()
-            failAll(invalidBatch ? .malformed : .queueOverloaded)
+            failAll(.queueOverloaded)
             return false
         }
         condition.broadcast()
@@ -1186,7 +1194,7 @@ final class EventBoard: @unchecked Sendable {
         let message = messages.remove(at: index)
         lastServedRuntime = message.runtime
         let weight = EventBoard.payloadBytes(message)
-        queuedBytes -= weight
+        queuedBytes = max(0, queuedBytes - weight)
         if let runtime = message.runtime, weight > 0 {
             let remainder = (runtimeBytes[runtime] ?? 0) - weight
             runtimeBytes[runtime] = remainder > 0 ? remainder : nil

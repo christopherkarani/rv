@@ -8,13 +8,13 @@ public struct RuntimeResourceProfile: Codable, Sendable, Equatable {
         /// launch; otherwise only launches whose hook name matches.
         /// Hook-less launches (shells) stage only unfiltered credentials,
         /// so agent secrets never land in a plain shell. An empty list
-        /// decodes to nil, so the two spellings never diverge.
+        /// normalizes to nil, so the two spellings never diverge.
         public var agents: [String]?
 
         public init(source: String, destination: String, agents: [String]? = nil) {
             self.source = source
             self.destination = destination
-            self.agents = agents
+            self.agents = agents.flatMap { $0.isEmpty ? nil : $0 }
         }
 
         private enum CodingKeys: String, CodingKey {
@@ -94,7 +94,7 @@ public struct RuntimeResourceProfile: Codable, Sendable, Equatable {
         public var env: String
         /// Agent hook names this entry injects for. Nil means every
         /// launch; otherwise only launches whose agent tag matches. An
-        /// empty list decodes to nil, so the two spellings never diverge.
+        /// empty list normalizes to nil, so the two spellings never diverge.
         public var agents: [String]?
 
         public init(
@@ -105,7 +105,7 @@ public struct RuntimeResourceProfile: Codable, Sendable, Equatable {
             self.account = account
             self.field = field
             self.env = env
-            self.agents = agents
+            self.agents = agents.flatMap { $0.isEmpty ? nil : $0 }
         }
 
         private enum CodingKeys: String, CodingKey {

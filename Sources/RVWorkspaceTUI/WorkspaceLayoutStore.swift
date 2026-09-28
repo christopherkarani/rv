@@ -25,14 +25,33 @@ public struct WorkspaceLayoutOpenResult {
 }
 
 /// The caller retains this session for the lifetime of its view and writer lock.
-public final class WorkspaceLayoutSession {
+/// Thread-safe: the save pump calls `save` from its worker and the reducing
+/// thread, so the mutable commit state carries its own lock instead of
+/// relying on the pump's saver-lock convention.
+public final class WorkspaceLayoutSession: @unchecked Sendable {
     public let viewID: ViewID
     public let isPrimary: Bool
     public let directoryURL: URL
-    public private(set) var view: WorkspaceView
-    public private(set) var revision: UInt64
-    public private(set) var requiresReopen = false
+    public var view: WorkspaceView {
+        lock.lock()
+        defer { lock.unlock() }
+        return committedView
+    }
+    public var revision: UInt64 {
+        lock.lock()
+        defer { lock.unlock() }
+        return committedRevision
+    }
+    public var requiresReopen: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return reopenRequired
+    }
 
+    private let lock = NSLock()
+    private var committedView: WorkspaceView
+    private var committedRevision: UInt64
+    private var reopenRequired = false
     private let directoryFD: Int32
     private let lockFD: Int32
     private let projectKey: String
@@ -47,8 +66,8 @@ public final class WorkspaceLayoutSession {
         self.directoryFD = directoryFD
         self.lockFD = lockFD
         self.projectKey = projectKey
-        self.view = view
-        self.revision = revision
+        self.committedView = view
+        self.committedRevision = revision
         self.failDirectorySyncAfterRename = failDirectorySyncAfterRename
     }
 
@@ -60,12 +79,14 @@ public final class WorkspaceLayoutSession {
 
     /// After an uncertain commit, discard this session and reopen to reconcile the visible revision.
     public func save(_ next: WorkspaceView) throws {
-        guard !requiresReopen else { throw WorkspaceLayoutStoreError.requiresReopen }
-        guard next.id == viewID, WorkspaceLayoutStore.valid(next), revision < UInt64.max else {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !reopenRequired else { throw WorkspaceLayoutStoreError.requiresReopen }
+        guard next.id == viewID, WorkspaceLayoutStore.valid(next), committedRevision < UInt64.max else {
             throw WorkspaceLayoutStoreError.invalidView
         }
         let document = SavedLayout(version: 1, projectKey: projectKey, viewID: viewID.rawValue,
-                                   revision: revision + 1, view: next)
+                                   revision: committedRevision + 1, view: next)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let bytes = try encoder.encode(document)
@@ -78,11 +99,11 @@ public final class WorkspaceLayoutSession {
                                                   viewID: viewID,
                                                   failDirectorySyncAfterRename: failDirectorySyncAfterRename)
         } catch WorkspaceLayoutStoreError.commitUncertain {
-            requiresReopen = true
+            reopenRequired = true
             throw WorkspaceLayoutStoreError.commitUncertain(viewID)
         }
-        view = next
-        revision += 1
+        committedView = next
+        committedRevision += 1
     }
 }
 

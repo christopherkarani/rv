@@ -46,3 +46,23 @@ import Testing
     #expect(checked == ["/opt/tools/mystery"])
     #expect(RunCommandParser.resolve(parsed, path: "/missing", isExecutable: { _ in false }) == .failure(.executableUnavailable))
 }
+
+@Test func resolveRefusesSlashRelativeAndNulExecutables() throws {
+    let slashRelative = try RunCommandParser.parse("bin/tool --flag").get()
+    #expect(RunCommandParser.resolve(slashRelative, path: "/usr/bin", isExecutable: { _ in true })
+        == .failure(.executableUnavailable))
+    let nulName = try RunCommandParser.parse("to\0ol").get()
+    #expect(RunCommandParser.resolve(nulName, path: "/usr/bin", isExecutable: { _ in true })
+        == .failure(.executableUnavailable))
+}
+
+@Test func resolveSkipsNulPathEntries() throws {
+    let parsed = try RunCommandParser.parse("mystery").get()
+    var checked: [String] = []
+    let resolved = RunCommandParser.resolve(parsed, path: "/no\0pe:/opt/tools") { candidate in
+        checked.append(candidate)
+        return true
+    }
+    #expect(resolved == .success(ParsedRuntimeCommand(executable: "/opt/tools/mystery", arguments: [])))
+    #expect(checked == ["/opt/tools/mystery"])
+}

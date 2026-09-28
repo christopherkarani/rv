@@ -376,7 +376,7 @@ private func peelCommandWrapper(
         if token == "-v" || token == "-V" {
             return .notWrapper
         }
-        if token == "-p" || token.hasPrefix("-") {
+        if token.hasPrefix("-") {
             index += 1
             continue
         }

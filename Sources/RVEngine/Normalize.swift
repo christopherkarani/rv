@@ -20,136 +20,23 @@ struct CommandToken {
     var wasAnsiC: Bool = false
 }
 
+/// Legacy tokenizer shape kept for `DocumentationQuery`, `Analyze*`, and the
+/// `peelTimeout` compatibility overload. The byte loop lives in
+/// `ShellPipeline.tokenize`; this maps its output 1:1.
 func tokenizeCommand(_ text: String) -> [CommandToken] {
-    var tokens: [CommandToken] = []
-    let utf8 = text.utf8
-    var index = utf8.startIndex
-
-    while index < utf8.endIndex {
-        var emittedNewline = false
-        while index < utf8.endIndex {
-            if let width = newlineWidth(utf8, at: index) {
-                if emittedNewline == false {
-                    tokens.append(CommandToken(decoded: "\n", wasQuoted: false))
-                    emittedNewline = true
-                }
-                index = utf8.index(index, offsetBy: width)
-                continue
-            }
-            let width = whitespaceLength(utf8, at: index)
-            if width == 0 { break }
-            index = utf8.index(index, offsetBy: width)
-        }
-        guard index < utf8.endIndex else { break }
-
-        let tokenStart = index
-        var decoded = ""
-        var wasQuoted = false
-        var wasAnsiC = false
-
-        while index < utf8.endIndex, whitespaceLength(utf8, at: index) == 0 {
-            let byte = utf8[index]
-            if byte == UInt8(ascii: "$"),
-               utf8.index(after: index) < utf8.endIndex,
-               utf8[utf8.index(after: index)] == UInt8(ascii: "(")
-            {
-                let start = index
-                index = utf8.index(after: utf8.index(after: index))
-                var depth = 1
-                while index < utf8.endIndex, depth > 0 {
-                    let current = utf8[index]
-                    if current == UInt8(ascii: "(") { depth += 1 }
-                    else if current == UInt8(ascii: ")") { depth -= 1 }
-                    utf8.formIndex(after: &index)
-                }
-                decoded.append(contentsOf: text[start..<index])
-                continue
-            }
-            if byte == UInt8(ascii: "$"),
-               utf8.index(after: index) < utf8.endIndex,
-               utf8[utf8.index(after: index)] == UInt8(ascii: "'")
-            {
-                wasQuoted = true
-                wasAnsiC = true
-                utf8.formIndex(after: &index)
-                utf8.formIndex(after: &index)
-                let innerStart = index
-                while index < utf8.endIndex, utf8[index] != UInt8(ascii: "'") {
-                    utf8.formIndex(after: &index)
-                }
-                decoded.append("$")
-                decoded.append(contentsOf: text[innerStart..<index])
-                if index < utf8.endIndex {
-                    utf8.formIndex(after: &index)
-                }
-                continue
-            }
-            if byte == UInt8(ascii: "`") {
-                let start = index
-                utf8.formIndex(after: &index)
-                while index < utf8.endIndex, utf8[index] != UInt8(ascii: "`") {
-                    utf8.formIndex(after: &index)
-                }
-                if index < utf8.endIndex {
-                    utf8.formIndex(after: &index)
-                }
-                decoded.append(contentsOf: text[start..<index])
-                continue
-            }
-            if byte == UInt8(ascii: "\"") || byte == UInt8(ascii: "'") {
-                wasQuoted = true
-                utf8.formIndex(after: &index)
-                let innerStart = index
-                while index < utf8.endIndex, utf8[index] != byte {
-                    utf8.formIndex(after: &index)
-                }
-                decoded.append(contentsOf: text[innerStart..<index])
-                if index < utf8.endIndex {
-                    utf8.formIndex(after: &index)
-                }
-                continue
-            }
-            let runStart = index
-            while index < utf8.endIndex, whitespaceLength(utf8, at: index) == 0 {
-                let current = utf8[index]
-                if current == UInt8(ascii: "`")
-                    || current == UInt8(ascii: "\"")
-                    || current == UInt8(ascii: "'")
-                {
-                    break
-                }
-                if current == UInt8(ascii: "$"),
-                   utf8.index(after: index) < utf8.endIndex
-                {
-                    let next = utf8[utf8.index(after: index)]
-                    if next == UInt8(ascii: "(") || next == UInt8(ascii: "'") {
-                        break
-                    }
-                }
-                index = nextScalarIndex(utf8, index)
-            }
-            if index > runStart {
-                decoded.append(contentsOf: text[runStart..<index])
-            }
-        }
-
-        if index > tokenStart {
-            tokens.append(CommandToken(decoded: decoded, wasQuoted: wasQuoted, wasAnsiC: wasAnsiC))
-        }
+    ShellPipeline.tokenize(text).map {
+        CommandToken(decoded: $0.lexeme, wasQuoted: $0.wasQuoted, wasAnsiC: $0.wasAnsiC)
     }
-    return tokens
 }
 
 func applyRoleAwareQuotes(_ text: String) -> String {
-    let legacy = tokenizeCommand(text)
-    guard !legacy.isEmpty else { return text }
-    return applyRoleAwareQuotes(tokens: legacy.map {
-        Token(lexeme: $0.decoded, wasQuoted: $0.wasQuoted, wasAnsiC: $0.wasAnsiC)
-    })
+    let tokens = ShellPipeline.tokenize(text)
+    guard !tokens.isEmpty else { return text }
+    return applyRoleAwareQuotes(tokens: tokens)
 }
 
-/// Role-aware masking over pipeline tokens. The `String` overload maps the
-/// legacy tokenizer output here 1:1; the facade passes `ShellPipeline.tokenize`.
+/// Role-aware masking over pipeline tokens. Both overloads run over
+/// `ShellPipeline.tokenize` output.
 func applyRoleAwareQuotes(tokens: [Token]) -> String {
     var tokens = tokens
     guard !tokens.isEmpty else { return "" }
@@ -182,7 +69,7 @@ func applyRoleAwareQuotes(tokens: [Token]) -> String {
         let decoded = token.lexeme
 
         if pendingInterpreterPayload {
-            if token.wasQuoted, containsInlineCode(token) == false {
+            if token.wasQuoted, token.containsInlineCode == false {
                 tokens[index].lexeme = " "
             }
             pendingInterpreterPayload = false
@@ -239,14 +126,14 @@ func applyRoleAwareQuotes(tokens: [Token]) -> String {
                 continue
             }
             if let masked = maskAttachedInterpreterProgram(command: commandBase, decoded: decoded),
-               containsInlineCode(token) == false
+               token.containsInlineCode == false
             {
                 tokens[index].lexeme = masked
                 continue
             }
         }
 
-        if containsInlineCode(token) {
+        if token.containsInlineCode {
             pendingDataFlag = false
             continue
         }
@@ -289,13 +176,13 @@ func applyRoleAwareQuotes(tokens: [Token]) -> String {
         }
 
         if gitSubcommand == "config" {
-            if containsInlineCode(token) == false, let masked = maskGitConfigAssignment(decoded) {
+            if token.containsInlineCode == false, let masked = maskGitConfigAssignment(decoded) {
                 tokens[index].lexeme = masked
                 gitConfigValuePending = false
                 pendingDataFlag = false
                 continue
             }
-            if gitConfigValuePending, containsInlineCode(token) == false {
+            if gitConfigValuePending, token.containsInlineCode == false {
                 tokens[index].lexeme = String(repeating: " ", count: max(decoded.count, 1))
                 gitConfigValuePending = false
                 pendingDataFlag = false
@@ -308,7 +195,7 @@ func applyRoleAwareQuotes(tokens: [Token]) -> String {
 
         if unquotedDataMaskSafe,
            isAllArgsData(commandBase),
-           containsInlineCode(token) == false
+           token.containsInlineCode == false
         {
             tokens[index].lexeme = String(repeating: " ", count: max(decoded.count, 1))
             pendingDataFlag = false
@@ -392,10 +279,6 @@ private func consumeWrapper(decoded: String, seek: inout WrapperSeek) -> String?
 
 private func isShellSeparator(_ token: String) -> Bool {
     token == "&&" || token == "||" || token == ";" || token == "|" || token == "\n"
-}
-
-private func containsInlineCode(_ token: Token) -> Bool {
-    token.lexeme.contains("$(") || token.lexeme.contains("`")
 }
 
 /// Tokenizer is whitespace-only, so `echo ok; git reset --hard` is one
@@ -981,35 +864,6 @@ private func joinTokenLexemes(_ tokens: [Token]) -> String {
         lastWasNewline = false
     }
     return out
-}
-
-/// Unquoted `\n` / `\r\n` / `\r` width. Quoted newlines stay inside the token.
-private func newlineWidth(_ utf8: String.UTF8View, at index: String.Index) -> Int? {
-    guard index < utf8.endIndex else { return nil }
-    let byte = utf8[index]
-    if byte == UInt8(ascii: "\n") { return 1 }
-    if byte == UInt8(ascii: "\r") {
-        let next = utf8.index(after: index)
-        if next < utf8.endIndex, utf8[next] == UInt8(ascii: "\n") {
-            return 2
-        }
-        return 1
-    }
-    return nil
-}
-
-private func whitespaceLength(_ utf8: String.UTF8View, at index: String.Index) -> Int {
-    let byte = utf8[index]
-    if byte < 0x80 {
-        switch byte {
-        case 9, 10, 11, 12, 13, 32:
-            return 1
-        default:
-            return 0
-        }
-    }
-    guard let (scalar, width) = decodeScalar(utf8, at: index) else { return 0 }
-    return Character(scalar).isWhitespace ? width : 0
 }
 
 private func nextScalarIndex(_ utf8: String.UTF8View, _ index: String.Index) -> String.Index {

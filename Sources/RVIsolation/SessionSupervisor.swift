@@ -683,6 +683,7 @@ private func addingResourceEnvironment(
     hostEnvironment: [String: String]?
 ) -> [String] {
     var values = values
+    var present = environmentNames(values)
     let host = hostEnvironment ?? ProcessInfo.processInfo.environment
     for entry in resources?.profile.environment ?? [] {
         let value: String?
@@ -695,6 +696,7 @@ private func addingResourceEnvironment(
             continue
         }
         guard let value, !value.contains("\0"), value.utf8.count <= 8_192 else { continue }
+        guard present.insert(entry.name).inserted else { continue }
         values.append("\(entry.name)=\(value)")
     }
     return values
@@ -705,11 +707,20 @@ private func addingKeychainEnvironment(
     keychain: [(name: String, value: String)]
 ) -> [String] {
     var values = values
+    var present = environmentNames(values)
     for entry in keychain {
         guard !entry.value.contains("\0"), entry.value.utf8.count <= 8_192 else { continue }
+        guard present.insert(entry.name).inserted else { continue }
         values.append("\(entry.name)=\(entry.value)")
     }
     return values
+}
+
+/// Names already carried by `NAME=value` entries. First spelling wins:
+/// `execve` lookup returns the first match, so later duplicates would be
+/// dead entries that only confuse auditors.
+private func environmentNames(_ values: [String]) -> Set<String> {
+    Set(values.compactMap { $0.split(separator: "=", maxSplits: 1).first.map(String.init) })
 }
 
 func watchSeatbeltProcess(

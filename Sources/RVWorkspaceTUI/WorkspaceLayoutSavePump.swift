@@ -49,9 +49,8 @@ public final class WorkspaceLayoutSavePump: @unchecked Sendable {
     }
 
     /// Wakes the saver so a just-reduced view change commits without
-    /// waiting for the next poll tick. Safe to call from any thread; a
-    /// burst of kicks collapses into one extra save pass at most, and an
-    /// unchanged view makes the pass a no-op.
+    /// waiting for the next poll tick. Safe to call from any thread; each
+    /// kick wakes one pass, and an unchanged view makes the pass a no-op.
     public func kick() {
         kicked.signal()
     }

@@ -217,3 +217,22 @@ private func keychainReader(returning data: Data?) -> KeychainReader {
     #expect(binary.isFailure(.keychain(env: "SYNTHETIC_KEY")))
     #expect(ResourceStagingError.keychain(env: "SYNTHETIC_KEY").detail == "keychain 'SYNTHETIC_KEY'")
 }
+
+@Test func emptyAgentsListNormalizesToNilInInitAndDecode() throws {
+    let credential = RuntimeResourceProfile.Credential(source: "a", destination: "b", agents: [])
+    #expect(credential.agents == nil)
+    let entry = RuntimeResourceProfile.KeychainEntry(
+        service: "s", account: "a", env: "E", agents: []
+    )
+    #expect(entry.agents == nil)
+    let decodedCredential = try JSONDecoder().decode(
+        RuntimeResourceProfile.Credential.self,
+        from: Data(#"{"source":"a","destination":"b","agents":[]}"#.utf8)
+    )
+    #expect(decodedCredential == credential)
+    let decodedEntry = try JSONDecoder().decode(
+        RuntimeResourceProfile.KeychainEntry.self,
+        from: Data(#"{"service":"s","account":"a","env":"E","agents":[]}"#.utf8)
+    )
+    #expect(decodedEntry == entry)
+}
