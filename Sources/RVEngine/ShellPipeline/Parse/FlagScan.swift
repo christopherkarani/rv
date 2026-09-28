@@ -19,7 +19,7 @@ extension ShellPipeline {
     /// `.dangling` (today's `checkout -b` / `switch -c` behavior).
     public static func scanFlags(
         _ argv: Argv,
-        values spec: FlagValueSpec = .none
+        valueSpec spec: FlagValueSpec = .none
     ) -> [FlagToken] {
         var out: [FlagToken] = []
         out.reserveCapacity(argv.args.count)

@@ -34,6 +34,8 @@ public enum FlagToken: Sendable, Hashable, Equatable {
     /// A value-taking flag whose value is missing (end of argv) or
     /// dash-led under a `rejectsDashValues` spec. All of today's parsers
     /// fail the whole parse in these cases. Only `scanFlags` produces this.
+    /// `flag` is the verbatim argv word with dashes (e.g. `"--branch"`,
+    /// `"-b"`), unlike the dash-stripped `long`/`shortEquals` names.
     case dangling(flag: String)
 
     /// Structural classification of one argv word. Total: every string maps

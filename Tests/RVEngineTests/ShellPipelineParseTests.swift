@@ -69,7 +69,7 @@ private let singleDashWordGoldens: [(word: String, expected: String?)] = [
         let spec = FlagValueSpec(valueLongs: ["date"])
         let argv = Argv(program: "touch", args: ["--date=2024-01-01", "file"])
         #expect(
-            ShellPipeline.scanFlags(argv, values: spec) == [
+            ShellPipeline.scanFlags(argv, valueSpec: spec) == [
                 .long(name: "date", value: "2024-01-01"),
                 .positional("file"),
             ]
@@ -78,7 +78,7 @@ private let singleDashWordGoldens: [(word: String, expected: String?)] = [
         // `--date=` without arming its expect flag.
         let empty = Argv(program: "touch", args: ["--date=", "file"])
         #expect(
-            ShellPipeline.scanFlags(empty, values: spec) == [
+            ShellPipeline.scanFlags(empty, valueSpec: spec) == [
                 .long(name: "date", value: ""),
                 .positional("file"),
             ]
@@ -89,7 +89,7 @@ private let singleDashWordGoldens: [(word: String, expected: String?)] = [
         let spec = FlagValueSpec(valueLongs: ["source"])
         let argv = Argv(program: "git", args: ["--source", "HEAD", "file"])
         #expect(
-            ShellPipeline.scanFlags(argv, values: spec) == [
+            ShellPipeline.scanFlags(argv, valueSpec: spec) == [
                 .long(name: "source", value: "HEAD"),
                 .positional("file"),
             ]
@@ -101,8 +101,21 @@ private let singleDashWordGoldens: [(word: String, expected: String?)] = [
         let spec = FlagValueSpec(valueShorts: ["t", "d"])
         let argv = Argv(program: "touch", args: ["-td", "2024-01-01", "file"])
         #expect(
-            ShellPipeline.scanFlags(argv, values: spec) == [
+            ShellPipeline.scanFlags(argv, valueSpec: spec) == [
                 .shorts(letters: ["t", "d"], value: "2024-01-01"),
+                .positional("file"),
+            ]
+        )
+    }
+
+    @Test func scan_shortEqualsNeverConsumes() {
+        // Classify-first passthrough: `-t=x` is already `.shortEquals`,
+        // so it never consumes even when `t` takes a value.
+        let spec = FlagValueSpec(valueShorts: ["t"])
+        let argv = Argv(program: "touch", args: ["-t=x", "file"])
+        #expect(
+            ShellPipeline.scanFlags(argv, valueSpec: spec) == [
+                .shortEquals(name: "t", value: "x"),
                 .positional("file"),
             ]
         )
@@ -114,7 +127,7 @@ private let singleDashWordGoldens: [(word: String, expected: String?)] = [
         let spec = FlagValueSpec(valueShorts: ["t", "d"])
         let argv = Argv(program: "touch", args: ["-t", "--", "file"])
         #expect(
-            ShellPipeline.scanFlags(argv, values: spec) == [
+            ShellPipeline.scanFlags(argv, valueSpec: spec) == [
                 .shorts(letters: ["t"], value: "--"),
                 .positional("file"),
             ]
@@ -122,7 +135,7 @@ private let singleDashWordGoldens: [(word: String, expected: String?)] = [
         // ... and `-t -d` consumes the flag-looking word too.
         let argv2 = Argv(program: "touch", args: ["-t", "-d", "file"])
         #expect(
-            ShellPipeline.scanFlags(argv2, values: spec) == [
+            ShellPipeline.scanFlags(argv2, valueSpec: spec) == [
                 .shorts(letters: ["t"], value: "-d"),
                 .positional("file"),
             ]
@@ -132,12 +145,12 @@ private let singleDashWordGoldens: [(word: String, expected: String?)] = [
     @Test func scan_missingValueDangles() {
         let longSpec = FlagValueSpec(valueLongs: ["source"])
         #expect(
-            ShellPipeline.scanFlags(Argv(program: "git", args: ["--source"]), values: longSpec)
+            ShellPipeline.scanFlags(Argv(program: "git", args: ["--source"]), valueSpec: longSpec)
                 == [.dangling(flag: "--source")]
         )
         let shortSpec = FlagValueSpec(valueShorts: ["b"], rejectsDashValues: true)
         #expect(
-            ShellPipeline.scanFlags(Argv(program: "git", args: ["-b"]), values: shortSpec)
+            ShellPipeline.scanFlags(Argv(program: "git", args: ["-b"]), valueSpec: shortSpec)
                 == [.dangling(flag: "-b")]
         )
         // End-of-argv dangles under the default spec too: legacy touch
@@ -145,7 +158,7 @@ private let singleDashWordGoldens: [(word: String, expected: String?)] = [
         #expect(
             ShellPipeline.scanFlags(
                 Argv(program: "touch", args: ["-t"]),
-                values: FlagValueSpec(valueShorts: ["t"])
+                valueSpec: FlagValueSpec(valueShorts: ["t"])
             ) == [.dangling(flag: "-t")]
         )
     }
@@ -156,14 +169,14 @@ private let singleDashWordGoldens: [(word: String, expected: String?)] = [
         let spec = FlagValueSpec(valueShorts: ["b", "B"], rejectsDashValues: true)
         let argv = Argv(program: "git", args: ["-b", "-f"])
         #expect(
-            ShellPipeline.scanFlags(argv, values: spec) == [
+            ShellPipeline.scanFlags(argv, valueSpec: spec) == [
                 .dangling(flag: "-b"),
                 .shorts(letters: ["f"], value: nil),
             ]
         )
         let ok = Argv(program: "git", args: ["-qb", "main"])
         #expect(
-            ShellPipeline.scanFlags(ok, values: spec) == [
+            ShellPipeline.scanFlags(ok, valueSpec: spec) == [
                 .shorts(letters: ["q", "b"], value: "main")
             ]
         )
@@ -171,10 +184,28 @@ private let singleDashWordGoldens: [(word: String, expected: String?)] = [
         let longSpec = FlagValueSpec(valueLongs: ["branch"], rejectsDashValues: true)
         #expect(
             ShellPipeline.scanFlags(
-                Argv(program: "git", args: ["--branch", "-f"]), values: longSpec
+                Argv(program: "git", args: ["--branch", "-f"]), valueSpec: longSpec
             ) == [
                 .dangling(flag: "--branch"),
                 .shorts(letters: ["f"], value: nil),
+            ]
+        )
+        // `--` and lone `-` are dash-led too, so they are rejected and
+        // classified normally next.
+        #expect(
+            ShellPipeline.scanFlags(
+                Argv(program: "git", args: ["--branch", "--"]), valueSpec: longSpec
+            ) == [
+                .dangling(flag: "--branch"),
+                .terminator,
+            ]
+        )
+        #expect(
+            ShellPipeline.scanFlags(
+                Argv(program: "git", args: ["-b", "-"]), valueSpec: spec
+            ) == [
+                .dangling(flag: "-b"),
+                .loneDash,
             ]
         )
     }
