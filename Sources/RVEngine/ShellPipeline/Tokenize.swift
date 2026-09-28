@@ -23,12 +23,12 @@ public enum ShellPipeline {
                         tokens.append(Token(lexeme: "\n", wasQuoted: false))
                         emittedNewline = true
                     }
-                    index = utf8.index(index, offsetBy: width)
+                    index = utf8.index(index, offsetBy: width, limitedBy: utf8.endIndex) ?? utf8.endIndex
                     continue
                 }
                 let width = shellWhitespaceLength(utf8, at: index)
                 if width == 0 { break }
-                index = utf8.index(index, offsetBy: width)
+                index = utf8.index(index, offsetBy: width, limitedBy: utf8.endIndex) ?? utf8.endIndex
             }
             guard index < utf8.endIndex else { break }
 
@@ -100,7 +100,9 @@ public enum ShellPipeline {
                     continue
                 }
                 let runStart = index
-                while index < utf8.endIndex, shellWhitespaceLength(utf8, at: index) == 0 {
+                while index < utf8.endIndex {
+                    let step = shellScalarStep(utf8, at: index)
+                    if step.isWhitespace { break }
                     let current = utf8[index]
                     if current == UInt8(ascii: "`")
                         || current == UInt8(ascii: "\"")
@@ -116,7 +118,7 @@ public enum ShellPipeline {
                             break
                         }
                     }
-                    index = shellNextScalarIndex(utf8, index)
+                    index = utf8.index(index, offsetBy: step.width, limitedBy: utf8.endIndex) ?? utf8.endIndex
                 }
                 if index > runStart {
                     decoded.append(contentsOf: input[runStart..<index])
@@ -146,28 +148,29 @@ private func shellNewlineWidth(_ utf8: String.UTF8View, at index: String.Index) 
     return nil
 }
 
+/// Width of the whitespace run starting at `index`, or 0 when the scalar
+/// there is not whitespace.
+/// - Precondition: `index < utf8.endIndex`.
 private func shellWhitespaceLength(_ utf8: String.UTF8View, at index: String.Index) -> Int {
+    let step = shellScalarStep(utf8, at: index)
+    return step.isWhitespace ? step.width : 0
+}
+
+/// Width and whitespace-ness of the scalar starting at `index`, decoded
+/// once. ASCII bytes never decode.
+/// - Precondition: `index < utf8.endIndex`.
+private func shellScalarStep(_ utf8: String.UTF8View, at index: String.Index) -> (width: Int, isWhitespace: Bool) {
     let byte = utf8[index]
     if byte < 0x80 {
         switch byte {
         case 9, 10, 11, 12, 13, 32:
-            return 1
+            return (1, true)
         default:
-            return 0
+            return (1, false)
         }
     }
-    guard let (scalar, width) = shellDecodeScalar(utf8, at: index) else { return 0 }
-    return Character(scalar).isWhitespace ? width : 0
-}
-
-private func shellNextScalarIndex(_ utf8: String.UTF8View, _ index: String.Index) -> String.Index {
-    if utf8[index] < 0x80 {
-        return utf8.index(after: index)
-    }
-    guard let (_, width) = shellDecodeScalar(utf8, at: index) else {
-        return utf8.index(after: index)
-    }
-    return utf8.index(index, offsetBy: width, limitedBy: utf8.endIndex) ?? utf8.endIndex
+    guard let (scalar, width) = shellDecodeScalar(utf8, at: index) else { return (1, false) }
+    return (width, scalar.properties.isWhitespace)
 }
 
 private func shellDecodeScalar(
