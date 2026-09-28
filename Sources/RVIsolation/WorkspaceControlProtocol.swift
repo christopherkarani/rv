@@ -10,6 +10,11 @@ public enum WorkspaceControlLimits {
     /// Interactive commands may contain long prompts. Bound the whole
     /// executable and argv payload rather than each individual argument.
     public static let maxLaunchCommandBytes = 8_192
+    /// Deprecated per-argument bound, superseded by `maxLaunchCommandBytes`.
+    /// Kept for one release so external `RVIsolation` library consumers keep
+    /// compiling; then removed.
+    @available(*, deprecated, message: "Per-argument bound replaced by maxLaunchCommandBytes.")
+    public static let maxArgumentBytes = 256
     public static let maxArguments = 128
     public static let maxResourceProfileIDBytes = 64
     public static let maxRuntimes = 64

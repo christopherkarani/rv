@@ -481,7 +481,7 @@ private func modesSplit() -> WorkspaceTUIState {
         state.lifecycle = .disconnected
         state.reconnectInflight = true
         let transition = WorkspaceTUIReducer.reduce(state, .reconnectFailed(error: .incompatibleHost))
-        #expect(transition.state.feedback == "Incompatible workspace host")
+        #expect(transition.state.feedback == "Incompatible workspace host — close the workspace and retry")
         #expect(transition.state.reconnectFiresAt == nil)
         #expect(transition.state.reconnectInflight == false)
     }

@@ -73,9 +73,9 @@ enum WorkspaceTUICommand {
         // policy yields that variant; otherwise it stays the plain shell.
         let defaultShellID: String = {
             guard let want = policy.defaultProfile,
-                launcher.contains(where: { $0.id == "shell:\(want)" })
-            else { return "shell" }
-            return "shell:\(want)"
+                launcher.contains(where: { $0.id == "\(RuntimeLaunchChoice.shellID):\(want)" })
+            else { return RuntimeLaunchChoice.shellID }
+            return "\(RuntimeLaunchChoice.shellID):\(want)"
         }()
         let model = WorkspaceTUIModel(
             session: session,
@@ -141,14 +141,14 @@ enum WorkspaceTUICommand {
         let shellArguments = shellExecutable == zshPath ? ["-o", "NO_PROMPT_SP"] : []
         var choices = [
             RuntimeLaunchChoice(
-                id: "shell",
+                id: RuntimeLaunchChoice.shellID,
                 title: "shell",
                 executable: shellExecutable,
                 arguments: shellArguments,
                 hook: nil
             ),
             RuntimeLaunchChoice(
-                id: "run",
+                id: RuntimeLaunchChoice.runPromptID,
                 title: "Run command…",
                 executable: "",
                 arguments: [],
@@ -211,7 +211,9 @@ enum WorkspaceTUICommand {
         var enriched: [RuntimeLaunchChoice] = []
         enriched.reserveCapacity(choices.count)
         for choice in choices {
-            guard choice.id != "shell", choice.id != "run" else {
+            guard choice.id != RuntimeLaunchChoice.shellID,
+                choice.id != RuntimeLaunchChoice.runPromptID
+            else {
                 enriched.append(choice)
                 continue
             }
@@ -232,7 +234,7 @@ enum WorkspaceTUICommand {
         var candidates: [String: [(profile: RuntimeResourceProfile, target: String)]] = [:]
         for profile in eligible {
             for mark in profile.agents {
-                guard mark != "shell", mark != "run",
+                guard mark != RuntimeLaunchChoice.shellID, mark != RuntimeLaunchChoice.runPromptID,
                     enriched.contains(where: { $0.id == mark }) == false,
                     let link = profile.executableLinks.first(where: { $0.name == mark })
                 else { continue }
@@ -250,11 +252,11 @@ enum WorkspaceTUICommand {
                 resourceProfileID: sole[0].profile.id
             ))
         }
-        guard let shell = enriched.first(where: { $0.id == "shell" }) else { return enriched }
+        guard let shell = enriched.first(where: { $0.id == RuntimeLaunchChoice.shellID }) else { return enriched }
         for profile in eligible.sorted(by: { Self.shellVariantPrecedes($0, $1, defaultProfile: defaultProfile) }) {
             let suffix = profile.id == defaultProfile ? " (default)" : ""
             enriched.append(RuntimeLaunchChoice(
-                id: "shell:\(profile.id)",
+                id: "\(RuntimeLaunchChoice.shellID):\(profile.id)",
                 title: "\(shell.title) · \(profile.id)\(suffix)",
                 executable: shell.executable,
                 arguments: shell.arguments,

@@ -106,6 +106,10 @@ public enum WorkspaceAbandonRefusal: Equatable, Sendable {
     case live
     /// The workspace is clean, recoverable, or absent. Start or recover it instead.
     case notBlocked
+    /// The host configuration directory is unavailable, so blocked state
+    /// could not even be assessed. Distinct from `notBlocked`: the caller
+    /// must repair the environment, not start the workspace.
+    case configurationUnavailable
     /// Blocked, but the reason is one abandonment cannot resolve.
     case unsafeReason(WorkspaceRecoveryBlock.Reason)
     /// Ownership continuity is unverifiable. No live owner was proven either.

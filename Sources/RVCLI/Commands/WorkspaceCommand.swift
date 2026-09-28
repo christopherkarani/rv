@@ -250,7 +250,7 @@ enum WorkspaceCommandRun {
         guard arguments.contains(where: { $0.contains("\0") }) == false else {
             throw ValidationError("executable must be an absolute path")
         }
-        if let hook, LaunchAgentTag.isValid(hook) == false {
+        if let hook, AgentTagValidator.isValid(hook) == false {
             throw ValidationError("hook must be an agent tag of 1-32 letters, digits, '-', '.', or '_'")
         }
         let project = try requireProject(raw)
@@ -477,6 +477,8 @@ enum WorkspaceCommandRun {
             "workspace is live; close it instead"
         case .notBlocked:
             "workspace is not blocked"
+        case .configurationUnavailable:
+            "workspace host configuration is unavailable"
         case .unsafeReason(let reason):
             "abandon refused: \(reason.rawValue)"
         case .unprovenOwner:
@@ -527,7 +529,7 @@ enum WorkspaceCommandRun {
         case .malformed: "workspace host rejected the request"
         case .queueOverloaded: "workspace host client queue is overloaded"
         case .timedOut: "workspace host timed out"
-        case .incompatibleProtocol: "incompatible workspace protocol"
+        case .incompatibleProtocol: "incompatible workspace protocol; close the workspace and retry (rv workspace close)"
         case .unauthorizedClient: "unauthorized workspace client"
         case .workspaceClosing: "workspace is closing"
         case .workspaceClosed: "workspace is closed"

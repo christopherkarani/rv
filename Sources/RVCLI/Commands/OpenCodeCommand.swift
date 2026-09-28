@@ -26,6 +26,11 @@ enum OpenCodeLaunchError: Error, Sendable, Equatable {
 enum OpenCodeRun {
     static let isolationNotice =
         "rv opencode: launching through the persistent workspace host; sandbox access follows workspace host policy.\n"
+    /// No profile is implicit: without one the host stages no credentials
+    /// and provider auth fails inside the cage. Warn instead of failing so
+    /// keyless runs (local models, `--help`) keep working.
+    static let missingProfileWarning =
+        "rv opencode: no --resource-profile selected; provider credentials are unstaged and agent auth will fail. Pass --resource-profile <id> to stage them.\n"
 
     static func prepare(
         executable: String?,
@@ -90,6 +95,12 @@ struct OpenCode: AsyncParsableCommand {
     @Option(help: "Absolute writable workspace (default: current directory).")
     var workspace: String?
 
+    @Option(name: .long, help: "Owner-authorized runtime resource profile ID. No profile is selected by executable name.")
+    var resourceProfile: String?
+
+    @Option(name: .long, help: "Launch agent tag for credential staging. Hook protocol applies only when the tag names a hook host.")
+    var hook: String = "opencode"
+
     @Argument(parsing: .captureForPassthrough, help: "Arguments passed unchanged to OpenCode.")
     var agentArguments: [String] = []
 
@@ -110,11 +121,16 @@ struct OpenCode: AsyncParsableCommand {
             throw ValidationError(error.message)
         }
         FileHandle.standardError.write(Data(OpenCodeRun.isolationNotice.utf8))
+        if resourceProfile == nil {
+            FileHandle.standardError.write(Data(OpenCodeRun.missingProfileWarning.utf8))
+        }
         try WorkspaceCommandRun.run(
             project,
             rows: nil,
             columns: nil,
-            command: [command.executable] + command.arguments
+            command: [command.executable] + command.arguments,
+            resourceProfileID: resourceProfile,
+            hook: hook
         )
     }
 }

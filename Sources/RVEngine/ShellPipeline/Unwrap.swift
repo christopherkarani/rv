@@ -18,17 +18,18 @@ import RVDomain
 /// Single depth/bytes policy for recursive unwrap.
 ///
 /// One value type replaces the scattered depth/bytes pairs. Defaults match
-/// the pre-T2 `UnwrapLimits` caps.
-public struct UnwrapBudget: Sendable, Equatable, Hashable {
-    public var maxDepth: Int
-    public var maxBytes: Int
+/// the pre-T2 `UnwrapLimits` caps. Internal: the public seam stays
+/// `unwrapCommand` with separate ints plus the `UnwrapLimits` scalars.
+struct UnwrapBudget: Sendable, Equatable, Hashable {
+    var maxDepth: Int
+    var maxBytes: Int
 
-    public init(maxDepth: Int = 8, maxBytes: Int = 4_096) {
+    init(maxDepth: Int = 8, maxBytes: Int = 4_096) {
         self.maxDepth = maxDepth
         self.maxBytes = maxBytes
     }
 
-    public static let `default` = UnwrapBudget()
+    static let `default` = UnwrapBudget()
 }
 
 // MARK: - Public unwrap vocabulary (pre-T2 API, unchanged signatures)

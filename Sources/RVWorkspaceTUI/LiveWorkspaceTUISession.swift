@@ -207,7 +207,7 @@ public final class LiveWorkspaceTUISession: WorkspaceTUISession, @unchecked Send
         columns: Int,
         resourceProfileID: String?
     ) -> Result<ListedRuntime, WorkspaceTUIError> {
-        if let hook, LaunchAgentTag.isValid(hook) == false {
+        if let hook, AgentTagValidator.isValid(hook) == false {
             return .failure(.rejected)
         }
         return controlClient.ensureTerminalRuntime(
@@ -241,7 +241,7 @@ public final class LiveWorkspaceTUISession: WorkspaceTUISession, @unchecked Send
         columns: Int,
         resourceProfileID: String?
     ) -> Result<ListedRuntime, WorkspaceTUIError> {
-        if let hook, LaunchAgentTag.isValid(hook) == false {
+        if let hook, AgentTagValidator.isValid(hook) == false {
             return .failure(.rejected)
         }
         return controlClient.launchRuntime(

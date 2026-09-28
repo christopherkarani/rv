@@ -1037,7 +1037,7 @@ enum WorkspaceTUIReducer {
             next.reconnectInflight = false
             if error == .incompatibleHost {
                 next.reconnectFiresAt = nil
-                next.feedback = "Incompatible workspace host"
+                next.feedback = "Incompatible workspace host — close the workspace and retry"
                 next.feedbackTicks = 3600
                 presentationChanged = true
             } else if next.reconnectAttempt >= Self.maxReconnectAttempts {
@@ -1750,7 +1750,7 @@ enum WorkspaceTUIReducer {
         case .resourceStagingFailed(let detail):
             if let profileID { "Profile '\(profileID)' staging failed: \(detail) unusable" }
             else { "Staging failed: \(detail) unusable" }
-        case .incompatibleHost: "Incompatible workspace host"
+        case .incompatibleHost: "Incompatible workspace host — close the workspace and retry"
         case .disconnected: "Workspace disconnected"
         case .busy: "Workspace busy"
         case .unavailable: "Runtime unavailable"

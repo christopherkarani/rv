@@ -555,7 +555,7 @@ final class WorkspaceHostServer: Sendable {
         guard phase.acceptsRuntime else {
             return failure(message, workspaceControlCode(.notAcceptingRuntime(phase)))
         }
-        if let rawHook = message.hook, LaunchAgentTag.isValid(rawHook) == false {
+        if let rawHook = message.hook, AgentTagValidator.isValid(rawHook) == false {
             return failure(message, .invalidRequest)
         }
         guard let executable = message.executable, executable.hasPrefix("/"),
@@ -626,7 +626,7 @@ final class WorkspaceHostServer: Sendable {
         let hook: HookHost?
         let stagingAgent: String?
         if let raw = message.hook {
-            guard LaunchAgentTag.isValid(raw) else {
+            guard AgentTagValidator.isValid(raw) else {
                 return failure(message, .invalidRequest)
             }
             hook = HookHost(rawValue: raw)

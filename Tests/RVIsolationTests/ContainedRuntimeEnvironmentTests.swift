@@ -10,10 +10,21 @@ import Testing
         let values = containedRuntimeEnvironment(workspace: "/tmp/ws", io: io, hostEnvironment: host)
         #expect(values.contains("PATH=/usr/bin:/bin"))
         #expect(values.contains("HOME=/tmp/ws"))
-        #expect(values.contains("TMPDIR=/tmp/ws"))
         #expect(values.allSatisfy { !$0.hasPrefix("META_API_KEY=") })
         #expect(values.allSatisfy { !$0.hasPrefix("ANTHROPIC_BASE_URL=") })
     }
+}
+
+@Test func profileLessTmpdirStaysOutOfTheWorkspaceRoot() {
+    let oneShot = containedRuntimeEnvironment(
+        workspace: "/tmp/ws", io: .inherit, hostEnvironment: [:]
+    )
+    #expect(oneShot.contains("TMPDIR=/tmp/ws"))
+    let terminal = containedRuntimeEnvironment(
+        workspace: "/tmp/ws", io: .pseudoTerminal(rows: 24, columns: 80),
+        hostEnvironment: [:]
+    )
+    #expect(terminal.contains("TMPDIR=/tmp/ws/.rv-cage/tmp"))
 }
 
 @Test func selectedManifestIsIdenticalForOneShotAndTerminalResources() {

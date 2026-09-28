@@ -479,6 +479,14 @@ func spawnSeatbeltProcess(
         case .failure(let staging):
             return .failure(.resourceStagingFailed(staging.detail))
         }
+    } else if case .pseudoTerminal = request.io {
+        // Profile-less PTY shells point TMPDIR at the workspace-local cage
+        // dir. Best-effort like the pre-profile staging: the shell reports
+        // its own failure if the directory cannot be created.
+        try? FileManager.default.createDirectory(
+            atPath: "\(workspace)/\(ContainedCagePaths.tmpSubpath)",
+            withIntermediateDirectories: true
+        )
     }
     var resourceStageHandedOff = false
     defer { if !resourceStageHandedOff { request.resources?.remove() } }
@@ -608,6 +616,14 @@ func spawnSeatbeltProcess(
     return .success(child)
 }
 
+/// Workspace-local fallback for a PTY launch with no resource profile.
+/// Staged launches use the manifest's private tmp; one-shot launches keep
+/// the byte-identical workspace TMPDIR. Without this, profile-less shells
+/// would scatter temp files across the workspace root.
+enum ContainedCagePaths {
+    static let tmpSubpath = ".rv-cage/tmp"
+}
+
 func containedRuntimeEnvironment(
     workspace: String,
     io: IsolatedIO,
@@ -616,12 +632,20 @@ func containedRuntimeEnvironment(
     hostEnvironment: [String: String]? = nil,
     keychain: [(name: String, value: String)] = []
 ) -> [String] {
+    let tmpdir: String
+    if let resources {
+        tmpdir = resources.tmp
+    } else if case .pseudoTerminal = io {
+        tmpdir = "\(workspace)/\(ContainedCagePaths.tmpSubpath)"
+    } else {
+        tmpdir = workspace
+    }
     var values = [
         "PATH=\(resources.map { "\($0.bin):" } ?? "")/usr/bin:/bin",
         "LANG=C",
         "LC_ALL=C",
         "HOME=\(resources?.privateHome ?? workspace)",
-        "TMPDIR=\(resources?.tmp ?? workspace)",
+        "TMPDIR=\(tmpdir)",
     ]
     guard case .pseudoTerminal = io else {
         return addingKeychainEnvironment(
@@ -661,7 +685,15 @@ private func addingResourceEnvironment(
     var values = values
     let host = hostEnvironment ?? ProcessInfo.processInfo.environment
     for entry in resources?.profile.environment ?? [] {
-        let value = entry.literalValue ?? entry.hostVariable.flatMap { host[$0] }
+        let value: String?
+        switch entry.resolvedSource {
+        case .hostVariable(let variable):
+            value = host[variable]
+        case .literal(let literal):
+            value = literal
+        case nil:
+            continue
+        }
         guard let value, !value.contains("\0"), value.utf8.count <= 8_192 else { continue }
         values.append("\(entry.name)=\(value)")
     }

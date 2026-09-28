@@ -4,7 +4,7 @@
 /// legacy `tokenizeCommand` produced `decoded`. The quoting flags preserve
 /// provenance so later stages (unwrap, parse, classify) can distinguish
 /// `git`, `"git"`, and `$'git'` even though their lexemes compare equal.
-public struct Token: Sendable, Hashable, Equatable, CustomStringConvertible {
+public struct Token: Sendable, Hashable, CustomStringConvertible, CustomDebugStringConvertible {
     /// Token text with quotes stripped. Structural newlines surface as `"\n"`.
     public var lexeme: String
     /// True when any part of the token was single-, double-, or ANSI-C quoted.
@@ -34,4 +34,10 @@ public struct Token: Sendable, Hashable, Equatable, CustomStringConvertible {
     }
 
     public var description: String { lexeme }
+
+    /// Debug spelling keeps quoting provenance: `git`, `"git"`, and
+    /// `$'git'` share a lexeme but tokenize differently downstream.
+    public var debugDescription: String {
+        "Token(\(lexeme.debugDescription), quoted: \(wasQuoted), ansiC: \(wasAnsiC))"
+    }
 }

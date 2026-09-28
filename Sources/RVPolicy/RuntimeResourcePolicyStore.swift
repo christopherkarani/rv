@@ -121,12 +121,17 @@ public enum RuntimeResourcePolicyStore {
             }
             var variables = Set<String>()
             for entry in profile.environment {
-                let hostSource = entry.hostVariable.map(environmentName) ?? false
-                let literalSource = entry.literalValue.map {
-                    !$0.contains("\0") && !$0.contains("\n") && !$0.contains("\r")
-                        && $0.utf8.count <= 1_024
-                } ?? false
-                guard environmentName(entry.name), hostSource != literalSource,
+                let sourceValid: Bool
+                switch entry.resolvedSource {
+                case .hostVariable(let variable):
+                    sourceValid = environmentName(variable)
+                case .literal(let literal):
+                    sourceValid = !literal.contains("\0") && !literal.contains("\n")
+                        && !literal.contains("\r") && literal.utf8.count <= 1_024
+                case nil:
+                    sourceValid = false
+                }
+                guard environmentName(entry.name), sourceValid,
                     !reservedEnvironmentNames.contains(entry.name),
                     variables.insert(entry.name).inserted else { return false }
             }

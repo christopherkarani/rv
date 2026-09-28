@@ -93,6 +93,13 @@ public enum FocusDirection: String, Sendable, Equatable {
 
 /// One offered runtime. The host still performs the launch.
 public struct RuntimeLaunchChoice: Equatable, Sendable, Identifiable {
+    /// Launcher id of the built-in default shell row.
+    public static let shellID = "shell"
+    /// Launcher id of the run-prompt row. The unresolved row carries an
+    /// empty executable until the typed command resolves to a real one;
+    /// dispatch keys off this id, never the executable.
+    public static let runPromptID = "run"
+
     public var id: String
     public var title: String
     public var executable: String
@@ -267,7 +274,8 @@ public enum CommandPrefix {
                 return (.terminal, nil)
             }
             let choice = launcher[index - 1]
-            return choice.id == "run" ? (.runCommand(input: "", error: nil), nil) : (.terminal, .launch(choice))
+            return choice.id == RuntimeLaunchChoice.runPromptID
+                ? (.runCommand(input: "", error: nil), nil) : (.terminal, .launch(choice))
         default:
             return (.terminal, nil)
         }

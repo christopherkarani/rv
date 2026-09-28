@@ -20,6 +20,11 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
     private let terminalQueue = DispatchQueue(label: "rv.workspace-tui.terminal")
     private var state: WorkspaceTUIState
     private var pump: SessionEventPump?
+    /// Serializes concurrent `startEventDelivery` calls and `detachSession`.
+    /// A start whose sequence is stale by install time drops its pump
+    /// unstarted instead of orphaning (or resurrecting) a live reader.
+    /// Always under `lock`.
+    private var pumpSequence: UInt64 = 0
     private struct EmulatorSlot {
         var binding: PaneBindingKey
         var emulator: any TerminalEmulating
@@ -45,7 +50,7 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
         emulators: any TerminalEmulatorFactory = SwiftTermFactory(),
         summary: WorkspaceTUISummary,
         launcher: [RuntimeLaunchChoice],
-        defaultShellID: String = "shell",
+        defaultShellID: String = RuntimeLaunchChoice.shellID,
         rows: Int = 24,
         columns: Int = 80,
         restoredView: WorkspaceView? = nil,
@@ -110,12 +115,20 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
     /// `detachSession`. The app calls this once after `connect` succeeds.
     public func startEventDelivery() {
         lock.lock()
+        pumpSequence &+= 1
+        let sequence = pumpSequence
         let old = pump
         pump = nil
         lock.unlock()
         old?.stop()
         let fresh = SessionEventPump()
         lock.lock()
+        guard sequence == pumpSequence else {
+            // Superseded by a newer start or by detach: never start, so no
+            // orphan pump delivers events past its replacement.
+            lock.unlock()
+            return
+        }
         pump = fresh
         lock.unlock()
         fresh.start(
@@ -295,6 +308,7 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
     /// or closes the workspace.
     public func detachSession() {
         lock.lock()
+        pumpSequence &+= 1
         let pump = self.pump
         self.pump = nil
         lock.unlock()
@@ -528,7 +542,8 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
             ) {
             case .success(let resolved):
                 followups.append(.runCommandResolved(target: target, choice: RuntimeLaunchChoice(
-                    id: "run", title: URL(fileURLWithPath: resolved.executable).lastPathComponent,
+                    id: RuntimeLaunchChoice.runPromptID,
+                    title: URL(fileURLWithPath: resolved.executable).lastPathComponent,
                     executable: resolved.executable, arguments: resolved.arguments,
                     hook: nil, resourceProfileID: selection.profileID
                 )))

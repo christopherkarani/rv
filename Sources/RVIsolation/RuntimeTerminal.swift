@@ -518,6 +518,9 @@ final class RuntimeTerminal: @unchecked Sendable {
         self.rows = rows
         self.columns = columns
         enqueueWindowLocked(rows: rows, columns: columns)
+        // Every other chunk-append site broadcasts: a parked flush loop
+        // waits on this condition and would miss the notice on an idle PTY.
+        condition.broadcast()
         condition.unlock()
         return .success(())
     }

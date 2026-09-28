@@ -68,6 +68,26 @@ struct RuntimeResourcePolicyStoreTests {
             == .failure(.invalidDocument))
     }
 
+    @Test func contradictoryEnvironmentEntriesFailClosed() throws {
+        // Both sources set but only one content-valid: still rejected, so no
+        // consumer can silently prefer one source over the other.
+        var contradictory = RuntimeResourceProfile.Environment(name: "KEY", hostVariable: "not a name")
+        contradictory.literalValue = "literal"
+        #expect(contradictory.resolvedSource == nil)
+        let document = RuntimeResourcePolicy(profiles: [
+            RuntimeResourceProfile(id: "contra", projects: ["/tmp/project"], environment: [contradictory]),
+        ])
+        #expect(RuntimeResourcePolicyStore.decode(try JSONEncoder().encode(document))
+            == .failure(.invalidDocument))
+        var empty = RuntimeResourceProfile.Environment(name: "KEY", hostVariable: "HOST_KEY")
+        empty.hostVariable = nil
+        #expect(empty.resolvedSource == nil)
+        #expect(RuntimeResourceProfile.Environment(name: "KEY", hostVariable: "HOST_KEY").resolvedSource
+            == .hostVariable("HOST_KEY"))
+        #expect(RuntimeResourceProfile.Environment(name: "KEY", literalValue: "v").resolvedSource
+            == .literal("v"))
+    }
+
     @Test func onlyOwnerFilesWithoutSymlinksAreLoaded() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-resources-policy-\(UUID().uuidString)", isDirectory: true)
@@ -248,5 +268,18 @@ struct RuntimeResourcePolicyStoreTests {
         """
         let decoded = try RuntimeResourcePolicyStore.decode(Data(raw.utf8)).get()
         #expect(decoded.profiles[0].keychain == [])
+    }
+
+    @Test func emptyAgentFiltersNormalizeToNil() throws {
+        let credential = try JSONDecoder().decode(
+            RuntimeResourceProfile.Credential.self,
+            from: Data(#"{"source":"/tmp/secret","destination":"auth","agents":[]}"#.utf8)
+        )
+        #expect(credential.agents == nil)
+        let entry = try JSONDecoder().decode(
+            RuntimeResourceProfile.KeychainEntry.self,
+            from: Data(#"{"service":"s","account":"a","env":"E","agents":[]}"#.utf8)
+        )
+        #expect(entry.agents == nil)
     }
 }

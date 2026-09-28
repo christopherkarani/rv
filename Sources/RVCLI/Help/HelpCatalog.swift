@@ -90,11 +90,13 @@ enum HelpCatalog {
         blurb: "",
         sections: [
             HelpSection(heading: "Usage", rows: [
-                HelpRow(name: "rv opencode [--executable <absolute-path>] [--workspace <absolute-path>] [--] <agent-arguments>"),
+                HelpRow(name: "rv opencode [--executable <absolute-path>] [--workspace <absolute-path>] [--resource-profile <id>] [--hook <tag>] [--] <agent-arguments>"),
             ]),
             HelpSection(heading: "Flags", rows: [
                 HelpRow(name: "--executable", description: "Absolute executable; default searches absolute PATH directories"),
                 HelpRow(name: "--workspace", description: "Writable workspace; default is the current directory"),
+                HelpRow(name: "--resource-profile", description: "Owner-authorized resource profile ID; without one no credentials are staged"),
+                HelpRow(name: "--hook", description: "Launch agent tag for credential staging; default opencode"),
                 HelpRow(name: "--", description: "Pass all following arguments to OpenCode, including --help"),
             ]),
             HelpSection(heading: "Isolation", rows: [

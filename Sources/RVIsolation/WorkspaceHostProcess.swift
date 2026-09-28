@@ -150,7 +150,7 @@ public enum WorkspaceHosts {
     /// leave the workspace untouched; only an explicit abandon call runs this.
     public static func abandon(project: String) -> WorkspaceAbandonOutcome {
         guard let configuration = WorkspaceHostLocation.configurationDirectory() else {
-            return .refused(.notBlocked)
+            return .refused(.configurationUnavailable)
         }
         guard let directory = WorkingDirectory(validating: project) else {
             return .refused(.unsafeReason(.corrupt))

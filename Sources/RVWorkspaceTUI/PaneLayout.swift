@@ -150,7 +150,9 @@ public indirect enum PaneTree: Equatable, Codable, Sendable {
     }
 
     /// Returns nil when the only leaf is closed or the pane does not exist.
-    public func closing(_ pane: PaneID) -> PaneTree? {
+    /// Internal: production closes through `closing(_:using:)`, which also
+    /// picks the focus target from the pre-close geometry.
+    func closing(_ pane: PaneID) -> PaneTree? {
         guard leafIDs.contains(pane) else { return nil }
         return closeExistingLeaf(pane)
     }

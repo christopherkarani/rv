@@ -43,18 +43,18 @@ import Testing
     #expect(HookHost.allCases.map(\.rawValue).contains("cursor"))
 }
 
-@Test func launchAgentTag_acceptsHostAndStagingOnlyNames() {
-    #expect(LaunchAgentTag.isValid("codex"))
-    #expect(LaunchAgentTag.isValid("muse"))
-    #expect(LaunchAgentTag.isValid("bogus-hook"))
-    #expect(LaunchAgentTag.isValid("agent_2.0-x"))
-    #expect(LaunchAgentTag.isValid(String(repeating: "a", count: 32)))
+@Test func agentTagValidator_acceptsHostAndStagingOnlyNames() {
+    #expect(AgentTagValidator.isValid("codex"))
+    #expect(AgentTagValidator.isValid("muse"))
+    #expect(AgentTagValidator.isValid("bogus-hook"))
+    #expect(AgentTagValidator.isValid("agent_2.0-x"))
+    #expect(AgentTagValidator.isValid(String(repeating: "a", count: 32)))
 }
 
-@Test func launchAgentTag_rejectsMalformedTags() {
-    #expect(LaunchAgentTag.isValid("") == false)
-    #expect(LaunchAgentTag.isValid("has space") == false)
-    #expect(LaunchAgentTag.isValid("../escape") == false)
-    #expect(LaunchAgentTag.isValid("semi;colon") == false)
-    #expect(LaunchAgentTag.isValid(String(repeating: "a", count: 33)) == false)
+@Test func agentTagValidator_rejectsMalformedTags() {
+    #expect(AgentTagValidator.isValid("") == false)
+    #expect(AgentTagValidator.isValid("has space") == false)
+    #expect(AgentTagValidator.isValid("../escape") == false)
+    #expect(AgentTagValidator.isValid("semi;colon") == false)
+    #expect(AgentTagValidator.isValid(String(repeating: "a", count: 33)) == false)
 }

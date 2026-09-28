@@ -187,7 +187,7 @@ public final class WorkspaceClient: Sendable {
         guard WorkspaceControlCodec.resourceProfileIDFits(resourceProfileID) else {
             return .failure(.invalidRequest)
         }
-        if let hook, LaunchAgentTag.isValid(hook) == false {
+        if let hook, AgentTagValidator.isValid(hook) == false {
             return .failure(.invalidRequest)
         }
         var message = WorkspaceControlMessage(
@@ -250,7 +250,7 @@ public final class WorkspaceClient: Sendable {
         else {
             return .failure(.invalidRequest)
         }
-        if let hook, LaunchAgentTag.isValid(hook) == false {
+        if let hook, AgentTagValidator.isValid(hook) == false {
             return .failure(.invalidRequest)
         }
         guard WorkspaceControlCodec.launchCommandFits(executable: executable, arguments: arguments),

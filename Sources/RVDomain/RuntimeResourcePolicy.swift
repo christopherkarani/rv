@@ -4,10 +4,11 @@ public struct RuntimeResourceProfile: Codable, Sendable, Equatable {
     public struct Credential: Codable, Sendable, Equatable {
         public var source: String
         public var destination: String
-        /// Agent hook names this credential stages for. Nil or empty
-        /// means every launch; otherwise only launches whose hook name
-        /// matches. Hook-less launches (shells) stage only unfiltered
-        /// credentials, so agent secrets never land in a plain shell.
+        /// Agent hook names this credential stages for. Nil means every
+        /// launch; otherwise only launches whose hook name matches.
+        /// Hook-less launches (shells) stage only unfiltered credentials,
+        /// so agent secrets never land in a plain shell. An empty list
+        /// decodes to nil, so the two spellings never diverge.
         public var agents: [String]?
 
         public init(source: String, destination: String, agents: [String]? = nil) {
@@ -15,6 +16,27 @@ public struct RuntimeResourceProfile: Codable, Sendable, Equatable {
             self.destination = destination
             self.agents = agents
         }
+
+        private enum CodingKeys: String, CodingKey {
+            case source, destination, agents
+        }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            source = try container.decode(String.self, forKey: .source)
+            destination = try container.decode(String.self, forKey: .destination)
+            let agents = try container.decodeIfPresent([String].self, forKey: .agents)
+            self.agents = agents.flatMap { $0.isEmpty ? nil : $0 }
+        }
+    }
+
+    /// The single validated value source for an `Environment` entry.
+    /// Exactly one of `hostVariable` / `literalValue` must be set; entries
+    /// resolving to nil are rejected by the store and skipped by the
+    /// supervisor, so no consumer silently prefers one over the other.
+    public enum EnvironmentSource: Sendable, Equatable {
+        case hostVariable(String)
+        case literal(String)
     }
 
     public struct Environment: Codable, Sendable, Equatable {
@@ -35,6 +57,19 @@ public struct RuntimeResourceProfile: Codable, Sendable, Equatable {
             self.name = name
             self.hostVariable = nil
             self.literalValue = literalValue
+        }
+
+        /// Validated factory: the entry's one value source, or nil when
+        /// both or neither is set. Content checks stay with the caller.
+        public var resolvedSource: EnvironmentSource? {
+            switch (hostVariable, literalValue) {
+            case (let variable?, nil):
+                return .hostVariable(variable)
+            case (nil, let literal?):
+                return .literal(literal)
+            case (nil, nil), (_?, _?):
+                return nil
+            }
         }
     }
 
@@ -57,8 +92,9 @@ public struct RuntimeResourceProfile: Codable, Sendable, Equatable {
         public var account: String
         public var field: String?
         public var env: String
-        /// Agent hook names this entry injects for. Nil or empty means
-        /// every launch; otherwise only launches whose agent tag matches.
+        /// Agent hook names this entry injects for. Nil means every
+        /// launch; otherwise only launches whose agent tag matches. An
+        /// empty list decodes to nil, so the two spellings never diverge.
         public var agents: [String]?
 
         public init(
@@ -70,6 +106,20 @@ public struct RuntimeResourceProfile: Codable, Sendable, Equatable {
             self.field = field
             self.env = env
             self.agents = agents
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case service, account, field, env, agents
+        }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            service = try container.decode(String.self, forKey: .service)
+            account = try container.decode(String.self, forKey: .account)
+            field = try container.decodeIfPresent(String.self, forKey: .field)
+            env = try container.decode(String.self, forKey: .env)
+            let agents = try container.decodeIfPresent([String].self, forKey: .agents)
+            self.agents = agents.flatMap { $0.isEmpty ? nil : $0 }
         }
     }
 
