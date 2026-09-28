@@ -111,6 +111,7 @@ struct DenialLedgerTests {
         #expect(names.contains("blocks.jsonl"))
         #expect(names.contains("blocks.lock"))
         #expect(names.contains("blocks.jsonl.tmp"))
+        #expect(DenialLedgerPaths(configDirectory: root).tempURL.lastPathComponent == "blocks.jsonl.tmp")
     }
 
     @Test func preferences_missingIsEnabled() {

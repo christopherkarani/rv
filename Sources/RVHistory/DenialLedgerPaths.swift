@@ -1,4 +1,5 @@
 import Foundation
+import RVFileStore
 
 public struct DenialLedgerPaths: Sendable, Equatable {
     public var configDirectory: URL
@@ -19,9 +20,14 @@ public struct DenialLedgerPaths: Sendable, Equatable {
         configDirectory.appendingPathComponent("blocks.lock", isDirectory: false)
     }
 
+    /// Temp sibling `save()` may leave behind on crash; covered by uninstall.
+    public var tempURL: URL {
+        FileLockedJSONLStore<DenialLedgerRecord>.tempURL(for: fileURL)
+    }
+
     public var uninstallArtifacts: [URL] {
-        // The .tmp entry covers save()'s crash window: temp-file + rename(2)
+        // The temp entry covers save()'s crash window: temp-file + rename(2)
         // can leave blocks.jsonl.tmp behind, which uninstall must not orphan.
-        [fileURL, lockURL, fileURL.appendingPathExtension("tmp")]
+        [fileURL, lockURL, tempURL]
     }
 }
