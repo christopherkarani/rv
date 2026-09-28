@@ -17,35 +17,38 @@ enum FilesystemOperation {
     case read
 }
 
-func parseFilesystemCommand(_ tokens: [String]) -> ParsedFilesystemCommand? {
-    guard let first = tokens.first else { return nil }
-    let head = basename(first).lowercased()
+func parseFilesystemCommand(_ argv: Argv) -> ParsedFilesystemCommand? {
+    let head = basename(argv.program).lowercased()
     switch head {
     case "rm":
-        return parseRm(Array(tokens.dropFirst()))
+        return parseRm(argv)
     case "unlink":
-        return parseUnlink(Array(tokens.dropFirst()))
+        return parseUnlink(argv)
     case "rmdir":
-        return parseRmdir(Array(tokens.dropFirst()))
+        return parseRmdir(argv)
     case "mv":
-        return parseMv(Array(tokens.dropFirst()))
+        return parseMv(argv)
     case "chmod":
-        return parseChmod(Array(tokens.dropFirst()))
+        return parseChmod(argv)
     case "truncate":
-        return parseTruncate(Array(tokens.dropFirst()))
+        return parseTruncate(argv)
     case "shred":
-        return parseShred(Array(tokens.dropFirst()))
+        return parseShred(argv)
     case "touch":
-        return parseTouch(Array(tokens.dropFirst()))
+        return parseTouch(argv)
     case "mkdir":
-        return parseMkdir(Array(tokens.dropFirst()))
+        return parseMkdir(argv)
     case "cat":
-        if let redirect = parseRedirectOnly(tokens), redirect.paths.isEmpty == false {
+        if let redirect = parseRedirectOnly(argv), redirect.paths.isEmpty == false {
             return redirect
         }
-        return parseCat(Array(tokens.dropFirst()))
+        return parseCat(argv)
     default:
-        return parseRedirectOnly(tokens)
+        return parseRedirectOnly(argv)
     }
 }
 
+func parseFilesystemCommand(_ tokens: [String]) -> ParsedFilesystemCommand? {
+    guard let first = tokens.first else { return nil }
+    return parseFilesystemCommand(Argv(program: first, args: Array(tokens.dropFirst())))
+}

@@ -152,6 +152,71 @@ struct ParseFilesystemMutationsTests {
         #expect(parseTruncate([]) == nil)
     }
 
+    @Test func truncate_dashDashKeepsValueLongsVerbatim() {
+        expectParsed(
+            parseTruncate(["--", "--size", "10", "f"]),
+            "overwrite",
+            paths: ["--size", "10", "f"]
+        )
+    }
+
+    @Test func splitFlagTerminator_routesValueTakingSpecsToPreSplit() {
+        let spec = FlagValueSpec(valueLongs: ["size"])
+        let (flags, rest) = splitFlagTerminator(
+            Argv(program: "truncate", args: ["--", "--size", "10", "f"]),
+            values: spec
+        )
+        #expect(flags.isEmpty)
+        #expect(rest == ["--size", "10", "f"])
+    }
+
+    @Test func rm_dashDashKeepsEveryTokenShapeVerbatim() {
+        expectParsed(
+            parseRm(["--", "-", "--", "--long", "--long=value", "--empty=", "-xyz", "-n=v", "plain"]),
+            "delete",
+            paths: ["-", "--", "--long", "--long=value", "--empty=", "-xyz", "-n=v", "plain"]
+        )
+    }
+
+    @Test func truncate_pendingValueConsumesDashDash() {
+        expectParsed(
+            parseTruncate(["-s", "--", "file"]),
+            "overwrite",
+            paths: ["file"]
+        )
+        expectParsed(
+            parseTruncate(["--size", "--", "file"]),
+            "overwrite",
+            paths: ["file"]
+        )
+    }
+
+    @Test func shred_pendingValueConsumesDashDash() {
+        expectParsed(
+            parseShred(["-n", "--", "file"]),
+            "delete",
+            paths: ["file"]
+        )
+        expectParsed(
+            parseShred(["--size", "--", "file"]),
+            "delete",
+            paths: ["file"]
+        )
+    }
+
+    @Test func shred_dashDashKeepsValueLongsVerbatim() {
+        expectParsed(
+            parseShred(["--", "--size", "10", "f"]),
+            "delete",
+            paths: ["--size", "10", "f"]
+        )
+        expectParsed(
+            parseShred(["--", "--iterations", "3", "g"]),
+            "delete",
+            paths: ["--iterations", "3", "g"]
+        )
+    }
+
     @Test func shred_iterationsSizeAndSkip() {
         expectParsed(
             parseShred(["--iterations", "3", "--size", "1K", "--force", "file"]),
