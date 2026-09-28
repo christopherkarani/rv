@@ -364,6 +364,12 @@ struct SecretPathGuardTests {
         )
         #expect(hit?.ruleID.rawValue == "core.secrets:env")
         #expect(hit?.matchedText == ".env")
+        let fileHit = SecretPathGuard.firstHit(
+            in: MatchingView("grep -f -- .env"),
+            catalog: .dayOne
+        )
+        #expect(fileHit?.ruleID.rawValue == "core.secrets:env")
+        #expect(fileHit?.matchedText == ".env")
     }
 
     @Test func secretPathGuard_grepShortEqualsValueIsCandidate() {
@@ -412,16 +418,42 @@ struct SecretPathGuardTests {
             catalog: .dayOne
         )
         #expect(leading?.ruleID.rawValue == "core.secrets:env")
+        #expect(leading?.matchedText == ".env")
     }
 
     @Test func secretPathGuard_findShortEqualsSkipsNoValue() {
         #expect(
             SecretPathGuard.firstHit(in: MatchingView("find . -name=x .env"), catalog: .dayOne) == nil
         )
+        #expect(
+            SecretPathGuard.firstHit(in: MatchingView("find . -iname=x .env"), catalog: .dayOne) == nil
+        )
+        #expect(
+            SecretPathGuard.firstHit(in: MatchingView("find . -path=x .env"), catalog: .dayOne) == nil
+        )
         let hit = SecretPathGuard.firstHit(
             in: MatchingView("find .env -name=x"),
             catalog: .dayOne
         )
         #expect(hit?.ruleID.rawValue == "core.secrets:env")
+    }
+
+    @Test func secretPathGuard_findPredicateStarterEndsPaths() {
+        for starter in ["!", "(", ";"] {
+            let hit = SecretPathGuard.firstHit(
+                in: MatchingView("find .env \(starter) -name x"),
+                catalog: .dayOne
+            )
+            #expect(hit?.ruleID.rawValue == "core.secrets:env", "starter: \(starter)")
+        }
+    }
+
+    @Test func secretPathGuard_grepUnknownLongAttachedValueIsCandidate() {
+        let hit = SecretPathGuard.firstHit(
+            in: MatchingView("grep --opt=.env"),
+            catalog: .dayOne
+        )
+        #expect(hit?.ruleID.rawValue == "core.secrets:env")
+        #expect(hit?.matchedText == ".env")
     }
 }
