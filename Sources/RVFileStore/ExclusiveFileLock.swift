@@ -28,27 +28,37 @@ public enum ExclusiveFileLock {
         if fd < 0, errno == EACCES {
             // Pre-existing mode denied the owner write access. The owner can always
             // chmod its own file, so re-assert 0600 and retry once.
-            try FileManager.default.setAttributes(
-                [.posixPermissions: 0o600],
-                ofItemAtPath: lockURL.path
-            )
+            do {
+                try FileManager.default.setAttributes(
+                    [.posixPermissions: 0o600],
+                    ofItemAtPath: lockURL.path
+                )
+            } catch {
+                throw LockError.lockFailed
+            }
             fd = lockURL.path.withCString { path in
                 open(path, O_RDWR | O_CREAT, 0o600)
             }
         }
         guard fd >= 0 else { throw LockError.lockFailed }
         defer { close(fd) }
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o600],
-            ofItemAtPath: lockURL.path
-        )
+        do {
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o600],
+                ofItemAtPath: lockURL.path
+            )
+        } catch {
+            throw LockError.lockFailed
+        }
         let flags = nonBlocking ? (LOCK_EX | LOCK_NB) : LOCK_EX
         guard flock(fd, flags) == 0 else { throw LockError.lockFailed }
         defer { _ = flock(fd, LOCK_UN) }
         return try body()
     }
 
-    public enum LockError: Error, Equatable {
+    /// Failures from `ExclusiveFileLock.withLock`.
+    public enum LockError: Error, Equatable, Sendable {
+        /// Lock file setup, chmod, or `flock` failed.
         case lockFailed
     }
 }

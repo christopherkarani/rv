@@ -67,6 +67,47 @@ struct FileLockedJSONLStoreTests {
         #expect(store.load() == [good, good])
     }
 
+    @Test func loadSkipsInvalidUTF8LineKeepsGoodLines() throws {
+        let store = try makeStore("badline")
+        try FileManager.default.createDirectory(
+            at: store.directoryURL,
+            withIntermediateDirectories: true
+        )
+        let good = ProbeRecord(name: "a", stamp: Date(timeIntervalSince1970: 1_700_000_000), count: 1)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let goodLine = try #require(String(data: try encoder.encode(good), encoding: .utf8))
+        var bytes = Data((goodLine + "\n").utf8)
+        bytes.append(contentsOf: [0xFF, 0xFE, 0x0A]) // invalid-UTF8 line
+        bytes.append(contentsOf: Data((goodLine + "\n").utf8))
+        try bytes.write(to: store.fileURL)
+        #expect(store.load() == [good, good])
+    }
+
+    @Test func loadAllInvalidUTF8ReturnsEmpty() throws {
+        let store = try makeStore("badfile")
+        try FileManager.default.createDirectory(
+            at: store.directoryURL,
+            withIntermediateDirectories: true
+        )
+        try Data([0xFF, 0xFE, 0x0A, 0xFF]).write(to: store.fileURL)
+        #expect(store.load() == [])
+    }
+
+    @Test func loadStripsRepeatedTrailingCRs() throws {
+        let store = try makeStore("crcr")
+        try FileManager.default.createDirectory(
+            at: store.directoryURL,
+            withIntermediateDirectories: true
+        )
+        let good = ProbeRecord(name: "a", stamp: Date(timeIntervalSince1970: 1_700_000_000), count: 1)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let goodLine = try #require(String(data: try encoder.encode(good), encoding: .utf8))
+        try (goodLine + "\r\r\n").write(to: store.fileURL, atomically: true, encoding: .utf8)
+        #expect(store.load() == [good])
+    }
+
     @Test func loadKeepsRowsContainingUnicodeLineSeparators() throws {
         let store = try makeStore("u2028")
         // JSONEncoder never escapes these, so they must not split rows.
@@ -126,6 +167,41 @@ struct FileLockedJSONLStoreTests {
         #expect(try storeMode(root) == 0o700)
     }
 
+    @Test func saveReassertsOwnerOnlyPermissionsOnPreExistingPaths() throws {
+        let store = try makeStore("perms-reassert")
+        try FileManager.default.createDirectory(
+            at: store.directoryURL,
+            withIntermediateDirectories: true
+        )
+        let seeded = FileManager.default.createFile(atPath: store.fileURL.path, contents: Data())
+        #expect(seeded)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: store.directoryURL.path
+        )
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o644],
+            ofItemAtPath: store.fileURL.path
+        )
+        try store.save([ProbeRecord(name: "a", stamp: Date(timeIntervalSince1970: 0), count: 0)])
+        #expect(try storeMode(store.directoryURL) == 0o700)
+        #expect(try storeMode(store.fileURL) == 0o600)
+    }
+
+    @Test func baseDirectoryInitDerivesURLsAndRoundTrips() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-store-basedir-\(UUID().uuidString)", isDirectory: true)
+        let store = FileLockedJSONLStore<ProbeRecord>(baseDirectory: root, fileName: "rows.jsonl")
+        #expect(store.fileURL == root.appendingPathComponent("rows.jsonl"))
+        #expect(store.lockURL == root.appendingPathComponent("rows.jsonl.lock"))
+        #expect(store.directoryURL == root)
+        let records = [ProbeRecord(name: "a", stamp: Date(timeIntervalSince1970: 0), count: 1)]
+        try store.withLock {
+            try store.save(records)
+        }
+        #expect(store.load() == records)
+    }
+
     @Test func withLockCreatesLockFileOwnerOnly() throws {
         let store = try makeStore("lock-perms")
         try store.withLock {}
@@ -141,6 +217,13 @@ struct FileLockedJSONLStoreTests {
         #expect(try store.withLock { true })
     }
 
+    @Test func withLockBodyThrownLockErrorRethrowsUntouched() throws {
+        let store = try makeStore("rethrow-lock")
+        #expect(throws: ExclusiveFileLock.LockError.lockFailed) {
+            try store.withLock { throw ExclusiveFileLock.LockError.lockFailed }
+        }
+    }
+
     @Test func nonBlockingFailsClosedWhileLockHeld() throws {
         let store = try makeStore("nonblocking")
         try FileManager.default.createDirectory(
@@ -152,7 +235,7 @@ struct FileLockedJSONLStoreTests {
         defer { close(fd) }
         #expect(flock(fd, LOCK_EX | LOCK_NB) == 0)
         defer { _ = flock(fd, LOCK_UN) }
-        #expect(throws: FileLockedStoreError.lockFailed) {
+        #expect(throws: FileLockedJSONLStoreError.lockFailed) {
             try store.withLock(nonBlocking: true) {}
         }
     }
@@ -167,7 +250,7 @@ struct FileLockedJSONLStoreTests {
             at: store.lockURL,
             withIntermediateDirectories: false
         )
-        #expect(throws: FileLockedStoreError.lockFailed) {
+        #expect(throws: FileLockedJSONLStoreError.lockFailed) {
             try store.withLock {}
         }
     }
@@ -180,7 +263,7 @@ struct FileLockedJSONLStoreTests {
             lockURL: root.appendingPathComponent("rows.lock"),
             directoryURL: root
         )
-        #expect(throws: FileLockedStoreError.encodeFailed) {
+        #expect(throws: FileLockedJSONLStoreError.encodeFailed) {
             try store.save([FailingEncodeRecord(name: "x")])
         }
         #expect(FileManager.default.fileExists(atPath: store.fileURL.path) == false)
@@ -201,7 +284,7 @@ struct FileLockedJSONLStoreTests {
         )
         try seedStore.save([ProbeRecord(name: "seed", stamp: Date(timeIntervalSince1970: 0), count: 7)])
         let before = try Data(contentsOf: seedStore.fileURL)
-        #expect(throws: FileLockedStoreError.encodeFailed) {
+        #expect(throws: FileLockedJSONLStoreError.encodeFailed) {
             try failingStore.save([FailingEncodeRecord(name: "x")])
         }
         #expect(try Data(contentsOf: seedStore.fileURL) == before)
@@ -212,16 +295,17 @@ struct FileLockedJSONLStoreTests {
     @Test func directoryPreparationFailureThrowsIoFailed() throws {
         let occupied = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-store-occupied-\(UUID().uuidString)")
-        FileManager.default.createFile(atPath: occupied.path, contents: Data())
+        let occupiedCreated = FileManager.default.createFile(atPath: occupied.path, contents: Data())
+        #expect(occupiedCreated)
         let store = FileLockedJSONLStore<ProbeRecord>(
             fileURL: occupied.appendingPathComponent("rows.jsonl"),
             lockURL: occupied.appendingPathComponent("rows.lock"),
             directoryURL: occupied
         )
-        #expect(throws: FileLockedStoreError.ioFailed) {
+        #expect(throws: FileLockedJSONLStoreError.ioFailed) {
             try store.withLock {}
         }
-        #expect(throws: FileLockedStoreError.ioFailed) {
+        #expect(throws: FileLockedJSONLStoreError.ioFailed) {
             try store.save([])
         }
     }
@@ -236,10 +320,27 @@ struct FileLockedJSONLStoreTests {
             at: store.fileURL,
             withIntermediateDirectories: false
         )
-        #expect(throws: FileLockedStoreError.ioFailed) {
+        #expect(throws: FileLockedJSONLStoreError.ioFailed) {
             try store.save([ProbeRecord(name: "a", stamp: Date(timeIntervalSince1970: 0), count: 0)])
         }
         let temp = store.fileURL.appendingPathExtension("tmp")
+        #expect(FileManager.default.fileExists(atPath: temp.path) == false)
+    }
+
+    @Test func saveTempPathOccupiedThrowsIoFailedWithoutStrayTemp() throws {
+        let store = try makeStore("save-tmp-dir")
+        try FileManager.default.createDirectory(
+            at: store.directoryURL,
+            withIntermediateDirectories: true
+        )
+        let temp = store.fileURL.appendingPathExtension("tmp")
+        try FileManager.default.createDirectory(
+            at: temp,
+            withIntermediateDirectories: false
+        )
+        #expect(throws: FileLockedJSONLStoreError.ioFailed) {
+            try store.save([ProbeRecord(name: "a", stamp: Date(timeIntervalSince1970: 0), count: 0)])
+        }
         #expect(FileManager.default.fileExists(atPath: temp.path) == false)
     }
 
