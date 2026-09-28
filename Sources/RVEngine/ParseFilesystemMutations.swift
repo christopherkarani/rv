@@ -1,15 +1,34 @@
 import RVDomain
 
-/// Splits scanned flag events at the first `--` terminator.
+/// Scans `argv` per `spec` and splits at the first `--` terminator.
 ///
 /// Pre-terminator events keep their T3a grammar reading; post-terminator
 /// words are recovered verbatim, matching the legacy loops where `--` made
 /// every later word a positional.
 ///
-/// Only for value-free scans: with a value-taking spec the scan must stop
-/// at `--` instead (see `scanFilesystemFlags`), because consumption past
-/// `--` cannot be recovered verbatim.
-func splitFlagTerminator(_ events: [FlagToken]) -> (flags: [FlagToken], rest: [String]) {
+/// Split-after-scan is only exact for value-free specs: with a value-taking
+/// spec the scan must stop at `--` instead (see `scanFilesystemFlags`),
+/// because consumption past `--` cannot be recovered verbatim. That routing
+/// is enforced here by construction — value-taking specs dispatch to the
+/// pending-aware pre-split — instead of a doc-only precondition on the
+/// events split.
+func splitFlagTerminator(
+    _ argv: Argv,
+    values spec: FlagValueSpec = .none
+) -> (flags: [FlagToken], rest: [String]) {
+    guard spec.isValueFree else {
+        return scanFilesystemFlags(argv, values: spec)
+    }
+    return splitScannedTerminator(ShellPipeline.scanFlags(argv, values: spec))
+}
+
+/// Splits scanned value-free flag events at the first `--` terminator.
+///
+/// Private: only scans that perform no value consumption may split after
+/// the fact. A consumed value shares its case with the attached form, so
+/// `verbatimWords` would re-emit it merged (`--name=value`) instead of as
+/// the two original words.
+private func splitScannedTerminator(_ events: [FlagToken]) -> (flags: [FlagToken], rest: [String]) {
     guard let cut = events.firstIndex(of: .terminator) else {
         return (events, [])
     }
@@ -34,7 +53,9 @@ func scanFilesystemFlags(
     values spec: FlagValueSpec
 ) -> (flags: [FlagToken], rest: [String]) {
     guard let cut = terminatorIndex(in: argv.args, values: spec) else {
-        return splitFlagTerminator(ShellPipeline.scanFlags(argv, values: spec))
+        // No `--` word, so no post-`--` recovery runs: the split is exact
+        // for any spec here.
+        return splitScannedTerminator(ShellPipeline.scanFlags(argv, values: spec))
     }
     let head = Argv(program: argv.program, args: Array(argv.args[..<cut]))
     return (
@@ -94,7 +115,7 @@ func verbatimWords(of event: FlagToken) -> [String] {
 }
 
 func parseRm(_ argv: Argv) -> ParsedFilesystemCommand? {
-    let (flags, rest) = splitFlagTerminator(ShellPipeline.scanFlags(argv))
+    let (flags, rest) = splitFlagTerminator(argv)
     var recursive = false
     var force = false
     var paths: [String] = []
@@ -143,7 +164,7 @@ private let rmSkipLong: Set<String> = [
 private let rmShorts: Set<Character> = ["r", "R", "d", "f", "v", "i", "I"]
 
 func parseUnlink(_ argv: Argv) -> ParsedFilesystemCommand? {
-    let (flags, rest) = splitFlagTerminator(ShellPipeline.scanFlags(argv))
+    let (flags, rest) = splitFlagTerminator(argv)
     var paths: [String] = []
     for event in flags {
         switch event {
@@ -169,7 +190,7 @@ func parseUnlink(_ args: [String]) -> ParsedFilesystemCommand? {
 }
 
 func parseRmdir(_ argv: Argv) -> ParsedFilesystemCommand? {
-    let (flags, rest) = splitFlagTerminator(ShellPipeline.scanFlags(argv))
+    let (flags, rest) = splitFlagTerminator(argv)
     var paths: [String] = []
     for event in flags {
         switch event {
@@ -205,7 +226,7 @@ private let rmdirSkip: Set<String> = [
 private let rmdirShorts: Set<Character> = ["p", "v"]
 
 func parseMv(_ argv: Argv) -> ParsedFilesystemCommand? {
-    let (flags, rest) = splitFlagTerminator(ShellPipeline.scanFlags(argv))
+    let (flags, rest) = splitFlagTerminator(argv)
     var paths: [String] = []
     for event in flags {
         switch event {

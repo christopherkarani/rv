@@ -112,6 +112,13 @@ public struct FlagValueSpec: Sendable, Hashable {
     /// No flag takes a value; every word classifies structurally.
     public static let none = FlagValueSpec()
 
+    /// Whether no flag takes a value: the scan classifies purely
+    /// structurally and consumes nothing, so post-`--` events can be
+    /// recovered verbatim. (`rejectsDashValues` is inert without takers.)
+    public var isValueFree: Bool {
+        valueShorts.isEmpty && valueLongs.isEmpty
+    }
+
     /// Whether a structurally classified token takes the next argv word as
     /// its value. Attached longs (`--mode=x`) never consume; bare
     /// value-longs and any cluster containing a value-short do. Shared by

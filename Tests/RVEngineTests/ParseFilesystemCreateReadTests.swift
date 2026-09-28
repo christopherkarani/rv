@@ -156,6 +156,19 @@ struct ParseFilesystemCreateReadTests {
         )
     }
 
+    @Test func mkdir_pendingValueConsumesDashDash() {
+        expectParsed(
+            parseMkdir(["-m", "--", "dir"]),
+            "create",
+            paths: ["dir"]
+        )
+        expectParsed(
+            parseMkdir(["--mode", "--", "dir"]),
+            "create",
+            paths: ["dir"]
+        )
+    }
+
     @Test func mkdir_rejectsUnknownAndDanglingMode() {
         #expect(parseMkdir(["-z", "dir"]) == nil)
         #expect(parseMkdir(["--weird", "dir"]) == nil)
