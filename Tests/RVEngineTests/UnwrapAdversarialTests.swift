@@ -53,9 +53,9 @@ struct UnwrapAdversarialTests {
         #expect(
             peelTimeout(
                 [
-                    CommandToken(decoded: "timeout", wasQuoted: false),
-                    CommandToken(decoded: "", wasQuoted: false),
-                    CommandToken(decoded: "git", wasQuoted: false),
+                    Token(lexeme: "timeout", wasQuoted: false),
+                    Token(lexeme: "", wasQuoted: false),
+                    Token(lexeme: "git", wasQuoted: false),
                 ],
                 workingDirectory: nil
             ) == .limited(.timeout)
