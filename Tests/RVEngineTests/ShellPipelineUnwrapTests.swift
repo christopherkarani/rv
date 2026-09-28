@@ -209,7 +209,7 @@ import RVDomain
     }
 
     @Test func peel_leadingNewline_staysNotWrapper() {
-        let tokens = [Token(lexeme: "\n", wasQuoted: false)]
+        let tokens = [ShellPipeline.Token(lexeme: "\n", wasQuoted: false)]
         let outcome = ShellPipeline.peel(
             text: "\n",
             tokens: tokens,
