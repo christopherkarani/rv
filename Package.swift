@@ -237,8 +237,8 @@ let package = Package(
     products: coreProducts + isolationExecProducts + terminalProbeProducts + serviceProducts + cliProducts,
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.7.0"),
-        // Pinned 0.14.0 source with RV's small public bracketed-paste hook.
-        .package(path: "Vendor/swift-tui"),
+        // Fork of 0.14.0 with RV's small public bracketed-paste hook (View.onPaste).
+        .package(url: "https://github.com/christopherkarani/swift-tui.git", exact: "0.14.0-rv1"),
         .package(url: "https://github.com/migueldeicaza/SwiftTerm", exact: "1.19.0"),
         // SwiftTUI requires 1.6.0 or newer. 1.7.0 emits Swift 6.4 borrow
         // runtime calls unavailable on the macOS 26 release runner.

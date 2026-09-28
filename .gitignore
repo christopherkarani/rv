@@ -15,3 +15,5 @@ scratch/
 spec/
 # Agent planning and phase handoffs — keep locally for other sessions
 docs/rv-agent/
+# swift-tui comes from the fork pin in Package.swift, never vendored
+Vendor/swift-tui/

@@ -1,1 +1,0 @@
-caps:{"acceptsDeltaFrames":true,"styleAppend":true}

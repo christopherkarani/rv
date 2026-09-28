@@ -1,8 +1,0 @@
-# Exact stable-documentation burn-down ledger.
-#
-# Format:
-#   missing-path|<stable-doc>|<repository-relative cited path>
-#   forbidden|<rule-id>|<stable-doc>
-#
-# This file must match the checker's current violations exactly. New rows and
-# stale rows both fail the policy phase; repair stages may only shrink it.
