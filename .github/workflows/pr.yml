@@ -32,10 +32,20 @@ jobs:
       - name: Cache official Swift Linux tarball
         uses: actions/cache@v4
         with:
-          path: |
-            ~/.local/share/swift
-            ~/.cache/swift
+          # Extracted toolchain only. The tarball in ~/.cache/swift is
+          # re-downloaded on a miss; caching it doubles the entry for no gain.
+          path: ~/.local/share/swift
           key: official-swift-${{ hashFiles('.swift-version') }}-ubuntu24.04-${{ runner.arch }}
+
+      - name: Cache SwiftPM build
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build
+            ~/.cache/org.swift.swiftpm
+          key: swiftpm-test-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.swift-version', 'Package.resolved', 'Package.swift') }}
+          restore-keys: |
+            swiftpm-test-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Tarball runtime deps (not apt swift)
         run: |
@@ -116,18 +126,29 @@ jobs:
       - name: Install Swift 6.4
         run: Scripts/install-official-swift-macos.sh
 
+      # Packages only, not compiled artifacts: a restored build plan embeds
+      # the Metal toolchain cryptex path, which is random per runner, so an
+      # incremental rebuild fails spawning `metal` (SwiftTerm shaders).
+      - name: Cache SwiftPM packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build/checkouts
+            ~/Library/Caches/org.swift.swiftpm
+          key: swiftpm-pkgs-isol-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.swift-version', 'Package.resolved', 'Package.swift') }}
+          restore-keys: |
+            swiftpm-pkgs-isol-${{ runner.os }}-${{ runner.arch }}-
+            swiftpm-pkgs-hook-${{ runner.os }}-${{ runner.arch }}-
+
       - name: Compile RVIsolationTests
         run: Scripts/swift-6.4 build --target RVIsolationTests
 
       # Debug products the suite execs. After the isolation compile, so a
       # hang in that compile still dies at 15 minutes. Not release.sh, and
-      # not the CLI test suite.
+      # not the CLI test suite. Single full build: SPM honors only one
+      # --product per invocation, so separate calls re-plan each time.
       - name: Build debug workspace products
-        run: |
-          Scripts/swift-6.4 build --product rv-pty-claim
-          Scripts/swift-6.4 build --product rv-workspace-host
-          Scripts/swift-6.4 build --product rv-terminal-probe
-          Scripts/swift-6.4 build --product rv
+        run: Scripts/swift-6.4 build
 
       - name: Run RVIsolationTests
         run: Scripts/swift-6.4 test --skip-build --test-product RVIsolationTests --filter RVIsolationTests
@@ -152,10 +173,26 @@ jobs:
       - name: Install Swift 6.4
         run: Scripts/install-official-swift-macos.sh
 
+      # Packages only, not compiled artifacts: a restored build plan embeds
+      # the Metal toolchain cryptex path, which is random per runner, so an
+      # incremental rebuild fails spawning `metal` (SwiftTerm shaders).
+      - name: Cache SwiftPM packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build/checkouts
+            ~/Library/Caches/org.swift.swiftpm
+          key: swiftpm-pkgs-hook-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.swift-version', 'Package.resolved', 'Package.swift') }}
+          restore-keys: |
+            swiftpm-pkgs-hook-${{ runner.os }}-${{ runner.arch }}-
+
       - name: C hook units
         run: Sources/rv-c/tests/run.sh
 
+      # C hook units ran in the previous step; release.sh skips its own copy.
       - name: Stage release binaries
+        env:
+          RV_RELEASE_SKIP_C_UNITS: "1"
         run: Scripts/release.sh
 
       - name: C hook process proof
@@ -167,11 +204,10 @@ jobs:
       # Linux PR already ran unfiltered swift test. Darwin XPC / LaunchAgent
       # and the isolated-HOME oracle only exist here. RVIsolationTests run in
       # the parallel macos isolation job. Skip the in-process CHookPipeTests
-      # proof — this job already ran Scripts/c-hook-proof.sh.
+      # proof — this job already ran Scripts/c-hook-proof.sh. One invocation:
+      # a second `swift test --filter` would re-plan and re-typecheck.
       - name: Darwin Swift (XPC / CLI)
-        run: |
-          Scripts/swift-6.4 test --filter RVServiceTests --skip injectedOneSecondIdleFiresWithoutKeepAlive
-          Scripts/swift-6.4 test --filter 'RVCLITests|RVWorkspaceTUITests' --skip CHookPipeTests.cHookProof
+        run: Scripts/swift-6.4 test --filter 'RVServiceTests|RVCLITests|RVWorkspaceTUITests' --skip 'injectedOneSecondIdleFiresWithoutKeepAlive|CHookPipeTests.cHookProof'
 
       - name: Isolated-HOME oracle
         run: Scripts/host-oracle.sh

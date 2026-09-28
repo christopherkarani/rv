@@ -1,0 +1,117 @@
+name: warm-cache
+
+# Prime the toolchain and SwiftPM caches on main so PR branches restore
+# them instead of cold-building. Cache entries expire after 7 days of
+# disuse, so refresh weekly even without main pushes.
+on:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: warm-cache-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: warm linux caches
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache official Swift Linux tarball
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/swift
+          key: official-swift-${{ hashFiles('.swift-version') }}-ubuntu24.04-${{ runner.arch }}
+
+      - name: Tarball runtime deps (not apt swift)
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            binutils \
+            git \
+            gnupg2 \
+            libc6-dev \
+            libcurl4-openssl-dev \
+            libedit2 \
+            libgcc-13-dev \
+            libncurses-dev \
+            libpython3-dev \
+            libsqlite3-0 \
+            libsqlite3-dev \
+            libstdc++-13-dev \
+            libxml2-dev \
+            libz3-dev \
+            pkg-config \
+            tzdata \
+            zip \
+            unzip \
+            zlib1g-dev
+          if dpkg-query -W -f='${Status}\n' swift swiftlang 2>/dev/null \
+            | grep -q 'install ok installed'; then
+            printf 'warm-cache: apt swift/swiftlang is present; refuse\n' >&2
+            exit 1
+          fi
+
+      - name: Install official Swift 6.4 Linux tarball
+        run: |
+          bin="$(Scripts/install-official-swift-linux.sh --print-bin)"
+          echo "$bin" >> "$GITHUB_PATH"
+          echo "Official tarball bin: $bin"
+
+      - name: Cache SwiftPM build
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build
+            ~/.cache/org.swift.swiftpm
+          key: swiftpm-test-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.swift-version', 'Package.resolved', 'Package.swift') }}
+          restore-keys: |
+            swiftpm-test-${{ runner.os }}-${{ runner.arch }}-
+
+      # Build (do not run) everything `swift test` needs, so PRs restore it.
+      - name: Warm debug build with tests
+        run: swift build --build-tests
+
+  macos:
+    name: warm macos caches
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Swift toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Developer/Toolchains/swift-6.4-RELEASE.xctoolchain
+            ~/Library/Developer/Toolchains/swift-6.4.0-RELEASE.xctoolchain
+          key: swift-6.4-RELEASE-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install Swift 6.4
+        run: Scripts/install-official-swift-macos.sh
+
+      # Packages only (see pr.yml): a restored .build breaks the Metal
+      # shader recompile. This job primes the toolchain + checkouts.
+      - name: Cache SwiftPM packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build/checkouts
+            ~/Library/Caches/org.swift.swiftpm
+          key: swiftpm-pkgs-hook-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.swift-version', 'Package.resolved', 'Package.swift') }}
+          restore-keys: |
+            swiftpm-pkgs-hook-${{ runner.os }}-${{ runner.arch }}-
+
+      # Fetch dependency checkouts so PR jobs skip the git fetch.
+      # No compile: macOS does not cache build artifacts (see above).
+      - name: Warm package checkouts
+        run: Scripts/swift-6.4 package resolve
