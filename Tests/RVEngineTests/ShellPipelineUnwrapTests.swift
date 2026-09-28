@@ -41,7 +41,77 @@ import RVDomain
             Issue.record("expected limited, got \(outcome)")
             return
         }
-        #expect(layers.contains(.bash))
+        #expect(layers == [.sudo, .env, .bash])
+    }
+
+    @Test func unwrap_budgetDepth_exactBoundary_completes() {
+        // Cutoff is depth + 1 > maxDepth, so N layers with maxDepth N completes.
+        let outcome = ShellPipeline.unwrap(
+            "sudo env git status",
+            workingDirectory: nil,
+            budget: UnwrapBudget(maxDepth: 2, maxBytes: 4_096),
+            depth: 0,
+            layers: []
+        )
+        #expect(
+            outcome
+                == .complete(
+                    UnwrappedCommand(
+                        command: ShellCommand(rawValue: "git status"),
+                        layers: [.sudo, .env]
+                    )
+                )
+        )
+    }
+
+    @Test func unwrap_budgetBytes_exactBoundary_completes() {
+        // Cutoff is inner.utf8.count > maxBytes, so == maxBytes completes.
+        let payload = String(repeating: "x", count: 50)
+        let outcome = ShellPipeline.unwrap(
+            "bash -c '\(payload)'",
+            workingDirectory: nil,
+            budget: UnwrapBudget(maxDepth: 8, maxBytes: 50),
+            depth: 0,
+            layers: []
+        )
+        #expect(
+            outcome
+                == .complete(
+                    UnwrappedCommand(
+                        command: ShellCommand(rawValue: payload),
+                        layers: [.bash]
+                    )
+                )
+        )
+    }
+
+    @Test func unwrap_budgetBytes_oneOver_isLimited() {
+        let payload = String(repeating: "x", count: 51)
+        let outcome = ShellPipeline.unwrap(
+            "bash -c '\(payload)'",
+            workingDirectory: nil,
+            budget: UnwrapBudget(maxDepth: 8, maxBytes: 50),
+            depth: 0,
+            layers: []
+        )
+        #expect(outcome == .limited(layers: [.bash]))
+    }
+
+    @Test func unwrap_workingDirectory_threadsThroughNext() {
+        let outcome = ShellPipeline.unwrap(
+            "env --chdir=/tmp sudo git status",
+            workingDirectory: nil,
+            budget: .default,
+            depth: 0,
+            layers: []
+        )
+        guard case .complete(let unwrapped) = outcome else {
+            Issue.record("expected complete, got \(outcome)")
+            return
+        }
+        #expect(unwrapped.command.rawValue == "git status")
+        #expect(unwrapped.layers == [.env, .sudo])
+        #expect(unwrapped.workingDirectory == WorkingDirectory(validating: "/tmp"))
     }
 
     @Test func unwrap_budgetBytes_isLimited() {
@@ -60,31 +130,38 @@ import RVDomain
         #expect(layers == [.bash])
     }
 
-    @Test func unwrap_matchesPublicAdapter() {
-        let corpus = [
-            "sudo git status",
-            "env FOO=1 git status",
-            "command git status",
-            "timeout 5 git status",
-            "nice -n 5 git status",
-            "mise exec -- git status",
-            "ssh host git status",
-            "bash -c 'git status'",
-            #"python -c "os.system('git status')""#,
-            "echo 'git status' | bash",
-            "git status",
-            "bash -c git status",
+    @Test func unwrap_goldenCorpus_pinsBehavior() {
+        let corpus: [(raw: String, outcome: UnwrapOutcome)] = [
+            ("sudo git status", .complete(UnwrappedCommand(command: ShellCommand(rawValue: "git status"), layers: [.sudo]))),
+            ("env FOO=1 git status", .complete(UnwrappedCommand(command: ShellCommand(rawValue: "git status"), layers: [.env]))),
+            ("command git status", .complete(UnwrappedCommand(command: ShellCommand(rawValue: "git status"), layers: [.command]))),
+            ("timeout 5 git status", .complete(UnwrappedCommand(command: ShellCommand(rawValue: "git status"), layers: [.timeout]))),
+            ("nice -n 5 git status", .complete(UnwrappedCommand(command: ShellCommand(rawValue: "git status"), layers: [.nice]))),
+            ("mise exec -- git status", .complete(UnwrappedCommand(command: ShellCommand(rawValue: "git status"), layers: [.mise]))),
+            ("ssh host git status", .complete(UnwrappedCommand(command: ShellCommand(rawValue: "git status"), layers: [.ssh]))),
+            ("bash -c 'git status'", .complete(UnwrappedCommand(command: ShellCommand(rawValue: "git status"), layers: [.bash]))),
+            (#"python -c "os.system('git status')""#, .complete(UnwrappedCommand(command: ShellCommand(rawValue: "git status"), layers: [.python]))),
+            ("echo 'git status' | bash", .complete(UnwrappedCommand(command: ShellCommand(rawValue: "git status"), layers: [.bash]))),
+            ("git status", .complete(UnwrappedCommand(command: ShellCommand(rawValue: "git status"), layers: []))),
+            ("bash -c git status", .limited(layers: [.bash])),
         ]
-        for raw in corpus {
-            let expected = unwrapCommand(ShellCommand(rawValue: raw))
-            let actual = ShellPipeline.unwrap(
-                raw,
-                workingDirectory: nil,
-                budget: .default,
-                depth: 0,
-                layers: []
+        for entry in corpus {
+            // Both the public adapter and the recursion must match the golden,
+            // which pins behavior and adapter wiring at once.
+            #expect(
+                unwrapCommand(ShellCommand(rawValue: entry.raw)) == entry.outcome,
+                "adapter drift for \(entry.raw)"
             )
-            #expect(actual == expected, "mismatch for \(raw)")
+            #expect(
+                ShellPipeline.unwrap(
+                    entry.raw,
+                    workingDirectory: nil,
+                    budget: .default,
+                    depth: 0,
+                    layers: []
+                ) == entry.outcome,
+                "recursion drift for \(entry.raw)"
+            )
         }
     }
 
@@ -218,4 +295,11 @@ private let peelCases: [PeelCase] = [
         inner: "git status",
         kind: .ruby
     ),
+    PeelCase(raw: "timeout --preserve-status 5 git status", inner: "git status", kind: .timeout),
+    PeelCase(raw: "nice --adjustment 5 git status", inner: "git status", kind: .nice),
+    PeelCase(raw: "ssh -p 2222 host git status", inner: "git status", kind: .ssh),
+    PeelCase(raw: "mise exec -c 'git status'", inner: "git status", kind: .mise),
+    PeelCase(raw: "command -p git status", inner: "git status", kind: .command),
+    PeelCase(raw: "/usr/bin/sudo git status", inner: "git status", kind: .sudo),
+    PeelCase(raw: "SUDO git status", inner: "git status", kind: .sudo),
 ]

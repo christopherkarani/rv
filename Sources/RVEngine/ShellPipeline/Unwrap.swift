@@ -20,10 +20,15 @@ import RVDomain
 /// One value type replaces the scattered depth/bytes pairs. Defaults match
 /// the pre-T2 `UnwrapLimits` caps.
 public struct UnwrapBudget: Sendable, Equatable, Hashable {
+    /// Maximum wrapper layers peeled before `.limited`. Must be `>= 0`.
     public var maxDepth: Int
+    /// Maximum UTF-8 byte count of one peel layer's inner command. Must be `>= 0`.
     public var maxBytes: Int
 
+    /// Creates a budget. Both caps must be non-negative.
     public init(maxDepth: Int = 8, maxBytes: Int = 4_096) {
+        precondition(maxDepth >= 0, "maxDepth must be non-negative")
+        precondition(maxBytes >= 0, "maxBytes must be non-negative")
         self.maxDepth = maxDepth
         self.maxBytes = maxBytes
     }
@@ -38,8 +43,8 @@ public struct UnwrapBudget: Sendable, Equatable, Hashable {
 /// Single source of truth is `UnwrapBudget`; this enum preserves the pre-T2
 /// public spelling used by analyzer defaults and the corpus gate.
 public enum UnwrapLimits: Sendable {
-    public static let maxDepth = UnwrapBudget.default.maxDepth
-    public static let maxBytes = UnwrapBudget.default.maxBytes
+    public static let maxDepth: Int = UnwrapBudget.default.maxDepth
+    public static let maxBytes: Int = UnwrapBudget.default.maxBytes
 }
 
 /// Inner command plus the wrappers peeled to reach it.
@@ -79,10 +84,23 @@ public func unwrapCommand(
     maxDepth: Int = UnwrapLimits.maxDepth,
     maxBytes: Int = UnwrapLimits.maxBytes
 ) -> UnwrapOutcome {
+    unwrapCommand(
+        command,
+        workingDirectory: workingDirectory,
+        budget: UnwrapBudget(maxDepth: maxDepth, maxBytes: maxBytes)
+    )
+}
+
+/// Budget spelling of `unwrapCommand(_:workingDirectory:maxDepth:maxBytes:)`.
+public func unwrapCommand(
+    _ command: ShellCommand,
+    workingDirectory: WorkingDirectory? = nil,
+    budget: UnwrapBudget
+) -> UnwrapOutcome {
     ShellPipeline.unwrap(
         command.rawValue,
         workingDirectory: workingDirectory,
-        budget: UnwrapBudget(maxDepth: maxDepth, maxBytes: maxBytes),
+        budget: budget,
         depth: 0,
         layers: []
     )
@@ -121,13 +139,44 @@ extension ShellPipeline {
             }
         }
 
+        // Text-level sink check first: on pipes/heredocs this skips a
+        // full-text tokenize that the sink path would discard.
+        if let sink = peelExecutingSink(trimmed, workingDirectory: workingDirectory) {
+            return applyPeel(
+                sink,
+                fallback: trimmed,
+                workingDirectory: workingDirectory,
+                budget: budget,
+                depth: depth,
+                layers: layers
+            )
+        }
         let tokens = ShellPipeline.tokenize(trimmed)
         let argv = Argv(tokens: tokens)
-        switch peel(text: trimmed, tokens: tokens, argv: argv, workingDirectory: workingDirectory) {
+        return applyPeel(
+            peelAfterSink(tokens: tokens, argv: argv, workingDirectory: workingDirectory),
+            fallback: trimmed,
+            workingDirectory: workingDirectory,
+            budget: budget,
+            depth: depth,
+            layers: layers
+        )
+    }
+
+    /// Applies one peel step: completes, limits, or recurses on `.next`.
+    private static func applyPeel(
+        _ peel: Peel,
+        fallback: String,
+        workingDirectory: WorkingDirectory?,
+        budget: UnwrapBudget,
+        depth: Int,
+        layers: [WrapperKind]
+    ) -> UnwrapOutcome {
+        switch peel {
         case .notWrapper:
             return .complete(
                 UnwrappedCommand(
-                    command: ShellCommand(rawValue: trimmed),
+                    command: ShellCommand(rawValue: fallback),
                     layers: layers,
                     workingDirectory: workingDirectory
                 )
@@ -165,7 +214,20 @@ extension ShellPipeline {
         if let sink = peelExecutingSink(text, workingDirectory: workingDirectory) {
             return sink
         }
-        guard let first = tokens.first, first.isNewline == false, let argv else {
+        return peelAfterSink(tokens: tokens, argv: argv, workingDirectory: workingDirectory)
+    }
+
+    /// Wrapper dispatch keyed on `argv.program`, after the sink check.
+    ///
+    /// `Argv` already filters structural newlines, so a `nil` argv is the
+    /// only no-dispatch case; `unwrap` trims before tokenizing, so a leading
+    /// newline never reaches dispatch through the recursion.
+    static func peelAfterSink(
+        tokens: [Token],
+        argv: Argv?,
+        workingDirectory: WorkingDirectory?
+    ) -> Peel {
+        guard let argv else {
             return .notWrapper
         }
         let head = basename(argv.program).lowercased()
@@ -197,7 +259,7 @@ extension ShellPipeline {
             return peelInterpreter(
                 tokens,
                 kind: .python,
-                flags: ["-c"],
+                flags: pythonEvalFlags,
                 extract: extractPython,
                 workingDirectory: workingDirectory
             )
@@ -206,7 +268,7 @@ extension ShellPipeline {
             return peelInterpreter(
                 tokens,
                 kind: .node,
-                flags: ["-e", "--eval", "-p", "--print"],
+                flags: nodeEvalFlags,
                 extract: extractNode,
                 workingDirectory: workingDirectory
             )
@@ -215,7 +277,7 @@ extension ShellPipeline {
             return peelInterpreter(
                 tokens,
                 kind: .ruby,
-                flags: ["-e"],
+                flags: rubyEvalFlags,
                 extract: extractRuby,
                 workingDirectory: workingDirectory
             )
@@ -224,18 +286,9 @@ extension ShellPipeline {
     }
 }
 
-/// Compatibility overload preserving the pre-T2 `[CommandToken]` call shape
-/// (used by `Tests/RVEngineTests/UnwrapAdversarialTests.swift`). Converts and
-/// delegates to the single `Token`-based implementation below.
-func peelTimeout(_ tokens: [CommandToken], workingDirectory: WorkingDirectory?) -> Peel {
-    peelTimeout(
-        tokens.map { Token(lexeme: $0.decoded, wasQuoted: $0.wasQuoted, wasAnsiC: $0.wasAnsiC) },
-        workingDirectory: workingDirectory
-    )
-}
 // MARK: - Peel result
 
-enum Peel: Equatable {
+enum Peel: Sendable, Equatable {
     case notWrapper
     case limited(WrapperKind)
     case next(String, WrapperKind, WorkingDirectory?)
@@ -445,6 +498,10 @@ private func peelShellPayload(
     return .next(token.lexeme, kind, cwd)
 }
 
+private let pythonEvalFlags: Set<String> = ["-c"]
+private let nodeEvalFlags: Set<String> = ["-e", "--eval", "-p", "--print"]
+private let rubyEvalFlags: Set<String> = ["-e"]
+
 private func peelInterpreter(
     _ tokens: [Token],
     kind: WrapperKind,
@@ -519,7 +576,7 @@ private func interpreterPeel(
     }
 }
 
-private enum InterpreterExtract: Equatable {
+private enum InterpreterExtract: Sendable, Equatable {
     case command(String)
     case dataOnly
     case limited
@@ -821,7 +878,7 @@ private func renderToken(_ token: Token) -> String {
     return token.lexeme
 }
 
-private func peelTimeout(_ tokens: [Token], workingDirectory: WorkingDirectory?) -> Peel {
+func peelTimeout(_ tokens: [Token], workingDirectory: WorkingDirectory?) -> Peel {
     var index = 1
     while index < tokens.count {
         let token = tokens[index].lexeme
@@ -906,7 +963,7 @@ private func peelMise(_ tokens: [Token], workingDirectory: WorkingDirectory?) ->
     let subcommand = tokens[1].lexeme.lowercased()
     guard subcommand == "exec" || subcommand == "x" else { return .notWrapper }
     let index = 2
-    while index < tokens.count {
+    if index < tokens.count {
         let token = tokens[index].lexeme
         if token == "--" {
             let rest = Array(tokens.dropFirst(index + 1))
@@ -1002,7 +1059,7 @@ private func peelSSH(_ tokens: [Token], workingDirectory: WorkingDirectory?) -> 
     return .next(renderCommand(rest), .ssh, workingDirectory)
 }
 
-private enum SSHOptionParse {
+private enum SSHOptionParse: Sendable {
     case consumed(Int)
     case unknown
     case missingArgument
