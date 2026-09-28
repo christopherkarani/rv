@@ -207,10 +207,10 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
     private func writeRecords(_ records: [PendingApproval]) throws {
         do {
             try store.save(records.map { PendingApprovalRecord(schemaVersion: 1, approval: $0) })
-        } catch is FileLockedStoreError {
+        } catch is FileLockedJSONLStoreError {
             // RVFileStore boundary: every save failure (encode or IO) becomes
             // the domain persistence error, so withFileLock only ever sees
-            // lock-acquisition or lock-setup failures (FileLockedStoreError),
+            // lock-acquisition or lock-setup failures (FileLockedJSONLStoreError),
             // never untranslated save failures.
             throw PendingApprovalError.encodeFailed
         }
@@ -219,8 +219,8 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
     private func withFileLock<T>(_ body: () throws -> T) throws -> T {
         do {
             return try store.withLock(nonBlocking: false, body)
-        } catch let error as FileLockedStoreError {
-            // Only FileLockedStoreError-originated failures are caught here:
+        } catch let error as FileLockedJSONLStoreError {
+            // Only FileLockedJSONLStoreError-originated failures are caught here:
             // the body throws domain errors (writeRecords translates save
             // failures). IO from lock setup collapses into encodeFailed —
             // fail-closed, and both map to ipcError for callers.
